@@ -1,0 +1,8 @@
+fastapi==0.141.1
+uvicorn[standard]
+psycopg[binary,pool]
+argon2-cffi
+python-multipart
+httpx
+ytmusicapi
+pytest

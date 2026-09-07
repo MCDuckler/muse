@@ -1,0 +1,13 @@
+# One upstream, automatic Let's Encrypt. Range requests pass through untouched —
+# the player seeks constantly, so buffering the response would break scrubbing.
+music.example.com {
+	encode zstd gzip
+
+	# SSE must not be buffered or the client never sees track_ready.
+	@events path /events
+	reverse_proxy @events api:8770 {
+		flush_interval -1
+	}
+
+	reverse_proxy api:8770
+}

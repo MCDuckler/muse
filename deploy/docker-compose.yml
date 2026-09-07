@@ -1,0 +1,44 @@
+# The OVH box runs api + db + caddy. It does NOT run the ingest worker:
+# YouTube refuses datacenter IPs (measured — see worker/NOTES.md), so the worker
+# lives on a residential connection and reaches this stack outbound only.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: muse
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: muse
+    volumes:
+      - ./data/pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U muse"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    build: ../server
+    depends_on:
+      db: {condition: service_healthy}
+    volumes:
+      - ./muse.toml:/config/muse.toml:ro
+      - ./data/muse:/data
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data/caddy:/data
+    depends_on: [api]
+    restart: unless-stopped
+
+  # Contingency, not baseline. The spike downloaded fine with neither a PO token
+  # nor cookies; enable this (and MUSE_POT_BASE_URL on the worker) the day yt-dlp
+  # starts reporting "PO Token required". Runs next to the WORKER, not here.
+  # pot-provider:
+  #   image: brainicism/bgutil-ytdlp-pot-provider
+  #   ports: ["4416:4416"]
+  #   restart: unless-stopped

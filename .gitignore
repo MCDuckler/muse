@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.m4a
+*.part
+.env
+cookies.txt
+muse.toml
+deploy/data/
+.pytest_cache/

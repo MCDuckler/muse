@@ -1,0 +1,17 @@
+[server]
+host = "127.0.0.1"
+port = 8770
+public_url = "https://music.example.com"
+data_dir = "~/.local/share/muse-data"
+
+[database]
+dsn = "host=127.0.0.1 port=5433 user=muse dbname=muse"
+
+[worker]
+# python -m muse.cli secret
+secret = "CHANGE-ME"
+
+# python -m muse.cli adduser <name>
+# [[users]]
+# name = "chris"
+# password_hash = "$argon2id$..."
