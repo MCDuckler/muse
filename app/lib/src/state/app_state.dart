@@ -25,10 +25,14 @@ class AppState extends ChangeNotifier {
 
   StreamSubscription? _events;
 
-  /// On web the app is served by the same host it talks to; on a device there is no
-  /// such hint, so it falls back to a local dev server and the user edits it once.
-  static String get defaultServer =>
-      kIsWeb ? Uri.base.origin : 'http://127.0.0.1:8770';
+  /// On web the app is served by the same host it talks to, so its own origin is the
+  /// answer. A device has no such hint, so the server is baked in at build time
+  ///   flutter build apk --dart-define=MUSE_SERVER=https://your.server
+  /// rather than hardcoded here — the address is deployment detail, not source.
+  static String get defaultServer => kIsWeb
+      ? Uri.base.origin
+      : const String.fromEnvironment('MUSE_SERVER',
+          defaultValue: 'http://127.0.0.1:8770');
 
   static const _kServer = 'muse.server';
   static const _kToken = 'muse.token';

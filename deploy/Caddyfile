@@ -19,6 +19,15 @@
 		reverse_proxy api:8770
 	}
 
+	# The Android build, so a phone with no cable can install it. Content-Type matters:
+	# served as anything else, Android downloads a file it then refuses to open.
+	handle /muse.apk {
+		header Content-Type application/vnd.android.package-archive
+		header Content-Disposition "attachment; filename=muse.apk"
+		root * /srv
+		file_server
+	}
+
 	# Flutter web build. try_files so a deep link still lands on the app shell.
 	handle {
 		root * /srv
