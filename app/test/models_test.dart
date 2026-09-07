@@ -59,6 +59,8 @@ void main() {
     });
   });
 
+  _queueShapes();
+
   group('Playlist', () {
     test('accepts both the list form and the count form of items', () {
       final listed = Playlist.fromJson(const {
@@ -76,5 +78,35 @@ void main() {
       expect(counted.itemCount, 42);
       expect(counted.items, isEmpty);
     });
+  });
+}
+
+// Regression: the list endpoint sends `items` as a count, the detail endpoint sends it
+// as a list. Assuming one shape crashed every login that already had a queue.
+void _queueShapes() {
+  test('Queue accepts items as a count and as a list', () {
+    final listed = Queue.fromJson(const {
+      'id': 1, 'name': 'Now', 'cursor_index': 0, 'position_ms': 0,
+      'shuffle': false, 'repeat': 'off', 'rev': 1, 'items': 4,
+    });
+    expect(listed.itemCount, 4);
+    expect(listed.items, isEmpty);
+
+    final detailed = Queue.fromJson(const {
+      'id': 1, 'name': 'Now', 'cursor_index': 0, 'position_ms': 0,
+      'shuffle': false, 'repeat': 'off', 'rev': 1,
+      'items': [
+        {'id': 9, 'title': 'x', 'artists': [], 'state': 'ready',
+         'source': 'youtube', 'stream_url': '/x'}
+      ],
+    });
+    expect(detailed.itemCount, 1);
+    expect(detailed.items.single.id, 9);
+
+    final empty = Queue.fromJson(const {
+      'id': 2, 'name': 'Empty', 'cursor_index': 0, 'position_ms': 0,
+      'shuffle': false, 'repeat': 'off', 'rev': 1,
+    });
+    expect(empty.itemCount, 0);
   });
 }

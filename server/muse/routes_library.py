@@ -53,7 +53,10 @@ def _own_playlist(playlist_id: int, user: dict) -> dict:
 def get_playlist(playlist_id: int, user: dict = Depends(current_user)):
     p = _own_playlist(playlist_id, user)
     items = db.all_(
-        """select i.pos, t.* from playlist_items i join tracks t on t.id=i.track_id
+        """select i.pos, t.*, m.path, m.bytes, m.sha256
+             from playlist_items i
+             join tracks t on t.id=i.track_id
+             left join media m on m.track_id=t.id and m.role='canonical'
             where i.playlist_id=%s order by i.pos""",
         (playlist_id,),
     )
@@ -88,8 +91,14 @@ def delete_playlist(playlist_id: int, user: dict = Depends(current_user)):
 # ------------------------------------------------------------------ queues
 def _queue_state(queue_id: int) -> dict:
     q = db.one("select * from queues where id=%s", (queue_id,))
+    # The media join is not optional: without it every row comes back with no
+    # stream_url, the client reads that as "not ready yet", and nothing in the queue
+    # is playable no matter how ready the track actually is.
     items = db.all_(
-        """select i.pos, i.origin, t.* from queue_items i join tracks t on t.id=i.track_id
+        """select i.pos, i.origin, t.*, m.path, m.bytes, m.sha256
+             from queue_items i
+             join tracks t on t.id=i.track_id
+             left join media m on m.track_id=t.id and m.role='canonical'
             where i.queue_id=%s order by i.pos""",
         (queue_id,),
     )

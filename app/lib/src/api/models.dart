@@ -94,6 +94,11 @@ class Queue {
   final int rev;
   final List<Track> items;
 
+  /// The list endpoint returns `items` as a COUNT and the detail endpoint returns it
+  /// as a LIST. Assuming one shape threw a TypeError on every login that had a queue,
+  /// which left the app signed in but with no queues, no playlists and no live events.
+  final int itemCount;
+
   const Queue({
     required this.id,
     required this.name,
@@ -103,7 +108,8 @@ class Queue {
     required this.repeat,
     required this.rev,
     this.items = const [],
-  });
+    int? itemCount,
+  }) : itemCount = itemCount ?? items.length;
 
   factory Queue.fromJson(Map<String, dynamic> j) => Queue(
         id: j['id'] as int,
@@ -113,12 +119,13 @@ class Queue {
         shuffle: (j['shuffle'] ?? false) as bool,
         repeat: (j['repeat'] ?? 'off') as String,
         rev: (j['rev'] ?? 1) as int,
-        items: ((j['items'] ?? const []) as List)
-            .map((e) => Track.fromJson(e as Map<String, dynamic>))
-            .toList(),
+        items: j['items'] is List
+            ? (j['items'] as List)
+                .map((e) => Track.fromJson(e as Map<String, dynamic>))
+                .toList()
+            : const [],
+        itemCount: j['items'] is int ? j['items'] as int : null,
       );
-
-  int get itemCount => items.length;
 }
 
 class Playlist {

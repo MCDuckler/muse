@@ -43,7 +43,14 @@ class _HomePageState extends State<HomePage> {
           ),
         ],
       ),
-      body: SafeArea(child: pages[_tab]),
+      // IndexedStack, not pages[_tab]: rebuilding the tab from scratch threw away
+      // your search results and scroll position every time you switched away and back.
+      body: SafeArea(
+        child: IndexedStack(
+          index: _tab,
+          children: pages,
+        ),
+      ),
       bottomNavigationBar: Column(
         mainAxisSize: MainAxisSize.min,
         children: [

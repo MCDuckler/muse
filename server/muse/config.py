@@ -24,6 +24,11 @@ class Config:
     users: tuple[User, ...] = field(default_factory=tuple)
     spotify: dict = field(default_factory=dict)
     ytmusic: dict = field(default_factory=dict)
+    # Empty by default: the app is served from this same origin in production, so
+    # nothing needs CORS. It is opt-in for a dev build or an integration test running
+    # on localhost against a deployed server.
+    cors_origins: tuple[str, ...] = field(default_factory=tuple)
+    cors_origin_regex: str = ""
 
     @property
     def audio_dir(self) -> pathlib.Path:
@@ -55,6 +60,8 @@ def load(path: str | os.PathLike | None = None) -> Config:
         port=int(srv.get("port", 8770)),
         public_url=srv.get("public_url", f"http://{srv.get('host','127.0.0.1')}:{srv.get('port',8770)}"),
         users=tuple(User(u["name"], u["password_hash"]) for u in raw.get("users", [])),
+        cors_origins=tuple(srv.get("cors_origins", [])),
+        cors_origin_regex=srv.get("cors_origin_regex", ""),
         spotify=raw.get("spotify", {}),
         ytmusic=raw.get("ytmusic", {}),
     )

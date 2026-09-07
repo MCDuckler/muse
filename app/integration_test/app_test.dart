@@ -1,0 +1,113 @@
+// Drives the real widgets in a real browser against a real server. This exists
+// because "playback and queues are unreliable" was not visible in unit tests: the
+// failures lived in how the player reacted to queue updates, not in any one call.
+//
+//   chromedriver --port=4444 &
+//   flutter drive --driver=test_driver/integration_test.dart \
+//     --target=integration_test/app_test.dart -d web-server --browser-name=chrome \
+//     --dart-define=MUSE_SERVER=https://... --dart-define=MUSE_USER=... --dart-define=MUSE_PASS=...
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:integration_test/integration_test.dart';
+import 'package:muse/main.dart' as app;
+
+const user = String.fromEnvironment('MUSE_USER', defaultValue: 'chris');
+const pass = String.fromEnvironment('MUSE_PASS');
+
+/// What is actually on screen, for when a finder comes up empty in a headless run.
+String visibleText(WidgetTester tester) {
+  final texts = tester.widgetList<Text>(find.byType(Text))
+      .map((w) => w.data ?? '')
+      .where((s) => s.isNotEmpty)
+      .toList();
+  return texts.join(' | ');
+}
+
+/// Icons repeat across the UI (queue_music is both a tab and an empty-state
+/// illustration), so tab taps have to be scoped to the navigation bar or the test
+/// silently stays on the wrong page and asserts against it.
+Finder tab(IconData icon) => find.descendant(
+      of: find.byType(NavigationBar),
+      matching: find.byIcon(icon),
+    );
+
+Future<void> settle(WidgetTester tester, {int seconds = 3}) async {
+  final end = DateTime.now().add(Duration(seconds: seconds));
+  while (DateTime.now().isBefore(end)) {
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+}
+
+void main() {
+  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets('sign in, queue a song, play it, and keep playing while adding another',
+      (tester) async {
+    app.main();
+    await settle(tester, seconds: 4);
+
+    // ---- sign in ----
+    expect(find.text('Sign in'), findsOneWidget, reason: 'login screen should be up');
+    final fields = find.byType(TextField);
+    expect(fields, findsNWidgets(3));
+    await tester.enterText(fields.at(1), user);
+    await tester.enterText(fields.at(2), pass);
+    await tester.tap(find.text('Sign in'));
+    await settle(tester, seconds: 6);
+    expect(find.text('Queues'), findsWidgets,
+        reason: 'should land on the home shell. On screen: ${visibleText(tester)}');
+
+    // ---- find something already in the library and queue it ----
+    await tester.tap(tab(Icons.search));
+    await settle(tester);
+    await tester.enterText(find.byType(TextField).first, 'lucky');
+    // Tap the button rather than sending an IME action: the on-screen keyboard is not
+    // real in a headless browser, so the submit action never arrives.
+    await tester.tap(find.byIcon(Icons.arrow_forward));
+    await settle(tester, seconds: 14);   // the remote leg hits YouTube Music
+
+    expect(find.text('IN YOUR LIBRARY'), findsOneWidget,
+        reason: 'the seeded track must come back from the local catalog (header is uppercased). '
+            'On screen: ${visibleText(tester)}');
+    await tester.tap(find.byIcon(Icons.playlist_add).first);
+    await settle(tester, seconds: 6);
+
+    // ---- play it from the queue ----
+    await tester.tap(tab(Icons.queue_music));
+    await settle(tester, seconds: 3);
+
+    // Tap the row we just added, not simply the first one: a queue can hold tracks
+    // that are still downloading, and those are deliberately not tappable.
+    final row = find.ancestor(
+      of: find.textContaining('Get Lucky'),
+      matching: find.byType(ListTile),
+    );
+    expect(row, findsWidgets, reason: 'queued row missing. On screen: ${visibleText(tester)}');
+    await tester.tap(row.first);
+    await settle(tester, seconds: 8);
+
+    final state = app.debugPlayerSnapshot();
+    expect(state, isNotNull, reason: 'player should have loaded a track');
+    expect(state!.error, isNull, reason: 'playback must not fail: ${state.error}');
+    expect(state.playing, isTrue,
+        reason: 'tapping a ready track should start audio. '
+            'current=${state.current?.title} state=${state.current?.state} '
+            'pos=${state.position} err=${state.error} '
+            'engine[${app.debugEngineState()}]');
+    final firstPosition = state.position;
+    expect(firstPosition, greaterThan(Duration.zero),
+        reason: 'position must advance — a frozen position was the original bug');
+
+    // ---- the regression that broke everything: adding a track mid-playback ----
+    await tester.tap(tab(Icons.search));
+    await settle(tester);
+    await tester.tap(find.byIcon(Icons.playlist_add).first);
+    await settle(tester, seconds: 5);
+
+    final after = app.debugPlayerSnapshot()!;
+    expect(after.playing, isTrue,
+        reason: 'adding to the queue must not stop what is playing');
+    expect(after.position, greaterThanOrEqualTo(firstPosition),
+        reason: 'adding to the queue must not rewind the current track');
+  });
+}

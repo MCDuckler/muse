@@ -71,7 +71,18 @@ class QueuePage extends StatelessWidget {
                               label: Text('radio'),
                               visualDensity: VisualDensity.compact)
                           : null,
-                      onTap: t.isReady ? () => app.player?.playAt(i) : null,
+                      onTap: t.isReady
+                          ? () async {
+                              try {
+                                await app.player?.playAt(i);
+                              } catch (e) {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('$e')));
+                                }
+                              }
+                            }
+                          : null,
                     );
                   },
                 ),

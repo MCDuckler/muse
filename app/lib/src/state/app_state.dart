@@ -29,10 +29,11 @@ class AppState extends ChangeNotifier {
   /// answer. A device has no such hint, so the server is baked in at build time
   ///   flutter build apk --dart-define=MUSE_SERVER=https://your.server
   /// rather than hardcoded here — the address is deployment detail, not source.
-  static String get defaultServer => kIsWeb
-      ? Uri.base.origin
-      : const String.fromEnvironment('MUSE_SERVER',
-          defaultValue: 'http://127.0.0.1:8770');
+  static String get defaultServer {
+    const configured = String.fromEnvironment('MUSE_SERVER');
+    if (configured.isNotEmpty) return configured;
+    return kIsWeb ? Uri.base.origin : 'http://127.0.0.1:8770';
+  }
 
   static const _kServer = 'muse.server';
   static const _kToken = 'muse.token';
@@ -79,9 +80,12 @@ class AppState extends ChangeNotifier {
     return false;
   }
 
+  /// Anything in here that throws must not leave the session half-built: the login
+  /// path reports failure loudly rather than showing a signed-in shell with no data.
   Future<void> _afterLogin() async {
     player ??= PlayerService(api);
     await player!.init();
+    bindPlayer();
     await api.ensureStreamKey();
     await refresh();
     _listenForEvents();
@@ -111,12 +115,39 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Find or create a queue by name.
+  ///
+  /// The local list is a cache, and it goes stale the moment another device (or an
+  /// earlier session on this one) makes a queue. Trusting it meant trying to create a
+  /// queue the server already had, and the resulting 409 escaped as a failed "add to
+  /// queue" — which is what made queues feel unreliable. So: check the cache, re-read
+  /// the server, and treat a 409 as "someone got there first" rather than an error.
   Future<Queue> ensureQueue(String name) async {
-    final existing = queues.where((q) => q.name == name);
-    if (existing.isNotEmpty) return api.queue(existing.first.id);
-    final made = await api.createQueue(name);
-    queues = await api.queues();
-    return made;
+    Queue? found = _byName(name);
+    if (found == null) {
+      queues = await api.queues();
+      found = _byName(name);
+    }
+    if (found != null) return api.queue(found.id);
+
+    try {
+      final made = await api.createQueue(name);
+      queues = await api.queues();
+      return made;
+    } on ApiException catch (e) {
+      if (e.status != 409) rethrow;
+      queues = await api.queues();
+      final raced = _byName(name);
+      if (raced == null) rethrow;
+      return api.queue(raced.id);
+    }
+  }
+
+  Queue? _byName(String name) {
+    for (final q in queues) {
+      if (q.name == name) return q;
+    }
+    return null;
   }
 
   /// Add to the active queue, creating one on first use so nothing is ever dropped.
@@ -137,9 +168,12 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  int _eventBackoff = 1;
+
   void _listenForEvents() {
     _events?.cancel();
     _events = api.events().listen((e) async {
+      _eventBackoff = 1;
       if (e.event == 'track_ready') {
         final id = e.data['track_id'] as int?;
         if (id != null) {
@@ -153,13 +187,33 @@ class AppState extends ChangeNotifier {
           notifyListeners();
         }
       }
-    }, onError: (_) {
-      // SSE drops on a sleeping phone; reconnect when the app resumes.
+    }, onError: (_) => _reconnectEvents(), onDone: _reconnectEvents);
+  }
+
+  /// The event stream dies whenever the phone sleeps or a proxy times out. Without a
+  /// reconnect, tracks that finish downloading stay greyed out forever and the app
+  /// looks broken while the server is perfectly fine.
+  void _reconnectEvents() {
+    if (user == null) return;
+    final wait = Duration(seconds: _eventBackoff);
+    _eventBackoff = (_eventBackoff * 2).clamp(1, 60);
+    Future.delayed(wait, () {
+      if (user != null) _listenForEvents();
     });
   }
 
+  /// Player state changes (track advanced, paused) have to reach the queue list, or
+  /// the highlighted row stops matching what is actually playing.
+  void bindPlayer() {
+    _playerSub?.cancel();
+    _playerSub = player?.snapshots.listen((_) => notifyListeners());
+  }
+
+  StreamSubscription? _playerSub;
+
   @override
   void dispose() {
+    _playerSub?.cancel();
     _events?.cancel();
     player?.dispose();
     super.dispose();

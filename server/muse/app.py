@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from . import (auth, catalog, config, db, jobs, routes_files, routes_library,
@@ -228,6 +229,18 @@ def create_app(configuration: config.Config) -> FastAPI:
             "jobs_outstanding": pending["n"],
             "workers": workers,
         }
+
+    if cfg.cors_origins or cfg.cors_origin_regex:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(cfg.cors_origins),
+            allow_origin_regex=cfg.cors_origin_regex or None,
+            allow_methods=["*"],
+            allow_headers=["*"],
+            # Range and the ETag are what let a player seek; without them exposed a
+            # cross-origin audio element cannot scrub.
+            expose_headers=["Content-Range", "Accept-Ranges", "ETag", "Content-Length"],
+        )
 
     app.include_router(routes_library.router)
     app.include_router(routes_sync.router)

@@ -150,3 +150,29 @@ def test_radio_skips_tracks_already_queued(client, hdr, tracks):
 def test_radio_needs_a_seed_with_a_source(client, hdr):
     q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
     assert client.post(f"/queues/{q['id']}/radio", headers=hdr, json={}).status_code == 400
+
+
+def test_queued_and_playlisted_tracks_carry_a_stream_url(client, hdr, wsec, complete_job):
+    """Without the media join these come back looking unplayable, and the client
+    correctly refuses to play them — which reads as "playback is broken"."""
+    t = client.post("/tracks/resolve", headers=hdr, json={"video_id": "PLAYABLE1"}).json()
+    job = client.post("/internal/jobs/lease", headers=wsec, json={"worker": "w"}).json()["jobs"][0]
+    complete_job(job["id"], t["id"])
+
+    q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
+    filled = client.put(f"/queues/{q['id']}", headers=hdr,
+                        json={"rev": q["rev"], "items": [t["id"]]}).json()
+    assert filled["items"][0]["state"] == "ready"
+    assert filled["items"][0]["stream_url"] == f"/tracks/{t['id']}/stream"
+
+    p = client.post("/playlists", headers=hdr, json={"name": "Mix"}).json()
+    full = client.post(f"/playlists/{p['id']}/items", headers=hdr,
+                       json={"track_ids": [t["id"]]}).json()
+    assert full["items"][0]["stream_url"] == f"/tracks/{t['id']}/stream"
+
+    # and a track that genuinely has no media must still report itself as pending
+    pending = client.post("/tracks/resolve", headers=hdr, json={"video_id": "NOTREADY1"}).json()
+    client.post(f"/queues/{q['id']}/items", headers=hdr, json={"track_ids": [pending["id"]]})
+    got = client.get(f"/queues/{q['id']}", headers=hdr).json()
+    unready = [i for i in got["items"] if i["id"] == pending["id"]][0]
+    assert unready["stream_url"] is None and unready["state"] == "pending"

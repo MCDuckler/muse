@@ -3,8 +3,22 @@ import 'package:just_audio_background/just_audio_background.dart';
 import 'package:provider/provider.dart';
 
 import 'src/state/app_state.dart';
+import 'src/state/player.dart';
 import 'src/ui/home_page.dart';
 import 'src/ui/login_page.dart';
+
+/// Exposed for the integration test: the player lives behind a stream, and a test
+/// driving real widgets needs a way to read what it actually did.
+AppState? debugAppState;
+PlayerSnapshot? debugPlayerSnapshot() => debugAppState?.player?.last;
+
+/// Raw engine state, for diagnosing a headless run where audio silently does nothing.
+String debugEngineState() {
+  final p = debugAppState?.player?.raw;
+  if (p == null) return 'no player';
+  return 'processing=${p.processingState} playing=${p.playing} '
+      'volume=${p.volume} duration=${p.duration} position=${p.position}';
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -23,7 +37,11 @@ class MuseApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
-      create: (_) => AppState()..boot(),
+      create: (_) {
+        final state = AppState()..boot();
+        debugAppState = state;
+        return state;
+      },
       child: MaterialApp(
         title: 'muse',
         debugShowCheckedModeBanner: false,
