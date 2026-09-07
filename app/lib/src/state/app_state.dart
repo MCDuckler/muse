@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show ChangeNotifier, kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/client.dart';
@@ -25,13 +25,20 @@ class AppState extends ChangeNotifier {
 
   StreamSubscription? _events;
 
+  /// On web the app is served by the same host it talks to; on a device there is no
+  /// such hint, so it falls back to a local dev server and the user edits it once.
+  static String get defaultServer =>
+      kIsWeb ? Uri.base.origin : 'http://127.0.0.1:8770';
+
   static const _kServer = 'muse.server';
   static const _kToken = 'muse.token';
 
   Future<void> boot() async {
     final prefs = await SharedPreferences.getInstance();
     api = ApiClient(
-      baseUrl: prefs.getString(_kServer) ?? 'http://127.0.0.1:8770',
+      // Served from the box itself on web, so the page's own origin is the server —
+      // no one should have to type a URL into a page they loaded from that URL.
+      baseUrl: prefs.getString(_kServer) ?? defaultServer,
       token: prefs.getString(_kToken),
     );
     if (api.token != null) {
@@ -71,6 +78,7 @@ class AppState extends ChangeNotifier {
   Future<void> _afterLogin() async {
     player ??= PlayerService(api);
     await player!.init();
+    await api.ensureStreamKey();
     await refresh();
     _listenForEvents();
   }
@@ -111,6 +119,7 @@ class AppState extends ChangeNotifier {
   Future<void> addTrack(Track t, {String mode = 'end'}) async {
     activeQueue ??= await ensureQueue('Now');
     activeQueue = await api.addToQueue(activeQueue!.id, [t.id], mode: mode);
+    queues = await api.queues();      // a queue created just now must show in the chips
     await player?.loadQueue(activeQueue!);
     notifyListeners();
   }

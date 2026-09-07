@@ -68,6 +68,13 @@ def create_app(configuration: config.Config) -> FastAPI:
         uid = auth.ensure_user(user)
         return {"token": auth.issue_token(uid, device, platform), "user": user}
 
+    @app.get("/auth/stream-key")
+    def stream_key(user: dict = Depends(current_user)):
+        """A browser cannot put a bearer token on an <audio> src, so it gets a
+        short-lived signed key to hang off the stream URL instead."""
+        key, exp = auth.stream_key(user["id"], cfg.worker_secret)
+        return {"key": key, "expires_at": exp}
+
     @app.get("/me")
     def me(user: dict = Depends(current_user)):
         return {"user": user["name"], "device": user["device_name"]}
@@ -130,7 +137,17 @@ def create_app(configuration: config.Config) -> FastAPI:
         return catalog.public(t)
 
     @app.get("/tracks/{track_id}/stream")
-    def stream(track_id: int, request: Request, user: dict = Depends(current_user)):
+    def stream(track_id: int, request: Request, k: str | None = None,
+               authorization: Annotated[str | None, Header()] = None):
+        # Either a bearer token (app) or a signed stream key (browser audio element).
+        user = None
+        if authorization and authorization.lower().startswith("bearer "):
+            user = auth.user_for_token(authorization.split(" ", 1)[1].strip())
+        if user is None and k:
+            user = auth.user_for_stream_key(k, cfg.worker_secret)
+        if user is None:
+            raise HTTPException(401, "missing bearer token or stream key")
+
         t = catalog.track_row(track_id)
         if not t or not t.get("path"):
             raise HTTPException(404, "not ready" if t else "no such track")

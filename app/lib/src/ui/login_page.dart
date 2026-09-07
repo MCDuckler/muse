@@ -11,7 +11,7 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  final _server = TextEditingController(text: 'http://127.0.0.1:8770');
+  final _server = TextEditingController(text: AppState.defaultServer);
   final _user = TextEditingController();
   final _pass = TextEditingController();
   bool _busy = false;

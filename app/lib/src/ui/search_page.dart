@@ -113,7 +113,10 @@ class _SearchPageState extends State<SearchPage> {
             : 'Queued ${track.title} — downloading'),
       ));
     } on ApiException catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+      messenger.showSnackBar(SnackBar(
+          content: Text(e.message.trim().isEmpty ? 'Failed (${e.status})' : e.message)));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('$e')));
     }
   }
 

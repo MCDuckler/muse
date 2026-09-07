@@ -36,9 +36,21 @@ class ApiClient {
         final d = jsonDecode(r.body);
         if (d is Map && d['detail'] != null) detail = '${d['detail']}';
       } catch (_) {}
+      if (detail.trim().isEmpty) detail = 'Request failed (${r.statusCode})';
+      if (detail.startsWith('<!DOCTYPE') || detail.startsWith('<html')) {
+        // A proxy served the app shell where the API should be: a routing problem,
+        // not an API error. Say so instead of dumping HTML at the user.
+        detail = 'Server returned a web page, not data (${r.statusCode})';
+      }
       throw ApiException(r.statusCode, detail);
     }
-    return r.body.isEmpty ? null : jsonDecode(r.body);
+    if (r.body.isEmpty) return null;
+    try {
+      return jsonDecode(r.body);
+    } on FormatException {
+      throw ApiException(r.statusCode,
+          'Server returned a web page, not data — check the API routing');
+    }
   }
 
   Future<String> login(String user, String password, String device) async {
@@ -51,6 +63,20 @@ class ApiClient {
     final d = await _decode(r) as Map<String, dynamic>;
     token = d['token'] as String;
     return token!;
+  }
+
+  String? _streamKey;
+  int _streamKeyExpiry = 0;
+
+  /// The browser's audio element cannot send an Authorization header, so media URLs
+  /// carry a short-lived signed key instead. Fetched once and reused until it ages out.
+  Future<void> ensureStreamKey({bool force = false}) async {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    if (!force && _streamKey != null && _streamKeyExpiry - 300 > now) return;
+    final d = await _decode(await http.get(_u('/auth/stream-key'), headers: _headers))
+        as Map<String, dynamic>;
+    _streamKey = d['key'] as String;
+    _streamKeyExpiry = d['expires_at'] as int;
   }
 
   Future<Map<String, dynamic>> me() async =>
@@ -79,9 +105,16 @@ class ApiClient {
       Track.fromJson(await _decode(await http.get(_u('/tracks/$id'), headers: _headers))
           as Map<String, dynamic>);
 
-  String streamUrl(Track t) => '$baseUrl${t.streamPath}';
+  String streamUrl(Track t) {
+    final key = _streamKey;
+    return key == null
+        ? '$baseUrl${t.streamPath}'
+        : '$baseUrl${t.streamPath}?k=${Uri.encodeQueryComponent(key)}';
+  }
 
   Map<String, String> get streamHeaders => {'Authorization': 'Bearer $token'};
+
+  bool get hasStreamKey => _streamKey != null;
 
   // ---------------- queues ----------------
   Future<List<Queue>> queues() async {

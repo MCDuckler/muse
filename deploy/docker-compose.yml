@@ -32,6 +32,7 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./data/caddy:/data
+      - ./web:/srv:ro
     depends_on: [api]
     restart: unless-stopped
 

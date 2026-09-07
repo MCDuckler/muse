@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import secrets
 import time
 
@@ -73,3 +74,31 @@ class RateLimiter:
             return False
         self._buckets[key] = (tokens - 1.0, now)
         return True
+
+
+# ---------------------------------------------------------------- stream keys
+# A browser's <audio> element cannot send an Authorization header, so the stream URL
+# has to carry its own proof. This is a short-lived HMAC over the user id — not the
+# device token itself, which would then sit in every proxy log for as long as it lives.
+STREAM_KEY_TTL = 12 * 3600
+
+
+def stream_key(user_id: int, secret: str, ttl: int = STREAM_KEY_TTL) -> tuple[str, int]:
+    exp = int(time.time()) + ttl
+    body = f"{user_id}.{exp}"
+    sig = hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest()[:32]
+    return f"{body}.{sig}", exp
+
+
+def user_for_stream_key(key: str, secret: str) -> dict | None:
+    try:
+        uid_s, exp_s, sig = key.split(".")
+        uid, exp = int(uid_s), int(exp_s)
+    except (ValueError, AttributeError):
+        return None
+    if exp < time.time():
+        return None
+    expected = hmac.new(secret.encode(), f"{uid}.{exp}".encode(), hashlib.sha256).hexdigest()[:32]
+    if not hmac.compare_digest(expected, sig):
+        return None
+    return db.one("select id, name from users where id=%s", (uid,))

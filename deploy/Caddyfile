@@ -1,13 +1,28 @@
-# One upstream, automatic Let's Encrypt. Range requests pass through untouched —
-# the player seeks constantly, so buffering the response would break scrubbing.
-music.example.com {
+# Temporary home on the CTA box. No domain, so the hostname is nip.io — Let's Encrypt
+# issues for it, which is what gives the phone real TLS instead of a cleartext login.
+158-69-192-169.nip.io {
 	encode zstd gzip
 
 	# SSE must not be buffered or the client never sees track_ready.
-	@events path /events
-	reverse_proxy @events api:8770 {
-		flush_interval -1
+	handle /events {
+		reverse_proxy api:8770 {
+			flush_interval -1
+		}
 	}
 
-	reverse_proxy api:8770
+	# The API surface, listed explicitly so a UI route can never shadow an endpoint.
+	# Both the bare collection path and everything under it: `path /queues/*` does NOT
+	# match `/queues`, and that mismatch silently served the app shell to the client,
+	# which then tried to parse a web page as JSON.
+	@api path /auth /auth/* /me /search /search/* /tracks /tracks/* /queues /queues/* /playlists /playlists/* /sync /sync/* /uploads /uploads/* /downloads /downloads/* /listens /listens/* /history /history/* /stats /stats/* /admin /admin/* /internal /internal/* /api-docs /openapi.json
+	handle @api {
+		reverse_proxy api:8770
+	}
+
+	# Flutter web build. try_files so a deep link still lands on the app shell.
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
 }

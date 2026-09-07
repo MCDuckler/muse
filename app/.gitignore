@@ -46,3 +46,8 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# signing material — never commit
+android/key.properties
+*.jks
+*.keystore

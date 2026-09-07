@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:just_audio/just_audio.dart';
 
 import '../api/client.dart';
@@ -75,8 +76,14 @@ class PlayerService {
       _emit();
       return;
     }
+    await api.ensureStreamKey();
     await _player.setAudioSource(
-      AudioSource.uri(Uri.parse(api.streamUrl(track)), headers: api.streamHeaders),
+      AudioSource.uri(
+        Uri.parse(api.streamUrl(track)),
+        // Headers are not deliverable from a browser's audio element, which is why
+        // the URL is signed. Native platforms send them too; either proves identity.
+        headers: kIsWeb ? null : api.streamHeaders,
+      ),
       initialPosition: startAt,
     );
     await _player.setVolume(_volumeFor(track));

@@ -159,3 +159,38 @@ def test_identical_rips_share_one_blob(client, hdr, wsec, complete_job):
     assert ids[0] == ids[1]                       # content-addressed: one file on disk
     stats = client.get("/admin/storage", headers=hdr).json()
     assert stats["media_files"] == 2 and stats["tracks"]["ready"] == 2
+
+
+# ---------------- stream keys (browser audio cannot send headers) ----------------
+def test_stream_key_authenticates_without_a_header(client, hdr, wsec, complete_job):
+    t = client.post("/tracks/resolve", headers=hdr, json={"query": "test song"}).json()
+    job = client.post("/internal/jobs/lease", headers=wsec, json={"worker": "w"}).json()["jobs"][0]
+    complete_job(job["id"], t["id"])
+
+    key = client.get("/auth/stream-key", headers=hdr).json()["key"]
+    r = client.get(f"/tracks/{t['id']}/stream", params={"k": key})   # no Authorization
+    assert r.status_code == 200
+    assert client.get(f"/tracks/{t['id']}/stream").status_code == 401
+
+
+def test_a_forged_or_expired_stream_key_is_refused(client, hdr, wsec, complete_job):
+    import time as _t
+
+    from muse import auth as _auth
+
+    t = client.post("/tracks/resolve", headers=hdr, json={"query": "test song"}).json()
+    job = client.post("/internal/jobs/lease", headers=wsec, json={"worker": "w"}).json()["jobs"][0]
+    complete_job(job["id"], t["id"])
+
+    good = client.get("/auth/stream-key", headers=hdr).json()["key"]
+    uid, exp, sig = good.split(".")
+
+    forged = f"{uid}.{int(exp) + 99999}.{sig}"            # extended expiry, stale signature
+    assert client.get(f"/tracks/{t['id']}/stream", params={"k": forged}).status_code == 401
+
+    expired, _ = _auth.stream_key(int(uid), "test-secret", ttl=-10)
+    assert client.get(f"/tracks/{t['id']}/stream", params={"k": expired}).status_code == 401
+
+    other_secret, _ = _auth.stream_key(int(uid), "not-the-secret")
+    assert client.get(f"/tracks/{t['id']}/stream", params={"k": other_secret}).status_code == 401
+    assert int(_t.time()) > 0
