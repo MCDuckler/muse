@@ -11,7 +11,9 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from . import auth, config, db, jobs, storage, ytm
+from . import auth, catalog, config, db, jobs, routes_library, storage, ytm
+from . import deps
+from .deps import current_user, worker_auth
 
 cfg: config.Config = None  # set in create_app
 
@@ -32,56 +34,11 @@ def publish(event: str, data: dict) -> None:
     _loop.call_soon_threadsafe(_fan_out)
 
 
-# ---- auth dependency ----
-def current_user(authorization: Annotated[str | None, Header()] = None) -> dict:
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(401, "missing bearer token")
-    user = auth.user_for_token(authorization.split(" ", 1)[1].strip())
-    if not user:
-        raise HTTPException(401, "unknown or revoked token")
-    return user
-
-
-def worker_auth(x_worker_secret: Annotated[str | None, Header()] = None) -> None:
-    if not x_worker_secret or x_worker_secret != cfg.worker_secret:
-        raise HTTPException(401, "bad worker secret")
-
-
-# ---- track helpers ----
-def _track_row(track_id: int) -> dict | None:
-    return db.one(
-        """select t.*, m.bytes, m.path, m.sha256, m.codec, m.bitrate,
-                  s.provider, s.provider_id
-             from tracks t
-             left join media m on m.track_id=t.id
-             left join track_sources s on s.track_id=t.id
-            where t.id=%s""",
-        (track_id,),
-    )
-
-
-def _public(t: dict) -> dict:
-    return {
-        "id": t["id"],
-        "title": t["title"],
-        "artists": t["artists"],
-        "album": t["album"],
-        "duration_ms": t["duration_ms"],
-        "state": t["state"],
-        "fail_reason": t["fail_reason"],
-        "source": t["source"],
-        "gain_db": t["gain_db"],
-        "loudness_lufs": t["loudness_lufs"],
-        "bytes": t.get("bytes"),
-        "provider_id": t.get("provider_id"),
-        "stream_url": f"/tracks/{t['id']}/stream" if t.get("path") else None,
-    }
-
-
 def create_app(configuration: config.Config) -> FastAPI:
     global cfg
     cfg = configuration
     db.init(cfg.dsn)
+    deps.set_config(cfg)
     for u in cfg.users:
         auth.ensure_user(u.name)
 
@@ -123,7 +80,7 @@ def create_app(configuration: config.Config) -> FastAPI:
                 order by similarity(t.norm_title, lower(%s)) desc limit %s""",
             (q, f"%{q}%", q, limit),
         )
-        out = {"local": [_public(t) for t in local], "remote": []}
+        out = {"local": [catalog.public(t) for t in local], "remote": []}
         if remote:
             have = {t.get("provider_id") for t in db.all_(
                 "select provider_id from track_sources where provider='ytmusic'")}
@@ -151,44 +108,29 @@ def create_app(configuration: config.Config) -> FastAPI:
             meta = None
 
         # 1. cache check — before anything touches the network
-        existing = db.one(
-            "select track_id from track_sources where provider='ytmusic' and provider_id=%s",
-            (video_id,),
-        )
-        if existing:
-            t = _track_row(existing["track_id"])
-            if t["state"] == "failed":       # retry a previously failed ingest
-                db.run("update tracks set state='pending', fail_reason=null where id=%s", (t["id"],))
-                jobs.enqueue("ingest", {"track_id": t["id"], "video_id": video_id})
-                t = _track_row(t["id"])
-            return _public(t)
+        cached = catalog.find_by_video_id(video_id)
+        if cached:
+            if cached["state"] == "failed":       # retry a previously failed ingest
+                cached = catalog.retry(cached["id"], video_id)
+            return catalog.public(cached)
 
         meta = meta or ytm.song(video_id) or {"video_id": video_id, "title": video_id,
                                               "artists": [], "album": None, "duration_ms": None,
                                               "raw": {}}
-        row = db.one(
-            """insert into tracks(title,artists,album,duration_ms,source,state)
-               values(%s,%s,%s,%s,'youtube','pending') returning id""",
-            (meta["title"], meta["artists"], meta["album"], meta["duration_ms"]),
-        )
-        db.run(
-            "insert into track_sources(track_id,provider,provider_id,raw) values(%s,'ytmusic',%s,%s)",
-            (row["id"], video_id, json.dumps(meta.get("raw") or {})),
-        )
-        jobs.enqueue("ingest", {"track_id": row["id"], "video_id": video_id})
-        t = _track_row(row["id"])
-        return JSONResponse(_public(t), status_code=202)
+        meta["video_id"] = video_id
+        created = catalog.create_from_ytm(meta, discovered_via=catalog.VIA_USER)
+        return JSONResponse(catalog.public(created), status_code=202)
 
     @app.get("/tracks/{track_id}")
     def get_track(track_id: int, user: dict = Depends(current_user)):
-        t = _track_row(track_id)
+        t = catalog.track_row(track_id)
         if not t:
             raise HTTPException(404, "no such track")
-        return _public(t)
+        return catalog.public(t)
 
     @app.get("/tracks/{track_id}/stream")
     def stream(track_id: int, request: Request, user: dict = Depends(current_user)):
-        t = _track_row(track_id)
+        t = catalog.track_row(track_id)
         if not t or not t.get("path"):
             raise HTTPException(404, "not ready" if t else "no such track")
         return _range_response(pathlib.Path(t["path"]), request, etag=t["sha256"])
@@ -269,6 +211,7 @@ def create_app(configuration: config.Config) -> FastAPI:
             "workers": workers,
         }
 
+    app.include_router(routes_library.router)
     return app
 
 

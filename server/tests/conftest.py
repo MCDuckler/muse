@@ -46,6 +46,11 @@ def client(cfg, monkeypatch):
         "video_id": "TESTVIDEO001", "title": "Test Song", "artists": ["Tester"],
         "album": "Test Album", "duration_ms": 123_000, "raw": {"stub": True},
     }])
+    monkeypatch.setattr(ytm, "watch_playlist", lambda vid, limit=25: [
+        {"video_id": f"RADIO{n}", "title": f"Radio Track {n}", "artists": ["Someone"],
+         "album": None, "duration_ms": 180_000 + n, "raw": {"radio_seed": vid}}
+        for n in range(12)
+    ])
     monkeypatch.setattr(ytm, "song", lambda vid: {
         "video_id": vid, "title": f"Song {vid}", "artists": ["Tester"],
         "album": None, "duration_ms": 60_000, "raw": {},

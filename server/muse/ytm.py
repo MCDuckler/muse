@@ -35,3 +35,27 @@ def song(video_id: str) -> dict | None:
         if r.get("videoId") == video_id:
             return _flatten(r)
     return None
+
+
+def watch_playlist(video_id: str, limit: int = 25) -> list[dict]:
+    """The radio tail for a seed track. Unauthenticated; returns ~50 candidates."""
+    data = _client().get_watch_playlist(video_id, limit=limit)
+    out = []
+    for t in data.get("tracks", []):
+        if not t.get("videoId"):
+            continue
+        length = t.get("length")  # "4:09"
+        ms = None
+        if isinstance(length, str) and ":" in length:
+            parts = [int(p) for p in length.split(":")]
+            ms = (parts[0] * 60 + parts[1]) * 1000 if len(parts) == 2 else \
+                 (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000
+        out.append({
+            "video_id": t["videoId"],
+            "title": t.get("title"),
+            "artists": [a["name"] for a in (t.get("artists") or []) if a.get("name")],
+            "album": (t.get("album") or {}).get("name") if isinstance(t.get("album"), dict) else None,
+            "duration_ms": ms,
+            "raw": {"radio_seed": video_id},
+        })
+    return out

@@ -44,6 +44,7 @@ create table if not exists tracks (
   created_at    timestamptz not null default now(),
   norm_title    text generated always as (lower(regexp_replace(title,'[^[:alnum:] ]','','g'))) stored
 );
+alter table tracks add column if not exists discovered_via text not null default 'user';
 create index if not exists tracks_norm_trgm on tracks using gin (norm_title gin_trgm_ops);
 create index if not exists tracks_state_idx on tracks(state);
 
