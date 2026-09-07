@@ -90,7 +90,9 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     @app.get("/search")
     def search(q: str, limit: int = 20, remote: bool = True, user: dict = Depends(current_user)):
         local = db.all_(
-            """select t.*, m.path from tracks t left join media m on m.track_id=t.id
+            """select t.*, m.path, c.color as cover_color from tracks t
+                 left join media m on m.track_id=t.id and m.role='canonical'
+                 left join covers c on c.id=t.cover_id
                 where t.norm_title %% lower(%s) or t.title ilike %s
                 order by similarity(t.norm_title, lower(%s)) desc limit %s""",
             (q, f"%{q}%", q, limit),

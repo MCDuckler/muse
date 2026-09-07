@@ -34,7 +34,19 @@ class ApiClient {
       String detail = r.body;
       try {
         final d = jsonDecode(r.body);
-        if (d is Map && d['detail'] != null) detail = '${d['detail']}';
+        if (d is Map && d['detail'] != null) {
+          final v = d['detail'];
+          if (v is List) {
+            // FastAPI validation errors arrive as a list of objects; printing them
+            // raw put "[{type: missing, loc: [body, user]…}]" in front of the user.
+            detail = v
+                .map((e) => e is Map ? (e['msg'] ?? '').toString() : '$e')
+                .where((s) => s.isNotEmpty)
+                .join('. ');
+          } else {
+            detail = '$v';
+          }
+        }
       } catch (_) {}
       if (detail.trim().isEmpty) detail = 'Request failed (${r.statusCode})';
       if (detail.startsWith('<!DOCTYPE') || detail.startsWith('<html')) {

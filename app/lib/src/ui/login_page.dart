@@ -29,7 +29,11 @@ class _LoginPageState extends State<LoginPage> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text('muse', style: Theme.of(context).textTheme.displaySmall),
+                Text('Muse',
+                    style: Theme.of(context)
+                        .textTheme
+                        .headlineSmall
+                        ?.copyWith(fontSize: 40, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 4),
                 Text('Sign in to your server',
                     style: Theme.of(context).textTheme.bodyMedium),
@@ -78,8 +82,13 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<void> _submit() async {
+    final app = context.read<AppState>();
+    if (_user.text.trim().isEmpty || _pass.text.isEmpty) {
+      app.reportError('Enter your user name and password');
+      return;
+    }
     setState(() => _busy = true);
-    await context.read<AppState>().login(_server.text.trim(), _user.text.trim(), _pass.text);
+    await app.login(_server.text.trim(), _user.text.trim(), _pass.text);
     if (mounted) setState(() => _busy = false);
   }
 

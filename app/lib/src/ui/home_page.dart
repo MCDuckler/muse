@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
+import 'glass.dart';
 import 'library_page.dart';
 import 'player_bar.dart';
 import 'queue_page.dart';
@@ -48,26 +49,44 @@ class _HomePageState extends State<HomePage> {
       ),
       // IndexedStack, not pages[_tab]: rebuilding the tab from scratch threw away
       // your search results and scroll position every time you switched away and back.
+      // Content runs under the bars so the blur has something to blur. Lists add
+      // their own bottom padding, otherwise the last row hides behind the glass.
+      extendBody: true,
       body: SafeArea(
+        bottom: false,
         child: IndexedStack(
           index: _tab,
           children: pages,
         ),
       ),
-      bottomNavigationBar: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const PlayerBar(),
-          NavigationBar(
-            selectedIndex: _tab,
-            onDestinationSelected: (i) => setState(() => _tab = i),
-            destinations: const [
-              NavigationDestination(icon: Icon(Icons.queue_music), label: 'Queues'),
-              NavigationDestination(icon: Icon(Icons.search), label: 'Search'),
-              NavigationDestination(icon: Icon(Icons.library_music), label: 'Library'),
+      bottomNavigationBar: GlassSurface(
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const PlayerBar(),
+              NavigationBar(
+                selectedIndex: _tab,
+                onDestinationSelected: (i) => setState(() => _tab = i),
+                destinations: const [
+                  NavigationDestination(
+                      icon: Icon(Icons.queue_music_outlined),
+                      selectedIcon: Icon(Icons.queue_music),
+                      label: 'Queues'),
+                  NavigationDestination(
+                      icon: Icon(Icons.search),
+                      selectedIcon: Icon(Icons.search),
+                      label: 'Search'),
+                  NavigationDestination(
+                      icon: Icon(Icons.library_music_outlined),
+                      selectedIcon: Icon(Icons.library_music),
+                      label: 'Library'),
+                ],
+              ),
             ],
           ),
-        ],
+        ),
       ),
       ),
     );

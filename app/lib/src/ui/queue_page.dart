@@ -22,10 +22,10 @@ class QueuePage extends StatelessWidget {
     return Column(
       children: [
         SizedBox(
-          height: 56,
+          height: 58,
           child: ListView(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
             children: [
               for (final q in app.queues)
                 Padding(
@@ -44,11 +44,45 @@ class QueuePage extends StatelessWidget {
             ],
           ),
         ),
+        if (active != null && rows.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+            child: Row(
+              spacing: 8,
+              children: [
+                IconButton.filledTonal(
+                  isSelected: app.player?.shuffle ?? false,
+                  icon: const Icon(Icons.shuffle),
+                  tooltip: 'Shuffle',
+                  onPressed: () => app.setShuffle(!(app.player?.shuffle ?? false)),
+                ),
+                IconButton.filledTonal(
+                  isSelected: (app.player?.repeat ?? QueueRepeat.off) != QueueRepeat.off,
+                  icon: Icon(app.player?.repeat == QueueRepeat.one
+                      ? Icons.repeat_one
+                      : Icons.repeat),
+                  tooltip: switch (app.player?.repeat ?? QueueRepeat.off) {
+                    QueueRepeat.off => 'Repeat off',
+                    QueueRepeat.all => 'Repeat queue',
+                    QueueRepeat.one => 'Repeat track',
+                  },
+                  onPressed: app.cycleRepeat,
+                ),
+                const Spacer(),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.radio, size: 18),
+                  label: const Text('Radio'),
+                  onPressed: () => app.startRadio(),
+                ),
+              ],
+            ),
+          ),
         const Divider(height: 1),
         Expanded(
           child: active == null || rows.isEmpty
               ? const _EmptyQueue()
               : ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
                   itemCount: rows.length,
                   itemBuilder: (context, i) {
                     final t = rows[i];
@@ -93,48 +127,18 @@ class QueuePage extends StatelessWidget {
                   },
                 ),
         ),
-        if (active != null && rows.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.all(8),
-            child: Row(
-              spacing: 8,
-              children: [
-                IconButton.filledTonal(
-                  isSelected: app.player?.shuffle ?? false,
-                  icon: const Icon(Icons.shuffle),
-                  tooltip: 'Shuffle',
-                  onPressed: () => app.setShuffle(!(app.player?.shuffle ?? false)),
-                ),
-                IconButton.filledTonal(
-                  isSelected: (app.player?.repeat ?? QueueRepeat.off) != QueueRepeat.off,
-                  icon: Icon(app.player?.repeat == QueueRepeat.one
-                      ? Icons.repeat_one
-                      : Icons.repeat),
-                  tooltip: switch (app.player?.repeat ?? QueueRepeat.off) {
-                    QueueRepeat.off => 'Repeat off',
-                    QueueRepeat.all => 'Repeat queue',
-                    QueueRepeat.one => 'Repeat track',
-                  },
-                  onPressed: app.cycleRepeat,
-                ),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    icon: const Icon(Icons.radio),
-                    label: const Text('Start radio'),
-                    onPressed: () => app.startRadio(),
-                  ),
-                ),
-              ],
-            ),
-          ),
       ],
     );
   }
 
+  /// Artwork stands in for a track number, with state layered on top: a spinner while
+  /// it downloads, an error mark when it failed, and the equalizer badge on whatever
+  /// is playing.
   Widget _leading(Track t, int i, bool isCurrent) {
     if (t.isPending) {
       return const SizedBox(
-          width: 40, height: 40,
+          width: 40,
+          height: 40,
           child: Center(
               child: SizedBox(
                   width: 20, height: 20,

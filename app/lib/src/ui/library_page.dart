@@ -12,6 +12,7 @@ class LibraryPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
     return ListView(
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
       children: [
         for (final p in app.playlists)
           ListTile(

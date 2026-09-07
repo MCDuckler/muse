@@ -5,6 +5,7 @@ import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/player.dart';
 import 'artwork.dart';
+import 'glass.dart';
 
 String formatTime(Duration d) {
   final m = d.inMinutes;
@@ -32,6 +33,7 @@ class NowPlayingScreen extends StatelessWidget {
         final scheme = Theme.of(context).colorScheme;
 
         return Scaffold(
+          extendBodyBehindAppBar: true,
           appBar: AppBar(
             leading: IconButton(
               icon: const Icon(Icons.keyboard_arrow_down),
@@ -42,7 +44,9 @@ class NowPlayingScreen extends StatelessWidget {
                 style: Theme.of(context).textTheme.titleSmall),
             centerTitle: true,
           ),
-          body: track == null
+          body: AmbientBackdrop(
+            colour: parseHexColour(track?.coverColor),
+            child: track == null
               ? const Center(child: Text('Nothing playing'))
               : SafeArea(
                   child: Center(
@@ -80,17 +84,30 @@ class NowPlayingScreen extends StatelessWidget {
                                   style: TextStyle(color: scheme.error)),
                             ],
                             const SizedBox(height: 26),
-                            _Scrubber(player: player, snapshot: s),
-                            const SizedBox(height: 8),
-                            _Controls(app: app, player: player, snapshot: s),
-                            const SizedBox(height: 16),
-                            _VolumeRow(player: player),
+                            GlassSurface(
+                              borderRadius: BorderRadius.circular(22),
+                              topBorder: false,
+                              opacity: 0.55,
+                              blur: 30,
+                              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  _Scrubber(player: player, snapshot: s),
+                                  const SizedBox(height: 4),
+                                  _Controls(app: app, player: player, snapshot: s),
+                                  const SizedBox(height: 6),
+                                  _VolumeRow(player: player),
+                                ],
+                              ),
+                            ),
                           ],
                         ),
                       ),
                     ),
                   ),
                 ),
+          ),
         );
       },
     );

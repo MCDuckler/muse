@@ -192,3 +192,21 @@ def test_a_video_still_is_cropped_square(client, cfg):
     Image.new("RGB", (1280, 720), (10, 20, 30)).save(wide, format="PNG")
     row = enrich.store_cover(cfg, wide.getvalue(), "youtube")
     assert row["w"] == row["h"] == 720
+
+
+def test_dominant_colour_prefers_the_hue_a_person_would_name(client, cfg):
+    """Averaging album art gives mud; the point is the colour someone would call it."""
+    from PIL import Image
+
+    canvas = Image.new("RGB", (100, 100), (0, 0, 0))     # mostly black
+    canvas.paste(Image.new("RGB", (30, 30), (220, 60, 40)), (10, 10))   # a red block
+    colour = enrich.dominant_colour(canvas)
+    r, g, b = int(colour[1:3], 16), int(colour[3:5], 16), int(colour[5:7], 16)
+    assert r > g and r > b, f"expected the red, got {colour}"
+
+
+def test_dominant_colour_survives_a_monochrome_cover(client, cfg):
+    from PIL import Image
+
+    colour = enrich.dominant_colour(Image.new("RGB", (50, 50), (255, 255, 255)))
+    assert colour.startswith("#") and len(colour) == 7

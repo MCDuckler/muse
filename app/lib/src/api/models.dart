@@ -15,6 +15,8 @@ class Track {
   final int? bytes;
   final String? streamPath;
   final String? coverPath;
+  /// Dominant colour of the artwork, computed server-side (#rrggbb).
+  final String? coverColor;
   /// Platform noise stripped for display; `title` keeps whatever the source said.
   final String displayTitle;
   final String origin; // user | autoplay | radio (queue items only)
@@ -33,15 +35,25 @@ class Track {
     this.bytes,
     this.streamPath,
     this.coverPath,
+    this.coverColor,
     String? displayTitle,
     this.origin = 'user',
   }) : displayTitle = displayTitle ?? title;
 
   bool get isReady => state == 'ready' && streamPath != null;
   bool get hasCover => coverPath != null;
-  /// Hide an album line that only repeats the title — common for singles.
-  String? get albumLine =>
-      (album == null || album == title || album == displayTitle) ? null : album;
+  /// Hide an album line that only repeats the title. Singles are usually released
+  /// under their own name, so "Around the World (Radio Edit) · Around the World" is
+  /// the common case rather than the exception.
+  String? get albumLine {
+    final a = album;
+    if (a == null || a.trim().isEmpty) return null;
+    String norm(String s) =>
+        s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim();
+    final na = norm(a), nt = norm(displayTitle);
+    if (na.isEmpty || na == nt || nt.startsWith(na) || na.startsWith(nt)) return null;
+    return a;
+  }
   bool get isPending => state == 'pending' || state == 'downloading';
   String get artistLine => artists.isEmpty ? 'Unknown artist' : artists.join(', ');
   Duration? get duration =>
@@ -61,6 +73,7 @@ class Track {
         bytes: j['bytes'] as int?,
         streamPath: j['stream_url'] as String?,
         coverPath: j['cover_url'] as String?,
+        coverColor: j['cover_color'] as String?,
         displayTitle: j['display_title'] as String?,
         origin: (j['origin'] ?? 'user') as String,
       );

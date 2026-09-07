@@ -115,6 +115,33 @@ def _download(url: str, min_px: int = 0) -> bytes | None:
         return None
 
 
+def dominant_colour(img) -> str:
+    """A colour to build the now-playing background from.
+
+    Not the average — averaging album art gives mud. Quantise, then prefer the most
+    saturated swatch that is neither black nor white, because that is the one a person
+    would name if asked what colour the cover is.
+    """
+    import colorsys
+
+    small = img.convert("RGB").resize((64, 64))
+    palette = small.quantize(colors=8, method=2).convert("RGB")
+    counts: dict[tuple[int, int, int], int] = {}
+    for px in palette.getdata():
+        counts[px] = counts.get(px, 0) + 1
+
+    best, best_score = (90, 90, 90), -1.0
+    for (r, g, b), n in counts.items():
+        h, l, s = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
+        if l < 0.08 or l > 0.94:
+            continue                       # near-black and near-white carry no hue
+        share = n / 4096
+        score = s * 2.2 + share + (1 - abs(l - 0.45)) * 0.6
+        if score > best_score:
+            best, best_score = (r, g, b), score
+    return "#%02x%02x%02x" % best
+
+
 def store_cover(cfg, raw_bytes: bytes, source: str) -> dict | None:
     """Content-addressed like audio, plus a small variant because lists need one."""
     from PIL import Image
@@ -147,13 +174,15 @@ def store_cover(cfg, raw_bytes: bytes, source: str) -> dict | None:
     tpath = path.with_name(f"{digest}_sm.jpg")
     tpath.write_bytes(tbuf.getvalue())
 
+    colour = dominant_colour(img)
     row = db.one("select id from covers where sha256=%s", (digest,))
     if row:
+        db.run("update covers set color=%s where id=%s", (colour, row["id"]))
         return db.one("select * from covers where id=%s", (row["id"],))
     return db.one(
-        """insert into covers(sha256,w,h,path,source) values(%s,%s,%s,%s,%s)
+        """insert into covers(sha256,w,h,path,source,color) values(%s,%s,%s,%s,%s,%s)
            returning *""",
-        (digest, img.width, img.height, str(path), source),
+        (digest, img.width, img.height, str(path), source, colour),
     )
 
 

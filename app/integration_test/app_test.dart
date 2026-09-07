@@ -29,9 +29,12 @@ String visibleText(WidgetTester tester) {
 /// Icons repeat across the UI (queue_music is both a tab and an empty-state
 /// illustration), so tab taps have to be scoped to the navigation bar or the test
 /// silently stays on the wrong page and asserts against it.
-Finder tab(IconData icon) => find.descendant(
+/// Tabs are addressed by label, not icon: destinations now use an outlined icon when
+/// unselected and a filled one when selected, so an icon finder matches only half the
+/// time.
+Finder tab(String label) => find.descendant(
       of: find.byType(NavigationBar),
-      matching: find.byIcon(icon),
+      matching: find.text(label),
     );
 
 /// Tabs live in an IndexedStack, so every page stays mounted and a bare finder will
@@ -39,10 +42,20 @@ Finder tab(IconData icon) => find.descendant(
 Finder onPage(Type page, Finder inner) =>
     find.descendant(of: find.byType(page), matching: inner);
 
+/// Collected while pumping. The framework only reports "multiple exceptions were
+/// detected" and swallows the first, which is no help at all when the widget tree is
+/// throwing in a loop.
+final caught = <String>[];
+
 Future<void> settle(WidgetTester tester, {int seconds = 3}) async {
   final end = DateTime.now().add(Duration(seconds: seconds));
   while (DateTime.now().isBefore(end)) {
     await tester.pump(const Duration(milliseconds: 100));
+    final e = tester.takeException();
+    if (e != null) {
+      final text = e.toString();
+      if (caught.length < 5 && !caught.any((c) => c == text)) caught.add(text);
+    }
   }
 }
 
@@ -67,6 +80,21 @@ void main() {
   final trace = <String>[];
   void note(String s) => trace.add(s);
 
+  // The framework reports "multiple exceptions were detected" and swallows the first
+  // one, which is useless when something in the widget tree is throwing repeatedly.
+  final renderErrors = <String>[];
+
+  setUpAll(() {
+    final previous = FlutterError.onError;
+    FlutterError.onError = (details) {
+      final text = details.exceptionAsString();
+      if (renderErrors.length < 6 && !renderErrors.contains(text)) {
+        renderErrors.add(text);
+      }
+      previous?.call(details);
+    };
+  });
+
   testWidgets('sign in, queue a song, play it, and keep playing while adding another',
       (tester) async {
     app.main();
@@ -84,7 +112,7 @@ void main() {
         reason: 'should land on the home shell. On screen: ${visibleText(tester)}');
 
     // ---- a scratch queue of our own, so real ones stay untouched ----
-    await tester.tap(tab(Icons.queue_music));
+    await tester.tap(tab('Queues'));
     await settle(tester, seconds: 2);
     await tester.tap(find.text('New queue'));
     await settle(tester, seconds: 2);
@@ -99,7 +127,7 @@ void main() {
         reason: 'the scratch queue must be the active one before anything is added');
 
     // ---- find something already in the library and queue it ----
-    await tester.tap(tab(Icons.search));
+    await tester.tap(tab('Search'));
     await settle(tester);
     await tester.enterText(find.byType(TextField).first, 'lucky');
     // Tap the button rather than sending an IME action: the on-screen keyboard is not
@@ -127,7 +155,7 @@ void main() {
     await settle(tester, seconds: 4);
 
     // ---- play it from the queue ----
-    await tester.tap(tab(Icons.queue_music));
+    await tester.tap(tab('Queues'));
     await settle(tester, seconds: 3);
 
     // Tap the row we just added, not simply the first one: a queue can hold tracks
@@ -160,11 +188,18 @@ void main() {
         reason: 'position must advance — a frozen position was the original bug');
 
     // ---- the regression that broke everything: adding a track mid-playback ----
-    await tester.tap(tab(Icons.search));
+    await tester.tap(tab('Search'));
     await settle(tester);
-    // Add a *different* track, through the explicit menu this time.
-    await tester.tap(onPage(SearchPage, find.byIcon(Icons.playlist_add)).last);
+    // Add another track through the explicit menu this time. Scroll it into view
+    // first: tapping a button below the fold silently does nothing, and the failure
+    // then surfaces further down as "no element" on the menu that never opened.
+    final menuButton = onPage(SearchPage, find.byIcon(Icons.playlist_add)).at(1);
+    await tester.ensureVisible(menuButton);
+    await settle(tester, seconds: 1);
+    await tester.tap(menuButton);
     await settle(tester, seconds: 2);
+    expect(find.text('Add to end'), findsWidgets,
+        reason: 'the queue menu should be open. On screen: ${visibleText(tester)}');
     await tester.tap(find.text('Add to end').last);
     await settle(tester, seconds: 5);
 
@@ -186,7 +221,7 @@ void main() {
     // ---- typing in search must not fire playback shortcuts ----
     // S is shuffle, N is next, space is play/pause. Typing "snx " into the search box
     // used to shuffle the queue, skip the track and pause the music.
-    await tester.tap(tab(Icons.search));
+    await tester.tap(tab('Search'));
     await settle(tester, seconds: 2);
     final shuffleBefore = app.debugPlayerSnapshot()!.shuffle;
     final trackBefore = app.debugPlayerSnapshot()!.current?.id;
@@ -225,5 +260,8 @@ void main() {
     expect(settings.repeat, 'all');
     expect(settings.items.length, itemsBefore,
         reason: 'a settings change must never clear the queue');
+
+    expect(caught, isEmpty,
+        reason: 'the widget tree must not throw while all this happens');
   });
 }

@@ -59,6 +59,11 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  void reportError(String message) {
+    error = message;
+    notifyListeners();
+  }
+
   Future<bool> login(String server, String username, String password) async {
     error = null;
     try {

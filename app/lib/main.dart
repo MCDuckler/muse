@@ -6,6 +6,7 @@ import 'src/state/app_state.dart';
 import 'src/state/player.dart';
 import 'src/ui/home_page.dart';
 import 'src/ui/login_page.dart';
+import 'src/ui/theme.dart';
 
 /// Exposed for the integration test: the player lives behind a stream, and a test
 /// driving real widgets needs a way to read what it actually did.
@@ -45,16 +46,8 @@ class MuseApp extends StatelessWidget {
       child: MaterialApp(
         title: 'muse',
         debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-              seedColor: const Color(0xFFC8511B), brightness: Brightness.light),
-          useMaterial3: true,
-        ),
-        darkTheme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-              seedColor: const Color(0xFFF07A3E), brightness: Brightness.dark),
-          useMaterial3: true,
-        ),
+        theme: MuseTheme.light(),
+        darkTheme: MuseTheme.dark(),
         home: const _Root(),
       ),
     );

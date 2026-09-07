@@ -73,6 +73,7 @@ class _SearchPageState extends State<SearchPage> {
           ),
         Expanded(
           child: ListView(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 160),
             children: [
               if (_local.isNotEmpty) const _SectionHeader('In your library'),
               for (final t in _local)

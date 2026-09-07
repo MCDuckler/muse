@@ -45,12 +45,14 @@ class PlayerBar extends StatelessWidget {
             (s?.finished ?? false);
 
         return PlayerBarMarker(
-            child: Material(
-          elevation: 8,
-          child: Column(
+            child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              LinearProgressIndicator(value: progress, minHeight: 2),
+              LinearProgressIndicator(
+                value: progress,
+                minHeight: 2,
+                backgroundColor: Colors.transparent,
+              ),
               ListTile(
                 dense: true,
                 onTap: () => Navigator.of(context).push(MaterialPageRoute(
@@ -86,7 +88,6 @@ class PlayerBar extends StatelessWidget {
                 ),
               ),
             ],
-          ),
         ));
       },
     );
