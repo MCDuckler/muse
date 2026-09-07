@@ -19,9 +19,10 @@ ERROR_SLEEP = 30.0
 
 
 class EnrichWorker:
-    def __init__(self, cfg, name: str = "api-enrich"):
+    def __init__(self, cfg, name: str = "api-enrich", publish=None):
         self.cfg = cfg
         self.name = name
+        self.publish = publish
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -55,6 +56,10 @@ class EnrichWorker:
         try:
             result = enrich.enrich_track(self.cfg, track_id)
             jobs.finish(job["id"])
+            # Tell every open client, so artwork appears while the app is running
+            # instead of on the next launch.
+            if self.publish and result.get("cover"):
+                self.publish("track_updated", {"track_id": track_id})
             log.info("enriched track %s in %.1fs: %s",
                      track_id, time.monotonic() - started, result)
         except Exception as e:

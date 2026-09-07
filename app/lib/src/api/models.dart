@@ -17,6 +17,9 @@ class Track {
   final String? coverPath;
   /// Dominant colour of the artwork, computed server-side (#rrggbb).
   final String? coverColor;
+  final String? providerId;
+  /// Changes when the artwork changes, so a cached image is not shown forever.
+  final String? coverVersion;
   /// Platform noise stripped for display; `title` keeps whatever the source said.
   final String displayTitle;
   final String origin; // user | autoplay | radio (queue items only)
@@ -36,9 +39,33 @@ class Track {
     this.streamPath,
     this.coverPath,
     this.coverColor,
+    this.providerId,
+    this.coverVersion,
     String? displayTitle,
     this.origin = 'user',
   }) : displayTitle = displayTitle ?? title;
+
+  /// Queue membership carries `origin`, which a freshly fetched track does not know.
+  Track copyWithOrigin(String origin) => Track(
+        id: id,
+        title: title,
+        artists: artists,
+        album: album,
+        durationMs: durationMs,
+        state: state,
+        failReason: failReason,
+        source: source,
+        discoveredVia: discoveredVia,
+        gainDb: gainDb,
+        bytes: bytes,
+        streamPath: streamPath,
+        coverPath: coverPath,
+        coverColor: coverColor,
+        coverVersion: coverVersion,
+        providerId: providerId,
+        displayTitle: displayTitle,
+        origin: origin,
+      );
 
   bool get isReady => state == 'ready' && streamPath != null;
   bool get hasCover => coverPath != null;
@@ -74,6 +101,8 @@ class Track {
         streamPath: j['stream_url'] as String?,
         coverPath: j['cover_url'] as String?,
         coverColor: j['cover_color'] as String?,
+        providerId: j['provider_id'] as String?,
+        coverVersion: j['cover_version'] as String?,
         displayTitle: j['display_title'] as String?,
         origin: (j['origin'] ?? 'user') as String,
       );

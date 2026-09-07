@@ -44,7 +44,21 @@ class NowPlayingScreen extends StatelessWidget {
                 style: Theme.of(context).textTheme.titleSmall),
             centerTitle: true,
           ),
-          body: AmbientBackdrop(
+          body: GestureDetector(
+            // Swipe down to close, the same gesture that dismisses a sheet anywhere
+            // else; sideways moves through the queue, matching the mini player.
+            onVerticalDragEnd: (d) {
+              if ((d.primaryVelocity ?? 0) > 240) Navigator.of(context).maybePop();
+            },
+            onHorizontalDragEnd: (d) {
+              final v = d.primaryVelocity ?? 0;
+              if (v < -240) {
+                player.next();
+              } else if (v > 240) {
+                player.previous();
+              }
+            },
+            child: AmbientBackdrop(
             colour: parseHexColour(track?.coverColor),
             child: track == null
               ? const Center(child: Text('Nothing playing'))
@@ -107,6 +121,7 @@ class NowPlayingScreen extends StatelessWidget {
                     ),
                   ),
                 ),
+          ),
           ),
         );
       },

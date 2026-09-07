@@ -45,7 +45,22 @@ class PlayerBar extends StatelessWidget {
             (s?.finished ?? false);
 
         return PlayerBarMarker(
-            child: Column(
+            child: GestureDetector(
+          // Gestures live here rather than on list rows: rows already use a
+          // horizontal swipe to remove, and two meanings for one drag is how a UI
+          // starts feeling unpredictable.
+          onVerticalDragEnd: (d) {
+            if ((d.primaryVelocity ?? 0) < -180) _openNowPlaying(context);
+          },
+          onHorizontalDragEnd: (d) {
+            final v = d.primaryVelocity ?? 0;
+            if (v < -220) {
+              player.next();
+            } else if (v > 220) {
+              player.previous();
+            }
+          },
+          child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               LinearProgressIndicator(
@@ -55,10 +70,7 @@ class PlayerBar extends StatelessWidget {
               ),
               ListTile(
                 dense: true,
-                onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => const NowPlayingScreen(),
-                  fullscreenDialog: true,
-                )),
+                onTap: () => _openNowPlaying(context),
                 leading: Artwork(track: track, size: 42),
                 title: Text(track.displayTitle,
                     maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -88,8 +100,14 @@ class PlayerBar extends StatelessWidget {
                 ),
               ),
             ],
-        ));
+        )));
       },
     );
   }
+
+  static void _openNowPlaying(BuildContext context) =>
+      Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => const NowPlayingScreen(),
+        fullscreenDialog: true,
+      ));
 }

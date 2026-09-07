@@ -212,3 +212,76 @@ def test_repeat_mode_is_validated(client, hdr):
     q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
     assert client.patch(f"/queues/{q['id']}", headers=hdr,
                         json={"repeat": "sideways"}).status_code == 400
+
+
+# ---------------- item-level queue editing ----------------
+@pytest.fixture()
+def filled_queue(client, hdr, tracks):
+    q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
+    return client.put(f"/queues/{q['id']}", headers=hdr,
+                      json={"rev": q["rev"], "items": [t["id"] for t in tracks]}).json()
+
+
+def test_removing_an_item_compacts_positions(client, hdr, tracks, filled_queue):
+    left = client.delete(f"/queues/{filled_queue['id']}/items/1", headers=hdr).json()
+    assert [i["id"] for i in left["items"]] == [tracks[0]["id"], tracks[2]["id"]]
+    assert [i["pos"] for i in left["items"]] == [0, 1], "no gaps in the order"
+    assert left["rev"] > filled_queue["rev"]
+
+
+def test_removing_above_the_cursor_does_not_skip_playback(client, hdr, tracks,
+                                                          filled_queue):
+    qid = filled_queue["id"]
+    client.patch(f"/queues/{qid}/cursor", headers=hdr, json={"cursor_index": 2})
+    after = client.delete(f"/queues/{qid}/items/0", headers=hdr).json()
+    assert after["cursor_index"] == 1, "the same track must still be current"
+    assert after["items"][after["cursor_index"]]["id"] == tracks[2]["id"]
+
+
+def test_removing_a_missing_position_is_404(client, hdr, filled_queue):
+    assert client.delete(f"/queues/{filled_queue['id']}/items/99",
+                         headers=hdr).status_code == 404
+
+
+def test_moving_an_item_keeps_the_current_track_current(client, hdr, tracks,
+                                                        filled_queue):
+    qid = filled_queue["id"]
+    client.patch(f"/queues/{qid}/cursor", headers=hdr, json={"cursor_index": 0})
+    moved = client.post(f"/queues/{qid}/move", headers=hdr,
+                        json={"from": 0, "to": 2}).json()
+    assert [i["id"] for i in moved["items"]] == [
+        tracks[1]["id"], tracks[2]["id"], tracks[0]["id"]]
+    assert moved["items"][moved["cursor_index"]]["id"] == tracks[0]["id"], \
+        "dragging the playing track must not change what is playing"
+
+
+def test_move_validates_its_range(client, hdr, filled_queue):
+    qid = filled_queue["id"]
+    assert client.post(f"/queues/{qid}/move", headers=hdr,
+                       json={"from": 0, "to": 9}).status_code == 400
+    assert client.post(f"/queues/{qid}/move", headers=hdr, json={}).status_code == 400
+
+
+def test_clearing_only_the_radio_tail(client, hdr, tracks, filled_queue):
+    qid = filled_queue["id"]
+    client.post(f"/queues/{qid}/items", headers=hdr,
+                json={"track_ids": [tracks[0]["id"]], "origin": "radio"})
+    cleared = client.post(f"/queues/{qid}/clear", headers=hdr,
+                          json={"origin": "radio"}).json()
+    assert len(cleared["items"]) == 3
+    assert all(i["origin"] == "user" for i in cleared["items"])
+    assert [i["pos"] for i in cleared["items"]] == [0, 1, 2]
+
+
+def test_clearing_everything(client, hdr, filled_queue):
+    cleared = client.post(f"/queues/{filled_queue['id']}/clear", headers=hdr,
+                          json={}).json()
+    assert cleared["items"] == [] and cleared["cursor_index"] == 0
+
+
+def test_removing_a_playlist_item(client, hdr, tracks):
+    p = client.post("/playlists", headers=hdr, json={"name": "Mix"}).json()
+    client.post(f"/playlists/{p['id']}/items", headers=hdr,
+                json={"track_ids": [t["id"] for t in tracks]})
+    left = client.delete(f"/playlists/{p['id']}/items/0", headers=hdr).json()
+    assert [i["id"] for i in left["items"]] == [tracks[1]["id"], tracks[2]["id"]]

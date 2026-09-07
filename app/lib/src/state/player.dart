@@ -97,6 +97,7 @@ class PlayerService {
   /// playing. It must leave playback alone unless the audio actually has to change.
   Future<void> loadQueue(Queue queue, {bool autoplay = false}) async {
     final sameQueue = _queueId == queue.id;
+    final previousIndex = index;
     _queueId = queue.id;
     _items = queue.items;
     if (!sameQueue) {
@@ -114,7 +115,7 @@ class PlayerService {
     }
 
     if (sameQueue && _loadedTrackId != null) {
-      final moved = _items.indexWhere((t) => t.id == _loadedTrackId);
+      final moved = _relocate(previousIndex, _loadedTrackId!);
       if (moved >= 0) {
         _rebuildOrder(keepItemIndex: moved);
         // A track we were stalled on may have arrived with this update.
@@ -128,6 +129,30 @@ class PlayerService {
     await _loadCurrent(startAt: Duration(milliseconds: queue.positionMs));
     if (autoplay) _startPlayback();
     _emit(force: true);
+  }
+
+  /// Where the playing track sits after the list changed.
+  ///
+  /// Matching purely by track id finds the *first* copy, so a queue containing the
+  /// same song twice — radio produces those, and so does adding a favourite again —
+  /// snapped playback back to copy one on every refresh, advanced from there, and hit
+  /// the same song again. Which is what "it just plays the same song" felt like.
+  int _relocate(int previousIndex, int trackId) {
+    if (previousIndex >= 0 &&
+        previousIndex < _items.length &&
+        _items[previousIndex].id == trackId) {
+      return previousIndex;                       // it did not move
+    }
+    var best = -1, bestDistance = 1 << 30;
+    for (var i = 0; i < _items.length; i++) {
+      if (_items[i].id != trackId) continue;
+      final distance = (i - previousIndex).abs();
+      if (distance < bestDistance) {
+        best = i;
+        bestDistance = distance;
+      }
+    }
+    return best;                                  // the nearest copy, not the first
   }
 
   /// Play order is a list of indices, so shuffle is a stable reordering rather than a
@@ -353,14 +378,34 @@ class PlayerService {
   /// A track that finished downloading becomes playable without the user doing
   /// anything — and if the player was stalled waiting for it, it starts.
   Future<void> onTrackReady(int trackId) async {
-    final i = _items.indexWhere((t) => t.id == trackId);
-    if (i < 0) return;
+    if (!_items.any((t) => t.id == trackId)) return;
     final fresh = await api.track(trackId);
-    _items = [..._items]..[i] = fresh;
+    // Update every copy: the same track can sit in a queue more than once.
+    _items = [
+      for (final t in _items) t.id == trackId ? fresh.copyWithOrigin(t.origin) : t
+    ];
+    final i = index;
     if (_waitingForTrack != null) {
       await _resumeIfPossible();
     } else if (i == index && _loadedTrackId != trackId) {
       await _loadCurrent();
+    }
+    _emit(force: true);
+  }
+
+  /// Metadata or artwork changed for a track we are holding. Swap the row in place —
+  /// and if it is the one playing, refresh the media session so the lockscreen picks
+  /// up the new cover too.
+  Future<void> onTrackUpdated(int trackId) async {
+    if (!_items.any((t) => t.id == trackId)) return;
+    final fresh = await api.track(trackId);
+    _items = [
+      for (final t in _items) t.id == trackId ? fresh.copyWithOrigin(t.origin) : t
+    ];
+    if (_loadedTrackId == trackId && !_player.playing) {
+      // Only when paused: reloading the source mid-song would restart it, and a cover
+      // is never worth interrupting playback for.
+      await _loadCurrent(startAt: _player.position);
     }
     _emit(force: true);
   }

@@ -85,6 +85,8 @@ void main() {
     });
   });
 
+  _relocationTests();
+
   group('snapshot progress', () {
     test('is a fraction, and never divides by a zero duration', () {
       const s = PlayerSnapshot(
@@ -108,6 +110,58 @@ void main() {
         itemCount: 1,
       );
       expect(s.progress, 1.0);
+    });
+  });
+}
+
+/// Mirrors PlayerService._relocate: where the playing track sits after the list
+/// changed. Matching by id alone finds the *first* copy, which is why a queue holding
+/// the same song twice kept snapping playback back to copy one — and then advancing
+/// from there into the same song again.
+int relocate(List<int> itemIds, int previousIndex, int trackId) {
+  if (previousIndex >= 0 &&
+      previousIndex < itemIds.length &&
+      itemIds[previousIndex] == trackId) {
+    return previousIndex;
+  }
+  var best = -1, bestDistance = 1 << 30;
+  for (var i = 0; i < itemIds.length; i++) {
+    if (itemIds[i] != trackId) continue;
+    final d = (i - previousIndex).abs();
+    if (d < bestDistance) {
+      best = i;
+      bestDistance = d;
+    }
+  }
+  return best;
+}
+
+void _relocationTests() {
+  group('finding the playing track after the queue changes', () {
+    test('stays put when the track has not moved', () {
+      expect(relocate([1, 2, 3], 1, 2), 1);
+    });
+
+    test('a duplicate does not drag playback back to the first copy', () {
+      // Playing the second copy of track 7; a refresh must not jump to index 0.
+      expect(relocate([7, 5, 7, 9], 2, 7), 2);
+    });
+
+    test('follows the track when something above it was removed', () {
+      expect(relocate([5, 7, 9], 2, 7), 1);
+    });
+
+    test('picks the nearest copy when the exact slot changed', () {
+      // Was at 4; copies now at 1 and 5 — the near one is the one being played.
+      expect(relocate([0, 7, 0, 0, 0, 7], 4, 7), 5);
+    });
+
+    test('reports absence rather than guessing', () {
+      expect(relocate([1, 2, 3], 1, 99), -1);
+    });
+
+    test('handles an emptied queue', () {
+      expect(relocate([], 3, 7), -1);
     });
   });
 }

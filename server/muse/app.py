@@ -44,7 +44,8 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     for u in cfg.users:
         auth.ensure_user(u.name)
 
-    worker = enrich_worker.EnrichWorker(cfg) if start_workers else None
+    worker = (enrich_worker.EnrichWorker(cfg, publish=publish)
+              if start_workers else None)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -90,7 +91,8 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     @app.get("/search")
     def search(q: str, limit: int = 20, remote: bool = True, user: dict = Depends(current_user)):
         local = db.all_(
-            """select t.*, m.path, c.color as cover_color from tracks t
+            """select t.*, m.path, c.color as cover_color, c.sha256 as cover_sha
+                 from tracks t
                  left join media m on m.track_id=t.id and m.role='canonical'
                  left join covers c on c.id=t.cover_id
                 where t.norm_title %% lower(%s) or t.title ilike %s

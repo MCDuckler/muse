@@ -130,7 +130,10 @@ class ApiClient {
     final key = _streamKey;
     final size = small ? 'sm' : 'lg';
     final auth = key == null ? '' : '&k=${Uri.encodeQueryComponent(key)}';
-    return '$baseUrl${t.coverPath}?size=$size$auth';
+    // The version changes when the artwork does; without it a client that already
+    // cached "no cover" or an older image by URL would never pick up the new one.
+    final version = t.coverVersion == null ? '' : '&v=${t.coverVersion}';
+    return '$baseUrl${t.coverPath}?size=$size$version$auth';
   }
 
   Map<String, String> get streamHeaders => {'Authorization': 'Bearer $token'};
@@ -192,6 +195,23 @@ class ApiClient {
     return Queue.fromJson(await _decode(r) as Map<String, dynamic>);
   }
 
+  Future<Queue> removeQueueItem(int id, int pos) async =>
+      Queue.fromJson(await _decode(
+              await http.delete(_u('/queues/$id/items/$pos'), headers: _headers))
+          as Map<String, dynamic>);
+
+  Future<Queue> moveQueueItem(int id, int from, int to) async =>
+      Queue.fromJson(await _decode(await http.post(_u('/queues/$id/move'),
+              headers: _headers, body: jsonEncode({'from': from, 'to': to})))
+          as Map<String, dynamic>);
+
+  /// `origin: 'radio'` clears only the machine-picked tail.
+  Future<Queue> clearQueue(int id, {String? origin}) async =>
+      Queue.fromJson(await _decode(await http.post(_u('/queues/$id/clear'),
+              headers: _headers,
+              body: jsonEncode({if (origin != null) 'origin': origin})))
+          as Map<String, dynamic>);
+
   Future<void> deleteQueue(int id) async {
     await _decode(await http.delete(_u('/queues/$id'), headers: _headers));
   }
@@ -210,6 +230,32 @@ class ApiClient {
 
   Future<Playlist> playlist(int id) async =>
       Playlist.fromJson(await _decode(await http.get(_u('/playlists/$id'), headers: _headers))
+          as Map<String, dynamic>);
+
+  Future<Playlist> createPlaylist(String name) async =>
+      Playlist.fromJson(await _decode(await http.post(_u('/playlists'),
+              headers: _headers, body: jsonEncode({'name': name})))
+          as Map<String, dynamic>);
+
+  Future<Playlist> addToPlaylist(int id, List<int> trackIds) async =>
+      Playlist.fromJson(await _decode(await http.post(_u('/playlists/$id/items'),
+              headers: _headers, body: jsonEncode({'track_ids': trackIds})))
+          as Map<String, dynamic>);
+
+  Future<Playlist> removePlaylistItem(int id, int pos) async =>
+      Playlist.fromJson(await _decode(
+              await http.delete(_u('/playlists/$id/items/$pos'), headers: _headers))
+          as Map<String, dynamic>);
+
+  Future<void> deletePlaylist(int id) async {
+    await _decode(await http.delete(_u('/playlists/$id'), headers: _headers));
+  }
+
+  Future<Playlist> saveQueueAsPlaylist(int queueId, {String? name}) async =>
+      Playlist.fromJson(await _decode(await http.post(
+              _u('/queues/$queueId/save-as-playlist'),
+              headers: _headers,
+              body: jsonEncode({if (name != null) 'name': name})))
           as Map<String, dynamic>);
 
   Future<List<Track>> history() async {

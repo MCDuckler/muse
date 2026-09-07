@@ -30,7 +30,8 @@ def display_title(raw: str | None) -> str:
 def track_row(track_id: int) -> dict | None:
     return db.one(
         """select t.*, m.bytes, m.path, m.sha256, m.codec, m.bitrate,
-                  s.provider, s.provider_id, c.color as cover_color
+                  s.provider, s.provider_id, c.color as cover_color,
+                  c.sha256 as cover_sha
              from tracks t
              left join media m on m.track_id=t.id and m.role='canonical'
              left join track_sources s on s.track_id=t.id
@@ -47,6 +48,9 @@ def public(t: dict) -> dict:
         "display_title": display_title(t["title"]),
         "cover_url": f"/tracks/{t['id']}/cover" if t.get("cover_id") else None,
         "cover_color": t.get("cover_color"),
+        # Changes when the artwork does, so a client that cached the old image by URL
+        # does not keep showing it.
+        "cover_version": (t.get("cover_sha") or "")[:8] or None,
         "artists": t["artists"],
         "album": t["album"],
         "duration_ms": t["duration_ms"],

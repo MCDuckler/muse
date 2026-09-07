@@ -197,6 +197,46 @@ class AppState extends ChangeNotifier {
         .catchError((_) => q);
   }
 
+  Future<void> _applyQueue(Queue updated) async {
+    activeQueue = updated;
+    await player?.loadQueue(updated);
+    notifyListeners();
+  }
+
+  Future<void> removeFromQueue(int pos) async {
+    final q = activeQueue;
+    if (q == null) return;
+    await _applyQueue(await api.removeQueueItem(q.id, pos));
+  }
+
+  Future<void> moveInQueue(int from, int to) async {
+    final q = activeQueue;
+    if (q == null) return;
+    await _applyQueue(await api.moveQueueItem(q.id, from, to));
+  }
+
+  Future<void> clearQueue({String? origin}) async {
+    final q = activeQueue;
+    if (q == null) return;
+    await _applyQueue(await api.clearQueue(q.id, origin: origin));
+    queues = await api.queues();
+    notifyListeners();
+  }
+
+  /// A track that failed to download can be asked for again: resolve() retries a
+  /// failed ingest, so the UI does not need a separate endpoint.
+  Future<void> retry(Track track) async {
+    if (track.providerId == null) return;
+    await api.resolve(videoId: track.providerId);
+    final q = activeQueue;
+    if (q != null) await _applyQueue(await api.queue(q.id));
+  }
+
+  Future<void> refreshPlaylists() async {
+    playlists = await api.playlists();
+    notifyListeners();
+  }
+
   Future<void> startRadio({int count = 5}) async {
     final q = activeQueue;
     final seed = player?.current;
@@ -216,6 +256,15 @@ class AppState extends ChangeNotifier {
         final id = e.data['track_id'] as int?;
         if (id != null) {
           player?.onTrackReady(id);
+          if (activeQueue != null) activeQueue = await api.queue(activeQueue!.id);
+          notifyListeners();
+        }
+      } else if (e.event == 'track_updated') {
+        // Artwork and metadata arrive after the audio does. Refresh in place so a
+        // cover appears while you are looking at the list, not on the next launch.
+        final id = e.data['track_id'] as int?;
+        if (id != null) {
+          await player?.onTrackUpdated(id);
           if (activeQueue != null) activeQueue = await api.queue(activeQueue!.id);
           notifyListeners();
         }

@@ -5,6 +5,7 @@ import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/player.dart';
 import 'artwork.dart';
+import 'dialogs.dart';
 
 /// Queues are the product, so this screen shows them all, not just the one playing.
 class QueuePage extends StatelessWidget {
@@ -74,6 +75,30 @@ class QueuePage extends StatelessWidget {
                   label: const Text('Radio'),
                   onPressed: () => app.startRadio(),
                 ),
+                PopupMenuButton<String>(
+                  tooltip: 'Queue actions',
+                  onSelected: (v) async {
+                    switch (v) {
+                      case 'clear-radio':
+                        await app.clearQueue(origin: 'radio');
+                      case 'clear':
+                        await app.clearQueue();
+                      case 'save':
+                        await _saveAsPlaylist(context, app);
+                      case 'delete':
+                        await _deleteQueue(context, app);
+                    }
+                  },
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(
+                        value: 'save', child: Text('Save as playlist')),
+                    PopupMenuItem(
+                        value: 'clear-radio', child: Text('Clear radio tracks')),
+                    PopupMenuItem(value: 'clear', child: Text('Clear queue')),
+                    PopupMenuDivider(),
+                    PopupMenuItem(value: 'delete', child: Text('Delete this queue')),
+                  ],
+                ),
               ],
             ),
           ),
@@ -81,13 +106,37 @@ class QueuePage extends StatelessWidget {
         Expanded(
           child: active == null || rows.isEmpty
               ? const _EmptyQueue()
-              : ListView.builder(
+              : ReorderableListView.builder(
                   padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
                   itemCount: rows.length,
+                  buildDefaultDragHandles: false,
+                  // onReorderItem, not onReorder: it hands over the index the row
+                  // actually lands on, rather than one measured before the row was
+                  // lifted out, which is an off-by-one waiting to happen.
+                  onReorderItem: (from, to) => app.moveInQueue(from, to),
                   itemBuilder: (context, i) {
                     final t = rows[i];
                     final isCurrent = i == (app.player?.index ?? -1);
-                    return ListTile(
+                    return Dismissible(
+                      key: ValueKey('${t.id}-$i'),
+                      direction: DismissDirection.endToStart,
+                      background: Container(
+                        alignment: Alignment.centerRight,
+                        padding: const EdgeInsets.only(right: 20),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.errorContainer,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(Icons.delete_outline,
+                            color: Theme.of(context).colorScheme.onErrorContainer),
+                      ),
+                      onDismissed: (_) => app.removeFromQueue(i),
+                      // Long-press to drag rather than a permanent handle: two
+                      // trailing controls left the titles with no room, and holding a
+                      // row to move it is what every list on a phone already does.
+                      child: ReorderableDelayedDragStartListener(
+                        index: i,
+                        child: ListTile(
                       selected: isCurrent,
                       leading: _leading(t, i, isCurrent),
                       title: Text(t.displayTitle,
@@ -106,11 +155,25 @@ class QueuePage extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
-                      trailing: t.origin == 'radio'
-                          ? const Chip(
-                              label: Text('radio'),
-                              visualDensity: VisualDensity.compact)
-                          : null,
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (t.origin == 'radio')
+                            const Padding(
+                              padding: EdgeInsets.only(right: 4),
+                              child: Chip(
+                                  label: Text('radio'),
+                                  visualDensity: VisualDensity.compact),
+                            ),
+                          if (t.state == 'failed')
+                            IconButton(
+                              icon: const Icon(Icons.refresh),
+                              tooltip: 'Try again',
+                              onPressed: () => app.retry(t),
+                            ),
+                          _rowMenu(context, app, t, i),
+                        ],
+                      ),
                       onTap: t.isReady
                           ? () async {
                               try {
@@ -123,6 +186,8 @@ class QueuePage extends StatelessWidget {
                               }
                             }
                           : null,
+                    ),
+                    ),
                     );
                   },
                 ),
@@ -163,6 +228,48 @@ class QueuePage extends StatelessWidget {
           ),
       ],
     );
+  }
+
+  Widget _rowMenu(BuildContext context, AppState app, Track t, int i) =>
+      PopupMenuButton<String>(
+        icon: const Icon(Icons.more_vert, size: 20),
+        tooltip: 'Track actions',
+        onSelected: (v) async {
+          switch (v) {
+            case 'remove':
+              await app.removeFromQueue(i);
+            case 'playlist':
+              await addToPlaylistSheet(context, app, t);
+          }
+        },
+        itemBuilder: (context) => const [
+          PopupMenuItem(value: 'playlist', child: Text('Add to playlist…')),
+          PopupMenuItem(value: 'remove', child: Text('Remove from queue')),
+        ],
+      );
+
+  Future<void> _saveAsPlaylist(BuildContext context, AppState app) async {
+    final q = app.activeQueue;
+    if (q == null) return;
+    final name = await promptForName(context, 'Save queue as playlist', q.name);
+    if (name == null) return;
+    await app.api.saveQueueAsPlaylist(q.id, name: name);
+    await app.refreshPlaylists();
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Saved "$name"')));
+    }
+  }
+
+  Future<void> _deleteQueue(BuildContext context, AppState app) async {
+    final q = app.activeQueue;
+    if (q == null) return;
+    final ok = await confirm(context, 'Delete "${q.name}"?',
+        'The tracks stay in your library.');
+    if (!ok) return;
+    await app.api.deleteQueue(q.id);
+    app.activeQueue = null;
+    await app.refresh();
   }
 
   Future<void> _newQueue(BuildContext context) async {

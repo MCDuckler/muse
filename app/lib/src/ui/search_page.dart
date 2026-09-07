@@ -5,6 +5,7 @@ import '../api/client.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import 'artwork.dart';
+import 'dialogs.dart';
 
 /// Local catalog first, then YouTube Music. Anything already in the library is marked,
 /// so you never queue a second copy of what you have.
@@ -85,6 +86,7 @@ class _SearchPageState extends State<SearchPage> {
                   trailing: _queueMenu(
                     onNext: () => app.addTrack(t, mode: 'next'),
                     onEnd: () => app.addTrack(t),
+                    onPlaylist: () => addToPlaylistSheet(context, app, t),
                   ),
                   onTap: () => app.addTrack(t),
                 ),
@@ -109,12 +111,31 @@ class _SearchPageState extends State<SearchPage> {
 
   /// "Play next" and "add to end" both existed in the API but were distinguished only
   /// by tap-versus-button, which nobody would ever discover.
-  Widget _queueMenu({required VoidCallback onNext, required VoidCallback onEnd}) =>
+  Widget _queueMenu({
+    required VoidCallback onNext,
+    required VoidCallback onEnd,
+    VoidCallback? onPlaylist,
+  }) =>
       PopupMenuButton<String>(
         icon: const Icon(Icons.playlist_add),
         tooltip: 'Add to queue',
-        onSelected: (v) => v == 'next' ? onNext() : onEnd(),
-        itemBuilder: (context) => const [
+        onSelected: (v) => switch (v) {
+          'next' => onNext(),
+          'playlist' => onPlaylist?.call(),
+          _ => onEnd(),
+        },
+        itemBuilder: (context) => [
+          if (onPlaylist != null)
+            const PopupMenuItem(
+              value: 'playlist',
+              child: ListTile(
+                dense: true,
+                leading: Icon(Icons.library_add),
+                title: Text('Add to playlist…'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          ...const [
           PopupMenuItem(
             value: 'next',
             child: ListTile(
@@ -133,6 +154,7 @@ class _SearchPageState extends State<SearchPage> {
               contentPadding: EdgeInsets.zero,
             ),
           ),
+        ],
         ],
       );
 

@@ -53,7 +53,8 @@ def _own_playlist(playlist_id: int, user: dict) -> dict:
 def get_playlist(playlist_id: int, user: dict = Depends(current_user)):
     p = _own_playlist(playlist_id, user)
     items = db.all_(
-        """select i.pos, t.*, m.path, m.bytes, m.sha256, c.color as cover_color
+        """select i.pos, t.*, m.path, m.bytes, m.sha256, c.color as cover_color,
+                    c.sha256 as cover_sha
              from playlist_items i
              join tracks t on t.id=i.track_id
              left join media m on m.track_id=t.id and m.role='canonical'
@@ -96,7 +97,8 @@ def _queue_state(queue_id: int) -> dict:
     # stream_url, the client reads that as "not ready yet", and nothing in the queue
     # is playable no matter how ready the track actually is.
     items = db.all_(
-        """select i.pos, i.origin, t.*, m.path, m.bytes, m.sha256, c.color as cover_color
+        """select i.pos, i.origin, t.*, m.path, m.bytes, m.sha256, c.color as cover_color,
+                    c.sha256 as cover_sha
              from queue_items i
              join tracks t on t.id=i.track_id
              left join media m on m.track_id=t.id and m.role='canonical'
@@ -245,6 +247,117 @@ def queue_add(queue_id: int, body: dict = Body(...), user: dict = Depends(curren
                       (queue_id, insert_at + n, tid, body.get("origin", "user")))
         c.execute("update queues set rev=rev+1, updated_at=now() where id=%s", (queue_id,))
     return _queue_state(queue_id)
+
+
+@router.delete("/queues/{queue_id}/items/{pos}")
+def remove_item(queue_id: int, pos: int, user: dict = Depends(current_user)):
+    """Remove one track.
+
+    Re-sending the whole list to drop a single row races with anything else touching
+    the queue, and it is why fixing a queue used to need a terminal.
+    """
+    _own_queue(queue_id, user)
+    with db.pool().connection() as c:
+        gone = c.execute(
+            "delete from queue_items where queue_id=%s and pos=%s returning track_id",
+            (queue_id, pos),
+        ).fetchone()
+        if not gone:
+            raise HTTPException(404, "no item at that position")
+        c.execute("update queue_items set pos = pos - 1 where queue_id=%s and pos > %s",
+                  (queue_id, pos))
+        # Keep the cursor pointing at the same *track*: removing something above the
+        # current one must not skip playback forward.
+        c.execute(
+            """update queues
+                  set cursor_index = case
+                        when cursor_index > %s then cursor_index - 1
+                        else cursor_index end,
+                      rev = rev + 1, updated_at = now()
+                where id=%s""",
+            (pos, queue_id),
+        )
+    return _queue_state(queue_id)
+
+
+@router.post("/queues/{queue_id}/move")
+def move_item(queue_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
+    """Reorder by dragging. Positions are rewritten in one statement per row so the
+    list can never end up with a gap or a duplicate position."""
+    _own_queue(queue_id, user)
+    src, dst = body.get("from"), body.get("to")
+    if src is None or dst is None:
+        raise HTTPException(400, "from and to are required")
+
+    rows = db.all_("select pos, track_id, origin from queue_items where queue_id=%s "
+                   "order by pos", (queue_id,))
+    if not (0 <= src < len(rows)) or not (0 <= dst < len(rows)):
+        raise HTTPException(400, "position out of range")
+
+    item = rows.pop(src)
+    rows.insert(dst, item)
+    cursor = db.one("select cursor_index from queues where id=%s",
+                    (queue_id,))["cursor_index"]
+    playing = None
+    if 0 <= cursor < len(rows):
+        # Follow the track that was playing rather than the index it happened to have.
+        original = db.all_("select track_id from queue_items where queue_id=%s "
+                           "order by pos", (queue_id,))
+        if cursor < len(original):
+            playing = original[cursor]["track_id"]
+
+    with db.pool().connection() as c:
+        c.execute("delete from queue_items where queue_id=%s", (queue_id,))
+        for i, r in enumerate(rows):
+            c.execute("insert into queue_items(queue_id,pos,track_id,origin) "
+                      "values(%s,%s,%s,%s)", (queue_id, i, r["track_id"], r["origin"]))
+        new_cursor = next((i for i, r in enumerate(rows) if r["track_id"] == playing),
+                          cursor)
+        c.execute("update queues set rev=rev+1, cursor_index=%s, updated_at=now() "
+                  "where id=%s", (new_cursor, queue_id))
+    return _queue_state(queue_id)
+
+
+@router.post("/queues/{queue_id}/clear")
+def clear_queue(queue_id: int, body: dict = Body(default={}),
+                user: dict = Depends(current_user)):
+    """Clear everything, or just the machine-picked tail — the point of tagging radio
+    tracks with an origin in the first place."""
+    _own_queue(queue_id, user)
+    origin = (body or {}).get("origin")
+    with db.pool().connection() as c:
+        if origin:
+            c.execute("delete from queue_items where queue_id=%s and origin=%s",
+                      (queue_id, origin))
+        else:
+            c.execute("delete from queue_items where queue_id=%s", (queue_id,))
+        rows = c.execute("select pos from queue_items where queue_id=%s order by pos",
+                         (queue_id,)).fetchall()
+        for i, r in enumerate(rows):
+            c.execute("update queue_items set pos=%s where queue_id=%s and pos=%s",
+                      (i - len(rows), queue_id, r["pos"]))
+        c.execute("update queue_items set pos = pos + %s where queue_id=%s and pos < 0",
+                  (len(rows), queue_id))
+        c.execute("""update queues set rev=rev+1, updated_at=now(),
+                            cursor_index=least(cursor_index, greatest(%s-1, 0))
+                      where id=%s""", (len(rows), queue_id))
+    return _queue_state(queue_id)
+
+
+@router.delete("/playlists/{playlist_id}/items/{pos}")
+def remove_playlist_item(playlist_id: int, pos: int,
+                         user: dict = Depends(current_user)):
+    _own_playlist(playlist_id, user)
+    with db.pool().connection() as c:
+        gone = c.execute(
+            "delete from playlist_items where playlist_id=%s and pos=%s returning track_id",
+            (playlist_id, pos),
+        ).fetchone()
+        if not gone:
+            raise HTTPException(404, "no item at that position")
+        c.execute("update playlist_items set pos = pos - 1 where playlist_id=%s and pos > %s",
+                  (playlist_id, pos))
+    return get_playlist(playlist_id, user)
 
 
 @router.delete("/queues/{queue_id}")
