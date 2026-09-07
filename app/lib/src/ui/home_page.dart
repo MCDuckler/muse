@@ -54,9 +54,17 @@ class _HomePageState extends State<HomePage> {
       extendBody: true,
       body: SafeArea(
         bottom: false,
-        child: IndexedStack(
-          index: _tab,
-          children: pages,
+        child: Column(
+          children: [
+            if (!app.ingestOnline && app.downloadsPending > 0)
+              _OfflineBanner(pending: app.downloadsPending),
+            Expanded(
+              child: IndexedStack(
+                index: _tab,
+                children: pages,
+              ),
+            ),
+          ],
         ),
       ),
       bottomNavigationBar: GlassSurface(
@@ -88,6 +96,37 @@ class _HomePageState extends State<HomePage> {
           ),
         ),
       ),
+      ),
+    );
+  }
+}
+
+/// Says the quiet part out loud: the machine that downloads music is not reachable,
+/// so those queued rows are not going to move until it is.
+class _OfflineBanner extends StatelessWidget {
+  const _OfflineBanner({required this.pending});
+  final int pending;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      color: scheme.secondaryContainer,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        children: [
+          Icon(Icons.cloud_off, size: 18, color: scheme.onSecondaryContainer),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              pending == 1
+                  ? '1 track is waiting — the downloader is offline'
+                  : '$pending tracks are waiting — the downloader is offline',
+              style: TextStyle(color: scheme.onSecondaryContainer, fontSize: 13.5),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 
+import time
+
 from . import db
 
 LEASE_SECONDS = 600
@@ -15,6 +17,22 @@ def enqueue(kind: str, payload: dict) -> int:
         (kind, json.dumps(payload)),
     )
     return row["id"]
+
+
+def lease_wait(worker: str, kind: str = "ingest", limit: int = 1,
+               wait_seconds: float = 0.0, poll: float = 0.25) -> list[dict]:
+    """Lease, or hold the connection open until work appears.
+
+    Polling every few seconds meant a track sat queued for up to that long before
+    anything happened, which reads as "nothing is downloading". Holding the request
+    open costs one idle connection and starts the download as soon as it is queued.
+    """
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        got = lease(worker, kind, limit)
+        if got or time.monotonic() >= deadline:
+            return got
+        time.sleep(poll)
 
 
 def lease(worker: str, kind: str = "ingest", limit: int = 1) -> list[dict]:

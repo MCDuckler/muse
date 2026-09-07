@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import mimetypes
 import pathlib
 import re
 from contextlib import asynccontextmanager
 from typing import Annotated
+from urllib.parse import quote, urlparse
+
+import httpx
 
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from . import (auth, catalog, config, db, enrich_worker, jobs, routes_files,
-               routes_library, routes_play, routes_sync, storage, ytm)
+from . import (auth, catalog, config, db, enrich_worker, failures, jobs, progress,
+               routes_files, routes_library, routes_play, routes_sync, storage, ytm)
 from . import deps
 from .deps import current_user, worker_auth
 
@@ -103,10 +107,17 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         if remote:
             have = {t.get("provider_id") for t in db.all_(
                 "select provider_id from track_sources where provider='ytmusic'")}
-            out["remote"] = [
-                {**r, "raw": None, "known": r["video_id"] in have}
-                for r in ytm.search_songs(q, limit=min(limit, 10))
-            ]
+            hits = []
+            for r in ytm.search_songs(q, limit=min(limit, 10)):
+                thumb = ytm.thumbnail_url(r.get("raw") or {})
+                hits.append({
+                    **{k: v for k, v in r.items() if k != "raw"},
+                    "known": r["video_id"] in have,
+                    # A result list of grey squares is not a search result list.
+                    "cover_url": (f"/art/remote?u={quote(thumb, safe='')}"
+                                  if thumb else None),
+                })
+            out["remote"] = hits
         return out
 
     @app.post("/tracks/resolve")
@@ -146,6 +157,53 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         if not t:
             raise HTTPException(404, "no such track")
         return catalog.public(t)
+
+    # Thumbnails for things not in the library yet come from Google's image hosts.
+    # Proxied rather than linked: it keeps the browser on one origin (no CORS), it
+    # authenticates like everything else, and the results are cached on disk so
+    # scrolling a result list twice costs nothing.
+    # Google serves this artwork from several interchangeable hosts; the allowlist has
+    # to cover the ones actually used, not the one that appeared in a doc example.
+    _REMOTE_ART_HOSTS = (
+        "lh3.googleusercontent.com",
+        "yt3.googleusercontent.com",
+        "yt3.ggpht.com",
+        "i.ytimg.com",
+        "i9.ytimg.com",
+    )
+
+    @app.get("/art/remote")
+    def remote_art(u: str, k: str | None = None,
+                   authorization: Annotated[str | None, Header()] = None):
+        user = None
+        if authorization and authorization.lower().startswith("bearer "):
+            user = auth.user_for_token(authorization.split(" ", 1)[1].strip())
+        if user is None and k:
+            user = auth.user_for_stream_key(k, cfg.worker_secret)
+        if user is None:
+            raise HTTPException(401, "missing bearer token or stream key")
+
+        parsed = urlparse(u)
+        if parsed.scheme != "https" or parsed.hostname not in _REMOTE_ART_HOSTS:
+            # An open proxy is a liability; this one only fetches album art.
+            raise HTTPException(400, "not an allowed image host")
+
+        cached = cfg.data_dir / "remote-art" / f"{hashlib.sha256(u.encode()).hexdigest()}.jpg"
+        if not cached.exists():
+            try:
+                r = httpx.get(u, timeout=15, follow_redirects=True,
+                              headers={"User-Agent": "muse/0.1"})
+            except httpx.HTTPError:
+                raise HTTPException(502, "could not fetch that image")
+            if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image/"):
+                raise HTTPException(404, "no image there")
+            cached.parent.mkdir(parents=True, exist_ok=True)
+            cached.write_bytes(r.content)
+        return Response(
+            content=cached.read_bytes(),
+            media_type="image/jpeg",
+            headers={"Cache-Control": "private, max-age=604800"},
+        )
 
     @app.get("/tracks/{track_id}/cover")
     def cover(track_id: int, request: Request, size: str = "lg", k: str | None = None,
@@ -214,10 +272,26 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     # ---------------- worker protocol ----------------
     @app.post("/internal/jobs/lease", dependencies=[Depends(worker_auth)])
     def lease(body: dict):
-        leased = jobs.lease(body.get("worker", "anon"), body.get("kind", "ingest"),
-                            int(body.get("limit", 1)))
+        leased = jobs.lease_wait(
+            body.get("worker", "anon"),
+            body.get("kind", "ingest"),
+            int(body.get("limit", 1)),
+            wait_seconds=float(body.get("wait", 0)),
+        )
+        for j in leased:
+            if tid := j["payload"].get("track_id"):
+                publish("track_progress",
+                        {"track_id": tid, **progress.update(tid, "queued")})
         return {"jobs": [{"id": j["id"], "kind": j["kind"], "payload": j["payload"],
                           "attempts": j["attempts"]} for j in leased]}
+
+    @app.post("/internal/jobs/{job_id}/progress", dependencies=[Depends(worker_auth)])
+    def report_progress(job_id: int, body: dict):
+        track_id = int(body["track_id"])
+        entry = progress.update(track_id, body.get("stage", "downloading"),
+                                body.get("percent"), body.get("speed"))
+        publish("track_progress", {"track_id": track_id, **entry})
+        return {"ok": True}
 
     @app.post("/internal/jobs/{job_id}/complete", dependencies=[Depends(worker_auth)])
     def complete(job_id: int, meta: str = Form(...), audio: UploadFile = None):
@@ -239,6 +313,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             (info.get("duration_ms"), info.get("loudness_lufs"), info.get("gain_db"), track_id),
         )
         jobs.finish(job_id)
+        progress.clear(track_id)
         # Artwork and canonical metadata are a separate concern from getting the audio,
         # and they must never hold up playback.
         jobs.enqueue("meta", {"track_id": track_id})
@@ -247,14 +322,46 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
 
     @app.post("/internal/jobs/{job_id}/fail", dependencies=[Depends(worker_auth)])
     def fail(job_id: int, body: dict):
-        reason = body.get("reason", "unknown")
-        jobs.fail(job_id, reason, bool(body.get("retryable", True)))
+        raw = body.get("reason", "")
+        code, message, retryable = failures.classify(raw)
+        # The worker's own judgement can only make a failure *less* retryable.
+        retryable = retryable and bool(body.get("retryable", True))
+        jobs.fail(job_id, raw or message, retryable)
+
         if tid := body.get("track_id"):
-            db.run("update tracks set state='failed', fail_reason=%s where id=%s", (reason[:500], tid))
-            publish("track_failed", {"track_id": tid, "reason": reason[:200]})
-        return {"ok": True}
+            progress.clear(tid)
+            attempts = db.one("select attempts from jobs where id=%s", (job_id,))
+            will_retry = retryable and (attempts or {}).get("attempts", 99) < jobs.MAX_ATTEMPTS
+            db.run(
+                """update tracks set state=%s, fail_reason=%s, fail_code=%s where id=%s""",
+                ("pending" if will_retry else "failed", message, code, tid),
+            )
+            publish("track_failed", {"track_id": tid, "reason": message, "code": code,
+                                     "will_retry": will_retry})
+        return {"ok": True, "code": code, "retryable": retryable}
 
     # ---------------- admin ----------------
+    @app.get("/status")
+    def status(user: dict = Depends(current_user)):
+        """Is anything able to download right now? Without this the UI can only show a
+        row spinning forever while the worker's machine is asleep."""
+        worker = db.one(
+            """select name, last_seen, extract(epoch from now()-last_seen) as age
+                 from workers where name <> 'api-enrich'
+                order by last_seen desc limit 1"""
+        )
+        pending = db.one(
+            "select count(*) n from jobs where kind='ingest' and state in ('pending','leased')"
+        )
+        age = float(worker["age"]) if worker and worker["age"] is not None else None
+        return {
+            "ingest_worker": worker["name"] if worker else None,
+            "ingest_online": age is not None and age < 90,
+            "last_seen_seconds": age,
+            "downloads_pending": pending["n"],
+            "in_progress": progress.snapshot(),
+        }
+
     @app.get("/admin/storage")
     def storage_stats(user: dict = Depends(current_user)):
         agg = db.one("select count(*) n, coalesce(sum(bytes),0) b from media")

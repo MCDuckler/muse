@@ -163,6 +163,7 @@ create table if not exists lyrics (
 -- placed next to the column it adds would execute before its table exists.
 -- ---------------------------------------------------------------------------
 alter table covers add column if not exists color text;
+alter table tracks add column if not exists fail_code text;
 alter table media add column if not exists role text not null default 'canonical';
 alter table tracks add column if not exists fingerprint text;
 alter table tracks add column if not exists discovered_via text not null default 'user';

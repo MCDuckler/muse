@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import re
 
-from . import db, jobs
+from . import db, jobs, progress
 
 # Where a track came into the library. Radio pulls in songs nobody asked for, so they
 # stay identifiable for a future cleanup.
@@ -56,6 +56,10 @@ def public(t: dict) -> dict:
         "duration_ms": t["duration_ms"],
         "state": t["state"],
         "fail_reason": t["fail_reason"],
+        "fail_code": t.get("fail_code"),
+        # Live ingest state, so a row can show what is happening rather than a spinner
+        # that means "something, for some length of time".
+        "progress": progress.get(t["id"]),
         "source": t["source"],
         "discovered_via": t.get("discovered_via"),
         "gain_db": t["gain_db"],
@@ -86,6 +90,9 @@ def create_from_ytm(meta: dict, discovered_via: str = VIA_USER) -> dict:
         (row["id"], meta["video_id"], json.dumps(meta.get("raw") or {})),
     )
     jobs.enqueue("ingest", {"track_id": row["id"], "video_id": meta["video_id"]})
+    # Artwork does not depend on the audio, and a queue row with a cover while it
+    # downloads is far better than a grey square that fills in minutes later.
+    jobs.enqueue("meta", {"track_id": row["id"]})
     return track_row(row["id"])
 
 

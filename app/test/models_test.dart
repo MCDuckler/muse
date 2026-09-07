@@ -60,6 +60,7 @@ void main() {
   });
 
   _queueShapes();
+  _statusLineTests();
 
   group('Playlist', () {
     test('accepts both the list form and the count form of items', () {
@@ -108,5 +109,55 @@ void _queueShapes() {
       'shuffle': false, 'repeat': 'off', 'rev': 1,
     });
     expect(empty.itemCount, 0);
+  });
+}
+
+// What a row says while a track is being fetched. A spinner alone means "something,
+// for some length of time"; these are the words that replace it.
+void _statusLineTests() {
+  Track make({String state = 'pending', Map<String, dynamic>? progress,
+      String? failReason, String? streamUrl}) =>
+      Track.fromJson({
+        'id': 1, 'title': 'Song', 'artists': const ['A'], 'state': state,
+        'source': 'youtube', 'stream_url': streamUrl,
+        if (failReason != null) 'fail_reason': failReason,
+        if (progress != null) 'progress': progress,
+      });
+
+  group('what a downloading row says', () {
+    test('shows the stage and a percentage', () {
+      final t = make(progress: {
+        'stage': 'downloading', 'label': 'Downloading', 'percent': 0.42,
+        'speed': '1.2MiB/s',
+      });
+      expect(t.statusLine, 'Downloading 42% · 1.2MiB/s');
+      expect(t.progressFraction, closeTo(0.42, 0.001));
+    });
+
+    test('drops the speed when there is none', () {
+      final t = make(progress: {
+        'stage': 'converting', 'label': 'Converting', 'percent': 0.1, 'speed': null});
+      expect(t.statusLine, 'Converting 10%');
+    });
+
+    test('a stage without a percentage still reads as progress', () {
+      final t = make(progress: {'stage': 'measuring', 'label': 'Checking loudness'});
+      expect(t.statusLine, 'Checking loudness…');
+      expect(t.progressFraction, isNull, reason: 'and the bar goes indeterminate');
+    });
+
+    test('a queued track says it is waiting', () {
+      expect(make().statusLine, 'Waiting to download');
+    });
+
+    test('a failure shows the reason, not a spinner', () {
+      final t = make(state: 'failed', failReason: 'Blocked in this region');
+      expect(t.statusLine, 'Blocked in this region');
+    });
+
+    test('a ready track is back to showing the artist', () {
+      final t = make(state: 'ready', streamUrl: '/tracks/1/stream');
+      expect(t.statusLine, 'A');
+    });
   });
 }

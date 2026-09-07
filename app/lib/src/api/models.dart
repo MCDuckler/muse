@@ -9,6 +9,9 @@ class Track {
   final int? durationMs;
   final String state; // pending | downloading | ready | failed
   final String? failReason;
+  final String? failCode;
+  /// Live ingest state while the audio is being fetched: stage, label, percent.
+  final Map<String, dynamic>? progress;
   final String source; // youtube | custom
   final String? discoveredVia;
   final double? gainDb;
@@ -32,6 +35,8 @@ class Track {
     this.durationMs,
     required this.state,
     this.failReason,
+    this.failCode,
+    this.progress,
     required this.source,
     this.discoveredVia,
     this.gainDb,
@@ -54,6 +59,8 @@ class Track {
         durationMs: durationMs,
         state: state,
         failReason: failReason,
+        failCode: failCode,
+        progress: progress,
         source: source,
         discoveredVia: discoveredVia,
         gainDb: gainDb,
@@ -67,7 +74,35 @@ class Track {
         origin: origin,
       );
 
+  Track withProgress(Map<String, dynamic>? p) => Track(
+        id: id, title: title, artists: artists, album: album,
+        durationMs: durationMs, state: state, failReason: failReason,
+        failCode: failCode, progress: p, source: source,
+        discoveredVia: discoveredVia, gainDb: gainDb, bytes: bytes,
+        streamPath: streamPath, coverPath: coverPath, coverColor: coverColor,
+        coverVersion: coverVersion, providerId: providerId,
+        displayTitle: displayTitle, origin: origin,
+      );
+
   bool get isReady => state == 'ready' && streamPath != null;
+
+  double? get progressFraction => (progress?['percent'] as num?)?.toDouble();
+
+  /// What to tell someone looking at this row right now.
+  String get statusLine {
+    if (state == 'failed') return failReason ?? 'Download failed';
+    final p = progress;
+    if (p != null) {
+      final label = (p['label'] ?? 'Working') as String;
+      final pct = progressFraction;
+      final speed = p['speed'] as String?;
+      if (pct == null) return '$label…';
+      return '$label ${(pct * 100).round()}%'
+          '${speed != null && speed.trim().isNotEmpty ? ' · $speed' : ''}';
+    }
+    if (isPending) return failReason ?? 'Waiting to download';
+    return artistLine;
+  }
   bool get hasCover => coverPath != null;
   /// Hide an album line that only repeats the title. Singles are usually released
   /// under their own name, so "Around the World (Radio Edit) · Around the World" is
@@ -94,6 +129,8 @@ class Track {
         durationMs: j['duration_ms'] as int?,
         state: (j['state'] ?? 'pending') as String,
         failReason: j['fail_reason'] as String?,
+        failCode: j['fail_code'] as String?,
+        progress: (j['progress'] as Map?)?.cast<String, dynamic>(),
         source: (j['source'] ?? 'youtube') as String,
         discoveredVia: j['discovered_via'] as String?,
         gainDb: (j['gain_db'] as num?)?.toDouble(),
@@ -113,23 +150,42 @@ class RemoteHit {
   final String videoId;
   final String title;
   final List<String> artists;
+  final String? album;
   final int? durationMs;
   final bool known;
+  /// Artwork for something not in the library yet, proxied through our own server.
+  final String? coverPath;
 
   const RemoteHit({
     required this.videoId,
     required this.title,
     required this.artists,
+    this.album,
     this.durationMs,
     this.known = false,
+    this.coverPath,
   });
 
   factory RemoteHit.fromJson(Map<String, dynamic> j) => RemoteHit(
         videoId: j['video_id'] as String,
         title: (j['title'] ?? '') as String,
         artists: ((j['artists'] ?? const []) as List).cast<String>(),
+        album: j['album'] as String?,
         durationMs: j['duration_ms'] as int?,
         known: (j['known'] ?? false) as bool,
+        coverPath: j['cover_url'] as String?,
+      );
+
+  /// Enough of a Track to render a row with artwork before anything is downloaded.
+  Track asPreview() => Track(
+        id: -1,
+        title: title,
+        artists: artists,
+        album: album,
+        durationMs: durationMs,
+        state: 'remote',
+        source: 'youtube',
+        coverPath: coverPath,
       );
 
   String get artistLine => artists.isEmpty ? 'Unknown artist' : artists.join(', ');

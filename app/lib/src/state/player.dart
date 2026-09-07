@@ -425,6 +425,28 @@ class PlayerService {
     _emit(force: true);
   }
 
+  /// A progress tick for a track in this queue. Patched in place: these arrive
+  /// several times a second and re-fetching the queue for each would be absurd.
+  void applyProgress(int trackId, Map<String, dynamic> data) {
+    var touched = false;
+    _items = [
+      for (final t in _items)
+        if (t.id == trackId)
+          () {
+            touched = true;
+            return t.withProgress({
+              'stage': data['stage'],
+              'label': data['label'],
+              'percent': data['percent'],
+              'speed': data['speed'],
+            });
+          }()
+        else
+          t
+    ];
+    if (touched) _emit(force: true);
+  }
+
   /// Metadata or artwork changed for a track we are holding. Swap the row in place —
   /// and if it is the one playing, refresh the media session so the lockscreen picks
   /// up the new cover too.

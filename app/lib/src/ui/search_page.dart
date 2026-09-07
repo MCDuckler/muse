@@ -93,7 +93,23 @@ class _SearchPageState extends State<SearchPage> {
               if (_remote.isNotEmpty) const _SectionHeader('On YouTube Music'),
               for (final hit in _remote)
                 ListTile(
-                  leading: Icon(hit.known ? Icons.check_circle_outline : Icons.cloud_download_outlined),
+                  leading: Stack(
+                    alignment: Alignment.bottomRight,
+                    children: [
+                      Artwork(
+                          url: app.api.remoteCoverUrl(hit.coverPath), size: 40),
+                      if (hit.known)
+                        Container(
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.surface,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(Icons.check_circle,
+                              size: 14,
+                              color: Theme.of(context).colorScheme.primary),
+                        ),
+                    ],
+                  ),
                   title: Text(hit.title, maxLines: 1, overflow: TextOverflow.ellipsis),
                   subtitle: Text(hit.artistLine, maxLines: 1, overflow: TextOverflow.ellipsis),
                   trailing: _queueMenu(

@@ -146,15 +146,7 @@ class QueuePage extends StatelessWidget {
                               color: t.state == 'failed'
                                   ? Theme.of(context).colorScheme.error
                                   : null)),
-                      subtitle: Text(
-                        t.state == 'failed'
-                            ? (t.failReason ?? 'Failed')
-                            : t.isPending
-                                ? 'Downloading…'
-                                : t.artistLine,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                      subtitle: _subtitle(context, t),
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -199,15 +191,51 @@ class QueuePage extends StatelessWidget {
   /// Artwork stands in for a track number, with state layered on top: a spinner while
   /// it downloads, an error mark when it failed, and the equalizer badge on whatever
   /// is playing.
+  /// Artist normally; while a track is being fetched, what is actually happening —
+  /// with a bar when the downloader knows how far along it is.
+  Widget _subtitle(BuildContext context, Track t) {
+    final scheme = Theme.of(context).colorScheme;
+    final failed = t.state == 'failed';
+    final line = Text(
+      t.statusLine,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: failed ? TextStyle(color: scheme.error) : null,
+    );
+    final fraction = t.progressFraction;
+    if (t.progress == null) return line;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        line,
+        const SizedBox(height: 5),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(2),
+          child: LinearProgressIndicator(
+            value: fraction,           // null renders as indeterminate, which is honest
+            minHeight: 3,
+            backgroundColor: scheme.onSurface.withValues(alpha: 0.12),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _leading(Track t, int i, bool isCurrent) {
     if (t.isPending) {
-      return const SizedBox(
-          width: 40,
-          height: 40,
-          child: Center(
-              child: SizedBox(
-                  width: 20, height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2))));
+      final fraction = t.progressFraction;
+      return SizedBox(
+        width: 40,
+        height: 40,
+        child: Center(
+          child: SizedBox(
+            width: 22,
+            height: 22,
+            child: CircularProgressIndicator(strokeWidth: 2, value: fraction),
+          ),
+        ),
+      );
     }
     if (t.state == 'failed') {
       return const SizedBox(width: 40, height: 40, child: Icon(Icons.error_outline));

@@ -20,6 +20,12 @@ class AppState extends ChangeNotifier {
   String? error;
 
   List<Queue> queues = const [];
+  /// Whether anything is able to download right now. The ingest worker runs on a
+  /// machine that sleeps, and a row spinning forever with no explanation is the worst
+  /// possible way to communicate that.
+  bool ingestOnline = true;
+  int downloadsPending = 0;
+  Timer? _statusTimer;
   Queue? activeQueue;
   List<Playlist> playlists = const [];
 
@@ -101,6 +107,9 @@ class AppState extends ChangeNotifier {
     await api.ensureStreamKey();
     await refresh();
     _listenForEvents();
+    await _pollStatus();
+    _statusTimer?.cancel();
+    _statusTimer = Timer.periodic(const Duration(seconds: 30), (_) => _pollStatus());
   }
 
   Future<void> logout() async {
@@ -259,6 +268,14 @@ class AppState extends ChangeNotifier {
           if (activeQueue != null) activeQueue = await api.queue(activeQueue!.id);
           notifyListeners();
         }
+      } else if (e.event == 'track_progress') {
+        // Progress arrives several times a second per track; patch the row in place
+        // rather than re-fetching the queue for every tick.
+        final id = e.data['track_id'] as int?;
+        if (id != null) {
+          player?.applyProgress(id, Map<String, dynamic>.from(e.data));
+          notifyListeners();
+        }
       } else if (e.event == 'track_updated') {
         // Artwork and metadata arrive after the audio does. Refresh in place so a
         // cover appears while you are looking at the list, not on the next launch.
@@ -269,10 +286,13 @@ class AppState extends ChangeNotifier {
           notifyListeners();
         }
       } else if (e.event == 'track_failed') {
+        final id = e.data['track_id'] as int?;
+        if (id != null) await player?.onTrackUpdated(id);
         if (activeQueue != null) {
           activeQueue = await api.queue(activeQueue!.id);
           notifyListeners();
         }
+        await _pollStatus();
       }
     }, onError: (_) => _reconnectEvents(), onDone: _reconnectEvents);
   }
@@ -298,8 +318,20 @@ class AppState extends ChangeNotifier {
 
   StreamSubscription? _playerSub;
 
+  Future<void> _pollStatus() async {
+    try {
+      final s = await api.status();
+      ingestOnline = (s['ingest_online'] ?? false) as bool;
+      downloadsPending = (s['downloads_pending'] ?? 0) as int;
+      notifyListeners();
+    } catch (_) {
+      // A failed status check says nothing about the worker; leave the last answer.
+    }
+  }
+
   @override
   void dispose() {
+    _statusTimer?.cancel();
     _playerSub?.cancel();
     _events?.cancel();
     player?.dispose();

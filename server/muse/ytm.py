@@ -1,6 +1,7 @@
 """YouTube Music lookups. Search needs no auth; the audio never comes from here."""
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 
 
@@ -59,3 +60,20 @@ def watch_playlist(video_id: str, limit: int = 25) -> list[dict]:
             "raw": {"radio_seed": video_id},
         })
     return out
+
+
+_GOOGLE_SIZE = re.compile(r"=w\d+-h\d+")
+
+
+def thumbnail_url(raw: dict, px: int = 300) -> str | None:
+    """Album art from a search payload, asked for at a useful size.
+
+    The stored URLs are 60 or 120px because that is what YouTube Music's own list
+    needs; the dimensions live in the URL, so a bigger one costs nothing.
+    """
+    thumbs = (raw or {}).get("thumbnails") or []
+    if not thumbs:
+        return None
+    best = max(thumbs, key=lambda t: (t.get("width") or 0))
+    url = best.get("url")
+    return _GOOGLE_SIZE.sub(f"=w{px}-h{px}", url) if url else None

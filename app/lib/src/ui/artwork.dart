@@ -9,13 +9,16 @@ import '../state/app_state.dart';
 class Artwork extends StatelessWidget {
   const Artwork({
     super.key,
-    required this.track,
+    this.track,
+    this.url,
     this.size = 44,
     this.radius = 6,
     this.small = true,
   });
 
   final Track? track;
+  /// For results that are not in the library yet and so have no track to ask.
+  final String? url;
   final double size;
   final double radius;
   final bool small;
@@ -23,9 +26,8 @@ class Artwork extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final url = track == null
-        ? null
-        : context.read<AppState>().api.coverUrl(track!, small: small);
+    final api = context.read<AppState>().api;
+    final url = this.url ?? (track == null ? null : api.coverUrl(track!, small: small));
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(radius),

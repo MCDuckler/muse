@@ -136,6 +136,18 @@ class ApiClient {
     return '$baseUrl${t.coverPath}?size=$size$version$auth';
   }
 
+  /// Artwork for a search hit, which lives on the provider's CDN and is proxied by
+  /// our server so the browser stays on one origin.
+  String? remoteCoverUrl(String? path) {
+    if (path == null) return null;
+    final key = _streamKey;
+    return '$baseUrl$path${key == null ? '' : '&k=${Uri.encodeQueryComponent(key)}'}';
+  }
+
+  Future<Map<String, dynamic>> status() async =>
+      await _decode(await http.get(_u('/status'), headers: _headers))
+          as Map<String, dynamic>;
+
   Map<String, String> get streamHeaders => {'Authorization': 'Bearer $token'};
 
   bool get hasStreamKey => _streamKey != null;
