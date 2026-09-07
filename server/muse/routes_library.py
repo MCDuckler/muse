@@ -141,10 +141,35 @@ def get_queue(queue_id: int, user: dict = Depends(current_user)):
     return _queue_state(queue_id)
 
 
+@router.patch("/queues/{queue_id}")
+def update_queue_settings(queue_id: int, body: dict = Body(...),
+                          user: dict = Depends(current_user)):
+    """Name, shuffle and repeat — deliberately separate from the item list.
+
+    These used to share the PUT, which reads items from `body.get("items") or []`, so a
+    client sending only `{"shuffle": true}` emptied the queue. Settings and order are
+    different operations with different risks and now have different endpoints.
+    """
+    _own_queue(queue_id, user)
+    if "repeat" in body and body["repeat"] not in ("off", "one", "all"):
+        raise HTTPException(400, "repeat must be off, one or all")
+    db.run(
+        """update queues set name=coalesce(%s,name), shuffle=coalesce(%s,shuffle),
+                  repeat=coalesce(%s,repeat), updated_at=now()
+            where id=%s""",
+        (body.get("name"), body.get("shuffle"), body.get("repeat"), queue_id),
+    )
+    return _queue_state(queue_id)
+
+
 @router.put("/queues/{queue_id}")
 def replace_queue(queue_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
     """Full order replace. `rev` must match or the caller gets 409 plus the live state."""
     q = _own_queue(queue_id, user)
+    if "items" not in body:
+        # Never infer "empty" from "unspecified": that is how a settings update used to
+        # erase a queue. Callers that mean to empty it send an explicit [].
+        raise HTTPException(400, "items is required — use PATCH for name/shuffle/repeat")
     rev = body.get("rev")
     if rev is not None and int(rev) != q["rev"]:
         # Hand the loser the live state so it can merge, instead of guessing what changed.

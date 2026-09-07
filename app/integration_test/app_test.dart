@@ -134,5 +134,25 @@ void main() {
         reason: 'adding to the queue must not stop what is playing');
     expect(after.position, greaterThanOrEqualTo(firstPosition),
         reason: 'adding to the queue must not rewind the current track');
+
+    // ---- the position must actually reach the server while playing ----
+    // It never did: the save timer was re-armed by every position tick, so it only
+    // fired once playback stopped, and closing the tab lost your place entirely.
+    await settle(tester, seconds: 14);   // cursor is written every 10s of playback
+    final api = app.debugAppState!.api;
+    final saved = await api.queue(scratchId!);
+    expect(saved.positionMs, greaterThan(0),
+        reason: 'the play position must be persisted during playback, not only on stop');
+
+    // ---- shuffle and repeat persist, and do not eat the queue ----
+    final itemsBefore = saved.items.length;
+    await app.debugAppState!.setShuffle(true);
+    await app.debugAppState!.cycleRepeat();
+    await settle(tester, seconds: 4);
+    final settings = await api.queue(scratchId!);
+    expect(settings.shuffle, isTrue);
+    expect(settings.repeat, 'all');
+    expect(settings.items.length, itemsBefore,
+        reason: 'a settings change must never clear the queue');
   });
 }

@@ -84,6 +84,13 @@ class AppState extends ChangeNotifier {
   /// path reports failure loudly rather than showing a signed-in shell with no data.
   Future<void> _afterLogin() async {
     player ??= PlayerService(api);
+    // The player writes the cursor through the app rather than knowing the API: it
+    // reports where playback is, and the app decides how to persist that.
+    player!.onCursor = (queueId, {cursorIndex, positionMs}) {
+      api
+          .setCursor(queueId, index: cursorIndex, positionMs: positionMs)
+          .catchError((_) {});
+    };
     await player!.init();
     bindPlayer();
     await api.ensureStreamKey();
@@ -157,6 +164,32 @@ class AppState extends ChangeNotifier {
     queues = await api.queues();      // a queue created just now must show in the chips
     await player?.loadQueue(activeQueue!);
     notifyListeners();
+  }
+
+  /// Shuffle and repeat live on the queue, so they persist across devices. They go
+  /// through PATCH, never PUT — a settings update must not touch the item list.
+  Future<void> setShuffle(bool value) async {
+    final q = activeQueue;
+    if (q == null) return;
+    await player?.setShuffle(value);
+    notifyListeners();
+    await api.updateQueueSettings(q.id, shuffle: value).catchError((_) => q);
+  }
+
+  Future<void> cycleRepeat() async {
+    final q = activeQueue;
+    final p = player;
+    if (q == null || p == null) return;
+    final next = switch (p.repeat) {
+      QueueRepeat.off => QueueRepeat.all,
+      QueueRepeat.all => QueueRepeat.one,
+      QueueRepeat.one => QueueRepeat.off,
+    };
+    p.setRepeat(next);
+    notifyListeners();
+    await api
+        .updateQueueSettings(q.id, repeat: queueRepeatTo(next))
+        .catchError((_) => q);
   }
 
   Future<void> startRadio({int count = 5}) async {

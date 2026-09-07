@@ -157,6 +157,20 @@ class ApiClient {
         })));
   }
 
+  /// Settings only. Deliberately not PUT: that endpoint replaces the item list, and
+  /// sending settings through it used to empty the queue.
+  Future<Queue> updateQueueSettings(int id,
+      {String? name, bool? shuffle, String? repeat}) async {
+    final r = await http.patch(_u('/queues/$id'),
+        headers: _headers,
+        body: jsonEncode({
+          if (name != null) 'name': name,
+          if (shuffle != null) 'shuffle': shuffle,
+          if (repeat != null) 'repeat': repeat,
+        }));
+    return Queue.fromJson(await _decode(r) as Map<String, dynamic>);
+  }
+
   Future<void> deleteQueue(int id) async {
     await _decode(await http.delete(_u('/queues/$id'), headers: _headers));
   }

@@ -176,3 +176,39 @@ def test_queued_and_playlisted_tracks_carry_a_stream_url(client, hdr, wsec, comp
     got = client.get(f"/queues/{q['id']}", headers=hdr).json()
     unready = [i for i in got["items"] if i["id"] == pending["id"]][0]
     assert unready["stream_url"] is None and unready["state"] == "pending"
+
+
+# ---------------- settings vs order (a settings PUT used to wipe the queue) ----------
+def test_settings_update_does_not_touch_the_items(client, hdr, tracks):
+    q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
+    q = client.put(f"/queues/{q['id']}", headers=hdr,
+                   json={"rev": q["rev"], "items": [t["id"] for t in tracks]}).json()
+
+    patched = client.patch(f"/queues/{q['id']}", headers=hdr,
+                           json={"shuffle": True, "repeat": "all"}).json()
+    assert patched["shuffle"] is True and patched["repeat"] == "all"
+    assert len(patched["items"]) == 3, "settings must never clear the queue"
+
+
+def test_put_without_items_is_refused(client, hdr, tracks):
+    q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
+    client.put(f"/queues/{q['id']}", headers=hdr,
+               json={"rev": q["rev"], "items": [tracks[0]["id"]]})
+    r = client.put(f"/queues/{q['id']}", headers=hdr, json={"shuffle": True})
+    assert r.status_code == 400
+    assert len(client.get(f"/queues/{q['id']}", headers=hdr).json()["items"]) == 1
+
+
+def test_emptying_a_queue_still_works_when_explicit(client, hdr, tracks):
+    q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
+    q = client.put(f"/queues/{q['id']}", headers=hdr,
+                   json={"rev": q["rev"], "items": [tracks[0]["id"]]}).json()
+    cleared = client.put(f"/queues/{q['id']}", headers=hdr,
+                         json={"rev": q["rev"], "items": []}).json()
+    assert cleared["items"] == []
+
+
+def test_repeat_mode_is_validated(client, hdr):
+    q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
+    assert client.patch(f"/queues/{q['id']}", headers=hdr,
+                        json={"repeat": "sideways"}).status_code == 400

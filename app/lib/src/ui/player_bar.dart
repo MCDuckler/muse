@@ -22,11 +22,17 @@ class PlayerBar extends StatelessWidget {
         final track = s?.current ?? player.current;
         if (track == null) return const SizedBox.shrink();
 
-        final duration = s?.duration ?? track.duration ?? Duration.zero;
-        final position = s?.position ?? Duration.zero;
-        final progress = duration.inMilliseconds == 0
-            ? 0.0
-            : (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0);
+        final progress = s?.progress ?? 0.0;
+        final subtitle = switch (s) {
+          _ when s?.error != null => s!.error!,
+          _ when (s?.waitingForDownload ?? false) => 'Waiting for download…',
+          _ when (s?.finished ?? false) => 'End of queue',
+          _ when track.isPending => 'Downloading…',
+          _ => track.artistLine,
+        };
+        final muted = (s?.error != null) ||
+            (s?.waitingForDownload ?? false) ||
+            (s?.finished ?? false);
 
         return Material(
           elevation: 8,
@@ -41,9 +47,12 @@ class PlayerBar extends StatelessWidget {
                     : Icons.music_note_outlined),
                 title: Text(track.title, maxLines: 1, overflow: TextOverflow.ellipsis),
                 subtitle: Text(
-                  track.isPending ? 'Downloading…' : track.artistLine,
+                  subtitle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
+                  style: muted
+                      ? TextStyle(color: Theme.of(context).colorScheme.error)
+                      : null,
                 ),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,

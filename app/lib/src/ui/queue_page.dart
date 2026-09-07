@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
+import '../state/player.dart';
 
 /// Queues are the product, so this screen shows them all, not just the one playing.
 class QueuePage extends StatelessWidget {
@@ -12,6 +13,10 @@ class QueuePage extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
     final active = app.activeQueue;
+    // The rows come from the player, not from the queue object: they used to come
+    // from different places, so the highlight could sit on the wrong track after a
+    // radio append or a change from another device.
+    final rows = app.player?.items ?? const <Track>[];
 
     return Column(
       children: [
@@ -40,12 +45,12 @@ class QueuePage extends StatelessWidget {
         ),
         const Divider(height: 1),
         Expanded(
-          child: active == null || active.items.isEmpty
+          child: active == null || rows.isEmpty
               ? const _EmptyQueue()
               : ListView.builder(
-                  itemCount: active.items.length,
+                  itemCount: rows.length,
                   itemBuilder: (context, i) {
-                    final t = active.items[i];
+                    final t = rows[i];
                     final isCurrent = i == (app.player?.index ?? -1);
                     return ListTile(
                       selected: isCurrent,
@@ -87,11 +92,30 @@ class QueuePage extends StatelessWidget {
                   },
                 ),
         ),
-        if (active != null && active.items.isNotEmpty)
+        if (active != null && rows.isNotEmpty)
           Padding(
             padding: const EdgeInsets.all(8),
             child: Row(
+              spacing: 8,
               children: [
+                IconButton.filledTonal(
+                  isSelected: app.player?.shuffle ?? false,
+                  icon: const Icon(Icons.shuffle),
+                  tooltip: 'Shuffle',
+                  onPressed: () => app.setShuffle(!(app.player?.shuffle ?? false)),
+                ),
+                IconButton.filledTonal(
+                  isSelected: (app.player?.repeat ?? QueueRepeat.off) != QueueRepeat.off,
+                  icon: Icon(app.player?.repeat == QueueRepeat.one
+                      ? Icons.repeat_one
+                      : Icons.repeat),
+                  tooltip: switch (app.player?.repeat ?? QueueRepeat.off) {
+                    QueueRepeat.off => 'Repeat off',
+                    QueueRepeat.all => 'Repeat queue',
+                    QueueRepeat.one => 'Repeat track',
+                  },
+                  onPressed: app.cycleRepeat,
+                ),
                 Expanded(
                   child: OutlinedButton.icon(
                     icon: const Icon(Icons.radio),
