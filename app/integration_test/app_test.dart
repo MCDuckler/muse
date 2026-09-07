@@ -41,6 +41,19 @@ Future<void> settle(WidgetTester tester, {int seconds = 3}) async {
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
+  // The test drives a real server, so it must not write into real queues. It makes
+  // its own, uses only that, and deletes it afterwards. An earlier version added to
+  // whatever queue happened to be active and left a dozen copies of one song there.
+  final scratchName = 'e2e-${DateTime.now().millisecondsSinceEpoch}';
+  int? scratchId;
+
+  tearDownAll(() async {
+    final api = app.debugAppState?.api;
+    if (api != null && scratchId != null) {
+      await api.deleteQueue(scratchId!);
+    }
+  });
+
   testWidgets('sign in, queue a song, play it, and keep playing while adding another',
       (tester) async {
     app.main();
@@ -56,6 +69,18 @@ void main() {
     await settle(tester, seconds: 6);
     expect(find.text('Queues'), findsWidgets,
         reason: 'should land on the home shell. On screen: ${visibleText(tester)}');
+
+    // ---- a scratch queue of our own, so real ones stay untouched ----
+    await tester.tap(tab(Icons.queue_music));
+    await settle(tester, seconds: 2);
+    await tester.tap(find.text('New queue'));
+    await settle(tester, seconds: 2);
+    await tester.enterText(find.byType(TextField).last, scratchName);
+    await tester.tap(find.text('Create'));
+    await settle(tester, seconds: 5);
+    scratchId = app.debugAppState?.activeQueue?.id;
+    expect(app.debugAppState?.activeQueue?.name, scratchName,
+        reason: 'the scratch queue must be the active one before anything is added');
 
     // ---- find something already in the library and queue it ----
     await tester.tap(tab(Icons.search));

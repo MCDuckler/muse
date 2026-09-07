@@ -157,6 +157,10 @@ class ApiClient {
         })));
   }
 
+  Future<void> deleteQueue(int id) async {
+    await _decode(await http.delete(_u('/queues/$id'), headers: _headers));
+  }
+
   Future<Queue> radio(int queueId, int seedTrackId, {int count = 5}) async =>
       Queue.fromJson(await _decode(await http.post(_u('/queues/$queueId/radio'),
               headers: _headers,
