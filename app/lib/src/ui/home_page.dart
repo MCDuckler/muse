@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
@@ -23,7 +24,9 @@ class _HomePageState extends State<HomePage> {
     const pages = [QueuePage(), SearchPage(), LibraryPage()];
     const titles = ['Queues', 'Search', 'Library'];
 
-    return Scaffold(
+    return _Shortcuts(
+      app: app,
+      child: Scaffold(
       appBar: AppBar(
         title: Text(titles[_tab]),
         actions: [
@@ -66,6 +69,53 @@ class _HomePageState extends State<HomePage> {
           ),
         ],
       ),
+      ),
     );
   }
+}
+
+/// Keyboard control, because the web build is the client most of the time and a
+/// music player you cannot pause from the keyboard is annoying to live with.
+class _Shortcuts extends StatelessWidget {
+  const _Shortcuts({required this.app, required this.child});
+  final AppState app;
+  final Widget child;
+
+  KeyEventResult _handle(FocusNode node, KeyEvent event) {
+    final player = app.player;
+    if (player == null || event is! KeyDownEvent) return KeyEventResult.ignored;
+
+    // Never steal keys from a text field: space belongs to the search box.
+    final focused = FocusManager.instance.primaryFocus?.context?.widget;
+    if (focused is EditableText) return KeyEventResult.ignored;
+
+    switch (event.logicalKey) {
+      case LogicalKeyboardKey.space:
+      case LogicalKeyboardKey.mediaPlayPause:
+        player.playPause();
+      case LogicalKeyboardKey.arrowRight:
+        player.nudge(const Duration(seconds: 10));
+      case LogicalKeyboardKey.arrowLeft:
+        player.nudge(const Duration(seconds: -10));
+      case LogicalKeyboardKey.keyN:
+      case LogicalKeyboardKey.mediaTrackNext:
+        player.next();
+      case LogicalKeyboardKey.keyP:
+      case LogicalKeyboardKey.mediaTrackPrevious:
+        player.previous();
+      case LogicalKeyboardKey.keyS:
+        app.setShuffle(!player.shuffle);
+      case LogicalKeyboardKey.keyR:
+        app.cycleRepeat();
+      case LogicalKeyboardKey.keyM:
+        player.setUserVolume(player.userVolume == 0 ? 1.0 : 0.0);
+      default:
+        return KeyEventResult.ignored;
+    }
+    return KeyEventResult.handled;
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      Focus(autofocus: true, onKeyEvent: _handle, child: child);
 }

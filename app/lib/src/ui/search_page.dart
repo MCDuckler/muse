@@ -79,8 +79,11 @@ class _SearchPageState extends State<SearchPage> {
                   leading: const Icon(Icons.library_music_outlined),
                   title: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis),
                   subtitle: Text(t.artistLine, maxLines: 1, overflow: TextOverflow.ellipsis),
-                  trailing: _addButton(context, () => app.addTrack(t)),
-                  onTap: () => app.addTrack(t, mode: 'next'),
+                  trailing: _queueMenu(
+                    onNext: () => app.addTrack(t, mode: 'next'),
+                    onEnd: () => app.addTrack(t),
+                  ),
+                  onTap: () => app.addTrack(t),
                 ),
               if (_remote.isNotEmpty) const _SectionHeader('On YouTube Music'),
               for (final hit in _remote)
@@ -88,7 +91,10 @@ class _SearchPageState extends State<SearchPage> {
                   leading: Icon(hit.known ? Icons.check_circle_outline : Icons.cloud_download_outlined),
                   title: Text(hit.title, maxLines: 1, overflow: TextOverflow.ellipsis),
                   subtitle: Text(hit.artistLine, maxLines: 1, overflow: TextOverflow.ellipsis),
-                  trailing: _addButton(context, () => _fetch(hit)),
+                  trailing: _queueMenu(
+                    onNext: () => _fetch(hit, mode: 'next'),
+                    onEnd: () => _fetch(hit),
+                  ),
                   onTap: () => _fetch(hit),
                 ),
             ],
@@ -98,15 +104,41 @@ class _SearchPageState extends State<SearchPage> {
     );
   }
 
-  Widget _addButton(BuildContext context, VoidCallback onTap) =>
-      IconButton(icon: const Icon(Icons.playlist_add), onPressed: onTap);
+  /// "Play next" and "add to end" both existed in the API but were distinguished only
+  /// by tap-versus-button, which nobody would ever discover.
+  Widget _queueMenu({required VoidCallback onNext, required VoidCallback onEnd}) =>
+      PopupMenuButton<String>(
+        icon: const Icon(Icons.playlist_add),
+        tooltip: 'Add to queue',
+        onSelected: (v) => v == 'next' ? onNext() : onEnd(),
+        itemBuilder: (context) => const [
+          PopupMenuItem(
+            value: 'next',
+            child: ListTile(
+              dense: true,
+              leading: Icon(Icons.playlist_play),
+              title: Text('Play next'),
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+          PopupMenuItem(
+            value: 'end',
+            child: ListTile(
+              dense: true,
+              leading: Icon(Icons.playlist_add),
+              title: Text('Add to end'),
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+        ],
+      );
 
-  Future<void> _fetch(RemoteHit hit) async {
+  Future<void> _fetch(RemoteHit hit, {String mode = 'end'}) async {
     final app = context.read<AppState>();
     final messenger = ScaffoldMessenger.of(context);
     try {
       final track = await app.api.resolve(videoId: hit.videoId);
-      await app.addTrack(track);
+      await app.addTrack(track, mode: mode);
       messenger.showSnackBar(SnackBar(
         content: Text(track.isReady
             ? 'Added ${track.title}'

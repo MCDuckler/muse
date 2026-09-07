@@ -3,9 +3,18 @@ import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
 import '../state/player.dart';
+import 'now_playing.dart';
 
 /// The bar that is always there. It shows what is playing, and it shows when what
 /// you queued is still downloading instead of pretending nothing happened.
+/// A named wrapper so tests can address the bar without guessing at list positions.
+class PlayerBarMarker extends StatelessWidget {
+  const PlayerBarMarker({super.key, required this.child});
+  final Widget child;
+  @override
+  Widget build(BuildContext context) => child;
+}
+
 class PlayerBar extends StatelessWidget {
   const PlayerBar({super.key});
 
@@ -34,7 +43,8 @@ class PlayerBar extends StatelessWidget {
             (s?.waitingForDownload ?? false) ||
             (s?.finished ?? false);
 
-        return Material(
+        return PlayerBarMarker(
+            child: Material(
           elevation: 8,
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -42,6 +52,10 @@ class PlayerBar extends StatelessWidget {
               LinearProgressIndicator(value: progress, minHeight: 2),
               ListTile(
                 dense: true,
+                onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const NowPlayingScreen(),
+                  fullscreenDialog: true,
+                )),
                 leading: Icon(track.source == 'custom'
                     ? Icons.folder_outlined
                     : Icons.music_note_outlined),
@@ -73,7 +87,7 @@ class PlayerBar extends StatelessWidget {
               ),
             ],
           ),
-        );
+        ));
       },
     );
   }

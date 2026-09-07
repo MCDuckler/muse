@@ -10,6 +10,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:muse/main.dart' as app;
+import 'package:muse/src/ui/player_bar.dart';
+import 'package:muse/src/ui/queue_page.dart';
+import 'package:muse/src/ui/search_page.dart';
 
 const user = String.fromEnvironment('MUSE_USER', defaultValue: 'chris');
 const pass = String.fromEnvironment('MUSE_PASS');
@@ -30,6 +33,11 @@ Finder tab(IconData icon) => find.descendant(
       of: find.byType(NavigationBar),
       matching: find.byIcon(icon),
     );
+
+/// Tabs live in an IndexedStack, so every page stays mounted and a bare finder will
+/// happily match a widget on a page nobody can see. Scope to the page under test.
+Finder onPage(Type page, Finder inner) =>
+    find.descendant(of: find.byType(page), matching: inner);
 
 Future<void> settle(WidgetTester tester, {int seconds = 3}) async {
   final end = DateTime.now().add(Duration(seconds: seconds));
@@ -53,6 +61,11 @@ void main() {
       await api.deleteQueue(scratchId!);
     }
   });
+
+  // flutter drive does not forward prints from a web test, so the trace travels in
+  // the failure message instead.
+  final trace = <String>[];
+  void note(String s) => trace.add(s);
 
   testWidgets('sign in, queue a song, play it, and keep playing while adding another',
       (tester) async {
@@ -79,6 +92,9 @@ void main() {
     await tester.tap(find.text('Create'));
     await settle(tester, seconds: 5);
     scratchId = app.debugAppState?.activeQueue?.id;
+    note('scratch=${app.debugAppState?.activeQueue?.name} id=$scratchId '
+        'pos=${app.debugAppState?.activeQueue?.positionMs} '
+        'cursor=${app.debugAppState?.activeQueue?.cursorIndex}');
     expect(app.debugAppState?.activeQueue?.name, scratchName,
         reason: 'the scratch queue must be the active one before anything is added');
 
@@ -91,11 +107,17 @@ void main() {
     await tester.tap(find.byIcon(Icons.arrow_forward));
     await settle(tester, seconds: 14);   // the remote leg hits YouTube Music
 
-    expect(find.text('IN YOUR LIBRARY'), findsOneWidget,
+    expect(onPage(SearchPage, find.text('IN YOUR LIBRARY')), findsOneWidget,
         reason: 'the seeded track must come back from the local catalog (header is uppercased). '
             'On screen: ${visibleText(tester)}');
-    await tester.tap(find.byIcon(Icons.playlist_add).first);
-    await settle(tester, seconds: 6);
+    // Tap the row itself: the trailing control is now a menu (play next / add to end).
+    await tester.tap(onPage(SearchPage, find.byType(ListTile)).first);
+    await settle(tester, seconds: 2);
+    note('afterAdd active=${app.debugAppState?.activeQueue?.name} '
+        'items=${app.debugAppState?.activeQueue?.items.length} '
+        'pos=${app.debugAppState?.activeQueue?.positionMs} '
+        'engine=${app.debugEngineState()}');
+    await settle(tester, seconds: 4);
 
     // ---- play it from the queue ----
     await tester.tap(tab(Icons.queue_music));
@@ -103,13 +125,20 @@ void main() {
 
     // Tap the row we just added, not simply the first one: a queue can hold tracks
     // that are still downloading, and those are deliberately not tappable.
-    final row = find.ancestor(
-      of: find.textContaining('Get Lucky'),
-      matching: find.byType(ListTile),
+    final row = onPage(
+      QueuePage,
+      find.ancestor(
+        of: find.textContaining('Get Lucky'),
+        matching: find.byType(ListTile),
+      ),
     );
     expect(row, findsWidgets, reason: 'queued row missing. On screen: ${visibleText(tester)}');
+    note('beforeTap ${app.debugEngineState()}');
     await tester.tap(row.first);
-    await settle(tester, seconds: 8);
+    await settle(tester, seconds: 4);
+    note('afterTap4s ${app.debugEngineState()}');
+    await settle(tester, seconds: 4);
+    note('afterTap8s ${app.debugEngineState()}');
 
     final state = app.debugPlayerSnapshot();
     expect(state, isNotNull, reason: 'player should have loaded a track');
@@ -118,7 +147,7 @@ void main() {
         reason: 'tapping a ready track should start audio. '
             'current=${state.current?.title} state=${state.current?.state} '
             'pos=${state.position} err=${state.error} '
-            'engine[${app.debugEngineState()}]');
+            'engine[${app.debugEngineState()}] TRACE: ${trace.join(' || ')}');
     final firstPosition = state.position;
     expect(firstPosition, greaterThan(Duration.zero),
         reason: 'position must advance — a frozen position was the original bug');
@@ -126,7 +155,10 @@ void main() {
     // ---- the regression that broke everything: adding a track mid-playback ----
     await tester.tap(tab(Icons.search));
     await settle(tester);
-    await tester.tap(find.byIcon(Icons.playlist_add).first);
+    // Add a *different* track, through the explicit menu this time.
+    await tester.tap(onPage(SearchPage, find.byIcon(Icons.playlist_add)).last);
+    await settle(tester, seconds: 2);
+    await tester.tap(find.text('Add to end').last);
     await settle(tester, seconds: 5);
 
     final after = app.debugPlayerSnapshot()!;
@@ -143,6 +175,24 @@ void main() {
     final saved = await api.queue(scratchId!);
     expect(saved.positionMs, greaterThan(0),
         reason: 'the play position must be persisted during playback, not only on stop');
+
+    // ---- the now-playing screen opens from the bar and can scrub ----
+    await tester.tap(find.descendant(
+        of: find.byType(PlayerBarMarker), matching: find.byType(ListTile)));
+    await settle(tester, seconds: 3);
+    expect(find.byType(Slider), findsWidgets,
+        reason: 'now playing must offer a real scrubber. On screen: ${visibleText(tester)}');
+
+    final beforeSeek = app.debugPlayerSnapshot()!.position;
+    final scrubber = find.byType(Slider).first;
+    await tester.tap(scrubber);            // taps the middle of the track
+    await settle(tester, seconds: 4);
+    final afterSeek = app.debugPlayerSnapshot()!;
+    expect(afterSeek.position, isNot(beforeSeek), reason: 'seeking must move playback');
+    expect(afterSeek.playing, isTrue, reason: 'seeking must not stop playback');
+
+    await tester.tap(find.byIcon(Icons.keyboard_arrow_down));
+    await settle(tester, seconds: 2);
 
     // ---- shuffle and repeat persist, and do not eat the queue ----
     final itemsBefore = saved.items.length;

@@ -49,6 +49,10 @@ class PlayerService {
   QueueRepeat repeat = QueueRepeat.off;
   bool shuffle = false;
 
+  /// Separate from the per-track loudness gain: that normalises tracks against each
+  /// other, this is the listener turning it down. They multiply.
+  double userVolume = 1.0;
+
   Timer? _cursorTimer;
   DateTime _lastEmit = DateTime.fromMillisecondsSinceEpoch(0);
   String? lastError;
@@ -314,8 +318,26 @@ class PlayerService {
 
   double _volumeFor(Track t) {
     final gain = t.gainDb;
-    if (gain == null || gain >= 0) return 1.0;   // never boost into clipping
-    return math.pow(10, gain / 20).toDouble().clamp(0.05, 1.0);
+    final normalised = (gain == null || gain >= 0)
+        ? 1.0                                     // never boost into clipping
+        : math.pow(10, gain / 20).toDouble().clamp(0.05, 1.0);
+    return (normalised * userVolume).clamp(0.0, 1.0);
+  }
+
+  Future<void> setUserVolume(double v) async {
+    userVolume = v.clamp(0.0, 1.0);
+    final t = current;
+    if (t != null) await _player.setVolume(_volumeFor(t));
+    _emit(force: true);
+  }
+
+  /// Seek relative to where we are, for keyboard and headset controls.
+  Future<void> nudge(Duration by) async {
+    final target = _player.position + by;
+    final max = _player.duration ?? Duration.zero;
+    await seek(target < Duration.zero
+        ? Duration.zero
+        : (max > Duration.zero && target > max ? max : target));
   }
 
   void _onCompleted() {
