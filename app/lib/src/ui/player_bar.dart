@@ -5,6 +5,7 @@ import '../state/app_state.dart';
 import '../state/player.dart';
 import 'artwork.dart';
 import 'now_playing.dart';
+import 'swipe.dart';
 
 /// The bar that is always there. It shows what is playing, and it shows when what
 /// you queued is still downloading instead of pretending nothing happened.
@@ -45,21 +46,16 @@ class PlayerBar extends StatelessWidget {
             (s?.finished ?? false);
 
         return PlayerBarMarker(
-            child: GestureDetector(
+            child: DragFollow(
           // Gestures live here rather than on list rows: rows already use a
           // horizontal swipe to remove, and two meanings for one drag is how a UI
           // starts feeling unpredictable.
-          onVerticalDragEnd: (d) {
-            if ((d.primaryVelocity ?? 0) < -180) _openNowPlaying(context);
-          },
-          onHorizontalDragEnd: (d) {
-            final v = d.primaryVelocity ?? 0;
-            if (v < -220) {
-              player.next();
-            } else if (v > 220) {
-              player.previous();
-            }
-          },
+          onSwipeUp: () => _openNowPlaying(context),
+          onSwipeLeft: player.next,
+          onSwipeRight: player.previous,
+          horizontalTravel: 76,
+          verticalTravel: 64,
+          fadeWithDrag: true,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [

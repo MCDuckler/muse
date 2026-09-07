@@ -6,6 +6,7 @@ import '../state/app_state.dart';
 import '../state/player.dart';
 import 'artwork.dart';
 import 'glass.dart';
+import 'swipe.dart';
 
 String formatTime(Duration d) {
   final m = d.inMinutes;
@@ -44,20 +45,16 @@ class NowPlayingScreen extends StatelessWidget {
                 style: Theme.of(context).textTheme.titleSmall),
             centerTitle: true,
           ),
-          body: GestureDetector(
-            // Swipe down to close, the same gesture that dismisses a sheet anywhere
-            // else; sideways moves through the queue, matching the mini player.
-            onVerticalDragEnd: (d) {
-              if ((d.primaryVelocity ?? 0) > 240) Navigator.of(context).maybePop();
-            },
-            onHorizontalDragEnd: (d) {
-              final v = d.primaryVelocity ?? 0;
-              if (v < -240) {
-                player.next();
-              } else if (v > 240) {
-                player.previous();
-              }
-            },
+          body: DragFollow(
+            // Drag down to close, the gesture that dismisses a sheet anywhere else;
+            // sideways moves through the queue, matching the mini player. The page
+            // follows the finger so a half-drag can be taken back.
+            onSwipeDown: () => Navigator.of(context).maybePop(),
+            onSwipeLeft: player.next,
+            onSwipeRight: player.previous,
+            horizontalTravel: 110,
+            verticalTravel: 150,
+            fadeWithDrag: true,
             child: AmbientBackdrop(
             colour: parseHexColour(track?.coverColor),
             child: track == null

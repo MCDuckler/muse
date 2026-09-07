@@ -46,6 +46,11 @@ class PlayerService {
   int? _loadedTrackId;
   int? _waitingForTrack;         // stalled on a download; resume when it lands
 
+  /// Every load takes this token. Two loads can overlap — tapping a row while a skip
+  /// is still resolving, or a server event arriving mid-tap — and without a token the
+  /// slower one finishes last and wins, leaving the wrong song playing.
+  int _loadToken = 0;
+
   QueueRepeat repeat = QueueRepeat.off;
   bool shuffle = false;
 
@@ -185,6 +190,20 @@ class PlayerService {
   }
 
   // ------------------------------------------------------------------ playback
+  /// Play a specific track, identified by what it *is* rather than where it was.
+  ///
+  /// A list index is only valid for the frame it was rendered in: a server event or a
+  /// radio append can reorder the queue between the row being drawn and the finger
+  /// landing on it, and then the index points at a different song. The index is kept
+  /// as a hint so the right copy is chosen when a track appears more than once.
+  Future<void> playTrack(int trackId, {int? indexHint}) async {
+    final itemIndex = _relocate(indexHint ?? index, trackId);
+    if (itemIndex < 0) return;
+    final pos = _order.indexOf(itemIndex);
+    if (pos < 0) return;
+    await _playOrderPos(pos);
+  }
+
   Future<void> playAt(int itemIndex) async {
     if (itemIndex < 0 || itemIndex >= _items.length) return;
     final pos = _order.indexOf(itemIndex);
@@ -198,9 +217,12 @@ class PlayerService {
     finished = false;
     final track = current;
     if (track == null) return;
+    final token = ++_loadToken;
     if (_loadedTrackId != track.id) {
-      await _loadCurrent(startAt: startAt);
+      await _loadCurrent(startAt: startAt, token: token);
     }
+    // A newer request came in while this one was loading: it owns playback now.
+    if (token != _loadToken) return;
     if (_waitingForTrack == null) _startPlayback();
     _emit(force: true);
     _saveCursor();
@@ -231,7 +253,10 @@ class PlayerService {
     _emit(force: true);
   }
 
-  Future<void> next() => _advance(1);
+  Future<void> next() {
+    _waitingForTrack = null;   // an explicit skip overrides waiting for a download
+    return _advance(1);
+  }
 
   Future<void> previous() async {
     // Restart the track first, then step back — the convention every player uses.
@@ -239,6 +264,7 @@ class PlayerService {
       await _player.seek(Duration.zero);
       return;
     }
+    _waitingForTrack = null;
     await _advance(-1);
   }
 
@@ -252,37 +278,40 @@ class PlayerService {
       return;
     }
 
+    // Walk the play order looking for something playable. A track that is still
+    // downloading is remembered rather than skipped past for good: reaching the end
+    // with one of those behind us means "wait", not "the queue is over".
+    int? pendingPos;
     var pos = _orderPos;
     for (var step = 0; step < _order.length; step++) {
       pos += direction;
       if (pos >= _order.length) {
-        if (repeat == QueueRepeat.all) {
-          pos = 0;
-        } else {
-          await _finish();
-          return;
-        }
+        if (repeat != QueueRepeat.all) break;
+        pos = 0;
       } else if (pos < 0) {
-        if (repeat == QueueRepeat.all) {
-          pos = _order.length - 1;
-        } else {
-          return;                        // already at the top; stay put
-        }
+        if (repeat != QueueRepeat.all) return;   // already at the top; stay put
+        pos = _order.length - 1;
       }
       final candidate = _items[_order[pos]];
       if (candidate.isReady) {
         await _playOrderPos(pos);
         return;
       }
-      // Not ready: remember it, keep looking for something that is.
-      _waitingForTrack ??= candidate.id;
+      pendingPos ??= pos;
     }
 
-    // Nothing in the queue is playable yet: wait rather than pretend it ended.
-    _orderPos = pos.clamp(0, _order.length - 1);
-    await _player.stop();
-    _loadedTrackId = null;
-    _emit(force: true);
+    if (pendingPos != null) {
+      // Park on the track we are waiting for. onTrackReady starts it.
+      _orderPos = pendingPos;
+      _waitingForTrack = _items[_order[pendingPos]].id;
+      _loadedTrackId = null;
+      await _player.stop();
+      _emit(force: true);
+      _saveCursor();
+      return;
+    }
+
+    await _finish();
   }
 
   Future<void> _finish() async {
@@ -297,7 +326,8 @@ class PlayerService {
     _saveCursor();
   }
 
-  Future<void> _loadCurrent({Duration? startAt}) async {
+  Future<void> _loadCurrent({Duration? startAt, int? token}) async {
+    final mine = token ?? ++_loadToken;
     final track = current;
     if (track == null) return;
     if (!track.isReady) {
@@ -313,6 +343,7 @@ class PlayerService {
     lastError = null;
     try {
       await api.ensureStreamKey();
+      if (mine != _loadToken) return;      // superseded while fetching the key
       final cover = api.coverUrl(track, small: false);
       final coverUri = cover == null ? null : Uri.parse(cover);
       await _player.setAudioSource(
@@ -336,6 +367,7 @@ class PlayerService {
         ),
         initialPosition: startAt,
       );
+      if (mine != _loadToken) return;      // a later track won the race
       await _player.setVolume(_volumeFor(track));
       _loadedTrackId = track.id;
     } catch (e) {
@@ -452,6 +484,7 @@ class PlayerService {
       duration: _player.duration ?? current?.duration,
       buffered: _player.bufferedPosition,
       itemCount: _items.length,
+      loadedTrackId: _loadedTrackId,
       error: lastError,
       repeat: repeat,
       shuffle: shuffle,
@@ -477,6 +510,9 @@ class PlayerSnapshot {
   final Duration? duration;
   final Duration buffered;
   final int itemCount;
+  /// What the audio engine actually holds. When this disagrees with [current] the UI
+  /// is showing one song and playing another — the failure that kept coming back.
+  final int? loadedTrackId;
   final String? error;
   final QueueRepeat repeat;
   final bool shuffle;
@@ -491,12 +527,15 @@ class PlayerSnapshot {
     required this.duration,
     this.buffered = Duration.zero,
     required this.itemCount,
+    this.loadedTrackId,
     this.error,
     this.repeat = QueueRepeat.off,
     this.shuffle = false,
     this.waitingForDownload = false,
     this.finished = false,
   });
+
+  bool get isConsistent => current == null || loadedTrackId == current!.id;
 
   double get progress {
     final d = duration?.inMilliseconds ?? 0;

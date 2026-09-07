@@ -218,6 +218,66 @@ void main() {
     expect(saved.positionMs, greaterThan(0),
         reason: 'the play position must be persisted during playback, not only on stop');
 
+    // ---- skipping must land on the song the UI is showing ----
+    // The engine loading one track while the list highlights another is what "it does
+    // not reliably play the right song" looked like from outside.
+    // Make sure the queue holds two *distinct* ready tracks. Searching one term can
+    // easily return the same song twice, and "skip" onto another copy of the same
+    // track proves nothing about landing on the right song.
+    final appState = app.debugAppState!;
+    final playing = appState.player!.current!.id;
+    final other = (await appState.api.search('otherside'))
+        .local
+        .where((t) => t.id != playing && t.isReady)
+        .toList();
+    expect(other, isNotEmpty, reason: 'need a second distinct ready track to skip to');
+
+    // Start from a known two-track queue. Earlier steps deliberately add the same
+    // song more than once, and skipping onto another copy of it is correct behaviour
+    // that would make this assertion meaningless.
+    await appState.clearQueue();
+    await settle(tester, seconds: 2);
+    await appState.addTrack(appState.player!.items.isEmpty
+        ? other.first
+        : appState.player!.items.first);
+    final firstTrack = (await appState.api.search('get lucky'))
+        .local
+        .firstWhere((t) => t.isReady);
+    await appState.addTrack(firstTrack);
+    await appState.addTrack(other.first);
+    await settle(tester, seconds: 3);
+    await appState.player!.playTrack(firstTrack.id);
+    await settle(tester, seconds: 5);
+
+    final startId = app.debugPlayerSnapshot()!.current!.id;
+    final startIndex = app.debugPlayerSnapshot()!.index;
+    await appState.player!.next();
+    await settle(tester, seconds: 5);
+    final afterSkip = app.debugPlayerSnapshot()!;
+    expect(afterSkip.isConsistent, isTrue,
+        reason: 'loaded ${afterSkip.loadedTrackId} but showing ${afterSkip.current?.id}');
+    expect(afterSkip.index, isNot(startIndex),
+        reason: 'skip must move through the queue. queue='
+            '${appState.player!.items.map((t) => "${t.id}:${t.state}").join(",")}');
+    expect(afterSkip.current!.id, isNot(startId),
+        reason: 'and it must land on a different song');
+
+    // Two skips in quick succession: the slower load must not win the race.
+    await appState.player!.next();
+    await appState.player!.next();
+    await settle(tester, seconds: 6);
+    final afterDouble = app.debugPlayerSnapshot()!;
+    expect(afterDouble.isConsistent, isTrue,
+        reason: 'rapid skips left the engine on the wrong track: '
+            'loaded ${afterDouble.loadedTrackId}, showing ${afterDouble.current?.id}');
+
+    // Skipping off the end of a short queue stops playback, which is correct — so
+    // start something again before testing that typing does not disturb it.
+    await appState.player!.playTrack(firstTrack.id);
+    await settle(tester, seconds: 5);
+    expect(app.debugPlayerSnapshot()!.playing, isTrue,
+        reason: 'playback should resume when a track is picked again');
+
     // ---- typing in search must not fire playback shortcuts ----
     // S is shuffle, N is next, space is play/pause. Typing "snx " into the search box
     // used to shuffle the queue, skip the track and pause the music.
@@ -251,7 +311,9 @@ void main() {
     await settle(tester, seconds: 2);
 
     // ---- shuffle and repeat persist, and do not eat the queue ----
-    final itemsBefore = saved.items.length;
+    // Read the count here rather than earlier: the steps in between deliberately
+    // change the queue, and a stale count would fail for the wrong reason.
+    final itemsBefore = (await api.queue(scratchId!)).items.length;
     await app.debugAppState!.setShuffle(true);
     await app.debugAppState!.cycleRepeat();
     await settle(tester, seconds: 4);

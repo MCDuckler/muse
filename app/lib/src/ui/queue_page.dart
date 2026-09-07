@@ -177,7 +177,7 @@ class QueuePage extends StatelessWidget {
                       onTap: t.isReady
                           ? () async {
                               try {
-                                await app.player?.playAt(i);
+                                await app.player?.playTrack(t.id, indexHint: i);
                               } catch (e) {
                                 if (context.mounted) {
                                   ScaffoldMessenger.of(context).showSnackBar(
