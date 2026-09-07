@@ -15,3 +15,13 @@ secret = "CHANGE-ME"
 # [[users]]
 # name = "chris"
 # password_hash = "$argon2id$..."
+
+# Optional. Spotify is a PLAYLIST SOURCE ONLY — Development mode can read your own
+# playlists and nothing else, and that will not change (extended quota needs 250k MAU).
+# [spotify]
+# client_id = ""
+# client_secret = ""
+# refresh_token = ""          # scopes: playlist-read-private, user-library-read
+
+# [ytmusic]
+# oauth_file = "~/.config/muse/ytmusic-oauth.json"   # ytmusicapi oauth

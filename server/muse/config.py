@@ -22,6 +22,8 @@ class Config:
     port: int = 8770
     public_url: str = "http://127.0.0.1:8770"
     users: tuple[User, ...] = field(default_factory=tuple)
+    spotify: dict = field(default_factory=dict)
+    ytmusic: dict = field(default_factory=dict)
 
     @property
     def audio_dir(self) -> pathlib.Path:
@@ -53,6 +55,8 @@ def load(path: str | os.PathLike | None = None) -> Config:
         port=int(srv.get("port", 8770)),
         public_url=srv.get("public_url", f"http://{srv.get('host','127.0.0.1')}:{srv.get('port',8770)}"),
         users=tuple(User(u["name"], u["password_hash"]) for u in raw.get("users", [])),
+        spotify=raw.get("spotify", {}),
+        ytmusic=raw.get("ytmusic", {}),
     )
     if not cfg.worker_secret:
         raise SystemExit("worker.secret is empty — the ingest worker would be unauthenticated")

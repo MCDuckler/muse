@@ -141,6 +141,10 @@ create table if not exists matches (
   primary key (remote_kind, remote_id)
 );
 
+alter table matches add column if not exists remote_title text;
+alter table matches add column if not exists remote_artists text[];
+alter table matches add column if not exists decided_at timestamptz not null default now();
+
 create table if not exists listens (
   id         bigserial primary key,
   user_id    int not null references users(id) on delete cascade,
