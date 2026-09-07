@@ -11,7 +11,8 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from . import auth, catalog, config, db, jobs, routes_library, routes_sync, storage, ytm
+from . import (auth, catalog, config, db, jobs, routes_files, routes_library,
+               routes_sync, storage, ytm)
 from . import deps
 from .deps import current_user, worker_auth
 
@@ -213,6 +214,7 @@ def create_app(configuration: config.Config) -> FastAPI:
 
     app.include_router(routes_library.router)
     app.include_router(routes_sync.router)
+    app.include_router(routes_files.router)
     return app
 
 

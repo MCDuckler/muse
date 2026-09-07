@@ -5,4 +5,5 @@ argon2-cffi
 python-multipart
 httpx
 ytmusicapi
+mutagen
 pytest

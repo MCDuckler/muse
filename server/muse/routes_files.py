@@ -1,0 +1,141 @@
+"""Custom uploads and the offline download manifest.
+
+Uploads are the only files in the library that cannot be re-fetched, so the original
+is kept alongside the canonical m4a even when it had to be transcoded.
+"""
+from __future__ import annotations
+
+import pathlib
+import shutil
+import tempfile
+
+from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile
+
+from . import audiofile, catalog, db, storage
+from .deps import cfg, current_user
+
+router = APIRouter()
+
+MAX_UPLOAD_BYTES = 512 * 1024 * 1024      # a 500 MB "song" is a mistake, not a song
+
+
+@router.post("/uploads", status_code=201)
+def upload(audio: UploadFile, user: dict = Depends(current_user)):
+    suffix = pathlib.Path(audio.filename or "upload").suffix or ".bin"
+    with tempfile.TemporaryDirectory(prefix="muse-up-") as tmp:
+        tmp_dir = pathlib.Path(tmp)
+        raw = tmp_dir / f"in{suffix}"
+        size = 0
+        with raw.open("wb") as fh:
+            while chunk := audio.file.read(1 << 20):
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(413, "file larger than 512 MB")
+                fh.write(chunk)
+        if not size:
+            raise HTTPException(400, "empty upload")
+
+        try:
+            info = audiofile.probe(raw)
+        except Exception:
+            raise HTTPException(415, f"{audio.filename!r} is not audio ffmpeg can read")
+        if not info.get("codec"):
+            raise HTTPException(415, "no audio stream in that file")
+
+        # Same bytes as something already here? Then it is already here.
+        original_sha = storage.sha256_file(raw)
+        dupe = db.one("select track_id from media where sha256=%s", (original_sha,))
+        if dupe:
+            return {**catalog.public(catalog.track_row(dupe["track_id"])), "duplicate": True}
+
+        meta = audiofile.tags(raw)
+        fp = audiofile.fingerprint(raw)
+
+        canonical = raw
+        if audiofile.needs_transcode(info):
+            canonical = audiofile.to_m4a(raw, tmp_dir / "out.m4a")
+            info = {**audiofile.probe(canonical), "transcoded_from": info["codec"]}
+        lufs, gain = audiofile.loudness(canonical)
+
+        title = meta.get("title") or pathlib.Path(audio.filename or "Unknown").stem
+        row = db.one(
+            """insert into tracks(title,artists,album,duration_ms,release_year,isrc,
+                                  source,state,loudness_lufs,gain_db,fingerprint,discovered_via)
+               values(%s,%s,%s,%s,%s,%s,'custom','ready',%s,%s,%s,'user') returning id""",
+            (title, meta.get("artists") or [], meta.get("album"), info.get("duration_ms"),
+             meta.get("release_year"), meta.get("isrc"), lufs, gain,
+             (fp or {}).get("fingerprint")),
+        )
+        track_id = row["id"]
+
+        with canonical.open("rb") as fh:
+            digest, path, stored = storage.store_stream(cfg().audio_dir, fh, ".m4a")
+        db.run(
+            """insert into media(track_id,sha256,codec,bitrate,bytes,path,role)
+               values(%s,%s,%s,%s,%s,%s,'canonical')
+               on conflict (track_id,sha256) do nothing""",
+            (track_id, digest, info.get("codec"), info.get("bitrate"), stored, str(path)),
+        )
+        if canonical is not raw:
+            # Irreplaceable: keep what was actually uploaded, next to the playable copy.
+            with raw.open("rb") as fh:
+                o_digest, o_path, o_bytes = storage.store_stream(
+                    cfg().data_dir / "originals", fh, suffix)
+            db.run(
+                """insert into media(track_id,sha256,codec,bitrate,bytes,path,role)
+                   values(%s,%s,%s,%s,%s,%s,'original')
+                   on conflict (track_id,sha256) do nothing""",
+                (track_id, o_digest, info.get("transcoded_from"), None, o_bytes, str(o_path)),
+            )
+
+    return {**catalog.public(catalog.track_row(track_id)),
+            "suggested": meta, "fingerprinted": bool(fp), "duplicate": False}
+
+
+@router.patch("/tracks/{track_id}")
+def edit_track(track_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
+    """Manual metadata fix — tags from an uploader are a suggestion, not a fact."""
+    if not catalog.track_row(track_id):
+        raise HTTPException(404, "no such track")
+    fields = {k: body[k] for k in
+              ("title", "artists", "album", "release_year", "isrc", "mbid") if k in body}
+    if not fields:
+        raise HTTPException(400, "nothing to change")
+    sets = ", ".join(f"{k}=%s" for k in fields)
+    db.run(f"update tracks set {sets} where id=%s", (*fields.values(), track_id))
+    return catalog.public(catalog.track_row(track_id))
+
+
+@router.get("/downloads/manifest")
+def manifest(playlist_id: int | None = None, queue_id: int | None = None,
+             user: dict = Depends(current_user)):
+    """What a device must fetch to have this playable offline, and how big that is."""
+    if playlist_id:
+        rows = db.all_(
+            """select t.*, m.sha256, m.bytes from playlist_items i
+                 join tracks t on t.id=i.track_id
+                 join media m on m.track_id=t.id and m.role='canonical'
+                 join playlists p on p.id=i.playlist_id
+                where i.playlist_id=%s and p.owner_id=%s order by i.pos""",
+            (playlist_id, user["id"]),
+        )
+    elif queue_id:
+        rows = db.all_(
+            """select t.*, m.sha256, m.bytes from queue_items i
+                 join tracks t on t.id=i.track_id
+                 join media m on m.track_id=t.id and m.role='canonical'
+                 join queues q on q.id=i.queue_id
+                where i.queue_id=%s and q.user_id=%s order by i.pos""",
+            (queue_id, user["id"]),
+        )
+    else:
+        raise HTTPException(400, "playlist_id or queue_id required")
+
+    items = [{
+        "track_id": r["id"], "title": r["title"], "artists": r["artists"],
+        "sha256": r["sha256"], "bytes": r["bytes"], "gain_db": r["gain_db"],
+        "duration_ms": r["duration_ms"], "url": f"/tracks/{r['id']}/stream",
+    } for r in rows]
+    return {"items": items, "count": len(items),
+            "bytes": sum(i["bytes"] or 0 for i in items),
+            "mb": round(sum(i["bytes"] or 0 for i in items) / 1e6, 1)}

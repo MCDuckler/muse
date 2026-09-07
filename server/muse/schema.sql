@@ -44,7 +44,6 @@ create table if not exists tracks (
   created_at    timestamptz not null default now(),
   norm_title    text generated always as (lower(regexp_replace(title,'[^[:alnum:] ]','','g'))) stored
 );
-alter table tracks add column if not exists discovered_via text not null default 'user';
 create index if not exists tracks_norm_trgm on tracks using gin (norm_title gin_trgm_ops);
 create index if not exists tracks_state_idx on tracks(state);
 
@@ -67,6 +66,7 @@ create table if not exists media (
   bytes     bigint not null,
   path      text not null,
   ready_at  timestamptz not null default now(),
+  role      text not null default 'canonical',   -- canonical | original
   unique (track_id, sha256)
 );
 
@@ -90,8 +90,7 @@ create table if not exists jobs (
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now()
 );
-alter table jobs add column if not exists next_attempt_at timestamptz not null default now();
-create index if not exists jobs_pending on jobs(kind, state, next_attempt_at);
+create index if not exists jobs_pending on jobs(kind, state, created_at);
 
 create table if not exists playlists (
   id             serial primary key,
@@ -141,9 +140,6 @@ create table if not exists matches (
   primary key (remote_kind, remote_id)
 );
 
-alter table matches add column if not exists remote_title text;
-alter table matches add column if not exists remote_artists text[];
-alter table matches add column if not exists decided_at timestamptz not null default now();
 
 create table if not exists listens (
   id         bigserial primary key,
@@ -161,3 +157,18 @@ create table if not exists lyrics (
   source     text,
   fetched_at timestamptz not null default now()
 );
+
+-- ---------------------------------------------------------------------------
+-- Additive migrations. They run after every create above, because an ALTER
+-- placed next to the column it adds would execute before its table exists.
+-- ---------------------------------------------------------------------------
+alter table media add column if not exists role text not null default 'canonical';
+alter table tracks add column if not exists fingerprint text;
+alter table tracks add column if not exists discovered_via text not null default 'user';
+alter table jobs add column if not exists next_attempt_at timestamptz not null default now();
+alter table matches add column if not exists remote_title text;
+alter table matches add column if not exists remote_artists text[];
+alter table matches add column if not exists decided_at timestamptz not null default now();
+
+create index if not exists jobs_pending_next on jobs(kind, state, next_attempt_at);
+create index if not exists media_sha_idx on media(sha256);

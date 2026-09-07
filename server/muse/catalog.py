@@ -15,7 +15,7 @@ def track_row(track_id: int) -> dict | None:
         """select t.*, m.bytes, m.path, m.sha256, m.codec, m.bitrate,
                   s.provider, s.provider_id
              from tracks t
-             left join media m on m.track_id=t.id
+             left join media m on m.track_id=t.id and m.role='canonical'
              left join track_sources s on s.track_id=t.id
             where t.id=%s""",
         (track_id,),
