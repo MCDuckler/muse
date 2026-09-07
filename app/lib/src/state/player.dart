@@ -288,6 +288,8 @@ class PlayerService {
     lastError = null;
     try {
       await api.ensureStreamKey();
+      final cover = api.coverUrl(track, small: false);
+      final coverUri = cover == null ? null : Uri.parse(cover);
       await _player.setAudioSource(
         AudioSource.uri(
           Uri.parse(api.streamUrl(track)),
@@ -298,10 +300,13 @@ class PlayerService {
           // lockscreen, the notification and the car display actually show.
           tag: MediaItem(
             id: '${track.id}',
-            title: track.title,
+            title: track.displayTitle,
             artist: track.artistLine,
-            album: track.album,
+            album: track.albumLine,
             duration: track.duration,
+            // The lockscreen and the car display fetch this themselves, so it has to
+            // be a URL that authenticates on its own — the same signed key as audio.
+            artUri: coverUri,
           ),
         ),
         initialPosition: startAt,

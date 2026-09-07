@@ -12,8 +12,8 @@ from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request, Uplo
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from . import (auth, catalog, config, db, jobs, routes_files, routes_library,
-               routes_play, routes_sync, storage, ytm)
+from . import (auth, catalog, config, db, enrich_worker, jobs, routes_files,
+               routes_library, routes_play, routes_sync, storage, ytm)
 from . import deps
 from .deps import current_user, worker_auth
 
@@ -36,7 +36,7 @@ def publish(event: str, data: dict) -> None:
     _loop.call_soon_threadsafe(_fan_out)
 
 
-def create_app(configuration: config.Config) -> FastAPI:
+def create_app(configuration: config.Config, start_workers: bool = False) -> FastAPI:
     global cfg
     cfg = configuration
     db.init(cfg.dsn)
@@ -44,11 +44,17 @@ def create_app(configuration: config.Config) -> FastAPI:
     for u in cfg.users:
         auth.ensure_user(u.name)
 
+    worker = enrich_worker.EnrichWorker(cfg) if start_workers else None
+
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         global _loop
         _loop = asyncio.get_running_loop()
+        if worker:
+            worker.start()
         yield
+        if worker:
+            worker.stop()
         _loop = None
 
     app = FastAPI(title="muse", docs_url="/api-docs", lifespan=lifespan)
@@ -137,6 +143,33 @@ def create_app(configuration: config.Config) -> FastAPI:
             raise HTTPException(404, "no such track")
         return catalog.public(t)
 
+    @app.get("/tracks/{track_id}/cover")
+    def cover(track_id: int, request: Request, size: str = "lg", k: str | None = None,
+              authorization: Annotated[str | None, Header()] = None):
+        """An <img> cannot send an Authorization header either, so covers accept the
+        same signed key as audio."""
+        user = None
+        if authorization and authorization.lower().startswith("bearer "):
+            user = auth.user_for_token(authorization.split(" ", 1)[1].strip())
+        if user is None and k:
+            user = auth.user_for_stream_key(k, cfg.worker_secret)
+        if user is None:
+            raise HTTPException(401, "missing bearer token or stream key")
+
+        row = db.one(
+            """select c.path, c.sha256 from tracks t join covers c on c.id=t.cover_id
+                where t.id=%s""",
+            (track_id,),
+        )
+        if not row:
+            raise HTTPException(404, "no cover for that track")
+        path = pathlib.Path(row["path"])
+        if size == "sm":
+            small = path.with_name(f"{row['sha256']}_sm.jpg")
+            if small.exists():
+                path = small
+        return _range_response(path, request, etag=f"{row['sha256']}-{size}")
+
     @app.get("/tracks/{track_id}/stream")
     def stream(track_id: int, request: Request, k: str | None = None,
                authorization: Annotated[str | None, Header()] = None):
@@ -202,6 +235,9 @@ def create_app(configuration: config.Config) -> FastAPI:
             (info.get("duration_ms"), info.get("loudness_lufs"), info.get("gain_db"), track_id),
         )
         jobs.finish(job_id)
+        # Artwork and canonical metadata are a separate concern from getting the audio,
+        # and they must never hold up playback.
+        jobs.enqueue("meta", {"track_id": track_id})
         publish("track_ready", {"track_id": track_id, "bytes": size})
         return {"ok": True, "sha256": digest, "bytes": size}
 
@@ -218,6 +254,7 @@ def create_app(configuration: config.Config) -> FastAPI:
     @app.get("/admin/storage")
     def storage_stats(user: dict = Depends(current_user)):
         agg = db.one("select count(*) n, coalesce(sum(bytes),0) b from media")
+        covers = db.one("select count(*) n from tracks where cover_id is not null")
         states = db.all_("select state, count(*) n from tracks group by state")
         workers = db.all_("select name, last_seen, leased from workers order by last_seen desc")
         pending = db.one("select count(*) n from jobs where state in ('pending','leased')")
@@ -226,6 +263,7 @@ def create_app(configuration: config.Config) -> FastAPI:
             "media_files": agg["n"],
             "bytes": int(agg["b"]),
             "gb": round(int(agg["b"]) / 1e9, 3),
+            "covers": covers["n"],
             "jobs_outstanding": pending["n"],
             "workers": workers,
         }

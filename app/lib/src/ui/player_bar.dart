@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
 import '../state/player.dart';
+import 'artwork.dart';
 import 'now_playing.dart';
 
 /// The bar that is always there. It shows what is playing, and it shows when what
@@ -56,10 +57,9 @@ class PlayerBar extends StatelessWidget {
                   builder: (_) => const NowPlayingScreen(),
                   fullscreenDialog: true,
                 )),
-                leading: Icon(track.source == 'custom'
-                    ? Icons.folder_outlined
-                    : Icons.music_note_outlined),
-                title: Text(track.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                leading: Artwork(track: track, size: 42),
+                title: Text(track.displayTitle,
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
                 subtitle: Text(
                   subtitle,
                   maxLines: 1,

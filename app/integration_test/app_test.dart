@@ -110,8 +110,15 @@ void main() {
     expect(onPage(SearchPage, find.text('IN YOUR LIBRARY')), findsOneWidget,
         reason: 'the seeded track must come back from the local catalog (header is uppercased). '
             'On screen: ${visibleText(tester)}');
-    // Tap the row itself: the trailing control is now a menu (play next / add to end).
-    await tester.tap(onPage(SearchPage, find.byType(ListTile)).first);
+    // Add a track by name, not by position: the library grows, so "the first result"
+    // stops being the track this test reasons about.
+    await tester.tap(onPage(
+      SearchPage,
+      find.ancestor(
+        of: find.textContaining('Get Lucky'),
+        matching: find.byType(ListTile),
+      ),
+    ).first);
     await settle(tester, seconds: 2);
     note('afterAdd active=${app.debugAppState?.activeQueue?.name} '
         'items=${app.debugAppState?.activeQueue?.items.length} '
@@ -175,6 +182,20 @@ void main() {
     final saved = await api.queue(scratchId!);
     expect(saved.positionMs, greaterThan(0),
         reason: 'the play position must be persisted during playback, not only on stop');
+
+    // ---- typing in search must not fire playback shortcuts ----
+    // S is shuffle, N is next, space is play/pause. Typing "snx " into the search box
+    // used to shuffle the queue, skip the track and pause the music.
+    await tester.tap(tab(Icons.search));
+    await settle(tester, seconds: 2);
+    final shuffleBefore = app.debugPlayerSnapshot()!.shuffle;
+    final trackBefore = app.debugPlayerSnapshot()!.current?.id;
+    await tester.enterText(onPage(SearchPage, find.byType(TextField)).first, 'sn ');
+    await settle(tester, seconds: 3);
+    final typed = app.debugPlayerSnapshot()!;
+    expect(typed.playing, isTrue, reason: 'space in the search box must not pause');
+    expect(typed.shuffle, shuffleBefore, reason: 's in the search box must not shuffle');
+    expect(typed.current?.id, trackBefore, reason: 'n in the search box must not skip');
 
     // ---- the now-playing screen opens from the bar and can scrub ----
     await tester.tap(find.descendant(

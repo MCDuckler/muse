@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
+import 'artwork.dart';
 
 class LibraryPage extends StatelessWidget {
   const LibraryPage({super.key});
@@ -64,7 +65,9 @@ class _PlaylistPage extends StatelessWidget {
           return ListView.builder(
             itemCount: items.length,
             itemBuilder: (context, i) => ListTile(
-              title: Text(items[i].title, maxLines: 1, overflow: TextOverflow.ellipsis),
+              leading: Artwork(track: items[i], size: 40),
+              title: Text(items[i].displayTitle,
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
               subtitle: Text(items[i].artistLine),
               trailing: IconButton(
                 icon: const Icon(Icons.playlist_add),
@@ -99,7 +102,9 @@ class _HistoryPage extends StatelessWidget {
           return ListView.builder(
             itemCount: items.length,
             itemBuilder: (context, i) => ListTile(
-              title: Text(items[i].title, maxLines: 1, overflow: TextOverflow.ellipsis),
+              leading: Artwork(track: items[i], size: 40),
+              title: Text(items[i].displayTitle,
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
               subtitle: Text(items[i].artistLine),
               trailing: IconButton(
                 icon: const Icon(Icons.playlist_add),

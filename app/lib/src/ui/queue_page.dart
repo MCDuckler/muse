@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/player.dart';
+import 'artwork.dart';
 
 /// Queues are the product, so this screen shows them all, not just the one playing.
 class QueuePage extends StatelessWidget {
@@ -55,7 +56,7 @@ class QueuePage extends StatelessWidget {
                     return ListTile(
                       selected: isCurrent,
                       leading: _leading(t, i, isCurrent),
-                      title: Text(t.title,
+                      title: Text(t.displayTitle,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
@@ -133,11 +134,31 @@ class QueuePage extends StatelessWidget {
   Widget _leading(Track t, int i, bool isCurrent) {
     if (t.isPending) {
       return const SizedBox(
-          width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2));
+          width: 40, height: 40,
+          child: Center(
+              child: SizedBox(
+                  width: 20, height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2))));
     }
-    if (t.state == 'failed') return const Icon(Icons.error_outline);
-    if (isCurrent) return const Icon(Icons.equalizer);
-    return SizedBox(width: 24, child: Center(child: Text('${i + 1}')));
+    if (t.state == 'failed') {
+      return const SizedBox(width: 40, height: 40, child: Icon(Icons.error_outline));
+    }
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        Artwork(track: t, size: 40),
+        if (isCurrent)
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: Colors.black54,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: const Icon(Icons.equalizer, color: Colors.white, size: 20),
+          ),
+      ],
+    );
   }
 
   Future<void> _newQueue(BuildContext context) async {

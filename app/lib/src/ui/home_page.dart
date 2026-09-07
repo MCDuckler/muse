@@ -81,13 +81,32 @@ class _Shortcuts extends StatelessWidget {
   final AppState app;
   final Widget child;
 
+  /// True while a text field has focus.
+  ///
+  /// Checking `primaryFocus.context.widget` is not enough: the node that holds focus
+  /// belongs to a Focus widget *inside* EditableText, so the type test never matched
+  /// and every letter typed into the search box also triggered a shortcut — S toggled
+  /// shuffle, N skipped the track, space paused the music.
+  static bool get _isTyping {
+    final ctx = FocusManager.instance.primaryFocus?.context;
+    if (ctx == null) return false;
+    var typing = false;
+    ctx.visitAncestorElements((element) {
+      if (element.widget is EditableText) {
+        typing = true;
+        return false;
+      }
+      return true;
+    });
+    return typing;
+  }
+
   KeyEventResult _handle(FocusNode node, KeyEvent event) {
     final player = app.player;
     if (player == null || event is! KeyDownEvent) return KeyEventResult.ignored;
 
     // Never steal keys from a text field: space belongs to the search box.
-    final focused = FocusManager.instance.primaryFocus?.context?.widget;
-    if (focused is EditableText) return KeyEventResult.ignored;
+    if (_isTyping) return KeyEventResult.ignored;
 
     switch (event.logicalKey) {
       case LogicalKeyboardKey.space:

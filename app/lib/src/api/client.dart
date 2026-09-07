@@ -112,6 +112,15 @@ class ApiClient {
         : '$baseUrl${t.streamPath}?k=${Uri.encodeQueryComponent(key)}';
   }
 
+  /// Same signed-key trick as audio: an <img> cannot send an Authorization header.
+  String? coverUrl(Track t, {bool small = false}) {
+    if (t.coverPath == null) return null;
+    final key = _streamKey;
+    final size = small ? 'sm' : 'lg';
+    final auth = key == null ? '' : '&k=${Uri.encodeQueryComponent(key)}';
+    return '$baseUrl${t.coverPath}?size=$size$auth';
+  }
+
   Map<String, String> get streamHeaders => {'Authorization': 'Bearer $token'};
 
   bool get hasStreamKey => _streamKey != null;

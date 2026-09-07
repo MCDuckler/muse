@@ -2,12 +2,29 @@
 from __future__ import annotations
 
 import json
+import re
 
 from . import db, jobs
 
 # Where a track came into the library. Radio pulls in songs nobody asked for, so they
 # stay identifiable for a future cleanup.
 VIA_USER, VIA_RADIO, VIA_SYNC = "user", "radio", "sync"
+
+# Markers a video platform adds that say nothing about the recording. Deliberately
+# conservative: "(Radio Edit)" and "(feat. …)" stay, because those distinguish one
+# recording from another and dropping them would be a lie about what is playing.
+_NOISE = re.compile(
+    r"\s*[\(\[]\s*(official\s+(music\s+)?video|official\s+audio|lyrics?\s*video"
+    r"|visualizer|audio only|hd|hq|4k)\s*[^\)\]]*[\)\]]",
+    re.I,
+)
+_TRAILING = re.compile(r"\s*[-–]\s*(official\s+.*|.*\bvisualizer\b.*)$", re.I)
+
+
+def display_title(raw: str | None) -> str:
+    if not raw:
+        return ""
+    return _TRAILING.sub("", _NOISE.sub("", raw)).strip() or raw
 
 
 def track_row(track_id: int) -> dict | None:
@@ -26,6 +43,8 @@ def public(t: dict) -> dict:
     return {
         "id": t["id"],
         "title": t["title"],
+        "display_title": display_title(t["title"]),
+        "cover_url": f"/tracks/{t['id']}/cover" if t.get("cover_id") else None,
         "artists": t["artists"],
         "album": t["album"],
         "duration_ms": t["duration_ms"],

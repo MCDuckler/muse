@@ -14,6 +14,9 @@ class Track {
   final double? gainDb;
   final int? bytes;
   final String? streamPath;
+  final String? coverPath;
+  /// Platform noise stripped for display; `title` keeps whatever the source said.
+  final String displayTitle;
   final String origin; // user | autoplay | radio (queue items only)
 
   const Track({
@@ -29,10 +32,16 @@ class Track {
     this.gainDb,
     this.bytes,
     this.streamPath,
+    this.coverPath,
+    String? displayTitle,
     this.origin = 'user',
-  });
+  }) : displayTitle = displayTitle ?? title;
 
   bool get isReady => state == 'ready' && streamPath != null;
+  bool get hasCover => coverPath != null;
+  /// Hide an album line that only repeats the title — common for singles.
+  String? get albumLine =>
+      (album == null || album == title || album == displayTitle) ? null : album;
   bool get isPending => state == 'pending' || state == 'downloading';
   String get artistLine => artists.isEmpty ? 'Unknown artist' : artists.join(', ');
   Duration? get duration =>
@@ -51,6 +60,8 @@ class Track {
         gainDb: (j['gain_db'] as num?)?.toDouble(),
         bytes: j['bytes'] as int?,
         streamPath: j['stream_url'] as String?,
+        coverPath: j['cover_url'] as String?,
+        displayTitle: j['display_title'] as String?,
         origin: (j['origin'] ?? 'user') as String,
       );
 }

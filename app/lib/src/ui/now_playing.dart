@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/player.dart';
+import 'artwork.dart';
 
 String formatTime(Duration d) {
   final m = d.inMinutes;
@@ -53,15 +54,18 @@ class NowPlayingScreen extends StatelessWidget {
                           mainAxisAlignment: MainAxisAlignment.center,
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            const _Artwork(),
+                            _Artwork(track: track),
                             const SizedBox(height: 32),
-                            Text(track.title,
+                            Text(track.displayTitle,
                                 textAlign: TextAlign.center,
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
                                 style: Theme.of(context).textTheme.headlineSmall),
                             const SizedBox(height: 6),
-                            Text(track.artistLine,
+                            Text(
+                                [track.artistLine, track.albumLine]
+                                    .whereType<String>()
+                                    .join(' · '),
                                 textAlign: TextAlign.center,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
@@ -103,27 +107,30 @@ class NowPlayingScreen extends StatelessWidget {
 }
 
 class _Artwork extends StatelessWidget {
-  const _Artwork();
+  const _Artwork({required this.track});
+  final Track track;
 
   @override
   Widget build(BuildContext context) {
-    // Artwork is not in the catalogue yet — the enrichment pipeline lands next. Rather
-    // than a grey box, this is a deliberate placeholder so the layout is already right.
-    final scheme = Theme.of(context).colorScheme;
-    return AspectRatio(
-      aspectRatio: 1,
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [scheme.surfaceContainerHighest, scheme.surfaceContainer],
+    return LayoutBuilder(
+      builder: (context, c) {
+        final side = c.maxWidth;
+        return Center(
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.28),
+                  blurRadius: 28,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
+            child: Artwork(track: track, size: side, radius: 16, small: false),
           ),
-        ),
-        child: Icon(Icons.graphic_eq,
-            size: 84, color: scheme.primary.withValues(alpha: 0.55)),
-      ),
+        );
+      },
     );
   }
 }

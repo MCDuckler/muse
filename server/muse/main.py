@@ -6,7 +6,7 @@ from . import config
 from .app import create_app
 
 cfg = config.load()
-app = create_app(cfg)
+app = create_app(cfg, start_workers=True)
 
 
 def run() -> None:

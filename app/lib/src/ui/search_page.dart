@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../api/client.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
+import 'artwork.dart';
 
 /// Local catalog first, then YouTube Music. Anything already in the library is marked,
 /// so you never queue a second copy of what you have.
@@ -76,8 +77,9 @@ class _SearchPageState extends State<SearchPage> {
               if (_local.isNotEmpty) const _SectionHeader('In your library'),
               for (final t in _local)
                 ListTile(
-                  leading: const Icon(Icons.library_music_outlined),
-                  title: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  leading: Artwork(track: t, size: 40),
+                  title: Text(t.displayTitle,
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
                   subtitle: Text(t.artistLine, maxLines: 1, overflow: TextOverflow.ellipsis),
                   trailing: _queueMenu(
                     onNext: () => app.addTrack(t, mode: 'next'),
