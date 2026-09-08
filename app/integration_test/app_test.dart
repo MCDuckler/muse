@@ -417,6 +417,33 @@ void main() {
               'On screen: ${visibleText(tester)}');
     }
 
+    // ---- sleep timer and speed ----
+    // Both live in the player's app bar, so the player has to be open: the earlier
+    // section closed it on its way out.
+    await tester.tap(find.descendant(
+        of: find.byType(PlayerBarMarker), matching: find.byType(ListTile)));
+    await settle(tester, seconds: 3);
+    await tester.tap(find.byIcon(Icons.timer_outlined));
+    await settle(tester, seconds: 2);
+    expect(find.text('Sleep timer'), findsOneWidget,
+        reason: 'On screen: ${visibleText(tester)}');
+    await tester.tap(find.text('1.5×'));
+    await settle(tester, seconds: 2);
+    expect(appState.player!.speed, 1.5, reason: 'speed must reach the engine');
+    await tester.tap(find.text('Normal'));
+    await settle(tester, seconds: 2);
+    await tester.tap(find.text('30 min'));
+    await settle(tester, seconds: 2);
+    expect(appState.sleepAt, isNotNull, reason: 'the timer must be set');
+    expect(find.textContaining('Stops in'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await settle(tester, seconds: 2);
+    expect(appState.sleepAt, isNull);
+    await tester.tapAt(const Offset(200, 60));      // dismiss the sheet
+    await settle(tester, seconds: 2);
+    await tester.tap(find.byIcon(Icons.keyboard_arrow_down));
+    await settle(tester, seconds: 2);
+
     // ---- listening together ----
     await tester.tap(find.byIcon(Icons.podcasts_outlined));
     await settle(tester, seconds: 3);

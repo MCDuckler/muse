@@ -59,6 +59,11 @@ class NowPlayingScreen extends StatelessWidget {
                 tooltip: 'Up next',
                 onPressed: () => showUpNext(context),
               ),
+              IconButton(
+                icon: Icon(app.sleepAt != null ? Icons.bedtime : Icons.timer_outlined),
+                tooltip: 'Sleep timer and speed',
+                onPressed: () => showPlaybackExtras(context),
+              ),
               if (track != null)
                 IconButton(
                   icon: const Icon(Icons.more_vert),
@@ -359,4 +364,85 @@ class _VolumeRowState extends State<_VolumeRow> {
       ],
     );
   }
+}
+
+/// Sleep timer and playback speed: the two things you reach for at either end of a
+/// listening session, and the two the player was missing.
+Future<void> showPlaybackExtras(BuildContext context) async {
+  final app = context.read<AppState>();
+  await showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheet) => StatefulBuilder(
+      builder: (sheet, refresh) {
+        final left = app.sleepIn;
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 6),
+                child: Text('Sleep timer',
+                    style: Theme.of(sheet).textTheme.titleSmall),
+              ),
+              if (left != null && !left.isNegative)
+                ListTile(
+                  leading: const Icon(Icons.bedtime),
+                  title: Text('Stops in ${left.inMinutes + 1} min'),
+                  trailing: TextButton(
+                    onPressed: () {
+                      app.setSleepTimer(null);
+                      refresh(() {});
+                    },
+                    child: const Text('Cancel'),
+                  ),
+                )
+              else
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final minutes in [15, 30, 45, 60, 90])
+                        OutlinedButton(
+                          onPressed: () {
+                            app.setSleepTimer(Duration(minutes: minutes));
+                            refresh(() {});
+                          },
+                          child: Text('$minutes min'),
+                        ),
+                    ],
+                  ),
+                ),
+              const SizedBox(height: 14),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 6),
+                child: Text('Playback speed',
+                    style: Theme.of(sheet).textTheme.titleSmall),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Wrap(
+                  spacing: 8,
+                  children: [
+                    for (final rate in [0.75, 1.0, 1.25, 1.5, 2.0])
+                      ChoiceChip(
+                        selected: (app.player?.speed ?? 1.0) == rate,
+                        label: Text(rate == 1.0 ? 'Normal' : '$rate×'),
+                        onSelected: (_) async {
+                          await app.player?.setSpeed(rate);
+                          refresh(() {});
+                        },
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+            ],
+          ),
+        );
+      },
+    ),
+  );
 }

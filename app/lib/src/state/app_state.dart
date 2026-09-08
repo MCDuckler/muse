@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/client.dart';
@@ -31,6 +32,31 @@ class AppState extends ChangeNotifier {
   /// The jam this device is in, if any. Null is the normal state: most listening is
   /// one person in one room.
   Jam? jam;
+
+  /// Stop playing at a time you chose. Null when nothing is set.
+  DateTime? sleepAt;
+  Timer? _sleepTimer;
+  /// Set instead of [sleepAt] when the timer should run to the end of this track.
+  bool sleepAtEndOfTrack = false;
+
+  Duration? get sleepIn => sleepAt?.difference(DateTime.now());
+
+  /// Fade out and pause. Nobody wants a record cut off mid-bar at 2am, and nobody
+  /// wants to wake up to it either.
+  void setSleepTimer(Duration? after, {bool endOfTrack = false}) {
+    _sleepTimer?.cancel();
+    sleepAtEndOfTrack = endOfTrack;
+    sleepAt = after == null ? null : DateTime.now().add(after);
+    if (after != null) {
+      _sleepTimer = Timer(after, () async {
+        if (player?.last?.playing ?? false) await player?.playPause();
+        sleepAt = null;
+        sleepAtEndOfTrack = false;
+        notifyListeners();
+      });
+    }
+    notifyListeners();
+  }
   Queue? activeQueue;
   List<Playlist> playlists = const [];
 
@@ -368,14 +394,32 @@ class AppState extends ChangeNotifier {
     }
     await refreshJam();
     if (jam != null && activeQueue?.id == jam!.queueId) {
-      activeQueue = await api.queue(activeQueue!.id);
-      await player?.loadQueue(activeQueue!);
+      await _reloadActiveQueue();
+      if (activeQueue != null) await player?.loadQueue(activeQueue!);
     }
     notifyListeners();
   }
 
   /// Ask where the jam stands. Doubles as the heartbeat that keeps this device listed
   /// as present, which is why it runs on the status timer too.
+  /// Re-read the queue being played, and cope with it having gone.
+  ///
+  /// A queue can disappear under you now: a jam you were in ended, or it was deleted
+  /// on another device. Before this, the refetch threw into an unawaited future and
+  /// the app carried on pointing at a queue the server no longer had.
+  Future<void> _reloadActiveQueue() async {
+    final q = activeQueue;
+    if (q == null) return;
+    try {
+      activeQueue = await api.queue(q.id);
+    } on ApiException catch (e) {
+      if (e.status != 404) rethrow;
+      activeQueue = null;
+      jam = null;
+      await refresh();
+    }
+  }
+
   Future<Jam?> refreshJam() async {
     try {
       jam = await api.currentJam();
@@ -417,7 +461,7 @@ class AppState extends ChangeNotifier {
         final id = e.data['track_id'] as int?;
         if (id != null) {
           player?.onTrackReady(id);
-          if (activeQueue != null) activeQueue = await api.queue(activeQueue!.id);
+          await _reloadActiveQueue();
           notifyListeners();
         }
       } else if (e.event == 'track_progress') {
@@ -434,7 +478,7 @@ class AppState extends ChangeNotifier {
         final id = e.data['track_id'] as int?;
         if (id != null) {
           await player?.onTrackUpdated(id);
-          if (activeQueue != null) activeQueue = await api.queue(activeQueue!.id);
+          await _reloadActiveQueue();
           notifyListeners();
         }
       } else if (e.event == 'jam') {
@@ -442,10 +486,8 @@ class AppState extends ChangeNotifier {
       } else if (e.event == 'track_failed') {
         final id = e.data['track_id'] as int?;
         if (id != null) await player?.onTrackUpdated(id);
-        if (activeQueue != null) {
-          activeQueue = await api.queue(activeQueue!.id);
-          notifyListeners();
-        }
+        await _reloadActiveQueue();
+        notifyListeners();
         await _pollStatus();
       }
     }, onError: (_) => _reconnectEvents(), onDone: _reconnectEvents);
@@ -465,9 +507,25 @@ class AppState extends ChangeNotifier {
 
   /// Player state changes (track advanced, paused) have to reach the queue list, or
   /// the highlighted row stops matching what is actually playing.
+  /// On the web this is the browser tab's title, which is how you find the tab that
+  /// is making the noise. Elsewhere it names the entry in the task switcher.
+  void _describeForTheOs(Track? track) {
+    SystemChrome.setApplicationSwitcherDescription(ApplicationSwitcherDescription(
+      label: track == null ? 'muse' : '${track.displayTitle} · ${track.artistLine}',
+      primaryColor: 0xFF121212,
+    ));
+  }
+
   void bindPlayer() {
     _playerSub?.cancel();
-    _playerSub = player?.snapshots.listen((_) => notifyListeners());
+    int? named;
+    _playerSub = player?.snapshots.listen((s) {
+      if (s.current?.id != named) {
+        named = s.current?.id;
+        _describeForTheOs(s.current);
+      }
+      notifyListeners();
+    });
   }
 
   StreamSubscription? _playerSub;

@@ -313,6 +313,16 @@ class PlayerService {
   /// downloaded yet instead of stopping dead on them.
   int? _warmedTrackId;
 
+  /// Playback speed. Kept here rather than read back off the engine because it has to
+  /// survive loading the next track, which resets it.
+  double speed = 1.0;
+
+  Future<void> setSpeed(double value) async {
+    speed = value.clamp(0.5, 2.0);
+    await _player.setSpeed(speed);
+    _emit(force: true);
+  }
+
   Future<void> _advance(int direction, {bool auto = false}) async {
     if (_order.isEmpty) return;
     if (auto && repeat == QueueRepeat.one) {
@@ -444,6 +454,7 @@ class PlayerService {
       );
       if (mine != _loadToken) return;      // a later track won the race
       await _player.setVolume(_volumeFor(track));
+      if (speed != 1.0) await _player.setSpeed(speed);
       _loadedTrackId = track.id;
     } catch (e) {
       _loadedTrackId = null;
