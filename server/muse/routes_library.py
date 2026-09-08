@@ -23,9 +23,14 @@ RADIO_DEFAULT = 5
 @router.get("/playlists")
 def list_playlists(user: dict = Depends(current_user)):
     return db.all_(
-        """select p.*, count(i.track_id) as items
-             from playlists p left join playlist_items i on i.playlist_id=p.id
-            where p.owner_id=%s group by p.id order by p.name""",
+        """select p.*, count(distinct i.track_id) as items,
+                  count(distinct u.pos) as unmatched
+             from playlists p
+             left join playlist_items i on i.playlist_id=p.id
+             left join playlist_unmatched u on u.playlist_id=p.id
+            where p.owner_id=%s
+            group by p.id
+            order by (p.kind <> 'local'), lower(p.name)""",
         (user["id"],),
     )
 
@@ -49,6 +54,22 @@ def _own_playlist(playlist_id: int, user: dict) -> dict:
     return row
 
 
+def _editable(playlist_id: int, user: dict) -> dict:
+    """A mirrored playlist is a view of someone else's list.
+
+    Letting it be edited would either lie (the change vanishes on the next sync) or
+    corrupt the mirror. Cloning is the honest answer, and the message says so.
+    """
+    row = _own_playlist(playlist_id, user)
+    if row["kind"] != "local":
+        raise HTTPException(
+            409,
+            f"This playlist mirrors {row['kind']} and cannot be edited here. "
+            f"Make a copy of it first.",
+        )
+    return row
+
+
 @router.get("/playlists/{playlist_id}")
 def get_playlist(playlist_id: int, user: dict = Depends(current_user)):
     p = _own_playlist(playlist_id, user)
@@ -64,12 +85,16 @@ def get_playlist(playlist_id: int, user: dict = Depends(current_user)):
     )
     # Position travels with the row: removing or reordering is by position, and the
     # client should not have to assume the list index matches.
-    return {**p, "items": [{**catalog.public(t), "pos": t["pos"]} for t in items]}
+    unmatched = db.one(
+        "select count(*) n from playlist_unmatched where playlist_id=%s", (playlist_id,)
+    )["n"]
+    return {**p, "unmatched": unmatched, "editable": p["kind"] == "local",
+            "items": [{**catalog.public(t), "pos": t["pos"]} for t in items]}
 
 
 @router.post("/playlists/{playlist_id}/items")
 def add_items(playlist_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
-    _own_playlist(playlist_id, user)
+    _editable(playlist_id, user)
     ids = body.get("track_ids") or []
     if not ids:
         raise HTTPException(400, "track_ids required")
@@ -88,7 +113,7 @@ def add_items(playlist_id: int, body: dict = Body(...), user: dict = Depends(cur
 @router.patch("/playlists/{playlist_id}")
 def rename_playlist(playlist_id: int, body: dict = Body(...),
                     user: dict = Depends(current_user)):
-    _own_playlist(playlist_id, user)
+    _editable(playlist_id, user)
     name = (body.get("name") or "").strip()
     if not name:
         raise HTTPException(400, "name required")
@@ -99,7 +124,7 @@ def rename_playlist(playlist_id: int, body: dict = Body(...),
 @router.post("/playlists/{playlist_id}/move")
 def move_playlist_item(playlist_id: int, body: dict = Body(...),
                        user: dict = Depends(current_user)):
-    _own_playlist(playlist_id, user)
+    _editable(playlist_id, user)
     src, dst = body.get("from"), body.get("to")
     if src is None or dst is None:
         raise HTTPException(400, "from and to are required")
@@ -381,7 +406,7 @@ def clear_queue(queue_id: int, body: dict = Body(default={}),
 @router.delete("/playlists/{playlist_id}/items/{pos}")
 def remove_playlist_item(playlist_id: int, pos: int,
                          user: dict = Depends(current_user)):
-    _own_playlist(playlist_id, user)
+    _editable(playlist_id, user)
     with db.pool().connection() as c:
         gone = c.execute(
             "delete from playlist_items where playlist_id=%s and pos=%s returning track_id",

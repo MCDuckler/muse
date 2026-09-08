@@ -240,9 +240,13 @@ class Queue {
 class Playlist {
   final int id;
   final String name;
-  final String kind;
+  final String kind;              // local | spotify | ytmusic
   final int itemCount;
   final List<Track> items;
+  /// How many of the source playlist's songs could not be translated.
+  final int unmatched;
+  final String? sourceName;
+  final bool editable;
 
   const Playlist({
     required this.id,
@@ -250,7 +254,10 @@ class Playlist {
     required this.kind,
     this.itemCount = 0,
     this.items = const [],
-  });
+    this.unmatched = 0,
+    this.sourceName,
+    bool? editable,
+  }) : editable = editable ?? (kind == 'local');
 
   factory Playlist.fromJson(Map<String, dynamic> j) => Playlist(
         id: j['id'] as int,
@@ -260,7 +267,37 @@ class Playlist {
         items: (j['items'] is List)
             ? (j['items'] as List).map((e) => Track.fromJson(e as Map<String, dynamic>)).toList()
             : const [],
+        unmatched: (j['unmatched'] ?? 0) as int,
+        sourceName: j['source_name'] as String?,
+        editable: j['editable'] as bool?,
       );
+
+  bool get isMirror => kind != 'local';
+}
+
+/// A song in a mirrored playlist that could not be translated into something muse can
+/// play. Kept and shown, rather than silently making the playlist shorter.
+class UnmatchedTrack {
+  final int pos;
+  final String title;
+  final List<String> artists;
+  final String reason;
+
+  const UnmatchedTrack({
+    required this.pos,
+    required this.title,
+    required this.artists,
+    required this.reason,
+  });
+
+  factory UnmatchedTrack.fromJson(Map<String, dynamic> j) => UnmatchedTrack(
+        pos: (j['pos'] ?? 0) as int,
+        title: (j['title'] ?? 'Unknown') as String,
+        artists: ((j['artists'] ?? const []) as List).cast<String>(),
+        reason: (j['reason'] ?? 'Could not be matched') as String,
+      );
+
+  String get artistLine => artists.isEmpty ? 'Unknown artist' : artists.join(', ');
 }
 
 

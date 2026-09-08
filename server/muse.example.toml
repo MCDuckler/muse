@@ -16,12 +16,17 @@ secret = "CHANGE-ME"
 # name = "chris"
 # password_hash = "$argon2id$..."
 
-# Optional. Spotify is a PLAYLIST SOURCE ONLY — Development mode can read your own
-# playlists and nothing else, and that will not change (extended quota needs 250k MAU).
+# Spotify is a PLAYLIST SOURCE ONLY — Development mode reads playlists you own or
+# collaborate on, and that will not change (extended quota needs 250k monthly users).
+#
+# Create an app at https://developer.spotify.com/dashboard, add this exact redirect
+# URI to it, and — because the app stays in Development mode — add your own Spotify
+# account under "User Management". Then each muse user links their own account from
+# Settings; the tokens are stored per user, not here.
 # [spotify]
 # client_id = ""
 # client_secret = ""
-# refresh_token = ""          # scopes: playlist-read-private, user-library-read
+# redirect_uri = "https://your.server/spotify/callback"
 
 # [ytmusic]
 # oauth_file = "~/.config/muse/ytmusic-oauth.json"   # ytmusicapi oauth

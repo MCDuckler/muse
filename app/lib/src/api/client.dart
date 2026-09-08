@@ -368,6 +368,59 @@ class ApiClient {
     return Track.fromJson(await _decode(response) as Map<String, dynamic>);
   }
 
+  // ---------------- Spotify ----------------
+  Future<Map<String, dynamic>> spotifyAccount() async =>
+      await _decode(await http.get(_u('/spotify/account'), headers: _headers))
+          as Map<String, dynamic>;
+
+  Future<String> spotifyAuthorizeUrl() async {
+    final d = await _decode(await http.get(_u('/spotify/authorize'), headers: _headers))
+        as Map<String, dynamic>;
+    return d['url'] as String;
+  }
+
+  Future<void> unlinkSpotify() async {
+    await _decode(await http.delete(_u('/spotify/account'), headers: _headers));
+  }
+
+  /// Mirror playlists from Spotify. Returns one row per playlist with how many of its
+  /// songs could be translated.
+  Future<List<Map<String, dynamic>>> syncSpotify({String? remoteId}) async {
+    final d = await _decode(await http.post(_u('/spotify/sync'),
+        headers: _headers,
+        body: jsonEncode({if (remoteId != null) 'remote_id': remoteId})))
+        as Map<String, dynamic>;
+    return (d['playlists'] as List).cast<Map<String, dynamic>>();
+  }
+
+  Future<List<UnmatchedTrack>> unmatched(int playlistId) async {
+    final d = await _decode(await http.get(
+        _u('/spotify/playlists/$playlistId/unmatched'), headers: _headers))
+        as Map<String, dynamic>;
+    return (d['items'] as List).map((e) => UnmatchedTrack.fromJson(e)).toList();
+  }
+
+  Future<List<RemoteHit>> unmatchedSuggestions(int playlistId, int pos) async {
+    final d = await _decode(await http.get(
+        _u('/spotify/playlists/$playlistId/suggestions', {'pos': pos}),
+        headers: _headers)) as Map<String, dynamic>;
+    return (d['items'] as List).map((e) => RemoteHit.fromJson(e)).toList();
+  }
+
+  Future<void> resolveUnmatched(int playlistId, int pos, {String? videoId}) async {
+    await _decode(await http.post(
+        _u('/spotify/playlists/$playlistId/unmatched/$pos/resolve'),
+        headers: _headers,
+        body: jsonEncode({'video_id': videoId})));
+  }
+
+  Future<Playlist> clonePlaylist(int playlistId, {String? name}) async =>
+      Playlist.fromJson(await _decode(await http.post(
+              _u('/spotify/playlists/$playlistId/clone'),
+              headers: _headers,
+              body: jsonEncode({if (name != null) 'name': name})))
+          as Map<String, dynamic>);
+
   Future<List<Track>> history() async {
     final d = await _decode(await http.get(_u('/history'), headers: _headers)) as List;
     return d.map((e) => Track.fromJson(e)).toList();

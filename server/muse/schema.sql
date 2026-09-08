@@ -150,6 +150,33 @@ create table if not exists listens (
   completed  boolean not null default false
 );
 
+-- A linked provider account, per muse user. Tokens live here rather than in the
+-- config file, because they belong to a person and expire.
+create table if not exists provider_accounts (
+  user_id       int not null references users(id) on delete cascade,
+  provider      text not null,
+  display_name  text,
+  account_id    text,
+  access_token  text,
+  refresh_token text,
+  expires_at    timestamptz,
+  linked_at     timestamptz not null default now(),
+  primary key (user_id, provider)
+);
+
+-- Entries in a mirrored playlist that could not be matched to anything we can play.
+-- Kept so the app can say which songs are missing and why, rather than quietly
+-- returning a shorter playlist than the one on Spotify.
+create table if not exists playlist_unmatched (
+  playlist_id int not null references playlists(id) on delete cascade,
+  pos         int not null,
+  remote_id   text,
+  title       text,
+  artists     text[],
+  reason      text,
+  primary key (playlist_id, pos)
+);
+
 create table if not exists lyrics (
   track_id   int primary key references tracks(id) on delete cascade,
   synced     text,
@@ -174,3 +201,5 @@ alter table matches add column if not exists decided_at timestamptz not null def
 
 create index if not exists jobs_pending_next on jobs(kind, state, next_attempt_at);
 create index if not exists media_sha_idx on media(sha256);
+alter table playlists add column if not exists source_name text;
+alter table playlists add column if not exists last_error text;

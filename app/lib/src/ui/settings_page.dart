@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
 import 'dialogs.dart';
+import 'spotify_page.dart';
 import 'track_menu.dart';
 
 const appVersion = '0.1.0';
@@ -141,6 +142,16 @@ class _SettingsPageState extends State<SettingsPage> {
             trailing: app.downloadsPending > 0
                 ? Chip(label: Text('${app.downloadsPending} waiting'))
                 : null,
+          ),
+          const Divider(),
+          _label(context, 'Connected services'),
+          ListTile(
+            leading: const Icon(Icons.music_note_outlined),
+            title: const Text('Spotify'),
+            subtitle: const Text('See and play your playlists here'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const SpotifyPage())),
           ),
           const Divider(),
           _label(context, 'Account'),

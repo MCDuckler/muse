@@ -17,8 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from . import (auth, catalog, config, db, enrich_worker, failures, jobs, progress,
-               routes_browse, routes_files, routes_library, routes_play, routes_sync,
-               storage, ytm)
+               routes_browse, routes_files, routes_library, routes_play, routes_spotify,
+               routes_sync, storage, ytm)
 from . import deps
 from .deps import current_user, worker_auth
 
@@ -395,6 +395,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     app.include_router(routes_browse.router)
     app.include_router(routes_library.router)
     app.include_router(routes_sync.router)
+    app.include_router(routes_spotify.router)
     app.include_router(routes_files.router)
     app.include_router(routes_play.router)
     return app

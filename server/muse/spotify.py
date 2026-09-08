@@ -1,0 +1,218 @@
+"""Linking a Spotify account to a muse user.
+
+Tokens belong to a person, not to a config file: they expire, they are refreshed, and
+each muse user links their own. What stays in the config is the app registration —
+the client id and secret that identify *this* installation to Spotify.
+
+Development mode is the permanent state of affairs here (extended quota needs 250k
+monthly users), which decides the whole shape: read-only, and only playlists the
+authenticated person owns or collaborates on.
+"""
+from __future__ import annotations
+
+import base64
+import secrets
+import time
+from urllib.parse import urlencode
+
+import httpx
+
+from . import db
+
+AUTH_URL = "https://accounts.spotify.com/authorize"
+TOKEN_URL = "https://accounts.spotify.com/api/token"
+API = "https://api.spotify.com/v1"
+
+# Read-only. muse never writes to Spotify, and asking for less is the difference
+# between a scary consent screen and a boring one.
+SCOPES = "playlist-read-private playlist-read-collaborative user-library-read"
+
+_states: dict[str, tuple[int, float]] = {}
+STATE_TTL = 600
+
+
+class NotLinked(RuntimeError):
+    pass
+
+
+class NotConfigured(RuntimeError):
+    pass
+
+
+def _app(cfg) -> tuple[str, str, str]:
+    s = cfg.spotify or {}
+    client_id, secret, redirect = (
+        s.get("client_id", ""), s.get("client_secret", ""), s.get("redirect_uri", ""))
+    if not (client_id and secret and redirect):
+        raise NotConfigured(
+            "Spotify is not set up on this server. Create an app at "
+            "developer.spotify.com, then put client_id, client_secret and "
+            "redirect_uri in muse.toml under [spotify]."
+        )
+    return client_id, secret, redirect
+
+
+def authorize_url(cfg, user_id: int) -> str:
+    client_id, _, redirect = _app(cfg)
+    state = secrets.token_urlsafe(24)
+    _states[state] = (user_id, time.time() + STATE_TTL)
+    return f"{AUTH_URL}?" + urlencode({
+        "client_id": client_id,
+        "response_type": "code",
+        "redirect_uri": redirect,
+        "scope": SCOPES,
+        "state": state,
+        "show_dialog": "false",
+    })
+
+
+def consume_state(state: str) -> int:
+    """One use, ten minutes. A replayed callback must not link someone else's account."""
+    now = time.time()
+    for key, (_, expires) in list(_states.items()):
+        if expires < now:
+            _states.pop(key, None)
+    entry = _states.pop(state, None)
+    if entry is None:
+        raise RuntimeError("that sign-in link has expired — start again from settings")
+    return entry[0]
+
+
+def _basic(cfg) -> dict:
+    client_id, secret, _ = _app(cfg)
+    token = base64.b64encode(f"{client_id}:{secret}".encode()).decode()
+    return {"Authorization": f"Basic {token}"}
+
+
+def exchange_code(cfg, user_id: int, code: str) -> dict:
+    _, _, redirect = _app(cfg)
+    r = httpx.post(TOKEN_URL, headers=_basic(cfg), timeout=30, data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect,
+    })
+    r.raise_for_status()
+    payload = r.json()
+    me = httpx.get(f"{API}/me", timeout=30,
+                   headers={"Authorization": f"Bearer {payload['access_token']}"})
+    profile = me.json() if me.status_code == 200 else {}
+    _store(user_id, payload, profile)
+    return {"display_name": profile.get("display_name") or profile.get("id")}
+
+
+def _store(user_id: int, payload: dict, profile: dict | None = None) -> None:
+    db.run(
+        """insert into provider_accounts(user_id, provider, display_name, account_id,
+                                         access_token, refresh_token, expires_at)
+           values(%s,'spotify',%s,%s,%s,%s, now() + (%s || ' seconds')::interval)
+           on conflict (user_id, provider) do update
+             set access_token=excluded.access_token,
+                 refresh_token=coalesce(excluded.refresh_token,
+                                        provider_accounts.refresh_token),
+                 expires_at=excluded.expires_at,
+                 display_name=coalesce(excluded.display_name,
+                                       provider_accounts.display_name),
+                 account_id=coalesce(excluded.account_id, provider_accounts.account_id)""",
+        (user_id,
+         (profile or {}).get("display_name") or (profile or {}).get("id"),
+         (profile or {}).get("id"),
+         payload["access_token"],
+         payload.get("refresh_token"),
+         int(payload.get("expires_in", 3600))),
+    )
+
+
+def account(user_id: int) -> dict | None:
+    return db.one(
+        """select display_name, account_id, linked_at,
+                  expires_at < now() as expired
+             from provider_accounts where user_id=%s and provider='spotify'""",
+        (user_id,),
+    )
+
+
+def unlink(user_id: int) -> None:
+    db.run("delete from provider_accounts where user_id=%s and provider='spotify'",
+           (user_id,))
+
+
+def access_token(cfg, user_id: int) -> str:
+    """A valid token, refreshing it if the stored one has aged out."""
+    row = db.one(
+        """select access_token, refresh_token,
+                  expires_at < now() + interval '60 seconds' as stale
+             from provider_accounts where user_id=%s and provider='spotify'""",
+        (user_id,),
+    )
+    if not row:
+        raise NotLinked("no Spotify account is linked")
+    if not row["stale"]:
+        return row["access_token"]
+
+    r = httpx.post(TOKEN_URL, headers=_basic(cfg), timeout=30, data={
+        "grant_type": "refresh_token",
+        "refresh_token": row["refresh_token"],
+    })
+    if r.status_code >= 400:
+        raise NotLinked("Spotify sign-in has expired — link the account again")
+    payload = r.json()
+    _store(user_id, payload)
+    return payload["access_token"]
+
+
+def _get(cfg, user_id: int, url: str, **params) -> dict:
+    r = httpx.get(url if url.startswith("http") else f"{API}{url}",
+                  headers={"Authorization": f"Bearer {access_token(cfg, user_id)}"},
+                  params=params or None, timeout=30)
+    if r.status_code == 403:
+        raise RuntimeError(
+            "Spotify refused that in Development mode — it only returns playlists you "
+            "own or collaborate on."
+        )
+    if r.status_code == 401:
+        raise NotLinked("Spotify sign-in has expired — link the account again")
+    r.raise_for_status()
+    return r.json()
+
+
+def playlists(cfg, user_id: int) -> list[dict]:
+    out, url, params = [], "/me/playlists", {"limit": 50}
+    while url:
+        page = _get(cfg, user_id, url, **params)
+        for p in page.get("items", []):
+            if not p:
+                continue
+            images = p.get("images") or []
+            out.append({
+                "remote_id": p["id"],
+                "name": p.get("name") or "Untitled",
+                "count": (p.get("tracks") or {}).get("total") or 0,
+                "owner": (p.get("owner") or {}).get("display_name"),
+                "image": images[0]["url"] if images else None,
+            })
+        url, params = page.get("next"), {}
+    return out
+
+
+def playlist_items(cfg, user_id: int, remote_id: str) -> list[dict]:
+    """`/tracks` has been 403 since March 2026; `/items` is the replacement, and it
+    renames the payload's fields as well as the path."""
+    out, url, params = [], f"/playlists/{remote_id}/items", {"limit": 50}
+    while url:
+        page = _get(cfg, user_id, url, **params)
+        for entry in page.get("items", []):
+            item = (entry or {}).get("item") or (entry or {}).get("track") or {}
+            if not item or item.get("type") not in (None, "track"):
+                continue
+            if not item.get("name"):
+                continue
+            out.append({
+                "remote_id": item.get("id") or item.get("uri"),
+                "title": item["name"],
+                "artists": [a["name"] for a in item.get("artists", []) if a.get("name")],
+                "album": (item.get("album") or {}).get("name"),
+                "duration_ms": item.get("duration_ms"),
+                "isrc": (item.get("external_ids") or {}).get("isrc"),
+            })
+        url, params = page.get("next"), {}
+    return out

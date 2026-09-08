@@ -120,3 +120,86 @@ def test_a_playlist_can_be_reordered(client, hdr, library):
     assert [i["pos"] for i in moved["items"]] == [0, 1, 2]
     assert client.post(f"/playlists/{p['id']}/move", headers=hdr,
                        json={"from": 0, "to": 9}).status_code == 400
+
+
+# ---------------- mirrored playlists ----------------
+@pytest.fixture()
+def mirrored(client, hdr, library):
+    """A playlist that mirrors Spotify, made directly: linking a real account needs an
+    app registration, and the rules below hold regardless of how the row got there."""
+    pid = db.one(
+        """insert into playlists(owner_id, name, kind, remote_id, sync_mode, source_name)
+           values((select id from users limit 1), 'From Spotify', 'spotify', 'SP1',
+                  'pull', 'someone') returning id"""
+    )["id"]
+    db.run("insert into playlist_items(playlist_id,pos,track_id) values(%s,0,%s)",
+           (pid, library[0]))
+    db.run("""insert into playlist_unmatched(playlist_id,pos,remote_id,title,artists,reason)
+              values(%s,1,'sp-x','Missing Song',%s,'Nothing on YouTube Music matched this song')""",
+           (pid, ["Someone"]))
+    return pid
+
+
+def test_a_mirrored_playlist_is_listed_with_its_source(client, hdr, mirrored):
+    rows = client.get("/playlists", headers=hdr).json()
+    mine = next(r for r in rows if r["id"] == mirrored)
+    assert mine["kind"] == "spotify"
+    assert mine["source_name"] == "someone"
+    assert mine["unmatched"] == 1, "the app must be able to say what is missing"
+
+
+def test_a_mirrored_playlist_is_playable_but_not_editable(client, hdr, mirrored,
+                                                          library):
+    full = client.get(f"/playlists/{mirrored}", headers=hdr).json()
+    assert full["editable"] is False
+    assert len(full["items"]) == 1, "what did match is there to play"
+
+    # every edit route refuses, and says what to do instead
+    assert client.post(f"/playlists/{mirrored}/items", headers=hdr,
+                       json={"track_ids": [library[1]]}).status_code == 409
+    assert client.patch(f"/playlists/{mirrored}", headers=hdr,
+                        json={"name": "Mine now"}).status_code == 409
+    assert client.delete(f"/playlists/{mirrored}/items/0", headers=hdr).status_code == 409
+    r = client.post(f"/playlists/{mirrored}/move", headers=hdr,
+                    json={"from": 0, "to": 0})
+    assert r.status_code == 409 and "copy" in r.json()["detail"].lower()
+
+
+def test_the_songs_that_could_not_be_translated_are_listed(client, hdr, mirrored):
+    items = client.get(f"/spotify/playlists/{mirrored}/unmatched",
+                       headers=hdr).json()["items"]
+    assert len(items) == 1
+    assert items[0]["title"] == "Missing Song"
+    assert "matched" in items[0]["reason"], "a reason in words, not a score"
+
+
+def test_cloning_makes_an_ordinary_editable_playlist(client, hdr, mirrored, library):
+    copy = client.post(f"/spotify/playlists/{mirrored}/clone", headers=hdr,
+                       json={"name": "My version"}).json()
+    assert copy["kind"] == "local" and copy["name"] == "My version"
+    assert [i["id"] for i in copy["items"]] == [library[0]]
+
+    # and the copy really is editable
+    assert client.post(f"/playlists/{copy['id']}/items", headers=hdr,
+                       json={"track_ids": [library[1]]}).status_code == 200
+    # while the original is untouched
+    assert len(client.get(f"/playlists/{mirrored}", headers=hdr).json()["items"]) == 1
+
+
+def test_an_unmatched_song_can_be_resolved_by_hand(client, hdr, mirrored, library):
+    r = client.post(f"/spotify/playlists/{mirrored}/unmatched/1/resolve", headers=hdr,
+                    json={"track_id": library[2]})
+    assert r.status_code == 200
+
+    full = client.get(f"/playlists/{mirrored}", headers=hdr).json()
+    assert library[2] in [i["id"] for i in full["items"]]
+    assert full["unmatched"] == 0
+    assert client.get(f"/spotify/playlists/{mirrored}/unmatched",
+                      headers=hdr).json()["items"] == []
+
+
+def test_spotify_says_what_is_missing_when_it_is_not_configured(client, hdr):
+    r = client.get("/spotify/account", headers=hdr).json()
+    assert r["configured"] is False
+    assert "developer.spotify.com" in r["reason"], "tell the operator what to do"
+    assert client.get("/spotify/authorize", headers=hdr).status_code == 501

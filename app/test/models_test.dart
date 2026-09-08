@@ -62,6 +62,7 @@ void main() {
   _queueShapes();
   _statusLineTests();
   _searchStateTests();
+  _mirrorTests();
 
   group('Playlist', () {
     test('accepts both the list form and the count form of items', () {
@@ -210,6 +211,54 @@ void _searchStateTests() {
     test('a new query in flight does not flash "nothing found"', () {
       expect(searchView(searched: true, busy: true, localCount: 0, remoteCount: 0),
           SearchView.results);
+    });
+  });
+}
+
+// A mirrored playlist is a view of someone else's list: playable, tagged, and not
+// editable, because an edit would either vanish on the next sync or corrupt the mirror.
+void _mirrorTests() {
+  Playlist make(Map<String, dynamic> j) => Playlist.fromJson({
+        'id': 1, 'name': 'Road trip', 'items': 12, ...j,
+      });
+
+  group('mirrored playlists', () {
+    test('a local playlist is editable and untagged', () {
+      final p = make({'kind': 'local'});
+      expect(p.isMirror, isFalse);
+      expect(p.editable, isTrue);
+      expect(p.unmatched, 0);
+    });
+
+    test('a spotify playlist is a mirror and not editable', () {
+      final p = make({'kind': 'spotify', 'source_name': 'chris', 'unmatched': 3});
+      expect(p.isMirror, isTrue);
+      expect(p.editable, isFalse);
+      expect(p.unmatched, 3, reason: 'the app must be able to say what is missing');
+      expect(p.sourceName, 'chris');
+    });
+
+    test('the server can override editability explicitly', () {
+      expect(make({'kind': 'spotify', 'editable': false}).editable, isFalse);
+      expect(make({'kind': 'local', 'editable': false}).editable, isFalse);
+    });
+
+    test('an unmatched entry keeps its reason in words', () {
+      final u = UnmatchedTrack.fromJson({
+        'pos': 4,
+        'title': 'Some Song',
+        'artists': ['A', 'B'],
+        'reason': 'Nothing on YouTube Music matched this song',
+      });
+      expect(u.pos, 4);
+      expect(u.artistLine, 'A, B');
+      expect(u.reason, contains('matched'));
+    });
+
+    test('an unmatched entry with no artists still reads properly', () {
+      final u = UnmatchedTrack.fromJson({'pos': 0, 'title': 'X'});
+      expect(u.artistLine, 'Unknown artist');
+      expect(u.reason, isNotEmpty);
     });
   });
 }

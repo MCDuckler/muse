@@ -6,6 +6,7 @@ import '../state/app_state.dart';
 import 'artwork.dart';
 import 'browse_page.dart';
 import 'dialogs.dart';
+import 'spotify_page.dart';
 
 
 class LibraryPage extends StatelessWidget {
@@ -54,20 +55,53 @@ class LibraryPage extends StatelessWidget {
         ),
         for (final p in app.playlists)
           ListTile(
-            leading: Icon(switch (p.kind) {
-              'spotify' => Icons.sync_alt,
-              'ytmusic' => Icons.sync_alt,
-              _ => Icons.playlist_play,
-            }),
-            title: Text(p.name),
-            subtitle: Text(p.kind == 'local' ? '${p.itemCount} tracks'
-                : '${p.itemCount} tracks · synced from ${p.kind}'),
+            leading: Icon(p.isMirror ? Icons.cloud_outlined : Icons.playlist_play),
+            title: Row(
+              children: [
+                Flexible(
+                  child: Text(p.name,
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                ),
+                if (p.isMirror) ...[
+                  const SizedBox(width: 8),
+                  _SourceTag(kind: p.kind),
+                ],
+              ],
+            ),
+            subtitle: Text([
+              '${p.itemCount} tracks',
+              if (p.unmatched > 0) '${p.unmatched} not matched',
+              if (p.isMirror && p.sourceName != null) 'by ${p.sourceName}',
+            ].join(' · ')),
             trailing: PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert, size: 20),
               onSelected: (v) async {
                 if (v == 'play' || v == 'shuffle') {
                   final full = await app.api.playlist(p.id);
                   await app.playNow(full.items, shuffle: v == 'shuffle');
+                } else if (v == 'clone') {
+                  final name = await promptForName(
+                      context, 'Copy playlist', '${p.name} (copy)');
+                  if (name == null) return;
+                  await app.api.clonePlaylist(p.id, name: name);
+                  await app.refreshPlaylists();
+                } else if (v == 'unmatched') {
+                  if (!context.mounted) return;
+                  await Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) =>
+                        UnmatchedPage(playlistId: p.id, name: p.name),
+                  ));
+                  await app.refreshPlaylists();
+                } else if (v == 'resync') {
+                  final messenger = ScaffoldMessenger.of(context);
+                  try {
+                    await app.api.syncSpotify();
+                    await app.refreshPlaylists();
+                    messenger.showSnackBar(
+                        const SnackBar(content: Text('Refreshed from Spotify')));
+                  } catch (e) {
+                    messenger.showSnackBar(SnackBar(content: Text('$e')));
+                  }
                 } else if (v == 'rename') {
                   final name = await promptForName(context, 'Rename playlist', p.name);
                   if (name == null) return;
@@ -86,12 +120,21 @@ class LibraryPage extends StatelessWidget {
                   }
                 }
               },
-              itemBuilder: (context) => const [
-                PopupMenuItem(value: 'play', child: Text('Play')),
-                PopupMenuItem(value: 'shuffle', child: Text('Shuffle')),
-                PopupMenuItem(value: 'queue', child: Text('Add all to queue')),
-                PopupMenuItem(value: 'rename', child: Text('Rename…')),
-                PopupMenuItem(value: 'delete', child: Text('Delete playlist')),
+              itemBuilder: (context) => [
+                const PopupMenuItem(value: 'play', child: Text('Play')),
+                const PopupMenuItem(value: 'shuffle', child: Text('Shuffle')),
+                const PopupMenuItem(value: 'queue', child: Text('Add all to queue')),
+                if (p.isMirror) ...[
+                  const PopupMenuItem(
+                      value: 'clone', child: Text('Make an editable copy')),
+                  if (p.unmatched > 0)
+                    PopupMenuItem(
+                        value: 'unmatched',
+                        child: Text('${p.unmatched} songs not matched…')),
+                  const PopupMenuItem(value: 'resync', child: Text('Refresh from Spotify')),
+                ] else
+                  const PopupMenuItem(value: 'rename', child: Text('Rename…')),
+                const PopupMenuItem(value: 'delete', child: Text('Remove from muse')),
               ],
             ),
             onTap: () => Navigator.of(context).push(MaterialPageRoute(
@@ -104,6 +147,13 @@ class LibraryPage extends StatelessWidget {
             child: Center(child: Text('No playlists yet.')),
           ),
         const Divider(),
+        ListTile(
+          leading: const Icon(Icons.music_note_outlined),
+          title: const Text('Spotify'),
+          subtitle: const Text('Connect an account to see your playlists'),
+          onTap: () => Navigator.of(context)
+              .push(MaterialPageRoute(builder: (_) => const SpotifyPage())),
+        ),
         ListTile(
           leading: const Icon(Icons.history),
           title: const Text('Recently played'),
@@ -159,13 +209,30 @@ class _PlaylistPageState extends State<_PlaylistPage> {
             padding: const EdgeInsets.fromLTRB(8, 4, 8, 24),
             physics: const AlwaysScrollableScrollPhysics(),
             buildDefaultDragHandles: false,
-            header: _PlaylistHeader(items: items),
+            header: _PlaylistHeader(
+                items: items, playlist: snap.data!, onChanged: _reload),
             onReorderItem: (from, to) async {
+              if (!snap.data!.editable) return;
               await app.api.movePlaylistItem(widget.playlistId, from, to);
               _reload();
             },
             itemCount: items.length,
-            itemBuilder: (context, i) => ReorderableDelayedDragStartListener(
+            itemBuilder: (context, i) => !snap.data!.editable
+                ? ListTile(
+                    key: ValueKey('pl-ro-${items[i].id}-$i'),
+                    leading: Artwork(track: items[i], size: 40),
+                    title: Text(items[i].displayTitle,
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                    subtitle: Text(items[i].artistLine,
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.playlist_add),
+                      tooltip: 'Add to queue',
+                      onPressed: () => app.addTrack(items[i]),
+                    ),
+                    onTap: () => app.playNow(items, startAt: i),
+                  )
+                : ReorderableDelayedDragStartListener(
               key: ValueKey('pl-${items[i].id}-$i'),
               index: i,
               child: Dismissible(
@@ -339,16 +406,71 @@ class _SectionLabel extends StatelessWidget {
       );
 }
 
+class _SourceTag extends StatelessWidget {
+  const _SourceTag({required this.kind});
+  final String kind;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+      decoration: BoxDecoration(
+        border: Border.all(color: scheme.primary.withValues(alpha: 0.6)),
+        borderRadius: BorderRadius.circular(100),
+      ),
+      child: Text(kind == 'spotify' ? 'Spotify' : kind,
+          style: TextStyle(
+              fontSize: 10.5, fontWeight: FontWeight.w700, color: scheme.primary)),
+    );
+  }
+}
+
 class _PlaylistHeader extends StatelessWidget {
-  const _PlaylistHeader({required this.items});
+  const _PlaylistHeader(
+      {required this.items, required this.playlist, required this.onChanged});
   final List<Track> items;
+  final Playlist playlist;
+  final VoidCallback onChanged;
 
   @override
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (playlist.isMirror)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
+              child: Row(
+                children: [
+                  _SourceTag(kind: playlist.kind),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      playlist.unmatched > 0
+                          ? 'Read-only · ${playlist.unmatched} songs could not be matched'
+                          : 'Read-only mirror',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      final name = await promptForName(
+                          context, 'Copy playlist', '${playlist.name} (copy)');
+                      if (name == null) return;
+                      await app.api.clonePlaylist(playlist.id, name: name);
+                      await app.refreshPlaylists();
+                      onChanged();
+                    },
+                    child: const Text('Copy'),
+                  ),
+                ],
+              ),
+            ),
+      Row(
         children: [
           Expanded(
             child: Text('${items.length} tracks',
@@ -365,6 +487,8 @@ class _PlaylistHeader extends StatelessWidget {
             label: const Text('Shuffle'),
             onPressed: () => app.playNow(items, shuffle: true),
           ),
+        ],
+      ),
         ],
       ),
     );
