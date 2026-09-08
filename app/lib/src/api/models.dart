@@ -378,3 +378,52 @@ class PlayedTrack {
         completed: (j['completed'] ?? false) as bool,
       );
 }
+
+
+/// A playlist as Spotify describes it. Development mode returns a stripped object —
+/// no track count, no images — so those are genuinely unknown until it is mirrored.
+class SpotifyPlaylist {
+  final String remoteId;
+  final String name;
+  final String? owner;
+  final int? count;
+  final int? playlistId;      // set once mirrored into muse
+  final int mirroredTracks;
+  final int unmatched;
+
+  const SpotifyPlaylist({
+    required this.remoteId,
+    required this.name,
+    this.owner,
+    this.count,
+    this.playlistId,
+    this.mirroredTracks = 0,
+    this.unmatched = 0,
+  });
+
+  factory SpotifyPlaylist.fromJson(Map<String, dynamic> j) {
+    final mirror = j['mirror'] as Map<String, dynamic>?;
+    return SpotifyPlaylist(
+      remoteId: j['remote_id'] as String,
+      name: (j['name'] ?? 'Untitled') as String,
+      owner: j['owner'] as String?,
+      count: j['count'] as int?,
+      playlistId: mirror?['playlist_id'] as int?,
+      mirroredTracks: (mirror?['tracks'] ?? 0) as int,
+      unmatched: (mirror?['unmatched'] ?? 0) as int,
+    );
+  }
+
+  bool get isMirrored => playlistId != null;
+
+  String get subtitle {
+    if (isMirrored) {
+      return [
+        '$mirroredTracks in muse',
+        if (unmatched > 0) '$unmatched not matched',
+      ].join(' · ');
+    }
+    return [if (owner != null) 'by $owner', if (count != null) '$count songs']
+        .join(' · ');
+  }
+}

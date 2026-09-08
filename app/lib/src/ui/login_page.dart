@@ -14,7 +14,11 @@ class _LoginPageState extends State<LoginPage> {
   final _server = TextEditingController(text: AppState.defaultServer);
   final _user = TextEditingController();
   final _pass = TextEditingController();
+  final _code = TextEditingController();
   bool _busy = false;
+  bool _joining = false;      // redeeming an invite rather than signing in
+  bool _showPassword = false;
+  bool _showServer = false;
 
   @override
   Widget build(BuildContext context) {
@@ -38,13 +42,28 @@ class _LoginPageState extends State<LoginPage> {
                 Text('Sign in to your server',
                     style: Theme.of(context).textTheme.bodyMedium),
                 const SizedBox(height: 24),
-                TextField(
-                  controller: _server,
-                  decoration: const InputDecoration(
-                      labelText: 'Server', prefixIcon: Icon(Icons.dns_outlined)),
-                  keyboardType: TextInputType.url,
-                ),
-                const SizedBox(height: 12),
+                // The server is right by construction on web, and typed once on a
+                // phone. Hiding it keeps the common case to two fields.
+                if (_showServer) ...[
+                  TextField(
+                    controller: _server,
+                    decoration: const InputDecoration(
+                        labelText: 'Server', prefixIcon: Icon(Icons.dns_outlined)),
+                    keyboardType: TextInputType.url,
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                if (_joining) ...[
+                  TextField(
+                    controller: _code,
+                    decoration: const InputDecoration(
+                      labelText: 'Invite code',
+                      prefixIcon: Icon(Icons.key),
+                      helperText: 'From someone who already has an account',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 TextField(
                   controller: _user,
                   autofillHints: const [AutofillHints.username],
@@ -54,11 +73,26 @@ class _LoginPageState extends State<LoginPage> {
                 const SizedBox(height: 12),
                 TextField(
                   controller: _pass,
-                  obscureText: true,
-                  autofillHints: const [AutofillHints.password],
+                  obscureText: !_showPassword,
+                  autofillHints: [
+                    _joining ? AutofillHints.newPassword : AutofillHints.password
+                  ],
                   onSubmitted: (_) => _submit(),
-                  decoration: const InputDecoration(
-                      labelText: 'Password', prefixIcon: Icon(Icons.lock_outline)),
+                  decoration: InputDecoration(
+                    labelText: _joining ? 'Choose a password' : 'Password',
+                    helperText: _joining ? 'At least 8 characters' : null,
+                    prefixIcon: const Icon(Icons.lock_outline),
+                    // Generated passwords on a phone keyboard are miserable without
+                    // a way to check what you typed.
+                    suffixIcon: IconButton(
+                      icon: Icon(_showPassword
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined),
+                      tooltip: _showPassword ? 'Hide password' : 'Show password',
+                      onPressed: () =>
+                          setState(() => _showPassword = !_showPassword),
+                    ),
+                  ),
                 ),
                 if (app.error != null) ...[
                   const SizedBox(height: 16),
@@ -70,8 +104,29 @@ class _LoginPageState extends State<LoginPage> {
                   onPressed: _busy ? null : _submit,
                   child: _busy
                       ? const SizedBox(
-                          height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Text('Sign in'),
+                          height: 18,
+                          width: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : Text(_joining ? 'Join' : 'Sign in'),
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    TextButton(
+                      onPressed: () => setState(() {
+                        _joining = !_joining;
+                        _code.clear();
+                      }),
+                      child: Text(_joining
+                          ? 'I already have an account'
+                          : 'I have an invite code'),
+                    ),
+                    TextButton(
+                      onPressed: () => setState(() => _showServer = !_showServer),
+                      child: Text(_showServer ? 'Hide server' : 'Change server'),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -84,11 +139,22 @@ class _LoginPageState extends State<LoginPage> {
   Future<void> _submit() async {
     final app = context.read<AppState>();
     if (_user.text.trim().isEmpty || _pass.text.isEmpty) {
-      app.reportError('Enter your user name and password');
+      app.reportError(_joining
+          ? 'Pick a name and a password'
+          : 'Enter your user name and password');
+      return;
+    }
+    if (_joining && _code.text.trim().isEmpty) {
+      app.reportError('Enter the invite code you were given');
       return;
     }
     setState(() => _busy = true);
-    await app.login(_server.text.trim(), _user.text.trim(), _pass.text);
+    if (_joining) {
+      await app.redeem(
+          _server.text.trim(), _code.text, _user.text.trim(), _pass.text);
+    } else {
+      await app.login(_server.text.trim(), _user.text.trim(), _pass.text);
+    }
     if (mounted) setState(() => _busy = false);
   }
 
@@ -97,6 +163,7 @@ class _LoginPageState extends State<LoginPage> {
     _server.dispose();
     _user.dispose();
     _pass.dispose();
+    _code.dispose();
     super.dispose();
   }
 }

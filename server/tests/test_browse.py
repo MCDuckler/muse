@@ -203,3 +203,41 @@ def test_spotify_says_what_is_missing_when_it_is_not_configured(client, hdr):
     assert r["configured"] is False
     assert "developer.spotify.com" in r["reason"], "tell the operator what to do"
     assert client.get("/spotify/authorize", headers=hdr).status_code == 501
+
+
+def test_syncing_nothing_specific_refreshes_only_what_is_mirrored(client, hdr,
+                                                                  mirrored,
+                                                                  monkeypatch):
+    """An account can hold hundreds of playlists — this user's has 460. Mirroring all
+    of them would be thousands of lookups and almost none of it wanted."""
+    from muse import routes_spotify, spotify
+
+    listed = [
+        {"remote_id": "SP1", "name": "From Spotify", "count": None, "owner": "someone"},
+        {"remote_id": "SP2", "name": "Not chosen", "count": None, "owner": "someone"},
+    ]
+    monkeypatch.setattr(spotify, "playlists", lambda cfg, uid: listed)
+    touched = []
+    monkeypatch.setattr(routes_spotify, "_mirror",
+                        lambda uid, p: touched.append(p["remote_id"]) or {"name": p["name"]})
+
+    client.post("/spotify/sync", headers=hdr, json={})
+    assert touched == ["SP1"], "only the playlist already mirrored gets refreshed"
+
+    touched.clear()
+    client.post("/spotify/sync", headers=hdr, json={"remote_id": "SP2"})
+    assert touched == ["SP2"], "and an explicit choice is honoured"
+
+
+def test_remote_playlists_say_which_are_mirrored(client, hdr, mirrored, monkeypatch):
+    from muse import spotify
+
+    monkeypatch.setattr(spotify, "playlists", lambda cfg, uid: [
+        {"remote_id": "SP1", "name": "From Spotify", "count": None, "owner": "someone"},
+        {"remote_id": "SP2", "name": "Not chosen", "count": None, "owner": "someone"},
+    ])
+    items = client.get("/spotify/playlists", headers=hdr).json()["items"]
+    by_id = {i["remote_id"]: i for i in items}
+    assert by_id["SP1"]["mirror"]["playlist_id"] == mirrored
+    assert by_id["SP1"]["mirror"]["unmatched"] == 1
+    assert by_id["SP2"]["mirror"] is None

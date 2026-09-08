@@ -17,8 +17,10 @@ class SpotifyPage extends StatefulWidget {
 
 class _SpotifyPageState extends State<SpotifyPage> {
   Future<Map<String, dynamic>>? _account;
+  Future<List<SpotifyPlaylist>>? _playlists;
+  final _filter = TextEditingController();
+  final _busy = <String>{};
   bool _syncing = false;
-  List<Map<String, dynamic>>? _lastSync;
 
   @override
   void initState() {
@@ -26,8 +28,57 @@ class _SpotifyPageState extends State<SpotifyPage> {
     _load();
   }
 
-  void _load() =>
-      setState(() => _account = context.read<AppState>().api.spotifyAccount());
+  void _load() {
+    final api = context.read<AppState>().api;
+    setState(() {
+      _account = api.spotifyAccount();
+      _playlists = api.spotifyAccount().then((a) =>
+          (a['account'] == null) ? <SpotifyPlaylist>[] : api.spotifyPlaylists());
+    });
+  }
+
+  @override
+  void dispose() {
+    _filter.dispose();
+    super.dispose();
+  }
+
+  /// Mirror or refresh one playlist. Everything is per playlist: this account has
+  /// hundreds, and each song mirrored costs a lookup on the other side.
+  Future<void> _mirror(SpotifyPlaylist p) async {
+    final app = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _busy.add(p.remoteId));
+    try {
+      final results = await app.api.syncSpotify(remoteId: p.remoteId);
+      await app.refreshPlaylists();
+      final r = results.isEmpty ? null : results.first;
+      if (!mounted) return;
+      _load();
+      messenger.showSnackBar(SnackBar(
+        content: Text(r == null
+            ? 'Nothing came back for ${p.name}'
+            : r['error'] != null
+                ? '${p.name}: ${r['error']}'
+                : '${p.name} · ${r['matched']} of ${r['total']} songs'
+                    '${(r['missing'] ?? 0) == 0 ? '' : ', ${r['missing']} not matched'}'),
+      ));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('$e')));
+    } finally {
+      if (mounted) setState(() => _busy.remove(p.remoteId));
+    }
+  }
+
+  Future<void> _stopMirroring(SpotifyPlaylist p) async {
+    final app = context.read<AppState>();
+    final ok = await confirm(context, 'Stop mirroring ${p.name}?',
+        'It disappears from your playlists here. Nothing changes on Spotify.');
+    if (!ok) return;
+    await app.api.deletePlaylist(p.playlistId!);
+    await app.refreshPlaylists();
+    _load();
+  }
 
   Future<void> _connect() async {
     final app = context.read<AppState>();
@@ -46,7 +97,8 @@ class _SpotifyPageState extends State<SpotifyPage> {
     }
   }
 
-  Future<void> _sync() async {
+  /// Refresh what is already mirrored — never everything.
+  Future<void> _refreshMirrors() async {
     final app = context.read<AppState>();
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _syncing = true);
@@ -54,13 +106,14 @@ class _SpotifyPageState extends State<SpotifyPage> {
       final results = await app.api.syncSpotify();
       await app.refreshPlaylists();
       if (!mounted) return;
-      setState(() => _lastSync = results);
+      _load();
       final missing = results.fold<int>(
           0, (sum, r) => sum + ((r['missing'] ?? 0) as int));
       messenger.showSnackBar(SnackBar(
-        content: Text(missing == 0
-            ? 'Brought over ${results.length} playlists'
-            : '${results.length} playlists · $missing songs could not be matched'),
+        content: Text(results.isEmpty
+            ? 'Nothing is mirrored yet — choose a playlist below'
+            : '${results.length} refreshed'
+                '${missing == 0 ? '' : ' · $missing songs not matched'}'),
       ));
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('$e')));
@@ -124,8 +177,8 @@ class _SpotifyPageState extends State<SpotifyPage> {
                                 height: 16,
                                 child: CircularProgressIndicator(strokeWidth: 2))
                             : const Icon(Icons.sync),
-                        label: const Text('Refresh playlists'),
-                        onPressed: _syncing ? null : _sync,
+                        label: const Text('Refresh mirrored'),
+                        onPressed: _syncing ? null : _refreshMirrors,
                       ),
                       const SizedBox(width: 8),
                       TextButton(
@@ -144,33 +197,107 @@ class _SpotifyPageState extends State<SpotifyPage> {
                   ],
                 ),
               ),
-              if (_lastSync != null) ...[
-                const Divider(),
-                for (final r in _lastSync!)
-                  ListTile(
-                    dense: true,
-                    leading: Icon(
-                      (r['missing'] ?? 0) == 0
-                          ? Icons.check_circle_outline
-                          : Icons.error_outline,
-                      color: (r['missing'] ?? 0) == 0
-                          ? Theme.of(context).colorScheme.primary
-                          : Theme.of(context).colorScheme.error,
-                    ),
-                    title: Text('${r['name'] ?? r['error'] ?? 'Unknown'}'),
-                    subtitle: r['error'] != null
-                        ? Text('${r['error']}')
-                        : Text('${r['matched']} of ${r['total']} songs'
-                            '${(r['missing'] ?? 0) == 0 ? '' : ' · ${r['missing']} not matched'}'),
-                  ),
-              ],
+              if (account != null) _picker(),
             ],
           );
         },
       ),
     );
   }
+
+  Widget _picker() => FutureBuilder<List<SpotifyPlaylist>>(
+        future: _playlists,
+        builder: (context, snap) {
+          if (snap.hasError) {
+            return ErrorRetry(error: snap.error!, onRetry: _load);
+          }
+          if (!snap.hasData) {
+            return const Padding(
+              padding: EdgeInsets.all(28),
+              child: Center(child: CircularProgressIndicator()),
+            );
+          }
+          final all = snap.data!;
+          final query = _filter.text.trim().toLowerCase();
+          final shown = query.isEmpty
+              ? all
+              : all.where((p) => p.name.toLowerCase().contains(query)).toList();
+          shown.sort((a, b) {
+            if (a.isMirrored != b.isMirrored) return a.isMirrored ? -1 : 1;
+            return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+          });
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Divider(),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                child: Text(
+                  '${all.length} playlists on Spotify · '
+                  '${all.where((p) => p.isMirrored).length} mirrored here',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                child: TextField(
+                  controller: _filter,
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    hintText: 'Find a playlist',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: _filter.text.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.close),
+                            onPressed: () => setState(_filter.clear),
+                          ),
+                  ),
+                ),
+              ),
+              // Only what is on screen is built: this account has 460 playlists.
+              for (final p in shown.take(60))
+                ListTile(
+                  leading: Icon(p.isMirrored
+                      ? Icons.cloud_done_outlined
+                      : Icons.cloud_outlined),
+                  title: Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  subtitle: Text(p.subtitle),
+                  trailing: _busy.contains(p.remoteId)
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : PopupMenuButton<String>(
+                          onSelected: (v) =>
+                              v == 'stop' ? _stopMirroring(p) : _mirror(p),
+                          itemBuilder: (context) => [
+                            PopupMenuItem(
+                                value: 'mirror',
+                                child: Text(p.isMirrored
+                                    ? 'Refresh from Spotify'
+                                    : 'Add to my playlists')),
+                            if (p.isMirrored)
+                              const PopupMenuItem(
+                                  value: 'stop', child: Text('Stop mirroring')),
+                          ],
+                        ),
+                  onTap: _busy.contains(p.remoteId) ? null : () => _mirror(p),
+                ),
+              if (shown.length > 60)
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(
+                      '${shown.length - 60} more — search to narrow it down',
+                      style: Theme.of(context).textTheme.bodySmall),
+                ),
+            ],
+          );
+        },
+      );
 }
+
 
 class _NotConfigured extends StatelessWidget {
   const _NotConfigured({required this.reason});

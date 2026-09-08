@@ -183,10 +183,14 @@ def playlists(cfg, user_id: int) -> list[dict]:
             if not p:
                 continue
             images = p.get("images") or []
+            # Development mode returns a stripped object: no `tracks` and no `images`.
+            # Reporting "0 songs" for a full playlist is worse than reporting nothing,
+            # so the count stays null until the playlist is actually read.
+            total = (p.get("tracks") or {}).get("total")
             out.append({
                 "remote_id": p["id"],
-                "name": p.get("name") or "Untitled",
-                "count": (p.get("tracks") or {}).get("total") or 0,
+                "name": (p.get("name") or "Untitled").strip(),
+                "count": total,
                 "owner": (p.get("owner") or {}).get("display_name"),
                 "image": images[0]["url"] if images else None,
             })

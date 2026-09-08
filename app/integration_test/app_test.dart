@@ -101,12 +101,14 @@ void main() {
     await settle(tester, seconds: 4);
 
     // ---- sign in ----
-    expect(find.text('Sign in'), findsOneWidget, reason: 'login screen should be up');
+    expect(find.text('Sign in'), findsWidgets, reason: 'login screen should be up');
+    // Two fields now: the server is correct by construction on web and hides behind
+    // "Change server", so the common case is user and password only.
     final fields = find.byType(TextField);
-    expect(fields, findsNWidgets(3));
-    await tester.enterText(fields.at(1), user);
-    await tester.enterText(fields.at(2), pass);
-    await tester.tap(find.text('Sign in'));
+    expect(fields, findsNWidgets(2));
+    await tester.enterText(fields.at(0), user);
+    await tester.enterText(fields.at(1), pass);
+    await tester.tap(find.widgetWithText(FilledButton, 'Sign in'));
     await settle(tester, seconds: 6);
     expect(find.text('Queues'), findsWidgets,
         reason: 'should land on the home shell. On screen: ${visibleText(tester)}');

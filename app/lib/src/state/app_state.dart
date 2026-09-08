@@ -31,6 +31,7 @@ class AppState extends ChangeNotifier {
   List<Playlist> playlists = const [];
 
   StreamSubscription? _events;
+  bool _disposed = false;
 
   /// On web the app is served by the same host it talks to, so its own origin is the
   /// answer. A device has no such hint, so the server is baked in at build time
@@ -94,6 +95,29 @@ class AppState extends ChangeNotifier {
 
   /// Anything in here that throws must not leave the session half-built: the login
   /// path reports failure loudly rather than showing a signed-in shell with no data.
+  /// Join a server with an invite code rather than a password someone else chose.
+  Future<bool> redeem(String server, String code, String username,
+      String password) async {
+    error = null;
+    try {
+      api.baseUrl = server.replaceAll(RegExp(r'/+$'), '');
+      await api.redeemInvite(code.trim(), username.trim(), password, 'flutter');
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kServer, api.baseUrl);
+      await prefs.setString(_kToken, api.token!);
+      user = username.trim();
+      await _afterLogin();
+      notifyListeners();
+      return true;
+    } on ApiException catch (e) {
+      error = e.message;
+    } catch (e) {
+      error = 'Cannot reach $server';
+    }
+    notifyListeners();
+    return false;
+  }
+
   Future<void> _afterLogin() async {
     player ??= PlayerService(api);
     // The player writes the cursor through the app rather than knowing the API: it
@@ -368,11 +392,11 @@ class AppState extends ChangeNotifier {
   /// reconnect, tracks that finish downloading stay greyed out forever and the app
   /// looks broken while the server is perfectly fine.
   void _reconnectEvents() {
-    if (user == null) return;
+    if (_disposed || user == null) return;
     final wait = Duration(seconds: _eventBackoff);
     _eventBackoff = (_eventBackoff * 2).clamp(1, 60);
     Future.delayed(wait, () {
-      if (user != null) _listenForEvents();
+      if (!_disposed && user != null) _listenForEvents();
     });
   }
 
@@ -386,6 +410,7 @@ class AppState extends ChangeNotifier {
   StreamSubscription? _playerSub;
 
   Future<void> _pollStatus() async {
+    if (_disposed) return;
     try {
       final s = await api.status();
       ingestOnline = (s['ingest_online'] ?? false) as bool;
@@ -396,9 +421,20 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Several things here outlive a single screen: a status poll every thirty seconds,
+  /// an event stream that reconnects with backoff, a player that keeps going. Any of
+  /// them can come back after the app is torn down, and notifying a disposed listener
+  /// throws — so this is the one place that has to know.
+  @override
+  void notifyListeners() {
+    if (!_disposed) super.notifyListeners();
+  }
+
   @override
   void dispose() {
+    _disposed = true;
     _statusTimer?.cancel();
+    _events?.cancel();
     _playerSub?.cancel();
     _events?.cancel();
     player?.dispose();

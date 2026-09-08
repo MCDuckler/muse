@@ -91,6 +91,52 @@ class ApiClient {
     _streamKeyExpiry = d['expires_at'] as int;
   }
 
+  /// Turn an invite into an account and sign in with it. The only route that creates
+  /// a user without already being signed in.
+  Future<String> redeemInvite(String code, String user, String password,
+      String device) async {
+    final r = await http.post(_u('/auth/redeem'), body: {
+      'code': code,
+      'user': user,
+      'password': password,
+      'device': device,
+      'platform': _platformName(),
+    });
+    final d = await _decode(r) as Map<String, dynamic>;
+    token = d['token'] as String;
+    return token!;
+  }
+
+  Future<void> changePassword(String password) async {
+    await _decode(await http.post(_u('/auth/password'),
+        headers: _headers, body: jsonEncode({'password': password})));
+  }
+
+  Future<({List<Map<String, dynamic>> items, int you})> accounts() async {
+    final d = await _decode(await http.get(_u('/accounts'), headers: _headers))
+        as Map<String, dynamic>;
+    return (
+      items: (d['items'] as List).cast<Map<String, dynamic>>(),
+      you: (d['you'] ?? 0) as int,
+    );
+  }
+
+  Future<Map<String, dynamic>> createAccount(String name, String password) async =>
+      await _decode(await http.post(_u('/accounts'),
+              headers: _headers,
+              body: jsonEncode({'name': name, 'password': password})))
+          as Map<String, dynamic>;
+
+  Future<void> deleteAccount(int id) async {
+    await _decode(await http.delete(_u('/accounts/$id'), headers: _headers));
+  }
+
+  Future<Map<String, dynamic>> createInvite({String? note}) async =>
+      await _decode(await http.post(_u('/accounts/invites'),
+              headers: _headers,
+              body: jsonEncode({if (note != null) 'note': note})))
+          as Map<String, dynamic>;
+
   Future<Map<String, dynamic>> me() async =>
       await _decode(await http.get(_u('/me'), headers: _headers)) as Map<String, dynamic>;
 
@@ -383,8 +429,16 @@ class ApiClient {
     await _decode(await http.delete(_u('/spotify/account'), headers: _headers));
   }
 
-  /// Mirror playlists from Spotify. Returns one row per playlist with how many of its
-  /// songs could be translated.
+  /// What is on the Spotify side, each marked with whether it is already mirrored.
+  Future<List<SpotifyPlaylist>> spotifyPlaylists() async {
+    final d = await _decode(
+            await http.get(_u('/spotify/playlists'), headers: _headers))
+        as Map<String, dynamic>;
+    return (d['items'] as List).map((e) => SpotifyPlaylist.fromJson(e)).toList();
+  }
+
+  /// Mirror the named playlists, or — with no names — refresh the ones already
+  /// mirrored. Never everything: an account can hold hundreds.
   Future<List<Map<String, dynamic>>> syncSpotify({String? remoteId}) async {
     final d = await _decode(await http.post(_u('/spotify/sync'),
         headers: _headers,

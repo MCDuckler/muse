@@ -14,7 +14,7 @@
 	# Both the bare collection path and everything under it: `path /queues/*` does NOT
 	# match `/queues`, and that mismatch silently served the app shell to the client,
 	# which then tried to parse a web page as JSON.
-	@api path /admin /admin/* /api-docs /art /art/* /auth /auth/* /downloads /downloads/* /history /history/* /internal /internal/* /library /library/* /listens /listens/* /me /openapi.json /playlists /playlists/* /queues /queues/* /search /search/* /spotify /spotify/* /stats /stats/* /status /status/* /sync /sync/* /tracks /tracks/* /uploads /uploads/*
+	@api path /accounts /accounts/* /admin /admin/* /api-docs /art /art/* /auth /auth/* /downloads /downloads/* /history /history/* /internal /internal/* /library /library/* /listens /listens/* /me /openapi.json /playlists /playlists/* /queues /queues/* /search /search/* /spotify /spotify/* /stats /stats/* /status /status/* /sync /sync/* /tracks /tracks/* /uploads /uploads/*
 	handle @api {
 		reverse_proxy api:8770
 	}

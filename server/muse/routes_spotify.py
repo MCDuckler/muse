@@ -95,23 +95,54 @@ def unlink(user: dict = Depends(current_user)):
 
 @router.get("/playlists")
 def remote_playlists(user: dict = Depends(current_user)):
-    try:
-        return {"items": spotify.playlists(cfg(), user["id"])}
-    except Exception as e:
-        raise _fail(e)
+    """Everything on the Spotify side, marked with whether it is already mirrored.
 
-
-@router.post("/sync")
-def sync_playlists(body: dict = Body(default={}), user: dict = Depends(current_user)):
-    """Mirror every Spotify playlist into the library, matching as we go."""
+    An account can hold hundreds of these — this one has 460 — so the app lists them
+    and you choose. Mirroring is not free: every song costs a YouTube Music lookup.
+    """
     try:
         remote = spotify.playlists(cfg(), user["id"])
     except Exception as e:
         raise _fail(e)
 
-    only = body.get("remote_id")
-    if only:
-        remote = [p for p in remote if p["remote_id"] == only]
+    mirrored = {
+        r["remote_id"]: r for r in db.all_(
+            """select p.remote_id, p.id as playlist_id, p.last_synced_at,
+                      count(distinct i.track_id) as tracks,
+                      count(distinct u.pos) as unmatched
+                 from playlists p
+                 left join playlist_items i on i.playlist_id=p.id
+                 left join playlist_unmatched u on u.playlist_id=p.id
+                where p.owner_id=%s and p.kind='spotify'
+                group by p.id""",
+            (user["id"],),
+        )
+    }
+    return {"items": [{**p, "mirror": mirrored.get(p["remote_id"])} for p in remote],
+            "mirrored": len(mirrored)}
+
+
+@router.post("/sync")
+def sync_playlists(body: dict = Body(default={}), user: dict = Depends(current_user)):
+    """Mirror chosen playlists, or refresh the ones already mirrored.
+
+    Deliberately never "all of them": an account with hundreds of playlists would mean
+    thousands of lookups, and almost none of it wanted.
+    """
+    try:
+        remote = spotify.playlists(cfg(), user["id"])
+    except Exception as e:
+        raise _fail(e)
+
+    wanted = body.get("remote_ids") or ([body["remote_id"]] if body.get("remote_id")
+                                        else None)
+    if wanted:
+        remote = [p for p in remote if p["remote_id"] in set(wanted)]
+    else:
+        already = {r["remote_id"] for r in db.all_(
+            "select remote_id from playlists where owner_id=%s and kind='spotify'",
+            (user["id"],))}
+        remote = [p for p in remote if p["remote_id"] in already]
 
     results = []
     for p in remote:

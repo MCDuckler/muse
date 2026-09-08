@@ -203,3 +203,19 @@ create index if not exists jobs_pending_next on jobs(kind, state, next_attempt_a
 create index if not exists media_sha_idx on media(sha256);
 alter table playlists add column if not exists source_name text;
 alter table playlists add column if not exists last_error text;
+-- Accounts live in the database, with muse.toml as the seed rather than the source of
+-- truth: adding someone should not mean editing a file and restarting the server.
+alter table users add column if not exists pw_hash text;
+alter table users add column if not exists created_by int references users(id);
+
+-- A one-time code so someone can set their own password. You should not have to know
+-- another person's password in order to give them an account.
+create table if not exists invites (
+  code       text primary key,
+  created_by int not null references users(id) on delete cascade,
+  note       text,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  used_at    timestamptz,
+  used_by    int references users(id)
+);

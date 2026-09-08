@@ -30,11 +30,52 @@ def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def ensure_user(name: str) -> int:
-    row = db.one("select id from users where name=%s", (name,))
+def ensure_user(name: str, pw_hash: str | None = None,
+                created_by: int | None = None) -> int:
+    row = db.one("select id, pw_hash from users where name=%s", (name,))
     if row:
+        # Seed a config-file account's password on first sight, but never overwrite a
+        # password the person has since set for themselves.
+        if pw_hash and not row["pw_hash"]:
+            db.run("update users set pw_hash=%s where id=%s", (pw_hash, row["id"]))
         return row["id"]
-    return db.one("insert into users(name) values(%s) returning id", (name,))["id"]
+    return db.one(
+        "insert into users(name, pw_hash, created_by) values(%s,%s,%s) returning id",
+        (name, pw_hash, created_by),
+    )["id"]
+
+
+def create_account(name: str, password: str, created_by: int | None = None) -> dict:
+    name = name.strip()
+    if not name:
+        raise ValueError("a name is required")
+    if len(password) < 8:
+        raise ValueError("use at least 8 characters")
+    if db.one("select id from users where lower(name)=lower(%s)", (name,)):
+        raise ValueError(f"there is already an account called {name!r}")
+    row = db.one(
+        "insert into users(name, pw_hash, created_by) values(%s,%s,%s) returning *",
+        (name, hash_password(password), created_by),
+    )
+    return {"id": row["id"], "name": row["name"], "created_at": row["created_at"]}
+
+
+def check_login(name: str, password: str, config_hash: str | None) -> dict | None:
+    """The database is authoritative; the config file is the fallback that bootstraps
+    the first account on a fresh install."""
+    row = db.one("select id, name, pw_hash from users where lower(name)=lower(%s)",
+                 (name,))
+    stored = (row or {}).get("pw_hash") or config_hash
+    if not stored or not verify_password(stored, password):
+        return None
+    user_id = row["id"] if row else ensure_user(name, config_hash)
+    return {"id": user_id, "name": row["name"] if row else name}
+
+
+def set_password(user_id: int, password: str) -> None:
+    if len(password) < 8:
+        raise ValueError("use at least 8 characters")
+    db.run("update users set pw_hash=%s where id=%s", (hash_password(password), user_id))
 
 
 def issue_token(user_id: int, device_name: str, platform: str | None) -> str:

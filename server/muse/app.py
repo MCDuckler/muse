@@ -12,13 +12,14 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
-from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request, UploadFile
+from fastapi import (Body, Depends, FastAPI, Form, Header, HTTPException, Request,
+                     UploadFile)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from . import (auth, catalog, config, db, enrich_worker, failures, jobs, progress,
-               routes_browse, routes_files, routes_library, routes_play, routes_spotify,
-               routes_sync, storage, ytm)
+               routes_accounts, routes_browse, routes_files, routes_library, routes_play,
+               routes_spotify, routes_sync, storage, ytm)
 from . import deps
 from .deps import current_user, worker_auth
 
@@ -47,7 +48,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     db.init(cfg.dsn)
     deps.set_config(cfg)
     for u in cfg.users:
-        auth.ensure_user(u.name)
+        auth.ensure_user(u.name, pw_hash=u.password_hash)
 
     worker = (enrich_worker.EnrichWorker(cfg, publish=publish)
               if start_workers else None)
@@ -76,10 +77,48 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         if not login_limit.allow(ip):
             raise HTTPException(429, "too many login attempts")
         entry = cfg.user(user)
-        if not entry or not auth.verify_password(entry.password_hash, password):
+        found = auth.check_login(user, password, entry.password_hash if entry else None)
+        if not found:
             raise HTTPException(401, "wrong user or password")
-        uid = auth.ensure_user(user)
-        return {"token": auth.issue_token(uid, device, platform), "user": user}
+        return {
+            "token": auth.issue_token(found["id"], device, platform),
+            "user": found["name"],
+        }
+
+    @app.post("/auth/redeem")
+    def redeem(request: Request, code: str = Form(...), user: str = Form(...),
+               password: str = Form(...), device: str = Form("unnamed"),
+               platform: str = Form(None)):
+        """Turn an invite into an account. This is the only route that creates a user
+        without being signed in, and it needs a code someone deliberately handed out."""
+        ip = request.client.host if request.client else "?"
+        if not login_limit.allow(ip):
+            raise HTTPException(429, "too many attempts")
+        invite = db.one(
+            """select code, created_by from invites
+                where code=%s and used_at is null and expires_at > now()""",
+            (code.strip(),),
+        )
+        if not invite:
+            raise HTTPException(400, "that invite is not valid any more")
+        try:
+            account = auth.create_account(user, password, created_by=invite["created_by"])
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        db.run("update invites set used_at=now(), used_by=%s where code=%s",
+               (account["id"], invite["code"]))
+        return {
+            "token": auth.issue_token(account["id"], device, platform),
+            "user": account["name"],
+        }
+
+    @app.post("/auth/password")
+    def change_password(body: dict = Body(...), user: dict = Depends(current_user)):
+        try:
+            auth.set_password(user["id"], body.get("password") or "")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"changed": True}
 
     @app.get("/auth/stream-key")
     def stream_key(user: dict = Depends(current_user)):
@@ -392,6 +431,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             expose_headers=["Content-Range", "Accept-Ranges", "ETag", "Content-Length"],
         )
 
+    app.include_router(routes_accounts.router)
     app.include_router(routes_browse.router)
     app.include_router(routes_library.router)
     app.include_router(routes_sync.router)

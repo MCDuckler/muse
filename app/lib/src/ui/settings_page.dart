@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
 import 'dialogs.dart';
+import 'accounts_page.dart';
 import 'spotify_page.dart';
 import 'track_menu.dart';
 
@@ -159,6 +160,14 @@ class _SettingsPageState extends State<SettingsPage> {
             leading: const Icon(Icons.person_outline),
             title: Text(app.user ?? 'Signed in'),
             subtitle: Text(app.api.baseUrl),
+          ),
+          ListTile(
+            leading: const Icon(Icons.group_outlined),
+            title: const Text('Accounts'),
+            subtitle: const Text('Invite someone, or add an account'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const AccountsPage())),
           ),
           ListTile(
             leading: const Icon(Icons.logout),
