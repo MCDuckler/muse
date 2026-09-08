@@ -58,6 +58,25 @@ def delete_account(account_id: int, user: dict = Depends(current_user)):
     return {"deleted": account_id}
 
 
+@router.post("/{account_id}/password")
+def reset_password(account_id: int, body: dict = Body(...),
+                   user: dict = Depends(current_user)):
+    """Set someone else's password.
+
+    Without this, an account that cannot sign in is only recoverable with a database
+    client — which is not a thing to need at eleven at night.
+    """
+    if not db.one("select id from users where id=%s", (account_id,)):
+        raise HTTPException(404, "no such account")
+    try:
+        auth.set_password(account_id, body.get("password") or "")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if body.get("sign_out_devices"):
+        db.run("delete from devices where user_id=%s", (account_id,))
+    return {"changed": True, "account_id": account_id}
+
+
 @router.post("/invites", status_code=201)
 def create_invite(body: dict = Body(default={}), user: dict = Depends(current_user)):
     """A one-time code, so you never have to know someone else's password."""

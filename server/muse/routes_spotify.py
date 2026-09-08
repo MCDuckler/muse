@@ -26,6 +26,9 @@ def _fail(e: Exception) -> HTTPException:
         return HTTPException(501, str(e))
     if isinstance(e, spotify.NotLinked):
         return HTTPException(409, str(e))
+    if isinstance(e, spotify.NotAllowed):
+        # Not a gateway failure: Spotify answered, and the answer was no.
+        return HTTPException(403, str(e))
     return HTTPException(502, str(e))
 
 

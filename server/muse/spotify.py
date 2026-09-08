@@ -35,6 +35,15 @@ class NotLinked(RuntimeError):
     pass
 
 
+class NotAllowed(RuntimeError):
+    """Spotify accepted the sign-in and then refused the data.
+
+    In Development mode this nearly always means one thing: the Spotify account is not
+    listed under User Management in the app's dashboard. Spotify authorises anyone and
+    only refuses at the API, which makes it look like a muse bug.
+    """
+
+
 class NotConfigured(RuntimeError):
     pass
 
@@ -165,9 +174,12 @@ def _get(cfg, user_id: int, url: str, **params) -> dict:
                   headers={"Authorization": f"Bearer {access_token(cfg, user_id)}"},
                   params=params or None, timeout=30)
     if r.status_code == 403:
-        raise RuntimeError(
-            "Spotify refused that in Development mode — it only returns playlists you "
-            "own or collaborate on."
+        raise NotAllowed(
+            "Spotify signed you in but will not share your library. In Development "
+            "mode it only serves accounts added under User Management in the app's "
+            "dashboard — ask whoever set up this server to add your Spotify account "
+            "there. (It can also mean the playlist belongs to someone else: only "
+            "playlists you own or collaborate on are readable.)"
         )
     if r.status_code == 401:
         raise NotLinked("Spotify sign-in has expired — link the account again")

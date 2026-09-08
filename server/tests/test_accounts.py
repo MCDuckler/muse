@@ -142,3 +142,35 @@ def test_changing_your_own_password(client, hdr):
     assert client.post("/auth/login",
                        data={"user": "sam", "password": "a-longer-secret"}).status_code == 200
     assert auth is not None
+
+
+def test_another_account_password_can_be_reset(client, hdr):
+    """An account that cannot sign in should be recoverable from the app, not from a
+    database client."""
+    made = client.post("/accounts", headers=hdr,
+                       json={"name": "sam", "password": "correct-horse"}).json()
+    r = client.post(f"/accounts/{made['id']}/password", headers=hdr,
+                    json={"password": "a-fresh-secret"})
+    assert r.status_code == 200
+    assert client.post("/auth/login",
+                       data={"user": "sam", "password": "a-fresh-secret"}).status_code == 200
+    assert client.post("/auth/login",
+                       data={"user": "sam", "password": "correct-horse"}).status_code == 401
+
+
+def test_a_reset_can_sign_out_their_devices(client, hdr):
+    made = client.post("/accounts", headers=hdr,
+                       json={"name": "sam", "password": "correct-horse"}).json()
+    token = client.post("/auth/login",
+                        data={"user": "sam", "password": "correct-horse"}).json()["token"]
+    theirs = {"Authorization": f"Bearer {token}"}
+    assert client.get("/me", headers=theirs).status_code == 200
+
+    client.post(f"/accounts/{made['id']}/password", headers=hdr,
+                json={"password": "a-fresh-secret", "sign_out_devices": True})
+    assert client.get("/me", headers=theirs).status_code == 401, "old sessions end"
+
+
+def test_resetting_a_missing_account_is_404(client, hdr):
+    assert client.post("/accounts/9999/password", headers=hdr,
+                       json={"password": "a-fresh-secret"}).status_code == 404

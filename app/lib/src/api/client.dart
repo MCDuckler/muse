@@ -127,6 +127,16 @@ class ApiClient {
               body: jsonEncode({'name': name, 'password': password})))
           as Map<String, dynamic>;
 
+  Future<void> resetPassword(int id, String password,
+      {bool signOutDevices = false}) async {
+    await _decode(await http.post(_u('/accounts/$id/password'),
+        headers: _headers,
+        body: jsonEncode({
+          'password': password,
+          'sign_out_devices': signOutDevices,
+        })));
+  }
+
   Future<void> deleteAccount(int id) async {
     await _decode(await http.delete(_u('/accounts/$id'), headers: _headers));
   }

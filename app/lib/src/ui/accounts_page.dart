@@ -118,6 +118,58 @@ class _AccountsPageState extends State<AccountsPage> {
     }
   }
 
+  /// Somebody locked out should be recoverable from here, not from a database client.
+  Future<void> _resetFor(Map<String, dynamic> account) async {
+    final password = TextEditingController();
+    var signOut = true;
+    final app = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setLocal) => AlertDialog(
+          title: Text('New password for ${account['name']}'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: password,
+                autofocus: true,
+                decoration: const InputDecoration(
+                    labelText: 'Password', helperText: 'At least 8 characters'),
+              ),
+              CheckboxListTile(
+                value: signOut,
+                onChanged: (v) => setLocal(() => signOut = v ?? true),
+                title: const Text('Sign out their devices'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Set')),
+          ],
+        ),
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await app.api.resetPassword(account['id'] as int, password.text,
+          signOutDevices: signOut);
+      messenger.showSnackBar(
+          SnackBar(content: Text('Password set for ${account['name']}')));
+      _load();
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('$e')));
+    }
+  }
+
   Future<void> _changeMyPassword() async {
     final password = TextEditingController();
     final app = context.read<AppState>();
@@ -211,19 +263,28 @@ class _AccountsPageState extends State<AccountsPage> {
                     ].join(' · ')),
                     trailing: a['id'] == data.you
                         ? null
-                        : IconButton(
-                            icon: const Icon(Icons.delete_outline),
-                            tooltip: 'Remove account',
-                            onPressed: () async {
-                              final ok = await confirm(
-                                  context,
-                                  'Remove ${a['name']}?',
-                                  'Their queues and playlists go with them. Tracks '
-                                  'stay in the library.');
-                              if (!ok) return;
-                              await app.api.deleteAccount(a['id'] as int);
-                              _load();
+                        : PopupMenuButton<String>(
+                            icon: const Icon(Icons.more_vert),
+                            onSelected: (v) async {
+                              if (v == 'reset') {
+                                await _resetFor(a);
+                              } else {
+                                final ok = await confirm(
+                                    context,
+                                    'Remove ${a['name']}?',
+                                    'Their queues and playlists go with them. Tracks '
+                                    'stay in the library.');
+                                if (!ok) return;
+                                await app.api.deleteAccount(a['id'] as int);
+                                _load();
+                              }
                             },
+                            itemBuilder: (context) => const [
+                              PopupMenuItem(
+                                  value: 'reset', child: Text('Set a new password…')),
+                              PopupMenuItem(
+                                  value: 'remove', child: Text('Remove account')),
+                            ],
                           ),
                   ),
               ],
