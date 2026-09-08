@@ -483,6 +483,11 @@ class PlayerService {
       await _player.setVolume(_volumeFor(track));
       if (speed != 1.0) await _player.setSpeed(speed);
       _loadedTrackId = track.id;
+    } on PlayerInterruptedException {
+      // Another load took over while this one was in flight — skipping twice quickly,
+      // or a queue update arriving mid-load. That is the intended outcome, not
+      // something to put on screen.
+      return;
     } catch (e) {
       _loadedTrackId = null;
       lastError = 'Could not load "${track.title}": $e';
@@ -626,7 +631,10 @@ class PlayerService {
       waitingForDownload: _waitingForTrack != null,
       finished: finished,
     );
-    _stateController.add(last!);
+    // A disposed player can still be reached by an event that was already in flight —
+    // an SSE update landing while the app tears down, say. Adding to a closed stream
+    // throws into nothing and looks like a crash in the logs.
+    if (!_stateController.isClosed) _stateController.add(last!);
   }
 
   Future<void> dispose() async {

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/player.dart';
+import 'artwork.dart';
 import 'glass.dart';
 import 'record_stage.dart';
 import 'swipe.dart';
@@ -180,6 +181,25 @@ class _Artwork extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, c) {
         final side = c.maxWidth;
+        if (context.watch<AppState>().coverStyle == CoverStyle.flat) {
+          // Just the cover: still, square, and the whole width of the stage.
+          return Center(
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.28),
+                    blurRadius: 28,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
+              ),
+              child: Artwork(track: track, size: side, radius: 16, small: false),
+            ),
+          );
+        }
+
         // No clip and no shadow of our own: the pieces carry their own, and a rounded
         // rectangle around them would cut the disc off as it slides out.
         return Center(

@@ -75,9 +75,25 @@ class AppState extends ChangeNotifier {
 
   static const _kServer = 'muse.server';
   static const _kToken = 'muse.token';
+  static const _kCoverStyle = 'muse.coverStyle';
+
+  /// How the player draws the artwork: as the record it came on, or as the cover on
+  /// its own. A per-device choice — the phone in a pocket and the laptop on a desk are
+  /// not the same screen.
+  CoverStyle coverStyle = CoverStyle.record;
+
+  Future<void> setCoverStyle(CoverStyle style) async {
+    coverStyle = style;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kCoverStyle, style.name);
+  }
 
   Future<void> boot() async {
     final prefs = await SharedPreferences.getInstance();
+    coverStyle = CoverStyle.values.firstWhere(
+        (s) => s.name == prefs.getString(_kCoverStyle),
+        orElse: () => CoverStyle.record);
     api = ApiClient(
       // Served from the box itself on web, so the page's own origin is the server —
       // no one should have to type a URL into a page they loaded from that URL.
@@ -381,6 +397,27 @@ class AppState extends ChangeNotifier {
 
   int _eventBackoff = 1;
 
+  /// Another device changed a queue: a guest in the jam added a song, or the same
+  /// person queued something from a laptop while their phone is playing.
+  ///
+  /// Only worth acting on for the queue actually loaded here, and only when the
+  /// revision is one this device has not seen — our own edits come back in the
+  /// response, so this skips the echo of what we just did.
+  Future<void> _onQueueChanged(Map<String, dynamic> data) async {
+    final id = data['queue_id'] as int?;
+    if (id == null || id != activeQueue?.id) return;
+    final rev = data['rev'] as int?;
+    if (rev != null && rev == activeQueue?.rev && data['cursor_moved'] != true) return;
+
+    await _reloadActiveQueue();
+    final live = activeQueue;
+    if (live == null) return;
+    // loadQueue keeps the song that is playing where it is: it relocates the loaded
+    // track rather than starting anything over.
+    await player?.loadQueue(live);
+    notifyListeners();
+  }
+
   /// Something happened in the jam: somebody joined, added, voted, or it ended.
   ///
   /// The host's device is the one that actually skips — a vote that passes is a
@@ -481,6 +518,8 @@ class AppState extends ChangeNotifier {
           await _reloadActiveQueue();
           notifyListeners();
         }
+      } else if (e.event == 'queue_changed') {
+        await _onQueueChanged(e.data);
       } else if (e.event == 'jam') {
         await _onJamEvent(e.data);
       } else if (e.event == 'track_failed') {

@@ -16,6 +16,30 @@ from .deps import cfg, current_user, user_or_key
 
 router = APIRouter()
 
+_publish = None                    # set by app.create_app, to avoid importing it here
+
+
+def set_publisher(fn) -> None:
+    global _publish
+    _publish = fn
+
+
+def announce_queue(queue_id: int, user: dict, cursor_moved: bool = False) -> None:
+    """Tell every device this queue changed.
+
+    Without this a jam was one-way: a guest's song landed in the host's queue on the
+    server and the host's player never heard about it. It matters outside a jam too —
+    the same person adding something from a laptop while a phone is playing.
+    """
+    if not _publish:
+        return
+    row = db.one("select rev, cursor_index from queues where id=%s", (queue_id,))
+    if not row:
+        return
+    _publish("queue_changed", {"queue_id": queue_id, "rev": row["rev"],
+                               "cursor_index": row["cursor_index"],
+                               "by": user.get("name"), "cursor_moved": cursor_moved})
+
 RADIO_MAX = 10          # never pull a whole 50-track watch playlist: each one is a download
 RADIO_DEFAULT = 5
 
@@ -309,6 +333,7 @@ def replace_queue(queue_id: int, body: dict = Body(...), user: dict = Depends(cu
             (body.get("name"), body.get("shuffle"), body.get("repeat"),
              body.get("cursor_index"), len(items), queue_id),
         )
+    announce_queue(queue_id, user)
     return _queue_state(queue_id)
 
 
@@ -316,6 +341,7 @@ def replace_queue(queue_id: int, body: dict = Body(...), user: dict = Depends(cu
 def move_cursor(queue_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
     """Cheap and frequent, so it does not bump `rev`: on a conflict the playing device wins."""
     _own_queue(queue_id, user)
+    was = db.one("select cursor_index from queues where id=%s", (queue_id,))["cursor_index"]
     db.run(
         """update queues set cursor_index=coalesce(%s,cursor_index),
                   position_ms=coalesce(%s,position_ms), updated_at=now()
@@ -323,6 +349,9 @@ def move_cursor(queue_id: int, body: dict = Body(...), user: dict = Depends(curr
         (body.get("cursor_index"), body.get("position_ms"), queue_id),
     )
     q = db.one("select id,name,cursor_index,position_ms,rev from queues where id=%s", (queue_id,))
+    # Position is saved every ten seconds; only a change of track is news.
+    if body.get("cursor_index") is not None and body["cursor_index"] != was:
+        announce_queue(queue_id, user, cursor_moved=True)
     return q
 
 
@@ -359,6 +388,7 @@ def queue_add(queue_id: int, body: dict = Body(...), user: dict = Depends(curren
                    values(%s,%s,%s,%s,%s)""",
                 (queue_id, insert_at + n, tid, body.get("origin", "user"), user["id"]))
         c.execute("update queues set rev=rev+1, updated_at=now() where id=%s", (queue_id,))
+    announce_queue(queue_id, user)
     return _queue_state(queue_id)
 
 
@@ -390,6 +420,7 @@ def remove_item(queue_id: int, pos: int, user: dict = Depends(current_user)):
                 where id=%s""",
             (pos, queue_id),
         )
+    announce_queue(queue_id, user)
     return _queue_state(queue_id)
 
 
@@ -428,6 +459,7 @@ def move_item(queue_id: int, body: dict = Body(...), user: dict = Depends(curren
                           cursor)
         c.execute("update queues set rev=rev+1, cursor_index=%s, updated_at=now() "
                   "where id=%s", (new_cursor, queue_id))
+    announce_queue(queue_id, user)
     return _queue_state(queue_id)
 
 
@@ -454,6 +486,7 @@ def clear_queue(queue_id: int, body: dict = Body(default={}),
         c.execute("""update queues set rev=rev+1, updated_at=now(),
                             cursor_index=least(cursor_index, greatest(%s-1, 0))
                       where id=%s""", (len(rows), queue_id))
+    announce_queue(queue_id, user)
     return _queue_state(queue_id)
 
 

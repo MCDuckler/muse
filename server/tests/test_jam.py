@@ -125,3 +125,55 @@ def test_the_host_can_remove_someone(client, hdr, guest, jam):
     assert client.get("/jams/current", headers=guest).json()["jam"] is None
     assert db.one("select count(*) n from jam_members where jam_id=%s",
                   (jam["id"],))["n"] == 1
+
+
+def test_a_guests_song_reaches_the_host(client, hdr, guest, jam, monkeypatch):
+    """The whole point of a jam: what a guest adds has to show up on the host's device.
+
+    The host's app finds out over the event stream, so this asserts on what is
+    published — without it the song landed in the database and nothing ever told the
+    machine that is playing.
+    """
+    from muse import routes_library
+
+    published: list[tuple[str, dict]] = []
+    monkeypatch.setattr(routes_library, "_publish",
+                        lambda event, data: published.append((event, data)))
+
+    client.post("/jams/join", headers=guest, json={"code": jam["code"]})
+    track = client.post("/tracks/resolve", headers=guest, json={"query": "a song"}).json()
+    client.post(f"/queues/{jam['queue']['id']}/items", headers=guest,
+                json={"track_ids": [track["id"]]})
+
+    changes = [d for e, d in published if e == "queue_changed"]
+    assert changes, "adding to the queue must announce itself"
+    assert changes[-1]["queue_id"] == jam["queue"]["id"]
+    assert changes[-1]["by"] == "sam", "and say who did it"
+
+
+def test_moving_to_the_next_track_is_announced(client, hdr, jam, monkeypatch):
+    """So the people listening along see what is on now."""
+    from muse import routes_library
+
+    published: list[tuple[str, dict]] = []
+    monkeypatch.setattr(routes_library, "_publish",
+                        lambda event, data: published.append((event, data)))
+
+    for n in range(2):
+        t = client.post("/tracks/resolve", headers=hdr,
+                        json={"video_id": f"JAM{n}"}).json()
+        client.post(f"/queues/{jam['queue']['id']}/items", headers=hdr,
+                    json={"track_ids": [t["id"]]})
+    published.clear()
+
+    # The position is saved every ten seconds while playing. That is not news.
+    client.patch(f"/queues/{jam['queue']['id']}/cursor", headers=hdr,
+                 json={"position_ms": 4000})
+    assert not [d for e, d in published if e == "queue_changed"]
+
+    # Moving to the next track is.
+    client.patch(f"/queues/{jam['queue']['id']}/cursor", headers=hdr,
+                 json={"cursor_index": 1, "position_ms": 0})
+    moved = [d for e, d in published if e == "queue_changed"]
+    assert moved and moved[-1]["cursor_moved"] is True
+    assert moved[-1]["cursor_index"] == 1

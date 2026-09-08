@@ -10,6 +10,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:muse/main.dart' as app;
+import 'package:muse/src/api/client.dart';
+import 'package:muse/src/api/models.dart';
 import 'package:muse/src/ui/player_bar.dart';
 import 'package:muse/src/ui/artwork.dart';
 import 'package:muse/src/ui/record_stage.dart';
@@ -444,7 +446,49 @@ void main() {
     await tester.tap(find.byIcon(Icons.keyboard_arrow_down));
     await settle(tester, seconds: 2);
 
+    // ---- another device changes the queue ----
+    // This is what a jam is underneath: someone else's edit to the queue this device
+    // is playing. It has to arrive without anyone pressing refresh.
+    final beforeCount = appState.player!.items.length;
+    final elsewhere = ApiClient(
+        baseUrl: appState.api.baseUrl, token: appState.api.token);
+    final extra = await elsewhere.resolve(query: 'daft punk get lucky');
+    await elsewhere.addToQueue(scratchId!, [extra.id]);
+    await settle(tester, seconds: 8);
+    expect(appState.player!.items.length, beforeCount + 1,
+        reason: 'a change made on another device must arrive on its own. '
+            'On screen: ${visibleText(tester)}');
+
+    // ---- the artwork style is a choice ----
+    // Whatever the previous section left open, settings is reached from the shell.
+    if (find.byIcon(Icons.keyboard_arrow_down).evaluate().isNotEmpty) {
+      await tester.tap(find.byIcon(Icons.keyboard_arrow_down));
+      await settle(tester, seconds: 2);
+    }
+    expect(find.byIcon(Icons.settings_outlined), findsOneWidget,
+        reason: 'should be back on the shell. On screen: ${visibleText(tester)}');
+    await tester.tap(find.byIcon(Icons.settings_outlined));
+    await settle(tester, seconds: 3);
+    await tester.scrollUntilVisible(find.text('Album cover'), 120,
+        scrollable: find.byType(Scrollable).last);
+    await settle(tester, seconds: 1);
+    await tester.tap(find.text('Album cover'));
+    await settle(tester, seconds: 2);
+    expect(appState.coverStyle, CoverStyle.flat);
+    await tester.tap(find.text('Record'));
+    await settle(tester, seconds: 2);
+    expect(appState.coverStyle, CoverStyle.record,
+        reason: 'the choice must stick and be reversible');
+    await tester.pageBack();
+    await settle(tester, seconds: 2);
+
     // ---- listening together ----
+    // A jam left running by an earlier run would change both the icon and the screen,
+    // so start from nothing.
+    if (appState.jam != null) {
+      await appState.leaveJam();
+      await settle(tester, seconds: 3);
+    }
     await tester.tap(find.byIcon(Icons.podcasts_outlined));
     await settle(tester, seconds: 3);
     expect(find.byType(JamPage), findsOneWidget);

@@ -570,6 +570,22 @@ class DownloadOverview {
 }
 
 
+/// How the player draws the artwork.
+enum CoverStyle {
+  /// The record: a cardboard sleeve that stands up, with the disc sliding out and
+  /// turning while it plays.
+  record,
+
+  /// The cover on its own, square and still.
+  flat;
+
+  String get label => this == CoverStyle.record ? 'Record' : 'Album cover';
+
+  String get description => this == CoverStyle.record
+      ? 'The sleeve stands up and the disc spins while it plays'
+      : 'The artwork on its own, no animation';
+}
+
 /// Someone in a jam.
 class JamMember {
   final int userId;

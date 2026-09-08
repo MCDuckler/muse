@@ -2,6 +2,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../api/models.dart';
 import '../state/app_state.dart';
 import 'dialogs.dart';
 import 'downloads_page.dart';
@@ -135,6 +136,18 @@ class _SettingsPageState extends State<SettingsPage> {
               );
             },
           ),
+          const Divider(),
+          _label(context, 'Player'),
+          for (final style in CoverStyle.values)
+            RadioListTile<CoverStyle>(
+              value: style,
+              // ignore: deprecated_member_use
+              groupValue: app.coverStyle,
+              title: Text(style.label),
+              subtitle: Text(style.description),
+              // ignore: deprecated_member_use
+              onChanged: (v) => v == null ? null : app.setCoverStyle(v),
+            ),
           const Divider(),
           _label(context, 'Downloads'),
           ListTile(
