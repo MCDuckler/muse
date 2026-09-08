@@ -55,7 +55,7 @@ class LibraryPage extends StatelessWidget {
         ),
         for (final p in app.playlists)
           ListTile(
-            leading: Icon(p.isMirror ? Icons.cloud_outlined : Icons.playlist_play),
+            leading: PlaylistArt(playlist: p, size: 44),
             title: Row(
               children: [
                 Flexible(
@@ -474,17 +474,35 @@ class _PlaylistHeader extends StatelessWidget {
             ),
       Row(
         children: [
+          PlaylistArt(playlist: playlist, size: 108, radius: 10, small: false),
+          const SizedBox(width: 14),
           Expanded(
-            child: Text('${items.length} tracks',
-                style: Theme.of(context).textTheme.bodySmall),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // The name is already in the app bar; repeating it here would just
+                // push the art down.
+                Text('${items.length} tracks',
+                    style: Theme.of(context).textTheme.titleMedium),
+                if (playlist.unmatched > 0)
+                  Text('${playlist.unmatched} could not be matched',
+                      style: Theme.of(context).textTheme.bodySmall),
+              ],
+            ),
           ),
-          TextButton.icon(
+        ],
+      ),
+      const SizedBox(height: 10),
+      Row(
+        children: [
+          FilledButton.icon(
             icon: const Icon(Icons.play_arrow, size: 18),
             label: const Text('Play'),
             onPressed: () => app.playNow(items),
           ),
-          const SizedBox(width: 4),
-          TextButton.icon(
+          const SizedBox(width: 8),
+          OutlinedButton.icon(
             icon: const Icon(Icons.shuffle, size: 18),
             label: const Text('Shuffle'),
             onPressed: () => app.playNow(items, shuffle: true),

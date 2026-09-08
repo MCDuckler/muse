@@ -109,7 +109,7 @@ Future<void> addToPlaylistSheet(
           ),
           for (final p in app.playlists)
             ListTile(
-              leading: const Icon(Icons.playlist_play),
+              leading: PlaylistArt(playlist: p, size: 40),
               title: Text(p.name),
               subtitle: Text('${p.itemCount} tracks'),
               onTap: () async {

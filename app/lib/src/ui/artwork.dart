@@ -61,3 +61,58 @@ class Artwork extends StatelessWidget {
             size: size * 0.5, color: scheme.primary.withValues(alpha: 0.5)),
       );
 }
+
+/// A playlist's own cover: bands of the records in it, built by the server.
+///
+/// Separate from [Artwork] because the fallback is different — a playlist without art
+/// yet still has a picture waiting to be generated, so the placeholder is the shape of
+/// the cover rather than a music note.
+class PlaylistArt extends StatelessWidget {
+  const PlaylistArt({
+    super.key,
+    required this.playlist,
+    this.size = 44,
+    this.radius = 6,
+    this.small = true,
+  });
+
+  final Playlist playlist;
+  final double size;
+  final double radius;
+  final bool small;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final url = context.read<AppState>().api.playlistCoverUrl(playlist, small: small);
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(radius),
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: url == null
+            ? _fallback(scheme)
+            : Image.network(
+                url,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+                errorBuilder: (_, __, ___) => _fallback(scheme),
+                frameBuilder: (context, child, frame, wasSync) =>
+                    wasSync || frame != null ? child : _fallback(scheme),
+              ),
+      ),
+    );
+  }
+
+  Widget _fallback(ColorScheme scheme) => DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [scheme.primaryContainer, scheme.surfaceContainerHighest],
+          ),
+        ),
+        child: Icon(playlist.isMirror ? Icons.cloud_outlined : Icons.playlist_play,
+            size: size * 0.42, color: scheme.onSurfaceVariant),
+      );
+}

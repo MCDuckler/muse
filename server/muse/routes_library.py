@@ -7,11 +7,12 @@ because the device that is playing is the authority on where playback is.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
+from fastapi.responses import FileResponse
 
-from . import catalog, db, match, ytm
-from .deps import current_user
+from . import catalog, db, match, playlist_art, ytm
+from .deps import cfg, current_user, user_or_key
 
 router = APIRouter()
 
@@ -20,9 +21,21 @@ RADIO_DEFAULT = 5
 
 
 # ------------------------------------------------------------------ playlists
+def with_cover(playlist: dict) -> dict:
+    """Every playlist has a cover, whether or not anyone gave it one.
+
+    The version is a hash of the art it is made from, so the client can cache the image
+    forever and still see it change the moment the playlist does.
+    """
+    sig = playlist_art.signature(playlist["id"], playlist["name"])
+    return {**playlist,
+            "cover_url": f"/playlists/{playlist['id']}/cover",
+            "cover_version": sig}
+
+
 @router.get("/playlists")
 def list_playlists(user: dict = Depends(current_user)):
-    return db.all_(
+    rows = db.all_(
         """select p.*, count(distinct i.track_id) as items,
                   count(distinct u.pos) as unmatched
              from playlists p
@@ -32,6 +45,29 @@ def list_playlists(user: dict = Depends(current_user)):
             group by p.id
             order by (p.kind <> 'local'), lower(p.name)""",
         (user["id"],),
+    )
+    return [with_cover(r) for r in rows]
+
+
+@router.get("/playlists/{playlist_id}/cover")
+def playlist_cover(playlist_id: int, request: Request, size: str = "lg",
+                   v: str | None = None, user: dict = Depends(user_or_key)):
+    """Art built from the records in the playlist. See playlist_art for what it looks
+    like and why it is not a 2×2 grid."""
+    p = db.one("select * from playlists where id=%s and owner_id=%s",
+               (playlist_id, user["id"]))
+    if not p:
+        raise HTTPException(404, "no such playlist")
+    sig = playlist_art.signature(playlist_id, p["name"])
+    playlist_art.build(cfg().cover_dir, playlist_id, p["name"], sig)
+    path = playlist_art.path_for(cfg().cover_dir, playlist_id, sig,
+                                 "sm" if size == "sm" else "lg")
+    return FileResponse(
+        path, media_type="image/jpeg",
+        headers={"ETag": f'"{sig}-{size}"',
+                 # Immutable is safe because the signature is in the URL the client
+                 # asks for; a changed playlist is a changed URL.
+                 "Cache-Control": "private, max-age=31536000, immutable"},
     )
 
 
@@ -88,7 +124,7 @@ def get_playlist(playlist_id: int, user: dict = Depends(current_user)):
     unmatched = db.one(
         "select count(*) n from playlist_unmatched where playlist_id=%s", (playlist_id,)
     )["n"]
-    return {**p, "unmatched": unmatched, "editable": p["kind"] == "local",
+    return {**with_cover(p), "unmatched": unmatched, "editable": p["kind"] == "local",
             "items": [{**catalog.public(t), "pos": t["pos"]} for t in items]}
 
 

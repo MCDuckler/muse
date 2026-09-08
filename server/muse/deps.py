@@ -30,6 +30,23 @@ def current_user(authorization: Annotated[str | None, Header()] = None) -> dict:
     return user
 
 
+def user_or_key(k: str | None = None,
+               authorization: Annotated[str | None, Header()] = None) -> dict:
+    """For things an <img> asks for directly.
+
+    An image element cannot send an Authorization header, so a signed key in the query
+    string is the second way in — the same one audio streaming already uses.
+    """
+    user = None
+    if authorization and authorization.lower().startswith("bearer "):
+        user = auth.user_for_token(authorization.split(" ", 1)[1].strip())
+    if user is None and k:
+        user = auth.user_for_stream_key(k, cfg().worker_secret)
+    if user is None:
+        raise HTTPException(401, "missing bearer token or stream key")
+    return user
+
+
 def worker_auth(x_worker_secret: Annotated[str | None, Header()] = None) -> None:
     if not x_worker_secret or x_worker_secret != cfg().worker_secret:
         raise HTTPException(401, "bad worker secret")

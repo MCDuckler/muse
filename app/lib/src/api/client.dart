@@ -202,6 +202,16 @@ class ApiClient {
 
   /// A cover addressed by path rather than by track — album and artist rows borrow a
   /// cover from one of their tracks.
+  /// A playlist's own art. Immutable per version, so it caches forever and still
+  /// changes the moment the playlist does.
+  String? playlistCoverUrl(Playlist p, {bool small = true}) {
+    if (p.coverPath == null) return null;
+    final key = _streamKey;
+    return '$baseUrl${p.coverPath}?size=${small ? 'sm' : 'lg'}'
+        '${p.coverVersion == null ? '' : '&v=${p.coverVersion}'}'
+        '${key == null ? '' : '&k=${Uri.encodeQueryComponent(key)}'}';
+  }
+
   String? coverUrlForPath(String? path, {bool small = true}) {
     if (path == null) return null;
     final key = _streamKey;

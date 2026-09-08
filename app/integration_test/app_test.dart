@@ -11,7 +11,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:muse/main.dart' as app;
 import 'package:muse/src/ui/player_bar.dart';
+import 'package:muse/src/ui/artwork.dart';
 import 'package:muse/src/ui/downloads_page.dart';
+import 'package:muse/src/ui/library_page.dart';
 import 'package:muse/src/ui/queue_page.dart';
 import 'package:muse/src/ui/search_page.dart';
 
@@ -380,6 +382,20 @@ void main() {
     expect(settings.repeat, 'all');
     expect(settings.items.length, itemsBefore,
         reason: 'a settings change must never clear the queue');
+
+    // ---- playlists have covers of their own ----
+    await tester.tap(tab('Library'));
+    await settle(tester, seconds: 3);
+    final playlists = appState.playlists;
+    if (playlists.isNotEmpty) {
+      final art = appState.api.playlistCoverUrl(playlists.first);
+      expect(art, isNotNull,
+          reason: 'every playlist must offer a cover, even an empty one');
+      expect(art, contains('v='), reason: 'the URL must carry the art version');
+      expect(onPage(LibraryPage, find.byType(PlaylistArt)), findsWidgets,
+          reason: 'the playlist list must show that art, not a generic icon. '
+              'On screen: ${visibleText(tester)}');
+    }
 
     // ---- the download queue can be looked at and understood ----
     // Read-only on purpose: the real server here is mid-import, and pause/cancel are

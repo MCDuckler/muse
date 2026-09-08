@@ -247,6 +247,9 @@ class Playlist {
   final int unmatched;
   final String? sourceName;
   final bool editable;
+  /// Art built from the records in it. Every playlist has one; see playlist_art.py.
+  final String? coverPath;
+  final String? coverVersion;
 
   const Playlist({
     required this.id,
@@ -256,6 +259,8 @@ class Playlist {
     this.items = const [],
     this.unmatched = 0,
     this.sourceName,
+    this.coverPath,
+    this.coverVersion,
     bool? editable,
   }) : editable = editable ?? (kind == 'local');
 
@@ -269,6 +274,8 @@ class Playlist {
             : const [],
         unmatched: (j['unmatched'] ?? 0) as int,
         sourceName: j['source_name'] as String?,
+        coverPath: j['cover_url'] as String?,
+        coverVersion: j['cover_version'] as String?,
         editable: j['editable'] as bool?,
       );
 
