@@ -732,3 +732,61 @@ class AlbumPreview {
         unavailable: (j['unavailable'] ?? 0) as int,
       );
 }
+
+
+/// A service linked by typing a name rather than signing in.
+class LinkedService {
+  final String provider;
+  final String label;
+  final String hint;
+  /// False for Deezer: it can tell us what is in a playlist, but not play it.
+  final bool plays;
+  final String? handle;
+  final String? displayName;
+
+  const LinkedService({
+    required this.provider,
+    required this.label,
+    required this.hint,
+    this.plays = true,
+    this.handle,
+    this.displayName,
+  });
+
+  factory LinkedService.fromJson(Map<String, dynamic> j) {
+    final l = j['linked'] as Map<String, dynamic>?;
+    return LinkedService(
+      provider: (j['provider'] ?? '') as String,
+      label: (j['label'] ?? '') as String,
+      hint: (j['hint'] ?? '') as String,
+      plays: (j['plays'] ?? true) as bool,
+      handle: l?['handle'] as String?,
+      displayName: l?['display_name'] as String?,
+    );
+  }
+
+  bool get isLinked => handle != null;
+}
+
+/// One of a linked service's lists, and whether we already mirror it.
+class RemoteList {
+  final String remoteId;
+  final String name;
+  final int? count;
+  final bool mirrored;
+  final int mirroredItems;
+
+  const RemoteList({required this.remoteId, required this.name, this.count,
+      this.mirrored = false, this.mirroredItems = 0});
+
+  factory RemoteList.fromJson(Map<String, dynamic> j) {
+    final m = j['mirror'] as Map<String, dynamic>?;
+    return RemoteList(
+      remoteId: (j['remote_id'] ?? '') as String,
+      name: (j['name'] ?? '') as String,
+      count: j['count'] as int?,
+      mirrored: m != null,
+      mirroredItems: (m?['items'] ?? 0) as int,
+    );
+  }
+}

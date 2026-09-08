@@ -460,6 +460,18 @@ void main() {
     expect(album.artist, 'Tycho');
     expect(album.tracks.every((t) => t.title.isNotEmpty), isTrue);
 
+    // ---- services linked by name ----
+    final services = await appState.api.linkedServices();
+    expect(services.map((s) => s.provider).toList(),
+        ['deezer', 'soundcloud', 'bandcamp']);
+    expect(services.firstWhere((s) => s.provider == 'deezer').plays, isFalse,
+        reason: 'Deezer can say what is in a playlist but cannot be played');
+    // Linking is typing a name; a name that is not a profile has to say so rather than
+    // failing silently.
+    await expectLater(
+        appState.api.linkService('bandcamp', 'definitely-not-a-fan-page-xyzzy'),
+        throwsA(isA<ApiException>()));
+
     // ---- another device changes the queue ----
     // This is what a jam is underneath: someone else's edit to the queue this device
     // is playing. It has to arrive without anyone pressing refresh.

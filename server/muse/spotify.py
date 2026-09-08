@@ -11,6 +11,7 @@ authenticated person owns or collaborates on.
 from __future__ import annotations
 
 import base64
+import logging
 import secrets
 import time
 from urllib.parse import urlencode
@@ -18,6 +19,8 @@ from urllib.parse import urlencode
 import httpx
 
 from . import db
+
+log = logging.getLogger("muse.spotify")
 
 AUTH_URL = "https://accounts.spotify.com/authorize"
 TOKEN_URL = "https://accounts.spotify.com/api/token"
@@ -33,6 +36,10 @@ STATE_TTL = 600
 
 class NotLinked(RuntimeError):
     pass
+
+
+class SpotifyBusy(RuntimeError):
+    """Rate-limited. Not a failure of ours, and not permanent."""
 
 
 class NotAllowed(RuntimeError):
@@ -169,10 +176,26 @@ def access_token(cfg, user_id: int) -> str:
     return payload["access_token"]
 
 
+# A library of twelve thousand songs is 240 pages, and Spotify starts saying no partway
+# through. It tells us how long to wait; the only mistake would be not listening.
+RATE_LIMIT_TRIES = 5
+MAX_BACKOFF = 60.0
+
+
 def _get(cfg, user_id: int, url: str, **params) -> dict:
-    r = httpx.get(url if url.startswith("http") else f"{API}{url}",
-                  headers={"Authorization": f"Bearer {access_token(cfg, user_id)}"},
-                  params=params or None, timeout=30)
+    for attempt in range(RATE_LIMIT_TRIES):
+        r = httpx.get(url if url.startswith("http") else f"{API}{url}",
+                      headers={"Authorization": f"Bearer {access_token(cfg, user_id)}"},
+                      params=params or None, timeout=30)
+        if r.status_code != 429:
+            break
+        wait = min(float(r.headers.get("Retry-After") or 2 ** attempt), MAX_BACKOFF)
+        log.info("spotify asked us to wait %.0fs (attempt %d)", wait, attempt + 1)
+        time.sleep(wait)
+    if r.status_code == 429:
+        raise SpotifyBusy(
+            "Spotify is rate-limiting this account. The import will pick up where it "
+            "left off — try again in a few minutes.")
     if r.status_code == 403:
         raise NotAllowed(
             "Spotify signed you in but will not share your library. In Development "

@@ -6,6 +6,7 @@ import '../api/models.dart';
 import '../state/app_state.dart';
 import 'dialogs.dart';
 import 'downloads_page.dart';
+import 'services_page.dart';
 import 'accounts_page.dart';
 import 'spotify_page.dart';
 import 'track_menu.dart';
@@ -175,6 +176,14 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const Divider(),
           _label(context, 'Connected services'),
+          ListTile(
+            leading: const Icon(Icons.hub_outlined),
+            title: const Text('Deezer, SoundCloud and Bandcamp'),
+            subtitle: const Text('Linked by name — no sign-in, only public lists'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const ServicesPage())),
+          ),
           ListTile(
             leading: const Icon(Icons.music_note_outlined),
             title: const Text('Spotify'),

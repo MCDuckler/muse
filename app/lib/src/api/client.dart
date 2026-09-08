@@ -334,6 +334,36 @@ class ApiClient {
       await _decode(await http.post(_u('/sources/import'),
           headers: _headers, body: jsonEncode({'url': url}))) as Map<String, dynamic>;
 
+  // ---------------- linked services ----------------
+  Future<List<LinkedService>> linkedServices() async {
+    final d = await _decode(await http.get(_u('/linked'), headers: _headers))
+        as Map<String, dynamic>;
+    return ((d['accounts'] ?? const []) as List)
+        .map((e) => LinkedService.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> linkService(String provider, String handle) async =>
+      await _decode(await http.post(_u('/linked/$provider'),
+          headers: _headers, body: jsonEncode({'handle': handle})));
+
+  Future<void> unlinkService(String provider) async =>
+      await _decode(await http.delete(_u('/linked/$provider'), headers: _headers));
+
+  Future<List<RemoteList>> serviceLists(String provider) async {
+    final d = await _decode(
+        await http.get(_u('/linked/$provider/playlists'), headers: _headers))
+        as Map<String, dynamic>;
+    return ((d['items'] ?? const []) as List)
+        .map((e) => RemoteList.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> mirrorList(String provider, RemoteList list) async =>
+      await _decode(await http.post(_u('/linked/$provider/sync'),
+          headers: _headers,
+          body: jsonEncode({'remote_id': list.remoteId, 'name': list.name})));
+
   // ---------------- jam ----------------
   Future<Jam> startJam(int queueId) async => Jam.fromJson(await _decode(
       await http.post(_u('/jams'),

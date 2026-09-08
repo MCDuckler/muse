@@ -21,7 +21,8 @@ from . import (auth, catalog, config, db, direct_worker, enrich_worker, failures
                jobs, progress,
                jam, routes_accounts, routes_browse, routes_downloads, routes_files,
                routes_jam,
-               routes_library, routes_play, routes_sources, routes_spotify,
+               routes_library, routes_linked, routes_play, routes_sources,
+               routes_spotify,
                routes_sync, sleeve,
                storage, ytm)
 from . import deps
@@ -58,8 +59,14 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
               if start_workers else None)
     # SoundCloud and Bandcamp are fetched here rather than at home, and big mirrors run
     # here rather than inside the request that asked for them.
-    direct = (direct_worker.DirectWorker(cfg, publish=publish,
-                                         mirror=routes_spotify.run_mirror_job)
+    def run_mirror(payload: dict) -> dict:
+        # Spotify owns its own mirroring (OAuth, tokens, its own quirks); the public
+        # ones share a single path.
+        if payload.get("provider") in routes_linked.linked.PROVIDERS:
+            return routes_linked.run_mirror_job(payload)
+        return routes_spotify.run_mirror_job(payload)
+
+    direct = (direct_worker.DirectWorker(cfg, publish=publish, mirror=run_mirror)
               if start_workers else None)
 
     @asynccontextmanager
@@ -483,6 +490,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     routes_library.set_publisher(publish)
     app.include_router(routes_jam.router)
     app.include_router(routes_sources.router)
+    app.include_router(routes_linked.router)
     app.include_router(routes_library.router)
     app.include_router(routes_sync.router)
     app.include_router(routes_spotify.router)

@@ -61,3 +61,46 @@ def test_liked_songs_read_like_any_other_playlist(api):
 def test_a_removed_track_does_not_become_an_empty_row(api):
     items = spotify.playlist_items(None, 1, spotify.LIKED)
     assert all(i["title"] for i in items)
+
+
+def test_a_rate_limit_is_waited_out_not_failed(monkeypatch):
+    """Twelve thousand liked songs is 240 pages, and Spotify says no partway through.
+    It tells us how long to wait; the only mistake would be not listening."""
+    from muse import spotify
+
+    class Response:
+        def __init__(self, status, body=None, retry_after=None):
+            self.status_code = status
+            self._body = body or {}
+            self.headers = {"Retry-After": str(retry_after)} if retry_after else {}
+
+        def json(self):
+            return self._body
+
+        def raise_for_status(self):
+            pass
+
+    answers = [Response(429, retry_after=1), Response(200, {"items": [], "next": None})]
+    waited: list[float] = []
+    monkeypatch.setattr(spotify.httpx, "get", lambda *a, **k: answers.pop(0))
+    monkeypatch.setattr(spotify.time, "sleep", waited.append)
+    monkeypatch.setattr(spotify, "access_token", lambda cfg, uid: "tok")
+
+    assert spotify._get(None, 1, "/me/tracks") == {"items": [], "next": None}
+    assert waited == [1.0], "and it waits exactly as long as it was asked to"
+
+
+def test_giving_up_on_a_rate_limit_says_it_will_resume(monkeypatch):
+    from muse import spotify
+
+    class Busy:
+        status_code = 429
+        headers = {"Retry-After": "1"}
+
+    monkeypatch.setattr(spotify.httpx, "get", lambda *a, **k: Busy())
+    monkeypatch.setattr(spotify.time, "sleep", lambda s: None)
+    monkeypatch.setattr(spotify, "access_token", lambda cfg, uid: "tok")
+
+    with pytest.raises(spotify.SpotifyBusy) as e:
+        spotify._get(None, 1, "/me/tracks")
+    assert "pick up where it left off" in str(e.value)
