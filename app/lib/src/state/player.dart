@@ -41,6 +41,7 @@ class PlayerService {
 
   List<Track> _items = const [];
   List<int> _order = const [];   // positions into _items, in play order
+  List<int> _orderedIds = const [];  // what _order was built from
   int _orderPos = 0;
   int? _queueId;
   int? _loadedTrackId;
@@ -122,7 +123,7 @@ class PlayerService {
     if (sameQueue && _loadedTrackId != null) {
       final moved = _relocate(previousIndex, _loadedTrackId!);
       if (moved >= 0) {
-        _rebuildOrder(keepItemIndex: moved);
+        _syncOrder(keepItemIndex: moved);
         // A track we were stalled on may have arrived with this update.
         if (_waitingForTrack != null) await _resumeIfPossible();
         _emit(force: true);
@@ -130,7 +131,7 @@ class PlayerService {
       }
     }
 
-    _rebuildOrder(keepItemIndex: queue.cursorIndex.clamp(0, _items.length - 1));
+    _syncOrder(keepItemIndex: queue.cursorIndex.clamp(0, _items.length - 1));
     await _loadCurrent(startAt: Duration(milliseconds: queue.positionMs));
     if (autoplay) _startPlayback();
     _emit(force: true);
@@ -160,6 +161,31 @@ class PlayerService {
     return best;                                  // the nearest copy, not the first
   }
 
+  /// Keep the existing play order unless the queue actually changed.
+  ///
+  /// loadQueue runs on every add, every server event and every edit. Rebuilding the
+  /// order each time meant that with shuffle on, the queue was reshuffled several
+  /// times a minute: "next" pointed somewhere new every time, and in a short queue
+  /// the same song kept coming round. Only a real change to the item list rebuilds.
+  void _syncOrder({required int keepItemIndex}) {
+    final ids = [for (final t in _items) t.id];
+    final unchanged = _order.length == _items.length &&
+        _orderedIds.length == ids.length &&
+        () {
+          for (var i = 0; i < ids.length; i++) {
+            if (_orderedIds[i] != ids[i]) return false;
+          }
+          return true;
+        }();
+
+    if (unchanged) {
+      final at = _order.indexOf(keepItemIndex);
+      if (at >= 0) _orderPos = at;
+      return;
+    }
+    _rebuildOrder(keepItemIndex: keepItemIndex);
+  }
+
   /// Play order is a list of indices, so shuffle is a stable reordering rather than a
   /// random pick each time — which is what makes "previous" mean anything.
   void _rebuildOrder({required int keepItemIndex}) {
@@ -174,6 +200,7 @@ class PlayerService {
       _order = all;
       _orderPos = keepItemIndex.clamp(0, _items.length - 1);
     }
+    _orderedIds = [for (final t in _items) t.id];
   }
 
   Future<void> setShuffle(bool value) async {
@@ -217,15 +244,29 @@ class PlayerService {
     finished = false;
     final track = current;
     if (track == null) return;
-    final token = ++_loadToken;
-    if (_loadedTrackId != track.id) {
-      await _loadCurrent(startAt: startAt, token: token);
-    }
-    // A newer request came in while this one was loading: it owns playback now.
-    if (token != _loadToken) return;
-    if (_waitingForTrack == null) _startPlayback();
+
+    // Show the new track at once. Loading takes a moment on a slow connection, and
+    // leaving the screen on the previous song until audio starts made skipping look
+    // like it had not registered.
     _emit(force: true);
-    _saveCursor();
+
+    final token = ++_loadToken;
+    try {
+      if (_loadedTrackId != track.id) {
+        await _loadCurrent(startAt: startAt, token: token);
+      }
+      // A newer request came in while this one was loading: it owns playback now.
+      if (token != _loadToken) return;
+      if (_waitingForTrack == null) _startPlayback();
+    } catch (e) {
+      // A load that throws must not leave the UI frozen on a half-changed state.
+      lastError = '$e';
+    } finally {
+      if (token == _loadToken) {
+        _emit(force: true);
+        _saveCursor();
+      }
+    }
   }
 
   /// Deliberately not awaited: just_audio's play() future completes when playback

@@ -86,6 +86,7 @@ void main() {
   });
 
   _relocationTests();
+  _orderStabilityTests();
 
   group('snapshot progress', () {
     test('is a fraction, and never divides by a zero duration', () {
@@ -162,6 +163,48 @@ void _relocationTests() {
 
     test('handles an emptied queue', () {
       expect(relocate([], 3, 7), -1);
+    });
+  });
+}
+
+/// Mirrors PlayerService._syncOrder: whether a queue refresh may rebuild the play
+/// order. loadQueue runs on every add, every server event and every edit; rebuilding
+/// each time reshuffled the queue several times a minute, so "next" pointed somewhere
+/// new constantly and short queues kept looping back onto the same song.
+bool orderIsStillValid(List<int> orderedIds, List<int> currentIds, int orderLength) {
+  if (orderLength != currentIds.length) return false;
+  if (orderedIds.length != currentIds.length) return false;
+  for (var i = 0; i < currentIds.length; i++) {
+    if (orderedIds[i] != currentIds[i]) return false;
+  }
+  return true;
+}
+
+void _orderStabilityTests() {
+  group('when the play order may be rebuilt', () {
+    test('an unchanged queue keeps its order', () {
+      expect(orderIsStillValid([4, 7, 9], [4, 7, 9], 3), isTrue);
+    });
+
+    test('an added track rebuilds', () {
+      expect(orderIsStillValid([4, 7], [4, 7, 9], 3), isFalse);
+    });
+
+    test('a removed track rebuilds', () {
+      expect(orderIsStillValid([4, 7, 9], [4, 9], 2), isFalse);
+    });
+
+    test('a reorder rebuilds', () {
+      expect(orderIsStillValid([4, 7, 9], [9, 4, 7], 3), isFalse);
+    });
+
+    test('duplicates are compared position by position, not as a set', () {
+      expect(orderIsStillValid([7, 7, 4], [7, 4, 7], 3), isFalse);
+      expect(orderIsStillValid([7, 7, 4], [7, 7, 4], 3), isTrue);
+    });
+
+    test('a stale order length rebuilds even when the ids look right', () {
+      expect(orderIsStillValid([4, 7, 9], [4, 7, 9], 2), isFalse);
     });
   });
 }
