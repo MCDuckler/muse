@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from muse import spotify
+from muse import db, spotify
 
 
 @pytest.fixture()
@@ -66,7 +66,7 @@ def test_a_removed_track_does_not_become_an_empty_row(api):
 def test_a_rate_limit_is_waited_out_not_failed(monkeypatch):
     """Twelve thousand liked songs is 240 pages, and Spotify says no partway through.
     It tells us how long to wait; the only mistake would be not listening."""
-    from muse import spotify
+    from muse import db, spotify
 
     class Response:
         def __init__(self, status, body=None, retry_after=None):
@@ -91,7 +91,7 @@ def test_a_rate_limit_is_waited_out_not_failed(monkeypatch):
 
 
 def test_giving_up_on_a_rate_limit_says_it_will_resume(monkeypatch):
-    from muse import spotify
+    from muse import db, spotify
 
     class Busy:
         status_code = 429
@@ -104,3 +104,85 @@ def test_giving_up_on_a_rate_limit_says_it_will_resume(monkeypatch):
     with pytest.raises(spotify.SpotifyBusy) as e:
         spotify._get(None, 1, "/me/tracks")
     assert "pick up where it left off" in str(e.value)
+
+
+def test_a_huge_library_arrives_in_runs_that_resume(client, hdr, monkeypatch):
+    """Spotify will not serve twelve thousand songs in one sitting, so the import takes
+    them in runs — and each run keeps what it got."""
+    from muse import jobs, routes_spotify, spotify, sync
+
+    page = [{"remote_id": f"sp{n}", "title": f"Song {n}", "artists": ["Someone"],
+             "album": None, "duration_ms": 200_000} for n in range(50)]
+
+    def saved(cfg, user_id, offset=0, pages=None):
+        # Two runs' worth, then the end.
+        return (page, offset + 50) if offset == 0 else (page[:10], None)
+
+    monkeypatch.setattr(spotify, "saved_tracks", saved)
+    made: list[int] = []
+    monkeypatch.setattr(sync, "resolve_item",
+                        lambda *a, **k: {"track_id": _fake_track(made)})
+
+    first = routes_spotify.run_mirror_job(
+        {"user_id": 1, "remote_id": spotify.LIKED, "name": "Liked Songs"})
+    assert first["added"] == 50 and first["resumes_at"] == 50
+
+    # The next run is queued, and carries where to carry on from.
+    queued = db.one("""select payload from jobs
+                        where kind='mirror' order by id desc limit 1""")["payload"]
+    assert queued["offset"] == 50
+
+    listed = client.get(f"/playlists/{first['playlist_id']}", headers=hdr).json()
+    assert len(listed["items"]) == 50, "a run that is cut off has still imported 50"
+    assert listed["download_mode"] == "on_play", "and the audio waits to be asked for"
+
+    second = routes_spotify.run_mirror_job(
+        {"user_id": 1, "remote_id": spotify.LIKED, "offset": 50})
+    assert second["added"] == 10 and second["resumes_at"] is None
+    listed = client.get(f"/playlists/{first['playlist_id']}", headers=hdr).json()
+    assert len(listed["items"]) == 60, "and the second run adds to the first"
+
+
+def _fake_track(made: list[int]) -> int:
+    """A track row to point a playlist item at."""
+    row = db.one(
+        """insert into tracks(title,artists,source,state,discovered_via)
+           values(%s,'{}','youtube','pending','sync') returning id""",
+        (f"Track {len(made)}",))
+    made.append(row["id"])
+    return row["id"]
+
+
+def test_naming_a_playlist_queues_it_without_asking_spotify(client, hdr, monkeypatch):
+    """A rate-limited account could not start the very import that would have waited
+    the limit out, because queueing it listed the playlists first."""
+    from muse import spotify
+
+    def refuse(*a, **k):
+        raise AssertionError("queueing must not call Spotify")
+
+    monkeypatch.setattr(spotify, "playlists", refuse)
+    r = client.post("/spotify/sync", headers=hdr, json={"remote_id": spotify.LIKED})
+    assert r.status_code == 200
+    assert db.one("""select count(*) n from jobs
+                      where kind='mirror' and payload->>'remote_id'=%s""",
+                  (spotify.LIKED,))["n"] == 1
+
+
+def test_being_told_to_slow_down_is_not_a_failure(client, hdr, monkeypatch):
+    """A rate limit must not spend one of the job's three attempts — it comes back."""
+    from muse import routes_spotify, spotify
+
+    def busy(*a, **k):
+        raise spotify.SpotifyBusy("slow down")
+
+    monkeypatch.setattr(spotify, "saved_tracks", busy)
+    out = routes_spotify.run_mirror_job(
+        {"user_id": 1, "remote_id": spotify.LIKED, "offset": 250})
+    assert "waiting" in out and out["from"] == 250
+
+    row = db.one("""select payload, attempts, next_attempt_at > now() as later
+                      from jobs where kind='mirror' order by id desc limit 1""")
+    assert row["payload"]["offset"] == 250, "it resumes where it stopped"
+    assert row["attempts"] == 0, "and starts with all its attempts intact"
+    assert row["later"], "just not right away"

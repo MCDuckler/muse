@@ -137,20 +137,28 @@ def sync_playlists(body: dict = Body(default={}), user: dict = Depends(current_u
     Deliberately never "all of them": an account with hundreds of playlists would mean
     thousands of lookups, and almost none of it wanted.
     """
+    wanted = body.get("remote_ids") or ([body["remote_id"]] if body.get("remote_id")
+                                        else None)
+    if wanted:
+        # Naming what you want needs nothing from Spotify: queue it and let the worker
+        # do the asking. Listing first meant a rate-limited account could not even
+        # start the import that would have waited the limit out.
+        return {"queued": [{"name": body.get("name") or r, "remote_id": r}
+                           for r in wanted],
+                "playlists": [{"name": body.get("name") or r, "remote_id": r}
+                              for r in _queue_mirrors(user, wanted)]}
+
     try:
         remote = spotify.playlists(cfg(), user["id"])
     except Exception as e:
         raise _fail(e)
 
-    wanted = body.get("remote_ids") or ([body["remote_id"]] if body.get("remote_id")
-                                        else None)
-    if wanted:
-        remote = [p for p in remote if p["remote_id"] in set(wanted)]
-    else:
-        already = {r["remote_id"] for r in db.all_(
-            "select remote_id from playlists where owner_id=%s and kind='spotify'",
-            (user["id"],))}
-        remote = [p for p in remote if p["remote_id"] in already]
+    # Nothing named: refresh what is already mirrored, and nothing else. An account
+    # with hundreds of playlists would otherwise mean thousands of lookups.
+    already = {r["remote_id"] for r in db.all_(
+        "select remote_id from playlists where owner_id=%s and kind='spotify'",
+        (user["id"],))}
+    remote = [p for p in remote if p["remote_id"] in already]
 
     queued = []
     for p in remote:
@@ -167,12 +175,98 @@ def sync_playlists(body: dict = Body(default={}), user: dict = Depends(current_u
     return {"queued": queued, "playlists": queued}
 
 
+# How much of a very large library to take in one go. Bounded so a run always finishes,
+# and so being cut off costs a page-run rather than an hour.
+PAGES_PER_RUN = 20                                   # 1,000 songs
+RATE_LIMIT_WAIT = 900                                # a quarter of an hour, then resume
+
+
+def _queue_mirrors(user: dict, remote_ids: list[str], names: dict | None = None) -> list[str]:
+    for remote_id in remote_ids:
+        jobs.enqueue("mirror", {"user_id": user["id"], "remote_id": remote_id,
+                                "name": (names or {}).get(remote_id)},
+                     priority=jobs.PRIORITY_NORMAL)
+    return list(remote_ids)
+
+
 def run_mirror_job(payload: dict) -> dict:
-    """What the worker runs for a `mirror` job. Kept here, next to the mirroring it
-    calls, and handed to the worker rather than imported by it."""
-    return _mirror(int(payload["user_id"]),
-                   {"remote_id": payload["remote_id"], "name": payload.get("name"),
-                    "owner": payload.get("owner"), "count": payload.get("count")})
+    """What the worker runs for a `mirror` job.
+
+    Liked Songs can be twelve thousand tracks, which Spotify will not serve in one
+    sitting: it rate-limits partway through. So that one is taken in runs, each picking
+    up where the last stopped, and each keeping what it got.
+    """
+    user_id = int(payload["user_id"])
+    remote_id = payload["remote_id"]
+    if remote_id != spotify.LIKED:
+        return _mirror(user_id, {"remote_id": remote_id, "name": payload.get("name"),
+                                 "owner": payload.get("owner"),
+                                 "count": payload.get("count")})
+
+    offset = int(payload.get("offset") or 0)
+    try:
+        items, next_offset = spotify.saved_tracks(cfg(), user_id, offset=offset,
+                                                  pages=PAGES_PER_RUN)
+    except spotify.SpotifyBusy:
+        # Being told to slow down is not this job failing. Ask again later, from where
+        # we got to, and do not spend an attempt on it.
+        jobs.enqueue("mirror", {**payload, "offset": offset},
+                     priority=jobs.PRIORITY_BULK, delay_seconds=RATE_LIMIT_WAIT)
+        log.info("spotify busy at offset %s; trying again in %s minutes",
+                 offset, RATE_LIMIT_WAIT // 60)
+        return {"waiting": "spotify is rate-limiting; will resume", "from": offset}
+    playlist_id = _liked_playlist(user_id)
+    added = _append_items(playlist_id, offset, items,
+                          batch_id=f"spotify:{spotify.LIKED}",
+                          batch_label="Spotify · Liked Songs")
+
+    if next_offset:
+        jobs.enqueue("mirror", {**payload, "offset": next_offset},
+                     priority=jobs.PRIORITY_BULK)
+    else:
+        db.run("update playlists set last_synced_at=now() where id=%s", (playlist_id,))
+    return {"playlist_id": playlist_id, "from": offset, "added": added,
+            "resumes_at": next_offset}
+
+
+def _liked_playlist(user_id: int) -> int:
+    row = db.one("""select id from playlists
+                     where owner_id=%s and kind='spotify' and remote_id=%s""",
+                 (user_id, spotify.LIKED))
+    if row:
+        return row["id"]
+    return db.one(
+        """insert into playlists(owner_id, name, kind, remote_id, sync_mode,
+                                 source_name, download_mode)
+           values(%s,'Liked Songs','spotify',%s,'pull','you','on_play') returning id""",
+        (user_id, spotify.LIKED),
+    )["id"]
+
+
+def _append_items(playlist_id: int, start: int, items: list[dict],
+                  batch_id: str, batch_label: str) -> int:
+    """Add a run of songs at the position they hold in the source list.
+
+    Whatever arrives is kept: an import that is cut off has still imported something,
+    and running it again carries on rather than starting over.
+    """
+    added = 0
+    for n, item in enumerate(items):
+        try:
+            outcome = sync.resolve_item("spotify", item, priority=jobs.PRIORITY_BULK,
+                                        batch_id=batch_id, batch_label=batch_label,
+                                        download=False)
+        except Exception as e:
+            log.warning("liked item failed: %s", e)
+            continue
+        if not outcome.get("track_id"):
+            continue
+        db.run("""insert into playlist_items(playlist_id,pos,track_id)
+                  values(%s,%s,%s) on conflict (playlist_id,pos) do update
+                  set track_id=excluded.track_id""",
+               (playlist_id, start + n, outcome["track_id"]))
+        added += 1
+    return added
 
 
 def _mirror(user_id: int, remote: dict) -> dict:

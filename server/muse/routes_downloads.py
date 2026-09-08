@@ -120,8 +120,15 @@ def overview(user: dict = Depends(current_user)):
 
 @router.post("/pause")
 def pause(body: dict = Body(default={}), user: dict = Depends(current_user)):
-    """Stop handing out work. In-flight downloads finish; nothing new starts."""
-    jobs.set_paused(bool(body.get("paused", True)))
+    """Stop handing out work, or start again. In-flight downloads finish either way.
+
+    `paused` is required: defaulting a bodyless POST to "pause everything" meant any
+    probe of this endpoint could quietly stop the whole queue, and a queue that has
+    silently stopped looks exactly like a queue that is broken.
+    """
+    if "paused" not in body:
+        raise HTTPException(400, "say which: {\"paused\": true} or {\"paused\": false}")
+    jobs.set_paused(bool(body["paused"]))
     return {"paused": jobs.paused()}
 
 

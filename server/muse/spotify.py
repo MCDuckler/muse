@@ -249,9 +249,17 @@ def playlists(cfg, user_id: int) -> list[dict]:
 LIKED = "liked-songs"
 
 
-def saved_tracks(cfg, user_id: int) -> list[dict]:
-    """Everything the user has hearted, newest first — Spotify's own order."""
-    out, url, params = [], "/me/tracks", {"limit": 50}
+def saved_tracks(cfg, user_id: int, offset: int = 0,
+                 pages: int | None = None) -> tuple[list[dict], int | None]:
+    """Hearted songs, newest first — Spotify's own order.
+
+    Returns a page-run and where to carry on from, because twelve thousand of them is
+    240 requests and Spotify starts saying no partway through. Stopping and resuming
+    beats starting again.
+    """
+    out: list[dict] = []
+    url, params = "/me/tracks", {"limit": 50, "offset": offset}
+    fetched = 0
     while url:
         page = _get(cfg, user_id, url, **params)
         for entry in page.get("items", []):
@@ -260,7 +268,10 @@ def saved_tracks(cfg, user_id: int) -> list[dict]:
                 continue
             out.append(_track(item))
         url, params = page.get("next"), {}
-    return out
+        fetched += 1
+        if pages is not None and fetched >= pages:
+            return out, offset + len(out) if url else None
+    return out, None
 
 
 def _track(item: dict) -> dict:
@@ -276,7 +287,7 @@ def _track(item: dict) -> dict:
 
 def playlist_items(cfg, user_id: int, remote_id: str) -> list[dict]:
     if remote_id == LIKED:
-        return saved_tracks(cfg, user_id)
+        return saved_tracks(cfg, user_id)[0]
     """`/tracks` has been 403 since March 2026; `/items` is the replacement, and it
     renames the payload's fields as well as the path."""
     out, url, params = [], f"/playlists/{remote_id}/items", {"limit": 50}

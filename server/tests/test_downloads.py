@@ -262,3 +262,15 @@ def test_a_track_already_downloaded_is_not_queued_again(client, hdr, wsec, compl
                        json={"track_ids": [track["id"]]}).json()["promoted"] == 0
     assert db.one("""select count(*) n from jobs where kind='ingest'
                       and (payload->>'track_id')::int=%s""", (track["id"],))["n"] == 1
+
+
+def test_pausing_needs_you_to_say_which_way(client, hdr):
+    """A bodyless POST used to mean "pause everything", so any probe of this endpoint
+    could stop the queue — and a queue that has silently stopped looks broken."""
+    assert client.post("/downloads/pause", headers=hdr, json={}).status_code == 400
+    assert jobs.paused() is False
+
+    assert client.post("/downloads/pause", headers=hdr,
+                       json={"paused": True}).json()["paused"] is True
+    assert client.post("/downloads/pause", headers=hdr,
+                       json={"paused": False}).json()["paused"] is False

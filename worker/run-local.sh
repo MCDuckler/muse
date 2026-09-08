@@ -65,15 +65,23 @@ refresh_cookies() {
 refresh_cookies
 ( while sleep 3600; do refresh_cookies; done ) &
 REFRESHER=$!
-trap 'kill $REFRESHER 2>/dev/null' EXIT
 
 # --- the worker --------------------------------------------------------------
 export MUSE_API MUSE_WORKER_NAME MUSE_CONCURRENCY MUSE_COOKIES_MODE
 export MUSE_COOKIES="$COOKIE_FILE"
 export MUSE_POT_BASE_URL="http://127.0.0.1:$POT_PORT"
 
+# The worker runs as a tracked child so stopping this script stops it too. Leaving one
+# behind and starting another beside it is how this machine ended up making four times
+# the requests it should have.
+worker_pid=""
+stop() { [ -n "$worker_pid" ] && kill "$worker_pid" 2>/dev/null; kill $REFRESHER 2>/dev/null; }
+trap stop EXIT INT TERM
+
 while true; do
-  ./.venv/bin/python worker.py
+  ./.venv/bin/python worker.py &
+  worker_pid=$!
+  wait "$worker_pid"
   code=$?
   [ $code -eq 0 ] && break          # a clean stop is a stop
   log "worker exited ($code) — restarting in 10s"

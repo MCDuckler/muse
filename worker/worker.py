@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import fcntl
 import signal
 import tempfile
 import threading
@@ -78,7 +79,19 @@ TERMINAL_ERRORS = (
 # Not a property of the track: the IP has been challenged. Failing the song for this
 # would mark a perfectly good track dead because we asked too fast. Give the job back,
 # stop asking for a while, and download fewer at a time from here on.
-BOT_CHECK = ("sign in to confirm you", "not a bot", "po token", "login_required")
+BOT_CHECK = ("sign in to confirm you're not a bot", "sign in to confirm you\u2019re not a bot",
+             "not a bot", "po token", "login_required")
+
+# This one *is* about the track. It reads almost identically to a bot check — "Sign in
+# to confirm your age" against "Sign in to confirm you're not a bot" — and lumping them
+# together cost hours: one age-restricted video put the worker into a ten-minute
+# cooldown, handed the job back, picked it up again, and did the same thing all night.
+AGE_CHECK = ("confirm your age", "age-restricted", "age restricted")
+
+# YouTube saying "slow down". It arrives as a warning while the visible error becomes
+# "Video unavailable", which is how a rate limit came to permanently kill a hundred and
+# fifteen perfectly good tracks: the symptom was classified, not the cause.
+RATE_LIMITED = ("http error 429", "too many requests")
 COOLDOWN_SECONDS = float(os.environ.get("MUSE_COOLDOWN", "600"))
 _LUFS = re.compile(r"^\s*I:\s*(-?\d+\.?\d*)\s*LUFS", re.M)
 
@@ -92,7 +105,10 @@ def ytdlp_args(video_id: str, out: pathlib.Path,
     args = [
         YTDLP, "--js-runtimes", "node",       # node satisfies the JS runtime; no deno needed
         "-f", "140/bestaudio[acodec^=mp4a]/bestaudio",
-        "--no-playlist", "--no-warnings",
+        # Warnings stay on: YouTube's "HTTP Error 429" arrives as one, while the error
+        # that follows it says "Video unavailable". Hiding warnings meant reading the
+        # symptom and writing off tracks that were only being throttled.
+        "--no-playlist",
         "-o", str(out / "%(id)s.%(ext)s"),
         # A machine-readable progress line, so the app can show a real bar instead of
         # a spinner that means "something is happening, for some length of time".
@@ -168,16 +184,23 @@ def cookie_copy(tmp_dir: pathlib.Path) -> pathlib.Path | None:
 
 
 def download_with_progress(video_id: str, tmp_dir: pathlib.Path, report,
-                           signed_in: bool = False) -> tuple[int, str]:
-    """Run yt-dlp, forwarding progress as it goes. Returns (exit code, last error)."""
+                           signed_in: bool = False) -> tuple[int, str, bool]:
+    """Run yt-dlp, forwarding progress as it goes.
+
+    Returns (exit code, last error, was rate limited). The last part is separate because
+    the 429 arrives as a warning and the error that follows says something else
+    entirely.
+    """
     proc = subprocess.Popen(
         ytdlp_args(video_id, tmp_dir,
                    cookies=cookie_copy(tmp_dir) if signed_in else None),
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
     )
-    last_report, last_error = 0.0, ""
+    last_report, last_error, rate_limited = 0.0, "", False
     for line in proc.stdout or []:
         line = line.strip()
+        if any(s in line.lower() for s in RATE_LIMITED):
+            rate_limited = True
         if m := _PERCENT.match(line):
             now = time.monotonic()
             # Once a second is enough: this crosses the network to a server that then
@@ -190,7 +213,7 @@ def download_with_progress(video_id: str, tmp_dir: pathlib.Path, report,
         elif line.startswith("ERROR"):
             last_error = line
     proc.wait()
-    return proc.returncode, last_error
+    return proc.returncode, last_error, rate_limited
 
 
 def handle(client: httpx.Client, job: dict) -> None:
@@ -214,21 +237,38 @@ def handle(client: httpx.Client, job: dict) -> None:
         # An account is worth spending only on the tracks that need one. Anonymous
         # first; if YouTube asks us to prove we are a person, ask again signed in.
         signed_in = COOKIES_MODE == "always"
-        code, error_line = download_with_progress(
+        code, error_line, throttled = download_with_progress(
             video_id, tmp_dir, on_progress, signed_in=signed_in)
-        if (code != 0 and COOKIES_MODE == "fallback"
-                and any(s in (error_line or "").lower() for s in BOT_CHECK)):
+        if code != 0 and not throttled and COOKIES_MODE == "fallback" and not signed_in:
+            # Ask again signed in, whatever went wrong. "Video unavailable" is what a
+            # track that is merely age-gated or region-locked looks like to nobody in
+            # particular, and only trying again on an explicit bot check meant a
+            # hundred perfectly downloadable songs were written off in one go.
             for stale in tmp_dir.iterdir():
                 stale.unlink(missing_ok=True)
             signed_in = True
-            code, error_line = download_with_progress(
+            code, error_line, throttled = download_with_progress(
                 video_id, tmp_dir, on_progress, signed_in=True)
 
         files = sorted(p for p in tmp_dir.iterdir()
                        if p.is_file() and p.suffix not in (".json", ".txt"))
         if code != 0 or not files:
             reason = (error_line or "yt-dlp failed")[:500]
-            if any(s in reason.lower() for s in BOT_CHECK):
+            lowered = reason.lower()
+            if throttled:
+                # Give it back and stop asking. Nothing is wrong with the track.
+                back_off("YouTube is rate-limiting this IP (HTTP 429)")
+                client.post(f"{API}/internal/jobs/{job['id']}/release", headers=H,
+                            json={"track_id": track_id})
+                return
+            if any(s in lowered for s in AGE_CHECK):
+                log.info(f"job {job['id']} needs an age-verified account: {video_id}")
+                client.post(f"{API}/internal/jobs/{job['id']}/fail", headers=H,
+                            json={"reason": "YouTube wants an age-verified account for "
+                                            "this one — it will not download here.",
+                                  "retryable": False, "track_id": track_id})
+                return
+            if any(s in lowered for s in BOT_CHECK):
                 # Nothing wrong with the track. Give it back, and slow down.
                 back_off(reason)
                 client.post(f"{API}/internal/jobs/{job['id']}/release", headers=H,
@@ -324,6 +364,33 @@ def run_job(client: httpx.Client, job: dict) -> None:
             URGENT.discard(job["id"])
 
 
+def take_the_lock() -> "object":
+    """Refuse to start if another worker is already running.
+
+    Two of these on one machine is not twice the speed — it is twice the requests from
+    one IP, which is how YouTube starts answering 429 to all of them. It has happened
+    more than once by accident: a restart that killed the supervisor and left the
+    worker behind, then started a second one beside it. The lock makes that impossible
+    rather than merely unlikely.
+    """
+    lock_path = pathlib.Path(os.environ.get("MUSE_WORKER_LOCK",
+                                            "/tmp/muse-worker.lock"))
+    handle = lock_path.open("a+")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.seek(0)
+        who = handle.read().strip() or "another process"
+        sys.exit(f"A muse worker is already running (pid {who}). "
+                 f"Stop that one first — two workers means twice the requests from "
+                 f"this IP, and YouTube counts.")
+    handle.seek(0)
+    handle.truncate()
+    handle.write(f"{os.getpid()}\n")
+    handle.flush()
+    return handle                        # held open: closing it would free the lock
+
+
 def give_back_everything() -> None:
     """Return leased jobs on the way out, so a restart does not stall the queue."""
     with INFLIGHT_LOCK:
@@ -343,6 +410,7 @@ def give_back_everything() -> None:
 def main() -> None:
     if not SECRET:
         sys.exit("MUSE_WORKER_SECRET is unset — the server would reject every lease")
+    _lock = take_the_lock()                                     # noqa: F841
     log(f"worker {NAME} → {API}  (up to {CONCURRENCY} at a time, "
         f"cookies={COOKIES_MODE if COOKIES else 'no'}, "
         f"pot={'yes' if POT_PROVIDER else 'no'})")

@@ -18,11 +18,19 @@ PRIORITY_BULK = 500      # a playlist import filling in behind you
 
 
 def enqueue(kind: str, payload: dict, priority: int = PRIORITY_NORMAL,
-            batch_id: str | None = None, batch_label: str | None = None) -> int:
+            batch_id: str | None = None, batch_label: str | None = None,
+            delay_seconds: float = 0.0) -> int:
+    """Queue a job, optionally not before a while from now.
+
+    The delay is for work that is waiting on somebody else — a service that has asked
+    us to slow down, say. That is not a failure and must not spend one of the job's
+    three attempts.
+    """
     row = db.one(
-        """insert into jobs(kind, payload, priority, batch_id, batch_label)
-           values(%s,%s,%s,%s,%s) returning id""",
-        (kind, json.dumps(payload), priority, batch_id, batch_label),
+        """insert into jobs(kind, payload, priority, batch_id, batch_label,
+                            next_attempt_at)
+           values(%s,%s,%s,%s,%s, now() + (%s || ' seconds')::interval) returning id""",
+        (kind, json.dumps(payload), priority, batch_id, batch_label, delay_seconds),
     )
     return row["id"]
 
