@@ -114,21 +114,27 @@ def import_album(body: dict = Body(...), user: dict = Depends(current_user)):
     batch_id, label = f"bandcamp:{url}", f"Bandcamp · {album}"
 
     from . import db                                     # local: routes own their writes
-    playlist_id = db.one(
-        """insert into playlists(owner_id, name, kind, remote_id, sync_mode, source_name)
-           values(%s,%s,'local',%s,'off',%s) returning id""",
-        (user["id"], album, url, artist),
-    )["id"]
 
-    added = 0
-    for pos, t in enumerate(playable):
-        track = catalog.find_by_provider("bandcamp", t["provider_id"]) or \
-            catalog.create_from_source("bandcamp", t, discovered_via=catalog.VIA_SYNC,
-                                       priority=jobs.PRIORITY_BULK,
-                                       batch_id=batch_id, batch_label=label)
-        db.run("""insert into playlist_items(playlist_id,pos,track_id)
-                  values(%s,%s,%s)""", (playlist_id, pos, track["id"]))
-        added += 1
+    # Tracks first, playlist second. Making the playlist up front left an empty one
+    # behind every time anything after it went wrong.
+    resolved = [
+        catalog.find_by_provider("bandcamp", t["provider_id"])
+        or catalog.create_from_source("bandcamp", t, discovered_via=catalog.VIA_SYNC,
+                                      priority=jobs.PRIORITY_BULK,
+                                      batch_id=batch_id, batch_label=label)
+        for t in playable
+    ]
 
-    return {"playlist_id": playlist_id, "name": album, "added": added,
+    with db.pool().connection() as c:
+        playlist_id = c.execute(
+            """insert into playlists(owner_id, name, kind, remote_id, sync_mode,
+                                     source_name)
+               values(%s,%s,'local',%s,'off',%s) returning id""",
+            (user["id"], album, url, artist),
+        ).fetchone()["id"]
+        for pos, track in enumerate(resolved):
+            c.execute("""insert into playlist_items(playlist_id,pos,track_id)
+                         values(%s,%s,%s)""", (playlist_id, pos, track["id"]))
+
+    return {"playlist_id": playlist_id, "name": album, "added": len(resolved),
             "unavailable": len(tracks) - len(playable)}

@@ -446,6 +446,20 @@ void main() {
     await tester.tap(find.byIcon(Icons.keyboard_arrow_down));
     await settle(tester, seconds: 2);
 
+    // ---- the other sources answer too ----
+    // SoundCloud and Bandcamp are fetched by the server, so these must work whether or
+    // not the machine at home is awake.
+    final scHits = await appState.api.searchSource('soundcloud', 'tycho awake', limit: 3);
+    expect(scHits, isNotEmpty, reason: 'SoundCloud must answer a search');
+    expect(scHits.first.durationMs, isNotNull,
+        reason: 'durations come through, so a thirty-second preview is visible as one');
+
+    final album = await appState.api.previewAlbum('https://tycho.bandcamp.com/album/awake');
+    expect(album.tracks.length, greaterThan(4),
+        reason: 'a Bandcamp album page carries the whole record in one request');
+    expect(album.artist, 'Tycho');
+    expect(album.tracks.every((t) => t.title.isNotEmpty), isTrue);
+
     // ---- another device changes the queue ----
     // This is what a jam is underneath: someone else's edit to the queue this device
     // is playing. It has to arrive without anyone pressing refresh.

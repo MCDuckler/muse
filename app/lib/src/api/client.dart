@@ -298,6 +298,42 @@ class ApiClient {
     }
   }
 
+  // ---------------- other sources ----------------
+  /// SoundCloud or Bandcamp. The server fetches these itself, so they arrive without
+  /// the machine at home being awake.
+  Future<List<SourceHit>> searchSource(String source, String query,
+      {int limit = 8}) async {
+    final d = await _decode(await http.get(
+        _u('/sources/search?source=$source&limit=$limit'
+            '&q=${Uri.encodeQueryComponent(query)}'),
+        headers: _headers)) as Map<String, dynamic>;
+    return ((d['items'] ?? const []) as List)
+        .map((e) => SourceHit.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<Track> addFromSource(SourceHit hit) async => Track.fromJson(await _decode(
+      await http.post(_u('/sources/resolve'),
+          headers: _headers,
+          body: jsonEncode({
+            'provider': hit.provider,
+            'provider_id': hit.providerId,
+            'title': hit.title,
+            'artists': hit.artists,
+            'album': hit.album,
+            'duration_ms': hit.durationMs,
+            'url': hit.url,
+          }))) as Map<String, dynamic>);
+
+  Future<AlbumPreview> previewAlbum(String url) async => AlbumPreview.fromJson(
+      await _decode(await http.get(
+          _u('/sources/preview?url=${Uri.encodeQueryComponent(url)}'),
+          headers: _headers)) as Map<String, dynamic>);
+
+  Future<Map<String, dynamic>> importAlbum(String url) async =>
+      await _decode(await http.post(_u('/sources/import'),
+          headers: _headers, body: jsonEncode({'url': url}))) as Map<String, dynamic>;
+
   // ---------------- jam ----------------
   Future<Jam> startJam(int queueId) async => Jam.fromJson(await _decode(
       await http.post(_u('/jams'),

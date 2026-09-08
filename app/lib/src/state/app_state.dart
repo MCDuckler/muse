@@ -183,6 +183,7 @@ class AppState extends ChangeNotifier {
     _listenForEvents();
     await _pollStatus();
     _statusTimer?.cancel();
+    _queueReload?.cancel();
     _statusTimer = Timer.periodic(const Duration(seconds: 30), (_) => _pollStatus());
   }
 
@@ -444,6 +445,25 @@ class AppState extends ChangeNotifier {
   /// A queue can disappear under you now: a jam you were in ended, or it was deleted
   /// on another device. Before this, the refetch threw into an unawaited future and
   /// the app carried on pointing at a queue the server no longer had.
+  Timer? _queueReload;
+
+  /// Refetch the queue, at most once a second, and only for news that concerns it.
+  ///
+  /// A mirror of twelve thousand songs enriches twelve thousand tracks, and every one
+  /// of those used to make every open client fetch its whole queue again. The queue is
+  /// the thing on screen; the other 11,990 tracks are not.
+  void _queueMayHaveChanged({int? trackId}) {
+    if (trackId != null &&
+        !(player?.items.any((t) => t.id == trackId) ?? false)) {
+      return;
+    }
+    _queueReload?.cancel();
+    _queueReload = Timer(const Duration(milliseconds: 600), () async {
+      await _reloadActiveQueue();
+      notifyListeners();
+    });
+  }
+
   Future<void> _reloadActiveQueue() async {
     final q = activeQueue;
     if (q == null) return;
@@ -498,7 +518,7 @@ class AppState extends ChangeNotifier {
         final id = e.data['track_id'] as int?;
         if (id != null) {
           player?.onTrackReady(id);
-          await _reloadActiveQueue();
+          _queueMayHaveChanged(trackId: id);
           notifyListeners();
         }
       } else if (e.event == 'track_progress') {
@@ -515,7 +535,7 @@ class AppState extends ChangeNotifier {
         final id = e.data['track_id'] as int?;
         if (id != null) {
           await player?.onTrackUpdated(id);
-          await _reloadActiveQueue();
+          _queueMayHaveChanged(trackId: id);
           notifyListeners();
         }
       } else if (e.event == 'queue_changed') {
@@ -525,7 +545,7 @@ class AppState extends ChangeNotifier {
       } else if (e.event == 'track_failed') {
         final id = e.data['track_id'] as int?;
         if (id != null) await player?.onTrackUpdated(id);
-        await _reloadActiveQueue();
+        _queueMayHaveChanged(trackId: id);
         notifyListeners();
         await _pollStatus();
       }

@@ -664,3 +664,71 @@ class Jam {
         if (guestsCanSkip) 'skipping is a vote',
       ].join(' · ');
 }
+
+
+/// A hit from a source the server fetches itself — SoundCloud, Bandcamp.
+class SourceHit {
+  final String provider;
+  final String providerId;
+  final String title;
+  final List<String> artists;
+  final String? album;
+  final int? durationMs;
+  final String? url;
+  /// Already in the library, if it is.
+  final Track? track;
+
+  const SourceHit({
+    required this.provider,
+    required this.providerId,
+    required this.title,
+    this.artists = const [],
+    this.album,
+    this.durationMs,
+    this.url,
+    this.track,
+  });
+
+  factory SourceHit.fromJson(Map<String, dynamic> j) => SourceHit(
+        provider: (j['provider'] ?? '') as String,
+        providerId: (j['provider_id'] ?? '') as String,
+        title: (j['title'] ?? '') as String,
+        artists: ((j['artists'] ?? const []) as List).cast<String>(),
+        album: j['album'] as String?,
+        durationMs: j['duration_ms'] as int?,
+        url: j['url'] as String?,
+        track: j['track'] == null
+            ? null
+            : Track.fromJson(j['track'] as Map<String, dynamic>),
+      );
+
+  String get artistLine => artists.join(', ');
+  bool get known => track != null;
+  String get sourceLabel => provider == 'bandcamp' ? 'Bandcamp' : 'SoundCloud';
+
+  String get lengthLine {
+    if (durationMs == null) return '';
+    final d = Duration(milliseconds: durationMs!);
+    return '${d.inMinutes}:${(d.inSeconds % 60).toString().padLeft(2, '0')}';
+  }
+}
+
+/// What is behind a pasted album link, before anything is added.
+class AlbumPreview {
+  final String? album;
+  final String? artist;
+  final List<SourceHit> tracks;
+  final int unavailable;
+
+  const AlbumPreview({this.album, this.artist, this.tracks = const [],
+      this.unavailable = 0});
+
+  factory AlbumPreview.fromJson(Map<String, dynamic> j) => AlbumPreview(
+        album: j['album'] as String?,
+        artist: j['artist'] as String?,
+        tracks: ((j['tracks'] ?? const []) as List)
+            .map((e) => SourceHit.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        unavailable: (j['unavailable'] ?? 0) as int,
+      );
+}

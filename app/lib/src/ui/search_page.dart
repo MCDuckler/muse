@@ -23,6 +23,10 @@ class _SearchPageState extends State<SearchPage> {
   final _focus = FocusNode();
   List<Track> _local = const [];
   List<RemoteHit> _remote = const [];
+  List<SourceHit> _soundcloud = const [];
+  List<SourceHit> _bandcamp = const [];
+  AlbumPreview? _album;
+  bool _importing = false;
   bool _busy = false;
   bool _searched = false;
   String? _error;
@@ -48,6 +52,9 @@ class _SearchPageState extends State<SearchPage> {
       setState(() {
         _local = const [];
         _remote = const [];
+        _soundcloud = const [];
+        _bandcamp = const [];
+        _album = null;
         _searched = false;
       });
       return;
@@ -65,14 +72,48 @@ class _SearchPageState extends State<SearchPage> {
       _busy = true;
       _error = null;
     });
+    final api = context.read<AppState>().api;
     try {
-      final res = await context.read<AppState>().api.search(q);
+      // A pasted album link is not a search: the page knows what is on the record, so
+      // ask it rather than guessing from the words in the URL.
+      if (q.startsWith('http') && q.contains('bandcamp.com')) {
+        final preview = await api.previewAlbum(q);
+        if (!mounted || _lastQuery != q) return;
+        setState(() {
+          _album = preview;
+          _local = const [];
+          _remote = const [];
+          _soundcloud = const [];
+          _bandcamp = const [];
+          _searched = true;
+        });
+        return;
+      }
+
+      final res = await api.search(q);
       if (!mounted || _lastQuery != q) return;   // a newer query already went out
       setState(() {
+        _album = null;
         _local = res.local;
         _remote = res.remote;
         _searched = true;
       });
+
+      // The other two are asked separately so a slow one never holds up the rest.
+      for (final source in const ['soundcloud', 'bandcamp']) {
+        api.searchSource(source, q, limit: 5).then((hits) {
+          if (!mounted || _lastQuery != q) return;
+          setState(() {
+            if (source == 'soundcloud') {
+              _soundcloud = hits;
+            } else {
+              _bandcamp = hits;
+            }
+          });
+        }).catchError((_) {
+          // One source being unreachable is not a failed search.
+        });
+      }
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
     } catch (e) {
@@ -95,7 +136,7 @@ class _SearchPageState extends State<SearchPage> {
             onSubmitted: (_) => _run(),
             focusNode: _focus,
             decoration: InputDecoration(
-              hintText: 'Search your library and YouTube Music',
+              hintText: 'Search, or paste a Bandcamp album link',
               prefixIcon: const Icon(Icons.search),
               suffixIcon: _busy
                   ? const Padding(
@@ -145,6 +186,7 @@ class _SearchPageState extends State<SearchPage> {
                   ),
                   onTap: () => app.addTrack(t),
                 ),
+              if (_album != null) ..._albumRows(app),
               if (_remote.isNotEmpty)
                 _SectionHeader('On YouTube Music · ${_remote.length}'),
               for (final hit in _remote)
@@ -174,11 +216,112 @@ class _SearchPageState extends State<SearchPage> {
                   ),
                   onTap: () => _fetch(hit),
                 ),
+              ..._sourceRows(app, 'SoundCloud', _soundcloud),
+              ..._sourceRows(app, 'Bandcamp', _bandcamp),
             ],
           ),
         ),
       ],
     );
+  }
+
+  /// Hits from a source the server fetches itself. Kept below YouTube Music on purpose:
+  /// SoundCloud is full of remixes, edits and thirty-second previews, so these are for
+  /// when you have looked at them and chosen, not for a machine to pick from.
+  List<Widget> _sourceRows(AppState app, String label, List<SourceHit> hits) {
+    if (hits.isEmpty) return const [];
+    return [
+      _SectionHeader('On $label · ${hits.length}'),
+      for (final hit in hits)
+        ListTile(
+          leading: CircleAvatar(
+            backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+            child: Icon(
+                hit.provider == 'bandcamp' ? Icons.album_outlined : Icons.cloud_outlined,
+                size: 18),
+          ),
+          title: Text(hit.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+          subtitle: Text(
+              [hit.artistLine, hit.lengthLine].where((s) => s.isNotEmpty).join(' · '),
+              maxLines: 1, overflow: TextOverflow.ellipsis),
+          trailing: hit.known
+              ? const Icon(Icons.check_circle_outline, size: 20)
+              : _queueMenu(
+                  onNext: () => _addSource(app, hit, mode: 'next'),
+                  onEnd: () => _addSource(app, hit),
+                ),
+          onTap: () => _addSource(app, hit),
+        ),
+    ];
+  }
+
+  /// A pasted album link: the whole record, in order, as the artist typed it.
+  List<Widget> _albumRows(AppState app) {
+    final album = _album!;
+    return [
+      _SectionHeader('${album.artist ?? 'Album'} · ${album.album ?? ''}'),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                [
+                  '${album.tracks.length} tracks',
+                  if (album.unavailable > 0)
+                    '${album.unavailable} sold only',
+                ].join(' · '),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+            FilledButton.icon(
+              icon: _importing
+                  ? const SizedBox(
+                      width: 14, height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.download, size: 18),
+              label: const Text('Add the album'),
+              onPressed: _importing ? null : () => _importAlbum(app),
+            ),
+          ],
+        ),
+      ),
+      for (final t in album.tracks)
+        ListTile(
+          dense: true,
+          leading: const Icon(Icons.music_note, size: 20),
+          title: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+          subtitle: Text(t.lengthLine),
+          trailing: t.known ? const Icon(Icons.check_circle_outline, size: 18) : null,
+        ),
+    ];
+  }
+
+  Future<void> _addSource(AppState app, SourceHit hit, {String mode = 'end'}) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final track = await app.api.addFromSource(hit);
+      await app.addTrack(track, mode: mode);
+      messenger.showSnackBar(SnackBar(
+          content: Text('Added "${hit.title}" from ${hit.sourceLabel}')));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('$e')));
+    }
+  }
+
+  Future<void> _importAlbum(AppState app) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _importing = true);
+    try {
+      final r = await app.api.importAlbum(_lastQuery);
+      await app.refreshPlaylists();
+      messenger.showSnackBar(SnackBar(
+          content: Text('Added "${r['name']}" — ${r['added']} tracks')));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('$e')));
+    } finally {
+      if (mounted) setState(() => _importing = false);
+    }
   }
 
   /// "Play next" and "add to end" both existed in the API but were distinguished only
