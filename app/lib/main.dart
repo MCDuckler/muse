@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 import 'package:provider/provider.dart';
@@ -24,11 +25,20 @@ String debugEngineState() {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // Lockscreen / notification controls and playback that survives the screen going off.
-  await JustAudioBackground.init(
-    androidNotificationChannelId: 'dev.muse.audio',
-    androidNotificationChannelName: 'muse',
-    androidNotificationOngoing: true,
-  );
+  //
+  // Not on the web, where there is no lockscreen to control and where it actively
+  // breaks playback: it wraps the audio platform, and on the web that wrapper accepts
+  // every setAudioSource after the first and quietly does nothing with it. The element
+  // keeps the first file it was ever given, so skipping moved the screen on while the
+  // same song kept playing. Proved by hooking HTMLMediaElement: one src assignment for
+  // the whole session, then nothing but repeated play() calls on it.
+  if (!kIsWeb) {
+    await JustAudioBackground.init(
+      androidNotificationChannelId: 'dev.muse.audio',
+      androidNotificationChannelName: 'muse',
+      androidNotificationOngoing: true,
+    );
+  }
   runApp(const MuseApp());
 }
 

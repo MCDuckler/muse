@@ -26,9 +26,10 @@ String queueRepeatTo(QueueRepeat m) => m.name;
 /// level instead of pushed up into clipping. That is the same choice ReplayGain's
 /// clipping prevention makes.
 class PlayerService {
-  PlayerService(this.api);
+  PlayerService(this.api) : _instance = ++instances;
 
   final ApiClient api;
+  final int _instance;
   final AudioPlayer _player = AudioPlayer();
 
   /// How often the play position is written back while audio is playing. This used to
@@ -313,6 +314,13 @@ class PlayerService {
   /// downloaded yet instead of stopping dead on them.
   int? _warmedTrackId;
 
+  /// The last URL actually handed to the audio engine, and what the engine said about
+  /// it. Debug only: when the screen and the sound disagree, this settles which one is
+  /// lying. `instances` counts players ever built, to catch a second one holding the
+  /// audio element while the first takes the commands.
+  String? lastSourceUrl;
+  static int instances = 0;
+
   /// Playback speed. Kept here rather than read back off the engine because it has to
   /// survive loading the next track, which resets it.
   double speed = 1.0;
@@ -429,11 +437,28 @@ class PlayerService {
     try {
       await api.ensureStreamKey();
       if (mine != _loadToken) return;      // superseded while fetching the key
+
+      // On the web, stop before loading anything else.
+      //
+      // just_audio wraps whatever you give it in an internal playlist whose id is
+      // fixed for the life of the AudioPlayer, and just_audio_web caches its source
+      // player under that id. So the second setAudioSource and every one after it
+      // resolves to the *first* source: the element keeps the file it was given at
+      // startup, and only play, pause and seek reach it. Skipping moved the screen on
+      // while the same song kept playing — for the whole session.
+      //
+      // Proved by hooking HTMLMediaElement: one createElement, one src assignment,
+      // then nothing but play/pause, while setAudioSource kept returning the first
+      // track's duration. stop() deactivates the platform player, which is what
+      // actually drops that cache; the next load then builds a fresh element.
+      if (kIsWeb && _loadedTrackId != null) await _player.stop();
+      if (mine != _loadToken) return;
       final cover = api.coverUrl(track, small: false);
       final coverUri = cover == null ? null : Uri.parse(cover);
-      await _player.setAudioSource(
+      final sourceUrl = api.streamUrl(track);
+      final reported = await _player.setAudioSource(
         AudioSource.uri(
-          Uri.parse(api.streamUrl(track)),
+          Uri.parse(sourceUrl),
           // Headers are not deliverable from a browser's audio element, which is why
           // the URL is signed. Native platforms send them too; either proves identity.
           headers: kIsWeb ? null : api.streamHeaders,
@@ -452,6 +477,8 @@ class PlayerService {
         ),
         initialPosition: startAt,
       );
+      lastSourceUrl = '$sourceUrl -> engine says ${reported?.inMilliseconds}ms '
+          '(player #$_instance of ${PlayerService.instances})';
       if (mine != _loadToken) return;      // a later track won the race
       await _player.setVolume(_volumeFor(track));
       if (speed != 1.0) await _player.setSpeed(speed);

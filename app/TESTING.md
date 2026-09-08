@@ -50,3 +50,14 @@ The driver writes any `binding.takeScreenshot('name')` to `build/screenshots/nam
 (that is what `integration_test_driver_extended` is for). The player's artwork is the
 reason it exists: a record standing up, lying down, or half way is something to look at
 rather than something to assert about.
+
+## The skip test
+
+`integration_test/skip_test.dart` exists because the player screen can look right while
+the audio engine is still on the previous song. It asserts on what the engine reports —
+the file it loaded and how long that file is — and, when it fails, prints what the
+browser's media element was actually told, by hooking `HTMLMediaElement` (just_audio's
+elements are detached from the document, so they cannot be found by querying the DOM).
+
+That hook is what found the real bug: one element, one src assignment, then nothing but
+play/pause for the whole session.
