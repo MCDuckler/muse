@@ -28,8 +28,13 @@ def enqueue(kind: str, payload: dict, priority: int = PRIORITY_NORMAL,
 
 
 def promote(track_id: int, priority: int = PRIORITY_NOW) -> bool:
-    """Move a track to the front. Pressing play on something still downloading should
-    not mean waiting behind a hundred tracks queued by an import."""
+    """Move a track to the front, queueing it first if nobody ever did.
+
+    Two cases, one answer. A track waiting behind a hundred imports jumps them. A track
+    from a mirrored library that was never queued at all — because twelve thousand liked
+    songs are a list worth having long before they are forty gigabytes worth having —
+    gets its job made now, at the front.
+    """
     row = db.one(
         """update jobs set priority=%s
             where kind='ingest' and state='pending'
@@ -37,7 +42,25 @@ def promote(track_id: int, priority: int = PRIORITY_NOW) -> bool:
             returning id""",
         (priority, track_id),
     )
-    return row is not None
+    if row:
+        return True
+
+    waiting = db.one(
+        """select t.id, s.provider_id
+             from tracks t
+             join track_sources s on s.track_id = t.id and s.provider='ytmusic'
+            where t.id=%s and t.state='pending'
+              and not exists (select 1 from jobs j
+                               where j.kind='ingest'
+                                 and (j.payload->>'track_id')::int = t.id
+                                 and j.state in ('pending','leased','done'))""",
+        (track_id,),
+    )
+    if not waiting or not waiting["provider_id"]:
+        return False
+    enqueue("ingest", {"track_id": track_id, "video_id": waiting["provider_id"]},
+            priority=priority)
+    return True
 
 
 def promote_run(track_ids: list[int], priority: int = PRIORITY_NOW) -> int:

@@ -188,7 +188,17 @@ def _get(cfg, user_id: int, url: str, **params) -> dict:
 
 
 def playlists(cfg, user_id: int) -> list[dict]:
-    out, url, params = [], "/me/playlists", {"limit": 50}
+    """Everything mirrorable, with Liked Songs first — it is the list most people mean
+    when they say "my music", and it is not in /me/playlists."""
+    liked = _get(cfg, user_id, "/me/tracks", limit=1)
+    out: list[dict] = [{
+        "remote_id": LIKED,
+        "name": "Liked Songs",
+        "count": liked.get("total"),
+        "owner": "you",
+        "image": None,
+    }]
+    url, params = "/me/playlists", {"limit": 50}
     while url:
         page = _get(cfg, user_id, url, **params)
         for p in page.get("items", []):
@@ -210,7 +220,40 @@ def playlists(cfg, user_id: int) -> list[dict]:
     return out
 
 
+# Liked Songs is not a playlist as far as the API is concerned — it lives behind
+# /me/tracks and has no id. It is one to a person, so a fixed sentinel stands in for the
+# id everywhere a playlist id would go.
+LIKED = "liked-songs"
+
+
+def saved_tracks(cfg, user_id: int) -> list[dict]:
+    """Everything the user has hearted, newest first — Spotify's own order."""
+    out, url, params = [], "/me/tracks", {"limit": 50}
+    while url:
+        page = _get(cfg, user_id, url, **params)
+        for entry in page.get("items", []):
+            item = (entry or {}).get("track") or {}
+            if not item.get("name") or item.get("type") not in (None, "track"):
+                continue
+            out.append(_track(item))
+        url, params = page.get("next"), {}
+    return out
+
+
+def _track(item: dict) -> dict:
+    return {
+        "remote_id": item.get("id") or item.get("uri"),
+        "title": item["name"],
+        "artists": [a["name"] for a in item.get("artists", []) if a.get("name")],
+        "album": (item.get("album") or {}).get("name"),
+        "duration_ms": item.get("duration_ms"),
+        "isrc": (item.get("external_ids") or {}).get("isrc"),
+    }
+
+
 def playlist_items(cfg, user_id: int, remote_id: str) -> list[dict]:
+    if remote_id == LIKED:
+        return saved_tracks(cfg, user_id)
     """`/tracks` has been 403 since March 2026; `/items` is the replacement, and it
     renames the payload's fields as well as the path."""
     out, url, params = [], f"/playlists/{remote_id}/items", {"limit": 50}
@@ -222,13 +265,6 @@ def playlist_items(cfg, user_id: int, remote_id: str) -> list[dict]:
                 continue
             if not item.get("name"):
                 continue
-            out.append({
-                "remote_id": item.get("id") or item.get("uri"),
-                "title": item["name"],
-                "artists": [a["name"] for a in item.get("artists", []) if a.get("name")],
-                "album": (item.get("album") or {}).get("name"),
-                "duration_ms": item.get("duration_ms"),
-                "isrc": (item.get("external_ids") or {}).get("isrc"),
-            })
+            out.append(_track(item))
         url, params = page.get("next"), {}
     return out

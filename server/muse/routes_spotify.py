@@ -20,6 +20,11 @@ from .deps import cfg, current_user
 log = logging.getLogger("muse.spotify")
 router = APIRouter(prefix="/spotify")
 
+# Above this many songs, a mirror records the list and leaves the audio until it is
+# wanted. Chosen so an album or a normal playlist still arrives whole, and a liked-songs
+# library does not fill the disk on the way past.
+BIG_MIRROR = 400
+
 
 def _fail(e: Exception) -> HTTPException:
     if isinstance(e, spotify.NotConfigured):
@@ -147,14 +152,27 @@ def sync_playlists(body: dict = Body(default={}), user: dict = Depends(current_u
             (user["id"],))}
         remote = [p for p in remote if p["remote_id"] in already]
 
-    results = []
+    queued = []
     for p in remote:
-        try:
-            results.append(_mirror(user["id"], p))
-        except Exception as e:                       # one bad playlist is not all of them
-            log.warning("mirror %s failed: %s", p["remote_id"], e)
-            results.append({"name": p["name"], "error": str(e)})
-    return {"playlists": results}
+        # Mirroring is not something to do inside a request. A playlist of twelve
+        # thousand songs is twelve thousand lookups; the caller would sit there for an
+        # hour and get a timeout for it. The worker does it and the app watches.
+        jobs.enqueue("mirror",
+                     {"user_id": user["id"], "remote_id": p["remote_id"],
+                      "name": p["name"], "owner": p.get("owner"),
+                      "count": p.get("count")},
+                     priority=jobs.PRIORITY_NORMAL)
+        queued.append({"name": p["name"], "remote_id": p["remote_id"],
+                       "count": p.get("count")})
+    return {"queued": queued, "playlists": queued}
+
+
+def run_mirror_job(payload: dict) -> dict:
+    """What the worker runs for a `mirror` job. Kept here, next to the mirroring it
+    calls, and handed to the worker rather than imported by it."""
+    return _mirror(int(payload["user_id"]),
+                   {"remote_id": payload["remote_id"], "name": payload.get("name"),
+                    "owner": payload.get("owner"), "count": payload.get("count")})
 
 
 def _mirror(user_id: int, remote: dict) -> dict:
@@ -176,6 +194,13 @@ def _mirror(user_id: int, remote: dict) -> dict:
         )["id"]
 
     items = spotify.playlist_items(cfg(), user_id, remote["remote_id"])
+
+    # Past a few hundred songs a mirror stops being an import and starts being a library.
+    # Record what is in it; fetch the audio when somebody plays it. Pressing play queues
+    # the track at the front, so "on play" costs seconds, not a place in a long line.
+    download_mode = "all" if len(items) <= BIG_MIRROR else "on_play"
+    db.run("update playlists set download_mode=%s where id=%s",
+           (download_mode, playlist_id))
     resolved: list[int] = []
     missing: list[dict] = []
 
@@ -186,7 +211,8 @@ def _mirror(user_id: int, remote: dict) -> dict:
     for pos, item in enumerate(items):
         try:
             outcome = sync.resolve_item("spotify", item, priority=jobs.PRIORITY_BULK,
-                                        batch_id=batch_id, batch_label=batch_label)
+                                        batch_id=batch_id, batch_label=batch_label,
+                                        download=download_mode == "all")
         except Exception as e:
             outcome = {"track_id": None, "confidence": 0.0, "method": f"error: {e}"}
         if outcome.get("track_id"):

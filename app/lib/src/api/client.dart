@@ -217,6 +217,13 @@ class ApiClient {
   String? discUrl(Track t, {bool small = false}) =>
       sleeveUrl(t, small: small, part: 'disc');
 
+  /// Take the whole thing: queue the audio for everything in a playlist that has none.
+  Future<int> downloadPlaylist(int playlistId) async {
+    final d = await _decode(await http.post(_u('/playlists/$playlistId/download'),
+        headers: _headers)) as Map<String, dynamic>;
+    return (d['queued'] ?? 0) as int;
+  }
+
   /// A playlist's own art. Immutable per version, so it caches forever and still
   /// changes the moment the playlist does.
   String? playlistCoverUrl(Playlist p, {bool small = true}) {

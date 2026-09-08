@@ -11,7 +11,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse
 
-from . import catalog, db, jam, match, playlist_art, ytm
+from . import catalog, db, jam, jobs, match, playlist_art, ytm
 from .deps import cfg, current_user, user_or_key
 
 router = APIRouter()
@@ -71,6 +71,36 @@ def list_playlists(user: dict = Depends(current_user)):
         (user["id"],),
     )
     return [with_cover(r) for r in rows]
+
+
+@router.post("/playlists/{playlist_id}/download")
+def download_playlist(playlist_id: int, user: dict = Depends(current_user)):
+    """Fetch the audio for everything in a playlist that has none yet.
+
+    A big mirror records the list and leaves the files until something is played. This
+    is the other answer: take all of it, at import priority so it fills in behind
+    whatever you are listening to now.
+    """
+    p = _own_playlist(playlist_id, user)
+    waiting = db.all_(
+        """select t.id, s.provider_id
+             from playlist_items i
+             join tracks t on t.id = i.track_id
+             join track_sources s on s.track_id = t.id and s.provider='ytmusic'
+            where i.playlist_id=%s and t.state='pending'
+              and not exists (select 1 from jobs j
+                               where j.kind='ingest'
+                                 and (j.payload->>'track_id')::int = t.id
+                                 and j.state in ('pending','leased','done'))""",
+        (playlist_id,),
+    )
+    for row in waiting:
+        jobs.enqueue("ingest", {"track_id": row["id"], "video_id": row["provider_id"]},
+                     priority=jobs.PRIORITY_BULK,
+                     batch_id=f"playlist:{playlist_id}",
+                     batch_label=p["name"])
+    db.run("update playlists set download_mode='all' where id=%s", (playlist_id,))
+    return {"queued": len(waiting)}
 
 
 @router.get("/playlists/{playlist_id}/cover")
@@ -149,6 +179,7 @@ def get_playlist(playlist_id: int, user: dict = Depends(current_user)):
         "select count(*) n from playlist_unmatched where playlist_id=%s", (playlist_id,)
     )["n"]
     return {**with_cover(p), "unmatched": unmatched, "editable": p["kind"] == "local",
+            "download_mode": p.get("download_mode", "all"),
             "items": [{**catalog.public(t), "pos": t["pos"]} for t in items]}
 
 

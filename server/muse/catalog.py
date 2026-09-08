@@ -78,11 +78,54 @@ def find_by_video_id(video_id: str) -> dict | None:
     return track_row(row["track_id"]) if row else None
 
 
+def create_from_source(provider: str, meta: dict, discovered_via: str = VIA_USER,
+                       priority: int = jobs.PRIORITY_NORMAL,
+                       batch_id: str | None = None,
+                       batch_label: str | None = None) -> dict:
+    """A track from somewhere the server fetches itself: SoundCloud, Bandcamp.
+
+    Same shape as the YouTube path, different lane. The job goes to `ingest_direct`,
+    which runs in this process rather than on the machine at home, because these two
+    do not care that the request comes from a datacenter.
+    """
+    row = db.one(
+        """insert into tracks(title,artists,album,duration_ms,source,state,discovered_via)
+           values(%s,%s,%s,%s,%s,'pending',%s) returning id""",
+        (meta["title"], meta.get("artists") or [], meta.get("album"),
+         meta.get("duration_ms"), provider, discovered_via),
+    )
+    db.run(
+        "insert into track_sources(track_id,provider,provider_id,raw) values(%s,%s,%s,%s)",
+        (row["id"], provider, meta["provider_id"], json.dumps(meta.get("raw") or meta)),
+    )
+    jobs.enqueue("ingest_direct",
+                 {"track_id": row["id"], "provider": provider,
+                  "ref": meta.get("url") or meta["provider_id"]},
+                 priority=priority, batch_id=batch_id, batch_label=batch_label)
+    jobs.enqueue("meta", {"track_id": row["id"]}, batch_id=batch_id)
+    return track_row(row["id"])
+
+
+def find_by_provider(provider: str, provider_id: str) -> dict | None:
+    row = db.one(
+        """select track_id from track_sources
+            where provider=%s and provider_id=%s order by track_id limit 1""",
+        (provider, provider_id),
+    )
+    return track_row(row["track_id"]) if row else None
+
+
 def create_from_ytm(meta: dict, discovered_via: str = VIA_USER,
                     priority: int = jobs.PRIORITY_NORMAL,
                     batch_id: str | None = None,
-                    batch_label: str | None = None) -> dict:
-    """New track row in `pending` plus the ingest job. Never downloads inline."""
+                    batch_label: str | None = None,
+                    download: bool = True) -> dict:
+    """New track row in `pending`, and usually the ingest job with it.
+
+    `download=False` records the track without queueing the audio. A library of twelve
+    thousand liked songs is a list worth having long before it is forty gigabytes worth
+    having, so those arrive when somebody actually plays them.
+    """
     row = db.one(
         """insert into tracks(title,artists,album,duration_ms,source,state,discovered_via)
            values(%s,%s,%s,%s,'youtube','pending',%s) returning id""",
@@ -92,8 +135,9 @@ def create_from_ytm(meta: dict, discovered_via: str = VIA_USER,
         "insert into track_sources(track_id,provider,provider_id,raw) values(%s,'ytmusic',%s,%s)",
         (row["id"], meta["video_id"], json.dumps(meta.get("raw") or {})),
     )
-    jobs.enqueue("ingest", {"track_id": row["id"], "video_id": meta["video_id"]},
-                 priority=priority, batch_id=batch_id, batch_label=batch_label)
+    if download:
+        jobs.enqueue("ingest", {"track_id": row["id"], "video_id": meta["video_id"]},
+                     priority=priority, batch_id=batch_id, batch_label=batch_label)
     # Artwork does not depend on the audio, and a queue row with a cover while it
     # downloads is far better than a grey square that fills in minutes later.
     jobs.enqueue("meta", {"track_id": row["id"]}, batch_id=batch_id)

@@ -176,7 +176,8 @@ def existing_decision(kind: str, remote_id: str) -> dict | None:
 
 
 def resolve_item(kind: str, item: dict, *, priority: int | None = None,
-                 batch_id: str | None = None, batch_label: str | None = None) -> dict:
+                 batch_id: str | None = None, batch_label: str | None = None,
+                 download: bool = True) -> dict:
     """Remote item -> local track (or a review entry). Never re-decides a human override."""
     remote_id = item["remote_id"]
     prior = existing_decision(kind, remote_id)
@@ -189,7 +190,7 @@ def resolve_item(kind: str, item: dict, *, priority: int | None = None,
         track = catalog.find_by_video_id(item["video_id"]) or catalog.create_from_ytm(
             {**item, "raw": item}, discovered_via=catalog.VIA_SYNC,
             priority=priority or jobs.PRIORITY_NORMAL,
-            batch_id=batch_id, batch_label=batch_label)
+            batch_id=batch_id, batch_label=batch_label, download=download)
         _record(kind, remote_id, track["id"], 1.0, "video-id", "auto", item)
         return {"track_id": track["id"], "confidence": 1.0, "method": "video-id",
                 "verdict": "auto"}
@@ -205,7 +206,7 @@ def resolve_item(kind: str, item: dict, *, priority: int | None = None,
                 "candidates": [{k: v for k, v in c.items() if k != "raw"} for c in candidates]}
 
     track = catalog.find_by_video_id(best["video_id"]) or catalog.create_from_ytm(
-        best, discovered_via=catalog.VIA_SYNC,
+        best, discovered_via=catalog.VIA_SYNC, download=download,
         priority=priority or jobs.PRIORITY_NORMAL,
         batch_id=batch_id, batch_label=batch_label)
     _record(kind, remote_id, track["id"], conf, method, "auto", item)

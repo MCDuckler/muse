@@ -217,16 +217,19 @@ def test_syncing_nothing_specific_refreshes_only_what_is_mirrored(client, hdr,
         {"remote_id": "SP2", "name": "Not chosen", "count": None, "owner": "someone"},
     ]
     monkeypatch.setattr(spotify, "playlists", lambda cfg, uid: listed)
-    touched = []
-    monkeypatch.setattr(routes_spotify, "_mirror",
-                        lambda uid, p: touched.append(p["remote_id"]) or {"name": p["name"]})
+    assert routes_spotify.run_mirror_job                 # the worker's entry point
+
+    def queued():
+        rows = db.all_("""select payload->>'remote_id' as remote_id from jobs
+                           where kind='mirror' order by id""")
+        return [r["remote_id"] for r in rows]
 
     client.post("/spotify/sync", headers=hdr, json={})
-    assert touched == ["SP1"], "only the playlist already mirrored gets refreshed"
+    assert queued() == ["SP1"], "only the playlist already mirrored gets refreshed"
 
-    touched.clear()
+    db.run("delete from jobs where kind='mirror'")
     client.post("/spotify/sync", headers=hdr, json={"remote_id": "SP2"})
-    assert touched == ["SP2"], "and an explicit choice is honoured"
+    assert queued() == ["SP2"], "and an explicit choice is honoured"
 
 
 def test_remote_playlists_say_which_are_mirrored(client, hdr, mirrored, monkeypatch):

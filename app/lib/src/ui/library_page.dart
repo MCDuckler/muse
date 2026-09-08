@@ -472,6 +472,35 @@ class _PlaylistHeader extends StatelessWidget {
                 ],
               ),
             ),
+      if (playlist.fetchesOnPlay)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
+          child: Row(
+            children: [
+              const Icon(Icons.cloud_queue, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Songs download when you play them — this library is too big to '
+                  'fetch all at once.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+              TextButton(
+                onPressed: () async {
+                  final messenger = ScaffoldMessenger.of(context);
+                  final n = await app.api.downloadPlaylist(playlist.id);
+                  messenger.showSnackBar(SnackBar(
+                      content: Text(n == 0
+                          ? 'Everything here is already downloaded'
+                          : 'Queued $n songs')));
+                  onChanged();
+                },
+                child: const Text('Get all'),
+              ),
+            ],
+          ),
+        ),
       Row(
         children: [
           PlaylistArt(playlist: playlist, size: 108, radius: 10, small: false),

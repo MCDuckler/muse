@@ -8,3 +8,5 @@ ytmusicapi
 mutagen
 pillow
 pytest
+# SoundCloud is fetched here, not at home: it does not care that this is a datacenter.
+yt-dlp

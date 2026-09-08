@@ -255,6 +255,9 @@ class Playlist {
   /// Art built from the records in it. Every playlist has one; see playlist_art.py.
   final String? coverPath;
   final String? coverVersion;
+  /// 'all' — the audio was queued with the list. 'on_play' — a library too big to fetch
+  /// up front, where songs arrive when you play them.
+  final String downloadMode;
 
   const Playlist({
     required this.id,
@@ -266,6 +269,7 @@ class Playlist {
     this.sourceName,
     this.coverPath,
     this.coverVersion,
+    this.downloadMode = 'all',
     bool? editable,
   }) : editable = editable ?? (kind == 'local');
 
@@ -281,10 +285,14 @@ class Playlist {
         sourceName: j['source_name'] as String?,
         coverPath: j['cover_url'] as String?,
         coverVersion: j['cover_version'] as String?,
+        downloadMode: (j['download_mode'] ?? 'all') as String,
         editable: j['editable'] as bool?,
       );
 
   bool get isMirror => kind != 'local';
+
+  /// True when the songs are listed but the files are not here yet.
+  bool get fetchesOnPlay => downloadMode == 'on_play';
 }
 
 /// A song in a mirrored playlist that could not be translated into something muse can

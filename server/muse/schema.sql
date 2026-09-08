@@ -288,3 +288,8 @@ create table if not exists jam_skip_votes (
 
 -- Who put this on. In a jam that is the difference between a queue and an argument.
 alter table queue_items add column if not exists added_by int references users(id);
+
+-- A mirrored library can be much bigger than the disk it would land on. Twelve thousand
+-- liked songs are a list worth having long before they are forty gigabytes worth having,
+-- so a big mirror records what is in it and fetches the audio when somebody plays it.
+alter table playlists add column if not exists download_mode text not null default 'all';

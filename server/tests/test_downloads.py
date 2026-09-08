@@ -234,3 +234,31 @@ def test_a_worker_can_ask_for_urgent_work_only(client, hdr, queued, wsec):
                                "max_priority": jobs.PRIORITY_NOW + 8}).json()["jobs"]
     assert [j["payload"]["track_id"] for j in urgent] == [queued[1]]
     assert urgent[0]["priority"] <= jobs.PRIORITY_NOW + 8, "the lease says how urgent it is"
+
+
+def test_playing_a_track_nobody_queued_queues_it(client, hdr):
+    """A big mirror records the list without the audio. Pressing play is what asks for
+    the file, and it must not need a job to already exist."""
+    track = client.post("/tracks/resolve", headers=hdr,
+                        json={"video_id": "LIBRARY1"}).json()
+    db.run("delete from jobs where kind='ingest'")          # as if it was never queued
+
+    assert client.post("/downloads/promote", headers=hdr,
+                       json={"track_ids": [track["id"]]}).json()["promoted"] == 1
+    row = db.one("""select priority, state from jobs
+                     where kind='ingest' and (payload->>'track_id')::int=%s""",
+                 (track["id"],))
+    assert row["state"] == "pending" and row["priority"] == jobs.PRIORITY_NOW, \
+        "and it goes to the front, because somebody is waiting for it"
+
+
+def test_a_track_already_downloaded_is_not_queued_again(client, hdr, wsec, complete_job):
+    track = client.post("/tracks/resolve", headers=hdr, json={"video_id": "DONE1"}).json()
+    job = client.post("/internal/jobs/lease", headers=wsec,
+                      json={"worker": "w"}).json()["jobs"][0]
+    complete_job(job["id"], track["id"])
+
+    assert client.post("/downloads/promote", headers=hdr,
+                       json={"track_ids": [track["id"]]}).json()["promoted"] == 0
+    assert db.one("""select count(*) n from jobs where kind='ingest'
+                      and (payload->>'track_id')::int=%s""", (track["id"],))["n"] == 1

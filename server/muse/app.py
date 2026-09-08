@@ -17,10 +17,12 @@ from fastapi import (Body, Depends, FastAPI, Form, Header, HTTPException, Reques
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from . import (auth, catalog, config, db, enrich_worker, failures, jobs, progress,
+from . import (auth, catalog, config, db, direct_worker, enrich_worker, failures,
+               jobs, progress,
                jam, routes_accounts, routes_browse, routes_downloads, routes_files,
                routes_jam,
-               routes_library, routes_play, routes_spotify, routes_sync, sleeve,
+               routes_library, routes_play, routes_sources, routes_spotify,
+               routes_sync, sleeve,
                storage, ytm)
 from . import deps
 from .deps import current_user, worker_auth
@@ -54,6 +56,11 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
 
     worker = (enrich_worker.EnrichWorker(cfg, publish=publish)
               if start_workers else None)
+    # SoundCloud and Bandcamp are fetched here rather than at home, and big mirrors run
+    # here rather than inside the request that asked for them.
+    direct = (direct_worker.DirectWorker(cfg, publish=publish,
+                                         mirror=routes_spotify.run_mirror_job)
+              if start_workers else None)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -61,9 +68,13 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         _loop = asyncio.get_running_loop()
         if worker:
             worker.start()
+        if direct:
+            direct.start()
         yield
         if worker:
             worker.stop()
+        if direct:
+            direct.stop()
         _loop = None
 
     app = FastAPI(title="muse", docs_url="/api-docs", lifespan=lifespan)
@@ -471,6 +482,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     routes_jam.set_publisher(publish)
     routes_library.set_publisher(publish)
     app.include_router(routes_jam.router)
+    app.include_router(routes_sources.router)
     app.include_router(routes_library.router)
     app.include_router(routes_sync.router)
     app.include_router(routes_spotify.router)
