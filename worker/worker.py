@@ -78,7 +78,8 @@ def log(*a):
     print(f"[{time.strftime('%H:%M:%S')}]", *a, flush=True)
 
 
-def ytdlp_args(video_id: str, out: pathlib.Path) -> list[str]:
+def ytdlp_args(video_id: str, out: pathlib.Path,
+               cookies: pathlib.Path | None = None) -> list[str]:
     args = [
         YTDLP, "--js-runtimes", "node",       # node satisfies the JS runtime; no deno needed
         "-f", "140/bestaudio[acodec^=mp4a]/bestaudio",
@@ -91,8 +92,8 @@ def ytdlp_args(video_id: str, out: pathlib.Path) -> list[str]:
         "MUSEPROGRESS %(progress._percent_str)s %(progress._speed_str)s",
         f"https://music.youtube.com/watch?v={video_id}",
     ]
-    if COOKIES:
-        args[1:1] = ["--cookies", COOKIES]
+    if cookies:
+        args[1:1] = ["--cookies", str(cookies)]
     if POT_PROVIDER:
         args[1:1] = ["--extractor-args", f"youtubepot-bgutilhttp:base_url={POT_PROVIDER}"]
     return args
@@ -143,11 +144,25 @@ def to_m4a(src: pathlib.Path) -> pathlib.Path:
 _PERCENT = re.compile(r"MUSEPROGRESS\s+([\d.]+)%\s+(\S+)")
 
 
+def cookie_copy(tmp_dir: pathlib.Path) -> pathlib.Path | None:
+    """Each download gets its own copy of the cookie jar.
+
+    yt-dlp writes refreshed cookies back to the file it was given, and several
+    downloads running at once would write over each other. The master jar is only
+    ever read; run-local.sh refreshes it from the browser.
+    """
+    if not COOKIES:
+        return None
+    dst = tmp_dir / "cookies.txt"
+    shutil.copyfile(COOKIES, dst)
+    return dst
+
+
 def download_with_progress(video_id: str, tmp_dir: pathlib.Path,
                            report) -> tuple[int, str]:
     """Run yt-dlp, forwarding progress as it goes. Returns (exit code, last error)."""
     proc = subprocess.Popen(
-        ytdlp_args(video_id, tmp_dir),
+        ytdlp_args(video_id, tmp_dir, cookies=cookie_copy(tmp_dir)),
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
     )
     last_report, last_error = 0.0, ""
@@ -186,7 +201,8 @@ def handle(client: httpx.Client, job: dict) -> None:
         report("downloading", 0.0)
         code, error_line = download_with_progress(
             video_id, tmp_dir, lambda pct, speed: report("downloading", pct, speed))
-        files = sorted(p for p in tmp_dir.iterdir() if p.is_file() and p.suffix != ".json")
+        files = sorted(p for p in tmp_dir.iterdir()
+                       if p.is_file() and p.suffix not in (".json", ".txt"))
         if code != 0 or not files:
             reason = (error_line or "yt-dlp failed")[:500]
             if any(s in reason.lower() for s in BOT_CHECK):
@@ -303,6 +319,8 @@ def main() -> None:
         sys.exit("MUSE_WORKER_SECRET is unset — the server would reject every lease")
     log(f"worker {NAME} → {API}  (up to {CONCURRENCY} at a time, "
         f"cookies={'yes' if COOKIES else 'no'}, pot={'yes' if POT_PROVIDER else 'no'})")
+    if not COOKIES:
+        log("no cookies: YouTube challenges this IP after a few hundred downloads")
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: STOPPING.set())
     running: set[Future] = set()

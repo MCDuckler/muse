@@ -66,3 +66,49 @@ ffmpeg -nostats -hide_banner -i <ID>.m4a -af ebur128=framelog=quiet -f null -
 - Sustained rate (how many tracks/hour from one residential IP before a challenge appears).
 - A track that genuinely needs cookies (age-gated ones tried were not gated in this region).
 - arm64: the Pi path is unverified until there is a Pi.
+
+## Throughput, and what actually limits it (measured 2026-09-08)
+
+Downloads run several at a time (`MUSE_CONCURRENCY`, default 6 via `run-local.sh`).
+Numbers from the live queue, three-minute samples:
+
+| setup | tracks/min |
+|---|---|
+| one at a time | ~7 |
+| 4 at a time | 15 |
+| 6 at a time | 18.7 |
+
+**The ceiling is this machine's upstream, not YouTube.** Measured 9.0 Mbit/s (20 MB scp
+to the box in 17.8 s). At ~3.3 MB per track that is ~20 tracks/min, and 6 at a time
+already runs at 8.2 Mbit/s. More concurrency buys nothing and asks YouTube for more.
+
+### Getting unblocked: PO tokens + cookies
+
+Running several at once got the IP challenged — every extraction answering "Sign in to
+confirm you're not a bot". Two things fix it, and both are needed:
+
+1. **bgutil PO token provider** (`MUSE_POT_BASE_URL`, default `http://127.0.0.1:4416`).
+   Install: `pip install bgutil-ytdlp-pot-provider==2.0.0` into the worker venv, then
+   build the server once —
+   ```
+   git clone --depth 1 --branch 2.0.0 https://github.com/Brainicism/bgutil-ytdlp-pot-provider
+   cd bgutil-ytdlp-pot-provider/server && npm install && npx tsc
+   cp -r build node_modules package.json ~/.local/bgutil-pot/
+   ```
+   `run-local.sh` starts it if port 4416 is quiet.
+2. **A signed-in cookie jar**, re-exported from Firefox on every start and hourly after
+   (`run-local.sh`), never committed (`cookies.txt` is gitignored, mode 600). Each
+   download gets its own copy of the jar, because yt-dlp writes refreshed cookies back
+   to the file it was given and six of them would race.
+
+Measured on ten tracks from the real queue: **0/10 without cookies, 6/6 with** (PO
+provider running in both cases). The provider alone was not enough once the IP was
+challenged.
+
+### The server still cannot download (re-measured, with PO tokens and cookies)
+
+Worth re-testing because it is the whole reason the worker exists. On the OVH box, with
+the bgutil provider running locally and the same cookie jar: a famous video downloaded
+fine at 33 MB/s, but **0 of 6 real queue tracks** did — four "Sign in to confirm you're
+not a bot", six "Video unavailable. This video is not available" (the laptop fetched
+those same six a minute earlier). Datacenter IP, still refused. The architecture stands.
