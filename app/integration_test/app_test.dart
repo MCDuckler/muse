@@ -460,6 +460,15 @@ void main() {
     expect(album.artist, 'Tycho');
     expect(album.tracks.every((t) => t.title.isNotEmpty), isTrue);
 
+    // ---- a track says where it came from, when that is worth saying ----
+    final fromYouTube = Track.fromJson(const {
+      'id': 1, 'title': 'x', 'artists': ['y'], 'state': 'ready', 'source': 'youtube'});
+    final fromBandcamp = Track.fromJson(const {
+      'id': 2, 'title': 'x', 'artists': ['y'], 'state': 'ready', 'source': 'bandcamp'});
+    expect(fromYouTube.sourceLabel, isNull,
+        reason: 'almost everything is from YouTube; saying so on every row is noise');
+    expect(fromBandcamp.sourceLabel, 'Bandcamp');
+
     // ---- services linked by name ----
     final services = await appState.api.linkedServices();
     expect(services.map((s) => s.provider).toList(),

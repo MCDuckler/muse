@@ -105,7 +105,7 @@ class NowPlayingScreen extends StatelessWidget {
                                 style: Theme.of(context).textTheme.headlineSmall),
                             const SizedBox(height: 6),
                             Text(
-                                [track.artistLine, track.albumLine]
+                                [track.artistLine, track.albumLine, track.sourceLabel]
                                     .whereType<String>()
                                     .join(' · '),
                                 textAlign: TextAlign.center,

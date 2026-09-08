@@ -52,6 +52,22 @@ def _deezer(title: str, artist: str) -> dict | None:
     return out or None
 
 
+def deezer_isrc(track_id: int | str) -> str | None:
+    """The ISRC for a Deezer track. Search does not carry it; the track itself does.
+
+    Worth the extra request: an ISRC is the one identifier that says two recordings are
+    the same recording, which is what stops the same song being downloaded twice under
+    two spellings and what stops a mirror attaching the wrong take.
+    """
+    try:
+        r = httpx.get(f"https://api.deezer.com/track/{track_id}",
+                      headers={"User-Agent": UA}, timeout=TIMEOUT)
+        r.raise_for_status()
+        return (r.json().get("isrc") or "").strip().upper() or None
+    except (httpx.HTTPError, ValueError):
+        return None
+
+
 def _itunes(title: str, artist: str) -> list[dict] | None:
     r = httpx.get("https://itunes.apple.com/search",
                   params={"term": f"{artist} {title}".strip(), "entity": "song", "limit": 5},
@@ -254,6 +270,12 @@ def enrich_track(cfg, track_id: int) -> dict:
         updates.append("cover_id=%s")
         params.append(cover["id"])
     if chosen:
+        if not t["isrc"] and chosen.get("provider") == "deezer" \
+                and chosen.get("provider_track_id"):
+            isrc = deezer_isrc(chosen["provider_track_id"])
+            if isrc:
+                updates.append("isrc=%s")
+                params.append(isrc)
         if chosen.get("album") and not t["album"]:
             updates.append("album=%s")
             params.append(chosen["album"])

@@ -12,7 +12,7 @@ class Track {
   final String? failCode;
   /// Live ingest state while the audio is being fetched: stage, label, percent.
   final Map<String, dynamic>? progress;
-  final String source; // youtube | custom
+  final String source; // youtube | soundcloud | bandcamp | custom
   final String? discoveredVia;
   final double? gainDb;
   final int? bytes;
@@ -122,6 +122,17 @@ class Track {
   }
   bool get isPending => state == 'pending' || state == 'downloading';
   String get artistLine => artists.isEmpty ? 'Unknown artist' : artists.join(', ');
+
+  /// Where this recording came from, named only when it is worth naming. Almost
+  /// everything is from YouTube, so saying so on every row is noise; a song that came
+  /// from Bandcamp or SoundCloud is worth knowing about — the quality differs, and so
+  /// does who got paid.
+  String? get sourceLabel => switch (source) {
+        'soundcloud' => 'SoundCloud',
+        'bandcamp' => 'Bandcamp',
+        'custom' => 'Your upload',
+        _ => null,
+      };
   Duration? get duration =>
       durationMs == null ? null : Duration(milliseconds: durationMs!);
 

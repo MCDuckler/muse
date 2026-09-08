@@ -185,6 +185,15 @@ def resolve_item(kind: str, item: dict, *, priority: int | None = None,
         return {"track_id": prior["track_id"], "confidence": prior["confidence"],
                 "method": prior["method"], "verdict": "cached"}
 
+    # An ISRC we already hold is the end of the question: it names a recording, so this
+    # is the same song, whatever the two services chose to call it. No search, no
+    # scoring, no second copy of a file we already have.
+    known = catalog.find_by_isrc(item.get("isrc"))
+    if known:
+        _record(kind, remote_id, known["id"], 1.0, "isrc", "auto", item)
+        return {"track_id": known["id"], "confidence": 1.0, "method": "isrc",
+                "verdict": "auto"}
+
     # YouTube Music items carry the videoId already: exact, nothing to score.
     if item.get("video_id"):
         track = catalog.find_by_video_id(item["video_id"]) or catalog.create_from_ytm(
@@ -209,6 +218,10 @@ def resolve_item(kind: str, item: dict, *, priority: int | None = None,
         best, discovered_via=catalog.VIA_SYNC, download=download,
         priority=priority or jobs.PRIORITY_NORMAL,
         batch_id=batch_id, batch_label=batch_label)
+    if item.get("isrc"):
+        # Cheap to store now, and it is what recognises this recording next time.
+        db.run("update tracks set isrc=coalesce(isrc, upper(%s)) where id=%s",
+               (item["isrc"], track["id"]))
     _record(kind, remote_id, track["id"], conf, method, "auto", item)
     return {"track_id": track["id"], "confidence": conf, "method": method, "verdict": verdict}
 

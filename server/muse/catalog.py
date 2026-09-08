@@ -89,10 +89,12 @@ def create_from_source(provider: str, meta: dict, discovered_via: str = VIA_USER
     do not care that the request comes from a datacenter.
     """
     row = db.one(
-        """insert into tracks(title,artists,album,duration_ms,source,state,discovered_via)
-           values(%s,%s,%s,%s,%s,'pending',%s) returning id""",
+        """insert into tracks(title,artists,album,duration_ms,source,state,
+                              discovered_via,isrc)
+           values(%s,%s,%s,%s,%s,'pending',%s,%s) returning id""",
         (meta["title"], meta.get("artists") or [], meta.get("album"),
-         meta.get("duration_ms"), provider, discovered_via),
+         meta.get("duration_ms"), provider, discovered_via,
+         (meta.get("isrc") or None)),
     )
     db.run(
         "insert into track_sources(track_id,provider,provider_id,raw) values(%s,%s,%s,%s)",
@@ -104,6 +106,23 @@ def create_from_source(provider: str, meta: dict, discovered_via: str = VIA_USER
                  priority=priority, batch_id=batch_id, batch_label=batch_label)
     jobs.enqueue("meta", {"track_id": row["id"]}, batch_id=batch_id)
     return track_row(row["id"])
+
+
+def find_by_isrc(isrc: str | None) -> dict | None:
+    """The same recording, whatever it was called on the way in.
+
+    An ISRC is assigned to a recording, not to a release or a spelling, so this is what
+    lets a song already in the library be recognised when it arrives again from another
+    service — no second download, no second row, no wrong take.
+    """
+    if not isrc:
+        return None
+    row = db.one(
+        """select id from tracks where isrc = upper(%s)
+            order by (state='ready') desc, id limit 1""",
+        (isrc.strip(),),
+    )
+    return track_row(row["id"]) if row else None
 
 
 def find_by_provider(provider: str, provider_id: str) -> dict | None:
@@ -127,9 +146,11 @@ def create_from_ytm(meta: dict, discovered_via: str = VIA_USER,
     having, so those arrive when somebody actually plays them.
     """
     row = db.one(
-        """insert into tracks(title,artists,album,duration_ms,source,state,discovered_via)
-           values(%s,%s,%s,%s,'youtube','pending',%s) returning id""",
-        (meta["title"], meta["artists"], meta["album"], meta["duration_ms"], discovered_via),
+        """insert into tracks(title,artists,album,duration_ms,source,state,
+                              discovered_via,isrc)
+           values(%s,%s,%s,%s,'youtube','pending',%s,%s) returning id""",
+        (meta["title"], meta["artists"], meta["album"], meta["duration_ms"],
+         discovered_via, (meta.get("isrc") or None)),
     )
     db.run(
         "insert into track_sources(track_id,provider,provider_id,raw) values(%s,'ytmusic',%s,%s)",
