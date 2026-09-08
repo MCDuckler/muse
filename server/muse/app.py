@@ -19,7 +19,8 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from . import (auth, catalog, config, db, enrich_worker, failures, jobs, progress,
                routes_accounts, routes_browse, routes_downloads, routes_files,
-               routes_library, routes_play, routes_spotify, routes_sync, storage, ytm)
+               routes_library, routes_play, routes_spotify, routes_sync, sleeve,
+               storage, ytm)
 from . import deps
 from .deps import current_user, worker_auth
 
@@ -250,6 +251,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
 
     @app.get("/tracks/{track_id}/cover")
     def cover(track_id: int, request: Request, size: str = "lg", k: str | None = None,
+              style: str = "flat",
               authorization: Annotated[str | None, Header()] = None):
         """An <img> cannot send an Authorization header either, so covers accept the
         same signed key as audio."""
@@ -262,12 +264,23 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             raise HTTPException(401, "missing bearer token or stream key")
 
         row = db.one(
-            """select c.path, c.sha256 from tracks t join covers c on c.id=t.cover_id
+            """select c.path, c.sha256, c.color from tracks t join covers c on c.id=t.cover_id
                 where t.id=%s""",
             (track_id,),
         )
         if not row:
             raise HTTPException(404, "no cover for that track")
+
+        if style == "sleeve":
+            # The record, not the file. Rendered once per cover and cached; see sleeve.py.
+            colour = (row["color"] or "#8a8a8a").lstrip("#")
+            rgb = tuple(int(colour[i:i + 2], 16) for i in (0, 2, 4))
+            sleeve.build(cfg.cover_dir, pathlib.Path(row["path"]), row["sha256"], rgb)
+            return _range_response(
+                sleeve.path_for(cfg.cover_dir, row["sha256"],
+                                "sm" if size == "sm" else "lg"),
+                request, etag=f"{row['sha256']}-sleeve-{size}")
+
         path = pathlib.Path(row["path"])
         if size == "sm":
             small = path.with_name(f"{row['sha256']}_sm.jpg")

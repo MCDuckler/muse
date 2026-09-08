@@ -302,6 +302,16 @@ void main() {
     expect(find.byType(Slider), findsWidgets,
         reason: 'now playing must offer a real scrubber. On screen: ${visibleText(tester)}');
 
+    // The player shows the record, not a flat square.
+    expect(
+        tester.widgetList<Artwork>(find.byType(Artwork)).where((a) => a.sleeve),
+        isNotEmpty,
+        reason: 'the player artwork must be the sleeve rendering');
+    final onScreen = app.debugPlayerSnapshot()?.current;
+    if (onScreen != null) {
+      expect(appState.api.sleeveUrl(onScreen), contains('style=sleeve'));
+    }
+
     final beforeSeek = app.debugPlayerSnapshot()!.position;
     final scrubber = find.byType(Slider).first;
     await tester.tap(scrubber);            // taps the middle of the track

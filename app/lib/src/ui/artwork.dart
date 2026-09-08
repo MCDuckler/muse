@@ -14,9 +14,13 @@ class Artwork extends StatelessWidget {
     this.size = 44,
     this.radius = 6,
     this.small = true,
+    this.sleeve = false,
   });
 
   final Track? track;
+  /// Render the cover as a physical record rather than a flat square. The picture
+  /// arrives with its own shadow and transparent corners, so it is not clipped.
+  final bool sleeve;
   /// For results that are not in the library yet and so have no track to ask.
   final String? url;
   final double size;
@@ -27,7 +31,28 @@ class Artwork extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final api = context.read<AppState>().api;
-    final url = this.url ?? (track == null ? null : api.coverUrl(track!, small: small));
+    final url = this.url ??
+        (track == null
+            ? null
+            : sleeve
+                ? api.sleeveUrl(track!, small: small)
+                : api.coverUrl(track!, small: small));
+
+    if (sleeve && url != null) {
+      return SizedBox(
+        width: size,
+        height: size,
+        child: Image.network(url,
+            fit: BoxFit.contain,
+            gaplessPlayback: true,
+            errorBuilder: (_, __, ___) => Artwork(
+                track: track, size: size, radius: radius, small: small),
+            frameBuilder: (context, child, frame, wasSync) =>
+                wasSync || frame != null
+                    ? child
+                    : Artwork(track: track, size: size, radius: radius, small: small)),
+      );
+    }
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(radius),

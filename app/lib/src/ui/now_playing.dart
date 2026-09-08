@@ -167,19 +167,13 @@ class _Artwork extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, c) {
         final side = c.maxWidth;
+        // No clip and no shadow of our own: the record is rendered with its own
+        // shadow and turned corners, and a rounded rectangle around it would cut the
+        // disc off. A single cached image — nothing animates, nothing repaints.
         return Center(
-          child: Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.28),
-                  blurRadius: 28,
-                  offset: const Offset(0, 10),
-                ),
-              ],
-            ),
-            child: Artwork(track: track, size: side, radius: 16, small: false),
+          child: RepaintBoundary(
+            child: Artwork(
+                track: track, size: side, radius: 16, small: false, sleeve: true),
           ),
         );
       },
