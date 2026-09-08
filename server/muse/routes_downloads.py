@@ -7,9 +7,11 @@ the only questions this module answers.
 """
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from . import catalog, db, jobs, progress
+from . import catalog, db, jobs, match, progress, sources, sync, ytm
 from .deps import current_user
 
 router = APIRouter(prefix="/downloads")
@@ -201,6 +203,88 @@ def cancel(body: dict = Body(...), user: dict = Depends(current_user)):
                 (r["track_id"],),
             )
     return {"cancelled": len(rows)}
+
+
+def _refind_one(track: dict) -> dict:
+    """Look for another copy of a song whose copy has gone.
+
+    A video being deleted says nothing about the song. This searches for it again —
+    somewhere else on YouTube first, then SoundCloud, which the server can fetch itself
+    — and only reports failure once nothing anywhere is a confident match. The dead id
+    is excluded by name, or the same search would hand it straight back.
+    """
+    dead = {r["provider_id"] for r in db.all_(
+        "select provider_id from track_sources where track_id=%s", (track["id"],))}
+    want = {"title": track["title"], "artists": track["artists"] or [],
+            "duration_ms": track["duration_ms"], "isrc": track.get("isrc")}
+    query = " ".join([track["title"] or "", (track["artists"] or [""])[0]]).strip()
+    if not query:
+        return {"found": False, "reason": "nothing to search for"}
+
+    try:
+        candidates = [c for c in ytm.search_songs(query, limit=8)
+                      if c.get("video_id") not in dead]
+    except Exception:
+        candidates = []
+    best, conf, method = match.best(want, candidates)
+    if best and conf >= match.AUTO_ACCEPT:
+        db.run("""insert into track_sources(track_id,provider,provider_id,raw)
+                  values(%s,'ytmusic',%s,%s)""",
+               (track["id"], best["video_id"], json.dumps(best.get("raw") or {})))
+        db.run("""update tracks set state='pending', fail_reason=null, fail_code=null
+                   where id=%s""", (track["id"],))
+        jobs.enqueue("ingest", {"track_id": track["id"], "video_id": best["video_id"]},
+                     priority=jobs.PRIORITY_BULK)
+        return {"found": True, "where": "youtube", "confidence": round(conf, 2),
+                "method": method}
+
+    try:
+        hits = [h for h in sources.search("soundcloud", query, limit=6)
+                if h["provider_id"] not in dead]
+    except sources.SourceError:
+        hits = []
+    best, conf, method = match.best(want, [{**h, "video_id": None} for h in hits])
+    if best and conf >= match.AUTO_ACCEPT:
+        db.run("""insert into track_sources(track_id,provider,provider_id,raw)
+                  values(%s,'soundcloud',%s,%s)""",
+               (track["id"], best["provider_id"], json.dumps({})))
+        db.run("""update tracks set state='pending', fail_reason=null, fail_code=null,
+                          source='soundcloud' where id=%s""", (track["id"],))
+        jobs.enqueue("ingest_direct",
+                     {"track_id": track["id"], "provider": "soundcloud",
+                      "ref": best.get("url") or best["provider_id"]},
+                     priority=jobs.PRIORITY_BULK)
+        return {"found": True, "where": "soundcloud", "confidence": round(conf, 2),
+                "method": method}
+
+    return {"found": False, "reason": "nothing close enough anywhere"}
+
+
+@router.post("/refind")
+def refind(body: dict = Body(default={}), user: dict = Depends(current_user)):
+    """Go looking for another copy of songs whose copy has gone.
+
+    Deleted videos are the largest single reason a mirrored playlist has holes in it,
+    and the song itself is usually still there under another upload.
+    """
+    ids = body.get("track_ids")
+    if ids:
+        rows = db.all_("select * from tracks where id = any(%s)", (list(ids),))
+    else:
+        rows = db.all_(
+            """select t.* from tracks t
+                where t.state='failed'
+                  and coalesce(t.fail_code,'') not in ('cancelled')
+                order by t.id limit %s""",
+            (int(body.get("limit") or 200),))
+
+    found, missing = [], []
+    for row in rows:
+        outcome = _refind_one(catalog.track_row(row["id"]))
+        (found if outcome.get("found") else missing).append(
+            {"track_id": row["id"], "title": row["title"], **outcome})
+    return {"looked_at": len(rows), "found": len(found), "still_missing": len(missing),
+            "details": found[:20]}
 
 
 @router.post("/promote")

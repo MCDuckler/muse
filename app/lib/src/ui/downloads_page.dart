@@ -182,6 +182,29 @@ class _DownloadsPageState extends State<DownloadsPage> {
                                         .then((_) {}),
                                     'Retrying'),
                               ),
+                              // The song is usually still there under another
+                              // upload; a deleted video is not a deleted song.
+                              OutlinedButton.icon(
+                                icon: const Icon(Icons.travel_explore, size: 18),
+                                label: const Text('Look for another copy'),
+                                onPressed: () async {
+                                  // Captured before the search: it can take a while,
+                                  // and a context used afterwards may be gone.
+                                  final messenger = ScaffoldMessenger.of(context);
+                                  try {
+                                    final r = await app.api.refindFailed();
+                                    await _load();
+                                    messenger.showSnackBar(SnackBar(
+                                        content: Text(r['found'] == 0
+                                            ? 'Nothing close enough anywhere'
+                                            : 'Found ${r['found']} elsewhere — '
+                                                'downloading them now')));
+                                  } catch (e) {
+                                    messenger.showSnackBar(
+                                        SnackBar(content: Text('$e')));
+                                  }
+                                },
+                              ),
                               // Worth separating: these tracks are fine, the
                               // downloader was told to prove it is a person.
                               if (d.failures.any(

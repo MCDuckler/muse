@@ -275,6 +275,12 @@ class ApiClient {
     return (d['cancelled'] ?? 0) as int;
   }
 
+  /// Go looking for another copy of songs whose copy has gone. Returns how many were
+  /// found somewhere else.
+  Future<Map<String, dynamic>> refindFailed() async =>
+      await _decode(await http.post(_u('/downloads/refind'),
+          headers: _headers, body: jsonEncode({}))) as Map<String, dynamic>;
+
   Future<void> promoteDownload(int trackId) => promoteDownloads([trackId]);
 
   /// Tracks in playing order: the one under the needle, then what follows it.

@@ -274,3 +274,54 @@ def test_pausing_needs_you_to_say_which_way(client, hdr):
                        json={"paused": True}).json()["paused"] is True
     assert client.post("/downloads/pause", headers=hdr,
                        json={"paused": False}).json()["paused"] is False
+
+
+def test_a_dead_video_is_not_a_dead_song(client, hdr, wsec, monkeypatch):
+    """Deleted uploads are the biggest single reason a mirror has holes in it. The song
+    is usually still there under another one."""
+    from muse import routes_downloads, ytm
+
+    track = client.post("/tracks/resolve", headers=hdr,
+                        json={"video_id": "GONE1"}).json()
+    job = client.post("/internal/jobs/lease", headers=wsec,
+                      json={"worker": "w"}).json()["jobs"][0]
+    client.post(f"/internal/jobs/{job['id']}/fail", headers=wsec,
+                json={"reason": "Video unavailable", "track_id": track["id"],
+                      "retryable": False})
+
+    seen = {}
+    monkeypatch.setattr(ytm, "search_songs", lambda q, limit=10: seen.setdefault(
+        "q", q) and None or [
+            {"video_id": "GONE1", "title": "Song GONE1", "artists": ["Tester"],
+             "album": None, "duration_ms": 60_000, "raw": {}},
+            {"video_id": "ALIVE1", "title": "Song GONE1", "artists": ["Tester"],
+             "album": None, "duration_ms": 60_000, "raw": {}},
+        ])
+
+    out = client.post("/downloads/refind", headers=hdr, json={}).json()
+    assert out["found"] == 1, out
+    assert out["details"][0]["where"] == "youtube"
+
+    # The dead id must not be handed back, and the track is queued again.
+    assert db.one("""select count(*) n from track_sources
+                      where track_id=%s and provider_id='ALIVE1'""",
+                  (track["id"],))["n"] == 1
+    assert client.get(f"/tracks/{track['id']}", headers=hdr).json()["state"] == "pending"
+
+
+def test_refind_says_so_when_there_is_nothing(client, hdr, wsec, monkeypatch):
+    from muse import sources, ytm
+
+    track = client.post("/tracks/resolve", headers=hdr, json={"video_id": "GONE2"}).json()
+    job = client.post("/internal/jobs/lease", headers=wsec,
+                      json={"worker": "w"}).json()["jobs"][0]
+    client.post(f"/internal/jobs/{job['id']}/fail", headers=wsec,
+                json={"reason": "Video unavailable", "track_id": track["id"],
+                      "retryable": False})
+
+    monkeypatch.setattr(ytm, "search_songs", lambda q, limit=10: [])
+    monkeypatch.setattr(sources, "search", lambda *a, **k: [])
+    out = client.post("/downloads/refind", headers=hdr, json={}).json()
+    assert out["found"] == 0 and out["still_missing"] == 1
+    assert client.get(f"/tracks/{track['id']}", headers=hdr).json()["state"] == "failed", \
+        "a track nothing was found for stays failed rather than looking queued"
