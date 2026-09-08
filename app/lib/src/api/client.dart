@@ -221,10 +221,13 @@ class ApiClient {
     return (d['paused'] ?? false) as bool;
   }
 
-  Future<int> retryFailedDownloads({String? batchId}) async {
+  Future<int> retryFailedDownloads({String? batchId, String? failCode}) async {
     final d = await _decode(await http.post(_u('/downloads/retry-failed'),
         headers: _headers,
-        body: jsonEncode({if (batchId != null) 'batch_id': batchId})))
+        body: jsonEncode({
+          if (batchId != null) 'batch_id': batchId,
+          if (failCode != null) 'fail_code': failCode,
+        })))
         as Map<String, dynamic>;
     return (d['retrying'] ?? 0) as int;
   }

@@ -20,23 +20,31 @@ def overview(user: dict = Depends(current_user)):
     """Everything about the download queue in one request, because a screen that has
     to make five is a screen that flickers."""
     counts = {r["state"]: r["n"] for r in db.all_(
-        """select state, count(*) n from jobs
+        # An expired lease is a job nobody is working on — a worker that was killed
+        # mid-download leaves them behind, and counting them as "downloading" is how
+        # the screen ends up claiming five downloads from a worker that runs three.
+        """select case when state='leased' and leased_until < now() then 'pending'
+                       else state end as state,
+                  count(*) n
+             from jobs
             where kind='ingest'
               and (state <> 'done' or created_at > now() - interval '30 days')
-            group by state"""
+            group by 1"""
     )}
 
     active = db.all_(
         """select j.id as job_id, j.batch_label, (j.payload->>'track_id')::int as track_id
              from jobs j
-            where j.kind='ingest' and j.state='leased'
+            where j.kind='ingest' and j.state='leased' and j.leased_until > now()
             order by j.priority, j.created_at limit 10"""
     )
     waiting = db.all_(
         """select j.id as job_id, j.priority, j.batch_label,
                   (j.payload->>'track_id')::int as track_id
              from jobs j
-            where j.kind='ingest' and j.state='pending'
+            where j.kind='ingest'
+              and (j.state='pending'
+                   or (j.state='leased' and j.leased_until < now()))
             order by j.priority, j.created_at limit 40"""
     )
     failed = db.all_(
@@ -125,11 +133,18 @@ def retry_failed(body: dict = Body(default={}), user: dict = Depends(current_use
     network came back, or the worker's machine woke up.
     """
     batch = (body or {}).get("batch_id")
+    fail_code = (body or {}).get("fail_code")
     where = "kind='ingest' and state='failed'"
     params: tuple = ()
     if batch:
         where += " and batch_id=%s"
-        params = (batch,)
+        params += (batch,)
+    if fail_code:
+        # "Everything that failed because the IP was challenged" is worth retrying;
+        # "everything that failed" also re-asks for tracks YouTube has deleted.
+        where += """ and (payload->>'track_id')::int in
+                     (select id from tracks where fail_code=%s)"""
+        params += (fail_code,)
     rows = db.all_(
         f"""update jobs set state='pending', attempts=0, error=null,
                    next_attempt_at=now(), updated_at=now()

@@ -137,7 +137,7 @@ class _DownloadsPageState extends State<DownloadsPage> {
                         for (final b in d.batches) _BatchRow(batch: b, onAct: _act),
                       ],
                       if (d.active.isNotEmpty) ...[
-                        _Label('Downloading now'),
+                        _Label('Downloading now · ${d.downloading}'),
                         for (final item in d.active)
                           _ItemRow(item: item, showProgress: true),
                       ],
@@ -170,7 +170,8 @@ class _DownloadsPageState extends State<DownloadsPage> {
                         _Label('Failed · ${d.failed}'),
                         Padding(
                           padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                          child: Row(
+                          child: Wrap(
+                            spacing: 8,
                             children: [
                               FilledButton.tonalIcon(
                                 icon: const Icon(Icons.refresh, size: 18),
@@ -181,6 +182,19 @@ class _DownloadsPageState extends State<DownloadsPage> {
                                         .then((_) {}),
                                     'Retrying'),
                               ),
+                              // Worth separating: these tracks are fine, the
+                              // downloader was told to prove it is a person.
+                              if (d.failures.any(
+                                  (f) => f.track?.failCode == 'bot_check'))
+                                OutlinedButton.icon(
+                                  icon: const Icon(Icons.shield_outlined, size: 18),
+                                  label: const Text('Only the blocked ones'),
+                                  onPressed: () => _act(
+                                      () => app.api
+                                          .retryFailedDownloads(failCode: 'bot_check')
+                                          .then((_) {}),
+                                      'Retrying the blocked ones'),
+                                ),
                             ],
                           ),
                         ),

@@ -144,3 +144,66 @@ def test_emptying_the_whole_queue(client, hdr, queued):
 def test_batches_say_how_many_there_are(client, hdr, queued):
     over = client.get("/downloads", headers=hdr).json()
     assert over["batches_total"] == len(over["batches"]) >= 1
+
+
+def test_a_worker_can_take_several_at_once(client, hdr, queued, wsec):
+    """Downloads are nearly all waiting, so the worker runs a few in parallel."""
+    got = client.post("/internal/jobs/lease", headers=wsec,
+                      json={"worker": "w", "limit": 3}).json()["jobs"]
+    assert len(got) == 3, "a lease of three must hand out three"
+    assert len({j["id"] for j in got}) == 3, "and never the same job twice"
+    assert client.get("/downloads", headers=hdr).json()["counts"]["downloading"] == 3
+
+    # The next lease is for the one slot that freed up, and says what is still running.
+    more = client.post("/internal/jobs/lease", headers=wsec,
+                       json={"worker": "w", "limit": 1, "busy": 2}).json()["jobs"]
+    assert len(more) == 1
+    assert db.one("select leased from workers where name='w'")["leased"] == 3
+
+
+def test_a_full_worker_still_says_it_is_alive(client, hdr, wsec, queued):
+    """Every slot busy means no lease, and no lease used to mean 'offline'."""
+    client.post("/internal/jobs/lease", headers=wsec,
+                json={"worker": "w", "limit": 0, "busy": 3})
+    over = client.get("/downloads", headers=hdr).json()
+    assert over["worker"]["online"] is True
+    assert over["counts"]["downloading"] == 0, "a heartbeat must not take work"
+
+
+def test_an_abandoned_lease_is_waiting_again(client, hdr, queued, wsec):
+    """A worker killed mid-download must not leave 'downloading' rows behind."""
+    got = client.post("/internal/jobs/lease", headers=wsec,
+                      json={"worker": "w", "limit": 2}).json()["jobs"]
+    db.run("update jobs set leased_until = now() - interval '1 minute' where id=%s",
+           (got[0]["id"],))
+    counts = client.get("/downloads", headers=hdr).json()["counts"]
+    assert counts["downloading"] == 1, "only the live lease counts as downloading"
+    assert counts["waiting"] == 12, "the abandoned one is waiting again"
+
+
+def test_a_shutting_down_worker_gives_its_jobs_back(client, hdr, queued, wsec):
+    """Restarting the worker must not park two tracks for the ten minutes a lease lasts."""
+    job = client.post("/internal/jobs/lease", headers=wsec,
+                      json={"worker": "w", "limit": 1}).json()["jobs"][0]
+    assert client.post(f"/internal/jobs/{job['id']}/release", headers=wsec,
+                       json={"track_id": queued[0]}).status_code == 200
+    row = db.one("select state, attempts from jobs where id=%s", (job["id"],))
+    assert row["state"] == "pending"
+    assert row["attempts"] == 0, "an attempt nobody made must not count against it"
+    assert client.get("/downloads", headers=hdr).json()["counts"]["waiting"] == 13
+
+
+def test_retrying_only_what_is_worth_retrying(client, hdr, queued, wsec):
+    """A challenged IP is worth another go; a deleted video is not."""
+    two = client.post("/internal/jobs/lease", headers=wsec,
+                      json={"worker": "w", "limit": 2}).json()["jobs"]
+    client.post(f"/internal/jobs/{two[0]['id']}/fail", headers=wsec,
+                json={"reason": "Sign in to confirm you’re not a bot",
+                      "track_id": two[0]["payload"]["track_id"], "retryable": False})
+    client.post(f"/internal/jobs/{two[1]['id']}/fail", headers=wsec,
+                json={"reason": "Video unavailable",
+                      "track_id": two[1]["payload"]["track_id"], "retryable": False})
+
+    assert client.post("/downloads/retry-failed", headers=hdr,
+                       json={"fail_code": "bot_check"}).json()["retrying"] == 1
+    assert client.get("/downloads", headers=hdr).json()["counts"]["failed"] == 1

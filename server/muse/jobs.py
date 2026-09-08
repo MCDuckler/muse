@@ -54,7 +54,8 @@ def set_paused(value: bool) -> None:
 
 
 def lease_wait(worker: str, kind: str = "ingest", limit: int = 1,
-               wait_seconds: float = 0.0, poll: float = 0.25) -> list[dict]:
+               wait_seconds: float = 0.0, poll: float = 0.25,
+               busy: int | None = None) -> list[dict]:
     """Lease, or hold the connection open until work appears.
 
     Polling every few seconds meant a track sat queued for up to that long before
@@ -63,19 +64,26 @@ def lease_wait(worker: str, kind: str = "ingest", limit: int = 1,
     """
     deadline = time.monotonic() + wait_seconds
     while True:
-        got = lease(worker, kind, limit)
+        got = lease(worker, kind, limit, busy=busy)
         if got or time.monotonic() >= deadline:
             return got
         time.sleep(poll)
 
 
-def lease(worker: str, kind: str = "ingest", limit: int = 1) -> list[dict]:
+def lease(worker: str, kind: str = "ingest", limit: int = 1,
+          busy: int | None = None) -> list[dict]:
+    """Hand out up to `limit` jobs.
+
+    `busy` is what the worker already has in flight: a worker that downloads three at a
+    time leases one job at a time as slots free, and without this the recorded count
+    would read as 1 while three were running.
+    """
     # A pause has to stop work being handed out, not just hide it in the UI.
     if kind == "ingest" and paused():
         db.run(
-            """insert into workers(name,last_seen,leased) values(%s,now(),0)
-               on conflict (name) do update set last_seen=now(), leased=0""",
-            (worker,),
+            """insert into workers(name,last_seen,leased) values(%s,now(),%s)
+               on conflict (name) do update set last_seen=now(), leased=excluded.leased""",
+            (worker, busy or 0),
         )
         return []
     with db.pool().connection() as c:
@@ -105,9 +113,25 @@ def lease(worker: str, kind: str = "ingest", limit: int = 1) -> list[dict]:
         c.execute(
             """insert into workers(name,last_seen,leased) values(%s,now(),%s)
                on conflict (name) do update set last_seen=now(), leased=excluded.leased""",
-            (worker, len(rows)),
+            (worker, (busy or 0) + len(rows)),
         )
     return rows
+
+
+def release(job_id: int) -> None:
+    """Hand a job back unstarted.
+
+    A worker that is being shut down knows its downloads will not finish. Without this
+    the job sits leased for ten minutes and burns one of its three attempts for a
+    reason that had nothing to do with the track.
+    """
+    db.run(
+        """update jobs set state='pending', leased_by=null, leased_until=null,
+                  attempts=greatest(attempts-1, 0), next_attempt_at=now(),
+                  updated_at=now()
+            where id=%s and state='leased'""",
+        (job_id,),
+    )
 
 
 def finish(job_id: int) -> None:

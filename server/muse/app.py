@@ -320,6 +320,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             body.get("kind", "ingest"),
             int(body.get("limit", 1)),
             wait_seconds=float(body.get("wait", 0)),
+            busy=int(body["busy"]) if body.get("busy") is not None else None,
         )
         for j in leased:
             if tid := j["payload"].get("track_id"):
@@ -331,6 +332,14 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
                           # on, and so tests can assert on ordering.
                           "batch_id": j.get("batch_id"),
                           "batch_label": j.get("batch_label")} for j in leased]}
+
+    @app.post("/internal/jobs/{job_id}/release", dependencies=[Depends(worker_auth)])
+    def release_job(job_id: int, body: dict | None = None):
+        """A worker shutting down gives back what it will not finish."""
+        jobs.release(job_id)
+        if body and (tid := body.get("track_id")):
+            progress.clear(int(tid))
+        return {"released": job_id}
 
     @app.post("/internal/jobs/{job_id}/progress", dependencies=[Depends(worker_auth)])
     def report_progress(job_id: int, body: dict):
