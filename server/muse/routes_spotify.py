@@ -14,7 +14,7 @@ import logging
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 
-from . import catalog, db, match, spotify, sync, ytm
+from . import catalog, db, jobs, match, spotify, sync, ytm
 from .deps import cfg, current_user
 
 log = logging.getLogger("muse.spotify")
@@ -179,9 +179,14 @@ def _mirror(user_id: int, remote: dict) -> dict:
     resolved: list[int] = []
     missing: list[dict] = []
 
+    # One batch per playlist, at bulk priority: an import fills in behind whatever
+    # you are listening to rather than in front of it.
+    batch_id = f"spotify:{remote['remote_id']}"
+    batch_label = f"Spotify · {remote['name']}"
     for pos, item in enumerate(items):
         try:
-            outcome = sync.resolve_item("spotify", item)
+            outcome = sync.resolve_item("spotify", item, priority=jobs.PRIORITY_BULK,
+                                        batch_id=batch_id, batch_label=batch_label)
         except Exception as e:
             outcome = {"track_id": None, "confidence": 0.0, "method": f"error: {e}"}
         if outcome.get("track_id"):

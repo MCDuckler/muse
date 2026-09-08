@@ -290,8 +290,10 @@ class _HistoryPageState extends State<_HistoryPage> {
     _load();
   }
 
-  void _load() =>
-      setState(() => _future = context.read<AppState>().api.playHistory());
+  void _load() {
+    final pending = context.read<AppState>().api.playHistory();
+    setState(() { _future = pending; });
+  }
 
   /// Grouped by day. A flat list with no sense of when is not a history.
   static String _dayLabel(DateTime? when) {

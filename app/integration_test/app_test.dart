@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:muse/main.dart' as app;
 import 'package:muse/src/ui/player_bar.dart';
+import 'package:muse/src/ui/downloads_page.dart';
 import 'package:muse/src/ui/queue_page.dart';
 import 'package:muse/src/ui/search_page.dart';
 
@@ -379,6 +380,46 @@ void main() {
     expect(settings.repeat, 'all');
     expect(settings.items.length, itemsBefore,
         reason: 'a settings change must never clear the queue');
+
+    // ---- the download queue can be looked at and understood ----
+    // Read-only on purpose: the real server here is mid-import, and pause/cancel are
+    // covered by server tests. What can only break here is the screen itself.
+    await tester.tap(find.byIcon(Icons.settings_outlined));
+    await settle(tester, seconds: 3);
+    // A page that throws while building leaves an ErrorWidget behind, which contains
+    // no Text and no Scrollable at all — so check the shape of the page, and report
+    // what the tree threw, or the failure says nothing about why.
+    expect(find.byType(Scrollable), findsWidgets,
+        reason: 'settings must open. caught=$caught');
+    // Settings is a lazy ListView: a row below the fold does not exist in the tree
+    // yet, so it has to be scrolled to before it can be found at all.
+    await tester.scrollUntilVisible(find.text('Download queue'), 120,
+        scrollable: find.byType(Scrollable).last);
+    await settle(tester, seconds: 2);
+    expect(find.text('Download queue'), findsOneWidget,
+        reason: 'downloads must be reachable without hunting. '
+            'On screen: ${visibleText(tester)}');
+    await tester.tap(find.text('Download queue'));
+    await settle(tester, seconds: 6);
+    expect(find.byType(DownloadsPage), findsOneWidget);
+    final overview = await appState.api.downloads();
+    expect(
+        find.textContaining(overview.paused
+            ? 'Paused'
+            : overview.outstanding == 0
+                ? 'Up to date'
+                : 'to download'),
+        findsWidgets,
+        reason: 'the screen must say what the queue is doing. '
+            'On screen: ${visibleText(tester)}');
+    if (overview.batches.isNotEmpty) {
+      expect(find.textContaining(overview.batches.first.label), findsWidgets,
+          reason: 'an import must appear as one named row, not N anonymous ones');
+      expect(onPage(DownloadsPage, find.byType(LinearProgressIndicator)), findsWidgets,
+          reason: 'and carry how far along it is');
+    }
+    await tester.pageBack();
+    await settle(tester, seconds: 2);
 
     expect(caught, isEmpty,
         reason: 'the widget tree must not throw while all this happens');

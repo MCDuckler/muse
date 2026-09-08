@@ -219,3 +219,37 @@ create table if not exists invites (
   used_at    timestamptz,
   used_by    int references users(id)
 );
+
+-- Downloads are managed, not just queued. Priority so a track you are about to play
+-- jumps a 200-track backfill; a batch so a playlist import reads as one thing rather
+-- than two hundred anonymous rows.
+alter table jobs add column if not exists priority int not null default 100;
+alter table jobs add column if not exists batch_id text;
+alter table jobs add column if not exists batch_label text;
+create index if not exists jobs_batch on jobs(batch_id);
+create index if not exists jobs_queue_order on jobs(kind, state, priority, created_at);
+
+-- Server-wide switches that outlive a restart. Pausing downloads is the only one so
+-- far, and it belongs in the database rather than in a process that gets redeployed.
+create table if not exists settings (
+  key   text primary key,
+  value text,
+  set_at timestamptz not null default now()
+);
+
+-- Jobs enqueued before batches existed still belong to an import. Tag them from the
+-- mirrored playlist their track came from, so a queue that is already 1300 deep reads
+-- as a handful of playlists instead of an anonymous wall. Only tracks discovered by a
+-- sync are touched: a track you asked for yourself stays unlabelled and ahead.
+update jobs j set batch_id = b.batch_id, batch_label = b.label
+  from (select distinct on (pi.track_id) pi.track_id,
+               'spotify:' || p.remote_id as batch_id,
+               'Spotify · ' || p.name    as label
+          from playlist_items pi
+          join playlists p on p.id = pi.playlist_id
+          join tracks t on t.id = pi.track_id
+         where p.kind = 'spotify' and t.discovered_via = 'sync'
+         order by pi.track_id, p.id) b
+ where j.kind = 'ingest' and j.batch_id is null
+   and j.state in ('pending', 'leased', 'failed')
+   and (j.payload->>'track_id')::int = b.track_id;

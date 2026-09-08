@@ -11,12 +11,46 @@ LEASE_SECONDS = 600
 MAX_ATTEMPTS = 3
 
 
-def enqueue(kind: str, payload: dict) -> int:
+# Lower runs sooner. The default sits in the middle so both directions are available.
+PRIORITY_NOW = 10        # you are waiting for this one
+PRIORITY_NORMAL = 100    # you asked for it
+PRIORITY_BULK = 500      # a playlist import filling in behind you
+
+
+def enqueue(kind: str, payload: dict, priority: int = PRIORITY_NORMAL,
+            batch_id: str | None = None, batch_label: str | None = None) -> int:
     row = db.one(
-        "insert into jobs(kind,payload) values(%s,%s) returning id",
-        (kind, json.dumps(payload)),
+        """insert into jobs(kind, payload, priority, batch_id, batch_label)
+           values(%s,%s,%s,%s,%s) returning id""",
+        (kind, json.dumps(payload), priority, batch_id, batch_label),
     )
     return row["id"]
+
+
+def promote(track_id: int, priority: int = PRIORITY_NOW) -> bool:
+    """Move a track to the front. Pressing play on something still downloading should
+    not mean waiting behind a hundred tracks queued by an import."""
+    row = db.one(
+        """update jobs set priority=%s
+            where kind='ingest' and state='pending'
+              and (payload->>'track_id')::int = %s
+            returning id""",
+        (priority, track_id),
+    )
+    return row is not None
+
+
+def paused() -> bool:
+    row = db.one("select value from settings where key='downloads_paused'")
+    return bool(row and row["value"] == "1")
+
+
+def set_paused(value: bool) -> None:
+    db.run(
+        """insert into settings(key, value, set_at) values('downloads_paused',%s,now())
+           on conflict (key) do update set value=excluded.value, set_at=now()""",
+        ("1" if value else "0",),
+    )
 
 
 def lease_wait(worker: str, kind: str = "ingest", limit: int = 1,
@@ -36,6 +70,14 @@ def lease_wait(worker: str, kind: str = "ingest", limit: int = 1,
 
 
 def lease(worker: str, kind: str = "ingest", limit: int = 1) -> list[dict]:
+    # A pause has to stop work being handed out, not just hide it in the UI.
+    if kind == "ingest" and paused():
+        db.run(
+            """insert into workers(name,last_seen,leased) values(%s,now(),0)
+               on conflict (name) do update set last_seen=now(), leased=0""",
+            (worker,),
+        )
+        return []
     with db.pool().connection() as c:
         rows = c.execute(
             """
@@ -46,7 +88,7 @@ def lease(worker: str, kind: str = "ingest", limit: int = 1) -> list[dict]:
                       or (state='leased' and leased_until < now()))
                  and next_attempt_at <= now()
                  and attempts < %s
-               order by created_at
+               order by priority, created_at
                for update skip locked
                limit %s
             )
@@ -56,7 +98,7 @@ def lease(worker: str, kind: str = "ingest", limit: int = 1) -> list[dict]:
                    attempts=j.attempts+1, updated_at=now()
               from picked p
              where j.id=p.id
-            returning j.id, j.kind, j.payload, j.attempts
+            returning j.id, j.kind, j.payload, j.attempts, j.batch_id, j.batch_label
             """,
             (kind, MAX_ATTEMPTS, limit, worker, LEASE_SECONDS),
         ).fetchall()

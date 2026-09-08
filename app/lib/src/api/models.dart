@@ -427,3 +427,132 @@ class SpotifyPlaylist {
         .join(' · ');
   }
 }
+
+
+/// One import, as a person thinks about it: a name and a progress bar, not a hundred
+/// and twenty anonymous rows.
+class DownloadBatch {
+  final String id;
+  final String label;
+  final int total;
+  final int done;
+  final int failed;
+  final int remaining;
+
+  const DownloadBatch({
+    required this.id,
+    required this.label,
+    required this.total,
+    required this.done,
+    required this.failed,
+    required this.remaining,
+  });
+
+  factory DownloadBatch.fromJson(Map<String, dynamic> j) => DownloadBatch(
+        id: (j['batch_id'] ?? '') as String,
+        label: (j['label'] ?? 'Import') as String,
+        total: (j['total'] ?? 0) as int,
+        done: (j['done'] ?? 0) as int,
+        failed: (j['failed'] ?? 0) as int,
+        remaining: (j['remaining'] ?? 0) as int,
+      );
+
+  double get fraction => total == 0 ? 0 : (done + failed) / total;
+  bool get finished => remaining == 0;
+
+  String get summary => [
+        '$done of $total',
+        if (failed > 0) '$failed failed',
+      ].join(' · ');
+}
+
+/// A queued, running or failed download, with the track behind it.
+class DownloadItem {
+  final int? jobId;
+  final Track? track;
+  final String? batchLabel;
+  final String? error;
+  final Map<String, dynamic>? progress;
+
+  const DownloadItem({this.jobId, this.track, this.batchLabel, this.error,
+      this.progress});
+
+  factory DownloadItem.fromJson(Map<String, dynamic> j) => DownloadItem(
+        jobId: j['job_id'] as int?,
+        track: j['track'] == null
+            ? null
+            : Track.fromJson(j['track'] as Map<String, dynamic>),
+        batchLabel: j['batch_label'] as String?,
+        error: j['error'] as String?,
+        progress: (j['progress'] as Map?)?.cast<String, dynamic>(),
+      );
+
+  double? get fraction => (progress?['percent'] as num?)?.toDouble();
+
+  String get line {
+    final p = progress;
+    if (p != null) {
+      final pct = fraction;
+      return pct == null
+          ? '${p['label'] ?? 'Working'}…'
+          : '${p['label']} ${(pct * 100).round()}%'
+              '${p['speed'] == null ? '' : ' · ${p['speed']}'}';
+    }
+    return track?.artistLine ?? '';
+  }
+}
+
+class DownloadOverview {
+  final bool paused;
+  final bool workerOnline;
+  final String? workerName;
+  final int waiting;
+  final int downloading;
+  final int failed;
+  final List<DownloadItem> active;
+  final List<DownloadItem> queued;
+  final List<DownloadItem> failures;
+  final List<DownloadBatch> batches;
+
+  /// How many imports are still going, which is not always how many [batches] lists.
+  final int batchesTotal;
+
+  const DownloadOverview({
+    required this.paused,
+    required this.workerOnline,
+    this.workerName,
+    required this.waiting,
+    required this.downloading,
+    required this.failed,
+    this.active = const [],
+    this.queued = const [],
+    this.failures = const [],
+    this.batches = const [],
+    this.batchesTotal = 0,
+  });
+
+  factory DownloadOverview.fromJson(Map<String, dynamic> j) {
+    final counts = (j['counts'] as Map?) ?? {};
+    final worker = (j['worker'] as Map?) ?? {};
+    List<DownloadItem> items(String key) =>
+        ((j[key] ?? const []) as List).map((e) => DownloadItem.fromJson(e)).toList();
+    return DownloadOverview(
+      paused: (j['paused'] ?? false) as bool,
+      workerOnline: (worker['online'] ?? false) as bool,
+      workerName: worker['name'] as String?,
+      waiting: (counts['waiting'] ?? 0) as int,
+      downloading: (counts['downloading'] ?? 0) as int,
+      failed: (counts['failed'] ?? 0) as int,
+      active: items('active'),
+      queued: items('waiting'),
+      failures: items('failed'),
+      batchesTotal: (j['batches_total'] ?? (j['batches'] as List?)?.length ?? 0) as int,
+      batches: ((j['batches'] ?? const []) as List)
+          .map((e) => DownloadBatch.fromJson(e))
+          .toList(),
+    );
+  }
+
+  int get outstanding => waiting + downloading;
+  bool get idle => outstanding == 0 && failed == 0;
+}

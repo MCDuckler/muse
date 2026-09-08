@@ -209,6 +209,42 @@ class ApiClient {
         '${key == null ? '' : '&k=${Uri.encodeQueryComponent(key)}'}';
   }
 
+  // ---------------- downloads ----------------
+  Future<DownloadOverview> downloads() async => DownloadOverview.fromJson(
+      await _decode(await http.get(_u('/downloads'), headers: _headers))
+          as Map<String, dynamic>);
+
+  Future<bool> pauseDownloads(bool paused) async {
+    final d = await _decode(await http.post(_u('/downloads/pause'),
+        headers: _headers, body: jsonEncode({'paused': paused})))
+        as Map<String, dynamic>;
+    return (d['paused'] ?? false) as bool;
+  }
+
+  Future<int> retryFailedDownloads({String? batchId}) async {
+    final d = await _decode(await http.post(_u('/downloads/retry-failed'),
+        headers: _headers,
+        body: jsonEncode({if (batchId != null) 'batch_id': batchId})))
+        as Map<String, dynamic>;
+    return (d['retrying'] ?? 0) as int;
+  }
+
+  Future<int> cancelDownloads({String? batchId, int? trackId, bool all = false}) async {
+    final d = await _decode(await http.post(_u('/downloads/cancel'),
+        headers: _headers,
+        body: jsonEncode({
+          if (batchId != null) 'batch_id': batchId,
+          if (trackId != null) 'track_id': trackId,
+          if (all) 'all': true,
+        }))) as Map<String, dynamic>;
+    return (d['cancelled'] ?? 0) as int;
+  }
+
+  Future<void> promoteDownload(int trackId) async {
+    await _decode(await http.post(_u('/downloads/promote'),
+        headers: _headers, body: jsonEncode({'track_id': trackId})));
+  }
+
   Future<Map<String, dynamic>> status() async =>
       await _decode(await http.get(_u('/status'), headers: _headers))
           as Map<String, dynamic>;

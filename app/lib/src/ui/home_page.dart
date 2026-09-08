@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
+import 'downloads_page.dart';
 import 'glass.dart';
 import 'library_page.dart';
 import 'settings_page.dart';
@@ -37,6 +38,16 @@ class _HomePageState extends State<HomePage> {
             onPressed: app.refresh,
             tooltip: 'Refresh',
           ),
+          if (app.downloadsPending > 0)
+            IconButton(
+              icon: Badge(
+                label: Text('${app.downloadsPending}'),
+                child: const Icon(Icons.downloading),
+              ),
+              tooltip: 'Downloads',
+              onPressed: () => Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
+            ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
             tooltip: 'Settings',
@@ -55,7 +66,11 @@ class _HomePageState extends State<HomePage> {
         child: Column(
           children: [
             if (!app.ingestOnline && app.downloadsPending > 0)
-              _OfflineBanner(pending: app.downloadsPending),
+              InkWell(
+                onTap: () => Navigator.of(context)
+                    .push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
+                child: _OfflineBanner(pending: app.downloadsPending),
+              ),
             Expanded(
               child: IndexedStack(
                 index: _tab,

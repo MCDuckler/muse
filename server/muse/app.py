@@ -18,8 +18,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from . import (auth, catalog, config, db, enrich_worker, failures, jobs, progress,
-               routes_accounts, routes_browse, routes_files, routes_library, routes_play,
-               routes_spotify, routes_sync, storage, ytm)
+               routes_accounts, routes_browse, routes_downloads, routes_files,
+               routes_library, routes_play, routes_spotify, routes_sync, storage, ytm)
 from . import deps
 from .deps import current_user, worker_auth
 
@@ -182,6 +182,9 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         if cached:
             if cached["state"] == "failed":       # retry a previously failed ingest
                 cached = catalog.retry(cached["id"], video_id)
+            elif cached["state"] != "ready":
+                # Asking for it again means you are waiting on it: move it forward.
+                jobs.promote(cached["id"])
             return catalog.public(cached)
 
         meta = meta or ytm.song(video_id) or {"video_id": video_id, "title": video_id,
@@ -323,7 +326,11 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
                 publish("track_progress",
                         {"track_id": tid, **progress.update(tid, "queued")})
         return {"jobs": [{"id": j["id"], "kind": j["kind"], "payload": j["payload"],
-                          "attempts": j["attempts"]} for j in leased]}
+                          "attempts": j["attempts"],
+                          # Passed through so the worker can say what it is working
+                          # on, and so tests can assert on ordering.
+                          "batch_id": j.get("batch_id"),
+                          "batch_label": j.get("batch_label")} for j in leased]}
 
     @app.post("/internal/jobs/{job_id}/progress", dependencies=[Depends(worker_auth)])
     def report_progress(job_id: int, body: dict):
@@ -433,6 +440,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
 
     app.include_router(routes_accounts.router)
     app.include_router(routes_browse.router)
+    app.include_router(routes_downloads.router)
     app.include_router(routes_library.router)
     app.include_router(routes_sync.router)
     app.include_router(routes_spotify.router)

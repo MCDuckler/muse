@@ -78,7 +78,10 @@ def find_by_video_id(video_id: str) -> dict | None:
     return track_row(row["track_id"]) if row else None
 
 
-def create_from_ytm(meta: dict, discovered_via: str = VIA_USER) -> dict:
+def create_from_ytm(meta: dict, discovered_via: str = VIA_USER,
+                    priority: int = jobs.PRIORITY_NORMAL,
+                    batch_id: str | None = None,
+                    batch_label: str | None = None) -> dict:
     """New track row in `pending` plus the ingest job. Never downloads inline."""
     row = db.one(
         """insert into tracks(title,artists,album,duration_ms,source,state,discovered_via)
@@ -89,10 +92,11 @@ def create_from_ytm(meta: dict, discovered_via: str = VIA_USER) -> dict:
         "insert into track_sources(track_id,provider,provider_id,raw) values(%s,'ytmusic',%s,%s)",
         (row["id"], meta["video_id"], json.dumps(meta.get("raw") or {})),
     )
-    jobs.enqueue("ingest", {"track_id": row["id"], "video_id": meta["video_id"]})
+    jobs.enqueue("ingest", {"track_id": row["id"], "video_id": meta["video_id"]},
+                 priority=priority, batch_id=batch_id, batch_label=batch_label)
     # Artwork does not depend on the audio, and a queue row with a cover while it
     # downloads is far better than a grey square that fills in minutes later.
-    jobs.enqueue("meta", {"track_id": row["id"]})
+    jobs.enqueue("meta", {"track_id": row["id"]}, batch_id=batch_id)
     return track_row(row["id"])
 
 

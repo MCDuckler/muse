@@ -26,7 +26,10 @@ class _AccountsPageState extends State<AccountsPage> {
     _load();
   }
 
-  void _load() => setState(() => _future = context.read<AppState>().api.accounts());
+  void _load() {
+    final pending = context.read<AppState>().api.accounts();
+    setState(() { _future = pending; });
+  }
 
   Future<void> _invite() async {
     final app = context.read<AppState>();

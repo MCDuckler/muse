@@ -95,7 +95,10 @@ class _AlbumsPageState extends State<AlbumsPage> {
     _load();
   }
 
-  void _load() => setState(() => _future = context.read<AppState>().api.albums());
+  void _load() {
+    final pending = context.read<AppState>().api.albums();
+    setState(() { _future = pending; });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -200,7 +203,10 @@ class _ArtistsPageState extends State<ArtistsPage> {
     _load();
   }
 
-  void _load() => setState(() => _future = context.read<AppState>().api.artists());
+  void _load() {
+    final pending = context.read<AppState>().api.artists();
+    setState(() { _future = pending; });
+  }
 
   @override
   Widget build(BuildContext context) {

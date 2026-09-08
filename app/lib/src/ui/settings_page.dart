@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
 import 'dialogs.dart';
+import 'downloads_page.dart';
 import 'accounts_page.dart';
 import 'spotify_page.dart';
 import 'track_menu.dart';
@@ -32,7 +33,12 @@ class _SettingsPageState extends State<SettingsPage> {
     _load();
   }
 
-  void _load() => setState(() => _storage = context.read<AppState>().api.storage());
+  // A block body, not an arrow: `() => _x = future` returns that future, and
+  // setState refuses a callback that returns one.
+  void _load() {
+    final pending = context.read<AppState>().api.storage();
+    setState(() { _storage = pending; });
+  }
 
   String _size(num bytes) {
     if (bytes >= 1e9) return '${(bytes / 1e9).toStringAsFixed(2)} GB';
@@ -131,6 +137,16 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const Divider(),
           _label(context, 'Downloads'),
+          ListTile(
+            leading: const Icon(Icons.downloading),
+            title: const Text('Download queue'),
+            subtitle: Text(app.downloadsPending == 0
+                ? 'Nothing waiting'
+                : '${app.downloadsPending} waiting'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
+          ),
           ListTile(
             leading: Icon(app.ingestOnline ? Icons.cloud_done : Icons.cloud_off,
                 color: app.ingestOnline
