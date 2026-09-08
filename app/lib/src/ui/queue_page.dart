@@ -6,6 +6,7 @@ import '../state/app_state.dart';
 import '../state/player.dart';
 import 'artwork.dart';
 import 'dialogs.dart';
+import 'track_menu.dart';
 
 /// Queues are the product, so this screen shows them all, not just the one playing.
 class QueuePage extends StatefulWidget {
@@ -309,22 +310,15 @@ class _QueuePageState extends State<QueuePage> {
     );
   }
 
-  Widget _rowMenu(BuildContext context, AppState app, Track t, int i) =>
-      PopupMenuButton<String>(
+  Widget _rowMenu(BuildContext context, AppState app, Track t, int i) => IconButton(
         icon: const Icon(Icons.more_vert, size: 20),
         tooltip: 'Track actions',
-        onSelected: (v) async {
-          switch (v) {
-            case 'remove':
-              await app.removeFromQueue(i, context: context);
-            case 'playlist':
-              await addToPlaylistSheet(context, app, t);
-          }
-        },
-        itemBuilder: (context) => const [
-          PopupMenuItem(value: 'playlist', child: Text('Add to playlist…')),
-          PopupMenuItem(value: 'remove', child: Text('Remove from queue')),
-        ],
+        onPressed: () => showTrackSheet(
+          context,
+          t,
+          onRemove: () => app.removeFromQueue(i, context: context),
+          onChanged: app.refresh,
+        ),
       );
 
   Future<void> _saveAsPlaylist(BuildContext context, AppState app) async {

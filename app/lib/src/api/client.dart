@@ -338,6 +338,36 @@ class ApiClient {
               headers: _headers, body: jsonEncode({'from': from, 'to': to})))
           as Map<String, dynamic>);
 
+  Future<({String? synced, String? plain, String? source})> lyrics(int trackId) async {
+    final d = await _decode(
+            await http.get(_u('/tracks/$trackId/lyrics'), headers: _headers))
+        as Map<String, dynamic>;
+    return (
+      synced: d['synced'] as String?,
+      plain: d['plain'] as String?,
+      source: d['source'] as String?,
+    );
+  }
+
+  Future<Track> updateTrack(int id, Map<String, dynamic> fields) async =>
+      Track.fromJson(await _decode(await http.patch(_u('/tracks/$id'),
+              headers: _headers, body: jsonEncode(fields))) as Map<String, dynamic>);
+
+  Future<Map<String, dynamic>> storage() async =>
+      await _decode(await http.get(_u('/admin/storage'), headers: _headers))
+          as Map<String, dynamic>;
+
+  /// Upload a file from the device. Bytes rather than a path, because the web build
+  /// never has a path to give.
+  Future<Track> upload(List<int> bytes, String filename) async {
+    final request = http.MultipartRequest('POST', _u('/uploads'))
+      ..headers.addAll({if (token != null) 'Authorization': 'Bearer $token'})
+      ..files.add(http.MultipartFile.fromBytes('audio', bytes, filename: filename));
+    final streamed = await request.send();
+    final response = await http.Response.fromStream(streamed);
+    return Track.fromJson(await _decode(response) as Map<String, dynamic>);
+  }
+
   Future<List<Track>> history() async {
     final d = await _decode(await http.get(_u('/history'), headers: _headers)) as List;
     return d.map((e) => Track.fromJson(e)).toList();

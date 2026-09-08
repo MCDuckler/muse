@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../state/app_state.dart';
 import 'glass.dart';
 import 'library_page.dart';
+import 'settings_page.dart';
 import 'player_bar.dart';
 import 'queue_page.dart';
 import 'search_page.dart';
@@ -36,14 +37,11 @@ class _HomePageState extends State<HomePage> {
             onPressed: app.refresh,
             tooltip: 'Refresh',
           ),
-          PopupMenuButton<String>(
-            onSelected: (v) {
-              if (v == 'logout') app.logout();
-            },
-            itemBuilder: (context) => [
-              PopupMenuItem(value: 'user', enabled: false, child: Text(app.user ?? '')),
-              const PopupMenuItem(value: 'logout', child: Text('Sign out')),
-            ],
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'Settings',
+            onPressed: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const SettingsPage())),
           ),
         ],
       ),

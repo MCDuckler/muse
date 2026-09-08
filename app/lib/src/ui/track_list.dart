@@ -5,6 +5,7 @@ import '../api/models.dart';
 import '../state/app_state.dart';
 import 'artwork.dart';
 import 'dialogs.dart';
+import 'track_menu.dart';
 
 /// One way of rendering a list of tracks, used by every browse screen.
 ///
@@ -43,27 +44,11 @@ class TrackList extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
-          trailing: PopupMenuButton<String>(
+          trailing: IconButton(
             icon: const Icon(Icons.more_vert, size: 20),
-            onSelected: (v) async {
-              switch (v) {
-                case 'next':
-                  await app.addTrack(t, mode: 'next');
-                case 'end':
-                  await app.addTrack(t);
-                case 'playlist':
-                  await addToPlaylistSheet(context, app, t);
-                case 'remove':
-                  onRemove?.call(i - 1);
-              }
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(value: 'next', child: Text('Play next')),
-              const PopupMenuItem(value: 'end', child: Text('Add to queue')),
-              const PopupMenuItem(value: 'playlist', child: Text('Add to playlist…')),
-              if (onRemove != null)
-                const PopupMenuItem(value: 'remove', child: Text('Remove')),
-            ],
+            tooltip: 'Track actions',
+            onPressed: () => showTrackSheet(context, t,
+                onRemove: onRemove == null ? null : () => onRemove!(i - 1)),
           ),
           onTap: () => app.playNow(tracks, startAt: i - 1),
         );

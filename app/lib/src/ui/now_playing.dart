@@ -7,6 +7,8 @@ import '../state/player.dart';
 import 'artwork.dart';
 import 'glass.dart';
 import 'swipe.dart';
+import 'lyrics_sheet.dart';
+import 'track_menu.dart';
 import 'up_next.dart';
 
 String formatTime(Duration d) {
@@ -46,11 +48,24 @@ class NowPlayingScreen extends StatelessWidget {
                 style: Theme.of(context).textTheme.titleSmall),
             centerTitle: true,
             actions: [
+              if (track != null)
+                IconButton(
+                  icon: const Icon(Icons.lyrics_outlined),
+                  tooltip: 'Lyrics',
+                  onPressed: () => showLyrics(context, track),
+                ),
               IconButton(
                 icon: const Icon(Icons.queue_music),
                 tooltip: 'Up next',
                 onPressed: () => showUpNext(context),
               ),
+              if (track != null)
+                IconButton(
+                  icon: const Icon(Icons.more_vert),
+                  tooltip: 'Track actions',
+                  onPressed: () => showTrackSheet(context, track,
+                      onChanged: app.refresh),
+                ),
             ],
           ),
           body: DragFollow(
