@@ -16,7 +16,10 @@ cd "$(dirname "$0")"
 : "${MUSE_CONCURRENCY:=6}"
 : "${POT_PORT:=4416}"
 : "${POT_HOME:=$HOME/.local/bgutil-pot}"
-: "${FIREFOX_PROFILE:=}"          # e.g. 1aa87zud.default-release; empty = let yt-dlp pick
+: "${COOKIE_BROWSER:=firefox}"    # firefox | chromium | chrome — where the jar comes from
+: "${FIREFOX_PROFILE:=}"          # profile name; point this at a throwaway account's
+                                  # profile to keep a real account out of it
+: "${MUSE_COOKIES_MODE:=fallback}"  # anonymous first, signed in only when challenged
 COOKIE_FILE="$PWD/cookies.txt"
 YTDLP="$PWD/.venv/bin/yt-dlp"
 
@@ -44,8 +47,8 @@ fi
 # Re-exported on every start, and hourly after that: YouTube rotates these, and a jar
 # that was fresh last week is a jar that gets you challenged today.
 refresh_cookies() {
-  local from="firefox"
-  [ -n "$FIREFOX_PROFILE" ] && from="firefox:$FIREFOX_PROFILE"
+  local from="$COOKIE_BROWSER"
+  [ -n "$FIREFOX_PROFILE" ] && from="$COOKIE_BROWSER:$FIREFOX_PROFILE"
   if "$YTDLP" --cookies-from-browser "$from" --cookies "$COOKIE_FILE.new" \
        --simulate --skip-download --no-warnings \
        "https://music.youtube.com/watch?v=dQw4w9WgXcQ" >/dev/null 2>&1 \
@@ -65,7 +68,7 @@ REFRESHER=$!
 trap 'kill $REFRESHER 2>/dev/null' EXIT
 
 # --- the worker --------------------------------------------------------------
-export MUSE_API MUSE_WORKER_NAME MUSE_CONCURRENCY
+export MUSE_API MUSE_WORKER_NAME MUSE_CONCURRENCY MUSE_COOKIES_MODE
 export MUSE_COOKIES="$COOKIE_FILE"
 export MUSE_POT_BASE_URL="http://127.0.0.1:$POT_PORT"
 

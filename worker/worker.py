@@ -43,6 +43,10 @@ TARGET_LUFS = -14.0
 # Contingencies, off by default — the spike downloaded fine without either.
 # Set them the day downloads start failing; see NOTES.md.
 COOKIES = os.environ.get("MUSE_COOKIES")           # path to cookies.txt
+# always   — every request signed in (fastest while the IP is challenged)
+# fallback — anonymous first, signed in only for the tracks that get challenged
+# never    — anonymous only, and accept what that costs
+COOKIES_MODE = os.environ.get("MUSE_COOKIES_MODE", "fallback" if COOKIES else "never")
 POT_PROVIDER = os.environ.get("MUSE_POT_BASE_URL")  # bgutil provider base url
 
 H = {"X-Worker-Secret": SECRET}
@@ -158,11 +162,12 @@ def cookie_copy(tmp_dir: pathlib.Path) -> pathlib.Path | None:
     return dst
 
 
-def download_with_progress(video_id: str, tmp_dir: pathlib.Path,
-                           report) -> tuple[int, str]:
+def download_with_progress(video_id: str, tmp_dir: pathlib.Path, report,
+                           signed_in: bool = False) -> tuple[int, str]:
     """Run yt-dlp, forwarding progress as it goes. Returns (exit code, last error)."""
     proc = subprocess.Popen(
-        ytdlp_args(video_id, tmp_dir, cookies=cookie_copy(tmp_dir)),
+        ytdlp_args(video_id, tmp_dir,
+                   cookies=cookie_copy(tmp_dir) if signed_in else None),
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
     )
     last_report, last_error = 0.0, ""
@@ -199,8 +204,21 @@ def handle(client: httpx.Client, job: dict) -> None:
         tmp_dir = pathlib.Path(tmp)
         log(f"job {job['id']} track {track_id} {video_id} downloading")
         report("downloading", 0.0)
+        on_progress = lambda pct, speed: report("downloading", pct, speed)   # noqa: E731
+
+        # An account is worth spending only on the tracks that need one. Anonymous
+        # first; if YouTube asks us to prove we are a person, ask again signed in.
+        signed_in = COOKIES_MODE == "always"
         code, error_line = download_with_progress(
-            video_id, tmp_dir, lambda pct, speed: report("downloading", pct, speed))
+            video_id, tmp_dir, on_progress, signed_in=signed_in)
+        if (code != 0 and COOKIES_MODE == "fallback"
+                and any(s in (error_line or "").lower() for s in BOT_CHECK)):
+            for stale in tmp_dir.iterdir():
+                stale.unlink(missing_ok=True)
+            signed_in = True
+            code, error_line = download_with_progress(
+                video_id, tmp_dir, on_progress, signed_in=True)
+
         files = sorted(p for p in tmp_dir.iterdir()
                        if p.is_file() and p.suffix not in (".json", ".txt"))
         if code != 0 or not files:
@@ -318,7 +336,8 @@ def main() -> None:
     if not SECRET:
         sys.exit("MUSE_WORKER_SECRET is unset — the server would reject every lease")
     log(f"worker {NAME} → {API}  (up to {CONCURRENCY} at a time, "
-        f"cookies={'yes' if COOKIES else 'no'}, pot={'yes' if POT_PROVIDER else 'no'})")
+        f"cookies={COOKIES_MODE if COOKIES else 'no'}, "
+        f"pot={'yes' if POT_PROVIDER else 'no'})")
     if not COOKIES:
         log("no cookies: YouTube challenges this IP after a few hundred downloads")
     for sig in (signal.SIGINT, signal.SIGTERM):
