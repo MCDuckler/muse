@@ -14,6 +14,7 @@ import 'package:muse/src/ui/player_bar.dart';
 import 'package:muse/src/ui/artwork.dart';
 import 'package:muse/src/ui/record_stage.dart';
 import 'package:muse/src/ui/downloads_page.dart';
+import 'package:muse/src/ui/jam_page.dart';
 import 'package:muse/src/ui/library_page.dart';
 import 'package:muse/src/ui/queue_page.dart';
 import 'package:muse/src/ui/search_page.dart';
@@ -415,6 +416,30 @@ void main() {
           reason: 'the playlist list must show that art, not a generic icon. '
               'On screen: ${visibleText(tester)}');
     }
+
+    // ---- listening together ----
+    await tester.tap(find.byIcon(Icons.podcasts_outlined));
+    await settle(tester, seconds: 3);
+    expect(find.byType(JamPage), findsOneWidget);
+    expect(find.textContaining('Listen together'), findsOneWidget,
+        reason: 'with no jam running the screen explains what one is. '
+            'On screen: ${visibleText(tester)}');
+
+    await appState.startJam();
+    await settle(tester, seconds: 3);
+    final jam = appState.jam;
+    expect(jam, isNotNull, reason: 'starting a jam must produce one');
+    expect(jam!.code.length, 6);
+    expect(find.text(jam.code), findsOneWidget,
+        reason: 'the code is the point of the screen and must be on it');
+    expect(jam.isHost, isTrue);
+    expect(jam.queueId, scratchId, reason: 'a jam opens the queue you are playing');
+
+    await appState.leaveJam();
+    await settle(tester, seconds: 3);
+    expect(appState.jam, isNull, reason: 'ending a jam must leave nothing running');
+    await tester.pageBack();
+    await settle(tester, seconds: 2);
 
     // ---- the download queue can be looked at and understood ----
     // Read-only on purpose: the real server here is mid-import, and pause/cancel are

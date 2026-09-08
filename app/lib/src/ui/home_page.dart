@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
 import 'downloads_page.dart';
+import 'jam_page.dart';
 import 'glass.dart';
 import 'library_page.dart';
 import 'settings_page.dart';
@@ -37,6 +38,12 @@ class _HomePageState extends State<HomePage> {
             icon: const Icon(Icons.refresh),
             onPressed: app.refresh,
             tooltip: 'Refresh',
+          ),
+          IconButton(
+            icon: Icon(app.jam == null ? Icons.podcasts_outlined : Icons.podcasts,
+                color: app.jam == null ? null : Theme.of(context).colorScheme.primary),
+            tooltip: app.jam == null ? 'Listen together' : 'Jam · ${app.jam!.code}',
+            onPressed: () => showJam(context),
           ),
           if (app.downloadsPending > 0)
             IconButton(

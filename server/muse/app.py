@@ -18,7 +18,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from . import (auth, catalog, config, db, enrich_worker, failures, jobs, progress,
-               routes_accounts, routes_browse, routes_downloads, routes_files,
+               jam, routes_accounts, routes_browse, routes_downloads, routes_files,
+               routes_jam,
                routes_library, routes_play, routes_spotify, routes_sync, sleeve,
                storage, ytm)
 from . import deps
@@ -336,13 +337,15 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             int(body.get("limit", 1)),
             wait_seconds=float(body.get("wait", 0)),
             busy=int(body["busy"]) if body.get("busy") is not None else None,
+            max_priority=(int(body["max_priority"])
+                          if body.get("max_priority") is not None else None),
         )
         for j in leased:
             if tid := j["payload"].get("track_id"):
                 publish("track_progress",
                         {"track_id": tid, **progress.update(tid, "queued")})
         return {"jobs": [{"id": j["id"], "kind": j["kind"], "payload": j["payload"],
-                          "attempts": j["attempts"],
+                          "attempts": j["attempts"], "priority": j["priority"],
                           # Passed through so the worker can say what it is working
                           # on, and so tests can assert on ordering.
                           "batch_id": j.get("batch_id"),
@@ -465,6 +468,8 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     app.include_router(routes_accounts.router)
     app.include_router(routes_browse.router)
     app.include_router(routes_downloads.router)
+    routes_jam.set_publisher(publish)
+    app.include_router(routes_jam.router)
     app.include_router(routes_library.router)
     app.include_router(routes_sync.router)
     app.include_router(routes_spotify.router)

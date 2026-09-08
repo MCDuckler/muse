@@ -27,6 +27,10 @@ class AppState extends ChangeNotifier {
   bool ingestOnline = true;
   int downloadsPending = 0;
   Timer? _statusTimer;
+
+  /// The jam this device is in, if any. Null is the normal state: most listening is
+  /// one person in one room.
+  Jam? jam;
   Queue? activeQueue;
   List<Playlist> playlists = const [];
 
@@ -131,6 +135,9 @@ class AppState extends ChangeNotifier {
     bindPlayer();
     await api.ensureStreamKey();
     await refresh();
+    // A jam survives closing the app: picking it back up is how the same person on
+    // two devices stays in the same room.
+    await refreshJam();
     _listenForEvents();
     await _pollStatus();
     _statusTimer?.cancel();
@@ -348,6 +355,60 @@ class AppState extends ChangeNotifier {
 
   int _eventBackoff = 1;
 
+  /// Something happened in the jam: somebody joined, added, voted, or it ended.
+  ///
+  /// The host's device is the one that actually skips — a vote that passes is a
+  /// request, and this is where it is carried out.
+  Future<void> _onJamEvent(Map<String, dynamic> data) async {
+    if (jam == null && data['what'] != 'started') return;
+    if (jam != null && data['jam_id'] != jam!.id) return;
+
+    if (data['what'] == 'skip' && (jam?.isHost ?? false)) {
+      if (player?.current?.id == data['track_id']) await player?.next();
+    }
+    await refreshJam();
+    if (jam != null && activeQueue?.id == jam!.queueId) {
+      activeQueue = await api.queue(activeQueue!.id);
+      await player?.loadQueue(activeQueue!);
+    }
+    notifyListeners();
+  }
+
+  /// Ask where the jam stands. Doubles as the heartbeat that keeps this device listed
+  /// as present, which is why it runs on the status timer too.
+  Future<Jam?> refreshJam() async {
+    try {
+      jam = await api.currentJam();
+    } catch (_) {
+      // A jam that cannot be reached is not worth an error on screen.
+    }
+    notifyListeners();
+    return jam;
+  }
+
+  Future<void> startJam() async {
+    final queue = activeQueue;
+    if (queue == null) return;
+    jam = await api.startJam(queue.id);
+    notifyListeners();
+  }
+
+  Future<void> joinJam(String code) async {
+    jam = await api.joinJam(code);
+    // Joining means listening to their queue, not yours.
+    activeQueue = await api.queue(jam!.queueId);
+    await player?.loadQueue(activeQueue!);
+    notifyListeners();
+  }
+
+  Future<void> leaveJam() async {
+    final current = jam;
+    if (current == null) return;
+    await api.leaveJam(current.id);
+    jam = null;
+    notifyListeners();
+  }
+
   void _listenForEvents() {
     _events?.cancel();
     _events = api.events().listen((e) async {
@@ -376,6 +437,8 @@ class AppState extends ChangeNotifier {
           if (activeQueue != null) activeQueue = await api.queue(activeQueue!.id);
           notifyListeners();
         }
+      } else if (e.event == 'jam') {
+        await _onJamEvent(e.data);
       } else if (e.event == 'track_failed') {
         final id = e.data['track_id'] as int?;
         if (id != null) await player?.onTrackUpdated(id);
@@ -416,6 +479,9 @@ class AppState extends ChangeNotifier {
       ingestOnline = (s['ingest_online'] ?? false) as bool;
       downloadsPending = (s['downloads_pending'] ?? 0) as int;
       notifyListeners();
+      // The same tick keeps this device listed as present in the jam. Without it the
+      // others would see everyone drift to "away" while they were still listening.
+      if (jam != null) await refreshJam();
     } catch (_) {
       // A failed status check says nothing about the worker; leave the last answer.
     }

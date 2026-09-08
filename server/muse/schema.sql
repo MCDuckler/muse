@@ -253,3 +253,38 @@ update jobs j set batch_id = b.batch_id, batch_label = b.label
  where j.kind = 'ingest' and j.batch_id is null
    and j.state in ('pending', 'leased', 'failed')
    and (j.payload->>'track_id')::int = b.track_id;
+
+-- A jam: one queue, several people, from wherever they are. The host's queue is the
+-- record box everyone is reaching into; membership is what lets a guest reach in.
+create table if not exists jams (
+  id           serial primary key,
+  code         text unique not null,
+  host_id      int not null references users(id) on delete cascade,
+  queue_id     int not null references queues(id) on delete cascade,
+  guests_can_add   boolean not null default true,
+  guests_can_skip  boolean not null default true,
+  created_at   timestamptz not null default now(),
+  ended_at     timestamptz
+);
+create index if not exists jams_live on jams(host_id) where ended_at is null;
+
+create table if not exists jam_members (
+  jam_id    int not null references jams(id) on delete cascade,
+  user_id   int not null references users(id) on delete cascade,
+  joined_at timestamptz not null default now(),
+  last_seen timestamptz not null default now(),
+  primary key (jam_id, user_id)
+);
+
+-- Skipping is the one thing a guest can do to what everyone else is hearing, so it is
+-- a vote rather than a button.
+create table if not exists jam_skip_votes (
+  jam_id   int not null references jams(id) on delete cascade,
+  track_id int not null references tracks(id) on delete cascade,
+  user_id  int not null references users(id) on delete cascade,
+  voted_at timestamptz not null default now(),
+  primary key (jam_id, track_id, user_id)
+);
+
+-- Who put this on. In a jam that is the difference between a queue and an argument.
+alter table queue_items add column if not exists added_by int references users(id);

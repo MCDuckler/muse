@@ -311,6 +311,8 @@ class PlayerService {
 
   /// Move through the queue, honouring repeat and stepping over tracks that are not
   /// downloaded yet instead of stopping dead on them.
+  int? _warmedTrackId;
+
   Future<void> _advance(int direction, {bool auto = false}) async {
     if (_order.isEmpty) return;
     if (auto && repeat == QueueRepeat.one) {
@@ -367,10 +369,42 @@ class PlayerService {
     _saveCursor();
   }
 
+  /// Ask the server to fetch what is about to be played before it fetches the rest of
+  /// the library, and warm the next song so it starts the instant this one ends.
+  ///
+  /// Both matter for the same reason: a mirrored playlist puts hundreds of tracks in
+  /// the download queue, and without this the song you just pressed play on waits
+  /// behind all of them.
+  Future<void> _lookAhead() async {
+    final run = <Track>[];
+    for (var i = index; i < index + 3 && i < items.length; i++) {
+      if (i >= 0) run.add(items[i]);
+    }
+    if (run.isEmpty) return;
+
+    final pending = run.where((t) => !t.isReady).map((t) => t.id).toList();
+    if (pending.isNotEmpty) {
+      try {
+        await api.promoteDownloads(pending);
+      } catch (_) {
+        // Best effort: it will download in its own time either way.
+      }
+    }
+
+    // The next song, into the HTTP cache, so it plays even if the connection is busy
+    // downloading the rest of the library — or gone.
+    final next = run.length > 1 ? run[1] : null;
+    if (next != null && next.isReady && next.id != _warmedTrackId) {
+      _warmedTrackId = next.id;
+      unawaited(api.warmStream(next));
+    }
+  }
+
   Future<void> _loadCurrent({Duration? startAt, int? token}) async {
     final mine = token ?? ++_loadToken;
     final track = current;
     if (track == null) return;
+    unawaited(_lookAhead());
     if (!track.isReady) {
       // Hold here rather than skipping past what the user picked, but remember it so
       // the track_ready event can start it.

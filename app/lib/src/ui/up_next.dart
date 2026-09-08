@@ -122,7 +122,11 @@ class _Row extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: isCurrent ? TextStyle(color: scheme.primary) : null),
-      subtitle: Text(track.statusLine,
+      subtitle: Text(
+          // In a jam the queue has several authors, and whose idea a song was is the
+          // most interesting thing about it.
+          [track.statusLine, if (track.addedBy != null) 'added by ${track.addedBy}']
+              .join(' · '),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: track.state == 'failed' ? TextStyle(color: scheme.error) : null),

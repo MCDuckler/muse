@@ -284,11 +284,30 @@ class _Controls extends StatelessWidget {
           icon: Icon(playing ? Icons.pause : Icons.play_arrow),
           onPressed: player.playPause,
         ),
-        IconButton(
-          iconSize: 34,
-          icon: const Icon(Icons.skip_next),
-          onPressed: player.next,
-        ),
+        if (app.jam != null && !app.jam!.isHost)
+          // A guest's device is not the one making sound, so skipping is asking the
+          // room rather than reaching over and pressing the button.
+          IconButton(
+            iconSize: 34,
+            icon: const Icon(Icons.how_to_vote_outlined),
+            tooltip: 'Vote to skip',
+            onPressed: app.jam!.guestsCanSkip
+                ? () async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    final r = await app.api.voteSkip(app.jam!.id);
+                    messenger.showSnackBar(SnackBar(
+                        content: Text(r['passed'] == true
+                            ? 'Skipped'
+                            : 'Asked to skip · ${r['votes']} of ${r['needed']}')));
+                  }
+                : null,
+          )
+        else
+          IconButton(
+            iconSize: 34,
+            icon: const Icon(Icons.skip_next),
+            onPressed: player.next,
+          ),
         IconButton(
           icon: Icon(repeat == QueueRepeat.one ? Icons.repeat_one : Icons.repeat),
           isSelected: repeat != QueueRepeat.off,

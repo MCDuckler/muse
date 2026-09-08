@@ -26,6 +26,8 @@ class Track {
   /// Platform noise stripped for display; `title` keeps whatever the source said.
   final String displayTitle;
   final String origin; // user | autoplay | radio (queue items only)
+  /// Who put this on. Only meaningful in a jam, where the queue has several authors.
+  final String? addedBy;
 
   const Track({
     required this.id,
@@ -48,6 +50,7 @@ class Track {
     this.coverVersion,
     String? displayTitle,
     this.origin = 'user',
+    this.addedBy,
   }) : displayTitle = displayTitle ?? title;
 
   /// Queue membership carries `origin`, which a freshly fetched track does not know.
@@ -72,6 +75,7 @@ class Track {
         providerId: providerId,
         displayTitle: displayTitle,
         origin: origin,
+        addedBy: addedBy,
       );
 
   Track withProgress(Map<String, dynamic>? p) => Track(
@@ -81,7 +85,7 @@ class Track {
         discoveredVia: discoveredVia, gainDb: gainDb, bytes: bytes,
         streamPath: streamPath, coverPath: coverPath, coverColor: coverColor,
         coverVersion: coverVersion, providerId: providerId,
-        displayTitle: displayTitle, origin: origin,
+        displayTitle: displayTitle, origin: origin, addedBy: addedBy,
       );
 
   bool get isReady => state == 'ready' && streamPath != null;
@@ -142,6 +146,7 @@ class Track {
         coverVersion: j['cover_version'] as String?,
         displayTitle: j['display_title'] as String?,
         origin: (j['origin'] ?? 'user') as String,
+        addedBy: j['added_by'] as String?,
       );
 }
 
@@ -562,4 +567,76 @@ class DownloadOverview {
 
   int get outstanding => waiting + downloading;
   bool get idle => outstanding == 0 && failed == 0;
+}
+
+
+/// Someone in a jam.
+class JamMember {
+  final int userId;
+  final String name;
+  final bool host;
+  final bool online;
+
+  const JamMember({required this.userId, required this.name,
+      this.host = false, this.online = false});
+
+  factory JamMember.fromJson(Map<String, dynamic> j) => JamMember(
+        userId: (j['user_id'] ?? 0) as int,
+        name: (j['name'] ?? '') as String,
+        host: (j['host'] ?? false) as bool,
+        online: (j['online'] ?? false) as bool,
+      );
+}
+
+/// A shared queue: the host's device plays, everyone else can put something on.
+class Jam {
+  final int id;
+  final String code;
+  final int queueId;
+  final String? host;
+  final bool isHost;
+  final bool guestsCanAdd;
+  final bool guestsCanSkip;
+  final List<JamMember> members;
+  final int listening;
+  final Track? nowPlaying;
+  final int skipVotes;
+
+  const Jam({
+    required this.id,
+    required this.code,
+    required this.queueId,
+    this.host,
+    this.isHost = false,
+    this.guestsCanAdd = true,
+    this.guestsCanSkip = true,
+    this.members = const [],
+    this.listening = 0,
+    this.nowPlaying,
+    this.skipVotes = 0,
+  });
+
+  factory Jam.fromJson(Map<String, dynamic> j) => Jam(
+        id: (j['id'] ?? 0) as int,
+        code: (j['code'] ?? '') as String,
+        queueId: (j['queue_id'] ?? 0) as int,
+        host: j['host'] as String?,
+        isHost: (j['is_host'] ?? false) as bool,
+        guestsCanAdd: (j['guests_can_add'] ?? true) as bool,
+        guestsCanSkip: (j['guests_can_skip'] ?? true) as bool,
+        members: ((j['members'] ?? const []) as List)
+            .map((e) => JamMember.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        listening: (j['listening'] ?? 0) as int,
+        nowPlaying: j['now_playing'] == null
+            ? null
+            : Track.fromJson(j['now_playing'] as Map<String, dynamic>),
+        skipVotes: (j['skip_votes'] ?? 0) as int,
+      );
+
+  /// What a guest is allowed to do, said the way a person would say it.
+  String get rules => [
+        guestsCanAdd ? 'anyone can add' : 'only the host adds',
+        if (guestsCanSkip) 'skipping is a vote',
+      ].join(' · ');
 }

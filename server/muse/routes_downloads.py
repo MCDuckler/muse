@@ -198,8 +198,12 @@ def cancel(body: dict = Body(...), user: dict = Depends(current_user)):
 
 @router.post("/promote")
 def promote(body: dict = Body(...), user: dict = Depends(current_user)):
-    """Jump the queue for something you are waiting on right now."""
-    track_id = body.get("track_id")
-    if not track_id:
-        raise HTTPException(400, "track_id required")
-    return {"promoted": jobs.promote(int(track_id))}
+    """Jump the queue for what is playing, and for what is about to.
+
+    Takes a run of tracks in playing order, not just one: by the time the current song
+    ends, the next one wants to be here already.
+    """
+    ids = body.get("track_ids") or ([body["track_id"]] if body.get("track_id") else [])
+    if not ids:
+        raise HTTPException(400, "track_id or track_ids required")
+    return {"promoted": jobs.promote_run([int(i) for i in ids])}

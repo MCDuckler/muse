@@ -54,7 +54,7 @@ def test_playing_something_still_downloading_moves_it_forward(client, hdr, queue
     db.run("""update jobs set priority=%s where (payload->>'track_id')::int = %s""",
            (jobs.PRIORITY_BULK + 1, queued[2]))
     assert client.post("/downloads/promote", headers=hdr,
-                       json={"track_id": queued[2]}).json()["promoted"] is True
+                       json={"track_id": queued[2]}).json()["promoted"] == 1
 
     first = client.post("/internal/jobs/lease", headers=wsec,
                         json={"worker": "w"}).json()["jobs"][0]
@@ -207,3 +207,30 @@ def test_retrying_only_what_is_worth_retrying(client, hdr, queued, wsec):
     assert client.post("/downloads/retry-failed", headers=hdr,
                        json={"fail_code": "bot_check"}).json()["retrying"] == 1
     assert client.get("/downloads", headers=hdr).json()["counts"]["failed"] == 1
+
+
+def test_what_is_about_to_play_jumps_too(client, hdr, queued, wsec):
+    """Not just the song under the needle: by the time it ends, the next one wants to
+    have been downloaded already."""
+    db.run("update jobs set priority=%s", (jobs.PRIORITY_BULK,))
+    run = [queued[2], queued[1]]
+    assert client.post("/downloads/promote", headers=hdr,
+                       json={"track_ids": run}).json()["promoted"] == 2
+
+    got = client.post("/internal/jobs/lease", headers=wsec,
+                      json={"worker": "w", "limit": 4}).json()["jobs"]
+    assert [j["payload"]["track_id"] for j in got[:2]] == run, \
+        "they keep their playing order, and both come before the import"
+
+
+def test_a_worker_can_ask_for_urgent_work_only(client, hdr, queued, wsec):
+    """A worker already downloading something somebody is waiting for leaves the line
+    free rather than filling every slot with a backfill."""
+    db.run("update jobs set priority=%s", (jobs.PRIORITY_BULK,))
+    client.post("/downloads/promote", headers=hdr, json={"track_ids": [queued[1]]})
+
+    urgent = client.post("/internal/jobs/lease", headers=wsec,
+                         json={"worker": "w", "limit": 5,
+                               "max_priority": jobs.PRIORITY_NOW + 8}).json()["jobs"]
+    assert [j["payload"]["track_id"] for j in urgent] == [queued[1]]
+    assert urgent[0]["priority"] <= jobs.PRIORITY_NOW + 8, "the lease says how urgent it is"

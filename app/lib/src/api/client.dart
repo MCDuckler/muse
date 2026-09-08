@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 
 import 'models.dart';
@@ -267,10 +268,64 @@ class ApiClient {
     return (d['cancelled'] ?? 0) as int;
   }
 
-  Future<void> promoteDownload(int trackId) async {
+  Future<void> promoteDownload(int trackId) => promoteDownloads([trackId]);
+
+  /// Tracks in playing order: the one under the needle, then what follows it.
+  Future<void> promoteDownloads(List<int> trackIds) async {
+    if (trackIds.isEmpty) return;
     await _decode(await http.post(_u('/downloads/promote'),
-        headers: _headers, body: jsonEncode({'track_id': trackId})));
+        headers: _headers, body: jsonEncode({'track_ids': trackIds})));
   }
+
+  /// Pull the start of a track through the cache so it is there when it is wanted.
+  ///
+  /// A range request rather than the whole file: enough that playback starts on what
+  /// is already local, cheap enough to do on every track change. The browser and the
+  /// native HTTP cache both keep it; failures are silent because this is a nicety.
+  Future<void> warmStream(Track t) async {
+    try {
+      await http.get(Uri.parse(streamUrl(t)),
+          headers: {...(kIsWeb ? const {} : streamHeaders), 'Range': 'bytes=0-524287'});
+    } catch (_) {
+      // Not being able to warm the cache is not a failure worth reporting.
+    }
+  }
+
+  // ---------------- jam ----------------
+  Future<Jam> startJam(int queueId) async => Jam.fromJson(await _decode(
+      await http.post(_u('/jams'),
+          headers: _headers, body: jsonEncode({'queue_id': queueId}))) as Map<String, dynamic>);
+
+  Future<Jam> joinJam(String code) async => Jam.fromJson(await _decode(
+      await http.post(_u('/jams/join'),
+          headers: _headers, body: jsonEncode({'code': code}))) as Map<String, dynamic>);
+
+  /// The jam you are in, and a heartbeat that keeps you listed as here.
+  Future<Jam?> currentJam() async {
+    final d = await _decode(await http.get(_u('/jams/current'), headers: _headers))
+        as Map<String, dynamic>;
+    return d['jam'] == null ? null : Jam.fromJson(d['jam'] as Map<String, dynamic>);
+  }
+
+  Future<Jam> setJamRules(int jamId, {bool? guestsCanAdd, bool? guestsCanSkip}) async =>
+      Jam.fromJson(await _decode(await http.patch(_u('/jams/$jamId'),
+          headers: _headers,
+          body: jsonEncode({
+            if (guestsCanAdd != null) 'guests_can_add': guestsCanAdd,
+            if (guestsCanSkip != null) 'guests_can_skip': guestsCanSkip,
+          }))) as Map<String, dynamic>);
+
+  Future<void> leaveJam(int jamId) async =>
+      await _decode(await http.post(_u('/jams/$jamId/leave'), headers: _headers));
+
+  Future<void> removeFromJam(int jamId, int userId) async =>
+      await _decode(await http.post(_u('/jams/$jamId/remove'),
+          headers: _headers, body: jsonEncode({'user_id': userId})));
+
+  /// Ask for the current track to be dropped. Returns how many have asked.
+  Future<Map<String, dynamic>> voteSkip(int jamId) async =>
+      await _decode(await http.post(_u('/jams/$jamId/skip-vote'),
+          headers: _headers, body: jsonEncode({}))) as Map<String, dynamic>;
 
   Future<Map<String, dynamic>> status() async =>
       await _decode(await http.get(_u('/status'), headers: _headers))

@@ -11,7 +11,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse
 
-from . import catalog, db, match, playlist_art, ytm
+from . import catalog, db, jam, match, playlist_art, ytm
 from .deps import cfg, current_user, user_or_key
 
 router = APIRouter()
@@ -192,24 +192,40 @@ def _queue_state(queue_id: int) -> dict:
     # stream_url, the client reads that as "not ready yet", and nothing in the queue
     # is playable no matter how ready the track actually is.
     items = db.all_(
-        """select i.pos, i.origin, t.*, m.path, m.bytes, m.sha256, c.color as cover_color,
-                    c.sha256 as cover_sha
+        """select i.pos, i.origin, u.name as added_by, t.*, m.path, m.bytes, m.sha256,
+                  c.color as cover_color, c.sha256 as cover_sha
              from queue_items i
              join tracks t on t.id=i.track_id
+             left join users u on u.id = i.added_by
              left join media m on m.track_id=t.id and m.role='canonical'
              left join covers c on c.id=t.cover_id
             where i.queue_id=%s order by i.pos""",
         (queue_id,),
     )
-    return {**q, "items": [{**catalog.public(t), "origin": t["origin"], "pos": t["pos"]}
+    return {**q, "items": [{**catalog.public(t), "origin": t["origin"], "pos": t["pos"],
+                            # Only interesting in a jam, and harmless otherwise: it is
+                            # how "who put this on" gets answered without asking.
+                            "added_by": t["added_by"]}
                            for t in items]}
 
 
-def _own_queue(queue_id: int, user: dict) -> dict:
+def _own_queue(queue_id: int, user: dict, *, adding: bool = False) -> dict:
+    """Your own queue — or one you have been let into.
+
+    A jam is exactly this: the host's queue, opened to the people who joined. Guests
+    read it always and add to it unless the host has turned that off; nothing else
+    about it is theirs to change.
+    """
     row = db.one("select * from queues where id=%s and user_id=%s", (queue_id, user["id"]))
-    if not row:
-        raise HTTPException(404, "no such queue")
-    return row
+    if row:
+        return row
+
+    shared = jam.may_touch_queue(queue_id, user["id"])
+    if shared:
+        if adding and not shared["guests_can_add"]:
+            raise HTTPException(403, "The host has turned off adding for this jam.")
+        return db.one("select * from queues where id=%s", (queue_id,))
+    raise HTTPException(404, "no such queue")
 
 
 @router.get("/queues")
@@ -313,7 +329,7 @@ def move_cursor(queue_id: int, body: dict = Body(...), user: dict = Depends(curr
 @router.post("/queues/{queue_id}/items")
 def queue_add(queue_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
     """`next` inserts above the autoplay/radio tail, not blindly at the top."""
-    _own_queue(queue_id, user)
+    _own_queue(queue_id, user, adding=True)
     ids = body.get("track_ids") or []
     if not ids:
         raise HTTPException(400, "track_ids required")
@@ -338,8 +354,10 @@ def queue_add(queue_id: int, body: dict = Body(...), user: dict = Depends(curren
                       where queue_id=%s and pos >= %s""",
                   (len(ids), queue_id, insert_at))
         for n, tid in enumerate(ids):
-            c.execute("insert into queue_items(queue_id,pos,track_id,origin) values(%s,%s,%s,%s)",
-                      (queue_id, insert_at + n, tid, body.get("origin", "user")))
+            c.execute(
+                """insert into queue_items(queue_id,pos,track_id,origin,added_by)
+                   values(%s,%s,%s,%s,%s)""",
+                (queue_id, insert_at + n, tid, body.get("origin", "user"), user["id"]))
         c.execute("update queues set rev=rev+1, updated_at=now() where id=%s", (queue_id,))
     return _queue_state(queue_id)
 

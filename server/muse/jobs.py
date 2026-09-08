@@ -40,6 +40,19 @@ def promote(track_id: int, priority: int = PRIORITY_NOW) -> bool:
     return row is not None
 
 
+def promote_run(track_ids: list[int], priority: int = PRIORITY_NOW) -> int:
+    """What is about to be played, in the order it will be played.
+
+    The track under the needle is worth more than the one after it, which is worth more
+    than the one after that — so they go in a step apart and keep their order among
+    themselves while all of them stay ahead of any import.
+    """
+    promoted = 0
+    for step, track_id in enumerate(track_ids[:8]):
+        promoted += promote(int(track_id), priority + step)
+    return promoted
+
+
 def paused() -> bool:
     row = db.one("select value from settings where key='downloads_paused'")
     return bool(row and row["value"] == "1")
@@ -55,7 +68,7 @@ def set_paused(value: bool) -> None:
 
 def lease_wait(worker: str, kind: str = "ingest", limit: int = 1,
                wait_seconds: float = 0.0, poll: float = 0.25,
-               busy: int | None = None) -> list[dict]:
+               busy: int | None = None, max_priority: int | None = None) -> list[dict]:
     """Lease, or hold the connection open until work appears.
 
     Polling every few seconds meant a track sat queued for up to that long before
@@ -64,19 +77,23 @@ def lease_wait(worker: str, kind: str = "ingest", limit: int = 1,
     """
     deadline = time.monotonic() + wait_seconds
     while True:
-        got = lease(worker, kind, limit, busy=busy)
+        got = lease(worker, kind, limit, busy=busy, max_priority=max_priority)
         if got or time.monotonic() >= deadline:
             return got
         time.sleep(poll)
 
 
 def lease(worker: str, kind: str = "ingest", limit: int = 1,
-          busy: int | None = None) -> list[dict]:
+          busy: int | None = None, max_priority: int | None = None) -> list[dict]:
     """Hand out up to `limit` jobs.
 
     `busy` is what the worker already has in flight: a worker that downloads three at a
     time leases one job at a time as slots free, and without this the recorded count
     would read as 1 while three were running.
+
+    `max_priority` asks for urgent work only. A worker already downloading something
+    somebody is waiting for uses it to leave the line free rather than filling every
+    slot with a backfill that will hold the connection for the next minute.
     """
     # A pause has to stop work being handed out, not just hide it in the UI.
     if kind == "ingest" and paused():
@@ -96,19 +113,27 @@ def lease(worker: str, kind: str = "ingest", limit: int = 1,
                       or (state='leased' and leased_until < now()))
                  and next_attempt_at <= now()
                  and attempts < %s
+                 and (%s::int is null or priority <= %s::int)
                order by priority, created_at
                for update skip locked
                limit %s
             )
-            update jobs j
-               set state='leased', leased_by=%s,
-                   leased_until=now() + (%s || ' seconds')::interval,
-                   attempts=j.attempts+1, updated_at=now()
-              from picked p
-             where j.id=p.id
-            returning j.id, j.kind, j.payload, j.attempts, j.batch_id, j.batch_label
+            , taken as (
+              update jobs j
+                 set state='leased', leased_by=%s,
+                     leased_until=now() + (%s || ' seconds')::interval,
+                     attempts=j.attempts+1, updated_at=now()
+                from picked p
+               where j.id=p.id
+              returning j.id, j.kind, j.payload, j.attempts, j.priority,
+                        j.batch_id, j.batch_label, j.created_at
+            )
+            -- Ordered here, not in the CTE: an UPDATE's RETURNING comes back in
+            -- whatever order the rows were touched, so a worker asking for four jobs
+            -- could be handed the backfill before the song somebody is waiting for.
+            select * from taken order by priority, created_at
             """,
-            (kind, MAX_ATTEMPTS, limit, worker, LEASE_SECONDS),
+            (kind, MAX_ATTEMPTS, max_priority, max_priority, limit, worker, LEASE_SECONDS),
         ).fetchall()
         c.execute(
             """insert into workers(name,last_seen,leased) values(%s,now(),%s)

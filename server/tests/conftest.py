@@ -59,9 +59,12 @@ def client(cfg, monkeypatch):
     with db.pool().connection() as c:
         # Accounts are per-test too, now that they live in the database: leaving them
         # behind made "create an account" fail as a duplicate in every later test.
+        # settings included: a test that pauses downloads used to leave them paused,
+        # and every later test that leased a job silently got nothing.
         for t in ("queue_items", "queues", "playlist_items", "playlist_unmatched",
                   "playlists", "listens", "media", "track_sources", "tracks", "jobs",
-                  "devices", "workers", "invites", "provider_accounts", "users"):
+                  "devices", "workers", "invites", "provider_accounts", "settings",
+                  "users"):
             c.execute(f"truncate {t} restart identity cascade")
     for u in cfg.users:                       # re-seed what muse.toml declares
         auth.ensure_user(u.name, pw_hash=u.password_hash)

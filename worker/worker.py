@@ -60,6 +60,11 @@ RATE_LOCK = threading.Lock()
 # What this process currently has leased, so a shutdown can give it back instead of
 # leaving it locked for the ten minutes a lease lasts.
 INFLIGHT: dict[int, int | None] = {}
+# Jobs somebody is waiting for right now, as opposed to a backfill. While one is in
+# flight the worker stops taking bulk work: the line is only so wide, and a song
+# somebody pressed play on should not queue behind a hundred imports for it.
+URGENT_PRIORITY = 90
+URGENT: set[int] = set()
 INFLIGHT_LOCK = threading.Lock()
 STOPPING = threading.Event()
 
@@ -301,6 +306,8 @@ def run_job(client: httpx.Client, job: dict) -> None:
     """One job, start to finish, on its own thread. Never raises."""
     with INFLIGHT_LOCK:
         INFLIGHT[job["id"]] = job["payload"].get("track_id")
+        if (job.get("priority") or 100) <= URGENT_PRIORITY:
+            URGENT.add(job["id"])
     try:
         handle(client, job)
     except Exception as e:
@@ -314,6 +321,7 @@ def run_job(client: httpx.Client, job: dict) -> None:
     finally:
         with INFLIGHT_LOCK:
             INFLIGHT.pop(job["id"], None)
+            URGENT.discard(job["id"])
 
 
 def give_back_everything() -> None:
@@ -368,6 +376,8 @@ def main() -> None:
                     heartbeat(client, len(running))
                 time.sleep(1)
                 continue
+            with INFLIGHT_LOCK:
+                waiting_on = len(URGENT)
             try:
                 # Long poll: the server holds the request until work appears, so a
                 # queued track starts downloading immediately instead of waiting out
@@ -376,6 +386,10 @@ def main() -> None:
                 jobs = client.post(f"{API}/internal/jobs/lease", headers=H,
                                    json={"worker": NAME, "kind": "ingest",
                                          "limit": free, "busy": len(running),
+                                         # Somebody is waiting: take nothing but more
+                                         # of the same until they have their song.
+                                         **({"max_priority": URGENT_PRIORITY}
+                                            if waiting_on else {}),
                                          "wait": 5 if running else 25},
                                    timeout=40).json()["jobs"]
                 last_beat = time.monotonic()
