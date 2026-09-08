@@ -7,6 +7,7 @@ import '../state/player.dart';
 import 'artwork.dart';
 import 'glass.dart';
 import 'swipe.dart';
+import 'up_next.dart';
 
 String formatTime(Duration d) {
   final m = d.inMinutes;
@@ -44,6 +45,13 @@ class NowPlayingScreen extends StatelessWidget {
             title: Text(app.activeQueue?.name ?? 'Now playing',
                 style: Theme.of(context).textTheme.titleSmall),
             centerTitle: true,
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.queue_music),
+                tooltip: 'Up next',
+                onPressed: () => showUpNext(context),
+              ),
+            ],
           ),
           body: DragFollow(
             // Drag down to close, the gesture that dismisses a sheet anywhere else;

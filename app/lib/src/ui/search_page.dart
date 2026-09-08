@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -18,26 +20,63 @@ class SearchPage extends StatefulWidget {
 
 class _SearchPageState extends State<SearchPage> {
   final _controller = TextEditingController();
+  final _focus = FocusNode();
   List<Track> _local = const [];
   List<RemoteHit> _remote = const [];
   bool _busy = false;
+  bool _searched = false;
   String? _error;
+  String _lastQuery = '';
+  Timer? _debounce;
 
-  Future<void> _run() async {
+  /// Long enough not to fire on every keystroke, short enough that it feels like the
+  /// results are following you. The remote leg goes out to YouTube Music, so this is
+  /// also what keeps that from being hammered.
+  static const _debounceDelay = Duration(milliseconds: 350);
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(_onTyped);
+  }
+
+  void _onTyped() {
+    setState(() {});                       // the clear button appears and disappears
+    _debounce?.cancel();
     final q = _controller.text.trim();
+    if (q.isEmpty) {
+      setState(() {
+        _local = const [];
+        _remote = const [];
+        _searched = false;
+      });
+      return;
+    }
+    if (q == _lastQuery) return;
+    _debounce = Timer(_debounceDelay, () => _run(q));
+  }
+
+  Future<void> _run([String? query]) async {
+    final q = (query ?? _controller.text).trim();
     if (q.isEmpty) return;
+    _debounce?.cancel();
+    _lastQuery = q;
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
       final res = await context.read<AppState>().api.search(q);
+      if (!mounted || _lastQuery != q) return;   // a newer query already went out
       setState(() {
         _local = res.local;
         _remote = res.remote;
+        _searched = true;
       });
     } on ApiException catch (e) {
-      setState(() => _error = e.message);
+      if (mounted) setState(() => _error = e.message);
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -54,16 +93,27 @@ class _SearchPageState extends State<SearchPage> {
             controller: _controller,
             textInputAction: TextInputAction.search,
             onSubmitted: (_) => _run(),
+            focusNode: _focus,
             decoration: InputDecoration(
               hintText: 'Search your library and YouTube Music',
               prefixIcon: const Icon(Icons.search),
               suffixIcon: _busy
                   ? const Padding(
-                      padding: EdgeInsets.all(12),
+                      padding: EdgeInsets.all(14),
                       child: SizedBox(
-                          width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)))
-                  : IconButton(icon: const Icon(Icons.arrow_forward), onPressed: _run),
-              border: const OutlineInputBorder(),
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2)))
+                  : (_controller.text.isEmpty
+                      ? null
+                      : IconButton(
+                          icon: const Icon(Icons.close),
+                          tooltip: 'Clear',
+                          onPressed: () {
+                            _controller.clear();
+                            _focus.requestFocus();
+                          },
+                        )),
             ),
           ),
         ),
@@ -73,10 +123,15 @@ class _SearchPageState extends State<SearchPage> {
             child: Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
           ),
         Expanded(
-          child: ListView(
+          child: _searched && _local.isEmpty && _remote.isEmpty && !_busy
+              ? _NothingFound(query: _lastQuery)
+              : !_searched && !_busy
+                  ? const _SearchPrompt()
+                  : ListView(
             padding: const EdgeInsets.fromLTRB(8, 0, 8, 160),
             children: [
-              if (_local.isNotEmpty) const _SectionHeader('In your library'),
+              if (_local.isNotEmpty)
+                _SectionHeader('In your library · ${_local.length}'),
               for (final t in _local)
                 ListTile(
                   leading: Artwork(track: t, size: 40),
@@ -90,7 +145,8 @@ class _SearchPageState extends State<SearchPage> {
                   ),
                   onTap: () => app.addTrack(t),
                 ),
-              if (_remote.isNotEmpty) const _SectionHeader('On YouTube Music'),
+              if (_remote.isNotEmpty)
+                _SectionHeader('On YouTube Music · ${_remote.length}'),
               for (final hit in _remote)
                 ListTile(
                   leading: Stack(
@@ -195,9 +251,67 @@ class _SearchPageState extends State<SearchPage> {
 
   @override
   void dispose() {
+    _debounce?.cancel();
+    _controller.removeListener(_onTyped);
     _controller.dispose();
+    _focus.dispose();
     super.dispose();
   }
+}
+
+/// Before the first search. An empty list here would look like a failed search.
+class _SearchPrompt extends StatelessWidget {
+  const _SearchPrompt();
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.search,
+                  size: 44, color: Theme.of(context).colorScheme.onSurfaceVariant),
+              const SizedBox(height: 12),
+              Text('Find something to play',
+                  style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 4),
+              Text('Your library first, then YouTube Music.',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall),
+            ],
+          ),
+        ),
+      );
+}
+
+/// And after one that found nothing — which used to look identical to never having
+/// searched at all.
+class _NothingFound extends StatelessWidget {
+  const _NothingFound({required this.query});
+  final String query;
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.search_off,
+                  size: 44, color: Theme.of(context).colorScheme.onSurfaceVariant),
+              const SizedBox(height: 12),
+              Text('Nothing found for “$query”',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 4),
+              Text('Try a different spelling, or add the artist’s name.',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall),
+            ],
+          ),
+        ),
+      );
 }
 
 class _SectionHeader extends StatelessWidget {

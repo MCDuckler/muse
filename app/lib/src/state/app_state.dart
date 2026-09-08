@@ -1,6 +1,7 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show ChangeNotifier, kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/client.dart';
@@ -212,10 +213,39 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> removeFromQueue(int pos) async {
+  /// Remove a track, offering to put it back.
+  ///
+  /// Every destructive action here used to be final. A swipe is easy to do by
+  /// accident, so the removal is announced with a way to reverse it — restoring the
+  /// track to the position it came from, not to the end.
+  Future<void> removeFromQueue(int pos, {BuildContext? context}) async {
     final q = activeQueue;
     if (q == null) return;
+    final removed = (player?.items.length ?? 0) > pos ? player!.items[pos] : null;
     await _applyQueue(await api.removeQueueItem(q.id, pos));
+    if (context == null || removed == null || !context.mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('Removed ${removed.displayTitle}'),
+      action: SnackBarAction(
+        label: 'Undo',
+        onPressed: () => _restoreToQueue(q.id, removed.id, pos),
+      ),
+    ));
+  }
+
+  Future<void> _restoreToQueue(int queueId, int trackId, int pos) async {
+    try {
+      var updated = await api.addToQueue(queueId, [trackId]);
+      // It goes back on the end, so walk it home to where it was.
+      final landedAt = updated.items.length - 1;
+      if (landedAt != pos && pos < updated.items.length) {
+        updated = await api.moveQueueItem(queueId, landedAt, pos);
+      }
+      if (activeQueue?.id == queueId) await _applyQueue(updated);
+    } catch (_) {
+      await refresh();
+    }
   }
 
   Future<void> moveInQueue(int from, int to) async {
@@ -224,12 +254,30 @@ class AppState extends ChangeNotifier {
     await _applyQueue(await api.moveQueueItem(q.id, from, to));
   }
 
-  Future<void> clearQueue({String? origin}) async {
+  Future<void> clearQueue({String? origin, BuildContext? context}) async {
     final q = activeQueue;
     if (q == null) return;
-    await _applyQueue(await api.clearQueue(q.id, origin: origin));
+    // Snapshot before clearing: undo has to put back exactly what was there, in order.
+    final before = [for (final t in player?.items ?? const <Track>[]) t.id];
+    final cleared = await api.clearQueue(q.id, origin: origin);
+    await _applyQueue(cleared);
     queues = await api.queues();
     notifyListeners();
+    if (context == null || before.isEmpty || !context.mounted) return;
+
+    final removedCount = before.length - cleared.items.length;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(origin == 'radio'
+          ? 'Cleared $removedCount radio ${removedCount == 1 ? 'track' : 'tracks'}'
+          : 'Cleared the queue'),
+      action: SnackBarAction(
+        label: 'Undo',
+        onPressed: () async {
+          final live = await api.queue(q.id);
+          await _applyQueue(await api.replaceQueue(q.id, live.rev, before));
+        },
+      ),
+    ));
   }
 
   /// A track that failed to download can be asked for again: resolve() retries a

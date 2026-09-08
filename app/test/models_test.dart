@@ -61,6 +61,7 @@ void main() {
 
   _queueShapes();
   _statusLineTests();
+  _searchStateTests();
 
   group('Playlist', () {
     test('accepts both the list form and the count form of items', () {
@@ -158,6 +159,57 @@ void _statusLineTests() {
     test('a ready track is back to showing the artist', () {
       final t = make(state: 'ready', streamUrl: '/tracks/1/stream');
       expect(t.statusLine, 'A');
+    });
+  });
+}
+
+// Which of the three search states to show. An empty list after a search used to look
+// exactly like a search that had never run.
+enum SearchView { prompt, results, nothingFound }
+
+SearchView searchView({
+  required bool searched,
+  required bool busy,
+  required int localCount,
+  required int remoteCount,
+}) {
+  if (searched && !busy && localCount == 0 && remoteCount == 0) {
+    return SearchView.nothingFound;
+  }
+  if (!searched && !busy) return SearchView.prompt;
+  return SearchView.results;
+}
+
+void _searchStateTests() {
+  group('what the search screen shows', () {
+    test('before anything is typed, an invitation', () {
+      expect(searchView(searched: false, busy: false, localCount: 0, remoteCount: 0),
+          SearchView.prompt);
+    });
+
+    test('while a query is in flight, the results area', () {
+      expect(searchView(searched: false, busy: true, localCount: 0, remoteCount: 0),
+          SearchView.results);
+    });
+
+    test('after a query that found nothing, it says so', () {
+      expect(searchView(searched: true, busy: false, localCount: 0, remoteCount: 0),
+          SearchView.nothingFound);
+    });
+
+    test('local hits alone are results', () {
+      expect(searchView(searched: true, busy: false, localCount: 3, remoteCount: 0),
+          SearchView.results);
+    });
+
+    test('remote hits alone are results', () {
+      expect(searchView(searched: true, busy: false, localCount: 0, remoteCount: 5),
+          SearchView.results);
+    });
+
+    test('a new query in flight does not flash "nothing found"', () {
+      expect(searchView(searched: true, busy: true, localCount: 0, remoteCount: 0),
+          SearchView.results);
     });
   });
 }

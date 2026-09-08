@@ -12,8 +12,11 @@ class LibraryPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
-    return ListView(
+    return RefreshIndicator(
+      onRefresh: app.refresh,
+      child: ListView(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
+      physics: const AlwaysScrollableScrollPhysics(),
       children: [
         ListTile(
           leading: const Icon(Icons.add),
@@ -74,6 +77,7 @@ class LibraryPage extends StatelessWidget {
           )),
         ),
       ],
+      ),
     );
   }
 }
@@ -114,8 +118,11 @@ class _PlaylistPageState extends State<_PlaylistPage> {
           if (items.isEmpty) {
             return const Center(child: Text('Nothing in this playlist yet.'));
           }
-          return ListView.builder(
+          return RefreshIndicator(
+            onRefresh: () async => _reload(),
+            child: ListView.builder(
             padding: const EdgeInsets.fromLTRB(8, 4, 8, 24),
+            physics: const AlwaysScrollableScrollPhysics(),
             itemCount: items.length,
             itemBuilder: (context, i) => Dismissible(
               key: ValueKey('pl-${items[i].id}-$i'),
@@ -146,6 +153,7 @@ class _PlaylistPageState extends State<_PlaylistPage> {
                 ),
               ),
             ),
+          ),
           );
         },
       ),

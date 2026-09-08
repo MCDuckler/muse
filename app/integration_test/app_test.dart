@@ -130,12 +130,10 @@ void main() {
     await tester.tap(tab('Search'));
     await settle(tester);
     await tester.enterText(find.byType(TextField).first, 'lucky');
-    // Tap the button rather than sending an IME action: the on-screen keyboard is not
-    // real in a headless browser, so the submit action never arrives.
-    await tester.tap(find.byIcon(Icons.arrow_forward));
-    await settle(tester, seconds: 14);   // the remote leg hits YouTube Music
+    // No submit any more: typing runs the search itself after a short debounce.
+    await settle(tester, seconds: 14);   // debounce plus the remote leg
 
-    expect(onPage(SearchPage, find.text('IN YOUR LIBRARY')), findsOneWidget,
+    expect(onPage(SearchPage, find.textContaining('IN YOUR LIBRARY')), findsOneWidget,
         reason: 'the seeded track must come back from the local catalog (header is uppercased). '
             'On screen: ${visibleText(tester)}');
     // Add a track by name, not by position: the library grows, so "the first result"
@@ -309,6 +307,45 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.keyboard_arrow_down));
     await settle(tester, seconds: 2);
+
+    // ---- search reacts to typing, without a submit ----
+    await tester.tap(tab('Search'));
+    await settle(tester, seconds: 2);
+    await tester.enterText(onPage(SearchPage, find.byType(TextField)).first, 'daft punk');
+    await settle(tester, seconds: 12);      // debounce plus the remote leg
+    expect(onPage(SearchPage, find.textContaining('Daft Punk')), findsWidgets,
+        reason: 'typing alone must produce results, with no submit. '
+            'On screen: ${visibleText(tester)}');
+
+    // Clearing the field returns to the prompt rather than an ambiguous empty list.
+    // (A "nothing found" query is not deterministic here: YouTube Music answers even
+    // nonsense with fuzzy matches, so that state is covered by a widget test.)
+    expect(onPage(SearchPage, find.byIcon(Icons.close)), findsOneWidget,
+        reason: 'a field with text in it needs a way to clear it');
+    await tester.tap(onPage(SearchPage, find.byIcon(Icons.close)));
+    await settle(tester, seconds: 3);
+    expect(find.textContaining('Find something to play'), findsOneWidget,
+        reason: 'an empty field must look different from a search that found nothing');
+
+    // ---- removing a track offers to put it back ----
+    await tester.tap(tab('Queues'));
+    await settle(tester, seconds: 2);
+    final queueLength = appState.player!.items.length;
+    if (queueLength > 1) {
+      final doomed = appState.player!.items[1];
+      await appState.removeFromQueue(1, context: tester.element(find.byType(QueuePage)));
+      await settle(tester, seconds: 3);
+      expect(appState.player!.items.length, queueLength - 1);
+      expect(find.text('Undo'), findsOneWidget,
+          reason: 'a destructive action must offer a way back');
+
+      await tester.tap(find.text('Undo'));
+      await settle(tester, seconds: 5);
+      expect(appState.player!.items.length, queueLength,
+          reason: 'undo must restore the track');
+      expect(appState.player!.items[1].id, doomed.id,
+          reason: 'and put it back where it was, not on the end');
+    }
 
     // ---- shuffle and repeat persist, and do not eat the queue ----
     // Read the count here rather than earlier: the steps in between deliberately

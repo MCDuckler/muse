@@ -8,8 +8,40 @@ import 'artwork.dart';
 import 'dialogs.dart';
 
 /// Queues are the product, so this screen shows them all, not just the one playing.
-class QueuePage extends StatelessWidget {
+class QueuePage extends StatefulWidget {
   const QueuePage({super.key});
+
+  @override
+  State<QueuePage> createState() => _QueuePageState();
+}
+
+class _QueuePageState extends State<QueuePage> {
+  final _scroll = ScrollController();
+  int? _followed;
+
+  /// Rows are close enough to a fixed height for scrolling maths; a row that is
+  /// downloading grows by the progress bar, which is a few pixels of drift at worst.
+  static const _rowExtent = 72.0;
+
+  void _scrollToCurrent({bool animate = true}) {
+    if (!_scroll.hasClients) return;
+    final app = context.read<AppState>();
+    final index = app.player?.index ?? 0;
+    final target = (index * _rowExtent - 120)
+        .clamp(0.0, _scroll.position.maxScrollExtent);
+    if (animate) {
+      _scroll.animateTo(target,
+          duration: const Duration(milliseconds: 320), curve: Curves.easeOutCubic);
+    } else {
+      _scroll.jumpTo(target);
+    }
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -19,6 +51,16 @@ class QueuePage extends StatelessWidget {
     // from different places, so the highlight could sit on the wrong track after a
     // radio append or a change from another device.
     final rows = app.player?.items ?? const <Track>[];
+
+    // Follow the music: when the track changes on its own, bring it into view rather
+    // than leaving the person to hunt for it in an eighteen-track queue.
+    final playing = app.player?.index;
+    if (playing != null && playing != _followed && rows.isNotEmpty) {
+      _followed = playing;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scrollToCurrent();
+      });
+    }
 
     return Column(
       children: [
@@ -69,6 +111,11 @@ class QueuePage extends StatelessWidget {
                   },
                   onPressed: app.cycleRepeat,
                 ),
+                IconButton.filledTonal(
+                  icon: const Icon(Icons.my_location),
+                  tooltip: 'Jump to what is playing',
+                  onPressed: () => _scrollToCurrent(),
+                ),
                 const Spacer(),
                 OutlinedButton.icon(
                   icon: const Icon(Icons.radio, size: 18),
@@ -80,9 +127,9 @@ class QueuePage extends StatelessWidget {
                   onSelected: (v) async {
                     switch (v) {
                       case 'clear-radio':
-                        await app.clearQueue(origin: 'radio');
+                        await app.clearQueue(origin: 'radio', context: context);
                       case 'clear':
-                        await app.clearQueue();
+                        await app.clearQueue(context: context);
                       case 'save':
                         await _saveAsPlaylist(context, app);
                       case 'delete':
@@ -106,7 +153,10 @@ class QueuePage extends StatelessWidget {
         Expanded(
           child: active == null || rows.isEmpty
               ? const _EmptyQueue()
-              : ReorderableListView.builder(
+              : RefreshIndicator(
+                  onRefresh: app.refresh,
+                  child: ReorderableListView.builder(
+                  scrollController: _scroll,
                   padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
                   itemCount: rows.length,
                   buildDefaultDragHandles: false,
@@ -130,7 +180,7 @@ class QueuePage extends StatelessWidget {
                         child: Icon(Icons.delete_outline,
                             color: Theme.of(context).colorScheme.onErrorContainer),
                       ),
-                      onDismissed: (_) => app.removeFromQueue(i),
+                      onDismissed: (_) => app.removeFromQueue(i, context: context),
                       // Long-press to drag rather than a permanent handle: two
                       // trailing controls left the titles with no room, and holding a
                       // row to move it is what every list on a phone already does.
@@ -182,6 +232,7 @@ class QueuePage extends StatelessWidget {
                     ),
                     );
                   },
+                ),
                 ),
         ),
       ],
@@ -265,7 +316,7 @@ class QueuePage extends StatelessWidget {
         onSelected: (v) async {
           switch (v) {
             case 'remove':
-              await app.removeFromQueue(i);
+              await app.removeFromQueue(i, context: context);
             case 'playlist':
               await addToPlaylistSheet(context, app, t);
           }
