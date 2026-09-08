@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../api/client.dart';
 import '../api/models.dart';
 import 'artwork.dart';
 import '../state/app_state.dart';
@@ -125,4 +126,66 @@ Future<void> addToPlaylistSheet(
       ),
     ),
   );
+}
+
+
+/// A failure with a way out. A blank area and a spinner that never resolves is the
+/// worst of the three things a failed load can look like.
+class ErrorRetry extends StatelessWidget {
+  const ErrorRetry({super.key, required this.error, required this.onRetry});
+  final Object error;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final message = error is ApiException
+        ? (error as ApiException).message
+        : 'Could not load that';
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.cloud_off,
+                size: 40, color: Theme.of(context).colorScheme.onSurfaceVariant),
+            const SizedBox(height: 12),
+            Text(message,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 12),
+            FilledButton.tonal(onPressed: onRetry, child: const Text('Try again')),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class EmptyHint extends StatelessWidget {
+  const EmptyHint(
+      {super.key, required this.icon, required this.title, required this.body});
+  final IconData icon;
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon,
+                  size: 40, color: Theme.of(context).colorScheme.onSurfaceVariant),
+              const SizedBox(height: 12),
+              Text(title, style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 4),
+              Text(body,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall),
+            ],
+          ),
+        ),
+      );
 }

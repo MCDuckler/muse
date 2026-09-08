@@ -262,3 +262,82 @@ class Playlist {
             : const [],
       );
 }
+
+
+/// An album, derived from track metadata rather than stored — grouped by name *and*
+/// artist, because two records can share a title.
+class AlbumSummary {
+  final String name;
+  final String artist;
+  final int tracks;
+  final int? year;
+  final int? durationMs;
+  final String? coverPath;
+
+  const AlbumSummary({
+    required this.name,
+    required this.artist,
+    required this.tracks,
+    this.year,
+    this.durationMs,
+    this.coverPath,
+  });
+
+  factory AlbumSummary.fromJson(Map<String, dynamic> j) => AlbumSummary(
+        name: (j['name'] ?? '') as String,
+        artist: (j['artist'] ?? '') as String,
+        tracks: (j['tracks'] ?? 0) as int,
+        year: j['year'] as int?,
+        durationMs: (j['duration_ms'] as num?)?.toInt(),
+        coverPath: j['cover_url'] as String?,
+      );
+
+  String get subtitle => [
+        artist,
+        if (year != null) '$year',
+        '$tracks ${tracks == 1 ? 'track' : 'tracks'}',
+      ].join(' · ');
+}
+
+class ArtistSummary {
+  final String name;
+  final int tracks;
+  final int albums;
+  final String? coverPath;
+
+  const ArtistSummary({
+    required this.name,
+    required this.tracks,
+    this.albums = 0,
+    this.coverPath,
+  });
+
+  factory ArtistSummary.fromJson(Map<String, dynamic> j) => ArtistSummary(
+        name: (j['name'] ?? '') as String,
+        tracks: (j['tracks'] ?? 0) as int,
+        albums: (j['albums'] ?? 0) as int,
+        coverPath: j['cover_url'] as String?,
+      );
+
+  String get subtitle => [
+        '$tracks ${tracks == 1 ? 'track' : 'tracks'}',
+        if (albums > 0) '$albums ${albums == 1 ? 'album' : 'albums'}',
+      ].join(' · ');
+}
+
+/// A track with when it was played. The history had no sense of when until now.
+class PlayedTrack {
+  final Track track;
+  final DateTime? playedAt;
+  final bool completed;
+
+  const PlayedTrack({required this.track, this.playedAt, this.completed = false});
+
+  factory PlayedTrack.fromJson(Map<String, dynamic> j) => PlayedTrack(
+        track: Track.fromJson(j),
+        playedAt: j['played_at'] == null
+            ? null
+            : DateTime.tryParse(j['played_at'] as String)?.toLocal(),
+        completed: (j['completed'] ?? false) as bool,
+      );
+}

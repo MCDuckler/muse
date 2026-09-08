@@ -294,6 +294,25 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Play a list of tracks now, replacing the queue.
+  ///
+  /// This is what "play album" means everywhere else, and there was no way to express
+  /// it: the only route into the queue was adding one track at a time.
+  Future<void> playNow(List<Track> tracks, {int startAt = 0, bool shuffle = false}) async {
+    if (tracks.isEmpty) return;
+    final target = activeQueue ?? await ensureQueue('Now');
+    final ids = [for (final t in tracks) t.id];
+    final live = await api.queue(target.id);
+    final filled = await api.replaceQueue(target.id, live.rev, ids);
+    activeQueue = filled;
+    queues = await api.queues();
+    await player?.loadQueue(filled);
+    if (shuffle) await player?.setShuffle(true);
+    final first = tracks[startAt.clamp(0, tracks.length - 1)];
+    await player?.playTrack(first.id, indexHint: startAt);
+    notifyListeners();
+  }
+
   Future<void> startRadio({int count = 5}) async {
     final q = activeQueue;
     final seed = player?.current;

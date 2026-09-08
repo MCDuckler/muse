@@ -62,7 +62,9 @@ def get_playlist(playlist_id: int, user: dict = Depends(current_user)):
             where i.playlist_id=%s order by i.pos""",
         (playlist_id,),
     )
-    return {**p, "items": [catalog.public(t) for t in items]}
+    # Position travels with the row: removing or reordering is by position, and the
+    # client should not have to assume the list index matches.
+    return {**p, "items": [{**catalog.public(t), "pos": t["pos"]} for t in items]}
 
 
 @router.post("/playlists/{playlist_id}/items")
@@ -80,6 +82,38 @@ def add_items(playlist_id: int, body: dict = Body(...), user: dict = Depends(cur
                    on conflict do nothing""",
                 (playlist_id, start + n, tid),
             )
+    return get_playlist(playlist_id, user)
+
+
+@router.patch("/playlists/{playlist_id}")
+def rename_playlist(playlist_id: int, body: dict = Body(...),
+                    user: dict = Depends(current_user)):
+    _own_playlist(playlist_id, user)
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "name required")
+    db.run("update playlists set name=%s where id=%s", (name, playlist_id))
+    return get_playlist(playlist_id, user)
+
+
+@router.post("/playlists/{playlist_id}/move")
+def move_playlist_item(playlist_id: int, body: dict = Body(...),
+                       user: dict = Depends(current_user)):
+    _own_playlist(playlist_id, user)
+    src, dst = body.get("from"), body.get("to")
+    if src is None or dst is None:
+        raise HTTPException(400, "from and to are required")
+    rows = db.all_("select pos, track_id from playlist_items where playlist_id=%s "
+                   "order by pos", (playlist_id,))
+    if not (0 <= src < len(rows)) or not (0 <= dst < len(rows)):
+        raise HTTPException(400, "position out of range")
+    item = rows.pop(src)
+    rows.insert(dst, item)
+    with db.pool().connection() as c:
+        c.execute("delete from playlist_items where playlist_id=%s", (playlist_id,))
+        for i, r in enumerate(rows):
+            c.execute("insert into playlist_items(playlist_id,pos,track_id) "
+                      "values(%s,%s,%s)", (playlist_id, i, r["track_id"]))
     return get_playlist(playlist_id, user)
 
 

@@ -347,6 +347,24 @@ void main() {
           reason: 'and put it back where it was, not on the end');
     }
 
+    // ---- the library can be browsed at all ----
+    final api2 = appState.api;
+    final all = await api2.libraryTracks(limit: 5);
+    expect(all.total, greaterThan(0), reason: 'the library must be listable');
+    final albums = await api2.albums();
+    final artists = await api2.artists();
+    expect(albums, isNotEmpty, reason: 'albums come from track metadata');
+    expect(artists, isNotEmpty);
+    final albumTracks = await api2.albumTracks(albums.first.name,
+        artist: albums.first.artist);
+    expect(albumTracks, isNotEmpty,
+        reason: 'an album that is listed must have tracks behind it');
+    final played = await api2.playHistory();
+    if (played.isNotEmpty) {
+      expect(played.first.playedAt, isNotNull,
+          reason: 'history entries must carry when they happened');
+    }
+
     // ---- shuffle and repeat persist, and do not eat the queue ----
     // Read the count here rather than earlier: the steps in between deliberately
     // change the queue, and a stale count would fail for the wrong reason.

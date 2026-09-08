@@ -144,6 +144,15 @@ class ApiClient {
     return '$baseUrl$path${key == null ? '' : '&k=${Uri.encodeQueryComponent(key)}'}';
   }
 
+  /// A cover addressed by path rather than by track — album and artist rows borrow a
+  /// cover from one of their tracks.
+  String? coverUrlForPath(String? path, {bool small = true}) {
+    if (path == null) return null;
+    final key = _streamKey;
+    return '$baseUrl$path?size=${small ? 'sm' : 'lg'}'
+        '${key == null ? '' : '&k=${Uri.encodeQueryComponent(key)}'}';
+  }
+
   Future<Map<String, dynamic>> status() async =>
       await _decode(await http.get(_u('/status'), headers: _headers))
           as Map<String, dynamic>;
@@ -268,6 +277,65 @@ class ApiClient {
               _u('/queues/$queueId/save-as-playlist'),
               headers: _headers,
               body: jsonEncode({if (name != null) 'name': name})))
+          as Map<String, dynamic>);
+
+  // ---------------- browsing ----------------
+  Future<({List<Track> items, int total})> libraryTracks(
+      {String sort = 'added', int limit = 200, int offset = 0}) async {
+    final d = await _decode(await http.get(
+        _u('/library/tracks', {'sort': sort, 'limit': limit, 'offset': offset}),
+        headers: _headers)) as Map<String, dynamic>;
+    return (
+      items: (d['items'] as List).map((e) => Track.fromJson(e)).toList(),
+      total: (d['total'] ?? 0) as int,
+    );
+  }
+
+  Future<List<AlbumSummary>> albums() async {
+    final d = await _decode(await http.get(_u('/library/albums'), headers: _headers))
+        as Map<String, dynamic>;
+    return (d['items'] as List).map((e) => AlbumSummary.fromJson(e)).toList();
+  }
+
+  Future<List<Track>> albumTracks(String album, {String? artist}) async {
+    final d = await _decode(await http.get(
+        _u('/library/albums/tracks',
+            {'album': album, if (artist != null) 'artist': artist}),
+        headers: _headers)) as Map<String, dynamic>;
+    return (d['items'] as List).map((e) => Track.fromJson(e)).toList();
+  }
+
+  Future<List<ArtistSummary>> artists() async {
+    final d = await _decode(await http.get(_u('/library/artists'), headers: _headers))
+        as Map<String, dynamic>;
+    return (d['items'] as List).map((e) => ArtistSummary.fromJson(e)).toList();
+  }
+
+  Future<List<Track>> artistTracks(String artist) async {
+    final d = await _decode(await http.get(
+        _u('/library/artists/tracks', {'artist': artist}), headers: _headers))
+        as Map<String, dynamic>;
+    return (d['items'] as List).map((e) => Track.fromJson(e)).toList();
+  }
+
+  Future<List<PlayedTrack>> playHistory() async {
+    final d = await _decode(await http.get(_u('/library/history'), headers: _headers))
+        as Map<String, dynamic>;
+    return (d['items'] as List).map((e) => PlayedTrack.fromJson(e)).toList();
+  }
+
+  Future<void> clearHistory() async {
+    await _decode(await http.delete(_u('/library/history'), headers: _headers));
+  }
+
+  Future<Playlist> renamePlaylist(int id, String name) async =>
+      Playlist.fromJson(await _decode(await http.patch(_u('/playlists/$id'),
+              headers: _headers, body: jsonEncode({'name': name})))
+          as Map<String, dynamic>);
+
+  Future<Playlist> movePlaylistItem(int id, int from, int to) async =>
+      Playlist.fromJson(await _decode(await http.post(_u('/playlists/$id/move'),
+              headers: _headers, body: jsonEncode({'from': from, 'to': to})))
           as Map<String, dynamic>);
 
   Future<List<Track>> history() async {
