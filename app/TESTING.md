@@ -43,3 +43,10 @@ Notes that cost time to learn:
 - Scope tab taps to the `NavigationBar`. `Icons.queue_music` is also the empty-state
   illustration, and tapping that leaves you on the wrong page asserting against it.
 - Section headers are uppercased by the widget, so find `IN YOUR LIBRARY`.
+
+## Screenshots
+
+The driver writes any `binding.takeScreenshot('name')` to `build/screenshots/name.png`
+(that is what `integration_test_driver_extended` is for). The player's artwork is the
+reason it exists: a record standing up, lying down, or half way is something to look at
+rather than something to assert about.

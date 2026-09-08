@@ -73,3 +73,34 @@ def test_the_same_cover_always_wears_the_same_way(cfg, track_with_cover):
 def test_a_record_needs_a_key_or_a_token(client, track_with_cover):
     assert client.get(
         f"/tracks/{track_with_cover['id']}/cover?style=sleeve").status_code == 401
+
+
+def test_the_record_comes_apart_for_the_player(client, hdr, track_with_cover):
+    """The player animates the jacket and the disc separately, so it asks for each."""
+    for part in ("jacket", "disc"):
+        r = client.get(f"/tracks/{track_with_cover['id']}/cover?style={part}", headers=hdr)
+        assert r.status_code == 200, part
+        assert r.headers["content-type"] == "image/webp"
+        img = Image.open(io.BytesIO(r.content)).convert("RGBA")
+        assert img.size == (sleeve.CANVAS, sleeve.CANVAS)
+        assert img.getpixel((img.width // 2, img.height // 2))[3] == 255, \
+            f"the {part} must be solid where it exists"
+
+
+def test_a_disc_is_round_and_a_jacket_is_not(client, hdr, track_with_cover):
+    def corner(part):
+        r = client.get(f"/tracks/{track_with_cover['id']}/cover?style={part}", headers=hdr)
+        return Image.open(io.BytesIO(r.content)).convert("RGBA").getpixel((10, 10))[3]
+
+    assert corner("disc") < 20, "a disc has nothing in the corners of its canvas"
+    assert corner("jacket") > 200, "a jacket does"
+
+
+def test_two_records_are_not_the_same_record(client, hdr):
+    """Condition, stock and the odd punched corner come from the cover's own hash."""
+    editions = [sleeve.edition(f"{n:012x}") for n in range(60)]
+    assert len({e["condition"] for e in editions}) == 3
+    assert any(e["cut_out"] for e in editions)
+    assert any(e["gloss"] for e in editions) and any(not e["gloss"] for e in editions)
+    assert sleeve.edition("abc123abc123")["condition"] == \
+        sleeve.edition("abc123abc123")["condition"]

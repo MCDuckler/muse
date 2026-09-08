@@ -12,6 +12,7 @@ import 'package:integration_test/integration_test.dart';
 import 'package:muse/main.dart' as app;
 import 'package:muse/src/ui/player_bar.dart';
 import 'package:muse/src/ui/artwork.dart';
+import 'package:muse/src/ui/record_stage.dart';
 import 'package:muse/src/ui/downloads_page.dart';
 import 'package:muse/src/ui/library_page.dart';
 import 'package:muse/src/ui/queue_page.dart';
@@ -63,7 +64,7 @@ Future<void> settle(WidgetTester tester, {int seconds = 3}) async {
 }
 
 void main() {
-  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   // The test drives a real server, so it must not write into real queues. It makes
   // its own, uses only that, and deletes it afterwards. An earlier version added to
@@ -302,15 +303,23 @@ void main() {
     expect(find.byType(Slider), findsWidgets,
         reason: 'now playing must offer a real scrubber. On screen: ${visibleText(tester)}');
 
-    // The player shows the record, not a flat square.
-    expect(
-        tester.widgetList<Artwork>(find.byType(Artwork)).where((a) => a.sleeve),
-        isNotEmpty,
-        reason: 'the player artwork must be the sleeve rendering');
+    // The player shows a record being played: the jacket standing up, the disc out
+    // and turning. Screenshots so the thing can be looked at, not just asserted about.
+    expect(find.byType(RecordStage), findsOneWidget,
+        reason: 'the player artwork must be the record, not a flat square');
     final onScreen = app.debugPlayerSnapshot()?.current;
     if (onScreen != null) {
-      expect(appState.api.sleeveUrl(onScreen), contains('style=sleeve'));
+      expect(appState.api.jacketUrl(onScreen), contains('style=jacket'));
+      expect(appState.api.discUrl(onScreen), contains('style=disc'));
     }
+    await binding.takeScreenshot('player-playing');
+    await appState.player!.playPause();
+    await settle(tester, seconds: 3);
+    await binding.takeScreenshot('player-paused');
+    await appState.player!.playPause();
+    await settle(tester, seconds: 1);
+    await binding.takeScreenshot('player-standing-up');
+    await settle(tester, seconds: 2);
 
     final beforeSeek = app.debugPlayerSnapshot()!.position;
     final scrubber = find.byType(Slider).first;

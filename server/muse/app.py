@@ -271,15 +271,17 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         if not row:
             raise HTTPException(404, "no cover for that track")
 
-        if style == "sleeve":
-            # The record, not the file. Rendered once per cover and cached; see sleeve.py.
+        if style in sleeve.PARTS:
+            # The record, not the file: the whole thing, or the jacket and disc apart so
+            # the player can animate them. Rendered once per cover; see sleeve.py.
             colour = (row["color"] or "#8a8a8a").lstrip("#")
             rgb = tuple(int(colour[i:i + 2], 16) for i in (0, 2, 4))
-            sleeve.build(cfg.cover_dir, pathlib.Path(row["path"]), row["sha256"], rgb)
+            sleeve.build(cfg.cover_dir, pathlib.Path(row["path"]), row["sha256"], rgb,
+                         part=style)
             return _range_response(
                 sleeve.path_for(cfg.cover_dir, row["sha256"],
-                                "sm" if size == "sm" else "lg"),
-                request, etag=f"{row['sha256']}-sleeve-{size}")
+                                "sm" if size == "sm" else "lg", part=style),
+                request, etag=f"{row['sha256']}-{style}-{size}")
 
         path = pathlib.Path(row["path"])
         if size == "sm":

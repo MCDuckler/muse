@@ -4,8 +4,8 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/player.dart';
-import 'artwork.dart';
 import 'glass.dart';
+import 'record_stage.dart';
 import 'swipe.dart';
 import 'lyrics_sheet.dart';
 import 'track_menu.dart';
@@ -69,13 +69,11 @@ class NowPlayingScreen extends StatelessWidget {
             ],
           ),
           body: DragFollow(
-            // Drag down to close, the gesture that dismisses a sheet anywhere else;
-            // sideways moves through the queue, matching the mini player. The page
-            // follows the finger so a half-drag can be taken back.
+            // Drag down to close, the gesture that dismisses a sheet anywhere else.
+            // Sideways belongs to the record itself rather than to the page: dragging
+            // the whole screen to change track carried the title and the controls
+            // along with it, which is not what the gesture is about.
             onSwipeDown: () => Navigator.of(context).maybePop(),
-            onSwipeLeft: player.next,
-            onSwipeRight: player.previous,
-            horizontalTravel: 110,
             verticalTravel: 150,
             fadeWithDrag: true,
             child: AmbientBackdrop(
@@ -92,7 +90,7 @@ class NowPlayingScreen extends StatelessWidget {
                           mainAxisAlignment: MainAxisAlignment.center,
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            _Artwork(track: track),
+                            _Artwork(track: track, snapshot: s, player: player),
                             const SizedBox(height: 32),
                             Text(track.displayTitle,
                                 textAlign: TextAlign.center,
@@ -159,21 +157,38 @@ class NowPlayingScreen extends StatelessWidget {
 }
 
 class _Artwork extends StatelessWidget {
-  const _Artwork({required this.track});
+  const _Artwork({required this.track, this.snapshot, required this.player});
   final Track track;
+  final PlayerSnapshot? snapshot;
+  final PlayerService player;
+
+  /// The record either side of this one, so the queue is something you can see rather
+  /// than something you have to remember. Read from the player's own list.
+  Track? _at(int offset) {
+    final items = player.items;
+    final i = (snapshot?.index ?? 0) + offset;
+    return i >= 0 && i < items.length ? items[i] : null;
+  }
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, c) {
         final side = c.maxWidth;
-        // No clip and no shadow of our own: the record is rendered with its own
-        // shadow and turned corners, and a rounded rectangle around it would cut the
-        // disc off. A single cached image — nothing animates, nothing repaints.
+        // No clip and no shadow of our own: the pieces carry their own, and a rounded
+        // rectangle around them would cut the disc off as it slides out.
         return Center(
-          child: RepaintBoundary(
-            child: Artwork(
-                track: track, size: side, radius: 16, small: false, sleeve: true),
+          child: SizedBox(
+            width: side,
+            height: side,
+            child: RecordStage(
+              track: track,
+              playing: snapshot?.playing ?? false,
+              previous: _at(-1),
+              next: _at(1),
+              onPrevious: player.previous,
+              onNext: player.next,
+            ),
           ),
         );
       },

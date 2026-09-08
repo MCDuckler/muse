@@ -202,12 +202,19 @@ class ApiClient {
 
   /// A cover addressed by path rather than by track — album and artist rows borrow a
   /// cover from one of their tracks.
-  /// The cover as a record in its sleeve, for the player screen. Same cache rules as
-  /// the flat one; the server renders it once per cover.
-  String? sleeveUrl(Track t, {bool small = false}) {
+  /// The cover as a record: the whole thing as one picture, or the pieces the player
+  /// animates separately. Same cache rules as the flat cover; the server renders each
+  /// once per cover and never again.
+  String? sleeveUrl(Track t, {bool small = false, String part = 'sleeve'}) {
     final flat = coverUrl(t, small: small);
-    return flat == null ? null : '$flat&style=sleeve';
+    return flat == null ? null : '$flat&style=$part';
   }
+
+  String? jacketUrl(Track t, {bool small = false}) =>
+      sleeveUrl(t, small: small, part: 'jacket');
+
+  String? discUrl(Track t, {bool small = false}) =>
+      sleeveUrl(t, small: small, part: 'disc');
 
   /// A playlist's own art. Immutable per version, so it caches forever and still
   /// changes the moment the playlist does.
