@@ -83,22 +83,32 @@ def download_playlist(playlist_id: int, user: dict = Depends(current_user)):
     """
     p = _own_playlist(playlist_id, user)
     waiting = db.all_(
-        """select t.id, s.provider_id
+        """select distinct on (t.id) t.id, s.provider, s.provider_id,
+                  s.raw->>'url' as url
              from playlist_items i
              join tracks t on t.id = i.track_id
-             join track_sources s on s.track_id = t.id and s.provider='ytmusic'
+             join track_sources s on s.track_id = t.id
             where i.playlist_id=%s and t.state='pending'
               and not exists (select 1 from jobs j
-                               where j.kind='ingest'
+                               where j.kind in ('ingest','ingest_direct')
                                  and (j.payload->>'track_id')::int = t.id
-                                 and j.state in ('pending','leased','done'))""",
+                                 and j.state in ('pending','leased','done'))
+            order by t.id, (s.provider = 'ytmusic') desc""",
         (playlist_id,),
     )
     for row in waiting:
-        jobs.enqueue("ingest", {"track_id": row["id"], "video_id": row["provider_id"]},
-                     priority=jobs.PRIORITY_BULK,
-                     batch_id=f"playlist:{playlist_id}",
-                     batch_label=p["name"])
+        # Same rule as pressing play: the lane depends on where the song lives.
+        if row["provider"] in ("soundcloud", "bandcamp"):
+            jobs.enqueue("ingest_direct",
+                         {"track_id": row["id"], "provider": row["provider"],
+                          "ref": row["url"] or row["provider_id"]},
+                         priority=jobs.PRIORITY_BULK,
+                         batch_id=f"playlist:{playlist_id}", batch_label=p["name"])
+        else:
+            jobs.enqueue("ingest", {"track_id": row["id"],
+                                    "video_id": row["provider_id"]},
+                         priority=jobs.PRIORITY_BULK,
+                         batch_id=f"playlist:{playlist_id}", batch_label=p["name"])
     db.run("update playlists set download_mode='all' where id=%s", (playlist_id,))
     return {"queued": len(waiting)}
 

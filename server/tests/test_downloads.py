@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from muse import db, jobs
+from muse import catalog, db, jobs
 
 
 @pytest.fixture()
@@ -325,3 +325,48 @@ def test_refind_says_so_when_there_is_nothing(client, hdr, wsec, monkeypatch):
     assert out["found"] == 0 and out["still_missing"] == 1
     assert client.get(f"/tracks/{track['id']}", headers=hdr).json()["state"] == "failed", \
         "a track nothing was found for stays failed rather than looking queued"
+
+
+def test_playing_a_bandcamp_track_queues_it_where_it_can_be_fetched(client, hdr):
+    """A big mirror records the list without the audio. Pressing play on one of those
+    must queue it in the lane that can actually get it — queueing everything as YouTube
+    meant a Bandcamp track sat "downloading" for good, because nothing could start it."""
+    track = catalog.create_from_source(
+        "bandcamp",
+        {"provider_id": "77", "title": "Urlaub in Italien", "artists": ["Deine Familie"],
+         "album": "An album", "duration_ms": 200_000,
+         "url": "https://deinefamilie.bandcamp.com/track/urlaub-in-italien"},
+        download=False)
+    assert db.one("""select count(*) n from jobs
+                      where (payload->>'track_id')::int=%s""",
+                  (track["id"],))["n"] == 1, "only the metadata job, no audio yet"
+
+    assert client.post("/downloads/promote", headers=hdr,
+                       json={"track_ids": [track["id"]]}).json()["promoted"] == 1
+
+    job = db.one("""select kind, payload, priority from jobs
+                     where kind in ('ingest','ingest_direct')
+                       and (payload->>'track_id')::int=%s""", (track["id"],))
+    assert job["kind"] == "ingest_direct", "the server fetches Bandcamp itself"
+    assert job["payload"]["provider"] == "bandcamp"
+    assert job["payload"]["ref"].endswith("/track/urlaub-in-italien")
+    assert job["priority"] == jobs.PRIORITY_NOW
+
+
+def test_getting_a_whole_playlist_uses_the_right_lane_per_track(client, hdr):
+    playlist = client.post("/playlists", headers=hdr, json={"name": "Mixed"}).json()
+    bc = catalog.create_from_source(
+        "bandcamp", {"provider_id": "88", "title": "One", "artists": ["A"],
+                     "duration_ms": 1000, "url": "https://a.bandcamp.com/track/one"},
+        download=False)
+    yt = catalog.create_from_ytm(
+        {"video_id": "YTONE", "title": "Two", "artists": ["B"], "album": None,
+         "duration_ms": 1000}, download=False)
+    client.post(f"/playlists/{playlist['id']}/items", headers=hdr,
+                json={"track_ids": [bc["id"], yt["id"]]})
+
+    assert client.post(f"/playlists/{playlist['id']}/download",
+                       headers=hdr).json()["queued"] == 2
+    kinds = {r["kind"] for r in db.all_(
+        """select kind from jobs where kind in ('ingest','ingest_direct')""")}
+    assert kinds == {"ingest", "ingest_direct"}, kinds

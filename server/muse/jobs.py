@@ -54,20 +54,32 @@ def promote(track_id: int, priority: int = PRIORITY_NOW) -> bool:
         return True
 
     waiting = db.one(
-        """select t.id, s.provider_id
+        """select t.id, s.provider, s.provider_id, s.raw->>'url' as url
              from tracks t
-             join track_sources s on s.track_id = t.id and s.provider='ytmusic'
+             join track_sources s on s.track_id = t.id
             where t.id=%s and t.state='pending'
               and not exists (select 1 from jobs j
-                               where j.kind='ingest'
+                               where j.kind in ('ingest','ingest_direct')
                                  and (j.payload->>'track_id')::int = t.id
-                                 and j.state in ('pending','leased','done'))""",
+                                 and j.state in ('pending','leased','done'))
+            order by (s.provider = 'ytmusic') desc limit 1""",
         (track_id,),
     )
     if not waiting or not waiting["provider_id"]:
         return False
-    enqueue("ingest", {"track_id": track_id, "video_id": waiting["provider_id"]},
-            priority=priority)
+
+    # Which lane depends on where the song lives. A Bandcamp or SoundCloud track is
+    # fetched by the server itself; only YouTube needs the worker at home. Queueing
+    # everything as YouTube meant a track from a big mirror — recorded but not
+    # downloaded — could never be started at all, and sat "downloading" for good.
+    if waiting["provider"] in ("soundcloud", "bandcamp"):
+        enqueue("ingest_direct",
+                {"track_id": track_id, "provider": waiting["provider"],
+                 "ref": waiting["url"] or waiting["provider_id"]},
+                priority=priority)
+    else:
+        enqueue("ingest", {"track_id": track_id, "video_id": waiting["provider_id"]},
+                priority=priority)
     return True
 
 
