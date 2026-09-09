@@ -596,6 +596,25 @@ class ApiClient {
     return ArtistDetail.fromJson(d);
   }
 
+  /// Everyone with an account here, and whether they are around right now.
+  Future<List<({int id, String name, bool online})>> jamPeople() async {
+    final d = await _decode(await http.get(_u('/jams/people'), headers: _headers))
+        as Map<String, dynamic>;
+    return [
+      for (final e in (d['items'] ?? const []) as List)
+        (
+          id: (e['id'] ?? 0) as int,
+          name: (e['name'] ?? '') as String,
+          online: (e['online'] ?? false) as bool,
+        )
+    ];
+  }
+
+  Future<Jam> inviteToJam(int jamId, int userId) async => Jam.fromJson(
+      await _decode(await http.post(_u('/jams/$jamId/invite'),
+          headers: _headers, body: jsonEncode({'user_id': userId})))
+          as Map<String, dynamic>);
+
   // ---------------- favourites ----------------
   /// The ids, so a screen full of hearts is one request rather than one per song.
   Future<({int playlistId, List<int> trackIds})> favourites() async {

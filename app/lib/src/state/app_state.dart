@@ -186,6 +186,7 @@ class AppState extends ChangeNotifier {
     // A jam survives closing the app: picking it back up is how the same person on
     // two devices stays in the same room.
     await refreshJam();
+    await followJamQueue();
     _listenForEvents();
     await _pollStatus();
     _statusTimer?.cancel();
@@ -552,9 +553,35 @@ class AppState extends ChangeNotifier {
 
   Future<void> joinJam(String code) async {
     jam = await api.joinJam(code);
-    // Joining means listening to their queue, not yours.
-    activeQueue = await api.queue(jam!.queueId);
-    await player?.loadQueue(activeQueue!);
+    queues = await api.queues();          // the host's queue is in your list now
+    await followJamQueue();
+    notifyListeners();
+  }
+
+  /// Listen to the jam's queue, not your own.
+  ///
+  /// Joining did this once and then never again, so the first thing that reopened a
+  /// queue — starting the app, most of all — put a guest back on their own queue while
+  /// the screen still said they were in a jam. Everything they added from then on went
+  /// somewhere the host could not see, which is exactly what "it does not influence the
+  /// host" looks like from the other end.
+  Future<void> followJamQueue() async {
+    final current = jam;
+    if (current == null) return;
+    if (activeQueue?.id == current.queueId) return;
+    try {
+      activeQueue = await api.queue(current.queueId);
+      await player?.loadQueue(activeQueue!);
+      notifyListeners();
+    } catch (_) {
+      // The jam ended under us; refreshJam will clear it.
+    }
+  }
+
+  Future<void> inviteToJam(int userId) async {
+    final current = jam;
+    if (current == null) return;
+    jam = await api.inviteToJam(current.id, userId);
     notifyListeners();
   }
 

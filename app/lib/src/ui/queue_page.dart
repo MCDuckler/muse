@@ -74,7 +74,15 @@ class _QueuePageState extends State<QueuePage> {
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: ChoiceChip(
-                    label: Text('${q.name} · ${q.itemCount}'),
+                    // A jam's queue is somebody else's, and saying whose is the
+                    // difference between "why is this here" and "that is the one we
+                    // are listening to together".
+                    avatar: q.sharedFrom == null
+                        ? null
+                        : const Icon(Icons.people_outline, size: 16),
+                    label: Text(q.sharedFrom == null
+                        ? '${q.name} · ${q.itemCount}'
+                        : "${q.sharedFrom}'s jam · ${q.itemCount}"),
                     selected: q.id == active?.id,
                     onSelected: (_) => app.openQueue(q.id),
                   ),

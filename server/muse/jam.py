@@ -110,6 +110,19 @@ def may_touch_queue(queue_id: int, user_id: int) -> dict | None:
     )
 
 
+def invite(jam_id: int, user_id: int) -> None:
+    """Add somebody to a jam without them typing anything.
+
+    Everyone here already has an account on this server, so the code is a way of
+    reaching somebody who is not in the room — not the way in. Tapping a name is.
+    """
+    db.run(
+        """insert into jam_members(jam_id, user_id) values(%s,%s)
+           on conflict (jam_id, user_id) do update set last_seen=now()""",
+        (jam_id, user_id),
+    )
+
+
 def vote_skip(jam_id: int, track_id: int, user_id: int) -> dict:
     """One vote each, and a skip when more than half of the people here want it."""
     db.run(

@@ -13,6 +13,7 @@ import 'track_menu.dart';
 import 'up_next.dart';
 import 'song_row.dart';
 import 'browse_page.dart';
+import 'jam_page.dart';
 
 String formatTime(Duration d) {
   final m = d.inMinutes;
@@ -47,8 +48,10 @@ class NowPlayingScreen extends StatelessWidget {
               onPressed: () => Navigator.of(context).maybePop(),
               tooltip: 'Close',
             ),
-            title: Text(app.activeQueue?.name ?? 'Now playing',
-                style: Theme.of(context).textTheme.titleSmall),
+            title: app.jam == null
+                ? Text(app.activeQueue?.name ?? 'Now playing',
+                    style: Theme.of(context).textTheme.titleSmall)
+                : _JamTitle(app: app),
             centerTitle: true,
             // Nothing up here but the way out and where you are. Everything that acts
             // on the song sat in the top corners, as far from the play button and from
@@ -134,6 +137,48 @@ class NowPlayingScreen extends StatelessWidget {
     if (track.state == 'failed') return track.failReason ?? 'This track failed';
     if (track.isPending) return 'Downloading…';
     return null;
+  }
+}
+
+/// Listening together, said where you are looking.
+///
+/// A jam changes what the buttons on this screen mean — anyone can add, a skip is a
+/// vote — so it has to be visible from the screen those buttons are on, not only from
+/// the jam page. Tapping it goes there.
+class _JamTitle extends StatelessWidget {
+  const _JamTitle({required this.app});
+  final AppState app;
+
+  @override
+  Widget build(BuildContext context) {
+    final jam = app.jam!;
+    final scheme = Theme.of(context).colorScheme;
+    return InkWell(
+      borderRadius: BorderRadius.circular(20),
+      onTap: () => Navigator.of(context)
+          .push(MaterialPageRoute(builder: (_) => const JamPage())),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.people, size: 15, color: scheme.primary),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                jam.isHost
+                    ? 'Your jam · ${jam.listening} listening'
+                    : "${jam.host ?? 'Someone'}'s jam",
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleSmall
+                    ?.copyWith(color: scheme.primary),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

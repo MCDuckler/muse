@@ -58,6 +58,57 @@ class _JamPageState extends State<JamPage> {
     );
   }
 
+  /// Everyone with an account here, and a tap to put them in the room.
+  Future<void> _invite(BuildContext context, AppState app) async {
+    final messenger = ScaffoldMessenger.of(context);
+    List<({int id, String name, bool online})> people;
+    try {
+      people = await app.api.jamPeople();
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      return;
+    }
+    if (!context.mounted) return;
+    final already = {for (final m in app.jam?.members ?? const <JamMember>[]) m.userId};
+
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheet) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text('Invite someone'),
+            ),
+            if (people.isEmpty)
+              const ListTile(title: Text('Nobody else has an account here')),
+            for (final person in people)
+              ListTile(
+                leading: Icon(person.online ? Icons.person : Icons.person_outline),
+                title: Text(person.name),
+                subtitle: Text(already.contains(person.id)
+                    ? 'already here'
+                    : (person.online ? 'around now' : 'not around')),
+                enabled: !already.contains(person.id),
+                onTap: () async {
+                  Navigator.of(sheet).pop();
+                  try {
+                    await app.inviteToJam(person.id);
+                    messenger.showSnackBar(
+                        SnackBar(content: Text('${person.name} is in')));
+                  } catch (e) {
+                    messenger.showSnackBar(SnackBar(content: Text('$e')));
+                  }
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   List<Widget> _invitations(BuildContext context, AppState app) => [
         Text('Listen together',
             style: Theme.of(context).textTheme.headlineSmall),
@@ -107,22 +158,25 @@ class _JamPageState extends State<JamPage> {
                     style: Theme.of(context).textTheme.bodySmall),
               ],
             ),
-            const SizedBox(height: 14),
-            // The code is the whole point of this screen: big, spaced, readable across
-            // a room and over a phone call.
-            SelectableText(
-              jam.code,
-              style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                  letterSpacing: 10, fontFeatures: const [FontFeature.tabularFigures()]),
-            ),
             const SizedBox(height: 4),
             Text(jam.rules, style: Theme.of(context).textTheme.bodySmall),
             const SizedBox(height: 12),
             Row(
               children: [
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.copy, size: 18),
-                  label: const Text('Copy code'),
+                if (jam.isHost)
+                  FilledButton.tonalIcon(
+                    icon: const Icon(Icons.person_add_alt, size: 18),
+                    label: const Text('Invite'),
+                    onPressed: _busy ? null : () => _invite(context, app),
+                  ),
+                const SizedBox(width: 8),
+                // The code is for reaching somebody who is not on this server's list —
+                // read out over a phone, typed in later. Everyone here already has an
+                // account, so it is the fallback and not the way in.
+                TextButton.icon(
+                  icon: const Icon(Icons.tag, size: 18),
+                  label: Text(jam.code,
+                      style: const TextStyle(letterSpacing: 3)),
                   onPressed: () async {
                     await Clipboard.setData(ClipboardData(text: jam.code));
                     if (!context.mounted) return;

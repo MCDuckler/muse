@@ -224,6 +224,11 @@ class Queue {
   /// which left the app signed in but with no queues, no playlists and no live events.
   final int itemCount;
 
+  /// Whose jam this queue belongs to, when it is not yours. A guest listening with
+  /// somebody else needs to see that queue in their own list, or they lose it the
+  /// moment anything reopens a queue for them.
+  final String? sharedFrom;
+
   const Queue({
     required this.id,
     required this.name,
@@ -233,6 +238,7 @@ class Queue {
     required this.repeat,
     required this.rev,
     this.items = const [],
+    this.sharedFrom,
     int? itemCount,
   }) : itemCount = itemCount ?? items.length;
 
@@ -250,6 +256,7 @@ class Queue {
                 .toList()
             : const [],
         itemCount: j['items'] is int ? j['items'] as int : null,
+        sharedFrom: j['shared_from'] as String?,
       );
 }
 

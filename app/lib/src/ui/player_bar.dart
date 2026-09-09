@@ -34,6 +34,7 @@ class PlayerBar extends StatelessWidget {
         if (track == null) return const SizedBox.shrink();
 
         final progress = s?.progress ?? 0.0;
+        final jam = app.jam;
         final subtitle = switch (s) {
           // Ahead of the error line: this one is answerable, and the raw engine
           // message ("NotAllowedError: The play method is not allowed…") is not
@@ -43,6 +44,11 @@ class PlayerBar extends StatelessWidget {
           _ when (s?.waitingForDownload ?? false) => 'Waiting for download…',
           _ when (s?.finished ?? false) => 'End of queue',
           _ when track.isPending => 'Downloading…',
+          // Whose room this is, when it is somebody's: what is playing is only half
+          // the answer if three people can change it.
+          _ when jam != null => jam.isHost
+              ? '${track.artistLine} · your jam · ${jam.listening} listening'
+              : '${track.artistLine} · ${jam.host ?? 'a'} jam',
           _ => track.artistLine,
         };
         final muted = (s?.error != null && !(s?.needsGesture ?? false)) ||
@@ -71,7 +77,27 @@ class PlayerBar extends StatelessWidget {
               ListTile(
                 dense: true,
                 onTap: () => _openNowPlaying(context),
-                leading: Artwork(track: track, size: 42),
+                leading: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Artwork(track: track, size: 42),
+                    if (jam != null)
+                      Positioned(
+                        right: -4,
+                        bottom: -4,
+                        child: Container(
+                          padding: const EdgeInsets.all(3),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.primary,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(Icons.people,
+                              size: 11,
+                              color: Theme.of(context).colorScheme.onPrimary),
+                        ),
+                      ),
+                  ],
+                ),
                 title: Text(track.displayTitle,
                     maxLines: 1, overflow: TextOverflow.ellipsis),
                 subtitle: Text(

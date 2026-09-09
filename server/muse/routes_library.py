@@ -347,11 +347,28 @@ def _own_queue(queue_id: int, user: dict, *, adding: bool = False) -> dict:
 
 @router.get("/queues")
 def list_queues(user: dict = Depends(current_user)):
+    """Your queues, and the one you are listening to with somebody else.
+
+    A jam's queue belongs to the host, so a guest's list did not contain the thing they
+    were actually listening to — and the moment anything reopened a queue for them,
+    they were quietly back on their own with the app still saying they were in a jam.
+    It is in the list now, named for whose it is.
+    """
     return db.all_(
-        """select q.*, count(i.track_id) as items
+        """select q.*, count(i.track_id) as items, null::text as shared_from
              from queues q left join queue_items i on i.queue_id=q.id
-            where q.user_id=%s group by q.id order by q.updated_at desc""",
-        (user["id"],),
+            where q.user_id=%s group by q.id
+            union all
+           select q.*, count(i.track_id) as items, h.name as shared_from
+             from jams j
+             join jam_members m on m.jam_id = j.id and m.user_id = %s
+             join queues q on q.id = j.queue_id
+             join users h on h.id = j.host_id
+             left join queue_items i on i.queue_id = q.id
+            where j.ended_at is null and q.user_id <> %s
+            group by q.id, h.name
+            order by updated_at desc""",
+        (user["id"], user["id"], user["id"]),
     )
 
 

@@ -61,6 +61,42 @@ def join_jam(body: dict = Body(...), user: dict = Depends(current_user)):
     return jam.public(row, user["id"])
 
 
+@router.get("/people")
+def people(user: dict = Depends(current_user)):
+    """Everyone with an account here, and whether they are around.
+
+    "Around" is a device that has been seen in the last few minutes — enough to know
+    whether tapping a name will reach anybody.
+    """
+    return {"items": db.all_(
+        """select u.id, u.name,
+                  max(d.last_seen) as last_seen,
+                  max(d.last_seen) > now() - interval '5 minutes' as online
+             from users u left join devices d on d.user_id = u.id
+            where u.id <> %s
+            group by u.id order by online desc nulls last, lower(u.name)""",
+        (user["id"],),
+    )}
+
+
+@router.post("/{jam_id}/invite")
+def invite(jam_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
+    """Put somebody in the jam by name. Only the host hands out places."""
+    row = db.one("select * from jams where id=%s and ended_at is null", (jam_id,))
+    if not row:
+        raise HTTPException(404, "That jam is not running.")
+    if row["host_id"] != user["id"]:
+        raise HTTPException(403, "Only the host can invite people.")
+
+    invited = db.one("select id, name from users where id=%s", (body.get("user_id"),))
+    if not invited:
+        raise HTTPException(404, "no such person")
+
+    jam.invite(row["id"], invited["id"])
+    announce(row, "joined", {"who": invited["name"], "invited_by": user["name"]})
+    return jam.public(db.one("select * from jams where id=%s", (row["id"],)), user["id"])
+
+
 @router.get("/current")
 def current_jam(user: dict = Depends(current_user)):
     """The jam you are in, if any — and a heartbeat, so the others can see you are
