@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import math
 import pathlib
 import re
@@ -37,6 +38,9 @@ UA = UAS[0]
 
 class SourceError(RuntimeError):
     """Something the person who pressed the button should be told about."""
+
+
+log = logging.getLogger("muse.sources")
 
 
 def _run(args: list[str], timeout: int = 180) -> subprocess.CompletedProcess:
@@ -69,6 +73,35 @@ def _soundcloud_search(query: str, limit: int) -> list[dict]:
             "url": f"https://api.soundcloud.com/tracks/{e['id']}",
         })
     return out
+
+
+def artwork_url(provider: str, ref: str) -> str | None:
+    """The cover the uploader put on it.
+
+    Searching Deezer for a SoundCloud upload finds a stranger's record or nothing at
+    all, and most of these have no equivalent release anywhere — but the service that
+    is serving the audio is also serving the artwork, and that artwork is the right one.
+    """
+    try:
+        if provider == "bandcamp":
+            blob = bandcamp_page(ref)
+            art = (blob.get("current") or {}).get("art_id") or blob.get("art_id")
+            return f"https://f4.bcbits.com/img/a{art}_10.jpg" if art else None
+
+        url = ref if ref.startswith("http") else f"https://api.soundcloud.com/tracks/{ref}"
+        r = _run([YTDLP, "--no-warnings", "--no-playlist", "-J", url], timeout=120)
+        if r.returncode != 0:
+            return None
+        data = json.loads(r.stdout or "{}") or {}
+        thumb = data.get("thumbnail")
+        # SoundCloud serves several sizes under one name; the original is worth having
+        # for a now-playing screen and costs nothing extra.
+        if isinstance(thumb, str) and "-large." in thumb:
+            thumb = thumb.replace("-large.", "-original.")
+        return thumb
+    except Exception as e:                       # never let artwork break an ingest
+        log.info("no artwork for %s %s: %s", provider, ref, e)
+        return None
 
 
 def _soundcloud_fetch(ref: str, out_dir: pathlib.Path, report) -> dict:

@@ -28,7 +28,8 @@ API = "https://api.spotify.com/v1"
 
 # Read-only. muse never writes to Spotify, and asking for less is the difference
 # between a scary consent screen and a boring one.
-SCOPES = "playlist-read-private playlist-read-collaborative user-library-read"
+SCOPES = ("playlist-read-private playlist-read-collaborative user-library-read "
+          "user-follow-read")
 
 _states: dict[str, tuple[int, float]] = {}
 STATE_TTL = 600
@@ -260,9 +261,16 @@ def saved_tracks(cfg, user_id: int, offset: int = 0,
     out: list[dict] = []
     url, params = "/me/tracks", {"limit": 50, "offset": offset}
     fetched = 0
+    # Where to carry on from is counted in *entries seen*, not entries kept. A local
+    # file or a podcast in the middle of somebody's liked songs is skipped, and resuming
+    # at "offset + how many we kept" then starts again short of where it stopped — the
+    # next run re-reads ground it has already read, writes over the same positions, and
+    # the import sits at twelve hundred songs for ever while every job reports success.
+    seen = 0
     while url:
         page = _get(cfg, user_id, url, **params)
         for entry in page.get("items", []):
+            seen += 1
             item = (entry or {}).get("track") or {}
             if not item.get("name") or item.get("type") not in (None, "track"):
                 continue
@@ -270,8 +278,30 @@ def saved_tracks(cfg, user_id: int, offset: int = 0,
         url, params = page.get("next"), {}
         fetched += 1
         if pages is not None and fetched >= pages:
-            return out, offset + len(out) if url else None
+            return out, (offset + seen) if url else None
     return out, None
+
+
+def followed_artists(cfg, user_id: int, limit: int = 50) -> list[dict]:
+    """The artists this account follows on Spotify.
+
+    Needs the user-follow-read scope, which older links were not asked for — an account
+    linked before this returns nothing until it is linked again, and says so rather
+    than looking empty.
+    """
+    out: list[dict] = []
+    after = None
+    while True:
+        params = {"type": "artist", "limit": min(limit, 50)}
+        if after:
+            params["after"] = after
+        page = (_get(cfg, user_id, "/me/following", **params) or {}).get("artists") or {}
+        for a in page.get("items") or []:
+            if a.get("name"):
+                out.append({"name": a["name"], "image": (a.get("images") or [{}])[0].get("url")})
+        after = (page.get("cursors") or {}).get("after")
+        if not after or not page.get("items"):
+            return out
 
 
 def _track(item: dict) -> dict:

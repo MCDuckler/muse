@@ -176,7 +176,42 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
                 order by mine desc, similarity(t.norm_title, lower(%s)) desc limit %s""",
             (user["id"], q, f"%{q}%", q, limit),
         )
+        # Artists and albums, from your own library. Searching for a band and getting
+        # only the four songs of theirs that happen to match the spelling is not a
+        # search for the band — the way in to everything of theirs is their page.
+        artists = db.all_(
+            """select artist as name, count(*) as tracks
+                 from (select unnest(t.artists) as artist
+                         from tracks t
+                         join library_items li
+                           on li.track_id = t.id and li.user_id = %s) x
+                where artist ilike %s
+                group by artist
+                order by (lower(artist) = lower(%s)) desc, count(*) desc
+                limit 6""",
+            (user["id"], f"%{q}%", q),
+        )
+        albums = db.all_(
+            """select t.album as name,
+                      coalesce(t.artists[1], 'Unknown artist') as artist,
+                      count(*) as tracks,
+                      max(t.id) filter (where t.cover_id is not null) as cover_track_id
+                 from tracks t
+                 join library_items li on li.track_id = t.id and li.user_id = %s
+                where t.album ilike %s
+                group by t.album, coalesce(t.artists[1], 'Unknown artist')
+                order by (lower(t.album) = lower(%s)) desc, count(*) desc
+                limit 6""",
+            (user["id"], f"%{q}%", q),
+        )
+
         out = {"local": [{**catalog.public(t), "mine": t["mine"]} for t in local],
+               "artists": artists,
+               "albums": [
+                   {**a, "cover_url": f"/tracks/{a['cover_track_id']}/cover"
+                    if a["cover_track_id"] else None}
+                   for a in albums
+               ],
                "remote": []}
         if remote:
             have = {t.get("provider_id") for t in db.all_(

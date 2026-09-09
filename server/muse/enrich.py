@@ -18,7 +18,7 @@ import re
 
 import httpx
 
-from . import catalog, db, match, storage
+from . import catalog, db, match, sources, storage
 
 log = logging.getLogger("muse.enrich")
 
@@ -235,6 +235,22 @@ def enrich_track(cfg, track_id: int) -> dict:
     # Whatever happens, a YouTube ingest can always show *something*.
     # Sources in descending order of what they actually look like at full size.
     attempts: list[tuple[str, str]] = []
+
+    # A SoundCloud or Bandcamp upload usually has no equivalent release anywhere, so
+    # searching a music database for it finds a stranger's record or nothing at all —
+    # but the service serving the audio is also serving the artwork the uploader chose,
+    # and that is the right cover. It goes first for those two, ahead of any match.
+    own = db.one(
+        """select provider, provider_id, raw from track_sources
+            where track_id=%s and provider in ('soundcloud','bandcamp') limit 1""",
+        (track_id,),
+    )
+    if own:
+        raw = own["raw"] if isinstance(own["raw"], dict) else {}
+        ref = (raw or {}).get("url") or own["provider_id"]
+        if url := sources.artwork_url(own["provider"], ref):
+            attempts.append((own["provider"], url))
+
     if chosen and chosen.get("cover"):
         attempts.append((chosen["provider"], chosen["cover"]))
     if t.get("provider") == "ytmusic" and t.get("provider_id"):

@@ -177,15 +177,41 @@ def _soundcloud_profile(handle: str) -> dict:
 
 
 def _soundcloud_playlists(handle: str) -> list[dict]:
-    """The three lists a public profile actually has."""
-    return [
-        {"remote_id": f"{handle}/likes", "name": f"{handle} · Likes",
+    """The three standing lists, and then the playlists they actually made.
+
+    A profile's own sets were missing entirely, so the only things that could be
+    mirrored were likes, uploads and reposts — which is not what most people mean by
+    their SoundCloud playlists.
+    """
+    out = [
+        {"remote_id": f"{handle}/likes", "name": "Likes",
          "count": None, "owner": handle, "image": None},
-        {"remote_id": f"{handle}/tracks", "name": f"{handle} · Tracks",
+        {"remote_id": f"{handle}/tracks", "name": "Tracks",
          "count": None, "owner": handle, "image": None},
-        {"remote_id": f"{handle}/reposts", "name": f"{handle} · Reposts",
+        {"remote_id": f"{handle}/reposts", "name": "Reposts",
          "count": None, "owner": handle, "image": None},
     ]
+    r = subprocess.run([sources.YTDLP, "--flat-playlist", "-J",
+                        f"https://soundcloud.com/{urllib.parse.quote(handle)}/sets"],
+                       capture_output=True, text=True, timeout=180)
+    if r.returncode != 0:
+        log.info("no sets for %s: %s", handle, (r.stderr or "").strip()[:200])
+        return out
+    try:
+        data = json.loads(r.stdout or "{}") or {}
+    except json.JSONDecodeError:
+        return out
+    for entry in data.get("entries") or []:
+        url = entry.get("url") or ""
+        # The remote id is the part after soundcloud.com/, which is what _soundcloud_items
+        # puts back together — one shape for a set and for a standing list.
+        remote = url.split("soundcloud.com/", 1)[-1].strip("/") if url else ""
+        if not remote or not entry.get("title"):
+            continue
+        out.append({"remote_id": remote, "name": entry["title"],
+                    "count": entry.get("playlist_count"), "owner": handle,
+                    "image": entry.get("thumbnail")})
+    return out
 
 
 def _soundcloud_items(remote_id: str, limit: int = 200) -> list[dict]:
@@ -239,9 +265,9 @@ def _bandcamp_playlists(handle: str) -> list[dict]:
     blob = _bandcamp_blob(handle)
     counts = blob.get("collection_count")
     return [
-        {"remote_id": f"{handle}/collection", "name": f"{handle} · Collection",
+        {"remote_id": f"{handle}/collection", "name": "Collection",
          "count": counts, "owner": handle, "image": None},
-        {"remote_id": f"{handle}/wishlist", "name": f"{handle} · Wishlist",
+        {"remote_id": f"{handle}/wishlist", "name": "Wishlist",
          "count": (blob.get("wishlist_data") or {}).get("item_count"),
          "owner": handle, "image": None},
     ]
@@ -304,6 +330,55 @@ def _bandcamp_items(remote_id: str, offset: int = 0) -> tuple[list[dict], int | 
 
     done = offset + len(run)
     return out, (done if done < len(albums) else None)
+
+
+# ---------------------------------------------------------------- who they follow
+def _soundcloud_following(handle: str) -> list[dict]:
+    """Not available, and saying so beats a scraper that breaks quietly.
+
+    yt-dlp reads a SoundCloud profile's tracks, likes, reposts and sets, but treats
+    /following as a track and fails on it. The only other way in is SoundCloud's
+    internal API with a client id lifted out of their JavaScript, which works until the
+    day it does not — and a followed-artists list that silently empties is worse than
+    one that was never offered.
+    """
+    r = subprocess.run([sources.YTDLP, "--flat-playlist", "-J", "--playlist-items", "1-200",
+                        f"https://soundcloud.com/{urllib.parse.quote(handle)}/following"],
+                       capture_output=True, text=True, timeout=300)
+    if r.returncode != 0:
+        raise LinkError("SoundCloud does not let us read who you follow. "
+                        "Spotify and Bandcamp do.")
+    data = json.loads(r.stdout or "{}") or {}
+    out = []
+    for e in data.get("entries") or []:
+        name = (e.get("uploader") or e.get("title") or "").strip()
+        # A profile listing is titled "Name (Tracks)" when it comes back as a user page.
+        name = re.sub(r"\s*\((Tracks|All|Likes)\)$", "", name)
+        if name:
+            out.append({"name": name, "image": e.get("thumbnail")})
+    return out
+
+
+def _bandcamp_following(handle: str) -> list[dict]:
+    blob = _bandcamp_blob(handle)
+    out = []
+    for band in (blob.get("following_bands_data") or {}).get("sequence") or []:
+        entry = ((blob.get("item_cache") or {}).get("following_bands") or {}).get(str(band))
+        name = (entry or {}).get("name")
+        if name:
+            out.append({"name": name, "image": (entry or {}).get("image_id")})
+    return out
+
+
+_FOLLOWING = {"soundcloud": _soundcloud_following, "bandcamp": _bandcamp_following}
+
+
+def following(provider: str, handle: str) -> list[dict]:
+    """Who this account follows over there. Deezer has no public following list."""
+    fetch = _FOLLOWING.get(provider)
+    if not fetch:
+        raise LinkError(f"{provider} does not say who you follow.")
+    return fetch(handle)
 
 
 # ---------------------------------------------------------------- registry

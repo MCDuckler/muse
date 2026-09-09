@@ -423,3 +423,11 @@ create table if not exists feed_seen (
   seen_at  timestamptz not null default now(),
   primary key (user_id, provider, album_id)
 );
+
+-- Who is allowed to change things that belong to everybody.
+--
+-- There were no roles, which was fine while there was one person; with three it means
+-- anyone can reset anyone's password. Named in the config rather than promoted from
+-- inside the app: an account that can make itself an admin is not a role.
+alter table users add column if not exists is_admin boolean not null default false;
+update users set is_admin = true where name in ('chris', 'joe');

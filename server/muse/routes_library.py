@@ -245,9 +245,61 @@ def move_playlist_item(playlist_id: int, body: dict = Body(...),
 
 @router.delete("/playlists/{playlist_id}")
 def delete_playlist(playlist_id: int, user: dict = Depends(current_user)):
-    _own_playlist(playlist_id, user)
+    row = _own_playlist(playlist_id, user)
+    if row["kind"] == FAVOURITES_KIND:
+        # It is not a playlist somebody made, it is where the heart button puts things.
+        # Deleting it would take the hearts with it and then quietly come back empty.
+        raise HTTPException(400, "Favourites cannot be deleted. Unheart songs instead.")
     db.run("delete from playlists where id=%s", (playlist_id,))
     return {"deleted": playlist_id}
+
+
+# ------------------------------------------------------------------ favourites
+FAVOURITES_KIND = "favourites"
+
+
+def favourites_id(user_id: int) -> int:
+    """The one playlist nobody has to make and nobody can delete."""
+    row = db.one("select id from playlists where owner_id=%s and kind=%s",
+                 (user_id, FAVOURITES_KIND))
+    if row:
+        return row["id"]
+    return db.one(
+        """insert into playlists(owner_id, name, kind, sync_mode)
+           values(%s,'Favourites',%s,'off') returning id""",
+        (user_id, FAVOURITES_KIND),
+    )["id"]
+
+
+@router.get("/favourites")
+def favourites(user: dict = Depends(current_user)):
+    """The ids, so a screen full of hearts is one request rather than one per song."""
+    playlist_id = favourites_id(user["id"])
+    rows = db.all_("select track_id from playlist_items where playlist_id=%s",
+                   (playlist_id,))
+    return {"playlist_id": playlist_id, "track_ids": [r["track_id"] for r in rows]}
+
+
+@router.post("/favourites/{track_id}")
+def set_favourite(track_id: int, body: dict = Body(default={}),
+                  user: dict = Depends(current_user)):
+    """Heart or unheart. Without a body it toggles, which is what a tap means."""
+    playlist_id = favourites_id(user["id"])
+    have = db.one("select pos from playlist_items where playlist_id=%s and track_id=%s",
+                  (playlist_id, track_id))
+    wanted = body.get("favourite")
+    if wanted is None:
+        wanted = have is None
+
+    if wanted and have is None:
+        at = (db.one("select coalesce(max(pos),-1) p from playlist_items where playlist_id=%s",
+                     (playlist_id,))["p"]) + 1
+        db.run("""insert into playlist_items(playlist_id,pos,track_id) values(%s,%s,%s)
+                  on conflict do nothing""", (playlist_id, at, track_id))
+    elif not wanted and have is not None:
+        db.run("delete from playlist_items where playlist_id=%s and track_id=%s",
+               (playlist_id, track_id))
+    return {"track_id": track_id, "favourite": bool(wanted), "playlist_id": playlist_id}
 
 
 # ------------------------------------------------------------------ queues

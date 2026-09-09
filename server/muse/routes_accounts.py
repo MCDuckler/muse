@@ -29,13 +29,29 @@ def list_accounts(user: dict = Depends(current_user)):
                   u.pw_hash is null as needs_password
              from users u left join devices d on d.user_id=u.id
             group by u.id order by u.id"""
-    ), "you": user["id"]}
+    ), "you": user["id"], "admin": is_admin(user["id"])}
+
+
+def is_admin(user_id: int) -> bool:
+    row = db.one("select is_admin from users where id=%s", (user_id,))
+    return bool(row and row["is_admin"])
+
+
+def _admin(user: dict) -> None:
+    """Only an admin changes what belongs to somebody else.
+
+    Named in the database rather than granted in the app: an account that can promote
+    itself is not a role, and chris and joe are set in the schema. Everything anyone
+    can do to their *own* account stays open.
+    """
+    if not is_admin(user["id"]):
+        raise HTTPException(403, "Only an admin can do that.")
 
 
 @router.post("", status_code=201)
 def create_account(body: dict = Body(...), user: dict = Depends(current_user)):
-    """Any signed-in user can add another. With a handful of trusted people that is
-    the right amount of ceremony; there are no roles to administer."""
+    """Adding somebody is an admin's job, along with removing them again."""
+    _admin(user)
     try:
         return auth.create_account(
             (body.get("name") or "").strip(),
@@ -48,6 +64,7 @@ def create_account(body: dict = Body(...), user: dict = Depends(current_user)):
 
 @router.delete("/{account_id}")
 def delete_account(account_id: int, user: dict = Depends(current_user)):
+    _admin(user)
     if account_id == user["id"]:
         raise HTTPException(400, "you cannot delete the account you are signed in with")
     if not db.one("select id from users where id=%s", (account_id,)):
@@ -64,8 +81,11 @@ def reset_password(account_id: int, body: dict = Body(...),
     """Set someone else's password.
 
     Without this, an account that cannot sign in is only recoverable with a database
-    client — which is not a thing to need at eleven at night.
+    client — which is not a thing to need at eleven at night. Somebody else's password
+    is an admin's to set; your own is yours.
     """
+    if account_id != user["id"]:
+        _admin(user)
     if not db.one("select id from users where id=%s", (account_id,)):
         raise HTTPException(404, "no such account")
     try:
@@ -79,7 +99,11 @@ def reset_password(account_id: int, body: dict = Body(...),
 
 @router.post("/invites", status_code=201)
 def create_invite(body: dict = Body(default={}), user: dict = Depends(current_user)):
-    """A one-time code, so you never have to know someone else's password."""
+    """A one-time code, so you never have to know someone else's password.
+
+    An invite is a way onto the server, so making one is an admin's to do.
+    """
+    _admin(user)
     code = secrets.token_urlsafe(9)
     expires = datetime.now(timezone.utc) + timedelta(hours=INVITE_TTL_HOURS)
     db.run(
@@ -101,5 +125,6 @@ def list_invites(user: dict = Depends(current_user)):
 
 @router.delete("/invites/{code}")
 def revoke_invite(code: str, user: dict = Depends(current_user)):
+    _admin(user)
     db.run("delete from invites where code=%s and used_at is null", (code,))
     return {"revoked": code}

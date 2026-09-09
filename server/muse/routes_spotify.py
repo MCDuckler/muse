@@ -199,9 +199,21 @@ def run_mirror_job(payload: dict) -> dict:
     user_id = int(payload["user_id"])
     remote_id = payload["remote_id"]
     if remote_id != spotify.LIKED:
-        return _mirror(user_id, {"remote_id": remote_id, "name": payload.get("name"),
-                                 "owner": payload.get("owner"),
-                                 "count": payload.get("count")})
+        try:
+            return _mirror(user_id, {
+                "remote_id": remote_id,
+                # A playlist row cannot have no name, and a queued mirror does not
+                # always carry one — a request that only had the id would fail on the
+                # insert, three times, and be written off as broken.
+                "name": (payload.get("name") or "").strip() or remote_id,
+                "owner": payload.get("owner"),
+                "count": payload.get("count")})
+        except spotify.SpotifyBusy:
+            jobs.enqueue("mirror", payload, priority=jobs.PRIORITY_BULK,
+                         delay_seconds=RATE_LIMIT_WAIT)
+            log.info("spotify busy on %s; trying again in %s minutes",
+                     remote_id, RATE_LIMIT_WAIT // 60)
+            return {"waiting": "spotify is rate-limiting; will resume"}
 
     offset = int(payload.get("offset") or 0)
     try:
@@ -245,11 +257,18 @@ def _liked_playlist(user_id: int) -> int:
 
 def _append_items(playlist_id: int, start: int, items: list[dict],
                   batch_id: str, batch_label: str) -> int:
-    """Add a run of songs at the position they hold in the source list.
+    """Add a run of songs to the end of the playlist.
+
+    At the end, rather than at the position they hold in the source list: songs that
+    cannot be matched leave gaps in that numbering, and a resumed run then writes over
+    positions the previous one already used. The order is preserved because the runs
+    arrive in order — which is the only thing the position has to do.
 
     Whatever arrives is kept: an import that is cut off has still imported something,
     and running it again carries on rather than starting over.
     """
+    at = (db.one("select coalesce(max(pos), -1) p from playlist_items where playlist_id=%s",
+                 (playlist_id,))["p"]) + 1
     added = 0
     for n, item in enumerate(items):
         try:
@@ -264,7 +283,7 @@ def _append_items(playlist_id: int, start: int, items: list[dict],
         db.run("""insert into playlist_items(playlist_id,pos,track_id)
                   values(%s,%s,%s) on conflict (playlist_id,pos) do update
                   set track_id=excluded.track_id""",
-               (playlist_id, start + n, outcome["track_id"]))
+               (playlist_id, at + added, outcome["track_id"]))
         added += 1
     return added
 
