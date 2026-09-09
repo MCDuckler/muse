@@ -35,13 +35,17 @@ class PlayerBar extends StatelessWidget {
 
         final progress = s?.progress ?? 0.0;
         final subtitle = switch (s) {
+          // Ahead of the error line: this one is answerable, and the raw engine
+          // message ("NotAllowedError: The play method is not allowed…") is not
+          // something to put in front of someone.
+          _ when (s?.needsGesture ?? false) => 'Ready — tap play',
           _ when s?.error != null => s!.error!,
           _ when (s?.waitingForDownload ?? false) => 'Waiting for download…',
           _ when (s?.finished ?? false) => 'End of queue',
           _ when track.isPending => 'Downloading…',
           _ => track.artistLine,
         };
-        final muted = (s?.error != null) ||
+        final muted = (s?.error != null && !(s?.needsGesture ?? false)) ||
             (s?.waitingForDownload ?? false) ||
             (s?.finished ?? false);
 

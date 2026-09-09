@@ -70,6 +70,14 @@ void _watchTheAudioElement() {
   """);
 }
 
+/// How many media elements the page has built. It has to stay at one: a browser gives
+/// permission to make sound to an *element*, so a player that throws its element away
+/// per track has to ask for a tap again every time — which is where "NotAllowedError:
+/// The play method is not allowed" came from.
+int _elementsBuilt() =>
+    ((_eval('(window.__log || []).filter(function(l){return /createElement|new Audio/.test(l);}).length')
+        as JSNumber?)?.toDartInt) ?? -1;
+
 String _audioLog() =>
     (_eval('(window.__log || []).join(" ~ ") + " | src reads: " + (window.__reads||0)')
         as JSString?)?.toDart ?? '(none)';
@@ -120,8 +128,9 @@ void main() {
     // Three downloaded songs of different lengths, so the engine's own duration says
     // which one it is holding. The library listing has no stream url on it, so the
     // queue is read back afterwards for the playable rows.
-    // Most of the library is mid-download right now, so look at a lot of it.
-    final library = await api.libraryTracks(limit: 400);
+    // Ask the server for playable rows: with a big mirror running, the newest few
+    // hundred tracks in the library are all still downloading.
+    final library = await api.libraryTracks(limit: 400, readyOnly: true);
     final picks = <Track>[];
     for (final t in library.items) {
       if (t.state != 'ready' || t.durationMs == null) continue;
@@ -199,5 +208,36 @@ void main() {
           reason: 'a skip starts the new song at the beginning. $trace');
       expect(snap.playing, isTrue, reason: 'a skip must keep playing. $trace');
     }
+
+    // One element for the whole session. See _elementsBuilt.
+    expect(_elementsBuilt(), 1,
+        reason: 'the web player must keep its one media element across track '
+            'changes, or the browser asks for a tap again on every song. $trace '
+            '|| AUDIO: ${_audioLog()}');
+
+    // The half of the problem a tap cannot cover: when a song finishes, or a download
+    // lands, nobody has touched anything, so the browser is within its rights to
+    // refuse. It only works if the element that was already allowed to play is reused.
+    final items = player.items;
+    _mark('auto-advance');
+    await player.playAt(0);
+    await settle(tester, seconds: 5);
+    expect(app.debugPlayerSnapshot()!.loadedTrackId, items[0].id);
+
+    // Right up to the end, then let it run off the end by itself.
+    final len = items[0].durationMs!;
+    await player.seek(Duration(milliseconds: len - 4000));
+    await settle(tester, seconds: 14);
+
+    snap = app.debugPlayerSnapshot()!;
+    expect(snap.loadedTrackId, items[1].id,
+        reason: 'the next song must load when the previous one ends '
+            '|| AUDIO: ${_audioLog()}');
+    expect(snap.playing, isTrue,
+        reason: 'and it must actually be playing, with nothing tapped '
+            '|| AUDIO: ${_audioLog()}');
+    expect(snap.needsGesture, isFalse, reason: 'no tap should have been needed');
+    expect(_elementsBuilt(), 1,
+        reason: 'still one element || AUDIO: ${_audioLog()}');
   });
 }

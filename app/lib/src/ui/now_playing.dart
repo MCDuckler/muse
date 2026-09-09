@@ -153,6 +153,8 @@ class NowPlayingScreen extends StatelessWidget {
   }
 
   static String? _statusLine(PlayerSnapshot? s, Track track) {
+    // First: the browser is only waiting to be tapped, which is not a failure.
+    if (s?.needsGesture ?? false) return 'Ready — tap play';
     if (s?.error != null) return s!.error;
     if (s?.waitingForDownload ?? false) return 'Waiting for download…';
     if (s?.finished ?? false) return 'End of queue';

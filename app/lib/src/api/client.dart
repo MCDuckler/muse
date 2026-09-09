@@ -534,9 +534,15 @@ class ApiClient {
 
   // ---------------- browsing ----------------
   Future<({List<Track> items, int total})> libraryTracks(
-      {String sort = 'added', int limit = 200, int offset = 0}) async {
+      {String sort = 'added', int limit = 200, int offset = 0,
+      bool readyOnly = false}) async {
     final d = await _decode(await http.get(
-        _u('/library/tracks', {'sort': sort, 'limit': limit, 'offset': offset}),
+        _u('/library/tracks', {
+          'sort': sort,
+          'limit': limit,
+          'offset': offset,
+          if (readyOnly) 'ready_only': true,
+        }),
         headers: _headers)) as Map<String, dynamic>;
     return (
       items: (d['items'] as List).map((e) => Track.fromJson(e)).toList(),

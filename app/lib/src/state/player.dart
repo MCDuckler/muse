@@ -48,6 +48,16 @@ class PlayerService {
   int? _loadedTrackId;
   int? _waitingForTrack;         // stalled on a download; resume when it lands
 
+  /// Whether the web player already holds a playlist we can edit in place.
+  /// Until the first source is set there is nothing to insert into.
+  bool _webPlaylistLive = false;
+
+  /// The browser refused to start audio because nothing has been tapped yet.
+  ///
+  /// Not an error: a browser will only make sound from an element a real interaction
+  /// reached. It is a prompt — the next tap anywhere resumes what was waiting.
+  bool needsGesture = false;
+
   /// Every load takes this token. Two loads can overlap — tapping a row while a skip
   /// is still resolving, or a server event arriving mid-tap — and without a token the
   /// slower one finishes last and wins, leaving the wrong song playing.
@@ -116,7 +126,7 @@ class PlayerService {
       _order = const [];
       _orderPos = 0;
       _loadedTrackId = null;
-      await _player.stop();
+      await _halt();
       _emit(force: true);
       return;
     }
@@ -275,9 +285,33 @@ class PlayerService {
   /// and leave an error handler open for the whole track.
   void _startPlayback() {
     unawaited(_player.play().catchError((Object e) {
-      lastError = '$e';
+      if (_isAutoplayRefusal(e)) {
+        // Ask for the tap rather than reporting a failure — nothing is broken.
+        needsGesture = true;
+      } else {
+        lastError = '$e';
+      }
       _emit(force: true);
     }));
+  }
+
+  /// A browser saying "not without a tap first", in the several ways it says it.
+  static bool _isAutoplayRefusal(Object e) {
+    final text = e.toString().toLowerCase();
+    return text.contains('notallowederror') ||
+        text.contains('play method is not allowed') ||
+        text.contains("didn't interact") ||
+        text.contains('user gesture') ||
+        text.contains('user activation');
+  }
+
+  /// Called when the person taps anything at all: a browser counts that as permission,
+  /// so whatever was waiting for one can start now.
+  Future<void> resumeAfterGesture() async {
+    if (!needsGesture) return;
+    needsGesture = false;
+    _emit(force: true);
+    await playPause();
   }
 
   Future<void> playPause() async {
@@ -366,7 +400,7 @@ class PlayerService {
       _orderPos = pendingPos;
       _waitingForTrack = _items[_order[pendingPos]].id;
       _loadedTrackId = null;
-      await _player.stop();
+      await _halt();
       _emit(force: true);
       _saveCursor();
       return;
@@ -378,8 +412,24 @@ class PlayerService {
   Future<void> _finish() async {
     _recordListen();
     finished = true;
-    await _player.stop();
+    await _halt();
     _emit(force: true);
+  }
+
+  /// Stop the audio without throwing the web player's `<audio>` element away.
+  ///
+  /// A browser grants permission to make sound to the *element* a tap happened on.
+  /// just_audio's stop() deactivates the platform player, which on the web disposes
+  /// that element — so the next track, started by a download finishing or by the
+  /// previous one ending, met a brand new element with no permission and was refused
+  /// ("NotAllowedError: The play method is not allowed..."). Pausing leaves the same
+  /// element in place, which is all "stopped" needs to mean here.
+  Future<void> _halt() async {
+    if (kIsWeb) {
+      await _player.pause();
+      return;
+    }
+    await _player.stop();
   }
 
   Future<void> seek(Duration to) async {
@@ -428,7 +478,7 @@ class PlayerService {
       // the track_ready event can start it.
       _waitingForTrack = track.id;
       _loadedTrackId = null;
-      await _player.stop();
+      await _halt();
       _emit(force: true);
       return;
     }
@@ -438,45 +488,56 @@ class PlayerService {
       await api.ensureStreamKey();
       if (mine != _loadToken) return;      // superseded while fetching the key
 
-      // On the web, stop before loading anything else.
-      //
-      // just_audio wraps whatever you give it in an internal playlist whose id is
-      // fixed for the life of the AudioPlayer, and just_audio_web caches its source
-      // player under that id. So the second setAudioSource and every one after it
-      // resolves to the *first* source: the element keeps the file it was given at
-      // startup, and only play, pause and seek reach it. Skipping moved the screen on
-      // while the same song kept playing — for the whole session.
-      //
-      // Proved by hooking HTMLMediaElement: one createElement, one src assignment,
-      // then nothing but play/pause, while setAudioSource kept returning the first
-      // track's duration. stop() deactivates the platform player, which is what
-      // actually drops that cache; the next load then builds a fresh element.
-      if (kIsWeb && _loadedTrackId != null) await _player.stop();
-      if (mine != _loadToken) return;
       final cover = api.coverUrl(track, small: false);
       final coverUri = cover == null ? null : Uri.parse(cover);
       final sourceUrl = api.streamUrl(track);
-      final reported = await _player.setAudioSource(
-        AudioSource.uri(
-          Uri.parse(sourceUrl),
-          // Headers are not deliverable from a browser's audio element, which is why
-          // the URL is signed. Native platforms send them too; either proves identity.
-          headers: kIsWeb ? null : api.streamHeaders,
-          // just_audio_background requires this on every source, and it is what the
-          // lockscreen, the notification and the car display actually show.
-          tag: MediaItem(
-            id: '${track.id}',
-            title: track.displayTitle,
-            artist: track.artistLine,
-            album: track.albumLine,
-            duration: track.duration,
-            // The lockscreen and the car display fetch this themselves, so it has to
-            // be a URL that authenticates on its own — the same signed key as audio.
-            artUri: coverUri,
-          ),
+      final source = AudioSource.uri(
+        Uri.parse(sourceUrl),
+        // Headers are not deliverable from a browser's audio element, which is why
+        // the URL is signed. Native platforms send them too; either proves identity.
+        headers: kIsWeb ? null : api.streamHeaders,
+        // just_audio_background requires this on every source, and it is what the
+        // lockscreen, the notification and the car display actually show.
+        tag: MediaItem(
+          id: '${track.id}',
+          title: track.displayTitle,
+          artist: track.artistLine,
+          album: track.albumLine,
+          duration: track.duration,
+          // The lockscreen and the car display fetch this themselves, so it has to
+          // be a URL that authenticates on its own — the same signed key as audio.
+          artUri: coverUri,
         ),
-        initialPosition: startAt,
       );
+
+      final Duration? reported;
+      if (kIsWeb && _webPlaylistLive) {
+        // Edit the playlist instead of replacing it.
+        //
+        // just_audio wraps whatever you give it in an internal playlist whose id is
+        // the empty string for the life of the AudioPlayer, and just_audio_web caches
+        // its source player under that id. setAudioSource replaces the children in
+        // Dart but never tells the platform, so the second call and every one after
+        // it resolved to the *first* source: the screen moved on while the same song
+        // kept playing. (Proved by hooking HTMLMediaElement — one src assignment for
+        // the whole session.) The insert/remove calls are the ones the web plugin
+        // actually implements, so they update that cached player.
+        //
+        // Doing it this way also keeps the one <audio> element alive, which is what
+        // the browser's permission to make sound is attached to; and because the
+        // plugin restarts playback itself when it swaps the src of a playing element,
+        // a track that ends or finishes downloading starts the next one with no tap.
+        await _player.insertAudioSource(0, source);
+        if (mine != _loadToken) return;
+        await _player.seek(startAt ?? Duration.zero, index: 0);
+        if (mine != _loadToken) return;
+        final stale = _player.audioSources.length;
+        if (stale > 1) await _player.removeAudioSourceRange(1, stale);
+        reported = _player.duration;
+      } else {
+        reported = await _player.setAudioSource(source, initialPosition: startAt);
+        _webPlaylistLive = kIsWeb;
+      }
       lastSourceUrl = '$sourceUrl -> engine says ${reported?.inMilliseconds}ms '
           '(player #$_instance of ${PlayerService.instances})';
       if (mine != _loadToken) return;      // a later track won the race
@@ -616,6 +677,8 @@ class PlayerService {
     final now = DateTime.now();
     if (!force && now.difference(_lastEmit).inMilliseconds < 250) return;
     _lastEmit = now;
+    // Sound is coming out, so whatever permission was missing is not missing now.
+    if (_player.playing) needsGesture = false;
     last = PlayerSnapshot(
       current: current,
       index: index,
@@ -626,6 +689,7 @@ class PlayerService {
       itemCount: _items.length,
       loadedTrackId: _loadedTrackId,
       error: lastError,
+      needsGesture: needsGesture,
       repeat: repeat,
       shuffle: shuffle,
       waitingForDownload: _waitingForTrack != null,
@@ -657,6 +721,8 @@ class PlayerSnapshot {
   /// is showing one song and playing another — the failure that kept coming back.
   final int? loadedTrackId;
   final String? error;
+  /// The browser is waiting to be tapped before it will make a sound.
+  final bool needsGesture;
   final QueueRepeat repeat;
   final bool shuffle;
   final bool waitingForDownload;
@@ -672,6 +738,7 @@ class PlayerSnapshot {
     required this.itemCount,
     this.loadedTrackId,
     this.error,
+    this.needsGesture = false,
     this.repeat = QueueRepeat.off,
     this.shuffle = false,
     this.waitingForDownload = false,

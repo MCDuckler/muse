@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:just_audio_background/just_audio_background.dart';
@@ -58,8 +60,36 @@ class MuseApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         theme: MuseTheme.light(),
         darkTheme: MuseTheme.dark(),
+        builder: (context, child) => _AnyTap(child: child ?? const SizedBox()),
         home: const _Root(),
       ),
+    );
+  }
+}
+
+/// Lets any tap stand in for the one the browser was waiting for.
+///
+/// A browser will not make a sound until someone has interacted with the page, so a
+/// track that finishes downloading — or one that follows the track that just ended —
+/// can be refused. The player says so instead of failing; this turns the next touch
+/// anywhere in the app into permission, so it usually resolves itself before anyone
+/// has to aim for the play button.
+class _AnyTap extends StatelessWidget {
+  const _AnyTap({required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      // Down, not up: the browser counts the whole gesture, and this way playback
+      // starts on the press.
+      onPointerDown: (_) {
+        final player = context.read<AppState>().player;
+        if (player != null && player.needsGesture) {
+          unawaited(player.resumeAfterGesture());
+        }
+      },
+      child: child,
     );
   }
 }
