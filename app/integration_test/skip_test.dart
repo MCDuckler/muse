@@ -3,6 +3,7 @@
 // The player screen can look right while the audio engine is still holding the
 // previous track, which is exactly the complaint. So this asserts on what the engine
 // reports — the loaded track and the duration it thinks it has — rather than on labels.
+import 'dart:async';
 import 'dart:js_interop';
 
 import 'package:flutter/material.dart';
@@ -208,6 +209,41 @@ void main() {
           reason: 'a skip starts the new song at the beginning. $trace');
       expect(snap.playing, isTrue, reason: 'a skip must keep playing. $trace');
     }
+
+    // ---- two skips before the first has loaded ----
+    //
+    // The complaint in plain terms: skip quickly and playback wanders back to
+    // something already passed. Each skip saves its cursor, the server tells every
+    // device about it, and that announcement used to arrive while the next track was
+    // still loading — at which point the queue was reloaded at the server's saved
+    // position, on top of a load already in flight.
+    _mark('rapid skips');
+    await player.playAt(0);
+    await settle(tester, seconds: 5);
+    final rapid = player.items;
+    // Deliberately not awaited: this is what a fast double-tap does.
+    unawaited(player.next());
+    unawaited(player.next());
+    await settle(tester, seconds: 10);
+
+    var landed = app.debugPlayerSnapshot()!;
+    expect(landed.current?.id, rapid[2].id,
+        reason: 'two skips must land two songs along. $trace '
+            '|| AUDIO: ${_audioLog()}');
+    expect(landed.loadedTrackId, rapid[2].id,
+        reason: 'and the engine must hold that one. $trace '
+            '|| AUDIO: ${_audioLog()}');
+
+    // Then leave it alone: this is where it used to walk backwards on its own, once
+    // the events caused by the skips came back.
+    await settle(tester, seconds: 12);
+    landed = app.debugPlayerSnapshot()!;
+    expect(landed.current?.id, rapid[2].id,
+        reason: 'and it must stay there with nothing touched. $trace '
+            '|| AUDIO: ${_audioLog()}');
+    expect(landed.loadedTrackId, rapid[2].id,
+        reason: 'the engine too. $trace || AUDIO: ${_audioLog()}');
+    expect(landed.playing, isTrue, reason: 'still playing. $trace');
 
     // One element for the whole session. See _elementsBuilt.
     expect(_elementsBuilt(), 1,
