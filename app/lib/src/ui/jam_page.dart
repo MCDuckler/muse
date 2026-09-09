@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import 'glass.dart';
+import 'mini_player.dart';
 
 /// Listening together: one queue, several people, different rooms.
 ///
@@ -40,7 +41,7 @@ class _JamPageState extends State<JamPage> {
     final app = context.watch<AppState>();
     final jam = app.jam;
 
-    return Scaffold(
+    return PlayerScaffold(
       appBar: AppBar(title: const Text('Jam')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),

@@ -11,6 +11,8 @@ import 'swipe.dart';
 import 'lyrics_sheet.dart';
 import 'track_menu.dart';
 import 'up_next.dart';
+import 'song_row.dart';
+import 'browse_page.dart';
 
 String formatTime(Duration d) {
   final m = d.inMinutes;
@@ -48,31 +50,10 @@ class NowPlayingScreen extends StatelessWidget {
             title: Text(app.activeQueue?.name ?? 'Now playing',
                 style: Theme.of(context).textTheme.titleSmall),
             centerTitle: true,
-            actions: [
-              if (track != null)
-                IconButton(
-                  icon: const Icon(Icons.lyrics_outlined),
-                  tooltip: 'Lyrics',
-                  onPressed: () => showLyrics(context, track),
-                ),
-              IconButton(
-                icon: const Icon(Icons.queue_music),
-                tooltip: 'Up next',
-                onPressed: () => showUpNext(context),
-              ),
-              IconButton(
-                icon: Icon(app.sleepAt != null ? Icons.bedtime : Icons.timer_outlined),
-                tooltip: 'Sleep timer and speed',
-                onPressed: () => showPlaybackExtras(context),
-              ),
-              if (track != null)
-                IconButton(
-                  icon: const Icon(Icons.more_vert),
-                  tooltip: 'Track actions',
-                  onPressed: () => showTrackSheet(context, track,
-                      onChanged: app.refresh),
-                ),
-            ],
+            // Nothing up here but the way out and where you are. Everything that acts
+            // on the song sat in the top corners, as far from the play button and from
+            // a thumb as the screen allows; it is down with the controls now.
+            actions: const [],
           ),
           body: DragFollow(
             // Drag down to close, the gesture that dismisses a sheet anywhere else.
@@ -104,17 +85,7 @@ class NowPlayingScreen extends StatelessWidget {
                                 overflow: TextOverflow.ellipsis,
                                 style: Theme.of(context).textTheme.headlineSmall),
                             const SizedBox(height: 6),
-                            Text(
-                                [track.artistLine, track.albumLine, track.sourceLabel]
-                                    .whereType<String>()
-                                    .join(' · '),
-                                textAlign: TextAlign.center,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .bodyLarge
-                                    ?.copyWith(color: scheme.onSurfaceVariant)),
+                            _Credits(track: track),
                             if (_statusLine(s, track) != null) ...[
                               const SizedBox(height: 10),
                               Text(_statusLine(s, track)!,
@@ -134,7 +105,9 @@ class NowPlayingScreen extends StatelessWidget {
                                   _Scrubber(player: player, snapshot: s),
                                   const SizedBox(height: 4),
                                   _Controls(app: app, player: player, snapshot: s),
-                                  const SizedBox(height: 6),
+                                  const SizedBox(height: 2),
+                                  _Extras(app: app, track: track),
+                                  const SizedBox(height: 2),
                                   _VolumeRow(player: player),
                                 ],
                               ),
@@ -161,6 +134,118 @@ class NowPlayingScreen extends StatelessWidget {
     if (track.state == 'failed') return track.failReason ?? 'This track failed';
     if (track.isPending) return 'Downloading…';
     return null;
+  }
+}
+
+/// Artist and album, and the way to each of their pages.
+///
+/// They were a line of grey text saying where a song came from. They are the two most
+/// obvious things to want next — everything else by them, the rest of the record — and
+/// a name that leads nowhere when you press it is a name you learn not to press.
+class _Credits extends StatelessWidget {
+  const _Credits({required this.track});
+  final Track track;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final style = Theme.of(context).textTheme.bodyLarge
+        ?.copyWith(color: scheme.onSurfaceVariant);
+
+    Widget link(String label, VoidCallback onTap) => InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(6),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            child: Text(label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: style?.copyWith(decoration: TextDecoration.underline,
+                    decorationColor: scheme.onSurfaceVariant.withValues(alpha: 0.4))),
+          ),
+        );
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Flexible(
+              child: link(
+                track.artistLine,
+                () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => ArtistPage(
+                    artist: ArtistSummary(
+                        name: track.artists.isEmpty ? track.artistLine
+                                                    : track.artists.first,
+                        tracks: 0),
+                  ),
+                )),
+              ),
+            ),
+            if (track.albumLine != null) ...[
+              Text(' · ', style: style),
+              Flexible(
+                child: link(
+                  track.albumLine!,
+                  () => Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => AlbumPage(
+                      album: AlbumSummary(
+                        name: track.albumLine!,
+                        artist: track.artists.isEmpty ? '' : track.artists.first,
+                        tracks: 0,
+                      ),
+                    ),
+                  )),
+                ),
+              ),
+            ],
+          ],
+        ),
+        if (track.sourceLabel != null)
+          Text(track.sourceLabel!,
+              style: Theme.of(context).textTheme.labelSmall
+                  ?.copyWith(color: scheme.outline)),
+      ],
+    );
+  }
+}
+
+/// The things that act on the song, where a thumb already is.
+class _Extras extends StatelessWidget {
+  const _Extras({required this.app, required this.track});
+  final AppState app;
+  final Track track;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: [
+        FavouriteButton(trackId: track.id, size: 22),
+        IconButton(
+          icon: const Icon(Icons.lyrics_outlined),
+          tooltip: 'Lyrics',
+          onPressed: () => showLyrics(context, track),
+        ),
+        IconButton(
+          icon: const Icon(Icons.queue_music),
+          tooltip: 'Up next',
+          onPressed: () => showUpNext(context),
+        ),
+        IconButton(
+          icon: Icon(app.sleepAt != null ? Icons.bedtime : Icons.timer_outlined),
+          tooltip: 'Sleep timer and speed',
+          onPressed: () => showPlaybackExtras(context),
+        ),
+        IconButton(
+          icon: const Icon(Icons.more_vert),
+          tooltip: 'Track actions',
+          onPressed: () => showTrackSheet(context, track, onChanged: app.refresh),
+        ),
+      ],
+    );
   }
 }
 

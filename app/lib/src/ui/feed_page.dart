@@ -6,6 +6,7 @@ import '../state/app_state.dart';
 import 'artwork.dart';
 import 'browse_page.dart';
 import 'dialogs.dart';
+import 'mini_player.dart';
 
 /// What the artists you follow have put out.
 ///
@@ -56,7 +57,7 @@ class _FeedPageState extends State<FeedPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PlayerScaffold(
       appBar: AppBar(
         title: const Text('New releases'),
         actions: [
@@ -221,7 +222,7 @@ class _FollowingPageState extends State<FollowingPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PlayerScaffold(
       appBar: AppBar(
         title: const Text('Following'),
         actions: [

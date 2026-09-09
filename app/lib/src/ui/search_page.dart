@@ -7,6 +7,7 @@ import '../api/client.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import 'artwork.dart';
+import 'song_row.dart';
 import 'dialogs.dart';
 
 /// Local catalog first, then YouTube Music. Anything already in the library is marked,
@@ -180,17 +181,15 @@ class _SearchPageState extends State<SearchPage> {
               if (_local.isNotEmpty)
                 _SectionHeader('In your library · ${_local.length}'),
               for (final t in _local)
-                ListTile(
-                  leading: Artwork(track: t, size: 40),
-                  title: Text(t.displayTitle,
-                      maxLines: 1, overflow: TextOverflow.ellipsis),
-                  subtitle: Text(t.artistLine, maxLines: 1, overflow: TextOverflow.ellipsis),
+                SongRow(
+                  track: t,
+                  onTap: () => app.addTrack(t),
                   trailing: _queueMenu(
                     onNext: () => app.addTrack(t, mode: 'next'),
                     onEnd: () => app.addTrack(t),
                     onPlaylist: () => addToPlaylistSheet(context, app, t),
                   ),
-                  onTap: () => app.addTrack(t),
+                  showMenu: false,
                 ),
               if (_album != null) ..._albumRows(app),
               if (_remoteError != null)

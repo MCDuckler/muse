@@ -7,7 +7,9 @@ import 'artwork.dart';
 import 'browse_page.dart';
 import 'dialogs.dart';
 import 'feed_page.dart';
+import 'mini_player.dart';
 import 'spotify_page.dart';
+import 'song_row.dart';
 
 
 class LibraryPage extends StatelessWidget {
@@ -70,10 +72,12 @@ class LibraryPage extends StatelessWidget {
                 ],
               ],
             ),
+            // No account name: whose Spotify a mirror came from is the same answer
+            // for every mirror on the screen, and it was crowding out the counts that
+            // differ. The service is already on the row as an icon.
             subtitle: Text([
               '${p.itemCount} tracks',
               if (p.unmatched > 0) '${p.unmatched} not matched',
-              if (p.isMirror && p.sourceName != null) 'by ${p.sourceName}',
             ].join(' · ')),
             trailing: PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert, size: 20),
@@ -193,7 +197,7 @@ class _PlaylistPageState extends State<_PlaylistPage> {
   @override
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
-    return Scaffold(
+    return PlayerScaffold(
       appBar: AppBar(title: Text(widget.name)),
       body: FutureBuilder<Playlist>(
         future: _future,
@@ -220,19 +224,12 @@ class _PlaylistPageState extends State<_PlaylistPage> {
             },
             itemCount: items.length,
             itemBuilder: (context, i) => !snap.data!.editable
-                ? ListTile(
+                ? SongRow(
                     key: ValueKey('pl-ro-${items[i].id}-$i'),
-                    leading: Artwork(track: items[i], size: 40),
-                    title: Text(items[i].displayTitle,
-                        maxLines: 1, overflow: TextOverflow.ellipsis),
-                    subtitle: Text(items[i].artistLine,
-                        maxLines: 1, overflow: TextOverflow.ellipsis),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.playlist_add),
-                      tooltip: 'Add to queue',
-                      onPressed: () => app.addTrack(items[i]),
-                    ),
-                    onTap: () => app.playNow(items, startAt: i),
+                    track: items[i],
+                    onTap: () =>
+                        app.playNow(items, startAt: i, named: widget.name),
+                    onChanged: _reload,
                   )
                 : ReorderableDelayedDragStartListener(
               key: ValueKey('pl-${items[i].id}-$i'),
@@ -254,17 +251,20 @@ class _PlaylistPageState extends State<_PlaylistPage> {
                 await app.refreshPlaylists();
                 _reload();
               },
-              child: ListTile(
-                leading: Artwork(track: items[i], size: 40),
-                title: Text(items[i].displayTitle,
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
-                subtitle: Text(items[i].artistLine),
-                trailing: IconButton(
-                  icon: const Icon(Icons.playlist_add),
-                  tooltip: 'Add to queue',
-                  onPressed: () => app.addTrack(items[i]),
+              child: SongRow(
+                track: items[i],
+                leading: ReorderableDragStartListener(
+                  index: i,
+                  child: Icon(Icons.drag_indicator,
+                      size: 20, color: Theme.of(context).colorScheme.outline),
                 ),
-                onTap: () => app.playNow(items, startAt: i),
+                onTap: () => app.playNow(items, startAt: i, named: widget.name),
+                onRemove: () async {
+                  await app.api.removePlaylistItem(widget.playlistId, i);
+                  await app.refreshPlaylists();
+                  _reload();
+                },
+                onChanged: _reload,
               ),
             ),
             ),
@@ -319,7 +319,7 @@ class _HistoryPageState extends State<_HistoryPage> {
   @override
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
-    return Scaffold(
+    return PlayerScaffold(
       appBar: AppBar(
         title: const Text('Recently played'),
         actions: [

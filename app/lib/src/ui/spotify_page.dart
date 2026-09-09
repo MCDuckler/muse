@@ -9,6 +9,7 @@ import '../api/models.dart';
 import '../state/app_state.dart';
 import 'artwork.dart';
 import 'dialogs.dart';
+import 'mini_player.dart';
 
 /// Connecting a Spotify account, and seeing what came across.
 class SpotifyPage extends StatefulWidget {
@@ -214,7 +215,7 @@ class _SpotifyPageState extends State<SpotifyPage> {
   @override
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
-    return Scaffold(
+    return PlayerScaffold(
       appBar: AppBar(title: const Text('Spotify')),
       body: FutureBuilder<Map<String, dynamic>>(
         future: _account,
@@ -489,7 +490,7 @@ class _UnmatchedPageState extends State<UnmatchedPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PlayerScaffold(
       appBar: AppBar(title: Text('Not matched · ${widget.name}')),
       body: FutureBuilder<List<UnmatchedTrack>>(
         future: _future,

@@ -22,6 +22,11 @@ class AppState extends ChangeNotifier {
   String? error;
 
   List<Queue> queues = const [];
+
+  /// The hearted songs, as ids. Held here rather than asked per row: a list of four
+  /// hundred would otherwise be four hundred requests to draw one icon each.
+  Set<int> favourites = <int>{};
+  int? favouritesPlaylistId;
   /// Whether anything is able to download right now. The ingest worker runs on a
   /// machine that sleeps, and a row spinning forever with no explanation is the worst
   /// possible way to communicate that.
@@ -177,6 +182,7 @@ class AppState extends ChangeNotifier {
     bindPlayer();
     await api.ensureStreamKey();
     await refresh();
+    await refreshFavourites();
     // A jam survives closing the app: picking it back up is how the same person on
     // two devices stays in the same room.
     await refreshJam();
@@ -218,7 +224,12 @@ class AppState extends ChangeNotifier {
   /// queue the server already had, and the resulting 409 escaped as a failed "add to
   /// queue" — which is what made queues feel unreliable. So: check the cache, re-read
   /// the server, and treat a 409 as "someone got there first" rather than an error.
-  Future<Queue> ensureQueue(String name) async {
+  /// The queue called [name], made if it is not there.
+  ///
+  /// [fresh] reuses the one with that name if it exists rather than making a second —
+  /// playing the same album twice should land in the same place, not leave a trail of
+  /// queues behind.
+  Future<Queue> ensureQueue(String name, {bool fresh = false}) async {
     Queue? found = _byName(name);
     if (found == null) {
       queues = await api.queues();
@@ -363,6 +374,42 @@ class AppState extends ChangeNotifier {
     if (q != null) await _applyQueue(await api.queue(q.id));
   }
 
+  bool isFavourite(int trackId) => favourites.contains(trackId);
+
+  Future<void> refreshFavourites() async {
+    try {
+      final f = await api.favourites();
+      favourites = f.trackIds.toSet();
+      favouritesPlaylistId = f.playlistId;
+      notifyListeners();
+    } catch (_) {
+      // A heart that cannot be read is not worth an error on screen.
+    }
+  }
+
+  /// Turned over straight away and put back if the server disagrees: a heart that waits
+  /// for a round trip feels broken, and this is the most-tapped control in the app.
+  Future<void> toggleFavourite(int trackId) async {
+    final wanted = !favourites.contains(trackId);
+    if (wanted) {
+      favourites.add(trackId);
+    } else {
+      favourites.remove(trackId);
+    }
+    notifyListeners();
+    try {
+      final actual = await api.setFavourite(trackId, favourite: wanted);
+      if (actual != wanted) {
+        actual ? favourites.add(trackId) : favourites.remove(trackId);
+        notifyListeners();
+      }
+      unawaited(refreshPlaylists());
+    } catch (e) {
+      wanted ? favourites.remove(trackId) : favourites.add(trackId);
+      notifyListeners();
+    }
+  }
+
   Future<void> refreshPlaylists() async {
     playlists = await api.playlists();
     notifyListeners();
@@ -372,9 +419,18 @@ class AppState extends ChangeNotifier {
   ///
   /// This is what "play album" means everywhere else, and there was no way to express
   /// it: the only route into the queue was adding one track at a time.
-  Future<void> playNow(List<Track> tracks, {int startAt = 0, bool shuffle = false}) async {
+  /// Play a list of songs.
+  ///
+  /// [named] makes a queue of its own rather than writing over the one you are
+  /// listening to. Playing an album used to empty the queue you had built — an hour of
+  /// picking gone because you wanted to hear a record — so anything with a name of its
+  /// own gets its own queue, and the old one is still in the list to go back to.
+  Future<void> playNow(List<Track> tracks,
+      {int startAt = 0, bool shuffle = false, String? named}) async {
     if (tracks.isEmpty) return;
-    final target = activeQueue ?? await ensureQueue('Now');
+    final target = named == null
+        ? (activeQueue ?? await ensureQueue('Now'))
+        : await ensureQueue(named, fresh: true);
     final ids = [for (final t in tracks) t.id];
     final live = await api.queue(target.id);
     final filled = await api.replaceQueue(target.id, live.rev, ids);

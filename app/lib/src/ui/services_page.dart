@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import 'dialogs.dart';
+import 'mini_player.dart';
 
 /// Services linked by typing a name.
 ///
@@ -55,7 +56,7 @@ class _ServicesPageState extends State<ServicesPage> {
   @override
   Widget build(BuildContext context) {
     final services = _services;
-    return Scaffold(
+    return PlayerScaffold(
       appBar: AppBar(title: const Text('Connected services')),
       body: _error != null && services == null
           ? ErrorRetry(error: _error!, onRetry: _load)
@@ -169,7 +170,7 @@ class _ServiceListsState extends State<_ServiceLists> {
   @override
   Widget build(BuildContext context) {
     final lists = _lists;
-    return Scaffold(
+    return PlayerScaffold(
       appBar: AppBar(title: Text(widget.service.label)),
       body: _error != null && lists == null
           ? ErrorRetry(error: _error!, onRetry: _load)

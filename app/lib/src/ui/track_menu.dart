@@ -30,6 +30,17 @@ Future<void> showTrackSheet(
         children: [
           _Header(track: track),
           const Divider(height: 1),
+          // First, because it is the one thing here that is about the song rather than
+          // about the queue, and the one most often wanted.
+          Builder(builder: (context) {
+            final on = context.watch<AppState>().isFavourite(track.id);
+            return _item(
+              sheet,
+              on ? Icons.favorite : Icons.favorite_border,
+              on ? 'Remove from favourites' : 'Add to favourites',
+              () => app.toggleFavourite(track.id),
+            );
+          }),
           _item(sheet, Icons.playlist_play, 'Play next',
               () => app.addTrack(track, mode: 'next')),
           _item(sheet, Icons.playlist_add, 'Add to queue', () => app.addTrack(track)),

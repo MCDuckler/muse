@@ -596,6 +596,26 @@ class ApiClient {
     return ArtistDetail.fromJson(d);
   }
 
+  // ---------------- favourites ----------------
+  /// The ids, so a screen full of hearts is one request rather than one per song.
+  Future<({int playlistId, List<int> trackIds})> favourites() async {
+    final d = await _decode(await http.get(_u('/favourites'), headers: _headers))
+        as Map<String, dynamic>;
+    return (
+      playlistId: (d['playlist_id'] ?? 0) as int,
+      trackIds: ((d['track_ids'] ?? const []) as List).cast<int>(),
+    );
+  }
+
+  /// No value toggles, which is what a tap on a heart means.
+  Future<bool> setFavourite(int trackId, {bool? favourite}) async {
+    final d = await _decode(await http.post(_u('/favourites/$trackId'),
+        headers: _headers,
+        body: jsonEncode({if (favourite != null) 'favourite': favourite})))
+        as Map<String, dynamic>;
+    return (d['favourite'] ?? false) as bool;
+  }
+
   // ---------------- following ----------------
   Future<List<FollowedArtist>> follows() async {
     final d = await _decode(await http.get(_u('/follows'), headers: _headers))

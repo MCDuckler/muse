@@ -5,6 +5,7 @@ import '../api/models.dart';
 import '../state/app_state.dart';
 import 'artwork.dart';
 import 'dialogs.dart';
+import 'mini_player.dart';
 import 'track_list.dart';
 import 'track_menu.dart';
 
@@ -40,7 +41,7 @@ class _AllTracksPageState extends State<AllTracksPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PlayerScaffold(
       appBar: AppBar(
         title: const Text('All tracks'),
         actions: [
@@ -104,7 +105,7 @@ class _AlbumsPageState extends State<AlbumsPage> {
   @override
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
-    return Scaffold(
+    return PlayerScaffold(
       appBar: AppBar(title: const Text('Albums')),
       body: FutureBuilder<List<AlbumSummary>>(
         future: _future,
@@ -235,7 +236,7 @@ class _AlbumPageState extends State<AlbumPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PlayerScaffold(
       appBar: AppBar(title: Text(widget.album?.name ?? widget.title ?? 'Album')),
       body: FutureBuilder<AlbumDetail>(
         future: _future,
@@ -352,13 +353,16 @@ class _AlbumHead extends StatelessWidget {
               TextButton.icon(
                 icon: const Icon(Icons.play_arrow, size: 18),
                 label: const Text('Play'),
-                onPressed: held.isEmpty ? null : () => app.playNow(held),
+                onPressed: held.isEmpty
+                    ? null
+                    : () => app.playNow(held, named: detail.name),
               ),
               TextButton.icon(
                 icon: const Icon(Icons.shuffle, size: 18),
                 label: const Text('Shuffle'),
-                onPressed:
-                    held.isEmpty ? null : () => app.playNow(held, shuffle: true),
+                onPressed: held.isEmpty
+                    ? null
+                    : () => app.playNow(held, shuffle: true, named: detail.name),
               ),
               const Spacer(),
               if (detail.missing > 0)
@@ -459,7 +463,7 @@ class _ArtistsPageState extends State<ArtistsPage> {
   @override
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
-    return Scaffold(
+    return PlayerScaffold(
       appBar: AppBar(title: const Text('Artists')),
       body: FutureBuilder<List<ArtistSummary>>(
         future: _future,
@@ -544,7 +548,7 @@ class _ArtistPageState extends State<ArtistPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PlayerScaffold(
       appBar: AppBar(title: Text(widget.artist.name)),
       body: FutureBuilder<ArtistDetail>(
         future: _future,

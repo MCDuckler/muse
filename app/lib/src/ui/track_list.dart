@@ -3,20 +3,29 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
-import 'artwork.dart';
 import 'dialogs.dart';
-import 'track_menu.dart';
+import 'song_row.dart';
 
 /// One way of rendering a list of tracks, used by every browse screen.
 ///
 /// It carries the actions that were previously scattered or missing: play the whole
 /// list from here, shuffle it, queue a single track, or put one in a playlist.
 class TrackList extends StatelessWidget {
-  const TrackList({super.key, required this.tracks, this.header, this.onRemove});
+  const TrackList({
+    super.key,
+    required this.tracks,
+    this.header,
+    this.onRemove,
+    this.named,
+  });
 
   final List<Track> tracks;
   final String? header;
   final void Function(int index)? onRemove;
+
+  /// The name of the thing being listed — an album, a playlist. Given one, playing it
+  /// makes a queue of its own instead of writing over whatever you were listening to.
+  final String? named;
 
   @override
   Widget build(BuildContext context) {
@@ -34,23 +43,12 @@ class TrackList extends StatelessWidget {
       physics: const AlwaysScrollableScrollPhysics(),
       itemCount: tracks.length + 1,
       itemBuilder: (context, i) {
-        if (i == 0) return _Head(tracks: tracks, header: header);
+        if (i == 0) return _Head(tracks: tracks, header: header, named: named);
         final t = tracks[i - 1];
-        return ListTile(
-          leading: Artwork(track: t, size: 40),
-          title: Text(t.displayTitle, maxLines: 1, overflow: TextOverflow.ellipsis),
-          subtitle: Text(
-            [t.artistLine, if (t.albumLine != null) t.albumLine!].join(' · '),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          trailing: IconButton(
-            icon: const Icon(Icons.more_vert, size: 20),
-            tooltip: 'Track actions',
-            onPressed: () => showTrackSheet(context, t,
-                onRemove: onRemove == null ? null : () => onRemove!(i - 1)),
-          ),
-          onTap: () => app.playNow(tracks, startAt: i - 1),
+        return SongRow(
+          track: t,
+          onTap: () => app.playNow(tracks, startAt: i - 1, named: named),
+          onRemove: onRemove == null ? null : () => onRemove!(i - 1),
         );
       },
     );
@@ -58,9 +56,10 @@ class TrackList extends StatelessWidget {
 }
 
 class _Head extends StatelessWidget {
-  const _Head({required this.tracks, this.header});
+  const _Head({required this.tracks, this.header, this.named});
   final List<Track> tracks;
   final String? header;
+  final String? named;
 
   @override
   Widget build(BuildContext context) {
@@ -76,13 +75,13 @@ class _Head extends StatelessWidget {
           TextButton.icon(
             icon: const Icon(Icons.play_arrow, size: 18),
             label: const Text('Play'),
-            onPressed: () => app.playNow(tracks),
+            onPressed: () => app.playNow(tracks, named: named),
           ),
           const SizedBox(width: 4),
           TextButton.icon(
             icon: const Icon(Icons.shuffle, size: 18),
             label: const Text('Shuffle'),
-            onPressed: () => app.playNow(tracks, shuffle: true),
+            onPressed: () => app.playNow(tracks, shuffle: true, named: named),
           ),
         ],
       ),

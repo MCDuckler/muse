@@ -7,6 +7,7 @@ import '../api/models.dart';
 import '../state/app_state.dart';
 import 'artwork.dart';
 import 'dialogs.dart';
+import 'mini_player.dart';
 
 /// One screen for the whole download queue.
 ///
@@ -93,7 +94,7 @@ class _DownloadsPageState extends State<DownloadsPage> {
     final app = context.read<AppState>();
     final d = _data;
 
-    return Scaffold(
+    return PlayerScaffold(
       appBar: AppBar(
         title: const Text('Downloads'),
         actions: [

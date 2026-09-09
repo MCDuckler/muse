@@ -4,9 +4,8 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/player.dart';
-import 'artwork.dart';
 import 'dialogs.dart';
-import 'track_menu.dart';
+import 'song_row.dart';
 
 /// Queues are the product, so this screen shows them all, not just the one playing.
 class QueuePage extends StatefulWidget {
@@ -182,55 +181,54 @@ class _QueuePageState extends State<QueuePage> {
                             color: Theme.of(context).colorScheme.onErrorContainer),
                       ),
                       onDismissed: (_) => app.removeFromQueue(i, context: context),
-                      // Long-press to drag rather than a permanent handle: two
-                      // trailing controls left the titles with no room, and holding a
-                      // row to move it is what every list on a phone already does.
-                      child: ReorderableDelayedDragStartListener(
-                        index: i,
-                        child: ListTile(
-                      selected: isCurrent,
-                      leading: _leading(t, i, isCurrent),
-                      title: Text(t.displayTitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              color: t.state == 'failed'
-                                  ? Theme.of(context).colorScheme.error
-                                  : null)),
-                      subtitle: _subtitle(context, t),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (t.origin == 'radio')
-                            const Padding(
-                              padding: EdgeInsets.only(right: 4),
-                              child: Chip(
-                                  label: Text('radio'),
-                                  visualDensity: VisualDensity.compact),
-                            ),
-                          if (t.state == 'failed')
-                            IconButton(
-                              icon: const Icon(Icons.refresh),
-                              tooltip: 'Try again',
-                              onPressed: () => app.retry(t),
-                            ),
-                          _rowMenu(context, app, t, i),
-                        ],
-                      ),
-                      onTap: t.isReady
-                          ? () async {
-                              try {
-                                await app.player?.playTrack(t.id, indexHint: i);
-                              } catch (e) {
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text('$e')));
+                      // A handle you can see, rather than a hold you have to know
+                      // about. Long-press still works, so a thumb landing anywhere on
+                      // the row can move it, but nobody has to guess that it does.
+                      child: SongRow(
+                        track: t,
+                        selected: isCurrent,
+                        dense: true,
+                        leading: ReorderableDragStartListener(
+                          index: i,
+                          child: Icon(Icons.drag_indicator,
+                              size: 20,
+                              color: Theme.of(context).colorScheme.outline),
+                        ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (t.origin == 'radio')
+                              Padding(
+                                padding: const EdgeInsets.only(right: 2),
+                                child: Text('radio',
+                                    style: Theme.of(context).textTheme.labelSmall
+                                        ?.copyWith(color:
+                                            Theme.of(context).colorScheme.outline)),
+                              ),
+                            if (t.state == 'failed')
+                              IconButton(
+                                icon: const Icon(Icons.refresh, size: 18),
+                                visualDensity: VisualDensity.compact,
+                                tooltip: 'Try again',
+                                onPressed: () => app.retry(t),
+                              ),
+                          ],
+                        ),
+                        onRemove: () => app.removeFromQueue(i, context: context),
+                        onChanged: app.refresh,
+                        onTap: t.isReady
+                            ? () async {
+                                try {
+                                  await app.player?.playTrack(t.id, indexHint: i);
+                                } catch (e) {
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text('$e')));
+                                  }
                                 }
                               }
-                            }
-                          : null,
-                    ),
-                    ),
+                            : null,
+                      ),
                     );
                   },
                 ),
@@ -239,87 +237,6 @@ class _QueuePageState extends State<QueuePage> {
       ],
     );
   }
-
-  /// Artwork stands in for a track number, with state layered on top: a spinner while
-  /// it downloads, an error mark when it failed, and the equalizer badge on whatever
-  /// is playing.
-  /// Artist normally; while a track is being fetched, what is actually happening —
-  /// with a bar when the downloader knows how far along it is.
-  Widget _subtitle(BuildContext context, Track t) {
-    final scheme = Theme.of(context).colorScheme;
-    final failed = t.state == 'failed';
-    final line = Text(
-      t.statusLine,
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: failed ? TextStyle(color: scheme.error) : null,
-    );
-    final fraction = t.progressFraction;
-    if (t.progress == null) return line;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        line,
-        const SizedBox(height: 5),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(2),
-          child: LinearProgressIndicator(
-            value: fraction,           // null renders as indeterminate, which is honest
-            minHeight: 3,
-            backgroundColor: scheme.onSurface.withValues(alpha: 0.12),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _leading(Track t, int i, bool isCurrent) {
-    if (t.isPending) {
-      final fraction = t.progressFraction;
-      return SizedBox(
-        width: 40,
-        height: 40,
-        child: Center(
-          child: SizedBox(
-            width: 22,
-            height: 22,
-            child: CircularProgressIndicator(strokeWidth: 2, value: fraction),
-          ),
-        ),
-      );
-    }
-    if (t.state == 'failed') {
-      return const SizedBox(width: 40, height: 40, child: Icon(Icons.error_outline));
-    }
-    return Stack(
-      alignment: Alignment.center,
-      children: [
-        Artwork(track: t, size: 40),
-        if (isCurrent)
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: Colors.black54,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: const Icon(Icons.equalizer, color: Colors.white, size: 20),
-          ),
-      ],
-    );
-  }
-
-  Widget _rowMenu(BuildContext context, AppState app, Track t, int i) => IconButton(
-        icon: const Icon(Icons.more_vert, size: 20),
-        tooltip: 'Track actions',
-        onPressed: () => showTrackSheet(
-          context,
-          t,
-          onRemove: () => app.removeFromQueue(i, context: context),
-          onChanged: app.refresh,
-        ),
-      );
 
   Future<void> _saveAsPlaylist(BuildContext context, AppState app) async {
     final q = app.activeQueue;

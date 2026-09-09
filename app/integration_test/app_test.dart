@@ -20,6 +20,7 @@ import 'package:muse/src/ui/jam_page.dart';
 import 'package:muse/src/ui/library_page.dart';
 import 'package:muse/src/ui/queue_page.dart';
 import 'package:muse/src/ui/search_page.dart';
+import 'package:muse/src/ui/song_row.dart';
 
 const user = String.fromEnvironment('MUSE_USER', defaultValue: 'chris');
 const pass = String.fromEnvironment('MUSE_PASS');
@@ -147,11 +148,13 @@ void main() {
             'On screen: ${visibleText(tester)}');
     // Add a track by name, not by position: the library grows, so "the first result"
     // stops being the track this test reasons about.
+    // Songs are drawn by one widget everywhere now, so the row is a SongRow rather
+    // than whatever each screen used to build for itself.
     await tester.tap(onPage(
       SearchPage,
       find.ancestor(
         of: find.textContaining('Get Lucky'),
-        matching: find.byType(ListTile),
+        matching: find.byType(SongRow),
       ),
     ).first);
     await settle(tester, seconds: 2);
@@ -171,7 +174,7 @@ void main() {
       QueuePage,
       find.ancestor(
         of: find.textContaining('Get Lucky'),
-        matching: find.byType(ListTile),
+        matching: find.byType(SongRow),
       ),
     );
     expect(row, findsWidgets, reason: 'queued row missing. On screen: ${visibleText(tester)}');
