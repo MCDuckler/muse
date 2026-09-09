@@ -59,7 +59,16 @@ class LibraryPage extends StatelessWidget {
         ),
         for (final p in app.playlists)
           ListTile(
-            leading: PlaylistArt(playlist: p, size: 44),
+            // Favourites gets the heart it is filled with rather than a cover made of
+            // whatever happens to be in it first.
+            leading: p.isFavourites
+                ? SizedBox(
+                    width: 44,
+                    height: 44,
+                    child: Icon(Icons.favorite,
+                        color: Theme.of(context).colorScheme.primary),
+                  )
+                : PlaylistArt(playlist: p, size: 44),
             title: Row(
               children: [
                 Flexible(
@@ -138,9 +147,13 @@ class LibraryPage extends StatelessWidget {
                         value: 'unmatched',
                         child: Text('${p.unmatched} songs not matched…')),
                   const PopupMenuItem(value: 'resync', child: Text('Refresh from Spotify')),
-                ] else
+                ] else if (!p.isFavourites)
                   const PopupMenuItem(value: 'rename', child: Text('Rename…')),
-                const PopupMenuItem(value: 'delete', child: Text('Remove from muse')),
+                // Favourites has no delete: it is where the heart button puts things,
+                // and the way to empty it is to unheart them.
+                if (!p.isFavourites)
+                  const PopupMenuItem(
+                      value: 'delete', child: Text('Remove from muse')),
               ],
             ),
             onTap: () => Navigator.of(context).push(MaterialPageRoute(

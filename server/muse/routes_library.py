@@ -59,6 +59,10 @@ def with_cover(playlist: dict) -> dict:
 
 @router.get("/playlists")
 def list_playlists(user: dict = Depends(current_user)):
+    # Favourites is not a playlist somebody made, so it is not one somebody has to
+    # make: it exists from the first time you look, empty, rather than appearing out
+    # of nowhere the first time a heart is pressed.
+    favourites_id(user["id"])
     rows = db.all_(
         """select p.*, count(distinct i.track_id) as items,
                   count(distinct u.pos) as unmatched
@@ -67,8 +71,9 @@ def list_playlists(user: dict = Depends(current_user)):
              left join playlist_unmatched u on u.playlist_id=p.id
             where p.owner_id=%s
             group by p.id
-            order by (p.kind <> 'local'), lower(p.name)""",
-        (user["id"],),
+            -- Favourites first, then the ones made here, then the mirrors.
+            order by (p.kind <> %s), (p.kind <> 'local'), lower(p.name)""",
+        (user["id"], FAVOURITES_KIND),
     )
     return [with_cover(r) for r in rows]
 

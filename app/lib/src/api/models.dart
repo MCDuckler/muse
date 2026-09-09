@@ -296,7 +296,7 @@ class Playlist {
     this.coverVersion,
     this.downloadMode = 'all',
     bool? editable,
-  }) : editable = editable ?? (kind == 'local');
+  }) : editable = editable ?? (kind == 'local' || kind == 'favourites');
 
   factory Playlist.fromJson(Map<String, dynamic> j) => Playlist(
         id: j['id'] as int,
@@ -314,7 +314,10 @@ class Playlist {
         editable: j['editable'] as bool?,
       );
 
-  bool get isMirror => kind != 'local';
+  bool get isMirror => kind != 'local' && kind != 'favourites';
+
+  /// The one playlist nobody made and nobody can remove.
+  bool get isFavourites => kind == 'favourites';
 
   /// True when the songs are listed but the files are not here yet.
   bool get fetchesOnPlay => downloadMode == 'on_play';

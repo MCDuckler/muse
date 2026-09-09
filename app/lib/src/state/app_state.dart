@@ -686,14 +686,38 @@ class AppState extends ChangeNotifier {
     ));
   }
 
+  /// Follow the player, and tell the app only when something it can see has changed.
+  ///
+  /// The player reports four times a second, because a progress bar has to move. This
+  /// used to call notifyListeners on every one of those, so every screen watching the
+  /// app — the whole queue, the library, the settings page — rebuilt four times a
+  /// second while a song played. Anything that genuinely needs the position reads the
+  /// snapshot stream directly and still gets every tick; everything else only needs to
+  /// know when the shape of things changed.
   void bindPlayer() {
     _playerSub?.cancel();
     int? named;
+    String? shape;
     _playerSub = player?.snapshots.listen((s) {
       if (s.current?.id != named) {
         named = s.current?.id;
         _describeForTheOs(s.current);
       }
+      final next = [
+        s.current?.id,
+        s.loadedTrackId,
+        s.index,
+        s.itemCount,
+        s.playing,
+        s.shuffle,
+        s.repeat,
+        s.finished,
+        s.waitingForDownload,
+        s.needsGesture,
+        s.error,
+      ].join('|');
+      if (next == shape) return;
+      shape = next;
       notifyListeners();
     });
   }

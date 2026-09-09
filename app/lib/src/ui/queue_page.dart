@@ -21,7 +21,11 @@ class _QueuePageState extends State<QueuePage> {
 
   /// Rows are close enough to a fixed height for scrolling maths; a row that is
   /// downloading grows by the progress bar, which is a few pixels of drift at worst.
-  static const _rowExtent = 72.0;
+  /// What one row is worth when scrolling to the song being played. It is the height
+  /// SongRow draws at in its dense form — a ListTile's 72 was left behind here when the
+  /// rows got shorter, and scrolling to "the current track" quietly landed a screen
+  /// further down the longer the queue was.
+  static const _rowExtent = 56.0;
 
   void _scrollToCurrent({bool animate = true}) {
     if (!_scroll.hasClients) return;
