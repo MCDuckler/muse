@@ -77,8 +77,10 @@ def test_play_next_inserts_above_the_radio_tail(client, hdr, tracks):
     after = client.post(f"/queues/{q['id']}/items", headers=hdr,
                         json={"track_ids": [tracks[2]["id"]], "mode": "next"}).json()
     origins = [(i["id"], i["origin"]) for i in after["items"]]
+    # "next" is its own origin: it is what keeps a run of play-nexts in the order the
+    # button was pressed, and it is still above the radio tail.
     assert origins == [(tracks[0]["id"], "user"),
-                       (tracks[2]["id"], "user"),      # above the radio tail
+                       (tracks[2]["id"], "next"),      # above the radio tail
                        (tracks[1]["id"], "radio")]
 
 
@@ -106,7 +108,10 @@ def test_playlist_crud(client, hdr, tracks):
     full = client.post(f"/playlists/{p['id']}/items", headers=hdr,
                        json={"track_ids": [t["id"] for t in tracks]}).json()
     assert [i["id"] for i in full["items"]] == [t["id"] for t in tracks]
-    assert client.get("/playlists", headers=hdr).json()[0]["items"] == 3
+    # By name, not by position: the favourites list is a playlist too and it sorts
+    # first, so index 0 is not the one just made.
+    listed = client.get("/playlists", headers=hdr).json()
+    assert next(x for x in listed if x["name"] == "Roadtrip")["items"] == 3
     assert client.delete(f"/playlists/{p['id']}", headers=hdr).status_code == 200
     assert client.get(f"/playlists/{p['id']}", headers=hdr).status_code == 404
 
@@ -285,3 +290,45 @@ def test_removing_a_playlist_item(client, hdr, tracks):
                 json={"track_ids": [t["id"] for t in tracks]})
     left = client.delete(f"/playlists/{p['id']}/items/0", headers=hdr).json()
     assert [i["id"] for i in left["items"]] == [tracks[1]["id"], tracks[2]["id"]]
+
+
+def test_play_next_lands_next_and_keeps_its_order(client, hdr, tracks):
+    """"Play next" must put a song after the one playing, not at the end.
+
+    It never did: the positions are a primary key, and shifting a block of rows up with
+    one `set pos = pos + 1` collides with the row still sitting in the slot the first
+    one is moving into. The queue only shifted anything when there was something to
+    shift past, so the failure was invisible until somebody used the feature.
+    """
+    a, b, c = tracks
+    q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
+    client.post(f"/queues/{q['id']}/items", headers=hdr,
+                json={"track_ids": [a["id"], b["id"], c["id"]]})
+    client.patch(f"/queues/{q['id']}/cursor", headers=hdr, json={"cursor_index": 0})
+
+    first = client.post(f"/queues/{q['id']}/items", headers=hdr,
+                        json={"track_ids": [c["id"]], "mode": "next"})
+    assert first.status_code == 200, first.text
+    second = client.post(f"/queues/{q['id']}/items", headers=hdr,
+                         json={"track_ids": [b["id"]], "mode": "next"})
+    assert second.status_code == 200, second.text
+
+    items = second.json()["items"]
+    assert [i["pos"] for i in items] == [0, 1, 2, 3, 4], "positions stay contiguous"
+    # Straight after the playing track, and in the order the button was pressed.
+    assert items[1]["id"] == c["id"]
+    assert items[2]["id"] == b["id"]
+    assert items[1]["origin"] == "next"
+
+
+def test_removing_from_the_middle_closes_the_gap(client, hdr, tracks):
+    """The same shift, downwards: it has the same collision if it is done row by row."""
+    a, b, c = tracks
+    q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
+    client.post(f"/queues/{q['id']}/items", headers=hdr,
+                json={"track_ids": [a["id"], b["id"], c["id"]]})
+    gone = client.delete(f"/queues/{q['id']}/items/0", headers=hdr)
+    assert gone.status_code == 200, gone.text
+    items = gone.json()["items"]
+    assert [i["pos"] for i in items] == [0, 1]
+    assert [i["id"] for i in items] == [b["id"], c["id"]]

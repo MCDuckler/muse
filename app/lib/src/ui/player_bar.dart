@@ -6,6 +6,7 @@ import '../state/player.dart';
 import 'artwork.dart';
 import 'now_playing.dart';
 import 'swipe.dart';
+import 'progress.dart';
 
 /// The bar that is always there. It shows what is playing, and it shows when what
 /// you queued is still downloading instead of pretending nothing happened.
@@ -33,7 +34,15 @@ class PlayerBar extends StatelessWidget {
         final track = s?.current ?? player.current;
         if (track == null) return const SizedBox.shrink();
 
-        final progress = s?.progress ?? 0.0;
+        // The small bar answers to the host in a jam too, for the same reason the big
+        // one does: this device is not the one playing.
+        final host = app.hostPosition;
+        // Same fallback as the big bar: the engine learns the length late, the track
+        // has always known it.
+        var length = s?.duration ?? Duration.zero;
+        if (length == Duration.zero) length = track.duration ?? Duration.zero;
+        final total = length.inMilliseconds;
+        final at = host ?? s?.position ?? Duration.zero;
         final jam = app.jam;
         final subtitle = switch (s) {
           // Ahead of the error line: this one is answerable, and the raw engine
@@ -69,10 +78,19 @@ class PlayerBar extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              LinearProgressIndicator(
-                value: progress,
-                minHeight: 2,
-                backgroundColor: Colors.transparent,
+              // Carried forward between the engine's reports, so the line creeps
+              // rather than stepping — see SmoothPosition.
+              SmoothPosition(
+                position: at,
+                playing: host != null || (s?.playing ?? false),
+                duration: length,
+                speed: player.speed,
+                builder: (context, now) => LinearProgressIndicator(
+                  value:
+                      total > 0 ? (now.inMilliseconds / total).clamp(0.0, 1.0) : 0.0,
+                  minHeight: 2,
+                  backgroundColor: Colors.transparent,
+                ),
               ),
               ListTile(
                 dense: true,

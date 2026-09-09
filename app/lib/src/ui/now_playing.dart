@@ -15,6 +15,7 @@ import 'song_row.dart';
 import 'browse_page.dart';
 import 'jam_page.dart';
 import 'halftone.dart';
+import 'progress.dart';
 
 String formatTime(Duration d) {
   final m = d.inMinutes;
@@ -54,10 +55,36 @@ class NowPlayingScreen extends StatelessWidget {
                     style: Theme.of(context).textTheme.titleSmall)
                 : _JamTitle(app: app),
             centerTitle: true,
-            // Nothing up here but the way out and where you are. Everything that acts
-            // on the song sat in the top corners, as far from the play button and from
-            // a thumb as the screen allows; it is down with the controls now.
-            actions: const [],
+            // Where these live is a setting: the top corners are furthest from a
+            // thumb, which is why they moved, but it is also the arrangement people
+            // knew — so it is still here to choose.
+            actions: app.playerLayout == PlayerLayout.topBar && track != null
+                ? [
+                    IconButton(
+                      icon: const Icon(Icons.lyrics_outlined),
+                      tooltip: 'Lyrics',
+                      onPressed: () => showLyrics(context, track),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.queue_music),
+                      tooltip: 'Up next',
+                      onPressed: () => showUpNext(context),
+                    ),
+                    IconButton(
+                      icon: Icon(app.sleepAt != null
+                          ? Icons.bedtime
+                          : Icons.timer_outlined),
+                      tooltip: 'Sleep timer and speed',
+                      onPressed: () => showPlaybackExtras(context),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.more_vert),
+                      tooltip: 'Track actions',
+                      onPressed: () => showTrackSheet(context, track,
+                          onChanged: app.refresh),
+                    ),
+                  ]
+                : const [],
           ),
           body: DragFollow(
             // Drag down to close, the gesture that dismisses a sheet anywhere else.
@@ -90,8 +117,22 @@ class NowPlayingScreen extends StatelessWidget {
                           mainAxisAlignment: MainAxisAlignment.center,
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            _Artwork(track: track, snapshot: s, player: player),
-                            const SizedBox(height: 32),
+                            // Roomy trades artwork for buttons: the panel below wants
+                            // the space more than the record does when the phone is
+                            // being held in one hand.
+                            Flexible(
+                              child: FractionallySizedBox(
+                                widthFactor: app.playerLayout == PlayerLayout.roomy
+                                    ? 0.82
+                                    : 1.0,
+                                child: _Artwork(
+                                    track: track, snapshot: s, player: player),
+                              ),
+                            ),
+                            SizedBox(
+                                height: app.playerLayout == PlayerLayout.roomy
+                                    ? 18
+                                    : 32),
                             Text(track.displayTitle,
                                 textAlign: TextAlign.center,
                                 maxLines: 2,
@@ -117,10 +158,26 @@ class NowPlayingScreen extends StatelessWidget {
                                 children: [
                                   _Scrubber(player: player, snapshot: s),
                                   const SizedBox(height: 4),
-                                  _Controls(app: app, player: player, snapshot: s),
-                                  const SizedBox(height: 2),
-                                  _Extras(app: app, track: track),
-                                  const SizedBox(height: 2),
+                                  _Controls(
+                                      app: app,
+                                      player: player,
+                                      snapshot: s,
+                                      big: app.playerLayout ==
+                                          PlayerLayout.roomy),
+                                  if (app.playerLayout != PlayerLayout.topBar) ...[
+                                    SizedBox(
+                                        height: app.playerLayout == PlayerLayout.roomy
+                                            ? 8
+                                            : 2),
+                                    _Extras(
+                                        app: app,
+                                        track: track,
+                                        big: app.playerLayout == PlayerLayout.roomy),
+                                  ],
+                                  SizedBox(
+                                      height: app.playerLayout == PlayerLayout.roomy
+                                          ? 8
+                                          : 2),
                                   _VolumeRow(player: player),
                                 ],
                               ),
@@ -269,32 +326,38 @@ class _Credits extends StatelessWidget {
 
 /// The things that act on the song, where a thumb already is.
 class _Extras extends StatelessWidget {
-  const _Extras({required this.app, required this.track});
+  const _Extras({required this.app, required this.track, this.big = false});
   final AppState app;
   final Track track;
+  final bool big;
 
   @override
   Widget build(BuildContext context) {
+    final size = big ? 28.0 : 22.0;
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
-        FavouriteButton(trackId: track.id, size: 22),
+        FavouriteButton(trackId: track.id, size: size),
         IconButton(
+          iconSize: size,
           icon: const Icon(Icons.lyrics_outlined),
           tooltip: 'Lyrics',
           onPressed: () => showLyrics(context, track),
         ),
         IconButton(
+          iconSize: size,
           icon: const Icon(Icons.queue_music),
           tooltip: 'Up next',
           onPressed: () => showUpNext(context),
         ),
         IconButton(
+          iconSize: size,
           icon: Icon(app.sleepAt != null ? Icons.bedtime : Icons.timer_outlined),
           tooltip: 'Sleep timer and speed',
           onPressed: () => showPlaybackExtras(context),
         ),
         IconButton(
+          iconSize: size,
           icon: const Icon(Icons.more_vert),
           tooltip: 'Track actions',
           onPressed: () => showTrackSheet(context, track, onChanged: app.refresh),
@@ -375,55 +438,119 @@ class _Scrubber extends StatefulWidget {
 class _ScrubberState extends State<_Scrubber> {
   double? _dragging;   // while the thumb is held, the UI follows the finger
 
+  /// Where a seek was aimed, until the engine reports having got there.
+  ///
+  /// Letting go used to drop straight back to whatever the last snapshot said, which
+  /// for a stream is the *old* position for as long as the seek takes — so the thumb
+  /// sprang back to where it started and then jumped forward a moment later. Holding
+  /// the target keeps the bar where the finger left it.
+  double? _seeking;
+  DateTime? _seekAt;
+
   @override
   Widget build(BuildContext context) {
     final s = widget.snapshot;
-    final duration = s?.duration ?? Duration.zero;
-    final position = s?.position ?? Duration.zero;
-    final max = duration.inMilliseconds.toDouble();
-    final value = (_dragging ?? position.inMilliseconds.toDouble()).clamp(0.0, max);
-    final enabled = max > 0;
+    final app = context.watch<AppState>();
 
-    return Column(
-      children: [
-        SliderTheme(
-          data: SliderTheme.of(context).copyWith(
-            trackHeight: 3,
-            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
-            overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
-          ),
-          child: Slider(
-            value: enabled ? value : 0,
-            max: enabled ? max : 1,
-            onChanged: enabled ? (v) => setState(() => _dragging = v) : null,
-            onChangeEnd: (v) {
-              widget.player.seek(Duration(milliseconds: v.round()));
-              setState(() => _dragging = null);
-            },
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(formatTime(Duration(milliseconds: value.round())),
-                  style: Theme.of(context).textTheme.labelMedium),
-              Text(enabled ? formatTime(duration) : '--:--',
-                  style: Theme.of(context).textTheme.labelMedium),
-            ],
-          ),
-        ),
-      ],
+    // The engine only knows a duration once it has read the file's header. The track
+    // itself has always known, so a bar that is dead for the first second of every
+    // song was only ever asking the wrong one of the two.
+    var duration = s?.duration ?? Duration.zero;
+    if (duration == Duration.zero) duration = s?.current?.duration ?? Duration.zero;
+
+    // In somebody else's jam this device is not the one playing, so its own player sits
+    // at zero. What the bar should show is where the host has got to.
+    final host = app.hostPosition;
+    var position = host ?? s?.position ?? Duration.zero;
+
+    final max = duration.inMilliseconds.toDouble();
+
+    // A seek is finished when the engine reports somewhere near where we sent it, or
+    // when it has had long enough that something must have gone wrong.
+    if (_seeking != null) {
+      final settled = (position.inMilliseconds - _seeking!).abs() < 1500 ||
+          DateTime.now().difference(_seekAt ?? DateTime.now()) >
+              const Duration(seconds: 3);
+      if (settled) {
+        _seeking = null;
+        _seekAt = null;
+      } else {
+        position = Duration(milliseconds: _seeking!.round());
+      }
+    }
+
+    // A guest's bar reports the host's playback; dragging it would only move this
+    // device, which makes nothing but a lie on screen.
+    final enabled = max > 0 && host == null;
+    // In a jam the host is the one playing, so the clock runs from their reports even
+    // though this device's own engine is silent.
+    final playing =
+        (host != null || (s?.playing ?? false)) && _dragging == null && _seeking == null;
+
+    return SmoothPosition(
+      position: position,
+      playing: playing,
+      duration: duration,
+      speed: widget.player.speed,
+      builder: (context, at) {
+        final value =
+            (_dragging ?? at.inMilliseconds.toDouble()).clamp(0.0, max <= 0 ? 1.0 : max);
+        return Column(
+          children: [
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 3,
+                thumbShape:
+                    RoundSliderThumbShape(enabledThumbRadius: host == null ? 7 : 4),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
+              ),
+              child: Slider(
+                value: max > 0 ? value : 0,
+                max: max > 0 ? max : 1,
+                onChanged: enabled ? (v) => setState(() => _dragging = v) : null,
+                onChangeEnd: enabled
+                    ? (v) {
+                        widget.player.seek(Duration(milliseconds: v.round()));
+                        setState(() {
+                          _seeking = v;
+                          _seekAt = DateTime.now();
+                          _dragging = null;
+                        });
+                      }
+                    : null,
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(formatTime(Duration(milliseconds: value.round())),
+                      style: Theme.of(context).textTheme.labelMedium),
+                  Text(max > 0 ? formatTime(duration) : '--:--',
+                      style: Theme.of(context).textTheme.labelMedium),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
 
 class _Controls extends StatelessWidget {
-  const _Controls({required this.app, required this.player, required this.snapshot});
+  const _Controls(
+      {required this.app,
+      required this.player,
+      required this.snapshot,
+      this.big = false});
   final AppState app;
   final PlayerService player;
   final PlayerSnapshot? snapshot;
+
+  /// The roomy arrangement: same controls, more of them under the thumb.
+  final bool big;
 
   @override
   Widget build(BuildContext context) {
@@ -431,7 +558,9 @@ class _Controls extends StatelessWidget {
     final repeat = snapshot?.repeat ?? QueueRepeat.off;
     final shuffle = snapshot?.shuffle ?? false;
 
-    return Row(
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: big ? 10 : 0),
+      child: Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
         IconButton(
@@ -442,12 +571,12 @@ class _Controls extends StatelessWidget {
           onPressed: () => app.setShuffle(!shuffle),
         ),
         IconButton(
-          iconSize: 34,
+          iconSize: big ? 42 : 34,
           icon: const Icon(Icons.skip_previous),
           onPressed: player.previous,
         ),
         IconButton.filled(
-          iconSize: 42,
+          iconSize: big ? 54 : 42,
           icon: Icon(playing ? Icons.pause : Icons.play_arrow),
           onPressed: player.playPause,
         ),
@@ -455,7 +584,7 @@ class _Controls extends StatelessWidget {
           // A guest's device is not the one making sound, so skipping is asking the
           // room rather than reaching over and pressing the button.
           IconButton(
-            iconSize: 34,
+            iconSize: big ? 42 : 34,
             icon: const Icon(Icons.how_to_vote_outlined),
             tooltip: 'Vote to skip',
             onPressed: app.jam!.guestsCanSkip
@@ -471,7 +600,7 @@ class _Controls extends StatelessWidget {
           )
         else
           IconButton(
-            iconSize: 34,
+            iconSize: big ? 42 : 34,
             icon: const Icon(Icons.skip_next),
             onPressed: player.next,
           ),
@@ -489,6 +618,7 @@ class _Controls extends StatelessWidget {
           onPressed: app.cycleRepeat,
         ),
       ],
+    ),
     );
   }
 }

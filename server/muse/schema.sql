@@ -431,3 +431,8 @@ create table if not exists feed_seen (
 -- inside the app: an account that can make itself an admin is not a role.
 alter table users add column if not exists is_admin boolean not null default false;
 update users set is_admin = true where name in ('chris', 'joe');
+
+-- Skipping is the one thing a guest can do to what everybody else is hearing, so it
+-- starts off. A host who wants a democracy can turn it on; a host who just wants to
+-- play records for people should not have to discover the setting first.
+alter table jams alter column guests_can_skip set default false;

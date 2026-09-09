@@ -84,6 +84,7 @@ class AppState extends ChangeNotifier {
   static const _kCoverStyle = 'muse.coverStyle';
   static const _kPalette = 'muse.palette';
   static const _kHalftone = 'muse.halftone';
+  static const _kLayout = 'muse.playerLayout';
 
   /// How the player draws the artwork: as the record it came on, or as the cover on
   /// its own. A per-device choice — the phone in a pocket and the laptop on a desk are
@@ -106,6 +107,16 @@ class AppState extends ChangeNotifier {
   /// to turn a moving background off, so it is a switch and not a fact.
   bool halftone = true;
 
+  /// How the now-playing screen is arranged. Per device, like the rest of the look.
+  PlayerLayout playerLayout = PlayerLayout.grouped;
+
+  Future<void> setPlayerLayout(PlayerLayout next) async {
+    playerLayout = next;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kLayout, next.name);
+  }
+
   Future<void> setHalftone(bool on) async {
     halftone = on;
     notifyListeners();
@@ -127,6 +138,9 @@ class AppState extends ChangeNotifier {
         orElse: () => CoverStyle.record);
     palette = Palette.byId(prefs.getString(_kPalette));
     halftone = prefs.getBool(_kHalftone) ?? true;
+    playerLayout = PlayerLayout.values.firstWhere(
+        (l) => l.name == prefs.getString(_kLayout),
+        orElse: () => PlayerLayout.grouped);
     api = ApiClient(
       // Served from the box itself on web, so the page's own origin is the server —
       // no one should have to type a URL into a page they loaded from that URL.
@@ -202,6 +216,9 @@ class AppState extends ChangeNotifier {
     // The player writes the cursor through the app rather than knowing the API: it
     // reports where playback is, and the app decides how to persist that.
     player!.onCursor = (queueId, {cursorIndex, positionMs}) {
+      // Remembered so the announcement this write causes can be recognised as our own
+      // when it arrives back over the event stream.
+      _cursorWrittenAt = DateTime.now();
       api
           .setCursor(queueId, index: cursorIndex, positionMs: positionMs)
           .catchError((_) {});
@@ -489,11 +506,48 @@ class AppState extends ChangeNotifier {
   /// Only worth acting on for the queue actually loaded here, and only when the
   /// revision is one this device has not seen — our own edits come back in the
   /// response, so this skips the echo of what we just did.
+  /// Where the host has got to, and when we heard it.
+  ///
+  /// In a jam the host's device is the one making sound: a guest's own player is
+  /// stopped, so drawing the seek bar from it showed nothing moving at zero. The host
+  /// reports its position as it plays, and this is that report plus the clock — near
+  /// enough for a bar that is telling you where somebody else is in a song.
+  Duration? jamPosition;
+  DateTime? _jamPositionAt;
+
+  /// When this device last wrote a cursor of its own.
+  DateTime? _cursorWrittenAt;
+
+  /// The host's position now, carried forward since it was last reported.
+  Duration? get hostPosition {
+    final at = _jamPositionAt, base = jamPosition;
+    if (at == null || base == null || jam == null || (jam?.isHost ?? true)) return null;
+    final since = DateTime.now().difference(at);
+    if (since > const Duration(minutes: 2)) return null;   // stale: say nothing
+    return base + since;
+  }
+
   Future<void> _onQueueChanged(Map<String, dynamic> data) async {
     final id = data['queue_id'] as int?;
     if (id == null || id != activeQueue?.id) return;
+    final reported = data['position_ms'] as int?;
+    if (reported != null && jam != null && !(jam?.isHost ?? false)) {
+      jamPosition = Duration(milliseconds: reported);
+      _jamPositionAt = DateTime.now();
+    }
     final rev = data['rev'] as int?;
-    if (rev != null && rev == activeQueue?.rev && data['cursor_moved'] != true) return;
+    // Every client of this user hears every announcement, this one included: a skip
+    // writes its cursor, the server tells everybody, and the device that skipped is
+    // told about its own move. Re-reading the queue for that is at best wasted work
+    // and at worst a reload landing on top of a load still in flight.
+    final ourOwnMove = jam == null &&
+        _cursorWrittenAt != null &&
+        DateTime.now().difference(_cursorWrittenAt!) < const Duration(seconds: 3);
+    if (rev != null &&
+        rev == activeQueue?.rev &&
+        (data['cursor_moved'] != true || ourOwnMove)) {
+      return;
+    }
 
     await _reloadActiveQueue();
     final live = activeQueue;

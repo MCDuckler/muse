@@ -59,6 +59,11 @@ def import_follows(body: dict = Body(default={}), user: dict = Depends(current_u
             from .deps import cfg
             try:
                 names = spotify.followed_artists(cfg(), user["id"])
+            except (spotify.NotLinked, spotify.NotAllowed, spotify.NotConfigured) as e:
+                # These say something the person reading them can act on — link the
+                # account, ask to be added to the app — so they are their own answer
+                # rather than "the service did not respond".
+                raise HTTPException(400, str(e))
             except Exception as e:
                 # The scope for this was added later, so an account linked before it
                 # will be refused — which is fixable, and worth saying how.

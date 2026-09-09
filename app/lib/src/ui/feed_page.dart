@@ -199,6 +199,9 @@ class FollowingPage extends StatefulWidget {
 class _FollowingPageState extends State<FollowingPage> {
   Future<List<FollowedArtist>>? _future;
 
+  /// Which service is being imported from right now, if any.
+  String? _importing;
+
   @override
   void initState() {
     super.initState();
@@ -206,6 +209,31 @@ class _FollowingPageState extends State<FollowingPage> {
   }
 
   void _load() => setState(() => _future = context.read<AppState>().api.follows());
+
+  /// Bring over the artists this person already follows elsewhere.
+  ///
+  /// Every service names artists slightly differently and some of what they call an
+  /// artist is not one, so the answer is reported rather than assumed: what was found,
+  /// what was already here, and the names that could not be placed.
+  Future<void> _import(String provider) async {
+    final api = context.read<AppState>().api;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _importing = provider);
+    try {
+      final r = await api.importFollows(provider);
+      final missed = (r['not_found'] as List?) ?? const [];
+      final line = StringBuffer('${r['followed']} new')
+        ..write(' · ${r['already']} already')
+        ..write(' of ${r['found']} on $provider');
+      if (missed.isNotEmpty) line.write(' · not found: ${missed.take(3).join(', ')}');
+      messenger.showSnackBar(SnackBar(content: Text(line.toString())));
+      _load();
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('$e')));
+    } finally {
+      if (mounted) setState(() => _importing = null);
+    }
+  }
 
   Future<void> _add() async {
     final api = context.read<AppState>().api;
@@ -226,6 +254,29 @@ class _FollowingPageState extends State<FollowingPage> {
       appBar: AppBar(
         title: const Text('Following'),
         actions: [
+          if (_importing != null)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 14),
+              child: Center(
+                child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
+              ),
+            )
+          else
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.download_outlined),
+              tooltip: 'Import who you follow',
+              onSelected: _import,
+              itemBuilder: (context) => const [
+                PopupMenuItem(value: 'spotify', child: Text('Import from Spotify')),
+                PopupMenuItem(
+                    value: 'soundcloud', child: Text('Import from SoundCloud')),
+                PopupMenuItem(value: 'deezer', child: Text('Import from Deezer')),
+                PopupMenuItem(value: 'bandcamp', child: Text('Import from Bandcamp')),
+              ],
+            ),
           IconButton(
               icon: const Icon(Icons.add), tooltip: 'Follow', onPressed: _add),
         ],
@@ -240,7 +291,8 @@ class _FollowingPageState extends State<FollowingPage> {
             return const EmptyHint(
               icon: Icons.people_outline,
               title: 'Following nobody',
-              body: 'Follow an artist from their page, or with the + above.',
+              body: 'Follow an artist from their page, with the + above, or bring '
+                  'over who you already follow on Spotify, SoundCloud or Deezer.',
             );
           }
           return ListView.builder(

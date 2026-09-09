@@ -25,6 +25,12 @@ import 'package:muse/src/ui/song_row.dart';
 const user = String.fromEnvironment('MUSE_USER', defaultValue: 'chris');
 const pass = String.fromEnvironment('MUSE_PASS');
 
+/// Which icons are on screen, for when an icon finder comes up empty.
+String visibleIcons(WidgetTester tester) => tester
+    .widgetList<Icon>(find.byType(Icon))
+    .map((w) => w.icon?.codePoint.toRadixString(16) ?? '?')
+    .join(' ');
+
 /// What is actually on screen, for when a finder comes up empty in a headless run.
 String visibleText(WidgetTester tester) {
   final texts = tester.widgetList<Text>(find.byType(Text))
@@ -138,8 +144,10 @@ void main() {
 
     // ---- find something already in the library and queue it ----
     await tester.tap(tab('Search'));
-    await settle(tester);
-    await tester.enterText(find.byType(TextField).first, 'lucky');
+    await settle(tester, seconds: 3);
+    // Scoped to the page: the queue dialog leaves a field behind for a frame, and
+    // typing into that one searches nothing while the prompt stays on screen.
+    await tester.enterText(onPage(SearchPage, find.byType(TextField)).first, 'lucky');
     // No submit any more: typing runs the search itself after a short debounce.
     await settle(tester, seconds: 14);   // debounce plus the remote leg
 
@@ -439,7 +447,10 @@ void main() {
     await tester.tap(find.descendant(
         of: find.byType(PlayerBarMarker), matching: find.byType(ListTile)));
     await settle(tester, seconds: 3);
-    await tester.tap(find.byIcon(Icons.timer_outlined));
+    expect(find.byIcon(Icons.timer_outlined), findsWidgets,
+        reason: 'the open player must offer the sleep timer. '
+            'Icons: ${visibleIcons(tester)}');
+    await tester.tap(find.byIcon(Icons.timer_outlined).first);
     await settle(tester, seconds: 2);
     expect(find.text('Sleep timer'), findsOneWidget,
         reason: 'On screen: ${visibleText(tester)}');
@@ -582,8 +593,10 @@ void main() {
         reason: 'settings must open. caught=$caught');
     // Settings is a lazy ListView: a row below the fold does not exist in the tree
     // yet, so it has to be scrolled to before it can be found at all.
+    // The page's own list again: "the last scrollable" is the horizontal strip of
+    // colour swatches, and dragging that downwards moves nothing at all.
     await tester.scrollUntilVisible(find.text('Download queue'), 120,
-        scrollable: find.byType(Scrollable).last);
+        scrollable: settingsList.last);
     await settle(tester, seconds: 2);
     expect(find.text('Download queue'), findsOneWidget,
         reason: 'downloads must be reachable without hunting. '

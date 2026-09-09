@@ -21,6 +21,7 @@ class SongRow extends StatelessWidget {
     required this.track,
     this.onTap,
     this.leading,
+    this.handle,
     this.trailing,
     this.selected = false,
     this.showAlbum = true,
@@ -34,8 +35,14 @@ class SongRow extends StatelessWidget {
   final Track track;
   final VoidCallback? onTap;
 
-  /// Replaces the artwork — a position number, a drag handle, a check.
+  /// Replaces the artwork — a position number, a check.
   final Widget? leading;
+
+  /// A grip, at the very edge of the row and tight against the artwork. It sits
+  /// *beside* the cover rather than instead of it: a row of small grey grips tells you
+  /// nothing at a glance, and a row with no grip at all makes you guess that holding
+  /// it does something.
+  final Widget? handle;
 
   /// Sits before the menu button. Durations and state chips go here.
   final Widget? trailing;
@@ -87,10 +94,14 @@ class SongRow extends StatelessWidget {
                 onRemove: onRemove, onChanged: onChanged)
             : null,
         child: Padding(
-          padding: EdgeInsets.symmetric(
-              horizontal: 8, vertical: dense ? 4 : 6),
+          padding: EdgeInsets.only(
+              left: handle == null ? 8 : 0,
+              right: 8,
+              top: dense ? 4 : 6,
+              bottom: dense ? 4 : 6),
           child: Row(
             children: [
+              if (handle != null) handle!,
               SizedBox(
                 width: 40,
                 height: 40,

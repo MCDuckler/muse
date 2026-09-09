@@ -67,7 +67,10 @@ def client(cfg, monkeypatch):
                   "users"):
             c.execute(f"truncate {t} restart identity cascade")
     for u in cfg.users:                       # re-seed what muse.toml declares
-        auth.ensure_user(u.name, pw_hash=u.password_hash)
+        # Admin, for the same reason create_app does it: whoever the server's own
+        # config names owns the server. The truncate above wipes the row create_app
+        # made, so this has to say it too.
+        auth.ensure_user(u.name, pw_hash=u.password_hash, admin=True)
     with TestClient(application) as tc:
         yield tc
     db.close()

@@ -150,6 +150,17 @@ class _SettingsPageState extends State<SettingsPage> {
               // ignore: deprecated_member_use
               onChanged: (v) => v == null ? null : app.setCoverStyle(v),
             ),
+          _label(context, 'Player controls'),
+          for (final layout in PlayerLayout.values)
+            RadioListTile<PlayerLayout>(
+              value: layout,
+              // ignore: deprecated_member_use
+              groupValue: app.playerLayout,
+              title: Text(layout.label),
+              subtitle: Text(layout.description),
+              // ignore: deprecated_member_use
+              onChanged: (v) => v == null ? null : app.setPlayerLayout(v),
+            ),
           SwitchListTile(
             secondary: const Icon(Icons.grain),
             title: const Text('Printed background'),

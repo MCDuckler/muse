@@ -54,7 +54,11 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     db.init(cfg.dsn)
     deps.set_config(cfg)
     for u in cfg.users:
-        auth.ensure_user(u.name, pw_hash=u.password_hash)
+        # Whoever is named in the server's own config file owns the server, so they are
+        # the admins. The schema names chris and joe as a starting point, but a name in
+        # there only becomes a row here — on a fresh database, and in the tests, that
+        # row is written after the schema has run and would never have been marked.
+        auth.ensure_user(u.name, pw_hash=u.password_hash, admin=True)
 
     worker = (enrich_worker.EnrichWorker(cfg, publish=publish)
               if start_workers else None)
@@ -268,6 +272,12 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             elif cached["state"] != "ready":
                 # Asking for it again means you are waiting on it: move it forward.
                 jobs.promote(cached["id"])
+            # Asking for a song is how it becomes yours. The catalog is shared, so
+            # somebody else having fetched it first must not leave it out of your
+            # library — and until this, a track that was only ever downloaded (never
+            # put in a queue or a playlist, which is what the triggers watch) belonged
+            # to nobody and showed up under nobody's Library.
+            catalog.remember(user["id"], cached["id"])
             return catalog.public(cached)
 
         try:
@@ -278,6 +288,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
                         "album": None, "duration_ms": None, "raw": {}}
         meta["video_id"] = video_id
         created = catalog.create_from_ytm(meta, discovered_via=catalog.VIA_USER)
+        catalog.remember(user["id"], created["id"])
         return JSONResponse(catalog.public(created), status_code=202)
 
     @app.get("/tracks/{track_id}")

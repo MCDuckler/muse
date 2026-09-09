@@ -196,12 +196,19 @@ class _QueuePageState extends State<QueuePage> {
                       // Hold the row to move it. A permanent handle took the place the
                       // artwork belongs in, and a queue of small grey grips tells you
                       // less at a glance than a queue of records does.
-                      child: ReorderableDelayedDragStartListener(
-                        index: i,
-                        child: SongRow(
+                      child: SongRow(
                         track: t,
                         selected: isCurrent,
                         dense: true,
+                        handle: ReorderableDragStartListener(
+                          index: i,
+                          child: Padding(
+                            padding: const EdgeInsets.only(left: 2, right: 2),
+                            child: Icon(Icons.drag_indicator,
+                                size: 18,
+                                color: Theme.of(context).colorScheme.outline),
+                          ),
+                        ),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -236,7 +243,6 @@ class _QueuePageState extends State<QueuePage> {
                                 }
                               }
                             : null,
-                        ),
                       ),
                     );
                   },

@@ -266,6 +266,14 @@ class _PlaylistPageState extends State<_PlaylistPage> {
               },
               child: SongRow(
                 track: items[i],
+                handle: ReorderableDragStartListener(
+                  index: i,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 2, right: 2),
+                    child: Icon(Icons.drag_indicator,
+                        size: 18, color: Theme.of(context).colorScheme.outline),
+                  ),
+                ),
                 onTap: () => app.playNow(items, startAt: i, named: widget.name),
                 onRemove: () async {
                   await app.api.removePlaylistItem(widget.playlistId, i);

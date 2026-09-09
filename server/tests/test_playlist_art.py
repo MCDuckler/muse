@@ -38,7 +38,9 @@ def playlist_with_art(client, hdr, cfg):
 def test_every_playlist_offers_a_cover(client, hdr):
     """Including an empty one — a playlist with no art still gets a picture."""
     p = client.post("/playlists", headers=hdr, json={"name": "Empty"}).json()
-    listed = client.get("/playlists", headers=hdr).json()[0]
+    # By name: Favourites is a playlist too, and it sorts first.
+    listed = next(x for x in client.get("/playlists", headers=hdr).json()
+                  if x["name"] == "Empty")
     assert listed["cover_url"] == f"/playlists/{p['id']}/cover"
     assert listed["cover_version"]
 

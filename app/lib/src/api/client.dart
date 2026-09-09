@@ -656,6 +656,13 @@ class ApiClient {
   Future<void> unfollow(String remoteId) async => await _decode(
       await http.delete(_u('/follows/$remoteId'), headers: _headers));
 
+  /// Take the artists already followed somewhere else. Answers with what it managed:
+  /// how many were found, how many were new, and the names it could not place.
+  Future<Map<String, dynamic>> importFollows(String provider) async =>
+      await _decode(await http.post(_u('/follows/import'),
+          headers: _headers,
+          body: jsonEncode({'provider': provider}))) as Map<String, dynamic>;
+
   Future<({List<FeedItem> items, int unseen, int following})> feed(
       {int limit = 60}) async {
     final d = await _decode(

@@ -31,17 +31,20 @@ def token_hash(token: str) -> str:
 
 
 def ensure_user(name: str, pw_hash: str | None = None,
-                created_by: int | None = None) -> int:
-    row = db.one("select id, pw_hash from users where name=%s", (name,))
+                created_by: int | None = None, admin: bool = False) -> int:
+    row = db.one("select id, pw_hash, is_admin from users where name=%s", (name,))
     if row:
         # Seed a config-file account's password on first sight, but never overwrite a
         # password the person has since set for themselves.
         if pw_hash and not row["pw_hash"]:
             db.run("update users set pw_hash=%s where id=%s", (pw_hash, row["id"]))
+        if admin and not row["is_admin"]:
+            db.run("update users set is_admin=true where id=%s", (row["id"],))
         return row["id"]
     return db.one(
-        "insert into users(name, pw_hash, created_by) values(%s,%s,%s) returning id",
-        (name, pw_hash, created_by),
+        "insert into users(name, pw_hash, created_by, is_admin) values(%s,%s,%s,%s) "
+        "returning id",
+        (name, pw_hash, created_by, admin),
     )["id"]
 
 

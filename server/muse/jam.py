@@ -13,7 +13,10 @@ import string
 from . import db
 
 ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"      # no I/O/0/1: these get read aloud
-ONLINE_SECONDS = 90
+# How long somebody stays "here" without checking in. Long enough to reload the page,
+# walk through a tunnel, or put the phone away for a minute — a jam that drops people
+# the moment their browser refreshes is not a room anyone can stay in.
+ONLINE_SECONDS = 300
 
 
 def _code() -> str:

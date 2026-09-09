@@ -33,11 +33,15 @@ def announce_queue(queue_id: int, user: dict, cursor_moved: bool = False) -> Non
     """
     if not _publish:
         return
-    row = db.one("select rev, cursor_index from queues where id=%s", (queue_id,))
+    row = db.one("select rev, cursor_index, position_ms from queues where id=%s",
+                 (queue_id,))
     if not row:
         return
+    # position_ms too: in a jam the host's device is the one making sound, and without
+    # it a guest's seek bar is drawing their own silent player.
     _publish("queue_changed", {"queue_id": queue_id, "rev": row["rev"],
                                "cursor_index": row["cursor_index"],
+                               "position_ms": row["position_ms"],
                                "by": user.get("name"), "cursor_moved": cursor_moved})
 
 RADIO_MAX = 10          # never pull a whole 50-track watch playlist: each one is a download
@@ -470,6 +474,25 @@ def move_cursor(queue_id: int, body: dict = Body(...), user: dict = Depends(curr
     return q
 
 
+def _shift_positions(c, queue_id: int, from_pos: int, delta: int) -> None:
+    """Move every row at or after `from_pos` along by `delta`.
+
+    (queue_id, pos) is a primary key and Postgres checks it row by row, so the obvious
+    `set pos = pos + 1` collides with the row still sitting in the slot the first one is
+    moving into. That is why "play next" answered 500 rather than putting a song next:
+    it only ever shifted anything when there was something to shift past. Parking the
+    whole block far above the queue first gives every row an empty slot to land in on
+    the way back.
+    """
+    if delta == 0:
+        return
+    park = 1_000_000
+    c.execute("update queue_items set pos = pos + %s where queue_id=%s and pos >= %s",
+              (park, queue_id, from_pos))
+    c.execute("update queue_items set pos = pos - %s where queue_id=%s and pos >= %s",
+              (park - delta, queue_id, park))
+
+
 @router.post("/queues/{queue_id}/items")
 def queue_add(queue_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
     """`next` inserts above the autoplay/radio tail, not blindly at the top."""
@@ -483,25 +506,33 @@ def queue_add(queue_id: int, body: dict = Body(...), user: dict = Depends(curren
     cursor = db.one("select cursor_index from queues where id=%s", (queue_id,))["cursor_index"]
 
     if mode == "next":
+        # Straight after the song playing, and after anything else already queued up
+        # this way — so three "play next" in a row play in the order they were pressed.
+        #
+        # It used to walk past every user-added row after the cursor, which in a queue
+        # somebody had built by hand is all of them: "play next" put the song at the
+        # very end, which is the one place it was not supposed to go.
         after = cursor
         for r in rows:
-            if r["pos"] > cursor and r["origin"] == "user":
+            if r["pos"] <= cursor:
+                continue
+            if r["origin"] == "next":
                 after = r["pos"]
-            elif r["pos"] > cursor:
+            else:
                 break
         insert_at = after + 1
     else:
         insert_at = (rows[-1]["pos"] + 1) if rows else 0
 
     with db.pool().connection() as c:
-        c.execute("""update queue_items set pos = pos + %s
-                      where queue_id=%s and pos >= %s""",
-                  (len(ids), queue_id, insert_at))
+        _shift_positions(c, queue_id, insert_at, len(ids))
         for n, tid in enumerate(ids):
             c.execute(
                 """insert into queue_items(queue_id,pos,track_id,origin,added_by)
                    values(%s,%s,%s,%s,%s)""",
-                (queue_id, insert_at + n, tid, body.get("origin", "user"), user["id"]))
+                (queue_id, insert_at + n, tid,
+                 body.get("origin") or ("next" if mode == "next" else "user"),
+                 user["id"]))
         c.execute("update queues set rev=rev+1, updated_at=now() where id=%s", (queue_id,))
     announce_queue(queue_id, user)
     return _queue_state(queue_id)
@@ -522,8 +553,7 @@ def remove_item(queue_id: int, pos: int, user: dict = Depends(current_user)):
         ).fetchone()
         if not gone:
             raise HTTPException(404, "no item at that position")
-        c.execute("update queue_items set pos = pos - 1 where queue_id=%s and pos > %s",
-                  (queue_id, pos))
+        _shift_positions(c, queue_id, pos + 1, -1)
         # Keep the cursor pointing at the same *track*: removing something above the
         # current one must not skip playback forward.
         c.execute(
@@ -548,8 +578,8 @@ def move_item(queue_id: int, body: dict = Body(...), user: dict = Depends(curren
     if src is None or dst is None:
         raise HTTPException(400, "from and to are required")
 
-    rows = db.all_("select pos, track_id, origin from queue_items where queue_id=%s "
-                   "order by pos", (queue_id,))
+    rows = db.all_("select pos, track_id, origin, added_by from queue_items "
+                   "where queue_id=%s order by pos", (queue_id,))
     if not (0 <= src < len(rows)) or not (0 <= dst < len(rows)):
         raise HTTPException(400, "position out of range")
 
@@ -568,8 +598,9 @@ def move_item(queue_id: int, body: dict = Body(...), user: dict = Depends(curren
     with db.pool().connection() as c:
         c.execute("delete from queue_items where queue_id=%s", (queue_id,))
         for i, r in enumerate(rows):
-            c.execute("insert into queue_items(queue_id,pos,track_id,origin) "
-                      "values(%s,%s,%s,%s)", (queue_id, i, r["track_id"], r["origin"]))
+            c.execute("insert into queue_items(queue_id,pos,track_id,origin,added_by) "
+                      "values(%s,%s,%s,%s,%s)",
+                      (queue_id, i, r["track_id"], r["origin"], r["added_by"]))
         new_cursor = next((i for i, r in enumerate(rows) if r["track_id"] == playing),
                           cursor)
         c.execute("update queues set rev=rev+1, cursor_index=%s, updated_at=now() "

@@ -33,7 +33,9 @@ def test_new_accounts_start_empty(client, hdr):
                         data={"user": "sam", "password": "correct-horse"}).json()["token"]
     theirs = {"Authorization": f"Bearer {token}"}
     assert client.get("/queues", headers=theirs).json() == []
-    assert client.get("/playlists", headers=theirs).json() == []
+    # Everyone gets a Favourites list of their own, and nothing else.
+    mine = client.get("/playlists", headers=theirs).json()
+    assert [(x["name"], x["items"]) for x in mine] == [("Favourites", 0)]
 
 
 def test_weak_or_duplicate_accounts_are_refused(client, hdr):

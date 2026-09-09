@@ -48,6 +48,12 @@ class PlayerService {
   int? _loadedTrackId;
   int? _waitingForTrack;         // stalled on a download; resume when it lands
 
+  /// Where the track now loading is meant to start. Until the engine holds the
+  /// current track it is still reporting the *previous* one's position, and
+  /// publishing that draws the new song as though it were already half over —
+  /// then snapping back a moment later when the real one arrives.
+  Duration _pendingStart = Duration.zero;
+
   /// Whether the web player already holds a playlist we can edit in place.
   /// Until the first source is set there is nothing to insert into.
   bool _webPlaylistLive = false;
@@ -115,6 +121,14 @@ class PlayerService {
   Future<void> loadQueue(Queue queue, {bool autoplay = false}) async {
     final sameQueue = _queueId == queue.id;
     final previousIndex = index;
+    // The song this device is on — which is not the same as the song whose audio has
+    // finished loading. Anchoring on the loaded id alone left a window, between a skip
+    // and its stream being ready, where this fell through to the branch at the bottom
+    // and reloaded the server's cursor at the server's last saved position. A skip
+    // announces its own cursor write, that announcement comes straight back over the
+    // event stream, and playback landed back on the previous song a few seconds in:
+    // the jump back you can feel when skipping quickly.
+    final anchor = _loadedTrackId ?? current?.id ?? _waitingForTrack;
     _queueId = queue.id;
     _items = queue.items;
     if (!sameQueue) {
@@ -131,8 +145,8 @@ class PlayerService {
       return;
     }
 
-    if (sameQueue && _loadedTrackId != null) {
-      final moved = _relocate(previousIndex, _loadedTrackId!);
+    if (sameQueue && anchor != null) {
+      final moved = _relocate(previousIndex, anchor);
       if (moved >= 0) {
         _syncOrder(keepItemIndex: moved);
         // A track we were stalled on may have arrived with this update.
@@ -472,6 +486,7 @@ class PlayerService {
     final mine = token ?? ++_loadToken;
     final track = current;
     if (track == null) return;
+    _pendingStart = startAt ?? Duration.zero;
     unawaited(_lookAhead());
     if (!track.isReady) {
       // Hold here rather than skipping past what the user picked, but remember it so
@@ -702,8 +717,13 @@ class PlayerService {
       current: current,
       index: index,
       playing: _player.playing,
-      position: _player.position,
-      duration: _player.duration ?? current?.duration,
+      // Only believe the engine while it actually holds this track.
+      position: _loadedTrackId != null && _loadedTrackId == current?.id
+          ? _player.position
+          : _pendingStart,
+      duration: _loadedTrackId != null && _loadedTrackId == current?.id
+          ? (_player.duration ?? current?.duration)
+          : current?.duration,
       buffered: _player.bufferedPosition,
       itemCount: _items.length,
       loadedTrackId: _loadedTrackId,

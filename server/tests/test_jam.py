@@ -78,6 +78,9 @@ def test_skipping_takes_more_than_one_voice(client, hdr, guest, jam):
     client.post(f"/queues/{jam['queue']['id']}/items", headers=hdr,
                 json={"track_ids": [track["id"]]})
     client.post("/jams/join", headers=guest, json={"code": jam["code"]})
+    # Voting is off unless the host turns it on: a guest skipping the host's music by
+    # default was not what "listen together" is supposed to mean.
+    client.patch(f"/jams/{jam['id']}", headers=hdr, json={"guests_can_skip": True})
 
     first = client.post(f"/jams/{jam['id']}/skip-vote", headers=guest, json={}).json()
     assert first["votes"] == 1 and first["passed"] is False

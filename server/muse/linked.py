@@ -333,48 +333,104 @@ def _bandcamp_items(remote_id: str, offset: int = 0) -> tuple[list[dict], int | 
 
 
 # ---------------------------------------------------------------- who they follow
-def _soundcloud_following(handle: str) -> list[dict]:
-    """Not available, and saying so beats a scraper that breaks quietly.
+# SoundCloud's own web app talks to an API that needs a key, and the key is sitting in
+# the JavaScript it serves. That is how their site works, so it is how this works — with
+# the key cached until it stops being accepted and fetched again when it does. It is not
+# a documented interface and it can be taken away; when it is, this says so rather than
+# quietly reporting that you follow nobody.
+_SC_API = "https://api-v2.soundcloud.com"
+_sc_client_id: str | None = None
 
-    yt-dlp reads a SoundCloud profile's tracks, likes, reposts and sets, but treats
-    /following as a track and fails on it. The only other way in is SoundCloud's
-    internal API with a client id lifted out of their JavaScript, which works until the
-    day it does not — and a followed-artists list that silently empties is worse than
-    one that was never offered.
-    """
-    r = subprocess.run([sources.YTDLP, "--flat-playlist", "-J", "--playlist-items", "1-200",
-                        f"https://soundcloud.com/{urllib.parse.quote(handle)}/following"],
-                       capture_output=True, text=True, timeout=300)
-    if r.returncode != 0:
-        raise LinkError("SoundCloud does not let us read who you follow. "
-                        "Spotify and Bandcamp do.")
-    data = json.loads(r.stdout or "{}") or {}
-    out = []
-    for e in data.get("entries") or []:
-        name = (e.get("uploader") or e.get("title") or "").strip()
-        # A profile listing is titled "Name (Tracks)" when it comes back as a user page.
-        name = re.sub(r"\s*\((Tracks|All|Likes)\)$", "", name)
-        if name:
-            out.append({"name": name, "image": e.get("thumbnail")})
+
+def _soundcloud_key(refresh: bool = False) -> str:
+    global _sc_client_id
+    if _sc_client_id and not refresh:
+        return _sc_client_id
+    page = sources._get_page("https://soundcloud.com/discover")
+    scripts = re.findall(r'src="(https://a-v2\.sndcdn\.com/assets/[^"]+\.js)"', page)
+    for src in reversed(scripts):                 # the key lives in a late bundle
+        found = re.search(r'client_id\s*[:=]\s*"([A-Za-z0-9]{20,})"',
+                          sources._get_page(src))
+        if found:
+            _sc_client_id = found.group(1)
+            return _sc_client_id
+    raise LinkError("SoundCloud changed its web app; following cannot be read.")
+
+
+def _sc_api(path: str, **params) -> dict:
+    """One call, retried once with a fresh key — the old one expires eventually."""
+    for attempt in (0, 1):
+        key = _soundcloud_key(refresh=attempt == 1)
+        query = urllib.parse.urlencode({**params, "client_id": key})
+        try:
+            return _json(f"{_SC_API}{path}?{query}")
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403) and attempt == 0:
+                continue
+            raise LinkError(f"SoundCloud said no: {e.code}")
+    raise LinkError("SoundCloud would not answer.")
+
+
+def _soundcloud_following(handle: str) -> list[dict]:
+    profile = _sc_api("/resolve", url=f"https://soundcloud.com/{handle}")
+    user_id = profile.get("id")
+    if not user_id:
+        raise LinkError("SoundCloud has no profile with that name.")
+
+    out, offset = [], 0
+    while len(out) < 400:
+        page = _sc_api(f"/users/{user_id}/followings", limit=100, offset=offset)
+        people = page.get("collection") or []
+        for person in people:
+            name = (person.get("username") or "").strip()
+            if name:
+                out.append({"name": name, "image": person.get("avatar_url")})
+        if len(people) < 100:
+            break
+        offset += len(people)
+        time.sleep(PAUSE_BETWEEN)
+    return out
+
+
+def _deezer_following(handle: str) -> list[dict]:
+    """Deezer publishes a profile's favourite artists, which is what following is there."""
+    out, url = [], f"https://api.deezer.com/user/{handle}/artists?limit=100"
+    while url and len(out) < 400:
+        page = _json(url)
+        if page.get("error"):
+            raise LinkError("Deezer will not show that profile's artists. "
+                            "They are only readable while the profile is public.")
+        for artist in page.get("data") or []:
+            if artist.get("name"):
+                out.append({"name": artist["name"], "image": artist.get("picture_medium")})
+        url = page.get("next")
     return out
 
 
 def _bandcamp_following(handle: str) -> list[dict]:
+    """The bands a fan page follows, out of the page's own data blob."""
     blob = _bandcamp_blob(handle)
+    cache = ((blob.get("item_cache") or {}).get("following_bands") or {})
     out = []
-    for band in (blob.get("following_bands_data") or {}).get("sequence") or []:
-        entry = ((blob.get("item_cache") or {}).get("following_bands") or {}).get(str(band))
+    for key, entry in cache.items():
         name = (entry or {}).get("name")
         if name:
             out.append({"name": name, "image": (entry or {}).get("image_id")})
+    if not out:
+        for band in (blob.get("following_bands_data") or {}).get("sequence") or []:
+            entry = cache.get(str(band)) or {}
+            if entry.get("name"):
+                out.append({"name": entry["name"], "image": entry.get("image_id")})
     return out
 
 
-_FOLLOWING = {"soundcloud": _soundcloud_following, "bandcamp": _bandcamp_following}
+_FOLLOWING = {"soundcloud": _soundcloud_following,
+              "bandcamp": _bandcamp_following,
+              "deezer": _deezer_following}
 
 
 def following(provider: str, handle: str) -> list[dict]:
-    """Who this account follows over there. Deezer has no public following list."""
+    """Who this account follows over there."""
     fetch = _FOLLOWING.get(provider)
     if not fetch:
         raise LinkError(f"{provider} does not say who you follow.")

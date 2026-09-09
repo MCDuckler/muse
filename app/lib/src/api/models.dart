@@ -622,6 +622,37 @@ enum CoverStyle {
       : 'The artwork on its own, no animation';
 }
 
+/// Where the player's controls live.
+///
+/// Three arrangements rather than one, because this is the screen people look at most
+/// and there is no answer that suits everybody: the icons used to be in the top
+/// corners, which is furthest from a thumb; grouping them under the transport put them
+/// where the hand already is; and giving the whole panel more room suits a phone used
+/// one-handed.
+enum PlayerLayout {
+  /// The original: lyrics, up next and the rest in the top bar, artwork given the room.
+  topBar,
+
+  /// Everything that acts on the song under the transport, in one panel.
+  grouped,
+
+  /// The same, with the panel taller and the buttons bigger — smaller artwork, larger
+  /// targets, in the manner of Musicolet.
+  roomy;
+
+  String get label => switch (this) {
+        PlayerLayout.topBar => 'Icons at the top',
+        PlayerLayout.grouped => 'Grouped with the controls',
+        PlayerLayout.roomy => 'Roomy controls',
+      };
+
+  String get description => switch (this) {
+        PlayerLayout.topBar => 'Lyrics, up next and the rest in the top bar',
+        PlayerLayout.grouped => 'All of it under the play buttons',
+        PlayerLayout.roomy => 'Bigger buttons and more space, artwork a little smaller',
+      };
+}
+
 /// Someone in a jam.
 class JamMember {
   final int userId;
