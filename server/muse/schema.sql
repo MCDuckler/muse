@@ -293,3 +293,82 @@ alter table queue_items add column if not exists added_by int references users(i
 -- liked songs are a list worth having long before they are forty gigabytes worth having,
 -- so a big mirror records what is in it and fetches the audio when somebody plays it.
 alter table playlists add column if not exists download_mode text not null default 'all';
+
+-- Whose library a track is in.
+--
+-- The catalog is shared on purpose: one download serves everybody, and a second person
+-- adding the same song should get it instantly rather than queue a second copy of the
+-- same file. But "the library" is a personal thing, and it was showing every track on
+-- the box to every account — one person's twelve thousand mirrored songs buried
+-- everyone else's.
+create table if not exists library_items (
+  user_id  int not null references users(id) on delete cascade,
+  track_id int not null references tracks(id) on delete cascade,
+  added_at timestamptz not null default now(),
+  primary key (user_id, track_id)
+);
+create index if not exists library_items_recent on library_items(user_id, added_at desc);
+
+-- Membership is recorded by the database rather than by each caller.
+--
+-- Tracks are attached to people in thirteen places across seven modules — playlist
+-- imports, queue edits, jam adds, radio, search-and-download — and a rule enforced in
+-- thirteen places is a rule that will be missed in the fourteenth. A trigger on the
+-- two tables that say "this track belongs to this person's list" cannot be bypassed.
+create or replace function library_note_playlist_item() returns trigger as $$
+begin
+  insert into library_items(user_id, track_id)
+  select p.owner_id, new.track_id from playlists p where p.id = new.playlist_id
+  on conflict do nothing;
+  return new;
+end $$ language plpgsql;
+
+create or replace function library_note_queue_item() returns trigger as $$
+begin
+  insert into library_items(user_id, track_id)
+  select q.user_id, new.track_id from queues q where q.id = new.queue_id
+  on conflict do nothing;
+  -- In a jam the person who queued it is not always the person whose queue it is.
+  if new.added_by is not null then
+    insert into library_items(user_id, track_id) values (new.added_by, new.track_id)
+    on conflict do nothing;
+  end if;
+  return new;
+end $$ language plpgsql;
+
+create or replace function library_note_listen() returns trigger as $$
+begin
+  insert into library_items(user_id, track_id) values (new.user_id, new.track_id)
+  on conflict do nothing;
+  return new;
+end $$ language plpgsql;
+
+drop trigger if exists library_from_playlist on playlist_items;
+create trigger library_from_playlist after insert on playlist_items
+  for each row execute function library_note_playlist_item();
+
+drop trigger if exists library_from_queue on queue_items;
+create trigger library_from_queue after insert on queue_items
+  for each row execute function library_note_queue_item();
+
+drop trigger if exists library_from_listen on listens;
+create trigger library_from_listen after insert on listens
+  for each row execute function library_note_listen();
+
+-- Seed once, from everything that was already attached to somebody. Guarded on the
+-- table being empty so that removing something from your library stays removed —
+-- otherwise the next restart would put it back.
+insert into library_items(user_id, track_id, added_at)
+select owner, track_id, min(at)
+  from (
+    select p.owner_id as owner, i.track_id, i.added_at as at
+      from playlists p join playlist_items i on i.playlist_id = p.id
+    union all
+    select q.user_id, i.track_id, q.updated_at
+      from queues q join queue_items i on i.queue_id = q.id
+    union all
+    select l.user_id, l.track_id, l.started_at from listens l
+  ) seed
+ where not exists (select 1 from library_items)
+ group by owner, track_id
+on conflict do nothing;

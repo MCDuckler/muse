@@ -154,16 +154,21 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     # ---------------- catalog ----------------
     @app.get("/search")
     def search(q: str, limit: int = 20, remote: bool = True, user: dict = Depends(current_user)):
+        # The catalog is shared, so search reaches everything on the box — but what is
+        # already in your own library comes first, and says so.
         local = db.all_(
-            """select t.*, m.path, c.color as cover_color, c.sha256 as cover_sha
+            """select t.*, m.path, c.color as cover_color, c.sha256 as cover_sha,
+                      (li.user_id is not null) as mine
                  from tracks t
                  left join media m on m.track_id=t.id and m.role='canonical'
                  left join covers c on c.id=t.cover_id
+                 left join library_items li on li.track_id=t.id and li.user_id=%s
                 where t.norm_title %% lower(%s) or t.title ilike %s
-                order by similarity(t.norm_title, lower(%s)) desc limit %s""",
-            (q, f"%{q}%", q, limit),
+                order by mine desc, similarity(t.norm_title, lower(%s)) desc limit %s""",
+            (user["id"], q, f"%{q}%", q, limit),
         )
-        out = {"local": [catalog.public(t) for t in local], "remote": []}
+        out = {"local": [{**catalog.public(t), "mine": t["mine"]} for t in local],
+               "remote": []}
         if remote:
             have = {t.get("provider_id") for t in db.all_(
                 "select provider_id from track_sources where provider='ytmusic'")}

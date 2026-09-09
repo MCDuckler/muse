@@ -37,8 +37,9 @@ def list_accounts(user: dict = Depends(current_user)):
                    "bandcamp": "Bandcamp"}[p],
          "hint": {
              "deezer": "The numeric id from your profile URL",
-             "soundcloud": "Your username, as it appears in soundcloud.com/…",
-             "bandcamp": "Your fan name, as it appears in bandcamp.com/…",
+             # Say that pasting the link works, because that is what people do.
+             "soundcloud": "Paste your profile link, or the name in it",
+             "bandcamp": "Paste your fan page link, or the name in it",
          }[p],
          "plays": p != "deezer",
          "linked": have.get(p)}

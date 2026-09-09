@@ -59,12 +59,15 @@ def resolve(body: dict = Body(...), user: dict = Depends(current_user)):
     if existing:
         if existing["state"] == "pending":
             jobs.promote(existing["id"])
+        catalog.remember(user["id"], existing["id"])
         return catalog.public(existing)
 
     meta = {"provider_id": provider_id, "title": body.get("title") or provider_id,
             "artists": body.get("artists") or [], "album": body.get("album"),
             "duration_ms": body.get("duration_ms"), "url": body.get("url")}
-    return catalog.public(catalog.create_from_source(provider, meta))
+    track = catalog.create_from_source(provider, meta)
+    catalog.remember(user["id"], track["id"])
+    return catalog.public(track)
 
 
 @router.get("/preview")

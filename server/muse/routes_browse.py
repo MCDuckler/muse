@@ -3,6 +3,10 @@
 Albums and artists are not stored as entities — they are what the enrichment pipeline
 wrote onto each track. Deriving them in a query keeps one source of truth: fix a
 track's album and the album view fixes itself, with nothing to re-import or migrate.
+
+"Your own" is the join to library_items on every query here. The catalog is shared —
+one download serves everybody — but a library is a person's, and without that join
+every account saw every track on the box.
 """
 from __future__ import annotations
 
@@ -14,7 +18,8 @@ from .deps import current_user
 router = APIRouter(prefix="/library")
 
 SORTS = {
-    "added": "t.created_at desc, t.id desc",
+    # When *you* added it, which is not when it was first downloaded for someone else.
+    "added": "li.added_at desc, t.id desc",
     "title": "lower(t.title) asc",
     "artist": "lower(coalesce(t.artists[1], '')) asc, lower(t.title) asc",
     "album": "lower(coalesce(t.album, '')) asc, lower(t.title) asc",
@@ -25,9 +30,13 @@ _TRACK_SELECT = """
     select t.*, m.path, m.bytes, m.sha256, c.color as cover_color,
            c.sha256 as cover_sha
       from tracks t
+      join library_items li on li.track_id = t.id and li.user_id = %s
       left join media m on m.track_id=t.id and m.role='canonical'
       left join covers c on c.id=t.cover_id
 """
+
+# Every query below starts with the user id, because the join above does.
+_MINE = "from tracks t join library_items li on li.track_id = t.id and li.user_id = %s"
 
 
 @router.get("/tracks")
@@ -39,9 +48,9 @@ def all_tracks(sort: str = "added", limit: int = 200, offset: int = 0,
     where = "where t.state='ready'" if ready_only else ""
     rows = db.all_(
         f"{_TRACK_SELECT} {where} order by {SORTS[sort]} limit %s offset %s",
-        (min(limit, 500), offset),
+        (user["id"], min(limit, 500), offset),
     )
-    total = db.one(f"select count(*) n from tracks t {where}")["n"]
+    total = db.one(f"select count(*) n {_MINE} {where}", (user["id"],))["n"]
     return {"items": [catalog.public(t) for t in rows], "total": total,
             "offset": offset, "sort": sort}
 
@@ -51,20 +60,20 @@ def albums(limit: int = 200, offset: int = 0, user: dict = Depends(current_user)
     """Grouped by album *and* artist: two records can share a title, and merging them
     would be a worse lie than showing two rows."""
     rows = db.all_(
-        """
+        f"""
         select t.album as name,
                coalesce(t.artists[1], 'Unknown artist') as artist,
                count(*) as tracks,
                min(t.release_year) as year,
                max(t.id) filter (where t.cover_id is not null) as cover_track_id,
                sum(coalesce(t.duration_ms, 0)) as duration_ms
-          from tracks t
+          {_MINE}
          where t.album is not null and t.album <> ''
          group by t.album, coalesce(t.artists[1], 'Unknown artist')
          order by lower(t.album)
          limit %s offset %s
         """,
-        (min(limit, 500), offset),
+        (user["id"], min(limit, 500), offset),
     )
     return {"items": [
         {**r, "cover_url": f"/tracks/{r['cover_track_id']}/cover"
@@ -76,7 +85,7 @@ def albums(limit: int = 200, offset: int = 0, user: dict = Depends(current_user)
 @router.get("/albums/tracks")
 def album_tracks(album: str, artist: str | None = None,
                  user: dict = Depends(current_user)):
-    params: tuple = (album,)
+    params: tuple = (user["id"], album)
     clause = "where t.album = %s"
     if artist:
         clause += " and coalesce(t.artists[1], 'Unknown artist') = %s"
@@ -89,17 +98,18 @@ def album_tracks(album: str, artist: str | None = None,
 def artists(limit: int = 300, offset: int = 0, user: dict = Depends(current_user)):
     """Every credited artist, not just the first: a feature is still an appearance."""
     rows = db.all_(
-        """
+        f"""
         select artist as name, count(*) as tracks,
                count(distinct album) filter (where album is not null) as albums,
                max(id) filter (where cover_id is not null) as cover_track_id
-          from (select unnest(artists) as artist, album, id, cover_id from tracks) x
+          from (select unnest(t.artists) as artist, t.album, t.id, t.cover_id
+                  {_MINE}) x
          where artist is not null and artist <> ''
          group by artist
          order by lower(artist)
          limit %s offset %s
         """,
-        (min(limit, 1000), offset),
+        (user["id"], min(limit, 1000), offset),
     )
     return {"items": [
         {**r, "cover_url": f"/tracks/{r['cover_track_id']}/cover"
@@ -112,7 +122,7 @@ def artists(limit: int = 300, offset: int = 0, user: dict = Depends(current_user
 def artist_tracks(artist: str, user: dict = Depends(current_user)):
     rows = db.all_(
         f"{_TRACK_SELECT} where %s = any(t.artists) order by lower(coalesce(t.album,'')), t.id",
-        (artist,),
+        (user["id"], artist),
     )
     return {"items": [catalog.public(t) for t in rows]}
 
@@ -129,7 +139,7 @@ def history(limit: int = 200, user: dict = Depends(current_user)):
          order by l.started_at desc
          limit %s
         """,
-        (user["id"], min(limit, 500)),
+        (user["id"], user["id"], min(limit, 500)),
     )
     return {"items": [
         {**catalog.public(r), "played_at": r["started_at"],

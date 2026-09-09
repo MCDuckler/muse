@@ -110,6 +110,23 @@ def create_from_source(provider: str, meta: dict, discovered_via: str = VIA_USER
     return track_row(row["id"])
 
 
+def remember(user_id: int, *track_ids: int) -> None:
+    """Put a track in someone's library.
+
+    Adding to a playlist or a queue does this by itself — the database does it, so no
+    caller can forget — but a track resolved straight from a search belongs to whoever
+    asked for it before it has landed anywhere.
+    """
+    ids = [t for t in track_ids if t]
+    if not ids:
+        return
+    db.run(
+        """insert into library_items(user_id, track_id)
+           select %s, unnest(%s::int[]) on conflict do nothing""",
+        (user_id, ids),
+    )
+
+
 def find_by_isrc(isrc: str | None) -> dict | None:
     """The same recording, whatever it was called on the way in.
 

@@ -41,6 +41,31 @@ ALBUMS_PER_RUN = 40
 PAUSE_BETWEEN = 0.35
 
 
+_HANDLE_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _handle_from(raw: str, host: str, what: str) -> str:
+    """The name out of whatever was pasted into the box.
+
+    Nobody types a bare handle. They paste the address bar, or the share sheet's URL
+    with its tracking parameters still attached, or the page they were actually on —
+    soundcloud.com/someone/likes. The handle is the *first* path segment; the previous
+    code took the last, so pasting a profile URL linked an account called "likes", and
+    a share link linked one called "you?si=3f2...". Both came back as "no public
+    profile with that name".
+    """
+    text = (raw or "").strip()
+    if "://" in text or host in text:
+        parsed = urllib.parse.urlsplit(text if "://" in text else "https://" + text)
+        segments = [s for s in parsed.path.split("/") if s]
+        text = segments[0] if segments else ""
+    text = text.split("?")[0].split("#")[0].strip().strip("/").lstrip("@").strip()
+    if not text or not _HANDLE_OK.match(text):
+        raise LinkError(f"That does not look like a {what} name. "
+                        f"Paste your profile link, or the name in it.")
+    return text
+
+
 def _json(url: str, data: dict | None = None) -> dict:
     body = json.dumps(data).encode() if data is not None else None
     req = urllib.request.Request(url, data=body, headers={
@@ -107,19 +132,30 @@ def _deezer_items(remote_id: str) -> list[dict]:
 
 # ---------------------------------------------------------------- SoundCloud
 def _soundcloud_profile(handle: str) -> dict:
-    handle = handle.strip().strip("/").split("/")[-1] if "soundcloud.com" in handle \
-        else handle.strip().strip("/")
-    r = subprocess.run([sources.YTDLP, "--no-warnings", "--flat-playlist", "-J",
-                        "--playlist-items", "1",
-                        f"https://soundcloud.com/{urllib.parse.quote(handle)}/tracks"],
-                       capture_output=True, text=True, timeout=120)
-    if r.returncode != 0:
-        raise LinkError("SoundCloud has no public profile with that name.")
-    data = json.loads(r.stdout or "{}")
-    # The listing is titled "Name (Tracks)"; the name is the part worth keeping.
-    name = data.get("uploader") or re.sub(r"\s*\(Tracks\)$", "",
-                                          data.get("title") or "") or handle
-    return {"handle": handle, "display_name": name}
+    handle = _handle_from(handle, "soundcloud.com", "SoundCloud")
+    quoted = urllib.parse.quote(handle)
+    # The profile itself first: most people here have never uploaded anything, and a
+    # listener's page is the one that has to work. /tracks and /likes are only a
+    # fallback for the odd account whose root page will not resolve.
+    problem = ""
+    for path in ("", "/tracks", "/likes"):
+        r = subprocess.run([sources.YTDLP, "--flat-playlist", "-J",
+                            "--playlist-items", "1",
+                            f"https://soundcloud.com/{quoted}{path}"],
+                           capture_output=True, text=True, timeout=120)
+        data = json.loads(r.stdout or "null") if r.returncode == 0 else None
+        if isinstance(data, dict) and data.get("id"):
+            # The listing is titled "Name (All)"; the name is the part worth keeping.
+            name = data.get("uploader") or re.sub(r"\s*\((All|Tracks|Likes)\)$", "",
+                                                  data.get("title") or "") or handle
+            return {"handle": handle, "display_name": name}
+        problem = (r.stderr or "").strip().splitlines()[-1] if r.stderr.strip() else problem
+
+    if "429" in problem or "rate" in problem.lower():
+        raise LinkError("SoundCloud is asking us to slow down. Try again in a minute.")
+    log.warning("soundcloud link failed for %r: %s", handle, problem[:300])
+    raise LinkError(f"SoundCloud has no public profile called “{handle}”. "
+                    "It is the name in your profile link, not your display name.")
 
 
 def _soundcloud_playlists(handle: str) -> list[dict]:
@@ -172,7 +208,7 @@ def _bandcamp_blob(username: str) -> dict:
 
 
 def _bandcamp_profile(handle: str) -> dict:
-    handle = handle.strip().strip("/").split("/")[-1]
+    handle = _handle_from(handle, "bandcamp.com", "Bandcamp fan")
     blob = _bandcamp_blob(handle)
     fan = blob.get("fan_data") or {}
     if not fan.get("fan_id"):
