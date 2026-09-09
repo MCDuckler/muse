@@ -7,16 +7,18 @@ import '../api/models.dart';
 import '../state/app_state.dart';
 import 'swipe.dart';
 
-/// The player's artwork, as a record you can watch being played.
+/// The record on the stage, and the two either side of it.
 ///
-/// At rest the jacket lies flat, the way a record sits on a table with the disc still
-/// inside it. Press play and it stands up, the disc slides a third of the way out and
-/// turns at 33⅓. Skip, and it all goes back in before the next one comes out.
+/// Three places on a shelf — left, middle, right — and every sleeve is somewhere along
+/// the line between them. Skipping does not slide a picture off and drop another one
+/// in: the middle record travels out to the left, the right-hand one arrives in the
+/// middle it just left, and the next one along comes in from off-stage. One journey,
+/// one set of positions, and every sleeve genuinely ends up where the one before it was.
 ///
-/// What it costs: two cached images per record and one turning texture. The jacket and
-/// the neighbours never repaint — only the disc's rotation does, inside its own
-/// [RepaintBoundary]. The ticker is muted by the framework whenever this route is not
-/// the one on screen, so a player in the background animates nothing at all.
+/// The disc belongs to whichever record is in the middle: it slides out of the sleeve
+/// while the song plays and goes back in when it stops. Its turning is its own
+/// animation inside a repaint boundary, so a record spinning does not repaint the two
+/// sleeves beside it sixty times a second.
 class RecordStage extends StatefulWidget {
   const RecordStage({
     super.key,
@@ -24,77 +26,165 @@ class RecordStage extends StatefulWidget {
     required this.playing,
     this.previous,
     this.next,
-    this.onPrevious,
     this.onNext,
+    this.onPrevious,
   });
 
   final Track track;
   final bool playing;
   final Track? previous;
   final Track? next;
-  /// Dragging the record sideways moves through the queue. Only the record moves:
-  /// the title and the controls stay where they are.
-  final VoidCallback? onPrevious;
   final VoidCallback? onNext;
+  final VoidCallback? onPrevious;
 
   @override
   State<RecordStage> createState() => _RecordStageState();
 }
 
+/// One sleeve, and where it is on the line. `slot` is -1, 0 or 1 at rest.
+class _Card {
+  const _Card(this.track, this.slot);
+  final Track track;
+  final double slot;
+}
+
 class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin {
-  /// 0 = flat on the table with the disc inside, 1 = standing with the disc out.
-  late final AnimationController _stand = AnimationController(
+  /// How far along the journey between one arrangement and the next, 0 to 1. The
+  /// direction is [_heading]: +1 means everything moves one place to the left.
+  late final AnimationController _travel = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 620),
-    reverseDuration: const Duration(milliseconds: 380),
+    duration: const Duration(milliseconds: 520),
   );
 
-  /// One turn every 1.8 s, which is 33⅓ rpm — the speed the record would actually run.
+  /// The disc, out of the sleeve and back in. Separate from the journey because a
+  /// record can start and stop playing without anything moving along the shelf.
+  late final AnimationController _out = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 520),
+    reverseDuration: const Duration(milliseconds: 340),
+  );
+
+  /// One turn every 1.8 s, which is 33⅓ rpm — the speed the record would really run.
   late final AnimationController _spin = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 1800),
   );
 
+  int _heading = 0;
+
+  /// What is on the shelf right now. Held separately from the widget so a skip can be
+  /// *travelled to* rather than appearing already finished.
+  Track? _left;
+  late Track _middle;
+  Track? _right;
+
+  /// The sleeve coming in from off-stage during a journey.
+  Track? _incoming;
+
   @override
   void initState() {
     super.initState();
+    _left = widget.previous;
+    _middle = widget.track;
+    _right = widget.next;
     if (widget.playing) {
-      _stand.value = 1;
+      _out.value = 1;
       _spin.repeat();
     }
+    _travel.addStatusListener((status) {
+      if (status != AnimationStatus.completed) return;
+      // Arrived: the arrangement the journey was heading for is now simply the truth.
+      setState(() {
+        _left = widget.previous;
+        _middle = widget.track;
+        _right = widget.next;
+        _incoming = null;
+        _heading = 0;
+        _travel.value = 0;
+      });
+    });
   }
 
   @override
   void didUpdateWidget(RecordStage old) {
     super.didUpdateWidget(old);
-    if (old.track.id != widget.track.id) {
-      // A different record: this one has not been taken out of its sleeve yet.
-      _stand.value = 0;
+
+    if (widget.track.id != _middle.id) {
+      final forwards = _right?.id == widget.track.id;
+      final backwards = _left?.id == widget.track.id;
+
+      if (forwards || backwards) {
+        // A step along the shelf. Everything slides one place; the sleeve that was
+        // next is now the one in the middle, in the place the middle one has left.
+        _heading = forwards ? 1 : -1;
+        _incoming = forwards ? widget.next : widget.previous;
+        _travel.forward(from: 0);
+        // A new record has not been taken out of its sleeve yet.
+        _out.value = 0;
+      } else {
+        // Somewhere else entirely — a different queue, a tap on a distant row. There
+        // is no journey between those, so the shelf is simply restocked.
+        _left = widget.previous;
+        _middle = widget.track;
+        _right = widget.next;
+        _incoming = null;
+        _heading = 0;
+        _travel.value = 0;
+        _out.value = 0;
+      }
+    } else if (old.previous?.id != widget.previous?.id ||
+        old.next?.id != widget.next?.id) {
+      // The neighbours changed under us — the queue was edited. No journey, just the
+      // new company.
+      if (!_travel.isAnimating) {
+        _left = widget.previous;
+        _right = widget.next;
+      }
     }
+
     if (widget.playing) {
-      _stand.forward();
+      _out.forward();
       if (!_spin.isAnimating) _spin.repeat();
     } else {
-      _stand.reverse();
-      _spin.stop();          // stops where it is, like a turntable winding down
+      // At rest the record goes back in its sleeve and the turntable stops where it
+      // is. It does not lie down: a sleeve tipping over every time you pause reads as
+      // something going wrong rather than as something stopping.
+      _out.reverse();
+      _spin.stop();
     }
   }
 
   @override
   void dispose() {
-    _stand.dispose();
+    _travel.dispose();
+    _out.dispose();
     _spin.dispose();
     super.dispose();
+  }
+
+  /// Everything on stage, with the slot each one occupies at rest.
+  List<_Card> _cards() {
+    final out = <_Card>[
+      if (_left != null) _Card(_left!, -1),
+      _Card(_middle, 0),
+      if (_right != null) _Card(_right!, 1),
+    ];
+    if (_incoming != null && _heading != 0) {
+      // Waiting just off-stage, on the side it will come in from.
+      out.add(_Card(_incoming!, 2.0 * _heading));
+    }
+    return out;
   }
 
   @override
   Widget build(BuildContext context) {
     final api = context.read<AppState>().api;
+
     return LayoutBuilder(
       builder: (context, c) {
-        final side = math.min(c.maxWidth, c.maxHeight.isFinite ? c.maxHeight : c.maxWidth);
+        final side =
+            math.min(c.maxWidth, c.maxHeight.isFinite ? c.maxHeight : c.maxWidth);
         final jacket = side * 0.60;
-        final disc = jacket * 0.92;
 
         return SizedBox(
           width: side,
@@ -104,54 +194,45 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
             onSwipeRight: widget.onPrevious,
             horizontalTravel: side * 0.22,
             child: AnimatedBuilder(
-            animation: _stand,
-            builder: (context, _) {
-              final t = Curves.easeOutCubic.transform(_stand.value);
-              return Stack(
-                alignment: Alignment.center,
-                clipBehavior: Clip.none,
-                children: [
-                  _Floor(side: side, jacket: jacket, stand: t),
-                  if (widget.previous != null)
-                    _Neighbour(
-                        url: api.jacketUrl(widget.previous!, small: true),
-                        side: side * 0.30,
-                        dx: -side * 0.45,
-                        turn: 0.78,
-                        lean: _laidBack * (1 - t) * 0.6,
-                        settle: t),
-                  if (widget.next != null)
-                    _Neighbour(
-                        url: api.jacketUrl(widget.next!, small: true),
-                        side: side * 0.30,
-                        dx: side * 0.45,
-                        turn: -0.78,
-                        lean: _laidBack * (1 - t) * 0.6,
-                        settle: t),
-                  // Jacket and disc share one transform because they are one object:
-                  // the record is inside the sleeve, and tips with it. Sliding out is
-                  // a move along the sleeve's own plane, not across the screen.
-                  Transform.translate(
-                    offset: Offset(-side * 0.09 * t, 0),
-                    child: Transform(
-                      alignment: Alignment.bottomCenter,
-                      transform: Matrix4.identity()
-                        ..setEntry(3, 2, 0.0011)
-                        ..rotateX(_laidBack * (1 - t)),
-                      child: Stack(
-                        alignment: Alignment.center,
-                        clipBehavior: Clip.none,
-                        children: [
-                          _Disc(spin: _spin, url: api.discUrl(widget.track),
-                              size: disc, out: t, jacket: jacket),
-                          _Jacket(url: api.jacketUrl(widget.track), size: jacket),
-                        ],
+              animation: Listenable.merge([_travel, _out]),
+              builder: (context, _) {
+                final p = Curves.easeInOutCubic.transform(_travel.value) * _heading;
+                final cards = _cards();
+
+                // Painted back to front: the ones furthest from the middle first, so
+                // the record being listened to is in front of its neighbours however
+                // far along the journey everything is.
+                final ordered = [...cards]..sort((a, b) =>
+                    (b.slot - p).abs().compareTo((a.slot - p).abs()));
+
+                return Stack(
+                  alignment: Alignment.center,
+                  clipBehavior: Clip.none,
+                  children: [
+                    _Floor(side: side, jacket: jacket, stand: _out.value),
+                    for (final card in ordered)
+                      _Sleeve(
+                        // Keyed by the place as well as the record: a queue of two
+                        // has the same track to the left and to the right of you, and
+                        // two children of one Stack may not share a key. The place is
+                        // fixed for the length of a journey, so identity still holds
+                        // while everything moves.
+                        key: ValueKey('${card.track.id}@${card.slot}'),
+                        // Where it is *now*: its own place, less how far the whole
+                        // shelf has travelled. At p = 1 the right-hand sleeve sits at
+                        // 0 — the middle — which is the point of the whole thing.
+                        d: card.slot - p,
+                        side: side,
+                        jacket: jacket,
+                        jacketUrl: api.jacketUrl(card.track,
+                            small: (card.slot - p).abs() > 0.5),
+                        discUrl: api.discUrl(card.track),
+                        spin: _spin,
+                        out: _out.value,
                       ),
-                    ),
-                  ),
-                ],
-              );
-            },
+                  ],
+                );
+              },
             ),
           ),
         );
@@ -160,8 +241,85 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
   }
 }
 
-/// The ground the record stands on: a soft shadow that spreads as it lies down and
-/// tightens under the sleeve as it stands up. Drawn, not an image — one gradient.
+/// One record, placed by how far it is from the middle.
+///
+/// [d] is a distance in shelf places: 0 is the middle, ±1 are the two beside it, and
+/// anything beyond that is off-stage. Everything about the pose — where it sits, how
+/// big it is, how far it is turned away, whether its disc is showing — is a function
+/// of that one number, which is what makes the movement continuous rather than a set
+/// of separate animations that have to be kept in step.
+class _Sleeve extends StatelessWidget {
+  const _Sleeve({
+    super.key,
+    required this.d,
+    required this.side,
+    required this.jacket,
+    required this.jacketUrl,
+    required this.discUrl,
+    required this.spin,
+    required this.out,
+  });
+
+  final double d;
+  final double side;
+  final double jacket;
+  final String? jacketUrl;
+  final String? discUrl;
+  final Animation<double> spin;
+  final double out;
+
+  @override
+  Widget build(BuildContext context) {
+    if (jacketUrl == null) return const SizedBox.shrink();
+
+    final away = d.abs();
+    if (away > 2.2) return const SizedBox.shrink();
+
+    // Nearer the edges the shelf is deeper, so the steps between places get shorter.
+    final x = side * 0.45 * d * (1 - 0.08 * away);
+    final scale = (1 - 0.42 * away.clamp(0.0, 1.6)).clamp(0.24, 1.0);
+    final turn = -0.78 * d.clamp(-1.4, 1.4);
+    final fade = away <= 1 ? 1.0 - 0.62 * away : (1.9 - away).clamp(0.0, 1.0) * 0.38;
+
+    // Only whatever is in the middle has its record out, and only as far as it is
+    // actually in the middle: a sleeve halfway to the edge has put it away again.
+    final centre = (1 - away).clamp(0.0, 1.0);
+    final showing = out * centre;
+
+    return Transform(
+      alignment: Alignment.center,
+      transform: Matrix4.identity()
+        ..setEntry(3, 2, 0.0011)
+        ..translateByDouble(x, 0.0, 0.0, 1.0)
+        ..rotateY(turn)
+        ..scaleByDouble(scale, scale, 1.0, 1.0),
+      child: Opacity(
+        opacity: fade.clamp(0.0, 1.0),
+        child: SizedBox(
+          width: jacket,
+          height: jacket,
+          child: Stack(
+            alignment: Alignment.center,
+            clipBehavior: Clip.none,
+            children: [
+              if (showing > 0.01)
+                _Disc(
+                    spin: spin,
+                    url: discUrl,
+                    size: jacket * 0.92,
+                    out: showing,
+                    jacket: jacket),
+              _Jacket(url: jacketUrl, size: jacket),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The ground the record stands on: a soft shadow that tightens under the sleeve as
+/// the disc comes out. Drawn, not an image — one gradient.
 class _Floor extends StatelessWidget {
   const _Floor({required this.side, required this.jacket, required this.stand});
 
@@ -172,15 +330,15 @@ class _Floor extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Transform.translate(
-      offset: Offset(-side * 0.09 * stand, jacket * (0.52 - 0.10 * stand)),
+      offset: Offset(-side * 0.05 * stand, jacket * 0.54),
       child: Container(
-        width: jacket * (1.15 - 0.25 * stand),
-        height: jacket * (0.30 - 0.16 * stand),
+        width: jacket * (1.02 + 0.16 * stand),
+        height: jacket * 0.16,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.all(Radius.elliptical(jacket, jacket * 0.2)),
           gradient: RadialGradient(
             colors: [
-              Colors.black.withValues(alpha: 0.40 - 0.10 * stand),
+              Colors.black.withValues(alpha: 0.34),
               Colors.black.withValues(alpha: 0),
             ],
           ),
@@ -189,11 +347,6 @@ class _Floor extends StatelessWidget {
     );
   }
 }
-
-/// How far the record lies back at rest. Not quite the full ninety degrees: past about
-/// seventy the artwork stops being artwork and becomes a stripe, and this is still the
-/// picture of the song you are listening to.
-const double _laidBack = 1.20;                 // radians, ≈69°
 
 /// The cardboard. Its pose comes from the stage; here it is just the picture.
 class _Jacket extends StatelessWidget {
@@ -232,11 +385,8 @@ class _Disc extends StatelessWidget {
   Widget build(BuildContext context) {
     if (url == null) return const SizedBox.shrink();
     // A third of the way out of the sleeve, along the sleeve's own plane.
-    final dx = jacket * 0.34 * out;
-    const dy = 0.0;
-
     return Transform.translate(
-      offset: Offset(dx, dy),
+      offset: Offset(jacket * 0.34 * out, 0),
       child: RepaintBoundary(
         child: AnimatedBuilder(
           animation: spin,
@@ -250,50 +400,6 @@ class _Disc extends StatelessWidget {
             height: size,
             child: Image.network(url!, fit: BoxFit.contain, gaplessPlayback: true),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-/// What is coming next, and what just played: turned away at the edges of the stage,
-/// so the queue is something you can see rather than something you have to remember.
-class _Neighbour extends StatelessWidget {
-  const _Neighbour({
-    required this.url,
-    required this.side,
-    required this.dx,
-    required this.turn,
-    required this.lean,
-    required this.settle,
-  });
-
-  final String? url;
-  final double side;
-  final double dx;
-  final double turn;
-  /// They lean with the record in front of them, so the three read as one crate
-  /// rather than as a record with two posters behind it.
-  final double lean;
-  final double settle;
-
-  @override
-  Widget build(BuildContext context) {
-    if (url == null) return const SizedBox.shrink();
-    return Transform(
-      alignment: Alignment.center,
-      transform: Matrix4.identity()
-        ..setEntry(3, 2, 0.0011)
-        ..translateByDouble(dx, 0.0, 0.0, 1.0)
-        ..rotateY(turn)
-        ..rotateX(lean),
-      child: Opacity(
-        // They fade back a little as the current record stands up and takes over.
-        opacity: 0.34 - 0.10 * settle,
-        child: SizedBox(
-          width: side,
-          height: side,
-          child: Image.network(url!, fit: BoxFit.contain, gaplessPlayback: true),
         ),
       ),
     );

@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api/client.dart';
 import '../api/models.dart';
 import 'player.dart';
+import '../ui/theme.dart';
 
 /// One place the UI reads from. Deliberately small: the server is the truth, and a
 /// local mirror (drift) is a later phase, not something to half-build now.
@@ -81,11 +82,36 @@ class AppState extends ChangeNotifier {
   static const _kServer = 'muse.server';
   static const _kToken = 'muse.token';
   static const _kCoverStyle = 'muse.coverStyle';
+  static const _kPalette = 'muse.palette';
+  static const _kHalftone = 'muse.halftone';
 
   /// How the player draws the artwork: as the record it came on, or as the cover on
   /// its own. A per-device choice — the phone in a pocket and the laptop on a desk are
   /// not the same screen.
   CoverStyle coverStyle = CoverStyle.record;
+
+  /// The colours. Per device like the cover style, because a phone at night and a
+  /// laptop in a bright room do not want the same thing.
+  Palette palette = Palette.ember;
+
+  Future<void> setPalette(Palette next) async {
+    palette = next;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kPalette, next.id);
+  }
+
+  /// The printed pattern behind the record. On by default: it is ambience, and the
+  /// screen is emptier without it — but a phone with a small battery is a good reason
+  /// to turn a moving background off, so it is a switch and not a fact.
+  bool halftone = true;
+
+  Future<void> setHalftone(bool on) async {
+    halftone = on;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kHalftone, on);
+  }
 
   Future<void> setCoverStyle(CoverStyle style) async {
     coverStyle = style;
@@ -99,6 +125,8 @@ class AppState extends ChangeNotifier {
     coverStyle = CoverStyle.values.firstWhere(
         (s) => s.name == prefs.getString(_kCoverStyle),
         orElse: () => CoverStyle.record);
+    palette = Palette.byId(prefs.getString(_kPalette));
+    halftone = prefs.getBool(_kHalftone) ?? true;
     api = ApiClient(
       // Served from the box itself on web, so the page's own origin is the server —
       // no one should have to type a URL into a page they loaded from that URL.

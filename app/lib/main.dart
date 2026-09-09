@@ -55,13 +55,17 @@ class MuseApp extends StatelessWidget {
         debugAppState = state;
         return state;
       },
-      child: MaterialApp(
+      // Watched, not read: changing the palette has to repaint the whole app, and the
+      // app is what holds the theme.
+      child: Consumer<AppState>(
+        builder: (context, app, _) => MaterialApp(
         title: 'muse',
         debugShowCheckedModeBanner: false,
-        theme: MuseTheme.light(),
-        darkTheme: MuseTheme.dark(),
+        theme: MuseTheme.light(app.palette),
+        darkTheme: MuseTheme.dark(app.palette),
         builder: (context, child) => _AnyTap(child: child ?? const SizedBox()),
         home: const _Root(),
+        ),
       ),
     );
   }

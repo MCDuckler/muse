@@ -10,6 +10,7 @@ import 'services_page.dart';
 import 'accounts_page.dart';
 import 'spotify_page.dart';
 import 'track_menu.dart';
+import 'theme.dart';
 
 const appVersion = '0.1.0';
 
@@ -149,6 +150,38 @@ class _SettingsPageState extends State<SettingsPage> {
               // ignore: deprecated_member_use
               onChanged: (v) => v == null ? null : app.setCoverStyle(v),
             ),
+          SwitchListTile(
+            secondary: const Icon(Icons.grain),
+            title: const Text('Printed background'),
+            subtitle: const Text(
+                'A halftone screen behind the record, breathing with the song'),
+            value: app.halftone,
+            onChanged: app.setHalftone,
+          ),
+          const Divider(),
+          _label(context, 'Colours'),
+          // Swatches rather than a list of names: the choice is a look, and reading
+          // "Midnight" tells you less than seeing it.
+          SizedBox(
+            height: 96,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              children: [
+                for (final palette in Palette.all)
+                  _Swatch(
+                    palette: palette,
+                    selected: app.palette.id == palette.id,
+                    onTap: () => app.setPalette(palette),
+                  ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
+            child: Text(app.palette.blurb,
+                style: Theme.of(context).textTheme.bodySmall),
+          ),
           const Divider(),
           _label(context, 'Downloads'),
           ListTile(
@@ -235,4 +268,61 @@ class _SettingsPageState extends State<SettingsPage> {
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
                 color: Theme.of(context).colorScheme.onSurfaceVariant)),
       );
+}
+
+
+/// One palette, as the two colours it is made of.
+class _Swatch extends StatelessWidget {
+  const _Swatch({
+    required this.palette,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final Palette palette;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final ground = dark ? palette.groundDark : palette.groundLight;
+    final accent = dark ? palette.accentDark : palette.accentLight;
+
+    return Padding(
+      padding: const EdgeInsets.only(right: 10),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: ground,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: selected
+                      ? accent
+                      : Theme.of(context).colorScheme.outlineVariant,
+                  width: selected ? 2.5 : 1,
+                ),
+              ),
+              child: Center(
+                child: Container(
+                  width: 22,
+                  height: 22,
+                  decoration: BoxDecoration(color: accent, shape: BoxShape.circle),
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(palette.name, style: Theme.of(context).textTheme.labelSmall),
+          ],
+        ),
+      ),
+    );
+  }
 }

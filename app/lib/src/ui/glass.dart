@@ -65,10 +65,19 @@ class GlassSurface extends StatelessWidget {
 /// with a picture on it. The colour comes from the server, which already has the image
 /// decoded, so the client never pays to analyse artwork.
 class AmbientBackdrop extends StatelessWidget {
-  const AmbientBackdrop({super.key, required this.colour, required this.child});
+  const AmbientBackdrop({
+    super.key,
+    required this.colour,
+    required this.child,
+    this.behind,
+  });
 
   final Color? colour;
   final Widget child;
+
+  /// Drawn over the wash and under the content, filling the same box. A wrapper around
+  /// [child] would change the constraints it is laid out with; this does not.
+  final Widget? behind;
 
   @override
   Widget build(BuildContext context) {
@@ -98,6 +107,7 @@ class AmbientBackdrop extends StatelessWidget {
             ),
           ),
         ),
+        if (behind != null) Positioned.fill(child: behind!),
         child,
       ],
     );

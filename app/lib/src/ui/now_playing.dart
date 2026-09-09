@@ -14,6 +14,7 @@ import 'up_next.dart';
 import 'song_row.dart';
 import 'browse_page.dart';
 import 'jam_page.dart';
+import 'halftone.dart';
 
 String formatTime(Duration d) {
   final m = d.inMinutes;
@@ -68,6 +69,15 @@ class NowPlayingScreen extends StatelessWidget {
             fadeWithDrag: true,
             child: AmbientBackdrop(
             colour: parseHexColour(track?.coverColor),
+            // The album's own colour where it has one, so the page belongs to the
+            // record rather than to the app.
+            behind: app.halftone
+                ? HalftoneBackdrop(
+                    colour: parseHexColour(track?.coverColor),
+                    playing: s?.playing ?? false,
+                    loudnessDb: track?.loudnessLufs,
+                  )
+                : null,
             child: track == null
               ? const Center(child: Text('Nothing playing'))
               : SafeArea(

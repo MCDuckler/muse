@@ -327,6 +327,17 @@ void main() {
     await binding.takeScreenshot('player-standing-up');
     await settle(tester, seconds: 2);
 
+    // Skipping is one journey along the shelf, so the sleeve that was next has to end
+    // up in the middle. Caught here because the record only ever *looks* wrong: the
+    // shot is the evidence, and the assertion is that the thing still stands after it.
+    await appState.player!.next();
+    await settle(tester);
+    await binding.takeScreenshot('player-mid-skip');
+    await settle(tester, seconds: 3);
+    await binding.takeScreenshot('player-after-skip');
+    expect(find.byType(RecordStage), findsOneWidget,
+        reason: 'the stage must survive a skip');
+
     final beforeSeek = app.debugPlayerSnapshot()!.position;
     final scrubber = find.byType(Slider).first;
     await tester.tap(scrubber);            // taps the middle of the track
@@ -507,12 +518,21 @@ void main() {
         reason: 'should be back on the shell. On screen: ${visibleText(tester)}');
     await tester.tap(find.byIcon(Icons.settings_outlined));
     await settle(tester, seconds: 3);
+    // The page's own list, not any scrollable on it: the colour swatches are a
+    // horizontal strip, and "the last scrollable" quietly became that.
+    final settingsList = find.byWidgetPredicate(
+        (w) => w is Scrollable && w.axisDirection == AxisDirection.down);
     await tester.scrollUntilVisible(find.text('Album cover'), 120,
-        scrollable: find.byType(Scrollable).last);
+        scrollable: settingsList.last);
     await settle(tester, seconds: 1);
     await tester.tap(find.text('Album cover'));
     await settle(tester, seconds: 2);
     expect(appState.coverStyle, CoverStyle.flat);
+    // Scroll to it as well: the settings page has grown, and "visible earlier" is not
+    // the same as "still on screen".
+    await tester.scrollUntilVisible(find.text('Record'), -120,
+        scrollable: settingsList.last);
+    await settle(tester, seconds: 1);
     await tester.tap(find.text('Record'));
     await settle(tester, seconds: 2);
     expect(appState.coverStyle, CoverStyle.record,

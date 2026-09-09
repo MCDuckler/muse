@@ -15,6 +15,10 @@ class Track {
   final String source; // youtube | soundcloud | bandcamp | custom
   final String? discoveredVia;
   final double? gainDb;
+
+  /// How loud the track was measured to be, in LUFS. The player normalises with
+  /// [gainDb]; this is the raw figure, and it is what the halftone breathes to.
+  final double? loudnessLufs;
   final int? bytes;
   final String? streamPath;
   final String? coverPath;
@@ -42,6 +46,7 @@ class Track {
     required this.source,
     this.discoveredVia,
     this.gainDb,
+    this.loudnessLufs,
     this.bytes,
     this.streamPath,
     this.coverPath,
@@ -67,6 +72,7 @@ class Track {
         source: source,
         discoveredVia: discoveredVia,
         gainDb: gainDb,
+        loudnessLufs: loudnessLufs,
         bytes: bytes,
         streamPath: streamPath,
         coverPath: coverPath,
@@ -149,6 +155,7 @@ class Track {
         source: (j['source'] ?? 'youtube') as String,
         discoveredVia: j['discovered_via'] as String?,
         gainDb: (j['gain_db'] as num?)?.toDouble(),
+        loudnessLufs: (j['loudness_lufs'] as num?)?.toDouble(),
         bytes: j['bytes'] as int?,
         streamPath: j['stream_url'] as String?,
         coverPath: j['cover_url'] as String?,
