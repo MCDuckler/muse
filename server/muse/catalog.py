@@ -81,7 +81,8 @@ def find_by_video_id(video_id: str) -> dict | None:
 def create_from_source(provider: str, meta: dict, discovered_via: str = VIA_USER,
                        priority: int = jobs.PRIORITY_NORMAL,
                        batch_id: str | None = None,
-                       batch_label: str | None = None) -> dict:
+                       batch_label: str | None = None,
+                       download: bool = True) -> dict:
     """A track from somewhere the server fetches itself: SoundCloud, Bandcamp.
 
     Same shape as the YouTube path, different lane. The job goes to `ingest_direct`,
@@ -100,10 +101,11 @@ def create_from_source(provider: str, meta: dict, discovered_via: str = VIA_USER
         "insert into track_sources(track_id,provider,provider_id,raw) values(%s,%s,%s,%s)",
         (row["id"], provider, meta["provider_id"], json.dumps(meta.get("raw") or meta)),
     )
-    jobs.enqueue("ingest_direct",
-                 {"track_id": row["id"], "provider": provider,
-                  "ref": meta.get("url") or meta["provider_id"]},
-                 priority=priority, batch_id=batch_id, batch_label=batch_label)
+    if download:
+        jobs.enqueue("ingest_direct",
+                     {"track_id": row["id"], "provider": provider,
+                      "ref": meta.get("url") or meta["provider_id"]},
+                     priority=priority, batch_id=batch_id, batch_label=batch_label)
     jobs.enqueue("meta", {"track_id": row["id"]}, batch_id=batch_id)
     return track_row(row["id"])
 

@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import re
 import subprocess
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -20,8 +23,22 @@ from . import db, sources
 PROVIDERS = ("deezer", "soundcloud", "bandcamp")
 
 
+log = logging.getLogger("muse.linked")
+
+
 class LinkError(RuntimeError):
     """Something to show the person who typed the name."""
+
+
+class RateLimited(RuntimeError):
+    """Asked to slow down. Not a failure — come back to it."""
+
+
+# A wishlist can be over a thousand records, and each one is a page fetch. Taken in
+# runs, with a pause between requests: a burst of a thousand is how a 429 happens, and
+# a mirror that gets itself blocked is worse than a slow one.
+ALBUMS_PER_RUN = 40
+PAUSE_BETWEEN = 0.35
 
 
 def _json(url: str, data: dict | None = None) -> dict:
@@ -30,7 +47,12 @@ def _json(url: str, data: dict | None = None) -> dict:
         "User-Agent": sources.UA,
         **({"Content-Type": "application/json"} if data is not None else {}),
     })
-    return json.loads(urllib.request.urlopen(req, timeout=30).read())
+    try:
+        return json.loads(urllib.request.urlopen(req, timeout=30).read())
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            raise RateLimited(str(e)) from e
+        raise
 
 
 # ---------------------------------------------------------------- Deezer
@@ -171,51 +193,63 @@ def _bandcamp_playlists(handle: str) -> list[dict]:
     ]
 
 
-def _bandcamp_items(remote_id: str, limit: int = 300) -> list[dict]:
-    """Every record in a collection, then every track on those records.
+def _bandcamp_albums(handle: str, which: str) -> list[str]:
+    """Every record in a collection or wishlist, as page URLs."""
+    blob = _bandcamp_blob(handle)
+    fan = (blob.get("fan_data") or {}).get("fan_id")
+    endpoint = "wishlist_items" if which == "wishlist" else "collection_items"
+    urls, token = [], "9999999999::a::"
+    while True:
+        page = _json(f"https://bandcamp.com/api/fancollection/1/{endpoint}",
+                     {"fan_id": fan, "older_than_token": token, "count": 100})
+        items = page.get("items") or []
+        urls += [it["item_url"] for it in items if it.get("item_url")]
+        token = page.get("last_token") or token
+        if not items or not page.get("more_available"):
+            return urls
+        time.sleep(PAUSE_BETWEEN)
+
+
+def _bandcamp_items(remote_id: str, offset: int = 0) -> tuple[list[dict], int | None]:
+    """A run of records from a collection or wishlist, and where to carry on.
 
     A Bandcamp collection is albums, not songs, and each album page carries its own
     tracklist — so this is one request per record rather than one per song, and the
-    metadata is what the artist typed.
+    metadata is what the artist typed. It is also why this has to be taken in runs: a
+    wishlist of thirteen hundred records is thirteen hundred page fetches, and asking
+    for them all at once gets the address blocked.
     """
     handle, _, which = remote_id.partition("/")
-    blob = _bandcamp_blob(handle)
-    fan = (blob.get("fan_data") or {}).get("fan_id")
-    endpoint = ("collection_items" if which != "wishlist" else "wishlist_items")
-
-    albums, token, seen = [], "9999999999::a::", 0
-    while len(albums) < limit:
-        page = _json(f"https://bandcamp.com/api/fancollection/1/{endpoint}",
-                     {"fan_id": fan, "older_than_token": token, "count": 50})
-        items = page.get("items") or []
-        if not items:
-            break
-        for it in items:
-            if it.get("item_url"):
-                albums.append(it["item_url"])
-        token = page.get("last_token") or token
-        seen += len(items)
-        if not page.get("more_available"):
-            break
+    albums = _bandcamp_albums(handle, which)
+    run = albums[offset:offset + ALBUMS_PER_RUN]
 
     out = []
-    for url in albums[:limit]:
+    for n, url in enumerate(run):
+        if n:
+            time.sleep(PAUSE_BETWEEN)
         try:
-            for t in sources.bandcamp_tracks(url):
-                if not t["streamable"]:
+            for track in sources.bandcamp_tracks(url):
+                if not track["streamable"]:
                     continue
                 out.append({
-                    "remote_id": t["provider_id"],
-                    "title": t["title"],
-                    "artists": t["artists"],
-                    "album": t["album"],
-                    "duration_ms": t["duration_ms"],
-                    "source": {"provider": "bandcamp", "provider_id": t["provider_id"],
-                               "url": t["url"]},
+                    "remote_id": track["provider_id"],
+                    "title": track["title"],
+                    "artists": track["artists"],
+                    "album": track["album"],
+                    "duration_ms": track["duration_ms"],
+                    "source": {"provider": "bandcamp",
+                               "provider_id": track["provider_id"],
+                               "url": track["url"]},
                 })
+        except RateLimited:
+            # Stop here and keep what we have; the rest is a later run's problem.
+            log.info("bandcamp asked us to slow down at record %s", offset + n)
+            return out, offset + n
         except sources.SourceError:
-            continue                      # one record being odd is not the collection
-    return out
+            continue                      # one odd record is not the collection
+
+    done = offset + len(run)
+    return out, (done if done < len(albums) else None)
 
 
 # ---------------------------------------------------------------- registry
@@ -237,8 +271,12 @@ def playlists(provider: str, handle: str) -> list[dict]:
     return _PLAYLISTS[provider](handle)
 
 
-def items(provider: str, remote_id: str) -> list[dict]:
-    return _ITEMS[provider](remote_id)
+def items(provider: str, remote_id: str,
+          offset: int = 0) -> tuple[list[dict], int | None]:
+    """A run of tracks, and where to resume — None when that was all of them."""
+    if provider == "bandcamp":
+        return _bandcamp_items(remote_id, offset)
+    return _ITEMS[provider](remote_id), None
 
 
 # ---------------------------------------------------------------- storage

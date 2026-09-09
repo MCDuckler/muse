@@ -64,12 +64,12 @@ def test_playlists_need_a_link_first(client, hdr):
 def test_a_soundcloud_mirror_needs_no_matching(client, hdr, monkeypatch):
     """The list hands back the track itself. Matching exists for services that only
     tell you a title and an artist — here there is nothing to guess."""
-    monkeypatch.setattr(linked, "items", lambda provider, remote_id: [
+    monkeypatch.setattr(linked, "items", lambda provider, remote_id, offset=0: ([
         {"remote_id": "1", "title": "Awake", "artists": ["Tycho"], "album": None,
          "duration_ms": 283_682,
          "source": {"provider": "soundcloud", "provider_id": "115300435",
                     "url": "https://api.soundcloud.com/tracks/115300435"}},
-    ])
+    ], None))
 
     out = routes_linked.run_mirror_job(
         {"provider": "soundcloud", "user_id": 1, "remote_id": "tycho/likes",
@@ -88,14 +88,17 @@ def test_a_soundcloud_mirror_needs_no_matching(client, hdr, monkeypatch):
 def test_a_big_mirror_leaves_the_audio_until_it_is_played(client, hdr, monkeypatch):
     many = [{"remote_id": str(n), "title": f"Song {n}", "artists": ["Someone"],
              "album": None, "duration_ms": 200_000} for n in range(routes_linked.BIG_MIRROR + 1)]
-    monkeypatch.setattr(linked, "items", lambda provider, remote_id: many)
+    monkeypatch.setattr(linked, "items",
+                        lambda provider, remote_id, offset=0: (many, None))
     monkeypatch.setattr("muse.sync.resolve_item",
                         lambda *a, **k: {"track_id": None, "confidence": 0.0,
                                          "method": "stub", "verdict": "review"})
 
     out = routes_linked.run_mirror_job(
         {"provider": "deezer", "user_id": 1, "remote_id": "42", "name": "Big"})
-    assert out["download_mode"] == "on_play"
+    assert db.one("select download_mode from playlists where id=%s",
+                  (out["playlist_id"],))["download_mode"] == "on_play", \
+        "past a few hundred songs a mirror is a library, and the audio waits"
 
 
 def test_a_bandcamp_collection_is_albums_not_songs(monkeypatch):
@@ -104,6 +107,7 @@ def test_a_bandcamp_collection_is_albums_not_songs(monkeypatch):
     monkeypatch.setattr(linked, "_json", lambda url, data=None: {
         "items": [{"item_url": "https://a.bandcamp.com/album/one"}],
         "more_available": False, "last_token": "t"})
+    monkeypatch.setattr(linked.time, "sleep", lambda s: None)
     monkeypatch.setattr(sources, "bandcamp_tracks", lambda url: [
         {"provider_id": "11", "title": "Track one", "artists": ["A band"],
          "album": "One", "duration_ms": 100_000, "url": url, "streamable": True},
@@ -111,6 +115,66 @@ def test_a_bandcamp_collection_is_albums_not_songs(monkeypatch):
          "album": "One", "duration_ms": 100_000, "url": url, "streamable": False},
     ])
 
-    got = linked._bandcamp_items("someone/collection")
+    got, resume = linked._bandcamp_items("someone/collection")
     assert [t["title"] for t in got] == ["Track one"], "what cannot be streamed is left out"
     assert got[0]["source"]["provider"] == "bandcamp"
+    assert resume is None, "one record, and that was all of them"
+
+
+def test_a_wishlist_of_a_thousand_records_arrives_in_runs(monkeypatch):
+    """Each record is a page fetch. Asking for thirteen hundred at once is how the
+    address gets blocked — which is exactly what happened to a real wishlist."""
+    albums = [f"https://a.bandcamp.com/album/{n}" for n in range(100)]
+    monkeypatch.setattr(linked, "_bandcamp_albums", lambda h, w: albums)
+    monkeypatch.setattr(linked.time, "sleep", lambda s: None)
+    fetched = []
+
+    def one_track(url):
+        fetched.append(url)
+        return [{"provider_id": url[-2:], "title": f"Track {url[-2:]}",
+                 "artists": ["A band"], "album": "An album", "duration_ms": 100_000,
+                 "url": url, "streamable": True}]
+
+    monkeypatch.setattr(sources, "bandcamp_tracks", one_track)
+
+    first, resume = linked._bandcamp_items("someone/wishlist")
+    assert len(first) == linked.ALBUMS_PER_RUN, "a bounded run, not the lot"
+    assert resume == linked.ALBUMS_PER_RUN
+
+    second, resume2 = linked._bandcamp_items("someone/wishlist", offset=resume)
+    assert resume2 == 2 * linked.ALBUMS_PER_RUN
+    assert fetched[resume] == albums[resume], "and it carries on where it stopped"
+
+
+def test_being_rate_limited_keeps_what_it_got(monkeypatch):
+    """Bandcamp said 429 partway through a real wishlist and the whole job failed three
+    times over. Now the run stops, keeps its records, and says where to resume."""
+    albums = [f"https://a.bandcamp.com/album/{n}" for n in range(10)]
+    monkeypatch.setattr(linked, "_bandcamp_albums", lambda h, w: albums)
+    monkeypatch.setattr(linked.time, "sleep", lambda s: None)
+
+    def blow_up_on_the_third(url):
+        if url.endswith("/2"):
+            raise linked.RateLimited("429")
+        return [{"provider_id": url[-1], "title": "t", "artists": ["a"], "album": "b",
+                 "duration_ms": 1000, "url": url, "streamable": True}]
+
+    monkeypatch.setattr(sources, "bandcamp_tracks", blow_up_on_the_third)
+    got, resume = linked._bandcamp_items("someone/wishlist")
+    assert len(got) == 2, "the two it managed are kept"
+    assert resume == 2, "and it comes back to the one that was refused"
+
+
+def test_a_rate_limit_reschedules_rather_than_failing(client, hdr, monkeypatch):
+    from muse import routes_linked
+
+    def busy(*a, **k):
+        raise linked.RateLimited("429")
+
+    monkeypatch.setattr(linked, "items", busy)
+    out = routes_linked.run_mirror_job({"provider": "bandcamp", "user_id": 1,
+                                        "remote_id": "someone/wishlist", "offset": 80})
+    assert "waiting" in out and out["from"] == 80
+    row = db.one("""select payload, attempts, next_attempt_at > now() later
+                      from jobs where kind='mirror' order by id desc limit 1""")
+    assert row["payload"]["offset"] == 80 and row["attempts"] == 0 and row["later"]
