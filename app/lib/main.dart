@@ -10,6 +10,7 @@ import 'src/state/player.dart';
 import 'src/ui/home_page.dart';
 import 'src/ui/login_page.dart';
 import 'src/ui/theme.dart';
+import 'src/ui/page_colour.dart';
 
 /// Exposed for the integration test: the player lives behind a stream, and a test
 /// driving real widgets needs a way to read what it actually did.
@@ -58,14 +59,21 @@ class MuseApp extends StatelessWidget {
       // Watched, not read: changing the palette has to repaint the whole app, and the
       // app is what holds the theme.
       child: Consumer<AppState>(
-        builder: (context, app, _) => MaterialApp(
+        builder: (context, app, _) {
+          // The strips the app does not draw — the clock at the top, the home bar at
+          // the bottom — are painted by the system from the page's colour, so it has to
+          // follow the palette rather than sit at whatever was compiled in.
+          final dark = MediaQuery.platformBrightnessOf(context) == Brightness.dark;
+          setPageColour(dark ? app.palette.groundDark : app.palette.groundLight);
+          return MaterialApp(
         title: 'muse',
         debugShowCheckedModeBanner: false,
         theme: MuseTheme.light(app.palette),
         darkTheme: MuseTheme.dark(app.palette),
         builder: (context, child) => _AnyTap(child: child ?? const SizedBox()),
         home: const _Root(),
-        ),
+          );
+        },
       ),
     );
   }

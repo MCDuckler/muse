@@ -16,6 +16,9 @@ dependencies:
   provider: ^6.1.5+1
   shared_preferences: ^2.5.5
   url_launcher: ^6.3.2
+  # The browser's own document, for the one thing Flutter cannot reach: the colour the
+  # system paints the strips it draws around an installed app.
+  web: ^1.1.0
 
 dev_dependencies:
   flutter_test:

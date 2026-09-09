@@ -193,19 +193,15 @@ class _QueuePageState extends State<QueuePage> {
                             color: Theme.of(context).colorScheme.onErrorContainer),
                       ),
                       onDismissed: (_) => app.removeFromQueue(i, context: context),
-                      // A handle you can see, rather than a hold you have to know
-                      // about. Long-press still works, so a thumb landing anywhere on
-                      // the row can move it, but nobody has to guess that it does.
-                      child: SongRow(
+                      // Hold the row to move it. A permanent handle took the place the
+                      // artwork belongs in, and a queue of small grey grips tells you
+                      // less at a glance than a queue of records does.
+                      child: ReorderableDelayedDragStartListener(
+                        index: i,
+                        child: SongRow(
                         track: t,
                         selected: isCurrent,
                         dense: true,
-                        leading: ReorderableDragStartListener(
-                          index: i,
-                          child: Icon(Icons.drag_indicator,
-                              size: 20,
-                              color: Theme.of(context).colorScheme.outline),
-                        ),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -240,6 +236,7 @@ class _QueuePageState extends State<QueuePage> {
                                 }
                               }
                             : null,
+                        ),
                       ),
                     );
                   },

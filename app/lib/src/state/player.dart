@@ -595,10 +595,21 @@ class PlayerService {
     _items = [
       for (final t in _items) t.id == trackId ? fresh.copyWithOrigin(t.origin) : t
     ];
-    final i = index;
-    if (_waitingForTrack != null) {
+    // Only the track we are actually stalled on may start playback, and only while
+    // nothing is playing. Anything else is a download finishing somewhere further down
+    // the queue, which is not a reason to touch what is on.
+    //
+    // This is where skipping went strange. The old test was "the index has not changed
+    // since a moment ago", compared against a value read *after* the await, so it was
+    // always true — and then any track in the queue becoming ready reloaded the
+    // current one from the start. With a queue downloading in the background that
+    // fired every few seconds, restarting or jumping past whatever you had just
+    // skipped to.
+    if (_waitingForTrack == trackId && !_player.playing) {
       await _resumeIfPossible();
-    } else if (i == index && _loadedTrackId != trackId) {
+    } else if (current?.id == trackId && _loadedTrackId != trackId) {
+      // The song on screen is the one that just became playable: load it, since until
+      // now there was nothing to load.
       await _loadCurrent();
     }
     _emit(force: true);
@@ -643,13 +654,21 @@ class PlayerService {
     _emit(force: true);
   }
 
+  /// Start the track we were stalled on, if it is still here and still wanted.
+  ///
+  /// It used to fall back to "whatever is current" when the track it was waiting for
+  /// had gone, which meant a download finishing could restart the song you had moved
+  /// on to. If the thing we were waiting for is not in the queue any more, the wait is
+  /// simply over.
   Future<void> _resumeIfPossible() async {
     final waitingPos = _order.indexWhere((i) => _items[i].id == _waitingForTrack);
-    final target = waitingPos >= 0 ? waitingPos : _orderPos;
-    if (target >= _order.length) return;
-    if (!_items[_order[target]].isReady) return;
+    if (waitingPos < 0) {
+      _waitingForTrack = null;
+      return;
+    }
+    if (!_items[_order[waitingPos]].isReady) return;
     _waitingForTrack = null;
-    await _playOrderPos(target);
+    await _playOrderPos(waitingPos);
   }
 
   // ------------------------------------------------------------------ bookkeeping

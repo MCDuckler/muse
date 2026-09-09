@@ -25,7 +25,14 @@
   <!-- iOS needs its own flag to launch from the home screen without Safari's chrome.
        Without this the "app" opens as a tab and loses the standalone feel entirely. -->
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <!-- The strip where the clock and the battery live.
+       "black" leaves iOS drawing its own bar, which it paints from the page rather
+       than from this tag, and an unstyled page is white — so on a phone in dark mode
+       the top of the app came up bright. "black-translucent" hands that strip to the
+       page, and the page paints it: the CSS below gives html and body a real
+       background, and the app rewrites the theme-colour to match whichever palette is
+       on (see setPageColour in the Dart). -->
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="theme-color" content="#171310">
   <meta name="apple-mobile-web-app-title" content="Muse">
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -35,6 +42,21 @@
 
   <title>Muse</title>
   <link rel="manifest" href="manifest.json">
+
+  <style>
+    /* Painted before Flutter has drawn anything, and behind the safe areas after it
+       has. Without this the browser's own white shows through at the top and bottom of
+       a standalone app on iOS. */
+    html, body {
+      margin: 0;
+      padding: 0;
+      background-color: #171310;
+      overscroll-behavior: none;
+    }
+    @media (prefers-color-scheme: light) {
+      html, body { background-color: #F6F3EF; }
+    }
+  </style>
 </head>
 <body>
   <!--
