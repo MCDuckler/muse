@@ -71,13 +71,16 @@ class DirectWorker:
     def _follow_poll(self, job: dict) -> None:
         try:
             result = follows.poll()
-            jobs.finish(job["id"])
             log.info("follow poll: %s artists", result.get("artists"))
         except Exception as e:
             log.warning("follow poll failed: %s", e)
             jobs.fail(job["id"], str(e))
-            # Whatever went wrong, the next one is still due.
-            follows.ensure_scheduled()
+            return                       # a retryable failure is itself the next one
+        # Finish first, then queue the next: "is one already outstanding?" would
+        # otherwise see this job, still leased, and decide there was nothing to do —
+        # which is how the poll ran once per restart and never again.
+        jobs.finish(job["id"])
+        follows.ensure_scheduled()
 
     # ------------------------------------------------------------------ audio
     def _ingest(self, job: dict) -> None:

@@ -62,4 +62,4 @@ def mark_seen(body: dict = Body(...), user: dict = Depends(current_user)):
 @router.post("/feed/refresh")
 def refresh(user: dict = Depends(current_user)):
     """Check now, rather than waiting for the next scheduled pass."""
-    return follows.poll(schedule_next=False)
+    return follows.poll()

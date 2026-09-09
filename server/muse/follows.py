@@ -135,11 +135,13 @@ def mark_seen(user_id: int, album_ids: list[str], provider: str = "deezer") -> i
 
 
 # ------------------------------------------------------------------ the poll
-def poll(schedule_next: bool = True) -> dict:
-    """Check every followed artist once, then ask to be run again later.
+def poll() -> dict:
+    """Check every followed artist once.
 
-    A job that re-queues itself is the whole scheduler here: there is no cron on this
-    box, and one row in the jobs table is easier to see and to stop than a thread.
+    The caller queues the next run, once this one is finished and no longer counts as
+    outstanding. A job that re-queues itself is the whole scheduler here: there is no
+    cron on this box, and one row in the jobs table is easier to see and to stop than
+    a thread.
     """
     artists = db.all_(
         """select distinct provider, remote_id, min(name) as name
@@ -149,8 +151,6 @@ def poll(schedule_next: bool = True) -> dict:
     for a in artists:
         refresh_artist(a["provider"], a["remote_id"], a["name"])
         checked += 1
-    if schedule_next:
-        ensure_scheduled(delay=POLL_SECONDS)
     return {"artists": checked}
 
 
