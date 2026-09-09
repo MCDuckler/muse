@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import mimetypes
 import pathlib
 import re
@@ -18,9 +19,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from . import (auth, catalog, config, db, direct_worker, enrich_worker, failures,
-               jobs, progress,
+               follows, jobs, progress,
                jam, routes_accounts, routes_browse, routes_downloads, routes_files,
-               routes_jam,
+               routes_follows, routes_jam,
                routes_library, routes_linked, routes_play, routes_sources,
                routes_spotify,
                routes_sync, sleeve,
@@ -77,6 +78,14 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             worker.start()
         if direct:
             direct.start()
+        if start_workers:
+            # One outstanding poll job is the scheduler; it re-queues itself when it
+            # runs. Asking at boot covers a box that was off when the last one was due.
+            try:
+                follows.ensure_scheduled(delay=60)
+            except Exception as e:                     # never block startup on this
+                logging.getLogger("muse").warning(
+                    "could not schedule the follow poll: %s", e)
         yield
         if worker:
             worker.stop()
@@ -496,6 +505,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     app.include_router(routes_jam.router)
     app.include_router(routes_sources.router)
     app.include_router(routes_linked.router)
+    app.include_router(routes_follows.router)
     app.include_router(routes_library.router)
     app.include_router(routes_sync.router)
     app.include_router(routes_spotify.router)

@@ -556,6 +556,84 @@ class ApiClient {
     return (d['items'] as List).map((e) => AlbumSummary.fromJson(e)).toList();
   }
 
+  /// The whole record — the parts we hold and the parts we do not.
+  Future<AlbumDetail> albumDetail(
+      {String? album, String? artist, String? remoteId}) async {
+    final d = await _decode(await http.get(
+        _u('/library/albums/detail', {
+          if (album != null) 'album': album,
+          if (artist != null) 'artist': artist,
+          if (remoteId != null) 'remote_id': remoteId,
+        }),
+        headers: _headers)) as Map<String, dynamic>;
+    return AlbumDetail.fromJson(d);
+  }
+
+  /// Fetch what is missing from a record. Empty [remoteIds] means all of it.
+  Future<({int queued, int notMatched})> fillAlbum(
+      {String? album, String? artist, String? remoteId,
+      List<String> remoteIds = const []}) async {
+    final d = await _decode(await http.post(_u('/library/albums/fill'),
+        headers: _headers,
+        body: jsonEncode({
+          if (album != null) 'album': album,
+          if (artist != null) 'artist': artist,
+          if (remoteId != null) 'remote_id': remoteId,
+          if (remoteIds.isNotEmpty) 'remote_ids': remoteIds,
+        }))) as Map<String, dynamic>;
+    return (queued: (d['queued'] ?? 0) as int,
+            notMatched: (d['not_matched'] ?? 0) as int);
+  }
+
+  Future<ArtistDetail> artistDetail(String artist) async {
+    final d = await _decode(await http.get(
+        _u('/library/artists/detail', {'artist': artist}),
+        headers: _headers)) as Map<String, dynamic>;
+    return ArtistDetail.fromJson(d);
+  }
+
+  // ---------------- following ----------------
+  Future<List<FollowedArtist>> follows() async {
+    final d = await _decode(await http.get(_u('/follows'), headers: _headers))
+        as Map<String, dynamic>;
+    return ((d['items'] ?? const []) as List)
+        .map((e) => FollowedArtist.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> follow({String? name, String? remoteId, String? image}) async =>
+      await _decode(await http.post(_u('/follows'),
+          headers: _headers,
+          body: jsonEncode({
+            if (name != null) 'name': name,
+            if (remoteId != null) 'remote_id': remoteId,
+            if (image != null) 'image': image,
+          })));
+
+  Future<void> unfollow(String remoteId) async => await _decode(
+      await http.delete(_u('/follows/$remoteId'), headers: _headers));
+
+  Future<({List<FeedItem> items, int unseen, int following})> feed(
+      {int limit = 60}) async {
+    final d = await _decode(
+            await http.get(_u('/feed', {'limit': limit}), headers: _headers))
+        as Map<String, dynamic>;
+    return (
+      items: ((d['items'] ?? const []) as List)
+          .map((e) => FeedItem.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      unseen: (d['unseen'] ?? 0) as int,
+      following: (d['following'] ?? 0) as int,
+    );
+  }
+
+  Future<void> markFeedSeen(List<String> albumIds) async => await _decode(
+      await http.post(_u('/feed/seen'),
+          headers: _headers, body: jsonEncode({'album_ids': albumIds})));
+
+  Future<void> refreshFeed() async =>
+      await _decode(await http.post(_u('/feed/refresh'), headers: _headers));
+
   Future<List<Track>> albumTracks(String album, {String? artist}) async {
     final d = await _decode(await http.get(
         _u('/library/albums/tracks',

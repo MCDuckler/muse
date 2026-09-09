@@ -6,6 +6,7 @@ import '../state/app_state.dart';
 import 'artwork.dart';
 import 'browse_page.dart';
 import 'dialogs.dart';
+import 'feed_page.dart';
 import 'spotify_page.dart';
 
 
@@ -41,6 +42,7 @@ class LibraryPage extends StatelessWidget {
           onTap: () => Navigator.of(context)
               .push(MaterialPageRoute(builder: (_) => const ArtistsPage())),
         ),
+        const _FeedRow(),
         const Divider(),
         const _SectionLabel('Playlists'),
         ListTile(
@@ -540,6 +542,62 @@ class _PlaylistHeader extends StatelessWidget {
       ),
         ],
       ),
+    );
+  }
+}
+
+
+/// The feed row, with what is waiting in it.
+///
+/// The count is the point: a feed you have to open to find out whether it is worth
+/// opening is a feed nobody opens.
+class _FeedRow extends StatefulWidget {
+  const _FeedRow();
+
+  @override
+  State<_FeedRow> createState() => _FeedRowState();
+}
+
+class _FeedRowState extends State<_FeedRow> {
+  int _unseen = 0;
+  int _following = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _count();
+  }
+
+  Future<void> _count() async {
+    try {
+      final f = await context.read<AppState>().api.feed(limit: 60);
+      if (!mounted) return;
+      setState(() {
+        _unseen = f.unseen;
+        _following = f.following;
+      });
+    } catch (_) {
+      // A row that cannot count is still a row that opens.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: const Icon(Icons.notifications_none),
+      title: const Text('New releases'),
+      subtitle: Text(_following == 0
+          ? 'Follow an artist to hear about their next record'
+          : '$_following followed'),
+      trailing: _unseen == 0
+          ? null
+          : Badge(label: Text('$_unseen'), backgroundColor:
+              Theme.of(context).colorScheme.primary),
+      onTap: () async {
+        await Navigator.of(context)
+            .push(MaterialPageRoute(builder: (_) => const FeedPage()));
+        _count();
+      },
     );
   }
 }

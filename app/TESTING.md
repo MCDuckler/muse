@@ -61,3 +61,18 @@ elements are detached from the document, so they cannot be found by querying the
 
 That hook is what found the real bug: one element, one src assignment, then nothing but
 play/pause for the whole session.
+
+## The discovery test
+
+`integration_test/discovery_test.dart` is about the album and artist pages showing the
+whole record rather than the part of it we downloaded. It picks an album the library
+only has some of, and asserts that the page lists more songs than the library holds,
+that the ones we hold are matched into their places, that the artist has a discography
+rather than a track list, and that following puts that artist's records in the feed.
+Then it pushes the real album page onto the app's own navigator and checks the missing
+rows are on screen.
+
+`integration_test/spotify_connect_test.dart` hooks `window.open` to return `null`, the
+way a popup blocker does, and asserts the Connect button opens Spotify from the tap
+itself — a browser only opens a window while it can still see the interaction that
+asked for one.

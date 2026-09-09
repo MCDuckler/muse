@@ -801,3 +801,229 @@ class RemoteList {
     );
   }
 }
+
+/// One line of a record: the song as the release lists it, and the copy we hold if
+/// there is one. A row with no [track] is a song that exists and we have not fetched.
+class ReleaseTrack {
+  final int pos;
+  final String title;
+  final List<String> artists;
+  final int? durationMs;
+  final String? remoteId;
+  final Track? track;
+
+  const ReleaseTrack({
+    required this.pos,
+    required this.title,
+    this.artists = const [],
+    this.durationMs,
+    this.remoteId,
+    this.track,
+  });
+
+  bool get have => track != null;
+
+  factory ReleaseTrack.fromJson(Map<String, dynamic> j) => ReleaseTrack(
+        pos: (j['pos'] ?? 0) as int,
+        title: (j['title'] ?? '') as String,
+        artists: ((j['artists'] ?? const []) as List)
+            .whereType<String>()
+            .toList(),
+        durationMs: (j['duration_ms'] as num?)?.toInt(),
+        remoteId: j['remote_id'] as String?,
+        track: j['track'] == null
+            ? null
+            : Track.fromJson(j['track'] as Map<String, dynamic>),
+      );
+
+  String get artistLine => artists.isEmpty ? '' : artists.join(', ');
+}
+
+/// A record, whether or not the library holds any of it.
+class AlbumDetail {
+  final String name;
+  final String? artist;
+  final String? cover;
+  final String? releaseDate;
+  final String? recordType;
+  final String? remoteId;
+  final String? unavailable;
+  final List<ReleaseTrack> tracks;
+  final List<Track> extra;
+  final int missing;
+
+  const AlbumDetail({
+    required this.name,
+    this.artist,
+    this.cover,
+    this.releaseDate,
+    this.recordType,
+    this.remoteId,
+    this.unavailable,
+    this.tracks = const [],
+    this.extra = const [],
+    this.missing = 0,
+  });
+
+  bool get complete => remoteId != null;
+  int get have => tracks.length - missing;
+  String? get year =>
+      (releaseDate != null && releaseDate!.length >= 4) ? releaseDate!.substring(0, 4) : null;
+
+  factory AlbumDetail.fromJson(Map<String, dynamic> j) {
+    final a = (j['album'] ?? const {}) as Map<String, dynamic>;
+    return AlbumDetail(
+      name: (a['name'] ?? '') as String,
+      artist: a['artist'] as String?,
+      cover: a['cover'] as String?,
+      releaseDate: a['release_date'] as String?,
+      recordType: a['record_type'] as String?,
+      remoteId: a['remote_id'] as String?,
+      unavailable: a['unavailable'] as String?,
+      tracks: ((j['tracks'] ?? const []) as List)
+          .map((e) => ReleaseTrack.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      extra: ((j['extra'] ?? const []) as List)
+          .map((e) => Track.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      missing: (j['missing'] ?? 0) as int,
+    );
+  }
+}
+
+/// A record in an artist's discography.
+class ArtistAlbum {
+  final String remoteId;
+  final String title;
+  final String? cover;
+  final String? releaseDate;
+  final String? recordType;
+  final int? tracks;
+  final int have;
+
+  const ArtistAlbum({
+    required this.remoteId,
+    required this.title,
+    this.cover,
+    this.releaseDate,
+    this.recordType,
+    this.tracks,
+    this.have = 0,
+  });
+
+  String? get year => (releaseDate != null && releaseDate!.length >= 4)
+      ? releaseDate!.substring(0, 4)
+      : null;
+
+  factory ArtistAlbum.fromJson(Map<String, dynamic> j) => ArtistAlbum(
+        remoteId: (j['remote_id'] ?? '') as String,
+        title: (j['title'] ?? '') as String,
+        cover: j['cover'] as String?,
+        releaseDate: j['release_date'] as String?,
+        recordType: j['record_type'] as String?,
+        tracks: j['tracks'] as int?,
+        have: (j['have'] ?? 0) as int,
+      );
+}
+
+class ArtistDetail {
+  final String name;
+  final String? image;
+  final String? remoteId;
+  final String? unavailable;
+  final bool following;
+  final int? fans;
+  final List<ArtistAlbum> albums;
+  final List<ReleaseTrack> top;
+  final List<Track> tracks;
+
+  const ArtistDetail({
+    required this.name,
+    this.image,
+    this.remoteId,
+    this.unavailable,
+    this.following = false,
+    this.fans,
+    this.albums = const [],
+    this.top = const [],
+    this.tracks = const [],
+  });
+
+  factory ArtistDetail.fromJson(Map<String, dynamic> j) {
+    final a = (j['artist'] ?? const {}) as Map<String, dynamic>;
+    return ArtistDetail(
+      name: (a['name'] ?? '') as String,
+      image: a['image'] as String?,
+      remoteId: a['remote_id'] as String?,
+      unavailable: a['unavailable'] as String?,
+      following: (a['following'] ?? false) as bool,
+      fans: a['fans'] as int?,
+      albums: ((j['albums'] ?? const []) as List)
+          .map((e) => ArtistAlbum.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      top: ((j['top'] ?? const []) as List)
+          .map((e) => ReleaseTrack.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      tracks: ((j['tracks'] ?? const []) as List)
+          .map((e) => Track.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+}
+
+class FollowedArtist {
+  final String remoteId;
+  final String name;
+  final String? image;
+  final int releases;
+
+  const FollowedArtist(
+      {required this.remoteId, required this.name, this.image, this.releases = 0});
+
+  factory FollowedArtist.fromJson(Map<String, dynamic> j) => FollowedArtist(
+        remoteId: (j['remote_id'] ?? '') as String,
+        name: (j['name'] ?? '') as String,
+        image: j['image'] as String?,
+        releases: (j['releases'] ?? 0) as int,
+      );
+}
+
+/// A record by somebody you follow.
+class FeedItem {
+  final String albumId;
+  final String title;
+  final String artist;
+  final String artistId;
+  final String? cover;
+  final String? releaseDate;
+  final String? recordType;
+  final int? tracks;
+  final bool unseen;
+  final bool inLibrary;
+
+  const FeedItem({
+    required this.albumId,
+    required this.title,
+    required this.artist,
+    required this.artistId,
+    this.cover,
+    this.releaseDate,
+    this.recordType,
+    this.tracks,
+    this.unseen = false,
+    this.inLibrary = false,
+  });
+
+  factory FeedItem.fromJson(Map<String, dynamic> j) => FeedItem(
+        albumId: (j['album_id'] ?? '') as String,
+        title: (j['title'] ?? '') as String,
+        artist: (j['artist'] ?? '') as String,
+        artistId: (j['artist_id'] ?? '') as String,
+        cover: j['cover'] as String?,
+        releaseDate: j['release_date'] as String?,
+        recordType: j['record_type'] as String?,
+        tracks: j['tracks'] as int?,
+        unseen: (j['unseen'] ?? false) as bool,
+        inLibrary: (j['in_library'] ?? false) as bool,
+      );
+}

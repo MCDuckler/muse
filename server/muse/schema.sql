@@ -372,3 +372,54 @@ select owner, track_id, min(at)
  where not exists (select 1 from library_items)
  group by owner, track_id
 on conflict do nothing;
+
+-- Answers from a metadata service, kept for a while.
+--
+-- An album page asks the same question every time it is opened, and the answer changes
+-- about as often as the album does. Caching it is the difference between a screen that
+-- opens instantly and one that waits on somebody else's server — and it keeps a library
+-- of thousands of albums from turning into thousands of requests.
+create table if not exists remote_cache (
+  key        text primary key,
+  body       jsonb not null,
+  fetched_at timestamptz not null default now()
+);
+create index if not exists remote_cache_age on remote_cache(fetched_at);
+
+-- Artists somebody follows, and the records those artists have put out. Following is
+-- per person; the releases are a fact about the artist, so they are shared.
+create table if not exists artist_follows (
+  user_id    int not null references users(id) on delete cascade,
+  provider   text not null default 'deezer',
+  remote_id  text not null,
+  name       text not null,
+  image      text,
+  created_at timestamptz not null default now(),
+  checked_at timestamptz,
+  primary key (user_id, provider, remote_id)
+);
+
+create table if not exists artist_releases (
+  provider     text not null default 'deezer',
+  artist_id    text not null,
+  album_id     text not null,
+  title        text not null,
+  artist       text not null,
+  cover        text,
+  release_date date,
+  record_type  text,
+  tracks       int,
+  first_seen   timestamptz not null default now(),
+  primary key (provider, album_id)
+);
+create index if not exists artist_releases_by_artist
+  on artist_releases(provider, artist_id, release_date desc);
+
+-- What each person has already scrolled past, so "new" means new to you.
+create table if not exists feed_seen (
+  user_id  int not null references users(id) on delete cascade,
+  provider text not null default 'deezer',
+  album_id text not null,
+  seen_at  timestamptz not null default now(),
+  primary key (user_id, provider, album_id)
+);

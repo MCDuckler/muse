@@ -5,7 +5,8 @@ Bandcamp do not — measured from this box, not assumed — so their downloads r
 where there is no upload leg and no nine-megabit ceiling between the file and the disk.
 
 It also runs `mirror` jobs, because importing twelve thousand liked songs is not
-something to do inside an HTTP request.
+something to do inside an HTTP request, and the `follow_poll` that asks what the
+artists people follow have put out lately.
 """
 from __future__ import annotations
 
@@ -15,13 +16,13 @@ import tempfile
 import threading
 import time
 
-from . import db, jobs, progress, sources, storage
+from . import db, follows, jobs, progress, sources, storage
 
 log = logging.getLogger("muse.direct")
 
 IDLE_SLEEP = 3.0
 ERROR_SLEEP = 30.0
-KINDS = ("ingest_direct", "mirror")
+KINDS = ("ingest_direct", "mirror", "follow_poll")
 
 
 class DirectWorker:
@@ -59,10 +60,24 @@ class DirectWorker:
                     worked = True
                     if kind == "mirror":
                         self._mirror(job)
+                    elif kind == "follow_poll":
+                        self._follow_poll(job)
                     else:
                         self._ingest(job)
             if not worked:
                 self._stop.wait(IDLE_SLEEP)
+
+    # ------------------------------------------------------------- followed artists
+    def _follow_poll(self, job: dict) -> None:
+        try:
+            result = follows.poll()
+            jobs.finish(job["id"])
+            log.info("follow poll: %s artists", result.get("artists"))
+        except Exception as e:
+            log.warning("follow poll failed: %s", e)
+            jobs.fail(job["id"], str(e))
+            # Whatever went wrong, the next one is still due.
+            follows.ensure_scheduled()
 
     # ------------------------------------------------------------------ audio
     def _ingest(self, job: dict) -> None:
