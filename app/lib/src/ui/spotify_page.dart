@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -22,23 +25,63 @@ class _SpotifyPageState extends State<SpotifyPage> {
   final _busy = <String>{};
   bool _syncing = false;
 
+  /// Spotify's sign-in address, fetched *before* it is needed.
+  ///
+  /// A browser only opens a window while it can still see the tap that asked for one.
+  /// Fetching the address first — one request, a few hundred milliseconds — spends that
+  /// permission, and the popup is then blocked with nothing shown: the button appeared
+  /// to do nothing at all. So the address is kept ready and the tap opens it straight
+  /// away. The server's half of it expires after ten minutes, hence the refresh.
+  String? _authUrl;
+  DateTime? _authUrlAt;
+  Timer? _authRefresh;
+  AppLifecycleListener? _lifecycle;
+
+  bool get _authUrlUsable =>
+      _authUrl != null &&
+      DateTime.now().difference(_authUrlAt!) < const Duration(minutes: 4);
+
   @override
   void initState() {
     super.initState();
     _load();
+    // Coming back from Spotify's tab should just work, rather than needing Refresh.
+    _lifecycle = AppLifecycleListener(onResume: _load);
   }
 
   void _load() {
     final api = context.read<AppState>().api;
     setState(() {
       _account = api.spotifyAccount();
-      _playlists = api.spotifyAccount().then((a) =>
-          (a['account'] == null) ? <SpotifyPlaylist>[] : api.spotifyPlaylists());
+      _playlists = api.spotifyAccount().then((a) {
+        if (a['account'] != null) return api.spotifyPlaylists();
+        _armAuthUrl();
+        return <SpotifyPlaylist>[];
+      });
     });
+  }
+
+  /// Keep a sign-in address in hand for as long as this screen is not connected.
+  void _armAuthUrl() {
+    _authRefresh ??= Timer.periodic(const Duration(minutes: 4), (_) => _fetchAuthUrl());
+    if (!_authUrlUsable) unawaited(_fetchAuthUrl());
+  }
+
+  Future<void> _fetchAuthUrl() async {
+    try {
+      final url = await context.read<AppState>().api.spotifyAuthorizeUrl();
+      if (!mounted) return;
+      _authUrl = url;
+      _authUrlAt = DateTime.now();
+    } catch (_) {
+      // Not fatal: the button falls back to fetching one on the spot.
+    }
   }
 
   @override
   void dispose() {
+    _authRefresh?.cancel();
+    _lifecycle?.dispose();
     _filter.dispose();
     super.dispose();
   }
@@ -80,18 +123,64 @@ class _SpotifyPageState extends State<SpotifyPage> {
     _load();
   }
 
-  Future<void> _connect() async {
-    final app = context.read<AppState>();
+  /// Deliberately not async before the launch: see [_authUrl].
+  ///
+  /// Sign-in happens on Spotify's own page, in a real browser tab — never inside the
+  /// app, which is the whole point of OAuth.
+  void _connect() {
     final messenger = ScaffoldMessenger.of(context);
-    try {
-      final url = await app.api.spotifyAuthorizeUrl();
-      // Sign-in happens on Spotify's own page, in a real browser tab — never inside
-      // the app, which is the whole point of OAuth.
-      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-      if (!mounted) return;
+    if (_authUrlUsable) {
+      final url = _authUrl!;
+      _authUrl = null;                       // one address, one sign-in
+      unawaited(launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication));
+      unawaited(_fetchAuthUrl());
       messenger.showSnackBar(const SnackBar(
-        content: Text('Finish signing in, then come back and tap Refresh'),
+        content: Text('Finish signing in on the Spotify tab — this page picks it up '
+            'when you come back'),
       ));
+      return;
+    }
+    unawaited(_connectTheSlowWay(messenger));
+  }
+
+  /// When there is no address ready — the first tap after opening the screen, or the
+  /// server was slow — fetch one and put it behind a button. Tapping that button is a
+  /// fresh interaction, which is what a browser needs to open the tab.
+  Future<void> _connectTheSlowWay(ScaffoldMessengerState messenger) async {
+    try {
+      await _fetchAuthUrl();
+      final url = _authUrl;
+      if (!mounted || url == null) {
+        messenger.showSnackBar(
+            const SnackBar(content: Text('Spotify sign-in is not available right now')));
+        return;
+      }
+      _authUrl = null;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Connect to Spotify'),
+          content: const Text('Sign in on Spotify, then come back here.'),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: url));
+                if (context.mounted) Navigator.pop(context);
+              },
+              child: const Text('Copy link'),
+            ),
+            FilledButton(
+              onPressed: () {
+                unawaited(
+                    launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication));
+                Navigator.pop(context);
+              },
+              child: const Text('Open Spotify'),
+            ),
+          ],
+        ),
+      );
+      unawaited(_fetchAuthUrl());
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('$e')));
     }
