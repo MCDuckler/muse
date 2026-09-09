@@ -30,6 +30,9 @@ class _SearchPageState extends State<SearchPage> {
   bool _busy = false;
   bool _searched = false;
   String? _error;
+  /// YouTube would not answer. Not the same as finding nothing, and the difference
+  /// matters: one means try another spelling, the other means try again in a minute.
+  String? _remoteError;
   String _lastQuery = '';
   Timer? _debounce;
 
@@ -52,6 +55,7 @@ class _SearchPageState extends State<SearchPage> {
       setState(() {
         _local = const [];
         _remote = const [];
+        _remoteError = null;
         _soundcloud = const [];
         _bandcamp = const [];
         _album = null;
@@ -83,6 +87,7 @@ class _SearchPageState extends State<SearchPage> {
           _album = preview;
           _local = const [];
           _remote = const [];
+          _remoteError = null;
           _soundcloud = const [];
           _bandcamp = const [];
           _searched = true;
@@ -96,6 +101,7 @@ class _SearchPageState extends State<SearchPage> {
         _album = null;
         _local = res.local;
         _remote = res.remote;
+        _remoteError = res.remoteError;
         _searched = true;
       });
 
@@ -187,6 +193,13 @@ class _SearchPageState extends State<SearchPage> {
                   onTap: () => app.addTrack(t),
                 ),
               if (_album != null) ..._albumRows(app),
+              if (_remoteError != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                  child: Text(_remoteError!,
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.outline)),
+                ),
               if (_remote.isNotEmpty)
                 _SectionHeader('On YouTube Music · ${_remote.length}'),
               for (final hit in _remote)

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import re
 
-from . import db, jobs, progress
+from . import artists, db, jobs, progress
 
 # Where a track came into the library. Radio pulls in songs nobody asked for, so they
 # stay identifiable for a future cleanup.
@@ -78,6 +78,16 @@ def find_by_video_id(video_id: str) -> dict | None:
     return track_row(row["track_id"]) if row else None
 
 
+def credits(names) -> list[str]:
+    """The artists in a credit, one per entry.
+
+    "Hugh Hardie, Kyan" arriving as a single string makes the pair a third artist with
+    one record to their name. muse.artists does the splitting, and the checking that
+    stops "Fujiya & Miyagi" becoming two people.
+    """
+    return artists.split_all(names, verify=artists.deezer_verifier())
+
+
 def create_from_source(provider: str, meta: dict, discovered_via: str = VIA_USER,
                        priority: int = jobs.PRIORITY_NORMAL,
                        batch_id: str | None = None,
@@ -93,7 +103,7 @@ def create_from_source(provider: str, meta: dict, discovered_via: str = VIA_USER
         """insert into tracks(title,artists,album,duration_ms,source,state,
                               discovered_via,isrc)
            values(%s,%s,%s,%s,%s,'pending',%s,%s) returning id""",
-        (meta["title"], meta.get("artists") or [], meta.get("album"),
+        (meta["title"], credits(meta.get("artists")), meta.get("album"),
          meta.get("duration_ms"), provider, discovered_via,
          (meta.get("isrc") or None)),
     )
@@ -168,7 +178,7 @@ def create_from_ytm(meta: dict, discovered_via: str = VIA_USER,
         """insert into tracks(title,artists,album,duration_ms,source,state,
                               discovered_via,isrc)
            values(%s,%s,%s,%s,'youtube','pending',%s,%s) returning id""",
-        (meta["title"], meta["artists"], meta["album"], meta["duration_ms"],
+        (meta["title"], credits(meta["artists"]), meta["album"], meta["duration_ms"],
          discovered_via, (meta.get("isrc") or None)),
     )
     db.run(

@@ -1,8 +1,21 @@
 """YouTube Music lookups. Search needs no auth; the audio never comes from here."""
 from __future__ import annotations
 
+import logging
 import re
 from functools import lru_cache
+
+log = logging.getLogger("muse.ytm")
+
+
+class Unavailable(RuntimeError):
+    """YouTube did not answer with an answer.
+
+    It serves this address a challenge page from time to time — the same reason the
+    audio has to be fetched from a machine at home — and the library parses that page
+    as JSON and throws. Callers can carry on without it; searching what is already here
+    must not stop working because somebody else's server is in a mood.
+    """
 
 
 @lru_cache(maxsize=1)
@@ -10,6 +23,23 @@ def _client():
     from ytmusicapi import YTMusic
 
     return YTMusic()
+
+
+def _ask(what, *args, **kwargs):
+    """One retry with a fresh session, then say so plainly.
+
+    The client keeps a context it fetched once; when that goes stale every call comes
+    back as a page instead of JSON, and only rebuilding it helps.
+    """
+    try:
+        return what(_client(), *args, **kwargs)
+    except Exception as first:
+        _client.cache_clear()
+        try:
+            return what(_client(), *args, **kwargs)
+        except Exception as second:
+            log.warning("youtube music refused: %s / %s", first, second)
+            raise Unavailable(str(second)) from second
 
 
 def _flatten(item: dict) -> dict:
@@ -26,12 +56,12 @@ def _flatten(item: dict) -> dict:
 
 def search_songs(query: str, limit: int = 10) -> list[dict]:
     """Songs, not videos: songs carry a real album and artist credit."""
-    res = _client().search(query, filter="songs", limit=limit)
+    res = _ask(lambda c: c.search(query, filter="songs", limit=limit))
     return [_flatten(r) for r in res if r.get("videoId")]
 
 
 def song(video_id: str) -> dict | None:
-    res = _client().search(video_id, filter="songs", limit=1)
+    res = _ask(lambda c: c.search(video_id, filter="songs", limit=1))
     for r in res:
         if r.get("videoId") == video_id:
             return _flatten(r)
@@ -40,7 +70,7 @@ def song(video_id: str) -> dict | None:
 
 def watch_playlist(video_id: str, limit: int = 25) -> list[dict]:
     """The radio tail for a seed track. Unauthenticated; returns ~50 candidates."""
-    data = _client().get_watch_playlist(video_id, limit=limit)
+    data = _ask(lambda c: c.get_watch_playlist(video_id, limit=limit))
     out = []
     for t in data.get("tracks", []):
         if not t.get("videoId"):

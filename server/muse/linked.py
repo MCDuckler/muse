@@ -43,6 +43,22 @@ PAUSE_BETWEEN = 0.35
 
 _HANDLE_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
+# The share sheet does not hand out profile links, it hands out short ones. Following
+# the redirect is the only way to find out whose profile it is.
+_SHORTENERS = ("on.soundcloud.com", "soundcloud.app.goo.gl", "bandcamp.com/redirect")
+
+
+def _follow_short_link(url: str) -> str:
+    """Where a share link actually points. The link itself if it cannot be followed."""
+    try:
+        req = urllib.request.Request(url, method="HEAD",
+                                     headers={"User-Agent": sources.UA})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return r.geturl() or url
+    except Exception as e:
+        log.info("could not follow %s: %s", url, e)
+        return url
+
 
 def _handle_from(raw: str, host: str, what: str) -> str:
     """The name out of whatever was pasted into the box.
@@ -55,6 +71,8 @@ def _handle_from(raw: str, host: str, what: str) -> str:
     profile with that name".
     """
     text = (raw or "").strip()
+    if any(s in text for s in _SHORTENERS):
+        text = _follow_short_link(text if "://" in text else "https://" + text)
     if "://" in text or host in text:
         parsed = urllib.parse.urlsplit(text if "://" in text else "https://" + text)
         segments = [s for s in parsed.path.split("/") if s]

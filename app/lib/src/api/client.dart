@@ -153,12 +153,16 @@ class ApiClient {
 
   /// Local catalog first, then YouTube Music. Remote hits are flagged `known` when
   /// the library already has them, so the UI never offers to fetch a track twice.
-  Future<({List<Track> local, List<RemoteHit> remote})> search(String q) async {
+  Future<({List<Track> local, List<RemoteHit> remote, String? remoteError})> search(
+      String q) async {
     final d = await _decode(await http.get(_u('/search', {'q': q}), headers: _headers))
         as Map<String, dynamic>;
     return (
       local: ((d['local'] ?? []) as List).map((e) => Track.fromJson(e)).toList(),
       remote: ((d['remote'] ?? []) as List).map((e) => RemoteHit.fromJson(e)).toList(),
+      // YouTube answers this server's address with a challenge page often enough that
+      // the search has to be able to say so instead of looking empty.
+      remoteError: d['remote_error'] as String?,
     );
   }
 

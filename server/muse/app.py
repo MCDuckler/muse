@@ -182,7 +182,16 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             have = {t.get("provider_id") for t in db.all_(
                 "select provider_id from track_sources where provider='ytmusic'")}
             hits = []
-            for r in ytm.search_songs(q, limit=min(limit, 10)):
+            try:
+                found = ytm.search_songs(q, limit=min(limit, 10))
+            except ytm.Unavailable as e:
+                # YouTube answers a datacenter address with a challenge page often
+                # enough that this cannot be an error: the library is right here and
+                # searching it must keep working when the outside world will not talk.
+                logging.getLogger("muse").warning("remote search failed: %s", e)
+                out["remote_error"] = "YouTube would not answer just now"
+                found = []
+            for r in found:
                 thumb = ytm.thumbnail_url(r.get("raw") or {})
                 hits.append({
                     **{k: v for k, v in r.items() if k != "raw"},
@@ -203,7 +212,12 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             raise HTTPException(400, "video_id or query required")
 
         if not video_id:
-            hits = ytm.search_songs(query, limit=1)
+            try:
+                hits = ytm.search_songs(query, limit=1)
+            except ytm.Unavailable as e:
+                # Not our failure and not the caller's: say so, rather than answering
+                # a search with a stack trace.
+                raise HTTPException(503, f"YouTube would not answer just now: {e}")
             if not hits:
                 raise HTTPException(404, f"nothing on YouTube Music for {query!r}")
             meta = hits[0]
@@ -221,9 +235,12 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
                 jobs.promote(cached["id"])
             return catalog.public(cached)
 
-        meta = meta or ytm.song(video_id) or {"video_id": video_id, "title": video_id,
-                                              "artists": [], "album": None, "duration_ms": None,
-                                              "raw": {}}
+        try:
+            meta = meta or ytm.song(video_id)
+        except ytm.Unavailable:
+            meta = None            # the id is enough to queue it; the title fills in later
+        meta = meta or {"video_id": video_id, "title": video_id, "artists": [],
+                        "album": None, "duration_ms": None, "raw": {}}
         meta["video_id"] = video_id
         created = catalog.create_from_ytm(meta, discovered_via=catalog.VIA_USER)
         return JSONResponse(catalog.public(created), status_code=202)
