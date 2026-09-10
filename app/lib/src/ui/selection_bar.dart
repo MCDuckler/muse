@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
+import '../state/offline.dart';
 import '../state/selection.dart';
 import 'dialogs.dart';
 
@@ -102,6 +103,14 @@ class SelectionBar extends StatelessWidget {
                       if (app.isFavourite(t.id)) await app.toggleFavourite(t.id);
                     }
                     await done('${picked.length} out of your favourites');
+                  case 'keep':
+                    await app.keepOffline(picked);
+                    await done('${picked.length} being kept on this device');
+                  case 'forget':
+                    for (final t in picked) {
+                      await app.forgetOffline(t.id);
+                    }
+                    await done('${picked.length} no longer kept here');
                   case 'remove':
                     final sure = await confirm(
                         context,
@@ -121,6 +130,12 @@ class SelectionBar extends StatelessWidget {
                     value: 'favourite', child: Text('Add to favourites')),
                 const PopupMenuItem(
                     value: 'unfavourite', child: Text('Remove from favourites')),
+                if (OfflineStore.supported) ...[
+                  const PopupMenuItem(
+                      value: 'keep', child: Text('Keep on this device')),
+                  const PopupMenuItem(
+                      value: 'forget', child: Text('Stop keeping here')),
+                ],
                 if (onRemove != null)
                   PopupMenuItem(value: 'remove', child: Text(removeLabel)),
               ],

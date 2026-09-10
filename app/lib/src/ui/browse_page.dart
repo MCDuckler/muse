@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
+import '../state/offline.dart';
 import 'artwork.dart';
 import 'source_dot.dart';
 import 'swipe.dart';
@@ -360,6 +361,29 @@ class _AlbumHead extends StatelessWidget {
                     ? null
                     : () => app.playNow(held, named: detail.name),
               ),
+              if (OfflineStore.supported)
+                Builder(builder: (context) {
+                  final offline = context.watch<AppState>().offline;
+                  final here = held.isNotEmpty &&
+                      held.every((t) => offline.has(t.id));
+                  return TextButton.icon(
+                    icon: Icon(
+                        here ? Icons.download_done : Icons.download_outlined,
+                        size: 18),
+                    label: Text(here ? 'Kept' : 'Keep'),
+                    onPressed: held.isEmpty
+                        ? null
+                        : () async {
+                            if (here) {
+                              for (final t in held) {
+                                await offline.forget(t.id);
+                              }
+                              return;
+                            }
+                            await offline.keep(held);
+                          },
+                  );
+                }),
               TextButton.icon(
                 icon: const Icon(Icons.shuffle, size: 18),
                 label: const Text('Shuffle'),

@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
+import 'offline.dart';
 import 'player.dart';
 import '../ui/theme.dart';
 
@@ -18,6 +19,10 @@ class AppState extends ChangeNotifier {
 
   late ApiClient api;
   PlayerService? player;
+
+  /// Music kept on this device. Created once the server is known, because it fetches
+  /// through the same client.
+  late final OfflineStore offline = OfflineStore(api);
 
   bool ready = false;
   String? user;
@@ -267,6 +272,10 @@ class AppState extends ChangeNotifier {
           .catchError((_) {});
     };
     await player!.init();
+    // The player reaches for a local file before the network — see _sourceFor.
+    await offline.init();
+    player!.offlinePath = offline.pathFor;
+    offline.addListener(notifyListeners);
     _lifecycle;                     // built lazily; touching it starts it listening
     bindPlayer();
     await api.ensureStreamKey();
@@ -371,6 +380,22 @@ class AppState extends ChangeNotifier {
     await api.clearAvatar();
     avatarVersion = null;
     notifyListeners();
+  }
+
+  /// Keep these on the device, or stop keeping them.
+  ///
+  /// Everything about what is kept is asked for by hand: nothing is downloaded because
+  /// it happened to play, so "is this here for the flight" has a definite answer.
+  Future<void> keepOffline(Iterable<Track> tracks) => offline.keep(tracks);
+
+  Future<void> forgetOffline(int trackId) => offline.forget(trackId);
+
+  /// Everything on a playlist or in a queue, in one go. The server says how much that
+  /// is before anything is fetched — see the manifest.
+  Future<({int count, double mb})> offlineSize(
+      {int? playlistId, int? queueId}) async {
+    final d = await api.downloadManifest(playlistId: playlistId, queueId: queueId);
+    return (count: d.count, mb: d.mb);
   }
 
   /// Rearrange what is coming, once.

@@ -744,6 +744,7 @@ class PlayerService {
     // the difference between "instant" and "a moment while it thinks".
     for (final soon in run.skip(1)) {
       if (!soon.isReady || _warmed.contains(soon.id)) continue;
+      if (offlinePath?.call(soon.id) != null) continue;   // already here
       _warmed.add(soon.id);
       unawaited(api.warmStream(soon));
     }
@@ -754,10 +755,30 @@ class PlayerService {
     }
   }
 
+  /// Where a track is kept on this device, if it is. Set by the app when the offline
+  /// store is ready; null everywhere that has no filesystem.
+  String? Function(int trackId)? offlinePath;
+
   /// One track, as something the audio engine can play.
   AudioSource _sourceFor(Track track) {
     final cover = api.coverUrl(track, small: false);
     final coverUri = cover == null ? null : Uri.parse(cover);
+    // A song kept on the device is played from the device — no request, no signal
+    // needed, and no second copy of it coming down the wire.
+    final local = offlinePath?.call(track.id);
+    if (local != null) {
+      return AudioSource.uri(
+        Uri.file(local),
+        tag: MediaItem(
+          id: '${track.id}',
+          title: track.displayTitle,
+          artist: track.artistLine,
+          album: track.albumLine,
+          duration: track.duration,
+          artUri: coverUri,
+        ),
+      );
+    }
     return AudioSource.uri(
       Uri.parse(api.streamUrl(track)),
       // Headers are not deliverable from a browser's audio element, which is why the

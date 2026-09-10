@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
+import '../state/offline.dart';
 import 'source_dot.dart';
 import 'browse_page.dart';
 import 'dialogs.dart';
@@ -42,6 +43,26 @@ Future<void> showTrackSheet(
               () => app.toggleFavourite(track.id),
             );
           }),
+          if (OfflineStore.supported)
+            Builder(builder: (context) {
+              final offline = context.watch<AppState>().offline;
+              final here = offline.has(track.id);
+              final coming = offline.isQueued(track.id);
+              return _item(
+                sheet,
+                here
+                    ? Icons.download_done
+                    : coming
+                        ? Icons.downloading
+                        : Icons.download_outlined,
+                here
+                    ? 'Kept on this device'
+                    : coming
+                        ? 'Being kept…'
+                        : 'Keep on this device',
+                () => here ? app.forgetOffline(track.id) : app.keepOffline([track]),
+              );
+            }),
           _item(sheet, Icons.playlist_play, 'Play next',
               () => app.addTrack(track, mode: 'next')),
           _item(sheet, Icons.playlist_add, 'Add to queue', () => app.addTrack(track)),

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
+import '../state/offline.dart';
 import 'artwork.dart';
 import 'browse_page.dart';
 import 'dialogs.dart';
@@ -119,6 +120,27 @@ class LibraryPage extends StatelessWidget {
                   } catch (e) {
                     messenger.showSnackBar(SnackBar(content: Text('$e')));
                   }
+                } else if (v == 'keep') {
+                  final messenger = ScaffoldMessenger.of(context);
+                  final full = await app.api.playlist(p.id);
+                  final ready = [for (final t in full.items) if (t.isReady) t];
+                  if (!context.mounted) return;
+                  final bytes = ready.length;
+                  final sure = await confirm(
+                      context,
+                      'Keep "${p.name}" on this device?',
+                      '$bytes ${bytes == 1 ? 'song' : 'songs'} are downloaded to the '
+                          'phone and play with no signal. Songs still being fetched by '
+                          'the server are skipped.');
+                  if (!sure) return;
+                  await app.keepOffline(ready);
+                  messenger.showSnackBar(
+                      SnackBar(content: Text('Keeping $bytes songs')));
+                } else if (v == 'forget') {
+                  final full = await app.api.playlist(p.id);
+                  for (final t in full.items) {
+                    await app.forgetOffline(t.id);
+                  }
                 } else if (v == 'cover') {
                   final messenger = ScaffoldMessenger.of(context);
                   final file = await FilePicker.pickFile(type: FileType.image);
@@ -155,6 +177,12 @@ class LibraryPage extends StatelessWidget {
                 const PopupMenuItem(value: 'play', child: Text('Play')),
                 const PopupMenuItem(value: 'shuffle', child: Text('Shuffle')),
                 const PopupMenuItem(value: 'queue', child: Text('Add all to queue')),
+                if (OfflineStore.supported) ...[
+                  const PopupMenuItem(
+                      value: 'keep', child: Text('Keep on this device')),
+                  const PopupMenuItem(
+                      value: 'forget', child: Text('Stop keeping here')),
+                ],
                 // A playlist draws its own cover from the records in it; this is for
                 // when you have a picture in mind instead.
                 const PopupMenuItem(value: 'cover', child: Text('Choose a cover…')),

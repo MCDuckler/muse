@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
+import '../state/offline.dart';
 import '../state/selection.dart';
 import 'artwork.dart';
 import 'source_dot.dart';
@@ -185,6 +186,31 @@ class SongRow extends StatelessWidget {
                 _Downloading(track: track),
               ],
               if (trailing != null) ...[const SizedBox(width: 6), trailing!],
+              // On the device, said quietly. A small filled arrow rather than a word:
+              // in a list of four hundred what matters is which ones have it.
+              if (!track.isPending && OfflineStore.supported)
+                Builder(builder: (context) {
+                  final offline = context.watch<AppState>().offline;
+                  if (offline.has(track.id)) {
+                    return Padding(
+                      padding: const EdgeInsets.only(left: 6),
+                      child: Icon(Icons.download_done,
+                          size: 14, color: scheme.onSurfaceVariant),
+                    );
+                  }
+                  if (offline.isQueued(track.id)) {
+                    return Padding(
+                      padding: const EdgeInsets.only(left: 6),
+                      child: SizedBox(
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 1.6, color: scheme.outline),
+                      ),
+                    );
+                  }
+                  return const SizedBox.shrink();
+                }),
               // Where the file came from, immediately left of how long it is: the
               // right-hand end of the row is where the eye already goes for the
               // facts about a song, and on the artwork the mark was competing with

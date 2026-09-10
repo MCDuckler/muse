@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
 import 'dialogs.dart';
+import '../state/offline.dart';
+import 'kept_page.dart';
 import 'face.dart';
 import 'downloads_page.dart';
 import 'player_look_page.dart';
@@ -194,6 +196,18 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const Divider(),
           _label(context, 'Downloads'),
+          if (OfflineStore.supported)
+            ListTile(
+              leading: const Icon(Icons.phone_iphone),
+              title: const Text('Kept on this device'),
+              subtitle: Text(app.offline.count == 0
+                  ? 'Nothing yet — keep a song, a record or a playlist for no signal'
+                  : '${app.offline.count} songs · '
+                      '${KeptPage.size(app.offline.bytes)}'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => const KeptPage())),
+            ),
           ListTile(
             leading: const Icon(Icons.downloading),
             title: const Text('Download queue'),

@@ -735,6 +735,26 @@ class ApiClient {
               body: jsonEncode({...backup, 'dry_run': dryRun})))
           as Map<String, dynamic>;
 
+  /// What a device would have to fetch to have a playlist or a queue playable with no
+  /// signal, and how big that is. Asked before downloading, so the size is a number
+  /// somebody agreed to rather than a surprise.
+  Future<({int count, double mb, List<int> trackIds})> downloadManifest(
+      {int? playlistId, int? queueId}) async {
+    final d = await _decode(await http.get(
+        _u('/downloads/manifest', {
+          if (playlistId != null) 'playlist_id': playlistId,
+          if (queueId != null) 'queue_id': queueId,
+        }),
+        headers: _headers)) as Map<String, dynamic>;
+    return (
+      count: (d['count'] ?? 0) as int,
+      mb: ((d['mb'] ?? 0) as num).toDouble(),
+      trackIds: [
+        for (final i in (d['items'] ?? const []) as List) (i['track_id'] ?? 0) as int
+      ],
+    );
+  }
+
   Future<List<FollowedArtist>> follows() async {
     final d = await _decode(await http.get(_u('/follows'), headers: _headers))
         as Map<String, dynamic>;

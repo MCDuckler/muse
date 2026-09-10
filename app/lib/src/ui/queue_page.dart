@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
+import '../state/offline.dart';
 import '../state/player.dart';
 import 'dialogs.dart';
 import 'song_row.dart';
@@ -181,6 +182,12 @@ class _QueuePageState extends State<QueuePage> {
                   tooltip: 'Queue actions',
                   onSelected: (v) async {
                     switch (v) {
+                      case 'keep':
+                        await app.keepOffline(rows);
+                      case 'forget':
+                        for (final t in rows) {
+                          await app.forgetOffline(t.id);
+                        }
                       case 'clear-radio':
                         await app.clearQueue(origin: 'radio', context: context);
                       case 'clear':
@@ -193,14 +200,22 @@ class _QueuePageState extends State<QueuePage> {
                         }
                     }
                   },
-                  itemBuilder: (context) => const [
-                    PopupMenuItem(
+                  itemBuilder: (context) => [
+                    if (OfflineStore.supported) ...const [
+                      PopupMenuItem(
+                          value: 'keep', child: Text('Keep this queue on the device')),
+                      PopupMenuItem(
+                          value: 'forget', child: Text('Stop keeping these here')),
+                      PopupMenuDivider(),
+                    ],
+                    const PopupMenuItem(
                         value: 'save', child: Text('Save as playlist')),
-                    PopupMenuItem(
+                    const PopupMenuItem(
                         value: 'clear-radio', child: Text('Clear radio tracks')),
-                    PopupMenuItem(value: 'clear', child: Text('Clear queue')),
-                    PopupMenuDivider(),
-                    PopupMenuItem(value: 'delete', child: Text('Delete this queue')),
+                    const PopupMenuItem(value: 'clear', child: Text('Clear queue')),
+                    const PopupMenuDivider(),
+                    const PopupMenuItem(
+                        value: 'delete', child: Text('Delete this queue')),
                   ],
                 ),
               ],

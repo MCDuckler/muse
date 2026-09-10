@@ -313,7 +313,9 @@ void main() {
   });
 
   test('shuffling deals what is coming and leaves the rest alone', () async {
-    final tracks = [for (var i = 1; i <= 8; i++) track(i)];
+    // Twelve, so that "something moved" is a fact rather than a coin toss: nine songs
+    // are dealt, and the chance of the same order coming back is one in 362,880.
+    final tracks = [for (var i = 1; i <= 12; i++) track(i)];
     await player.loadQueue(queueOf(tracks));
     await player.playAt(2);            // third song
     await settle();
@@ -327,8 +329,6 @@ void main() {
     expect(after.sublist(3)..sort(), before.sublist(3)..sort(),
         reason: 'the same songs are still there');
     expect(player.current?.id, 3, reason: 'and the same one is playing');
-    // Eight songs means five to deal: the odds of the same order are one in 120, and
-    // the test is about the rows moving at all.
     expect(after, isNot(before), reason: 'something moved');
   });
 
