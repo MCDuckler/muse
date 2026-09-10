@@ -5,7 +5,6 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
-import 'swipe.dart';
 
 /// The record on the stage, and the two either side of it.
 ///
@@ -26,6 +25,8 @@ class RecordStage extends StatefulWidget {
     required this.playing,
     this.previous,
     this.next,
+    this.before,
+    this.after,
     this.onNext,
     this.onPrevious,
     this.scale = 0.74,
@@ -40,6 +41,13 @@ class RecordStage extends StatefulWidget {
   final bool playing;
   final Track? previous;
   final Track? next;
+
+  /// Two away, either side. Only ever seen off-stage at the edge of the frame — but a
+  /// journey driven by a finger can be held halfway for as long as somebody likes, and
+  /// an empty space where the fourth sleeve should be is visible when it is.
+  final Track? before;
+  final Track? after;
+
   final VoidCallback? onNext;
   final VoidCallback? onPrevious;
 
@@ -52,6 +60,146 @@ class _Card {
   const _Card(this.track, this.slot);
   final Track track;
   final double slot;
+}
+
+/// What a change of track turned out to be.
+enum ShelfMove {
+  /// The same record is still in the middle; only its neighbours may have changed.
+  none,
+
+  /// One step along the shelf, to the right-hand record or the left-hand one.
+  forward,
+  back,
+
+  /// Nowhere near: a different queue, a tap on a distant row. Nothing to travel.
+  restock,
+
+  /// Back where it started: a journey was in flight and the record it was leaving is
+  /// the one wanted again. The journey is not finished, it is undone.
+  abandon,
+
+  /// Already on the way there. A finger dragged the shelf most of the way and let go;
+  /// the player is only now catching up with what the hand already did.
+  resume,
+}
+
+/// Which record stands where, kept apart from the animation that moves them.
+///
+/// This is the whole of the bookkeeping the stage does, and every way the movement
+/// used to break was a mistake in it rather than in the drawing — so it lives on its
+/// own, where it can be checked without a screen.
+class Shelf {
+  Shelf({this.left, required this.middle, this.right});
+
+  Track? left;
+  Track middle;
+  Track? right;
+
+  /// The sleeve waiting off-stage for the journey in flight, on the side it comes in
+  /// from.
+  Track? incoming;
+
+  /// +1 while everything is moving one place to the left, -1 the other way, 0 at rest.
+  int heading = 0;
+
+  bool get travelling => heading != 0;
+
+  /// The record that will be in the middle when the journey in flight finishes.
+  Track? get destination =>
+      heading > 0 ? right : (heading < 0 ? left : null);
+
+  /// Start a journey by hand: a finger dragging the shelf rather than a skip arriving.
+  ///
+  /// Says whether there is anything that way. The sleeve coming in from off-stage is
+  /// two along, which the stage is told about precisely so that a drag held halfway
+  /// has something to show at the edge.
+  bool begin(int direction, {Track? before, Track? after}) {
+    if (direction > 0 && right == null) return false;
+    if (direction < 0 && left == null) return false;
+    heading = direction;
+    incoming = direction > 0 ? after : before;
+    return true;
+  }
+
+  /// Take the journey in flight to be finished, right now.
+  ///
+  /// Where a journey ends is known before it starts — the right-hand record becomes
+  /// the middle one, and the one waiting off-stage takes its place — so an interrupted
+  /// journey has an answer, and it is this one.
+  void settle() {
+    if (heading > 0 && right != null) {
+      left = middle;
+      middle = right!;
+      right = incoming;
+    } else if (heading < 0 && left != null) {
+      right = middle;
+      middle = left!;
+      left = incoming;
+    }
+    incoming = null;
+    heading = 0;
+  }
+
+  /// The record in the middle is now [track]. Says how the shelf got there.
+  ///
+  /// Skipping twice inside half a second used to be measured against where the records
+  /// were when the *first* skip began, and by then the answer was no longer one of the
+  /// three places on the shelf — so the second skip fell through to a restock and the
+  /// whole thing snapped. Settling first makes it a step along the shelf like any other.
+  ShelfMove goTo(Track track, {Track? previous, Track? next}) {
+    // Already going there. A drag that was let go past the point of no return started
+    // this journey before the player was told; finishing it is all that is left.
+    if (travelling && destination?.id == track.id) {
+      incoming = heading > 0 ? next : previous;
+      return ShelfMove.resume;
+    }
+    if (track.id != middle.id && travelling) settle();
+
+    if (track.id == middle.id) {
+      // Skipped forward and straight back again, inside the half second the journey
+      // takes. The sleeves are mid-stage and the record they were leaving is wanted
+      // again: the honest answer is to take them back, not to finish a journey to
+      // somewhere nobody is going any more and then snap.
+      if (travelling) return ShelfMove.abandon;
+      // Otherwise the queue was edited under us. New company, no journey.
+      left = previous;
+      right = next;
+      return ShelfMove.none;
+    }
+    if (right?.id == track.id) {
+      heading = 1;
+      incoming = next;
+      return ShelfMove.forward;
+    }
+    if (left?.id == track.id) {
+      heading = -1;
+      incoming = previous;
+      return ShelfMove.back;
+    }
+    left = previous;
+    middle = track;
+    right = next;
+    incoming = null;
+    heading = 0;
+    return ShelfMove.restock;
+  }
+
+  /// The journey came back to where it started. Nothing moved after all.
+  void abandon({Track? previous, Track? next}) {
+    incoming = null;
+    heading = 0;
+    left = previous;
+    right = next;
+  }
+
+  /// The journey finished on its own: the arrangement it was heading for is the truth.
+  void arrive({Track? previous, required Track track, Track? next}) {
+    left = previous;
+    middle = track;
+    right = next;
+    incoming = null;
+    heading = 0;
+  }
 }
 
 class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin {
@@ -76,39 +224,49 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     duration: const Duration(milliseconds: 1800),
   );
 
-  int _heading = 0;
-
   /// What is on the shelf right now. Held separately from the widget so a skip can be
   /// *travelled to* rather than appearing already finished.
-  Track? _left;
-  late Track _middle;
-  Track? _right;
+  late final Shelf _shelf =
+      Shelf(left: widget.previous, middle: widget.track, right: widget.next);
 
-  /// The sleeve coming in from off-stage during a journey.
-  Track? _incoming;
+  /// A finger on the shelf, moving it by hand.
+  ///
+  /// The gesture used to slide the whole stage sideways and spring back — a picture of
+  /// a swipe rather than the thing itself. Now the drag *is* the journey: the sleeves
+  /// travel exactly as far as the hand takes them, in both directions, and letting go
+  /// either carries the movement through or takes it back. Nothing else moves.
+  bool _scrubbing = false;
+
+  /// How far the finger has gone, in pixels, signed. Left is forward.
+  double _dragged = 0;
+
+  /// How far a finger must travel for one whole step along the shelf. Set from the
+  /// stage's own width, so the sleeves keep pace with the hand.
+  double _reach = 240;
 
   @override
   void initState() {
     super.initState();
-    _left = widget.previous;
-    _middle = widget.track;
-    _right = widget.next;
     if (widget.playing) {
       _out.value = 1;
       _spin.repeat();
     }
     _travel.addStatusListener((status) {
-      if (status != AnimationStatus.completed) return;
-      // Arrived: the arrangement the journey was heading for is now simply the truth.
-      setState(() {
-        _left = widget.previous;
-        _middle = widget.track;
-        _right = widget.next;
-        _incoming = null;
-        _heading = 0;
-        _travel.value = 0;
-      });
-      // And the record that has just come to rest in the middle comes out.
+      if (status == AnimationStatus.completed) {
+        // Arrived: the arrangement the journey was heading for is now the truth.
+        setState(() {
+          _shelf.arrive(
+              previous: widget.previous, track: widget.track, next: widget.next);
+          _travel.value = 0;
+        });
+      } else if (status == AnimationStatus.dismissed && _shelf.travelling) {
+        // Or came back: an abandoned journey ends where it began.
+        setState(() =>
+            _shelf.abandon(previous: widget.previous, next: widget.next));
+      } else {
+        return;
+      }
+      // Either way, the record now at rest in the middle comes out.
       if (widget.playing) _out.forward();
     });
   }
@@ -120,7 +278,13 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
   /// when the eye is following something.
   void _warmSleeves() {
     final api = context.read<AppState>().api;
-    for (final track in [widget.previous, widget.next, widget.track]) {
+    for (final track in [
+      widget.previous,
+      widget.next,
+      widget.track,
+      widget.before,
+      widget.after,
+    ]) {
       if (track == null) continue;
       for (final url in [api.jacketUrl(track, small: false), api.discUrl(track)]) {
         if (url == null) continue;
@@ -138,55 +302,49 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
   @override
   void didUpdateWidget(RecordStage old) {
     super.didUpdateWidget(old);
-    if (old.next?.id != widget.next?.id || old.previous?.id != widget.previous?.id) {
+    if (old.next?.id != widget.next?.id ||
+        old.previous?.id != widget.previous?.id ||
+        old.after?.id != widget.after?.id ||
+        old.before?.id != widget.before?.id) {
       _warmSleeves();
     }
 
-    if (widget.track.id != _middle.id) {
-      final forwards = _right?.id == widget.track.id;
-      final backwards = _left?.id == widget.track.id;
-
-      if (forwards || backwards) {
+    switch (_shelf.goTo(widget.track,
+        previous: widget.previous, next: widget.next)) {
+      case ShelfMove.forward:
+      case ShelfMove.back:
         // A step along the shelf. Everything slides one place; the sleeve that was
         // next is now the one in the middle, in the place the middle one has left.
-        _heading = forwards ? 1 : -1;
-        _incoming = forwards ? widget.next : widget.previous;
         _travel.forward(from: 0);
         // The record goes back into its sleeve on the way out, rather than blinking
         // off the screen — one movement, the way it happens on a table. The next one
         // slides out when it arrives, which the playing branch below takes care of.
         _out.reverse();
-      } else {
-        // Somewhere else entirely — a different queue, a tap on a distant row. There
-        // is no journey between those, so the shelf is simply restocked.
-        _left = widget.previous;
-        _middle = widget.track;
-        _right = widget.next;
-        _incoming = null;
-        _heading = 0;
+      case ShelfMove.resume:
+        // The hand started this one. It is already running; nothing to do but let it
+        // finish where it was always going.
+        break;
+      case ShelfMove.abandon:
+        _travel.reverse();
+        _out.reverse();
+      case ShelfMove.restock:
         _travel.value = 0;
         _out.value = 0;
-      }
-    } else if (old.previous?.id != widget.previous?.id ||
-        old.next?.id != widget.next?.id) {
-      // The neighbours changed under us — the queue was edited. No journey, just the
-      // new company.
-      if (!_travel.isAnimating) {
-        _left = widget.previous;
-        _right = widget.next;
-      }
+      case ShelfMove.none:
+        break;
     }
 
     if (widget.playing) {
-      // Not while a sleeve is still travelling: a disc sliding out of something that
-      // is halfway across the stage is two movements fighting.
-      if (!_travel.isAnimating) _out.forward();
+      // Not while a sleeve is still travelling, and not while a finger is holding one
+      // halfway across the stage: a disc sliding out of something that is moving is
+      // two movements fighting, and under a finger it is a third.
+      if (!_travel.isAnimating && !_scrubbing) _out.forward();
       if (!_spin.isAnimating) _spin.repeat();
     } else {
       // At rest the record goes back in its sleeve and the turntable stops where it
       // is. It does not lie down: a sleeve tipping over every time you pause reads as
       // something going wrong rather than as something stopping.
-      _out.reverse();
+      if (!_scrubbing) _out.reverse();
       _spin.stop();
     }
   }
@@ -199,16 +357,76 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     super.dispose();
   }
 
+  // ------------------------------------------------------------ dragging by hand
+
+  void _dragStart(DragStartDetails _) {
+    _travel.stop();
+    _scrubbing = true;
+    // A drag that catches a journey mid-flight takes it over from exactly where it is,
+    // rather than snapping it back to the start.
+    _dragged = _shelf.travelling ? -_travel.value * _reach * _shelf.heading : 0;
+  }
+
+  void _dragUpdate(DragUpdateDetails d) {
+    _dragged += d.delta.dx;
+
+    // Pulling the shelf to the left brings the next record in; to the right, the one
+    // before. Changing your mind mid-drag changes which journey is being scrubbed.
+    final wanted = _dragged < 0 ? 1 : -1;
+    if (_shelf.heading != wanted) {
+      setState(() {
+        if (_shelf.travelling) {
+          _shelf.abandon(previous: widget.previous, next: widget.next);
+        }
+        _shelf.begin(wanted, before: widget.before, after: widget.after);
+      });
+    }
+    if (!_shelf.travelling) {
+      // Nothing that way: the shelf does not move, and the drag does not build up a
+      // debt that has to be paid back before the other direction answers.
+      _dragged = 0;
+      return;
+    }
+
+    final along = (_dragged.abs() / _reach).clamp(0.0, 1.0);
+    _travel.value = along;
+    // The record goes back into its sleeve as the sleeve leaves, at the speed of the
+    // hand — the same movement a skip makes, only this time somebody is doing it.
+    if (widget.playing) _out.value = 1 - along;
+  }
+
+  void _dragEnd(DragEndDetails d) {
+    _scrubbing = false;
+    if (!_shelf.travelling) return;
+
+    final velocity = d.velocity.pixelsPerSecond.dx;
+    // A flick counts, but only a flick the way the shelf is already going.
+    final flung =
+        velocity.abs() > 420 && velocity.sign == -_shelf.heading.toDouble();
+    final go = _shelf.heading > 0 ? widget.onNext : widget.onPrevious;
+
+    if (go != null && (_travel.value >= 0.4 || flung)) {
+      // Past the point of no return: carry the movement through from where the hand
+      // left it, and tell the player what just happened.
+      _travel.forward();
+      go();
+    } else {
+      // Not far enough. Back the way it came, and the record comes out again when it
+      // gets there — see the status listener.
+      _travel.reverse();
+    }
+  }
+
   /// Everything on stage, with the slot each one occupies at rest.
   List<_Card> _cards() {
     final out = <_Card>[
-      if (_left != null) _Card(_left!, -1),
-      _Card(_middle, 0),
-      if (_right != null) _Card(_right!, 1),
+      if (_shelf.left != null) _Card(_shelf.left!, -1),
+      _Card(_shelf.middle, 0),
+      if (_shelf.right != null) _Card(_shelf.right!, 1),
     ];
-    if (_incoming != null && _heading != 0) {
+    if (_shelf.incoming != null && _shelf.travelling) {
       // Waiting just off-stage, on the side it will come in from.
-      out.add(_Card(_incoming!, 2.0 * _heading));
+      out.add(_Card(_shelf.incoming!, 2.0 * _shelf.heading));
     }
     return out;
   }
@@ -222,15 +440,20 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
         final side =
             math.min(c.maxWidth, c.maxHeight.isFinite ? c.maxHeight : c.maxWidth);
         final jacket = side * widget.scale.clamp(0.5, 1.0);
+        // One shelf place is 0.45 of the stage; the finger covers the same ground, so
+        // the sleeve under it stays under it.
+        _reach = side * 0.45;
 
         return RepaintBoundary(
           child: SizedBox(
           width: side,
           height: side,
-          child: DragFollow(
-            onSwipeLeft: widget.onNext,
-            onSwipeRight: widget.onPrevious,
-            horizontalTravel: side * 0.22,
+          // Horizontal only, so a drag up or down still belongs to the page.
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onHorizontalDragStart: _dragStart,
+            onHorizontalDragUpdate: _dragUpdate,
+            onHorizontalDragEnd: _dragEnd,
             child: AnimatedBuilder(
               animation: Listenable.merge([_travel, _out]),
               builder: (context, _) {
@@ -245,22 +468,23 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                 // than like a transition. So each card's progress is the same curve,
                 // started late in proportion to how far behind the leading sleeve it
                 // is, and everything is still exactly in place when the journey ends.
+                final heading = _shelf.heading;
                 double progressFor(double slot) {
-                  if (_heading == 0) return 0;
+                  if (heading == 0) return 0;
                   // Counted from the sleeve leading the way: the one travelling out.
-                  final behind = (_heading > 0 ? slot + 1 : 1 - slot).clamp(0.0, 3.0);
+                  final behind = (heading > 0 ? slot + 1 : 1 - slot).clamp(0.0, 3.0);
                   const lag = 0.10;
                   final start = (behind * lag).clamp(0.0, 0.34);
                   final local =
                       ((_travel.value - start) / (1 - start)).clamp(0.0, 1.0);
-                  return Curves.easeInOutCubic.transform(local) * _heading;
+                  return Curves.easeInOutCubic.transform(local) * heading;
                 }
 
                 // Painted back to front: the ones furthest from the middle first, so
                 // the record being listened to is in front of its neighbours however
                 // far along the journey everything is.
-                final middle = Curves.easeInOutCubic.transform(_travel.value) *
-                    _heading;
+                final middle =
+                    Curves.easeInOutCubic.transform(_travel.value) * heading;
                 final ordered = [...cards]..sort((a, b) =>
                     (b.slot - middle).abs().compareTo((a.slot - middle).abs()));
 
@@ -282,8 +506,14 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                         d: card.slot - progressFor(card.slot),
                         side: side,
                         jacket: jacket,
-                        jacketUrl: api.jacketUrl(card.track,
-                            small: (card.slot - middle).abs() > 0.5),
+                        // The same picture wherever it stands. Choosing the small
+                        // one for the sleeves off to the side meant the URL changed
+                        // halfway through the journey, and a changed URL is a second
+                        // download and a fresh decode landing in the middle of the
+                        // movement — which is precisely where a stutter is visible.
+                        // It saved nothing either: _warmSleeves already fetches the
+                        // full-size one for all three.
+                        jacketUrl: api.jacketUrl(card.track, small: false),
                         discUrl: api.discUrl(card.track),
                         spin: _spin,
                         out: _out.value,
@@ -345,6 +575,12 @@ class _Sleeve extends StatelessWidget {
     final centre = (1 - away).clamp(0.0, 1.0);
     final showing = out * centre;
 
+    // Faded by the pictures themselves rather than by an Opacity around them.
+    // Opacity between 0 and 1 saves a layer, and there is one of these for every
+    // sleeve on stage on every frame of every journey — four full-size offscreen
+    // buffers a frame was most of why the movement dropped frames at all.
+    final dim = fade.clamp(0.0, 1.0);
+
     return Transform(
       alignment: Alignment.center,
       transform: Matrix4.identity()
@@ -352,35 +588,45 @@ class _Sleeve extends StatelessWidget {
         ..translateByDouble(x, 0.0, 0.0, 1.0)
         ..rotateY(turn)
         ..scaleByDouble(scale, scale, 1.0, 1.0),
-      child: Opacity(
-        opacity: fade.clamp(0.0, 1.0),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: jacket,
-              height: jacket,
-              child: Stack(
-                alignment: Alignment.center,
-                clipBehavior: Clip.none,
-                children: [
-                  if (showing > 0.01)
-                    _Disc(
-                        spin: spin,
-                        url: discUrl,
-                        size: jacket * 0.92,
-                        out: showing,
-                        jacket: jacket),
-                  _Jacket(url: jacketUrl, size: jacket),
-                ],
-              ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: jacket,
+            height: jacket,
+            child: Stack(
+              alignment: Alignment.center,
+              clipBehavior: Clip.none,
+              children: [
+                if (showing > 0.01)
+                  _Disc(
+                      spin: spin,
+                      url: discUrl,
+                      size: jacket * 0.92,
+                      out: showing,
+                      jacket: jacket,
+                      dim: dim),
+                _Jacket(url: jacketUrl, size: jacket, dim: dim),
+              ],
             ),
-            // What the record is standing on, said as quietly as possible. The
-            // cardboard only — the disc is turning, and a turning reflection is
-            // something the eye follows instead of the record itself.
-            Mirror(size: jacket, child: _Jacket(url: jacketUrl, size: jacket)),
-          ],
-        ),
+          ),
+          // What the record is standing on, said as quietly as possible. The
+          // cardboard only — the disc is turning, and a turning reflection is
+          // something the eye follows instead of the record itself.
+          //
+          // Skipped once it is dim enough not to be seen: it is the one thing here
+          // that genuinely needs a layer of its own, and the sleeves it would be
+          // under at that point are themselves nearly gone.
+          if (dim > 0.25)
+            RepaintBoundary(
+              child: Mirror(
+                size: jacket,
+                child: _Jacket(url: jacketUrl, size: jacket, dim: dim),
+              ),
+            )
+          else
+            SizedBox(width: jacket, height: jacket * 0.34),
+        ],
       ),
     );
   }
@@ -388,10 +634,14 @@ class _Sleeve extends StatelessWidget {
 
 /// The cardboard. Its pose comes from the stage; here it is just the picture.
 class _Jacket extends StatelessWidget {
-  const _Jacket({required this.url, required this.size});
+  const _Jacket({required this.url, required this.size, this.dim = 1.0});
 
   final String? url;
   final double size;
+
+  /// How present it is, 0 to 1 — applied while the picture is painted rather than by
+  /// an Opacity above it, which would cost an offscreen buffer every frame.
+  final double dim;
 
   @override
   Widget build(BuildContext context) => SizedBox(
@@ -399,7 +649,10 @@ class _Jacket extends StatelessWidget {
         height: size,
         child: url == null
             ? const SizedBox.shrink()
-            : Image.network(url!, fit: BoxFit.contain, gaplessPlayback: true),
+            : Image.network(url!,
+                fit: BoxFit.contain,
+                gaplessPlayback: true,
+                opacity: AlwaysStoppedAnimation(dim)),
       );
 }
 
@@ -411,6 +664,7 @@ class _Disc extends StatelessWidget {
     required this.size,
     required this.out,
     required this.jacket,
+    this.dim = 1.0,
   });
 
   final Animation<double> spin;
@@ -418,6 +672,7 @@ class _Disc extends StatelessWidget {
   final double size;
   final double out;
   final double jacket;
+  final double dim;
 
   @override
   Widget build(BuildContext context) {
@@ -436,7 +691,10 @@ class _Disc extends StatelessWidget {
           child: SizedBox(
             width: size,
             height: size,
-            child: Image.network(url!, fit: BoxFit.contain, gaplessPlayback: true),
+            child: Image.network(url!,
+                fit: BoxFit.contain,
+                gaplessPlayback: true,
+                opacity: AlwaysStoppedAnimation(dim)),
           ),
         ),
       ),

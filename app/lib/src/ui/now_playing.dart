@@ -583,6 +583,10 @@ class _Artwork extends StatelessWidget {
               scale: context.watch<AppState>().coverScale,
               previous: _at(-1),
               next: _at(1),
+              // Two either side as well: a journey held halfway by a finger shows the
+              // fourth sleeve at the edge of the frame, and it should be the right one.
+              before: _at(-2),
+              after: _at(2),
               // Through the app: a swipe in a jam asks the room, like every other
               // way of changing track.
               onPrevious: context.read<AppState>().skipPrevious,
