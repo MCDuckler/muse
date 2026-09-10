@@ -127,6 +127,12 @@ class NowPlayingScreen extends StatelessWidget {
                           mainAxisAlignment: MainAxisAlignment.center,
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
+                            // Room above the record.
+                            //
+                            // It sat hard against the app bar, which reads as the
+                            // screen having run out rather than as a record standing
+                            // on a shelf with air around it.
+                            const SizedBox(height: 28),
                             // Roomy trades artwork for buttons: the panel below wants
                             // the space more than the record does when the phone is
                             // being held in one hand.
@@ -401,15 +407,23 @@ class _Credits extends StatelessWidget {
           ),
         );
 
-    // Artist over album, one to a line.
+    final albumStyle = Theme.of(context).textTheme.bodyMedium?.copyWith(
+        color: scheme.onSurfaceVariant.withValues(alpha: 0.75));
+    final sourceStyle = Theme.of(context).textTheme.labelSmall
+        ?.copyWith(color: scheme.outline);
+
+    // Artist over album over source: one to a line, and always the same three lines.
     //
-    // Side by side they were two links competing for the same row: a long artist and a
-    // long album each got half of it and both ended in an ellipsis, and the dot between
-    // them read as punctuation in a sentence rather than as a divider between two
-    // different things you can tap. Stacked, each gets the whole width.
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
+    // Side by side, artist and album were two links competing for one row — a long one
+    // of each got half of it, both ended in an ellipsis, and the dot between them read
+    // as punctuation rather than as a divider between two things you can tap.
+    //
+    // The room for all three is reserved whether or not this particular song has an
+    // album or came from somewhere worth naming. Otherwise every song changes the
+    // height of this block, and a block above the controls that changes height moves
+    // the record, the bar and the buttons with it — so the whole screen twitches on
+    // every track, which is the thing that is actually noticed.
+    final lines = <Widget>[
         link(
           track.artistLine,
           () => Navigator.of(context).push(MaterialPageRoute(
@@ -424,8 +438,7 @@ class _Credits extends StatelessWidget {
         ),
         if (track.albumLine != null)
           link(
-            own: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: scheme.onSurfaceVariant.withValues(alpha: 0.75)),
+            own: albumStyle,
             track.albumLine!,
             () => Navigator.of(context).push(MaterialPageRoute(
               builder: (_) => AlbumPage(
@@ -437,11 +450,23 @@ class _Credits extends StatelessWidget {
               ),
             )),
           ),
-        if (track.sourceLabel != null)
-          Text(track.sourceLabel!,
-              style: Theme.of(context).textTheme.labelSmall
-                  ?.copyWith(color: scheme.outline)),
-      ],
+    ];
+
+    double heightOf(TextStyle? style, double fallback) {
+      final size = MediaQuery.textScalerOf(context)
+          .scale(style?.fontSize ?? fallback);
+      return size * (style?.height ?? 1.35);
+    }
+
+    // Each line's own height, plus what the padding inside a link adds. Measured from
+    // the type rather than guessed, so it holds at any text scale.
+    final reserved = heightOf(style, 16) + 4 +
+        heightOf(albumStyle, 14) + 4 +
+        heightOf(sourceStyle, 11);
+
+    return SizedBox(
+      height: reserved,
+      child: Column(mainAxisSize: MainAxisSize.min, children: lines),
     );
   }
 }

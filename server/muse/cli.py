@@ -117,7 +117,7 @@ def markdead(apply: bool = False) -> None:
     job log and marks the sources they name, which is what makes asking for those songs
     again reach for a copy that might work.
     """
-    from . import config, failures
+    from . import config, db, failures
 
     db.init(config.load().dsn)
     rows = db.all_(
@@ -142,6 +142,7 @@ def markdead(apply: bool = False) -> None:
                returning track_id""",
             (row["track_id"], row["provider_id"])))
     print(f"marked {marked} sources dead")
+    db.close()
 
 
 def main() -> None:

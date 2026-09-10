@@ -220,8 +220,10 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
   /// record can start and stop playing without anything moving along the shelf.
   late final AnimationController _out = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 520),
-    reverseDuration: const Duration(milliseconds: 340),
+    // Longer than it was: the record now comes right out of the sleeve and then leans
+    // back against it, which is two movements and needs the time for both.
+    duration: const Duration(milliseconds: 780),
+    reverseDuration: const Duration(milliseconds: 520),
   );
 
   /// One turn every 1.8 s, which is 33⅓ rpm — the speed the record would really run.
@@ -234,6 +236,33 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
   /// *travelled to* rather than appearing already finished.
   late final Shelf _shelf =
       Shelf(left: widget.previous, middle: widget.track, right: widget.next);
+
+  /// The record turning over in the air, and which way up it has landed.
+  ///
+  /// One movement: thrown, so it rises and comes back down, and turning while it is up
+  /// there so it lands on its other face. Held apart from everything else on the stage
+  /// because it happens to the sleeve rather than to the shelf.
+  late final AnimationController _toss = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 620),
+  )..addStatusListener((status) {
+      if (status == AnimationStatus.completed) {
+        setState(() {
+          _showingBack = !_showingBack;
+          _toss.value = 0;
+        });
+      }
+    });
+
+  /// Which face is towards you at rest.
+  bool _showingBack = false;
+
+  /// Whether the record has been pulled out by hand, rather than because it is
+  /// playing. Null until somebody says otherwise, and forgotten when the song changes:
+  /// a decision about *this* record is not a decision about the next one.
+  bool? _discByHand;
+
+  bool get _discWanted => _discByHand ?? widget.playing;
 
   /// A finger on the shelf, moving it by hand.
   ///
@@ -315,6 +344,14 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
       _warmSleeves();
     }
 
+    if (widget.track.id != _shelf.middle.id) {
+      // A different record: it arrives the right way up and with its own disc put
+      // away, whatever was decided about the last one.
+      _discByHand = null;
+      _showingBack = false;
+      _toss.value = 0;
+    }
+
     switch (_shelf.goTo(widget.track,
         previous: widget.previous, next: widget.next)) {
       case ShelfMove.forward:
@@ -349,15 +386,47 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
       // Not while a sleeve is still travelling, and not while a finger is holding one
       // halfway across the stage: a disc sliding out of something that is moving is
       // two movements fighting, and under a finger it is a third.
-      if (!_travel.isAnimating && !_scrubbing) _out.forward();
+      if (_discWanted && !_travel.isAnimating && !_scrubbing && !_showingBack) {
+        _out.forward();
+      }
       if (!_spin.isAnimating) _spin.repeat();
     } else {
       // At rest the record goes back in its sleeve and the turntable stops where it
       // is. It does not lie down: a sleeve tipping over every time you pause reads as
       // something going wrong rather than as something stopping.
-      if (!_scrubbing) _out.reverse();
+      //
+      // Unless it was pulled out by hand, in which case it stays where it was put.
+      if (!_scrubbing && !_discWanted) _out.reverse();
       _spin.stop();
     }
+  }
+
+  /// Tapping the record: out of the sleeve, or back into it.
+  ///
+  /// The cover is a thing to look at, and while the disc is halfway across it you
+  /// cannot. So it goes away when asked and comes back the same way it left — the same
+  /// movement, run backwards, rather than a second animation that has to be kept in
+  /// step with the first.
+  void _toggleDisc() {
+    if (_showingBack || _toss.isAnimating) return;
+    setState(() => _discByHand = !_discWanted);
+    if (_discWanted) {
+      _out.forward();
+    } else {
+      _out.reverse();
+    }
+  }
+
+  /// Thrown in the air, landing on its other face.
+  void _tossIt() {
+    if (_toss.isAnimating || _shelf.travelling || _scrubbing) return;
+    // Not with the record halfway out of it: the two would be turning over together
+    // and the disc has no back.
+    if (_discWanted) {
+      _discByHand = false;
+      _out.reverse();
+    }
+    _toss.forward(from: 0);
   }
 
   @override
@@ -365,6 +434,7 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     _travel.dispose();
     _out.dispose();
     _spin.dispose();
+    _toss.dispose();
     super.dispose();
   }
 
@@ -467,14 +537,23 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
           // direction still belongs to the page: a drag down closes the player.
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
+            // Tapping the record puts it back in its sleeve, or takes it out again.
+            onTap: _toggleDisc,
             onHorizontalDragStart: _upright ? null : _dragStart,
             onHorizontalDragUpdate: _upright ? null : _dragUpdate,
             onHorizontalDragEnd: _upright ? null : _dragEnd,
+            // Up and over. Only where the shelf runs across the screen: where it runs
+            // up and down, a swipe up is already how you change record, and one drag
+            // meaning two things is how a screen stops being predictable.
             onVerticalDragStart: _upright ? _dragStart : null,
             onVerticalDragUpdate: _upright ? _dragUpdate : null,
-            onVerticalDragEnd: _upright ? _dragEnd : null,
+            onVerticalDragEnd: _upright
+                ? _dragEnd
+                : (d) {
+                    if (d.velocity.pixelsPerSecond.dy < -520) _tossIt();
+                  },
             child: AnimatedBuilder(
-              animation: Listenable.merge([_travel, _out]),
+              animation: Listenable.merge([_travel, _out, _toss]),
               builder: (context, _) {
                 final cards = _cards();
 
@@ -524,6 +603,10 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                         // 0 — the middle — which is the point of the whole thing.
                         d: card.slot - progressFor(card.slot),
                         upright: _upright,
+                        // Only the record in the middle turns over; the ones beside it
+                        // are somebody else's.
+                        toss: card.slot == 0 ? _toss.value : 0.0,
+                        showingBack: card.slot == 0 && _showingBack,
                         side: side,
                         jacket: jacket,
                         // The same picture wherever it stands. Choosing the small
@@ -536,7 +619,7 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                         jacketUrl: api.jacketUrl(card.track, small: false),
                         discUrl: api.discUrl(card.track),
                         spin: _spin,
-                        out: _out.value,
+                        out: Curves.easeInOutCubic.transform(_out.value),
                       ),
                   ],
                 );
@@ -562,6 +645,8 @@ class _Sleeve extends StatelessWidget {
     super.key,
     required this.d,
     required this.upright,
+    required this.toss,
+    required this.showingBack,
     required this.side,
     required this.jacket,
     required this.jacketUrl,
@@ -574,6 +659,13 @@ class _Sleeve extends StatelessWidget {
 
   /// The shelf runs up the screen rather than across it.
   final bool upright;
+
+  /// How far through being thrown in the air, 0 to 1. Zero for everything that is not
+  /// the record in the middle.
+  final double toss;
+
+  /// Which face was towards you before the throw started.
+  final bool showingBack;
 
   final double side;
   final double jacket;
@@ -599,9 +691,11 @@ class _Sleeve extends StatelessWidget {
     final fade = away <= 1 ? 1.0 - 0.62 * away : (1.9 - away).clamp(0.0, 1.0) * 0.38;
 
     // Only whatever is in the middle has its record out, and only as far as it is
-    // actually in the middle: a sleeve halfway to the edge has put it away again.
+    // actually in the middle: a sleeve halfway to the edge has put it away again. And
+    // nothing is out of a sleeve that is in the air — the disc would be turning over
+    // with it, and a record has no back.
     final centre = (1 - away).clamp(0.0, 1.0);
-    final showing = out * centre;
+    final showing = out * centre * (1 - toss.clamp(0.0, 1.0));
 
     // Faded by the pictures themselves rather than by an Opacity around them.
     // Opacity between 0 and 1 saves a layer, and there is one of these for every
@@ -632,15 +726,25 @@ class _Sleeve extends StatelessWidget {
               alignment: Alignment.center,
               clipBehavior: Clip.none,
               children: [
-                if (showing > 0.01)
-                  _Disc(
-                      spin: spin,
-                      url: discUrl,
-                      size: jacket * 0.92,
-                      out: showing,
-                      jacket: jacket,
-                      dim: dim),
-                _Jacket(url: jacketUrl, size: jacket, dim: dim),
+                // Behind the sleeve on the way out, in front of it once it is clear.
+                //
+                // That order *is* the movement: a record comes out from behind its
+                // cover, and once it is out it is the thing in front. Drawing it
+                // behind the whole way meant it slid out and then sat half-hidden, and
+                // drawing it in front the whole way meant it appeared to come out of
+                // thin air rather than out of the sleeve.
+                if (showing > 0.01 && showing < Disc.infront)
+                  Disc(spin: spin, url: discUrl, size: jacket * 0.92,
+                      out: showing, jacket: jacket, dim: dim),
+                _Face(
+                    url: jacketUrl,
+                    size: jacket,
+                    dim: dim,
+                    toss: toss,
+                    showingBack: showingBack),
+                if (showing >= Disc.infront)
+                  Disc(spin: spin, url: discUrl, size: jacket * 0.92,
+                      out: showing, jacket: jacket, dim: dim),
               ],
             ),
           ),
@@ -651,11 +755,13 @@ class _Sleeve extends StatelessWidget {
           // Skipped once it is dim enough not to be seen: it is the one thing here
           // that genuinely needs a layer of its own, and the sleeves it would be
           // under at that point are themselves nearly gone.
-          if (dim > 0.25 && !upright)
+          if (dim > 0.25 && !upright && toss == 0)
             RepaintBoundary(
               child: Mirror(
                 size: jacket,
-                child: _Jacket(url: jacketUrl, size: jacket, dim: dim),
+                child: showingBack
+                    ? _Back(size: jacket, dim: dim)
+                    : _Jacket(url: jacketUrl, size: jacket, dim: dim),
               ),
             )
           else
@@ -667,6 +773,152 @@ class _Sleeve extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The sleeve, thrown in the air and landing on its other face.
+///
+/// One movement rather than two. It rises and comes back down on a single arc, turning
+/// while it is up there, and it grows a little on the way — which is what something
+/// coming towards you does, and what makes it read as thrown rather than as a picture
+/// being rotated in place.
+class _Face extends StatelessWidget {
+  const _Face({
+    required this.url,
+    required this.size,
+    required this.dim,
+    required this.toss,
+    required this.showingBack,
+  });
+
+  final String? url;
+  final double size;
+  final double dim;
+  final double toss;
+  final bool showingBack;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget front() => _Jacket(url: url, size: size, dim: dim);
+    Widget back() => _Back(size: size, dim: dim);
+
+    if (toss <= 0) {
+      return showingBack ? back() : front();
+    }
+
+    // Up and down again: highest halfway through, back where it started at the end.
+    final rise = math.sin(toss * math.pi);
+    // Half a turn, eased so it is quickest at the top of the arc where the record is
+    // furthest away and the turn is least readable anyway.
+    final turned = Curves.easeInOutSine.transform(toss) * math.pi;
+    // Past a quarter turn the far side is towards you.
+    final far = turned > math.pi / 2;
+    final showing = far != showingBack;
+
+    return Transform(
+      alignment: Alignment.center,
+      transform: Matrix4.identity()
+        ..setEntry(3, 2, 0.0012)
+        ..translateByDouble(0.0, -size * 0.34 * rise, 0.0, 1.0)
+        ..scaleByDouble(1 + 0.12 * rise, 1 + 0.12 * rise, 1.0, 1.0)
+        ..rotateX(-turned),
+      // The far side of a rotated thing is a mirror of the near side, so whatever is
+      // painted on it has to be turned over again to be the right way up.
+      child: showing
+          ? Transform(
+              alignment: Alignment.center,
+              transform: Matrix4.identity()..rotateX(math.pi),
+              child: back(),
+            )
+          : front(),
+    );
+  }
+}
+
+/// The back of the sleeve: bare board.
+///
+/// Drawn here rather than fetched, because there is nothing about it that belongs to
+/// this record — every sleeve in the world has roughly this back until somebody prints
+/// on it. Kraft card, the grain of the stock, the seam where it is folded, and corners
+/// a shade darker from being handled.
+class _Back extends StatelessWidget {
+  const _Back({required this.size, this.dim = 1.0});
+
+  final double size;
+  final double dim;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        width: size,
+        height: size,
+        child: Opacity(
+          opacity: dim.clamp(0.0, 1.0),
+          child: CustomPaint(painter: _Board(), size: Size(size, size)),
+        ),
+      );
+}
+
+class _Board extends CustomPainter {
+  /// The fibre in the card. One pattern, made once, tiled — a few hundred marks laid
+  /// down per frame would be a lot of work for something nobody is meant to study.
+  static final List<Offset> _fibres = () {
+    final rng = math.Random(20260910);
+    return [for (var i = 0; i < 240; i++) Offset(rng.nextDouble(), rng.nextDouble())];
+  }();
+
+  static final List<double> _lengths = () {
+    final rng = math.Random(7);
+    return [for (var i = 0; i < 240; i++) 0.004 + rng.nextDouble() * 0.02];
+  }();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final radius = size.shortestSide * 0.012;
+    final board = RRect.fromRectAndRadius(rect, Radius.circular(radius));
+
+    canvas.save();
+    canvas.clipRRect(board);
+    canvas.drawRect(rect, Paint()..color = const Color(0xFFBFB093));
+
+    // Handled corners, a shade darker.
+    canvas.drawRect(
+      rect,
+      Paint()
+        ..shader = const RadialGradient(
+          radius: 0.78,
+          colors: [Color(0x00000000), Color(0x22000000)],
+          stops: [0.55, 1.0],
+        ).createShader(rect),
+    );
+
+    final fibre = Paint()
+      ..color = const Color(0x14000000)
+      ..strokeWidth = math.max(1.0, size.width / 900);
+    for (var i = 0; i < _fibres.length; i++) {
+      final at = Offset(_fibres[i].dx * size.width, _fibres[i].dy * size.height);
+      final run = _lengths[i] * size.width;
+      canvas.drawLine(at, at.translate(run, run * 0.18), fibre);
+    }
+
+    // The fold, down the spine edge.
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width * 0.035, size.height),
+      Paint()
+        ..shader = const LinearGradient(
+          colors: [Color(0x33000000), Color(0x00000000)],
+        ).createShader(Rect.fromLTWH(0, 0, size.width * 0.035, size.height)),
+    );
+    canvas.restore();
+    canvas.drawRRect(
+        board,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = math.max(1.0, size.width / 500)
+          ..color = const Color(0x22000000));
+  }
+
+  @override
+  bool shouldRepaint(_Board old) => false;
 }
 
 /// The cardboard. Its pose comes from the stage; here it is just the picture.
@@ -694,9 +946,10 @@ class _Jacket extends StatelessWidget {
       );
 }
 
-/// The disc: slides out from behind the jacket and turns while it plays.
-class _Disc extends StatelessWidget {
-  const _Disc({
+/// The disc: comes out from behind the jacket, and turns while it plays.
+class Disc extends StatelessWidget {
+  const Disc({
+    super.key,
     required this.spin,
     required this.url,
     required this.size,
@@ -712,17 +965,48 @@ class _Disc extends StatelessWidget {
   final double jacket;
   final double dim;
 
+  /// How far out it is before it is the thing in front rather than the thing behind.
+  ///
+  /// The moment it is clear of the sleeve. Before this it is coming out from behind
+  /// the cover, which is where a record comes from; after it, it is in front, which is
+  /// where a record you have taken out is.
+  static const double infront = 0.55;
+
+  /// Clear of the sleeve, at the far end of the way out.
+  static const double _clear = 0.78;
+
+  /// Where it settles: overlapping the cover by about half its width, which is how a
+  /// record leans against the sleeve it came out of.
+  static const double _rest = 0.46;
+
+  /// How far along the sleeve the disc is, given how far out it is.
+  ///
+  /// Out and then back, not straight to where it stops. A record does not slide half
+  /// out and stay there — it comes right out of the sleeve, and then you lean it
+  /// against the front. Two movements in one number, so nothing has to be kept in step
+  /// with anything.
+  static double travel(double out) {
+    if (out <= infront) return _clear * (out / infront);
+    return _clear + (_rest - _clear) * ((out - infront) / (1 - infront));
+  }
+
   @override
   Widget build(BuildContext context) {
     if (url == null) return const SizedBox.shrink();
-    // A third of the way out of the sleeve, along the sleeve's own plane.
+    final along = jacket * travel(out);
+    // Rolling, not sliding. A disc that moves without turning is a picture being
+    // dragged; one that turns by the distance it covers divided by its own radius is
+    // a record rolling along the edge of the sleeve — and it rolls *back* on the way
+    // in, which is the whole of why the return leg reads as a return.
+    final roll = along / (size / 2);
+
     return Transform.translate(
-      offset: Offset(jacket * 0.34 * out, 0),
+      offset: Offset(along, 0),
       child: RepaintBoundary(
         child: AnimatedBuilder(
           animation: spin,
           builder: (context, child) => Transform.rotate(
-            angle: spin.value * 2 * math.pi,
+            angle: spin.value * 2 * math.pi + roll,
             child: child,
           ),
           // Built once and turned, rather than rebuilt every frame.
@@ -796,11 +1080,7 @@ class Mirror extends StatelessWidget {
     return SizedBox(
       width: size,
       height: size * depth,
-      // Clipped, not merely faded. The copy inside is a whole cover tall and only a
-      // sixth of one is wanted; leaving the rest to the gradient means trusting a
-      // shader's clamp to keep an upside-down album off the title underneath it.
-      child: ClipRect(
-        child: ShaderMask(
+      child: ShaderMask(
           blendMode: BlendMode.dstIn,
           shaderCallback: (bounds) => LinearGradient(
             begin: Alignment.topCenter,
@@ -811,7 +1091,17 @@ class Mirror extends StatelessWidget {
             ],
             stops: fadeStops,
           ).createShader(bounds),
-          child: OverflowBox(
+          // Clipped *inside* the mask, which is the whole of the white fringe.
+          //
+          // A ShaderMask paints its shader over its own rectangle and nothing else, and
+          // dstIn leaves anything outside that rectangle alone — so the rest of the
+          // reflected cover, which is a whole album tall, sat below at full brightness.
+          // A clip on the outside cut it at the same line the mask ends on, and the
+          // antialiased edge of that clip kept a sliver of it: one bright row, exactly
+          // where the reflection is meant to have faded to nothing. Clipping first
+          // means there is no unmasked content for the edge to keep.
+          child: ClipRect(
+            child: OverflowBox(
             alignment: Alignment.topCenter,
             maxHeight: size,
             // Flipped about its own middle, so the copy stays in the box and its top
@@ -826,8 +1116,8 @@ class Mirror extends StatelessWidget {
               child: child,
             ),
           ),
+          ),
         ),
-      ),
     );
   }
 }

@@ -243,11 +243,11 @@ def _refind_one(track: dict) -> dict:
     dead = {r["provider_id"] for r in db.all_(
         "select provider_id from track_sources where track_id=%s", (track["id"],))}
     # Copies written off along the way, so a second search does not resurrect one.
-    dead |= {r["error"] for r in db.all_(
-        """select payload->>'video_id' as error from jobs
+    dead |= {r["tried"] for r in db.all_(
+        """select payload->>'video_id' as tried from jobs
             where kind='ingest' and state='failed'
               and (payload->>'track_id')::int = %s""", (track["id"],))
-        if r["error"]}
+        if r["tried"]}
     want = {"title": track["title"], "artists": track["artists"] or [],
             "duration_ms": track["duration_ms"], "isrc": track.get("isrc")}
     query = " ".join([track["title"] or "", (track["artists"] or [""])[0]]).strip()
