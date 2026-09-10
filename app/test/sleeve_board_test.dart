@@ -143,13 +143,59 @@ void main() {
     expect(board.drawing, isNull);
   });
 
+  wetPaint();
+
   test('the pen is remembered, and it is the pen that draws', () {
-    board.pickInk(4);
+    board.pickInk(3);
     board.pickNib(2.2);
     board.begin(const Offset01(0.1, 0.1));
     board.extend(const Offset01(0.5, 0.5));
     board.end();
-    expect(board.strokes.single.ink, 4);
+    expect(board.strokes.single.ink, 3);
     expect(board.strokes.single.width, 2.2);
+  });
+}
+
+void wetPaint() {
+  group('wet paint', () {
+    late SleeveBoard board;
+
+    setUp(() async {
+      board = SleeveBoard(_Recorder());
+      await board.open(7);
+    });
+
+    tearDown(() => board.dispose());
+
+    test('a line just drawn is wet, and dries', () {
+      board.begin(const Offset01(0.2, 0.2));
+      board.extend(const Offset01(0.6, 0.6));
+      board.end();
+      final id = board.strokes.single.id;
+      expect(board.wetness(id), greaterThan(0.9));
+    });
+
+    test("somebody else's paint is wet when it lands", () {
+      board.arrived({
+        'track_id': 7, 'stroke_id': 'theirs', 'ink': 1, 'width': 2.4,
+        'points': [0.1, 0.1, 0.4, 0.4], 'done': true, 'author_id': 9,
+      });
+      expect(board.wetness('theirs'), greaterThan(0.9));
+    });
+
+    test('a line still being drawn is not running yet', () {
+      board.arrived({
+        'track_id': 7, 'stroke_id': 'theirs', 'ink': 1, 'width': 2.4,
+        'points': [0.1, 0.1, 0.4, 0.4], 'done': false, 'author_id': 9,
+      });
+      expect(board.wetness('theirs'), 0,
+          reason: 'paint runs when the can stops, not while it is moving');
+    });
+
+    test('what was already on the board when it opened is dry', () {
+      // Otherwise every board would put on a show of drying every time it was opened,
+      // and a record turned over twice would drip twice.
+      expect(board.wetness('anything-from-the-server'), 0);
+    });
   });
 }

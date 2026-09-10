@@ -117,9 +117,22 @@ class SleeveInk extends CustomPainter {
     if (live != null) _line(canvas, size, live);
   }
 
+  /// One pass of the can.
+  ///
+  /// Three layers and it needs all three. A halo of overspray, wide and soft, which is
+  /// what a nozzle actually puts on a wall; a denser core inside it; and a scatter of
+  /// separate droplets along the way, because the edge of a sprayed line is never a
+  /// line, it is where the dots run out.
+  ///
+  /// Painted over rather than into. It used to multiply, which is how ink sinks into
+  /// paper — and it meant a pale colour laid over a dark one could not lighten it, so
+  /// everything drifted towards the darkest thing on the board and black won every
+  /// argument. Paint covers what it lands on.
   void _line(Canvas canvas, Size size, SleeveStroke stroke) {
     final points = stroke.points;
     if (points.length < 4) return;
+    final colour = inkAt(stroke.ink);
+    final w = stroke.width * size.width * 0.019;
 
     final path = Path()
       ..moveTo(points[0] * size.width, points[1] * size.height);
@@ -133,30 +146,101 @@ class SleeveInk extends CustomPainter {
     path.lineTo(points[points.length - 2] * size.width,
         points[points.length - 1] * size.height);
 
-    final pen = Paint()
+    Paint pass(double width, double alpha, double blur) => Paint()
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..isAntiAlias = true
-      ..strokeWidth = stroke.width * size.width * 0.019
-      ..color = inkAt(stroke.ink)
-      // Ink sinks into card rather than sitting on top of it, and multiply is what
-      // that looks like: the grain of the board shows through the line.
-      ..blendMode = BlendMode.multiply;
+      ..strokeWidth = width
+      ..color = colour.withValues(alpha: alpha)
+      ..maskFilter = blur <= 0
+          ? null
+          : MaskFilter.blur(BlurStyle.normal, blur);
 
-    // The mark a pen leaves where it presses hardest, under the line proper. Almost
-    // nothing on its own; together they are why it reads as a pen and not a stylus.
-    canvas.drawPath(
-        path,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeCap = StrokeCap.round
-          ..strokeJoin = StrokeJoin.round
-          ..isAntiAlias = true
-          ..strokeWidth = pen.strokeWidth * 1.5
-          ..color = inkAt(stroke.ink).withValues(alpha: 0.18)
-          ..blendMode = BlendMode.multiply);
-    canvas.drawPath(path, pen);
+    canvas.drawPath(path, pass(w * 2.1, 0.16, w * 0.52));   // overspray
+    canvas.drawPath(path, pass(w * 1.15, 0.55, w * 0.24));  // the edge of the cone
+    canvas.drawPath(path, pass(w * 0.62, 0.95, w * 0.08));  // the middle of it
+
+    _speckle(canvas, size, stroke, colour, w);
+    _runs(canvas, size, stroke, colour, w);
+  }
+
+  /// The droplets that miss.
+  void _speckle(Canvas canvas, Size size, SleeveStroke stroke, Color colour,
+      double w) {
+    final rng = math.Random(_seedOf(stroke.id));
+    final points = stroke.points;
+    final dot = Paint()..isAntiAlias = true;
+    // Along the line rather than around the whole of it: spray lands where the can was
+    // pointed, and thins out with distance from it.
+    for (var i = 0; i + 1 < points.length; i += 2) {
+      if (rng.nextDouble() > 0.55) continue;
+      final x = points[i] * size.width, y = points[i + 1] * size.height;
+      for (var n = 0; n < 3; n++) {
+        final away = w * (0.6 + rng.nextDouble() * 1.5);
+        final angle = rng.nextDouble() * math.pi * 2;
+        dot.color = colour.withValues(alpha: 0.10 + rng.nextDouble() * 0.30);
+        canvas.drawCircle(
+            Offset(x + math.cos(angle) * away, y + math.sin(angle) * away),
+            w * (0.045 + rng.nextDouble() * 0.10),
+            dot);
+      }
+    }
+  }
+
+  /// Paint that has been laid on too thick, running down the board.
+  ///
+  /// Worked out from the stroke itself rather than recorded with it: the same id gives
+  /// the same runs on every device that draws it, which is what makes a drip somebody
+  /// else is watching appear in the same place as it does here — and it means a board
+  /// carries no more over the wire than the lines that were drawn on it.
+  void _runs(Canvas canvas, Size size, SleeveStroke stroke, Color colour, double w) {
+    final rng = math.Random(_seedOf(stroke.id) ^ 0x5eed);
+    final points = stroke.points;
+    // More paint, more runs: a fat nib held over one spot is what makes them.
+    final count = ((points.length / 24) * stroke.width).round().clamp(0, 4);
+    if (count == 0) return;
+
+    // How far the runs have got. One while the paint is wet, and they stop where they
+    // stopped — a drip does not climb back up when it dries.
+    final wet = board.wetness(stroke.id);
+    final grown = wet <= 0 ? 1.0 : Curves.easeOutCubic.transform(1 - wet);
+
+    for (var n = 0; n < count; n++) {
+      final at = rng.nextInt(points.length ~/ 2) * 2;
+      final x = points[at] * size.width;
+      final y = points[at + 1] * size.height;
+      // Never off the board: paint runs down a sleeve, not off the bottom of it.
+      final room = size.height - y;
+      final full = math.min(room, size.height * (0.04 + rng.nextDouble() * 0.13));
+      if (full < w) continue;
+      final length = full * grown;
+      final thin = w * (0.16 + rng.nextDouble() * 0.16);
+
+      // A tapering tail with a bead on the end, which is what a run actually looks
+      // like: it carries the paint down with it and leaves less behind as it goes.
+      final tail = Path()
+        ..moveTo(x - thin, y)
+        ..quadraticBezierTo(x - thin * 0.7, y + length * 0.6, x, y + length)
+        ..quadraticBezierTo(x + thin * 0.7, y + length * 0.6, x + thin, y)
+        ..close();
+      canvas.drawPath(tail, Paint()
+        ..isAntiAlias = true
+        ..color = colour.withValues(alpha: 0.72));
+      canvas.drawCircle(Offset(x, y + length), thin * 1.35,
+          Paint()
+            ..isAntiAlias = true
+            ..color = colour.withValues(alpha: 0.9));
+    }
+  }
+
+  /// A number from the stroke's own id, so every device draws the same spray.
+  static int _seedOf(String id) {
+    var h = 0x811c9dc5;
+    for (final code in id.codeUnits) {
+      h = ((h ^ code) * 0x01000193) & 0x7fffffff;
+    }
+    return h;
   }
 
   @override
@@ -373,14 +457,15 @@ class SleeveLoupe extends CustomPainter {
     canvas.drawLine(centre.translate(0, -reach), centre.translate(0, -gap), hair);
     canvas.drawLine(centre.translate(0, gap), centre.translate(0, reach), hair);
 
-    // What the pen will lay down, at the size it will lay it down.
+    // What the can will lay down, at the size it will lay it down: the whole cone,
+    // not the dense middle of it, because the overspray is part of the mark.
     canvas.drawCircle(
         centre,
-        nib * sleeve.width * 0.019 * zoom / 2,
+        nib * sleeve.width * 0.019 * 1.05 * zoom,
         Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1
-          ..color = inkAt(board.ink).withValues(alpha: 0.9));
+          ..color = inkAt(board.ink).withValues(alpha: 0.85));
 
     // The rim of the glass.
     canvas.drawCircle(

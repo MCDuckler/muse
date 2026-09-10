@@ -53,6 +53,39 @@ class SleeveBoard extends ChangeNotifier {
   /// screen.
   bool get open01 => _trackId != null;
 
+  // ------------------------------------------------------------- wet paint
+  /// How long paint runs for after it is laid down.
+  static const Duration drying = Duration(milliseconds: 2600);
+
+  /// When each stroke was first seen here. Strokes that were already on the board when
+  /// it was opened are not in this at all: their paint dried long ago, and a board
+  /// coming back after a reload should not put on a show of drying again.
+  final Map<String, DateTime> _wet = {};
+  Timer? _drying;
+
+  /// How fresh a stroke is: one when it has just gone on, zero once it has dried.
+  double wetness(String strokeId) {
+    final at = _wet[strokeId];
+    if (at == null) return 0;
+    final since = DateTime.now().difference(at).inMilliseconds;
+    return (1 - since / drying.inMilliseconds).clamp(0.0, 1.0);
+  }
+
+  void _wetten(String strokeId) {
+    _wet[strokeId] = DateTime.now();
+    // Paint that is running has to be redrawn while it runs, and nothing else on this
+    // screen is moving — so the clock runs only while there is something to see and
+    // stops itself the moment the last run has finished.
+    _drying ??= Timer.periodic(const Duration(milliseconds: 16), (t) {
+      _wet.removeWhere((_, at) => DateTime.now().difference(at) > drying);
+      if (_wet.isEmpty) {
+        t.cancel();
+        _drying = null;
+      }
+      notifyListeners();
+    });
+  }
+
   /// What is sent and how often.
   ///
   /// A line appears on somebody else's screen while it is still being drawn, which is
@@ -95,6 +128,9 @@ class SleeveBoard extends ChangeNotifier {
     _trackId = null;
     _strokes.clear();
     _drawing = null;
+    _wet.clear();
+    _drying?.cancel();
+    _drying = null;
     notifyListeners();
   }
 
@@ -142,6 +178,7 @@ class SleeveBoard extends ChangeNotifier {
             done: true)
         : line.copyWith(done: true);
     _strokes.add(finished);
+    _wetten(finished.id);
     _drawing = null;
     notifyListeners();
     _pending?.cancel();
@@ -220,6 +257,8 @@ class SleeveBoard extends ChangeNotifier {
     } else {
       _strokes.add(stroke);
     }
+    // Somebody else's paint is as wet as your own when it lands.
+    if (stroke.done) _wetten(stroke.id);
     notifyListeners();
   }
 
@@ -238,6 +277,7 @@ class SleeveBoard extends ChangeNotifier {
   @override
   void dispose() {
     _pending?.cancel();
+    _drying?.cancel();
     super.dispose();
   }
 }

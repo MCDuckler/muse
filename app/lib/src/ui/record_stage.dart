@@ -457,6 +457,15 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
   /// Where the pen is now, 0 to 1 on the sleeve. Null when nothing is being drawn.
   Offset? _penAt;
 
+  /// Where the finger is, in the stage's own square.
+  ///
+  /// Kept as well as the point on the sleeve, because the glass is held above the
+  /// *hand* — the same distance above it, always. Hanging it off the point on the
+  /// sleeve instead meant it moved whenever the sleeve did, flipped to the other side
+  /// of the finger near the top edge, and slid along the edges when it was clamped to
+  /// stay on the stage. All three read as the glass wandering about on its own.
+  Offset? _fingerAt;
+
   /// The square the stage actually draws in.
   ///
   /// Not this widget's own box: it is given whatever space is going, and the square is
@@ -492,18 +501,25 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
 
   void _pen(Offset global, {required bool start}) {
     final at = _on(global);
-    if (at == null) return;
+    final stage = _stageKey.currentContext?.findRenderObject() as RenderBox?;
+    if (at == null || stage == null) return;
     if (start) {
       widget.board!.begin(at);
     } else {
       widget.board!.extend(at);
     }
-    setState(() => _penAt = Offset(at.x, at.y));
+    setState(() {
+      _penAt = Offset(at.x, at.y);
+      _fingerAt = stage.globalToLocal(global);
+    });
   }
 
   void _liftPen() {
     widget.board?.end();
-    setState(() => _penAt = null);
+    setState(() {
+      _penAt = null;
+      _fingerAt = null;
+    });
   }
 
   /// Thrown in the air, landing on its other face.
@@ -591,29 +607,23 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     }
   }
 
-  /// The magnifying glass, wherever the hand is not.
+  /// The magnifying glass, held in one place above the hand.
   ///
-  /// Above the point being drawn by default, because the hand is below it — and below
-  /// it when there is no room above, which is what happens when somebody draws along
-  /// the top edge of the sleeve.
+  /// Directly over the finger and always the same distance above it — not above the
+  /// point on the sleeve, and never flipped or nudged aside to keep it on the stage.
+  /// A glass that moves relative to the hand holding it is a glass you have to keep
+  /// finding, and finding it is the one thing it exists to save you from. It may hang
+  /// off the top of the stage; that is fine, and better than it jumping.
   Widget _loupe(double side) {
     final sleeve = _sleeveRect();
     final at = _penAt;
+    final finger = _fingerAt;
     final board = widget.board;
-    if (sleeve == null || at == null || board == null) {
+    if (sleeve == null || at == null || finger == null || board == null) {
       return const SizedBox.shrink();
     }
-    final radius = (side * 0.17).clamp(46.0, 92.0);
-    final point = Offset(sleeve.left + at.dx * sleeve.width,
-        sleeve.top + at.dy * sleeve.height);
-
-    var centre = point.translate(0, -(radius + 34));
-    if (centre.dy - radius < 4) centre = point.translate(0, radius + 34);
-    // Kept on the stage sideways, so drawing in a corner does not push it off.
-    centre = Offset(
-      centre.dx.clamp(radius + 2, side - radius - 2),
-      centre.dy.clamp(radius + 2, side - radius - 2),
-    );
+    final radius = (side * 0.26).clamp(72.0, 136.0);
+    final centre = finger.translate(0, -(radius + 30));
 
     return Positioned.fill(
       child: IgnorePointer(
