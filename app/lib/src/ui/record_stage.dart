@@ -433,20 +433,28 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     }
   }
 
-  /// Where the sleeve is on the stage, so a finger on the screen can be turned into a
-  /// place on the board.
-  Rect _backAt = Rect.zero;
+  /// The sleeve itself, so a finger on the screen can be asked where it is on it.
+  ///
+  /// A key rather than arithmetic. Working the position out from the stage's size and
+  /// the layout meant assuming the stage is exactly as big as it asked to be and that
+  /// the sleeve sits in the middle of it — and it is not: the box is given whatever
+  /// space is going, the square inside it is drawn from the corner, and the sleeve is
+  /// then scaled and tilted on top of that. Every one of those is an offset, and they
+  /// added up to a line landing an inch from the finger. Asking the sleeve where it is
+  /// costs one lookup and cannot be wrong.
+  final GlobalKey _backKey = GlobalKey();
 
   bool get _drawable => _showingBack && _toss.value == 0 && widget.board != null;
 
   Offset01? _on(Offset global) {
-    if (_backAt.width <= 0) return null;
-    final box = context.findRenderObject() as RenderBox?;
-    if (box == null) return null;
+    final box = _backKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || box.size.width <= 0) return null;
+    // globalToLocal walks back through every transform between here and the screen,
+    // which is the scaling, the perspective and the tilt, all of them, exactly.
     final local = box.globalToLocal(global);
     return Offset01(
-      ((local.dx - _backAt.left) / _backAt.width).clamp(0.0, 1.0),
-      ((local.dy - _backAt.top) / _backAt.height).clamp(0.0, 1.0),
+      (local.dx / box.size.width).clamp(0.0, 1.0),
+      (local.dy / box.size.height).clamp(0.0, 1.0),
     );
   }
 
@@ -561,12 +569,6 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
         // One shelf place is 0.45 of the stage; the finger covers the same ground, so
         // the sleeve under it stays under it.
         _reach = side * 0.45;
-        // Where the middle sleeve sits inside the stage. The column is the jacket with
-        // the reflection's worth of space under it, centred — so this is arithmetic
-        // rather than a measurement, and it is right on the frame it is needed.
-        final column = jacket * (1 + Mirror.defaultDepth);
-        _backAt = Rect.fromLTWH(
-            (side - jacket) / 2, (side - column) / 2, jacket, jacket);
 
         return RepaintBoundary(
           child: SizedBox(
@@ -634,6 +636,9 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                 // started late in proportion to how far behind the leading sleeve it
                 // is, and everything is still exactly in place when the journey ends.
                 final heading = _shelf.heading;
+                // How far towards face-down the middle record is: one when it is, zero
+                // when it is not, and part-way through the throw.
+                final flipped = _showingBack ? 1 - _toss.value : _toss.value;
                 double progressFor(double slot) {
                   if (heading == 0) return 0;
                   // Counted from the sleeve leading the way: the one travelling out.
@@ -675,6 +680,11 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                         toss: card.slot == 0 ? _toss.value : 0.0,
                         showingBack: card.slot == 0 && _showingBack,
                         board: card.slot == 0 ? widget.board : null,
+                        backKey: card.slot == 0 ? _backKey : null,
+                        // Bigger while it is turned over. A sleeve you are drawing on
+                        // wants the room, and the neighbours it is borrowing it from
+                        // are not what anybody is looking at.
+                        grow: card.slot == 0 ? 1 + 0.30 * flipped : 1.0,
                         side: side,
                         jacket: jacket,
                         // The same picture wherever it stands. Choosing the small
@@ -716,6 +726,8 @@ class _Sleeve extends StatelessWidget {
     required this.toss,
     required this.showingBack,
     required this.board,
+    required this.backKey,
+    required this.grow,
     required this.side,
     required this.jacket,
     required this.jacketUrl,
@@ -738,6 +750,14 @@ class _Sleeve extends StatelessWidget {
 
   /// The back of this record, and what is on it. Only the one in the middle has one.
   final SleeveBoard? board;
+
+  /// Put on the sleeve's own box, so a finger can ask it where it is rather than
+  /// having its position worked out from the layout.
+  final GlobalKey? backKey;
+
+  /// Larger than its place on the shelf would make it — a record turned over to be
+  /// drawn on wants the room.
+  final double grow;
 
   final double side;
   final double jacket;
@@ -782,16 +802,17 @@ class _Sleeve extends StatelessWidget {
             ..setEntry(3, 2, 0.0011)
             ..translateByDouble(0.0, along, 0.0, 1.0)
             ..rotateX(-turn)
-            ..scaleByDouble(scale, scale, 1.0, 1.0))
+            ..scaleByDouble(scale * grow, scale * grow, 1.0, 1.0))
           : (Matrix4.identity()
             ..setEntry(3, 2, 0.0011)
             ..translateByDouble(along, 0.0, 0.0, 1.0)
             ..rotateY(turn)
-            ..scaleByDouble(scale, scale, 1.0, 1.0)),
+            ..scaleByDouble(scale * grow, scale * grow, 1.0, 1.0)),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           SizedBox(
+            key: backKey,
             width: jacket,
             height: jacket,
             child: Stack(
@@ -828,7 +849,7 @@ class _Sleeve extends StatelessWidget {
           // Skipped once it is dim enough not to be seen: it is the one thing here
           // that genuinely needs a layer of its own, and the sleeves it would be
           // under at that point are themselves nearly gone.
-          if (dim > 0.25 && !upright && toss == 0)
+          if (dim > 0.25 && !upright && toss == 0 && !showingBack)
             RepaintBoundary(
               child: Mirror(
                 size: jacket,

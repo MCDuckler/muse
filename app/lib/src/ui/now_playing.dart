@@ -695,14 +695,8 @@ class _SleeveTools extends StatelessWidget {
             width: board.nib,
             onInk: board.pickInk,
             onWidth: board.pickNib,
-            onUndo: () => board.undo(app.userId),
             // The board is the host's in a jam, and clearing it is theirs alone.
             onWipe: jam == null || jam.isHost ? board.wipe : null,
-            sharing: jam == null
-                ? null
-                : jam.isHost
-                    ? 'Your sleeve — everyone in the jam is drawing on it'
-                    : "${jam.host ?? 'The host'}'s sleeve",
           ),
         );
       },

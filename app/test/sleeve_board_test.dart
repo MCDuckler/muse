@@ -59,11 +59,23 @@ void main() {
   });
 
   test('a wobble smaller than the pen is not a point', () {
+    // The filter is deliberately fine — a line that only catches up once the finger
+    // has moved far enough to be worth recording lags visibly behind it — but it is
+    // not nothing, or a finger held still would fill the stroke with the same point.
     board.begin(const Offset01(0.5, 0.5));
     for (var i = 0; i < 30; i++) {
-      board.extend(Offset01(0.5 + i * 0.0001, 0.5));
+      board.extend(Offset01(0.5 + i * 0.00001, 0.5));
     }
     expect(board.drawing!.points.length, 2, reason: 'nothing worth recording moved');
+  });
+
+  test('but a slow, real movement is followed closely', () {
+    board.begin(const Offset01(0.5, 0.5));
+    for (var i = 1; i <= 20; i++) {
+      board.extend(Offset01(0.5 + i * 0.002, 0.5));
+    }
+    expect(board.drawing!.points.length, greaterThan(30),
+        reason: 'a line drawn slowly keeps up with the finger');
   });
 
   test('a tap leaves a dot', () {

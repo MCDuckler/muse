@@ -37,7 +37,7 @@ class SleeveBoard extends ChangeNotifier {
   /// The pen. Held here rather than by whatever is drawing with it, so the palette and
   /// the sleeve cannot disagree about which colour is in your hand.
   int ink = 0;
-  double nib = 1.2;
+  double nib = 2.4;
 
   void pickInk(int i) {
     ink = i;
@@ -59,7 +59,7 @@ class SleeveBoard extends ChangeNotifier {
   /// the whole point of drawing together — but not sixty times a second. Every eighth
   /// of a second is faster than anybody can tell and an order of magnitude less
   /// traffic, and the last send always carries the finished line.
-  static const send = Duration(milliseconds: 120);
+  static const send = Duration(milliseconds: 70);
   Timer? _pending;
   var _sentAt = DateTime.fromMillisecondsSinceEpoch(0);
 
@@ -115,7 +115,11 @@ class SleeveBoard extends ChangeNotifier {
   /// Not every wobble: a point closer than this to the last one says nothing the line
   /// does not already say, and a stroke made of a thousand of them is slow to draw and
   /// slower to send.
-  static const double _apart = 0.006;
+  ///
+  /// A quarter of what it was. At six thousandths of a sleeve the line lagged visibly
+  /// behind the finger on anything drawn slowly — the pen only caught up once you had
+  /// moved far enough to be worth recording, which is exactly the wrong way round.
+  static const double _apart = 0.0015;
 
   void extend(Offset01 at) {
     final line = _drawing;
