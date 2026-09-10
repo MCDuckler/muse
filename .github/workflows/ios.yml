@@ -1,0 +1,86 @@
+# Build the iPhone app.
+#
+# iOS binaries can only be produced on macOS — Flutter's build shells out to xcodebuild
+# and the asset-catalog tools, which do not exist anywhere else — and the only macOS
+# machine involved in this project is a rented one for ten minutes at a time. That is
+# what this is.
+#
+# It builds *unsigned*, which is the useful part: SideStore signs the app on the phone
+# with your own Apple ID, so no certificates, no provisioning profiles and no Apple
+# credentials go anywhere near this workflow. There is nothing here to leak.
+name: iPhone app
+
+on:
+  # Every push that touches the app, and on demand from the Actions tab.
+  push:
+    branches: [master, main]
+    paths:
+      - 'app/**'
+      - '.github/workflows/ios.yml'
+  workflow_dispatch:
+    inputs:
+      server:
+        description: 'muse server the build points at'
+        default: 'https://158-69-192-169.nip.io'
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Fetch packages
+        working-directory: app
+        run: flutter pub get
+
+      - name: Check it compiles cleanly
+        working-directory: app
+        run: flutter analyze lib
+
+      - name: Run the tests
+        working-directory: app
+        run: flutter test
+
+      - name: Build, unsigned
+        working-directory: app
+        env:
+          MUSE_SERVER: ${{ inputs.server || 'https://158-69-192-169.nip.io' }}
+        run: |
+          flutter build ios --release --no-codesign \
+            --dart-define=MUSE_SERVER="$MUSE_SERVER"
+
+      - name: Wrap it as an ipa
+        working-directory: app
+        run: |
+          # An ipa is a zip with the app inside a folder called Payload. That is the
+          # whole format; the signing SideStore does happens on the phone.
+          mkdir -p build/ipa/Payload
+          cp -R build/ios/iphoneos/Runner.app build/ipa/Payload/
+          cd build/ipa
+          zip -qry muse.ipa Payload
+          ls -lh muse.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: muse-ipa
+          path: app/build/ipa/muse.ipa
+          retention-days: 30
+
+      # A release makes it a plain link the phone can open, which is easier than
+      # digging an artifact out of the Actions tab on a small screen.
+      - name: Publish it as a release
+        if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="ios-$(date +%Y%m%d-%H%M)"
+          gh release create "$tag" app/build/ipa/muse.ipa \
+            --title "muse for iPhone · $tag" \
+            --notes "Unsigned build of ${{ github.sha }}. Open it with SideStore."
