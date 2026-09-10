@@ -11,7 +11,8 @@ import json
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from . import catalog, db, jobs, match, progress, sources, sync, ytm
+from . import (catalog, db, failures, jobs, match, progress, sources,
+               sync, ytm)
 from .deps import current_user
 
 router = APIRouter(prefix="/downloads")
@@ -49,13 +50,29 @@ def overview(user: dict = Depends(current_user)):
                    or (j.state='leased' and j.leased_until < now()))
             order by j.priority, j.created_at limit 40"""
     )
+    # Only failures that are still true.
+    #
+    # This listed every job that had ever failed, for ever. A song found on the ninth
+    # attempt and playing perfectly still showed the eight dead video ids underneath
+    # it in red — so the screen was mostly a history of attempts rather than a list of
+    # things that need attention, and the one genuine failure was lost among them.
+    # A job whose track is now ready, or which has since been superseded by another
+    # attempt, is not a problem anybody has.
     failed = db.all_(
-        """select j.id as job_id, j.error, j.attempts, j.batch_label,
-                  (j.payload->>'track_id')::int as track_id
+        """select distinct on (t.id) j.id as job_id, j.error, j.attempts,
+                  j.batch_label, t.id as track_id, t.source
              from jobs j
-            where j.kind='ingest' and j.state='failed'
-            order by j.updated_at desc limit 40"""
+             join tracks t on t.id = (j.payload->>'track_id')::int
+            where j.kind in ('ingest','ingest_direct') and j.state='failed'
+              and t.state = 'failed'
+              and not exists (select 1 from jobs later
+                               where later.kind in ('ingest','ingest_direct')
+                                 and (later.payload->>'track_id')::int = t.id
+                                 and later.state in ('pending','leased','done'))
+            order by t.id, j.updated_at desc"""
     )
+    failed.sort(key=lambda r: r["job_id"], reverse=True)
+    failed = failed[:40]
 
     # A batch is how a person thinks about an import: one row, one progress bar.
     batches = db.all_(
@@ -90,8 +107,15 @@ def overview(user: dict = Depends(current_user)):
         out = []
         for r in rows:
             track = catalog.track_row(r["track_id"]) if r.get("track_id") else None
-            out.append({**r, "track": catalog.public(track) if track else None,
-                        "progress": progress.get(r["track_id"]) if r.get("track_id") else None})
+            row = {**r, "track": catalog.public(track) if track else None,
+                   "progress": progress.get(r["track_id"]) if r.get("track_id") else None}
+            # Never yt-dlp's own words. "ERROR: [youtube] rSPtR483gXI: Video
+            # unavailable" is written for a terminal, and a person reading a list of
+            # songs is owed a sentence about the song.
+            if row.get("error"):
+                row["error"] = failures.classify(
+                    row["error"], (track or {}).get("source"))[1]
+            out.append(row)
         return out
 
     worker = db.one(
@@ -213,8 +237,17 @@ def _refind_one(track: dict) -> dict:
     — and only reports failure once nothing anywhere is a confident match. The dead id
     is excluded by name, or the same search would hand it straight back.
     """
+    # Everywhere this song has already been looked for, whether or not it worked. A
+    # search that can hand back an id already on the track will do exactly that, and
+    # one track collected nine of them that way.
     dead = {r["provider_id"] for r in db.all_(
         "select provider_id from track_sources where track_id=%s", (track["id"],))}
+    # Copies written off along the way, so a second search does not resurrect one.
+    dead |= {r["error"] for r in db.all_(
+        """select payload->>'video_id' as error from jobs
+            where kind='ingest' and state='failed'
+              and (payload->>'track_id')::int = %s""", (track["id"],))
+        if r["error"]}
     want = {"title": track["title"], "artists": track["artists"] or [],
             "duration_ms": track["duration_ms"], "isrc": track.get("isrc")}
     query = " ".join([track["title"] or "", (track["artists"] or [""])[0]]).strip()
@@ -229,7 +262,8 @@ def _refind_one(track: dict) -> dict:
     best, conf, method = match.best(want, candidates)
     if best and conf >= match.AUTO_ACCEPT:
         db.run("""insert into track_sources(track_id,provider,provider_id,raw)
-                  values(%s,'ytmusic',%s,%s)""",
+                  values(%s,'ytmusic',%s,%s)
+                  on conflict do nothing""",
                (track["id"], best["video_id"], json.dumps(best.get("raw") or {})))
         db.run("""update tracks set state='pending', fail_reason=null, fail_code=null
                    where id=%s""", (track["id"],))
@@ -246,7 +280,8 @@ def _refind_one(track: dict) -> dict:
     best, conf, method = match.best(want, [{**h, "video_id": None} for h in hits])
     if best and conf >= match.AUTO_ACCEPT:
         db.run("""insert into track_sources(track_id,provider,provider_id,raw)
-                  values(%s,'soundcloud',%s,%s)""",
+                  values(%s,'soundcloud',%s,%s)
+                  on conflict do nothing""",
                (track["id"], best["provider_id"], json.dumps({})))
         db.run("""update tracks set state='pending', fail_reason=null, fail_code=null,
                           source='soundcloud' where id=%s""", (track["id"],))

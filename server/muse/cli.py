@@ -108,6 +108,42 @@ def fixspotifynames(apply: bool = False) -> None:
     db.close()
 
 
+def markdead(apply: bool = False) -> None:
+    """Write off copies that have already been proved gone.
+
+    New failures mark their own source, but the ones that happened before that rule
+    existed left nothing behind — so a track that has failed on the same dead video id
+    eight times will reach for it a ninth. This reads those failures back out of the
+    job log and marks the sources they name, which is what makes asking for those songs
+    again reach for a copy that might work.
+    """
+    from . import config, failures
+
+    db.init(config.load().dsn)
+    rows = db.all_(
+        """select distinct (j.payload->>'track_id')::int as track_id,
+                  j.payload->>'video_id' as provider_id, j.error
+             from jobs j
+            where j.kind='ingest' and j.state='failed'
+              and j.payload->>'video_id' is not null"""
+    )
+    gone = [r for r in rows if failures.classify(r["error"])[0] in failures.GONE]
+    print(f"{len(rows)} failed youtube jobs, {len(gone)} of them for good")
+    if not apply:
+        print("dry run — pass --apply to write it")
+        return
+    marked = 0
+    for row in gone:
+        marked += len(db.all_(
+            """update track_sources
+                  set raw = coalesce(raw,'{}'::jsonb) || '{"dead": true}'
+                where track_id=%s and provider_id=%s
+                  and coalesce(raw->>'dead','') <> 'true'
+               returning track_id""",
+            (row["track_id"], row["provider_id"])))
+    print(f"marked {marked} sources dead")
+
+
 def main() -> None:
     match sys.argv[1:]:
         case ["adduser", name]:
@@ -126,10 +162,14 @@ def main() -> None:
             fixspotifynames()
         case ["fixspotifynames", "--apply"]:
             fixspotifynames(apply=True)
+        case ["markdead"]:
+            markdead()
+        case ["markdead", "--apply"]:
+            markdead(apply=True)
         case _:
             sys.exit("usage: python -m muse.cli [adduser <name> | secret "
                      "| splitartists [--apply] | fixsoundcloud [--apply] "
-                     "| fixspotifynames [--apply]]")
+                     "| fixspotifynames [--apply] | markdead [--apply]]")
 
 
 if __name__ == "__main__":

@@ -462,3 +462,61 @@ def test_a_failure_names_the_service_the_song_came_from(client, hdr):
     # And where nobody said, it does not invent one.
     _, vague, _ = failures.classify("ERROR: Video unavailable", None)
     assert "YouTube" not in vague and "SoundCloud" not in vague
+
+
+def test_the_failures_screen_shows_failures_that_are_still_true(client, hdr):
+    """A song found on the ninth attempt and playing perfectly used to show the eight
+    dead ids underneath it in red.
+
+    The screen listed every job that had ever failed, for ever, so it was a history of
+    attempts rather than a list of things needing attention — and the one real failure
+    was lost among them.
+    """
+    from muse import catalog, db, jobs
+
+    fine = catalog.create_from_source("soundcloud", {
+        "provider_id": "1", "title": "Found in the end", "artists": [],
+        "url": "https://soundcloud.com/a/found",
+    }, download=False)
+    broken = catalog.create_from_source("soundcloud", {
+        "provider_id": "2", "title": "Still broken", "artists": [],
+        "url": "https://soundcloud.com/a/broken",
+    }, download=False)
+
+    for track in (fine, broken):
+        job = jobs.enqueue("ingest", {"track_id": track["id"], "video_id": "dead"})
+        db.run("""update jobs set state='failed', error='ERROR: [youtube] dead: Video unavailable'
+                   where id=%s""", (job,))
+        db.run("update tracks set state='failed' where id=%s", (track["id"],))
+
+    # The first one was found somewhere else since, and plays.
+    db.run("update tracks set state='ready' where id=%s", (fine["id"],))
+
+    listed = client.get("/downloads", headers=hdr).json()["failed"]
+    ids = [row["track_id"] for row in listed]
+    assert broken["id"] in ids
+    assert fine["id"] not in ids, "a song that plays is not a failure"
+
+    # And what it says is a sentence about the song, not yt-dlp's output.
+    row = next(r for r in listed if r["track_id"] == broken["id"])
+    assert "ERROR:" not in (row["error"] or "")
+
+
+def test_a_copy_that_is_gone_is_not_reached_for_again(client, hdr):
+    """One track collected nine YouTube ids and kept trying the dead ones."""
+    from muse import catalog, db, jobs
+
+    track = catalog.create_from_source("soundcloud", {
+        "provider_id": "live", "title": "Two copies", "artists": [],
+        "url": "https://soundcloud.com/a/live",
+    }, download=False)
+    db.run("""insert into track_sources(track_id,provider,provider_id,raw)
+              values(%s,'ytmusic','gone','{"dead": true}'::jsonb)""", (track["id"],))
+
+    best = jobs.best_source(track["id"])
+    assert best is not None and best["provider"] == "soundcloud"
+
+    # And when the only copy left is a dead one, there is nothing to try.
+    db.run("""update track_sources set raw = raw || '{"dead": true}'
+               where track_id=%s and provider='soundcloud'""", (track["id"],))
+    assert jobs.best_source(track["id"]) is None

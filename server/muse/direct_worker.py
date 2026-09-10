@@ -143,6 +143,12 @@ class DirectWorker:
             db.run("update tracks set state='failed', fail_reason=%s, fail_code=%s "
                    "where id=%s",
                    (message if code != "unknown" else str(e)[:500], code, track_id))
+            # Written off, so the next attempt reaches for a different copy. See the
+            # worker-report path in app.py for the same rule.
+            if code in failures.GONE:
+                db.run("""update track_sources
+                             set raw = coalesce(raw,'{}'::jsonb) || '{"dead": true}'
+                           where track_id=%s and provider=%s""", (track_id, provider))
             log.warning("%s track %s failed: %s", provider, track_id, e)
         except Exception as e:
             progress.clear(track_id)

@@ -516,6 +516,15 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
                 """update tracks set state=%s, fail_reason=%s, fail_code=%s where id=%s""",
                 ("pending" if will_retry else "failed", message, code, tid),
             )
+            # A copy that is gone stays gone. Marked rather than deleted — it is still
+            # the reason the track is here — but never chosen again, so asking for the
+            # song reaches for a copy that might work instead of the one that is known
+            # not to. A track collected nine YouTube ids this way and kept trying the
+            # dead ones.
+            if code in failures.GONE and (video := body.get("video_id")):
+                db.run("""update track_sources
+                             set raw = coalesce(raw,'{}'::jsonb) || '{"dead": true}'
+                           where track_id=%s and provider_id=%s""", (tid, video))
             publish("track_failed", {"track_id": tid, "reason": message, "code": code,
                                      "will_retry": will_retry})
         return {"ok": True, "code": code, "retryable": retryable}

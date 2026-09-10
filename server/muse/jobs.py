@@ -66,7 +66,8 @@ DIRECT = ("soundcloud", "bandcamp")
 def best_source(track_id: int) -> dict | None:
     """Where to fetch this track from, given every place it is known to live.
 
-    A source the server can fetch itself wins.
+    A source the server can fetch itself wins, and one already known to be gone is not
+    considered at all.
     
     This used to be the other way round — `order by (provider = 'ytmusic') desc` — and
     it is how forty-eight SoundCloud tracks ended up failing over and over with "this
@@ -80,7 +81,8 @@ def best_source(track_id: int) -> dict | None:
     """
     rows = db.all_(
         f"""select s.provider, s.provider_id, {REF_SQL} as url
-             from track_sources s where s.track_id=%s""",
+             from track_sources s
+            where s.track_id=%s and coalesce(s.raw->>'dead','') <> 'true'""",
         (track_id,),
     )
     best = None

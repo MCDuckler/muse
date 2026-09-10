@@ -44,6 +44,12 @@ _RULES: list[tuple[str, re.Pattern, str, bool]] = [
 
 FALLBACK = ("unknown", "The download failed", True)
 
+# Failures that say something about the copy rather than about the moment. A source
+# that answers with one of these will answer with it again for ever, so it is worth
+# writing off and looking elsewhere.
+GONE = frozenset({"unavailable", "private", "copyright", "geo_blocked", "drm",
+                  "paywalled", "format"})
+
 # What a person calls the place a song came from.
 _NAMES = {
     "ytmusic": "YouTube",
