@@ -14,7 +14,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse
 
-from . import catalog, db, jam, jobs, match, playlist_art, ytm
+from . import catalog, db, images, jam, jobs, match, playlist_art, ytm
 from .deps import cfg, current_user, user_or_key
 
 router = APIRouter()
@@ -58,10 +58,14 @@ def with_cover(playlist: dict) -> dict:
     The version is a hash of the art it is made from, so the client can cache the image
     forever and still see it change the moment the playlist does.
     """
-    sig = playlist_art.signature(playlist["id"], playlist["name"])
+    # A cover somebody chose wins over the one drawn from the contents — and changes
+    # the version, so the picture in a list updates the moment it is set.
+    sig = playlist.get("cover_sig") \
+        or playlist_art.signature(playlist["id"], playlist["name"])
     return {**playlist,
             "cover_url": f"/playlists/{playlist['id']}/cover",
-            "cover_version": sig}
+            "cover_version": sig,
+            "custom_cover": bool(playlist.get("cover_sig"))}
 
 
 @router.get("/playlists")
@@ -134,6 +138,14 @@ def playlist_cover(playlist_id: int, request: Request, size: str = "lg",
                (playlist_id, user["id"]))
     if not p:
         raise HTTPException(404, "no such playlist")
+    if p.get("cover_sig"):
+        chosen = images.path_for(cfg().image_dir, "playlist", playlist_id,
+                                 p["cover_sig"], "sm" if size == "sm" else "lg")
+        if chosen.exists():
+            return FileResponse(chosen, media_type="image/jpeg", headers={
+                "ETag": f'"{p["cover_sig"]}-{size}"',
+                "Cache-Control": "private, max-age=31536000, immutable"})
+
     sig = playlist_art.signature(playlist_id, p["name"])
     playlist_art.build(cfg().cover_dir, playlist_id, p["name"], sig)
     path = playlist_art.path_for(cfg().cover_dir, playlist_id, sig,
@@ -145,6 +157,40 @@ def playlist_cover(playlist_id: int, request: Request, size: str = "lg",
                  # asks for; a changed playlist is a changed URL.
                  "Cache-Control": "private, max-age=31536000, immutable"},
     )
+
+
+@router.post("/playlists/{playlist_id}/cover")
+async def set_playlist_cover(playlist_id: int, request: Request,
+                             user: dict = Depends(current_user)):
+    """Use a picture of your own for this playlist instead of the drawn one."""
+    p = db.one("select id, kind from playlists where id=%s and owner_id=%s",
+               (playlist_id, user["id"]))
+    if not p:
+        raise HTTPException(404, "no such playlist")
+    raw = await request.body()
+    try:
+        sig = images.store(cfg().image_dir, "playlist", playlist_id, raw)
+    except images.BadImage as e:
+        raise HTTPException(400, str(e))
+    old = db.one("select cover_sig from playlists where id=%s", (playlist_id,))
+    db.run("update playlists set cover_sig=%s where id=%s", (sig, playlist_id))
+    if old and old["cover_sig"] and old["cover_sig"] != sig:
+        images.forget(cfg().image_dir, "playlist", playlist_id, old["cover_sig"])
+    return {"cover_url": f"/playlists/{playlist_id}/cover", "cover_version": sig,
+            "custom_cover": True}
+
+
+@router.delete("/playlists/{playlist_id}/cover")
+def clear_playlist_cover(playlist_id: int, user: dict = Depends(current_user)):
+    """Back to the picture made from the records in it."""
+    old = db.one("select cover_sig from playlists where id=%s and owner_id=%s",
+                 (playlist_id, user["id"]))
+    if not old:
+        raise HTTPException(404, "no such playlist")
+    db.run("update playlists set cover_sig=null where id=%s", (playlist_id,))
+    if old["cover_sig"]:
+        images.forget(cfg().image_dir, "playlist", playlist_id, old["cover_sig"])
+    return {"cover_url": f"/playlists/{playlist_id}/cover", "custom_cover": False}
 
 
 # A backup from another player is one file: a list of playlists naming track ids, and
@@ -683,8 +729,11 @@ def remove_item(queue_id: int, pos: int, user: dict = Depends(current_user)):
 
 @router.post("/queues/{queue_id}/move")
 def move_item(queue_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
-    """Reorder by dragging. Positions are rewritten in one statement per row so the
-    list can never end up with a gap or a duplicate position."""
+    """Reorder by dragging — one row, or a whole selection at once.
+
+    Positions are rewritten in one statement per row so the list can never end up with
+    a gap or a duplicate position.
+    """
     _own_queue(queue_id, user)
     src, dst = body.get("from"), body.get("to")
     if src is None or dst is None:
@@ -692,11 +741,20 @@ def move_item(queue_id: int, body: dict = Body(...), user: dict = Depends(curren
 
     rows = db.all_("select pos, track_id, origin, added_by from queue_items "
                    "where queue_id=%s order by pos", (queue_id,))
-    if not (0 <= src < len(rows)) or not (0 <= dst < len(rows)):
+    # `from` may be several positions: dragging one row of a selection brings the rest
+    # with it, and doing that as one edit keeps them together and costs one request
+    # instead of a dozen that each shift the ones after them.
+    moving = sorted(src) if isinstance(src, list) else [src]
+    if not moving or not all(0 <= p < len(rows) for p in moving) \
+            or not (0 <= dst < len(rows)):
         raise HTTPException(400, "position out of range")
 
-    item = rows.pop(src)
-    rows.insert(dst, item)
+    block = [rows[p] for p in moving]
+    remaining = [r for i, r in enumerate(rows) if i not in set(moving)]
+    # `to` is where it lands in the list it is landing in — that is, with the rows
+    # being moved already taken out of it, which is what a drag reports.
+    at = max(0, min(len(remaining), dst))
+    rows = remaining[:at] + block + remaining[at:]
     cursor = db.one("select cursor_index from queues where id=%s",
                     (queue_id,))["cursor_index"]
     playing = None

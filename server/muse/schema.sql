@@ -454,3 +454,9 @@ create table if not exists jam_playback (
   playing     boolean not null default false,
   at          timestamptz not null default now()
 );
+
+-- Pictures somebody chose: a profile photo, a cover for a playlist that should not be
+-- the one drawn from its contents. Both are a signature rather than a path — the file
+-- is named from it, so a changed picture is a changed URL and nothing caches wrongly.
+alter table users add column if not exists avatar_sig text;
+alter table playlists add column if not exists cover_sig text;

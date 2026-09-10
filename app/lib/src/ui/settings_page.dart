@@ -49,6 +49,24 @@ class _SettingsPageState extends State<SettingsPage> {
     return '${(bytes / 1e3).toStringAsFixed(0)} kB';
   }
 
+  bool _pickingFace = false;
+
+  /// A picture for the account. It shows up beside your name here, on who is in a jam,
+  /// and against the songs you put in a shared queue.
+  Future<void> _pickFace(AppState app) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final file = await FilePicker.pickFile(type: FileType.image);
+    if (file == null || !mounted) return;
+    setState(() => _pickingFace = true);
+    try {
+      await app.setAvatar(await file.readAsBytes());
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('$e')));
+    } finally {
+      if (mounted) setState(() => _pickingFace = false);
+    }
+  }
+
   Future<void> _upload() async {
     // Read the bytes rather than a path: the web build never has one.
     final file = await FilePicker.pickFile(type: FileType.audio);
@@ -239,9 +257,21 @@ class _SettingsPageState extends State<SettingsPage> {
           const Divider(),
           _label(context, 'Account'),
           ListTile(
-            leading: const Icon(Icons.person_outline),
+            leading: _Face(app: app),
             title: Text(app.user ?? 'Signed in'),
             subtitle: Text(app.api.baseUrl),
+            trailing: TextButton(
+              onPressed: _pickingFace ? null : () => _pickFace(app),
+              child: Text(app.avatarVersion == null ? 'Add photo' : 'Change'),
+            ),
+            onLongPress: app.avatarVersion == null
+                ? null
+                : () async {
+                    if (await confirm(context, 'Remove your photo?',
+                        'Your name goes back to standing on its own.')) {
+                      await app.clearAvatar();
+                    }
+                  },
           ),
           ListTile(
             leading: const Icon(Icons.group_outlined),
@@ -332,6 +362,43 @@ class _Swatch extends StatelessWidget {
             const SizedBox(height: 4),
             Text(palette.name, style: Theme.of(context).textTheme.labelSmall),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+
+/// Somebody's picture, or the first letter of their name.
+class _Face extends StatelessWidget {
+  const _Face({required this.app});
+  final AppState app;
+
+  static const size = 40.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final version = app.avatarVersion;
+    final id = app.userId;
+    if (version == null || id == null) {
+      return CircleAvatar(
+        radius: size / 2,
+        backgroundColor: scheme.surfaceContainerHighest,
+        child: Text((app.user ?? '?').characters.first.toUpperCase()),
+      );
+    }
+    return ClipOval(
+      child: Image.network(
+        app.api.avatarUrl(id, version: version),
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        errorBuilder: (context, _, __) => CircleAvatar(
+          radius: size / 2,
+          backgroundColor: scheme.surfaceContainerHighest,
+          child: Text((app.user ?? '?').characters.first.toUpperCase()),
         ),
       ),
     );

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import 'dialogs.dart';
+import 'selection_bar.dart';
 import 'song_row.dart';
 
 /// One way of rendering a list of tracks, used by every browse screen.
@@ -17,7 +18,12 @@ class TrackList extends StatelessWidget {
     this.header,
     this.onRemove,
     this.named,
+    this.selectable,
   });
+
+  /// What to call this list when several songs are picked out of it — "playlist:3",
+  /// "album:Low". Lists that pass nothing cannot be selected in.
+  final String? selectable;
 
   final List<Track> tracks;
   final String? header;
@@ -38,19 +44,45 @@ class TrackList extends StatelessWidget {
       );
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
-      physics: const AlwaysScrollableScrollPhysics(),
-      itemCount: tracks.length + 1,
-      itemBuilder: (context, i) {
-        if (i == 0) return _Head(tracks: tracks, header: header, named: named);
-        final t = tracks[i - 1];
-        return SongRow(
-          track: t,
-          onTap: () => app.playNow(tracks, startAt: i - 1, named: named),
-          onRemove: onRemove == null ? null : () => onRemove!(i - 1),
-        );
-      },
+    return Column(
+      children: [
+        if (selectable != null)
+          SelectionBar(
+            where: selectable!,
+            tracks: tracks,
+            removeLabel: onRemove == null ? 'Remove' : 'Remove from this list',
+            onRemove: onRemove == null
+                ? null
+                : (picked) async {
+                    // Backwards through the positions, so removing one does not shift
+                    // the next one out from under the index about to be used.
+                    final at = [
+                      for (var i = 0; i < tracks.length; i++)
+                        if (picked.any((p) => p.id == tracks[i].id)) i
+                    ];
+                    for (final i in at.reversed) {
+                      onRemove!(i);
+                    }
+                  },
+          ),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
+            physics: const AlwaysScrollableScrollPhysics(),
+            itemCount: tracks.length + 1,
+            itemBuilder: (context, i) {
+              if (i == 0) return _Head(tracks: tracks, header: header, named: named);
+              final t = tracks[i - 1];
+              return SongRow(
+                track: t,
+                selectable: selectable,
+                onTap: () => app.playNow(tracks, startAt: i - 1, named: named),
+                onRemove: onRemove == null ? null : () => onRemove!(i - 1),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 }

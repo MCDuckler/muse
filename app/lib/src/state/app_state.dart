@@ -21,6 +21,11 @@ class AppState extends ChangeNotifier {
 
   bool ready = false;
   String? user;
+
+  /// Who this is on the server, and the version of their picture — both come back with
+  /// the first "who am I" and are what the app draws a face from.
+  int? userId;
+  String? avatarVersion;
   String? error;
 
   List<Queue> queues = const [];
@@ -165,6 +170,8 @@ class AppState extends ChangeNotifier {
       try {
         final me = await api.me();
         user = me['user'] as String?;
+        userId = me['user_id'] as int?;
+        avatarVersion = me['avatar_version'] as String?;
         await _afterLogin();
       } on ApiException {
         api.token = null; // revoked or a different server
@@ -213,6 +220,9 @@ class AppState extends ChangeNotifier {
       await prefs.setString(_kServer, api.baseUrl);
       await prefs.setString(_kToken, api.token!);
       user = username.trim();
+      final me = await api.me();
+      userId = me['user_id'] as int?;
+      avatarVersion = me['avatar_version'] as String?;
       await _afterLogin();
       notifyListeners();
       return true;
@@ -337,6 +347,18 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Choose a picture for this account, or take it away again.
+  Future<void> setAvatar(List<int> bytes) async {
+    avatarVersion = await api.setAvatar(bytes);
+    notifyListeners();
+  }
+
+  Future<void> clearAvatar() async {
+    await api.clearAvatar();
+    avatarVersion = null;
+    notifyListeners();
+  }
+
   /// Rearrange what is coming, once.
   ///
   /// Shuffle used to be a switch: on, and every song after this one came in an order
@@ -430,6 +452,19 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     try {
       await _applyQueue(await api.moveQueueItem(q.id, from, to));
+    } catch (_) {
+      await _resyncQueue();
+    }
+  }
+
+  /// Move a whole selection to one place, as one edit.
+  Future<void> moveManyInQueue(List<int> froms, int to) async {
+    final q = activeQueue;
+    if (q == null || froms.isEmpty) return;
+    player?.moveManyLocally(froms, to);
+    notifyListeners();
+    try {
+      await _applyQueue(await api.moveQueueItems(q.id, froms, to));
     } catch (_) {
       await _resyncQueue();
     }

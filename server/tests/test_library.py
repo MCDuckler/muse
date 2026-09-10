@@ -424,3 +424,30 @@ def test_shuffling_a_queue_with_nothing_coming_is_harmless(client, hdr, tracks):
     r = client.post(f"/queues/{q['id']}/shuffle", headers=hdr, json={})
     assert r.status_code == 200
     assert len(r.json()["items"]) == 1
+
+
+def test_a_selection_moves_as_one_block(client, hdr, tracks):
+    """Dragging one row of a selection brings the rest with it, in their own order and
+    without disturbing anything between them."""
+    q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
+    ids = [t["id"] for t in tracks]              # three distinct tracks
+    client.post(f"/queues/{q['id']}/items", headers=hdr,
+                json={"track_ids": ids + ids})   # six rows: A B C A B C
+
+    moved = client.post(f"/queues/{q['id']}/move", headers=hdr,
+                        json={"from": [3, 5], "to": 0})
+    assert moved.status_code == 200, moved.text
+    got = [i["id"] for i in moved.json()["items"]]
+    assert got == [ids[0], ids[2], ids[0], ids[1], ids[2], ids[1]], \
+        "the two picked rows land at the top, in the order they were in"
+    assert [i["pos"] for i in moved.json()["items"]] == list(range(6))
+
+
+def test_moving_a_block_past_itself_is_not_an_error(client, hdr, tracks):
+    q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
+    ids = [t["id"] for t in tracks]
+    client.post(f"/queues/{q['id']}/items", headers=hdr, json={"track_ids": ids})
+    r = client.post(f"/queues/{q['id']}/move", headers=hdr,
+                    json={"from": [0, 1], "to": 2})
+    assert r.status_code == 200
+    assert [i["id"] for i in r.json()["items"]] == [ids[2], ids[0], ids[1]]

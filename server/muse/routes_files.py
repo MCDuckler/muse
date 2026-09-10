@@ -1,4 +1,4 @@
-"""Custom uploads and the offline download manifest.
+"""Custom uploads, profile pictures, and the offline download manifest.
 
 Uploads are the only files in the library that cannot be re-fetched, so the original
 is kept alongside the canonical m4a even when it had to be transcoded.
@@ -9,10 +9,11 @@ import pathlib
 import shutil
 import tempfile
 
-from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
 
-from . import audiofile, catalog, db, storage
-from .deps import cfg, current_user
+from . import audiofile, catalog, db, images, storage
+from .deps import cfg, current_user, user_or_key
 
 router = APIRouter()
 
@@ -90,6 +91,48 @@ def upload(audio: UploadFile, user: dict = Depends(current_user)):
 
     return {**catalog.public(catalog.track_row(track_id)),
             "suggested": meta, "fingerprinted": bool(fp), "duplicate": False}
+
+
+@router.post("/me/avatar")
+async def set_avatar(request: Request, user: dict = Depends(current_user)):
+    """A profile picture, from whatever the phone had."""
+    raw = await request.body()
+    try:
+        sig = images.store(cfg().image_dir, "avatar", user["id"], raw)
+    except images.BadImage as e:
+        raise HTTPException(400, str(e))
+    old = db.one("select avatar_sig from users where id=%s", (user["id"],))
+    db.run("update users set avatar_sig=%s where id=%s", (sig, user["id"]))
+    if old and old["avatar_sig"] and old["avatar_sig"] != sig:
+        images.forget(cfg().image_dir, "avatar", user["id"], old["avatar_sig"])
+    return {"avatar_url": f"/users/{user['id']}/avatar", "avatar_version": sig}
+
+
+@router.delete("/me/avatar")
+def clear_avatar(user: dict = Depends(current_user)):
+    old = db.one("select avatar_sig from users where id=%s", (user["id"],))
+    db.run("update users set avatar_sig=null where id=%s", (user["id"],))
+    if old and old["avatar_sig"]:
+        images.forget(cfg().image_dir, "avatar", user["id"], old["avatar_sig"])
+    return {"avatar_url": None}
+
+
+@router.get("/users/{user_id}/avatar")
+def avatar(user_id: int, size: str = "lg", v: str | None = None,
+           user: dict = Depends(user_or_key)):
+    """Anyone signed in here can see anyone's picture: it is a name with a face on it,
+    shown beside what they added to a queue and who is in a jam."""
+    row = db.one("select avatar_sig from users where id=%s", (user_id,))
+    sig = (row or {}).get("avatar_sig")
+    if not sig:
+        raise HTTPException(404, "no picture")
+    path = images.path_for(cfg().image_dir, "avatar", user_id, sig,
+                           "sm" if size == "sm" else "lg")
+    if not path.exists():
+        raise HTTPException(404, "no picture")
+    return FileResponse(path, media_type="image/jpeg", headers={
+        "ETag": f'"{sig}-{size}"',
+        "Cache-Control": "private, max-age=31536000, immutable"})
 
 
 @router.patch("/tracks/{track_id}")

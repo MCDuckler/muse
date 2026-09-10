@@ -6,6 +6,7 @@ import 'package:just_audio_background/just_audio_background.dart';
 import 'package:provider/provider.dart';
 
 import 'src/state/app_state.dart';
+import 'src/state/selection.dart';
 import 'src/state/player.dart';
 import 'src/ui/home_page.dart';
 import 'src/ui/login_page.dart';
@@ -50,12 +51,17 @@ class MuseApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      create: (_) {
-        final state = AppState()..boot();
-        debugAppState = state;
-        return state;
-      },
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) {
+          final state = AppState()..boot();
+          debugAppState = state;
+          return state;
+        }),
+        // Picking several songs out of a list is its own small piece of state, and it
+        // belongs to no one screen: the queue, a playlist and an album all use it.
+        ChangeNotifierProvider(create: (_) => Selection()),
+      ],
       // Watched, not read: changing the palette has to repaint the whole app, and the
       // app is what holds the theme.
       child: Consumer<AppState>(

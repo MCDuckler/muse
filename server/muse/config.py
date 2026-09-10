@@ -38,6 +38,11 @@ class Config:
     def cover_dir(self) -> pathlib.Path:
         return self.data_dir / "covers"
 
+    @property
+    def image_dir(self) -> pathlib.Path:
+        """Pictures people chose: profile photos, playlist covers."""
+        return self.data_dir / "images"
+
     def user(self, name: str) -> User | None:
         return next((u for u in self.users if u.name == name), None)
 

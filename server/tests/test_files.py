@@ -143,3 +143,66 @@ def test_manifest_of_someone_elses_playlist_is_empty(client, hdr, tmp_audio):
     m = client.get("/downloads/manifest", headers={"Authorization": f"Bearer {tok}"},
                    params={"playlist_id": p["id"]}).json()
     assert m["count"] == 0
+
+
+# ---------------- pictures people choose ----------------
+def _png(colour=(200, 30, 90)) -> bytes:
+    from io import BytesIO
+
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (900, 600), colour).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_a_profile_picture_can_be_set_seen_and_removed(client, hdr):
+    """A picture is stored under a signature, so a changed one is a changed URL and
+    nothing anywhere is left showing the old one."""
+    up = client.post("/me/avatar", headers=hdr, content=_png())
+    assert up.status_code == 200, up.text
+    version = up.json()["avatar_version"]
+    assert up.json()["avatar_url"] == "/users/1/avatar"
+
+    got = client.get("/users/1/avatar", headers=hdr)
+    assert got.status_code == 200 and got.headers["content-type"] == "image/jpeg"
+    assert got.headers["etag"] == f'"{version}-lg"'
+    assert client.get("/users/1/avatar?size=sm", headers=hdr).status_code == 200
+
+    # A different picture is a different version.
+    again = client.post("/me/avatar", headers=hdr, content=_png((10, 120, 200)))
+    assert again.json()["avatar_version"] != version
+
+    assert client.delete("/me/avatar", headers=hdr).status_code == 200
+    assert client.get("/users/1/avatar", headers=hdr).status_code == 404
+
+
+def test_something_that_is_not_a_picture_is_refused(client, hdr):
+    r = client.post("/me/avatar", headers=hdr, content=b"this is not a png")
+    assert r.status_code == 400
+    assert "picture" in r.json()["detail"]
+
+
+def test_a_playlist_can_be_given_a_cover_and_have_it_taken_back(client, hdr):
+    p = client.post("/playlists", headers=hdr, json={"name": "Roadtrip"}).json()
+    drawn = client.get("/playlists", headers=hdr).json()
+    before = next(x for x in drawn if x["id"] == p["id"])
+    assert before["custom_cover"] is False
+
+    set_it = client.post(f"/playlists/{p['id']}/cover", headers=hdr, content=_png())
+    assert set_it.status_code == 200, set_it.text
+    listed = next(x for x in client.get("/playlists", headers=hdr).json()
+                  if x["id"] == p["id"])
+    assert listed["custom_cover"] is True
+    assert listed["cover_version"] == set_it.json()["cover_version"], \
+        "the version changes with the picture, or a cached one is shown forever"
+
+    served = client.get(f"/playlists/{p['id']}/cover", headers=hdr)
+    assert served.status_code == 200 and served.headers["content-type"] == "image/jpeg"
+
+    client.delete(f"/playlists/{p['id']}/cover", headers=hdr)
+    after = next(x for x in client.get("/playlists", headers=hdr).json()
+                 if x["id"] == p["id"])
+    assert after["custom_cover"] is False
+    assert after["cover_version"] == before["cover_version"], \
+        "and it goes back to the picture drawn from what is in it"

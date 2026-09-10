@@ -425,6 +425,25 @@ class PlayerService {
     _emit(force: true);
   }
 
+  /// Move several rows at once, keeping their own order.
+  void moveManyLocally(List<int> froms, int to) {
+    final picked = ({...froms}.toList()..sort());
+    if (picked.isEmpty || picked.any((p) => p < 0 || p >= _items.length)) return;
+    final playing = current?.id;
+    final block = [for (final p in picked) _items[p]];
+    final rest = [
+      for (var i = 0; i < _items.length; i++)
+        if (!picked.contains(i)) _items[i]
+    ];
+    final at = to.clamp(0, rest.length);
+    _items = [...rest.sublist(0, at), ...block, ...rest.sublist(at)];
+    final now = playing == null ? index : _relocate(index, playing);
+    _rebuildOrder(keepItemIndex: now < 0 ? 0 : now);
+    _queuedNextId = null;
+    unawaited(_queueNext());
+    _emit(force: true);
+  }
+
   /// Take a row out now, for the same reason.
   void removeLocally(int pos) {
     if (pos < 0 || pos >= _items.length) return;

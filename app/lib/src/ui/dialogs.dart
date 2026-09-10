@@ -75,9 +75,21 @@ Future<bool> confirm(BuildContext context, String title, String body) async {
 /// Pick a playlist to add a track to, or make one on the spot — the common case is
 /// "this song belongs somewhere I have not created yet".
 Future<void> addToPlaylistSheet(
-    BuildContext context, AppState app, Track track) async {
+        BuildContext context, AppState app, Track track) =>
+    addTracksToPlaylistSheet(context, app, [track]);
+
+/// Put songs on a playlist — one, or the eleven you have picked out.
+///
+/// The same sheet either way: the header says what is going where, and every playlist
+/// is one tap. Making a new one from here keeps the songs, which is the whole reason
+/// somebody opens this with a selection running.
+Future<void> addTracksToPlaylistSheet(
+    BuildContext context, AppState app, List<Track> tracks) async {
+  if (tracks.isEmpty) return;
   await app.refreshPlaylists();
   if (!context.mounted) return;
+  final many = tracks.length > 1;
+  final ids = [for (final t in tracks) t.id];
 
   await showModalBottomSheet<void>(
     context: context,
@@ -90,17 +102,24 @@ Future<void> addToPlaylistSheet(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
             child: Row(
               children: [
-                Artwork(track: track, size: 40),
+                Artwork(track: tracks.first, size: 40),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(track.displayTitle,
+                      Text(
+                          many
+                              ? '${tracks.length} songs'
+                              : tracks.first.displayTitle,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.titleSmall),
-                      Text(track.artistLine,
+                      Text(
+                          many
+                              ? '${tracks.first.displayTitle} and '
+                                  '${tracks.length - 1} more'
+                              : tracks.first.artistLine,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.bodySmall),
@@ -118,7 +137,7 @@ Future<void> addToPlaylistSheet(
               final name = await promptForName(sheetContext, 'New playlist');
               if (name == null) return;
               final made = await app.api.createPlaylist(name);
-              await app.api.addToPlaylist(made.id, [track.id]);
+              await app.api.addToPlaylist(made.id, ids);
               await app.refreshPlaylists();
               if (sheetContext.mounted) Navigator.pop(sheetContext);
               if (context.mounted) {
@@ -133,12 +152,14 @@ Future<void> addToPlaylistSheet(
               title: Text(p.name),
               subtitle: Text('${p.itemCount} tracks'),
               onTap: () async {
-                await app.api.addToPlaylist(p.id, [track.id]);
+                await app.api.addToPlaylist(p.id, ids);
                 await app.refreshPlaylists();
                 if (sheetContext.mounted) Navigator.pop(sheetContext);
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context)
-                      .showSnackBar(SnackBar(content: Text('Added to "${p.name}"')));
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                      content: Text(many
+                          ? '${tracks.length} added to "${p.name}"'
+                          : 'Added to "${p.name}"')));
                 }
               },
             ),

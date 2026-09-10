@@ -162,7 +162,12 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
 
     @app.get("/me")
     def me(user: dict = Depends(current_user)):
-        return {"user": user["name"], "device": user["device_name"]}
+        row = db.one("select id, avatar_sig from users where id=%s", (user["id"],))
+        return {"user": user["name"], "device": user["device_name"],
+                "user_id": user["id"],
+                # The picture, if there is one, so the app can draw it without asking
+                # a second question on every start.
+                "avatar_version": (row or {}).get("avatar_sig")}
 
     # ---------------- catalog ----------------
     @app.get("/search")

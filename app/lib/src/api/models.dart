@@ -280,6 +280,9 @@ class Playlist {
   /// Art built from the records in it. Every playlist has one; see playlist_art.py.
   final String? coverPath;
   final String? coverVersion;
+
+  /// True when somebody chose a picture rather than letting one be drawn.
+  final bool customCover;
   /// 'all' — the audio was queued with the list. 'on_play' — a library too big to fetch
   /// up front, where songs arrive when you play them.
   final String downloadMode;
@@ -290,6 +293,7 @@ class Playlist {
     required this.kind,
     this.itemCount = 0,
     this.items = const [],
+    this.customCover = false,
     this.unmatched = 0,
     this.sourceName,
     this.coverPath,
@@ -310,6 +314,7 @@ class Playlist {
         sourceName: j['source_name'] as String?,
         coverPath: j['cover_url'] as String?,
         coverVersion: j['cover_version'] as String?,
+        customCover: (j['custom_cover'] ?? false) as bool,
         downloadMode: (j['download_mode'] ?? 'all') as String,
         editable: j['editable'] as bool?,
       );

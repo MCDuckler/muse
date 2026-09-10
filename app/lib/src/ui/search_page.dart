@@ -7,6 +7,7 @@ import '../api/client.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import 'artwork.dart';
+import 'selection_bar.dart';
 import 'song_row.dart';
 import 'dialogs.dart';
 
@@ -215,6 +216,7 @@ class _SearchPageState extends State<SearchPage> {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
           ),
+        SelectionBar(where: 'search', tracks: _local),
         Expanded(
           child: _searched && !_busy && _nothingAtAll
               ? _NothingFound(query: _lastQuery)
@@ -229,6 +231,7 @@ class _SearchPageState extends State<SearchPage> {
                 for (final t in _local)
                 SongRow(
                   track: t,
+                  selectable: 'search',
                   onTap: () => app.addTrack(t),
                   trailing: _queueMenu(
                     onNext: () => app.addTrack(t, mode: 'next'),

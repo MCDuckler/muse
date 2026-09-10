@@ -1,3 +1,4 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -9,6 +10,7 @@ import 'dialogs.dart';
 import 'feed_page.dart';
 import 'mini_player.dart';
 import 'spotify_page.dart';
+import 'selection_bar.dart';
 import 'song_row.dart';
 
 
@@ -117,6 +119,20 @@ class LibraryPage extends StatelessWidget {
                   } catch (e) {
                     messenger.showSnackBar(SnackBar(content: Text('$e')));
                   }
+                } else if (v == 'cover') {
+                  final messenger = ScaffoldMessenger.of(context);
+                  final file = await FilePicker.pickFile(type: FileType.image);
+                  if (file == null) return;
+                  try {
+                    await app.api
+                        .setPlaylistCover(p.id, await file.readAsBytes());
+                    await app.refreshPlaylists();
+                  } catch (e) {
+                    messenger.showSnackBar(SnackBar(content: Text('$e')));
+                  }
+                } else if (v == 'drawn-cover') {
+                  await app.api.clearPlaylistCover(p.id);
+                  await app.refreshPlaylists();
                 } else if (v == 'rename') {
                   final name = await promptForName(context, 'Rename playlist', p.name);
                   if (name == null) return;
@@ -139,6 +155,12 @@ class LibraryPage extends StatelessWidget {
                 const PopupMenuItem(value: 'play', child: Text('Play')),
                 const PopupMenuItem(value: 'shuffle', child: Text('Shuffle')),
                 const PopupMenuItem(value: 'queue', child: Text('Add all to queue')),
+                // A playlist draws its own cover from the records in it; this is for
+                // when you have a picture in mind instead.
+                const PopupMenuItem(value: 'cover', child: Text('Choose a cover…')),
+                if (p.customCover)
+                  const PopupMenuItem(
+                      value: 'drawn-cover', child: Text('Use the drawn cover')),
                 if (p.isMirror) ...[
                   const PopupMenuItem(
                       value: 'clone', child: Text('Make an editable copy')),
@@ -222,7 +244,30 @@ class _PlaylistPageState extends State<_PlaylistPage> {
           if (items.isEmpty) {
             return const Center(child: Text('Nothing in this playlist yet.'));
           }
-          return RefreshIndicator(
+          final where = 'playlist:${widget.playlistId}';
+          return Column(
+            children: [
+              SelectionBar(
+                where: where,
+                tracks: items,
+                removeLabel: 'Remove from playlist',
+                onRemove: !snap.data!.editable
+                    ? null
+                    : (picked) async {
+                        final at = [
+                          for (var i = 0; i < items.length; i++)
+                            if (picked.any((p) => p.id == items[i].id)) i
+                        ];
+                        // Backwards: each removal shifts everything after it up.
+                        for (final i in at.reversed) {
+                          await app.api.removePlaylistItem(widget.playlistId, i);
+                        }
+                        await app.refreshPlaylists();
+                        _reload();
+                      },
+              ),
+              Expanded(
+                child: RefreshIndicator(
             onRefresh: () async => _reload(),
             child: ReorderableListView.builder(
             padding: const EdgeInsets.fromLTRB(8, 4, 8, 24),
@@ -240,13 +285,16 @@ class _PlaylistPageState extends State<_PlaylistPage> {
                 ? SongRow(
                     key: ValueKey('pl-ro-${items[i].id}-$i'),
                     track: items[i],
+                    selectable: where,
                     onTap: () =>
                         app.playNow(items, startAt: i, named: widget.name),
                     onChanged: _reload,
                   )
-                : ReorderableDelayedDragStartListener(
+                : KeyedSubtree(
+              // Not a delayed drag listener any more: holding a row picks it out to
+              // do something to it along with others, and the grip beside the artwork
+              // is what moves it.
               key: ValueKey('pl-${items[i].id}-$i'),
-              index: i,
               child: Dismissible(
               key: ValueKey('pl-dismiss-${items[i].id}-$i'),
               direction: DismissDirection.endToStart,
@@ -266,6 +314,7 @@ class _PlaylistPageState extends State<_PlaylistPage> {
               },
               child: SongRow(
                 track: items[i],
+                selectable: where,
                 handle: ReorderableDragStartListener(
                   index: i,
                   child: Padding(
@@ -285,6 +334,9 @@ class _PlaylistPageState extends State<_PlaylistPage> {
             ),
             ),
           ),
+                ),
+              ),
+            ],
           );
         },
       ),

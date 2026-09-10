@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
+import '../state/selection.dart';
 import 'artwork.dart';
 import 'source_dot.dart';
 import 'track_menu.dart';
@@ -31,7 +32,14 @@ class SongRow extends StatelessWidget {
     this.onRemove,
     this.onChanged,
     this.dense = false,
+    this.selectable,
   });
+
+  /// Which list this row is in, when it can be picked out along with others.
+  ///
+  /// Given one, holding the row starts a selection and tapping adds to it — see
+  /// Selection. Rows in lists that pass nothing behave as they always did.
+  final String? selectable;
 
   final Track track;
   final VoidCallback? onTap;
@@ -74,6 +82,9 @@ class SongRow extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
     final failed = track.state == 'failed';
+    final selection = selectable == null ? null : context.watch<Selection>();
+    final picking = selection?.inside(selectable!) ?? false;
+    final picked = picking && selection!.has(track.id);
 
     // Artist · album on one line: an album that is only in the metadata is not much
     // use, and two lines of subtitle in a list of four hundred is a lot of scrolling.
@@ -85,15 +96,27 @@ class SongRow extends StatelessWidget {
     final duration = SongRow.formatDuration(track.duration);
 
     return Material(
-      color: selected ? scheme.primary.withValues(alpha: 0.10) : Colors.transparent,
+      color: picked
+          ? scheme.primary.withValues(alpha: 0.18)
+          : selected
+              ? scheme.primary.withValues(alpha: 0.10)
+              : Colors.transparent,
       child: InkWell(
         // The feedback is the point: a list that does not answer a touch immediately
         // reads as broken long before anything has actually gone wrong.
-        onTap: onTap,
-        onLongPress: showMenu
-            ? () => showTrackSheet(context, track,
-                onRemove: onRemove, onChanged: onChanged)
-            : null,
+        //
+        // While a selection is running in this list, a tap adds to it rather than
+        // playing: nobody holds a row to pick it out and then expects the next tap to
+        // start the music.
+        onTap: picking
+            ? () => selection!.toggle(selectable!, track.id)
+            : onTap,
+        onLongPress: selectable != null
+            ? () => selection!.start(selectable!, track.id)
+            : showMenu
+                ? () => showTrackSheet(context, track,
+                    onRemove: onRemove, onChanged: onChanged)
+                : null,
         child: Padding(
           padding: EdgeInsets.only(
               left: handle == null ? 8 : 0,
@@ -107,7 +130,12 @@ class SongRow extends StatelessWidget {
                 width: 40,
                 height: 40,
                 child: Center(
-                  child: leading ?? Artwork(track: track, size: 40, radius: 5),
+                  child: picking
+                      ? Icon(
+                          picked ? Icons.check_circle : Icons.circle_outlined,
+                          color: picked ? scheme.primary : scheme.outline,
+                        )
+                      : leading ?? Artwork(track: track, size: 40, radius: 5),
                 ),
               ),
               const SizedBox(width: 10),
@@ -155,7 +183,7 @@ class SongRow extends StatelessWidget {
                 Text(duration,
                     style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
               ],
-              if (showMenu)
+              if (showMenu && !picking)
                 IconButton(
                   icon: const Icon(Icons.more_vert, size: 18),
                   visualDensity: VisualDensity.compact,

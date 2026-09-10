@@ -6,6 +6,9 @@ import '../state/app_state.dart';
 import '../state/player.dart';
 import 'dialogs.dart';
 import 'song_row.dart';
+import '../state/selection.dart';
+import 'selection_bar.dart';
+import 'artwork.dart';
 
 /// Queues are the product, so this screen shows them all, not just the one playing.
 class QueuePage extends StatefulWidget {
@@ -18,6 +21,10 @@ class QueuePage extends StatefulWidget {
 class _QueuePageState extends State<QueuePage> {
   final _scroll = ScrollController();
   int? _followed;
+
+  /// The row being dragged, while one is. Everything else that is selected folds away
+  /// behind it for the length of the drag — see the itemBuilder.
+  int? _dragging;
 
   /// Rows are close enough to a fixed height for scrolling maths; a row that is
   /// downloading grows by the progress bar, which is a few pixels of drift at worst.
@@ -170,6 +177,24 @@ class _QueuePageState extends State<QueuePage> {
               ],
             ),
           ),
+        if (active != null)
+          SelectionBar(
+            where: 'queue:${active.id}',
+            tracks: rows,
+            removeLabel: 'Remove from queue',
+            onRemove: (picked) async {
+              // Backwards, so removing one row does not shift the next one out from
+              // under the position we are about to remove.
+              final byId = {for (var i = 0; i < rows.length; i++) rows[i].id: i};
+              final positions = [
+                for (final t in picked)
+                  if (byId.containsKey(t.id)) byId[t.id]!
+              ]..sort();
+              for (final pos in positions.reversed) {
+                await app.removeFromQueue(pos);
+              }
+            },
+          ),
         const Divider(height: 1),
         Expanded(
           child: active == null || rows.isEmpty
@@ -181,13 +206,46 @@ class _QueuePageState extends State<QueuePage> {
                   padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
                   itemCount: rows.length,
                   buildDefaultDragHandles: false,
+                  onReorderStart: (i) => setState(() => _dragging = i),
+                  onReorderEnd: (_) => setState(() => _dragging = null),
+                  // While a selection is being dragged, the rest of it is drawn as one
+                  // row: a stack of sleeves with a count on it, rather than a dozen
+                  // rows sliding about independently.
+                  proxyDecorator: (child, index, animation) {
+                    final picked = _pickedPositions(context, rows, active);
+                    if (picked.length < 2 || !picked.contains(index)) {
+                      return Material(color: Colors.transparent, child: child);
+                    }
+                    return Material(
+                      elevation: 6,
+                      borderRadius: BorderRadius.circular(10),
+                      child: _DraggedBundle(
+                          tracks: [for (final p in picked) rows[p]]),
+                    );
+                  },
                   // onReorderItem, not onReorder: it hands over the index the row
                   // actually lands on, rather than one measured before the row was
                   // lifted out, which is an off-by-one waiting to happen.
-                  onReorderItem: (from, to) => app.moveInQueue(from, to),
+                  onReorderItem: (from, to) {
+                    final picked = _pickedPositions(context, rows, active);
+                    if (picked.length > 1 && picked.contains(from)) {
+                      app.moveManyInQueue(picked, to);
+                    } else {
+                      app.moveInQueue(from, to);
+                    }
+                  },
                   itemBuilder: (context, i) {
                     final t = rows[i];
                     final isCurrent = i == (app.player?.index ?? -1);
+                    final picked = _pickedPositions(context, rows, active);
+                    // Folded away behind the row being dragged.
+                    if (_dragging != null &&
+                        i != _dragging &&
+                        picked.length > 1 &&
+                        picked.contains(i) &&
+                        picked.contains(_dragging!)) {
+                      return SizedBox(key: ValueKey('folded-${t.id}-$i'), height: 0);
+                    }
                     return Dismissible(
                       key: ValueKey('${t.id}-$i'),
                       direction: DismissDirection.endToStart,
@@ -209,6 +267,7 @@ class _QueuePageState extends State<QueuePage> {
                         track: t,
                         selected: isCurrent,
                         dense: true,
+                        selectable: 'queue:${active.id}',
                         handle: ReorderableDragStartListener(
                           index: i,
                           child: Padding(
@@ -275,6 +334,17 @@ class _QueuePageState extends State<QueuePage> {
     }
   }
 
+  /// Which rows of this queue are picked out, as positions in the list.
+  List<int> _pickedPositions(BuildContext context, List<Track> rows, Queue? active) {
+    if (active == null) return const [];
+    final selection = context.read<Selection>();
+    if (!selection.inside('queue:${active.id}')) return const [];
+    return [
+      for (var i = 0; i < rows.length; i++)
+        if (selection.has(rows[i].id)) i
+    ];
+  }
+
   Future<void> _deleteQueue(BuildContext context, Queue queue) async {
     final app = context.read<AppState>();
     final messenger = ScaffoldMessenger.of(context);
@@ -339,6 +409,52 @@ class _EmptyQueue extends StatelessWidget {
                 textAlign: TextAlign.center),
           ],
         ),
+      ),
+    );
+  }
+}
+
+
+/// Several songs being dragged, drawn as one thing.
+///
+/// Dragging eleven rows as eleven rows is unreadable and janky; a small stack of their
+/// sleeves with the count on it says the same thing and moves as one object.
+class _DraggedBundle extends StatelessWidget {
+  const _DraggedBundle({required this.tracks});
+  final List<Track> tracks;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final shown = tracks.take(3).toList();
+    return Container(
+      height: 56,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 40 + (shown.length - 1) * 8,
+            height: 40,
+            child: Stack(
+              children: [
+                for (var i = shown.length - 1; i >= 0; i--)
+                  Positioned(
+                    left: i * 8,
+                    child: Artwork(track: shown[i], size: 40, radius: 5),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Text('${tracks.length} songs',
+              style: Theme.of(context).textTheme.titleSmall),
+          const Spacer(),
+          Icon(Icons.drag_indicator, color: scheme.outline),
+        ],
       ),
     );
   }

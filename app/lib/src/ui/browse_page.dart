@@ -73,6 +73,7 @@ class _AllTracksPageState extends State<AllTracksPage> {
             onRefresh: () async => _load(),
             child: TrackList(
               tracks: data.items,
+              selectable: 'library',
               header: '${data.total} in your library · ${_sorts[_sort]!.toLowerCase()}',
             ),
           );

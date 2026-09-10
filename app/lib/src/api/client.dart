@@ -230,6 +230,35 @@ class ApiClient {
 
   /// A playlist's own art. Immutable per version, so it caches forever and still
   /// changes the moment the playlist does.
+  /// A picture for the account, sent as it came off the phone.
+  Future<String> setAvatar(List<int> bytes) async {
+    final d = await _decode(await http.post(_u('/me/avatar'),
+        headers: {..._headers, 'Content-Type': 'application/octet-stream'},
+        body: bytes)) as Map<String, dynamic>;
+    return d['avatar_version'] as String;
+  }
+
+  Future<void> clearAvatar() async =>
+      await _decode(await http.delete(_u('/me/avatar'), headers: _headers));
+
+  /// Somebody's picture, if they have one. Signed like every other image the app shows,
+  /// because an <img> cannot carry a header.
+  String avatarUrl(int userId, {String? version, bool small = true}) {
+    final key = _streamKey;
+    return '$baseUrl/users/$userId/avatar?size=${small ? 'sm' : 'lg'}'
+        '${version == null ? '' : '&v=$version'}'
+        '${key == null ? '' : '&k=${Uri.encodeQueryComponent(key)}'}';
+  }
+
+  /// A cover of your own for a playlist, instead of the one drawn from its records.
+  Future<void> setPlaylistCover(int playlistId, List<int> bytes) async =>
+      await _decode(await http.post(_u('/playlists/$playlistId/cover'),
+          headers: {..._headers, 'Content-Type': 'application/octet-stream'},
+          body: bytes));
+
+  Future<void> clearPlaylistCover(int playlistId) async => await _decode(
+      await http.delete(_u('/playlists/$playlistId/cover'), headers: _headers));
+
   String? playlistCoverUrl(Playlist p, {bool small = true}) {
     if (p.coverPath == null) return null;
     final key = _streamKey;
@@ -460,6 +489,12 @@ class ApiClient {
   }
 
   /// Deal the rest of the queue again. Once — see the server's own note on it.
+  /// Move several rows as one. Dragging one row of a selection brings the rest.
+  Future<Queue> moveQueueItems(int id, List<int> froms, int to) async =>
+      Queue.fromJson(await _decode(await http.post(_u('/queues/$id/move'),
+          headers: _headers,
+          body: jsonEncode({'from': froms, 'to': to}))) as Map<String, dynamic>);
+
   Future<Queue> shuffleQueue(int id) async => Queue.fromJson(await _decode(
       await http.post(_u('/queues/$id/shuffle'),
           headers: _headers, body: '{}')) as Map<String, dynamic>);
