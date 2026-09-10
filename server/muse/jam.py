@@ -102,6 +102,44 @@ def live_for(user_id: int) -> dict | None:
     )
 
 
+def running(exclude_user: int | None = None) -> list[dict]:
+    """Every jam going on right now, with enough about each to choose between them.
+
+    Everybody here already has an account on this server — the code is for reaching
+    somebody who is not in the room, not a door lock — so there is no reason a person
+    should have to be told a code by somebody sitting next to them. This is the list of
+    rooms with the lights on.
+    """
+    rows = db.all_(
+        f"""select j.id, j.code, j.queue_id, u.name as host, u.avatar_sig,
+                   q.name as queue,
+                   (select count(*) from jam_members m
+                     where m.jam_id = j.id
+                       and extract(epoch from now() - m.last_seen) < {ONLINE_SECONDS})
+                     as listening,
+                   (select t.title from queue_items i
+                      join tracks t on t.id = i.track_id
+                     where i.queue_id = q.id and i.pos = q.cursor_index) as playing,
+                   (select array_agg(t.artists[1]) from queue_items i
+                      join tracks t on t.id = i.track_id
+                     where i.queue_id = q.id and i.pos = q.cursor_index) as by,
+                   exists (select 1 from jam_members m
+                            where m.jam_id = j.id and m.user_id = %s) as joined
+              from jams j
+              join users u on u.id = j.host_id
+              join queues q on q.id = j.queue_id
+             where j.ended_at is null
+             order by listening desc, j.created_at desc""",
+        (exclude_user or 0,),
+    )
+    return [
+        {**r, "by": (r.pop("by") or [None])[0]}
+        for r in rows
+        # A jam nobody has been seen in for a while is over in every way but the row.
+        if r["listening"] > 0 or r["joined"]
+    ]
+
+
 def may_touch_queue(queue_id: int, user_id: int) -> dict | None:
     """The jam that gives this person a say over that queue, if any."""
     return db.one(

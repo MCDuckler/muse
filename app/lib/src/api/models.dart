@@ -666,6 +666,53 @@ enum PlayerLayout {
       };
 }
 
+/// A jam that is running now, as seen from outside it.
+class OpenJam {
+  final int id;
+  final String code;
+  final int queueId;
+  final String host;
+  final String? hostAvatar;
+  final String queue;
+  final int listening;
+  final String? playing;
+  final String? by;
+  final bool joined;
+
+  const OpenJam({
+    required this.id,
+    required this.code,
+    required this.queueId,
+    required this.host,
+    required this.queue,
+    this.hostAvatar,
+    this.listening = 0,
+    this.playing,
+    this.by,
+    this.joined = false,
+  });
+
+  factory OpenJam.fromJson(Map<String, dynamic> j) => OpenJam(
+        id: (j['id'] ?? 0) as int,
+        code: (j['code'] ?? '') as String,
+        queueId: (j['queue_id'] ?? 0) as int,
+        host: (j['host'] ?? '') as String,
+        hostAvatar: j['avatar_sig'] as String?,
+        queue: (j['queue'] ?? '') as String,
+        listening: (j['listening'] ?? 0) as int,
+        playing: j['playing'] as String?,
+        by: j['by'] as String?,
+        joined: (j['joined'] ?? false) as bool,
+      );
+
+  /// What is on, said the way somebody would say it.
+  String get nowPlaying => playing == null
+      ? 'nothing playing yet'
+      : by == null
+          ? playing!
+          : '$playing · $by';
+}
+
 /// Someone in a jam.
 class JamMember {
   final int userId;

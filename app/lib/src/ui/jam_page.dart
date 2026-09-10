@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -139,8 +140,19 @@ class _JamPageState extends State<JamPage> {
         const SizedBox(height: 26),
         const Divider(),
         const SizedBox(height: 14),
-        Text('Join someone else', style: Theme.of(context).textTheme.titleMedium),
+        Text('Rooms with the lights on',
+            style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 4),
+        Text(
+          'Everybody here has an account on this server, so a jam that is running is '
+          'something to walk into.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
         const SizedBox(height: 10),
+        _OpenJams(onJoin: (code) => _run(() => app.joinJam(code))),
+        const SizedBox(height: 18),
+        Text('Or type a code', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
         _JoinField(onJoin: (code) => _run(() => app.joinJam(code))),
       ];
 
@@ -293,3 +305,105 @@ class _JoinFieldState extends State<_JoinField> {
 /// Opens the jam screen from wherever the user is.
 Future<void> showJam(BuildContext context) => Navigator.of(context)
     .push(MaterialPageRoute(builder: (_) => const JamPage()));
+
+
+/// The jams running right now, as a list you can walk into.
+class _OpenJams extends StatefulWidget {
+  const _OpenJams({required this.onJoin});
+  final void Function(String code) onJoin;
+
+  @override
+  State<_OpenJams> createState() => _OpenJamsState();
+}
+
+class _OpenJamsState extends State<_OpenJams> {
+  Future<List<OpenJam>>? _future;
+  Timer? _refresh;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    // Somebody starting a jam in the next room should appear here without anyone
+    // pulling the screen down.
+    _refresh = Timer.periodic(const Duration(seconds: 12), (_) => _load());
+  }
+
+  void _load() {
+    if (!mounted) return;
+    setState(() => _future = context.read<AppState>().api.openJams());
+  }
+
+  @override
+  void dispose() {
+    _refresh?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return FutureBuilder<List<OpenJam>>(
+      future: _future,
+      builder: (context, snap) {
+        if (snap.hasError) {
+          return Text('Could not ask who is listening: ${snap.error}',
+              style: Theme.of(context).textTheme.bodySmall);
+        }
+        final rooms = snap.data;
+        if (rooms == null) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: SizedBox(
+                width: 18, height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2)),
+          );
+        }
+        if (rooms.isEmpty) {
+          return Text('Nobody is listening together at the moment.',
+              style: Theme.of(context).textTheme.bodySmall);
+        }
+        return Column(
+          children: [
+            for (final room in rooms)
+              Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                child: ListTile(
+                  leading: Face(
+                      name: room.host,
+                      version: room.hostAvatar,
+                      // The picture belongs to the host; the id comes with the jam's
+                      // own member list once you are in it, so outside a room the
+                      // initial stands in.
+                      size: 40),
+                  title: Text("${room.host}'s jam"),
+                  subtitle: Text(
+                    [
+                      room.nowPlaying,
+                      '${room.listening} listening',
+                    ].join(' · '),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: FilledButton.tonal(
+                    onPressed: () => widget.onJoin(room.code),
+                    child: const Text('Join'),
+                  ),
+                  onTap: () => widget.onJoin(room.code),
+                ),
+              ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: _load,
+                icon: Icon(Icons.refresh, size: 18, color: scheme.outline),
+                label: Text('Look again',
+                    style: Theme.of(context).textTheme.bodySmall),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}

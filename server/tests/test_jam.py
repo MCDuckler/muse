@@ -200,3 +200,36 @@ def test_a_stranger_cannot_reach_the_controls(client, hdr, guest, jam):
 def test_an_invented_action_is_refused(client, hdr, jam):
     r = client.post(f"/jams/{jam['id']}/control", headers=hdr, json={"action": "eject"})
     assert r.status_code == 400
+
+
+def test_the_rooms_with_the_lights_on_are_listed(client, hdr, guest, jam):
+    """Everybody here already has an account, so nobody should have to be read a code
+    by somebody sitting next to them."""
+    listed = client.get("/jams", headers=guest).json()["items"]
+    assert len(listed) == 1
+    room = listed[0]
+    assert room["host"] == "chris"
+    assert room["code"] == jam["code"]
+    assert room["listening"] == 1, "the host is in it"
+    assert room["joined"] is False, "and this person is not"
+
+    client.post("/jams/join", headers=guest, json={"code": jam["code"]})
+    after = client.get("/jams", headers=guest).json()["items"][0]
+    assert after["joined"] is True and after["listening"] == 2
+
+
+def test_what_is_playing_is_part_of_choosing(client, hdr, guest, jam):
+    track = client.post("/tracks/resolve", headers=hdr, json={"query": "on now"}).json()
+    client.post(f"/queues/{jam['queue']['id']}/items", headers=hdr,
+                json={"track_ids": [track["id"]]})
+    client.patch(f"/queues/{jam['queue']['id']}/cursor", headers=hdr,
+                 json={"cursor_index": 0})
+
+    room = client.get("/jams", headers=guest).json()["items"][0]
+    assert room["playing"] == track["title"]
+    assert room["queue"] == "Kitchen"
+
+
+def test_a_jam_that_has_ended_is_not_offered(client, hdr, guest, jam):
+    client.post(f"/jams/{jam['id']}/leave", headers=hdr)      # the host leaving ends it
+    assert client.get("/jams", headers=guest).json()["items"] == []

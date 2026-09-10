@@ -64,6 +64,12 @@ def join_jam(body: dict = Body(...), user: dict = Depends(current_user)):
     return jam.public(row, user["id"])
 
 
+@router.get("")
+def running_jams(user: dict = Depends(current_user)):
+    """The rooms with the lights on, so joining one is a tap rather than a code."""
+    return {"items": jam.running(exclude_user=user["id"])}
+
+
 @router.get("/people")
 def people(user: dict = Depends(current_user)):
     """Everyone with an account here, and whether they are around.

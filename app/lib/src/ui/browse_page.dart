@@ -5,6 +5,7 @@ import '../api/models.dart';
 import '../state/app_state.dart';
 import 'artwork.dart';
 import 'source_dot.dart';
+import 'swipe.dart';
 import 'dialogs.dart';
 import 'mini_player.dart';
 import 'track_list.dart';
@@ -400,7 +401,12 @@ class _ReleaseRow extends StatelessWidget {
     final track = row.track;
     final faded = track == null;
 
-    return ListTile(
+    // A row for a song we hold swipes to put it on next, like every other list. One we
+    // do not hold has nothing to queue yet, so it does not.
+    return _maybeSwipe(
+      context,
+      track,
+      ListTile(
       dense: true,
       leading: SizedBox(
         width: 40,
@@ -451,8 +457,24 @@ class _ReleaseRow extends StatelessWidget {
       onTap: track == null
           ? onFetch
           : () => app.playNow(playable, startAt: playable.indexOf(track)),
+    ),
     );
   }
+}
+
+/// Wrap a row that is not a SongRow in the same play-next gesture SongRow has, so a
+/// record and an artist behave like the lists everywhere else.
+Widget _maybeSwipe(BuildContext context, Track? track, Widget row) {
+  if (track == null) return row;
+  return SwipeAction(
+    onSwipe: () {
+      final messenger = ScaffoldMessenger.of(context);
+      context.read<AppState>().addTrack(track, mode: 'next');
+      messenger.showSnackBar(
+          SnackBar(content: Text('${track.displayTitle} plays next')));
+    },
+    child: row,
+  );
 }
 
 class ArtistsPage extends StatefulWidget {
@@ -695,7 +717,10 @@ class _TopRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final track = row.track;
-    return ListTile(
+    return _maybeSwipe(
+      context,
+      track,
+      ListTile(
       dense: true,
       leading: track == null
           ? Artwork(track: track, size: 36, radius: 4)
@@ -722,6 +747,7 @@ class _TopRow extends StatelessWidget {
           : () => context
               .read<AppState>()
               .playNow(playable, startAt: playable.indexOf(track)),
+    ),
     );
   }
 }

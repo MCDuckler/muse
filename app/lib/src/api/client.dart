@@ -438,6 +438,17 @@ class ApiClient {
       await http.post(_u('/jams/join'),
           headers: _headers, body: jsonEncode({'code': code}))) as Map<String, dynamic>);
 
+  /// Every jam running now. Everybody here has an account on this server, so a room
+  /// is something to walk into rather than something to be let into.
+  Future<List<OpenJam>> openJams() async {
+    final d = await _decode(await http.get(_u('/jams'), headers: _headers))
+        as Map<String, dynamic>;
+    return [
+      for (final e in (d['items'] ?? const []) as List)
+        OpenJam.fromJson(e as Map<String, dynamic>)
+    ];
+  }
+
   /// The jam you are in, and a heartbeat that keeps you listed as here.
   Future<Jam?> currentJam() async {
     final d = await _decode(await http.get(_u('/jams/current'), headers: _headers))
