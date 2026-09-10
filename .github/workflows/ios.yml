@@ -27,6 +27,11 @@ jobs:
   ipa:
     runs-on: macos-15
     timeout-minutes: 30
+    # The one permission this needs: attaching the ipa to a release. A repository's
+    # token is read-only by default, which is the right default and the reason the
+    # first run built the app and then could not hand it over.
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
