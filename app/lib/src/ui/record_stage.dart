@@ -661,7 +661,7 @@ class _Sleeve extends StatelessWidget {
             // Kept as space either way, so the sleeve sits at the same height on the
             // stage whether or not it is standing on anything. On a stack there is
             // nothing under a record but the next record, so no reflection.
-            SizedBox(width: jacket, height: jacket * 0.34),
+            SizedBox(width: jacket, height: jacket * Mirror.defaultDepth),
         ],
       ),
     );
@@ -750,15 +750,20 @@ class Mirror extends StatelessWidget {
     super.key,
     required this.child,
     required this.size,
-    this.depth = 0.34,
-    this.strength = 0.20,
+    this.depth = defaultDepth,
+    this.strength = 0.11,
   });
+
+  /// How much of the height is reflected, and how much room to leave for it.
+  ///
+  /// Shallow. A whole mirrored copy is a puddle, and even a third of one is a second
+  /// picture hanging off the bottom of the first — it reached far enough down the
+  /// screen to sit behind the song's title. What is wanted is the inch of light a
+  /// record picks up from whatever it is standing on.
+  static const double defaultDepth = 0.15;
 
   final Widget child;
   final double size;
-
-  /// How much of the height is reflected. A whole mirrored copy looks like a puddle;
-  /// a third of one looks like a surface.
   final double depth;
 
   /// How bright the brightest part of it is — the edge touching the record.
@@ -769,32 +774,38 @@ class Mirror extends StatelessWidget {
     return SizedBox(
       width: size,
       height: size * depth,
-      child: ShaderMask(
-        blendMode: BlendMode.dstIn,
-        shaderCallback: (bounds) => LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            Colors.white.withValues(alpha: strength),
-            Colors.white.withValues(alpha: 0),
-          ],
-          // Most of the fade happens early: a reflection that lingers reads as a
-          // second picture rather than as light on a floor.
-          stops: const [0, 0.85],
-        ).createShader(bounds),
-        child: OverflowBox(
-          alignment: Alignment.topCenter,
-          maxHeight: size,
-          // Flipped about its own middle, so the copy stays in the box and its top
-          // edge is the record's bottom edge — which is what a reflection is.
-          //
-          // Flipping about the top sent the whole copy *upwards* instead, out of this
-          // box and straight over the cover above it, so every sleeve was wearing an
-          // upside-down picture of itself across its bottom third.
-          child: Transform(
-            alignment: Alignment.center,
-            transform: Matrix4.identity()..scaleByDouble(1.0, -1.0, 1.0, 1.0),
-            child: child,
+      // Clipped, not merely faded. The copy inside is a whole cover tall and only a
+      // sixth of one is wanted; leaving the rest to the gradient means trusting a
+      // shader's clamp to keep an upside-down album off the title underneath it.
+      child: ClipRect(
+        child: ShaderMask(
+          blendMode: BlendMode.dstIn,
+          shaderCallback: (bounds) => LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.white.withValues(alpha: strength),
+              Colors.white.withValues(alpha: strength * 0.35),
+              Colors.white.withValues(alpha: 0),
+            ],
+            // Gone before the bottom of its own box, so there is always clear air
+            // between the reflection and whatever is written below it.
+            stops: const [0, 0.35, 0.8],
+          ).createShader(bounds),
+          child: OverflowBox(
+            alignment: Alignment.topCenter,
+            maxHeight: size,
+            // Flipped about its own middle, so the copy stays in the box and its top
+            // edge is the record's bottom edge — which is what a reflection is.
+            //
+            // Flipping about the top sent the whole copy *upwards* instead, out of
+            // this box and straight over the cover above it, so every sleeve was
+            // wearing an upside-down picture of itself across its bottom third.
+            child: Transform(
+              alignment: Alignment.center,
+              transform: Matrix4.identity()..scaleByDouble(1.0, -1.0, 1.0, 1.0),
+              child: child,
+            ),
           ),
         ),
       ),
