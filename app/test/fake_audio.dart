@@ -207,6 +207,20 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
     _emit();
   }
 
+  /// The engine has run out of audio and is waiting for more — a network that went
+  /// away, a stream the server stopped feeding. This is what a real stall looks like:
+  /// the state changes and then nothing else happens at all.
+  void stall() {
+    state = ProcessingStateMessage.buffering;
+    _emit();
+  }
+
+  /// Audio again.
+  void recover() {
+    state = ProcessingStateMessage.ready;
+    _emit();
+  }
+
   /// The song ended and the engine stopped there, waiting to be told what to do.
   void reachEnd() {
     position = trackLength;

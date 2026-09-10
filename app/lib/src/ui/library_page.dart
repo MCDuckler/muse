@@ -290,71 +290,33 @@ class _PlaylistPageState extends State<_PlaylistPage> {
                         app.playNow(items, startAt: i, named: widget.name),
                     onChanged: _reload,
                   )
-                : KeyedSubtree(
-              // Not a delayed drag listener any more: holding a row picks it out to
-              // do something to it along with others, and the grip beside the artwork
-              // is what moves it.
+                : SongRow(
+              // Both directions live in the row itself now: towards you puts the song
+              // on next, away takes it off the playlist. Neither throws the row off
+              // the screen — it goes as far as it is dragged and comes back.
               key: ValueKey('pl-${items[i].id}-$i'),
-              child: Dismissible(
-              key: ValueKey('pl-dismiss-${items[i].id}-$i'),
-              // Both ways, and they mean different things: away takes it off the
-              // playlist, towards puts it on next. Playing something next is the most
-              // common thing anybody wants from a list they are looking at, and it was
-              // three taps through a menu.
-              direction: DismissDirection.horizontal,
-              background: Container(
-                alignment: Alignment.centerLeft,
-                padding: const EdgeInsets.only(left: 20),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primaryContainer,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(Icons.playlist_play),
-              ),
-              secondaryBackground: Container(
-                alignment: Alignment.centerRight,
-                padding: const EdgeInsets.only(right: 20),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.errorContainer,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(Icons.delete_outline),
-              ),
-              confirmDismiss: (direction) async {
-                if (direction != DismissDirection.startToEnd) return true;
-                // Playing next leaves the row where it is: the list it is on has not
-                // changed, so the row must not vanish.
-                final messenger = ScaffoldMessenger.of(context);
-                await app.addTrack(items[i], mode: 'next');
-                messenger.showSnackBar(SnackBar(
-                    content: Text('${items[i].displayTitle} plays next')));
-                return false;
-              },
-              onDismissed: (_) async {
+              track: items[i],
+              selectable: where,
+              onSwipeAway: () async {
                 await app.api.removePlaylistItem(widget.playlistId, i);
                 await app.refreshPlaylists();
                 _reload();
               },
-              child: SongRow(
-                track: items[i],
-                selectable: where,
-                handle: ReorderableDragStartListener(
-                  index: i,
-                  child: Padding(
-                    padding: const EdgeInsets.only(left: 2, right: 2),
-                    child: Icon(Icons.drag_indicator,
-                        size: 18, color: Theme.of(context).colorScheme.outline),
-                  ),
+              handle: ReorderableDragStartListener(
+                index: i,
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 2, right: 2),
+                  child: Icon(Icons.drag_indicator,
+                      size: 18, color: Theme.of(context).colorScheme.outline),
                 ),
-                onTap: () => app.playNow(items, startAt: i, named: widget.name),
-                onRemove: () async {
-                  await app.api.removePlaylistItem(widget.playlistId, i);
-                  await app.refreshPlaylists();
-                  _reload();
-                },
-                onChanged: _reload,
               ),
-            ),
+              onTap: () => app.playNow(items, startAt: i, named: widget.name),
+              onRemove: () async {
+                await app.api.removePlaylistItem(widget.playlistId, i);
+                await app.refreshPlaylists();
+                _reload();
+              },
+              onChanged: _reload,
             ),
           ),
                 ),

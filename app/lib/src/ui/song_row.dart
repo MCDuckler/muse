@@ -6,6 +6,7 @@ import '../state/app_state.dart';
 import '../state/selection.dart';
 import 'artwork.dart';
 import 'source_dot.dart';
+import 'swipe.dart';
 import 'track_menu.dart';
 
 /// One song, drawn the same way everywhere it appears.
@@ -33,7 +34,21 @@ class SongRow extends StatelessWidget {
     this.onChanged,
     this.dense = false,
     this.selectable,
+    this.swipeToPlayNext = true,
+    this.onSwipeAway,
   });
+
+  /// Pushing the row away, where the list it is in has something for that — taking it
+  /// off a playlist. Bounded like the other direction: the row does not leave the
+  /// frame, because it is not going anywhere until it is let go of.
+  final VoidCallback? onSwipeAway;
+
+  /// Push the row aside to put the song on next.
+  ///
+  /// On by default, because it is the thing most often wanted from a list you are
+  /// looking at, and off in the queue: a song already in the queue has nothing to be
+  /// added to, and that list uses the same gesture to take rows out.
+  final bool swipeToPlayNext;
 
   /// Which list this row is in, when it can be picked out along with others.
   ///
@@ -95,7 +110,7 @@ class SongRow extends StatelessWidget {
 
     final duration = SongRow.formatDuration(track.duration);
 
-    return Material(
+    final row = Material(
       color: picked
           ? scheme.primary.withValues(alpha: 0.18)
           : selected
@@ -199,6 +214,22 @@ class SongRow extends StatelessWidget {
           ),
         ),
       ),
+    );
+
+    // Not while a selection is running: the same sideways drag would be doing two
+    // things at once, and the bar at the top is how you act on a selection.
+    if (picking || (!swipeToPlayNext && onSwipeAway == null)) return row;
+    return SwipeAction(
+      onSwipe: !swipeToPlayNext
+          ? null
+          : () {
+              final messenger = ScaffoldMessenger.of(context);
+              context.read<AppState>().addTrack(track, mode: 'next');
+              messenger.showSnackBar(
+                  SnackBar(content: Text('${track.displayTitle} plays next')));
+            },
+      onSwipeAway: onSwipeAway,
+      child: row,
     );
   }
 }

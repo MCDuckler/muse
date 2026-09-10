@@ -300,6 +300,9 @@ class _QueuePageState extends State<QueuePage> {
                         track: t,
                         selected: isCurrent,
                         dense: true,
+                        // The queue's sideways drag takes a row out; a song already in
+                        // the queue has nothing to be added to.
+                        swipeToPlayNext: false,
                         selectable: 'queue:${active.id}',
                         handle: ReorderableDragStartListener(
                           index: i,

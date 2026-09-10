@@ -18,6 +18,7 @@ class DragFollow extends StatefulWidget {
     this.verticalTravel = 90,
     this.completeAt = 0.45,
     this.fadeWithDrag = false,
+    this.behind,
   });
 
   final Widget child;
@@ -34,6 +35,11 @@ class DragFollow extends StatefulWidget {
   /// Fraction of the travel at which releasing completes rather than springs back.
   final double completeAt;
   final bool fadeWithDrag;
+
+  /// Drawn underneath while the drag is happening, told how far along it is (0 to 1)
+  /// and which way it is going. This is how a row says what letting go will do without
+  /// anything showing when nobody is touching it.
+  final Widget Function(BuildContext context, double progress, bool forward)? behind;
 
   @override
   State<DragFollow> createState() => _DragFollowState();
@@ -145,15 +151,107 @@ class _DragFollowState extends State<DragFollow> with SingleTickerProviderStateM
     final opacity =
         widget.fadeWithDrag ? (1 - progress.clamp(0.0, 1.0) * 0.45) : 1.0;
 
+    final moved = Transform.translate(
+      offset: _offset,
+      child: Opacity(opacity: opacity, child: widget.child),
+    );
+
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onPanStart: _onStart,
       onPanUpdate: _onUpdate,
       onPanEnd: _onEnd,
-      child: Transform.translate(
-        offset: _offset,
-        child: Opacity(opacity: opacity, child: widget.child),
-      ),
+      child: widget.behind == null || _offset == Offset.zero
+          ? moved
+          : Stack(
+              children: [
+                Positioned.fill(
+                  child: widget.behind!(
+                      context,
+                      progress.clamp(0.0, 1.0),
+                      (_horizontal ? _offset.dx : _offset.dy) > 0),
+                ),
+                moved,
+              ],
+            ),
+    );
+  }
+}
+
+
+/// A row you can push aside to do one thing to it.
+///
+/// The row follows the finger and no further: it moves the distance it is dragged, up
+/// to a short limit, and springs back. It never leaves the frame — going off the edge
+/// is what a list says when a row is being *removed*, and this row is staying exactly
+/// where it is.
+class SwipeAction extends StatelessWidget {
+  const SwipeAction({
+    super.key,
+    required this.child,
+    this.onSwipe,
+    this.icon = Icons.playlist_play,
+    this.label = 'Play next',
+    this.onSwipeAway,
+    this.awayIcon = Icons.delete_outline,
+    this.awayLabel = 'Remove',
+  });
+
+  final Widget child;
+
+  /// Pulled towards you — the additive one.
+  final VoidCallback? onSwipe;
+  final IconData icon;
+  final String label;
+
+  /// Pushed away — the destructive one, where a list has one.
+  final VoidCallback? onSwipeAway;
+  final IconData awayIcon;
+  final String awayLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    Widget hint(bool forward, double progress) {
+      final ground = forward ? scheme.primaryContainer : scheme.errorContainer;
+      final ink = forward ? scheme.onPrimaryContainer : scheme.onErrorContainer;
+      return Align(
+        alignment: forward ? Alignment.centerLeft : Alignment.centerRight,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          decoration: BoxDecoration(
+            color: ground.withValues(alpha: 0.25 + 0.75 * progress),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(forward ? icon : awayIcon, size: 18, color: ink),
+              // The words appear only once the drag is far enough to mean it.
+              if (progress > 0.5) ...[
+                const SizedBox(width: 8),
+                Text(forward ? label : awayLabel,
+                    style: Theme.of(context)
+                        .textTheme
+                        .labelMedium
+                        ?.copyWith(color: ink)),
+              ],
+            ],
+          ),
+        ),
+      );
+    }
+
+    return DragFollow(
+      horizontalTravel: 76,
+      onSwipeRight: onSwipe,
+      onSwipeLeft: onSwipeAway,
+      behind: (context, progress, forward) =>
+          (forward ? onSwipe : onSwipeAway) == null
+              ? const SizedBox.shrink()
+              : hint(forward, progress),
+      child: child,
     );
   }
 }

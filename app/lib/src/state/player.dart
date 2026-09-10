@@ -56,8 +56,14 @@ class PlayerService {
   static Duration stallAfter = const Duration(seconds: 12);
 
   Timer? _watchdog;
-  Duration _lastPosition = Duration.zero;
-  DateTime _lastMovement = DateTime.now();
+
+  /// Since when the engine has been waiting for audio, if it is.
+  DateTime? _bufferingSince;
+
+  /// The furthest into this song playback has actually reached. Where to put the
+  /// needle back when a stream dies: not where the engine last mentioned, which may be
+  /// the top of the song.
+  Duration _heardUpTo = Duration.zero;
   int _nudges = 0;
 
   /// The song already handed to the engine to play after this one, if any.
@@ -226,37 +232,40 @@ class PlayerService {
   /// and if that does not take, load the song again from that spot.
   Future<void> checkForStall() async {
     if (!_player.playing || _loadedTrackId == null || _mutating > 0) {
-      _rememberMovement(_player.playbackEvent.updatePosition);
-      return;
-    }
-    final state = _player.processingState;
-    if (state == ProcessingState.idle || state == ProcessingState.completed) {
-      _rememberMovement(_player.playbackEvent.updatePosition);
+      _bufferingSince = null;
       return;
     }
 
-    // The engine's own clock, not the app's. While a track is playing normally the
-    // position here is worked out from "where it was, plus how long ago that was", so
-    // it keeps moving whether or not any sound is coming out — which is exactly the
-    // case this is looking for. What the engine last *reported* does stop.
-    final reported = _player.playbackEvent.updatePosition;
-    if (reported != _lastPosition) {
-      _rememberMovement(reported);
+    // Buffering is the signal, and only buffering.
+    //
+    // The obvious test — "has the position moved" — cannot be asked of either clock.
+    // The one the app shows is worked out from "where it was, plus how long ago", so
+    // it moves whether or not any sound is coming out; the one the engine reports only
+    // changes when the engine has something to say, which on Android is a state change
+    // and not the passing of time. Reading that second one as a stall is what made a
+    // song jump back to where it started after a few seconds — which is worse than the
+    // fault it was watching for.
+    if (_player.processingState != ProcessingState.buffering) {
+      _bufferingSince = null;
       _nudges = 0;
       return;
     }
-    if (DateTime.now().difference(_lastMovement) < stallAfter) return;
+    _bufferingSince ??= DateTime.now();
+    if (DateTime.now().difference(_bufferingSince!) < stallAfter) return;
 
-    _lastMovement = DateTime.now();
+    _bufferingSince = DateTime.now();
     _nudges++;
+    // Back to where the listener believes they are, which is the furthest the song has
+    // actually played — never to whatever the engine last happened to mention.
+    final at = _heardUpTo > _player.position ? _heardUpTo : _player.position;
     try {
       if (_nudges <= 2) {
-        // Cheapest first: ask for the same spot again, which re-opens the stream.
-        await _player.seek(reported);
+        // Cheapest first: asking for the same spot again re-opens the stream.
+        await _player.seek(at);
         _startPlayback();
       } else {
         // It is not coming back on its own.
-        await _loadCurrent(startAt: reported);
+        await _loadCurrent(startAt: at);
         _startPlayback();
         _nudges = 0;
       }
@@ -264,11 +273,6 @@ class PlayerService {
       lastError = '$e';
     }
     _emit(force: true);
-  }
-
-  void _rememberMovement(Duration at) {
-    _lastPosition = at;
-    _lastMovement = DateTime.now();
   }
 
   /// The app came back to the front. If it should be playing and it is not, it stopped
@@ -707,6 +711,7 @@ class PlayerService {
   }
 
   Future<void> seek(Duration to) async {
+    _heardUpTo = to;
     await _player.seek(to);
     _saveCursor();
   }
@@ -845,6 +850,7 @@ class PlayerService {
     final track = current;
     if (track == null) return;
     _pendingStart = startAt ?? Duration.zero;
+    _heardUpTo = _pendingStart;
     unawaited(_lookAhead());
     if (!track.isReady) {
       // Hold here rather than skipping past what the user picked, but remember it so
@@ -1075,6 +1081,14 @@ class PlayerService {
     final now = DateTime.now();
     if (!force && now.difference(_lastEmit).inMilliseconds < 250) return;
     _lastEmit = now;
+    // How far this song has actually played, which is what a stall has to be put back
+    // to. Reset by loading or seeking, both of which go through _pendingStart.
+    if (_player.playing &&
+        _player.processingState == ProcessingState.ready &&
+        _loadedTrackId == current?.id) {
+      final at = _player.position;
+      if (at > _heardUpTo) _heardUpTo = at;
+    }
     // Sound is coming out, so whatever permission was missing is not missing now.
     if (_player.playing) needsGesture = false;
     last = PlayerSnapshot(
