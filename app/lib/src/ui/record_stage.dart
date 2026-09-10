@@ -446,16 +446,64 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
 
   bool get _drawable => _showingBack && _toss.value == 0 && widget.board != null;
 
+  /// How far above the fingertip the pen actually is, on screen.
+  ///
+  /// A finger covers the thing it is pointing at. Everything about drawing on a phone
+  /// with one is aiming at a spot you cannot see, and the answer every stylus-less
+  /// drawing tool has landed on is the same: put the nib a little above the contact
+  /// patch, and show that spot somewhere the hand is not.
+  static const double lift = 44;
+
+  /// Where the pen is now, 0 to 1 on the sleeve. Null when nothing is being drawn.
+  Offset? _penAt;
+
+  /// The square the stage actually draws in.
+  ///
+  /// Not this widget's own box: it is given whatever space is going, and the square is
+  /// drawn inside that. The glass is painted in the square's coordinates, so the
+  /// square is what the sleeve's position has to be measured against — measuring
+  /// against the wrong one of the two is the same mistake as before, one level up.
+  final GlobalKey _stageKey = GlobalKey();
+
+  /// The sleeve as it is actually drawn, in the stage square's coordinates.
+  Rect? _sleeveRect() {
+    final box = _backKey.currentContext?.findRenderObject() as RenderBox?;
+    final stage = _stageKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || stage == null || box.size.width <= 0) return null;
+    final topLeft = stage.globalToLocal(box.localToGlobal(Offset.zero));
+    // Through the transform rather than from the box's own size: the sleeve is scaled
+    // where it is drawn, and how big it looks is the only size that matters here.
+    final corner = stage.globalToLocal(
+        box.localToGlobal(Offset(box.size.width, box.size.height)));
+    return Rect.fromPoints(topLeft, corner);
+  }
+
   Offset01? _on(Offset global) {
     final box = _backKey.currentContext?.findRenderObject() as RenderBox?;
     if (box == null || box.size.width <= 0) return null;
     // globalToLocal walks back through every transform between here and the screen,
     // which is the scaling, the perspective and the tilt, all of them, exactly.
-    final local = box.globalToLocal(global);
+    final local = box.globalToLocal(global.translate(0, -lift));
     return Offset01(
       (local.dx / box.size.width).clamp(0.0, 1.0),
       (local.dy / box.size.height).clamp(0.0, 1.0),
     );
+  }
+
+  void _pen(Offset global, {required bool start}) {
+    final at = _on(global);
+    if (at == null) return;
+    if (start) {
+      widget.board!.begin(at);
+    } else {
+      widget.board!.extend(at);
+    }
+    setState(() => _penAt = Offset(at.x, at.y));
+  }
+
+  void _liftPen() {
+    widget.board?.end();
+    setState(() => _penAt = null);
   }
 
   /// Thrown in the air, landing on its other face.
@@ -543,6 +591,49 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     }
   }
 
+  /// The magnifying glass, wherever the hand is not.
+  ///
+  /// Above the point being drawn by default, because the hand is below it — and below
+  /// it when there is no room above, which is what happens when somebody draws along
+  /// the top edge of the sleeve.
+  Widget _loupe(double side) {
+    final sleeve = _sleeveRect();
+    final at = _penAt;
+    final board = widget.board;
+    if (sleeve == null || at == null || board == null) {
+      return const SizedBox.shrink();
+    }
+    final radius = (side * 0.17).clamp(46.0, 92.0);
+    final point = Offset(sleeve.left + at.dx * sleeve.width,
+        sleeve.top + at.dy * sleeve.height);
+
+    var centre = point.translate(0, -(radius + 34));
+    if (centre.dy - radius < 4) centre = point.translate(0, radius + 34);
+    // Kept on the stage sideways, so drawing in a corner does not push it off.
+    centre = Offset(
+      centre.dx.clamp(radius + 2, side - radius - 2),
+      centre.dy.clamp(radius + 2, side - radius - 2),
+    );
+
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: RepaintBoundary(
+          child: CustomPaint(
+            painter: SleeveLoupe(
+              board: board,
+              card: SleeveCard(),
+              sleeve: sleeve,
+              at: at,
+              centre: centre,
+              radius: radius,
+              nib: board.nib,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   /// Everything on stage, with the slot each one occupies at rest.
   List<_Card> _cards() {
     final out = <_Card>[
@@ -572,6 +663,7 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
 
         return RepaintBoundary(
           child: SizedBox(
+          key: _stageKey,
           width: side,
           height: side,
           // One axis only, and it is the one the records travel along — so the other
@@ -583,29 +675,15 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
             onTap: _drawable ? null : _toggleDisc,
             // While the sleeve is face-down every drag is a pen. The shelf keeps
             // still: you are writing on this record, not looking for the next one.
-            onPanStart: !_drawable
-                ? null
-                : (d) {
-                    final at = _on(d.globalPosition);
-                    if (at != null) {
-                      widget.board!.begin(at);
-                    }
-                  },
-            onPanUpdate: !_drawable
-                ? null
-                : (d) {
-                    final at = _on(d.globalPosition);
-                    if (at != null) widget.board!.extend(at);
-                  },
-            onPanEnd: !_drawable ? null : (_) => widget.board!.end(),
-            onTapUp: !_drawable
-                ? null
-                : (d) {
-                    final at = _on(d.globalPosition);
-                    if (at == null) return;
-                    widget.board!.begin(at);
-                    widget.board!.end();
-                  },
+            //
+            // From the moment the finger lands, not from the moment it has moved far
+            // enough to count as a drag — the glass is most wanted before the line
+            // starts, while you are still aiming.
+            onPanDown: !_drawable ? null : (d) => _pen(d.globalPosition, start: true),
+            onPanUpdate:
+                !_drawable ? null : (d) => _pen(d.globalPosition, start: false),
+            onPanEnd: !_drawable ? null : (_) => _liftPen(),
+            onPanCancel: !_drawable ? null : _liftPen,
             onHorizontalDragStart: _drawable || _upright ? null : _dragStart,
             onHorizontalDragUpdate: _drawable || _upright ? null : _dragUpdate,
             onHorizontalDragEnd: _drawable || _upright ? null : _dragEnd,
@@ -699,6 +777,11 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                         spin: _spin,
                         out: Curves.easeInOutCubic.transform(_out.value),
                       ),
+                    // The glass, over everything, in the stage's own coordinates —
+                    // outside the sleeve so that nothing about the sleeve's own scale
+                    // or tilt applies to it. It is being held above the record, not
+                    // lying on it.
+                    if (_penAt != null) _loupe(side),
                   ],
                 );
               },
@@ -954,77 +1037,13 @@ class _Back extends StatelessWidget {
         child: Opacity(
           opacity: dim.clamp(0.0, 1.0),
           child: CustomPaint(
-            painter: _Board(),
+            painter: SleeveCard(),
             foregroundPainter:
                 board == null ? null : SleeveInk(board: board!, size01: size),
             size: Size(size, size),
           ),
         ),
       );
-}
-
-class _Board extends CustomPainter {
-  /// The fibre in the card. One pattern, made once, tiled — a few hundred marks laid
-  /// down per frame would be a lot of work for something nobody is meant to study.
-  static final List<Offset> _fibres = () {
-    final rng = math.Random(20260910);
-    return [for (var i = 0; i < 240; i++) Offset(rng.nextDouble(), rng.nextDouble())];
-  }();
-
-  static final List<double> _lengths = () {
-    final rng = math.Random(7);
-    return [for (var i = 0; i < 240; i++) 0.004 + rng.nextDouble() * 0.02];
-  }();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rect = Offset.zero & size;
-    final radius = size.shortestSide * 0.012;
-    final board = RRect.fromRectAndRadius(rect, Radius.circular(radius));
-
-    canvas.save();
-    canvas.clipRRect(board);
-    canvas.drawRect(rect, Paint()..color = const Color(0xFFBFB093));
-
-    // Handled corners, a shade darker.
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..shader = const RadialGradient(
-          radius: 0.78,
-          colors: [Color(0x00000000), Color(0x22000000)],
-          stops: [0.55, 1.0],
-        ).createShader(rect),
-    );
-
-    final fibre = Paint()
-      ..color = const Color(0x14000000)
-      ..strokeWidth = math.max(1.0, size.width / 900);
-    for (var i = 0; i < _fibres.length; i++) {
-      final at = Offset(_fibres[i].dx * size.width, _fibres[i].dy * size.height);
-      final run = _lengths[i] * size.width;
-      canvas.drawLine(at, at.translate(run, run * 0.18), fibre);
-    }
-
-    // The fold, down the spine edge.
-    canvas.drawRect(
-      Rect.fromLTWH(0, 0, size.width * 0.035, size.height),
-      Paint()
-        ..shader = const LinearGradient(
-          colors: [Color(0x33000000), Color(0x00000000)],
-        ).createShader(Rect.fromLTWH(0, 0, size.width * 0.035, size.height)),
-    );
-    canvas.restore();
-    canvas.drawRRect(
-        board,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = math.max(1.0, size.width / 500)
-          ..color = const Color(0x22000000));
-  }
-
-  @override
-  bool shouldRepaint(_Board old) => false;
 }
 
 /// The cardboard. Its pose comes from the stage; here it is just the picture.

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../api/models.dart';
@@ -19,6 +21,77 @@ const List<Color> sleeveInks = [
 ];
 
 Color inkAt(int i) => sleeveInks[i % sleeveInks.length];
+
+/// Bare board: the back of a sleeve before anybody writes on it.
+///
+/// Drawn rather than fetched, because there is nothing about it that belongs to any
+/// one record — every sleeve in the world has roughly this back until somebody prints
+/// on it. Kraft card, the grain of the stock, the fold down the spine, and corners a
+/// shade darker from being handled.
+class SleeveCard extends CustomPainter {
+  /// The fibre in the card. One pattern, made once, tiled — a few hundred marks laid
+  /// down per frame would be a lot of work for something nobody is meant to study.
+  static final List<Offset> _fibres = () {
+    final rng = math.Random(20260910);
+    return [for (var i = 0; i < 240; i++) Offset(rng.nextDouble(), rng.nextDouble())];
+  }();
+
+  static final List<double> _lengths = () {
+    final rng = math.Random(7);
+    return [for (var i = 0; i < 240; i++) 0.004 + rng.nextDouble() * 0.02];
+  }();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final radius = size.shortestSide * 0.012;
+    final board = RRect.fromRectAndRadius(rect, Radius.circular(radius));
+
+    canvas.save();
+    canvas.clipRRect(board);
+    canvas.drawRect(rect, Paint()..color = const Color(0xFFBFB093));
+
+    // Handled corners, a shade darker.
+    canvas.drawRect(
+      rect,
+      Paint()
+        ..shader = const RadialGradient(
+          radius: 0.78,
+          colors: [Color(0x00000000), Color(0x22000000)],
+          stops: [0.55, 1.0],
+        ).createShader(rect),
+    );
+
+    final fibre = Paint()
+      ..color = const Color(0x14000000)
+      ..strokeWidth = math.max(1.0, size.width / 900);
+    for (var i = 0; i < _fibres.length; i++) {
+      final at = Offset(_fibres[i].dx * size.width, _fibres[i].dy * size.height);
+      final run = _lengths[i] * size.width;
+      canvas.drawLine(at, at.translate(run, run * 0.18), fibre);
+    }
+
+    // The fold, down the spine edge.
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width * 0.035, size.height),
+      Paint()
+        ..shader = const LinearGradient(
+          colors: [Color(0x33000000), Color(0x00000000)],
+        ).createShader(Rect.fromLTWH(0, 0, size.width * 0.035, size.height)),
+    );
+    canvas.restore();
+    canvas.drawRRect(
+        board,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = math.max(1.0, size.width / 500)
+          ..color = const Color(0x22000000));
+  }
+
+  @override
+  bool shouldRepaint(SleeveCard old) => false;
+}
+
 
 /// What has been written on the back of this record.
 ///
@@ -215,4 +288,119 @@ class _Nib extends StatelessWidget {
           ),
         ),
       );
+}
+
+/// A magnifying glass over the point the pen is actually touching.
+///
+/// Drawing on a sleeve with a finger has one problem and it is the finger: the tip
+/// covers exactly the part of the board you are trying to aim at, so you are always
+/// drawing a centimetre behind where you are looking. Two answers together — the pen
+/// draws a little above the fingertip rather than under it, and this shows that spot
+/// enlarged, in a window held clear of the hand, with a crosshair on the exact point.
+///
+/// The board is painted again inside the glass rather than copied out of the screen:
+/// the card and the ink are both drawings we make ourselves, so magnifying them means
+/// scaling the canvas rather than blowing up pixels, and the enlarged line has the same
+/// clean edge as the small one.
+class SleeveLoupe extends CustomPainter {
+  SleeveLoupe({
+    required this.board,
+    required this.card,
+    required this.sleeve,
+    required this.at,
+    required this.centre,
+    required this.radius,
+    required this.nib,
+    this.zoom = 2.4,
+  }) : super(repaint: board);
+
+  final SleeveBoard board;
+
+  /// The bare card, so what is under the ink is the same board.
+  final SleeveCard card;
+
+  /// Where the sleeve is and how big it is, in the coordinates this paints in.
+  final Rect sleeve;
+
+  /// The point being drawn at, 0 to 1 across the sleeve.
+  final Offset at;
+
+  /// Where the glass itself sits.
+  final Offset centre;
+  final double radius;
+
+  /// The pen's width, so the ring shows what the line will actually be.
+  final double nib;
+
+  final double zoom;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final glass = Rect.fromCircle(center: centre, radius: radius);
+    final point = Offset(sleeve.left + at.dx * sleeve.width,
+        sleeve.top + at.dy * sleeve.height);
+
+    // The shadow the glass casts, so it reads as held above the record rather than
+    // cut out of it.
+    canvas.drawCircle(centre.translate(0, radius * 0.07),
+        radius, Paint()
+          ..color = const Color(0x44000000)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10));
+
+    canvas.save();
+    canvas.clipPath(Path()..addOval(glass));
+    // Everything under the glass, drawn again at size rather than sampled: move the
+    // point of interest to the middle of the glass, scale about it, and paint the
+    // board where it really is.
+    canvas.translate(centre.dx, centre.dy);
+    canvas.scale(zoom);
+    canvas.translate(-point.dx, -point.dy);
+    canvas.translate(sleeve.left, sleeve.top);
+    card.paint(canvas, sleeve.size);
+    SleeveInk(board: board, size01: sleeve.width).paint(canvas, sleeve.size);
+    canvas.restore();
+
+    // The crosshair, on the exact spot the pen is on. Broken in the middle, so the
+    // one place it matters is the one place nothing is drawn over.
+    final hair = Paint()
+      ..color = const Color(0xCC1A1714)
+      ..strokeWidth = 1
+      ..isAntiAlias = true;
+    const gap = 5.0;
+    final reach = radius * 0.42;
+    canvas.drawLine(centre.translate(-reach, 0), centre.translate(-gap, 0), hair);
+    canvas.drawLine(centre.translate(gap, 0), centre.translate(reach, 0), hair);
+    canvas.drawLine(centre.translate(0, -reach), centre.translate(0, -gap), hair);
+    canvas.drawLine(centre.translate(0, gap), centre.translate(0, reach), hair);
+
+    // What the pen will lay down, at the size it will lay it down.
+    canvas.drawCircle(
+        centre,
+        nib * sleeve.width * 0.019 * zoom / 2,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1
+          ..color = inkAt(board.ink).withValues(alpha: 0.9));
+
+    // The rim of the glass.
+    canvas.drawCircle(
+        centre,
+        radius,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2
+          ..color = const Color(0x55FFFFFF));
+    canvas.drawCircle(
+        centre,
+        radius - 1,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1
+          ..color = const Color(0x33000000));
+  }
+
+  @override
+  bool shouldRepaint(SleeveLoupe old) =>
+      old.at != at || old.centre != centre || old.sleeve != sleeve ||
+      old.nib != nib || old.board != board;
 }
