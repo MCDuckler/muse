@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -32,19 +33,47 @@ class _QueuePageState extends State<QueuePage> {
   /// SongRow draws at in its dense form — a ListTile's 72 was left behind here when the
   /// rows got shorter, and scrolling to "the current track" quietly landed a screen
   /// further down the longer the queue was.
-  static const _rowExtent = 56.0;
+  static const _rowExtent = 48.0;
 
-  void _scrollToCurrent({bool animate = true}) {
+  /// The row that is playing, when it happens to be built. A lazy list only builds what
+  /// is on screen, so this is null exactly when the estimate below is needed.
+  final _currentRow = GlobalKey();
+
+  /// Bring the song that is playing into view.
+  ///
+  /// Two steps, because neither alone is right. The row height is an estimate — a row
+  /// downloading is taller — so scrolling by arithmetic lands near the track rather
+  /// than on it, and in a long queue "near" is off the screen. Once the estimate has
+  /// put the row into the tree, the row itself can say where it is, which is exact.
+  Future<void> _scrollToCurrent({bool animate = true}) async {
     if (!_scroll.hasClients) return;
     final app = context.read<AppState>();
     final index = app.player?.index ?? 0;
+
+    final exact = _currentRow.currentContext;
+    if (exact != null) {
+      await Scrollable.ensureVisible(exact,
+          alignment: 0.3,
+          duration: animate ? const Duration(milliseconds: 320) : Duration.zero,
+          curve: Curves.easeOutCubic);
+      return;
+    }
+
     final target = (index * _rowExtent - 120)
         .clamp(0.0, _scroll.position.maxScrollExtent);
     if (animate) {
-      _scroll.animateTo(target,
+      await _scroll.animateTo(target,
           duration: const Duration(milliseconds: 320), curve: Curves.easeOutCubic);
     } else {
       _scroll.jumpTo(target);
+    }
+    // Now that it is built, land on it properly.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    final built = _currentRow.currentContext;
+    if (built != null && built.mounted) {
+      await Scrollable.ensureVisible(built,
+          alignment: 0.3, duration: const Duration(milliseconds: 180));
     }
   }
 
@@ -248,6 +277,9 @@ class _QueuePageState extends State<QueuePage> {
                     }
                     return Dismissible(
                       key: ValueKey('${t.id}-$i'),
+                      // The playing row carries a key, so "jump to what is playing"
+                      // can ask it where it is instead of guessing from a row height.
+                      dragStartBehavior: DragStartBehavior.start,
                       direction: DismissDirection.endToStart,
                       background: Container(
                         alignment: Alignment.centerRight,
@@ -264,6 +296,7 @@ class _QueuePageState extends State<QueuePage> {
                       // artwork belongs in, and a queue of small grey grips tells you
                       // less at a glance than a queue of records does.
                       child: SongRow(
+                        key: isCurrent ? _currentRow : null,
                         track: t,
                         selected: isCurrent,
                         dense: true,

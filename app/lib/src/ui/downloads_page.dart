@@ -122,7 +122,7 @@ class _DownloadsPageState extends State<DownloadsPage> {
               : RefreshIndicator(
                   onRefresh: _load,
                   child: ListView(
-                    padding: const EdgeInsets.only(bottom: 40),
+                    padding: const EdgeInsets.only(bottom: bottomForPlayer),
                     children: [
                       _Summary(data: d),
                       if (d.idle)

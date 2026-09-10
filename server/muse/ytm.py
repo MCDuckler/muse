@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 from functools import lru_cache
@@ -123,13 +124,25 @@ class NotAllowed(RuntimeError):
 _authed_clients: dict[str, object] = {}
 
 
-def _authed(auth: str):
+def _authed(auth: str, cfg=None):
+    """A client for one person's library.
+
+    Two kinds of sign-in end up here: a token from the device flow, which refreshes
+    itself and needs the OAuth client to do it, and a block of browser headers, which
+    is what people paste. They are told apart by what is in them.
+    """
     key = hashlib.sha256(auth.encode()).hexdigest()
     client = _authed_clients.get(key)
     if client is None:
         from ytmusicapi import YTMusic
         try:
-            client = YTMusic(auth)
+            credentials = None
+            if '"refresh_token"' in auth:
+                from . import deps
+                credentials = _oauth(cfg or deps.cfg())
+            client = YTMusic(auth, oauth_credentials=credentials)
+        except NotConfigured:
+            raise
         except Exception as e:
             raise NotAllowed(f"YouTube Music would not take that sign-in: {e}") from e
         _authed_clients[key] = client
@@ -257,3 +270,67 @@ def playlist_name(remote_id: str, auth: str | None = None) -> str:
         return (data.get("title") or "").strip() or pid
     except Exception:
         return pid
+
+
+# ---------------------------------------------------------------- signing in properly
+#
+# Google will not let anybody sign in inside an embedded browser — a WebView that opens
+# accounts.google.com is told "this browser or app may not be secure", and no user agent
+# gets around it, because that is the point of the check. The way in that Google *does*
+# support for something without a browser of its own is the device flow: the app shows a
+# short code, the person types it into google.com/device in whatever browser they
+# already trust, and the token comes back here. It also lasts, where a copied cookie
+# expires.
+#
+# It needs an OAuth client of type "TV and Limited Input" from the Google Cloud console,
+# named in muse.toml:
+#
+#     [ytmusic]
+#     client_id = "….apps.googleusercontent.com"
+#     client_secret = "…"
+class NotConfigured(RuntimeError):
+    """No OAuth client is set up, so the device flow cannot be offered."""
+
+
+def _oauth(cfg):
+    from ytmusicapi.auth.oauth import OAuthCredentials
+
+    client_id = (cfg.ytmusic or {}).get("client_id")
+    client_secret = (cfg.ytmusic or {}).get("client_secret")
+    if not client_id or not client_secret:
+        raise NotConfigured(
+            "This server has no YouTube OAuth client set up, so signing in has to be "
+            "done by pasting the headers from a browser.")
+    return OAuthCredentials(client_id=client_id, client_secret=client_secret)
+
+
+def oauth_configured(cfg) -> bool:
+    try:
+        _oauth(cfg)
+        return True
+    except NotConfigured:
+        return False
+
+
+def oauth_start(cfg) -> dict:
+    """Ask Google for a code to read out. First half of the device flow."""
+    code = _oauth(cfg).get_code()
+    return {
+        "device_code": code["device_code"],
+        "user_code": code["user_code"],
+        "url": code.get("verification_url") or "https://google.com/device",
+        "interval": code.get("interval", 5),
+        "expires_in": code.get("expires_in", 1800),
+    }
+
+
+def oauth_finish(cfg, device_code: str) -> str:
+    """Turn the code into a sign-in, once the person has typed it in.
+
+    Answers with the blob to store. Raises NotAllowed while they have not finished —
+    which is not an error, just "not yet".
+    """
+    token = _oauth(cfg).token_from_code(device_code)
+    if "refresh_token" not in token:
+        raise NotAllowed(str(token.get("error") or "not finished yet"))
+    return json.dumps(token)

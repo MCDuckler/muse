@@ -252,12 +252,16 @@ def playlist(cfg, user_id: int, remote_id: str) -> dict:
     named after the id, which is how a library filled up with 3J2c5PZcDg3ciEqtMfddGB.
     """
     p = _get(cfg, user_id, f"/playlists/{remote_id}",
-             fields="name,owner(display_name),tracks(total)")
+             fields="name,owner(display_name),tracks(total),images")
+    images = p.get("images") or []
     return {
         "remote_id": remote_id,
         "name": (p.get("name") or "").strip() or "Untitled",
         "owner": (p.get("owner") or {}).get("display_name"),
         "count": (p.get("tracks") or {}).get("total"),
+        # Spotify's own art for the list — a mosaic it made, or a picture somebody
+        # uploaded. Either way it is what that playlist looks like to its owner.
+        "image": images[0]["url"] if images else None,
     }
 
 

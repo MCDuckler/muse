@@ -233,7 +233,7 @@ class _SpotifyPageState extends State<SpotifyPage> {
           }
 
           return ListView(
-            padding: const EdgeInsets.only(bottom: 40),
+            padding: const EdgeInsets.only(bottom: bottomForPlayer),
             children: [
               ListTile(
                 leading: Icon(account == null ? Icons.link_off : Icons.link,

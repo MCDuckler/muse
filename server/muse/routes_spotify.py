@@ -9,12 +9,14 @@ that quietly comes back three tracks shorter is worse than one that says which t
 """
 from __future__ import annotations
 
+import urllib.request
+
 import logging
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 
-from . import catalog, db, jobs, match, spotify, sync, ytm
+from . import catalog, db, images, jobs, match, spotify, sync, ytm
 from .deps import cfg, current_user
 
 log = logging.getLogger("muse.spotify")
@@ -288,6 +290,31 @@ def _append_items(playlist_id: int, start: int, items: list[dict],
     return added
 
 
+def _take_cover(playlist_id: int, url: str | None) -> None:
+    """Keep the playlist's own picture, if it has one.
+
+    A mirrored playlist is recognisable by its art before it is readable by its name,
+    and the art muse draws for a playlist with no cover is for playlists that have
+    none. Fetched once per mirror run and stored like any chosen cover, so it survives
+    and caches the same way.
+    """
+    if not url:
+        return
+    try:
+        with urllib.request.urlopen(url, timeout=20) as r:
+            raw = r.read(images.MAX_BYTES + 1)
+        sig = images.store(cfg().image_dir, "playlist", playlist_id, raw)
+    except Exception as e:                        # noqa: BLE001 - art is not the point
+        log.info("could not take the cover for playlist %s: %s", playlist_id, e)
+        return
+    old = db.one("select cover_sig from playlists where id=%s", (playlist_id,))
+    if old and old["cover_sig"] == sig:
+        return
+    db.run("update playlists set cover_sig=%s where id=%s", (sig, playlist_id))
+    if old and old["cover_sig"]:
+        images.forget(cfg().image_dir, "playlist", playlist_id, old["cover_sig"])
+
+
 def _mirror(user_id: int, remote: dict) -> dict:
     # A mirror queued from an id alone arrives with the id standing in for the name.
     # Ask Spotify what the playlist is actually called rather than writing that down.
@@ -314,6 +341,8 @@ def _mirror(user_id: int, remote: dict) -> dict:
                values(%s,%s,'spotify',%s,'pull',%s) returning id""",
             (user_id, remote["name"], remote["remote_id"], remote.get("owner")),
         )["id"]
+
+    _take_cover(playlist_id, remote.get("image"))
 
     items = spotify.playlist_items(cfg(), user_id, remote["remote_id"])
 

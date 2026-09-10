@@ -151,6 +151,10 @@ class PlayerService {
   /// Read by the tests: it is the difference between a gap between songs and none.
   int? get queuedNextId => _queuedNextId;
 
+  /// The audio session the platform is playing through, where there is such a thing.
+  /// The visualiser needs it to read the shape of this app's own output.
+  int? get androidAudioSessionId => _player.androidAudioSessionId;
+
   Future<void> init() async {
     _player.playerStateStream.listen((s) {
       _emit(force: true);

@@ -103,6 +103,7 @@ class AppState extends ChangeNotifier {
   static const _kCoverStyle = 'muse.coverStyle';
   static const _kPalette = 'muse.palette';
   static const _kHalftone = 'muse.halftone';
+  static const _kSpectrum = 'muse.spectrum';
   static const _kLayout = 'muse.playerLayout';
 
   /// How the player draws the artwork: as the record it came on, or as the cover on
@@ -125,6 +126,18 @@ class AppState extends ChangeNotifier {
   /// screen is emptier without it — but a phone with a small battery is a good reason
   /// to turn a moving background off, so it is a switch and not a fact.
   bool halftone = true;
+
+  /// The bars under the artwork: what is actually coming out of the speaker. Off by
+  /// default because switching it on asks for a permission, and a permission nobody
+  /// asked for is alarming.
+  bool spectrum = false;
+
+  Future<void> setSpectrum(bool on) async {
+    spectrum = on;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kSpectrum, on);
+  }
 
   /// How the now-playing screen is arranged. Per device, like the rest of the look.
   PlayerLayout playerLayout = PlayerLayout.grouped;
@@ -157,6 +170,7 @@ class AppState extends ChangeNotifier {
         orElse: () => CoverStyle.record);
     palette = Palette.byId(prefs.getString(_kPalette));
     halftone = prefs.getBool(_kHalftone) ?? true;
+    spectrum = prefs.getBool(_kSpectrum) ?? false;
     playerLayout = PlayerLayout.values.firstWhere(
         (l) => l.name == prefs.getString(_kLayout),
         orElse: () => PlayerLayout.grouped);

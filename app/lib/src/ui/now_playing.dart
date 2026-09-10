@@ -7,6 +7,7 @@ import '../state/player.dart';
 import 'artwork.dart';
 import 'glass.dart';
 import 'record_stage.dart';
+import 'spectrum.dart';
 import 'swipe.dart';
 import 'lyrics_sheet.dart';
 import 'track_menu.dart';
@@ -127,11 +128,26 @@ class NowPlayingScreen extends StatelessWidget {
                               child: FractionallySizedBox(
                                 widthFactor: app.playerLayout == PlayerLayout.roomy
                                     ? 0.82
-                                    : 1.0,
+                                    : app.playerLayout == PlayerLayout.plain
+                                        ? 0.88
+                                        : 1.0,
                                 child: _Artwork(
                                     track: track, snapshot: s, player: player),
                               ),
                             ),
+                            // The shape of the sound, along the bottom edge of the
+                            // record: wide and short, so it reads as part of the
+                            // artwork rather than as an instrument panel.
+                            if (app.spectrum && Spectrum.available)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 6),
+                                child: Spectrum(
+                                  sessionId: player.androidAudioSessionId,
+                                  playing: s?.playing ?? false,
+                                  colour: parseHexColour(track.coverColor),
+                                  height: 40,
+                                ),
+                              ),
                             SizedBox(
                                 height: app.playerLayout == PlayerLayout.roomy
                                     ? 18
@@ -149,42 +165,58 @@ class NowPlayingScreen extends StatelessWidget {
                                   textAlign: TextAlign.center,
                                   style: TextStyle(color: scheme.error)),
                             ],
-                            const SizedBox(height: 26),
-                            GlassSurface(
-                              borderRadius: BorderRadius.circular(22),
-                              topBorder: false,
-                              opacity: 0.55,
-                              blur: 30,
-                              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  _Scrubber(player: player),
-                                  const SizedBox(height: 4),
-                                  _Controls(
-                                      app: app,
-                                      player: player,
-                                      snapshot: s,
-                                      big: app.playerLayout ==
-                                          PlayerLayout.roomy),
-                                  if (app.playerLayout != PlayerLayout.topBar) ...[
+                            const SizedBox(height: 22),
+                            // Plain lays the same things out in a different order and
+                            // without a panel around them: the song's own buttons in a
+                            // row, then the bar with its times at either end, then the
+                            // transport large across the bottom.
+                            if (app.playerLayout == PlayerLayout.plain) ...[
+                              _Extras(app: app, track: track, spread: true),
+                              const SizedBox(height: 6),
+                              _Scrubber(player: player, timesBeside: true),
+                              const SizedBox(height: 10),
+                              _Controls(
+                                  app: app, player: player, snapshot: s, big: true,
+                                  bare: true),
+                            ] else
+                              GlassSurface(
+                                borderRadius: BorderRadius.circular(22),
+                                topBorder: false,
+                                opacity: 0.55,
+                                blur: 30,
+                                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    _Scrubber(player: player),
+                                    const SizedBox(height: 4),
+                                    _Controls(
+                                        app: app,
+                                        player: player,
+                                        snapshot: s,
+                                        big: app.playerLayout ==
+                                            PlayerLayout.roomy),
+                                    if (app.playerLayout != PlayerLayout.topBar) ...[
+                                      SizedBox(
+                                          height: app.playerLayout ==
+                                                  PlayerLayout.roomy
+                                              ? 8
+                                              : 2),
+                                      _Extras(
+                                          app: app,
+                                          track: track,
+                                          big: app.playerLayout ==
+                                              PlayerLayout.roomy),
+                                    ],
                                     SizedBox(
-                                        height: app.playerLayout == PlayerLayout.roomy
+                                        height: app.playerLayout ==
+                                                PlayerLayout.roomy
                                             ? 8
                                             : 2),
-                                    _Extras(
-                                        app: app,
-                                        track: track,
-                                        big: app.playerLayout == PlayerLayout.roomy),
+                                    _VolumeRow(player: player),
                                   ],
-                                  SizedBox(
-                                      height: app.playerLayout == PlayerLayout.roomy
-                                          ? 8
-                                          : 2),
-                                  _VolumeRow(player: player),
-                                ],
+                                ),
                               ),
-                            ),
                           ],
                         ),
                       ),
@@ -341,14 +373,56 @@ class _Credits extends StatelessWidget {
 
 /// The things that act on the song, where a thumb already is.
 class _Extras extends StatelessWidget {
-  const _Extras({required this.app, required this.track, this.big = false});
+  const _Extras(
+      {required this.app,
+      required this.track,
+      this.big = false,
+      this.spread = false});
   final AppState app;
   final Track track;
   final bool big;
 
+  /// The song's buttons on the left, what the queue does with it on the right — the
+  /// two are different kinds of thing, and putting a gap between them says so.
+  final bool spread;
+
   @override
   Widget build(BuildContext context) {
     final size = big ? 28.0 : 22.0;
+    if (spread) {
+      return Row(
+        children: [
+          FavouriteButton(trackId: track.id, size: size),
+          IconButton(
+            iconSize: size,
+            icon: const Icon(Icons.lyrics_outlined),
+            tooltip: 'Lyrics',
+            onPressed: () => showLyrics(context, track),
+          ),
+          IconButton(
+            iconSize: size,
+            icon: const Icon(Icons.queue_music),
+            tooltip: 'Queue',
+            onPressed: () => showQueue(context),
+          ),
+          IconButton(
+            iconSize: size,
+            icon: const Icon(Icons.more_horiz),
+            tooltip: 'Track actions',
+            onPressed: () =>
+                showTrackSheet(context, track, onChanged: app.refresh),
+          ),
+          const Spacer(),
+          _RepeatButton(app: app, size: size),
+          IconButton(
+            iconSize: size,
+            icon: const Icon(Icons.shuffle),
+            tooltip: 'Shuffle what is coming',
+            onPressed: app.shuffleWhatIsComing,
+          ),
+        ],
+      );
+    }
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
@@ -382,6 +456,32 @@ class _Extras extends StatelessWidget {
   }
 }
 
+/// Repeat, wherever it is shown: off, the whole queue, or this one song.
+class _RepeatButton extends StatelessWidget {
+  const _RepeatButton({required this.app, this.size = 22});
+  final AppState app;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final repeat = app.player?.repeat ?? QueueRepeat.off;
+    return IconButton(
+      iconSize: size,
+      icon: Icon(repeat == QueueRepeat.one ? Icons.repeat_one : Icons.repeat),
+      isSelected: repeat != QueueRepeat.off,
+      color: repeat != QueueRepeat.off
+          ? Theme.of(context).colorScheme.primary
+          : null,
+      tooltip: switch (repeat) {
+        QueueRepeat.off => 'Repeat off',
+        QueueRepeat.all => 'Repeat queue',
+        QueueRepeat.one => 'Repeat track',
+      },
+      onPressed: app.cycleRepeat,
+    );
+  }
+}
+
 class _Artwork extends StatelessWidget {
   const _Artwork({required this.track, this.snapshot, required this.player});
   final Track track;
@@ -402,11 +502,12 @@ class _Artwork extends StatelessWidget {
       builder: (context, c) {
         final side = c.maxWidth;
         if (context.watch<AppState>().coverStyle == CoverStyle.flat) {
-          // Just the cover: still, square, and the whole width of the stage.
+          // Just the cover: still, square, and the whole width of the stage. Square
+          // corners on purpose — a record sleeve has corners, and rounding them off
+          // makes the art look like an app icon of itself.
           return Center(
             child: Container(
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black.withValues(alpha: 0.28),
@@ -415,7 +516,7 @@ class _Artwork extends StatelessWidget {
                   ),
                 ],
               ),
-              child: Artwork(track: track, size: side, radius: 16, small: false),
+              child: Artwork(track: track, size: side, radius: 0, small: false),
             ),
           );
         }
@@ -449,24 +550,29 @@ class _Artwork extends StatelessWidget {
 /// one thing that genuinely changes several times a second, so it listens for itself
 /// and repaints nothing but itself.
 class _Scrubber extends StatelessWidget {
-  const _Scrubber({required this.player});
+  const _Scrubber({required this.player, this.timesBeside = false});
   final PlayerService player;
+
+  /// Elapsed and total at either end of the bar rather than underneath it.
+  final bool timesBeside;
 
   @override
   Widget build(BuildContext context) => RepaintBoundary(
         child: StreamBuilder<PlayerSnapshot>(
           stream: player.snapshots,
           initialData: player.last,
-          builder: (context, snap) =>
-              _ScrubberBar(player: player, snapshot: snap.data),
+          builder: (context, snap) => _ScrubberBar(
+              player: player, snapshot: snap.data, timesBeside: timesBeside),
         ),
       );
 }
 
 class _ScrubberBar extends StatefulWidget {
-  const _ScrubberBar({required this.player, required this.snapshot});
+  const _ScrubberBar(
+      {required this.player, required this.snapshot, this.timesBeside = false});
   final PlayerService player;
   final PlayerSnapshot? snapshot;
+  final bool timesBeside;
 
   @override
   State<_ScrubberBar> createState() => _ScrubberState();
@@ -535,40 +641,46 @@ class _ScrubberState extends State<_ScrubberBar> {
       builder: (context, at) {
         final value =
             (_dragging ?? at.inMilliseconds.toDouble()).clamp(0.0, max <= 0 ? 1.0 : max);
+        final bar = SliderTheme(
+          data: SliderTheme.of(context).copyWith(
+            trackHeight: 3,
+            thumbShape: RoundSliderThumbShape(enabledThumbRadius: enabled ? 7 : 4),
+            overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
+          ),
+          child: Slider(
+            value: max > 0 ? value : 0,
+            max: max > 0 ? max : 1,
+            onChanged: enabled ? (v) => setState(() => _dragging = v) : null,
+            onChangeEnd: enabled
+                ? (v) {
+                    app.seekTo(Duration(milliseconds: v.round()));
+                    setState(() {
+                      _seeking = v;
+                      _seekAt = DateTime.now();
+                      _dragging = null;
+                    });
+                  }
+                : null,
+          ),
+        );
+        final elapsed = Text(formatTime(Duration(milliseconds: value.round())),
+            style: Theme.of(context).textTheme.labelMedium);
+        final total = Text(max > 0 ? formatTime(duration) : '--:--',
+            style: Theme.of(context).textTheme.labelMedium);
+
+        // Beside the bar rather than under it: a line less, and the two numbers read
+        // as the ends of the thing they belong to.
+        if (widget.timesBeside) {
+          return Row(children: [elapsed, Expanded(child: bar), total]);
+        }
         return Column(
           children: [
-            SliderTheme(
-              data: SliderTheme.of(context).copyWith(
-                trackHeight: 3,
-                thumbShape: RoundSliderThumbShape(enabledThumbRadius: enabled ? 7 : 4),
-                overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
-              ),
-              child: Slider(
-                value: max > 0 ? value : 0,
-                max: max > 0 ? max : 1,
-                onChanged: enabled ? (v) => setState(() => _dragging = v) : null,
-                onChangeEnd: enabled
-                    ? (v) {
-                        app.seekTo(Duration(milliseconds: v.round()));
-                        setState(() {
-                          _seeking = v;
-                          _seekAt = DateTime.now();
-                          _dragging = null;
-                        });
-                      }
-                    : null,
-              ),
-            ),
+            bar,
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 6),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(formatTime(Duration(milliseconds: value.round())),
-                      style: Theme.of(context).textTheme.labelMedium),
-                  Text(max > 0 ? formatTime(duration) : '--:--',
-                      style: Theme.of(context).textTheme.labelMedium),
-                ],
+                children: [elapsed, total],
               ),
             ),
           ],
@@ -583,7 +695,8 @@ class _Controls extends StatelessWidget {
       {required this.app,
       required this.player,
       required this.snapshot,
-      this.big = false});
+      this.big = false,
+      this.bare = false});
   final AppState app;
   final PlayerService player;
   final PlayerSnapshot? snapshot;
@@ -591,10 +704,54 @@ class _Controls extends StatelessWidget {
   /// The roomy arrangement: same controls, more of them under the thumb.
   final bool big;
 
+  /// Volume at one end and the equaliser-ish extras at the other, with shuffle and
+  /// repeat left to the row above — the plain arrangement's transport.
+  final bool bare;
+
   @override
   Widget build(BuildContext context) {
     final playing = snapshot?.playing ?? false;
     final repeat = snapshot?.repeat ?? QueueRepeat.off;
+
+    if (bare) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            IconButton(
+              iconSize: 24,
+              icon: Icon(app.player?.userVolume == 0
+                  ? Icons.volume_off
+                  : Icons.volume_up),
+              tooltip: 'Volume',
+              onPressed: () => showVolume(context, player),
+            ),
+            IconButton(
+              iconSize: 44,
+              icon: const Icon(Icons.skip_previous),
+              onPressed: app.skipPrevious,
+            ),
+            IconButton.filled(
+              iconSize: 56,
+              icon: Icon(playing ? Icons.pause : Icons.play_arrow),
+              onPressed: app.playPause,
+            ),
+            IconButton(
+              iconSize: 44,
+              icon: const Icon(Icons.skip_next),
+              onPressed: app.skipNext,
+            ),
+            IconButton(
+              iconSize: 24,
+              icon: Icon(app.sleepAt != null ? Icons.bedtime : Icons.timer_outlined),
+              tooltip: 'Sleep timer and speed',
+              onPressed: () => showPlaybackExtras(context),
+            ),
+          ],
+        ),
+      );
+    }
 
     return Padding(
       padding: EdgeInsets.symmetric(vertical: big ? 10 : 0),
@@ -639,6 +796,19 @@ class _Controls extends StatelessWidget {
     );
   }
 }
+
+/// Volume, as a sheet, for the arrangement that has no room for a slider of its own.
+Future<void> showVolume(BuildContext context, PlayerService player) =>
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheet) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          child: _VolumeRow(player: player),
+        ),
+      ),
+    );
 
 class _VolumeRow extends StatefulWidget {
   const _VolumeRow({required this.player});

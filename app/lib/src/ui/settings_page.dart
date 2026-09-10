@@ -2,14 +2,13 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../api/models.dart';
 import '../state/app_state.dart';
 import 'dialogs.dart';
 import 'face.dart';
 import 'downloads_page.dart';
+import 'player_look_page.dart';
 import 'services_page.dart';
 import 'accounts_page.dart';
-import 'spotify_page.dart';
 import 'track_menu.dart';
 import 'theme.dart';
 
@@ -159,34 +158,15 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const Divider(),
           _label(context, 'Player'),
-          for (final style in CoverStyle.values)
-            RadioListTile<CoverStyle>(
-              value: style,
-              // ignore: deprecated_member_use
-              groupValue: app.coverStyle,
-              title: Text(style.label),
-              subtitle: Text(style.description),
-              // ignore: deprecated_member_use
-              onChanged: (v) => v == null ? null : app.setCoverStyle(v),
-            ),
-          _label(context, 'Player controls'),
-          for (final layout in PlayerLayout.values)
-            RadioListTile<PlayerLayout>(
-              value: layout,
-              // ignore: deprecated_member_use
-              groupValue: app.playerLayout,
-              title: Text(layout.label),
-              subtitle: Text(layout.description),
-              // ignore: deprecated_member_use
-              onChanged: (v) => v == null ? null : app.setPlayerLayout(v),
-            ),
-          SwitchListTile(
-            secondary: const Icon(Icons.grain),
-            title: const Text('Printed background'),
-            subtitle: const Text(
-                'A halftone screen behind the record, breathing with the song'),
-            value: app.halftone,
-            onChanged: app.setHalftone,
+          ListTile(
+            leading: const Icon(Icons.play_circle_outline),
+            title: const Text('Now playing'),
+            subtitle: Text('${app.playerLayout.label} · '
+                '${app.coverStyle.label.toLowerCase()}'
+                '${app.halftone ? ' · printed background' : ''}'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const PlayerLookPage())),
           ),
           const Divider(),
           _label(context, 'Colours'),
@@ -241,19 +221,12 @@ class _SettingsPageState extends State<SettingsPage> {
           _label(context, 'Connected services'),
           ListTile(
             leading: const Icon(Icons.hub_outlined),
-            title: const Text('Deezer, SoundCloud and Bandcamp'),
-            subtitle: const Text('Linked by name — no sign-in, only public lists'),
+            title: const Text('Connected services'),
+            subtitle: const Text(
+                'Spotify, YouTube Music, Deezer, SoundCloud, Bandcamp'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.of(context)
                 .push(MaterialPageRoute(builder: (_) => const ServicesPage())),
-          ),
-          ListTile(
-            leading: const Icon(Icons.music_note_outlined),
-            title: const Text('Spotify'),
-            subtitle: const Text('See and play your playlists here'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.of(context)
-                .push(MaterialPageRoute(builder: (_) => const SpotifyPage())),
           ),
           const Divider(),
           _label(context, 'Account'),

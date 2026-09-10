@@ -3,6 +3,7 @@ package dev.muse.muse
 import android.webkit.CookieManager
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 // AudioServiceActivity, not FlutterActivity: audio_service routes lockscreen and
@@ -18,8 +19,35 @@ class MainActivity : AudioServiceActivity() {
     /// of the ones that matter. The platform's CookieManager can, and it is four lines,
     /// which is a better trade than a plugin that has not been updated for this
     /// version of the Android build tools.
+    private var spectrum: Spectrum? = null
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, results: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, results)
+        spectrum?.onPermissionAnswer(
+            requestCode,
+            results.isNotEmpty() && results[0] == android.content.pm.PackageManager.PERMISSION_GRANTED
+        )
+    }
+
     override fun configureFlutterEngine(engine: FlutterEngine) {
         super.configureFlutterEngine(engine)
+
+        // The bars under the artwork. See Spectrum for why this needs the microphone
+        // permission to read the app's own output.
+        val bars = Spectrum(this)
+        spectrum = bars
+        EventChannel(engine.dartExecutor.binaryMessenger, "muse/spectrum")
+            .setStreamHandler(bars)
+        MethodChannel(engine.dartExecutor.binaryMessenger, "muse/spectrum/permission")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "has" -> result.success(bars.hasPermission())
+                    "ask" -> bars.askForPermission(result)
+                    else -> result.notImplemented()
+                }
+            }
         MethodChannel(engine.dartExecutor.binaryMessenger, "muse/cookies")
             .setMethodCallHandler { call, result ->
                 when (call.method) {

@@ -270,7 +270,7 @@ class _PlaylistPageState extends State<_PlaylistPage> {
                 child: RefreshIndicator(
             onRefresh: () async => _reload(),
             child: ReorderableListView.builder(
-            padding: const EdgeInsets.fromLTRB(8, 4, 8, 24),
+            padding: const EdgeInsets.fromLTRB(8, 4, 8, bottomForPlayer),
             physics: const AlwaysScrollableScrollPhysics(),
             buildDefaultDragHandles: false,
             header: _PlaylistHeader(
@@ -297,8 +297,21 @@ class _PlaylistPageState extends State<_PlaylistPage> {
               key: ValueKey('pl-${items[i].id}-$i'),
               child: Dismissible(
               key: ValueKey('pl-dismiss-${items[i].id}-$i'),
-              direction: DismissDirection.endToStart,
+              // Both ways, and they mean different things: away takes it off the
+              // playlist, towards puts it on next. Playing something next is the most
+              // common thing anybody wants from a list they are looking at, and it was
+              // three taps through a menu.
+              direction: DismissDirection.horizontal,
               background: Container(
+                alignment: Alignment.centerLeft,
+                padding: const EdgeInsets.only(left: 20),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.playlist_play),
+              ),
+              secondaryBackground: Container(
                 alignment: Alignment.centerRight,
                 padding: const EdgeInsets.only(right: 20),
                 decoration: BoxDecoration(
@@ -307,6 +320,16 @@ class _PlaylistPageState extends State<_PlaylistPage> {
                 ),
                 child: const Icon(Icons.delete_outline),
               ),
+              confirmDismiss: (direction) async {
+                if (direction != DismissDirection.startToEnd) return true;
+                // Playing next leaves the row where it is: the list it is on has not
+                // changed, so the row must not vanish.
+                final messenger = ScaffoldMessenger.of(context);
+                await app.addTrack(items[i], mode: 'next');
+                messenger.showSnackBar(SnackBar(
+                    content: Text('${items[i].displayTitle} plays next')));
+                return false;
+              },
               onDismissed: (_) async {
                 await app.api.removePlaylistItem(widget.playlistId, i);
                 await app.refreshPlaylists();

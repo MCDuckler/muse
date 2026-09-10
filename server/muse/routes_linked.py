@@ -10,8 +10,8 @@ import logging
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from . import catalog, db, jobs, linked, sync
-from .deps import current_user
+from . import catalog, db, jobs, linked, sync, ytm
+from .deps import cfg, current_user
 
 log = logging.getLogger("muse.linked")
 router = APIRouter(prefix="/linked")
@@ -42,9 +42,15 @@ def list_accounts(user: dict = Depends(current_user)):
              "bandcamp": "Paste your fan page link, or the name in it",
              # The only one that needs a credential rather than a name: nothing about
              # a YouTube account is public, including the list of your own playlists.
-             "youtube": "Paste the request headers from music.youtube.com",
+             "youtube": "Sign in with a code, or paste the headers from a browser",
          }[p],
          "plays": p not in ("deezer", "youtube"),
+         # How signing in works here. "code" is Google's device flow — the app shows a
+         # short code and the person types it into a browser they already trust, which
+         # is the only way in Google supports for something without a browser of its
+         # own; an embedded one is refused as "not secure" whatever it claims to be.
+         "sign_in": ("code" if p == "youtube" and ytm.oauth_configured(cfg())
+                     else "name" if p != "youtube" else "paste"),
          "linked": have.get(p)}
         for p in linked.PROVIDERS]}
 
@@ -62,6 +68,41 @@ def link_account(provider: str, body: dict = Body(...), user: dict = Depends(cur
     except Exception as e:
         raise HTTPException(502, f"{provider} did not answer: {e}")
     return linked.link(user["id"], provider, profile)
+
+
+@router.post("/youtube/oauth")
+def youtube_oauth_start(user: dict = Depends(current_user)):
+    """Begin signing in to YouTube Music: a code to read out, and where to type it."""
+    try:
+        return ytm.oauth_start(cfg())
+    except ytm.NotConfigured as e:
+        raise HTTPException(409, str(e))
+    except Exception as e:                        # noqa: BLE001
+        raise HTTPException(502, f"Google would not start a sign-in: {e}")
+
+
+@router.post("/youtube/oauth/finish")
+def youtube_oauth_finish(body: dict = Body(...), user: dict = Depends(current_user)):
+    """Finish it, once the code has been typed in over there.
+
+    A 409 means "not yet" rather than "no": the app asks again while somebody is still
+    working through the pages on the other device.
+    """
+    device_code = (body.get("device_code") or "").strip()
+    if not device_code:
+        raise HTTPException(400, "device_code required")
+    try:
+        secret = ytm.oauth_finish(cfg(), device_code)
+    except ytm.NotAllowed as e:
+        raise HTTPException(409, str(e))
+    except ytm.NotConfigured as e:
+        raise HTTPException(409, str(e))
+    except Exception as e:                        # noqa: BLE001
+        raise HTTPException(502, f"Google would not finish the sign-in: {e}")
+
+    name = ytm.account_name(secret)
+    return linked.link(user["id"], "youtube",
+                       {"handle": name, "display_name": name, "secret": secret})
 
 
 @router.delete("/{provider}")

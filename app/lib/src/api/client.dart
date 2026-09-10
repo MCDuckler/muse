@@ -389,6 +389,26 @@ class ApiClient {
   Future<void> unlinkService(String provider) async =>
       await _decode(await http.delete(_u('/linked/$provider'), headers: _headers));
 
+  /// Start signing in to YouTube Music with a code. Answers with the code to read out
+  /// and where to type it.
+  Future<({String deviceCode, String userCode, String url, int interval})>
+      startYoutubeSignIn() async {
+    final d = await _decode(await http.post(_u('/linked/youtube/oauth'),
+        headers: _headers, body: '{}')) as Map<String, dynamic>;
+    return (
+      deviceCode: d['device_code'] as String,
+      userCode: d['user_code'] as String,
+      url: d['url'] as String,
+      interval: (d['interval'] ?? 5) as int,
+    );
+  }
+
+  /// Ask whether they have finished over there. Throws with status 409 while they have
+  /// not, which is "not yet" rather than "no".
+  Future<void> finishYoutubeSignIn(String deviceCode) async =>
+      await _decode(await http.post(_u('/linked/youtube/oauth/finish'),
+          headers: _headers, body: jsonEncode({'device_code': deviceCode})));
+
   Future<List<RemoteList>> serviceLists(String provider) async {
     final d = await _decode(
         await http.get(_u('/linked/$provider/playlists'), headers: _headers))

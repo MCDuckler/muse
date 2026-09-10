@@ -29,6 +29,14 @@ class MiniPlayer extends StatelessWidget {
   }
 }
 
+/// How much room a scrolling page has to leave at its bottom.
+///
+/// The player bar floats over the body — that is what makes it blur what is behind it —
+/// so a list that ends where the screen ends puts its last row, or its last button,
+/// underneath the bar where it cannot be reached. Lists that end in songs already left
+/// room; this is the number, so the ones that end in a button leave it too.
+const bottomForPlayer = 140.0;
+
 /// A page with the player under it. Every screen that shows songs uses this instead of
 /// a bare Scaffold, so there is one answer to "where are the controls" everywhere.
 class PlayerScaffold extends StatelessWidget {

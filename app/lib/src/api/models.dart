@@ -642,19 +642,27 @@ enum PlayerLayout {
   grouped,
 
   /// The same, with the panel taller and the buttons bigger — smaller artwork, larger
-  /// targets, in the manner of Musicolet.
-  roomy;
+  /// targets.
+  roomy,
+
+  /// Musicolet's arrangement: the song's own buttons in a row of their own above the
+  /// bar, the times at either end of it rather than under it, and the transport large
+  /// and plain across the bottom with no panel around any of it.
+  plain;
 
   String get label => switch (this) {
         PlayerLayout.topBar => 'Icons at the top',
         PlayerLayout.grouped => 'Grouped with the controls',
         PlayerLayout.roomy => 'Roomy controls',
+        PlayerLayout.plain => 'Plain and wide',
       };
 
   String get description => switch (this) {
         PlayerLayout.topBar => 'Lyrics, up next and the rest in the top bar',
         PlayerLayout.grouped => 'All of it under the play buttons',
         PlayerLayout.roomy => 'Bigger buttons and more space, artwork a little smaller',
+        PlayerLayout.plain =>
+          'No panel: icons in a row, times beside the bar, big transport underneath',
       };
 }
 
@@ -837,6 +845,10 @@ class LinkedService {
   final String hint;
   /// False for Deezer: it can tell us what is in a playlist, but not play it.
   final bool plays;
+
+  /// How this one is signed in to: a public 'name', Google's 'code' flow, or a block
+  /// of browser headers to 'paste'.
+  final String signIn;
   final String? handle;
   final String? displayName;
 
@@ -845,6 +857,7 @@ class LinkedService {
     required this.label,
     required this.hint,
     this.plays = true,
+    this.signIn = 'name',
     this.handle,
     this.displayName,
   });
@@ -856,6 +869,7 @@ class LinkedService {
       label: (j['label'] ?? '') as String,
       hint: (j['hint'] ?? '') as String,
       plays: (j['plays'] ?? true) as bool,
+      signIn: (j['sign_in'] ?? 'name') as String,
       handle: l?['handle'] as String?,
       displayName: l?['display_name'] as String?,
     );

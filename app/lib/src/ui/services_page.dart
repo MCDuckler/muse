@@ -1,3 +1,6 @@
+import '../api/client.dart';
+import 'package:flutter/services.dart';
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
@@ -8,6 +11,7 @@ import '../api/models.dart';
 import '../state/app_state.dart';
 import 'dialogs.dart';
 import 'mini_player.dart';
+import 'spotify_page.dart';
 import 'youtube_sign_in.dart';
 
 /// Services linked by typing a name.
@@ -111,6 +115,31 @@ class _ServicesPageState extends State<ServicesPage> {
     }
   }
 
+  /// Signing in to YouTube Music with a code, the way a television does it.
+  Future<void> _signInWithCode(LinkedService service) async {
+    final api = context.read<AppState>().api;
+    final messenger = ScaffoldMessenger.of(context);
+    ({String deviceCode, String userCode, String url, int interval}) code;
+    try {
+      code = await api.startYoutubeSignIn();
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      return;
+    }
+    if (!mounted) return;
+
+    final done = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialog) => _CodeDialog(code: code, api: api),
+    );
+    if (done == true) {
+      await _load();
+      messenger.showSnackBar(
+          const SnackBar(content: Text('YouTube Music is linked')));
+    }
+  }
+
   Future<void> _link(LinkedService service) async {
     // Both captured before the dialog: it can sit open for a while, and a context used
     // afterwards may no longer be in the tree.
@@ -118,9 +147,17 @@ class _ServicesPageState extends State<ServicesPage> {
     final messenger = ScaffoldMessenger.of(context);
     final youtube = service.provider == 'youtube';
 
-    // On a phone there is a browser to hand: sign in there and the cookie it ends up
-    // with is the sign-in, with nothing to copy. The web build cannot see another
-    // site's cookies, so there the headers are still pasted.
+    // Google refuses to sign anybody in inside an app's own browser — "this browser or
+    // app may not be secure" — and no amount of pretending to be Chrome gets past it,
+    // because that is what the check is for. What Google does support is a code: it is
+    // shown here and typed into a browser the person already trusts.
+    if (youtube && service.signIn == 'code') {
+      await _signInWithCode(service);
+      return;
+    }
+
+    // Failing that, the app's own browser is still worth offering: it works for
+    // accounts Google is relaxed about, and it is better than nothing on a phone.
     if (youtube && canSignInToYouTube) {
       final captured = await Navigator.of(context).push<String>(
           MaterialPageRoute(builder: (_) => const YouTubeSignInPage()));
@@ -169,11 +206,13 @@ class _ServicesPageState extends State<ServicesPage> {
               : RefreshIndicator(
                   onRefresh: _load,
                   child: ListView(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, bottomForPlayer),
                     children: [
                       Text(
-                        'These are read by name rather than by signing in — a profile '
-                        'id or a username is enough, and only what is public is read.',
+                        'Most of these are read by name rather than by signing in — a '
+                        'profile id or a username is enough, and only what is public '
+                        'is read. Spotify and YouTube Music need a sign-in, because '
+                        'nothing about those accounts is public.',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                       const SizedBox(height: 12),
@@ -185,6 +224,23 @@ class _ServicesPageState extends State<ServicesPage> {
                               .unlinkService(s.provider);
                           await _load();
                         },
+                      ),
+                      // Spotify is here too, even though it works differently: it is
+                      // one of the places your music is, and asking "where is Spotify"
+                      // should not be answered by a different part of the settings.
+                      Card(
+                        margin: const EdgeInsets.only(bottom: 10),
+                        child: ListTile(
+                          leading: const Icon(Icons.music_note_outlined),
+                          title: const Text('Spotify'),
+                          subtitle: const Text(
+                              'Signs in properly — everything about a Spotify '
+                              'account is private'),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                  builder: (_) => const SpotifyPage())),
+                        ),
                       ),
                       const SizedBox(height: 18),
                       const Divider(),
@@ -327,7 +383,7 @@ class _ServiceListsState extends State<_ServiceLists> {
           : lists == null
               ? const Center(child: CircularProgressIndicator())
               : ListView(
-                  padding: const EdgeInsets.only(bottom: 40),
+                  padding: const EdgeInsets.only(bottom: bottomForPlayer),
                   children: [
                     for (final l in lists)
                       ListTile(
@@ -365,5 +421,101 @@ class _ServiceListsState extends State<_ServiceLists> {
     } finally {
       if (mounted) setState(() => _busy.remove(list.remoteId));
     }
+  }
+}
+
+
+/// The code, and the waiting.
+///
+/// It polls rather than asking the person to come back and press something: they are
+/// on another device typing, and the moment it goes through is the moment this should
+/// close.
+class _CodeDialog extends StatefulWidget {
+  const _CodeDialog({required this.code, required this.api});
+  final ({String deviceCode, String userCode, String url, int interval}) code;
+  final ApiClient api;
+
+  @override
+  State<_CodeDialog> createState() => _CodeDialogState();
+}
+
+class _CodeDialogState extends State<_CodeDialog> {
+  Timer? _poll;
+  String? _trouble;
+
+  @override
+  void initState() {
+    super.initState();
+    _poll = Timer.periodic(
+        Duration(seconds: widget.code.interval.clamp(2, 15)), (_) => _ask());
+  }
+
+  Future<void> _ask() async {
+    try {
+      await widget.api.finishYoutubeSignIn(widget.code.deviceCode);
+      _poll?.cancel();
+      if (mounted) Navigator.of(context).pop(true);
+    } on ApiException catch (e) {
+      // 409 is "they have not finished yet", which is the normal state of this dialog.
+      if (e.status != 409 && mounted) setState(() => _trouble = e.message);
+    } catch (_) {
+      // A dropped request is not worth reporting: the next tick asks again.
+    }
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return AlertDialog(
+      title: const Text('Sign in to YouTube Music'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('On any device, open ${widget.code.url} and enter this code:',
+              style: Theme.of(context).textTheme.bodySmall),
+          const SizedBox(height: 14),
+          Center(
+            child: SelectableText(
+              widget.code.userCode,
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  letterSpacing: 4, fontFeatures: const [FontFeature.tabularFigures()]),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              const SizedBox(
+                  width: 14, height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2)),
+              const SizedBox(width: 10),
+              Text('Waiting for you to finish…',
+                  style: Theme.of(context).textTheme.bodySmall),
+            ],
+          ),
+          if (_trouble != null) ...[
+            const SizedBox(height: 10),
+            Text(_trouble!, style: TextStyle(color: scheme.error)),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Clipboard.setData(
+              ClipboardData(text: widget.code.userCode)),
+          child: const Text('Copy code'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+      ],
+    );
   }
 }

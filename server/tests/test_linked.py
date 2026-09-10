@@ -301,3 +301,47 @@ def test_a_youtube_sign_in_is_never_handed_back(client, hdr, monkeypatch):
     listed = client.get("/linked", headers=hdr)
     assert "SECRET" not in listed.text
     assert linked_mod._secret(1, "youtube") == "cookie: SECRET-VALUE"
+
+
+def test_signing_in_to_youtube_with_a_code(client, hdr, monkeypatch):
+    """Google refuses an embedded browser — "this browser or app may not be secure" —
+    so the way in is the device flow: a code read out here, typed in over there."""
+    from muse import ytm
+
+    monkeypatch.setattr(ytm, "oauth_start", lambda cfg: {
+        "device_code": "DEV-123", "user_code": "ABCD-EFGH",
+        "url": "https://google.com/device", "interval": 5, "expires_in": 1800,
+    })
+    started = client.post("/linked/youtube/oauth", headers=hdr)
+    assert started.status_code == 200, started.text
+    assert started.json()["user_code"] == "ABCD-EFGH"
+
+    # Still working through the pages over there: not an error, just not yet.
+    def not_yet(cfg, device_code):
+        raise ytm.NotAllowed("authorization_pending")
+
+    monkeypatch.setattr(ytm, "oauth_finish", not_yet)
+    waiting = client.post("/linked/youtube/oauth/finish", headers=hdr,
+                          json={"device_code": "DEV-123"})
+    assert waiting.status_code == 409
+
+    monkeypatch.setattr(ytm, "oauth_finish",
+                        lambda cfg, device_code: '{"refresh_token": "SECRET"}')
+    monkeypatch.setattr(ytm, "account_name", lambda auth: "Chris")
+    done = client.post("/linked/youtube/oauth/finish", headers=hdr,
+                       json={"device_code": "DEV-123"})
+    assert done.status_code == 200, done.text
+    assert done.json()["display_name"] == "Chris"
+    assert "SECRET" not in done.text, "the token never leaves the server"
+
+    from muse import linked as linked_mod
+    assert linked_mod._secret(1, "youtube") == '{"refresh_token": "SECRET"}'
+
+
+def test_without_an_oauth_client_the_app_is_told_to_paste(client, hdr):
+    """No credentials configured is a 409 with an explanation, not a broken button."""
+    r = client.post("/linked/youtube/oauth", headers=hdr)
+    assert r.status_code == 409
+    assert "pasting" in r.json()["detail"]
+    listed = client.get("/linked", headers=hdr).json()["accounts"]
+    assert next(a for a in listed if a["provider"] == "youtube")["sign_in"] == "paste"

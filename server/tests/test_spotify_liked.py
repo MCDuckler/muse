@@ -186,3 +186,49 @@ def test_being_told_to_slow_down_is_not_a_failure(client, hdr, monkeypatch):
     assert row["payload"]["offset"] == 250, "it resumes where it stopped"
     assert row["attempts"] == 0, "and starts with all its attempts intact"
     assert row["later"], "just not right away"
+
+
+def test_a_mirrored_playlist_keeps_spotifys_own_cover(client, hdr, monkeypatch, tmp_path):
+    """A mirrored playlist is recognised by its art before its name is read, and the
+    art muse draws is for playlists that have none of their own."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    from muse import db, images, routes_spotify, spotify
+
+    buf = BytesIO()
+    Image.new("RGB", (640, 640), (12, 200, 90)).save(buf, "PNG")
+    art = buf.getvalue()
+
+    monkeypatch.setattr(spotify, "playlist", lambda cfg, user_id, remote_id: {
+        "remote_id": remote_id, "name": "Roadtrip", "owner": "chris", "count": 1,
+        "image": "https://i.scdn.co/image/whatever",
+    })
+    monkeypatch.setattr(spotify, "playlist_items", lambda cfg, user_id, remote_id: [])
+
+    class Answer:
+        def read(self, n=None):
+            return art
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(routes_spotify.urllib.request, "urlopen",
+                        lambda url, timeout=20: Answer())
+
+    out = routes_spotify._mirror(1, {"remote_id": "abc123", "name": ""})
+    assert out["name"] == "Roadtrip"
+
+    row = db.one("select cover_sig from playlists where id=%s", (out["playlist_id"],))
+    assert row["cover_sig"], "the playlist keeps the picture it has over there"
+
+    listed = next(p for p in client.get("/playlists", headers=hdr).json()
+                  if p["id"] == out["playlist_id"])
+    assert listed["custom_cover"] is True
+    assert listed["cover_version"] == row["cover_sig"]
+    served = client.get(f"/playlists/{out['playlist_id']}/cover", headers=hdr)
+    assert served.status_code == 200 and served.headers["content-type"] == "image/jpeg"

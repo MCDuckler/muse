@@ -9,6 +9,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- The visualiser. Android only lets an app read the shape of its own audio
+         through the same permission a recording app asks for; nothing is recorded, and
+         it is requested at the moment the bars are switched on rather than at install. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <application
         android:label="muse"
         android:name="${applicationName}"
