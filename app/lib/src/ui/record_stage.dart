@@ -784,17 +784,25 @@ class Mirror extends StatelessWidget {
       child: ClipRect(
         child: ShaderMask(
           blendMode: BlendMode.dstIn,
+          // A curve down to nothing, not a ramp.
+          //
+          // Three stops made the fade a straight line ending at zero, and a straight
+          // line ending at zero has a corner in it — the eye finds that corner and
+          // reads it as the bottom edge of a picture, which is the one thing a
+          // reflection must not have. These stops bend: most of the light goes in the
+          // first fifth and the tail runs out to nothing at the very bottom of the box,
+          // so there is nowhere for an edge to be.
           shaderCallback: (bounds) => LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: [
               Colors.white.withValues(alpha: strength),
-              Colors.white.withValues(alpha: strength * 0.42),
+              Colors.white.withValues(alpha: strength * 0.58),
+              Colors.white.withValues(alpha: strength * 0.28),
+              Colors.white.withValues(alpha: strength * 0.09),
               Colors.white.withValues(alpha: 0),
             ],
-            // Gone before the bottom of its own box, so there is always clear air
-            // between the reflection and whatever is written below it.
-            stops: const [0, 0.45, 0.92],
+            stops: const [0, 0.18, 0.42, 0.7, 1.0],
           ).createShader(bounds),
           child: OverflowBox(
             alignment: Alignment.topCenter,

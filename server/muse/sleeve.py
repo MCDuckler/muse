@@ -73,7 +73,7 @@ def edition(seed: str) -> dict:
 
 # ---------------------------------------------------------------- the jacket
 def render_jacket(cover: pathlib.Path, seed: str, size: int = CANVAS) -> Image.Image:
-    """The cardboard jacket, face on, with transparent surroundings.
+    """The cover, square, with softened corners and nothing else.
 
     The artwork, and nothing done to the artwork.
 
@@ -84,10 +84,10 @@ def render_jacket(cover: pathlib.Path, seed: str, size: int = CANVAS) -> Image.I
     different picture entirely. A record sleeve's artwork is the one thing on this
     screen that somebody else made on purpose, and the right amount to do to it is none.
 
-    What is left is the object rather than the image: the board's own thickness along
-    the bottom edge, corners that are not perfectly square, and — from the cover's own
-    hash, so a record you know stays the record you know — the odd copy with a price
-    sticker on it or a hole drilled through a corner by a distributor writing it off.
+    What is left is the object rather than the image: corners that are not perfectly
+    square, and — from the cover's own hash, so a record you know stays the record you
+    know — the odd copy with a price sticker on it or a hole drilled through a corner
+    by a distributor writing it off.
 
     Square and centred so the client can rotate it about any axis and still have it sit
     where it expects.
@@ -122,19 +122,20 @@ def render_jacket(cover: pathlib.Path, seed: str, size: int = CANVAS) -> Image.I
         ImageDraw.Draw(hole).ellipse((hx - rad, hy - rad, hx + rad, hy + rad), fill=0)
         face.putalpha(ImageChops.darker(face.getchannel("A"), hole))
 
-    # Softened corners and the board's own thickness along the bottom edge.
+    # Corners that are not quite square, and nothing else along any edge.
+    #
+    # There used to be a strip of board colour across the bottom, meant to read as the
+    # thickness of the card seen edge-on. Face on — which is how the player draws it —
+    # it is not thickness, it is a grey stripe under the artwork; and with a reflection
+    # beneath, the stripe and its mirror image met to make a grey band separating the
+    # record from the surface it stands on. Losing it also means the cover no longer
+    # has to be squashed by its height to fit back into a square, so the artwork now
+    # arrives at exactly the size and shape it was drawn at.
     corners = Image.new("L", (size, size), 0)
     ImageDraw.Draw(corners).rounded_rectangle(
         (0, 0, size - 1, size - 1), radius=int(size * 0.012), fill=255)
     face.putalpha(ImageChops.darker(face.getchannel("A"), corners))
-
-    thickness = max(3, int(size * 0.014))
-    out = Image.new("RGBA", (size, size + thickness), (0, 0, 0, 0))
-    spine = Image.new("RGBA", (size, thickness), (72, 66, 60, 255))
-    ImageDraw.Draw(spine).line([(0, 0), (size, 0)], fill=(150, 142, 130, 255), width=1)
-    out.alpha_composite(spine, (0, size - 1))
-    out.alpha_composite(face, (0, 0))
-    return out.resize((size, size), Image.LANCZOS)
+    return face
 
 
 # ---------------------------------------------------------------- the record
@@ -252,7 +253,7 @@ SIZES = {"lg": CANVAS, "sm": 320}
 # Bumped whenever the drawing changes. The art is cached under the cover's hash, which
 # does not change when the *renderer* does — so without this, a fix to how a record is
 # drawn only reaches records nobody has looked at yet.
-VERSION = 4
+VERSION = 5
 
 
 def path_for(root: pathlib.Path, sha: str, size: str, part: str = "sleeve") -> pathlib.Path:

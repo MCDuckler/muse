@@ -108,22 +108,20 @@ def test_the_artwork_is_left_alone(client, hdr, tmp_path):
 
     source = tmp_path / "cover.png"
     art = Image.new("RGB", (900, 900))
-    # Varies across, constant down. The jacket squashes the art by the thickness of the
-    # board — about one percent — so anything varying down the picture would be
-    # comparing rows that moved. Across is where the two failed treatments showed:
-    # faceting flattens a gradient into steps, and a printed-on border replaces the
-    # edges with cardboard.
-    art.putdata([((x * 7) % 256, 255 - (x * 5) % 256, (x * 3) % 256)
-                 for _ in range(900) for x in range(900)])
+    art.putdata([((x * 7) % 256, 255 - (y * 5) % 256, (x + y) % 256)
+                 for y in range(900) for x in range(900)])
     art.save(source)
 
     jacket = sleeve.render_jacket(source, "abc123abc123", 900).convert("RGB")
-    # Right out to the edges, short of the rounded corners themselves.
-    for x in (6, 60, 300, 450, 700, 893):
-        want = art.getpixel((x, 450))
-        got = jacket.getpixel((x, 450))
+    # Every direction now, including down: with the board strip gone the cover is no
+    # longer squashed to fit back into a square, so it arrives at the size and shape it
+    # was drawn at. The bottom row is checked on purpose — that is where the grey
+    # stripe was.
+    for x, y in ((6, 450), (300, 20), (450, 450), (700, 880), (893, 300), (450, 897)):
+        want = art.getpixel((x, y))
+        got = jacket.getpixel((x, y))
         assert max(abs(a - b) for a, b in zip(want, got)) <= 8, \
-            f"the cover was altered at x={x}: {want} became {got}"
+            f"the cover was altered at {(x, y)}: {want} became {got}"
 
 
 def test_two_records_are_not_the_same_record(client, hdr):
