@@ -145,13 +145,12 @@ class PlayerService {
     final sameQueue = _queueId == queue.id;
     final previousIndex = index;
     // The song this device is on — which is not the same as the song whose audio has
-    // finished loading. Anchoring on the loaded id alone left a window, between a skip
-    // and its stream being ready, where this fell through to the branch at the bottom
-    // and reloaded the server's cursor at the server's last saved position. A skip
-    // announces its own cursor write, that announcement comes straight back over the
-    // event stream, and playback landed back on the previous song a few seconds in:
-    // the jump back you can feel when skipping quickly.
-    final anchor = _loadedTrackId ?? current?.id ?? _waitingForTrack;
+    // finished loading, and the order of those two matters. Between a skip and its
+    // stream being ready the engine still holds the *previous* track; anchoring on
+    // that relocates the queue to the song just skipped, which is the flick backwards
+    // you see for a moment before the new one settles. What this device means to play
+    // is `current`; the loaded id is only the fallback for before there is one.
+    final anchor = current?.id ?? _loadedTrackId ?? _waitingForTrack;
     _queueId = queue.id;
     _items = queue.items;
     if (!sameQueue) {
@@ -252,6 +251,45 @@ class PlayerService {
       _orderPos = keepItemIndex.clamp(0, _items.length - 1);
     }
     _orderedIds = [for (final t in _items) t.id];
+  }
+
+  /// Move a row now, rather than when the server says so.
+  ///
+  /// Reordering used to be: ask the server, wait, then redraw. For the length of that
+  /// request the list was still the old one, so the row you had just dragged sprang
+  /// back to where it came from and then jumped to where you put it. The server is
+  /// still the authority — its answer replaces this — but it is confirming what the
+  /// screen already shows instead of being the first to know.
+  void moveLocally(int from, int to) {
+    if (from < 0 || from >= _items.length) return;
+    if (to < 0 || to >= _items.length || from == to) return;
+    final playing = current?.id;
+    final items = [..._items];
+    items.insert(to, items.removeAt(from));
+    _items = items;
+    // Keep playing what is playing: it has a new index in the list now.
+    final at = playing == null ? index : _relocate(index, playing);
+    _rebuildOrder(keepItemIndex: at < 0 ? 0 : at);
+    unawaited(_queueNext());
+    _emit(force: true);
+  }
+
+  /// Take a row out now, for the same reason.
+  void removeLocally(int pos) {
+    if (pos < 0 || pos >= _items.length) return;
+    final playing = current?.id;
+    final items = [..._items]..removeAt(pos);
+    _items = items;
+    if (items.isEmpty) {
+      _order = const [];
+      _orderPos = 0;
+      _emit(force: true);
+      return;
+    }
+    final at = playing == null ? index : _relocate(index, playing);
+    _rebuildOrder(keepItemIndex: at < 0 ? pos.clamp(0, items.length - 1) : at);
+    unawaited(_queueNext());
+    _emit(force: true);
   }
 
   Future<void> setShuffle(bool value) async {

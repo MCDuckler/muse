@@ -1,3 +1,6 @@
+import 'dart:convert';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -35,6 +38,52 @@ class _ServicesPageState extends State<ServicesPage> {
       if (mounted) setState(() { _services = s; _error = null; });
     } catch (e) {
       if (mounted) setState(() => _error = e);
+    }
+  }
+
+  bool _importing = false;
+
+  /// Playlists from another player's backup file.
+  ///
+  /// The lists people build are the part of a music app that takes years and cannot be
+  /// re-derived from anything: a backup file is the only way they leave the app that
+  /// holds them. bcplayer's is the format asked for, and the ids in it are Bandcamp's
+  /// own — which is why most of an import lands instantly.
+  Future<void> _importBackup() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final api = context.read<AppState>().api;
+    final file = await FilePicker.pickFile(
+        type: FileType.custom, allowedExtensions: ['json'], dialogTitle: 'Backup file');
+    if (file == null || !mounted) return;
+
+    setState(() => _importing = true);
+    try {
+      // Bytes rather than a path: the web build never has one.
+      final text = utf8.decode(await file.readAsBytes());
+      final backup = jsonDecode(text);
+      if (backup is! Map<String, dynamic>) {
+        throw const FormatException('that file is not a playlist backup');
+      }
+      final result = await api.importPlaylists(backup);
+      final lists = (result['playlists'] as List?) ?? const [];
+      final missing = (result['missing'] ?? 0) as int;
+      if (!mounted) return;
+      await context.read<AppState>().refresh();
+      messenger.showSnackBar(SnackBar(
+        content: Text([
+          '${lists.length} ${lists.length == 1 ? 'playlist' : 'playlists'}',
+          '${result['tracks']} songs',
+          if (missing > 0) '$missing not in the file',
+          if (result['audio'] == 'on play') 'audio fetched when played',
+        ].join(' · ')),
+      ));
+    } on FormatException {
+      messenger.showSnackBar(const SnackBar(
+          content: Text('That file is not a playlist backup.')));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('$e')));
+    } finally {
+      if (mounted) setState(() => _importing = false);
     }
   }
 
@@ -81,6 +130,33 @@ class _ServicesPageState extends State<ServicesPage> {
                               .unlinkService(s.provider);
                           await _load();
                         },
+                      ),
+                      const SizedBox(height: 18),
+                      const Divider(),
+                      Text('From a file',
+                          style: Theme.of(context).textTheme.titleSmall),
+                      const SizedBox(height: 4),
+                      Text(
+                        'A backup exported by bcplayer. The playlists come across with '
+                        'their names, and songs already here are recognised rather '
+                        'than fetched again.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 10),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: FilledButton.tonalIcon(
+                          onPressed: _importing ? null : _importBackup,
+                          icon: _importing
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2))
+                              : const Icon(Icons.upload_file),
+                          label: Text(_importing
+                              ? 'Importing…'
+                              : 'Import playlists from a backup'),
+                        ),
                       ),
                     ],
                   ),

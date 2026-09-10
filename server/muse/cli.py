@@ -79,6 +79,35 @@ def fixsoundcloud(apply: bool = False) -> None:
     db.close()
 
 
+def fixspotifynames(apply: bool = False) -> None:
+    """Rename the Spotify playlists that ended up named after their own id."""
+    from . import config, db, spotify
+
+    cfg = config.load()
+    db.init(cfg.dsn)
+    rows = db.all_(
+        """select id, owner_id, name, remote_id from playlists
+            where kind = 'spotify' and name = remote_id order by id""",
+    )
+    print(f"{len(rows)} playlists named after their id\n")
+    fixed = 0
+    for row in rows:
+        try:
+            remote = spotify.playlist(cfg, row["owner_id"], row["remote_id"])
+        except Exception as e:                    # noqa: BLE001
+            print(f"  {row['remote_id']}: {e}")
+            continue
+        print(f"  {row['remote_id']}  ->  {remote['name']}")
+        fixed += 1
+        if apply:
+            db.run("update playlists set name=%s, source_name=coalesce(source_name,%s) "
+                   "where id=%s", (remote["name"], remote.get("owner"), row["id"]))
+    print(f"\n{fixed} {'renamed' if apply else 'could be renamed'}")
+    if not apply:
+        print("run with --apply to write them")
+    db.close()
+
+
 def main() -> None:
     match sys.argv[1:]:
         case ["adduser", name]:
@@ -93,9 +122,14 @@ def main() -> None:
             fixsoundcloud()
         case ["fixsoundcloud", "--apply"]:
             fixsoundcloud(apply=True)
+        case ["fixspotifynames"]:
+            fixspotifynames()
+        case ["fixspotifynames", "--apply"]:
+            fixspotifynames(apply=True)
         case _:
             sys.exit("usage: python -m muse.cli [adduser <name> | secret "
-                     "| splitartists [--apply] | fixsoundcloud [--apply]]")
+                     "| splitartists [--apply] | fixsoundcloud [--apply] "
+                     "| fixspotifynames [--apply]]")
 
 
 if __name__ == "__main__":

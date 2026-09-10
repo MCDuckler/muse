@@ -376,7 +376,15 @@ class AppState extends ChangeNotifier {
     final q = activeQueue;
     if (q == null) return;
     final removed = (player?.items.length ?? 0) > pos ? player!.items[pos] : null;
-    await _applyQueue(await api.removeQueueItem(q.id, pos));
+    // Gone from the list at once — see moveInQueue for why.
+    player?.removeLocally(pos);
+    notifyListeners();
+    try {
+      await _applyQueue(await api.removeQueueItem(q.id, pos));
+    } catch (_) {
+      await _resyncQueue();
+      return;
+    }
     if (context == null || removed == null || !context.mounted) return;
 
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -405,7 +413,24 @@ class AppState extends ChangeNotifier {
   Future<void> moveInQueue(int from, int to) async {
     final q = activeQueue;
     if (q == null) return;
-    await _applyQueue(await api.moveQueueItem(q.id, from, to));
+    // On screen first, then ask. The server's answer replaces this a moment later and
+    // agrees with it; if it does not — somebody else changed the queue underneath —
+    // what it says is what the list goes back to.
+    player?.moveLocally(from, to);
+    notifyListeners();
+    try {
+      await _applyQueue(await api.moveQueueItem(q.id, from, to));
+    } catch (_) {
+      await _resyncQueue();
+    }
+  }
+
+  /// Put the list back to whatever the server actually has.
+  Future<void> _resyncQueue() async {
+    await _reloadActiveQueue();
+    final live = activeQueue;
+    if (live != null) await player?.loadQueue(live);
+    notifyListeners();
   }
 
   Future<void> clearQueue({String? origin, BuildContext? context}) async {

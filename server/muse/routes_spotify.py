@@ -289,6 +289,15 @@ def _append_items(playlist_id: int, start: int, items: list[dict],
 
 
 def _mirror(user_id: int, remote: dict) -> dict:
+    # A mirror queued from an id alone arrives with the id standing in for the name.
+    # Ask Spotify what the playlist is actually called rather than writing that down.
+    if (remote.get("name") or "").strip() in ("", remote["remote_id"]):
+        try:
+            remote = {**remote, **spotify.playlist(cfg(), user_id, remote["remote_id"])}
+        except Exception as e:                    # noqa: BLE001 - a name is not worth failing over
+            log.info("could not read the name of spotify playlist %s: %s",
+                     remote["remote_id"], e)
+
     row = db.one(
         """select id from playlists
             where owner_id=%s and kind='spotify' and remote_id=%s""",

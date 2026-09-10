@@ -52,6 +52,11 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   /// playlist the engine already held.
   final List<String> calls = [];
 
+  /// How long the engine takes to accept a source. Nothing interesting happens while
+  /// a load is instant: the races this exists to catch all live in the window between
+  /// asking for a song and the engine holding it.
+  Duration slowness = Duration.zero;
+
   int index = 0;
   Duration position = Duration.zero;
   bool playing = false;
@@ -64,6 +69,10 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   Stream<PlaybackEventMessage> get playbackEventMessageStream => _events.stream;
 
   void close() => _events.close();
+
+  Future<void> _slow() async {
+    if (slowness > Duration.zero) await Future<void>.delayed(slowness);
+  }
 
   void _emit() {
     if (_events.isClosed) return;
@@ -89,6 +98,7 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
 
   @override
   Future<LoadResponse> load(LoadRequest request) async {
+    await _slow();
     sources
       ..clear()
       ..addAll(_urlsOf(request.audioSourceMessage));
@@ -103,6 +113,7 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   @override
   Future<ConcatenatingInsertAllResponse> concatenatingInsertAll(
       ConcatenatingInsertAllRequest request) async {
+    await _slow();
     final urls = [for (final child in request.children) ..._urlsOf(child)];
     sources.insertAll(request.index, urls);
     // A real engine keeps playing what it was playing: inserting above the current

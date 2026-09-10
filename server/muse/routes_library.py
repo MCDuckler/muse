@@ -144,6 +144,118 @@ def playlist_cover(playlist_id: int, request: Request, size: str = "lg",
     )
 
 
+# A backup from another player is one file: a list of playlists naming track ids, and
+# a list of what those ids are. Almost everything in one is already here — the ids are
+# Bandcamp's own, and so are ours — so an import is mostly a lookup.
+BIG_IMPORT = 400
+
+
+@router.post("/playlists/import", status_code=201)
+def import_playlists(body: dict = Body(...), user: dict = Depends(current_user)):
+    """Playlists from a backup file exported by another player.
+
+    Only bcplayer's format for now, which is the one that was asked for: a JSON file
+    with the playlists and a catalogue of the tracks they name. The ids in it are
+    Bandcamp's, which is what makes this cheap — a track already in the library is
+    found rather than fetched, and only what is genuinely new is queued.
+    """
+    fmt = (body.get("format") or "bcplayer").strip().lower()
+    if fmt != "bcplayer":
+        raise HTTPException(400, f"{fmt} backups are not something I can read yet.")
+
+    data = body.get("data") if isinstance(body.get("data"), dict) else body
+    lists = data.get("playlists")
+    if not isinstance(lists, list) or not lists:
+        raise HTTPException(400, "That file has no playlists in it.")
+
+    known: dict[str, dict] = {}
+    for entry in data.get("tracks") or []:
+        if not isinstance(entry, dict):
+            continue
+        key = str(entry.get("id") or f"t{entry.get('trackId')}")
+        known[key] = entry
+        known[str(entry.get("trackId"))] = entry
+
+    # Past a few hundred new songs an import is a library rather than a list: record
+    # what is in it and fetch the audio when somebody plays it, as a big mirror does.
+    fresh = sum(1 for l in lists for t in (l.get("tracks") or [])
+                if not catalog.find_by_provider("bandcamp", _bc_id(t, known)))
+    download = fresh <= BIG_IMPORT
+
+    made = []
+    for entry in lists:
+        name = (entry.get("name") or "").strip() or "Untitled"
+        ids = [t for t in (entry.get("tracks") or []) if t]
+        made.append(_import_one(user["id"], name, ids, known, download))
+    return {"format": fmt, "playlists": made,
+            "tracks": sum(m["added"] for m in made),
+            "missing": sum(m["missing"] for m in made),
+            "audio": "queued" if download else "on play"}
+
+
+def _bc_id(key, known: dict) -> str:
+    """The Bandcamp track id, whichever way the file spells it."""
+    entry = known.get(str(key)) or {}
+    return str(entry.get("trackId") or str(key).lstrip("t"))
+
+
+def _import_one(user_id: int, name: str, ids: list, known: dict,
+                download: bool) -> dict:
+    """One playlist from the file, replacing the last import of the same name."""
+    row = db.one(
+        """select id from playlists
+            where owner_id=%s and lower(name)=lower(%s) and kind in ('local','import')
+            order by id limit 1""",
+        (user_id, name),
+    )
+    if row:
+        playlist_id = row["id"]
+        db.run("delete from playlist_items where playlist_id=%s", (playlist_id,))
+        db.run("delete from playlist_unmatched where playlist_id=%s", (playlist_id,))
+    else:
+        playlist_id = db.one(
+            "insert into playlists(owner_id,name,kind) values(%s,%s,'local') returning id",
+            (user_id, name),
+        )["id"]
+
+    added = missing = 0
+    for key in ids:
+        provider_id = _bc_id(key, known)
+        track = catalog.find_by_provider("bandcamp", provider_id)
+        if not track:
+            entry = known.get(str(key)) or known.get(provider_id)
+            if not entry or not entry.get("pageUrl"):
+                # Named in a playlist and described nowhere: nothing to look up and
+                # nothing to fetch, so say so rather than dropping it silently.
+                db.run("""insert into playlist_unmatched(playlist_id,pos,remote_id,
+                                                        title,artists,reason)
+                          values(%s,%s,%s,%s,%s,'not in the backup file')
+                          on conflict do nothing""",
+                       (playlist_id, added + missing, str(key), None, []))
+                missing += 1
+                continue
+            track = catalog.create_from_source("bandcamp", {
+                "provider_id": provider_id,
+                "title": (entry.get("title") or "").strip() or provider_id,
+                "artists": [a for a in [entry.get("artist")] if a],
+                "album": entry.get("album"),
+                "duration_ms": entry.get("durationMs"),
+                # The page holds the whole record, so the reference names the track on
+                # it — see _bandcamp_fetch.
+                "url": f"{entry['pageUrl']}#{provider_id}",
+                "raw": entry,
+            }, discovered_via=catalog.VIA_USER, priority=jobs.PRIORITY_BULK,
+                batch_id=f"bcplayer:{user_id}", batch_label="Imported playlists",
+                download=download)
+        db.run("""insert into playlist_items(playlist_id,pos,track_id)
+                  values(%s,%s,%s) on conflict do nothing""",
+               (playlist_id, added, track["id"]))
+        catalog.remember(user_id, track["id"])
+        added += 1
+
+    return {"id": playlist_id, "name": name, "added": added, "missing": missing}
+
+
 @router.post("/playlists", status_code=201)
 def create_playlist(body: dict = Body(...), user: dict = Depends(current_user)):
     name = (body.get("name") or "").strip()

@@ -205,9 +205,19 @@ def _bandcamp_search(query: str, limit: int) -> list[dict]:
 
 
 def _bandcamp_fetch(ref: str, out_dir: pathlib.Path, report) -> dict:
-    tracks = bandcamp_tracks(ref)
-    track = next((t for t in tracks if t["url"] == ref and t["streamable"]), None) \
-        or next((t for t in tracks if t["streamable"]), None)
+    # A reference may name the track within the page it lives on: "<album url>#<id>".
+    # Bandcamp's own links are per-track, but an import from somewhere else often knows
+    # only the record and which track on it — and taking the first streamable one there
+    # would quietly fetch the wrong song.
+    page, _, wanted = ref.partition("#")
+    tracks = bandcamp_tracks(page)
+    track = None
+    if wanted:
+        track = next((t for t in tracks
+                      if t["provider_id"] == wanted and t["streamable"]), None)
+    track = track \
+        or next((t for t in tracks if t["url"] == ref and t["streamable"]), None) \
+        or (None if wanted else next((t for t in tracks if t["streamable"]), None))
     if not track:
         raise SourceError(
             "This one streams only if you buy it — Bandcamp keeps the file behind the "

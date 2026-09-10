@@ -332,3 +332,63 @@ def test_removing_from_the_middle_closes_the_gap(client, hdr, tracks):
     items = gone.json()["items"]
     assert [i["pos"] for i in items] == [0, 1]
     assert [i["id"] for i in items] == [b["id"], c["id"]]
+
+
+# ---------------- importing a backup from another player ----------------
+BACKUP = {
+    "version": 1,
+    "playlists": [
+        {"name": "Acid", "tracks": ["t111", "t222"]},
+        {"name": "Ambient", "tracks": ["t222", "t999"]},
+    ],
+    "tracks": [
+        {"id": "t111", "trackId": 111, "title": "First", "artist": "A Band",
+         "album": "A Record", "durationMs": 1000,
+         "pageUrl": "https://band.bandcamp.com/album/a-record"},
+        {"id": "t222", "trackId": 222, "title": "Second", "artist": "A Band",
+         "album": "A Record", "durationMs": 2000,
+         "pageUrl": "https://band.bandcamp.com/album/a-record"},
+    ],
+}
+
+
+def test_a_backup_becomes_playlists(client, hdr):
+    """The ids in a bcplayer backup are Bandcamp's own, and so are ours: an import is
+    mostly a lookup, and only what is genuinely new is queued for fetching."""
+    r = client.post("/playlists/import", headers=hdr, json=BACKUP)
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert [p["name"] for p in body["playlists"]] == ["Acid", "Ambient"]
+    assert body["tracks"] == 3, "two in the first, one findable in the second"
+    assert body["missing"] == 1, "t999 is named by a playlist and described nowhere"
+
+    listed = client.get("/playlists", headers=hdr).json()
+    acid = next(p for p in listed if p["name"] == "Acid")
+    assert acid["items"] == 2
+
+    # The track that was created carries what the file knew about it, and a reference
+    # that names it on the page it shares with the rest of the record.
+    made = client.get(f"/playlists/{acid['id']}", headers=hdr).json()["items"]
+    assert [t["title"] for t in made] == ["First", "Second"]
+    assert all(t["source"] == "bandcamp" for t in made)
+
+
+def test_importing_the_same_file_twice_does_not_double_it(client, hdr):
+    client.post("/playlists/import", headers=hdr, json=BACKUP)
+    again = client.post("/playlists/import", headers=hdr, json=BACKUP)
+    assert again.status_code == 201
+    listed = client.get("/playlists", headers=hdr).json()
+    assert len([p for p in listed if p["name"] == "Acid"]) == 1
+    assert next(p for p in listed if p["name"] == "Acid")["items"] == 2
+
+
+def test_a_backup_from_something_else_says_so(client, hdr):
+    r = client.post("/playlists/import", headers=hdr,
+                    json={"format": "winamp", "playlists": [{"name": "x"}]})
+    assert r.status_code == 400
+    assert "winamp" in r.json()["detail"]
+
+
+def test_a_file_with_no_playlists_is_refused(client, hdr):
+    r = client.post("/playlists/import", headers=hdr, json={"tracks": []})
+    assert r.status_code == 400

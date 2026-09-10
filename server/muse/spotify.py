@@ -244,6 +244,23 @@ def playlists(cfg, user_id: int) -> list[dict]:
     return out
 
 
+def playlist(cfg, user_id: int, remote_id: str) -> dict:
+    """One playlist's own description of itself.
+
+    A mirror queued from a name the app already knew carries it along; one queued from
+    an id alone does not, and a playlist row cannot be nameless — so it used to be
+    named after the id, which is how a library filled up with 3J2c5PZcDg3ciEqtMfddGB.
+    """
+    p = _get(cfg, user_id, f"/playlists/{remote_id}",
+             fields="name,owner(display_name),tracks(total)")
+    return {
+        "remote_id": remote_id,
+        "name": (p.get("name") or "").strip() or "Untitled",
+        "owner": (p.get("owner") or {}).get("display_name"),
+        "count": (p.get("tracks") or {}).get("total"),
+    }
+
+
 # Liked Songs is not a playlist as far as the API is concerned — it lives behind
 # /me/tracks and has no id. It is one to a person, so a fixed sentinel stands in for the
 # id everywhere a playlist id would go.

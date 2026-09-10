@@ -23,6 +23,10 @@ import 'package:muse/src/state/player.dart';
 
 import 'fake_audio.dart';
 
+/// How long the stub server takes to answer. A load that is still in flight is where
+/// the interesting races live, and instant answers hide them.
+Duration stubDelay = Duration.zero;
+
 /// A server that says yes. The player talks to one for the stream key, for warming the
 /// cache and for reporting what was listened to; none of that is what these tests are
 /// about, and none of it should reach the real one.
@@ -30,6 +34,7 @@ Future<HttpServer> stubServer() async {
   final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
   unawaited(() async {
     await for (final request in server) {
+      if (stubDelay > Duration.zero) await Future<void>.delayed(stubDelay);
       request.response.headers.contentType = ContentType.json;
       if (request.uri.path == '/auth/stream-key') {
         request.response.write(jsonEncode({
@@ -99,6 +104,7 @@ void main() {
     // The test binding installs an HttpClient that refuses everything, which is the
     // right default and the wrong one here: the stub server below is the network.
     HttpOverrides.global = null;
+    stubDelay = Duration.zero;
     server = await stubServer();
     audio = FakeJustAudio();
     JustAudioPlatform.instance = audio;
@@ -185,6 +191,57 @@ void main() {
     await settle();
     expect(player.queuedNextId, isNull);
     expect(audio.only.sources.length, 1);
+  });
+
+  test('a skip is not undone by the queue update it causes', () async {
+    // The echo has to land *during* the load — after the skip, while the engine is
+    // still holding the previous track — because that is the only window in which the
+    // question "which song is this device on" has two answers.
+    // Skipping writes the cursor, the server tells every device, and the device that
+    // skipped hears about its own move — while its new track is still loading and the
+    // engine is still holding the old one. Anchoring on what the engine holds put the
+    // queue back on the song just skipped, which is the flick backwards.
+    final tracks = [track(1), track(2), track(3)];
+    await player.loadQueue(queueOf(tracks));
+    await player.playAt(0);
+    await settle();
+    audio.only.slowness = const Duration(milliseconds: 300);
+
+    final skip = player.next();                 // deliberately not awaited
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    // The echo: the same queue, unchanged, arriving as a "something happened" update
+    // while the skipped-to song is still being fetched.
+    await player.loadQueue(queueOf(tracks, cursor: 0));
+    await skip;
+    await settle(20);
+
+    expect(player.current?.id, 2,
+        reason: 'the skip stands: ${audio.only.calls}');
+  });
+
+  test('a move is on screen before the server is asked', () async {
+    final tracks = [track(1), track(2), track(3)];
+    await player.loadQueue(queueOf(tracks));
+    await player.playAt(0);
+    await settle();
+
+    player.moveLocally(2, 0);          // drag the third row to the top
+
+    expect([for (final t in player.items) t.id], [3, 1, 2],
+        reason: 'the list changes with the finger, not with the network');
+    expect(player.current?.id, 1,
+        reason: 'and the song playing is still the song playing');
+  });
+
+  test('removing a row keeps the music on the same song', () async {
+    await player.loadQueue(queueOf([track(1), track(2), track(3)]));
+    await player.playAt(1);            // playing the middle one
+    await settle();
+
+    player.removeLocally(0);           // take out the row above it
+
+    expect([for (final t in player.items) t.id], [2, 3]);
+    expect(player.current?.id, 2, reason: 'still playing what was playing');
   });
 
   test('a guest follows the room into the right song at the right place', () async {
