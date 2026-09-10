@@ -35,6 +35,18 @@ class PlayerLookPage extends StatelessWidget {
             ),
           const SizedBox(height: 12),
           Text('The record', style: Theme.of(context).textTheme.titleSmall),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('How big'),
+            subtitle: Slider(
+              value: app.coverScale,
+              min: 0.5,
+              max: 1.0,
+              divisions: 10,
+              label: '${(app.coverScale * 100).round()}%',
+              onChanged: app.setCoverScale,
+            ),
+          ),
           for (final style in CoverStyle.values)
             RadioListTile<CoverStyle>(
               value: style,

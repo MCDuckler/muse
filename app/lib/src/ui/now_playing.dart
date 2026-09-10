@@ -572,6 +572,7 @@ class _Artwork extends StatelessWidget {
             child: RecordStage(
               track: track,
               playing: snapshot?.playing ?? false,
+              scale: context.watch<AppState>().coverScale,
               previous: _at(-1),
               next: _at(1),
               // Through the app: a swipe in a jam asks the room, like every other

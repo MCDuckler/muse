@@ -28,7 +28,13 @@ class RecordStage extends StatefulWidget {
     this.next,
     this.onNext,
     this.onPrevious,
+    this.scale = 0.74,
   });
+
+  /// How much of the stage the middle record takes. The rest is where its neighbours
+  /// stand, so this trades "how big is the record" against "how much of the next one
+  /// can be seen" — which is a matter of taste and is therefore a setting.
+  final double scale;
 
   final Track track;
   final bool playing;
@@ -102,6 +108,8 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
         _heading = 0;
         _travel.value = 0;
       });
+      // And the record that has just come to rest in the middle comes out.
+      if (widget.playing) _out.forward();
     });
   }
 
@@ -144,8 +152,10 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
         _heading = forwards ? 1 : -1;
         _incoming = forwards ? widget.next : widget.previous;
         _travel.forward(from: 0);
-        // A new record has not been taken out of its sleeve yet.
-        _out.value = 0;
+        // The record goes back into its sleeve on the way out, rather than blinking
+        // off the screen — one movement, the way it happens on a table. The next one
+        // slides out when it arrives, which the playing branch below takes care of.
+        _out.reverse();
       } else {
         // Somewhere else entirely — a different queue, a tap on a distant row. There
         // is no journey between those, so the shelf is simply restocked.
@@ -168,7 +178,9 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     }
 
     if (widget.playing) {
-      _out.forward();
+      // Not while a sleeve is still travelling: a disc sliding out of something that
+      // is halfway across the stage is two movements fighting.
+      if (!_travel.isAnimating) _out.forward();
       if (!_spin.isAnimating) _spin.repeat();
     } else {
       // At rest the record goes back in its sleeve and the turntable stops where it
@@ -209,7 +221,7 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
       builder: (context, c) {
         final side =
             math.min(c.maxWidth, c.maxHeight.isFinite ? c.maxHeight : c.maxWidth);
-        final jacket = side * 0.60;
+        final jacket = side * widget.scale.clamp(0.5, 1.0);
 
         return RepaintBoundary(
           child: SizedBox(
@@ -222,20 +234,40 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
             child: AnimatedBuilder(
               animation: Listenable.merge([_travel, _out]),
               builder: (context, _) {
-                final p = Curves.easeInOutCubic.transform(_travel.value) * _heading;
                 final cards = _cards();
+
+                // Each sleeve sets off a moment after the one in front of it.
+                //
+                // Moving them in lockstep is correct and lifeless — a row of pictures
+                // sliding as one board. Records on a shelf do not do that: the one
+                // you are pulling moves first and the rest follow, and the tail of
+                // that is most of what makes the movement feel like something rather
+                // than like a transition. So each card's progress is the same curve,
+                // started late in proportion to how far behind the leading sleeve it
+                // is, and everything is still exactly in place when the journey ends.
+                double progressFor(double slot) {
+                  if (_heading == 0) return 0;
+                  // Counted from the sleeve leading the way: the one travelling out.
+                  final behind = (_heading > 0 ? slot + 1 : 1 - slot).clamp(0.0, 3.0);
+                  const lag = 0.10;
+                  final start = (behind * lag).clamp(0.0, 0.34);
+                  final local =
+                      ((_travel.value - start) / (1 - start)).clamp(0.0, 1.0);
+                  return Curves.easeInOutCubic.transform(local) * _heading;
+                }
 
                 // Painted back to front: the ones furthest from the middle first, so
                 // the record being listened to is in front of its neighbours however
                 // far along the journey everything is.
+                final middle = Curves.easeInOutCubic.transform(_travel.value) *
+                    _heading;
                 final ordered = [...cards]..sort((a, b) =>
-                    (b.slot - p).abs().compareTo((a.slot - p).abs()));
+                    (b.slot - middle).abs().compareTo((a.slot - middle).abs()));
 
                 return Stack(
                   alignment: Alignment.center,
                   clipBehavior: Clip.none,
                   children: [
-                    _Floor(side: side, jacket: jacket, stand: _out.value),
                     for (final card in ordered)
                       _Sleeve(
                         // Keyed by the place as well as the record: a queue of two
@@ -247,11 +279,11 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                         // Where it is *now*: its own place, less how far the whole
                         // shelf has travelled. At p = 1 the right-hand sleeve sits at
                         // 0 — the middle — which is the point of the whole thing.
-                        d: card.slot - p,
+                        d: card.slot - progressFor(card.slot),
                         side: side,
                         jacket: jacket,
                         jacketUrl: api.jacketUrl(card.track,
-                            small: (card.slot - p).abs() > 0.5),
+                            small: (card.slot - middle).abs() > 0.5),
                         discUrl: api.discUrl(card.track),
                         spin: _spin,
                         out: _out.value,
@@ -337,36 +369,6 @@ class _Sleeve extends StatelessWidget {
                     out: showing,
                     jacket: jacket),
               _Jacket(url: jacketUrl, size: jacket),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// The ground the record stands on: a soft shadow that tightens under the sleeve as
-/// the disc comes out. Drawn, not an image — one gradient.
-class _Floor extends StatelessWidget {
-  const _Floor({required this.side, required this.jacket, required this.stand});
-
-  final double side;
-  final double jacket;
-  final double stand;
-
-  @override
-  Widget build(BuildContext context) {
-    return Transform.translate(
-      offset: Offset(-side * 0.05 * stand, jacket * 0.54),
-      child: Container(
-        width: jacket * (1.02 + 0.16 * stand),
-        height: jacket * 0.16,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.all(Radius.elliptical(jacket, jacket * 0.2)),
-          gradient: RadialGradient(
-            colors: [
-              Colors.black.withValues(alpha: 0.34),
-              Colors.black.withValues(alpha: 0),
             ],
           ),
         ),

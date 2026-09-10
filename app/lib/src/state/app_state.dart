@@ -109,6 +109,7 @@ class AppState extends ChangeNotifier {
   static const _kPalette = 'muse.palette';
   static const _kHalftone = 'muse.halftone';
   static const _kSpectrum = 'muse.spectrum';
+  static const _kCoverScale = 'muse.coverScale';
   static const _kLayout = 'muse.playerLayout';
 
   /// How the player draws the artwork: as the record it came on, or as the cover on
@@ -131,6 +132,18 @@ class AppState extends ChangeNotifier {
   /// screen is emptier without it — but a phone with a small battery is a good reason
   /// to turn a moving background off, so it is a switch and not a fact.
   bool halftone = true;
+
+  /// How much of the stage the record in the middle takes up. Bigger than it was —
+  /// the record is the thing you are looking at — and adjustable, because how big it
+  /// should be depends on the phone and on how far away it is being read from.
+  double coverScale = 0.74;
+
+  Future<void> setCoverScale(double value) async {
+    coverScale = value.clamp(0.5, 1.0);
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_kCoverScale, coverScale);
+  }
 
   /// The bars under the artwork: what is actually coming out of the speaker. Off by
   /// default because switching it on asks for a permission, and a permission nobody
@@ -176,6 +189,7 @@ class AppState extends ChangeNotifier {
     palette = Palette.byId(prefs.getString(_kPalette));
     halftone = prefs.getBool(_kHalftone) ?? true;
     spectrum = prefs.getBool(_kSpectrum) ?? false;
+    coverScale = (prefs.getDouble(_kCoverScale) ?? 0.74).clamp(0.5, 1.0);
     playerLayout = PlayerLayout.values.firstWhere(
         (l) => l.name == prefs.getString(_kLayout),
         orElse: () => PlayerLayout.grouped);

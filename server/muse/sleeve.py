@@ -326,13 +326,10 @@ def render_disc(cover: pathlib.Path, colour: tuple[int, int, int], seed: str,
                fill=(255, 255, 255, rng.randint(18, 40)), width=1)
     disc = Image.alpha_composite(disc, scratches)
 
-    sheen = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(sheen).polygon(
-        [(0, size * 0.14), (size * 0.72, 0), (size, size * 0.3), (size * 0.16, size * 0.66)],
-        fill=46)
-    gloss = Image.new("RGBA", (size, size), (255, 255, 255, 0))
-    gloss.putalpha(sheen.filter(ImageFilter.GaussianBlur(size / 26)))
-    disc = Image.alpha_composite(disc, gloss)
+    # No sheen on the disc. A vinyl record does catch the light in a band across it,
+    # but a *painted-on* one does not move when the record turns: it sits still while
+    # the grooves rotate under it, which reads as a smear on the screen rather than as
+    # light on a record. The grooves and the wear carry it.
 
     edge = Image.new("L", (size, size), 0)
     ImageDraw.Draw(edge).ellipse((0, 0, size - 1, size - 1), fill=255)
@@ -382,9 +379,15 @@ def render(cover: pathlib.Path, colour: tuple[int, int, int], seed: str,
 SIZES = {"lg": CANVAS, "sm": 320}
 
 
+# Bumped whenever the drawing changes. The art is cached under the cover's hash, which
+# does not change when the *renderer* does — so without this, a fix to how a record is
+# drawn only reaches records nobody has looked at yet.
+VERSION = 2
+
+
 def path_for(root: pathlib.Path, sha: str, size: str, part: str = "sleeve") -> pathlib.Path:
     stem = sha if part == "sleeve" else f"{sha}-{part}"
-    return root / "sleeves" / f"{stem}-{size}.webp"
+    return root / "sleeves" / f"{stem}-{size}-v{VERSION}.webp"
 
 
 def build(root: pathlib.Path, cover: pathlib.Path, sha: str,
