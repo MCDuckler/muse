@@ -382,7 +382,8 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             return _range_response(
                 sleeve.path_for(cfg.cover_dir, row["sha256"],
                                 "sm" if size == "sm" else "lg", part=style),
-                request, etag=f"{row['sha256']}-{style}-{size}")
+                request,
+                etag=f"{row['sha256']}-{style}-{size}-v{sleeve.VERSION}")
 
         path = pathlib.Path(row["path"])
         if size == "sm":
@@ -534,6 +535,12 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             "last_seen_seconds": age,
             "downloads_pending": pending["n"],
             "in_progress": progress.snapshot(),
+            # How the records are being drawn. Covers are cached for a year and marked
+            # immutable — correctly, because the artwork's own hash is in the URL — so
+            # when the *renderer* changes there is nothing to make a client ask again.
+            # Handing the number over lets the client put it in the URL, which is the
+            # only thing that reaches every cache between here and the screen.
+            "sleeve_version": sleeve.VERSION,
         }
 
     @app.get("/admin/storage")

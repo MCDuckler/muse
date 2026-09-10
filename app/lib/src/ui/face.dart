@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
+import '../state/art_cache.dart';
 
 /// Somebody, as a picture or as the first letter of their name.
 ///
@@ -38,8 +39,9 @@ class Face extends StatelessWidget {
     );
     if (version == null || userId == null) return letter;
     return ClipOval(
-      child: Image.network(
-        context.read<AppState>().api.avatarUrl(userId!, version: version),
+      child: Image(
+        image: artwork(
+            context.read<AppState>().api.avatarUrl(userId!, version: version)),
         width: size,
         height: size,
         fit: BoxFit.cover,

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
+import '../state/art_cache.dart';
 
 /// Album art with a placeholder that is deliberately not a grey box: a track with no
 /// cover yet should still look like part of the app rather than a hole in it.
@@ -42,7 +43,8 @@ class Artwork extends StatelessWidget {
       return SizedBox(
         width: size,
         height: size,
-        child: Image.network(url,
+        child: Image(
+            image: artwork(url),
             fit: BoxFit.contain,
             gaplessPlayback: true,
             errorBuilder: (_, __, ___) => Artwork(
@@ -61,8 +63,8 @@ class Artwork extends StatelessWidget {
         height: size,
         child: url == null
             ? _placeholder(scheme)
-            : Image.network(
-                url,
+            : Image(
+                image: artwork(url),
                 fit: BoxFit.cover,
                 gaplessPlayback: true,
                 errorBuilder: (_, __, ___) => _placeholder(scheme),
@@ -117,8 +119,8 @@ class PlaylistArt extends StatelessWidget {
         height: size,
         child: url == null
             ? _fallback(scheme)
-            : Image.network(
-                url,
+            : Image(
+                image: artwork(url),
                 fit: BoxFit.cover,
                 gaplessPlayback: true,
                 errorBuilder: (_, __, ___) => _fallback(scheme),

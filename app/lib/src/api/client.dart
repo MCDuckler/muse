@@ -210,9 +210,18 @@ class ApiClient {
   /// The cover as a record: the whole thing as one picture, or the pieces the player
   /// animates separately. Same cache rules as the flat cover; the server renders each
   /// once per cover and never again.
+  /// How the server is drawing records at the moment.
+  ///
+  /// Carried in every sleeve URL. Covers are cached for a year and marked immutable,
+  /// which is right — the artwork's hash is in the address — but it means a change to
+  /// the *renderer* has nothing to make a browser, or this app's own store, ask again.
+  /// The number does that, and it comes from the server rather than being compiled in
+  /// so the two can never disagree.
+  int sleeveVersion = 0;
+
   String? sleeveUrl(Track t, {bool small = false, String part = 'sleeve'}) {
     final flat = coverUrl(t, small: small);
-    return flat == null ? null : '$flat&style=$part';
+    return flat == null ? null : '$flat&style=$part&r=$sleeveVersion';
   }
 
   String? jacketUrl(Track t, {bool small = false}) =>

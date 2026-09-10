@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../state/app_state.dart';
 import 'dialogs.dart';
 import '../state/offline.dart';
+import '../state/art_cache.dart';
 import 'kept_page.dart';
 import 'face.dart';
 import 'downloads_page.dart';
@@ -209,6 +210,7 @@ class _SettingsPageState extends State<SettingsPage> {
               onTap: () => Navigator.of(context)
                   .push(MaterialPageRoute(builder: (_) => const KeptPage())),
             ),
+          if (ArtCache.supported) const _ArtCacheRow(),
           ListTile(
             leading: const Icon(Icons.downloading),
             title: const Text('Download queue'),
@@ -364,4 +366,51 @@ class _Swatch extends StatelessWidget {
       ),
     );
   }
+}
+
+/// How much artwork is being kept, and a way to be rid of it.
+///
+/// Covers download once and stay, which is the whole point — but a store with no size
+/// on it and no way to empty it is a store people are right not to trust.
+class _ArtCacheRow extends StatefulWidget {
+  const _ArtCacheRow();
+
+  @override
+  State<_ArtCacheRow> createState() => _ArtCacheRowState();
+}
+
+class _ArtCacheRowState extends State<_ArtCacheRow> {
+  int? _bytes;
+
+  @override
+  void initState() {
+    super.initState();
+    _measure();
+  }
+
+  Future<void> _measure() async {
+    final n = await ArtCache.size();
+    if (mounted) setState(() => _bytes = n);
+  }
+
+  @override
+  Widget build(BuildContext context) => ListTile(
+        leading: const Icon(Icons.image_outlined),
+        title: const Text('Album art on this device'),
+        subtitle: Text(_bytes == null
+            ? 'Measuring…'
+            : _bytes == 0
+                ? 'Nothing yet — covers are kept as you play them'
+                : '${KeptPage.size(_bytes!)} · covers load instantly and work '
+                    'with no signal'),
+        trailing: (_bytes ?? 0) == 0
+            ? null
+            : TextButton(
+                onPressed: () async {
+                  await ArtCache.forgetAll();
+                  await _measure();
+                },
+                child: const Text('Clear'),
+              ),
+      );
 }

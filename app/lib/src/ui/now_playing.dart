@@ -385,7 +385,7 @@ class _Credits extends StatelessWidget {
     final style = Theme.of(context).textTheme.bodyLarge
         ?.copyWith(color: scheme.onSurfaceVariant);
 
-    Widget link(String label, VoidCallback onTap) => InkWell(
+    Widget link(String label, VoidCallback onTap, {TextStyle? own}) => InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(6),
           child: Padding(
@@ -393,49 +393,50 @@ class _Credits extends StatelessWidget {
             child: Text(label,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: style?.copyWith(decoration: TextDecoration.underline,
-                    decorationColor: scheme.onSurfaceVariant.withValues(alpha: 0.4))),
+                textAlign: TextAlign.center,
+                style: (own ?? style)?.copyWith(
+                    decoration: TextDecoration.underline,
+                    decorationColor:
+                        scheme.onSurfaceVariant.withValues(alpha: 0.4))),
           ),
         );
 
+    // Artist over album, one to a line.
+    //
+    // Side by side they were two links competing for the same row: a long artist and a
+    // long album each got half of it and both ended in an ellipsis, and the dot between
+    // them read as punctuation in a sentence rather than as a divider between two
+    // different things you can tap. Stacked, each gets the whole width.
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Flexible(
-              child: link(
-                track.artistLine,
-                () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => ArtistPage(
-                    artist: ArtistSummary(
-                        name: track.artists.isEmpty ? track.artistLine
-                                                    : track.artists.first,
-                        tracks: 0),
-                  ),
-                )),
-              ),
+        link(
+          track.artistLine,
+          () => Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => ArtistPage(
+              artist: ArtistSummary(
+                  name: track.artists.isEmpty
+                      ? track.artistLine
+                      : track.artists.first,
+                  tracks: 0),
             ),
-            if (track.albumLine != null) ...[
-              Text(' · ', style: style),
-              Flexible(
-                child: link(
-                  track.albumLine!,
-                  () => Navigator.of(context).push(MaterialPageRoute(
-                    builder: (_) => AlbumPage(
-                      album: AlbumSummary(
-                        name: track.albumLine!,
-                        artist: track.artists.isEmpty ? '' : track.artists.first,
-                        tracks: 0,
-                      ),
-                    ),
-                  )),
+          )),
+        ),
+        if (track.albumLine != null)
+          link(
+            own: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: scheme.onSurfaceVariant.withValues(alpha: 0.75)),
+            track.albumLine!,
+            () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => AlbumPage(
+                album: AlbumSummary(
+                  name: track.albumLine!,
+                  artist: track.artists.isEmpty ? '' : track.artists.first,
+                  tracks: 0,
                 ),
               ),
-            ],
-          ],
-        ),
+            )),
+          ),
         if (track.sourceLabel != null)
           Text(track.sourceLabel!,
               style: Theme.of(context).textTheme.labelSmall

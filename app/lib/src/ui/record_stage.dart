@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
+import '../state/art_cache.dart';
 
 /// The record on the stage, and the two either side of it.
 ///
@@ -293,7 +294,7 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
       if (track == null) continue;
       for (final url in [api.jacketUrl(track, small: false), api.discUrl(track)]) {
         if (url == null) continue;
-        precacheImage(NetworkImage(url), context).catchError((_) {});
+        precacheImage(artwork(url), context).catchError((_) {});
       }
     }
   }
@@ -685,7 +686,8 @@ class _Jacket extends StatelessWidget {
         height: size,
         child: url == null
             ? const SizedBox.shrink()
-            : Image.network(url!,
+            : Image(
+                image: artwork(url!),
                 fit: BoxFit.contain,
                 gaplessPlayback: true,
                 opacity: AlwaysStoppedAnimation(dim)),
@@ -727,7 +729,8 @@ class _Disc extends StatelessWidget {
           child: SizedBox(
             width: size,
             height: size,
-            child: Image.network(url!,
+            child: Image(
+                image: artwork(url!),
                 fit: BoxFit.contain,
                 gaplessPlayback: true,
                 opacity: AlwaysStoppedAnimation(dim)),
@@ -751,16 +754,17 @@ class Mirror extends StatelessWidget {
     required this.child,
     required this.size,
     this.depth = defaultDepth,
-    this.strength = 0.11,
+    this.strength = 0.28,
   });
 
   /// How much of the height is reflected, and how much room to leave for it.
   ///
-  /// Shallow. A whole mirrored copy is a puddle, and even a third of one is a second
-  /// picture hanging off the bottom of the first — it reached far enough down the
-  /// screen to sit behind the song's title. What is wanted is the inch of light a
-  /// record picks up from whatever it is standing on.
-  static const double defaultDepth = 0.15;
+  /// A quarter. A whole mirrored copy is a puddle and a third of one reached far
+  /// enough down the screen to sit behind the song's title — but a sixth, dimmed to
+  /// almost nothing, was a thing you had to be told was there. This is the inch of
+  /// light a record picks up from whatever it is standing on, and it is meant to be
+  /// seen.
+  static const double defaultDepth = 0.24;
 
   final Widget child;
   final double size;
@@ -785,12 +789,12 @@ class Mirror extends StatelessWidget {
             end: Alignment.bottomCenter,
             colors: [
               Colors.white.withValues(alpha: strength),
-              Colors.white.withValues(alpha: strength * 0.35),
+              Colors.white.withValues(alpha: strength * 0.42),
               Colors.white.withValues(alpha: 0),
             ],
             // Gone before the bottom of its own box, so there is always clear air
             // between the reflection and whatever is written below it.
-            stops: const [0, 0.35, 0.8],
+            stops: const [0, 0.45, 0.92],
           ).createShader(bounds),
           child: OverflowBox(
             alignment: Alignment.topCenter,

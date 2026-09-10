@@ -96,52 +96,34 @@ def test_a_disc_is_round_and_a_jacket_is_not(client, hdr, track_with_cover):
     assert corner("jacket") > 200, "a jacket does"
 
 
-def test_a_cover_is_rebuilt_out_of_flat_facets(client, hdr):
-    """The point of the render: a few hundred flat planes, not a filtered photograph.
+def test_the_artwork_is_left_alone(client, hdr, tmp_path):
+    """Nothing is done to the cover itself.
 
-    Measured as flatness rather than as colour count. A low-poly render is piecewise
-    constant — walk across it and the colour under you changes only when you cross an
-    edge — and that is true whatever the picture was. A filter over a photograph, which
-    is what the old wear pass was, is not.
+    Two attempts at "an old record" went through here — cardboard composited round the
+    edge, then the whole thing rebuilt out of triangles — and both changed somebody
+    else's artwork. This is the test that says they are gone: the middle of a jacket is
+    the middle of the cover, pixel for pixel.
     """
-    import random
-
     from PIL import Image
 
-    rng = random.Random(4)
-    art = Image.new("RGB", (400, 400))
-    # Noise: no two neighbouring pixels alike, so any flatness in the output is the
-    # render's doing and not the source's.
-    art.putdata([(rng.randrange(256), rng.randrange(256), rng.randrange(256))
-                 for _ in range(400 * 400)])
+    source = tmp_path / "cover.png"
+    art = Image.new("RGB", (900, 900))
+    # Varies across, constant down. The jacket squashes the art by the thickness of the
+    # board — about one percent — so anything varying down the picture would be
+    # comparing rows that moved. Across is where the two failed treatments showed:
+    # faceting flattens a gradient into steps, and a printed-on border replaces the
+    # edges with cardboard.
+    art.putdata([((x * 7) % 256, 255 - (x * 5) % 256, (x * 3) % 256)
+                 for _ in range(900) for x in range(900)])
+    art.save(source)
 
-    def flatness(im: Image.Image) -> float:
-        px = im.convert("RGB").load()
-        w, h = im.size
-        same = 0
-        for y in range(0, h, 3):
-            for x in range(0, w - 1, 3):
-                a, b = px[x, y], px[x + 1, y]
-                if max(abs(a[i] - b[i]) for i in range(3)) <= 4:
-                    same += 1
-        return same / ((h // 3) * ((w - 1) // 3))
-
-    out = sleeve.facet(art, 400, sleeve.edition("abc123abc123"))
-    # Noise is the worst case for this: every part of the picture reads as detail, so
-    # the facets end up as small as they ever get. Even then most of the render is
-    # flat, and the source has none of it — which is the difference being asserted.
-    assert flatness(art) < 0.05, "the source really is noise"
-    assert flatness(out) > 0.45, f"only {flatness(out):.0%} of it is flat"
-
-
-def test_a_cover_keeps_its_own_colours(client, hdr, tmp_path):
-    """Faceted, not repainted. A red record stays red."""
-    from PIL import Image
-
-    art = Image.new("RGB", (400, 400), (196, 44, 40))
-    out = sleeve.facet(art, 400, sleeve.edition("abc123abc123"))
-    r, g, b = out.convert("RGB").resize((1, 1), Image.BILINEAR).getpixel((0, 0))
-    assert r > g + 60 and r > b + 60, f"still red, got {(r, g, b)}"
+    jacket = sleeve.render_jacket(source, "abc123abc123", 900).convert("RGB")
+    # Right out to the edges, short of the rounded corners themselves.
+    for x in (6, 60, 300, 450, 700, 893):
+        want = art.getpixel((x, 450))
+        got = jacket.getpixel((x, 450))
+        assert max(abs(a - b) for a, b in zip(want, got)) <= 8, \
+            f"the cover was altered at x={x}: {want} became {got}"
 
 
 def test_two_records_are_not_the_same_record(client, hdr):

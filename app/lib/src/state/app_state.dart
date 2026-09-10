@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api/client.dart';
 import '../api/models.dart';
 import 'offline.dart';
+import 'art_cache.dart';
 import 'playback_log.dart';
 import 'player.dart';
 import '../ui/theme.dart';
@@ -220,6 +221,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> boot() async {
+    await ArtCache.open();
     await PlaybackLog.load();
     // First line after a restart. If the one before it is not a goodbye, the process
     // did not choose to stop — it was killed, which is a different fault entirely.
@@ -339,6 +341,9 @@ class AppState extends ChangeNotifier {
     _lifecycle;                     // built lazily; touching it starts it listening
     bindPlayer();
     await api.ensureStreamKey();
+    // Before anything asks for a cover: sleeve URLs carry the renderer's version, and
+    // a first pass at the wrong one is a screen's worth of artwork fetched twice.
+    await _pollStatus();
     await refresh();
     await refreshFavourites();
     // A jam survives closing the app: picking it back up is how the same person on
@@ -346,7 +351,6 @@ class AppState extends ChangeNotifier {
     await refreshJam();
     await followJamQueue();
     _listenForEvents();
-    await _pollStatus();
     _statusTimer?.cancel();
     _queueReload?.cancel();
     _statusTimer = Timer.periodic(const Duration(seconds: 30), (_) => _pollStatus());
@@ -496,6 +500,39 @@ class AppState extends ChangeNotifier {
     activeQueue = updated;
     await player?.loadQueue(updated);
     notifyListeners();
+    unawaited(_keepTheseCovers(updated));
+  }
+
+  /// Put the covers of a queue on the device, once, in the background.
+  ///
+  /// A queue is the one list you are certain to scroll: it is what you chose to
+  /// listen to. Fetching its artwork now — quietly, four at a time, behind whatever is
+  /// streaming — is the difference between a list of grey squares filling in as you
+  /// scroll and one that is simply there, including the next time the app is opened
+  /// with no signal at all.
+  Future<void> _keepTheseCovers(Queue queue) async {
+    if (!ArtCache.supported) return;
+    final small = <String>[];
+    final large = <String>[];
+    for (final t in queue.items) {
+      final row = api.coverUrl(t, small: true);
+      if (row != null) small.add(row);
+    }
+    // The one being played, and its neighbours, at full size — those are the ones the
+    // player itself draws large.
+    final at = player?.index ?? 0;
+    for (var i = at - 1; i <= at + 2; i++) {
+      if (i < 0 || i >= queue.items.length) continue;
+      for (final url in [
+        api.coverUrl(queue.items[i], small: false),
+        api.jacketUrl(queue.items[i]),
+        api.discUrl(queue.items[i]),
+      ]) {
+        if (url != null) large.add(url);
+      }
+    }
+    await ArtCache.warm(large, limit: 12);
+    await ArtCache.warm(small);
   }
 
   /// Remove a track, offering to put it back.
@@ -1260,6 +1297,10 @@ class AppState extends ChangeNotifier {
       final s = await api.status();
       ingestOnline = (s['ingest_online'] ?? false) as bool;
       downloadsPending = (s['downloads_pending'] ?? 0) as int;
+      // Put in every sleeve URL, so a change to how records are drawn reaches a
+      // browser and this device's own store rather than sitting behind a year-long
+      // immutable cache. See ApiClient.sleeveVersion.
+      api.sleeveVersion = (s['sleeve_version'] ?? 0) as int;
       notifyListeners();
       // The same tick keeps this device listed as present in the jam. Without it the
       // others would see everyone drift to "away" while they were still listening.
