@@ -54,43 +54,21 @@ def test_a_stranger_cannot_touch_the_queue(client, hdr, guest, jam):
     assert client.get(f"/queues/{jam['queue']['id']}", headers=guest).status_code == 404
 
 
-def test_the_host_can_close_the_door(client, hdr, guest, jam):
+def test_the_room_shares_the_queue_both_ways(client, hdr, guest, jam):
+    """There is no door to close any more: a jam is a queue everybody in it can use."""
     client.post("/jams/join", headers=guest, json={"code": jam["code"]})
-    client.patch(f"/jams/{jam['id']}", headers=hdr, json={"guests_can_add": False})
-
-    track = client.post("/tracks/resolve", headers=guest, json={"query": "no"}).json()
-    r = client.post(f"/queues/{jam['queue']['id']}/items", headers=guest,
-                    json={"track_ids": [track["id"]]})
-    assert r.status_code == 403
-    assert "turned off" in r.json()["detail"]
-    # Reading is still fine: you can watch without being able to add.
-    assert client.get(f"/queues/{jam['queue']['id']}", headers=guest).status_code == 200
+    track = client.post("/tracks/resolve", headers=guest, json={"query": "theirs"}).json()
+    added = client.post(f"/queues/{jam['queue']['id']}/items", headers=guest,
+                        json={"track_ids": [track["id"]]})
+    assert added.status_code == 200, added.text
+    # And the host sees it, because it is one queue and not two.
+    host_sees = client.get(f"/queues/{jam['queue']['id']}", headers=hdr).json()
+    assert track["id"] in [i["id"] for i in host_sees["items"]]
 
 
 def test_a_code_that_is_not_a_jam_says_so(client, guest):
     r = client.post("/jams/join", headers=guest, json={"code": "ZZZZZZ"})
     assert r.status_code == 404 and "not belong" in r.json()["detail"]
-
-
-def test_skipping_takes_more_than_one_voice(client, hdr, guest, jam):
-    """One person's opinion is not the room's."""
-    track = client.post("/tracks/resolve", headers=hdr, json={"query": "on now"}).json()
-    client.post(f"/queues/{jam['queue']['id']}/items", headers=hdr,
-                json={"track_ids": [track["id"]]})
-    client.post("/jams/join", headers=guest, json={"code": jam["code"]})
-    # Voting is off unless the host turns it on: a guest skipping the host's music by
-    # default was not what "listen together" is supposed to mean.
-    client.patch(f"/jams/{jam['id']}", headers=hdr, json={"guests_can_skip": True})
-
-    first = client.post(f"/jams/{jam['id']}/skip-vote", headers=guest, json={}).json()
-    assert first["votes"] == 1 and first["passed"] is False
-
-    again = client.post(f"/jams/{jam['id']}/skip-vote", headers=guest, json={}).json()
-    assert again["votes"] == 1, "voting twice is still one voice"
-
-    passed = client.post(f"/jams/{jam['id']}/skip-vote", headers=hdr, json={}).json()
-    assert passed["passed"] is True
-
 
 def test_the_host_leaving_ends_it(client, hdr, guest, jam):
     client.post("/jams/join", headers=guest, json={"code": jam["code"]})
@@ -113,13 +91,6 @@ def test_current_says_what_is_playing(client, hdr, jam):
     state = client.get("/jams/current", headers=hdr).json()["jam"]
     assert state["now_playing"]["id"] == track["id"]
     assert state["code"] == jam["code"]
-
-
-def test_only_the_host_changes_the_rules(client, hdr, guest, jam):
-    client.post("/jams/join", headers=guest, json={"code": jam["code"]})
-    r = client.patch(f"/jams/{jam['id']}", headers=guest, json={"guests_can_add": False})
-    assert r.status_code == 403
-
 
 def test_the_host_can_remove_someone(client, hdr, guest, jam):
     joined = client.post("/jams/join", headers=guest, json={"code": jam["code"]}).json()
@@ -180,3 +151,52 @@ def test_moving_to_the_next_track_is_announced(client, hdr, jam, monkeypatch):
     moved = [d for e, d in published if e == "queue_changed"]
     assert moved and moved[-1]["cursor_moved"] is True
     assert moved[-1]["cursor_index"] == 1
+
+
+# ---------------- the transport ----------------
+def test_the_room_hears_where_the_host_is(client, hdr, guest, jam):
+    """A jam used to share a queue and nothing else, so two people in it were listening
+    to the same list at different points in it. The host's player says where the music
+    is; everybody else reads it."""
+    track = client.post("/tracks/resolve", headers=hdr, json={"query": "on now"}).json()
+    client.post("/jams/join", headers=guest, json={"code": jam["code"]})
+
+    pushed = client.post(f"/jams/{jam['id']}/playback", headers=hdr,
+                         json={"track_id": track["id"], "position_ms": 45_000,
+                               "playing": True})
+    assert pushed.status_code == 200, pushed.text
+
+    seen = client.get("/jams/current", headers=guest).json()["jam"]["playback"]
+    assert seen["track_id"] == track["id"]
+    assert seen["playing"] is True
+    assert seen["position_ms"] == 45_000
+    # Stamped by the server, so a device reading it late knows how late it is.
+    assert 0 <= seen["age_ms"] < 5_000
+
+
+def test_only_the_host_sets_the_time(client, hdr, guest, jam):
+    client.post("/jams/join", headers=guest, json={"code": jam["code"]})
+    r = client.post(f"/jams/{jam['id']}/playback", headers=guest,
+                    json={"position_ms": 1000, "playing": True})
+    assert r.status_code == 403
+
+
+def test_everybody_in_the_room_works_the_controls(client, hdr, guest, jam):
+    """A jam has no rules any more: whoever is in it can play, pause and skip."""
+    client.post("/jams/join", headers=guest, json={"code": jam["code"]})
+    for action in ("pause", "play", "next", "previous"):
+        r = client.post(f"/jams/{jam['id']}/control", headers=guest,
+                        json={"action": action})
+        assert r.status_code == 200, f"{action}: {r.text}"
+    assert client.post(f"/jams/{jam['id']}/control", headers=hdr,
+                       json={"action": "next"}).status_code == 200
+
+
+def test_a_stranger_cannot_reach_the_controls(client, hdr, guest, jam):
+    r = client.post(f"/jams/{jam['id']}/control", headers=guest, json={"action": "play"})
+    assert r.status_code == 403
+
+
+def test_an_invented_action_is_refused(client, hdr, jam):
+    r = client.post(f"/jams/{jam['id']}/control", headers=hdr, json={"action": "eject"})
+    assert r.status_code == 400

@@ -1,7 +1,10 @@
 """Listening together. See jam.py for what a jam is.
 
-The host's device is the one making sound; everything here is about letting other
-people reach into the queue it is playing from.
+Two halves. The queue is shared, so anyone in the room can put something on; and the
+host's transport is broadcast, so every device plays the same song at the same place.
+Everybody in the room works the controls — a guest's play button asks the host's player
+to do it rather than doing it here, because one device has to be the clock or the room
+drifts apart, but there is nothing anybody is not allowed to press.
 """
 from __future__ import annotations
 
@@ -115,33 +118,10 @@ def current_jam(user: dict = Depends(current_user)):
     )
     track = catalog.track_row(playing["track_id"]) if playing and playing["track_id"] else None
     state["now_playing"] = catalog.public(track) if track else None
-    if track:
-        votes = db.one(
-            "select count(*) n from jam_skip_votes where jam_id=%s and track_id=%s",
-            (row["id"], track["id"]),
-        )["n"]
-        state["skip_votes"] = votes
+    # Where the music actually is, so a device joining or coming back from a reload
+    # lands in the right place in the right song rather than at the top of it.
+    state["playback"] = jam.playback(row["id"])
     return {"jam": state}
-
-
-@router.patch("/{jam_id}")
-def update_jam(jam_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
-    """Whether guests can add, and whether they can vote to skip. Host's call."""
-    row = jam.get(jam_id)
-    if not row or row["ended_at"]:
-        raise HTTPException(404, "no such jam")
-    if row["host_id"] != user["id"]:
-        raise HTTPException(403, "only the host can change how the jam works")
-
-    fields = {k: bool(v) for k, v in body.items()
-              if k in ("guests_can_add", "guests_can_skip")}
-    if not fields:
-        raise HTTPException(400, "nothing to change")
-    for key, value in fields.items():
-        db.run(f"update jams set {key}=%s where id=%s", (value, jam_id))
-    row = jam.get(jam_id)
-    announce(row, "settings")
-    return jam.public(row, user["id"])
 
 
 @router.post("/{jam_id}/leave")
@@ -174,35 +154,55 @@ def remove_member(jam_id: int, body: dict = Body(...), user: dict = Depends(curr
     return {"removed": target}
 
 
-@router.post("/{jam_id}/skip-vote")
-def skip_vote(jam_id: int, body: dict = Body(default={}),
-              user: dict = Depends(current_user)):
-    """Ask for the current track to be dropped. Enough asks and it is."""
+@router.post("/{jam_id}/playback")
+def push_playback(jam_id: int, body: dict = Body(...),
+                  user: dict = Depends(current_user)):
+    """The host saying what its player is doing. Everyone else follows this.
+
+    Sent when something changes — a track, a play, a pause, a seek — and every few
+    seconds while music is running, which is what keeps the room from drifting apart
+    over the length of a song.
+    """
+    row = jam.get(jam_id)
+    if not row or row["ended_at"]:
+        raise HTTPException(404, "no such jam")
+    if row["host_id"] != user["id"]:
+        raise HTTPException(403, "only the host's player sets the time")
+
+    state = jam.set_playback(jam_id, body.get("track_id"),
+                             int(body.get("position_ms") or 0),
+                             bool(body.get("playing")))
+    announce(row, "playback", {
+        "track_id": state["track_id"],
+        "position_ms": state["position_ms"],
+        "playing": state["playing"],
+    })
+    return {"ok": True}
+
+
+@router.post("/{jam_id}/control")
+def control(jam_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
+    """Anybody in the room reaching for the transport: play, pause, next, previous, seek.
+
+    It is a request, not the act: the host's device carries it out and then says what
+    happened, so there is one answer to "where are we" rather than one per device. That
+    is the only reason the host is special — not permission, timekeeping.
+    """
     row = jam.get(jam_id)
     if not row or row["ended_at"]:
         raise HTTPException(404, "no such jam")
     if not db.one("select 1 from jam_members where jam_id=%s and user_id=%s",
                   (jam_id, user["id"])):
         raise HTTPException(403, "you are not in this jam")
-    if not row["guests_can_skip"] and row["host_id"] != user["id"]:
-        raise HTTPException(403, "the host has turned voting off for this jam")
 
-    track_id = body.get("track_id")
-    if not track_id:
-        playing = db.one(
-            """select i.track_id from queues q
-                 join queue_items i on i.queue_id=q.id and i.pos=q.cursor_index
-                where q.id=%s""",
-            (row["queue_id"],),
-        )
-        track_id = playing["track_id"] if playing else None
-    if not track_id:
-        raise HTTPException(400, "nothing is playing to skip")
+    action = (body.get("action") or "").strip()
+    if action not in ("play", "pause", "next", "previous", "seek"):
+        raise HTTPException(400, "action must be play, pause, next, previous or seek")
 
-    result = jam.vote_skip(jam_id, int(track_id), user["id"])
-    announce(row, "skip-vote", {"track_id": int(track_id), **result})
-    if result["passed"]:
-        # The host's player is what actually skips; it is listening for this.
-        announce(row, "skip", {"track_id": int(track_id)})
-        jam.clear_votes(jam_id, int(track_id))
-    return result
+    announce(row, "control", {
+        "action": action,
+        "position_ms": int(body.get("position_ms") or 0),
+        "track_id": body.get("track_id"),
+        "by": user["name"],
+    })
+    return {"asked": action}

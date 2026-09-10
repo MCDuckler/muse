@@ -390,13 +390,26 @@ class ApiClient {
     return d['jam'] == null ? null : Jam.fromJson(d['jam'] as Map<String, dynamic>);
   }
 
-  Future<Jam> setJamRules(int jamId, {bool? guestsCanAdd, bool? guestsCanSkip}) async =>
-      Jam.fromJson(await _decode(await http.patch(_u('/jams/$jamId'),
+  /// The host telling the room where the music is. Fire and forget: a dropped one is
+  /// replaced by the next heartbeat a few seconds later.
+  Future<void> pushJamPlayback(int jamId,
+          {int? trackId, required int positionMs, required bool playing}) async =>
+      await _decode(await http.post(_u('/jams/$jamId/playback'),
           headers: _headers,
           body: jsonEncode({
-            if (guestsCanAdd != null) 'guests_can_add': guestsCanAdd,
-            if (guestsCanSkip != null) 'guests_can_skip': guestsCanSkip,
-          }))) as Map<String, dynamic>);
+            'track_id': trackId,
+            'position_ms': positionMs,
+            'playing': playing,
+          })));
+
+  /// A guest reaching for the transport. The host's device does the work.
+  Future<void> jamControl(int jamId, String action, {int? positionMs}) async =>
+      await _decode(await http.post(_u('/jams/$jamId/control'),
+          headers: _headers,
+          body: jsonEncode({
+            'action': action,
+            if (positionMs != null) 'position_ms': positionMs,
+          })));
 
   Future<void> leaveJam(int jamId) async =>
       await _decode(await http.post(_u('/jams/$jamId/leave'), headers: _headers));
@@ -406,10 +419,6 @@ class ApiClient {
           headers: _headers, body: jsonEncode({'user_id': userId})));
 
   /// Ask for the current track to be dropped. Returns how many have asked.
-  Future<Map<String, dynamic>> voteSkip(int jamId) async =>
-      await _decode(await http.post(_u('/jams/$jamId/skip-vote'),
-          headers: _headers, body: jsonEncode({}))) as Map<String, dynamic>;
-
   Future<Map<String, dynamic>> status() async =>
       await _decode(await http.get(_u('/status'), headers: _headers))
           as Map<String, dynamic>;

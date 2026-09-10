@@ -37,6 +37,22 @@ class _SearchPageState extends State<SearchPage> {
   String _lastQuery = '';
   Timer? _debounce;
 
+  /// Which source the results are narrowed to, or 'all'.
+  ///
+  /// Everything used to be one list with YouTube Music in the middle of it, and the two
+  /// the server fetches itself — SoundCloud and Bandcamp, the ones that actually sound
+  /// good — underneath however many YouTube results there were. On a phone that is off
+  /// the bottom of the screen, which is the same as not being there.
+  String _only = 'all';
+
+  static const _sources = <String, String>{
+    'all': 'Everywhere',
+    'library': 'Library',
+    'ytmusic': 'YouTube Music',
+    'soundcloud': 'SoundCloud',
+    'bandcamp': 'Bandcamp',
+  };
+
   /// Long enough not to fire on every keystroke, short enough that it feels like the
   /// results are following you. The remote leg goes out to YouTube Music, so this is
   /// also what keeps that from being hammered.
@@ -108,7 +124,7 @@ class _SearchPageState extends State<SearchPage> {
 
       // The other two are asked separately so a slow one never holds up the rest.
       for (final source in const ['soundcloud', 'bandcamp']) {
-        api.searchSource(source, q, limit: 5).then((hits) {
+        api.searchSource(source, q, limit: _only == source ? 15 : 6).then((hits) {
           if (!mounted || _lastQuery != q) return;
           setState(() {
             if (source == 'soundcloud') {
@@ -165,22 +181,52 @@ class _SearchPageState extends State<SearchPage> {
             ),
           ),
         ),
+        // Where to look. Sitting above the results rather than in a menu, because the
+        // answer to "why is there nothing from Bandcamp" should be one tap away.
+        SizedBox(
+          height: 42,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            children: [
+              for (final entry in _sources.entries)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: ChoiceChip(
+                    label: Text(entry.value),
+                    selected: _only == entry.key,
+                    onSelected: (_) {
+                      setState(() => _only = entry.key);
+                      // A narrowed search asks that source for more than the handful
+                      // it contributes to the mixed list.
+                      if (_lastQuery.isNotEmpty) {
+                        final q = _lastQuery;
+                        _lastQuery = '';
+                        _run(q);
+                      }
+                    },
+                  ),
+                ),
+            ],
+          ),
+        ),
         if (_error != null)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
           ),
         Expanded(
-          child: _searched && _local.isEmpty && _remote.isEmpty && !_busy
+          child: _searched && !_busy && _nothingAtAll
               ? _NothingFound(query: _lastQuery)
               : !_searched && !_busy
                   ? const _SearchPrompt()
                   : ListView(
             padding: const EdgeInsets.fromLTRB(8, 0, 8, 160),
             children: [
-              if (_local.isNotEmpty)
+              if (_shows('library') && _local.isNotEmpty)
                 _SectionHeader('In your library · ${_local.length}'),
-              for (final t in _local)
+              if (_shows('library'))
+                for (final t in _local)
                 SongRow(
                   track: t,
                   onTap: () => app.addTrack(t),
@@ -192,16 +238,17 @@ class _SearchPageState extends State<SearchPage> {
                   showMenu: false,
                 ),
               if (_album != null) ..._albumRows(app),
-              if (_remoteError != null)
+              if (_shows('ytmusic') && _remoteError != null)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                   child: Text(_remoteError!,
                       style: TextStyle(
                           color: Theme.of(context).colorScheme.outline)),
                 ),
-              if (_remote.isNotEmpty)
+              if (_shows('ytmusic') && _remote.isNotEmpty)
                 _SectionHeader('On YouTube Music · ${_remote.length}'),
-              for (final hit in _remote)
+              if (_shows('ytmusic'))
+                for (final hit in _youtubeShown)
                 ListTile(
                   leading: Stack(
                     alignment: Alignment.bottomRight,
@@ -228,14 +275,43 @@ class _SearchPageState extends State<SearchPage> {
                   ),
                   onTap: () => _fetch(hit),
                 ),
-              ..._sourceRows(app, 'SoundCloud', _soundcloud),
-              ..._sourceRows(app, 'Bandcamp', _bandcamp),
+              if (_shows('soundcloud')) ..._sourceRows(app, 'SoundCloud', _soundcloud),
+              if (_shows('bandcamp')) ..._sourceRows(app, 'Bandcamp', _bandcamp),
+              if (_shows('ytmusic') && _only == 'all' && _remote.length > _mixedCap)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                  child: TextButton(
+                    onPressed: () => setState(() => _only = 'ytmusic'),
+                    child: Text(
+                        'All ${_remote.length} YouTube Music results'),
+                  ),
+                ),
             ],
           ),
         ),
       ],
     );
   }
+
+  /// How many YouTube results the mixed list shows before the other sources.
+  ///
+  /// Not a limit on the search — the rest are one tap away — but on how much of the
+  /// screen one source may take before the others get a look in.
+  static const _mixedCap = 6;
+
+  List<RemoteHit> get _youtubeShown =>
+      _only == 'all' && _remote.length > _mixedCap
+          ? _remote.sublist(0, _mixedCap)
+          : _remote;
+
+  bool _shows(String source) => _only == 'all' || _only == source;
+
+  bool get _nothingAtAll =>
+      (!_shows('library') || _local.isEmpty) &&
+      (!_shows('ytmusic') || _remote.isEmpty) &&
+      (!_shows('soundcloud') || _soundcloud.isEmpty) &&
+      (!_shows('bandcamp') || _bandcamp.isEmpty) &&
+      _album == null;
 
   /// Hits from a source the server fetches itself. Kept below YouTube Music on purpose:
   /// SoundCloud is full of remixes, edits and thirty-second previews, so these are for

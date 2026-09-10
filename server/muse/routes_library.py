@@ -338,18 +338,15 @@ def _queue_state(queue_id: int) -> dict:
 def _own_queue(queue_id: int, user: dict, *, adding: bool = False) -> dict:
     """Your own queue — or one you have been let into.
 
-    A jam is exactly this: the host's queue, opened to the people who joined. Guests
-    read it always and add to it unless the host has turned that off; nothing else
-    about it is theirs to change.
+    A jam is exactly this: the host's queue, opened to the people who joined. Everyone
+    in the room reads it and adds to it — a shared queue nobody but the host may touch
+    is just somebody else's playlist with an audience.
     """
     row = db.one("select * from queues where id=%s and user_id=%s", (queue_id, user["id"]))
     if row:
         return row
 
-    shared = jam.may_touch_queue(queue_id, user["id"])
-    if shared:
-        if adding and not shared["guests_can_add"]:
-            raise HTTPException(403, "The host has turned off adding for this jam.")
+    if jam.may_touch_queue(queue_id, user["id"]):
         return db.one("select * from queues where id=%s", (queue_id,))
     raise HTTPException(404, "no such queue")
 

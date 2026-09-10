@@ -671,19 +671,51 @@ class JamMember {
       );
 }
 
-/// A shared queue: the host's device plays, everyone else can put something on.
+/// What the host's player is doing, and how old that answer is.
+///
+/// The age matters more than it looks: the message has been through a server and a
+/// phone's event stream by the time it is read, and a position from two seconds ago
+/// applied as though it were from now puts the room two seconds apart for the rest of
+/// the song.
+class JamPlayback {
+  final int? trackId;
+  final int positionMs;
+  final bool playing;
+  final int ageMs;
+
+  const JamPlayback({
+    this.trackId,
+    this.positionMs = 0,
+    this.playing = false,
+    this.ageMs = 0,
+  });
+
+  factory JamPlayback.fromJson(Map<String, dynamic> j) => JamPlayback(
+        trackId: j['track_id'] as int?,
+        positionMs: (j['position_ms'] ?? 0) as int,
+        playing: (j['playing'] ?? false) as bool,
+        ageMs: (j['age_ms'] ?? 0) as int,
+      );
+
+  /// Where the music is now, rather than where it was when this was written.
+  Duration get position => Duration(milliseconds: positionMs + (playing ? ageMs : 0));
+}
+
+/// A shared queue and a shared transport: everyone hears the same song, in the same
+/// place, and anyone in the room can add to it or work the controls.
 class Jam {
   final int id;
   final String code;
   final int queueId;
   final String? host;
   final bool isHost;
-  final bool guestsCanAdd;
-  final bool guestsCanSkip;
   final List<JamMember> members;
   final int listening;
   final Track? nowPlaying;
-  final int skipVotes;
+
+  /// Where the host's player is, when the server was asked. Only /jams/current
+  /// carries this; the live events carry the same thing as it changes.
+  final JamPlayback? playback;
 
   const Jam({
     required this.id,
@@ -691,12 +723,10 @@ class Jam {
     required this.queueId,
     this.host,
     this.isHost = false,
-    this.guestsCanAdd = true,
-    this.guestsCanSkip = true,
     this.members = const [],
     this.listening = 0,
     this.nowPlaying,
-    this.skipVotes = 0,
+    this.playback,
   });
 
   factory Jam.fromJson(Map<String, dynamic> j) => Jam(
@@ -705,8 +735,6 @@ class Jam {
         queueId: (j['queue_id'] ?? 0) as int,
         host: j['host'] as String?,
         isHost: (j['is_host'] ?? false) as bool,
-        guestsCanAdd: (j['guests_can_add'] ?? true) as bool,
-        guestsCanSkip: (j['guests_can_skip'] ?? true) as bool,
         members: ((j['members'] ?? const []) as List)
             .map((e) => JamMember.fromJson(e as Map<String, dynamic>))
             .toList(),
@@ -714,14 +742,14 @@ class Jam {
         nowPlaying: j['now_playing'] == null
             ? null
             : Track.fromJson(j['now_playing'] as Map<String, dynamic>),
-        skipVotes: (j['skip_votes'] ?? 0) as int,
+        playback: j['playback'] == null
+            ? null
+            : JamPlayback.fromJson(j['playback'] as Map<String, dynamic>),
       );
 
-  /// What a guest is allowed to do, said the way a person would say it.
-  String get rules => [
-        guestsCanAdd ? 'anyone can add' : 'only the host adds',
-        if (guestsCanSkip) 'skipping is a vote',
-      ].join(' · ');
+  /// How a jam works, said the way a person would say it. There is nothing to
+  /// configure: everybody in the room shares the queue and the controls.
+  String get rules => 'anyone can add, play and skip';
 }
 
 

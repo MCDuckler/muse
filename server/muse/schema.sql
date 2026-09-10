@@ -435,4 +435,22 @@ update users set is_admin = true where name in ('chris', 'joe');
 -- Skipping is the one thing a guest can do to what everybody else is hearing, so it
 -- starts off. A host who wants a democracy can turn it on; a host who just wants to
 -- play records for people should not have to discover the setting first.
-alter table jams alter column guests_can_skip set default false;
+-- Legacy: a jam used to have rules — who could add, who could vote to skip. It has
+-- none now (everybody in the room can add and can work the controls), so these two
+-- columns are read by nothing. Left in place rather than dropped: an old row costs
+-- nothing, and dropping columns from a live table to tidy up is not worth it.
+
+-- What the host's player is doing, so everybody else can do the same.
+--
+-- A jam used to be a shared *queue* and nothing else: guests could add songs and vote,
+-- but nobody's play button reached anybody else, so "listening together" meant two
+-- people playing the same list at different points in it. This is the transport, kept
+-- as one row per jam and stamped with the moment it was true, so a device that reads it
+-- late can work out where the music has got to since.
+create table if not exists jam_playback (
+  jam_id      int primary key references jams(id) on delete cascade,
+  track_id    int references tracks(id) on delete set null,
+  position_ms int not null default 0,
+  playing     boolean not null default false,
+  at          timestamptz not null default now()
+);

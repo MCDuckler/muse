@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import 'artwork.dart';
+import 'source_dot.dart';
 import 'dialogs.dart';
 import 'mini_player.dart';
 import 'track_list.dart';
@@ -401,11 +402,25 @@ class _ReleaseRow extends StatelessWidget {
     return ListTile(
       dense: true,
       leading: SizedBox(
-        width: 28,
-        child: Text('${row.pos}',
-            textAlign: TextAlign.end,
-            style: TextStyle(
-                color: faded ? scheme.outline : scheme.onSurfaceVariant)),
+        width: 40,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            Text('${row.pos}',
+                textAlign: TextAlign.end,
+                style: TextStyle(
+                    color: faded ? scheme.outline : scheme.onSurfaceVariant)),
+            // No artwork on this row to put the mark on, so it sits beside the
+            // number instead — and a track we do not have gets no mark at all.
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 7,
+              child: track == null
+                  ? null
+                  : SourceDot(source: track.source),
+            ),
+          ],
+        ),
       ),
       title: Text(
         track?.displayTitle ?? row.title,
@@ -681,7 +696,12 @@ class _TopRow extends StatelessWidget {
     final track = row.track;
     return ListTile(
       dense: true,
-      leading: Artwork(track: track, size: 36, radius: 4),
+      leading: track == null
+          ? Artwork(track: track, size: 36, radius: 4)
+          : MarkedArtwork(
+              source: track.source,
+              child: Artwork(track: track, size: 36, radius: 4),
+            ),
       title: Text(track?.displayTitle ?? row.title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,

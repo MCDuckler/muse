@@ -70,8 +70,10 @@ class PlayerBar extends StatelessWidget {
           // horizontal swipe to remove, and two meanings for one drag is how a UI
           // starts feeling unpredictable.
           onSwipeUp: () => _openNowPlaying(context),
-          onSwipeLeft: player.next,
-          onSwipeRight: player.previous,
+          // Through the app, not the player: in a jam these ask the room rather than
+          // moving this device on its own.
+          onSwipeLeft: app.skipNext,
+          onSwipeRight: app.skipPrevious,
           horizontalTravel: 76,
           verticalTravel: 64,
           fadeWithDrag: true,
@@ -131,15 +133,16 @@ class PlayerBar extends StatelessWidget {
                   children: [
                     IconButton(
                         icon: const Icon(Icons.skip_previous),
-                        onPressed: player.previous),
+                        onPressed: app.skipPrevious),
                     IconButton(
                       iconSize: 34,
                       icon: Icon((s?.playing ?? false)
                           ? Icons.pause_circle_filled
                           : Icons.play_circle_fill),
-                      onPressed: track.isReady ? player.playPause : null,
+                      onPressed: track.isReady ? app.playPause : null,
                     ),
-                    IconButton(icon: const Icon(Icons.skip_next), onPressed: player.next),
+                    IconButton(
+                        icon: const Icon(Icons.skip_next), onPressed: app.skipNext),
                   ],
                 ),
               ),

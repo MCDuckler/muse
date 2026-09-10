@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import 'artwork.dart';
+import 'source_dot.dart';
 import 'track_menu.dart';
 
 /// One song, drawn the same way everywhere it appears.
@@ -106,7 +107,15 @@ class SongRow extends StatelessWidget {
                 width: 40,
                 height: 40,
                 child: Center(
-                  child: leading ?? Artwork(track: track, size: 40, radius: 5),
+                  // The dot in the corner says where the file came from — see
+                  // SourceDot. A row with a number or a check instead of artwork
+                  // keeps the mark too, beside it.
+                  child: leading == null
+                      ? MarkedArtwork(
+                          source: track.source,
+                          child: Artwork(track: track, size: 40, radius: 5),
+                        )
+                      : leading!,
                 ),
               ),
               const SizedBox(width: 10),

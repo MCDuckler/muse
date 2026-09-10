@@ -48,6 +48,22 @@ class PlayerService {
   int? _loadedTrackId;
   int? _waitingForTrack;         // stalled on a download; resume when it lands
 
+  /// The song already handed to the engine to play after this one, if any.
+  int? _queuedNextId;
+
+  /// Which slot of the engine's playlist the current song sits in. An explicit load
+  /// puts it back at the top; an automatic advance moves it one along.
+  int _engineIndex = 0;
+
+  /// How many playlist edits are in flight.
+  ///
+  /// Loading a track inserts it at the top, which shifts everything already in the
+  /// playlist down a slot — and the engine reports that as its current index changing,
+  /// which is indistinguishable from the song having ended and the next one starting.
+  /// Believing it there would move the queue on by one every time somebody pressed
+  /// skip. While this is above zero, index changes are ours, not the music's.
+  int _mutating = 0;
+
   /// Where the track now loading is meant to start. Until the engine holds the
   /// current track it is still reporting the *previous* one's position, and
   /// publishing that draws the new song as though it were already half over —
@@ -97,6 +113,10 @@ class PlayerService {
   bool get isPlaying => _player.playing;
   int? get waitingForTrack => _waitingForTrack;
 
+  /// The song already sitting in the engine's playlist, ready to follow this one.
+  /// Read by the tests: it is the difference between a gap between songs and none.
+  int? get queuedNextId => _queuedNextId;
+
   Future<void> init() async {
     _player.playerStateStream.listen((s) {
       _emit(force: true);
@@ -104,6 +124,9 @@ class PlayerService {
       if (!s.playing) _saveCursor();      // pausing is a good moment to remember
     });
     _player.positionStream.listen((_) => _emit());
+    // The engine moving through its own playlist, which is what a gapless transition
+    // looks like from here.
+    _player.currentIndexStream.listen(_onEngineIndex);
     _player.playbackEventStream.listen((_) {}, onError: (Object e) {
       lastError = '$e';
       _emit(force: true);
@@ -151,6 +174,9 @@ class PlayerService {
         _syncOrder(keepItemIndex: moved);
         // A track we were stalled on may have arrived with this update.
         if (_waitingForTrack != null) await _resumeIfPossible();
+        // What comes next may be a different song now — somebody put something in
+        // front of it, or took it out.
+        await _queueNext();
         _emit(force: true);
         return;
       }
@@ -232,12 +258,16 @@ class PlayerService {
     if (shuffle == value) return;
     shuffle = value;
     _rebuildOrder(keepItemIndex: index);
+    // Shuffle changes what follows this song, and the engine is already holding the
+    // old answer.
+    await _queueNext();
     _emit(force: true);
   }
 
   void setRepeat(QueueRepeat mode) {
     repeat = mode;
     finished = false;
+    unawaited(_queueNext());
     _emit(force: true);
   }
 
@@ -328,6 +358,33 @@ class PlayerService {
     await playPause();
   }
 
+  /// Stop, without deciding to start again. The jam needs the two halves separately:
+  /// following somebody else's player is not a toggle.
+  Future<void> pause() async {
+    if (!_player.playing) return;
+    try {
+      await _player.pause();
+      _saveCursor();
+    } catch (e) {
+      lastError = '$e';
+    }
+    _emit(force: true);
+  }
+
+  /// Start, without deciding to stop. Loads the current track first if the engine is
+  /// holding nothing — a guest that has just been told what the room is playing has
+  /// usually not loaded anything yet.
+  Future<void> resumeForJam() async {
+    if (_player.playing) return;
+    try {
+      if (_loadedTrackId == null) await _loadCurrent();
+      _startPlayback();
+    } catch (e) {
+      lastError = '$e';
+    }
+    _emit(force: true);
+  }
+
   Future<void> playPause() async {
     try {
       if (_player.playing) {
@@ -360,7 +417,8 @@ class PlayerService {
 
   /// Move through the queue, honouring repeat and stepping over tracks that are not
   /// downloaded yet instead of stopping dead on them.
-  int? _warmedTrackId;
+  /// Tracks whose first seconds have already been pulled into the HTTP cache.
+  final _warmed = <int>{};
 
   /// The last URL actually handed to the audio engine, and what the engine said about
   /// it. Debug only: when the screen and the sound disagree, this settles which one is
@@ -473,13 +531,111 @@ class PlayerService {
       }
     }
 
-    // The next song, into the HTTP cache, so it plays even if the connection is busy
-    // downloading the rest of the library — or gone.
-    final next = run.length > 1 ? run[1] : null;
-    if (next != null && next.isReady && next.id != _warmedTrackId) {
-      _warmedTrackId = next.id;
-      unawaited(api.warmStream(next));
+    // The songs after this one, into the HTTP cache, so they play even if the
+    // connection is busy downloading the rest of the library — or gone. Two rather
+    // than one: skipping through a couple of tracks is normal, and the second one is
+    // the difference between "instant" and "a moment while it thinks".
+    for (final soon in run.skip(1)) {
+      if (!soon.isReady || _warmed.contains(soon.id)) continue;
+      _warmed.add(soon.id);
+      unawaited(api.warmStream(soon));
     }
+    // Remembering every track ever warmed would grow without limit; the last handful
+    // is all that stops the same request going out twice in a row.
+    while (_warmed.length > 12) {
+      _warmed.remove(_warmed.first);
+    }
+  }
+
+  /// One track, as something the audio engine can play.
+  AudioSource _sourceFor(Track track) {
+    final cover = api.coverUrl(track, small: false);
+    final coverUri = cover == null ? null : Uri.parse(cover);
+    return AudioSource.uri(
+      Uri.parse(api.streamUrl(track)),
+      // Headers are not deliverable from a browser's audio element, which is why the
+      // URL is signed. Native platforms send them too; either proves identity.
+      headers: kIsWeb ? null : api.streamHeaders,
+      // just_audio_background requires this on every source, and it is what the
+      // lockscreen, the notification and the car display actually show.
+      tag: MediaItem(
+        id: '${track.id}',
+        title: track.displayTitle,
+        artist: track.artistLine,
+        album: track.albumLine,
+        duration: track.duration,
+        // The lockscreen and the car display fetch this themselves, so it has to be a
+        // URL that authenticates on its own — the same signed key as audio.
+        artUri: coverUri,
+      ),
+    );
+  }
+
+  /// Hand the engine the next song before the current one ends.
+  ///
+  /// Otherwise the end of a track is the *start* of the work: the engine stops, tells
+  /// Dart, and Dart builds a source, hands it over and asks for play — which is the
+  /// silence between songs, and which does not happen at all when the app is in the
+  /// background and nothing is running our code. With the next source already in the
+  /// engine's own playlist, the transition belongs to the audio platform: it happens
+  /// with the screen off, in another app, or in a tab that is not on top.
+  Future<void> _queueNext() async {
+    if (repeat == QueueRepeat.one) return;      // it will play this one again
+    if (_order.isEmpty) return;
+
+    var pos = _orderPos + 1;
+    if (pos >= _order.length) {
+      if (repeat != QueueRepeat.all) return;    // nothing follows; let it end
+      pos = 0;
+      if (_order.length == 1) return;           // one song on repeat-all is a seek
+    }
+    final next = _items[_order[pos]];
+    if (!next.isReady) return;                  // still downloading; not yet
+    if (_queuedNextId == next.id) return;       // already waiting in the wings
+
+    _mutating++;
+    try {
+      // The queued URL is signed, and it has to still be valid when the engine gets
+      // round to playing it — which may be a whole song from now.
+      await api.ensureStreamKey();
+      final length = _player.audioSources.length;
+      if (length > _engineIndex + 1) {
+        // Something else was queued and is no longer next. Dropping what comes after
+        // the playing item does not touch the playing item.
+        await _player.removeAudioSourceRange(_engineIndex + 1, length);
+      }
+      await _player.insertAudioSource(_engineIndex + 1, _sourceFor(next));
+      _queuedNextId = next.id;
+    } catch (_) {
+      // A platform that will not take a playlist still works the old way: the track
+      // ends, Dart notices, and the next one is loaded. Slower, not broken.
+      _queuedNextId = null;
+    } finally {
+      _mutating--;
+    }
+  }
+
+  /// The engine moved on by itself, because the next song was already in its playlist.
+  /// Catch our own bookkeeping up to it rather than reloading anything.
+  void _onEngineIndex(int? at) {
+    if (at == null || at == _engineIndex || _mutating > 0) return;
+    final expected = _engineIndex + 1;
+    final queued = _queuedNextId;
+    _engineIndex = at;
+    if (at != expected || queued == null) return;
+
+    _recordListen(completed: true);
+    final pos = _order.indexWhere((i) => _items[i].id == queued);
+    if (pos >= 0) _orderPos = pos;
+    _loadedTrackId = queued;
+    _queuedNextId = null;
+    _waitingForTrack = null;
+    finished = false;
+    _pendingStart = Duration.zero;
+    _emit(force: true);
+    _saveCursor();
+    unawaited(_lookAhead());
+    unawaited(_queueNext());
   }
 
   Future<void> _loadCurrent({Duration? startAt, int? token}) async {
@@ -499,31 +655,13 @@ class PlayerService {
     }
     _waitingForTrack = null;
     lastError = null;
+    _mutating++;
     try {
       await api.ensureStreamKey();
       if (mine != _loadToken) return;      // superseded while fetching the key
 
-      final cover = api.coverUrl(track, small: false);
-      final coverUri = cover == null ? null : Uri.parse(cover);
       final sourceUrl = api.streamUrl(track);
-      final source = AudioSource.uri(
-        Uri.parse(sourceUrl),
-        // Headers are not deliverable from a browser's audio element, which is why
-        // the URL is signed. Native platforms send them too; either proves identity.
-        headers: kIsWeb ? null : api.streamHeaders,
-        // just_audio_background requires this on every source, and it is what the
-        // lockscreen, the notification and the car display actually show.
-        tag: MediaItem(
-          id: '${track.id}',
-          title: track.displayTitle,
-          artist: track.artistLine,
-          album: track.albumLine,
-          duration: track.duration,
-          // The lockscreen and the car display fetch this themselves, so it has to
-          // be a URL that authenticates on its own — the same signed key as audio.
-          artUri: coverUri,
-        ),
-      );
+      final source = _sourceFor(track);
 
       final Duration? reported;
       if (kIsWeb && _webPlaylistLive) {
@@ -559,6 +697,12 @@ class PlayerService {
       await _player.setVolume(_volumeFor(track));
       if (speed != 1.0) await _player.setSpeed(speed);
       _loadedTrackId = track.id;
+      // An explicit load puts this song at the top of the engine's playlist and throws
+      // away whatever was queued behind it, so the next song has to be handed over
+      // again — see _queueNext.
+      _engineIndex = 0;
+      _queuedNextId = null;
+      unawaited(_queueNext());
     } on PlayerInterruptedException {
       // Another load took over while this one was in flight — skipping twice quickly,
       // or a queue update arriving mid-load. That is the intended outcome, not
@@ -569,6 +713,8 @@ class PlayerService {
       lastError = 'Could not load "${track.title}": $e';
       _emit(force: true);
       rethrow;
+    } finally {
+      _mutating--;
     }
   }
 
@@ -597,6 +743,18 @@ class PlayerService {
   }
 
   void _onCompleted() {
+    // The next song is already in the engine, so moving to it is a step rather than a
+    // load: no request, no wait, nothing to fetch. A platform that advances through
+    // its own playlist never gets here at all — this is for the ones that stop at the
+    // end of each item and wait to be told.
+    if (_queuedNextId != null) {
+      unawaited(_player.seekToNext().catchError((_) {
+        _queuedNextId = null;
+        _recordListen(completed: true);
+        _advance(1, auto: true);
+      }));
+      return;
+    }
     _recordListen(completed: true);
     _advance(1, auto: true);
   }
@@ -622,6 +780,10 @@ class PlayerService {
     // skipped to.
     if (_waitingForTrack == trackId && !_player.playing) {
       await _resumeIfPossible();
+    } else if (_queuedNextId == null && current?.id != trackId) {
+      // It may be the one that plays after this: now that it is playable it can be
+      // handed to the engine, so the transition still costs nothing.
+      await _queueNext();
     } else if (current?.id == trackId && _loadedTrackId != trackId) {
       // The song on screen is the one that just became playable: load it, since until
       // now there was nothing to load.

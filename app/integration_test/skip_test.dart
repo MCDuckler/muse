@@ -251,6 +251,27 @@ void main() {
             'changes, or the browser asks for a tap again on every song. $trace '
             '|| AUDIO: ${_audioLog()}');
 
+    // ---- the next song is handed over before this one ends ----
+    //
+    // Otherwise the end of a track is where the work starts: the engine stops, tells
+    // Dart, and Dart fetches and hands over the next one — the silence between songs,
+    // and nothing at all when the app is in the background and none of our code is
+    // running. With the next source already in the engine's playlist the transition
+    // belongs to the audio platform.
+    _mark('queue next');
+    await player.playAt(0);
+    await settle(tester, seconds: 6);
+    final wantNext = player.items[1].id;
+    var handedOver = false;
+    for (var i = 0; i < 60 && !handedOver; i++) {
+      handedOver = player.queuedNextId == wantNext;
+      await settle(tester, seconds: 1);
+    }
+    expect(handedOver, isTrue,
+        reason: 'the song after this one must already be in the engine, not waiting '
+            'for Dart to fetch it when the music stops. queued=${player.queuedNextId} '
+            'want=$wantNext || AUDIO: ${_audioLog()}');
+
     // The half of the problem a tap cannot cover: when a song finishes, or a download
     // lands, nobody has touched anything, so the browser is within its rights to
     // refuse. It only works if the element that was already allowed to play is reused.

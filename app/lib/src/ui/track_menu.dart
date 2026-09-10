@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
+import 'source_dot.dart';
 import 'browse_page.dart';
 import 'dialogs.dart';
 import 'lyrics_sheet.dart';
@@ -115,6 +116,10 @@ class _Header extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.bodySmall,
             ),
+            const SizedBox(height: 6),
+            // The one place the coloured dots in the lists are named, so the mark is
+            // learnable rather than decorative.
+            SourceChip(track: track),
           ],
         ),
       );

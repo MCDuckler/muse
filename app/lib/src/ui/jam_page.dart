@@ -218,41 +218,18 @@ class _JamPageState extends State<JamPage> {
                 )
               : null,
         ),
-      if (jam.isHost) ...[
-        const SizedBox(height: 18),
-        const Divider(),
-        Text('What guests can do', style: Theme.of(context).textTheme.titleSmall),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Add to the queue'),
-          subtitle: const Text('Off means only you choose what plays next'),
-          value: jam.guestsCanAdd,
-          onChanged: _busy
-              ? null
-              : (v) => _run(() async {
-                    app.jam = await app.api.setJamRules(jam.id, guestsCanAdd: v);
-                  }),
-        ),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Vote to skip'),
-          subtitle: const Text('A skip needs more than half the room'),
-          value: jam.guestsCanSkip,
-          onChanged: _busy
-              ? null
-              : (v) => _run(() async {
-                    app.jam = await app.api.setJamRules(jam.id, guestsCanSkip: v);
-                  }),
-        ),
-      ],
-      if (!jam.isHost) ...[
-        const SizedBox(height: 18),
-        Text(
-          'Songs you add go into ${jam.host ?? 'the host'}\'s queue. '
-          'They are playing, so their device controls playback.',
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-      ],
+      const SizedBox(height: 18),
+      const Divider(),
+      Text(
+        jam.isHost
+            ? 'Everybody here is listening to this queue, in step with you. Anyone can '
+                'add a song, and anyone can play, pause or skip — it moves the whole '
+                'room, not just their own phone.'
+            : 'You are listening to ${jam.host ?? 'the host'}\'s queue, in step with '
+                'everybody else. Add a song, or play, pause and skip: it moves the '
+                'whole room.',
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
     ];
   }
 }

@@ -126,36 +126,6 @@ def invite(jam_id: int, user_id: int) -> None:
     )
 
 
-def vote_skip(jam_id: int, track_id: int, user_id: int) -> dict:
-    """One vote each, and a skip when more than half of the people here want it."""
-    db.run(
-        """insert into jam_skip_votes(jam_id, track_id, user_id) values(%s,%s,%s)
-           on conflict do nothing""",
-        (jam_id, track_id, user_id),
-    )
-    votes = db.one(
-        "select count(*) n from jam_skip_votes where jam_id=%s and track_id=%s",
-        (jam_id, track_id),
-    )["n"]
-    present = db.one(
-        f"""select count(*) n from jam_members
-             where jam_id=%s
-               and extract(epoch from now() - last_seen) < {ONLINE_SECONDS}""",
-        (jam_id,),
-    )["n"] or 1
-    needed = max(2, present // 2 + 1)
-    return {"votes": votes, "needed": needed, "present": present,
-            "passed": votes >= needed}
-
-
-def clear_votes(jam_id: int, track_id: int | None = None) -> None:
-    if track_id is None:
-        db.run("delete from jam_skip_votes where jam_id=%s", (jam_id,))
-    else:
-        db.run("delete from jam_skip_votes where jam_id=%s and track_id=%s",
-               (jam_id, track_id))
-
-
 def public(jam: dict, user_id: int) -> dict:
     people = members(jam["id"])
     return {
@@ -164,10 +134,46 @@ def public(jam: dict, user_id: int) -> dict:
         "queue_id": jam["queue_id"],
         "host": next((p["name"] for p in people if p["host"]), None),
         "is_host": jam["host_id"] == user_id,
-        "guests_can_add": jam["guests_can_add"],
-        "guests_can_skip": jam["guests_can_skip"],
         "members": people,
         "listening": sum(1 for p in people if p["online"]),
         "started_at": jam["created_at"],
         "ended": jam["ended_at"] is not None,
+    }
+
+
+# ------------------------------------------------------------------ transport
+def set_playback(jam_id: int, track_id: int | None, position_ms: int,
+                 playing: bool) -> dict:
+    """Record what the host's player is doing, as of now.
+
+    Only the host writes this. `at` is the server's clock rather than the device's:
+    phones disagree about the time by seconds, and the whole point of the row is to
+    work out how far the music has moved since it was written.
+    """
+    return db.one(
+        """insert into jam_playback(jam_id, track_id, position_ms, playing, at)
+           values(%s,%s,%s,%s, now())
+           on conflict (jam_id) do update
+             set track_id=excluded.track_id, position_ms=excluded.position_ms,
+                 playing=excluded.playing, at=now()
+           returning *""",
+        (jam_id, track_id, max(0, int(position_ms)), bool(playing)),
+    )
+
+
+def playback(jam_id: int) -> dict | None:
+    """Where the music is, with how old that answer is."""
+    row = db.one(
+        """select track_id, position_ms, playing,
+                  (extract(epoch from now() - at) * 1000)::int as age_ms
+             from jam_playback where jam_id=%s""",
+        (jam_id,),
+    )
+    if not row:
+        return None
+    return {
+        "track_id": row["track_id"],
+        "position_ms": row["position_ms"],
+        "playing": row["playing"],
+        "age_ms": max(0, row["age_ms"] or 0),
     }

@@ -10,7 +10,6 @@ import 'record_stage.dart';
 import 'swipe.dart';
 import 'lyrics_sheet.dart';
 import 'track_menu.dart';
-import 'up_next.dart';
 import 'song_row.dart';
 import 'browse_page.dart';
 import 'jam_page.dart';
@@ -67,8 +66,8 @@ class NowPlayingScreen extends StatelessWidget {
                     ),
                     IconButton(
                       icon: const Icon(Icons.queue_music),
-                      tooltip: 'Up next',
-                      onPressed: () => showUpNext(context),
+                      tooltip: 'Queue',
+                      onPressed: () => showQueue(context),
                     ),
                     IconButton(
                       icon: Icon(app.sleepAt != null
@@ -205,6 +204,18 @@ class NowPlayingScreen extends StatelessWidget {
     if (track.isPending) return 'Downloading…';
     return null;
   }
+}
+
+/// Leave the player and land on the queue.
+///
+/// This used to open a small sheet with its own list of what was coming: a second
+/// queue screen, with none of the things the real one has — reordering, the other
+/// queues, removing a track, the menu on every row. One queue, one screen.
+void showQueue(BuildContext context) {
+  context.read<AppState>().setHomeTab(0);
+  // All the way back, not one step: the player can be opened from an album or an
+  // artist, and popping once would land there instead of on the queue.
+  Navigator.of(context).popUntil((route) => route.isFirst);
 }
 
 /// Listening together, said where you are looking.
@@ -347,8 +358,8 @@ class _Extras extends StatelessWidget {
         IconButton(
           iconSize: size,
           icon: const Icon(Icons.queue_music),
-          tooltip: 'Up next',
-          onPressed: () => showUpNext(context),
+          tooltip: 'Queue',
+          onPressed: () => showQueue(context),
         ),
         IconButton(
           iconSize: size,
@@ -416,8 +427,10 @@ class _Artwork extends StatelessWidget {
               playing: snapshot?.playing ?? false,
               previous: _at(-1),
               next: _at(1),
-              onPrevious: player.previous,
-              onNext: player.next,
+              // Through the app: a swipe in a jam asks the room, like every other
+              // way of changing track.
+              onPrevious: context.read<AppState>().skipPrevious,
+              onNext: context.read<AppState>().skipNext,
             ),
           ),
         );
@@ -458,10 +471,13 @@ class _ScrubberState extends State<_Scrubber> {
     var duration = s?.duration ?? Duration.zero;
     if (duration == Duration.zero) duration = s?.current?.duration ?? Duration.zero;
 
-    // In somebody else's jam this device is not the one playing, so its own player sits
-    // at zero. What the bar should show is where the host has got to.
+    // A guest plays the same song on its own device now, in step with the host, so
+    // its own clock is the one to draw. The host's reported position is the fallback
+    // for the moment before the guest's engine has caught up — otherwise the bar sits
+    // at zero while the room is halfway through a record.
     final host = app.hostPosition;
-    var position = host ?? s?.position ?? Duration.zero;
+    var position = s?.position ?? Duration.zero;
+    if (position == Duration.zero && host != null) position = host;
 
     final max = duration.inMilliseconds.toDouble();
 
@@ -479,13 +495,13 @@ class _ScrubberState extends State<_Scrubber> {
       }
     }
 
-    // A guest's bar reports the host's playback; dragging it would only move this
-    // device, which makes nothing but a lie on screen.
-    final enabled = max > 0 && host == null;
+    // Dragging is allowed whenever it will reach the room: the host always, a guest
+    // when the host has left the controls open. A guest who cannot control the room
+    // would only move their own device out of step with it.
+    final enabled = max > 0 && (!app.isJamGuest || app.jamControlsTheRoom);
     // In a jam the host is the one playing, so the clock runs from their reports even
     // though this device's own engine is silent.
-    final playing =
-        (host != null || (s?.playing ?? false)) && _dragging == null && _seeking == null;
+    final playing = (s?.playing ?? false) && _dragging == null && _seeking == null;
 
     return SmoothPosition(
       position: position,
@@ -500,8 +516,7 @@ class _ScrubberState extends State<_Scrubber> {
             SliderTheme(
               data: SliderTheme.of(context).copyWith(
                 trackHeight: 3,
-                thumbShape:
-                    RoundSliderThumbShape(enabledThumbRadius: host == null ? 7 : 4),
+                thumbShape: RoundSliderThumbShape(enabledThumbRadius: enabled ? 7 : 4),
                 overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
               ),
               child: Slider(
@@ -510,7 +525,7 @@ class _ScrubberState extends State<_Scrubber> {
                 onChanged: enabled ? (v) => setState(() => _dragging = v) : null,
                 onChangeEnd: enabled
                     ? (v) {
-                        widget.player.seek(Duration(milliseconds: v.round()));
+                        app.seekTo(Duration(milliseconds: v.round()));
                         setState(() {
                           _seeking = v;
                           _seekAt = DateTime.now();
@@ -573,37 +588,18 @@ class _Controls extends StatelessWidget {
         IconButton(
           iconSize: big ? 42 : 34,
           icon: const Icon(Icons.skip_previous),
-          onPressed: player.previous,
+          onPressed: app.skipPrevious,
         ),
         IconButton.filled(
           iconSize: big ? 54 : 42,
           icon: Icon(playing ? Icons.pause : Icons.play_arrow),
-          onPressed: player.playPause,
+          onPressed: app.playPause,
         ),
-        if (app.jam != null && !app.jam!.isHost)
-          // A guest's device is not the one making sound, so skipping is asking the
-          // room rather than reaching over and pressing the button.
-          IconButton(
-            iconSize: big ? 42 : 34,
-            icon: const Icon(Icons.how_to_vote_outlined),
-            tooltip: 'Vote to skip',
-            onPressed: app.jam!.guestsCanSkip
-                ? () async {
-                    final messenger = ScaffoldMessenger.of(context);
-                    final r = await app.api.voteSkip(app.jam!.id);
-                    messenger.showSnackBar(SnackBar(
-                        content: Text(r['passed'] == true
-                            ? 'Skipped'
-                            : 'Asked to skip · ${r['votes']} of ${r['needed']}')));
-                  }
-                : null,
-          )
-        else
-          IconButton(
-            iconSize: big ? 42 : 34,
-            icon: const Icon(Icons.skip_next),
-            onPressed: player.next,
-          ),
+        IconButton(
+          iconSize: big ? 42 : 34,
+          icon: const Icon(Icons.skip_next),
+          onPressed: app.skipNext,
+        ),
         IconButton(
           icon: Icon(repeat == QueueRepeat.one ? Icons.repeat_one : Icons.repeat),
           isSelected: repeat != QueueRepeat.off,

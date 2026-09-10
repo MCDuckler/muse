@@ -24,6 +24,19 @@ class AppState extends ChangeNotifier {
 
   List<Queue> queues = const [];
 
+  /// Which tab the home shell is on: 0 queues, 1 search, 2 library.
+  ///
+  /// It lives here rather than in the shell's own State because other screens need to
+  /// send you to a tab — the player's "up next" is the queue, and the queue is a page
+  /// people already know, not a sheet with its own half-copy of one.
+  int homeTab = 0;
+
+  void setHomeTab(int tab) {
+    if (homeTab == tab) return;
+    homeTab = tab;
+    notifyListeners();
+  }
+
   /// The hearted songs, as ids. Held here rather than asked per row: a list of four
   /// hundred would otherwise be four hundred requests to draw one icon each.
   Set<int> favourites = <int>{};
@@ -216,6 +229,11 @@ class AppState extends ChangeNotifier {
     // The player writes the cursor through the app rather than knowing the API: it
     // reports where playback is, and the app decides how to persist that.
     player!.onCursor = (queueId, {cursorIndex, positionMs}) {
+      // A guest is playing the host's queue, so writing where *this* device has got to
+      // moves the host's cursor: two people listening together fought over one number,
+      // and each one's playback dragged the other's back. The host's player is the one
+      // that keeps the place; a guest keeps its own place in its own head.
+      if (jam != null && !(jam?.isHost ?? false)) return;
       // Remembered so the announcement this write causes can be recognised as our own
       // when it arrives back over the event stream.
       _cursorWrittenAt = DateTime.now();
@@ -237,6 +255,11 @@ class AppState extends ChangeNotifier {
     _statusTimer?.cancel();
     _queueReload?.cancel();
     _statusTimer = Timer.periodic(const Duration(seconds: 30), (_) => _pollStatus());
+    // The room's heartbeat. Five seconds is short enough that nobody drifts audibly
+    // within a song and long enough to be nothing on a phone's battery; it costs
+    // nothing at all when this device is not hosting a jam.
+    _jamTimer?.cancel();
+    _jamTimer = Timer.periodic(const Duration(seconds: 5), (_) => pushJamState());
   }
 
   Future<void> logout() async {
@@ -518,6 +541,156 @@ class AppState extends ChangeNotifier {
   /// When this device last wrote a cursor of its own.
   DateTime? _cursorWrittenAt;
 
+  /// The last transport this device sent as host, so heartbeats that say nothing new
+  /// are not sent at all.
+  String? _pushedState;
+  DateTime? _pushedAt;
+
+  /// A guest is only allowed to correct its own playback so often: seeking on every
+  /// heartbeat would stutter through the whole song.
+  DateTime? _lastFollowSeek;
+
+  /// True while this device is somebody else's guest.
+  bool get isJamGuest => jam != null && !(jam?.isHost ?? true);
+
+  /// True when working the controls here reaches the room rather than this device.
+  /// Which, for a guest, is always: a jam has no rules — everybody in it shares the
+  /// queue and the transport.
+  bool get jamControlsTheRoom => isJamGuest;
+
+  // ---------------------------------------------------------------- host → room
+  /// Say where the music is, if it has moved somewhere worth saying.
+  ///
+  /// Called whenever the player's shape changes and on a few-second heartbeat: the
+  /// changes keep the room in step with a skip or a pause, and the heartbeat keeps it
+  /// from drifting over the length of a song.
+  Future<void> pushJamState({bool force = false}) async {
+    final current = jam;
+    final p = player;
+    if (current == null || p == null || !current.isHost) return;
+    final snap = p.last;
+    final shape = '${snap?.current?.id}|${snap?.playing}';
+    final now = DateTime.now();
+    final due = _pushedAt == null ||
+        now.difference(_pushedAt!) > const Duration(seconds: 5);
+    if (!force && shape == _pushedState && !due) return;
+    _pushedState = shape;
+    _pushedAt = now;
+    try {
+      await api.pushJamPlayback(current.id,
+          trackId: snap?.current?.id,
+          positionMs: (snap?.position ?? Duration.zero).inMilliseconds,
+          playing: snap?.playing ?? false);
+    } catch (_) {
+      // The next heartbeat says the same thing; a dropped one costs nothing.
+    }
+  }
+
+  // ---------------------------------------------------------------- room → guest
+  /// Play what the host is playing, where the host is playing it.
+  Future<void> followJamPlayback(JamPlayback state) async {
+    if (!isJamGuest) return;
+    final p = player;
+    if (p == null) return;
+    // Reported position plus however long the message took to get here.
+    final target = state.position;
+
+    if (state.trackId != null && p.current?.id != state.trackId) {
+      // A different song: catch up to it, then to the place in it.
+      await p.playTrack(state.trackId!);
+      await p.seek(target);
+      if (!state.playing) await p.pause();
+      notifyListeners();
+      return;
+    }
+
+    if (!state.playing) {
+      if (p.last?.playing ?? false) await p.pause();
+      // Still worth landing on the right spot: a paused room is paused *somewhere*.
+      await p.seek(target);
+      notifyListeners();
+      return;
+    }
+
+    final here = p.last?.position ?? Duration.zero;
+    final drift = (here - target).abs();
+    final settled = _lastFollowSeek == null ||
+        DateTime.now().difference(_lastFollowSeek!) > const Duration(seconds: 4);
+    if (drift > const Duration(milliseconds: 2500) && settled) {
+      _lastFollowSeek = DateTime.now();
+      await p.seek(target);
+    }
+    if (!(p.last?.playing ?? false)) await p.resumeForJam();
+    notifyListeners();
+  }
+
+  // ---------------------------------------------------------------- guest → room
+  /// The transport, wherever it is pressed.
+  ///
+  /// In a jam a guest's play button is a request: the host's device is the clock, and
+  /// two devices deciding for themselves is exactly the drift this is here to stop.
+  Future<void> playPause() async {
+    if (jamControlsTheRoom) {
+      final playing = player?.last?.playing ?? false;
+      await _ask(playing ? 'pause' : 'play');
+      return;
+    }
+    await player?.playPause();
+    await pushJamState(force: true);
+  }
+
+  Future<void> skipNext() async {
+    if (jamControlsTheRoom) return _ask('next');
+    await player?.next();
+    await pushJamState(force: true);
+  }
+
+  Future<void> skipPrevious() async {
+    if (jamControlsTheRoom) return _ask('previous');
+    await player?.previous();
+    await pushJamState(force: true);
+  }
+
+  Future<void> seekTo(Duration to) async {
+    if (jamControlsTheRoom) return _ask('seek', positionMs: to.inMilliseconds);
+    await player?.seek(to);
+    await pushJamState(force: true);
+  }
+
+  /// What went wrong last time somebody reached for the controls, if anything.
+  String? jamRefusal;
+
+  Future<void> _ask(String action, {int? positionMs}) async {
+    final current = jam;
+    if (current == null) return;
+    try {
+      await api.jamControl(current.id, action, positionMs: positionMs);
+      jamRefusal = null;
+    } catch (e) {
+      jamRefusal = '$e';
+      notifyListeners();
+    }
+  }
+
+  /// The host carrying out what somebody asked for.
+  Future<void> _obeyJamControl(Map<String, dynamic> data) async {
+    final p = player;
+    if (p == null || !(jam?.isHost ?? false)) return;
+    switch (data['action']) {
+      case 'play':
+        if (!(p.last?.playing ?? false)) await p.playPause();
+      case 'pause':
+        if (p.last?.playing ?? false) await p.playPause();
+      case 'next':
+        await p.next();
+      case 'previous':
+        await p.previous();
+      case 'seek':
+        await p.seek(Duration(milliseconds: (data['position_ms'] ?? 0) as int));
+    }
+    await pushJamState(force: true);
+  }
+
   /// The host's position now, carried forward since it was last reported.
   Duration? get hostPosition {
     final at = _jamPositionAt, base = jamPosition;
@@ -565,6 +738,22 @@ class AppState extends ChangeNotifier {
   Future<void> _onJamEvent(Map<String, dynamic> data) async {
     if (jam == null && data['what'] != 'started') return;
     if (jam != null && data['jam_id'] != jam!.id) return;
+
+    // The two live halves of a jam, before anything else: they arrive several times a
+    // minute and neither of them needs the jam re-read from the server.
+    if (data['what'] == 'playback') {
+      if (isJamGuest) {
+        final state = JamPlayback.fromJson(Map<String, dynamic>.from(data));
+        jamPosition = state.position;
+        _jamPositionAt = DateTime.now();
+        await followJamPlayback(state);
+      }
+      return;
+    }
+    if (data['what'] == 'control') {
+      await _obeyJamControl(Map<String, dynamic>.from(data));
+      return;
+    }
 
     if (data['what'] == 'skip' && (jam?.isHost ?? false)) {
       if (player?.current?.id == data['track_id']) await player?.next();
@@ -630,6 +819,9 @@ class AppState extends ChangeNotifier {
     final queue = activeQueue;
     if (queue == null) return;
     jam = await api.startJam(queue.id);
+    // Say where the music is immediately: the first person to join wants the song
+    // that is on, not the one the heartbeat gets round to mentioning.
+    await pushJamState(force: true);
     notifyListeners();
   }
 
@@ -650,13 +842,25 @@ class AppState extends ChangeNotifier {
   Future<void> followJamQueue() async {
     final current = jam;
     if (current == null) return;
-    if (activeQueue?.id == current.queueId) return;
-    try {
-      activeQueue = await api.queue(current.queueId);
-      await player?.loadQueue(activeQueue!);
-      notifyListeners();
-    } catch (_) {
-      // The jam ended under us; refreshJam will clear it.
+    if (activeQueue?.id != current.queueId) {
+      try {
+        activeQueue = await api.queue(current.queueId);
+        await player?.loadQueue(activeQueue!);
+        notifyListeners();
+      } catch (_) {
+        // The jam ended under us; refreshJam will clear it.
+        return;
+      }
+    }
+    // Land in the right place in the right song. Joining halfway through a record and
+    // starting it from the top is not listening together.
+    final state = current.playback;
+    if (state != null && isJamGuest) {
+      jamPosition = state.position;
+      _jamPositionAt = DateTime.now();
+      await followJamPlayback(state);
+    } else if (current.isHost) {
+      await pushJamState(force: true);
     }
   }
 
@@ -772,11 +976,14 @@ class AppState extends ChangeNotifier {
       ].join('|');
       if (next == shape) return;
       shape = next;
+      // A jam's host is the room's clock: every change here is news to everybody else.
+      if (jam?.isHost ?? false) unawaited(pushJamState());
       notifyListeners();
     });
   }
 
   StreamSubscription? _playerSub;
+  Timer? _jamTimer;
 
   Future<void> _pollStatus() async {
     if (_disposed) return;
@@ -787,7 +994,13 @@ class AppState extends ChangeNotifier {
       notifyListeners();
       // The same tick keeps this device listed as present in the jam. Without it the
       // others would see everyone drift to "away" while they were still listening.
-      if (jam != null) await refreshJam();
+      if (jam != null) {
+        await refreshJam();
+        // And it is the way back into step after a missed event — a tunnel, a sleeping
+        // phone, an event stream that dropped and came back.
+        final state = jam?.playback;
+        if (state != null && isJamGuest) await followJamPlayback(state);
+      }
     } catch (_) {
       // A failed status check says nothing about the worker; leave the last answer.
     }
@@ -806,6 +1019,7 @@ class AppState extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _statusTimer?.cancel();
+    _jamTimer?.cancel();
     _events?.cancel();
     _playerSub?.cancel();
     _events?.cancel();
