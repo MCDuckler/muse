@@ -536,6 +536,11 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
 
   @override
   void dispose() {
+    // The board belongs to the record being shown, and this is the thing showing it.
+    // Leaving the player with a sleeve face-down used to leave the board open behind
+    // it — so the pens turned up again on a screen with no back on it, over a flat
+    // cover, or over the next record entirely.
+    if (_showingBack) widget.board?.close();
     _travel.dispose();
     _out.dispose();
     _spin.dispose();

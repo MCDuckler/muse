@@ -238,6 +238,7 @@ class AppState extends ChangeNotifier {
     // First line after a restart. If the one before it is not a goodbye, the process
     // did not choose to stop — it was killed, which is a different fault entirely.
     PlaybackLog.note('--- app started');
+    unawaited(PlaybackLog.askWhyItDied());
     final prefs = await SharedPreferences.getInstance();
     coverStyle = CoverStyle.values.firstWhere(
         (s) => s.name == prefs.getString(_kCoverStyle),
@@ -1315,10 +1316,31 @@ class AppState extends ChangeNotifier {
     // The other end of the interesting gap: everything between this line and the next
     // "app in front" happened with nobody watching, which is exactly the stretch a
     // report of "it stops when I switch away" is about.
-    onHide: () => PlaybackLog.note('app out of sight'),
-    onPause: () => PlaybackLog.note('app paused by the system'),
+    onHide: _travelLight,
+    onPause: _travelLight,
     onDetach: () => PlaybackLog.note('app being torn down'),
   );
+
+  /// Give back the memory nobody is looking at.
+  ///
+  /// A backgrounded app that is only playing audio is competing for room with whatever
+  /// is in front of it, and the largest thing this one holds is decoded artwork —
+  /// Flutter keeps up to a hundred megabytes of it, and the record stage alone has four
+  /// full-size sleeves and their discs in hand. None of that is on screen while the
+  /// screen is off, and every megabyte of it makes the process a better candidate for
+  /// the low-memory killer, which is the one way music stops that no amount of watching
+  /// the audio engine will catch.
+  ///
+  /// Nothing is lost: the artwork is on the disk now, so coming back reads it from
+  /// there rather than from the server.
+  void _travelLight() {
+    PlaybackLog.note('app out of sight');
+    final cache = PaintingBinding.instance.imageCache;
+    final held = cache.currentSizeBytes ~/ (1024 * 1024);
+    cache.clear();
+    cache.clearLiveImages();
+    if (held > 0) PlaybackLog.note('gave back ${held}MB of artwork');
+  }
 
   Future<void> _pollStatus() async {
     if (_disposed) return;

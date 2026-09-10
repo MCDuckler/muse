@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// A short written record of what the audio engine did, kept across restarts.
@@ -65,4 +67,22 @@ class PlaybackLog {
   }
 
   static String get text => _lines.join('\n');
+
+  /// What Android says about how the app stopped running last time.
+  ///
+  /// Three rounds of "the music stops when I leave the app" have been answered with
+  /// guesses, because the interesting minute is the one with the screen off. The system
+  /// has been keeping the answer the whole time — it records why it kills a process —
+  /// and "it was reclaimed for memory" and "it crashed" and "something force-stopped
+  /// it" are three faults with three different fixes, only one of which is ours.
+  static Future<void> askWhyItDied() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      final said = await const MethodChannel('muse/lastexit')
+          .invokeMethod<String>('describe');
+      if (said != null && said.isNotEmpty) note(said);
+    } catch (_) {
+      // Older Android, or nothing recorded. Not worth a word.
+    }
+  }
 }

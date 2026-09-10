@@ -686,7 +686,13 @@ class _SleeveTools extends StatelessWidget {
       animation: app.sleeveBoard,
       builder: (context, _) {
         final board = app.sleeveBoard;
-        if (!board.open01) return const SizedBox.shrink();
+        // Two conditions, not one. A board can only be open because a record is turned
+        // over, and a record can only be turned over on the stage that draws records —
+        // so the pens have no business appearing beside a flat cover, whatever the
+        // board happens to think.
+        if (!board.open01 || app.coverStyle != CoverStyle.record) {
+          return const SizedBox.shrink();
+        }
         final jam = app.jam;
         return Padding(
           padding: const EdgeInsets.only(bottom: 10),

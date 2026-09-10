@@ -50,6 +50,14 @@ class MainActivity : AudioServiceActivity() {
             }
         // See Keepalive: the radio has to stay up for a stream to keep arriving once
         // the screen is off.
+        // Why the app stopped running last time. See LastExit.
+        MethodChannel(engine.dartExecutor.binaryMessenger, "muse/lastexit")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "describe" -> result.success(LastExit.describe(applicationContext))
+                    else -> result.notImplemented()
+                }
+            }
         MethodChannel(engine.dartExecutor.binaryMessenger, "muse/keepalive")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
