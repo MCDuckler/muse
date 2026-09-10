@@ -29,7 +29,11 @@ publish_server() {
 publish_web() {
   echo "== web"
   (cd app && flutter build web --release --dart-define=MUSE_SERVER="$SERVER_URL")
-  rsync -az --delete --exclude muse.apk -e "$SSH" app/build/web/ "$HOST":/opt/muse/deploy/web/
+  # muse.apk* rather than muse.apk: the manifest beside the APK is published by the
+  # apk step and lives in the same directory, and a --delete that only knew about the
+  # APK itself quietly removed it every time the web app went out — so the app could
+  # never find out that a new version existed.
+  rsync -az --delete --exclude 'muse.apk*' -e "$SSH" app/build/web/ "$HOST":/opt/muse/deploy/web/
 }
 
 publish_apk() {

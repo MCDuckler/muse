@@ -28,6 +28,17 @@
 		file_server
 	}
 
+	# What the app reads to find out whether the APK above is newer than the one it is
+	# running. Its own handler, because the app-shell fallback below answers anything it
+	# does not recognise with index.html — so asking for a manifest that was not there
+	# got a page of HTML and a parse error rather than "no manifest".
+	handle /muse.apk.json {
+		header Content-Type application/json
+		header Cache-Control "no-cache"
+		root * /srv
+		file_server
+	}
+
 	# Flutter web build. try_files so a deep link still lands on the app shell.
 	handle {
 		root * /srv
