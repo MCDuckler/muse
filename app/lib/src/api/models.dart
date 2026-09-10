@@ -33,6 +33,11 @@ class Track {
   /// Who put this on. Only meaningful in a jam, where the queue has several authors.
   final String? addedBy;
 
+  /// Who that is, and the picture they chose — so a queue in a jam can show a face
+  /// against a song rather than a name nobody reads in a list of forty.
+  final int? addedById;
+  final String? addedByAvatar;
+
   const Track({
     required this.id,
     required this.title,
@@ -56,6 +61,8 @@ class Track {
     String? displayTitle,
     this.origin = 'user',
     this.addedBy,
+    this.addedById,
+    this.addedByAvatar,
   }) : displayTitle = displayTitle ?? title;
 
   /// Queue membership carries `origin`, which a freshly fetched track does not know.
@@ -82,6 +89,8 @@ class Track {
         displayTitle: displayTitle,
         origin: origin,
         addedBy: addedBy,
+        addedById: addedById,
+        addedByAvatar: addedByAvatar,
       );
 
   Track withProgress(Map<String, dynamic>? p) => Track(
@@ -92,6 +101,7 @@ class Track {
         streamPath: streamPath, coverPath: coverPath, coverColor: coverColor,
         coverVersion: coverVersion, providerId: providerId,
         displayTitle: displayTitle, origin: origin, addedBy: addedBy,
+        addedById: addedById, addedByAvatar: addedByAvatar,
       );
 
   bool get isReady => state == 'ready' && streamPath != null;
@@ -165,6 +175,8 @@ class Track {
         displayTitle: j['display_title'] as String?,
         origin: (j['origin'] ?? 'user') as String,
         addedBy: j['added_by'] as String?,
+        addedById: j['added_by_id'] as int?,
+        addedByAvatar: j['added_by_avatar'] as String?,
       );
 }
 

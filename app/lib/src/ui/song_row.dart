@@ -26,6 +26,7 @@ class SongRow extends StatelessWidget {
     this.onTap,
     this.leading,
     this.handle,
+    this.corner,
     this.trailing,
     this.selected = false,
     this.showAlbum = true,
@@ -62,6 +63,10 @@ class SongRow extends StatelessWidget {
 
   /// Replaces the artwork — a position number, a check.
   final Widget? leading;
+
+  /// Drawn over the corner of the artwork: a small face saying who put this song
+  /// here. Only worth showing where more than one person is adding to a list.
+  final Widget? corner;
 
   /// A grip, at the very edge of the row and tight against the artwork. It sits
   /// *beside* the cover rather than instead of it: a row of small grey grips tells you
@@ -151,7 +156,17 @@ class SongRow extends StatelessWidget {
                           picked ? Icons.check_circle : Icons.circle_outlined,
                           color: picked ? scheme.primary : scheme.outline,
                         )
-                      : leading ?? Artwork(track: track, size: 40, radius: 5),
+                      : corner == null
+                          ? leading ?? Artwork(track: track, size: 40, radius: 5)
+                          : Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                leading ??
+                                    Artwork(track: track, size: 40, radius: 5),
+                                Positioned(
+                                    left: -4, bottom: -4, child: corner!),
+                              ],
+                            ),
                 ),
               ),
               const SizedBox(width: 10),

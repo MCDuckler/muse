@@ -9,6 +9,7 @@ import '../state/player.dart';
 import 'dialogs.dart';
 import 'song_row.dart';
 import '../state/selection.dart';
+import 'face.dart';
 import 'selection_bar.dart';
 import 'artwork.dart';
 
@@ -315,6 +316,27 @@ class _QueuePageState extends State<QueuePage> {
                         track: t,
                         selected: isCurrent,
                         dense: true,
+                        // Whose song this is, but only where that is a question: on
+                        // your own queue everything is yours, and a row of identical
+                        // faces says nothing.
+                        corner: app.jam == null || t.addedBy == null
+                            ? null
+                            : Tooltip(
+                                message: 'Added by ${t.addedBy}',
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: Theme.of(context).colorScheme.surface,
+                                  ),
+                                  padding: const EdgeInsets.all(1.5),
+                                  child: Face(
+                                    name: t.addedBy,
+                                    userId: t.addedById,
+                                    version: t.addedByAvatar,
+                                    size: 18,
+                                  ),
+                                ),
+                              ),
                         // The queue's sideways drag takes a row out; a song already in
                         // the queue has nothing to be added to.
                         swipeToPlayNext: false,

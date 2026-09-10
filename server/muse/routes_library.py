@@ -517,7 +517,9 @@ def _queue_state(queue_id: int) -> dict:
     # stream_url, the client reads that as "not ready yet", and nothing in the queue
     # is playable no matter how ready the track actually is.
     items = db.all_(
-        """select i.pos, i.origin, u.name as added_by, t.*, m.path, m.bytes, m.sha256,
+        """select i.pos, i.origin, u.name as added_by, u.id as added_by_id,
+                  u.avatar_sig as added_by_avatar,
+                  t.*, m.path, m.bytes, m.sha256,
                   c.color as cover_color, c.sha256 as cover_sha
              from queue_items i
              join tracks t on t.id=i.track_id
@@ -529,8 +531,12 @@ def _queue_state(queue_id: int) -> dict:
     )
     return {**q, "items": [{**catalog.public(t), "origin": t["origin"], "pos": t["pos"],
                             # Only interesting in a jam, and harmless otherwise: it is
-                            # how "who put this on" gets answered without asking.
-                            "added_by": t["added_by"]}
+                            # how "who put this on" gets answered without asking. The
+                            # id and the picture come too, so the answer can be a face
+                            # rather than a name nobody reads in a list of forty.
+                            "added_by": t["added_by"],
+                            "added_by_id": t["added_by_id"],
+                            "added_by_avatar": t["added_by_avatar"]}
                            for t in items]}
 
 
