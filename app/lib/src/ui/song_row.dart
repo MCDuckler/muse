@@ -116,12 +116,25 @@ class SongRow extends StatelessWidget {
 
     final duration = SongRow.formatDuration(track.duration);
 
+    // The song playing, said properly.
+    //
+    // A ten-percent wash was not enough to find in a queue of four hundred: scrolling
+    // past it, there was nothing to catch. Now it is a chip of its own — filled,
+    // outlined, its title in the accent colour, and the artwork carrying a small mark
+    // that says this is the one making the sound.
     final row = Material(
       color: picked
           ? scheme.primary.withValues(alpha: 0.18)
           : selected
-              ? scheme.primary.withValues(alpha: 0.10)
+              ? scheme.primary.withValues(alpha: 0.20)
               : Colors.transparent,
+      shape: selected && !picked
+          ? RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(
+                  color: scheme.primary.withValues(alpha: 0.55), width: 1.2),
+            )
+          : null,
       child: InkWell(
         // The feedback is the point: a list that does not answer a touch immediately
         // reads as broken long before anything has actually gone wrong.
@@ -156,15 +169,32 @@ class SongRow extends StatelessWidget {
                           picked ? Icons.check_circle : Icons.circle_outlined,
                           color: picked ? scheme.primary : scheme.outline,
                         )
-                      : corner == null
+                      : corner == null && !selected
                           ? leading ?? Artwork(track: track, size: 40, radius: 5)
                           : Stack(
                               clipBehavior: Clip.none,
                               children: [
                                 leading ??
                                     Artwork(track: track, size: 40, radius: 5),
-                                Positioned(
-                                    left: -4, bottom: -4, child: corner!),
+                                // The mark on the record itself. Held back behind a
+                                // scrim so it reads against any artwork — a bright
+                                // glyph on a bright cover is invisible, which is the
+                                // failure this whole change is about.
+                                if (selected)
+                                  Positioned.fill(
+                                    child: DecoratedBox(
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(5),
+                                        color: Colors.black
+                                            .withValues(alpha: 0.45),
+                                      ),
+                                      child: Icon(Icons.graphic_eq,
+                                          size: 20, color: scheme.primary),
+                                    ),
+                                  ),
+                                if (corner != null)
+                                  Positioned(
+                                      left: -4, bottom: -4, child: corner!),
                               ],
                             ),
                 ),
@@ -180,8 +210,12 @@ class SongRow extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: text.bodyMedium?.copyWith(
-                        color: failed ? scheme.error : null,
-                        fontWeight: selected ? FontWeight.w600 : null,
+                        color: failed
+                            ? scheme.error
+                            : selected
+                                ? scheme.primary
+                                : null,
+                        fontWeight: selected ? FontWeight.w700 : null,
                       ),
                     ),
                     if (subtitle.isNotEmpty)
