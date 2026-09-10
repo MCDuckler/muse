@@ -48,6 +48,18 @@ class MainActivity : AudioServiceActivity() {
                     else -> result.notImplemented()
                 }
             }
+        // See Keepalive: the radio has to stay up for a stream to keep arriving once
+        // the screen is off.
+        MethodChannel(engine.dartExecutor.binaryMessenger, "muse/keepalive")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "set" -> {
+                        Keepalive.set(applicationContext, call.argument<Boolean>("on") == true)
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         MethodChannel(engine.dartExecutor.binaryMessenger, "muse/cookies")
             .setMethodCallHandler { call, result ->
                 when (call.method) {

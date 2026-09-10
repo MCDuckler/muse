@@ -65,6 +65,11 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   /// Every track is a minute long, which is all the tests need of a duration.
   static const trackLength = Duration(minutes: 1);
 
+  /// How many times *any* engine has been handed a source. Kept off the instance
+  /// because a repair may replace the platform player, and a count that disappears
+  /// with the thing being counted cannot answer "how many times did it try".
+  static int loadCount = 0;
+
   @override
   Stream<PlaybackEventMessage> get playbackEventMessageStream => _events.stream;
 
@@ -105,6 +110,7 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
     index = request.initialIndex ?? 0;
     position = request.initialPosition ?? Duration.zero;
     state = ProcessingStateMessage.ready;
+    loadCount++;
     calls.add('load ${sources.length}');
     _emit();
     return LoadResponse(duration: trackLength);
@@ -212,6 +218,18 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   /// the state changes and then nothing else happens at all.
   void stall() {
     state = ProcessingStateMessage.buffering;
+    _emit();
+  }
+
+  /// The engine stopped on its own and said nothing more about it.
+  ///
+  /// What a phone actually does to a background app: the stream's socket is closed
+  /// while the screen is off, or the platform takes the player back, and playback ends
+  /// with no error anybody asked for. From Dart it looks exactly like this — playing
+  /// goes false, the state goes idle, and nothing else ever happens.
+  void die() {
+    playing = false;
+    state = ProcessingStateMessage.idle;
     _emit();
   }
 

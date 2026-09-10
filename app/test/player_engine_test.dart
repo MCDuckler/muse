@@ -326,6 +326,93 @@ void main() {
         reason: 'it picks up where the sound stopped: ${engine.calls}');
   });
 
+  test('an engine that dies in the background is started again', () async {
+    // The complaint: leave the app and the music stops after a while. Nothing looked
+    // for this. The snapshot is rebuilt from the engine on every state change, so
+    // "the app thinks it is playing but the engine has stopped" was a state that could
+    // not exist to be noticed — the check meant to catch it compared the engine
+    // against a copy of itself and was always false. The signal that does survive is
+    // the processing state: an engine holding nothing reports idle.
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    await player.playAt(0);
+    await settle();
+    audio.only.tick(const Duration(seconds: 40));
+    await settle();
+
+    audio.only.die();                              // the stream's socket closed
+    await settle();
+    await player.checkForStall();                  // the watchdog's next round
+    await settle();
+
+    final engine = audio.only;                     // possibly a fresh platform player
+    expect(engine.calls.any((c) => c.startsWith('load')), isTrue,
+        reason: 'the source is opened again: ${engine.calls}');
+    expect(engine.calls, contains('play'),
+        reason: 'and started: ${engine.calls}');
+    expect(engine.position, const Duration(seconds: 40),
+        reason: 'from where the song had actually got to');
+    expect(player.current?.id, 1, reason: 'the same song, not the next one');
+  });
+
+  test('an engine that will not come back is not hammered for ever', () async {
+    // A phone quietly reopening a dead stream every five seconds until the battery
+    // is flat is worse than silence.
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    await player.playAt(0);
+    await settle();
+
+    FakeAudioPlayer.loadCount = 0;
+    for (var i = 0; i < PlayerService.maxRevivals + 4; i++) {
+      if (audio.players.isNotEmpty) audio.only.die();
+      await settle();
+      await player.checkForStall();
+      await settle();
+    }
+
+    expect(FakeAudioPlayer.loadCount, lessThanOrEqualTo(PlayerService.maxRevivals),
+        reason: 'it gives up rather than retrying for ever');
+    expect(FakeAudioPlayer.loadCount, greaterThan(0), reason: 'but it does try');
+  });
+
+  test('a paused player is left paused', () async {
+    // The other half of the same fix: reviving must follow what the person asked for,
+    // never what the engine happens to be doing. Pausing and putting the phone down
+    // is not a fault to be repaired.
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    await player.playAt(0);
+    await settle();
+    await player.pause();
+    await settle();
+    final engine = audio.only;
+    engine.calls.clear();
+
+    for (var i = 0; i < 4; i++) {
+      await player.checkForStall();
+      await settle();
+    }
+    await player.resumeIfStopped();
+    await settle();
+
+    expect(engine.calls, isEmpty,
+        reason: 'nothing starts music nobody asked for: ${engine.calls}');
+  });
+
+  test('a queue that has run out is not restarted', () async {
+    await player.loadQueue(queueOf([track(1)]));
+    await player.playAt(0);
+    await settle();
+    final engine = audio.only;
+    engine.reachEnd();
+    await settle();
+    engine.calls.clear();
+
+    await player.checkForStall();
+    await settle();
+
+    expect(engine.calls.where((c) => c == 'play'), isEmpty,
+        reason: 'the end of the queue is not a stall: ${engine.calls}');
+  });
+
   test('shuffling deals what is coming and leaves the rest alone', () async {
     // Twelve, so that "something moved" is a fact rather than a coin toss: nine songs
     // are dealt, and the chance of the same order coming back is one in 362,880.

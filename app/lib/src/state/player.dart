@@ -8,6 +8,7 @@ import 'package:just_audio_background/just_audio_background.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
+import 'keepalive.dart';
 
 enum QueueRepeat { off, one, all }
 
@@ -59,6 +60,23 @@ class PlayerService {
 
   /// Since when the engine has been waiting for audio, if it is.
   DateTime? _bufferingSince;
+
+  /// Whether music is *supposed* to be playing.
+  ///
+  /// Not the same question as `_player.playing`, and the difference is the whole of
+  /// this bug. The snapshot mirrors the engine — it is rebuilt from it on every state
+  /// change — so "it says it is playing but the engine has stopped" was a state that
+  /// could never be observed, and the check that was meant to catch a background stop
+  /// could never fire. This is the other half: what the person asked for, which only
+  /// the person changes.
+  bool _wantPlaying = false;
+
+  /// Something else has the speaker — a call, a spoken direction. Not a fault, and not
+  /// ours to undo: the session tells us when it is over.
+  bool _interrupted = false;
+
+  /// How many times the watchdog has tried to get a stopped engine going again.
+  int _revivals = 0;
 
   /// The furthest into this song playback has actually reached. Where to put the
   /// needle back when a stream dies: not where the engine last mentioned, which may be
@@ -201,9 +219,13 @@ class PlayerService {
           if (event.type == AudioInterruptionType.duck) {
             await _player.setVolume(_volumeFor(current) * 0.3);
           } else if (wasPlaying) {
+            // Held apart from `pause()`: this is not the person deciding to stop, and
+            // the watchdog must neither undo it nor forget that music was playing.
+            _interrupted = true;
             await _player.pause();
           }
         } else {
+          _interrupted = false;
           if (event.type == AudioInterruptionType.duck) {
             await _player.setVolume(_volumeFor(current));
           } else if (event.type == AudioInterruptionType.pause && wasPlaying) {
@@ -231,10 +253,32 @@ class PlayerService {
   /// Nothing notices that on its own, so this does: nudge it back to where it was,
   /// and if that does not take, load the song again from that spot.
   Future<void> checkForStall() async {
-    if (!_player.playing || _loadedTrackId == null || _mutating > 0) {
+    if (_loadedTrackId == null || _mutating > 0) {
       _bufferingSince = null;
       return;
     }
+
+    // Music that is supposed to be playing, and an engine that is not playing it.
+    //
+    // This is the background case, and until now nothing looked for it: the app was
+    // switched away from, something stopped the engine — a stream the connection
+    // dropped, a socket a sleeping phone closed, the platform reclaiming the player —
+    // and the app only ever noticed if you opened it again.
+    //
+    // `idle` is the signal that matters, not `playing`. just_audio keeps `playing` in
+    // Dart: it is what was last *asked for*, and it stays true through an engine that
+    // has died underneath it. What the platform actually reports is its processing
+    // state, and an engine holding nothing reports idle. So a dead engine is one that
+    // has gone idle while we still want sound out of it — which is precisely the state
+    // that could not be seen from the snapshot, because the snapshot is built from the
+    // same two values.
+    final dead = _player.processingState == ProcessingState.idle;
+    if (dead || !_player.playing) {
+      _bufferingSince = null;
+      if (_wantPlaying && !_interrupted && !finished) await _revive();
+      return;
+    }
+    _revivals = 0;
 
     // Buffering is the signal, and only buffering.
     //
@@ -275,12 +319,54 @@ class PlayerService {
     _emit(force: true);
   }
 
+  /// Get a stopped engine going again, from where the listener was.
+  ///
+  /// Escalating, and bounded. Asking it to play again is nearly always enough — the
+  /// engine is idle but intact. When it is not, the source is loaded afresh from the
+  /// furthest point that was actually heard. After a few failures in a row it stops
+  /// trying: something is wrong that retrying will not fix, and a phone quietly
+  /// reopening a dead stream every five seconds is worse than silence.
+  static const maxRevivals = 6;
+
+  Future<void> _revive() async {
+    if (_revivals >= maxRevivals) return;
+    _revivals++;
+    final at = _heardUpTo > _player.position ? _heardUpTo : _player.position;
+    // An engine that is holding nothing cannot be talked round, and asking is worse
+    // than useless: just_audio's play() returns immediately when it already believes
+    // it is playing, which after a death underneath it is exactly what it believes.
+    // So an idle engine is reloaded on the first attempt rather than the third.
+    final holdingNothing = _player.processingState == ProcessingState.idle;
+    try {
+      if (!holdingNothing && _revivals <= 1) {
+        // The engine still has the song and merely stopped — it lost the audio focus,
+        // or the platform paused it. Asking again is the whole repair.
+        _startPlayback();
+      } else {
+        // Put just_audio's own idea of playing back to false first, or the play()
+        // after the load is a no-op for the same reason.
+        try {
+          await _player.pause();
+        } catch (_) {
+          // A dead platform cannot be paused. It is about to be replaced anyway.
+        }
+        await _loadCurrent(startAt: at);
+        _startPlayback();
+      }
+    } catch (e) {
+      lastError = '$e';
+    }
+    _emit(force: true);
+  }
+
   /// The app came back to the front. If it should be playing and it is not, it stopped
-  /// while nobody was looking.
+  /// while nobody was looking — and whatever stopped it may also have stopped the
+  /// watchdog getting anywhere, so this gets a fresh set of attempts.
   Future<void> resumeIfStopped() async {
     if (_loadedTrackId == null) return;
-    if (!_player.playing && (last?.playing ?? false)) {
-      _startPlayback();
+    _revivals = 0;
+    if (_wantPlaying && !_player.playing && !_interrupted && !finished) {
+      await _revive();
       return;
     }
     await checkForStall();
@@ -534,6 +620,8 @@ class PlayerService {
   /// *stops*, so awaiting it would defer everything after it to the end of the song
   /// and leave an error handler open for the whole track.
   void _startPlayback() {
+    _wantPlaying = true;
+    unawaited(Keepalive.set(true));
     unawaited(_player.play().catchError((Object e) {
       if (_isAutoplayRefusal(e)) {
         // Ask for the tap rather than reporting a failure — nothing is broken.
@@ -567,6 +655,8 @@ class PlayerService {
   /// Stop, without deciding to start again. The jam needs the two halves separately:
   /// following somebody else's player is not a toggle.
   Future<void> pause() async {
+    _wantPlaying = false;
+    unawaited(Keepalive.set(false));
     if (!_player.playing) return;
     try {
       await _player.pause();
@@ -594,6 +684,8 @@ class PlayerService {
   Future<void> playPause() async {
     try {
       if (_player.playing) {
+        _wantPlaying = false;
+        unawaited(Keepalive.set(false));
         await _player.pause();
         _saveCursor();
       } else {
@@ -690,6 +782,8 @@ class PlayerService {
   Future<void> _finish() async {
     _recordListen();
     finished = true;
+    _wantPlaying = false;              // the queue ran out; nothing to revive
+    unawaited(Keepalive.set(false));
     await _halt();
     _emit(force: true);
   }
@@ -703,6 +797,7 @@ class PlayerService {
   /// ("NotAllowedError: The play method is not allowed..."). Pausing leaves the same
   /// element in place, which is all "stopped" needs to mean here.
   Future<void> _halt() async {
+    _revivals = 0;
     if (kIsWeb) {
       await _player.pause();
       return;
