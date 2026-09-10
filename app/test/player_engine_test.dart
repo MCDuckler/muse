@@ -36,10 +36,24 @@ Future<HttpServer> stubServer() async {
     await for (final request in server) {
       if (stubDelay > Duration.zero) await Future<void>.delayed(stubDelay);
       request.response.headers.contentType = ContentType.json;
-      if (request.uri.path == '/auth/stream-key') {
+      final path = request.uri.path;
+      if (path == '/auth/stream-key') {
         request.response.write(jsonEncode({
           'key': 'test-key',
           'expires_at': DateTime.now().millisecondsSinceEpoch ~/ 1000 + 86400,
+        }));
+      } else if (path == '/queues' && request.method == 'GET') {
+        // One queue of this person's own, which is what somebody leaving a jam is
+        // handed back to.
+        request.response.write(jsonEncode([
+          {'id': 99, 'name': 'Mine', 'cursor_index': 0, 'position_ms': 0,
+           'rev': 1, 'items': 0},
+        ]));
+      } else if (path.startsWith('/queues/') && request.method == 'GET') {
+        request.response.write(jsonEncode({
+          'id': int.tryParse(path.split('/')[2]) ?? 99,
+          'name': 'Mine', 'cursor_index': 0, 'position_ms': 0, 'rev': 1,
+          'items': <dynamic>[],
         }));
       } else {
         request.response.write(jsonEncode({'ok': true}));
@@ -362,6 +376,38 @@ void main() {
         trackId: 2, positionMs: 42000, playing: false));
     await settle();
     expect(audio.only.playing, isFalse);
+  });
+
+  test('leaving a jam hands back the queue that came with it', () async {
+    // The host's queue is in a guest's list only while they are in the room. Clearing
+    // the jam alone left it sitting there, selected, refusing every edit.
+    final app = AppState();
+    app.api = api;
+    app.player = player;
+    final theirs = queueOf([track(1), track(2)]);
+    app.activeQueue = theirs;
+    app.queues = [theirs];
+    app.jam = Jam.fromJson({
+      'id': 7, 'code': 'ABC123', 'queue_id': theirs.id, 'host': 'somebody',
+      'is_host': false,
+    });
+    await player.loadQueue(theirs);
+    await player.playAt(0);
+    await settle();
+    expect(audio.only.playing, isTrue);
+
+    await app.leaveJam();
+    await settle();
+
+    expect(app.jam, isNull);
+    // Asked of the player rather than the engine: an empty queue deactivates the
+    // platform player altogether, which is the engine agreeing rather than an answer.
+    expect(player.last?.playing, isFalse,
+        reason: 'the music was the room\'s; ending the room ends it');
+    expect(app.activeQueue?.id, isNot(theirs.id),
+        reason: 'and the queue that came with the room goes back with it');
+    expect(app.queues.any((q) => q.id == theirs.id), isFalse,
+        reason: 'it is not in the list of queues either');
   });
 
   test('a guest does not write its own position into the host queue', () async {

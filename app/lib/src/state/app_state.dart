@@ -905,8 +905,18 @@ class AppState extends ChangeNotifier {
     if (data['what'] == 'skip' && (jam?.isHost ?? false)) {
       if (player?.current?.id == data['track_id']) await player?.next();
     }
+    // Held onto before asking, because what it answers may be "there is no jam any
+    // more" — and by then there is nothing left to say which queue was the room's.
+    final wasQueue = jam?.queueId;
+    final wasHost = jam?.isHost ?? false;
+
     await refreshJam();
-    if (jam != null && activeQueue?.id == jam!.queueId) {
+    if (jam == null) {
+      // Ended by the host, or this device was removed from it.
+      await _outOfTheJam(wasQueue, wasHost: wasHost);
+      return;
+    }
+    if (activeQueue?.id == jam!.queueId) {
       await _reloadActiveQueue();
       if (activeQueue != null) await player?.loadQueue(activeQueue!);
     }
@@ -1022,7 +1032,35 @@ class AppState extends ChangeNotifier {
     final current = jam;
     if (current == null) return;
     await api.leaveJam(current.id);
+    await _outOfTheJam(current.queueId, wasHost: current.isHost);
+  }
+
+  /// The room is over for this device — left, removed, or the host closed it.
+  ///
+  /// A guest was listening to the host's queue, which is in their list only for as
+  /// long as they are in the jam. Clearing the jam alone left that queue sitting in
+  /// the strip and selected, so the screen still showed somebody else's list, still
+  /// said what was on it, and refused every edit — the room had gone and the app had
+  /// not noticed.
+  Future<void> _outOfTheJam(int? jamQueueId, {bool wasHost = false}) async {
     jam = null;
+    jamPosition = null;
+    _jamPositionAt = null;
+    queues = await api.queues();
+
+    // The host keeps their own queue; only a guest is left holding one that is not
+    // theirs to hold.
+    if (!wasHost && jamQueueId != null && activeQueue?.id == jamQueueId) {
+      // The music was the room's. Stopping is what ending a shared listen sounds
+      // like; carrying on into somebody else's list from your own queue is not.
+      await player?.pause();
+      final mine = queues.where((q) => q.sharedFrom == null).toList();
+      final next = mine.isEmpty
+          ? await ensureQueue('Now')
+          : await api.queue(mine.first.id);
+      activeQueue = next;
+      await player?.loadQueue(next);
+    }
     notifyListeners();
   }
 
