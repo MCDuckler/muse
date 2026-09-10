@@ -76,6 +76,59 @@ void main() {
     );
   });
 
+  test('a jam carries the transport, not just the queue', () async {
+    // The complaint this exists for: a jam shared a queue and nothing else, so two
+    // people in one were listening to the same list at different points in it. The
+    // second account is the other person in the room.
+    final guestUser = Platform.environment['MUSE_TEST_GUEST_USER'];
+    final guestPass = Platform.environment['MUSE_TEST_GUEST_PASS'];
+    if (guestUser == null || guestPass == null) {
+      markTestSkipped('set MUSE_TEST_GUEST_USER/PASS for the jam test');
+      return;
+    }
+    final guest = ApiClient(baseUrl: base);
+    await guest.login(guestUser, guestPass, 'flutter-test');
+
+    final library = await api.libraryTracks(limit: 40, readyOnly: true);
+    final picks = library.items.take(2).toList();
+    expect(picks.length, 2, reason: 'need two downloaded tracks');
+
+    final queue = await api.createQueue('jam-live-${DateTime.now().millisecondsSinceEpoch}');
+    await api.addToQueue(queue.id, picks.map((t) => t.id).toList());
+    final jam = await api.startJam(queue.id);
+    try {
+      final joined = await guest.joinJam(jam.code);
+      expect(joined.queueId, queue.id, reason: 'a guest listens to the host\'s queue');
+
+      // The host says where the music is; the room reads it.
+      await api.pushJamPlayback(jam.id,
+          trackId: picks[1].id, positionMs: 61_000, playing: true);
+      final seen = (await guest.currentJam())!.playback;
+      expect(seen, isNotNull);
+      expect(seen!.trackId, picks[1].id);
+      expect(seen.playing, isTrue);
+      expect(seen.positionMs, 61_000);
+      // The age is what lets a device that reads this late land in the right place.
+      expect(seen.position.inMilliseconds, greaterThanOrEqualTo(61_000));
+
+      // Anybody in the room works the controls, and adds to the queue.
+      for (final action in ['pause', 'play', 'next', 'previous']) {
+        await guest.jamControl(jam.id, action);
+      }
+      final grown = await guest.addToQueue(queue.id, [picks[0].id], mode: 'next');
+      expect(grown.items.length, 3, reason: 'a guest can put something on');
+
+      // Only the host's player is the clock.
+      expect(
+        () => guest.pushJamPlayback(jam.id, positionMs: 1, playing: true),
+        throwsA(isA<ApiException>().having((e) => e.status, 'status', 403)),
+      );
+    } finally {
+      await api.leaveJam(jam.id);          // the host leaving ends it
+      await api.deleteQueue(queue.id);
+    }
+  });
+
   test('the stream endpoint serves ranges to the player', () async {
     final t = await api.resolve(videoId: 'Rgrt_8mXrK8');
     final client = HttpClient();
