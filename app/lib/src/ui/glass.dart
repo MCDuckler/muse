@@ -1,5 +1,6 @@
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 /// A translucent, blurred surface.
@@ -29,6 +30,11 @@ class GlassSurface extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final radius = borderRadius ?? BorderRadius.zero;
+    // Gentler in a browser. A backdrop blur is the most expensive thing on this
+    // screen and its cost follows the radius; on the web, where there is least to
+    // spend, half of it over an opaque ground still reads as frosted glass and costs
+    // a fraction of what the full radius does.
+    final sigma = kIsWeb ? blur * 0.5 : blur;
 
     return ClipRRect(
       borderRadius: radius,
@@ -52,7 +58,7 @@ class GlassSurface extends StatelessWidget {
             ),
           ),
       BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+        filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
         child: DecoratedBox(
           decoration: BoxDecoration(
             color: scheme.surface.withValues(alpha: opacity),

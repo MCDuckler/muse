@@ -244,7 +244,17 @@ class _QueuePageState extends State<QueuePage> {
         Expanded(
           child: active == null || rows.isEmpty
               ? const _EmptyQueue()
-              : RefreshIndicator(
+              : Builder(builder: (context) {
+                // Worked out once for the whole list rather than once per row.
+                //
+                // It is a scan of the queue, and it was being run for every row built
+                // and again for every proxy drawn — on a mirrored library of thirteen
+                // thousand songs that is a couple of hundred thousand comparisons a
+                // frame while a selection is being dragged, to answer the same
+                // question a dozen times.
+                final picked = _pickedPositions(context, rows, active);
+                final pickedSet = picked.toSet();
+                return RefreshIndicator(
                   onRefresh: app.refresh,
                   child: ReorderableListView.builder(
                   scrollController: _scroll,
@@ -257,8 +267,7 @@ class _QueuePageState extends State<QueuePage> {
                   // row: a stack of sleeves with a count on it, rather than a dozen
                   // rows sliding about independently.
                   proxyDecorator: (child, index, animation) {
-                    final picked = _pickedPositions(context, rows, active);
-                    if (picked.length < 2 || !picked.contains(index)) {
+                    if (picked.length < 2 || !pickedSet.contains(index)) {
                       return Material(color: Colors.transparent, child: child);
                     }
                     return Material(
@@ -272,8 +281,7 @@ class _QueuePageState extends State<QueuePage> {
                   // actually lands on, rather than one measured before the row was
                   // lifted out, which is an off-by-one waiting to happen.
                   onReorderItem: (from, to) {
-                    final picked = _pickedPositions(context, rows, active);
-                    if (picked.length > 1 && picked.contains(from)) {
+                    if (picked.length > 1 && pickedSet.contains(from)) {
                       app.moveManyInQueue(picked, to);
                     } else {
                       app.moveInQueue(from, to);
@@ -282,13 +290,12 @@ class _QueuePageState extends State<QueuePage> {
                   itemBuilder: (context, i) {
                     final t = rows[i];
                     final isCurrent = i == (app.player?.index ?? -1);
-                    final picked = _pickedPositions(context, rows, active);
                     // Folded away behind the row being dragged.
                     if (_dragging != null &&
                         i != _dragging &&
                         picked.length > 1 &&
-                        picked.contains(i) &&
-                        picked.contains(_dragging!)) {
+                        pickedSet.contains(i) &&
+                        pickedSet.contains(_dragging!)) {
                       return SizedBox(key: ValueKey('folded-${t.id}-$i'), height: 0);
                     }
                     return Dismissible(
@@ -388,7 +395,8 @@ class _QueuePageState extends State<QueuePage> {
                     );
                   },
                 ),
-                ),
+                );
+              }),
         ),
       ],
     );

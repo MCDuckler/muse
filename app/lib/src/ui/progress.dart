@@ -95,7 +95,14 @@ class _SmoothPositionState extends State<SmoothPosition>
     if (widget.duration > Duration.zero && at > widget.duration) {
       at = widget.duration;
     }
-    if (at.inMilliseconds == _shown.inMilliseconds) return;
+    // Ten times a second, not sixty.
+    //
+    // What this drives is a bar a few hundred pixels wide across a four-minute song:
+    // one pixel of it is most of a second, so sixty updates a second redraw the same
+    // pixel forty times over — and each one rebuilds a Slider, or a progress bar and
+    // the two times either side of it. A tenth of a second is still a tenth of a pixel
+    // per step, which is smooth by any measure anyone can see.
+    if ((at.inMilliseconds - _shown.inMilliseconds).abs() < 100) return;
     setState(() => _shown = at);
   }
 

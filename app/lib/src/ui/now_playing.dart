@@ -285,6 +285,37 @@ class NowPlayingScreen extends StatelessWidget {
   }
 }
 
+/// The way into the player: up from the bottom, the way it is dismissed.
+///
+/// It used to arrive from the side, which is what a *page* does — one thing after
+/// another in a stack you go back through. This is not that. The player is the bar at
+/// the bottom of the screen opened out, it is dragged back down to close, and coming
+/// in sideways said none of that.
+Route<void> nowPlayingRoute() => PageRouteBuilder<void>(
+      // Opaque, so that once it has arrived the app underneath stops being drawn at
+      // all. A see-through route keeps every screen below it painting for as long as
+      // it is open, which is a whole app rendered behind a page that covers it.
+      transitionDuration: const Duration(milliseconds: 340),
+      reverseTransitionDuration: const Duration(milliseconds: 260),
+      pageBuilder: (_, __, ___) => const NowPlayingScreen(),
+      transitionsBuilder: (context, animation, secondary, child) {
+        // Decelerating in, accelerating out — a sheet that is thrown up and then
+        // settles, rather than one moving at a constant speed in both directions.
+        final curve = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+          reverseCurve: Curves.easeInCubic,
+        );
+        return SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(0, 1),
+            end: Offset.zero,
+          ).animate(curve),
+          child: child,
+        );
+      },
+    );
+
 /// Leave the player and land on the queue.
 ///
 /// This used to open a small sheet with its own list of what was coming: a second

@@ -165,8 +165,5 @@ class PlayerBar extends StatelessWidget {
   }
 
   static void _openNowPlaying(BuildContext context) =>
-      Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) => const NowPlayingScreen(),
-        fullscreenDialog: true,
-      ));
+      Navigator.of(context).push(nowPlayingRoute());
 }

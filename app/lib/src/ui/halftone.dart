@@ -112,7 +112,13 @@ class _HalftoneBackdropState extends State<HalftoneBackdrop>
         animation: Listenable.merge([_clock, _life]),
         builder: (context, _) => CustomPaint(
           painter: _HalftonePainter(
-            phase: _clock.value,
+            // Stepped rather than continuous. The field takes twelve seconds to drift
+            // through itself, so it does not need sixty new positions a second to look
+            // like it is moving — and every one of those is a full screen of dots
+            // recomputed. Two hundred and forty steps is a new frame every fiftieth of
+            // a second, which nobody can tell from smooth and which the painter can
+            // then skip entirely when nothing has changed.
+            phase: (_clock.value * 240).round() / 240,
             life: Curves.easeInOut.transform(_life.value),
             swell: 0.35 + 0.65 * loud,
             ink: ink,
@@ -122,6 +128,41 @@ class _HalftoneBackdropState extends State<HalftoneBackdrop>
       ),
     );
   }
+}
+
+/// The press angle and the distance between dot centres. Out here so the range
+/// arithmetic can be checked against the drawing it is meant to cover.
+const double halftoneAngle = 0.26;
+const double halftonePitch = 26.0;
+
+/// The range of cells that can land on a screen of this size.
+///
+/// The rows run at an angle, so the block of cells covering a screen is not the block
+/// the screen sits in — but it is not the whole plane either, which is what the painter
+/// used to walk. Scanning ±(w+h)/pitch in both directions meant nine thousand cells
+/// considered to draw five hundred, and considering one costs eight hash computations.
+/// Rotating the screen's corners back into cell space gives the range that matters,
+/// which is about a ninth of it.
+({int iLow, int iHigh, int jLow, int jHigh}) visibleCells(
+    Size size, double angle, double pitch) {
+  final cos = math.cos(angle), sin = math.sin(angle);
+  final w = size.width + pitch, h = size.height + pitch;
+  var iLow = double.infinity, iHigh = -double.infinity;
+  var jLow = double.infinity, jHigh = -double.infinity;
+  for (final c in [[-pitch, -pitch], [w, -pitch], [-pitch, h], [w, h]]) {
+    final ci = (c[0] * cos + c[1] * sin) / pitch;
+    final cj = (-c[0] * sin + c[1] * cos) / pitch;
+    if (ci < iLow) iLow = ci;
+    if (ci > iHigh) iHigh = ci;
+    if (cj < jLow) jLow = cj;
+    if (cj > jHigh) jHigh = cj;
+  }
+  return (
+    iLow: iLow.floor(),
+    iHigh: iHigh.ceil(),
+    jLow: jLow.floor(),
+    jHigh: jHigh.ceil(),
+  );
 }
 
 class _HalftonePainter extends CustomPainter {
@@ -147,11 +188,11 @@ class _HalftonePainter extends CustomPainter {
 
   /// The press angle. Fifteen degrees is the screen angle a printer gives the lightest
   /// plate; square-on rows read as a grid, and a grid reads as a mistake.
-  static const double _angle = 0.26;
+  static const double _angle = halftoneAngle;
 
   /// Distance between dot centres. Coarse on purpose: a fine screen at this size is
   /// grey, and the point is that you can see it is made of dots.
-  static const double _pitch = 26.0;
+  static const double _pitch = halftonePitch;
 
   /// Smooth value noise from a hash — one field, sampled twice at different scales so
   /// the pattern has both a slow swell and some grain in it.
@@ -189,11 +230,11 @@ class _HalftonePainter extends CustomPainter {
     // Rows run at the press angle, and the field is sampled in the rotated frame so
     // the whole screen moves as one sheet rather than as rows sliding past each other.
     final cos = math.cos(_angle), sin = math.sin(_angle);
-    final reach = size.width + size.height;
-    final rows = (reach / _pitch).ceil();
 
-    for (var j = -rows; j <= rows; j++) {
-      for (var i = -rows; i <= rows; i++) {
+    final cells = visibleCells(size, _angle, _pitch);
+
+    for (var j = cells.jLow; j <= cells.jHigh; j++) {
+      for (var i = cells.iLow; i <= cells.iHigh; i++) {
         final x = i * _pitch * cos - j * _pitch * sin;
         final y = i * _pitch * sin + j * _pitch * cos;
         if (x < -_pitch || y < -_pitch || x > size.width + _pitch ||

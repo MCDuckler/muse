@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart'
-    show defaultTargetPlatform, kIsWeb, TargetPlatform;
+    show ValueListenable, defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
@@ -71,16 +71,23 @@ class _SpectrumState extends State<Spectrum> with SingleTickerProviderStateMixin
   void _release() {
     _feed?.cancel();
     _feed = null;
-    if (mounted) setState(() => _levels = const []);
+    _levels = const [];
   }
   List<double> _levels = const [];
 
   /// What is drawn, which follows the levels rather than jumping to them: a bar that
   /// snaps to every reading reads as noise, and one that falls slowly reads as music.
-  List<double> _shown = const [];
+  ///
+  /// Held in a notifier rather than in the widget's state, and handed to the painter
+  /// as its `repaint`. Sixty times a second is the right rate for bars to move at and
+  /// the wrong rate to rebuild a widget at: setState on every tick put this subtree
+  /// through build, layout and paint when only the painting had changed.
+  final ValueNotifier<_Frame> _frame =
+      ValueNotifier(const _Frame(levels: [], peaks: []));
 
-  /// Where each band has been recently, falling slowly.
-  List<double> _peaks = const [];
+  List<double> get _shown => _frame.value.levels;
+  List<double> get _peaks => _frame.value.peaks;
+
   Ticker? _ease;
 
   @override
@@ -137,10 +144,12 @@ class _SpectrumState extends State<Spectrum> with SingleTickerProviderStateMixin
       peaks[i] = next[i] > was ? next[i] : was - 0.012;
       if (peaks[i] < 0) peaks[i] = 0;
     }
-    setState(() {
-      _shown = next;
-      _peaks = peaks;
-    });
+    // Whether there is anything at all to draw decides whether the box is even in the
+    // tree, and that *is* a rebuild — but it happens twice a song rather than sixty
+    // times a second.
+    final wasEmpty = _shown.isEmpty;
+    _frame.value = _Frame(levels: next, peaks: peaks);
+    if (wasEmpty != next.isEmpty && mounted) setState(() {});
   }
 
   @override
@@ -148,6 +157,7 @@ class _SpectrumState extends State<Spectrum> with SingleTickerProviderStateMixin
     _lifecycle.dispose();
     _ease?.dispose();
     _feed?.cancel();
+    _frame.dispose();
     super.dispose();
   }
 
@@ -159,8 +169,7 @@ class _SpectrumState extends State<Spectrum> with SingleTickerProviderStateMixin
         height: widget.height,
         child: CustomPaint(
           painter: _Bars(
-            levels: _shown,
-            peaks: _peaks,
+            frame: _frame,
             colour: widget.colour ?? Theme.of(context).colorScheme.primary,
           ),
           size: Size.infinite,
@@ -170,15 +179,25 @@ class _SpectrumState extends State<Spectrum> with SingleTickerProviderStateMixin
   }
 }
 
-class _Bars extends CustomPainter {
-  _Bars({required this.levels, required this.peaks, required this.colour});
-
+/// One reading, as the painter needs it.
+class _Frame {
+  const _Frame({required this.levels, required this.peaks});
   final List<double> levels;
   final List<double> peaks;
+}
+
+class _Bars extends CustomPainter {
+  _Bars({required this.frame, required this.colour}) : super(repaint: frame);
+
+  /// Listened to rather than copied in: a new reading repaints, and nothing above it
+  /// is asked to rebuild.
+  final ValueListenable<_Frame> frame;
   final Color colour;
 
   @override
   void paint(Canvas canvas, Size size) {
+    final levels = frame.value.levels;
+    final peaks = frame.value.peaks;
     if (levels.isEmpty) return;
     // Thin bars with a hairline between them: at sixty-four across a phone that is
     // about two pixels each, which is what makes it read as a spectrum rather than as
@@ -233,5 +252,7 @@ class _Bars extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_Bars old) => true;
+  // The readings come through `repaint`; this only has to answer for the colour,
+  // which changes when the record does.
+  bool shouldRepaint(_Bars old) => old.colour != colour || old.frame != frame;
 }
