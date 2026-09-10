@@ -728,9 +728,12 @@ class ApiClient {
   ///
   /// The whole file goes up as it came off disk: the server knows the shape, and a
   /// backup that names four hundred songs is still a small thing to send.
-  Future<Map<String, dynamic>> importPlaylists(Map<String, dynamic> backup) async =>
+  Future<Map<String, dynamic>> importPlaylists(Map<String, dynamic> backup,
+          {bool dryRun = false}) async =>
       await _decode(await http.post(_u('/playlists/import'),
-          headers: _headers, body: jsonEncode(backup))) as Map<String, dynamic>;
+              headers: _headers,
+              body: jsonEncode({...backup, 'dry_run': dryRun})))
+          as Map<String, dynamic>;
 
   Future<List<FollowedArtist>> follows() async {
     final d = await _decode(await http.get(_u('/follows'), headers: _headers))

@@ -451,3 +451,35 @@ def test_moving_a_block_past_itself_is_not_an_error(client, hdr, tracks):
                     json={"from": [0, 1], "to": 2})
     assert r.status_code == 200
     assert [i["id"] for i in r.json()["items"]] == [ids[2], ids[0], ids[1]]
+
+
+def test_an_import_can_be_rehearsed_first(client, hdr):
+    """A backup is somebody's whole listening history, and putting one in the wrong
+    account is easy to do and tedious to undo. So it can be asked first."""
+    before = client.get("/playlists", headers=hdr).json()
+
+    rehearsal = client.post("/playlists/import", headers=hdr,
+                            json={**BACKUP, "dry_run": True})
+    assert rehearsal.status_code == 201, rehearsal.text
+    said = rehearsal.json()
+    assert said["dry_run"] is True
+    assert [p["name"] for p in said["playlists"]] == ["Acid", "Ambient"]
+    assert said["tracks"] == 3 and said["missing"] == 1
+    assert said["fetch"] == 2, "two songs are not here yet and would be fetched"
+
+    after = client.get("/playlists", headers=hdr).json()
+    assert [p["id"] for p in after] == [p["id"] for p in before], \
+        "a rehearsal writes nothing at all"
+
+    # And what it said is what happens.
+    real = client.post("/playlists/import", headers=hdr, json=BACKUP).json()
+    assert real["tracks"] == said["tracks"]
+    assert real["missing"] == said["missing"]
+
+
+def test_a_rehearsal_says_which_playlists_it_would_replace(client, hdr):
+    client.post("/playlists/import", headers=hdr, json=BACKUP)
+    again = client.post("/playlists/import", headers=hdr,
+                        json={**BACKUP, "dry_run": True}).json()
+    assert again["replaces"] == 2, "both would be written over, not added beside"
+    assert all(p["replaces"] for p in again["playlists"])

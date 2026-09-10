@@ -69,6 +69,32 @@ class _ServicesPageState extends State<ServicesPage> {
       if (backup is! Map<String, dynamic>) {
         throw const FormatException('that file is not a playlist backup');
       }
+      // Ask first. A backup is somebody's whole listening history and it lands in
+      // whichever account is signed in here — which is worth being sure about before
+      // twenty-five playlists appear in it.
+      final would = await api.importPlaylists(backup, dryRun: true);
+      if (!mounted) return;
+      final coming = (would['playlists'] as List?) ?? const [];
+      final replaces = (would['replaces'] ?? 0) as int;
+      final go = await confirm(
+        context,
+        'Import ${coming.length} '
+            '${coming.length == 1 ? 'playlist' : 'playlists'}?',
+        [
+          '${would['tracks']} songs, into ${context.read<AppState>().user ?? 'this'}'
+              "'s library.",
+          if ((would['fetch'] ?? 0) != 0)
+            '${would['fetch']} of them are not here yet and would be fetched.',
+          if (replaces > 0)
+            '$replaces existing '
+                '${replaces == 1 ? 'playlist' : 'playlists'} of the same name would be '
+                'written over.',
+          if ((would['missing'] ?? 0) != 0)
+            '${would['missing']} songs are named in the file but not described in it.',
+        ].join('\n\n'),
+      );
+      if (!go) return;
+
       final result = await api.importPlaylists(backup);
       final lists = (result['playlists'] as List?) ?? const [];
       final missing = (result['missing'] ?? 0) as int;

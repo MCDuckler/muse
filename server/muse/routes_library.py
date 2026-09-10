@@ -212,6 +212,12 @@ def import_playlists(body: dict = Body(...), user: dict = Depends(current_user))
     if fmt != "bcplayer":
         raise HTTPException(400, f"{fmt} backups are not something I can read yet.")
 
+    # A backup file is somebody's whole listening history, and importing one into the
+    # wrong account is easy to do and tedious to undo — twenty-five playlists appear,
+    # and every song in them joins that person's library. So it can be asked first:
+    # `dry_run` answers with exactly what would happen and writes nothing.
+    rehearsal = bool(body.get("dry_run"))
+
     data = body.get("data") if isinstance(body.get("data"), dict) else body
     lists = data.get("playlists")
     if not isinstance(lists, list) or not lists:
@@ -225,20 +231,34 @@ def import_playlists(body: dict = Body(...), user: dict = Depends(current_user))
         known[key] = entry
         known[str(entry.get("trackId"))] = entry
 
+    # What is genuinely new, counted once however many playlists name it — the number
+    # that decides how the audio is fetched, and the number worth putting in front of
+    # somebody before they say yes.
+    fetch: set[str] = set()
+    for entry in lists:
+        for key in (entry.get("tracks") or []):
+            provider_id = _bc_id(key, known)
+            if catalog.find_by_provider("bandcamp", provider_id):
+                continue
+            if (known.get(str(key)) or known.get(provider_id) or {}).get("pageUrl"):
+                fetch.add(provider_id)
+
     # Past a few hundred new songs an import is a library rather than a list: record
     # what is in it and fetch the audio when somebody plays it, as a big mirror does.
-    fresh = sum(1 for l in lists for t in (l.get("tracks") or [])
-                if not catalog.find_by_provider("bandcamp", _bc_id(t, known)))
-    download = fresh <= BIG_IMPORT
+    download = len(fetch) <= BIG_IMPORT
 
     made = []
     for entry in lists:
         name = (entry.get("name") or "").strip() or "Untitled"
         ids = [t for t in (entry.get("tracks") or []) if t]
-        made.append(_import_one(user["id"], name, ids, known, download))
+        made.append(_import_one(user["id"], name, ids, known, download,
+                                rehearsal=rehearsal))
     return {"format": fmt, "playlists": made,
             "tracks": sum(m["added"] for m in made),
             "missing": sum(m["missing"] for m in made),
+            "fetch": len(fetch),
+            "replaces": sum(1 for m in made if m.get("replaces")),
+            "dry_run": rehearsal,
             "audio": "queued" if download else "on play"}
 
 
@@ -249,7 +269,7 @@ def _bc_id(key, known: dict) -> str:
 
 
 def _import_one(user_id: int, name: str, ids: list, known: dict,
-                download: bool) -> dict:
+                download: bool, rehearsal: bool = False) -> dict:
     """One playlist from the file, replacing the last import of the same name."""
     row = db.one(
         """select id from playlists
@@ -257,6 +277,23 @@ def _import_one(user_id: int, name: str, ids: list, known: dict,
             order by id limit 1""",
         (user_id, name),
     )
+
+    if rehearsal:
+        # Say what would happen, touch nothing. Counted the same way as the real thing
+        # so the number in the confirmation is the number that turns up.
+        here = fetch = missing = 0
+        for key in ids:
+            provider_id = _bc_id(key, known)
+            if catalog.find_by_provider("bandcamp", provider_id):
+                here += 1
+            elif (known.get(str(key)) or known.get(provider_id) or {}).get("pageUrl"):
+                fetch += 1
+            else:
+                missing += 1
+        return {"id": row["id"] if row else None, "name": name,
+                "added": here + fetch, "fetch": fetch, "missing": missing,
+                "replaces": bool(row)}
+
     if row:
         playlist_id = row["id"]
         db.run("delete from playlist_items where playlist_id=%s", (playlist_id,))
@@ -302,7 +339,8 @@ def _import_one(user_id: int, name: str, ids: list, known: dict,
         catalog.remember(user_id, track["id"])
         added += 1
 
-    return {"id": playlist_id, "name": name, "added": added, "missing": missing}
+    return {"id": playlist_id, "name": name, "added": added, "missing": missing,
+            "fetch": 0, "replaces": False}
 
 
 @router.post("/playlists", status_code=201)
