@@ -652,7 +652,8 @@ class ApiClient {
   }
 
   /// Everyone with an account here, and whether they are around right now.
-  Future<List<({int id, String name, bool online})>> jamPeople() async {
+  Future<List<({int id, String name, bool online, String? avatarVersion})>>
+      jamPeople() async {
     final d = await _decode(await http.get(_u('/jams/people'), headers: _headers))
         as Map<String, dynamic>;
     return [
@@ -661,6 +662,7 @@ class ApiClient {
           id: (e['id'] ?? 0) as int,
           name: (e['name'] ?? '') as String,
           online: (e['online'] ?? false) as bool,
+          avatarVersion: e['avatar_sig'] as String?,
         )
     ];
   }

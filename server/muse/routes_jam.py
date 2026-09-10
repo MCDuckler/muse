@@ -72,12 +72,13 @@ def people(user: dict = Depends(current_user)):
     whether tapping a name will reach anybody.
     """
     return {"items": db.all_(
-        """select u.id, u.name,
+        """select u.id, u.name, u.avatar_sig,
                   max(d.last_seen) as last_seen,
                   max(d.last_seen) > now() - interval '5 minutes' as online
              from users u left join devices d on d.user_id = u.id
             where u.id <> %s
-            group by u.id order by online desc nulls last, lower(u.name)""",
+            group by u.id, u.name, u.avatar_sig
+            order by online desc nulls last, lower(u.name)""",
         (user["id"],),
     )}
 

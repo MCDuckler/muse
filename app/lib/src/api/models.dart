@@ -665,14 +665,18 @@ class JamMember {
   final bool host;
   final bool online;
 
+  /// The version of their picture, if they have chosen one.
+  final String? avatarVersion;
+
   const JamMember({required this.userId, required this.name,
-      this.host = false, this.online = false});
+      this.host = false, this.online = false, this.avatarVersion});
 
   factory JamMember.fromJson(Map<String, dynamic> j) => JamMember(
         userId: (j['user_id'] ?? 0) as int,
         name: (j['name'] ?? '') as String,
         host: (j['host'] ?? false) as bool,
         online: (j['online'] ?? false) as bool,
+        avatarVersion: j['avatar_sig'] as String?,
       );
 }
 

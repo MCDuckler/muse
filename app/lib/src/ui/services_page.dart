@@ -8,6 +8,7 @@ import '../api/models.dart';
 import '../state/app_state.dart';
 import 'dialogs.dart';
 import 'mini_player.dart';
+import 'youtube_sign_in.dart';
 
 /// Services linked by typing a name.
 ///
@@ -116,6 +117,23 @@ class _ServicesPageState extends State<ServicesPage> {
     final api = context.read<AppState>().api;
     final messenger = ScaffoldMessenger.of(context);
     final youtube = service.provider == 'youtube';
+
+    // On a phone there is a browser to hand: sign in there and the cookie it ends up
+    // with is the sign-in, with nothing to copy. The web build cannot see another
+    // site's cookies, so there the headers are still pasted.
+    if (youtube && canSignInToYouTube) {
+      final captured = await Navigator.of(context).push<String>(
+          MaterialPageRoute(builder: (_) => const YouTubeSignInPage()));
+      if (captured == null) return;
+      try {
+        await api.linkService(service.provider, captured);
+        await _load();
+      } catch (e) {
+        messenger.showSnackBar(SnackBar(content: Text('$e')));
+      }
+      return;
+    }
+
     final handle = await promptForName(
       context,
       'Link ${service.label}',

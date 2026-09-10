@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
+import 'face.dart';
 import 'glass.dart';
 import 'mini_player.dart';
 
@@ -61,7 +62,7 @@ class _JamPageState extends State<JamPage> {
   /// Everyone with an account here, and a tap to put them in the room.
   Future<void> _invite(BuildContext context, AppState app) async {
     final messenger = ScaffoldMessenger.of(context);
-    List<({int id, String name, bool online})> people;
+    List<({int id, String name, bool online, String? avatarVersion})> people;
     try {
       people = await app.api.jamPeople();
     } catch (e) {
@@ -86,7 +87,14 @@ class _JamPageState extends State<JamPage> {
               const ListTile(title: Text('Nobody else has an account here')),
             for (final person in people)
               ListTile(
-                leading: Icon(person.online ? Icons.person : Icons.person_outline),
+                leading: Opacity(
+                  opacity: person.online ? 1 : 0.45,
+                  child: Face(
+                      name: person.name,
+                      userId: person.id,
+                      version: person.avatarVersion,
+                      size: 36),
+                ),
                 title: Text(person.name),
                 subtitle: Text(already.contains(person.id)
                     ? 'already here'
@@ -199,9 +207,11 @@ class _JamPageState extends State<JamPage> {
       for (final m in jam.members)
         ListTile(
           contentPadding: EdgeInsets.zero,
-          leading: CircleAvatar(
-            backgroundColor: m.online ? scheme.primaryContainer : scheme.surfaceContainerHighest,
-            child: Text(m.name.isEmpty ? '?' : m.name[0].toUpperCase()),
+          leading: Opacity(
+            // Away is drawn faintly rather than differently: it is the same person.
+            opacity: m.online ? 1 : 0.45,
+            child: Face(
+                name: m.name, userId: m.userId, version: m.avatarVersion, size: 40),
           ),
           title: Text(m.name),
           subtitle: Text(m.host ? 'Host · playing' : (m.online ? 'Listening' : 'Away')),

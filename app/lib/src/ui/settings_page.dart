@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import 'dialogs.dart';
+import 'face.dart';
 import 'downloads_page.dart';
 import 'services_page.dart';
 import 'accounts_page.dart';
@@ -257,7 +258,8 @@ class _SettingsPageState extends State<SettingsPage> {
           const Divider(),
           _label(context, 'Account'),
           ListTile(
-            leading: _Face(app: app),
+            leading: Face(
+                name: app.user, userId: app.userId, version: app.avatarVersion),
             title: Text(app.user ?? 'Signed in'),
             subtitle: Text(app.api.baseUrl),
             trailing: TextButton(
@@ -362,43 +364,6 @@ class _Swatch extends StatelessWidget {
             const SizedBox(height: 4),
             Text(palette.name, style: Theme.of(context).textTheme.labelSmall),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-
-/// Somebody's picture, or the first letter of their name.
-class _Face extends StatelessWidget {
-  const _Face({required this.app});
-  final AppState app;
-
-  static const size = 40.0;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final version = app.avatarVersion;
-    final id = app.userId;
-    if (version == null || id == null) {
-      return CircleAvatar(
-        radius: size / 2,
-        backgroundColor: scheme.surfaceContainerHighest,
-        child: Text((app.user ?? '?').characters.first.toUpperCase()),
-      );
-    }
-    return ClipOval(
-      child: Image.network(
-        app.api.avatarUrl(id, version: version),
-        width: size,
-        height: size,
-        fit: BoxFit.cover,
-        gaplessPlayback: true,
-        errorBuilder: (context, _, __) => CircleAvatar(
-          radius: size / 2,
-          backgroundColor: scheme.surfaceContainerHighest,
-          child: Text((app.user ?? '?').characters.first.toUpperCase()),
         ),
       ),
     );

@@ -78,7 +78,7 @@ def touch(jam_id: int, user_id: int) -> None:
 
 def members(jam_id: int) -> list[dict]:
     rows = db.all_(
-        f"""select m.user_id, u.name, m.joined_at,
+        f"""select m.user_id, u.name, u.avatar_sig, m.joined_at,
                    extract(epoch from now() - m.last_seen) < {ONLINE_SECONDS} as online,
                    (j.host_id = m.user_id) as host
               from jam_members m
