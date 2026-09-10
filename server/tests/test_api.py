@@ -92,7 +92,9 @@ def test_failed_job_marks_track_failed_with_reason(client, hdr, wsec):
     assert got["state"] == "failed"
     assert got["fail_code"] == "unavailable"
     # The row shows a sentence, not the downloader's console output.
-    assert "available" in got["fail_reason"] and "ERROR" not in got["fail_reason"]
+    # A sentence a person can act on, naming where the song actually lives, with none
+    # of yt-dlp's own words left in it.
+    assert "YouTube" in got["fail_reason"] and "ERROR" not in got["fail_reason"]
     # terminal failure is not handed back out to a worker
     assert client.post("/internal/jobs/lease", headers=wsec,
                        json={"worker": "w"}).json()["jobs"] == []

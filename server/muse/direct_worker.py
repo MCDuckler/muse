@@ -16,7 +16,7 @@ import tempfile
 import threading
 import time
 
-from . import db, follows, jobs, progress, sources, storage
+from . import db, failures, follows, jobs, progress, sources, storage
 
 log = logging.getLogger("muse.direct")
 
@@ -132,10 +132,17 @@ class DirectWorker:
                      time.monotonic() - started, info.get("codec"), size / 1e6)
         except sources.SourceError as e:
             # Something about this track, not about the network: do not keep asking.
+            #
+            # Put through the same classifier as a YouTube failure, so what a person
+            # reads is the same kind of sentence and names the right service — yt-dlp's
+            # own words ("This video is DRM protected") are about neither the track nor
+            # anywhere it lives.
             progress.clear(track_id)
+            code, message, _ = failures.classify(str(e), provider)
             jobs.fail(job["id"], str(e), retryable=False)
             db.run("update tracks set state='failed', fail_reason=%s, fail_code=%s "
-                   "where id=%s", (str(e)[:500], "source", track_id))
+                   "where id=%s",
+                   (message if code != "unknown" else str(e)[:500], code, track_id))
             log.warning("%s track %s failed: %s", provider, track_id, e)
         except Exception as e:
             progress.clear(track_id)

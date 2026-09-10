@@ -370,3 +370,95 @@ def test_getting_a_whole_playlist_uses_the_right_lane_per_track(client, hdr):
     kinds = {r["kind"] for r in db.all_(
         """select kind from jobs where kind in ('ingest','ingest_direct')""")}
     assert kinds == {"ingest", "ingest_direct"}, kinds
+
+
+def test_a_song_is_fetched_from_somewhere_this_machine_can_reach(client, hdr):
+    """A source the server can fetch itself beats one that needs the worker at home.
+
+    The rule used to be the other way round, and it is how forty-eight SoundCloud
+    tracks came to fail over and over with "this isn't on YouTube any more". They were
+    on SoundCloud — which is where they came from and which this machine reaches in a
+    second — but a YouTube source had been added beside it while looking for a copy of
+    something else, and from then on every attempt went to the copy that did not exist
+    instead of the original that did.
+    """
+    from muse import catalog, db, jobs
+
+    track = catalog.create_from_source("soundcloud", {
+        "provider_id": "555", "title": "Both places", "artists": [],
+        "url": "https://soundcloud.com/a/both-places",
+    }, download=False)
+    # The other source, of the kind refind adds.
+    db.run("""insert into track_sources(track_id,provider,provider_id,raw)
+              values(%s,'ytmusic','deadbeef','{}'::jsonb)""", (track["id"],))
+
+    assert jobs.promote(track["id"]) is True
+    job = db.one("""select kind, payload->>'ref' as ref from jobs
+                     where (payload->>'track_id')::int=%s
+                       and kind in ('ingest','ingest_direct')""", (track["id"],))
+    assert job["kind"] == "ingest_direct", "fetched here, not queued for the laptop"
+    assert job["ref"] == "https://soundcloud.com/a/both-places"
+
+
+def test_a_track_that_failed_can_be_asked_for_again(client, hdr):
+    """Asking for a song is the clearest possible statement that the last answer was
+    not the wanted one.
+
+    Promote only ever looked at tracks that were still `pending`, so everything that
+    had failed — including everything ever cancelled — could not be started by any
+    means the app offered. The button did nothing, silently, for good.
+    """
+    from muse import catalog, db, jobs
+
+    track = catalog.create_from_source("bandcamp", {
+        "provider_id": "777", "title": "Gone wrong", "artists": [],
+        "url": "https://band.bandcamp.com/track/gone-wrong",
+    }, download=False)
+    db.run("""update tracks set state='failed', fail_reason='Download cancelled',
+                     fail_code='cancelled' where id=%s""", (track["id"],))
+
+    assert jobs.promote(track["id"]) is True
+    assert db.one("select state from tracks where id=%s", (track["id"],))["state"] \
+        == "pending"
+    assert db.one("""select 1 from jobs where kind='ingest_direct'
+                      and (payload->>'track_id')::int=%s""", (track["id"],))
+
+
+def test_a_song_with_nowhere_left_says_so_rather_than_nothing(client, hdr):
+    from muse import catalog, db, jobs
+
+    track = catalog.create_from_source("bandcamp", {
+        "provider_id": "888", "title": "Nowhere", "artists": [],
+    }, download=False)
+    db.run("update track_sources set raw='{}'::jsonb where track_id=%s", (track["id"],))
+    db.run("update tracks set state='failed' where id=%s", (track["id"],))
+
+    assert jobs.promote(track["id"]) is False
+    row = db.one("select state, fail_code from tracks where id=%s", (track["id"],))
+    assert row["state"] == "failed", "not left sitting at pending with nothing coming"
+    assert row["fail_code"] == "no_source"
+
+    r = client.post("/downloads/promote", headers=hdr,
+                    json={"track_ids": [track["id"]]})
+    assert r.status_code == 200
+    assert r.json()["promoted"] == 0
+    assert r.json()["stuck"] == [track["id"]], "the caller is told which one"
+
+
+def test_a_failure_names_the_service_the_song_came_from(client, hdr):
+    """"This track isn't available on YouTube any more" on a SoundCloud track is both
+    wrong and unactionable: it never was on YouTube."""
+    from muse import failures
+
+    code, message, retry = failures.classify(
+        "ERROR: [soundcloud] 12: Video unavailable", "soundcloud")
+    assert code == "unavailable" and not retry
+    assert "SoundCloud" in message and "YouTube" not in message
+
+    _, youtube, _ = failures.classify(
+        "ERROR: [youtube] ab: Video unavailable", "ytmusic")
+    assert "YouTube" in youtube
+
+    # And where nobody said, it does not invent one.
+    _, vague, _ = failures.classify("ERROR: Video unavailable", None)
+    assert "YouTube" not in vague and "SoundCloud" not in vague

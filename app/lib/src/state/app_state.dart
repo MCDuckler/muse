@@ -661,21 +661,24 @@ class AppState extends ChangeNotifier {
 
   /// A track that failed to download can be asked for again: resolve() retries a
   /// failed ingest, so the UI does not need a separate endpoint.
-  Future<void> retry(Track track) async {
-    if (track.providerId == null) return;
-    await api.resolve(videoId: track.providerId);
-    final q = activeQueue;
-    if (q != null) await _applyQueue(await api.queue(q.id));
-  }
+  /// Have another go at a song that failed.
+  ///
+  /// Through the download queue, not through YouTube. This used to hand the track's
+  /// provider id to the YouTube resolver whatever the track was — so retrying a
+  /// SoundCloud song asked YouTube for a SoundCloud id, and either found nothing or
+  /// invented a YouTube track out of it. The server knows every place a song lives and
+  /// which of them it can reach; asking it is the whole job.
+  Future<bool> retry(Track track) => fetchNow(track);
 
   /// Fetch this one now, for a song that is listed but has no file behind it.
   ///
   /// A mirrored library records far more than it downloads, so most songs sit like
   /// this until something asks for them. Pressing play asks; so does this.
-  Future<void> fetchNow(Track track) async {
-    await api.promoteDownload(track.id);
+  Future<bool> fetchNow(Track track) async {
+    final started = await api.promoteDownload(track.id);
     final q = activeQueue;
     if (q != null) await _applyQueue(await api.queue(q.id));
+    return started > 0;
   }
 
   bool isFavourite(int trackId) => favourites.contains(trackId);

@@ -323,13 +323,22 @@ class ApiClient {
       await _decode(await http.post(_u('/downloads/refind'),
           headers: _headers, body: jsonEncode({}))) as Map<String, dynamic>;
 
-  Future<void> promoteDownload(int trackId) => promoteDownloads([trackId]);
+  /// Ask for this one now. Says how many of them actually got a job.
+  ///
+  /// The answer matters: a track with nowhere left to fetch it from cannot be started,
+  /// and a button that silently does nothing is worse than one that says why.
+  Future<int> promoteDownload(int trackId) => promoteDownloads([trackId]);
 
   /// Tracks in playing order: the one under the needle, then what follows it.
-  Future<void> promoteDownloads(List<int> trackIds) async {
-    if (trackIds.isEmpty) return;
-    await _decode(await http.post(_u('/downloads/promote'),
-        headers: _headers, body: jsonEncode({'track_ids': trackIds})));
+  ///
+  /// Answers with how many were actually started. Zero out of one means the song has
+  /// nowhere left to be fetched from, which is worth saying out loud.
+  Future<int> promoteDownloads(List<int> trackIds) async {
+    if (trackIds.isEmpty) return 0;
+    final d = await _decode(await http.post(_u('/downloads/promote'),
+        headers: _headers,
+        body: jsonEncode({'track_ids': trackIds}))) as Map<String, dynamic>;
+    return (d['promoted'] ?? 0) as int;
   }
 
   /// Pull the start of a track through the cache so it is there when it is wanted.

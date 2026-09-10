@@ -498,7 +498,12 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     @app.post("/internal/jobs/{job_id}/fail", dependencies=[Depends(worker_auth)])
     def fail(job_id: int, body: dict):
         raw = body.get("reason", "")
-        code, message, retryable = failures.classify(raw)
+        # Named by where the song actually lives, not by where the worker happens to
+        # fetch from — see failures.classify.
+        heard_from = db.one("select source from tracks where id=%s",
+                            (body.get("track_id"),)) if body.get("track_id") else None
+        code, message, retryable = failures.classify(
+            raw, (heard_from or {}).get("source"))
         # The worker's own judgement can only make a failure *less* retryable.
         retryable = retryable and bool(body.get("retryable", True))
         jobs.fail(job_id, raw or message, retryable)

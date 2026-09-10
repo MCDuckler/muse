@@ -98,39 +98,37 @@ def download_playlist(playlist_id: int, user: dict = Depends(current_user)):
     whatever you are listening to now.
     """
     p = _own_playlist(playlist_id, user)
+    # Everything here without audio, and without a job already on its way. A failure is
+    # included on purpose: pressing "get all" on a playlist half of which failed last
+    # week is a request to try those again, not to skip them.
     waiting = db.all_(
-        f"""select distinct on (t.id) t.id, s.provider, s.provider_id,
-                  {jobs.REF_SQL} as url
+        """select distinct t.id
              from playlist_items i
              join tracks t on t.id = i.track_id
-             join track_sources s on s.track_id = t.id
-            where i.playlist_id=%s and t.state='pending'
+            where i.playlist_id=%s and t.state in ('pending','failed')
               and not exists (select 1 from jobs j
                                where j.kind in ('ingest','ingest_direct')
                                  and (j.payload->>'track_id')::int = t.id
-                                 and j.state in ('pending','leased','done'))
-            order by t.id, (s.provider = 'ytmusic') desc""",
+                                 and (j.state='pending'
+                                      or (j.state='leased' and j.leased_until > now())))
+            order by t.id""",
         (playlist_id,),
     )
     queued = unfetchable = 0
     for row in waiting:
-        # Same rule as pressing play: the lane depends on where the song lives.
-        if row["provider"] in ("soundcloud", "bandcamp"):
-            ref = jobs.direct_ref(row["provider"], row["provider_id"], row["url"])
-            if not ref:
-                unfetchable += 1
-                continue
-            jobs.enqueue("ingest_direct",
-                         {"track_id": row["id"], "provider": row["provider"],
-                          "ref": ref},
-                         priority=jobs.PRIORITY_BULK,
-                         batch_id=f"playlist:{playlist_id}", batch_label=p["name"])
+        # Same rule as pressing play, and the same code: where a song can be fetched
+        # from is one question with one answer, and three places disagreeing about it
+        # is how a track ends up queued against a source that does not have it.
+        db.run("""update tracks set state='pending', fail_reason=null, fail_code=null
+                   where id=%s and state='failed'""", (row["id"],))
+        if jobs.queue(row["id"], priority=jobs.PRIORITY_BULK,
+                      batch_id=f"playlist:{playlist_id}", batch_label=p["name"]):
+            queued += 1
         else:
-            jobs.enqueue("ingest", {"track_id": row["id"],
-                                    "video_id": row["provider_id"]},
-                         priority=jobs.PRIORITY_BULK,
-                         batch_id=f"playlist:{playlist_id}", batch_label=p["name"])
-        queued += 1
+            unfetchable += 1
+            db.run("""update tracks set state='failed',
+                             fail_reason='There is nowhere left to fetch this from',
+                             fail_code='no_source' where id=%s""", (row["id"],))
     db.run("update playlists set download_mode='all' where id=%s", (playlist_id,))
     return {"queued": queued, "unfetchable": unfetchable}
 
@@ -422,7 +420,7 @@ def get_playlist(playlist_id: int, user: dict = Depends(current_user)):
     # happen at import; this says what is actually true now, which is what a "Get all"
     # button has to be offered on — a playlist marked "all" whose songs were found
     # already in the catalog never had a single job queued for it.
-    waiting = sum(1 for t in items if t["state"] == "pending")
+    waiting = sum(1 for t in items if t["state"] in ("pending", "failed"))
     return {**with_cover(p), "unmatched": unmatched, "editable": p["kind"] == "local",
             "download_mode": p.get("download_mode", "all"),
             "waiting": waiting,

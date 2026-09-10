@@ -294,7 +294,23 @@ def promote(body: dict = Body(...), user: dict = Depends(current_user)):
     Takes a run of tracks in playing order, not just one: by the time the current song
     ends, the next one wants to be here already.
     """
-    ids = body.get("track_ids") or ([body["track_id"]] if body.get("track_id") else [])
+    ids = [int(i) for i in
+           (body.get("track_ids") or
+            ([body["track_id"]] if body.get("track_id") else []))]
     if not ids:
         raise HTTPException(400, "track_id or track_ids required")
-    return {"promoted": jobs.promote_run([int(i) for i in ids])}
+
+    # Which ones could not be started, and not merely how many could.
+    #
+    # This used to answer with a count and nothing else, so "download this" failing was
+    # indistinguishable from "download this" working — the button did nothing, said
+    # nothing, and the song stayed exactly as it was. A caller that knows which ones
+    # went nowhere can say so.
+    done, stuck = [], []
+    for step, track_id in enumerate(ids[:8]):
+        (done if jobs.promote(track_id, jobs.PRIORITY_NOW + step) else stuck).append(
+            track_id)
+    return {"promoted": len(done), "queued": done, "stuck": stuck,
+            "ready": [r["id"] for r in db.all_(
+                "select id from tracks where id = any(%s) and state='ready'",
+                (ids,))]}

@@ -59,17 +59,85 @@ def direct_ref(provider: str, provider_id: str, url: str | None) -> str | None:
     return provider_id or None
 
 
+# The two the server fetches itself. Everything else needs the worker at home.
+DIRECT = ("soundcloud", "bandcamp")
+
+
+def best_source(track_id: int) -> dict | None:
+    """Where to fetch this track from, given every place it is known to live.
+
+    A source the server can fetch itself wins.
+    
+    This used to be the other way round — `order by (provider = 'ytmusic') desc` — and
+    it is how forty-eight SoundCloud tracks ended up failing over and over with "this
+    isn't on YouTube any more". They were on SoundCloud, which is where they came from
+    and which this machine can reach in a second; a YouTube source had been added
+    beside it while looking for a copy of something, and from then on every attempt
+    went to the copy that did not exist instead of the original that did.
+
+    It is the better rule anyway: a direct source needs nothing but this server, and a
+    YouTube one needs a laptop at home to be awake.
+    """
+    rows = db.all_(
+        f"""select s.provider, s.provider_id, {REF_SQL} as url
+             from track_sources s where s.track_id=%s""",
+        (track_id,),
+    )
+    best = None
+    for row in rows:
+        if not row["provider_id"]:
+            continue
+        if row["provider"] in DIRECT:
+            ref = direct_ref(row["provider"], row["provider_id"], row["url"])
+            if not ref:
+                continue                     # named but not addressable; see direct_ref
+            rank = 0
+        elif row["provider"] == "ytmusic":
+            ref, rank = row["provider_id"], 1
+        else:
+            continue
+        if best is None or rank < best["rank"]:
+            best = {"rank": rank, "provider": row["provider"], "ref": ref,
+                    "provider_id": row["provider_id"]}
+    return best
+
+
+def queue(track_id: int, priority: int = PRIORITY_NORMAL,
+          batch_id: str | None = None, batch_label: str | None = None) -> bool:
+    """Make the job that fetches this track. Says whether there was one to make.
+
+    Which lane depends on where the song lives: a Bandcamp or SoundCloud track is
+    fetched by the server itself, and only YouTube needs the worker at home.
+    """
+    source = best_source(track_id)
+    if source is None:
+        return False
+    if source["provider"] in DIRECT:
+        enqueue("ingest_direct",
+                {"track_id": track_id, "provider": source["provider"],
+                 "ref": source["ref"]},
+                priority=priority, batch_id=batch_id, batch_label=batch_label)
+    else:
+        enqueue("ingest", {"track_id": track_id, "video_id": source["ref"]},
+                priority=priority, batch_id=batch_id, batch_label=batch_label)
+    return True
+
+
 def promote(track_id: int, priority: int = PRIORITY_NOW) -> bool:
     """Move a track to the front, queueing it first if nobody ever did.
 
-    Two cases, one answer. A track waiting behind a hundred imports jumps them. A track
-    from a mirrored library that was never queued at all — because twelve thousand liked
-    songs are a list worth having long before they are forty gigabytes worth having —
-    gets its job made now, at the front.
+    Three cases, one answer. A track waiting behind a hundred imports jumps them. A
+    track from a mirrored library that was never queued at all — because twelve
+    thousand liked songs are a list worth having long before they are forty gigabytes
+    worth having — gets its job made now, at the front. And a track that failed gets
+    another go: asking for it again is the clearest possible statement that the last
+    answer was not the wanted one, and refusing on the grounds that it went badly once
+    is how "download this" came to do nothing at all, silently, for everything that had
+    ever been cancelled.
     """
     row = db.one(
         """update jobs set priority=%s
-            where kind='ingest' and state='pending'
+            where kind in ('ingest','ingest_direct') and state='pending'
               and (payload->>'track_id')::int = %s
             returning id""",
         (priority, track_id),
@@ -77,36 +145,34 @@ def promote(track_id: int, priority: int = PRIORITY_NOW) -> bool:
     if row:
         return True
 
-    waiting = db.one(
-        f"""select t.id, s.provider, s.provider_id, {REF_SQL} as url
-             from tracks t
-             join track_sources s on s.track_id = t.id
-            where t.id=%s and t.state='pending'
-              and not exists (select 1 from jobs j
-                               where j.kind in ('ingest','ingest_direct')
-                                 and (j.payload->>'track_id')::int = t.id
-                                 and j.state in ('pending','leased','done'))
-            order by (s.provider = 'ytmusic') desc limit 1""",
-        (track_id,),
-    )
-    if not waiting or not waiting["provider_id"]:
+    track = db.one("select id, state from tracks where id=%s", (track_id,))
+    if not track or track["state"] == "ready":
         return False
 
-    # Which lane depends on where the song lives. A Bandcamp or SoundCloud track is
-    # fetched by the server itself; only YouTube needs the worker at home. Queueing
-    # everything as YouTube meant a track from a big mirror — recorded but not
-    # downloaded — could never be started at all, and sat "downloading" for good.
-    if waiting["provider"] in ("soundcloud", "bandcamp"):
-        ref = direct_ref(waiting["provider"], waiting["provider_id"], waiting["url"])
-        if not ref:
-            return False
-        enqueue("ingest_direct",
-                {"track_id": track_id, "provider": waiting["provider"], "ref": ref},
-                priority=priority)
-    else:
-        enqueue("ingest", {"track_id": track_id, "video_id": waiting["provider_id"]},
-                priority=priority)
-    return True
+    # Already being fetched. Not a failure, and not a reason to fetch it twice.
+    running = db.one(
+        """select 1 from jobs
+            where kind in ('ingest','ingest_direct') and state='leased'
+              and leased_until > now()
+              and (payload->>'track_id')::int = %s""",
+        (track_id,),
+    )
+    if running:
+        return True
+
+    if track["state"] == "failed":
+        db.run("""update tracks set state='pending', fail_reason=null, fail_code=null
+                   where id=%s""", (track_id,))
+
+    if queue(track_id, priority=priority):
+        return True
+    # Nothing addressable anywhere. Put the state back rather than leaving a track
+    # sitting at "pending" with nothing on its way.
+    if track["state"] == "failed":
+        db.run("""update tracks set state='failed',
+                         fail_reason='There is nowhere left to fetch this from',
+                         fail_code='no_source' where id=%s""", (track_id,))
+    return False
 
 
 def promote_run(track_ids: list[int], priority: int = PRIORITY_NOW) -> int:

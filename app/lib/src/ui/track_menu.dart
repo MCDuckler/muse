@@ -96,16 +96,31 @@ Future<void> showTrackSheet(
           }),
           if (track.isNotFetched)
             _item(sheet, Icons.cloud_download_outlined, 'Download now',
-                () => app.fetchNow(track)),
+                () => _start(context, app, track)),
           if (track.state == 'failed')
             _item(sheet, Icons.refresh, 'Try downloading again',
-                () => app.retry(track)),
+                () => _start(context, app, track)),
           if (onRemove != null)
             _item(sheet, Icons.delete_outline, 'Remove', onRemove),
         ],
       ),
     ),
   );
+}
+
+/// Ask for a song, and say what happened.
+///
+/// A download that cannot be started looks exactly like one that has been — the sheet
+/// closes and nothing changes — so it says so. "Nowhere left to fetch it from" is the
+/// real answer when every source a track has is gone, and it is a great deal more use
+/// than a button that quietly does nothing.
+Future<void> _start(BuildContext context, AppState app, Track track) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final started = await app.fetchNow(track);
+  messenger.showSnackBar(SnackBar(
+      content: Text(started
+          ? '${track.displayTitle} is downloading'
+          : 'Nowhere left to fetch ${track.displayTitle} from')));
 }
 
 Widget _item(BuildContext sheet, IconData icon, String label, VoidCallback action,
