@@ -77,18 +77,26 @@ class _QueuePageState extends State<QueuePage> {
               for (final q in app.queues)
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
-                  child: ChoiceChip(
-                    // A jam's queue is somebody else's, and saying whose is the
-                    // difference between "why is this here" and "that is the one we
-                    // are listening to together".
-                    avatar: q.sharedFrom == null
+                  child: GestureDetector(
+                    // Hold a queue to get rid of it. Queues accumulate — a name for
+                    // every evening — and until now the only way to lose one was the
+                    // terminal.
+                    onLongPress: q.sharedFrom != null
                         ? null
-                        : const Icon(Icons.people_outline, size: 16),
-                    label: Text(q.sharedFrom == null
-                        ? '${q.name} · ${q.itemCount}'
-                        : "${q.sharedFrom}'s jam · ${q.itemCount}"),
-                    selected: q.id == active?.id,
-                    onSelected: (_) => app.openQueue(q.id),
+                        : () => _deleteQueue(context, q),
+                    child: ChoiceChip(
+                      // A jam's queue is somebody else's, and saying whose is the
+                      // difference between "why is this here" and "that is the one we
+                      // are listening to together".
+                      avatar: q.sharedFrom == null
+                          ? null
+                          : const Icon(Icons.people_outline, size: 16),
+                      label: Text(q.sharedFrom == null
+                          ? '${q.name} · ${q.itemCount}'
+                          : "${q.sharedFrom}'s jam · ${q.itemCount}"),
+                      selected: q.id == active?.id,
+                      onSelected: (_) => app.openQueue(q.id),
+                    ),
                   ),
                 ),
               ActionChip(
@@ -144,7 +152,9 @@ class _QueuePageState extends State<QueuePage> {
                       case 'save':
                         await _saveAsPlaylist(context, app);
                       case 'delete':
-                        await _deleteQueue(context, app);
+                        if (app.activeQueue != null) {
+                          await _deleteQueue(context, app.activeQueue!);
+                        }
                     }
                   },
                   itemBuilder: (context) => const [
@@ -265,15 +275,21 @@ class _QueuePageState extends State<QueuePage> {
     }
   }
 
-  Future<void> _deleteQueue(BuildContext context, AppState app) async {
-    final q = app.activeQueue;
-    if (q == null) return;
-    final ok = await confirm(context, 'Delete "${q.name}"?',
-        'The tracks stay in your library.');
-    if (!ok) return;
-    await app.api.deleteQueue(q.id);
-    app.activeQueue = null;
-    await app.refresh();
+  Future<void> _deleteQueue(BuildContext context, Queue queue) async {
+    final app = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    final gone = await confirm(context, 'Delete "${queue.name}"?',
+        queue.itemCount == 0
+            ? 'It is empty, so there is nothing in it to lose.'
+            : 'The ${queue.itemCount} songs in it stay in your library; only the '
+                'queue goes.');
+    if (!gone) return;
+    try {
+      await app.deleteQueue(queue.id);
+      messenger.showSnackBar(SnackBar(content: Text('Deleted "${queue.name}"')));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('$e')));
+    }
   }
 
   Future<void> _newQueue(BuildContext context) async {

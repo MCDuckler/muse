@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:audio_session/audio_session.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 
@@ -47,6 +48,17 @@ class PlayerService {
   int? _queueId;
   int? _loadedTrackId;
   int? _waitingForTrack;         // stalled on a download; resume when it lands
+
+  /// How often playback is checked for having quietly stopped, and how long it has to
+  /// be stuck before anything is done about it. Both are settable so a test does not
+  /// have to wait out a real stall.
+  static Duration watchInterval = const Duration(seconds: 5);
+  static Duration stallAfter = const Duration(seconds: 12);
+
+  Timer? _watchdog;
+  Duration _lastPosition = Duration.zero;
+  DateTime _lastMovement = DateTime.now();
+  int _nudges = 0;
 
   /// The song already handed to the engine to play after this one, if any.
   int? _queuedNextId;
@@ -101,6 +113,29 @@ class PlayerService {
   final _stateController = StreamController<PlayerSnapshot>.broadcast();
   Stream<PlayerSnapshot> get snapshots => _stateController.stream;
 
+  /// The same reports, minus the ones that only say the clock moved.
+  ///
+  /// Position arrives four times a second, and a screen built from it rebuilds four
+  /// times a second — every widget on the player, including the record, its shadow and
+  /// the printed background behind it. The animations then compete with the rebuilds
+  /// and the whole thing judders. Anything that needs the clock takes it from
+  /// [snapshots] itself (and moves smoothly between reports on its own); everything
+  /// else takes this, which fires when something visible actually changes — with a
+  /// coarse position included so a seek is still noticed within a few seconds.
+  Stream<PlayerSnapshot> get changes => _stateController.stream.distinct((a, b) =>
+      a.current?.id == b.current?.id &&
+      a.loadedTrackId == b.loadedTrackId &&
+      a.index == b.index &&
+      a.itemCount == b.itemCount &&
+      a.playing == b.playing &&
+      a.repeat == b.repeat &&
+      a.finished == b.finished &&
+      a.waitingForDownload == b.waitingForDownload &&
+      a.needsGesture == b.needsGesture &&
+      a.error == b.error &&
+      a.duration == b.duration &&
+      a.position.inSeconds ~/ 5 == b.position.inSeconds ~/ 5);
+
   /// Fired when the player changes the queue's settings or order itself, so the app
   /// can persist them without the player knowing about the API.
   void Function(int queueId, {int? cursorIndex, int? positionMs})? onCursor;
@@ -133,6 +168,114 @@ class PlayerService {
     _cursorTimer = Timer.periodic(cursorInterval, (_) {
       if (_player.playing) _saveCursor();
     });
+    _watchdog = Timer.periodic(watchInterval, (_) => checkForStall());
+    unawaited(_listenToTheSession());
+  }
+
+  /// What to do when something else wants the speaker.
+  ///
+  /// Without this the phone's own rules apply and nothing here knows they did: a
+  /// notification, a navigation instruction or a call takes the audio focus, playback
+  /// stops, and it stays stopped — which is a song that ends in the middle for no
+  /// reason anybody can see. A short interruption is now resumed from, and unplugging
+  /// the headphones pauses rather than playing the record to the room.
+  Future<void> _listenToTheSession() async {
+    if (kIsWeb) return;                       // the browser has its own rules
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration.music());
+      var wasPlaying = false;
+      session.interruptionEventStream.listen((event) async {
+        if (event.begin) {
+          wasPlaying = _player.playing;
+          if (event.type == AudioInterruptionType.duck) {
+            await _player.setVolume(_volumeFor(current) * 0.3);
+          } else if (wasPlaying) {
+            await _player.pause();
+          }
+        } else {
+          if (event.type == AudioInterruptionType.duck) {
+            await _player.setVolume(_volumeFor(current));
+          } else if (event.type == AudioInterruptionType.pause && wasPlaying) {
+            // A phone call or a spoken direction: it was ours before and it is ours
+            // again. (`unknown` is not resumed from — that is the user pressing pause
+            // somewhere else, and starting again over their head is worse.)
+            _startPlayback();
+          }
+        }
+        _emit(force: true);
+      });
+      session.becomingNoisyEventStream.listen((_) => unawaited(pause()));
+    } catch (_) {
+      // A platform with no session to configure still plays.
+    }
+  }
+
+  double _volumeFor(Track? t) => t == null ? userVolume : _volumeForTrack(t);
+
+  /// Playback said it was running and the clock did not move.
+  ///
+  /// A phone changing network, a connection a sleeping phone dropped, a stream the
+  /// server stopped feeding: the engine sits there believing it is playing, and the
+  /// song stops in the middle until somebody opens the app and touches something.
+  /// Nothing notices that on its own, so this does: nudge it back to where it was,
+  /// and if that does not take, load the song again from that spot.
+  Future<void> checkForStall() async {
+    if (!_player.playing || _loadedTrackId == null || _mutating > 0) {
+      _rememberMovement(_player.playbackEvent.updatePosition);
+      return;
+    }
+    final state = _player.processingState;
+    if (state == ProcessingState.idle || state == ProcessingState.completed) {
+      _rememberMovement(_player.playbackEvent.updatePosition);
+      return;
+    }
+
+    // The engine's own clock, not the app's. While a track is playing normally the
+    // position here is worked out from "where it was, plus how long ago that was", so
+    // it keeps moving whether or not any sound is coming out — which is exactly the
+    // case this is looking for. What the engine last *reported* does stop.
+    final reported = _player.playbackEvent.updatePosition;
+    if (reported != _lastPosition) {
+      _rememberMovement(reported);
+      _nudges = 0;
+      return;
+    }
+    if (DateTime.now().difference(_lastMovement) < stallAfter) return;
+
+    _lastMovement = DateTime.now();
+    _nudges++;
+    try {
+      if (_nudges <= 2) {
+        // Cheapest first: ask for the same spot again, which re-opens the stream.
+        await _player.seek(reported);
+        _startPlayback();
+      } else {
+        // It is not coming back on its own.
+        await _loadCurrent(startAt: reported);
+        _startPlayback();
+        _nudges = 0;
+      }
+    } catch (e) {
+      lastError = '$e';
+    }
+    _emit(force: true);
+  }
+
+  void _rememberMovement(Duration at) {
+    _lastPosition = at;
+    _lastMovement = DateTime.now();
+  }
+
+  /// The app came back to the front. If it should be playing and it is not, it stopped
+  /// while nobody was looking.
+  Future<void> resumeIfStopped() async {
+    if (_loadedTrackId == null) return;
+    if (!_player.playing && (last?.playing ?? false)) {
+      _startPlayback();
+      return;
+    }
+    await checkForStall();
   }
 
   // ------------------------------------------------------------------ queue
@@ -730,7 +873,7 @@ class PlayerService {
       lastSourceUrl = '$sourceUrl -> engine says ${reported?.inMilliseconds}ms '
           '(player #$_instance of ${PlayerService.instances})';
       if (mine != _loadToken) return;      // a later track won the race
-      await _player.setVolume(_volumeFor(track));
+      await _player.setVolume(_volumeForTrack(track));
       if (speed != 1.0) await _player.setSpeed(speed);
       _loadedTrackId = track.id;
       // An explicit load puts this song at the top of the engine's playlist and throws
@@ -754,7 +897,7 @@ class PlayerService {
     }
   }
 
-  double _volumeFor(Track t) {
+  double _volumeForTrack(Track t) {
     final gain = t.gainDb;
     final normalised = (gain == null || gain >= 0)
         ? 1.0                                     // never boost into clipping
@@ -765,7 +908,7 @@ class PlayerService {
   Future<void> setUserVolume(double v) async {
     userVolume = v.clamp(0.0, 1.0);
     final t = current;
-    if (t != null) await _player.setVolume(_volumeFor(t));
+    if (t != null) await _player.setVolume(_volumeForTrack(t));
     _emit(force: true);
   }
 
@@ -939,6 +1082,7 @@ class PlayerService {
 
   Future<void> dispose() async {
     _cursorTimer?.cancel();
+    _watchdog?.cancel();
     _saveCursor();
     await _player.dispose();
     await _stateController.close();

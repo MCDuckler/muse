@@ -243,6 +243,7 @@ class AppState extends ChangeNotifier {
           .catchError((_) {});
     };
     await player!.init();
+    _lifecycle;                     // built lazily; touching it starts it listening
     bindPlayer();
     await api.ensureStreamKey();
     await refresh();
@@ -439,6 +440,25 @@ class AppState extends ChangeNotifier {
     await _reloadActiveQueue();
     final live = activeQueue;
     if (live != null) await player?.loadQueue(live);
+    notifyListeners();
+  }
+
+  /// Get rid of a queue. The songs in it are library rows and stay where they are;
+  /// what goes is the list and the order.
+  Future<void> deleteQueue(int id) async {
+    await api.deleteQueue(id);
+    final wasActive = activeQueue?.id == id;
+    queues = await api.queues();
+    if (wasActive) {
+      activeQueue = null;
+      // Land somewhere rather than on an empty screen with no queue selected.
+      final next = queues.where((q) => q.sharedFrom == null).firstOrNull;
+      if (next != null) {
+        await openQueue(next.id);
+      } else {
+        await player?.loadQueue(await ensureQueue('Now'));
+      }
+    }
     notifyListeners();
   }
 
@@ -1023,6 +1043,16 @@ class AppState extends ChangeNotifier {
   StreamSubscription? _playerSub;
   Timer? _jamTimer;
 
+  /// Coming back to the app is the moment to find out what happened while it was away:
+  /// a phone freezes what it is not showing, and a stream that died out of sight stays
+  /// dead until something looks at it.
+  late final AppLifecycleListener _lifecycle = AppLifecycleListener(
+    onResume: () {
+      unawaited(player?.resumeIfStopped());
+      unawaited(refreshJam());
+    },
+  );
+
   Future<void> _pollStatus() async {
     if (_disposed) return;
     try {
@@ -1058,6 +1088,7 @@ class AppState extends ChangeNotifier {
     _disposed = true;
     _statusTimer?.cancel();
     _jamTimer?.cancel();
+    _lifecycle.dispose();
     _events?.cancel();
     _playerSub?.cancel();
     _events?.cancel();

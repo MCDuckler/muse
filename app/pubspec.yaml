@@ -13,6 +13,9 @@ dependencies:
   http: ^1.6.0
   just_audio: ^0.10.6
   just_audio_background: ^0.0.1-beta.17
+  # Interruptions — a call, a notification, headphones pulled out — are the other
+  # half of "playback stopped and nothing said why".
+  audio_session: ^0.2.4
   provider: ^6.1.5+1
   shared_preferences: ^2.5.5
   url_launcher: ^6.3.2

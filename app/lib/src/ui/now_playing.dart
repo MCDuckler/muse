@@ -34,7 +34,11 @@ class NowPlayingScreen extends StatelessWidget {
     if (player == null) return const SizedBox.shrink();
 
     return StreamBuilder<PlayerSnapshot>(
-      stream: player.snapshots,
+      // Coarse on purpose. The record turning, the disc sliding out and the printed
+      // background are animations with their own clocks; rebuilding the screen under
+      // them four times a second is what made them stutter. The scrubber keeps its own
+      // fine-grained subscription — see _Scrubber.
+      stream: player.changes,
       initialData: player.last,
       builder: (context, snap) {
         final s = snap.data;
@@ -155,7 +159,7 @@ class NowPlayingScreen extends StatelessWidget {
                               child: Column(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  _Scrubber(player: player, snapshot: s),
+                                  _Scrubber(player: player),
                                   const SizedBox(height: 4),
                                   _Controls(
                                       app: app,
@@ -439,16 +443,36 @@ class _Artwork extends StatelessWidget {
   }
 }
 
-class _Scrubber extends StatefulWidget {
-  const _Scrubber({required this.player, required this.snapshot});
+/// The bar and the two times, with its own line to the player.
+///
+/// Everything else on this screen is drawn from the coarse stream; the clock is the
+/// one thing that genuinely changes several times a second, so it listens for itself
+/// and repaints nothing but itself.
+class _Scrubber extends StatelessWidget {
+  const _Scrubber({required this.player});
+  final PlayerService player;
+
+  @override
+  Widget build(BuildContext context) => RepaintBoundary(
+        child: StreamBuilder<PlayerSnapshot>(
+          stream: player.snapshots,
+          initialData: player.last,
+          builder: (context, snap) =>
+              _ScrubberBar(player: player, snapshot: snap.data),
+        ),
+      );
+}
+
+class _ScrubberBar extends StatefulWidget {
+  const _ScrubberBar({required this.player, required this.snapshot});
   final PlayerService player;
   final PlayerSnapshot? snapshot;
 
   @override
-  State<_Scrubber> createState() => _ScrubberState();
+  State<_ScrubberBar> createState() => _ScrubberState();
 }
 
-class _ScrubberState extends State<_Scrubber> {
+class _ScrubberState extends State<_ScrubberBar> {
   double? _dragging;   // while the thumb is held, the UI follows the finger
 
   /// Where a seek was aimed, until the engine reports having got there.

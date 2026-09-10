@@ -101,6 +101,7 @@ void main() {
   late PlayerService player;
 
   setUp(() async {
+    PlayerService.stallAfter = const Duration(seconds: 12);
     // The test binding installs an HttpClient that refuses everything, which is the
     // right default and the wrong one here: the stub server below is the network.
     HttpOverrides.global = null;
@@ -242,6 +243,73 @@ void main() {
 
     expect([for (final t in player.items) t.id], [2, 3]);
     expect(player.current?.id, 2, reason: 'still playing what was playing');
+  });
+
+  test('a song that stops in the middle is started again', () async {
+    // The engine can sit there believing it is playing while the clock does not move —
+    // a phone changing network, a stream a sleeping phone dropped. Nothing notices
+    // that on its own, which is why the song stopped and only came back when the app
+    // was opened.
+    PlayerService.stallAfter = const Duration(milliseconds: 200);
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    await player.playAt(0);
+    await settle();
+    final engine = audio.only;
+    engine.tick(const Duration(seconds: 12));      // playing along nicely
+    await settle();
+
+    await player.checkForStall();                  // notes where the engine had got to
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    engine.calls.clear();
+    await player.checkForStall();
+    await settle();
+
+    // Asking for the same spot again is what re-opens a stream that died; the engine
+    // still believes it is playing, so telling it to play is a no-op and the seek is
+    // the whole remedy.
+    expect(engine.calls.any((c) => c.startsWith('seek 12s')), isTrue,
+        reason: 'it is nudged back to where it stopped: ${engine.calls}');
+    expect(player.last?.position.inSeconds, 12,
+        reason: 'without losing the place in the song');
+  });
+
+  test('a song that is playing along is left alone', () async {
+    PlayerService.stallAfter = const Duration(milliseconds: 200);
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    await player.playAt(0);
+    await settle();
+    final engine = audio.only;
+
+    for (var second = 1; second <= 4; second++) {
+      engine.tick(Duration(seconds: second));
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      engine.calls.clear();
+      await player.checkForStall();
+    }
+    expect(engine.calls, isEmpty,
+        reason: 'a moving clock needs no help: ${engine.calls}');
+  });
+
+  test('coming back to the app finds a stream that died out of sight', () async {
+    // A phone freezes what it is not showing. The engine still says it is playing, its
+    // own clock stopped a while ago, and nothing notices until somebody looks — which
+    // is why the song came back only when the app did.
+    PlayerService.stallAfter = const Duration(milliseconds: 200);
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    await player.playAt(0);
+    await settle();
+    final engine = audio.only;
+    engine.tick(const Duration(seconds: 30));
+    await settle();                               // let that reading arrive
+    await player.checkForStall();                 // notes where the engine had got to
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    engine.calls.clear();
+
+    await player.resumeIfStopped();               // the app comes back
+    await settle();
+
+    expect(engine.calls.any((c) => c.startsWith('seek 30s')), isTrue,
+        reason: 'it picks up where the sound stopped: ${engine.calls}');
   });
 
   test('shuffling deals what is coming and leaves the rest alone', () async {

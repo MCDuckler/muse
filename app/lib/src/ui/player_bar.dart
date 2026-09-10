@@ -28,7 +28,8 @@ class PlayerBar extends StatelessWidget {
     if (player == null) return const SizedBox.shrink();
 
     return StreamBuilder<PlayerSnapshot>(
-      stream: player.snapshots,
+      // Not every report: the line across the top moves by itself between them.
+      stream: player.changes,
       builder: (context, snap) {
         final s = snap.data;
         final track = s?.current ?? player.current;

@@ -105,9 +105,34 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     });
   }
 
+  /// Decode the neighbours now rather than when they arrive on stage.
+  ///
+  /// An image that has never been drawn is decoded the first frame it is needed, and
+  /// that frame is the one in the middle of the journey — which is a stutter exactly
+  /// when the eye is following something.
+  void _warmSleeves() {
+    final api = context.read<AppState>().api;
+    for (final track in [widget.previous, widget.next, widget.track]) {
+      if (track == null) continue;
+      for (final url in [api.jacketUrl(track, small: false), api.discUrl(track)]) {
+        if (url == null) continue;
+        precacheImage(NetworkImage(url), context).catchError((_) {});
+      }
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _warmSleeves();
+  }
+
   @override
   void didUpdateWidget(RecordStage old) {
     super.didUpdateWidget(old);
+    if (old.next?.id != widget.next?.id || old.previous?.id != widget.previous?.id) {
+      _warmSleeves();
+    }
 
     if (widget.track.id != _middle.id) {
       final forwards = _right?.id == widget.track.id;
@@ -186,7 +211,8 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
             math.min(c.maxWidth, c.maxHeight.isFinite ? c.maxHeight : c.maxWidth);
         final jacket = side * 0.60;
 
-        return SizedBox(
+        return RepaintBoundary(
+          child: SizedBox(
           width: side,
           height: side,
           child: DragFollow(
@@ -235,6 +261,7 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
               },
             ),
           ),
+        ),
         );
       },
     );
