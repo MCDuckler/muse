@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -6,6 +8,7 @@ import '../state/app_state.dart';
 import 'dialogs.dart';
 import '../state/offline.dart';
 import '../state/art_cache.dart';
+import '../state/updates.dart';
 import 'kept_page.dart';
 import 'face.dart';
 import 'downloads_page.dart';
@@ -17,6 +20,13 @@ import 'track_menu.dart';
 import 'theme.dart';
 
 const appVersion = '0.1.0';
+
+/// The moment this build was made, as `YYYYMMDDHHMM`, put in by the publisher.
+///
+/// Empty in anything not built by deploy/publish.sh — a debug build somebody is
+/// working in — and an app that does not know when it was made never claims to be out
+/// of date.
+const appBuild = String.fromEnvironment('MUSE_BUILD');
 
 /// Where the answers to "is this thing working" live.
 ///
@@ -296,10 +306,13 @@ class _SettingsPageState extends State<SettingsPage> {
             onTap: () => Navigator.of(context)
                 .push(MaterialPageRoute(builder: (_) => const PlaybackLogPage())),
           ),
+          if (Updates.supported) const _UpdateRow(),
           ListTile(
             leading: const Icon(Icons.info_outline),
             title: const Text('Muse'),
-            subtitle: const Text('Version $appVersion'),
+            subtitle: Text(appBuild.isEmpty
+                ? 'Version $appVersion'
+                : 'Version $appVersion · build $appBuild'),
           ),
         ],
       ),
@@ -416,4 +429,112 @@ class _ArtCacheRowState extends State<_ArtCacheRow> {
                 child: const Text('Clear'),
               ),
       );
+}
+
+/// Whether there is a newer app, and getting it.
+///
+/// Says what it is doing at every step and never more than it is doing. The last step
+/// is the system's own installer, which is as far as an app that is not the owner of
+/// the device is allowed to go — so this fetches everything, checks it arrived whole,
+/// and then asks once.
+class _UpdateRow extends StatefulWidget {
+  const _UpdateRow();
+
+  @override
+  State<_UpdateRow> createState() => _UpdateRowState();
+}
+
+class _UpdateRowState extends State<_UpdateRow> {
+  Updates? _updates;
+
+  @override
+  void initState() {
+    super.initState();
+    final app = context.read<AppState>();
+    _updates = Updates(baseUrl: app.api.baseUrl, running: appBuild)
+      ..addListener(_changed);
+    unawaited(_updates!.look());
+  }
+
+  void _changed() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _updates?.removeListener(_changed);
+    _updates?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final u = _updates;
+    if (u == null) return const SizedBox.shrink();
+    final scheme = Theme.of(context).colorScheme;
+
+    if (u.state == Updating.downloading) {
+      return ListTile(
+        leading: const Icon(Icons.download),
+        title: const Text('Getting the new version'),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: LinearProgressIndicator(value: u.progress),
+        ),
+        trailing: Text('${(u.progress * 100).round()}%',
+            style: Theme.of(context).textTheme.labelMedium),
+      );
+    }
+
+    if (u.state == Updating.waiting) {
+      return ListTile(
+        leading: Icon(Icons.system_update, color: scheme.primary),
+        title: const Text('Ready to install'),
+        subtitle: const Text('Android asks before it installs anything — say yes'),
+        trailing: FilledButton(
+          onPressed: u.offer,
+          child: const Text('Install'),
+        ),
+      );
+    }
+
+    if (u.state == Updating.failed) {
+      return ListTile(
+        leading: Icon(Icons.error_outline, color: scheme.error),
+        title: const Text('That did not work'),
+        subtitle: Text(u.trouble ?? 'Unknown'),
+        trailing: TextButton(
+            onPressed: u.fetchAndOffer, child: const Text('Again')),
+      );
+    }
+
+    if (!u.available) {
+      return ListTile(
+        leading: const Icon(Icons.check_circle_outline),
+        title: const Text('Up to date'),
+        subtitle: Text(u.state == Updating.checking
+            ? 'Looking…'
+            : appBuild.isEmpty
+                ? 'This build was not made by the publisher'
+                : 'This is the newest version on the server'),
+        trailing: IconButton(
+          icon: const Icon(Icons.refresh),
+          tooltip: 'Check again',
+          onPressed: u.look,
+        ),
+      );
+    }
+
+    final release = u.release!;
+    return ListTile(
+      leading: Icon(Icons.system_update, color: scheme.primary),
+      title: Text('Version ${release.version} is ready'),
+      subtitle: Text('${release.size}'
+          '${release.built == null ? '' : ' · built ${release.built!.split('T').first}'}'),
+      trailing: FilledButton(
+        onPressed: u.fetchAndOffer,
+        child: const Text('Update'),
+      ),
+    );
+  }
 }

@@ -37,9 +37,31 @@ publish_apk() {
   # A registrant generated during an integration-test run lists the integration_test
   # plugin, which does not exist in a release build. Deleting it forces a fresh one.
   rm -f app/android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
-  (cd app && flutter build apk --release --dart-define=MUSE_SERVER="$SERVER_URL")
-  scp -q -i "$KEY" app/build/app/outputs/flutter-apk/app-release.apk "$HOST":/opt/muse/deploy/web/muse.apk
-  echo "   $SERVER_URL/muse.apk"
+  # The moment it was built, as the build number.
+  #
+  # Nothing was ever going to tell a new APK from the running one: the version was a
+  # constant in the source that had not been touched since the first commit. A stamp
+  # cannot be forgotten and is in order by construction, which is the whole of what an
+  # update check needs — is the one on the server newer than the one in my hand.
+  local build
+  build=$(date -u +%Y%m%d%H%M)
+  local version
+  version=$(sed -n 's/^version: *\([^+]*\).*/\1/p' app/pubspec.yaml | tr -d '[:space:]')
+  (cd app && flutter build apk --release \
+      --dart-define=MUSE_SERVER="$SERVER_URL" \
+      --dart-define=MUSE_BUILD="$build")
+
+  local apk=app/build/app/outputs/flutter-apk/app-release.apk
+  local bytes
+  bytes=$(stat -c%s "$apk")
+  scp -q -i "$KEY" "$apk" "$HOST":/opt/muse/deploy/web/muse.apk
+  # What the app reads to find out whether there is a newer one. A plain file beside
+  # the APK rather than an endpoint: it is written by whatever publishes the APK, so
+  # the two cannot get out of step.
+  printf '{"version":"%s","build":"%s","bytes":%s,"built":"%s"}\n' \
+    "$version" "$build" "$bytes" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    | $SSH "$HOST" 'cat > /opt/muse/deploy/web/muse.apk.json'
+  echo "   $SERVER_URL/muse.apk  ($version build $build, $((bytes / 1024 / 1024))MB)"
 }
 
 case "$what" in

@@ -73,3 +73,10 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // FileProvider, for handing a downloaded APK to the system installer. Flutter's
+    // own plugins pull androidx in already, but this module names what it uses rather
+    // than relying on somebody else's dependency staying where it is.
+    implementation("androidx.core:core-ktx:1.13.1")
+}

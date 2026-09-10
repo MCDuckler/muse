@@ -13,6 +13,11 @@
          through the same permission a recording app asks for; nothing is recorded, and
          it is requested at the moment the bars are switched on rather than at install. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- Fetching a new version and offering to install it. Android will not let
+         anything but a device owner install software without somebody saying yes, so
+         this only buys the right to *ask*: the app downloads the APK and opens the
+         system installer on it, and a person taps yes. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <application
         android:label="muse"
         android:name="${applicationName}"
@@ -57,6 +62,19 @@
                 <action android:name="android.intent.action.MEDIA_BUTTON"/>
             </intent-filter>
         </receiver>
+
+        <!-- How a downloaded APK is handed to the installer. The app's own files are
+             unreadable from outside it, including by the system installer; this grants
+             a temporary read on one directory and nothing else. See muse_files.xml. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/muse_files" />
+        </provider>
 
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The one place the installer is allowed to read from.
+     A downloaded APK lives in the app's own files, which nothing outside the app can
+     open — including the system installer. A FileProvider hands out a temporary,
+     read-only grant for exactly this directory and nothing else. -->
+<paths>
+    <files-path name="updates" path="updates/" />
+</paths>

@@ -50,6 +50,21 @@ class MainActivity : AudioServiceActivity() {
             }
         // See Keepalive: the radio has to stay up for a stream to keep arriving once
         // the screen is off.
+        // Fetching a new version and asking to install it. See Installer.
+        MethodChannel(engine.dartExecutor.binaryMessenger, "muse/install")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "allowed" -> result.success(Installer.mayInstall(applicationContext))
+                    "allow" -> {
+                        Installer.askToAllow(this)
+                        result.success(null)
+                    }
+                    "open" -> result.success(
+                        Installer.install(applicationContext,
+                            call.argument<String>("path") ?: ""))
+                    else -> result.notImplemented()
+                }
+            }
         // Why the app stopped running last time. See LastExit.
         MethodChannel(engine.dartExecutor.binaryMessenger, "muse/lastexit")
             .setMethodCallHandler { call, result ->
