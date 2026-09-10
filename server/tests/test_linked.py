@@ -178,3 +178,76 @@ def test_a_rate_limit_reschedules_rather_than_failing(client, hdr, monkeypatch):
     row = db.one("""select payload, attempts, next_attempt_at > now() later
                       from jobs where kind='mirror' order by id desc limit 1""")
     assert row["payload"]["offset"] == 80 and row["attempts"] == 0 and row["later"]
+
+
+# ---------------- SoundCloud listings ----------------
+def test_a_soundcloud_set_arrives_with_names(monkeypatch):
+    """Every SoundCloud track mirrored before this was created blank.
+
+    yt-dlp's flat listing answers for SoundCloud with ids and links and nothing else —
+    no title, no uploader — so a whole profile came in as "Unknown artist". The web
+    API answers the same question with the record.
+    """
+    calls = []
+
+    def fake(path, **params):
+        calls.append((path, params))
+        if path == "/resolve" and params["url"].endswith("/dj-somebody"):
+            return {"id": 77}
+        if path == "/resolve":                       # the set itself
+            return {"kind": "playlist", "tracks": [
+                {"id": 1, "title": "First", "duration": 1000,
+                 "user": {"username": "Someone"}},
+                {"id": 2},                           # named but not described
+            ]}
+        if path == "/tracks":
+            assert params["ids"] == "2"
+            return [{"id": 2, "title": "Second", "duration": 2000,
+                     "user": {"username": "Another"}}]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(linked, "_sc_api", fake)
+    items = linked._soundcloud_items("dj-somebody/sets/night-bus")
+
+    assert [i["title"] for i in items] == ["First", "Second"], "and in the set's order"
+    assert [i["artists"] for i in items] == [["Someone"], ["Another"]]
+    assert [i["duration_ms"] for i in items] == [1000, 2000]
+    assert items[0]["source"] == {"provider": "soundcloud", "provider_id": "1",
+                                  "url": "https://api.soundcloud.com/tracks/1"}
+
+
+def test_likes_are_unwrapped(monkeypatch):
+    """A like is a wrapper around a track, and a repost is the same shape."""
+    def fake(path, **params):
+        if path == "/resolve":
+            return {"id": 5}
+        if path.endswith("/likes"):
+            return {"collection": [
+                {"track": {"id": 9, "title": "Liked", "duration": 3000,
+                           "user": {"username": "Uploader"}}},
+            ]}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(linked, "_sc_api", fake)
+    items = linked._soundcloud_items("dj-somebody/likes")
+    assert items[0]["title"] == "Liked" and items[0]["artists"] == ["Uploader"]
+
+
+def test_a_listing_that_will_not_answer_falls_back(monkeypatch):
+    """The old path still works, and now names the track from its link rather than
+    creating something with no name at all."""
+    def refuse(path, **params):
+        raise linked.LinkError("no")
+
+    class Result:
+        returncode = 0
+        stdout = json.dumps({"entries": [
+            {"id": 42, "url": "https://soundcloud.com/dj-somebody/night-bus-edit"},
+        ]})
+        stderr = ""
+
+    monkeypatch.setattr(linked, "_sc_api", refuse)
+    monkeypatch.setattr(linked.subprocess, "run", lambda *a, **k: Result())
+    items = linked._soundcloud_items("dj-somebody/likes")
+    assert items[0]["title"] == "night bus edit"
+    assert items[0]["artists"] == ["dj-somebody"]

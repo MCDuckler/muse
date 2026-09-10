@@ -64,6 +64,21 @@ def splitartists(apply: bool = False) -> None:
     db.close()
 
 
+def fixsoundcloud(apply: bool = False) -> None:
+    """Name the SoundCloud tracks that were mirrored before the listing knew names."""
+    from . import config, db, linked
+
+    cfg = config.load()
+    db.init(cfg.dsn)
+    result = linked.repair_soundcloud(apply=apply)
+    print(f"{result['looked_at']} nameless tracks, {result['named']} "
+          f"{'named' if apply else 'could be named'}, "
+          f"{result['still_unknown']} SoundCloud would not describe")
+    if not apply:
+        print("run with --apply to write them")
+    db.close()
+
+
 def main() -> None:
     match sys.argv[1:]:
         case ["adduser", name]:
@@ -74,9 +89,13 @@ def main() -> None:
             splitartists()
         case ["splitartists", "--apply"]:
             splitartists(apply=True)
+        case ["fixsoundcloud"]:
+            fixsoundcloud()
+        case ["fixsoundcloud", "--apply"]:
+            fixsoundcloud(apply=True)
         case _:
             sys.exit("usage: python -m muse.cli [adduser <name> | secret "
-                     "| splitartists [--apply]]")
+                     "| splitartists [--apply] | fixsoundcloud [--apply]]")
 
 
 if __name__ == "__main__":

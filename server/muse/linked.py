@@ -214,7 +214,117 @@ def _soundcloud_playlists(handle: str) -> list[dict]:
     return out
 
 
+def _sc_item(track: dict) -> dict | None:
+    """One SoundCloud track, in the shape a mirror run expects."""
+    if not track or not track.get("id"):
+        return None
+    who = (track.get("user") or {}).get("username")
+    return {
+        "remote_id": str(track["id"]),
+        "title": (track.get("title") or "").strip(),
+        # The uploader is who SoundCloud says made it. Not always the artist a shop
+        # would print — a label account, a mix series — but it is a name, and a name is
+        # what "Unknown artist" was standing in for.
+        "artists": [who] if who else [],
+        "album": None,
+        "duration_ms": track.get("duration") or None,
+        # Straight from SoundCloud, so no matching step: this *is* the recording.
+        "source": {"provider": "soundcloud", "provider_id": str(track["id"]),
+                   "url": f"https://api.soundcloud.com/tracks/{track['id']}"},
+    }
+
+
+def sc_tracks_by_id(ids: list[str]) -> dict[str, dict]:
+    """Fill in tracks that a listing named but did not describe.
+
+    A SoundCloud playlist hands back the first few tracks in full and the rest as bare
+    ids; asking for fifty at a time is one request rather than fifty.
+    """
+    found: dict[str, dict] = {}
+    for start in range(0, len(ids), 50):
+        batch = ids[start:start + 50]
+        if not batch:
+            continue
+        try:
+            for track in _sc_api("/tracks", ids=",".join(batch)) or []:
+                found[str(track.get("id"))] = track
+        except LinkError:
+            break
+    return found
+
+
+def _soundcloud_items_api(handle: str, which: str, limit: int) -> list[dict]:
+    """A listing, through SoundCloud's own web API.
+
+    yt-dlp's flat listing is one request for a whole profile, which is why it was used
+    — but for SoundCloud it answers with nothing except ids and links: no title, no
+    uploader. Every track mirrored from here was therefore created blank, which is what
+    "Unknown artist" was. The web app's own API answers the same question with the
+    whole record.
+    """
+    profile = _sc_api("/resolve", url=f"https://soundcloud.com/{handle}")
+    user_id = profile.get("id")
+    if not user_id:
+        raise LinkError("SoundCloud has no profile with that name.")
+
+    raw: list[dict] = []
+    if which.startswith("sets/"):
+        playlist = _sc_api("/resolve", url=f"https://soundcloud.com/{handle}/{which}")
+        listed = playlist.get("tracks") or []
+        thin = [str(t["id"]) for t in listed if t.get("id") and not t.get("title")]
+        filled = sc_tracks_by_id(thin) if thin else {}
+        for track in listed:
+            whole = track if track.get("title") else filled.get(str(track.get("id")))
+            if whole:
+                raw.append(whole)
+    elif which in ("likes", "reposts", "tracks", ""):
+        path = {
+            "likes": f"/users/{user_id}/likes",
+            "reposts": f"/stream/users/{user_id}/reposts",
+            "tracks": f"/users/{user_id}/tracks",
+            "": f"/users/{user_id}/tracks",
+        }[which]
+        offset = 0
+        while len(raw) < limit:
+            page = _sc_api(path, limit=min(100, limit - len(raw)), offset=offset)
+            items = page.get("collection") or []
+            for entry in items:
+                # Likes and reposts wrap the track; a plain listing is the track.
+                track = entry.get("track") if isinstance(entry, dict) and "track" in entry \
+                    else entry
+                if track and track.get("kind", "track") == "track":
+                    raw.append(track)
+            if len(items) < 1:
+                break
+            offset += len(items)
+            if len(items) < 100:
+                break
+    else:
+        raise LinkError(f"Nothing to read at soundcloud.com/{handle}/{which}")
+
+    out = []
+    for track in raw[:limit]:
+        item = _sc_item(track)
+        if item and item["title"]:
+            out.append(item)
+    if not out:
+        raise LinkError("SoundCloud listed nothing there.")
+    return out
+
+
 def _soundcloud_items(remote_id: str, limit: int = 200) -> list[dict]:
+    handle, _, which = remote_id.partition("/")
+    try:
+        return _soundcloud_items_api(handle, which, limit)
+    except LinkError as e:
+        log.info("soundcloud api listing failed for %s (%s); falling back to yt-dlp",
+                 remote_id, e)
+    except Exception as e:                        # noqa: BLE001 - any web app change
+        log.info("soundcloud api listing broke on %s: %s", remote_id, e)
+
+    # The old way, kept as the fallback. It knows the ids and the links, which is
+    # enough to fetch the audio; the titles are filled in from the links so a track is
+    # never created with no name at all.
     r = subprocess.run([sources.YTDLP, "--no-warnings", "--flat-playlist", "-J",
                         "--playlist-items", f"1-{limit}",
                         f"https://soundcloud.com/{remote_id}"],
@@ -226,17 +336,65 @@ def _soundcloud_items(remote_id: str, limit: int = 200) -> list[dict]:
     for e in data.get("entries") or []:
         if not e.get("id"):
             continue
+        link = e.get("url") or ""
+        slug = link.rstrip("/").rsplit("/", 1)[-1] if link else ""
+        who = e.get("uploader") or (link.split("soundcloud.com/", 1)[-1].split("/")[0]
+                                    if "soundcloud.com/" in link else None)
         out.append({
             "remote_id": str(e["id"]),
-            "title": e.get("title") or "",
-            "artists": [e["uploader"]] if e.get("uploader") else [],
+            # A slug is a poor title, and a better one arrives with the file itself —
+            # but it is a name, and the row is no longer nameless.
+            "title": e.get("title") or slug.replace("-", " ").strip(),
+            "artists": [who] if who else [],
             "album": None,
             "duration_ms": int((e.get("duration") or 0) * 1000) or None,
-            # Straight from SoundCloud, so no matching step: this *is* the track.
             "source": {"provider": "soundcloud", "provider_id": str(e["id"]),
                        "url": f"https://api.soundcloud.com/tracks/{e['id']}"},
         })
     return out
+
+
+def repair_soundcloud(limit: int = 1000, apply: bool = True) -> dict:
+    """Give names back to tracks mirrored while the listing had none.
+
+    Everything SoundCloud added before this ran was created from a listing that carried
+    only ids and links, so the rows have no title and no artist — "Unknown artist", on a
+    song whose name SoundCloud knows perfectly well. This asks for those tracks by id
+    and writes back what comes.
+    """
+    rows = db.all_(
+        """select t.id, ts.provider_id
+             from tracks t
+             join track_sources ts on ts.track_id = t.id and ts.provider = 'soundcloud'
+            where t.source = 'soundcloud'
+              and (coalesce(t.title, '') = '' or coalesce(array_length(t.artists, 1), 0) = 0)
+            order by t.id desc limit %s""",
+        (limit,),
+    )
+    if not rows:
+        return {"looked_at": 0, "named": 0, "still_unknown": 0}
+
+    by_provider = {str(r["provider_id"]): r["id"] for r in rows}
+    found = sc_tracks_by_id(list(by_provider))
+    named = 0
+    for provider_id, track_id in by_provider.items():
+        track = found.get(provider_id)
+        item = _sc_item(track) if track else None
+        if not item or not item["title"]:
+            continue
+        named += 1
+        if apply:
+            db.run(
+                """update tracks
+                      set title = %s,
+                          artists = case when coalesce(array_length(artists,1),0) = 0
+                                         then %s else artists end,
+                          duration_ms = coalesce(duration_ms, %s)
+                    where id = %s""",
+                (item["title"], item["artists"], item["duration_ms"], track_id),
+            )
+    return {"looked_at": len(rows), "named": named,
+            "still_unknown": len(rows) - named}
 
 
 # ---------------------------------------------------------------- Bandcamp

@@ -19,11 +19,16 @@ class SourceDot extends StatelessWidget {
   /// speck floating over it. Null for no ring.
   final Color? ring;
 
-  /// Each source's own colour, near enough to be recognised without a legend.
+  /// Each source's own colour.
+  ///
+  /// SoundCloud orange and YouTube red were a few degrees of hue apart, which is fine
+  /// on a brand sheet and useless at seven pixels across in a list: they read as the
+  /// same dot. YouTube is pulled round to a cool red — nearly rose — so the two are
+  /// telling apart at a glance rather than on inspection.
   static Color colourOf(String source, ColorScheme scheme) => switch (source) {
-        'soundcloud' => const Color(0xFFFF5500),
+        'soundcloud' => const Color(0xFFFF7A00),
         'bandcamp' => const Color(0xFF1DA0C3),
-        'youtube' => const Color(0xFFE0403A),
+        'youtube' => const Color(0xFFE11D48),
         // Anything put there by hand belongs to the person, not to a service.
         'custom' => scheme.primary,
         _ => scheme.outline,

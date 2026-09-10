@@ -107,15 +107,7 @@ class SongRow extends StatelessWidget {
                 width: 40,
                 height: 40,
                 child: Center(
-                  // The dot in the corner says where the file came from — see
-                  // SourceDot. A row with a number or a check instead of artwork
-                  // keeps the mark too, beside it.
-                  child: leading == null
-                      ? MarkedArtwork(
-                          source: track.source,
-                          child: Artwork(track: track, size: 40, radius: 5),
-                        )
-                      : leading!,
+                  child: leading ?? Artwork(track: track, size: 40, radius: 5),
                 ),
               ),
               const SizedBox(width: 10),
@@ -150,8 +142,16 @@ class SongRow extends StatelessWidget {
                 _Downloading(track: track),
               ],
               if (trailing != null) ...[const SizedBox(width: 6), trailing!],
-              if (showDuration && duration.isNotEmpty && !track.isPending) ...[
+              // Where the file came from, immediately left of how long it is: the
+              // right-hand end of the row is where the eye already goes for the
+              // facts about a song, and on the artwork the mark was competing with
+              // the picture it sat on.
+              if (!track.isPending) ...[
                 const SizedBox(width: 8),
+                SourceDot(source: track.source),
+              ],
+              if (showDuration && duration.isNotEmpty && !track.isPending) ...[
+                const SizedBox(width: 6),
                 Text(duration,
                     style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
               ],
