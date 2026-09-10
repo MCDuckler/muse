@@ -325,6 +325,11 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
         // finish where it was always going.
         break;
       case ShelfMove.abandon:
+        // Not while the hand is still on it. The player rebuilds this a few times a
+        // second as the song plays, and every one of those rebuilds arrives with the
+        // record that is still in the middle — which is the same thing an undone skip
+        // looks like. Taking it back under the finger cancelled the drag mid-gesture.
+        if (_scrubbing) break;
         _travel.reverse();
         _out.reverse();
       case ShelfMove.restock:
