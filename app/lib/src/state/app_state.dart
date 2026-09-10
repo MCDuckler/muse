@@ -11,6 +11,7 @@ import '../api/models.dart';
 import 'offline.dart';
 import 'art_cache.dart';
 import 'playback_log.dart';
+import 'sleeve_board.dart';
 import 'player.dart';
 import '../ui/theme.dart';
 
@@ -160,6 +161,12 @@ class AppState extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kSpectrum, on);
   }
+
+  /// The back of whatever record is turned over, and what is written on it.
+  ///
+  /// Its own notifier: a line being drawn moves with the finger, and the rest of the
+  /// app has no business rebuilding sixty times a second for it.
+  late final SleeveBoard sleeveBoard = SleeveBoard(api);
 
   /// Whether this device plays the jam's music, or only follows along.
   ///
@@ -1204,6 +1211,13 @@ class AppState extends ChangeNotifier {
         await _onQueueChanged(e.data);
       } else if (e.event == 'jam') {
         await _onJamEvent(e.data);
+      } else if (e.event == 'sleeve_mark') {
+        // Somebody drawing on the record in front of you, as they draw it.
+        sleeveBoard.arrived(Map<String, dynamic>.from(e.data));
+      } else if (e.event == 'sleeve_erase') {
+        sleeveBoard.erased(Map<String, dynamic>.from(e.data));
+      } else if (e.event == 'sleeve_wiped') {
+        sleeveBoard.wiped(Map<String, dynamic>.from(e.data));
       } else if (e.event == 'track_failed') {
         final id = e.data['track_id'] as int?;
         if (id != null) await player?.onTrackUpdated(id);
@@ -1334,6 +1348,7 @@ class AppState extends ChangeNotifier {
     _statusTimer?.cancel();
     _jamTimer?.cancel();
     _lifecycle.dispose();
+    sleeveBoard.dispose();
     _events?.cancel();
     _playerSub?.cancel();
     _events?.cancel();

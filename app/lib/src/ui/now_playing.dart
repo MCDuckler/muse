@@ -7,6 +7,7 @@ import '../state/player.dart';
 import 'artwork.dart';
 import 'glass.dart';
 import 'record_stage.dart';
+import 'sleeve_ink.dart';
 import 'spectrum.dart';
 import 'swipe.dart';
 import 'lyrics_sheet.dart';
@@ -151,6 +152,11 @@ class NowPlayingScreen extends StatelessWidget {
                                 height: app.playerLayout == PlayerLayout.roomy
                                     ? 18
                                     : 32),
+                            // Only while a record is turned over. It is the back of a
+                            // sleeve, not an art program: the pens appear because
+                            // there is suddenly something to draw on, and go again
+                            // when the record is turned back.
+                            _SleeveTools(app: app),
                             Padding(
                               padding: EdgeInsets.symmetric(
                                   horizontal: app.playerLayout == PlayerLayout.plain
@@ -650,6 +656,7 @@ class _Artwork extends StatelessWidget {
               // way of changing track.
               onPrevious: context.read<AppState>().skipPrevious,
               onNext: context.read<AppState>().skipNext,
+              board: context.read<AppState>().sleeveBoard,
             ),
           ),
         );
@@ -663,6 +670,46 @@ class _Artwork extends StatelessWidget {
 /// Everything else on this screen is drawn from the coarse stream; the clock is the
 /// one thing that genuinely changes several times a second, so it listens for itself
 /// and repaints nothing but itself.
+/// The pens, while the record is face-down.
+///
+/// Takes the place of the words rather than sitting beside them, because while you are
+/// drawing on a sleeve the title of the song is not what you are looking at — and
+/// because anything that appears *in addition* moves everything under it, which is the
+/// thing this screen has just stopped doing.
+class _SleeveTools extends StatelessWidget {
+  const _SleeveTools({required this.app});
+  final AppState app;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: app.sleeveBoard,
+      builder: (context, _) {
+        final board = app.sleeveBoard;
+        if (!board.open01) return const SizedBox.shrink();
+        final jam = app.jam;
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: SleevePalette(
+            ink: board.ink,
+            width: board.nib,
+            onInk: board.pickInk,
+            onWidth: board.pickNib,
+            onUndo: () => board.undo(app.userId),
+            // The board is the host's in a jam, and clearing it is theirs alone.
+            onWipe: jam == null || jam.isHost ? board.wipe : null,
+            sharing: jam == null
+                ? null
+                : jam.isHost
+                    ? 'Your sleeve — everyone in the jam is drawing on it'
+                    : "${jam.host ?? 'The host'}'s sleeve",
+          ),
+        );
+      },
+    );
+  }
+}
+
 /// The song's name, in a box that is always two lines tall.
 ///
 /// The height is worked out from the type rather than guessed, so it holds whatever

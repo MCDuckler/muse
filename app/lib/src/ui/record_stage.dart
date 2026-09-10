@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,8 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/art_cache.dart';
+import '../state/sleeve_board.dart';
+import 'sleeve_ink.dart';
 
 /// The record on the stage, and the two either side of it.
 ///
@@ -32,7 +35,11 @@ class RecordStage extends StatefulWidget {
     this.onPrevious,
     this.scale = 0.74,
     this.axis = ShelfAxis.sideways,
+    this.board,
   });
+
+  /// The back of whatever is in the middle, and what is written on it.
+  final SleeveBoard? board;
 
   /// Which way the shelf runs. Everything about the movement is the same either way —
   /// the same journey, the same lag, the same drag — laid along a different line.
@@ -246,11 +253,19 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     vsync: this,
     duration: const Duration(milliseconds: 620),
   )..addStatusListener((status) {
-      if (status == AnimationStatus.completed) {
-        setState(() {
-          _showingBack = !_showingBack;
-          _toss.value = 0;
-        });
+      if (status != AnimationStatus.completed) return;
+      setState(() {
+        _showingBack = !_showingBack;
+        _toss.value = 0;
+      });
+      // Landing face-down is what opens the board: nothing is fetched, and nothing is
+      // on screen, until a record is actually turned over.
+      final board = widget.board;
+      if (board == null) return;
+      if (_showingBack) {
+        unawaited(board.open(widget.track.id));
+      } else {
+        board.close();
       }
     });
 
@@ -348,6 +363,7 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
       // A different record: it arrives the right way up and with its own disc put
       // away, whatever was decided about the last one.
       _discByHand = null;
+      if (_showingBack) widget.board?.close();
       _showingBack = false;
       _toss.value = 0;
     }
@@ -415,6 +431,23 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     } else {
       _out.reverse();
     }
+  }
+
+  /// Where the sleeve is on the stage, so a finger on the screen can be turned into a
+  /// place on the board.
+  Rect _backAt = Rect.zero;
+
+  bool get _drawable => _showingBack && _toss.value == 0 && widget.board != null;
+
+  Offset01? _on(Offset global) {
+    if (_backAt.width <= 0) return null;
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return null;
+    final local = box.globalToLocal(global);
+    return Offset01(
+      ((local.dx - _backAt.left) / _backAt.width).clamp(0.0, 1.0),
+      ((local.dy - _backAt.top) / _backAt.height).clamp(0.0, 1.0),
+    );
   }
 
   /// Thrown in the air, landing on its other face.
@@ -528,6 +561,12 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
         // One shelf place is 0.45 of the stage; the finger covers the same ground, so
         // the sleeve under it stays under it.
         _reach = side * 0.45;
+        // Where the middle sleeve sits inside the stage. The column is the jacket with
+        // the reflection's worth of space under it, centred — so this is arithmetic
+        // rather than a measurement, and it is right on the frame it is needed.
+        final column = jacket * (1 + Mirror.defaultDepth);
+        _backAt = Rect.fromLTWH(
+            (side - jacket) / 2, (side - column) / 2, jacket, jacket);
 
         return RepaintBoundary(
           child: SizedBox(
@@ -537,21 +576,49 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
           // direction still belongs to the page: a drag down closes the player.
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            // Tapping the record puts it back in its sleeve, or takes it out again.
-            onTap: _toggleDisc,
-            onHorizontalDragStart: _upright ? null : _dragStart,
-            onHorizontalDragUpdate: _upright ? null : _dragUpdate,
-            onHorizontalDragEnd: _upright ? null : _dragEnd,
+            // Tapping the record puts it back in its sleeve, or takes it out again —
+            // unless it is turned over, in which case a tap is a dot of ink.
+            onTap: _drawable ? null : _toggleDisc,
+            // While the sleeve is face-down every drag is a pen. The shelf keeps
+            // still: you are writing on this record, not looking for the next one.
+            onPanStart: !_drawable
+                ? null
+                : (d) {
+                    final at = _on(d.globalPosition);
+                    if (at != null) {
+                      widget.board!.begin(at);
+                    }
+                  },
+            onPanUpdate: !_drawable
+                ? null
+                : (d) {
+                    final at = _on(d.globalPosition);
+                    if (at != null) widget.board!.extend(at);
+                  },
+            onPanEnd: !_drawable ? null : (_) => widget.board!.end(),
+            onTapUp: !_drawable
+                ? null
+                : (d) {
+                    final at = _on(d.globalPosition);
+                    if (at == null) return;
+                    widget.board!.begin(at);
+                    widget.board!.end();
+                  },
+            onHorizontalDragStart: _drawable || _upright ? null : _dragStart,
+            onHorizontalDragUpdate: _drawable || _upright ? null : _dragUpdate,
+            onHorizontalDragEnd: _drawable || _upright ? null : _dragEnd,
             // Up and over. Only where the shelf runs across the screen: where it runs
             // up and down, a swipe up is already how you change record, and one drag
             // meaning two things is how a screen stops being predictable.
-            onVerticalDragStart: _upright ? _dragStart : null,
-            onVerticalDragUpdate: _upright ? _dragUpdate : null,
-            onVerticalDragEnd: _upright
-                ? _dragEnd
-                : (d) {
-                    if (d.velocity.pixelsPerSecond.dy < -520) _tossIt();
-                  },
+            onVerticalDragStart: _upright && !_drawable ? _dragStart : null,
+            onVerticalDragUpdate: _upright && !_drawable ? _dragUpdate : null,
+            onVerticalDragEnd: _drawable
+                ? null
+                : _upright
+                    ? _dragEnd
+                    : (d) {
+                        if (d.velocity.pixelsPerSecond.dy < -520) _tossIt();
+                      },
             child: AnimatedBuilder(
               animation: Listenable.merge([_travel, _out, _toss]),
               builder: (context, _) {
@@ -607,6 +674,7 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                         // are somebody else's.
                         toss: card.slot == 0 ? _toss.value : 0.0,
                         showingBack: card.slot == 0 && _showingBack,
+                        board: card.slot == 0 ? widget.board : null,
                         side: side,
                         jacket: jacket,
                         // The same picture wherever it stands. Choosing the small
@@ -647,6 +715,7 @@ class _Sleeve extends StatelessWidget {
     required this.upright,
     required this.toss,
     required this.showingBack,
+    required this.board,
     required this.side,
     required this.jacket,
     required this.jacketUrl,
@@ -666,6 +735,9 @@ class _Sleeve extends StatelessWidget {
 
   /// Which face was towards you before the throw started.
   final bool showingBack;
+
+  /// The back of this record, and what is on it. Only the one in the middle has one.
+  final SleeveBoard? board;
 
   final double side;
   final double jacket;
@@ -741,7 +813,8 @@ class _Sleeve extends StatelessWidget {
                     size: jacket,
                     dim: dim,
                     toss: toss,
-                    showingBack: showingBack),
+                    showingBack: showingBack,
+                    board: board),
                 if (showing >= Disc.infront)
                   Disc(spin: spin, url: discUrl, size: jacket * 0.92,
                       out: showing, jacket: jacket, dim: dim),
@@ -760,7 +833,7 @@ class _Sleeve extends StatelessWidget {
               child: Mirror(
                 size: jacket,
                 child: showingBack
-                    ? _Back(size: jacket, dim: dim)
+                    ? _Back(size: jacket, dim: dim, board: board)
                     : _Jacket(url: jacketUrl, size: jacket, dim: dim),
               ),
             )
@@ -788,6 +861,7 @@ class _Face extends StatelessWidget {
     required this.dim,
     required this.toss,
     required this.showingBack,
+    this.board,
   });
 
   final String? url;
@@ -795,11 +869,14 @@ class _Face extends StatelessWidget {
   final double dim;
   final double toss;
   final bool showingBack;
+  final SleeveBoard? board;
 
   @override
   Widget build(BuildContext context) {
     Widget front() => _Jacket(url: url, size: size, dim: dim);
-    Widget back() => _Back(size: size, dim: dim);
+    // Nothing is drawn on it mid-throw: the board is not a surface until it has landed.
+    Widget back() =>
+        _Back(size: size, dim: dim, board: toss > 0 ? null : board);
 
     if (toss <= 0) {
       return showingBack ? back() : front();
@@ -841,10 +918,13 @@ class _Face extends StatelessWidget {
 /// on it. Kraft card, the grain of the stock, the seam where it is folded, and corners
 /// a shade darker from being handled.
 class _Back extends StatelessWidget {
-  const _Back({required this.size, this.dim = 1.0});
+  const _Back({required this.size, this.dim = 1.0, this.board});
 
   final double size;
   final double dim;
+
+  /// What has been written on this one, if anybody has been given the chance.
+  final SleeveBoard? board;
 
   @override
   Widget build(BuildContext context) => SizedBox(
@@ -852,7 +932,12 @@ class _Back extends StatelessWidget {
         height: size,
         child: Opacity(
           opacity: dim.clamp(0.0, 1.0),
-          child: CustomPaint(painter: _Board(), size: Size(size, size)),
+          child: CustomPaint(
+            painter: _Board(),
+            foregroundPainter:
+                board == null ? null : SleeveInk(board: board!, size01: size),
+            size: Size(size, size),
+          ),
         ),
       );
 }

@@ -230,6 +230,45 @@ class ApiClient {
   String? discUrl(Track t, {bool small = false}) =>
       sleeveUrl(t, small: small, part: 'disc');
 
+  // ---------------- the back of a sleeve ----------------
+  /// Everything drawn on this record's back, on whichever board this device is on:
+  /// your own, or the host's when you are in a jam.
+  Future<List<SleeveStroke>> marks(int trackId) async {
+    final d = await _decode(await http.get(_u('/tracks/$trackId/marks'),
+        headers: _headers)) as Map<String, dynamic>;
+    return [
+      for (final s in (d['strokes'] ?? const []) as List)
+        SleeveStroke.fromJson(s as Map<String, dynamic>)
+    ];
+  }
+
+  /// A line, or as much of one as has been drawn so far.
+  ///
+  /// Sent whole every time rather than as a difference: a stroke is a few dozen
+  /// numbers, and "here is the line as it stands" cannot arrive out of order or land
+  /// twice, which is worth more than the bytes it costs.
+  Future<void> draw(int trackId, SleeveStroke stroke) async {
+    await _decode(await http.post(_u('/tracks/$trackId/marks'),
+        headers: _headers,
+        body: jsonEncode({
+          'stroke_id': stroke.id,
+          'ink': stroke.ink,
+          'width': stroke.width,
+          'points': stroke.points,
+          'done': stroke.done,
+        })));
+  }
+
+  Future<void> undoMark(int trackId, String strokeId) async {
+    await _decode(await http.delete(
+        _u('/tracks/$trackId/marks/$strokeId'), headers: _headers));
+  }
+
+  Future<void> wipeMarks(int trackId) async {
+    await _decode(
+        await http.delete(_u('/tracks/$trackId/marks'), headers: _headers));
+  }
+
   /// Take the whole thing: queue the audio for everything in a playlist that has none.
   Future<int> downloadPlaylist(int playlistId) async {
     final d = await _decode(await http.post(_u('/playlists/$playlistId/download'),

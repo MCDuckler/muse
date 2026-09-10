@@ -664,6 +664,60 @@ enum CoverStyle {
       : 'The artwork on its own, no animation';
 }
 
+/// One line drawn on the back of a sleeve.
+///
+/// Points are in the sleeve's own square, 0 to 1, so a drawing made on a phone is the
+/// same drawing on a laptop and the same one again when the record is small on a shelf.
+class SleeveStroke {
+  const SleeveStroke({
+    required this.id,
+    required this.ink,
+    required this.width,
+    required this.points,
+    this.done = false,
+    this.authorId,
+    this.author,
+    this.authorAvatar,
+  });
+
+  final String id;
+
+  /// An index into the palette rather than a colour. The palette is the app's business
+  /// and can get prettier; a board drawn on today should still look right after it has.
+  final int ink;
+  final double width;
+
+  /// x, y, x, y… flat, because that is how it goes over the wire and how it is drawn.
+  final List<double> points;
+  final bool done;
+
+  final int? authorId;
+  final String? author;
+  final String? authorAvatar;
+
+  SleeveStroke copyWith({List<double>? points, bool? done}) => SleeveStroke(
+        id: id,
+        ink: ink,
+        width: width,
+        points: points ?? this.points,
+        done: done ?? this.done,
+        authorId: authorId,
+        author: author,
+        authorAvatar: authorAvatar,
+      );
+
+  factory SleeveStroke.fromJson(Map<String, dynamic> j) => SleeveStroke(
+        id: (j['stroke_id'] ?? '') as String,
+        ink: (j['ink'] ?? 0) as int,
+        width: ((j['width'] ?? 1.0) as num).toDouble(),
+        points: [for (final v in (j['points'] ?? const []) as List) (v as num).toDouble()],
+        done: (j['done'] ?? false) as bool,
+        authorId: j['author_id'] as int?,
+        author: j['author'] as String?,
+        authorAvatar: j['author_avatar'] as String?,
+      );
+}
+
 /// Which way the records travel when the song changes.
 enum ShelfAxis {
   /// A shelf: the record you are on slides off to the left and the next one takes its

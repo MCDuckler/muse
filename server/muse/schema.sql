@@ -460,3 +460,35 @@ create table if not exists jam_playback (
 -- is named from it, so a changed picture is a changed URL and nothing caches wrongly.
 alter table users add column if not exists avatar_sig text;
 alter table playlists add column if not exists cover_sig text;
+
+-- The back of a record, drawn on.
+--
+-- Every sleeve has a bare cardboard back, and the player turns records over. What is
+-- written there belongs to whoever owns the board: yours is yours, and a jam's is the
+-- host's — everybody in the room draws on the record the host is playing, the way a
+-- sleeve going round a table collects everybody's handwriting rather than each person
+-- getting their own copy.
+--
+-- One row per stroke rather than one per board. A stroke is small, arrives complete,
+-- and can be undone on its own; a single blob per board would have every drawer in a
+-- jam overwriting each other's last second of work.
+create table if not exists sleeve_marks (
+  id          bigserial primary key,
+  track_id    int not null references tracks(id) on delete cascade,
+  -- Whose board this is. Not who drew: in a jam those differ, and that is the point.
+  owner_id    int not null references users(id) on delete cascade,
+  author_id   int not null references users(id) on delete cascade,
+  -- The client's own id for the stroke, so a stroke still being drawn can be updated
+  -- in place as it grows rather than arriving forty times as forty strokes.
+  stroke_id   text not null,
+  ink         int not null default 0,
+  width       real not null default 1.0,
+  -- x,y,x,y… in the sleeve's own square, 0 to 1, so it draws at any size.
+  points      real[] not null,
+  done        boolean not null default false,
+  at          timestamptz not null default now(),
+  unique (owner_id, track_id, stroke_id)
+);
+
+create index if not exists sleeve_marks_board
+  on sleeve_marks(owner_id, track_id, id);
