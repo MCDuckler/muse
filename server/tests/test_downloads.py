@@ -520,3 +520,70 @@ def test_a_copy_that_is_gone_is_not_reached_for_again(client, hdr):
     db.run("""update track_sources set raw = raw || '{"dead": true}'
                where track_id=%s and provider='soundcloud'""", (track["id"],))
     assert jobs.best_source(track["id"]) is None
+
+
+def test_a_dead_copy_is_written_off_from_the_job_that_proved_it(client, hdr, wsec):
+    """The worker says what went wrong and which track; it has never said which video.
+
+    So the rule that writes off a dead copy looked for a video id that was never in the
+    request and marked nothing — and one track failed on the same dead id ten times in
+    a row, because every attempt reached for the copy already known not to work. The
+    server queued the job. It knows what it asked for.
+    """
+    from muse import db, jobs
+
+    track = client.post("/tracks/resolve", headers=hdr,
+                        json={"video_id": "GONE1"}).json()
+    job = db.one("""select id from jobs where kind='ingest'
+                     and (payload->>'track_id')::int=%s""", (track["id"],))["id"]
+
+    client.post(f"/internal/jobs/{job}/fail", headers=wsec,
+                json={"reason": "ERROR: [youtube] GONE1: Video unavailable",
+                      "retryable": False, "track_id": track["id"]})
+
+    dead = db.one("""select raw->>'dead' as dead from track_sources
+                      where track_id=%s and provider_id='GONE1'""", (track["id"],))
+    assert dead["dead"] == "true"
+    assert jobs.best_source(track["id"]) is None, "nothing left worth trying"
+
+
+def test_a_song_whose_last_copy_dies_goes_looking_by_itself(client, hdr, wsec):
+    """A video being deleted says nothing about the song.
+
+    "This track isn't on YouTube any more" is true of a video and wrong about a song
+    that plainly is still there — so when the last source dies the search starts on its
+    own rather than waiting for somebody to notice and press a button.
+    """
+    from muse import db
+
+    track = client.post("/tracks/resolve", headers=hdr,
+                        json={"video_id": "GONE2"}).json()
+    job = db.one("""select id from jobs where kind='ingest'
+                     and (payload->>'track_id')::int=%s""", (track["id"],))["id"]
+
+    client.post(f"/internal/jobs/{job}/fail", headers=wsec,
+                json={"reason": "ERROR: [youtube] GONE2: Video unavailable",
+                      "retryable": False, "track_id": track["id"]})
+
+    queued = db.one("""select 1 from jobs where kind='refind'
+                        and (payload->>'track_id')::int=%s""", (track["id"],))
+    assert queued, "it went looking"
+
+
+def test_a_copy_that_merely_timed_out_is_not_written_off(client, hdr, wsec):
+    """Only failures about the copy. A network that dropped says nothing about whether
+    the video is there, and writing it off would throw away a good source."""
+    from muse import db
+
+    track = client.post("/tracks/resolve", headers=hdr,
+                        json={"video_id": "SLOW1"}).json()
+    job = db.one("""select id from jobs where kind='ingest'
+                     and (payload->>'track_id')::int=%s""", (track["id"],))["id"]
+
+    client.post(f"/internal/jobs/{job}/fail", headers=wsec,
+                json={"reason": "ERROR: unable to download: connection timed out",
+                      "retryable": True, "track_id": track["id"]})
+
+    dead = db.one("""select raw->>'dead' as dead from track_sources
+                      where track_id=%s and provider_id='SLOW1'""", (track["id"],))
+    assert dead["dead"] is None

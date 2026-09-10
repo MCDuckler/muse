@@ -16,13 +16,14 @@ import tempfile
 import threading
 import time
 
-from . import db, failures, follows, jobs, progress, sources, storage
+from . import (catalog, db, failures, follows, jobs, progress, refind,
+               sources, storage)
 
 log = logging.getLogger("muse.direct")
 
 IDLE_SLEEP = 3.0
 ERROR_SLEEP = 30.0
-KINDS = ("ingest_direct", "mirror", "follow_poll")
+KINDS = ("ingest_direct", "mirror", "follow_poll", "refind")
 
 
 class DirectWorker:
@@ -58,7 +59,9 @@ class DirectWorker:
                     break
                 for job in leased:
                     worked = True
-                    if kind == "mirror":
+                    if kind == "refind":
+                        self._refind(job)
+                    elif kind == "mirror":
                         self._mirror(job)
                     elif kind == "follow_poll":
                         self._follow_poll(job)
@@ -154,6 +157,31 @@ class DirectWorker:
             progress.clear(track_id)
             jobs.fail(job["id"], f"{type(e).__name__}: {e}", retryable=True)
             log.warning("%s track %s crashed: %s", provider, track_id, e)
+
+    def _refind(self, job: dict) -> None:
+        """Another copy of a song whose copy has gone.
+
+        Searching does not need the machine at home — only downloading does — so this
+        runs here, and it runs by itself the moment a track's last source is proved
+        dead rather than waiting for somebody to open a screen and press a button.
+        """
+        track_id = int(job["payload"]["track_id"])
+        row = catalog.track_row(track_id)
+        if not row:
+            jobs.finish(job["id"])
+            return
+        try:
+            found = refind.look(row)
+        except Exception as e:
+            jobs.fail(job["id"], f"{type(e).__name__}: {e}", retryable=True)
+            return
+        jobs.finish(job["id"])
+        if found.get("found"):
+            log.info("found %s again on %s", track_id, found.get("where"))
+        else:
+            db.run("""update tracks set state='failed',
+                             fail_reason='Looked everywhere — no copy of this anywhere',
+                             fail_code='no_source' where id=%s""", (track_id,))
 
     # ------------------------------------------------------------------ mirrors
     def _mirror(self, job: dict) -> None:

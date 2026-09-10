@@ -523,13 +523,28 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             )
             # A copy that is gone stays gone. Marked rather than deleted — it is still
             # the reason the track is here — but never chosen again, so asking for the
-            # song reaches for a copy that might work instead of the one that is known
-            # not to. A track collected nine YouTube ids this way and kept trying the
-            # dead ones.
-            if code in failures.GONE and (video := body.get("video_id")):
-                db.run("""update track_sources
-                             set raw = coalesce(raw,'{}'::jsonb) || '{"dead": true}'
-                           where track_id=%s and provider_id=%s""", (tid, video))
+            # song reaches for a copy that might work instead of the one known not to.
+            #
+            # Read off the job rather than out of the request. The worker reports what
+            # went wrong and which track it was, and has never sent the video id — so
+            # this looked for one that was never there and marked nothing, and one
+            # track failed on the same dead id ten times in a row. The server queued
+            # the job; it knows perfectly well what it asked for.
+            if code in failures.GONE:
+                job = db.one("select payload from jobs where id=%s", (job_id,))
+                video = ((job or {}).get("payload") or {}).get("video_id")
+                if video:
+                    db.run("""update track_sources
+                                 set raw = coalesce(raw,'{}'::jsonb) || '{"dead": true}'
+                               where track_id=%s and provider_id=%s""", (tid, video))
+                # Nothing left that could work. A video being deleted says nothing
+                # about the song, so go and look for another copy of it rather than
+                # leaving somebody to notice and press a button — which is the whole
+                # difference between "this isn't on YouTube any more" being true of a
+                # video and being wrong about a song that plainly is.
+                if jobs.best_source(int(tid)) is None:
+                    jobs.enqueue("refind", {"track_id": int(tid)},
+                                 priority=jobs.PRIORITY_BULK)
             publish("track_failed", {"track_id": tid, "reason": message, "code": code,
                                      "will_retry": will_retry})
         return {"ok": True, "code": code, "retryable": retryable}
