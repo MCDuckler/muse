@@ -56,6 +56,9 @@ class _SpectrumState extends State<Spectrum> with SingleTickerProviderStateMixin
   /// What is drawn, which follows the levels rather than jumping to them: a bar that
   /// snaps to every reading reads as noise, and one that falls slowly reads as music.
   List<double> _shown = const [];
+
+  /// Where each band has been recently, falling slowly.
+  List<double> _peaks = const [];
   Ticker? _ease;
 
   @override
@@ -93,15 +96,28 @@ class _SpectrumState extends State<Spectrum> with SingleTickerProviderStateMixin
   void _settle() {
     if (!mounted) return;
     final target = widget.playing ? _levels : const <double>[];
-    if (target.isEmpty && _shown.every((v) => v < 0.01)) return;
-    final next = <double>[];
-    for (var i = 0; i < (target.isEmpty ? _shown.length : target.length); i++) {
+    if (target.isEmpty && _shown.every((v) => v < 0.005)) return;
+    final length = target.isEmpty ? _shown.length : target.length;
+    final next = List<double>.filled(length, 0);
+    final peaks = List<double>.filled(length, 0);
+    for (var i = 0; i < length; i++) {
       final want = i < target.length ? target[i] : 0.0;
       final have = i < _shown.length ? _shown[i] : 0.0;
-      // Up quickly, down slowly — the way a needle on a meter behaves.
-      next.add(want > have ? have + (want - have) * 0.55 : have * 0.88);
+      // Up quickly, down slowly — the way a needle on a meter behaves. The reports
+      // arrive about twenty times a second and this runs at sixty, so the bars move
+      // between them rather than stepping.
+      next[i] = want > have ? have + (want - have) * 0.45 : have * 0.90;
+
+      // A mark that falls slower still, so a peak is legible after the bar under it
+      // has dropped away.
+      final was = i < _peaks.length ? _peaks[i] : 0.0;
+      peaks[i] = next[i] > was ? next[i] : was - 0.012;
+      if (peaks[i] < 0) peaks[i] = 0;
     }
-    setState(() => _shown = next);
+    setState(() {
+      _shown = next;
+      _peaks = peaks;
+    });
   }
 
   @override
@@ -120,6 +136,7 @@ class _SpectrumState extends State<Spectrum> with SingleTickerProviderStateMixin
         child: CustomPaint(
           painter: _Bars(
             levels: _shown,
+            peaks: _peaks,
             colour: widget.colour ?? Theme.of(context).colorScheme.primary,
           ),
           size: Size.infinite,
@@ -130,33 +147,64 @@ class _SpectrumState extends State<Spectrum> with SingleTickerProviderStateMixin
 }
 
 class _Bars extends CustomPainter {
-  _Bars({required this.levels, required this.colour});
+  _Bars({required this.levels, required this.peaks, required this.colour});
 
   final List<double> levels;
+  final List<double> peaks;
   final Color colour;
 
   @override
   void paint(Canvas canvas, Size size) {
     if (levels.isEmpty) return;
-    final gap = 2.0;
+    // Thin bars with a hairline between them: at sixty-four across a phone that is
+    // about two pixels each, which is what makes it read as a spectrum rather than as
+    // a row of blocks.
+    const gap = 1.0;
     final width = (size.width - gap * (levels.length - 1)) / levels.length;
     if (width <= 0) return;
 
+    final bar = Paint()..isAntiAlias = true;
+    final mark = Paint()
+      ..isAntiAlias = true
+      ..color = colour.withValues(alpha: 0.45);
+
     for (var i = 0; i < levels.length; i++) {
       final level = levels[i].clamp(0.0, 1.0);
-      final height = (size.height * level).clamp(1.5, size.height);
       final left = i * (width + gap);
-      // Brighter where it is louder, so a quiet passage is a low grey line rather than
-      // a row of full-strength stubs.
-      final paint = Paint()
-        ..color = colour.withValues(alpha: 0.25 + 0.6 * level);
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(left, size.height - height, width, height),
-          const Radius.circular(1.5),
-        ),
-        paint,
-      );
+      final height = (size.height * level).clamp(0.0, size.height);
+
+      if (height > 0.5) {
+        // Brighter and warmer towards the top of the bar, so a loud band reads as
+        // loud at a glance rather than only as tall.
+        bar.shader = LinearGradient(
+          begin: Alignment.bottomCenter,
+          end: Alignment.topCenter,
+          colors: [
+            colour.withValues(alpha: 0.30 + 0.35 * level),
+            colour.withValues(alpha: 0.75 + 0.25 * level),
+          ],
+        ).createShader(
+            Rect.fromLTWH(left, size.height - height, width, height));
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(left, size.height - height, width, height),
+            Radius.circular(width / 2),
+          ),
+          bar,
+        );
+      }
+
+      final peak = peaks.length > i ? peaks[i].clamp(0.0, 1.0) : 0.0;
+      if (peak > level + 0.04) {
+        final y = size.height - size.height * peak;
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(left, y, width, 1.5),
+            const Radius.circular(1),
+          ),
+          mark,
+        );
+      }
     }
   }
 

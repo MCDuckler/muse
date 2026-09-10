@@ -116,7 +116,12 @@ class NowPlayingScreen extends StatelessWidget {
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 520),
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        // Plain runs its panel almost to the walls, so the page's own
+                        // margin gets out of the way and the words inside keep theirs.
+                        padding: EdgeInsets.symmetric(
+                            horizontal: app.playerLayout == PlayerLayout.plain
+                                ? 8
+                                : 24),
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -135,30 +140,29 @@ class NowPlayingScreen extends StatelessWidget {
                                     track: track, snapshot: s, player: player),
                               ),
                             ),
-                            // The shape of the sound, along the bottom edge of the
-                            // record: wide and short, so it reads as part of the
-                            // artwork rather than as an instrument panel.
-                            if (app.spectrum && Spectrum.available)
-                              Padding(
-                                padding: const EdgeInsets.only(top: 6),
-                                child: Spectrum(
-                                  sessionId: player.androidAudioSessionId,
-                                  playing: s?.playing ?? false,
-                                  colour: parseHexColour(track.coverColor),
-                                  height: 40,
-                                ),
-                              ),
                             SizedBox(
                                 height: app.playerLayout == PlayerLayout.roomy
                                     ? 18
                                     : 32),
-                            Text(track.displayTitle,
-                                textAlign: TextAlign.center,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context).textTheme.headlineSmall),
-                            const SizedBox(height: 6),
-                            _Credits(track: track),
+                            Padding(
+                              padding: EdgeInsets.symmetric(
+                                  horizontal: app.playerLayout == PlayerLayout.plain
+                                      ? 14
+                                      : 0),
+                              child: Column(
+                                children: [
+                                  Text(track.displayTitle,
+                                      textAlign: TextAlign.center,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .headlineSmall),
+                                  const SizedBox(height: 6),
+                                  _Credits(track: track),
+                                ],
+                              ),
+                            ),
                             if (_statusLine(s, track) != null) ...[
                               const SizedBox(height: 10),
                               Text(_statusLine(s, track)!,
@@ -170,15 +174,41 @@ class NowPlayingScreen extends StatelessWidget {
                             // without a panel around them: the song's own buttons in a
                             // row, then the bar with its times at either end, then the
                             // transport large across the bottom.
-                            if (app.playerLayout == PlayerLayout.plain) ...[
-                              _Extras(app: app, track: track, spread: true),
-                              const SizedBox(height: 6),
-                              _Scrubber(player: player, timesBeside: true),
-                              const SizedBox(height: 10),
-                              _Controls(
-                                  app: app, player: player, snapshot: s, big: true,
-                                  bare: true),
-                            ] else
+                            if (app.playerLayout == PlayerLayout.plain)
+                              GlassSurface(
+                                borderRadius: BorderRadius.circular(20),
+                                topBorder: false,
+                                opacity: 0.55,
+                                blur: 30,
+                                padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    _Extras(app: app, track: track, spread: true),
+                                    const SizedBox(height: 2),
+                                    if (app.spectrum && Spectrum.available)
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                            left: 6, right: 6, bottom: 2),
+                                        child: Spectrum(
+                                          sessionId: player.androidAudioSessionId,
+                                          playing: s?.playing ?? false,
+                                          colour: parseHexColour(track.coverColor),
+                                          height: 34,
+                                        ),
+                                      ),
+                                    _Scrubber(player: player, timesBeside: true),
+                                    const SizedBox(height: 6),
+                                    _Controls(
+                                        app: app,
+                                        player: player,
+                                        snapshot: s,
+                                        big: true,
+                                        bare: true),
+                                  ],
+                                ),
+                              )
+                            else
                               GlassSurface(
                                 borderRadius: BorderRadius.circular(22),
                                 topBorder: false,
@@ -188,6 +218,18 @@ class NowPlayingScreen extends StatelessWidget {
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
+                                    // The shape of the sound, sitting on the bar it
+                                    // belongs to rather than under the artwork.
+                                    if (app.spectrum && Spectrum.available)
+                                      Padding(
+                                        padding: const EdgeInsets.only(bottom: 2),
+                                        child: Spectrum(
+                                          sessionId: player.androidAudioSessionId,
+                                          playing: s?.playing ?? false,
+                                          colour: parseHexColour(track.coverColor),
+                                          height: 34,
+                                        ),
+                                      ),
                                     _Scrubber(player: player),
                                     const SizedBox(height: 4),
                                     _Controls(
