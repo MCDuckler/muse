@@ -21,6 +21,9 @@ dependencies:
   web: ^1.1.0
 
 dev_dependencies:
+  # The fake audio engine in test/ implements this, so the player's own logic can be
+  # tested without a browser or a device.
+  just_audio_platform_interface: ^4.6.0
   flutter_test:
     sdk: flutter
   integration_test:
