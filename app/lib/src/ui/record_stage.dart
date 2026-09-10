@@ -354,23 +354,32 @@ class _Sleeve extends StatelessWidget {
         ..scaleByDouble(scale, scale, 1.0, 1.0),
       child: Opacity(
         opacity: fade.clamp(0.0, 1.0),
-        child: SizedBox(
-          width: jacket,
-          height: jacket,
-          child: Stack(
-            alignment: Alignment.center,
-            clipBehavior: Clip.none,
-            children: [
-              if (showing > 0.01)
-                _Disc(
-                    spin: spin,
-                    url: discUrl,
-                    size: jacket * 0.92,
-                    out: showing,
-                    jacket: jacket),
-              _Jacket(url: jacketUrl, size: jacket),
-            ],
-          ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: jacket,
+              height: jacket,
+              child: Stack(
+                alignment: Alignment.center,
+                clipBehavior: Clip.none,
+                children: [
+                  if (showing > 0.01)
+                    _Disc(
+                        spin: spin,
+                        url: discUrl,
+                        size: jacket * 0.92,
+                        out: showing,
+                        jacket: jacket),
+                  _Jacket(url: jacketUrl, size: jacket),
+                ],
+              ),
+            ),
+            // What the record is standing on, said as quietly as possible. The
+            // cardboard only — the disc is turning, and a turning reflection is
+            // something the eye follows instead of the record itself.
+            Mirror(size: jacket, child: _Jacket(url: jacketUrl, size: jacket)),
+          ],
         ),
       ),
     );
@@ -428,6 +437,64 @@ class _Disc extends StatelessWidget {
             width: size,
             height: size,
             child: Image.network(url!, fit: BoxFit.contain, gaplessPlayback: true),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
+/// A reflection under something, on a surface that is barely there.
+///
+/// The stage had a shadow under the sleeve once and it read as a dark blob. This is
+/// the other way of saying the same thing — that the record is standing on something —
+/// and it works because it is almost invisible: a short, flipped, quickly fading copy,
+/// dim enough that you would not point at it, and missed if it were gone.
+class Mirror extends StatelessWidget {
+  const Mirror({
+    super.key,
+    required this.child,
+    required this.size,
+    this.depth = 0.34,
+    this.strength = 0.20,
+  });
+
+  final Widget child;
+  final double size;
+
+  /// How much of the height is reflected. A whole mirrored copy looks like a puddle;
+  /// a third of one looks like a surface.
+  final double depth;
+
+  /// How bright the brightest part of it is — the edge touching the record.
+  final double strength;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size * depth,
+      child: ShaderMask(
+        blendMode: BlendMode.dstIn,
+        shaderCallback: (bounds) => LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.white.withValues(alpha: strength),
+            Colors.white.withValues(alpha: 0),
+          ],
+          // Most of the fade happens early: a reflection that lingers reads as a
+          // second picture rather than as light on a floor.
+          stops: const [0, 0.85],
+        ).createShader(bounds),
+        child: OverflowBox(
+          alignment: Alignment.topCenter,
+          maxHeight: size,
+          child: Transform(
+            alignment: Alignment.topCenter,
+            transform: Matrix4.identity()..scaleByDouble(1.0, -1.0, 1.0, 1.0),
+            child: child,
           ),
         ),
       ),

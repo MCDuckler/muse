@@ -547,18 +547,26 @@ class _Artwork extends StatelessWidget {
           // Just the cover: still, square, and the whole width of the stage. Square
           // corners on purpose — a record sleeve has corners, and rounding them off
           // makes the art look like an app icon of itself.
+          final cover = Artwork(track: track, size: side, radius: 0, small: false);
           return Center(
-            child: Container(
-              decoration: BoxDecoration(
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.28),
-                    blurRadius: 28,
-                    offset: const Offset(0, 10),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  decoration: BoxDecoration(
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.28),
+                        blurRadius: 28,
+                        offset: const Offset(0, 10),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-              child: Artwork(track: track, size: side, radius: 0, small: false),
+                  child: cover,
+                ),
+                // The same barely-there surface the record stands on.
+                Mirror(size: side, child: cover),
+              ],
             ),
           );
         }
