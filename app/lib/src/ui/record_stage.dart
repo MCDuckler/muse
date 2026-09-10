@@ -773,6 +773,24 @@ class Mirror extends StatelessWidget {
   /// How bright the brightest part of it is — the edge touching the record.
   final double strength;
 
+  /// Where the fade is sampled. Enough points that a straight line between any two of
+  /// them is indistinguishable from the curve.
+  static const List<double> fadeStops = [0.0, 0.15, 0.3, 0.45, 0.6, 0.75, 0.9, 1.0];
+
+  /// How much of the reflection is left, [t] of the way down it.
+  ///
+  /// A smoothstep, and it took three goes to arrive at one. A straight ramp to zero has
+  /// a corner at the end, and the eye finds that corner and reads it as the bottom edge
+  /// of a picture — which is the one thing a reflection must not have. Replacing it
+  /// with a steep decay hid the corner but spent the whole visible fade in the first
+  /// third of the band, so the reflection appeared to stop short and the rest of it was
+  /// already invisible.
+  ///
+  /// This is flat at the top, steepest through the middle, and levels into nothing at
+  /// the very bottom: its slope is zero at both ends, which is what fading out means
+  /// and what neither of the others did.
+  static double fadeAt(double t) => 1 - t * t * (3 - 2 * t);
+
   @override
   Widget build(BuildContext context) {
     return SizedBox(
@@ -784,25 +802,14 @@ class Mirror extends StatelessWidget {
       child: ClipRect(
         child: ShaderMask(
           blendMode: BlendMode.dstIn,
-          // A curve down to nothing, not a ramp.
-          //
-          // Three stops made the fade a straight line ending at zero, and a straight
-          // line ending at zero has a corner in it — the eye finds that corner and
-          // reads it as the bottom edge of a picture, which is the one thing a
-          // reflection must not have. These stops bend: most of the light goes in the
-          // first fifth and the tail runs out to nothing at the very bottom of the box,
-          // so there is nowhere for an edge to be.
           shaderCallback: (bounds) => LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: [
-              Colors.white.withValues(alpha: strength),
-              Colors.white.withValues(alpha: strength * 0.58),
-              Colors.white.withValues(alpha: strength * 0.28),
-              Colors.white.withValues(alpha: strength * 0.09),
-              Colors.white.withValues(alpha: 0),
+              for (final t in fadeStops)
+                Colors.white.withValues(alpha: strength * fadeAt(t)),
             ],
-            stops: const [0, 0.18, 0.42, 0.7, 1.0],
+            stops: fadeStops,
           ).createShader(bounds),
           child: OverflowBox(
             alignment: Alignment.topCenter,
