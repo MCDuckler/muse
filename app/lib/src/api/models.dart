@@ -120,7 +120,7 @@ class Track {
       return '$label ${(pct * 100).round()}%'
           '${speed != null && speed.trim().isNotEmpty ? ' · $speed' : ''}';
     }
-    if (isPending) return failReason ?? 'Waiting to download';
+    if (isPending) return failReason ?? 'Not downloaded yet';
     return artistLine;
   }
   bool get hasCover => coverPath != null;
@@ -137,6 +137,18 @@ class Track {
     return a;
   }
   bool get isPending => state == 'pending' || state == 'downloading';
+
+  /// Actually coming down the wire right now.
+  ///
+  /// `pending` means only "no file here yet", and in a mirrored library that is true of
+  /// twenty thousand songs nobody has asked for. Showing all of them a spinner said
+  /// every one of them was stuck; the spinner belongs to the ones the worker has in
+  /// hand, which is exactly the ones reporting progress.
+  bool get isDownloading =>
+      state == 'downloading' || (state == 'pending' && progress != null);
+
+  /// Listed, but not here — and not on its way either.
+  bool get isNotFetched => isPending && !isDownloading;
   String get artistLine => artists.isEmpty ? 'Unknown artist' : artists.join(', ');
 
   /// Where this recording came from, named only when it is worth naming. Almost
@@ -299,6 +311,14 @@ class Playlist {
   /// up front, where songs arrive when you play them.
   final String downloadMode;
 
+  /// How many songs in it have no audio here yet.
+  ///
+  /// Separate from [downloadMode], which only says what was *meant* to happen when the
+  /// playlist was made. A playlist marked "download everything" whose songs were all
+  /// already in the catalog had nothing queued for it at all, and this is the number
+  /// that catches that.
+  final int waiting;
+
   const Playlist({
     required this.id,
     required this.name,
@@ -311,6 +331,7 @@ class Playlist {
     this.coverPath,
     this.coverVersion,
     this.downloadMode = 'all',
+    this.waiting = 0,
     bool? editable,
   }) : editable = editable ?? (kind == 'local' || kind == 'favourites');
 
@@ -328,6 +349,7 @@ class Playlist {
         coverVersion: j['cover_version'] as String?,
         customCover: (j['custom_cover'] ?? false) as bool,
         downloadMode: (j['download_mode'] ?? 'all') as String,
+        waiting: (j['waiting'] ?? 0) as int,
         editable: j['editable'] as bool?,
       );
 
@@ -338,6 +360,9 @@ class Playlist {
 
   /// True when the songs are listed but the files are not here yet.
   bool get fetchesOnPlay => downloadMode == 'on_play';
+
+  /// Worth offering to fetch the whole thing: something in it has no audio.
+  bool get hasHoles => waiting > 0;
 }
 
 /// A song in a mirrored playlist that could not be translated into something muse can

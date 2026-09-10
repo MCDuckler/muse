@@ -196,13 +196,23 @@ class SongRow extends StatelessWidget {
                   ],
                 ),
               ),
-              if (track.isPending) ...[
+              if (track.isDownloading) ...[
                 const SizedBox(width: 8),
                 _Downloading(track: track),
               ],
               if (trailing != null) ...[const SizedBox(width: 6), trailing!],
               // On the device, said quietly. A small filled arrow rather than a word:
               // in a list of four hundred what matters is which ones have it.
+              // Listed but not here, and nothing fetching it. A cloud rather than a
+              // spinner: a spinner is a promise that something is happening, and in a
+              // mirrored library of twenty thousand songs it was a promise made to
+              // every one of them.
+              if (track.isNotFetched)
+                Padding(
+                  padding: const EdgeInsets.only(left: 6),
+                  child: Icon(Icons.cloud_outlined,
+                      size: 14, color: scheme.onSurfaceVariant),
+                ),
               if (!track.isPending && OfflineStore.supported)
                 Builder(builder: (context) {
                   final offline = context.watch<AppState>().offline;
@@ -230,11 +240,11 @@ class SongRow extends StatelessWidget {
               // right-hand end of the row is where the eye already goes for the
               // facts about a song, and on the artwork the mark was competing with
               // the picture it sat on.
-              if (!track.isPending) ...[
+              if (!track.isDownloading) ...[
                 const SizedBox(width: 8),
                 SourceDot(source: track.source),
               ],
-              if (showDuration && duration.isNotEmpty && !track.isPending) ...[
+              if (showDuration && duration.isNotEmpty && !track.isDownloading) ...[
                 const SizedBox(width: 6),
                 Text(duration,
                     style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),

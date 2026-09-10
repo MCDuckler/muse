@@ -373,6 +373,86 @@ def test_a_backup_becomes_playlists(client, hdr):
     assert all(t["source"] == "bandcamp" for t in made)
 
 
+def test_a_backup_queues_songs_the_catalog_already_knows_of(client, hdr, monkeypatch):
+    """A song already in the catalog but never downloaded still has to be fetched.
+
+    This is what a backup import mostly *is*: the ids in it are Bandcamp's, a wishlist
+    mirror already recorded thousands of them, and every one of those matched. Counting
+    a match as "nothing to do" meant twenty-five playlists arrived with no audio behind
+    a single song in them, and no way to ask for any.
+    """
+    from muse import catalog, jobs
+
+    # A track already known here, listed but never fetched — exactly what a mirror
+    # leaves behind.
+    known = catalog.create_from_source("bandcamp", {
+        "provider_id": "111", "title": "First", "artists": ["A Band"],
+        "url": "https://band.bandcamp.com/track/first",
+    }, download=False)
+    assert known["state"] == "pending"
+
+    r = client.post("/playlists/import", headers=hdr, json=BACKUP)
+    assert r.status_code == 201, r.text
+
+    queued = jobs.db.all_(
+        """select payload->>'ref' as ref from jobs
+            where kind='ingest_direct' and (payload->>'track_id')::int = %s""",
+        (known["id"],))
+    assert len(queued) == 1, "the song that was only listed is now actually queued"
+    assert queued[0]["ref"] == "https://band.bandcamp.com/track/first"
+
+
+def test_a_playlist_says_how_many_of_its_songs_have_no_audio(client, hdr):
+    """The number the "Get all" button hangs on. `download_mode` says what was meant to
+    happen at import; this says what is true now."""
+    client.post("/playlists/import", headers=hdr, json=BACKUP)
+    listed = client.get("/playlists", headers=hdr).json()
+    acid = next(p for p in listed if p["name"] == "Acid")
+    full = client.get(f"/playlists/{acid['id']}", headers=hdr).json()
+    assert full["waiting"] == 2, "neither has been downloaded"
+
+
+def test_a_bandcamp_track_with_no_page_is_not_queued_to_fail(client, hdr):
+    """An id on its own names nothing Bandcamp can look up.
+
+    Queueing it anyway produced a job that failed on every attempt, and a song that sat
+    "downloading" for good. Better to leave it alone and say nothing was queued.
+    """
+    from muse import catalog, jobs, db
+
+    track = catalog.create_from_source("bandcamp", {
+        "provider_id": "555", "title": "Nowhere", "artists": [],
+    }, download=False)
+    db.run("update track_sources set raw='{}'::jsonb where track_id=%s", (track["id"],))
+
+    assert jobs.promote(track["id"]) is False
+    assert db.all_("""select 1 from jobs where kind='ingest_direct'
+                       and (payload->>'track_id')::int = %s""", (track["id"],)) == []
+
+
+def test_a_track_imported_from_a_backup_can_be_queued_later(client, hdr):
+    """The page it lives on travels with the row.
+
+    A backup file calls it `pageUrl`; the fetcher wants "<page>#<id>". Losing that on
+    the way in left the track with a bare numeric id as its only reference, which is
+    not a URL and never becomes one.
+    """
+    from muse import catalog, jobs, db
+
+    track = catalog.create_from_source("bandcamp", {
+        "provider_id": "777", "title": "On A Record", "artists": [],
+        "url": "https://band.bandcamp.com/album/a-record#777",
+        "raw": {"pageUrl": "https://band.bandcamp.com/album/a-record",
+                "trackId": 777},
+    }, download=False)
+
+    assert jobs.promote(track["id"]) is True
+    ref = db.one("""select payload->>'ref' as ref from jobs
+                     where kind='ingest_direct'
+                       and (payload->>'track_id')::int = %s""", (track["id"],))["ref"]
+    assert ref == "https://band.bandcamp.com/album/a-record#777"
+
+
 def test_importing_the_same_file_twice_does_not_double_it(client, hdr):
     client.post("/playlists/import", headers=hdr, json=BACKUP)
     again = client.post("/playlists/import", headers=hdr, json=BACKUP)

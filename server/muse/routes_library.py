@@ -99,8 +99,8 @@ def download_playlist(playlist_id: int, user: dict = Depends(current_user)):
     """
     p = _own_playlist(playlist_id, user)
     waiting = db.all_(
-        """select distinct on (t.id) t.id, s.provider, s.provider_id,
-                  s.raw->>'url' as url
+        f"""select distinct on (t.id) t.id, s.provider, s.provider_id,
+                  {jobs.REF_SQL} as url
              from playlist_items i
              join tracks t on t.id = i.track_id
              join track_sources s on s.track_id = t.id
@@ -112,12 +112,17 @@ def download_playlist(playlist_id: int, user: dict = Depends(current_user)):
             order by t.id, (s.provider = 'ytmusic') desc""",
         (playlist_id,),
     )
+    queued = unfetchable = 0
     for row in waiting:
         # Same rule as pressing play: the lane depends on where the song lives.
         if row["provider"] in ("soundcloud", "bandcamp"):
+            ref = jobs.direct_ref(row["provider"], row["provider_id"], row["url"])
+            if not ref:
+                unfetchable += 1
+                continue
             jobs.enqueue("ingest_direct",
                          {"track_id": row["id"], "provider": row["provider"],
-                          "ref": row["url"] or row["provider_id"]},
+                          "ref": ref},
                          priority=jobs.PRIORITY_BULK,
                          batch_id=f"playlist:{playlist_id}", batch_label=p["name"])
         else:
@@ -125,8 +130,9 @@ def download_playlist(playlist_id: int, user: dict = Depends(current_user)):
                                     "video_id": row["provider_id"]},
                          priority=jobs.PRIORITY_BULK,
                          batch_id=f"playlist:{playlist_id}", batch_label=p["name"])
+        queued += 1
     db.run("update playlists set download_mode='all' where id=%s", (playlist_id,))
-    return {"queued": len(waiting)}
+    return {"queued": queued, "unfetchable": unfetchable}
 
 
 @router.get("/playlists/{playlist_id}/cover")
@@ -234,13 +240,18 @@ def import_playlists(body: dict = Body(...), user: dict = Depends(current_user))
     # What is genuinely new, counted once however many playlists name it — the number
     # that decides how the audio is fetched, and the number worth putting in front of
     # somebody before they say yes.
+    # A song already in the catalog but never downloaded counts here too. It used to
+    # not, and that was the whole bug: a backup whose songs all matched the Bandcamp
+    # wishlist mirror looked like an import with nothing new in it, so nothing was ever
+    # queued and every one of those playlists stayed empty of audio for good.
     fetch: set[str] = set()
     for entry in lists:
         for key in (entry.get("tracks") or []):
             provider_id = _bc_id(key, known)
-            if catalog.find_by_provider("bandcamp", provider_id):
+            found = catalog.find_by_provider("bandcamp", provider_id)
+            if found and found["state"] != "pending":
                 continue
-            if (known.get(str(key)) or known.get(provider_id) or {}).get("pageUrl"):
+            if found or (known.get(str(key)) or known.get(provider_id) or {}).get("pageUrl"):
                 fetch.add(provider_id)
 
     # Past a few hundred new songs an import is a library rather than a list: record
@@ -284,9 +295,10 @@ def _import_one(user_id: int, name: str, ids: list, known: dict,
         here = fetch = missing = 0
         for key in ids:
             provider_id = _bc_id(key, known)
-            if catalog.find_by_provider("bandcamp", provider_id):
+            found = catalog.find_by_provider("bandcamp", provider_id)
+            if found and found["state"] != "pending":
                 here += 1
-            elif (known.get(str(key)) or known.get(provider_id) or {}).get("pageUrl"):
+            elif found or (known.get(str(key)) or known.get(provider_id) or {}).get("pageUrl"):
                 fetch += 1
             else:
                 missing += 1
@@ -304,10 +316,16 @@ def _import_one(user_id: int, name: str, ids: list, known: dict,
             (user_id, name),
         )["id"]
 
-    added = missing = 0
+    added = missing = queued = 0
     for key in ids:
         provider_id = _bc_id(key, known)
         track = catalog.find_by_provider("bandcamp", provider_id)
+        if track and download and track["state"] == "pending":
+            # Known here, but only as a name — a row from the wishlist mirror with no
+            # file behind it. Adding it to a playlist is asking for it, so it gets a
+            # job now rather than waiting for somebody to press play on it.
+            if jobs.promote(track["id"], jobs.PRIORITY_BULK):
+                queued += 1
         if not track:
             entry = known.get(str(key)) or known.get(provider_id)
             if not entry or not entry.get("pageUrl"):
@@ -339,8 +357,12 @@ def _import_one(user_id: int, name: str, ids: list, known: dict,
         catalog.remember(user_id, track["id"])
         added += 1
 
+    # What the songs will actually do, recorded on the playlist itself, so the screen
+    # can say so and offer the other answer.
+    db.run("update playlists set download_mode=%s where id=%s",
+           ("all" if download else "on_play", playlist_id))
     return {"id": playlist_id, "name": name, "added": added, "missing": missing,
-            "fetch": 0, "replaces": False}
+            "fetch": queued, "replaces": False}
 
 
 @router.post("/playlists", status_code=201)
@@ -396,8 +418,14 @@ def get_playlist(playlist_id: int, user: dict = Depends(current_user)):
     unmatched = db.one(
         "select count(*) n from playlist_unmatched where playlist_id=%s", (playlist_id,)
     )["n"]
+    # How many of these have no audio yet. `download_mode` said what was *meant* to
+    # happen at import; this says what is actually true now, which is what a "Get all"
+    # button has to be offered on — a playlist marked "all" whose songs were found
+    # already in the catalog never had a single job queued for it.
+    waiting = sum(1 for t in items if t["state"] == "pending")
     return {**with_cover(p), "unmatched": unmatched, "editable": p["kind"] == "local",
             "download_mode": p.get("download_mode", "all"),
+            "waiting": waiting,
             "items": [{**catalog.public(t), "pos": t["pos"]} for t in items]}
 
 

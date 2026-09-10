@@ -107,9 +107,15 @@ def create_from_source(provider: str, meta: dict, discovered_via: str = VIA_USER
          meta.get("duration_ms"), provider, discovered_via,
          (meta.get("isrc") or None)),
     )
+    # The page URL travels with the row, whatever shape the metadata arrived in. A
+    # backup file from another player calls it `pageUrl`; keeping `url` beside it is
+    # what lets this track be queued again months later without going back to the file.
+    raw = dict(meta.get("raw") or meta)
+    if meta.get("url") and not raw.get("url"):
+        raw["url"] = meta["url"]
     db.run(
         "insert into track_sources(track_id,provider,provider_id,raw) values(%s,%s,%s,%s)",
-        (row["id"], provider, meta["provider_id"], json.dumps(meta.get("raw") or meta)),
+        (row["id"], provider, meta["provider_id"], json.dumps(raw)),
     )
     if download:
         jobs.enqueue("ingest_direct",

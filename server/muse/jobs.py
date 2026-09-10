@@ -35,6 +35,30 @@ def enqueue(kind: str, payload: dict, priority: int = PRIORITY_NORMAL,
     return row["id"]
 
 
+# What a direct-source row is fetched from. Selected as one expression because three
+# places need the same answer and disagreeing about it is how a track ends up with a
+# job that can never succeed.
+REF_SQL = """coalesce(s.raw->>'url',
+                      case when s.raw->>'pageUrl' is not null
+                           then (s.raw->>'pageUrl') || '#' || s.provider_id end)"""
+
+
+def direct_ref(provider: str, provider_id: str, url: str | None) -> str | None:
+    """Where to fetch this one from, or nothing if we cannot say.
+
+    SoundCloud is happy with a bare track id — the fetcher builds the api.soundcloud.com
+    URL itself. Bandcamp is not: an id names nothing it can look up, so a row with no
+    page behind it must not be queued at all. Queueing it anyway is how a song sat
+    "downloading" for good: the job failed on a reference that was never going to work,
+    and every retry failed the same way.
+    """
+    if url:
+        return url
+    if provider == "bandcamp":
+        return None
+    return provider_id or None
+
+
 def promote(track_id: int, priority: int = PRIORITY_NOW) -> bool:
     """Move a track to the front, queueing it first if nobody ever did.
 
@@ -54,7 +78,7 @@ def promote(track_id: int, priority: int = PRIORITY_NOW) -> bool:
         return True
 
     waiting = db.one(
-        """select t.id, s.provider, s.provider_id, s.raw->>'url' as url
+        f"""select t.id, s.provider, s.provider_id, {REF_SQL} as url
              from tracks t
              join track_sources s on s.track_id = t.id
             where t.id=%s and t.state='pending'
@@ -73,9 +97,11 @@ def promote(track_id: int, priority: int = PRIORITY_NOW) -> bool:
     # everything as YouTube meant a track from a big mirror — recorded but not
     # downloaded — could never be started at all, and sat "downloading" for good.
     if waiting["provider"] in ("soundcloud", "bandcamp"):
+        ref = direct_ref(waiting["provider"], waiting["provider_id"], waiting["url"])
+        if not ref:
+            return False
         enqueue("ingest_direct",
-                {"track_id": track_id, "provider": waiting["provider"],
-                 "ref": waiting["url"] or waiting["provider_id"]},
+                {"track_id": track_id, "provider": waiting["provider"], "ref": ref},
                 priority=priority)
     else:
         enqueue("ingest", {"track_id": track_id, "video_id": waiting["provider_id"]},

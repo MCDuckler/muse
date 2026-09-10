@@ -148,8 +148,20 @@ void _statusLineTests() {
       expect(t.progressFraction, isNull, reason: 'and the bar goes indeterminate');
     });
 
-    test('a queued track says it is waiting', () {
-      expect(make().statusLine, 'Waiting to download');
+    test('a track with no file behind it says so, and is not "downloading"', () {
+      // `pending` means only "no file here yet", which in a mirrored library is true
+      // of twenty thousand songs nobody has asked for. Calling all of those
+      // downloading put a spinner on every one of them that never went away.
+      final t = make();
+      expect(t.statusLine, 'Not downloaded yet');
+      expect(t.isDownloading, isFalse);
+      expect(t.isNotFetched, isTrue);
+    });
+
+    test('a track the worker has in hand is downloading', () {
+      final t = make(progress: {'stage': 'downloading', 'label': 'Downloading'});
+      expect(t.isDownloading, isTrue);
+      expect(t.isNotFetched, isFalse);
     });
 
     test('a failure shows the reason, not a spinner', () {

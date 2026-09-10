@@ -94,6 +94,9 @@ Future<void> showTrackSheet(
             final changed = await editTrackDialog(context, track);
             if (changed) onChanged?.call();
           }),
+          if (track.isNotFetched)
+            _item(sheet, Icons.cloud_download_outlined, 'Download now',
+                () => app.fetchNow(track)),
           if (track.state == 'failed')
             _item(sheet, Icons.refresh, 'Try downloading again',
                 () => app.retry(track)),

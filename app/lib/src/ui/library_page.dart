@@ -555,7 +555,11 @@ class _PlaylistHeader extends StatelessWidget {
                 ],
               ),
             ),
-      if (playlist.fetchesOnPlay)
+      // Offered whenever songs here have no audio, not only when the playlist was
+      // *marked* fetch-on-play. An import that found its songs already in the catalog
+      // is marked "download everything" and has nothing queued, which is exactly the
+      // case that needs this button most.
+      if (playlist.hasHoles)
         Padding(
           padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
           child: Row(
@@ -564,8 +568,10 @@ class _PlaylistHeader extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Songs download when you play them — this library is too big to '
-                  'fetch all at once.',
+                  playlist.fetchesOnPlay
+                      ? 'Songs download when you play them — this library is too big '
+                          'to fetch all at once.'
+                      : '${playlist.waiting} of these are not downloaded yet.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),

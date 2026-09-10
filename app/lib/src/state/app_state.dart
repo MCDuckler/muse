@@ -585,6 +585,16 @@ class AppState extends ChangeNotifier {
     if (q != null) await _applyQueue(await api.queue(q.id));
   }
 
+  /// Fetch this one now, for a song that is listed but has no file behind it.
+  ///
+  /// A mirrored library records far more than it downloads, so most songs sit like
+  /// this until something asks for them. Pressing play asks; so does this.
+  Future<void> fetchNow(Track track) async {
+    await api.promoteDownload(track.id);
+    final q = activeQueue;
+    if (q != null) await _applyQueue(await api.queue(q.id));
+  }
+
   bool isFavourite(int trackId) => favourites.contains(trackId);
 
   Future<void> refreshFavourites() async {
