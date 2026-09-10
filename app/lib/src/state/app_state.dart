@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api/client.dart';
 import '../api/models.dart';
 import 'offline.dart';
+import 'playback_log.dart';
 import 'player.dart';
 import '../ui/theme.dart';
 
@@ -111,6 +112,8 @@ class AppState extends ChangeNotifier {
   static const _kSpectrum = 'muse.spectrum';
   static const _kCoverScale = 'muse.coverScale';
   static const _kLayout = 'muse.playerLayout';
+  static const _kShelfAxis = 'muse.shelfAxis';
+  static const _kJamListening = 'muse.jamListening';
 
   /// How the player draws the artwork: as the record it came on, or as the cover on
   /// its own. A per-device choice — the phone in a pocket and the laptop on a desk are
@@ -157,6 +160,41 @@ class AppState extends ChangeNotifier {
     await prefs.setBool(_kSpectrum, on);
   }
 
+  /// Whether this device plays the jam's music, or only follows along.
+  ///
+  /// Off by default, and deliberately. Everybody in a room hearing the same record out
+  /// of five phones a half-second apart is not listening together, it is a mess — the
+  /// host's speaker is the one playing. A guest who *is* somewhere else turns this on
+  /// and hears it too.
+  bool jamListening = false;
+
+  Future<void> setJamListening(bool on) async {
+    jamListening = on;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kJamListening, on);
+    if (!on) {
+      await player?.pause();
+    } else {
+      final state = jam?.playback;
+      if (state != null) await followJamPlayback(state);
+    }
+  }
+
+  /// Which way the records travel when the song changes.
+  ///
+  /// Sideways is a shelf of records; upwards is a stack of them. Neither is more
+  /// correct, and which one reads better depends on how the phone is held — so it is
+  /// a choice rather than a decision made here.
+  ShelfAxis shelfAxis = ShelfAxis.sideways;
+
+  Future<void> setShelfAxis(ShelfAxis next) async {
+    shelfAxis = next;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kShelfAxis, next.name);
+  }
+
   /// How the now-playing screen is arranged. Per device, like the rest of the look.
   PlayerLayout playerLayout = PlayerLayout.grouped;
 
@@ -182,6 +220,10 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> boot() async {
+    await PlaybackLog.load();
+    // First line after a restart. If the one before it is not a goodbye, the process
+    // did not choose to stop — it was killed, which is a different fault entirely.
+    PlaybackLog.note('--- app started');
     final prefs = await SharedPreferences.getInstance();
     coverStyle = CoverStyle.values.firstWhere(
         (s) => s.name == prefs.getString(_kCoverStyle),
@@ -193,6 +235,10 @@ class AppState extends ChangeNotifier {
     playerLayout = PlayerLayout.values.firstWhere(
         (l) => l.name == prefs.getString(_kLayout),
         orElse: () => PlayerLayout.grouped);
+    shelfAxis = ShelfAxis.values.firstWhere(
+        (a) => a.name == prefs.getString(_kShelfAxis),
+        orElse: () => ShelfAxis.sideways);
+    jamListening = prefs.getBool(_kJamListening) ?? false;
     api = ApiClient(
       // Served from the box itself on web, so the page's own origin is the server —
       // no one should have to type a URL into a page they loaded from that URL.
@@ -749,6 +795,18 @@ class AppState extends ChangeNotifier {
     if (!isJamGuest) return;
     final p = player;
     if (p == null) return;
+
+    // Following without listening: the screen keeps up with the room, the speaker
+    // stays out of it. This is the normal case — everyone in one room hearing the
+    // same record out of five phones is not listening together.
+    if (!jamListening) {
+      if (p.last?.playing ?? false) await p.pause();
+      if (state.trackId != null && p.current?.id != state.trackId) {
+        await p.showTrack(state.trackId!);
+      }
+      notifyListeners();
+      return;
+    }
     // Reported position plus however long the message took to get here.
     final target = state.position;
 
@@ -1184,9 +1242,16 @@ class AppState extends ChangeNotifier {
   /// dead until something looks at it.
   late final AppLifecycleListener _lifecycle = AppLifecycleListener(
     onResume: () {
+      PlaybackLog.note('app in front');
       unawaited(player?.resumeIfStopped());
       unawaited(refreshJam());
     },
+    // The other end of the interesting gap: everything between this line and the next
+    // "app in front" happened with nobody watching, which is exactly the stretch a
+    // report of "it stops when I switch away" is about.
+    onHide: () => PlaybackLog.note('app out of sight'),
+    onPause: () => PlaybackLog.note('app paused by the system'),
+    onDetach: () => PlaybackLog.note('app being torn down'),
   );
 
   Future<void> _pollStatus() async {

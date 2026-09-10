@@ -16,7 +16,7 @@ import math
 import pathlib
 import random
 
-from PIL import Image, ImageChops, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter
 
 CANVAS = 900               # generated size; the client scales it down
 JACKET = 0.80              # jacket edge length as a fraction of the canvas
@@ -52,6 +52,118 @@ def _perspective_coeffs(target: list[tuple[float, float]],
     return _solve(rows)
 
 
+# ---------------------------------------------------------------- triangulation
+def _circumcircle(a, b, c):
+    """Centre and squared radius of the circle through three points."""
+    ax, ay = a
+    bx, by = b
+    cx, cy = c
+    d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+    if abs(d) < 1e-12:
+        return None
+    a2 = ax * ax + ay * ay
+    b2 = bx * bx + by * by
+    c2 = cx * cx + cy * cy
+    ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d
+    uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d
+    return (ux, uy), (ux - ax) ** 2 + (uy - ay) ** 2
+
+
+def _delaunay(points: list[tuple[float, float]]) -> list[tuple[int, int, int]]:
+    """Bowyer-Watson, written out rather than imported.
+
+    The whole faceting rests on this and it is forty lines; adding numpy or scipy to
+    the image to avoid writing them would be a hundred megabytes for one function that
+    runs once per record and then never again.
+    """
+    if len(points) < 3:
+        return []
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    span = max(max(xs) - min(xs), max(ys) - min(ys)) or 1.0
+    mx, my = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+    # A triangle far enough out that every real point is inside it.
+    big = span * 20
+    pts = list(points) + [(mx - big, my - big), (mx + big, my - big), (mx, my + big)]
+    n = len(points)
+    tris = [(n, n + 1, n + 2)]
+    circles = {tris[0]: _circumcircle(pts[n], pts[n + 1], pts[n + 2])}
+
+    for i in range(n):
+        px, py = pts[i]
+        bad = []
+        for tri in tris:
+            circle = circles.get(tri)
+            if circle is None:
+                continue
+            (cx, cy), r2 = circle
+            if (px - cx) ** 2 + (py - cy) ** 2 <= r2:
+                bad.append(tri)
+        if not bad:
+            continue
+
+        # The hole those triangles leave: every edge that only one of them owns.
+        seen: dict[tuple[int, int], int] = {}
+        for a, b, c in bad:
+            for edge in ((a, b), (b, c), (c, a)):
+                key = (min(edge), max(edge))
+                seen[key] = seen.get(key, 0) + 1
+        for tri in bad:
+            tris.remove(tri)
+            circles.pop(tri, None)
+        for (a, b), count in seen.items():
+            if count != 1:
+                continue
+            tri = (a, b, i)
+            circle = _circumcircle(pts[a], pts[b], pts[i])
+            if circle is None:
+                continue
+            tris.append(tri)
+            circles[tri] = circle
+
+    return [t for t in tris if all(v < n for v in t)]
+
+
+def _facet_points(art: Image.Image, size: int, count: int,
+                  rng: random.Random) -> list[tuple[float, float]]:
+    """Where the corners of the facets go.
+
+    Denser where the picture has something in it. Scattering evenly gives an even mesh,
+    which is a mosaic; putting more of them where the image changes is what makes the
+    facets follow the artwork — a face keeps its features, a flat sky becomes two large
+    planes.
+    """
+    grid = 48
+    detail = (art.convert("L").resize((grid, grid), Image.BILINEAR)
+              .filter(ImageFilter.FIND_EDGES))
+    weights = list(detail.getdata())  # noqa: PIL deprecation lands in 14
+    top = max(weights) or 1
+
+    points = []
+    # The frame first, so the facets reach the edges instead of leaving a ragged margin.
+    edge_steps = max(6, int(count ** 0.5))
+    for i in range(edge_steps):
+        t = i / edge_steps
+        jitter = rng.uniform(-0.4, 0.4) / edge_steps
+        u = min(max(t + jitter, 0.0), 1.0) * size
+        points += [(u, 0.0), (u, float(size)), (0.0, u), (float(size), u)]
+    points += [(0.0, 0.0), (float(size), 0.0), (0.0, float(size)),
+               (float(size), float(size))]
+
+    cell = size / grid
+    tries = 0
+    while len(points) < count and tries < count * 40:
+        tries += 1
+        gx, gy = rng.randrange(grid), rng.randrange(grid)
+        # Rejection sampling against the edge map, with a floor so empty areas still
+        # get some structure rather than one enormous triangle.
+        want = 0.18 + 0.82 * (weights[gy * grid + gx] / top)
+        if rng.random() > want:
+            continue
+        points.append(((gx + rng.random()) * cell, (gy + rng.random()) * cell))
+    return points
+
+
 # ---------------------------------------------------------------- the edition
 def edition(seed: str) -> dict:
     """What kind of copy of this record you ended up with.
@@ -66,118 +178,113 @@ def edition(seed: str) -> dict:
         "rng": rng,
         "condition": condition,
         "wear": {"mint": 0.35, "played": 1.0, "beat": 1.7}[condition],
-        "gloss": rng.random() < 0.45,          # laminated front, or matte board
         "cut_out": condition != "mint" and rng.random() < 0.14,
         "sticker": rng.random() < 0.22,
-        "border": rng.random() < 0.30,         # print stops short of the edge
-        "foxing": condition == "beat" and rng.random() < 0.6,
-        "hue": rng.uniform(-0.02, 0.02),
+        # Where the light comes from, per copy: two records lit identically look
+        # printed, two lit differently look like objects on a shelf.
+        "light": (rng.uniform(-0.75, -0.25), rng.uniform(-0.9, -0.45)),
     }
 
 
 # ---------------------------------------------------------------- the jacket
-def _board(size: int, rng: random.Random) -> Image.Image:
-    """Bare cardboard: kraft-ish, with fibre running through it."""
-    base = Image.new("RGB", (size, size), (206, 197, 182))
-    tile = 200
-    fibre = Image.frombytes(
-        "L", (tile, tile), bytes(rng.getrandbits(8) for _ in range(tile * tile))
-    ).resize((size, size), Image.BILINEAR).filter(ImageFilter.GaussianBlur(size / 700))
-    return Image.blend(base, Image.merge("RGB", (fibre, fibre, fibre)), 0.18)
+def facet(art: Image.Image, size: int, ed: dict, count: int = 620,
+          relief: float = 0.30) -> Image.Image:
+    """The artwork, rebuilt out of flat triangles.
 
+    Not a filter over the picture: the picture is thrown away and redrawn as a few
+    hundred planes, each one a single colour taken from what was underneath it. That is
+    what makes it read as something *rendered* rather than something photographed and
+    then processed — and it is why the old version never worked, because a wash of
+    scratches over a photograph is still a photograph.
 
-def _edge_mask(size: int, ed: dict) -> Image.Image:
-    """Where the board shows through the print: edges and corners, unevenly.
-
-    A straight white line around the artwork looks like a border someone designed. Real
-    edge wear is ragged, heavier at the corners, and skips whole stretches.
+    The facets are then lit. Every triangle is given a pretend tilt from its own
+    position, and shaded against one light, so neighbouring planes separate the way
+    they do on a faceted surface. It is a lie about geometry that does not exist, but
+    it is a consistent one, which is all the eye is asking for.
     """
     rng = ed["rng"]
-    mask = Image.new("L", (size, size), 0)
-    pen = ImageDraw.Draw(mask)
-    band = max(2, int(size * 0.008 * ed["wear"]))
+    # Drawn at twice the size and brought back down: PIL's polygon fill has no
+    # anti-aliasing, and a mesh of hard-edged triangles at final size looks like a
+    # rendering error rather than a rendering.
+    work = size * 2
+    art = art.resize((work, work), Image.LANCZOS)
+    source = art.load()
 
-    for side in range(4):
-        x = 0.0
-        while x < size:
-            run = rng.uniform(size * 0.02, size * 0.18)
-            if rng.random() < 0.72:
-                thick = band * rng.uniform(0.4, 1.6)
-                box = {
-                    0: (x, 0, x + run, thick),
-                    1: (size - thick, x, size, x + run),
-                    2: (x, size - thick, x + run, size),
-                    3: (0, x, thick, x + run),
-                }[side]
-                pen.rectangle(box, fill=rng.randint(120, 235))
-            x += run
+    points = _facet_points(art, work, count, rng)
+    out = Image.new("RGB", (work, work), (0, 0, 0))
+    pen = ImageDraw.Draw(out)
 
-    for corner in ((0, 0), (size, 0), (size, size), (0, size)):
-        reach = size * rng.uniform(0.03, 0.09) * ed["wear"]
-        pen.polygon([corner,
-                     (corner[0] + (reach if corner[0] == 0 else -reach), corner[1]),
-                     (corner[0], corner[1] + (reach if corner[1] == 0 else -reach))],
-                    fill=rng.randint(150, 255))
-    return mask.filter(ImageFilter.GaussianBlur(size / 500))
+    lx, ly = ed["light"]
+    length = math.hypot(lx, ly, 1.0)
+    lx, ly, lz = lx / length, ly / length, 1.0 / length
+
+    for a, b, c in _delaunay(points):
+        pa, pb, pc = points[a], points[b], points[c]
+        cx = (pa[0] + pb[0] + pc[0]) / 3
+        cy = (pa[1] + pb[1] + pc[1]) / 3
+        px = min(work - 1, max(0, int(cx)))
+        py = min(work - 1, max(0, int(cy)))
+        r, g, bl = source[px, py][:3]
+
+        # A tilt for this facet, from where it is rather than from anything real, so
+        # the same record is lit the same way every time it is drawn.
+        nx = math.sin(cx * 0.011 + cy * 0.006) * relief
+        ny = math.cos(cy * 0.013 - cx * 0.005) * relief
+        norm = math.hypot(nx, ny, 1.0)
+        lambert = (nx * lx + ny * ly + lz) / norm
+        shade = 0.72 + 0.46 * max(0.0, lambert)
+
+        pen.polygon([pa, pb, pc], fill=(
+            min(255, int(r * shade)),
+            min(255, int(g * shade)),
+            min(255, int(bl * shade)),
+        ))
+    return out.resize((size, size), Image.LANCZOS)
 
 
-def _wear_layers(size: int, ed: dict) -> tuple[Image.Image, Image.Image]:
-    """Ring wear, creases, scuffs, dust — as one light layer and one dark one."""
+def _retro(face: Image.Image, size: int, ed: dict) -> Image.Image:
+    """Old paper and old ink, without pretending to be a photograph of either.
+
+    Three things, all of them flat: the colour pulled back and warmed the way a print
+    ages, a vignette, and the grain of the stock. What is deliberately *not* here is
+    the ring of bare cardboard the previous version composited round the edge of every
+    cover — the "ugly grey border". Wear on a stylised object has to be stylised too,
+    or it is a photograph of damage stuck to a drawing.
+    """
     rng, wear = ed["rng"], ed["wear"]
-    light = Image.new("RGBA", (size, size), (255, 255, 255, 0))
-    dark = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    lp, dp = ImageDraw.Draw(light), ImageDraw.Draw(dark)
 
-    # Ring wear on its own layer so it can be blurred into a halo; drawn sharp it reads
-    # as a circle someone printed on the cover.
-    ring = Image.new("RGBA", (size, size), (255, 255, 255, 0))
-    rp = ImageDraw.Draw(ring)
-    r = size * rng.uniform(0.345, 0.375)
-    cx = size / 2 + rng.uniform(-0.015, 0.015) * size
-    cy = size / 2 + rng.uniform(-0.015, 0.015) * size
-    rp.ellipse((cx - r, cy - r, cx + r, cy + r),
-               outline=(255, 255, 255, int(20 * wear)), width=int(size * 0.022))
-    rp.ellipse((cx - r * 1.02, cy - r * 1.02, cx + r * 1.02, cy + r * 1.02),
-               outline=(0, 0, 0, int(14 * wear)), width=int(size * 0.03))
-    ring = ring.filter(ImageFilter.GaussianBlur(size / 110))
+    # Aged ink: less saturated, warmer, and never quite reaching black or white.
+    faded = ImageEnhance.Color(face).enhance(0.82 - 0.12 * wear)
+    faded = ImageEnhance.Contrast(faded).enhance(0.92)
+    warm = Image.new("RGB", (size, size), (236, 214, 176))
+    face = Image.blend(faded, warm, 0.06 + 0.05 * wear)
 
-    # The seam where the jacket is folded, and the shadow inside the opening.
-    dp.line([(size * 0.018, 0), (size * 0.018, size)], fill=(0, 0, 0, 34),
-            width=max(2, size // 300))
-    lp.line([(size * 0.026, 0), (size * 0.026, size)], fill=(255, 255, 255, 26),
-            width=max(1, size // 450))
+    # A vignette: the corners of a sleeve are handled most and darken first.
+    #
+    # Built small and scaled up rather than drawn at full size. Nested outlines at 900
+    # pixels are 900-pixel-long hairlines — the ring pattern is visible as rings, which
+    # is the same mistake as the border it replaced. At a fortieth of the size the same
+    # steps are a pixel apart and the resize is the gradient.
+    steps = 40
+    small = Image.new("L", (steps, steps), 255)
+    pen = ImageDraw.Draw(small)
+    for i in range(steps // 2):
+        t = i / (steps / 2)
+        pen.rectangle((i, i, steps - 1 - i, steps - 1 - i),
+                      outline=int(255 - 52 * wear * (1 - t) ** 2.2))
+    shade = small.resize((size, size), Image.BICUBIC).filter(
+        ImageFilter.GaussianBlur(size / 90))
+    face = ImageChops.multiply(face, Image.merge("RGB", (shade, shade, shade)))
 
-    for _ in range(rng.randint(1, 3) if wear > 0.5 else 0):
-        x0, y0 = rng.choice([(0, 0), (size, 0), (size, size), (0, size)])
-        x1, y1 = rng.uniform(size * 0.3, size * 0.8), rng.uniform(size * 0.3, size * 0.8)
-        dp.line([(x0, y0), (x1, y1)], fill=(0, 0, 0, int(30 * wear)),
-                width=max(2, size // 300))
-        lp.line([(x0 + 2, y0), (x1 + 2, y1)], fill=(255, 255, 255, int(34 * wear)),
-                width=max(1, size // 400))
-
-    for _ in range(int(rng.randint(14, 22) * wear)):
-        x, y = rng.uniform(0, size), rng.uniform(0, size)
-        a, length = rng.uniform(0, math.pi), rng.uniform(size * 0.02, size * 0.13)
-        lp.line([(x, y), (x + math.cos(a) * length, y + math.sin(a) * length)],
-                fill=(255, 255, 255, rng.randint(16, 34)), width=1)
-
-    for _ in range(int(rng.randint(90, 150) * wear)):
-        x, y = rng.uniform(0, size), rng.uniform(0, size)
-        rad = rng.uniform(0.6, 2.0)
-        speck = dp if rng.random() < 0.6 else lp
-        speck.ellipse((x, y, x + rad, y + rad),
-                      fill=(0, 0, 0, rng.randint(30, 70)) if speck is dp
-                      else (255, 255, 255, rng.randint(30, 70)))
-
-    if ed["foxing"]:                       # the brown age spots old board grows
-        for _ in range(rng.randint(6, 14)):
-            x, y = rng.uniform(0, size), rng.uniform(0, size)
-            rad = rng.uniform(size * 0.004, size * 0.016)
-            dp.ellipse((x - rad, y - rad, x + rad, y + rad), fill=(96, 68, 30, 40))
-
-    return Image.alpha_composite(ring, light.filter(
-        ImageFilter.GaussianBlur(size / 400))), dark.filter(
-        ImageFilter.GaussianBlur(size / 400))
+    # The stock itself. Seeded here rather than by PIL's own noise, so a record wears
+    # the same way every time it is asked for.
+    tile = 180
+    grain = Image.frombytes(
+        "L", (tile, tile), bytes(rng.getrandbits(8) for _ in range(tile * tile))
+    ).resize((size, size), Image.BILINEAR)
+    face = Image.blend(face, Image.merge("RGB", (grain, grain, grain)),
+                       0.045 + 0.02 * wear)
+    return face
 
 
 def render_jacket(cover: pathlib.Path, seed: str, size: int = CANVAS) -> Image.Image:
@@ -198,40 +305,26 @@ def render_jacket(cover: pathlib.Path, seed: str, size: int = CANVAS) -> Image.I
     art = art.crop(((w - size) // 2, (h - size) // 2,
                     (w - size) // 2 + size, (h - size) // 2 + size))
 
-    board = _board(size, rng)
-    if ed["border"]:
-        # Some pressings print the front onto a panel glued to the board, leaving a
-        # margin of bare card all the way round.
-        inset = int(size * rng.uniform(0.012, 0.025))
-        panel = art.resize((size - inset * 2, size - inset * 2), Image.LANCZOS)
-        art = board.copy()
-        art.paste(panel, (inset, inset))
+    face = _retro(facet(art, size, ed), size, ed).convert("RGBA")
 
-    face = Image.composite(board, art, _edge_mask(size, ed)).convert("RGBA")
-
-    light, dark = _wear_layers(size, ed)
-    face = Image.alpha_composite(face, light)
-    face = Image.alpha_composite(face, dark)
-
-    # Paper grain, from our own seeded noise: PIL's effect_noise draws from a generator
-    # we do not control, so the same record would wear differently on every request.
-    tile = 160
-    grain = Image.frombytes(
-        "L", (tile, tile), bytes(rng.getrandbits(8) for _ in range(tile * tile))
-    ).resize((size, size), Image.BILINEAR)
-    face = Image.blend(face, Image.merge("RGBA", (grain, grain, grain,
-                                                  face.getchannel("A"))), 0.035)
-
-    if ed["gloss"]:
-        sheen = Image.new("L", (size, size), 0)
-        ImageDraw.Draw(sheen).polygon(
-            [(0, size * 0.30), (size * 0.34, 0), (size * 0.52, 0), (0, size * 0.56)], fill=24)
-        ImageDraw.Draw(sheen).polygon(
-            [(size * 0.62, size), (size, size * 0.58), (size, size * 0.74),
-             (size * 0.80, size)], fill=13)
-        gloss = Image.new("RGBA", (size, size), (255, 255, 255, 0))
-        gloss.putalpha(sheen.filter(ImageFilter.GaussianBlur(size / 22)))
-        face = Image.alpha_composite(face, gloss)
+    # A crease or two: a soft band of shadow with a soft band of light beside it, which
+    # is what a fold in card actually looks like. Drawn as hairlines it read as a
+    # scratch on the screen rather than as a mark on an object — the same mistake, at
+    # one pixel wide, as the border this render exists to be rid of.
+    if ed["wear"] > 0.5:
+        marks = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        mp = ImageDraw.Draw(marks)
+        for _ in range(rng.randint(1, 2)):
+            x0, y0 = rng.choice([(0, 0), (size, 0), (size, size), (0, size)])
+            x1 = rng.uniform(size * 0.35, size * 0.75)
+            y1 = rng.uniform(size * 0.35, size * 0.75)
+            band = max(3, int(size * 0.012))
+            mp.line([(x0, y0), (x1, y1)], fill=(0, 0, 0, int(20 * ed["wear"])),
+                    width=band)
+            mp.line([(x0 + band, y0), (x1 + band, y1)],
+                    fill=(255, 255, 255, int(16 * ed["wear"])), width=band)
+        face = Image.alpha_composite(
+            face, marks.filter(ImageFilter.GaussianBlur(size / 160)))
 
     if ed["sticker"]:
         # A price sticker someone half peeled off, in the corner shops always use.
@@ -382,7 +475,7 @@ SIZES = {"lg": CANVAS, "sm": 320}
 # Bumped whenever the drawing changes. The art is cached under the cover's hash, which
 # does not change when the *renderer* does — so without this, a fix to how a record is
 # drawn only reaches records nobody has looked at yet.
-VERSION = 2
+VERSION = 3
 
 
 def path_for(root: pathlib.Path, sha: str, size: str, part: str = "sleeve") -> pathlib.Path:

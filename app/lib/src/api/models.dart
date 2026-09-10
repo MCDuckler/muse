@@ -664,6 +664,23 @@ enum CoverStyle {
       : 'The artwork on its own, no animation';
 }
 
+/// Which way the records travel when the song changes.
+enum ShelfAxis {
+  /// A shelf: the record you are on slides off to the left and the next one takes its
+  /// place, the way you would flip through a crate.
+  sideways,
+
+  /// A stack: the record lifts away upwards and the next one comes up under it.
+  upwards;
+
+  String get label =>
+      this == ShelfAxis.sideways ? 'Side to side' : 'Up and down';
+
+  String get description => this == ShelfAxis.sideways
+      ? 'Records move across, like flipping through a crate'
+      : 'Records move up, like lifting one off a stack';
+}
+
 /// Where the player's controls live.
 ///
 /// Three arrangements rather than one, because this is the screen people look at most

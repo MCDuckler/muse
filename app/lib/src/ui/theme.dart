@@ -145,6 +145,20 @@ class MuseTheme {
           color: scheme.onSurface,
         ),
       ),
+      // Nothing lights up because a button happens to hold focus.
+      //
+      // A button that has been tapped keeps the focus afterwards, and Material paints
+      // a pale disc under a focused or hovered icon — which on a phone appears for no
+      // reason the person did anything about, sometimes seconds later, and looks like
+      // a control blinking. The press ripple stays: that one answers a finger.
+      iconButtonTheme: IconButtonThemeData(
+        style: ButtonStyle(
+          overlayColor: WidgetStateProperty.resolveWith((states) =>
+              states.contains(WidgetState.pressed)
+                  ? scheme.onSurface.withValues(alpha: 0.10)
+                  : Colors.transparent),
+        ),
+      ),
       listTileTheme: ListTileThemeData(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         selectedTileColor: scheme.primary.withValues(alpha: 0.10),

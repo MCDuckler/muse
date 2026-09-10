@@ -32,7 +32,26 @@ class GlassSurface extends StatelessWidget {
 
     return ClipRRect(
       borderRadius: radius,
-      child: BackdropFilter(
+      // An opaque ground under the blur, so a dropped backdrop sample shows the
+      // surface rather than nothing.
+      //
+      // This is where the white blinking came from. A BackdropFilter reads what has
+      // already been composited behind it, and when the layer tree above it changes —
+      // a route settling, the record stage gaining or losing a repaint boundary — it
+      // can be handed a frame with nothing in it. A 55%-opaque panel over nothing is a
+      // white flash across the controls, which is exactly what it looked like.
+      child: Stack(
+        fit: StackFit.passthrough,
+        children: [
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: scheme.surface.withValues(alpha: opacity),
+                borderRadius: radius,
+              ),
+            ),
+          ),
+      BackdropFilter(
         filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
         child: DecoratedBox(
           decoration: BoxDecoration(
@@ -54,6 +73,8 @@ class GlassSurface extends StatelessWidget {
             child: Padding(padding: padding, child: child),
           ),
         ),
+      ),
+        ],
       ),
     );
   }

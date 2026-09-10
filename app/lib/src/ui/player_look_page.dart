@@ -57,6 +57,22 @@ class PlayerLookPage extends StatelessWidget {
               // ignore: deprecated_member_use
               onChanged: (v) => v == null ? null : app.setCoverStyle(v),
             ),
+          // Only the record moves, so only the record has a direction.
+          if (app.coverStyle == CoverStyle.record) ...[
+            const SizedBox(height: 12),
+            Text('Which way it moves',
+                style: Theme.of(context).textTheme.titleSmall),
+            for (final axis in ShelfAxis.values)
+              RadioListTile<ShelfAxis>(
+                value: axis,
+                // ignore: deprecated_member_use
+                groupValue: app.shelfAxis,
+                title: Text(axis.label),
+                subtitle: Text(axis.description),
+                // ignore: deprecated_member_use
+                onChanged: (v) => v == null ? null : app.setShelfAxis(v),
+              ),
+          ],
           SwitchListTile(
             secondary: const Icon(Icons.grain),
             title: const Text('Printed background'),

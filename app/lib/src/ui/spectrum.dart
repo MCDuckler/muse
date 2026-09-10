@@ -51,6 +51,28 @@ class Spectrum extends StatefulWidget {
 
 class _SpectrumState extends State<Spectrum> with SingleTickerProviderStateMixin {
   StreamSubscription? _feed;
+
+  /// Let go of the microphone the moment the app is not in front of somebody.
+  ///
+  /// Android reads an app's own output through the same door a recording app uses, and
+  /// a backgrounded app is not allowed through it — so this reads nothing there anyway.
+  /// What it does do is hold an open capture on a foreground service declared for media
+  /// playback, which on recent Android is a service doing something it did not say it
+  /// would, and a plausible reason for one to be shut down mid-song.
+  late final AppLifecycleListener _lifecycle = AppLifecycleListener(
+    onResume: () {
+      if (_feed == null) unawaited(_listen());
+    },
+    onInactive: _release,
+    onHide: _release,
+    onPause: _release,
+  );
+
+  void _release() {
+    _feed?.cancel();
+    _feed = null;
+    if (mounted) setState(() => _levels = const []);
+  }
   List<double> _levels = const [];
 
   /// What is drawn, which follows the levels rather than jumping to them: a bar that
@@ -64,6 +86,7 @@ class _SpectrumState extends State<Spectrum> with SingleTickerProviderStateMixin
   @override
   void initState() {
     super.initState();
+    _lifecycle;                     // built lazily; touching it starts it listening
     _ease = createTicker((_) => _settle())..start();
     _listen();
   }
@@ -122,6 +145,7 @@ class _SpectrumState extends State<Spectrum> with SingleTickerProviderStateMixin
 
   @override
   void dispose() {
+    _lifecycle.dispose();
     _ease?.dispose();
     _feed?.cancel();
     super.dispose();

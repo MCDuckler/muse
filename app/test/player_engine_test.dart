@@ -439,6 +439,7 @@ void main() {
     final app = AppState();
     app.api = api;
     app.player = player;
+    app.jamListening = true;        // this guest is somewhere else and wants to hear it
     app.jam = Jam.fromJson({
       'id': 7,
       'code': 'ABC123',
@@ -463,6 +464,36 @@ void main() {
         trackId: 2, positionMs: 42000, playing: false));
     await settle();
     expect(audio.only.playing, isFalse);
+  });
+
+  test('a guest in the room follows it without making a sound', () async {
+    // The normal case, and the reason it is the default: everybody in one room hearing
+    // the same record out of five phones a half-second apart is not listening
+    // together. The screen keeps up; the speaker stays out of it.
+    final app = AppState();
+    app.api = api;
+    app.player = player;
+    app.jam = Jam.fromJson({
+      'id': 7,
+      'code': 'ABC123',
+      'queue_id': 1,
+      'host': 'somebody',
+      'is_host': false,
+    });
+    await player.loadQueue(queueOf([track(1), track(2), track(3)]));
+    await settle();
+
+    await app.followJamPlayback(const JamPlayback(
+        trackId: 2, positionMs: 30000, playing: true));
+    await settle();
+
+    expect(player.current?.id, 2, reason: 'the screen is on the room\'s song');
+    expect(player.last?.playing ?? false, isFalse,
+        reason: 'and this device is silent');
+    // Not "loaded and then paused": a stream nobody is listening to is somebody's
+    // phone data spent on a song they cannot hear.
+    expect(audio.players.values.expand((p) => p.sources), isEmpty,
+        reason: 'no audio was fetched at all');
   });
 
   test('leaving a jam hands back the queue that came with it', () async {

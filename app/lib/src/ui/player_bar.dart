@@ -7,6 +7,7 @@ import 'artwork.dart';
 import 'now_playing.dart';
 import 'swipe.dart';
 import 'progress.dart';
+import 'pulse.dart';
 
 /// The bar that is always there. It shows what is playing, and it shows when what
 /// you queued is still downloading instead of pretending nothing happened.
@@ -88,11 +89,17 @@ class PlayerBar extends StatelessWidget {
                 playing: host != null || (s?.playing ?? false),
                 duration: length,
                 speed: player.speed,
-                builder: (context, now) => LinearProgressIndicator(
-                  value:
-                      total > 0 ? (now.inMilliseconds / total).clamp(0.0, 1.0) : 0.0,
-                  minHeight: 2,
-                  backgroundColor: Colors.transparent,
+                builder: (context, now) => Pulse(
+                  // Nothing after this one. The same slow breath as the full player's
+                  // bar, so the two are obviously the same thing being said.
+                  on: s?.lastInQueue ?? false,
+                  child: LinearProgressIndicator(
+                    value: total > 0
+                        ? (now.inMilliseconds / total).clamp(0.0, 1.0)
+                        : 0.0,
+                    minHeight: 2,
+                    backgroundColor: Colors.transparent,
+                  ),
                 ),
               ),
               ListTile(
@@ -140,7 +147,11 @@ class PlayerBar extends StatelessWidget {
                       icon: Icon((s?.playing ?? false)
                           ? Icons.pause_circle_filled
                           : Icons.play_circle_fill),
-                      onPressed: track.isReady ? app.playPause : null,
+                      // Never disabled. A track whose file has not landed yet still
+                      // answers a tap — the player waits for the download — and a
+                      // button that greys out for the moment a state arrives late is
+                      // a pale flash in the corner of the eye for no gain.
+                      onPressed: app.playPause,
                     ),
                     IconButton(
                         icon: const Icon(Icons.skip_next), onPressed: app.skipNext),

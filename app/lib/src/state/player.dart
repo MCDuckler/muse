@@ -9,6 +9,7 @@ import 'package:just_audio_background/just_audio_background.dart';
 import '../api/client.dart';
 import '../api/models.dart';
 import 'keepalive.dart';
+import 'playback_log.dart';
 
 enum QueueRepeat { off, one, all }
 
@@ -180,7 +181,16 @@ class PlayerService {
   int? get androidAudioSessionId => _player.androidAudioSessionId;
 
   Future<void> init() async {
+    var said = '';
     _player.playerStateStream.listen((s) {
+      // Written down, because the minute worth reading is always the one with the
+      // screen off. See PlaybackLog.
+      final now = '${s.playing ? 'playing' : 'stopped'} ${s.processingState.name}';
+      if (now != said) {
+        said = now;
+        PlaybackLog.note('engine $now'
+            '${_wantPlaying ? '' : ' (nothing wanted)'}');
+      }
       _emit(force: true);
       if (s.processingState == ProcessingState.completed) _onCompleted();
       if (!s.playing) _saveCursor();      // pausing is a good moment to remember
@@ -191,6 +201,7 @@ class PlayerService {
     _player.currentIndexStream.listen(_onEngineIndex);
     _player.playbackEventStream.listen((_) {}, onError: (Object e) {
       lastError = '$e';
+      PlaybackLog.note('engine error: $e');
       _emit(force: true);
     });
     _cursorTimer = Timer.periodic(cursorInterval, (_) {
@@ -222,9 +233,11 @@ class PlayerService {
             // Held apart from `pause()`: this is not the person deciding to stop, and
             // the watchdog must neither undo it nor forget that music was playing.
             _interrupted = true;
+            PlaybackLog.note('interrupted (${event.type.name})');
             await _player.pause();
           }
         } else {
+          if (_interrupted) PlaybackLog.note('interruption over');
           _interrupted = false;
           if (event.type == AudioInterruptionType.duck) {
             await _player.setVolume(_volumeFor(current));
@@ -237,7 +250,10 @@ class PlayerService {
         }
         _emit(force: true);
       });
-      session.becomingNoisyEventStream.listen((_) => unawaited(pause()));
+      session.becomingNoisyEventStream.listen((_) {
+        PlaybackLog.note('headphones unplugged');
+        unawaited(pause());
+      });
     } catch (_) {
       // A platform with no session to configure still plays.
     }
@@ -329,7 +345,13 @@ class PlayerService {
   static const maxRevivals = 6;
 
   Future<void> _revive() async {
-    if (_revivals >= maxRevivals) return;
+    if (_revivals >= maxRevivals) {
+      if (_revivals == maxRevivals) {
+        _revivals++;
+        PlaybackLog.note('gave up reviving after $maxRevivals tries');
+      }
+      return;
+    }
     _revivals++;
     final at = _heardUpTo > _player.position ? _heardUpTo : _player.position;
     // An engine that is holding nothing cannot be talked round, and asking is worse
@@ -337,6 +359,8 @@ class PlayerService {
     // it is playing, which after a death underneath it is exactly what it believes.
     // So an idle engine is reloaded on the first attempt rather than the third.
     final holdingNothing = _player.processingState == ProcessingState.idle;
+    PlaybackLog.note(
+        'reviving (#$_revivals, ${holdingNothing ? 'engine empty' : 'engine holds it'}, at ${at.inSeconds}s)');
     try {
       if (!holdingNothing && _revivals <= 1) {
         // The engine still has the song and merely stopped — it lost the audio focus,
@@ -576,6 +600,27 @@ class PlayerService {
     final pos = _order.indexOf(itemIndex);
     if (pos < 0) return;
     await _playOrderPos(pos);
+  }
+
+  /// Move to a song without making a sound.
+  ///
+  /// For a guest in a jam who is following the room but not listening to it on this
+  /// device: the screen has to show what everyone is playing, and the audio has to
+  /// stay off. Loading the stream to immediately pause it would be a download nobody
+  /// asked for, on somebody's phone data, for a song they are not hearing.
+  Future<void> showTrack(int trackId) async {
+    final itemIndex = _relocate(index, trackId);
+    if (itemIndex < 0) return;
+    final pos = _order.indexOf(itemIndex);
+    if (pos < 0 || pos == _orderPos) return;
+    _orderPos = pos;
+    finished = false;
+    _wantPlaying = false;
+    _loadedTrackId = null;
+    _pendingStart = Duration.zero;
+    _heardUpTo = Duration.zero;
+    await _halt();
+    _emit(force: true);
   }
 
   Future<void> playAt(int itemIndex) async {
@@ -1277,6 +1322,13 @@ class PlayerSnapshot {
   });
 
   bool get isConsistent => current == null || loadedTrackId == current!.id;
+
+  /// Nothing after this one. Worth saying, because the alternative is the music
+  /// simply stopping and nobody having been told it was going to.
+  ///
+  /// Not true on repeat: a queue that comes round again has no last song.
+  bool get lastInQueue =>
+      repeat == QueueRepeat.off && itemCount > 0 && index == itemCount - 1;
 
   double get progress {
     final d = duration?.inMilliseconds ?? 0;

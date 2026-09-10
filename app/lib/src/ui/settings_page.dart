@@ -11,6 +11,7 @@ import 'downloads_page.dart';
 import 'player_look_page.dart';
 import 'services_page.dart';
 import 'accounts_page.dart';
+import 'playback_log_page.dart';
 import 'track_menu.dart';
 import 'theme.dart';
 
@@ -282,6 +283,14 @@ class _SettingsPageState extends State<SettingsPage> {
             },
           ),
           const Divider(),
+          ListTile(
+            leading: const Icon(Icons.receipt_long_outlined),
+            title: const Text('Playback log'),
+            subtitle: const Text('What the audio engine did, and when'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const PlaybackLogPage())),
+          ),
           ListTile(
             leading: const Icon(Icons.info_outline),
             title: const Text('Muse'),

@@ -30,7 +30,12 @@ class RecordStage extends StatefulWidget {
     this.onNext,
     this.onPrevious,
     this.scale = 0.74,
+    this.axis = ShelfAxis.sideways,
   });
+
+  /// Which way the shelf runs. Everything about the movement is the same either way —
+  /// the same journey, the same lag, the same drag — laid along a different line.
+  final ShelfAxis axis;
 
   /// How much of the stage the middle record takes. The rest is where its neighbours
   /// stand, so this trades "how big is the record" against "how much of the next one
@@ -372,8 +377,10 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     _dragged = _shelf.travelling ? -_travel.value * _reach * _shelf.heading : 0;
   }
 
+  bool get _upright => widget.axis == ShelfAxis.upwards;
+
   void _dragUpdate(DragUpdateDetails d) {
-    _dragged += d.delta.dx;
+    _dragged += _upright ? d.delta.dy : d.delta.dx;
 
     // Pulling the shelf to the left brings the next record in; to the right, the one
     // before. Changing your mind mid-drag changes which journey is being scrubbed.
@@ -404,7 +411,9 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     _scrubbing = false;
     if (!_shelf.travelling) return;
 
-    final velocity = d.velocity.pixelsPerSecond.dx;
+    final velocity = _upright
+        ? d.velocity.pixelsPerSecond.dy
+        : d.velocity.pixelsPerSecond.dx;
     // A flick counts, but only a flick the way the shelf is already going.
     final flung =
         velocity.abs() > 420 && velocity.sign == -_shelf.heading.toDouble();
@@ -453,12 +462,16 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
           child: SizedBox(
           width: side,
           height: side,
-          // Horizontal only, so a drag up or down still belongs to the page.
+          // One axis only, and it is the one the records travel along — so the other
+          // direction still belongs to the page: a drag down closes the player.
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onHorizontalDragStart: _dragStart,
-            onHorizontalDragUpdate: _dragUpdate,
-            onHorizontalDragEnd: _dragEnd,
+            onHorizontalDragStart: _upright ? null : _dragStart,
+            onHorizontalDragUpdate: _upright ? null : _dragUpdate,
+            onHorizontalDragEnd: _upright ? null : _dragEnd,
+            onVerticalDragStart: _upright ? _dragStart : null,
+            onVerticalDragUpdate: _upright ? _dragUpdate : null,
+            onVerticalDragEnd: _upright ? _dragEnd : null,
             child: AnimatedBuilder(
               animation: Listenable.merge([_travel, _out]),
               builder: (context, _) {
@@ -509,6 +522,7 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                         // shelf has travelled. At p = 1 the right-hand sleeve sits at
                         // 0 — the middle — which is the point of the whole thing.
                         d: card.slot - progressFor(card.slot),
+                        upright: _upright,
                         side: side,
                         jacket: jacket,
                         // The same picture wherever it stands. Choosing the small
@@ -546,6 +560,7 @@ class _Sleeve extends StatelessWidget {
   const _Sleeve({
     super.key,
     required this.d,
+    required this.upright,
     required this.side,
     required this.jacket,
     required this.jacketUrl,
@@ -555,6 +570,10 @@ class _Sleeve extends StatelessWidget {
   });
 
   final double d;
+
+  /// The shelf runs up the screen rather than across it.
+  final bool upright;
+
   final double side;
   final double jacket;
   final String? jacketUrl;
@@ -570,8 +589,11 @@ class _Sleeve extends StatelessWidget {
     if (away > 2.2) return const SizedBox.shrink();
 
     // Nearer the edges the shelf is deeper, so the steps between places get shorter.
-    final x = side * 0.45 * d * (1 - 0.08 * away);
+    final along = side * 0.45 * d * (1 - 0.08 * away);
     final scale = (1 - 0.42 * away.clamp(0.0, 1.6)).clamp(0.24, 1.0);
+    // Turned away from the middle: about the upright axis on a shelf, about the
+    // horizontal one on a stack — a record lifted off a pile tips towards you rather
+    // than swinging round.
     final turn = -0.78 * d.clamp(-1.4, 1.4);
     final fade = away <= 1 ? 1.0 - 0.62 * away : (1.9 - away).clamp(0.0, 1.0) * 0.38;
 
@@ -588,11 +610,17 @@ class _Sleeve extends StatelessWidget {
 
     return Transform(
       alignment: Alignment.center,
-      transform: Matrix4.identity()
-        ..setEntry(3, 2, 0.0011)
-        ..translateByDouble(x, 0.0, 0.0, 1.0)
-        ..rotateY(turn)
-        ..scaleByDouble(scale, scale, 1.0, 1.0),
+      transform: upright
+          ? (Matrix4.identity()
+            ..setEntry(3, 2, 0.0011)
+            ..translateByDouble(0.0, along, 0.0, 1.0)
+            ..rotateX(-turn)
+            ..scaleByDouble(scale, scale, 1.0, 1.0))
+          : (Matrix4.identity()
+            ..setEntry(3, 2, 0.0011)
+            ..translateByDouble(along, 0.0, 0.0, 1.0)
+            ..rotateY(turn)
+            ..scaleByDouble(scale, scale, 1.0, 1.0)),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -622,7 +650,7 @@ class _Sleeve extends StatelessWidget {
           // Skipped once it is dim enough not to be seen: it is the one thing here
           // that genuinely needs a layer of its own, and the sleeves it would be
           // under at that point are themselves nearly gone.
-          if (dim > 0.25)
+          if (dim > 0.25 && !upright)
             RepaintBoundary(
               child: Mirror(
                 size: jacket,
@@ -630,6 +658,9 @@ class _Sleeve extends StatelessWidget {
               ),
             )
           else
+            // Kept as space either way, so the sleeve sits at the same height on the
+            // stage whether or not it is standing on anything. On a stack there is
+            // nothing under a record but the next record, so no reflection.
             SizedBox(width: jacket, height: jacket * 0.34),
         ],
       ),
@@ -754,8 +785,14 @@ class Mirror extends StatelessWidget {
         child: OverflowBox(
           alignment: Alignment.topCenter,
           maxHeight: size,
+          // Flipped about its own middle, so the copy stays in the box and its top
+          // edge is the record's bottom edge — which is what a reflection is.
+          //
+          // Flipping about the top sent the whole copy *upwards* instead, out of this
+          // box and straight over the cover above it, so every sleeve was wearing an
+          // upside-down picture of itself across its bottom third.
           child: Transform(
-            alignment: Alignment.topCenter,
+            alignment: Alignment.center,
             transform: Matrix4.identity()..scaleByDouble(1.0, -1.0, 1.0, 1.0),
             child: child,
           ),

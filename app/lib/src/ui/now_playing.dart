@@ -16,6 +16,7 @@ import 'browse_page.dart';
 import 'jam_page.dart';
 import 'halftone.dart';
 import 'progress.dart';
+import 'pulse.dart';
 
 String formatTime(Duration d) {
   final m = d.inMinutes;
@@ -151,13 +152,13 @@ class NowPlayingScreen extends StatelessWidget {
                                       : 0),
                               child: Column(
                                 children: [
-                                  Text(track.displayTitle,
-                                      textAlign: TextAlign.center,
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .headlineSmall),
+                                  // Two lines' worth of room whether or not the title
+                                  // needs two. The artwork sits above this in a
+                                  // centred column, so a title that wrapped used to
+                                  // shove the record up the screen — and going from
+                                  // one song to the next moved the picture as much as
+                                  // it changed it.
+                                  _TitleBlock(title: track.displayTitle),
                                   const SizedBox(height: 6),
                                   _Credits(track: track),
                                 ],
@@ -581,6 +582,7 @@ class _Artwork extends StatelessWidget {
               track: track,
               playing: snapshot?.playing ?? false,
               scale: context.watch<AppState>().coverScale,
+              axis: context.watch<AppState>().shelfAxis,
               previous: _at(-1),
               next: _at(1),
               // Two either side as well: a journey held halfway by a finger shows the
@@ -604,6 +606,35 @@ class _Artwork extends StatelessWidget {
 /// Everything else on this screen is drawn from the coarse stream; the clock is the
 /// one thing that genuinely changes several times a second, so it listens for itself
 /// and repaints nothing but itself.
+/// The song's name, in a box that is always two lines tall.
+///
+/// The height is worked out from the type rather than guessed, so it holds whatever
+/// the text scale is set to. Top-aligned: a one-line title sits where the first line
+/// of a two-line one does, which is what stops the words moving as well as the record.
+class _TitleBlock extends StatelessWidget {
+  const _TitleBlock({required this.title});
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.headlineSmall;
+    final size = MediaQuery.textScalerOf(context)
+        .scale(style?.fontSize ?? 24);
+    final line = size * (style?.height ?? 1.25);
+    return SizedBox(
+      height: line * 2,
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: Text(title,
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: style),
+      ),
+    );
+  }
+}
+
 class _Scrubber extends StatelessWidget {
   const _Scrubber({required this.player, this.timesBeside = false});
   final PlayerService player;
@@ -696,7 +727,11 @@ class _ScrubberState extends State<_ScrubberBar> {
       builder: (context, at) {
         final value =
             (_dragging ?? at.inMilliseconds.toDouble()).clamp(0.0, max <= 0 ? 1.0 : max);
-        final bar = SliderTheme(
+        final bar = Pulse(
+          // The last song in the queue, said quietly on the one thing that is already
+          // about how much is left.
+          on: widget.snapshot?.lastInQueue ?? false,
+          child: SliderTheme(
           data: SliderTheme.of(context).copyWith(
             trackHeight: 3,
             thumbShape: RoundSliderThumbShape(enabledThumbRadius: enabled ? 7 : 4),
@@ -717,6 +752,7 @@ class _ScrubberState extends State<_ScrubberBar> {
                   }
                 : null,
           ),
+        ),
         );
         final elapsed = Text(formatTime(Duration(milliseconds: value.round())),
             style: Theme.of(context).textTheme.labelMedium);

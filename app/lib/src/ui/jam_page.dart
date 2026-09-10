@@ -214,6 +214,23 @@ class _JamPageState extends State<JamPage> {
           ],
         ),
       ),
+      // Only a guest chooses: the host's device *is* the room's speaker.
+      if (!jam.isHost) ...[
+        const SizedBox(height: 14),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          secondary: Icon(app.jamListening
+              ? Icons.headset
+              : Icons.headset_off_outlined),
+          title: const Text('Play it here too'),
+          subtitle: Text(app.jamListening
+              ? 'This device is playing along with the room'
+              : 'Following the room without making a sound — turn this on if '
+                  'you are somewhere else'),
+          value: app.jamListening,
+          onChanged: (on) => app.setJamListening(on),
+        ),
+      ],
       const SizedBox(height: 22),
       Text('Who is here', style: Theme.of(context).textTheme.titleSmall),
       for (final m in jam.members)
