@@ -33,6 +33,11 @@ class AppState extends ChangeNotifier {
   /// Who this is on the server, and the version of their picture — both come back with
   /// the first "who am I" and are what the app draws a face from.
   int? userId;
+
+  /// Records heard all the way through. Counted by the server from the listens it has
+  /// already written down, so it is a fact about what happened rather than a tally
+  /// that can drift away from it.
+  int score = 0;
   String? avatarVersion;
   String? error;
 
@@ -259,6 +264,7 @@ class AppState extends ChangeNotifier {
         final me = await api.me();
         user = me['user'] as String?;
         userId = me['user_id'] as int?;
+        score = (me['score'] ?? 0) as int;
         avatarVersion = me['avatar_version'] as String?;
         await _afterLogin();
       } on ApiException {
@@ -310,6 +316,7 @@ class AppState extends ChangeNotifier {
       user = username.trim();
       final me = await api.me();
       userId = me['user_id'] as int?;
+      score = (me['score'] ?? 0) as int;
       avatarVersion = me['avatar_version'] as String?;
       await _afterLogin();
       notifyListeners();
@@ -1261,6 +1268,11 @@ class AppState extends ChangeNotifier {
   /// know when the shape of things changed.
   void bindPlayer() {
     _playerSub?.cancel();
+    player?.onScore = (n) {
+      if (n == score) return;
+      score = n;
+      notifyListeners();
+    };
     int? named;
     String? shape;
     _playerSub = player?.snapshots.listen((s) {

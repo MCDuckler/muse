@@ -895,6 +895,10 @@ class PlayerService {
     }
   }
 
+  /// Told the tally after every play that counted, so a score can move as it is
+  /// earned rather than on the next start.
+  void Function(int score)? onScore;
+
   /// Where a track is kept on this device, if it is. Set by the app when the offline
   /// store is ready; null everywhere that has no filesystem.
   String? Function(int trackId)? offlinePath;
@@ -1228,7 +1232,10 @@ class PlayerService {
     final total = track.durationMs ?? 0;
     final done = completed ||
         (total > 0 && played / total >= _completedFraction);
-    api.recordListen(track.id, played, done).catchError((_) {});
+    api
+        .recordListen(track.id, played, done)
+        .then((score) => onScore?.call(score))
+        .catchError((_) => 0);
   }
 
   void _saveCursor() {

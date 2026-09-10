@@ -80,3 +80,64 @@ def test_history_is_deduped_and_recent_first(client, hdr, track):
 
 def test_listen_for_unknown_track_is_404(client, hdr):
     assert client.post("/listens", headers=hdr, json={"track_id": 4242}).status_code == 404
+
+
+def test_a_record_heard_to_the_end_is_worth_a_point(client, hdr):
+    """One point a record, and only for the ones actually listened to.
+
+    Counted from the listens rather than kept as a number beside them: the listens are
+    the record of what happened, and a tally kept alongside can only ever come to
+    disagree with them.
+    """
+    track = client.post("/tracks/resolve", headers=hdr,
+                        json={"video_id": "AAA"}).json()
+    other = client.post("/tracks/resolve", headers=hdr,
+                        json={"video_id": "BBB"}).json()
+
+    assert client.get("/me", headers=hdr).json()["score"] == 0
+
+    skipped = client.post("/listens", headers=hdr, json={
+        "track_id": track["id"], "ms_played": 4000, "completed": False}).json()
+    assert skipped["score"] == 0, "skipping through a song earns nothing"
+
+    heard = client.post("/listens", headers=hdr, json={
+        "track_id": track["id"], "ms_played": 210_000, "completed": True}).json()
+    assert heard["score"] == 1
+
+    again = client.post("/listens", headers=hdr, json={
+        "track_id": other["id"], "ms_played": 190_000, "completed": True}).json()
+    assert again["score"] == 2
+    assert client.get("/me", headers=hdr).json()["score"] == 2
+
+
+def test_the_score_is_beside_every_name(client, hdr):
+    track = client.post("/tracks/resolve", headers=hdr,
+                        json={"video_id": "AAA"}).json()
+    client.post("/listens", headers=hdr,
+                json={"track_id": track["id"], "ms_played": 200_000,
+                      "completed": True})
+    client.post("/accounts", headers=hdr,
+                json={"name": "sam", "password": "correct-horse"})
+
+    listed = client.get("/accounts", headers=hdr).json()["items"]
+    by_name = {a["name"]: a["score"] for a in listed}
+    assert by_name["chris"] == 1
+    assert by_name["sam"] == 0, "everybody starts at nothing"
+
+
+def test_a_second_device_does_not_double_the_score(client, hdr):
+    """The tally is a count of listens, not a join across them — one more device
+    signed in must not multiply what somebody has heard."""
+    from muse import db
+
+    track = client.post("/tracks/resolve", headers=hdr,
+                        json={"video_id": "AAA"}).json()
+    client.post("/listens", headers=hdr,
+                json={"track_id": track["id"], "ms_played": 200_000,
+                      "completed": True})
+    me = client.get("/me", headers=hdr).json()["user_id"]
+    db.run("""insert into devices(user_id, name, token_hash)
+              values(%s,'another','x')""", (me,))
+
+    listed = client.get("/accounts", headers=hdr).json()["items"]
+    assert next(a for a in listed if a["id"] == me)["score"] == 1

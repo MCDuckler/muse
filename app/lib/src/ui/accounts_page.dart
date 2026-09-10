@@ -1,3 +1,4 @@
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -240,7 +241,10 @@ class _AccountsPageState extends State<AccountsPage> {
                   onTap: _changeMyPassword,
                 ),
                 const Divider(),
-                for (final a in data.items)
+                // Most records heard first. A score nobody can see beside anybody
+                // else's is a statistic; in an order it is a scoreboard.
+                for (final a in ([...data.items]..sort((x, y) =>
+                    ((y['score'] ?? 0) as int).compareTo((x['score'] ?? 0) as int))))
                   ListTile(
                     leading: CircleAvatar(
                       child: Text(((a['name'] ?? '?') as String)
@@ -257,6 +261,8 @@ class _AccountsPageState extends State<AccountsPage> {
                               style: Theme.of(context).textTheme.labelSmall?.copyWith(
                                   color: Theme.of(context).colorScheme.primary)),
                         ],
+                        const Spacer(),
+                        _Score(records: (a['score'] ?? 0) as int),
                       ],
                     ),
                     subtitle: Text([
@@ -294,6 +300,45 @@ class _AccountsPageState extends State<AccountsPage> {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+/// How many records somebody has heard all the way through.
+///
+/// A count of finished listens, which is a thing that either happened or did not —
+/// skipping through a hundred songs earns nothing, and sitting through one earns the
+/// same as sitting through any other. That is the whole of the game.
+class _Score extends StatelessWidget {
+  const _Score({required this.records});
+  final int records;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+      decoration: BoxDecoration(
+        color: scheme.primary.withValues(alpha: records == 0 ? 0.06 : 0.14),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.album_outlined,
+              size: 13,
+              color: scheme.primary.withValues(alpha: records == 0 ? 0.4 : 1)),
+          const SizedBox(width: 5),
+          Text(
+            '$records',
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: scheme.primary.withValues(alpha: records == 0 ? 0.5 : 1),
+                  fontWeight: FontWeight.w700,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+          ),
+        ],
       ),
     );
   }

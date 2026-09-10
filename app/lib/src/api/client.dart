@@ -997,11 +997,20 @@ class ApiClient {
     return d.map((e) => Track.fromJson(e)).toList();
   }
 
-  Future<void> recordListen(int trackId, int msPlayed, bool completed) async {
-    await _decode(await http.post(_u('/listens'),
+  /// One play, and the score it leaves behind.
+  ///
+  /// Answers with how many records have now been heard all the way through, so the
+  /// number can move at the moment a record ends rather than the next time the app is
+  /// opened.
+  Future<int> recordListen(int trackId, int msPlayed, bool completed) async {
+    final d = await _decode(await http.post(_u('/listens'),
         headers: _headers,
-        body: jsonEncode(
-            {'track_id': trackId, 'ms_played': msPlayed, 'completed': completed})));
+        body: jsonEncode({
+          'track_id': trackId,
+          'ms_played': msPlayed,
+          'completed': completed
+        }))) as Map<String, dynamic>;
+    return (d['score'] ?? 0) as int;
   }
 
   /// Server-sent events: a track finishing its download un-greys it everywhere.

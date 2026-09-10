@@ -165,6 +165,11 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         row = db.one("select id, avatar_sig from users where id=%s", (user["id"],))
         return {"user": user["name"], "device": user["device_name"],
                 "user_id": user["id"],
+                # Records heard all the way through, which is the only number in here
+                # anybody is competing over.
+                "score": db.one(
+                    "select count(*) n from listens where user_id=%s and completed",
+                    (user["id"],))["n"],
                 # The picture, if there is one, so the app can draw it without asking
                 # a second question on every start.
                 "avatar_version": (row or {}).get("avatar_sig")}

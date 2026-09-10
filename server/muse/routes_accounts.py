@@ -23,10 +23,17 @@ INVITE_TTL_HOURS = 48
 @router.get("")
 def list_accounts(user: dict = Depends(current_user)):
     return {"items": db.all_(
+        # Records listened to all the way through. Counted here rather than kept as a
+        # number somewhere, because the listens are already written down and a tally
+        # that is derived cannot drift from what actually happened — and a subquery
+        # rather than another join, or every device somebody owns would multiply their
+        # score by one.
         """select u.id, u.name, u.created_at,
                   count(d.id) as devices,
                   max(d.last_seen) as last_seen,
-                  u.pw_hash is null as needs_password
+                  u.pw_hash is null as needs_password,
+                  (select count(*) from listens l
+                    where l.user_id = u.id and l.completed) as score
              from users u left join devices d on d.user_id=u.id
             group by u.id order by u.id"""
     ), "you": user["id"], "admin": is_admin(user["id"])}

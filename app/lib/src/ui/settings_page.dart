@@ -268,7 +268,10 @@ class _SettingsPageState extends State<SettingsPage> {
           ListTile(
             leading: const Icon(Icons.group_outlined),
             title: const Text('Accounts'),
-            subtitle: const Text('Invite someone, or add an account'),
+            subtitle: Text(app.score == 0
+                ? 'Invite someone, or add an account'
+                : '${app.score} ${app.score == 1 ? 'record' : 'records'} heard '
+                    'all the way through'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.of(context)
                 .push(MaterialPageRoute(builder: (_) => const AccountsPage())),

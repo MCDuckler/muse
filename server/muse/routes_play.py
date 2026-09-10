@@ -68,7 +68,13 @@ def record_listen(body: dict = Body(...), user: dict = Depends(current_user)):
            values(%s,%s,%s,%s) returning id, started_at""",
         (user["id"], track_id, int(body.get("ms_played", 0)), bool(body.get("completed", False))),
     )
-    return {"id": row["id"], "started_at": row["started_at"]}
+    # The tally comes back with it, so a score can tick up at the moment the record
+    # ends rather than the next time the app is opened. Counted rather than kept: the
+    # listens are the record of what happened, and a number kept beside them can only
+    # ever disagree with them.
+    score = db.one("select count(*) n from listens where user_id=%s and completed",
+                   (user["id"],))["n"]
+    return {"id": row["id"], "started_at": row["started_at"], "score": score}
 
 
 @router.get("/history")
