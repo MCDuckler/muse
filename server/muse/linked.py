@@ -20,7 +20,7 @@ import urllib.request
 
 from . import db, sources
 
-PROVIDERS = ("deezer", "soundcloud", "bandcamp")
+PROVIDERS = ("deezer", "soundcloud", "bandcamp", "youtube")
 
 
 log = logging.getLogger("muse.linked")
@@ -490,6 +490,42 @@ def _bandcamp_items(remote_id: str, offset: int = 0) -> tuple[list[dict], int | 
     return out, (done if done < len(albums) else None)
 
 
+# ---------------------------------------------------------------- YouTube Music
+#
+# The odd one out. The others are public reads — a name is enough — but nothing about a
+# YouTube account is public, so this one keeps a credential: the headers a signed-in
+# browser sends, which is what ytmusicapi takes. Public playlists still need none of
+# that, so a link is only required for your own library and your liked songs.
+def _youtube_profile(auth: str) -> dict:
+    from . import ytm
+
+    blob = (auth or "").strip()
+    if not blob:
+        raise LinkError("Paste the request headers from music.youtube.com.")
+    try:
+        # The listing is the real test: a sign-in that cannot read the library is no
+        # use however well-formed it looks.
+        ytm.library_playlists(blob, limit=1)
+        name = ytm.account_name(blob)
+    except ytm.NotAllowed as e:
+        raise LinkError(str(e))
+    except ytm.Unavailable as e:
+        raise LinkError(str(e))
+    return {"handle": name, "display_name": name, "secret": blob}
+
+
+def _youtube_playlists(auth: str) -> list[dict]:
+    from . import ytm
+
+    return ytm.library_playlists(auth)
+
+
+def _youtube_items(remote_id: str, auth: str | None = None) -> list[dict]:
+    from . import ytm
+
+    return ytm.playlist_tracks(remote_id, auth=auth)
+
+
 # ---------------------------------------------------------------- who they follow
 # SoundCloud's own web app talks to an API that needs a key, and the key is sitting in
 # the JavaScript it serves. That is how their site works, so it is how this works — with
@@ -597,11 +633,11 @@ def following(provider: str, handle: str) -> list[dict]:
 
 # ---------------------------------------------------------------- registry
 _PROFILE = {"deezer": _deezer_profile, "soundcloud": _soundcloud_profile,
-            "bandcamp": _bandcamp_profile}
+            "bandcamp": _bandcamp_profile, "youtube": _youtube_profile}
 _PLAYLISTS = {"deezer": _deezer_playlists, "soundcloud": _soundcloud_playlists,
-              "bandcamp": _bandcamp_playlists}
+              "bandcamp": _bandcamp_playlists, "youtube": _youtube_playlists}
 _ITEMS = {"deezer": _deezer_items, "soundcloud": _soundcloud_items,
-          "bandcamp": _bandcamp_items}
+          "bandcamp": _bandcamp_items, "youtube": _youtube_items}
 
 
 def check(provider: str, handle: str) -> dict:
@@ -610,29 +646,53 @@ def check(provider: str, handle: str) -> dict:
     return _PROFILE[provider](handle)
 
 
-def playlists(provider: str, handle: str) -> list[dict]:
+def playlists(provider: str, handle: str, user_id: int | None = None) -> list[dict]:
+    # YouTube reads a library rather than a public page, so it is asked with the stored
+    # sign-in and not with the name on the account.
+    if provider == "youtube":
+        return _PLAYLISTS[provider](_secret(user_id, provider) or handle)
     return _PLAYLISTS[provider](handle)
 
 
-def items(provider: str, remote_id: str,
-          offset: int = 0) -> tuple[list[dict], int | None]:
+def items(provider: str, remote_id: str, offset: int = 0,
+          user_id: int | None = None) -> tuple[list[dict], int | None]:
     """A run of tracks, and where to resume — None when that was all of them."""
     if provider == "bandcamp":
         return _bandcamp_items(remote_id, offset)
+    if provider == "youtube":
+        # A public playlist needs no sign-in; your own library does.
+        return _youtube_items(remote_id, _secret(user_id, provider)), None
     return _ITEMS[provider](remote_id), None
 
 
 # ---------------------------------------------------------------- storage
 def link(user_id: int, provider: str, profile: dict) -> dict:
+    """Remember an account. A profile may carry a `secret` — YouTube's sign-in does —
+    and that is kept apart from the name, so listing accounts can never hand it out."""
     db.run(
-        """insert into provider_accounts(user_id, provider, account_id, display_name)
-           values(%s,%s,%s,%s)
+        """insert into provider_accounts(user_id, provider, account_id, display_name,
+                                         access_token)
+           values(%s,%s,%s,%s,%s)
            on conflict (user_id, provider)
            do update set account_id=excluded.account_id,
-                         display_name=excluded.display_name, linked_at=now()""",
-        (user_id, provider, profile["handle"], profile.get("display_name")),
+                         display_name=excluded.display_name,
+                         access_token=excluded.access_token, linked_at=now()""",
+        (user_id, provider, profile["handle"], profile.get("display_name"),
+         profile.get("secret")),
     )
     return account(user_id, provider)
+
+
+def _secret(user_id: int | None, provider: str) -> str | None:
+    """The credential behind a linked account, for the code that needs it. Never part
+    of anything an endpoint returns."""
+    if user_id is None:
+        return None
+    row = db.one(
+        "select access_token from provider_accounts where user_id=%s and provider=%s",
+        (user_id, provider),
+    )
+    return (row or {}).get("access_token")
 
 
 def unlink(user_id: int, provider: str) -> None:

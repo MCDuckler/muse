@@ -374,6 +374,12 @@ class ApiClient {
           headers: _headers,
           body: jsonEncode({'remote_id': list.remoteId, 'name': list.name})));
 
+  /// Copy one list by its id or its link, without having listed anything first — a
+  /// public playlist somebody sent you needs no account here.
+  Future<void> syncServiceList(String provider, String remoteId) async =>
+      await _decode(await http.post(_u('/linked/$provider/sync'),
+          headers: _headers, body: jsonEncode({'remote_id': remoteId})));
+
   // ---------------- jam ----------------
   Future<Jam> startJam(int queueId) async => Jam.fromJson(await _decode(
       await http.post(_u('/jams'),
@@ -452,6 +458,11 @@ class ApiClient {
     }
     return Queue.fromJson(await _decode(r) as Map<String, dynamic>);
   }
+
+  /// Deal the rest of the queue again. Once — see the server's own note on it.
+  Future<Queue> shuffleQueue(int id) async => Queue.fromJson(await _decode(
+      await http.post(_u('/queues/$id/shuffle'),
+          headers: _headers, body: '{}')) as Map<String, dynamic>);
 
   Future<Queue> addToQueue(int id, List<int> trackIds, {String mode = 'end'}) async =>
       Queue.fromJson(await _decode(await http.post(_u('/queues/$id/items'),

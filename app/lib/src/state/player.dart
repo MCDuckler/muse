@@ -86,7 +86,6 @@ class PlayerService {
   int _loadToken = 0;
 
   QueueRepeat repeat = QueueRepeat.off;
-  bool shuffle = false;
 
   /// Separate from the per-track loudness gain: that normalises tracks against each
   /// other, this is the listener turning it down. They multiply.
@@ -155,7 +154,6 @@ class PlayerService {
     _items = queue.items;
     if (!sameQueue) {
       repeat = queueRepeatFrom(queue.repeat);
-      shuffle = queue.shuffle;
     }
 
     if (_items.isEmpty) {
@@ -236,21 +234,31 @@ class PlayerService {
     _rebuildOrder(keepItemIndex: keepItemIndex);
   }
 
-  /// Play order is a list of indices, so shuffle is a stable reordering rather than a
-  /// random pick each time — which is what makes "previous" mean anything.
+  /// The play order, which is now simply the list.
+  ///
+  /// It used to be a separate ordering so that shuffle could be a mode: the queue said
+  /// one thing and playback did another, and turning shuffle off put nothing back.
+  /// Shuffling rearranges the rows themselves now — see shuffleWhatIsComing — so there
+  /// is one order, and it is the one on screen.
   void _rebuildOrder({required int keepItemIndex}) {
-    final all = List<int>.generate(_items.length, (i) => i);
-    if (shuffle) {
-      all.remove(keepItemIndex);
-      all.shuffle(math.Random());
-      all.insert(0, keepItemIndex);
-      _order = all;
-      _orderPos = 0;
-    } else {
-      _order = all;
-      _orderPos = keepItemIndex.clamp(0, _items.length - 1);
-    }
+    _order = List<int>.generate(_items.length, (i) => i);
+    _orderPos = keepItemIndex.clamp(0, _items.length - 1);
     _orderedIds = [for (final t in _items) t.id];
+  }
+
+  /// Rearrange what is coming, once, keeping the song playing where it is.
+  ///
+  /// Applied here before the server is asked, like every other queue edit, so the list
+  /// changes under the finger rather than a moment later.
+  void shuffleWhatIsComing() {
+    if (_items.length - index < 3) return;      // nothing worth rearranging
+    final at = index;
+    final rest = _items.sublist(at + 1)..shuffle(math.Random());
+    _items = [..._items.sublist(0, at + 1), ...rest];
+    _rebuildOrder(keepItemIndex: at);
+    _queuedNextId = null;                       // what comes next is a different song
+    unawaited(_queueNext());
+    _emit(force: true);
   }
 
   /// Move a row now, rather than when the server says so.
@@ -289,16 +297,6 @@ class PlayerService {
     final at = playing == null ? index : _relocate(index, playing);
     _rebuildOrder(keepItemIndex: at < 0 ? pos.clamp(0, items.length - 1) : at);
     unawaited(_queueNext());
-    _emit(force: true);
-  }
-
-  Future<void> setShuffle(bool value) async {
-    if (shuffle == value) return;
-    shuffle = value;
-    _rebuildOrder(keepItemIndex: index);
-    // Shuffle changes what follows this song, and the engine is already holding the
-    // old answer.
-    await _queueNext();
     _emit(force: true);
   }
 
@@ -930,7 +928,6 @@ class PlayerService {
       error: lastError,
       needsGesture: needsGesture,
       repeat: repeat,
-      shuffle: shuffle,
       waitingForDownload: _waitingForTrack != null,
       finished: finished,
     );
@@ -963,7 +960,6 @@ class PlayerSnapshot {
   /// The browser is waiting to be tapped before it will make a sound.
   final bool needsGesture;
   final QueueRepeat repeat;
-  final bool shuffle;
   final bool waitingForDownload;
   final bool finished;
 
@@ -979,7 +975,6 @@ class PlayerSnapshot {
     this.error,
     this.needsGesture = false,
     this.repeat = QueueRepeat.off,
-    this.shuffle = false,
     this.waitingForDownload = false,
     this.finished = false,
   });

@@ -1,11 +1,14 @@
 """Playlists, queues and radio.
 
 A queue is a first-class object, not "the" queue: several named queues per user, each
-with its own items, cursor, shuffle and repeat, so switching between them resumes where
-each one was. Order is versioned with `rev` and conflicts are refused; the cursor is not,
+with its own items, cursor and repeat, so switching between them resumes where each one
+was. Shuffle is not among them: it is something you do to a queue, once, rather than a
+mode the queue is in. Order is versioned with `rev` and conflicts are refused; the cursor is not,
 because the device that is playing is the authority on where playback is.
 """
 from __future__ import annotations
+
+import random
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
@@ -714,6 +717,40 @@ def move_item(queue_id: int, body: dict = Body(...), user: dict = Depends(curren
                           cursor)
         c.execute("update queues set rev=rev+1, cursor_index=%s, updated_at=now() "
                   "where id=%s", (new_cursor, queue_id))
+    announce_queue(queue_id, user)
+    return _queue_state(queue_id)
+
+
+@router.post("/queues/{queue_id}/shuffle")
+def shuffle_queue(queue_id: int, body: dict = Body(default={}),
+                  user: dict = Depends(current_user)):
+    """Shuffle what is coming, once.
+
+    Not a mode. A shuffle you can switch on is a promise about every song after this
+    one for as long as it is on, which means the queue on screen is not the order you
+    will hear — and turning it off does not put anything back. This rearranges the
+    rows themselves, after the one playing, and then it is over: what the list says is
+    what happens.
+    """
+    _own_queue(queue_id, user)
+    cursor = db.one("select cursor_index from queues where id=%s",
+                    (queue_id,))["cursor_index"]
+    rows = db.all_("select pos, track_id, origin, added_by from queue_items "
+                   "where queue_id=%s order by pos", (queue_id,))
+    keep = [r for r in rows if r["pos"] <= cursor]
+    rest = [r for r in rows if r["pos"] > cursor]
+    if len(rest) < 2:
+        return _queue_state(queue_id)
+
+    random.shuffle(rest)
+    with db.pool().connection() as c:
+        c.execute("delete from queue_items where queue_id=%s", (queue_id,))
+        for i, r in enumerate(keep + rest):
+            c.execute("""insert into queue_items(queue_id,pos,track_id,origin,added_by)
+                         values(%s,%s,%s,%s,%s)""",
+                      (queue_id, i, r["track_id"], r["origin"], r["added_by"]))
+        c.execute("update queues set rev=rev+1, updated_at=now() where id=%s",
+                  (queue_id,))
     announce_queue(queue_id, user)
     return _queue_state(queue_id)
 

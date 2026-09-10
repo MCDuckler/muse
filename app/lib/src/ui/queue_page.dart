@@ -106,10 +106,9 @@ class _QueuePageState extends State<QueuePage> {
               spacing: 8,
               children: [
                 IconButton.filledTonal(
-                  isSelected: app.player?.shuffle ?? false,
                   icon: const Icon(Icons.shuffle),
-                  tooltip: 'Shuffle',
-                  onPressed: () => app.setShuffle(!(app.player?.shuffle ?? false)),
+                  tooltip: 'Shuffle what is coming',
+                  onPressed: app.shuffleWhatIsComing,
                 ),
                 IconButton.filledTonal(
                   isSelected: (app.player?.repeat ?? QueueRepeat.off) != QueueRepeat.off,

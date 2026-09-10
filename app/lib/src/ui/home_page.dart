@@ -199,7 +199,7 @@ class _Shortcuts extends StatelessWidget {
       case LogicalKeyboardKey.mediaTrackPrevious:
         app.skipPrevious();
       case LogicalKeyboardKey.keyS:
-        app.setShuffle(!player.shuffle);
+        app.shuffleWhatIsComing();
       case LogicalKeyboardKey.keyR:
         app.cycleRepeat();
       case LogicalKeyboardKey.keyM:

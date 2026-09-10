@@ -301,13 +301,14 @@ void main() {
     // used to shuffle the queue, skip the track and pause the music.
     await tester.tap(tab('Search'));
     await settle(tester, seconds: 2);
-    final shuffleBefore = app.debugPlayerSnapshot()!.shuffle;
+    final orderBefore = [for (final t in appState.player!.items) t.id];
     final trackBefore = app.debugPlayerSnapshot()!.current?.id;
     await tester.enterText(onPage(SearchPage, find.byType(TextField)).first, 'sn ');
     await settle(tester, seconds: 3);
     final typed = app.debugPlayerSnapshot()!;
     expect(typed.playing, isTrue, reason: 'space in the search box must not pause');
-    expect(typed.shuffle, shuffleBefore, reason: 's in the search box must not shuffle');
+    expect([for (final t in appState.player!.items) t.id], orderBefore,
+        reason: 's in the search box must not shuffle the queue');
     expect(typed.current?.id, trackBefore, reason: 'n in the search box must not skip');
 
     // ---- the now-playing screen opens from the bar and can scrub ----
@@ -414,18 +415,24 @@ void main() {
           reason: 'history entries must carry when they happened');
     }
 
-    // ---- shuffle and repeat persist, and do not eat the queue ----
+    // ---- shuffling rearranges the queue itself, and keeps all of it ----
     // Read the count here rather than earlier: the steps in between deliberately
     // change the queue, and a stale count would fail for the wrong reason.
-    final itemsBefore = (await api.queue(scratchId!)).items.length;
-    await app.debugAppState!.setShuffle(true);
+    final before = await api.queue(scratchId!);
+    final itemsBefore = before.items.length;
+    await app.debugAppState!.shuffleWhatIsComing();
     await app.debugAppState!.cycleRepeat();
     await settle(tester, seconds: 4);
     final settings = await api.queue(scratchId!);
-    expect(settings.shuffle, isTrue);
     expect(settings.repeat, 'all');
     expect(settings.items.length, itemsBefore,
-        reason: 'a settings change must never clear the queue');
+        reason: 'shuffling must never lose a song');
+    expect([for (final t in settings.items) t.id]..sort(),
+        [for (final t in before.items) t.id]..sort(),
+        reason: 'the same songs, rearranged — not different ones');
+    expect(settings.items[settings.cursorIndex].id,
+        before.items[before.cursorIndex].id,
+        reason: 'and the song playing is still the song playing');
 
     // ---- playlists have covers of their own ----
     await tester.tap(tab('Library'));

@@ -392,3 +392,35 @@ def test_a_backup_from_something_else_says_so(client, hdr):
 def test_a_file_with_no_playlists_is_refused(client, hdr):
     r = client.post("/playlists/import", headers=hdr, json={"tracks": []})
     assert r.status_code == 400
+
+
+def test_shuffling_rearranges_what_is_coming_and_leaves_the_rest(client, hdr, tracks):
+    """Shuffle is a thing you do, not a mode you are in.
+
+    What is playing stays playing and what has already gone by stays where it was; only
+    the songs still to come are rearranged — and then it is over, so the list on screen
+    is the order that will be heard.
+    """
+    q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
+    ids = [t["id"] for t in tracks]
+    # Six rows, so a shuffle that changed nothing would be a one-in-many accident.
+    client.post(f"/queues/{q['id']}/items", headers=hdr, json={"track_ids": ids + ids})
+    client.patch(f"/queues/{q['id']}/cursor", headers=hdr, json={"cursor_index": 1})
+
+    before = [i["id"] for i in client.get(f"/queues/{q['id']}", headers=hdr).json()["items"]]
+    shuffled = client.post(f"/queues/{q['id']}/shuffle", headers=hdr, json={})
+    assert shuffled.status_code == 200, shuffled.text
+    after = [i["id"] for i in shuffled.json()["items"]]
+
+    assert after[:2] == before[:2], "the song playing and the ones behind it stay put"
+    assert sorted(after[2:]) == sorted(before[2:]), "the same songs, rearranged"
+    assert [i["pos"] for i in shuffled.json()["items"]] == list(range(6))
+
+
+def test_shuffling_a_queue_with_nothing_coming_is_harmless(client, hdr, tracks):
+    q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
+    client.post(f"/queues/{q['id']}/items", headers=hdr,
+                json={"track_ids": [tracks[0]["id"]]})
+    r = client.post(f"/queues/{q['id']}/shuffle", headers=hdr, json={})
+    assert r.status_code == 200
+    assert len(r.json()["items"]) == 1

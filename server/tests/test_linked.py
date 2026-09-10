@@ -15,7 +15,8 @@ from muse import catalog, db, linked, routes_linked, sources
 
 def test_only_the_three_can_be_linked(client, hdr):
     listed = client.get("/linked", headers=hdr).json()["accounts"]
-    assert [a["provider"] for a in listed] == ["deezer", "soundcloud", "bandcamp"]
+    assert [a["provider"] for a in listed] == ["deezer", "soundcloud", "bandcamp",
+                                               "youtube"]
     assert all(a["linked"] is None for a in listed), "nothing is linked to begin with"
     assert client.post("/linked/tidal", headers=hdr, json={"handle": "x"}).status_code == 404
 
@@ -64,7 +65,8 @@ def test_playlists_need_a_link_first(client, hdr):
 def test_a_soundcloud_mirror_needs_no_matching(client, hdr, monkeypatch):
     """The list hands back the track itself. Matching exists for services that only
     tell you a title and an artist — here there is nothing to guess."""
-    monkeypatch.setattr(linked, "items", lambda provider, remote_id, offset=0: ([
+    monkeypatch.setattr(linked, "items",
+                        lambda provider, remote_id, offset=0, user_id=None: ([
         {"remote_id": "1", "title": "Awake", "artists": ["Tycho"], "album": None,
          "duration_ms": 283_682,
          "source": {"provider": "soundcloud", "provider_id": "115300435",
@@ -89,7 +91,7 @@ def test_a_big_mirror_leaves_the_audio_until_it_is_played(client, hdr, monkeypat
     many = [{"remote_id": str(n), "title": f"Song {n}", "artists": ["Someone"],
              "album": None, "duration_ms": 200_000} for n in range(routes_linked.BIG_MIRROR + 1)]
     monkeypatch.setattr(linked, "items",
-                        lambda provider, remote_id, offset=0: (many, None))
+                        lambda provider, remote_id, offset=0, user_id=None: (many, None))
     monkeypatch.setattr("muse.sync.resolve_item",
                         lambda *a, **k: {"track_id": None, "confidence": 0.0,
                                          "method": "stub", "verdict": "review"})
@@ -251,3 +253,51 @@ def test_a_listing_that_will_not_answer_falls_back(monkeypatch):
     items = linked._soundcloud_items("dj-somebody/likes")
     assert items[0]["title"] == "night bus edit"
     assert items[0]["artists"] == ["dj-somebody"]
+
+
+# ---------------- YouTube Music ----------------
+def test_a_public_youtube_playlist_needs_no_account(client, hdr, monkeypatch):
+    """Nothing about a YouTube account is public, so linking one keeps a credential —
+    but a playlist somebody sent you is public, and mirroring that needs nothing."""
+    from muse import ytm
+
+    monkeypatch.setattr(ytm, "playlist_tracks", lambda rid, auth=None, limit=2000: [
+        {"remote_id": "vid1", "video_id": "vid1", "title": "One",
+         "artists": ["Somebody"], "album": None, "duration_ms": 1000},
+    ])
+    monkeypatch.setattr(ytm, "playlist_name", lambda rid, auth=None: "Sent to me")
+
+    queued = client.post("/linked/youtube/sync", headers=hdr,
+                         json={"remote_id": "PLwhatever"})
+    assert queued.status_code == 200, queued.text
+
+    out = routes_linked.run_mirror_job({"provider": "youtube", "user_id": 1,
+                                        "remote_id": "PLwhatever"})
+    assert out["matched"] == 1
+    listed = client.get("/playlists", headers=hdr).json()
+    assert any(p["name"] == "Sent to me" for p in listed), \
+        "a playlist mirrored from a link keeps its name, not its id"
+
+
+def test_your_own_youtube_library_needs_linking(client, hdr):
+    r = client.post("/linked/youtube/sync", headers=hdr,
+                    json={"remote_ids": ["liked-songs"]})
+    assert r.status_code == 409
+    assert "linked" in r.json()["detail"]
+
+
+def test_a_youtube_sign_in_is_never_handed_back(client, hdr, monkeypatch):
+    """The stored credential is the one thing here that must not leave the server."""
+    from muse import linked as linked_mod
+
+    monkeypatch.setitem(linked_mod._PROFILE, "youtube",
+                        lambda auth: {"handle": "Chris", "display_name": "Chris",
+                                      "secret": "cookie: SECRET-VALUE"})
+    made = client.post("/linked/youtube", headers=hdr,
+                       json={"handle": "cookie: SECRET-VALUE"})
+    assert made.status_code == 200, made.text
+    assert "SECRET" not in made.text
+
+    listed = client.get("/linked", headers=hdr)
+    assert "SECRET" not in listed.text
+    assert linked_mod._secret(1, "youtube") == "cookie: SECRET-VALUE"

@@ -34,14 +34,17 @@ def list_accounts(user: dict = Depends(current_user)):
     return {"accounts": [
         {"provider": p,
          "label": {"deezer": "Deezer", "soundcloud": "SoundCloud",
-                   "bandcamp": "Bandcamp"}[p],
+                   "bandcamp": "Bandcamp", "youtube": "YouTube Music"}[p],
          "hint": {
              "deezer": "The numeric id from your profile URL",
              # Say that pasting the link works, because that is what people do.
              "soundcloud": "Paste your profile link, or the name in it",
              "bandcamp": "Paste your fan page link, or the name in it",
+             # The only one that needs a credential rather than a name: nothing about
+             # a YouTube account is public, including the list of your own playlists.
+             "youtube": "Paste the request headers from music.youtube.com",
          }[p],
-         "plays": p != "deezer",
+         "plays": p not in ("deezer", "youtube"),
          "linked": have.get(p)}
         for p in linked.PROVIDERS]}
 
@@ -75,7 +78,7 @@ def list_playlists(provider: str, user: dict = Depends(current_user)):
     if not acc:
         raise HTTPException(409, f"No {provider} account is linked here yet.")
     try:
-        remote = linked.playlists(provider, acc["handle"])
+        remote = linked.playlists(provider, acc["handle"], user_id=user["id"])
     except linked.LinkError as e:
         raise HTTPException(400, str(e))
 
@@ -94,13 +97,20 @@ def sync_playlists(provider: str, body: dict = Body(default={}),
     records, and that is not something to hold a request open for."""
     _known(provider)
     acc = linked.account(user["id"], provider)
-    if not acc:
+    # A YouTube playlist somebody sent you is public: it can be mirrored without
+    # linking anything. Your own library cannot, and says so.
+    if not acc and not (provider == "youtube" and body.get("remote_id")):
         raise HTTPException(409, f"No {provider} account is linked here yet.")
 
     wanted = body.get("remote_ids") or ([body["remote_id"]] if body.get("remote_id")
                                         else None)
     if not wanted:
         raise HTTPException(400, "remote_id or remote_ids required")
+
+    if provider == "youtube":
+        # People paste links, not ids.
+        from . import ytm
+        wanted = [ytm.playlist_id(r) or r for r in wanted]
 
     for remote_id in wanted:
         jobs.enqueue("mirror", {"provider": provider, "user_id": user["id"],
@@ -122,7 +132,8 @@ def run_mirror_job(payload: dict) -> dict:
     offset = int(payload.get("offset") or 0)
 
     try:
-        items, next_offset = linked.items(provider, remote_id, offset=offset)
+        items, next_offset = linked.items(provider, remote_id, offset=offset,
+                                          user_id=user_id)
     except linked.RateLimited:
         jobs.enqueue("mirror", {**payload, "offset": offset},
                      priority=jobs.PRIORITY_BULK, delay_seconds=RATE_LIMIT_WAIT)
@@ -130,8 +141,14 @@ def run_mirror_job(payload: dict) -> dict:
                  provider, offset, RATE_LIMIT_WAIT // 60)
         return {"waiting": f"{provider} is rate-limiting; will resume", "from": offset}
 
+    # A mirror queued from a link alone carries no name, and a playlist row cannot be
+    # nameless — which is how a library fills up with lists called PLxOdPtLRV6i.
+    name = (payload.get("name") or "").strip()
+    if name in ("", remote_id) and provider == "youtube":
+        from . import ytm
+        name = ytm.playlist_name(remote_id, linked._secret(user_id, provider))
     playlist_id = _playlist_for(user_id, provider, remote_id,
-                               payload.get("name") or remote_id, payload.get("owner"))
+                                name or remote_id, payload.get("owner"))
 
     # The first run decides how this list behaves; later runs add to it. Past a few
     # hundred songs a mirror is a library, and the audio waits until something is played.

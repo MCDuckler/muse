@@ -244,6 +244,26 @@ void main() {
     expect(player.current?.id, 2, reason: 'still playing what was playing');
   });
 
+  test('shuffling deals what is coming and leaves the rest alone', () async {
+    final tracks = [for (var i = 1; i <= 8; i++) track(i)];
+    await player.loadQueue(queueOf(tracks));
+    await player.playAt(2);            // third song
+    await settle();
+    final before = [for (final t in player.items) t.id];
+
+    player.shuffleWhatIsComing();
+
+    final after = [for (final t in player.items) t.id];
+    expect(after.sublist(0, 3), before.sublist(0, 3),
+        reason: 'what has played and what is playing stay where they are');
+    expect(after.sublist(3)..sort(), before.sublist(3)..sort(),
+        reason: 'the same songs are still there');
+    expect(player.current?.id, 3, reason: 'and the same one is playing');
+    // Eight songs means five to deal: the odds of the same order are one in 120, and
+    // the test is about the rows moving at all.
+    expect(after, isNot(before), reason: 'something moved');
+  });
+
   test('a guest follows the room into the right song at the right place', () async {
     // The other half of a jam: the host says where the music is, and this device puts
     // itself there. No UI, no browser — the state and the player are the whole of it.

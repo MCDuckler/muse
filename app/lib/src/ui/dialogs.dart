@@ -8,18 +8,38 @@ import '../state/app_state.dart';
 /// Ask for a name. Returns null when the user backs out, so callers can tell "cancel"
 /// apart from "empty".
 Future<String?> promptForName(BuildContext context, String title,
-    [String initial = '']) async {
+    [String initial = '',
+    // Some answers are a name and some are a paste: a link, or the block of request
+    // headers YouTube Music needs. One line is right for the first and useless for
+    // the second.
+    String hint = 'Name',
+    String? help,
+    bool multiline = false]) async {
   final controller = TextEditingController(text: initial);
   final value = await showDialog<String>(
     context: context,
     builder: (context) => AlertDialog(
       title: Text(title),
-      content: TextField(
-        controller: controller,
-        autofocus: true,
-        textInputAction: TextInputAction.done,
-        onSubmitted: (v) => Navigator.pop(context, v),
-        decoration: const InputDecoration(hintText: 'Name'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (help != null) ...[
+            Text(help, style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: 12),
+          ],
+          TextField(
+            controller: controller,
+            autofocus: true,
+            maxLines: multiline ? 6 : 1,
+            minLines: multiline ? 4 : 1,
+            textInputAction:
+                multiline ? TextInputAction.newline : TextInputAction.done,
+            onSubmitted:
+                multiline ? null : (v) => Navigator.pop(context, v),
+            decoration: InputDecoration(hintText: hint),
+          ),
+        ],
       ),
       actions: [
         TextButton(

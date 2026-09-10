@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -335,14 +336,22 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Shuffle and repeat live on the queue, so they persist across devices. They go
-  /// through PATCH, never PUT — a settings update must not touch the item list.
-  Future<void> setShuffle(bool value) async {
+  /// Rearrange what is coming, once.
+  ///
+  /// Shuffle used to be a switch: on, and every song after this one came in an order
+  /// the queue did not show; off, and nothing went back to where it had been. This
+  /// shuffles the rows themselves — the song playing stays playing, everything after
+  /// it is dealt again — and then it is done, so the list is the running order.
+  Future<void> shuffleWhatIsComing() async {
     final q = activeQueue;
     if (q == null) return;
-    await player?.setShuffle(value);
+    player?.shuffleWhatIsComing();
     notifyListeners();
-    await api.updateQueueSettings(q.id, shuffle: value).catchError((_) => q);
+    try {
+      await _applyQueue(await api.shuffleQueue(q.id));
+    } catch (_) {
+      await _resyncQueue();
+    }
   }
 
   Future<void> cycleRepeat() async {
@@ -525,15 +534,20 @@ class AppState extends ChangeNotifier {
     final target = named == null
         ? (activeQueue ?? await ensureQueue('Now'))
         : await ensureQueue(named, fresh: true);
-    final ids = [for (final t in tracks) t.id];
+
+    // "Shuffle" on a record or a playlist is the same one-shot deal as the button in
+    // the player: the queue is built in a shuffled order and then played from the top.
+    // Nothing is left switched on afterwards, and the list shows the order it will
+    // play in — which a shuffle mode never did.
+    final ordered = shuffle ? ([...tracks]..shuffle(math.Random())) : tracks;
+    final ids = [for (final t in ordered) t.id];
     final live = await api.queue(target.id);
     final filled = await api.replaceQueue(target.id, live.rev, ids);
     activeQueue = filled;
     queues = await api.queues();
     await player?.loadQueue(filled);
-    if (shuffle) await player?.setShuffle(true);
-    final first = tracks[startAt.clamp(0, tracks.length - 1)];
-    await player?.playTrack(first.id, indexHint: startAt);
+    final at = shuffle ? 0 : startAt.clamp(0, ordered.length - 1);
+    await player?.playTrack(ordered[at].id, indexHint: at);
     notifyListeners();
   }
 
@@ -992,7 +1006,6 @@ class AppState extends ChangeNotifier {
         s.index,
         s.itemCount,
         s.playing,
-        s.shuffle,
         s.repeat,
         s.finished,
         s.waitingForDownload,

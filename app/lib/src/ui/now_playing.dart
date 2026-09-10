@@ -571,7 +571,6 @@ class _Controls extends StatelessWidget {
   Widget build(BuildContext context) {
     final playing = snapshot?.playing ?? false;
     final repeat = snapshot?.repeat ?? QueueRepeat.off;
-    final shuffle = snapshot?.shuffle ?? false;
 
     return Padding(
       padding: EdgeInsets.symmetric(vertical: big ? 10 : 0),
@@ -580,10 +579,8 @@ class _Controls extends StatelessWidget {
       children: [
         IconButton(
           icon: const Icon(Icons.shuffle),
-          isSelected: shuffle,
-          color: shuffle ? Theme.of(context).colorScheme.primary : null,
-          tooltip: shuffle ? 'Shuffle on' : 'Shuffle off',
-          onPressed: () => app.setShuffle(!shuffle),
+          tooltip: 'Shuffle what is coming',
+          onPressed: app.shuffleWhatIsComing,
         ),
         IconButton(
           iconSize: big ? 42 : 34,

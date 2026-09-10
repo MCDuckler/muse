@@ -87,12 +87,49 @@ class _ServicesPageState extends State<ServicesPage> {
     }
   }
 
+  /// Mirror a YouTube Music playlist from a link.
+  ///
+  /// A playlist somebody sends you is public, and public needs no sign-in — so this
+  /// works whether or not an account is linked here.
+  Future<void> _importYoutubeLink() async {
+    final api = context.read<AppState>().api;
+    final messenger = ScaffoldMessenger.of(context);
+    final link = await promptForName(
+        context,
+        'YouTube Music playlist',
+        '',
+        'https://music.youtube.com/playlist?list=…',
+        'Paste a link to a playlist. Public ones need no account.');
+    if (link == null) return;
+    try {
+      await api.syncServiceList('youtube', link);
+      messenger.showSnackBar(const SnackBar(
+          content: Text('Copying it now — it will appear in your playlists.')));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('$e')));
+    }
+  }
+
   Future<void> _link(LinkedService service) async {
     // Both captured before the dialog: it can sit open for a while, and a context used
     // afterwards may no longer be in the tree.
     final api = context.read<AppState>().api;
     final messenger = ScaffoldMessenger.of(context);
-    final handle = await promptForName(context, 'Link ${service.label}');
+    final youtube = service.provider == 'youtube';
+    final handle = await promptForName(
+      context,
+      'Link ${service.label}',
+      '',
+      youtube ? 'Paste the headers here' : 'Name',
+      youtube
+          ? 'Nothing about a YouTube account is public, so this one needs a '
+              'sign-in rather than a name. On a computer: open '
+              'music.youtube.com signed in, open the developer tools, Network tab, '
+              'click any request to music.youtube.com, and copy the request headers '
+              '(the block that includes "cookie:"). Paste the whole block.'
+          : service.hint,
+      youtube,
+    );
     if (handle == null || handle.trim().isEmpty) return;
     try {
       await api.linkService(service.provider, handle.trim());
@@ -130,6 +167,25 @@ class _ServicesPageState extends State<ServicesPage> {
                               .unlinkService(s.provider);
                           await _load();
                         },
+                      ),
+                      const SizedBox(height: 18),
+                      const Divider(),
+                      Text('From a link',
+                          style: Theme.of(context).textTheme.titleSmall),
+                      const SizedBox(height: 4),
+                      Text(
+                        'A YouTube Music playlist somebody sent you. Public playlists '
+                        'need no account here.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 10),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: FilledButton.tonalIcon(
+                          onPressed: _importYoutubeLink,
+                          icon: const Icon(Icons.link),
+                          label: const Text('Copy a playlist from a link'),
+                        ),
                       ),
                       const SizedBox(height: 18),
                       const Divider(),

@@ -1,6 +1,7 @@
 """YouTube Music lookups. Search needs no auth; the audio never comes from here."""
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from functools import lru_cache
@@ -107,3 +108,152 @@ def thumbnail_url(raw: dict, px: int = 300) -> str | None:
     best = max(thumbs, key=lambda t: (t.get("width") or 0))
     url = best.get("url")
     return _GOOGLE_SIZE.sub(f"=w{px}-h{px}", url) if url else None
+
+
+# ---------------------------------------------------------------- one person's library
+#
+# Search needs nobody's permission; "my playlists" and "songs I liked" are the opposite.
+# ytmusicapi takes the same headers a signed-in browser sends, which is what the app
+# asks for and what is stored — so this is the one linked service where what is kept is
+# a credential rather than a public name.
+class NotAllowed(RuntimeError):
+    """The stored sign-in no longer works — usually expired, sometimes revoked."""
+
+
+_authed_clients: dict[str, object] = {}
+
+
+def _authed(auth: str):
+    key = hashlib.sha256(auth.encode()).hexdigest()
+    client = _authed_clients.get(key)
+    if client is None:
+        from ytmusicapi import YTMusic
+        try:
+            client = YTMusic(auth)
+        except Exception as e:
+            raise NotAllowed(f"YouTube Music would not take that sign-in: {e}") from e
+        _authed_clients[key] = client
+    return client
+
+
+def forget_auth(auth: str) -> None:
+    _authed_clients.pop(hashlib.sha256(auth.encode()).hexdigest(), None)
+
+
+def playlist_id(text: str) -> str:
+    """The id, from whatever somebody pasted — a link, a browse id, or the id itself."""
+    value = (text or "").strip()
+    if "list=" in value:
+        value = value.split("list=", 1)[1].split("&", 1)[0]
+    value = value.rstrip("/").rsplit("/", 1)[-1]
+    return value[2:] if value.startswith("VL") else value
+
+
+def _playlist_track(t: dict) -> dict | None:
+    """One track from a playlist listing, in the shape a mirror expects.
+
+    A YouTube Music item carries the video id, which is exactly what the library keys
+    on — so nothing here has to be matched or guessed at.
+    """
+    video_id = t.get("videoId")
+    if not video_id:
+        return None                          # unavailable where you are, or taken down
+    album = t.get("album")
+    seconds = t.get("duration_seconds")
+    return {
+        "remote_id": video_id,
+        "video_id": video_id,
+        "title": (t.get("title") or "").strip(),
+        "artists": [a["name"] for a in (t.get("artists") or []) if a.get("name")],
+        "album": album.get("name") if isinstance(album, dict) else album,
+        "duration_ms": int(seconds) * 1000 if seconds else None,
+        "raw": {"videoId": video_id},
+    }
+
+
+def account_name(auth: str) -> str:
+    """Whose library this is, for the screen that lists linked accounts."""
+    try:
+        info = _authed(auth).get_account_info()
+        return (info or {}).get("accountName") or "YouTube Music"
+    except NotAllowed:
+        raise
+    except Exception:
+        # Not every sign-in exposes the account card; being able to read the library is
+        # the thing that matters, and that is checked separately.
+        return "YouTube Music"
+
+
+def library_playlists(auth: str, limit: int = 200) -> list[dict]:
+    """The playlists in somebody's library, with Liked Songs first."""
+    try:
+        rows = _authed(auth).get_library_playlists(limit=limit) or []
+    except NotAllowed:
+        raise
+    except Exception as e:
+        raise Unavailable(f"YouTube Music would not list your playlists: {e}") from e
+
+    out = [{"remote_id": LIKED, "name": "Liked Songs", "count": None, "owner": "you",
+            "image": None}]
+    for row in rows:
+        pid = row.get("playlistId")
+        if not pid or pid == "LM":
+            continue                          # Liked Songs is already at the top
+        thumbs = row.get("thumbnails") or []
+        out.append({
+            "remote_id": pid,
+            "name": (row.get("title") or "Untitled").strip(),
+            "count": row.get("count"),
+            "owner": (row.get("author") or [{}])[0].get("name")
+            if isinstance(row.get("author"), list) else row.get("author"),
+            "image": thumbs[-1]["url"] if thumbs else None,
+        })
+    return out
+
+
+LIKED = "liked-songs"
+
+
+def liked_songs(auth: str, limit: int = 5000) -> list[dict]:
+    try:
+        data = _authed(auth).get_liked_songs(limit=limit) or {}
+    except NotAllowed:
+        raise
+    except Exception as e:
+        raise Unavailable(f"YouTube Music would not list your liked songs: {e}") from e
+    return [t for t in (_playlist_track(x) for x in data.get("tracks") or []) if t]
+
+
+def playlist_tracks(remote_id: str, auth: str | None = None,
+                    limit: int = 2000) -> list[dict]:
+    """Everything in one playlist. Public ones need no sign-in at all."""
+    if remote_id == LIKED:
+        if not auth:
+            raise NotAllowed("Liked Songs is private: link YouTube Music first.")
+        return liked_songs(auth, limit=limit)
+
+    pid = playlist_id(remote_id)
+    client = _authed(auth) if auth else None
+    try:
+        data = (client.get_playlist(pid, limit=limit) if client
+                else _ask(lambda c: c.get_playlist(pid, limit=limit))) or {}
+    except NotAllowed:
+        raise
+    except Unavailable:
+        raise
+    except Exception as e:
+        raise Unavailable(f"YouTube Music would not open that playlist: {e}") from e
+    return [t for t in (_playlist_track(x) for x in data.get("tracks") or []) if t]
+
+
+def playlist_name(remote_id: str, auth: str | None = None) -> str:
+    if remote_id == LIKED:
+        return "Liked Songs"
+    pid = playlist_id(remote_id)
+    try:
+        client = _authed(auth) if auth else None
+        data = (client.get_playlist(pid, limit=1) if client
+                else _ask(lambda c: c.get_playlist(pid, limit=1))) or {}
+        return (data.get("title") or "").strip() or pid
+    except Exception:
+        return pid
