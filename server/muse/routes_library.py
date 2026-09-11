@@ -74,14 +74,19 @@ def list_playlists(user: dict = Depends(current_user)):
     # make: it exists from the first time you look, empty, rather than appearing out
     # of nowhere the first time a heart is pressed.
     favourites_id(user["id"])
+    # Counted per playlist rather than by joining every row of every list and
+    # grouping: that plan read all 21,000 playlist rows and sorted 14,000 of them to
+    # answer "how many songs" for eighteen playlists — 60ms on a request the app makes
+    # at startup and again after every change. The primary key already orders
+    # playlist_items by playlist, so each count is an index-only scan.
     rows = db.all_(
-        """select p.*, count(distinct i.track_id) as items,
-                  count(distinct u.pos) as unmatched
+        """select p.*,
+                  (select count(*) from playlist_items i
+                    where i.playlist_id = p.id) as items,
+                  (select count(*) from playlist_unmatched u
+                    where u.playlist_id = p.id) as unmatched
              from playlists p
-             left join playlist_items i on i.playlist_id=p.id
-             left join playlist_unmatched u on u.playlist_id=p.id
             where p.owner_id=%s
-            group by p.id
             -- Favourites first, then the ones made here, then the mirrors.
             order by (p.kind <> %s), (p.kind <> 'local'), lower(p.name)""",
         (user["id"], FAVOURITES_KIND),

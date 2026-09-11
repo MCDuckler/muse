@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 
+import 'connection.dart';
 import 'models.dart';
 
 class ApiException implements Exception {
@@ -67,7 +68,7 @@ class ApiClient {
   }
 
   Future<String> login(String user, String password, String device) async {
-    final r = await http.post(_u('/auth/login'), body: {
+    final r = await net.post(_u('/auth/login'), body: {
       'user': user,
       'password': password,
       'device': device,
@@ -86,7 +87,7 @@ class ApiClient {
   Future<void> ensureStreamKey({bool force = false}) async {
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     if (!force && _streamKey != null && _streamKeyExpiry - 300 > now) return;
-    final d = await _decode(await http.get(_u('/auth/stream-key'), headers: _headers))
+    final d = await _decode(await net.get(_u('/auth/stream-key'), headers: _headers))
         as Map<String, dynamic>;
     _streamKey = d['key'] as String;
     _streamKeyExpiry = d['expires_at'] as int;
@@ -96,7 +97,7 @@ class ApiClient {
   /// a user without already being signed in.
   Future<String> redeemInvite(String code, String user, String password,
       String device) async {
-    final r = await http.post(_u('/auth/redeem'), body: {
+    final r = await net.post(_u('/auth/redeem'), body: {
       'code': code,
       'user': user,
       'password': password,
@@ -109,12 +110,12 @@ class ApiClient {
   }
 
   Future<void> changePassword(String password) async {
-    await _decode(await http.post(_u('/auth/password'),
+    await _decode(await net.post(_u('/auth/password'),
         headers: _headers, body: jsonEncode({'password': password})));
   }
 
   Future<({List<Map<String, dynamic>> items, int you})> accounts() async {
-    final d = await _decode(await http.get(_u('/accounts'), headers: _headers))
+    final d = await _decode(await net.get(_u('/accounts'), headers: _headers))
         as Map<String, dynamic>;
     return (
       items: (d['items'] as List).cast<Map<String, dynamic>>(),
@@ -123,14 +124,14 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> createAccount(String name, String password) async =>
-      await _decode(await http.post(_u('/accounts'),
+      await _decode(await net.post(_u('/accounts'),
               headers: _headers,
               body: jsonEncode({'name': name, 'password': password})))
           as Map<String, dynamic>;
 
   Future<void> resetPassword(int id, String password,
       {bool signOutDevices = false}) async {
-    await _decode(await http.post(_u('/accounts/$id/password'),
+    await _decode(await net.post(_u('/accounts/$id/password'),
         headers: _headers,
         body: jsonEncode({
           'password': password,
@@ -139,23 +140,23 @@ class ApiClient {
   }
 
   Future<void> deleteAccount(int id) async {
-    await _decode(await http.delete(_u('/accounts/$id'), headers: _headers));
+    await _decode(await net.delete(_u('/accounts/$id'), headers: _headers));
   }
 
   Future<Map<String, dynamic>> createInvite({String? note}) async =>
-      await _decode(await http.post(_u('/accounts/invites'),
+      await _decode(await net.post(_u('/accounts/invites'),
               headers: _headers,
               body: jsonEncode({if (note != null) 'note': note})))
           as Map<String, dynamic>;
 
   Future<Map<String, dynamic>> me() async =>
-      await _decode(await http.get(_u('/me'), headers: _headers)) as Map<String, dynamic>;
+      await _decode(await net.get(_u('/me'), headers: _headers)) as Map<String, dynamic>;
 
   /// Local catalog first, then YouTube Music. Remote hits are flagged `known` when
   /// the library already has them, so the UI never offers to fetch a track twice.
   Future<({List<Track> local, List<RemoteHit> remote, String? remoteError})> search(
       String q) async {
-    final d = await _decode(await http.get(_u('/search', {'q': q}), headers: _headers))
+    final d = await _decode(await net.get(_u('/search', {'q': q}), headers: _headers))
         as Map<String, dynamic>;
     return (
       local: ((d['local'] ?? []) as List).map((e) => Track.fromJson(e)).toList(),
@@ -168,14 +169,14 @@ class ApiClient {
 
   /// 200 when the server already had it, 202 when it just queued a download.
   Future<Track> resolve({String? videoId, String? query}) async {
-    final r = await http.post(_u('/tracks/resolve'),
+    final r = await net.post(_u('/tracks/resolve'),
         headers: _headers,
         body: jsonEncode({if (videoId != null) 'video_id': videoId, if (query != null) 'query': query}));
     return Track.fromJson(await _decode(r) as Map<String, dynamic>);
   }
 
   Future<Track> track(int id) async =>
-      Track.fromJson(await _decode(await http.get(_u('/tracks/$id'), headers: _headers))
+      Track.fromJson(await _decode(await net.get(_u('/tracks/$id'), headers: _headers))
           as Map<String, dynamic>);
 
   String streamUrl(Track t) {
@@ -234,7 +235,7 @@ class ApiClient {
   /// Everything drawn on this record's back, on whichever board this device is on:
   /// your own, or the host's when you are in a jam.
   Future<List<SleeveStroke>> marks(int trackId) async {
-    final d = await _decode(await http.get(_u('/tracks/$trackId/marks'),
+    final d = await _decode(await net.get(_u('/tracks/$trackId/marks'),
         headers: _headers)) as Map<String, dynamic>;
     return [
       for (final s in (d['strokes'] ?? const []) as List)
@@ -248,7 +249,7 @@ class ApiClient {
   /// numbers, and "here is the line as it stands" cannot arrive out of order or land
   /// twice, which is worth more than the bytes it costs.
   Future<void> draw(int trackId, SleeveStroke stroke) async {
-    await _decode(await http.post(_u('/tracks/$trackId/marks'),
+    await _decode(await net.post(_u('/tracks/$trackId/marks'),
         headers: _headers,
         body: jsonEncode({
           'stroke_id': stroke.id,
@@ -260,13 +261,13 @@ class ApiClient {
   }
 
   Future<void> undoMark(int trackId, String strokeId) async {
-    await _decode(await http.delete(
+    await _decode(await net.delete(
         _u('/tracks/$trackId/marks/$strokeId'), headers: _headers));
   }
 
   Future<void> wipeMarks(int trackId) async {
     await _decode(
-        await http.delete(_u('/tracks/$trackId/marks'), headers: _headers));
+        await net.delete(_u('/tracks/$trackId/marks'), headers: _headers));
   }
 
   /// Put this queue's own songs ahead of everything else waiting to download.
@@ -275,14 +276,14 @@ class ApiClient {
   /// statement about what might be wanted some day. Answers with how many were moved
   /// up or started.
   Future<int> prioritiseQueue(int queueId) async {
-    final d = await _decode(await http.post(
+    final d = await _decode(await net.post(
         _u('/queues/$queueId/prioritise'), headers: _headers)) as Map<String, dynamic>;
     return ((d['moved'] ?? 0) as int) + ((d['queued'] ?? 0) as int);
   }
 
   /// Take the whole thing: queue the audio for everything in a playlist that has none.
   Future<int> downloadPlaylist(int playlistId) async {
-    final d = await _decode(await http.post(_u('/playlists/$playlistId/download'),
+    final d = await _decode(await net.post(_u('/playlists/$playlistId/download'),
         headers: _headers)) as Map<String, dynamic>;
     return (d['queued'] ?? 0) as int;
   }
@@ -291,14 +292,14 @@ class ApiClient {
   /// changes the moment the playlist does.
   /// A picture for the account, sent as it came off the phone.
   Future<String> setAvatar(List<int> bytes) async {
-    final d = await _decode(await http.post(_u('/me/avatar'),
+    final d = await _decode(await net.post(_u('/me/avatar'),
         headers: {..._headers, 'Content-Type': 'application/octet-stream'},
         body: bytes)) as Map<String, dynamic>;
     return d['avatar_version'] as String;
   }
 
   Future<void> clearAvatar() async =>
-      await _decode(await http.delete(_u('/me/avatar'), headers: _headers));
+      await _decode(await net.delete(_u('/me/avatar'), headers: _headers));
 
   /// Somebody's picture, if they have one. Signed like every other image the app shows,
   /// because an <img> cannot carry a header.
@@ -311,12 +312,12 @@ class ApiClient {
 
   /// A cover of your own for a playlist, instead of the one drawn from its records.
   Future<void> setPlaylistCover(int playlistId, List<int> bytes) async =>
-      await _decode(await http.post(_u('/playlists/$playlistId/cover'),
+      await _decode(await net.post(_u('/playlists/$playlistId/cover'),
           headers: {..._headers, 'Content-Type': 'application/octet-stream'},
           body: bytes));
 
   Future<void> clearPlaylistCover(int playlistId) async => await _decode(
-      await http.delete(_u('/playlists/$playlistId/cover'), headers: _headers));
+      await net.delete(_u('/playlists/$playlistId/cover'), headers: _headers));
 
   String? playlistCoverUrl(Playlist p, {bool small = true}) {
     if (p.coverPath == null) return null;
@@ -335,18 +336,18 @@ class ApiClient {
 
   // ---------------- downloads ----------------
   Future<DownloadOverview> downloads() async => DownloadOverview.fromJson(
-      await _decode(await http.get(_u('/downloads'), headers: _headers))
+      await _decode(await net.get(_u('/downloads'), headers: _headers))
           as Map<String, dynamic>);
 
   Future<bool> pauseDownloads(bool paused) async {
-    final d = await _decode(await http.post(_u('/downloads/pause'),
+    final d = await _decode(await net.post(_u('/downloads/pause'),
         headers: _headers, body: jsonEncode({'paused': paused})))
         as Map<String, dynamic>;
     return (d['paused'] ?? false) as bool;
   }
 
   Future<int> retryFailedDownloads({String? batchId, String? failCode}) async {
-    final d = await _decode(await http.post(_u('/downloads/retry-failed'),
+    final d = await _decode(await net.post(_u('/downloads/retry-failed'),
         headers: _headers,
         body: jsonEncode({
           if (batchId != null) 'batch_id': batchId,
@@ -357,7 +358,7 @@ class ApiClient {
   }
 
   Future<int> cancelDownloads({String? batchId, int? trackId, bool all = false}) async {
-    final d = await _decode(await http.post(_u('/downloads/cancel'),
+    final d = await _decode(await net.post(_u('/downloads/cancel'),
         headers: _headers,
         body: jsonEncode({
           if (batchId != null) 'batch_id': batchId,
@@ -370,7 +371,7 @@ class ApiClient {
   /// Go looking for another copy of songs whose copy has gone. Returns how many were
   /// found somewhere else.
   Future<Map<String, dynamic>> refindFailed() async =>
-      await _decode(await http.post(_u('/downloads/refind'),
+      await _decode(await net.post(_u('/downloads/refind'),
           headers: _headers, body: jsonEncode({}))) as Map<String, dynamic>;
 
   /// Ask for this one now. Says how many of them actually got a job.
@@ -385,7 +386,7 @@ class ApiClient {
   /// nowhere left to be fetched from, which is worth saying out loud.
   Future<int> promoteDownloads(List<int> trackIds) async {
     if (trackIds.isEmpty) return 0;
-    final d = await _decode(await http.post(_u('/downloads/promote'),
+    final d = await _decode(await net.post(_u('/downloads/promote'),
         headers: _headers,
         body: jsonEncode({'track_ids': trackIds}))) as Map<String, dynamic>;
     return (d['promoted'] ?? 0) as int;
@@ -398,7 +399,7 @@ class ApiClient {
   /// native HTTP cache both keep it; failures are silent because this is a nicety.
   Future<void> warmStream(Track t) async {
     try {
-      await http.get(Uri.parse(streamUrl(t)),
+      await net.get(Uri.parse(streamUrl(t)),
           headers: {...(kIsWeb ? const {} : streamHeaders), 'Range': 'bytes=0-524287'});
     } catch (_) {
       // Not being able to warm the cache is not a failure worth reporting.
@@ -410,7 +411,7 @@ class ApiClient {
   /// the machine at home being awake.
   Future<List<SourceHit>> searchSource(String source, String query,
       {int limit = 8}) async {
-    final d = await _decode(await http.get(
+    final d = await _decode(await net.get(
         _u('/sources/search?source=$source&limit=$limit'
             '&q=${Uri.encodeQueryComponent(query)}'),
         headers: _headers)) as Map<String, dynamic>;
@@ -420,7 +421,7 @@ class ApiClient {
   }
 
   Future<Track> addFromSource(SourceHit hit) async => Track.fromJson(await _decode(
-      await http.post(_u('/sources/resolve'),
+      await net.post(_u('/sources/resolve'),
           headers: _headers,
           body: jsonEncode({
             'provider': hit.provider,
@@ -433,17 +434,17 @@ class ApiClient {
           }))) as Map<String, dynamic>);
 
   Future<AlbumPreview> previewAlbum(String url) async => AlbumPreview.fromJson(
-      await _decode(await http.get(
+      await _decode(await net.get(
           _u('/sources/preview?url=${Uri.encodeQueryComponent(url)}'),
           headers: _headers)) as Map<String, dynamic>);
 
   Future<Map<String, dynamic>> importAlbum(String url) async =>
-      await _decode(await http.post(_u('/sources/import'),
+      await _decode(await net.post(_u('/sources/import'),
           headers: _headers, body: jsonEncode({'url': url}))) as Map<String, dynamic>;
 
   // ---------------- linked services ----------------
   Future<List<LinkedService>> linkedServices() async {
-    final d = await _decode(await http.get(_u('/linked'), headers: _headers))
+    final d = await _decode(await net.get(_u('/linked'), headers: _headers))
         as Map<String, dynamic>;
     return ((d['accounts'] ?? const []) as List)
         .map((e) => LinkedService.fromJson(e as Map<String, dynamic>))
@@ -451,17 +452,17 @@ class ApiClient {
   }
 
   Future<void> linkService(String provider, String handle) async =>
-      await _decode(await http.post(_u('/linked/$provider'),
+      await _decode(await net.post(_u('/linked/$provider'),
           headers: _headers, body: jsonEncode({'handle': handle})));
 
   Future<void> unlinkService(String provider) async =>
-      await _decode(await http.delete(_u('/linked/$provider'), headers: _headers));
+      await _decode(await net.delete(_u('/linked/$provider'), headers: _headers));
 
   /// Start signing in to YouTube Music with a code. Answers with the code to read out
   /// and where to type it.
   Future<({String deviceCode, String userCode, String url, int interval})>
       startYoutubeSignIn() async {
-    final d = await _decode(await http.post(_u('/linked/youtube/oauth'),
+    final d = await _decode(await net.post(_u('/linked/youtube/oauth'),
         headers: _headers, body: '{}')) as Map<String, dynamic>;
     return (
       deviceCode: d['device_code'] as String,
@@ -474,12 +475,12 @@ class ApiClient {
   /// Ask whether they have finished over there. Throws with status 409 while they have
   /// not, which is "not yet" rather than "no".
   Future<void> finishYoutubeSignIn(String deviceCode) async =>
-      await _decode(await http.post(_u('/linked/youtube/oauth/finish'),
+      await _decode(await net.post(_u('/linked/youtube/oauth/finish'),
           headers: _headers, body: jsonEncode({'device_code': deviceCode})));
 
   Future<List<RemoteList>> serviceLists(String provider) async {
     final d = await _decode(
-        await http.get(_u('/linked/$provider/playlists'), headers: _headers))
+        await net.get(_u('/linked/$provider/playlists'), headers: _headers))
         as Map<String, dynamic>;
     return ((d['items'] ?? const []) as List)
         .map((e) => RemoteList.fromJson(e as Map<String, dynamic>))
@@ -487,29 +488,29 @@ class ApiClient {
   }
 
   Future<void> mirrorList(String provider, RemoteList list) async =>
-      await _decode(await http.post(_u('/linked/$provider/sync'),
+      await _decode(await net.post(_u('/linked/$provider/sync'),
           headers: _headers,
           body: jsonEncode({'remote_id': list.remoteId, 'name': list.name})));
 
   /// Copy one list by its id or its link, without having listed anything first — a
   /// public playlist somebody sent you needs no account here.
   Future<void> syncServiceList(String provider, String remoteId) async =>
-      await _decode(await http.post(_u('/linked/$provider/sync'),
+      await _decode(await net.post(_u('/linked/$provider/sync'),
           headers: _headers, body: jsonEncode({'remote_id': remoteId})));
 
   // ---------------- jam ----------------
   Future<Jam> startJam(int queueId) async => Jam.fromJson(await _decode(
-      await http.post(_u('/jams'),
+      await net.post(_u('/jams'),
           headers: _headers, body: jsonEncode({'queue_id': queueId}))) as Map<String, dynamic>);
 
   Future<Jam> joinJam(String code) async => Jam.fromJson(await _decode(
-      await http.post(_u('/jams/join'),
+      await net.post(_u('/jams/join'),
           headers: _headers, body: jsonEncode({'code': code}))) as Map<String, dynamic>);
 
   /// Every jam running now. Everybody here has an account on this server, so a room
   /// is something to walk into rather than something to be let into.
   Future<List<OpenJam>> openJams() async {
-    final d = await _decode(await http.get(_u('/jams'), headers: _headers))
+    final d = await _decode(await net.get(_u('/jams'), headers: _headers))
         as Map<String, dynamic>;
     return [
       for (final e in (d['items'] ?? const []) as List)
@@ -519,7 +520,7 @@ class ApiClient {
 
   /// The jam you are in, and a heartbeat that keeps you listed as here.
   Future<Jam?> currentJam() async {
-    final d = await _decode(await http.get(_u('/jams/current'), headers: _headers))
+    final d = await _decode(await net.get(_u('/jams/current'), headers: _headers))
         as Map<String, dynamic>;
     return d['jam'] == null ? null : Jam.fromJson(d['jam'] as Map<String, dynamic>);
   }
@@ -528,7 +529,7 @@ class ApiClient {
   /// replaced by the next heartbeat a few seconds later.
   Future<void> pushJamPlayback(int jamId,
           {int? trackId, required int positionMs, required bool playing}) async =>
-      await _decode(await http.post(_u('/jams/$jamId/playback'),
+      await _decode(await net.post(_u('/jams/$jamId/playback'),
           headers: _headers,
           body: jsonEncode({
             'track_id': trackId,
@@ -538,7 +539,7 @@ class ApiClient {
 
   /// A guest reaching for the transport. The host's device does the work.
   Future<void> jamControl(int jamId, String action, {int? positionMs}) async =>
-      await _decode(await http.post(_u('/jams/$jamId/control'),
+      await _decode(await net.post(_u('/jams/$jamId/control'),
           headers: _headers,
           body: jsonEncode({
             'action': action,
@@ -546,15 +547,15 @@ class ApiClient {
           })));
 
   Future<void> leaveJam(int jamId) async =>
-      await _decode(await http.post(_u('/jams/$jamId/leave'), headers: _headers));
+      await _decode(await net.post(_u('/jams/$jamId/leave'), headers: _headers));
 
   Future<void> removeFromJam(int jamId, int userId) async =>
-      await _decode(await http.post(_u('/jams/$jamId/remove'),
+      await _decode(await net.post(_u('/jams/$jamId/remove'),
           headers: _headers, body: jsonEncode({'user_id': userId})));
 
   /// Ask for the current track to be dropped. Returns how many have asked.
   Future<Map<String, dynamic>> status() async =>
-      await _decode(await http.get(_u('/status'), headers: _headers))
+      await _decode(await net.get(_u('/status'), headers: _headers))
           as Map<String, dynamic>;
 
   Map<String, String> get streamHeaders => {'Authorization': 'Bearer $token'};
@@ -563,22 +564,22 @@ class ApiClient {
 
   // ---------------- queues ----------------
   Future<List<Queue>> queues() async {
-    final d = await _decode(await http.get(_u('/queues'), headers: _headers)) as List;
+    final d = await _decode(await net.get(_u('/queues'), headers: _headers)) as List;
     return d.map((e) => Queue.fromJson(e)).toList();
   }
 
   Future<Queue> queue(int id) async =>
-      Queue.fromJson(await _decode(await http.get(_u('/queues/$id'), headers: _headers))
+      Queue.fromJson(await _decode(await net.get(_u('/queues/$id'), headers: _headers))
           as Map<String, dynamic>);
 
   Future<Queue> createQueue(String name) async => Queue.fromJson(await _decode(
-      await http.post(_u('/queues'), headers: _headers, body: jsonEncode({'name': name})))
+      await net.post(_u('/queues'), headers: _headers, body: jsonEncode({'name': name})))
       as Map<String, dynamic>);
 
   /// Order is versioned. A 409 means someone else reordered it; the caller gets the
   /// live state back so it can merge instead of overwriting.
   Future<Queue> replaceQueue(int id, int rev, List<int> trackIds) async {
-    final r = await http.put(_u('/queues/$id'),
+    final r = await net.put(_u('/queues/$id'),
         headers: _headers, body: jsonEncode({'rev': rev, 'items': trackIds}));
     if (r.statusCode == 409) {
       final d = jsonDecode(r.body)['detail'] as Map<String, dynamic>;
@@ -590,22 +591,22 @@ class ApiClient {
   /// Deal the rest of the queue again. Once — see the server's own note on it.
   /// Move several rows as one. Dragging one row of a selection brings the rest.
   Future<Queue> moveQueueItems(int id, List<int> froms, int to) async =>
-      Queue.fromJson(await _decode(await http.post(_u('/queues/$id/move'),
+      Queue.fromJson(await _decode(await net.post(_u('/queues/$id/move'),
           headers: _headers,
           body: jsonEncode({'from': froms, 'to': to}))) as Map<String, dynamic>);
 
   Future<Queue> shuffleQueue(int id) async => Queue.fromJson(await _decode(
-      await http.post(_u('/queues/$id/shuffle'),
+      await net.post(_u('/queues/$id/shuffle'),
           headers: _headers, body: '{}')) as Map<String, dynamic>);
 
   Future<Queue> addToQueue(int id, List<int> trackIds, {String mode = 'end'}) async =>
-      Queue.fromJson(await _decode(await http.post(_u('/queues/$id/items'),
+      Queue.fromJson(await _decode(await net.post(_u('/queues/$id/items'),
               headers: _headers, body: jsonEncode({'track_ids': trackIds, 'mode': mode})))
           as Map<String, dynamic>);
 
   /// The cursor is not versioned: the device that is playing is the authority.
   Future<void> setCursor(int id, {int? index, int? positionMs}) async {
-    await _decode(await http.patch(_u('/queues/$id/cursor'),
+    await _decode(await net.patch(_u('/queues/$id/cursor'),
         headers: _headers,
         body: jsonEncode({
           if (index != null) 'cursor_index': index,
@@ -617,7 +618,7 @@ class ApiClient {
   /// sending settings through it used to empty the queue.
   Future<Queue> updateQueueSettings(int id,
       {String? name, bool? shuffle, String? repeat}) async {
-    final r = await http.patch(_u('/queues/$id'),
+    final r = await net.patch(_u('/queues/$id'),
         headers: _headers,
         body: jsonEncode({
           if (name != null) 'name': name,
@@ -629,48 +630,48 @@ class ApiClient {
 
   Future<Queue> removeQueueItem(int id, int pos) async =>
       Queue.fromJson(await _decode(
-              await http.delete(_u('/queues/$id/items/$pos'), headers: _headers))
+              await net.delete(_u('/queues/$id/items/$pos'), headers: _headers))
           as Map<String, dynamic>);
 
   Future<Queue> moveQueueItem(int id, int from, int to) async =>
-      Queue.fromJson(await _decode(await http.post(_u('/queues/$id/move'),
+      Queue.fromJson(await _decode(await net.post(_u('/queues/$id/move'),
               headers: _headers, body: jsonEncode({'from': from, 'to': to})))
           as Map<String, dynamic>);
 
   /// `origin: 'radio'` clears only the machine-picked tail.
   Future<Queue> clearQueue(int id, {String? origin}) async =>
-      Queue.fromJson(await _decode(await http.post(_u('/queues/$id/clear'),
+      Queue.fromJson(await _decode(await net.post(_u('/queues/$id/clear'),
               headers: _headers,
               body: jsonEncode({if (origin != null) 'origin': origin})))
           as Map<String, dynamic>);
 
   Future<void> deleteQueue(int id) async {
-    await _decode(await http.delete(_u('/queues/$id'), headers: _headers));
+    await _decode(await net.delete(_u('/queues/$id'), headers: _headers));
   }
 
   Future<Queue> radio(int queueId, int seedTrackId, {int count = 5}) async =>
-      Queue.fromJson(await _decode(await http.post(_u('/queues/$queueId/radio'),
+      Queue.fromJson(await _decode(await net.post(_u('/queues/$queueId/radio'),
               headers: _headers,
               body: jsonEncode({'seed_track_id': seedTrackId, 'count': count})))
           as Map<String, dynamic>);
 
   // ---------------- library ----------------
   Future<List<Playlist>> playlists() async {
-    final d = await _decode(await http.get(_u('/playlists'), headers: _headers)) as List;
+    final d = await _decode(await net.get(_u('/playlists'), headers: _headers)) as List;
     return d.map((e) => Playlist.fromJson(e)).toList();
   }
 
   Future<Playlist> playlist(int id) async =>
-      Playlist.fromJson(await _decode(await http.get(_u('/playlists/$id'), headers: _headers))
+      Playlist.fromJson(await _decode(await net.get(_u('/playlists/$id'), headers: _headers))
           as Map<String, dynamic>);
 
   Future<Playlist> createPlaylist(String name) async =>
-      Playlist.fromJson(await _decode(await http.post(_u('/playlists'),
+      Playlist.fromJson(await _decode(await net.post(_u('/playlists'),
               headers: _headers, body: jsonEncode({'name': name})))
           as Map<String, dynamic>);
 
   Future<Playlist> addToPlaylist(int id, List<int> trackIds) async =>
-      Playlist.fromJson(await _decode(await http.post(_u('/playlists/$id/items'),
+      Playlist.fromJson(await _decode(await net.post(_u('/playlists/$id/items'),
               headers: _headers, body: jsonEncode({'track_ids': trackIds})))
           as Map<String, dynamic>);
 
@@ -679,7 +680,7 @@ class ApiClient {
   /// Keyed by playlist id, so the sheet can draw a tick, a dash or nothing without
   /// fetching a single playlist's contents.
   Future<Map<int, int>> playlistsHolding(List<int> trackIds) async {
-    final d = await _decode(await http.post(_u('/playlists/holding'),
+    final d = await _decode(await net.post(_u('/playlists/holding'),
         headers: _headers, body: jsonEncode({'track_ids': trackIds})));
     final holding = (d['holding'] as Map).cast<String, dynamic>();
     return {
@@ -688,22 +689,22 @@ class ApiClient {
   }
 
   Future<Playlist> removeFromPlaylist(int id, List<int> trackIds) async =>
-      Playlist.fromJson(await _decode(await http.post(
+      Playlist.fromJson(await _decode(await net.post(
               _u('/playlists/$id/items/remove'),
               headers: _headers,
               body: jsonEncode({'track_ids': trackIds}))) as Map<String, dynamic>);
 
   Future<Playlist> removePlaylistItem(int id, int pos) async =>
       Playlist.fromJson(await _decode(
-              await http.delete(_u('/playlists/$id/items/$pos'), headers: _headers))
+              await net.delete(_u('/playlists/$id/items/$pos'), headers: _headers))
           as Map<String, dynamic>);
 
   Future<void> deletePlaylist(int id) async {
-    await _decode(await http.delete(_u('/playlists/$id'), headers: _headers));
+    await _decode(await net.delete(_u('/playlists/$id'), headers: _headers));
   }
 
   Future<Playlist> saveQueueAsPlaylist(int queueId, {String? name}) async =>
-      Playlist.fromJson(await _decode(await http.post(
+      Playlist.fromJson(await _decode(await net.post(
               _u('/queues/$queueId/save-as-playlist'),
               headers: _headers,
               body: jsonEncode({if (name != null) 'name': name})))
@@ -713,7 +714,7 @@ class ApiClient {
   Future<({List<Track> items, int total})> libraryTracks(
       {String sort = 'added', int limit = 200, int offset = 0,
       bool readyOnly = false}) async {
-    final d = await _decode(await http.get(
+    final d = await _decode(await net.get(
         _u('/library/tracks', {
           'sort': sort,
           'limit': limit,
@@ -728,7 +729,7 @@ class ApiClient {
   }
 
   Future<List<AlbumSummary>> albums() async {
-    final d = await _decode(await http.get(_u('/library/albums'), headers: _headers))
+    final d = await _decode(await net.get(_u('/library/albums'), headers: _headers))
         as Map<String, dynamic>;
     return (d['items'] as List).map((e) => AlbumSummary.fromJson(e)).toList();
   }
@@ -736,7 +737,7 @@ class ApiClient {
   /// The whole record — the parts we hold and the parts we do not.
   Future<AlbumDetail> albumDetail(
       {String? album, String? artist, String? remoteId}) async {
-    final d = await _decode(await http.get(
+    final d = await _decode(await net.get(
         _u('/library/albums/detail', {
           if (album != null) 'album': album,
           if (artist != null) 'artist': artist,
@@ -750,7 +751,7 @@ class ApiClient {
   Future<({int queued, int notMatched})> fillAlbum(
       {String? album, String? artist, String? remoteId,
       List<String> remoteIds = const []}) async {
-    final d = await _decode(await http.post(_u('/library/albums/fill'),
+    final d = await _decode(await net.post(_u('/library/albums/fill'),
         headers: _headers,
         body: jsonEncode({
           if (album != null) 'album': album,
@@ -763,7 +764,7 @@ class ApiClient {
   }
 
   Future<ArtistDetail> artistDetail(String artist) async {
-    final d = await _decode(await http.get(
+    final d = await _decode(await net.get(
         _u('/library/artists/detail', {'artist': artist}),
         headers: _headers)) as Map<String, dynamic>;
     return ArtistDetail.fromJson(d);
@@ -772,7 +773,7 @@ class ApiClient {
   /// Everyone with an account here, and whether they are around right now.
   Future<List<({int id, String name, bool online, String? avatarVersion})>>
       jamPeople() async {
-    final d = await _decode(await http.get(_u('/jams/people'), headers: _headers))
+    final d = await _decode(await net.get(_u('/jams/people'), headers: _headers))
         as Map<String, dynamic>;
     return [
       for (final e in (d['items'] ?? const []) as List)
@@ -786,14 +787,14 @@ class ApiClient {
   }
 
   Future<Jam> inviteToJam(int jamId, int userId) async => Jam.fromJson(
-      await _decode(await http.post(_u('/jams/$jamId/invite'),
+      await _decode(await net.post(_u('/jams/$jamId/invite'),
           headers: _headers, body: jsonEncode({'user_id': userId})))
           as Map<String, dynamic>);
 
   // ---------------- favourites ----------------
   /// The ids, so a screen full of hearts is one request rather than one per song.
   Future<({int playlistId, List<int> trackIds})> favourites() async {
-    final d = await _decode(await http.get(_u('/favourites'), headers: _headers))
+    final d = await _decode(await net.get(_u('/favourites'), headers: _headers))
         as Map<String, dynamic>;
     return (
       playlistId: (d['playlist_id'] ?? 0) as int,
@@ -803,7 +804,7 @@ class ApiClient {
 
   /// No value toggles, which is what a tap on a heart means.
   Future<bool> setFavourite(int trackId, {bool? favourite}) async {
-    final d = await _decode(await http.post(_u('/favourites/$trackId'),
+    final d = await _decode(await net.post(_u('/favourites/$trackId'),
         headers: _headers,
         body: jsonEncode({if (favourite != null) 'favourite': favourite})))
         as Map<String, dynamic>;
@@ -817,7 +818,7 @@ class ApiClient {
   /// backup that names four hundred songs is still a small thing to send.
   Future<Map<String, dynamic>> importPlaylists(Map<String, dynamic> backup,
           {bool dryRun = false}) async =>
-      await _decode(await http.post(_u('/playlists/import'),
+      await _decode(await net.post(_u('/playlists/import'),
               headers: _headers,
               body: jsonEncode({...backup, 'dry_run': dryRun})))
           as Map<String, dynamic>;
@@ -827,7 +828,7 @@ class ApiClient {
   /// somebody agreed to rather than a surprise.
   Future<({int count, double mb, List<int> trackIds})> downloadManifest(
       {int? playlistId, int? queueId}) async {
-    final d = await _decode(await http.get(
+    final d = await _decode(await net.get(
         _u('/downloads/manifest', {
           if (playlistId != null) 'playlist_id': playlistId,
           if (queueId != null) 'queue_id': queueId,
@@ -843,7 +844,7 @@ class ApiClient {
   }
 
   Future<List<FollowedArtist>> follows() async {
-    final d = await _decode(await http.get(_u('/follows'), headers: _headers))
+    final d = await _decode(await net.get(_u('/follows'), headers: _headers))
         as Map<String, dynamic>;
     return ((d['items'] ?? const []) as List)
         .map((e) => FollowedArtist.fromJson(e as Map<String, dynamic>))
@@ -851,7 +852,7 @@ class ApiClient {
   }
 
   Future<void> follow({String? name, String? remoteId, String? image}) async =>
-      await _decode(await http.post(_u('/follows'),
+      await _decode(await net.post(_u('/follows'),
           headers: _headers,
           body: jsonEncode({
             if (name != null) 'name': name,
@@ -860,19 +861,19 @@ class ApiClient {
           })));
 
   Future<void> unfollow(String remoteId) async => await _decode(
-      await http.delete(_u('/follows/$remoteId'), headers: _headers));
+      await net.delete(_u('/follows/$remoteId'), headers: _headers));
 
   /// Take the artists already followed somewhere else. Answers with what it managed:
   /// how many were found, how many were new, and the names it could not place.
   Future<Map<String, dynamic>> importFollows(String provider) async =>
-      await _decode(await http.post(_u('/follows/import'),
+      await _decode(await net.post(_u('/follows/import'),
           headers: _headers,
           body: jsonEncode({'provider': provider}))) as Map<String, dynamic>;
 
   Future<({List<FeedItem> items, int unseen, int following})> feed(
       {int limit = 60}) async {
     final d = await _decode(
-            await http.get(_u('/feed', {'limit': limit}), headers: _headers))
+            await net.get(_u('/feed', {'limit': limit}), headers: _headers))
         as Map<String, dynamic>;
     return (
       items: ((d['items'] ?? const []) as List)
@@ -884,14 +885,14 @@ class ApiClient {
   }
 
   Future<void> markFeedSeen(List<String> albumIds) async => await _decode(
-      await http.post(_u('/feed/seen'),
+      await net.post(_u('/feed/seen'),
           headers: _headers, body: jsonEncode({'album_ids': albumIds})));
 
   Future<void> refreshFeed() async =>
-      await _decode(await http.post(_u('/feed/refresh'), headers: _headers));
+      await _decode(await net.post(_u('/feed/refresh'), headers: _headers));
 
   Future<List<Track>> albumTracks(String album, {String? artist}) async {
-    final d = await _decode(await http.get(
+    final d = await _decode(await net.get(
         _u('/library/albums/tracks',
             {'album': album, if (artist != null) 'artist': artist}),
         headers: _headers)) as Map<String, dynamic>;
@@ -899,41 +900,41 @@ class ApiClient {
   }
 
   Future<List<ArtistSummary>> artists() async {
-    final d = await _decode(await http.get(_u('/library/artists'), headers: _headers))
+    final d = await _decode(await net.get(_u('/library/artists'), headers: _headers))
         as Map<String, dynamic>;
     return (d['items'] as List).map((e) => ArtistSummary.fromJson(e)).toList();
   }
 
   Future<List<Track>> artistTracks(String artist) async {
-    final d = await _decode(await http.get(
+    final d = await _decode(await net.get(
         _u('/library/artists/tracks', {'artist': artist}), headers: _headers))
         as Map<String, dynamic>;
     return (d['items'] as List).map((e) => Track.fromJson(e)).toList();
   }
 
   Future<List<PlayedTrack>> playHistory() async {
-    final d = await _decode(await http.get(_u('/library/history'), headers: _headers))
+    final d = await _decode(await net.get(_u('/library/history'), headers: _headers))
         as Map<String, dynamic>;
     return (d['items'] as List).map((e) => PlayedTrack.fromJson(e)).toList();
   }
 
   Future<void> clearHistory() async {
-    await _decode(await http.delete(_u('/library/history'), headers: _headers));
+    await _decode(await net.delete(_u('/library/history'), headers: _headers));
   }
 
   Future<Playlist> renamePlaylist(int id, String name) async =>
-      Playlist.fromJson(await _decode(await http.patch(_u('/playlists/$id'),
+      Playlist.fromJson(await _decode(await net.patch(_u('/playlists/$id'),
               headers: _headers, body: jsonEncode({'name': name})))
           as Map<String, dynamic>);
 
   Future<Playlist> movePlaylistItem(int id, int from, int to) async =>
-      Playlist.fromJson(await _decode(await http.post(_u('/playlists/$id/move'),
+      Playlist.fromJson(await _decode(await net.post(_u('/playlists/$id/move'),
               headers: _headers, body: jsonEncode({'from': from, 'to': to})))
           as Map<String, dynamic>);
 
   Future<({String? synced, String? plain, String? source})> lyrics(int trackId) async {
     final d = await _decode(
-            await http.get(_u('/tracks/$trackId/lyrics'), headers: _headers))
+            await net.get(_u('/tracks/$trackId/lyrics'), headers: _headers))
         as Map<String, dynamic>;
     return (
       synced: d['synced'] as String?,
@@ -943,11 +944,11 @@ class ApiClient {
   }
 
   Future<Track> updateTrack(int id, Map<String, dynamic> fields) async =>
-      Track.fromJson(await _decode(await http.patch(_u('/tracks/$id'),
+      Track.fromJson(await _decode(await net.patch(_u('/tracks/$id'),
               headers: _headers, body: jsonEncode(fields))) as Map<String, dynamic>);
 
   Future<Map<String, dynamic>> storage() async =>
-      await _decode(await http.get(_u('/admin/storage'), headers: _headers))
+      await _decode(await net.get(_u('/admin/storage'), headers: _headers))
           as Map<String, dynamic>;
 
   /// Upload a file from the device. Bytes rather than a path, because the web build
@@ -963,23 +964,23 @@ class ApiClient {
 
   // ---------------- Spotify ----------------
   Future<Map<String, dynamic>> spotifyAccount() async =>
-      await _decode(await http.get(_u('/spotify/account'), headers: _headers))
+      await _decode(await net.get(_u('/spotify/account'), headers: _headers))
           as Map<String, dynamic>;
 
   Future<String> spotifyAuthorizeUrl() async {
-    final d = await _decode(await http.get(_u('/spotify/authorize'), headers: _headers))
+    final d = await _decode(await net.get(_u('/spotify/authorize'), headers: _headers))
         as Map<String, dynamic>;
     return d['url'] as String;
   }
 
   Future<void> unlinkSpotify() async {
-    await _decode(await http.delete(_u('/spotify/account'), headers: _headers));
+    await _decode(await net.delete(_u('/spotify/account'), headers: _headers));
   }
 
   /// What is on the Spotify side, each marked with whether it is already mirrored.
   Future<List<SpotifyPlaylist>> spotifyPlaylists() async {
     final d = await _decode(
-            await http.get(_u('/spotify/playlists'), headers: _headers))
+            await net.get(_u('/spotify/playlists'), headers: _headers))
         as Map<String, dynamic>;
     return (d['items'] as List).map((e) => SpotifyPlaylist.fromJson(e)).toList();
   }
@@ -987,7 +988,7 @@ class ApiClient {
   /// Mirror the named playlists, or — with no names — refresh the ones already
   /// mirrored. Never everything: an account can hold hundreds.
   Future<List<Map<String, dynamic>>> syncSpotify({String? remoteId}) async {
-    final d = await _decode(await http.post(_u('/spotify/sync'),
+    final d = await _decode(await net.post(_u('/spotify/sync'),
         headers: _headers,
         body: jsonEncode({if (remoteId != null) 'remote_id': remoteId})))
         as Map<String, dynamic>;
@@ -995,35 +996,35 @@ class ApiClient {
   }
 
   Future<List<UnmatchedTrack>> unmatched(int playlistId) async {
-    final d = await _decode(await http.get(
+    final d = await _decode(await net.get(
         _u('/spotify/playlists/$playlistId/unmatched'), headers: _headers))
         as Map<String, dynamic>;
     return (d['items'] as List).map((e) => UnmatchedTrack.fromJson(e)).toList();
   }
 
   Future<List<RemoteHit>> unmatchedSuggestions(int playlistId, int pos) async {
-    final d = await _decode(await http.get(
+    final d = await _decode(await net.get(
         _u('/spotify/playlists/$playlistId/suggestions', {'pos': pos}),
         headers: _headers)) as Map<String, dynamic>;
     return (d['items'] as List).map((e) => RemoteHit.fromJson(e)).toList();
   }
 
   Future<void> resolveUnmatched(int playlistId, int pos, {String? videoId}) async {
-    await _decode(await http.post(
+    await _decode(await net.post(
         _u('/spotify/playlists/$playlistId/unmatched/$pos/resolve'),
         headers: _headers,
         body: jsonEncode({'video_id': videoId})));
   }
 
   Future<Playlist> clonePlaylist(int playlistId, {String? name}) async =>
-      Playlist.fromJson(await _decode(await http.post(
+      Playlist.fromJson(await _decode(await net.post(
               _u('/spotify/playlists/$playlistId/clone'),
               headers: _headers,
               body: jsonEncode({if (name != null) 'name': name})))
           as Map<String, dynamic>);
 
   Future<List<Track>> history() async {
-    final d = await _decode(await http.get(_u('/history'), headers: _headers)) as List;
+    final d = await _decode(await net.get(_u('/history'), headers: _headers)) as List;
     return d.map((e) => Track.fromJson(e)).toList();
   }
 
@@ -1033,7 +1034,7 @@ class ApiClient {
   /// number can move at the moment a record ends rather than the next time the app is
   /// opened.
   Future<int> recordListen(int trackId, int msPlayed, bool completed) async {
-    final d = await _decode(await http.post(_u('/listens'),
+    final d = await _decode(await net.post(_u('/listens'),
         headers: _headers,
         body: jsonEncode({
           'track_id': trackId,

@@ -246,15 +246,23 @@ class SongRow extends StatelessWidget {
                 ),
               if (!track.isPending && OfflineStore.supported)
                 Builder(builder: (context) {
-                  final offline = context.watch<AppState>().offline;
-                  if (offline.has(track.id)) {
+                  // Only this song's two facts, not the whole app: a row in a list of
+                  // four hundred rebuilt every time anything anywhere changed —
+                  // including every download progress report — to draw a 14-pixel
+                  // tick that had not moved.
+                  final offline = context.select<AppState, ({bool here, bool coming})>(
+                      (a) => (
+                            here: a.offline.has(track.id),
+                            coming: a.offline.isQueued(track.id)
+                          ));
+                  if (offline.here) {
                     return Padding(
                       padding: const EdgeInsets.only(left: 6),
                       child: Icon(Icons.download_done,
                           size: 14, color: scheme.onSurfaceVariant),
                     );
                   }
-                  if (offline.isQueued(track.id)) {
+                  if (offline.coming) {
                     return Padding(
                       padding: const EdgeInsets.only(left: 6),
                       child: SizedBox(
@@ -344,14 +352,13 @@ class FavouriteButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final app = context.watch<AppState>();
-    final on = app.isFavourite(trackId);
+    final on = context.select<AppState, bool>((a) => a.isFavourite(trackId));
     return IconButton(
       icon: Icon(on ? Icons.favorite : Icons.favorite_border, size: size),
       color: on ? Theme.of(context).colorScheme.primary : null,
       visualDensity: VisualDensity.compact,
       tooltip: on ? 'Remove from favourites' : 'Add to favourites',
-      onPressed: () => app.toggleFavourite(trackId),
+      onPressed: () => context.read<AppState>().toggleFavourite(trackId),
     );
   }
 }

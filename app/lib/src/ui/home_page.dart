@@ -118,11 +118,13 @@ class MuseNavigationBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final app = context.watch<AppState>();
+    // Which tab, and nothing else. The bar sits under every screen and used to be
+    // rebuilt by every report the app received.
+    final tab = context.select<AppState, int>((a) => a.homeTab);
     return NavigationBar(
-      selectedIndex: app.homeTab,
+      selectedIndex: tab,
       onDestinationSelected: (i) {
-        app.setHomeTab(i);
+        context.read<AppState>().setHomeTab(i);
         onLeaving?.call();
       },
       destinations: const [

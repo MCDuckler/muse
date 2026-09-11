@@ -55,6 +55,11 @@
 		header Cache-Control "no-cache"
 		root * /srv
 		try_files {path} /index.html
-		file_server
+		# The .br files beside each asset, compressed properly at publish time rather
+		# than in a hurry per request — and the only compression Safari understands
+		# besides gzip, which is what the iPhone was getting.
+		file_server {
+			precompressed br zstd gzip
+		}
 	}
 }

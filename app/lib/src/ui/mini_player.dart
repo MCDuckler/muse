@@ -18,8 +18,11 @@ class MiniPlayer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final app = context.watch<AppState>();
-    if (app.player == null) return const SizedBox.shrink();
+    // Whether there is a player at all, not everything about it: this bar is under
+    // every screen in the app, and watching the whole of the app state rebuilt it —
+    // and the blur behind it — on every report of anything.
+    final has = context.select<AppState, bool>((a) => a.player != null);
+    if (!has) return const SizedBox.shrink();
     return GlassSurface(
       child: SafeArea(
         top: false,

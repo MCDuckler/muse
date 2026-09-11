@@ -150,6 +150,10 @@ create table if not exists listens (
   completed  boolean not null default false
 );
 
+-- Recently played, newest first, for one person. It was a sequential scan and a sort
+-- of every listen ever recorded to draw one screen.
+create index if not exists listens_recent on listens(user_id, started_at desc);
+
 -- A linked provider account, per muse user. Tokens live here rather than in the
 -- config file, because they belong to a person and expire.
 create table if not exists provider_accounts (
@@ -308,6 +312,11 @@ create table if not exists library_items (
   primary key (user_id, track_id)
 );
 create index if not exists library_items_recent on library_items(user_id, added_at desc);
+
+-- Which playlists hold a given song. The primary key answers "what is on this
+-- playlist"; this answers the other direction, which is what the add-to-playlist
+-- ticks, the favourites lookup and the library trigger all ask.
+create index if not exists playlist_items_track on playlist_items(track_id);
 
 -- Membership is recorded by the database rather than by each caller.
 --

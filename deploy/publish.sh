@@ -26,14 +26,47 @@ publish_server() {
   python3 deploy/check_routes.py "$SERVER_URL"
 }
 
+# Brotli, once per file, kept beside it for Caddy to serve as-is.
+#
+# The two files a cold load waits for are the app and CanvasKit: 3.9MB over the wire
+# compressed on the fly, 3.0MB compressed properly here. Safari has no zstd at all, so
+# the phone was getting gzip — this is most of a megabyte off the first load of the web
+# app and of the PWA on the iPhone.
+#
+# Compressing 7MB of wasm at the highest setting takes most of a minute, and CanvasKit
+# only changes when Flutter does, so the results are kept by content hash and the work
+# is done once.
+precompress_web() {
+  command -v brotli >/dev/null || { echo "   (no brotli — serving compressed on the fly)"; return; }
+  local cache=app/build/br-cache
+  mkdir -p "$cache"
+  local n=0
+  while IFS= read -r f; do
+    local sum key
+    sum=$(sha256sum "$f" | cut -d' ' -f1)
+    key="$cache/$sum.br"
+    if [ ! -f "$key" ]; then
+      brotli -f -q 11 -o "$key" "$f"
+    fi
+    cp "$key" "$f.br"
+    n=$((n + 1))
+  done < <(find app/build/web -type f \( -name '*.js' -o -name '*.wasm' -o -name '*.json' \
+             -o -name '*.css' -o -name '*.html' -o -name 'NOTICES' \) -size +1k)
+  echo "   precompressed $n files"
+}
+
 publish_web() {
   echo "== web"
   (cd app && flutter build web --release --dart-define=MUSE_SERVER="$SERVER_URL")
+  precompress_web
   # muse.apk* rather than muse.apk: the manifest beside the APK is published by the
   # apk step and lives in the same directory, and a --delete that only knew about the
   # APK itself quietly removed it every time the web app went out — so the app could
   # never find out that a new version existed.
-  rsync -az --delete --exclude 'muse.apk*' -e "$SSH" app/build/web/ "$HOST":/opt/muse/deploy/web/
+  # The symbol files are for reading a stack trace off a debug build; nothing serves
+  # them and they are another megabyte and a half over the wire on every publish.
+  rsync -az --delete --exclude 'muse.apk*' --exclude '*.symbols' \
+    -e "$SSH" app/build/web/ "$HOST":/opt/muse/deploy/web/
 }
 
 publish_apk() {

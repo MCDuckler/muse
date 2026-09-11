@@ -12,6 +12,7 @@ import 'offline.dart';
 import 'art_cache.dart';
 import 'playback_log.dart';
 import 'sleeve_board.dart';
+import 'coalesce.dart';
 import 'player.dart';
 import '../ui/media_session.dart';
 import '../ui/theme.dart';
@@ -358,14 +359,22 @@ class AppState extends ChangeNotifier {
     _lifecycle;                     // built lazily; touching it starts it listening
     bindPlayer();
     await api.ensureStreamKey();
-    // Before anything asks for a cover: sleeve URLs carry the renderer's version, and
-    // a first pass at the wrong one is a screen's worth of artwork fetched twice.
-    await _pollStatus();
-    await refresh();
-    await refreshFavourites();
+    // All at once. These four ask the server four unrelated questions and used to ask
+    // them one after another, so opening the app was five round trips of waiting
+    // before the first screen had anything on it — a second of nothing on a phone
+    // away from wifi.
+    //
     // A jam survives closing the app: picking it back up is how the same person on
     // two devices stays in the same room.
-    await refreshJam();
+    final status = _pollStatus();
+    final library = refresh();
+    final hearts = refreshFavourites();
+    final room = refreshJam();
+    // Status first of the four, because sleeve URLs carry the renderer's version and
+    // a first pass at the wrong one is a screen's worth of artwork fetched twice.
+    // Started with the others, waited for before anything is drawn.
+    await status;
+    await Future.wait([library, hearts, room]);
     await followJamQueue();
     _listenForEvents();
     _statusTimer?.cancel();
@@ -388,8 +397,11 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> refresh() async {
-    queues = await api.queues();
-    playlists = await api.playlists();
+    // Two questions, one wait: neither answer depends on the other.
+    final asked = api.queues();
+    final lists = api.playlists();
+    queues = await asked;
+    playlists = await lists;
     if (activeQueue == null && queues.isNotEmpty) {
       await openQueue(queues.first.id, autoplay: false);
     }
@@ -1233,6 +1245,12 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Download progress, folded into one report every 250ms — see [Coalesce].
+  late final Coalesce _progressed =
+      Coalesce(const Duration(milliseconds: 250), () {
+    if (!_disposed) notifyListeners();
+  });
+
   void _listenForEvents() {
     _events?.cancel();
     _events = api.events().listen((e) async {
@@ -1247,10 +1265,16 @@ class AppState extends ChangeNotifier {
       } else if (e.event == 'track_progress') {
         // Progress arrives several times a second per track; patch the row in place
         // rather than re-fetching the queue for every tick.
+        //
+        // And tell the screens at most four times a second. Six downloads running at
+        // once is twenty reports a second, and every one of them rebuilt the bar at
+        // the bottom of the page, the queue and every row in view — the app was at
+        // its slowest exactly while it was fetching music, which is when somebody is
+        // most likely to be looking at it.
         final id = e.data['track_id'] as int?;
         if (id != null) {
           player?.applyProgress(id, Map<String, dynamic>.from(e.data));
-          notifyListeners();
+          _progressed();
         }
       } else if (e.event == 'track_updated') {
         // Artwork and metadata arrive after the audio does. Refresh in place so a
@@ -1452,6 +1476,7 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _progressed.dispose();
     _statusTimer?.cancel();
     _jamTimer?.cancel();
     _lifecycle.dispose();

@@ -167,6 +167,16 @@ class PlayerBar extends StatelessWidget {
     );
   }
 
-  static void _openNowPlaying(BuildContext context) =>
-      Navigator.of(context).push(nowPlayingRoute());
+  /// Open the player, telling it where it is coming from.
+  ///
+  /// The rectangle is this bar's own, read at the moment it is tapped: the route grows
+  /// out of it and shrinks back into it, so the thing that was tapped is the thing
+  /// that opens.
+  static void _openNowPlaying(BuildContext context) {
+    final box = context.findRenderObject() as RenderBox?;
+    final from = box == null || !box.hasSize
+        ? null
+        : box.localToGlobal(Offset.zero) & box.size;
+    Navigator.of(context).push(nowPlayingRoute(from: from));
+  }
 }

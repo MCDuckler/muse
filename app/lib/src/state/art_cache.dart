@@ -4,8 +4,9 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
-import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+
+import '../api/connection.dart';
 
 /// Artwork kept on the device, not fetched again every time the app opens.
 ///
@@ -88,7 +89,7 @@ class ArtCache {
 
     final Uint8List got;
     try {
-      final r = await http.get(Uri.parse(url));
+      final r = await net.get(Uri.parse(url));
       if (r.statusCode != 200 || r.bodyBytes.isEmpty) return null;
       got = r.bodyBytes;
     } catch (_) {
