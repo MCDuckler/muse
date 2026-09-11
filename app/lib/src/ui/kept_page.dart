@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../state/app_state.dart';
 import 'dialogs.dart';
 import 'mini_player.dart';
+import 'selection_bar.dart';
 import 'song_row.dart';
 
 /// What is on the phone.
@@ -47,7 +48,18 @@ class KeptPage extends StatelessWidget {
             ),
         ],
       ),
-      body: ListView(
+      body: SelectionOver(
+        bar: SelectionBar(
+          where: 'kept',
+          tracks: [for (final e in kept) e.asTrack],
+          removeLabel: 'Stop keeping here',
+          onRemove: (picked) async {
+            for (final t in picked) {
+              await offline.forget(t.id);
+            }
+          },
+        ),
+        child: ListView(
         padding: const EdgeInsets.fromLTRB(8, 4, 8, bottomForPlayer),
         children: [
           Padding(
@@ -93,6 +105,7 @@ class KeptPage extends StatelessWidget {
           for (final entry in kept)
             SongRow(
               track: entry.asTrack,
+              selectable: 'kept',
               swipeToPlayNext: false,
               trailing: Text(size(entry.bytes),
                   style: Theme.of(context).textTheme.bodySmall),
@@ -104,6 +117,7 @@ class KeptPage extends StatelessWidget {
               onRemove: () => offline.forget(entry.id),
             ),
         ],
+        ),
       ),
     );
   }

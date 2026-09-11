@@ -13,6 +13,7 @@ import 'dialogs.dart';
 import 'mini_player.dart';
 import 'spotify_page.dart';
 import 'youtube_sign_in.dart';
+import 'snack.dart';
 
 /// Services linked by typing a name.
 ///
@@ -100,8 +101,7 @@ class _ServicesPageState extends State<ServicesPage> {
       final missing = (result['missing'] ?? 0) as int;
       if (!mounted) return;
       await context.read<AppState>().refresh();
-      messenger.showSnackBar(SnackBar(
-        content: Text([
+      messenger.showSnackBar(snack(Text([
           '${lists.length} ${lists.length == 1 ? 'playlist' : 'playlists'}',
           '${result['tracks']} songs',
           if (missing > 0) '$missing not in the file',
@@ -109,10 +109,9 @@ class _ServicesPageState extends State<ServicesPage> {
         ].join(' · ')),
       ));
     } on FormatException {
-      messenger.showSnackBar(const SnackBar(
-          content: Text('That file is not a playlist backup.')));
+      messenger.showSnackBar(snack(Text('That file is not a playlist backup.')));
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
     } finally {
       if (mounted) setState(() => _importing = false);
     }
@@ -134,10 +133,9 @@ class _ServicesPageState extends State<ServicesPage> {
     if (link == null) return;
     try {
       await api.syncServiceList('youtube', link);
-      messenger.showSnackBar(const SnackBar(
-          content: Text('Copying it now — it will appear in your playlists.')));
+      messenger.showSnackBar(snack(Text('Copying it now — it will appear in your playlists.')));
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
     }
   }
 
@@ -149,7 +147,7 @@ class _ServicesPageState extends State<ServicesPage> {
     try {
       code = await api.startYoutubeSignIn();
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
       return;
     }
     if (!mounted) return;
@@ -162,7 +160,7 @@ class _ServicesPageState extends State<ServicesPage> {
     if (done == true) {
       await _load();
       messenger.showSnackBar(
-          const SnackBar(content: Text('YouTube Music is linked')));
+          snack(Text('YouTube Music is linked')));
     }
   }
 
@@ -192,7 +190,7 @@ class _ServicesPageState extends State<ServicesPage> {
         await api.linkService(service.provider, captured);
         await _load();
       } catch (e) {
-        messenger.showSnackBar(SnackBar(content: Text('$e')));
+        messenger.showSnackBar(snack(Text('$e')));
       }
       return;
     }
@@ -216,7 +214,7 @@ class _ServicesPageState extends State<ServicesPage> {
       await api.linkService(service.provider, handle.trim());
       await _load();
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
     }
   }
 
@@ -439,11 +437,10 @@ class _ServiceListsState extends State<_ServiceLists> {
     setState(() => _busy.add(list.remoteId));
     try {
       await app.api.mirrorList(widget.service.provider, list);
-      messenger.showSnackBar(SnackBar(
-          content: Text('Copying "${list.name}" — it will appear in your playlists')));
+      messenger.showSnackBar(snack(Text('Copying "${list.name}" — it will appear in your playlists')));
       await app.refreshPlaylists();
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
     } finally {
       if (mounted) setState(() => _busy.remove(list.remoteId));
     }

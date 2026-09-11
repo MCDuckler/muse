@@ -12,6 +12,7 @@ import '../state/selection.dart';
 import 'face.dart';
 import 'selection_bar.dart';
 import 'artwork.dart';
+import 'snack.dart';
 
 /// Queues are the product, so this screen shows them all, not just the one playing.
 class QueuePage extends StatefulWidget {
@@ -388,7 +389,7 @@ class _QueuePageState extends State<QueuePage> {
                                 } catch (e) {
                                   if (context.mounted) {
                                     ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text('$e')));
+                                        snack(Text('$e')));
                                   }
                                 }
                               }
@@ -414,7 +415,7 @@ class _QueuePageState extends State<QueuePage> {
     await app.refreshPlaylists();
     if (context.mounted) {
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Saved "$name"')));
+          .showSnackBar(snack(Text('Saved "$name"')));
     }
   }
 
@@ -440,9 +441,9 @@ class _QueuePageState extends State<QueuePage> {
     if (!gone) return;
     try {
       await app.deleteQueue(queue.id);
-      messenger.showSnackBar(SnackBar(content: Text('Deleted "${queue.name}"')));
+      messenger.showSnackBar(snack(Text('Deleted "${queue.name}"')));
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
     }
   }
 

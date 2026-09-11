@@ -9,6 +9,7 @@ import 'artwork.dart';
 import 'source_dot.dart';
 import 'swipe.dart';
 import 'track_menu.dart';
+import 'snack.dart';
 
 /// One song, drawn the same way everywhere it appears.
 ///
@@ -307,7 +308,7 @@ class SongRow extends StatelessWidget {
               final messenger = ScaffoldMessenger.of(context);
               context.read<AppState>().addTrack(track, mode: 'next');
               messenger.showSnackBar(
-                  SnackBar(content: Text('${track.displayTitle} plays next')));
+                  snack(Text('${track.displayTitle} plays next')));
             },
       onSwipeAway: onSwipeAway,
       child: row,

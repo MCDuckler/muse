@@ -563,3 +563,78 @@ def test_a_rehearsal_says_which_playlists_it_would_replace(client, hdr):
                         json={**BACKUP, "dry_run": True}).json()
     assert again["replaces"] == 2, "both would be written over, not added beside"
     assert all(p["replaces"] for p in again["playlists"])
+
+
+def test_which_playlists_already_hold_these_songs(client, hdr, tracks):
+    """The tick-boxes in the add-to-playlist sheet, in one request.
+
+    Three states have to come out of this: a list with all of them, a list with some,
+    and a list with none — and "none" means absent from the answer rather than zero,
+    which is what lets the sheet draw an empty box without knowing every playlist.
+    """
+    ids = [t["id"] for t in tracks]
+    everything = client.post("/playlists", headers=hdr, json={"name": "All"}).json()
+    some = client.post("/playlists", headers=hdr, json={"name": "Some"}).json()
+    none = client.post("/playlists", headers=hdr, json={"name": "None"}).json()
+    client.post(f"/playlists/{everything['id']}/items", headers=hdr,
+                json={"track_ids": ids})
+    client.post(f"/playlists/{some['id']}/items", headers=hdr,
+                json={"track_ids": ids[:1]})
+
+    held = client.post("/playlists/holding", headers=hdr,
+                       json={"track_ids": ids}).json()["holding"]
+    assert held[str(everything["id"])] == len(ids)
+    assert held[str(some["id"])] == 1
+    assert str(none["id"]) not in held
+
+
+def test_holding_only_answers_for_your_own_playlists(client, hdr, tracks):
+    ids = [t["id"] for t in tracks]
+    mine = client.post("/playlists", headers=hdr, json={"name": "Mine"}).json()
+    client.post(f"/playlists/{mine['id']}/items", headers=hdr, json={"track_ids": ids})
+
+    client.post("/accounts", headers=hdr,
+                json={"name": "sam", "password": "correct-horse"})
+    token = client.post("/auth/login",
+                        data={"user": "sam", "password": "correct-horse"}).json()["token"]
+    theirs = {"Authorization": f"Bearer {token}"}
+    held = client.post("/playlists/holding", headers=theirs,
+                       json={"track_ids": ids}).json()["holding"]
+    assert str(mine["id"]) not in held
+
+
+def test_taking_songs_off_a_playlist_by_id(client, hdr, tracks):
+    """Unticking a list in the sheet: it knows the songs, never the positions."""
+    ids = [t["id"] for t in tracks]
+    p = client.post("/playlists", headers=hdr, json={"name": "Mix"}).json()
+    client.post(f"/playlists/{p['id']}/items", headers=hdr, json={"track_ids": ids})
+    left = client.post(f"/playlists/{p['id']}/items/remove", headers=hdr,
+                       json={"track_ids": [ids[0], ids[2]]}).json()
+    assert [i["id"] for i in left["items"]] == [ids[1]]
+
+
+def test_favourites_can_be_added_to_from_the_playlist_sheet(client, hdr, tracks):
+    """Favourites is a list songs go into, whoever asked.
+
+    The heart wrote to it and the playlist sheet was refused with a 409 about mirroring
+    — one list behaving two ways depending on which button was pressed.
+    """
+    favourites = next(p for p in client.get("/playlists", headers=hdr).json()
+                      if p["kind"] == "favourites")
+    track = tracks[0]["id"]
+    assert client.post(f"/playlists/{favourites['id']}/items", headers=hdr,
+                       json={"track_ids": [track]}).status_code == 200
+    assert track in client.get("/favourites", headers=hdr).json()["track_ids"]
+    client.post(f"/playlists/{favourites['id']}/items/remove", headers=hdr,
+                json={"track_ids": [track]})
+    assert track not in client.get("/favourites", headers=hdr).json()["track_ids"]
+
+
+def test_a_mirrored_playlist_still_refuses_both_ways(client, hdr, tracks):
+    mirror = client.post("/playlists", headers=hdr,
+                         json={"name": "Theirs", "kind": "spotify"}).json()
+    ids = [tracks[0]["id"]]
+    assert client.post(f"/playlists/{mirror['id']}/items", headers=hdr,
+                       json={"track_ids": ids}).status_code == 409
+    assert client.post(f"/playlists/{mirror['id']}/items/remove", headers=hdr,
+                       json={"track_ids": ids}).status_code == 409

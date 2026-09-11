@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
 import 'dialogs.dart';
+import 'snack.dart';
 
 /// Who can sign in to this server.
 ///
@@ -72,7 +73,7 @@ class _AccountsPageState extends State<AccountsPage> {
         ),
       );
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
     }
   }
 
@@ -118,7 +119,7 @@ class _AccountsPageState extends State<AccountsPage> {
       await app.api.createAccount(name.text.trim(), password.text);
       _load();
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
     }
   }
 
@@ -167,10 +168,10 @@ class _AccountsPageState extends State<AccountsPage> {
       await app.api.resetPassword(account['id'] as int, password.text,
           signOutDevices: signOut);
       messenger.showSnackBar(
-          SnackBar(content: Text('Password set for ${account['name']}')));
+          snack(Text('Password set for ${account['name']}')));
       _load();
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
     }
   }
 
@@ -201,9 +202,9 @@ class _AccountsPageState extends State<AccountsPage> {
     if (ok != true) return;
     try {
       await app.api.changePassword(password.text);
-      messenger.showSnackBar(const SnackBar(content: Text('Password changed')));
+      messenger.showSnackBar(snack(Text('Password changed')));
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
     }
   }
 

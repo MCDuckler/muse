@@ -8,6 +8,7 @@ import '../state/app_state.dart';
 import 'artwork.dart';
 import 'dialogs.dart';
 import 'mini_player.dart';
+import 'snack.dart';
 
 /// One screen for the whole download queue.
 ///
@@ -60,9 +61,9 @@ class _DownloadsPageState extends State<DownloadsPage> {
     try {
       await action();
       await _load();
-      messenger.showSnackBar(SnackBar(content: Text(done)));
+      messenger.showSnackBar(snack(Text(done)));
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
     }
   }
 
@@ -195,14 +196,13 @@ class _DownloadsPageState extends State<DownloadsPage> {
                                   try {
                                     final r = await app.api.refindFailed();
                                     await _load();
-                                    messenger.showSnackBar(SnackBar(
-                                        content: Text(r['found'] == 0
+                                    messenger.showSnackBar(snack(Text(r['found'] == 0
                                             ? 'Nothing close enough anywhere'
                                             : 'Found ${r['found']} elsewhere — '
                                                 'downloading them now')));
                                   } catch (e) {
                                     messenger.showSnackBar(
-                                        SnackBar(content: Text('$e')));
+                                        snack(Text('$e')));
                                   }
                                 },
                               ),

@@ -4,13 +4,17 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/offline.dart';
+import '../state/selection.dart';
 import 'artwork.dart';
+import 'selection_bar.dart';
+import 'song_row.dart';
 import 'source_dot.dart';
 import 'swipe.dart';
 import 'dialogs.dart';
 import 'mini_player.dart';
 import 'track_list.dart';
 import 'track_menu.dart';
+import 'snack.dart';
 
 /// All tracks, albums and artists — built from metadata the enrichment pipeline
 /// already writes and nothing used to read.
@@ -224,15 +228,14 @@ class _AlbumPageState extends State<AlbumPage> {
             remoteId: widget.remoteId ?? detail.remoteId,
             remoteIds: one == null ? const [] : [one],
           );
-      messenger.showSnackBar(SnackBar(
-        content: Text(r.queued == 0
+      messenger.showSnackBar(snack(Text(r.queued == 0
             ? 'Nothing could be matched'
             : '${r.queued} queued'
                 '${r.notMatched == 0 ? '' : ' · ${r.notMatched} not matched'}'),
       ));
       _load();
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
     } finally {
       if (mounted) setState(() => _filling = false);
     }
@@ -253,7 +256,13 @@ class _AlbumPageState extends State<AlbumPage> {
               if (r.track != null) r.track!,
             ...detail.extra,
           ];
-          return RefreshIndicator(
+          // A record is a list like any other: several of its songs can be picked
+          // out and queued, kept or put on a playlist together. Only the ones we
+          // actually hold — a row for a track nobody has fetched has nothing to pick.
+          final where = 'album:${widget.album?.name ?? widget.remoteId ?? ''}';
+          return SelectionOver(
+            bar: SelectionBar(where: where, tracks: held),
+            child: RefreshIndicator(
             onRefresh: () async => _load(),
             child: ListView(
               padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
@@ -268,6 +277,7 @@ class _AlbumPageState extends State<AlbumPage> {
                   _ReleaseRow(
                     row: row,
                     playable: held,
+                    selectable: where,
                     onFetch: detail.complete && row.remoteId != null
                         ? () => _fill(detail, one: row.remoteId)
                         : null,
@@ -277,19 +287,19 @@ class _AlbumPageState extends State<AlbumPage> {
                     padding: EdgeInsets.fromLTRB(16, 20, 16, 6),
                     child: Text('Also in your library under this album'),
                   ),
+                  // The same row as everywhere else: these were plain tiles with no
+                  // menu, no swipe and nothing to say whether the song was even here.
                   for (final t in detail.extra)
-                    ListTile(
-                      leading: Artwork(track: t, size: 40),
-                      title: Text(t.displayTitle,
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                      subtitle: Text(t.artistLine,
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                    SongRow(
+                      track: t,
+                      selectable: where,
                       onTap: () => context
                           .read<AppState>()
                           .playNow(held, startAt: held.indexOf(t)),
                     ),
                 ],
               ],
+            ),
             ),
           );
         },
@@ -413,10 +423,15 @@ class _AlbumHead extends StatelessWidget {
 
 /// One line of the record. A song we hold plays; one we do not is offered.
 class _ReleaseRow extends StatelessWidget {
-  const _ReleaseRow({required this.row, required this.playable, this.onFetch});
+  const _ReleaseRow(
+      {required this.row, required this.playable, this.onFetch, this.selectable});
   final ReleaseTrack row;
   final List<Track> playable;
   final VoidCallback? onFetch;
+
+  /// Which list this row belongs to when songs are being picked out of it. Only rows
+  /// for songs we hold take part; the rest are a track listing, not a library.
+  final String? selectable;
 
   @override
   Widget build(BuildContext context) {
@@ -424,13 +439,26 @@ class _ReleaseRow extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final track = row.track;
     final faded = track == null;
+    final selection =
+        selectable == null || track == null ? null : context.watch<Selection>();
+    final picking = selection?.inside(selectable!) ?? false;
+    final picked = picking && selection!.has(track!.id);
 
     // A row for a song we hold swipes to put it on next, like every other list. One we
     // do not hold has nothing to queue yet, so it does not.
     return _maybeSwipe(
       context,
-      track,
-      ListTile(
+      picking ? null : track,
+      Material(
+      color: picked ? scheme.primary.withValues(alpha: 0.26) : Colors.transparent,
+      shape: picked
+          ? RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(
+                  color: scheme.primary.withValues(alpha: 0.85), width: 1.6),
+            )
+          : null,
+      child: ListTile(
       dense: true,
       leading: SizedBox(
         width: 40,
@@ -467,20 +495,28 @@ class _ReleaseRow extends StatelessWidget {
               : Text(track.state == 'failed'
                   ? (track.failReason ?? 'Download failed')
                   : 'Downloading…')),
-      trailing: track == null
-          ? IconButton(
-              icon: const Icon(Icons.add_circle_outline, size: 20),
-              tooltip: 'Fetch this one',
-              onPressed: onFetch,
-            )
-          : IconButton(
-              icon: const Icon(Icons.more_vert, size: 20),
-              tooltip: 'Track actions',
-              onPressed: () => showTrackSheet(context, track),
-            ),
-      onTap: track == null
-          ? onFetch
-          : () => app.playNow(playable, startAt: playable.indexOf(track)),
+      trailing: picking
+          ? null
+          : track == null
+              ? IconButton(
+                  icon: const Icon(Icons.add_circle_outline, size: 20),
+                  tooltip: 'Fetch this one',
+                  onPressed: onFetch,
+                )
+              : IconButton(
+                  icon: const Icon(Icons.more_vert, size: 20),
+                  tooltip: 'Track actions',
+                  onPressed: () => showTrackSheet(context, track),
+                ),
+      onLongPress: track == null || selectable == null
+          ? null
+          : () => selection!.start(selectable!, track.id),
+      onTap: picking
+          ? () => selection!.toggle(selectable!, track!.id)
+          : track == null
+              ? onFetch
+              : () => app.playNow(playable, startAt: playable.indexOf(track)),
+    ),
     ),
     );
   }
@@ -495,7 +531,7 @@ Widget _maybeSwipe(BuildContext context, Track? track, Widget row) {
       final messenger = ScaffoldMessenger.of(context);
       context.read<AppState>().addTrack(track, mode: 'next');
       messenger.showSnackBar(
-          SnackBar(content: Text('${track.displayTitle} plays next')));
+          snack(Text('${track.displayTitle} plays next')));
     },
     child: row,
   );
@@ -595,14 +631,13 @@ class _ArtistPageState extends State<ArtistPage> {
       } else {
         await api.follow(remoteId: d.remoteId, name: d.name, image: d.image);
       }
-      messenger.showSnackBar(SnackBar(
-        content: Text(d.following
+      messenger.showSnackBar(snack(Text(d.following
             ? 'No longer following ${d.name}'
             : 'Following ${d.name} — new records show up in your feed'),
       ));
       _load();
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
     } finally {
       if (mounted) setState(() => _working = false);
     }
@@ -619,7 +654,10 @@ class _ArtistPageState extends State<ArtistPage> {
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           final d = snap.data!;
           final text = Theme.of(context).textTheme;
-          return RefreshIndicator(
+          final where = 'artist:${d.name}';
+          return SelectionOver(
+            bar: SelectionBar(where: where, tracks: d.tracks),
+            child: RefreshIndicator(
             onRefresh: () async => _load(),
             child: ListView(
               padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
@@ -650,25 +688,22 @@ class _ArtistPageState extends State<ArtistPage> {
                     child: Text('In your library (${d.tracks.length})',
                         style: text.titleSmall),
                   ),
+                  // Was a tile of its own with a menu button and nothing else: no
+                  // swipe to play next, no source, no sign of what is on the device,
+                  // and no way to pick several out. It is the same song as in every
+                  // other list, so it is the same row.
                   for (var i = 0; i < d.tracks.length; i++)
-                    ListTile(
+                    SongRow(
+                      track: d.tracks[i],
+                      selectable: where,
                       dense: true,
-                      leading: Artwork(track: d.tracks[i], size: 40),
-                      title: Text(d.tracks[i].displayTitle,
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                      subtitle: Text(d.tracks[i].albumLine ?? '',
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.more_vert, size: 20),
-                        tooltip: 'Track actions',
-                        onPressed: () => showTrackSheet(context, d.tracks[i]),
-                      ),
                       onTap: () => context
                           .read<AppState>()
                           .playNow(d.tracks, startAt: i),
                     ),
                 ],
               ],
+            ),
             ),
           );
         },

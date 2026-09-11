@@ -674,6 +674,25 @@ class ApiClient {
               headers: _headers, body: jsonEncode({'track_ids': trackIds})))
           as Map<String, dynamic>);
 
+  /// Which of your playlists already hold any of these songs, and how many.
+  ///
+  /// Keyed by playlist id, so the sheet can draw a tick, a dash or nothing without
+  /// fetching a single playlist's contents.
+  Future<Map<int, int>> playlistsHolding(List<int> trackIds) async {
+    final d = await _decode(await http.post(_u('/playlists/holding'),
+        headers: _headers, body: jsonEncode({'track_ids': trackIds})));
+    final holding = (d['holding'] as Map).cast<String, dynamic>();
+    return {
+      for (final e in holding.entries) int.parse(e.key): (e.value as num).toInt()
+    };
+  }
+
+  Future<Playlist> removeFromPlaylist(int id, List<int> trackIds) async =>
+      Playlist.fromJson(await _decode(await http.post(
+              _u('/playlists/$id/items/remove'),
+              headers: _headers,
+              body: jsonEncode({'track_ids': trackIds}))) as Map<String, dynamic>);
+
   Future<Playlist> removePlaylistItem(int id, int pos) async =>
       Playlist.fromJson(await _decode(
               await http.delete(_u('/playlists/$id/items/$pos'), headers: _headers))

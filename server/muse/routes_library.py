@@ -427,6 +427,24 @@ def _own_playlist(playlist_id: int, user: dict) -> dict:
     return row
 
 
+def _holds_items(playlist_id: int, user: dict) -> dict:
+    """A list whose *contents* you may change.
+
+    Wider than _editable on purpose: Favourites is not a playlist anybody made, but it
+    is one songs go into — the heart writes to it. Adding to it from the playlist sheet
+    used to come back 409 while the heart on the same song worked, which is one list
+    behaving two ways depending on which button you pressed.
+    """
+    row = _own_playlist(playlist_id, user)
+    if row["kind"] not in ("local", FAVOURITES_KIND):
+        raise HTTPException(
+            409,
+            f"This playlist mirrors {row['kind']} and cannot be edited here. "
+            f"Make a copy of it first.",
+        )
+    return row
+
+
 def _editable(playlist_id: int, user: dict) -> dict:
     """A mirrored playlist is a view of someone else's list.
 
@@ -466,7 +484,8 @@ def get_playlist(playlist_id: int, user: dict = Depends(current_user)):
     # button has to be offered on — a playlist marked "all" whose songs were found
     # already in the catalog never had a single job queued for it.
     waiting = sum(1 for t in items if t["state"] in ("pending", "failed"))
-    return {**with_cover(p), "unmatched": unmatched, "editable": p["kind"] == "local",
+    return {**with_cover(p), "unmatched": unmatched,
+            "editable": p["kind"] in ("local", FAVOURITES_KIND),
             "download_mode": p.get("download_mode", "all"),
             "waiting": waiting,
             "items": [{**catalog.public(t), "pos": t["pos"]} for t in items]}
@@ -474,7 +493,7 @@ def get_playlist(playlist_id: int, user: dict = Depends(current_user)):
 
 @router.post("/playlists/{playlist_id}/items")
 def add_items(playlist_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
-    _editable(playlist_id, user)
+    _holds_items(playlist_id, user)
     ids = body.get("track_ids") or []
     if not ids:
         raise HTTPException(400, "track_ids required")
@@ -488,6 +507,47 @@ def add_items(playlist_id: int, body: dict = Body(...), user: dict = Depends(cur
                 (playlist_id, start + n, tid),
             )
     return get_playlist(playlist_id, user)
+
+
+@router.post("/playlists/{playlist_id}/items/remove")
+def remove_items(playlist_id: int, body: dict = Body(...),
+                 user: dict = Depends(current_user)):
+    """Take songs off a playlist by id rather than by position.
+
+    The position route is what a row in a list uses, because that is what a row knows.
+    This is what a tick-box knows: the sheet that puts a song on five playlists has to
+    be able to take it off one, and it never saw the positions.
+    """
+    _holds_items(playlist_id, user)
+    ids = body.get("track_ids") or []
+    if not ids:
+        raise HTTPException(400, "track_ids required")
+    db.run("delete from playlist_items where playlist_id=%s and track_id = any(%s)",
+           (playlist_id, list(ids)))
+    return get_playlist(playlist_id, user)
+
+
+@router.post("/playlists/holding")
+def playlists_holding(body: dict = Body(...), user: dict = Depends(current_user)):
+    """How many of these songs each of your playlists already has.
+
+    One request for the whole sheet. Asking per playlist would be twenty round trips to
+    draw twenty tick-boxes, and asking for every playlist's contents would be the whole
+    library to answer a question about eleven songs.
+    """
+    ids = body.get("track_ids") or []
+    if not ids:
+        return {"holding": {}}
+    rows = db.all_(
+        """select p.id, count(distinct i.track_id) n
+             from playlists p
+             join playlist_items i
+               on i.playlist_id = p.id and i.track_id = any(%s)
+            where p.owner_id = %s
+            group by p.id""",
+        (list(ids), user["id"]),
+    )
+    return {"holding": {str(r["id"]): r["n"] for r in rows}}
 
 
 @router.patch("/playlists/{playlist_id}")
@@ -504,7 +564,7 @@ def rename_playlist(playlist_id: int, body: dict = Body(...),
 @router.post("/playlists/{playlist_id}/move")
 def move_playlist_item(playlist_id: int, body: dict = Body(...),
                        user: dict = Depends(current_user)):
-    _editable(playlist_id, user)
+    _holds_items(playlist_id, user)
     src, dst = body.get("from"), body.get("to")
     if src is None or dst is None:
         raise HTTPException(400, "from and to are required")
@@ -958,7 +1018,7 @@ def clear_queue(queue_id: int, body: dict = Body(default={}),
 @router.delete("/playlists/{playlist_id}/items/{pos}")
 def remove_playlist_item(playlist_id: int, pos: int,
                          user: dict = Depends(current_user)):
-    _editable(playlist_id, user)
+    _holds_items(playlist_id, user)
     with db.pool().connection() as c:
         gone = c.execute(
             "delete from playlist_items where playlist_id=%s and pos=%s returning track_id",

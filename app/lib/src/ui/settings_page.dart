@@ -18,6 +18,7 @@ import 'accounts_page.dart';
 import 'playback_log_page.dart';
 import 'track_menu.dart';
 import 'theme.dart';
+import 'snack.dart';
 
 const appVersion = '0.1.0';
 
@@ -75,7 +76,7 @@ class _SettingsPageState extends State<SettingsPage> {
     try {
       await app.setAvatar(await file.readAsBytes());
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
     } finally {
       if (mounted) setState(() => _pickingFace = false);
     }
@@ -97,8 +98,7 @@ class _SettingsPageState extends State<SettingsPage> {
       final track = await app.api.upload(bytes, file.name);
       _load();
       if (!mounted) return;
-      messenger.showSnackBar(SnackBar(
-        content: Text(track.state == 'ready'
+      messenger.showSnackBar(snack(Text(track.state == 'ready'
             ? 'Added ${track.displayTitle}'
             : 'Uploaded ${file.name}'),
         action: SnackBarAction(
@@ -111,7 +111,7 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
       ));
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
     } finally {
       if (mounted) setState(() => _uploading = false);
     }

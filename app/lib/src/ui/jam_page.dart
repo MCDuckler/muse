@@ -8,6 +8,7 @@ import '../state/app_state.dart';
 import 'face.dart';
 import 'glass.dart';
 import 'mini_player.dart';
+import 'snack.dart';
 
 /// Listening together: one queue, several people, different rooms.
 ///
@@ -67,7 +68,7 @@ class _JamPageState extends State<JamPage> {
     try {
       people = await app.api.jamPeople();
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
       return;
     }
     if (!context.mounted) return;
@@ -106,9 +107,9 @@ class _JamPageState extends State<JamPage> {
                   try {
                     await app.inviteToJam(person.id);
                     messenger.showSnackBar(
-                        SnackBar(content: Text('${person.name} is in')));
+                        snack(Text('${person.name} is in')));
                   } catch (e) {
-                    messenger.showSnackBar(SnackBar(content: Text('$e')));
+                    messenger.showSnackBar(snack(Text('$e')));
                   }
                 },
               ),
@@ -201,7 +202,7 @@ class _JamPageState extends State<JamPage> {
                     await Clipboard.setData(ClipboardData(text: jam.code));
                     if (!context.mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Code copied')));
+                        snack(Text('Code copied')));
                   },
                 ),
                 const Spacer(),

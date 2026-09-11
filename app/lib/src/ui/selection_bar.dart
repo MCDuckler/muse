@@ -6,6 +6,7 @@ import '../state/app_state.dart';
 import '../state/offline.dart';
 import '../state/selection.dart';
 import 'dialogs.dart';
+import 'snack.dart';
 
 /// What you can do to the songs you have picked out.
 ///
@@ -47,7 +48,7 @@ class SelectionBar extends StatelessWidget {
 
     Future<void> done(String said) async {
       selection.clear();
-      messenger.showSnackBar(SnackBar(content: Text(said)));
+      messenger.showSnackBar(snack(Text(said)));
     }
 
     final all = picked.length == tracks.length;

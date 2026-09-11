@@ -13,6 +13,7 @@ import 'mini_player.dart';
 import 'spotify_page.dart';
 import 'selection_bar.dart';
 import 'song_row.dart';
+import 'snack.dart';
 
 
 class LibraryPage extends StatelessWidget {
@@ -116,9 +117,9 @@ class LibraryPage extends StatelessWidget {
                     await app.api.syncSpotify();
                     await app.refreshPlaylists();
                     messenger.showSnackBar(
-                        const SnackBar(content: Text('Refreshed from Spotify')));
+                        snack(Text('Refreshed from Spotify')));
                   } catch (e) {
-                    messenger.showSnackBar(SnackBar(content: Text('$e')));
+                    messenger.showSnackBar(snack(Text('$e')));
                   }
                 } else if (v == 'keep') {
                   final messenger = ScaffoldMessenger.of(context);
@@ -135,7 +136,7 @@ class LibraryPage extends StatelessWidget {
                   if (!sure) return;
                   await app.keepOffline(ready);
                   messenger.showSnackBar(
-                      SnackBar(content: Text('Keeping $bytes songs')));
+                      snack(Text('Keeping $bytes songs')));
                 } else if (v == 'forget') {
                   final full = await app.api.playlist(p.id);
                   for (final t in full.items) {
@@ -150,7 +151,7 @@ class LibraryPage extends StatelessWidget {
                         .setPlaylistCover(p.id, await file.readAsBytes());
                     await app.refreshPlaylists();
                   } catch (e) {
-                    messenger.showSnackBar(SnackBar(content: Text('$e')));
+                    messenger.showSnackBar(snack(Text('$e')));
                   }
                 } else if (v == 'drawn-cover') {
                   await app.api.clearPlaylistCover(p.id);
@@ -196,7 +197,12 @@ class LibraryPage extends StatelessWidget {
                     PopupMenuItem(
                         value: 'unmatched',
                         child: Text('${p.unmatched} songs not matched…')),
-                  const PopupMenuItem(value: 'resync', child: Text('Refresh from Spotify')),
+                  // Only where there is something to refresh from: this called the
+                  // Spotify sync whatever the playlist mirrored, so a YouTube Music
+                  // list offered "Refresh from Spotify" and then did nothing to it.
+                  if (p.kind == 'spotify')
+                    const PopupMenuItem(
+                        value: 'resync', child: Text('Refresh from Spotify')),
                 ] else if (!p.isFavourites)
                   const PopupMenuItem(value: 'rename', child: Text('Rename…')),
                 // Favourites has no delete: it is where the heart button puts things,
@@ -429,7 +435,15 @@ class _HistoryPageState extends State<_HistoryPage> {
             );
           }
           String? lastDay;
-          return RefreshIndicator(
+          // The same row as every other list — held to pick several out, swiped to
+          // play next, with the full menu behind it. This screen was the last one
+          // drawing its own ListTile, so a song you had just played was the one song
+          // in the app you could not favourite, keep, or add to a playlist from the
+          // list it was in.
+          final tracks = [for (final p in items) p.track];
+          return SelectionOver(
+            bar: SelectionBar(where: 'history', tracks: tracks),
+            child: RefreshIndicator(
             onRefresh: () async => _load(),
             child: ListView.builder(
               padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
@@ -443,27 +457,22 @@ class _HistoryPageState extends State<_HistoryPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     if (showDay) _SectionLabel(day),
-                    ListTile(
-                      leading: Artwork(track: played.track, size: 40),
-                      title: Text(played.track.displayTitle,
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                      subtitle: Text(
-                        [_time(played.playedAt), played.track.artistLine]
-                            .where((s) => s.isNotEmpty)
-                            .join(' · '),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.playlist_add),
-                        tooltip: 'Add to queue',
-                        onPressed: () => app.addTrack(played.track),
-                      ),
+                    SongRow(
+                      track: played.track,
+                      selectable: 'history',
+                      showAlbum: false,
+                      // When it was played is the one thing this list knows that no
+                      // other list does, so it keeps the place a duration would have.
+                      showDuration: false,
+                      trailing: Text(_time(played.playedAt),
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Theme.of(context).colorScheme.onSurfaceVariant)),
                       onTap: () => app.playNow([played.track]),
                     ),
                   ],
                 );
               },
+            ),
             ),
           );
         },
@@ -575,8 +584,7 @@ class _PlaylistHeader extends StatelessWidget {
                 onPressed: () async {
                   final messenger = ScaffoldMessenger.of(context);
                   final n = await app.api.downloadPlaylist(playlist.id);
-                  messenger.showSnackBar(SnackBar(
-                      content: Text(n == 0
+                  messenger.showSnackBar(snack(Text(n == 0
                           ? 'Everything here is already downloaded'
                           : 'Queued $n songs')));
                   onChanged();

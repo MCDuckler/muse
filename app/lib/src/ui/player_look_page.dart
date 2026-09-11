@@ -5,6 +5,7 @@ import '../api/models.dart';
 import '../state/app_state.dart';
 import 'mini_player.dart';
 import 'spectrum.dart';
+import 'snack.dart';
 
 /// How the player screen is laid out, on a screen of its own.
 ///
@@ -94,8 +95,7 @@ class PlayerLookPage extends StatelessWidget {
                 final allowed = await Spectrum.askForPermission();
                 await app.setSpectrum(allowed);
                 if (!allowed && context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                      content: Text(
+                  ScaffoldMessenger.of(context).showSnackBar(snack(Text(
                           'Without that permission Android will not say what is '
                           'playing, so there is nothing to draw.')));
                 }

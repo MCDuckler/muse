@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../state/playback_log.dart';
+import 'snack.dart';
 
 /// What the audio engine did, in order.
 ///
@@ -32,7 +33,7 @@ class _PlaybackLogPageState extends State<PlaybackLogPage> {
               await Clipboard.setData(ClipboardData(text: PlaybackLog.text));
               if (!context.mounted) return;
               ScaffoldMessenger.of(context)
-                  .showSnackBar(const SnackBar(content: Text('Log copied')));
+                  .showSnackBar(snack(Text('Log copied')));
             },
           ),
           IconButton(

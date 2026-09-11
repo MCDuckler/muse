@@ -9,7 +9,7 @@ import '../state/app_state.dart';
 import 'artwork.dart';
 import 'selection_bar.dart';
 import 'song_row.dart';
-import 'dialogs.dart';
+import 'snack.dart';
 
 /// Local catalog first, then YouTube Music. Anything already in the library is marked,
 /// so you never queue a second copy of what you have.
@@ -230,16 +230,15 @@ class _SearchPageState extends State<SearchPage> {
                 _SectionHeader('In your library · ${_local.length}'),
               if (_shows('library'))
                 for (final t in _local)
+                // The same menu a song has everywhere else. This list used to carry a
+                // cut-down one — queue, play next, playlist — so the six other things
+                // you can do to a song (favourite it, go to its album or its artist,
+                // read the words, correct the metadata, fetch it now) were missing in
+                // the one place you have just gone looking for that song.
                 SongRow(
                   track: t,
                   selectable: 'search',
                   onTap: () => app.addTrack(t),
-                  trailing: _queueMenu(
-                    onNext: () => app.addTrack(t, mode: 'next'),
-                    onEnd: () => app.addTrack(t),
-                    onPlaylist: () => addToPlaylistSheet(context, app, t),
-                  ),
-                  showMenu: false,
                 ),
               if (_album != null) ..._albumRows(app),
               if (_shows('ytmusic') && _remoteError != null)
@@ -395,10 +394,9 @@ class _SearchPageState extends State<SearchPage> {
     try {
       final track = await app.api.addFromSource(hit);
       await app.addTrack(track, mode: mode);
-      messenger.showSnackBar(SnackBar(
-          content: Text('Added "${hit.title}" from ${hit.sourceLabel}')));
+      messenger.showSnackBar(snack(Text('Added "${hit.title}" from ${hit.sourceLabel}')));
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
     }
   }
 
@@ -408,10 +406,9 @@ class _SearchPageState extends State<SearchPage> {
     try {
       final r = await app.api.importAlbum(_lastQuery);
       await app.refreshPlaylists();
-      messenger.showSnackBar(SnackBar(
-          content: Text('Added "${r['name']}" — ${r['added']} tracks')));
+      messenger.showSnackBar(snack(Text('Added "${r['name']}" — ${r['added']} tracks')));
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
     } finally {
       if (mounted) setState(() => _importing = false);
     }
@@ -472,16 +469,14 @@ class _SearchPageState extends State<SearchPage> {
     try {
       final track = await app.api.resolve(videoId: hit.videoId);
       await app.addTrack(track, mode: mode);
-      messenger.showSnackBar(SnackBar(
-        content: Text(track.isReady
+      messenger.showSnackBar(snack(Text(track.isReady
             ? 'Added ${track.title}'
             : 'Queued ${track.title} — downloading'),
       ));
     } on ApiException catch (e) {
-      messenger.showSnackBar(SnackBar(
-          content: Text(e.message.trim().isEmpty ? 'Failed (${e.status})' : e.message)));
+      messenger.showSnackBar(snack(Text(e.message.trim().isEmpty ? 'Failed (${e.status})' : e.message)));
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
     }
   }
 

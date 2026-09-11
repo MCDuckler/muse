@@ -221,9 +221,18 @@ class MuseTheme {
                   : scheme.onSurfaceVariant,
             )),
       ),
+      // In the app's colours rather than Material's inverse surface, which in a dark
+      // theme is a white slab: the brightest thing on the screen, appearing at the
+      // bottom for a message about something that already worked.
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        backgroundColor: scheme.surfaceContainerHighest,
+        contentTextStyle: TextStyle(
+            fontFamily: 'Manrope', fontSize: 13.5, color: scheme.onSurface),
+        actionTextColor: scheme.primary,
+        elevation: 6,
+        insetPadding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
       ),
       popupMenuTheme: PopupMenuThemeData(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),

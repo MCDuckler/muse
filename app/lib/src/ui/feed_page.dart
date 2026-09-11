@@ -7,6 +7,7 @@ import 'artwork.dart';
 import 'browse_page.dart';
 import 'dialogs.dart';
 import 'mini_player.dart';
+import 'snack.dart';
 
 /// What the artists you follow have put out.
 ///
@@ -49,7 +50,7 @@ class _FeedPageState extends State<FeedPage> {
       await context.read<AppState>().api.refreshFeed();
       _load();
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
     } finally {
       if (mounted) setState(() => _checking = false);
     }
@@ -226,10 +227,10 @@ class _FollowingPageState extends State<FollowingPage> {
         ..write(' · ${r['already']} already')
         ..write(' of ${r['found']} on $provider');
       if (missed.isNotEmpty) line.write(' · not found: ${missed.take(3).join(', ')}');
-      messenger.showSnackBar(SnackBar(content: Text(line.toString())));
+      messenger.showSnackBar(snack(Text(line.toString())));
       _load();
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
     } finally {
       if (mounted) setState(() => _importing = null);
     }
@@ -244,7 +245,7 @@ class _FollowingPageState extends State<FollowingPage> {
       await api.follow(name: name.trim());
       _load();
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(snack(Text('$e')));
     }
   }
 

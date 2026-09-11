@@ -8,6 +8,7 @@ import 'source_dot.dart';
 import 'browse_page.dart';
 import 'dialogs.dart';
 import 'lyrics_sheet.dart';
+import 'snack.dart';
 
 /// Everything you can do to one track, in one place.
 ///
@@ -117,8 +118,7 @@ Future<void> showTrackSheet(
 Future<void> _start(BuildContext context, AppState app, Track track) async {
   final messenger = ScaffoldMessenger.of(context);
   final started = await app.fetchNow(track);
-  messenger.showSnackBar(SnackBar(
-      content: Text(started
+  messenger.showSnackBar(snack(Text(started
           ? '${track.displayTitle} is downloading'
           : 'Nowhere left to fetch ${track.displayTitle} from')));
 }
