@@ -13,6 +13,7 @@ import 'art_cache.dart';
 import 'playback_log.dart';
 import 'sleeve_board.dart';
 import 'player.dart';
+import '../ui/media_session.dart';
 import '../ui/theme.dart';
 
 /// One place the UI reads from. Deliberately small: the server is the truth, and a
@@ -1264,11 +1265,30 @@ class AppState extends ChangeNotifier {
   /// the highlighted row stops matching what is actually playing.
   /// On the web this is the browser tab's title, which is how you find the tab that
   /// is making the noise. Elsewhere it names the entry in the task switcher.
-  void _describeForTheOs(Track? track) {
+  void _describeForTheOs(Track? track, {bool? playing}) {
     SystemChrome.setApplicationSwitcherDescription(ApplicationSwitcherDescription(
       label: track == null ? 'muse' : '${track.displayTitle} · ${track.artistLine}',
       primaryColor: 0xFF121212,
     ));
+    if (track == null) {
+      nothingIsPlaying();
+      return;
+    }
+    // And the browser, which has no other way of knowing. On iOS this is the
+    // difference between a page that happens to be playing a sound and a media app:
+    // the first has its work suspended when it is switched away from, so nothing runs
+    // to start the next song and a queue plays exactly one record.
+    describeToTheBrowser(
+      title: track.displayTitle,
+      artist: track.artistLine,
+      album: track.albumLine ?? '',
+      artwork: api.coverUrl(track, small: false),
+      playing: playing ?? (player?.last?.playing ?? false),
+      onPlay: playPause,
+      onPause: playPause,
+      onNext: skipNext,
+      onPrevious: skipPrevious,
+    );
   }
 
   /// Follow the player, and tell the app only when something it can see has changed.
@@ -1287,11 +1307,15 @@ class AppState extends ChangeNotifier {
       notifyListeners();
     };
     int? named;
+    bool? wasPlaying;
     String? shape;
     _playerSub = player?.snapshots.listen((s) {
-      if (s.current?.id != named) {
+      if (s.current?.id != named || s.playing != wasPlaying) {
         named = s.current?.id;
-        _describeForTheOs(s.current);
+        wasPlaying = s.playing;
+        // Also on play and pause: a lockscreen showing a play button on something that
+        // is playing is worse than no lockscreen control at all.
+        _describeForTheOs(s.current, playing: s.playing);
       }
       final next = [
         s.current?.id,
