@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:audio_session/audio_session.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
@@ -75,6 +75,9 @@ class PlayerService {
   /// Something else has the speaker — a call, a spoken direction. Not a fault, and not
   /// ours to undo: the session tells us when it is over.
   bool _interrupted = false;
+
+  /// Whether music was playing when something else took the speaker.
+  bool _wasPlayingWhenInterrupted = false;
 
   /// How many times the watchdog has tried to get a stopped engine going again.
   int _revivals = 0;
@@ -223,33 +226,8 @@ class PlayerService {
     try {
       final session = await AudioSession.instance;
       await session.configure(const AudioSessionConfiguration.music());
-      var wasPlaying = false;
-      session.interruptionEventStream.listen((event) async {
-        if (event.begin) {
-          wasPlaying = _player.playing;
-          if (event.type == AudioInterruptionType.duck) {
-            await _player.setVolume(_volumeFor(current) * 0.3);
-          } else if (wasPlaying) {
-            // Held apart from `pause()`: this is not the person deciding to stop, and
-            // the watchdog must neither undo it nor forget that music was playing.
-            _interrupted = true;
-            PlaybackLog.note('interrupted (${event.type.name})');
-            await _player.pause();
-          }
-        } else {
-          if (_interrupted) PlaybackLog.note('interruption over');
-          _interrupted = false;
-          if (event.type == AudioInterruptionType.duck) {
-            await _player.setVolume(_volumeFor(current));
-          } else if (event.type == AudioInterruptionType.pause && wasPlaying) {
-            // A phone call or a spoken direction: it was ours before and it is ours
-            // again. (`unknown` is not resumed from — that is the user pressing pause
-            // somewhere else, and starting again over their head is worse.)
-            _startPlayback();
-          }
-        }
-        _emit(force: true);
-      });
+      session.interruptionEventStream.listen((event) => unawaited(
+          handleInterruption(begin: event.begin, type: event.type)));
       // Only when something was actually playing.
       //
       // The log has this firing twice a minute with nothing playing between — a
@@ -257,8 +235,24 @@ class PlayerService {
       // then costs nothing visible but it does set "nothing wanted", which is the one
       // state the watchdog will not bring music back from. Something that was not
       // playing cannot be interrupted.
-      session.becomingNoisyEventStream.listen((_) {
+      session.becomingNoisyEventStream.listen((_) async {
         if (!_player.playing && !_wantPlaying) return;
+        // Only when something really did unplug.
+        //
+        // This broadcast means "the output you were using has gone, do not blast the
+        // room" — and on this phone it also arrives when a Bluetooth route merely
+        // settles, twice a minute, with nothing pulled out of anything. Pausing on one
+        // of those while the app was in the background is music stopping for no reason
+        // anybody can see, and it never came back because a pause is a decision.
+        //
+        // So ask what the sound is coming out of before believing it. A headset, a
+        // Bluetooth speaker or anything else still connected means nothing was
+        // unplugged and the event was noise.
+        final still = await _stillPluggedIn(session);
+        if (still != null) {
+          PlaybackLog.note('audio route settled (still on $still) — kept playing');
+          return;
+        }
         PlaybackLog.note('audio route went away');
         unawaited(pause());
       });
@@ -266,6 +260,95 @@ class PlayerService {
       // A platform with no session to configure still plays.
     }
   }
+
+  /// The name of an output that is not the phone's own speaker, or null if the only
+  /// thing left to play through is the speaker — which is what "becoming noisy"
+  /// actually means.
+  Future<String?> _stillPluggedIn(AudioSession session) async {
+    try {
+      return somewhereElseToPlay(await session.getDevices(includeInputs: false));
+    } catch (_) {
+      // A platform that will not say. Take the broadcast at its word.
+      return null;
+    }
+  }
+
+  /// Anything connected that is not the phone's own speaker, by name.
+  ///
+  /// "Becoming noisy" means the sound is about to come out of the speaker because
+  /// what it was coming out of has gone. If a headset or a Bluetooth speaker is still
+  /// there, nothing has gone anywhere and the broadcast was the audio routing
+  /// settling, which this phone does about twice a minute.
+  @visibleForTesting
+  static String? somewhereElseToPlay(Iterable<AudioDevice> devices) {
+    for (final d in devices) {
+      if (!d.isOutput) continue;
+      // The device list is marked experimental in audio_session; the three cases
+      // named here are the ones that have existed since it was added.
+      // ignore: experimental_member_use
+      switch (d.type) {
+        // ignore: experimental_member_use
+        case AudioDeviceType.builtInSpeaker:
+        // ignore: experimental_member_use
+        case AudioDeviceType.builtInEarpiece:
+        // ignore: experimental_member_use
+        case AudioDeviceType.unknown:
+          continue;
+        default:
+          // ignore: experimental_member_use
+          return d.name.isEmpty ? d.type.name : d.name;
+      }
+    }
+    return null;
+  }
+
+  /// Something else wanted the speaker, or has finished with it.
+  ///
+  /// Its own method so a test can be the phone: interruptions arrive from the platform
+  /// and there is no other way to stand where they come from.
+  @visibleForTesting
+  Future<void> handleInterruption(
+      {required bool begin, required AudioInterruptionType type}) async {
+      if (begin) {
+        _wasPlayingWhenInterrupted = _player.playing;
+        if (type == AudioInterruptionType.duck) {
+          await _player.setVolume(_volumeFor(current) * 0.3);
+        } else if (_wasPlayingWhenInterrupted) {
+          // Held apart from `pause()`: this is not the person deciding to stop, and
+          // the watchdog must neither undo it nor forget that music was playing.
+          //
+          // Only for an interruption that will end. `unknown` on Android is the
+          // permanent loss of the audio focus — another app has the speaker for as
+          // long as it wants it — and no "over" event is coming for it, ever. Left
+          // flagged as interrupted, the watchdog was disabled for the rest of the
+          // session: the one stop it could not recover from was the one after
+          // somebody opened a video, and every stop after that as well, because
+          // nothing ever cleared the flag. A permanent loss is the speaker being
+          // taken, so that is what it is recorded as — nothing wanted here — and
+          // the next thing this app is asked to do starts cleanly.
+          final forGood = type == AudioInterruptionType.unknown;
+          _interrupted = !forGood;
+          PlaybackLog.note('interrupted (${type.name}'
+              '${forGood ? ", for good" : ""})');
+          if (forGood) {
+            _wantPlaying = false;
+          }
+          await _player.pause();
+        }
+      } else {
+        if (_interrupted) PlaybackLog.note('interruption over');
+        _interrupted = false;
+        if (type == AudioInterruptionType.duck) {
+          await _player.setVolume(_volumeFor(current));
+        } else if (type == AudioInterruptionType.pause && _wasPlayingWhenInterrupted) {
+          // A phone call or a spoken direction: it was ours before and it is ours
+          // again. (`unknown` is not resumed from — that is the user pressing pause
+          // somewhere else, and starting again over their head is worse.)
+          _startPlayback();
+        }
+      }
+      _emit(force: true);
+    }
 
   double _volumeFor(Track? t) => t == null ? userVolume : _volumeForTrack(t);
 
@@ -674,6 +757,9 @@ class PlayerService {
   /// and leave an error handler open for the whole track.
   void _startPlayback() {
     _wantPlaying = true;
+    // Asked for, so nothing is interrupting us any more — and the watchdog is allowed
+    // to do its job again even if the "interruption over" event never arrived.
+    _interrupted = false;
     unawaited(Keepalive.set(true));
     unawaited(Keepalive.mayWeShowThePlayer());
     unawaited(_player.play().catchError((Object e) {

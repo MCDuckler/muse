@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
@@ -307,6 +309,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 .push(MaterialPageRoute(builder: (_) => const PlaybackLogPage())),
           ),
           if (Updates.supported) const _UpdateRow(),
+          const _ApkRow(),
           ListTile(
             leading: const Icon(Icons.info_outline),
             title: const Text('Muse'),
@@ -437,6 +440,110 @@ class _ArtCacheRowState extends State<_ArtCacheRow> {
 /// is the system's own installer, which is as far as an app that is not the owner of
 /// the device is allowed to go — so this fetches everything, checks it arrived whole,
 /// and then asks once.
+/// The Android app itself, from wherever you are reading this.
+///
+/// The update row above only appears on a phone, and only when the server has a newer
+/// build than the one running — so on the web app, where somebody is most likely to be
+/// looking for it, there was no way to reach the APK at all short of typing the URL.
+/// This is always here: how big it is, when it was built, and the one link.
+class _ApkRow extends StatefulWidget {
+  const _ApkRow();
+
+  @override
+  State<_ApkRow> createState() => _ApkRowState();
+}
+
+class _ApkRowState extends State<_ApkRow> {
+  Release? _release;
+  bool _looked = false;
+  Updates? _updates;
+
+  String get _base => context.read<AppState>().api.baseUrl;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_look());
+  }
+
+  Future<void> _look() async {
+    final found = await Updates.published(_base);
+    if (mounted) setState(() { _release = found; _looked = true; });
+  }
+
+  @override
+  void dispose() {
+    _updates?.dispose();
+    super.dispose();
+  }
+
+  /// On a phone the file is no use as a download — it has to reach the installer — so
+  /// it takes the same path an update does: fetched, checked, offered. Anywhere else
+  /// it is a file to save and carry to a phone, which the browser does far better than
+  /// this app could.
+  Future<void> _get() async {
+    final messenger = ScaffoldMessenger.of(context);
+    if (Updates.supported) {
+      final u = _updates ??= Updates(baseUrl: _base, running: appBuild)
+        ..addListener(() { if (mounted) setState(() {}); });
+      if (u.release == null) await u.look();
+      await u.fetchAndOffer();
+      return;
+    }
+    final url = Uri.parse(Updates.apkUrl(_base));
+    final opened = await launchUrl(url, mode: LaunchMode.externalApplication);
+    if (!opened) {
+      messenger.showSnackBar(snack(const Text('Could not open the download')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final u = _updates;
+    final downloading = u?.state == Updating.downloading;
+    final release = _release;
+    return ListTile(
+      leading: const Icon(Icons.android),
+      title: const Text('Android app'),
+      subtitle: downloading
+          ? Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: LinearProgressIndicator(value: u!.progress),
+            )
+          : Text(!_looked
+              ? 'Looking…'
+              : release == null
+                  ? 'Nothing published on this server yet'
+                  : [
+                      release.size,
+                      if (release.built != null)
+                        'built ${release.built!.split('T').first}',
+                    ].join(' · ')),
+      trailing: release == null
+          ? null
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.link),
+                  tooltip: 'Copy the link',
+                  onPressed: () {
+                    Clipboard.setData(
+                        ClipboardData(text: Updates.apkUrl(_base)));
+                    ScaffoldMessenger.of(context)
+                        .showSnackBar(snack(const Text('Link copied')));
+                  },
+                ),
+                FilledButton.tonal(
+                  onPressed: downloading ? null : _get,
+                  child: Text(Updates.supported ? 'Install' : 'Download'),
+                ),
+              ],
+            ),
+    );
+  }
+}
+
 class _UpdateRow extends StatefulWidget {
   const _UpdateRow();
 

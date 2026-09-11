@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
+import '../api/connection.dart';
+
 /// What is on the server, and whether it is newer than what is running.
 class Release {
   const Release({
@@ -87,25 +89,35 @@ class Updates extends ChangeNotifier {
 
   bool get available => release != null && release!.isNewerThan(running);
 
+  /// What the server has, whoever is asking.
+  ///
+  /// Separate from [look] because it is not about updating: the web app on a laptop
+  /// has no update to offer and still wants to say "here is the Android app, and here
+  /// is how big it is".
+  static Future<Release?> published(String baseUrl) async {
+    try {
+      final r = await net
+          .get(Uri.parse('$baseUrl/muse.apk.json'))
+          .timeout(const Duration(seconds: 10));
+      if (r.statusCode != 200) return null;
+      final decoded = jsonDecode(r.body);
+      return decoded is Map<String, dynamic> ? Release.fromJson(decoded) : null;
+    } catch (_) {
+      // No manifest, no signal, an older server: nothing to say.
+      return null;
+    }
+  }
+
+  /// Where the file itself is. One link, the same one the browser downloads.
+  static String apkUrl(String baseUrl) => '$baseUrl/muse.apk';
+
   /// Look, quietly. Anything that goes wrong here is not worth a word: an update
   /// nobody knew about cannot be missed.
   Future<void> look() async {
     if (!supported || state == Updating.downloading) return;
     state = Updating.checking;
     notifyListeners();
-    try {
-      final r = await http
-          .get(Uri.parse('$baseUrl/muse.apk.json'))
-          .timeout(const Duration(seconds: 10));
-      if (r.statusCode == 200) {
-        final decoded = jsonDecode(r.body);
-        if (decoded is Map<String, dynamic>) {
-          release = Release.fromJson(decoded);
-        }
-      }
-    } catch (_) {
-      // No manifest, no signal, an older server: nothing to say.
-    }
+    release = await published(baseUrl) ?? release;
     state = available ? Updating.ready : Updating.idle;
     notifyListeners();
   }

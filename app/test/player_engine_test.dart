@@ -15,10 +15,12 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:audio_session/audio_session.dart';
 import 'package:just_audio_platform_interface/just_audio_platform_interface.dart';
 import 'package:muse/src/api/client.dart';
 import 'package:muse/src/api/models.dart';
 import 'package:muse/src/state/app_state.dart';
+import 'package:muse/src/state/playback_log.dart';
 import 'package:muse/src/state/player.dart';
 
 import 'fake_audio.dart';
@@ -651,5 +653,77 @@ void main() {
     await player.next();
     await settle();
     expect(wrote, 0, reason: 'a guest keeps its place in its own head');
+  });
+
+  test('something else taking the speaker for good does not disable the watchdog',
+      () async {
+    // The complaint that would not go away: playback stops sometimes when you leave
+    // the app. Opening anything that makes a sound takes the audio focus for good —
+    // there is no "over" event for that, ever — and the app used to stay flagged as
+    // interrupted from then on. The flag is what tells the watchdog to keep its hands
+    // off, so from the first video somebody watched until the app was restarted, every
+    // stop in the background was permanent.
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    await player.playAt(0);
+    await settle();
+
+    await player.handleInterruption(
+        begin: true, type: AudioInterruptionType.unknown);
+    await settle();
+    expect(audio.only.calls, contains('pause'),
+        reason: 'the other app has the speaker');
+
+    // Back in this app, pressing play.
+    await player.playPause();
+    await settle();
+
+    final before = PlaybackLog.lines.length;
+    audio.only.die();                              // and then the engine dies
+    await settle();
+    await player.checkForStall();
+    await settle();
+
+    final said = PlaybackLog.lines.skip(before).toList();
+    expect(said.any((l) => l.contains('reviving')), isTrue,
+        reason: 'the watchdog still works after an interruption: $said');
+  });
+
+  test('a phone call is resumed from, an interruption that never ends is not',
+      () async {
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    await player.playAt(0);
+    await settle();
+    audio.only.calls.clear();
+
+    await player.handleInterruption(begin: true, type: AudioInterruptionType.pause);
+    await settle();
+    expect(audio.only.calls, contains('pause'));
+
+    await player.handleInterruption(begin: false, type: AudioInterruptionType.pause);
+    await settle();
+    expect(audio.only.calls, contains('play'),
+        reason: 'it was ours before the call and it is ours again');
+  });
+
+  test('a bluetooth route settling is not a headphone being pulled out', () {
+    // ignore_for_file: experimental_member_use
+    AudioDevice device(AudioDeviceType type, String name) => AudioDevice(
+        id: name, name: name, isInput: false, isOutput: true, type: type);
+
+    // Still something to play through: the broadcast was the routing settling, which
+    // this phone does about twice a minute, and pausing on it stopped the music for
+    // good with nothing to show why.
+    expect(
+        PlayerService.somewhereElseToPlay([
+          device(AudioDeviceType.builtInSpeaker, 'speaker'),
+          device(AudioDeviceType.bluetoothA2dp, 'Kitchen'),
+        ]),
+        'Kitchen');
+
+    // Nothing left but the speaker: something really was unplugged.
+    expect(
+        PlayerService.somewhereElseToPlay(
+            [device(AudioDeviceType.builtInSpeaker, 'speaker')]),
+        isNull);
   });
 }
