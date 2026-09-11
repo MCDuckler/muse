@@ -40,7 +40,19 @@
 	}
 
 	# Flutter web build. try_files so a deep link still lands on the app shell.
+	#
+	# Everything revalidates. Nothing here said anything about caching, so browsers
+	# applied their own guess — and for an installed app that guess covers the page,
+	# the loader *and* the service worker script, which is the one file that has to be
+	# re-read for a new version to be noticed at all. The app kept serving itself out
+	# of its own cache across restart after restart with no way to find out there was
+	# anything newer.
+	#
+	# `no-cache` is not `no-store`: the files are still kept, they are just checked
+	# before use. With the ETags below that is a 304 and no body, so the cost of being
+	# always up to date is one small request per file.
 	handle {
+		header Cache-Control "no-cache"
 		root * /srv
 		try_files {path} /index.html
 		file_server
