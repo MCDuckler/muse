@@ -116,23 +116,29 @@ class SongRow extends StatelessWidget {
 
     final duration = SongRow.formatDuration(track.duration);
 
-    // The song playing, said properly.
+    // Two different things a row can be, both said by the row itself.
     //
-    // A ten-percent wash was not enough to find in a queue of four hundred: scrolling
-    // past it, there was nothing to catch. Now it is a chip of its own — filled,
-    // outlined, its title in the accent colour, and the artwork carrying a small mark
-    // that says this is the one making the sound.
+    // The song playing used to be a ten-percent wash, which is nothing to catch on
+    // while scrolling past four hundred of them; it is a chip now — filled, outlined,
+    // its title in the accent colour, and a small mark on the artwork.
+    //
+    // A song you have picked out is the same idea, stronger, and that is all it is.
+    // Picking used to replace every cover in the list with a circle: a hundred rows of
+    // identical grey rings, no way to tell one record from another, and the thing you
+    // were choosing between taken away at the moment of choosing. The covers stay and
+    // the row is simply lit.
     final row = Material(
       color: picked
-          ? scheme.primary.withValues(alpha: 0.18)
+          ? scheme.primary.withValues(alpha: 0.26)
           : selected
               ? scheme.primary.withValues(alpha: 0.20)
               : Colors.transparent,
-      shape: selected && !picked
+      shape: picked || selected
           ? RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
               side: BorderSide(
-                  color: scheme.primary.withValues(alpha: 0.55), width: 1.2),
+                  color: scheme.primary.withValues(alpha: picked ? 0.85 : 0.55),
+                  width: picked ? 1.6 : 1.2),
             )
           : null,
       child: InkWell(
@@ -142,9 +148,7 @@ class SongRow extends StatelessWidget {
         // While a selection is running in this list, a tap adds to it rather than
         // playing: nobody holds a row to pick it out and then expects the next tap to
         // start the music.
-        onTap: picking
-            ? () => selection!.toggle(selectable!, track.id)
-            : onTap,
+        onTap: picking ? () => selection!.toggle(selectable!, track.id) : onTap,
         onLongPress: selectable != null
             ? () => selection!.start(selectable!, track.id)
             : showMenu
@@ -164,39 +168,31 @@ class SongRow extends StatelessWidget {
                 width: 40,
                 height: 40,
                 child: Center(
-                  child: picking
-                      ? Icon(
-                          picked ? Icons.check_circle : Icons.circle_outlined,
-                          color: picked ? scheme.primary : scheme.outline,
-                        )
-                      : corner == null && !selected
-                          ? leading ?? Artwork(track: track, size: 40, radius: 5)
-                          : Stack(
-                              clipBehavior: Clip.none,
-                              children: [
-                                leading ??
-                                    Artwork(track: track, size: 40, radius: 5),
-                                // The mark on the record itself. Held back behind a
-                                // scrim so it reads against any artwork — a bright
-                                // glyph on a bright cover is invisible, which is the
-                                // failure this whole change is about.
-                                if (selected)
-                                  Positioned.fill(
-                                    child: DecoratedBox(
-                                      decoration: BoxDecoration(
-                                        borderRadius: BorderRadius.circular(5),
-                                        color: Colors.black
-                                            .withValues(alpha: 0.45),
-                                      ),
-                                      child: Icon(Icons.graphic_eq,
-                                          size: 20, color: scheme.primary),
-                                    ),
+                  child: corner == null && !selected
+                      ? leading ?? Artwork(track: track, size: 40, radius: 5)
+                      : Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            leading ?? Artwork(track: track, size: 40, radius: 5),
+                            // The mark on the record itself. Held back behind a
+                            // scrim so it reads against any artwork — a bright
+                            // glyph on a bright cover is invisible, which is the
+                            // failure this whole change is about.
+                            if (selected)
+                              Positioned.fill(
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(5),
+                                    color: Colors.black.withValues(alpha: 0.45),
                                   ),
-                                if (corner != null)
-                                  Positioned(
-                                      left: -4, bottom: -4, child: corner!),
-                              ],
-                            ),
+                                  child: Icon(Icons.graphic_eq,
+                                      size: 20, color: scheme.primary),
+                                ),
+                              ),
+                            if (corner != null)
+                              Positioned(left: -4, bottom: -4, child: corner!),
+                          ],
+                        ),
                 ),
               ),
               const SizedBox(width: 10),
