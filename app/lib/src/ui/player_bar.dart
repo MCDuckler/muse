@@ -86,7 +86,10 @@ class PlayerBar extends StatelessWidget {
               // rather than stepping — see SmoothPosition.
               SmoothPosition(
                 position: at,
-                playing: host != null || (s?.playing ?? false),
+                // What the room is doing, for a guest whose own speaker is off — it is
+                // the same song they can hear, and a line that does not move says it
+                // has stopped.
+                playing: app.musicIsPlaying,
                 duration: length,
                 speed: player.speed,
                 builder: (context, now) => Pulse(
@@ -144,7 +147,7 @@ class PlayerBar extends StatelessWidget {
                         onPressed: app.skipPrevious),
                     IconButton(
                       iconSize: 34,
-                      icon: Icon((s?.playing ?? false)
+                      icon: Icon(app.musicIsPlaying
                           ? Icons.pause_circle_filled
                           : Icons.play_circle_fill),
                       // Never disabled. A track whose file has not landed yet still

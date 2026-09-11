@@ -92,29 +92,53 @@ class _HomePageState extends State<HomePage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const PlayerBar(),
-              NavigationBar(
-                selectedIndex: app.homeTab,
-                onDestinationSelected: app.setHomeTab,
-                destinations: const [
-                  NavigationDestination(
-                      icon: Icon(Icons.queue_music_outlined),
-                      selectedIcon: Icon(Icons.queue_music),
-                      label: 'Queues'),
-                  NavigationDestination(
-                      icon: Icon(Icons.search),
-                      selectedIcon: Icon(Icons.search),
-                      label: 'Search'),
-                  NavigationDestination(
-                      icon: Icon(Icons.library_music_outlined),
-                      selectedIcon: Icon(Icons.library_music),
-                      label: 'Library'),
-                ],
-              ),
+              const MuseNavigationBar(),
             ],
           ),
         ),
       ),
       ),
+    );
+  }
+}
+
+/// The three places the app goes, wherever you happen to be standing.
+///
+/// One widget rather than one per screen, because it appears on more than one now: the
+/// player used to cover it completely, so opening what is playing meant losing every
+/// way of going anywhere until you had closed it again. It is the same bar, in the
+/// same place, doing the same thing — the only difference is that from inside the
+/// player it has to get you out of the player first.
+class MuseNavigationBar extends StatelessWidget {
+  const MuseNavigationBar({super.key, this.onLeaving});
+
+  /// Called before the tab changes, for screens that are sitting on top of the app and
+  /// have to get out of the way. Nothing on the home screen needs it.
+  final VoidCallback? onLeaving;
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    return NavigationBar(
+      selectedIndex: app.homeTab,
+      onDestinationSelected: (i) {
+        app.setHomeTab(i);
+        onLeaving?.call();
+      },
+      destinations: const [
+        NavigationDestination(
+            icon: Icon(Icons.queue_music_outlined),
+            selectedIcon: Icon(Icons.queue_music),
+            label: 'Queues'),
+        NavigationDestination(
+            icon: Icon(Icons.search),
+            selectedIcon: Icon(Icons.search),
+            label: 'Search'),
+        NavigationDestination(
+            icon: Icon(Icons.library_music_outlined),
+            selectedIcon: Icon(Icons.library_music),
+            label: 'Library'),
+      ],
     );
   }
 }

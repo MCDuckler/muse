@@ -868,6 +868,11 @@ class AppState extends ChangeNotifier {
     // stays out of it. This is the normal case — everyone in one room hearing the
     // same record out of five phones is not listening together.
     if (!jamListening) {
+      // The clock the screen runs on, kept up to date even though the speaker is not:
+      // the record still turns, the bar still moves, the button still says pause.
+      jamPosition = state.position;
+      _jamPositionAt = DateTime.now();
+      roomIsPlaying = state.playing;
       if (p.last?.playing ?? false) await p.pause();
       if (state.trackId != null && p.current?.id != state.trackId) {
         await p.showTrack(state.trackId!);
@@ -975,6 +980,32 @@ class AppState extends ChangeNotifier {
   }
 
   /// The host's position now, carried forward since it was last reported.
+  /// Whether the room is playing, as last reported by the host.
+  bool roomIsPlaying = false;
+
+  /// What this screen should say is happening.
+  ///
+  /// A guest who is not playing the music on this device is still *in* the room, and
+  /// the room is playing: the bar should move, the record should turn, the printed
+  /// background should breathe and the button should say pause. Everything on that
+  /// screen is about the music, and the music is happening — it is simply coming out
+  /// of somebody else's speaker. Reading the local engine there showed a stopped
+  /// player to somebody who could hear the song.
+  bool get musicIsPlaying {
+    if (isJamGuest && !jamListening) return roomIsPlaying;
+    return player?.last?.playing ?? false;
+  }
+
+  /// Where the music is, wherever it is playing from.
+  ///
+  /// The host's clock for a guest listening to the room, and this device's own for
+  /// everybody else — including a guest who has turned their own speaker on, whose
+  /// engine is the thing making the sound they can hear.
+  Duration? get positionNow {
+    if (isJamGuest && !jamListening) return hostPosition;
+    return player?.last?.position;
+  }
+
   Duration? get hostPosition {
     final at = _jamPositionAt, base = jamPosition;
     if (at == null || base == null || jam == null || (jam?.isHost ?? true)) return null;
@@ -1029,6 +1060,7 @@ class AppState extends ChangeNotifier {
         final state = JamPlayback.fromJson(Map<String, dynamic>.from(data));
         jamPosition = state.position;
         _jamPositionAt = DateTime.now();
+        roomIsPlaying = state.playing;
         await followJamPlayback(state);
       }
       return;
@@ -1151,6 +1183,7 @@ class AppState extends ChangeNotifier {
     if (state != null && isJamGuest) {
       jamPosition = state.position;
       _jamPositionAt = DateTime.now();
+      roomIsPlaying = state.playing;
       await followJamPlayback(state);
     } else if (current.isHost) {
       await pushJamState(force: true);
@@ -1181,6 +1214,7 @@ class AppState extends ChangeNotifier {
   Future<void> _outOfTheJam(int? jamQueueId, {bool wasHost = false}) async {
     jam = null;
     jamPosition = null;
+    roomIsPlaying = false;
     _jamPositionAt = null;
     queues = await api.queues();
 

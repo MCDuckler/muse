@@ -14,6 +14,7 @@ import 'lyrics_sheet.dart';
 import 'track_menu.dart';
 import 'song_row.dart';
 import 'browse_page.dart';
+import 'home_page.dart';
 import 'jam_page.dart';
 import 'halftone.dart';
 import 'progress.dart';
@@ -50,6 +51,21 @@ class NowPlayingScreen extends StatelessWidget {
 
         return Scaffold(
           extendBodyBehindAppBar: true,
+          // The same three places as everywhere else.
+          //
+          // The player covered them completely, so opening what is playing meant
+          // losing every way of going anywhere until you had closed it again — and
+          // the way to close it was a downward drag nobody is told about. Tapping one
+          // takes you there, which means getting out of the player on the way.
+          bottomNavigationBar: GlassSurface(
+            child: SafeArea(
+              top: false,
+              child: MuseNavigationBar(
+                onLeaving: () =>
+                    Navigator.of(context).popUntil((r) => r.isFirst),
+              ),
+            ),
+          ),
           appBar: AppBar(
             leading: IconButton(
               icon: const Icon(Icons.keyboard_arrow_down),
@@ -107,7 +123,10 @@ class NowPlayingScreen extends StatelessWidget {
             behind: app.halftone
                 ? HalftoneBackdrop(
                     colour: parseHexColour(track?.coverColor),
-                    playing: s?.playing ?? false,
+                    // What the room is doing, not what this device's own engine is: a
+                    // guest listening to somebody else's speaker can hear the music,
+                    // and a still background says it has stopped.
+                    playing: app.musicIsPlaying,
                     loudnessDb: track?.loudnessLufs,
                   )
                 : null,
@@ -145,7 +164,10 @@ class NowPlayingScreen extends StatelessWidget {
                                         ? 0.88
                                         : 1.0,
                                 child: _Artwork(
-                                    track: track, snapshot: s, player: player),
+                                    track: track,
+                                    snapshot: s,
+                                    player: player,
+                                    app: app),
                               ),
                             ),
                             SizedBox(
@@ -577,10 +599,15 @@ class _RepeatButton extends StatelessWidget {
 }
 
 class _Artwork extends StatelessWidget {
-  const _Artwork({required this.track, this.snapshot, required this.player});
+  const _Artwork(
+      {required this.track,
+      this.snapshot,
+      required this.player,
+      required this.app});
   final Track track;
   final PlayerSnapshot? snapshot;
   final PlayerService player;
+  final AppState app;
 
   /// The record either side of this one, so the queue is something you can see rather
   /// than something you have to remember. Read from the player's own list.
@@ -631,7 +658,7 @@ class _Artwork extends StatelessWidget {
             height: side,
             child: RecordStage(
               track: track,
-              playing: snapshot?.playing ?? false,
+              playing: app.musicIsPlaying,
               scale: context.watch<AppState>().coverScale,
               axis: context.watch<AppState>().shelfAxis,
               previous: _at(-1),
@@ -834,13 +861,17 @@ class _ScrubberState extends State<_ScrubberBar> {
     var duration = s?.duration ?? Duration.zero;
     if (duration == Duration.zero) duration = s?.current?.duration ?? Duration.zero;
 
-    // A guest plays the same song on its own device now, in step with the host, so
-    // its own clock is the one to draw. The host's reported position is the fallback
-    // for the moment before the guest's engine has caught up — otherwise the bar sits
-    // at zero while the room is halfway through a record.
-    final host = app.hostPosition;
-    var position = s?.position ?? Duration.zero;
-    if (position == Duration.zero && host != null) position = host;
+    // Whichever clock is actually running the music.
+    //
+    // A guest playing along on their own device has its own engine and that is the one
+    // to draw. A guest who is only listening to the room has no engine running at all,
+    // so the host's reported position is not a fallback for it — it *is* the clock,
+    // and treating it as a fallback meant the bar sat at zero through a song they
+    // could hear, because the silent engine was perfectly happy to report zero.
+    var position = app.positionNow ?? s?.position ?? Duration.zero;
+    if (position == Duration.zero) {
+      position = app.hostPosition ?? s?.position ?? Duration.zero;
+    }
 
     final max = duration.inMilliseconds.toDouble();
 
@@ -863,8 +894,10 @@ class _ScrubberState extends State<_ScrubberBar> {
     // would only move their own device out of step with it.
     final enabled = max > 0 && (!app.isJamGuest || app.jamControlsTheRoom);
     // In a jam the host is the one playing, so the clock runs from their reports even
-    // though this device's own engine is silent.
-    final playing = (s?.playing ?? false) && _dragging == null && _seeking == null;
+    // though this device's own engine is silent — otherwise a guest watches a bar that
+    // never moves through a song they can hear perfectly well.
+    final playing =
+        app.musicIsPlaying && _dragging == null && _seeking == null;
 
     return SmoothPosition(
       position: position,
@@ -948,7 +981,10 @@ class _Controls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final playing = snapshot?.playing ?? false;
+    // What the room is doing. A guest listening to somebody else's speaker can hear
+    // the song; a play button on a song they can hear is simply wrong, and pressing it
+    // asks the room to pause, which is what the button under their thumb should say.
+    final playing = app.musicIsPlaying;
     final repeat = snapshot?.repeat ?? QueueRepeat.off;
 
     if (bare) {

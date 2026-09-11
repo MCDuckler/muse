@@ -541,6 +541,63 @@ void main() {
         reason: 'no audio was fetched at all');
   });
 
+  test('a guest sees the room playing even with their own speaker off', () async {
+    // Everything on the now-playing screen is about the music, and for a guest in a
+    // room the music is happening — it is just coming out of somebody else's speaker.
+    // Reading this device's own engine showed a stopped player, a still record and a
+    // play button to somebody listening to a song.
+    final app = AppState();
+    app.api = api;
+    app.player = player;
+    app.jam = Jam.fromJson({
+      'id': 7, 'code': 'ABC123', 'queue_id': 1,
+      'host': 'somebody', 'is_host': false,
+    });
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    await settle();
+
+    expect(app.musicIsPlaying, isFalse, reason: 'nothing said yet');
+
+    await app.followJamPlayback(const JamPlayback(
+        trackId: 2, positionMs: 30000, playing: true));
+    await settle();
+
+    expect(audio.players.values.expand((p) => p.sources), isEmpty,
+        reason: 'still silent here');
+    expect(app.musicIsPlaying, isTrue, reason: 'but the room is playing');
+    expect(app.positionNow, isNotNull);
+    expect(app.positionNow!.inSeconds, greaterThanOrEqualTo(30),
+        reason: 'and the clock runs from the host, not from a silent engine');
+
+    // And a room that pauses stops the record turning.
+    await app.followJamPlayback(const JamPlayback(
+        trackId: 2, positionMs: 42000, playing: false));
+    await settle();
+    expect(app.musicIsPlaying, isFalse);
+  });
+
+  test('a guest playing along reads its own engine', () async {
+    // The other half: once the speaker here is on, this device is the thing making
+    // the sound, and its own clock is the one that matters.
+    final app = AppState();
+    app.api = api;
+    app.player = player;
+    app.jamListening = true;
+    app.jam = Jam.fromJson({
+      'id': 7, 'code': 'ABC123', 'queue_id': 1,
+      'host': 'somebody', 'is_host': false,
+    });
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    await settle();
+
+    await app.followJamPlayback(const JamPlayback(
+        trackId: 2, positionMs: 30000, playing: true));
+    await settle();
+
+    expect(app.musicIsPlaying, isTrue);
+    expect(audio.only.playing, isTrue, reason: 'this device is the one playing');
+  });
+
   test('leaving a jam hands back the queue that came with it', () async {
     // The host's queue is in a guest's list only while they are in the room. Clearing
     // the jam alone left it sitting there, selected, refusing every edit.
