@@ -283,6 +283,13 @@ class NowPlayingScreen extends StatelessWidget {
                                   ],
                                 ),
                               ),
+                            // Air under the panel.
+                            //
+                            // The controls ended where the body ended, which put the
+                            // volume slider a couple of pixels above the bar with the
+                            // three places in it — two rows of controls touching, and
+                            // the bottom one is the one you reach for by feel.
+                            const SizedBox(height: 20),
                           ],
                         ),
                       ),

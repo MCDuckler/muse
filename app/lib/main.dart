@@ -9,6 +9,7 @@ import 'src/state/app_state.dart';
 import 'src/state/selection.dart';
 import 'src/state/player.dart';
 import 'src/ui/home_page.dart';
+import 'src/ui/loading.dart';
 import 'src/ui/login_page.dart';
 import 'src/ui/theme.dart';
 import 'src/ui/page_colour.dart';
@@ -134,7 +135,7 @@ class _Root extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
     if (!app.ready) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(body: LoadingField());
     }
     return app.user == null ? const LoginPage() : const HomePage();
   }
