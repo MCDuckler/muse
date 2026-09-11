@@ -306,6 +306,11 @@ class _QueuePageState extends State<QueuePage> {
                     // rebuild it, only the grip inside it, which fades out of the way
                     // while it moves. See SwipingNow.
                     return Pushable(
+                      key: ValueKey('row-${t.id}-$i'),
+                      // The key belongs on whatever the list itself is handed:
+                      // ReorderableListView reads it off the top of each item, and
+                      // without one it throws — which in a release build is a grey
+                      // rectangle where the queue should be.
                       builder: (context, row, report) => Dismissible(
                         key: ValueKey('${t.id}-$i'),
                         // The playing row carries a key, so "jump to what is playing"
