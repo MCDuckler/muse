@@ -1,11 +1,121 @@
 
+import 'dart:async';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
+import 'artwork.dart';
 import 'dialogs.dart';
 import 'snack.dart';
+
+/// The picture on everybody's home screen.
+///
+/// Served rather than built in, so changing it does not mean a new build and a new
+/// install for everyone — the web app's manifest, its favicon and the icon iOS puts on
+/// a home screen all ask the server for it. The launcher icon of an installed Android
+/// app is the one thing that cannot follow: that one is inside the APK, and it changes
+/// when a new APK does.
+class AppIconRow extends StatefulWidget {
+  const AppIconRow({super.key});
+
+  @override
+  State<AppIconRow> createState() => _AppIconRowState();
+}
+
+class _AppIconRowState extends State<AppIconRow> {
+  ({String version, bool custom, bool mayChange})? _icon;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    try {
+      final got = await context.read<AppState>().api.appIcon();
+      if (mounted) setState(() => _icon = got);
+    } catch (_) {
+      // An older server has no icon to ask about. The row simply says nothing.
+    }
+  }
+
+  Future<void> _choose() async {
+    final app = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    final file = await FilePicker.pickFile(type: FileType.image);
+    if (file == null) return;
+    setState(() => _busy = true);
+    try {
+      await app.api.setAppIcon(await file.readAsBytes());
+      await _load();
+      messenger.showSnackBar(snack(const Text('That is the icon now')));
+    } catch (e) {
+      messenger.showSnackBar(snack(Text('$e')));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _revert() async {
+    final app = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _busy = true);
+    try {
+      await app.api.clearAppIcon();
+      await _load();
+      messenger.showSnackBar(snack(const Text('Back to the one it came with')));
+    } catch (e) {
+      messenger.showSnackBar(snack(Text('$e')));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = _icon;
+    if (icon == null) return const SizedBox.shrink();
+    final api = context.read<AppState>().api;
+    return ListTile(
+      leading: Artwork(
+        url: api.appIconUrl(size: 192, version: icon.version),
+        size: 44,
+        radius: 10,
+      ),
+      title: const Text('App icon'),
+      subtitle: Text(icon.mayChange
+          ? 'On the web and on a home screen. An installed Android app keeps the '
+              'icon it was built with until the next one.'
+          : 'Only an admin can change this'),
+      trailing: !icon.mayChange
+          ? null
+          : _busy
+              ? const SizedBox(
+                  width: 20, height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (icon.custom)
+                      IconButton(
+                        icon: const Icon(Icons.undo),
+                        tooltip: 'Use the one it came with',
+                        onPressed: _revert,
+                      ),
+                    FilledButton.tonal(
+                      onPressed: _choose,
+                      child: const Text('Change'),
+                    ),
+                  ],
+                ),
+    );
+  }
+}
 
 /// Who can sign in to this server.
 ///
@@ -241,6 +351,8 @@ class _AccountsPageState extends State<AccountsPage> {
                   title: const Text('Change your password'),
                   onTap: _changeMyPassword,
                 ),
+                const Divider(),
+                const AppIconRow(),
                 const Divider(),
                 // Most records heard first. A score nobody can see beside anybody
                 // else's is a statistic; in an order it is a scoreboard.

@@ -12,8 +12,9 @@ import tempfile
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
-from . import audiofile, catalog, db, images, storage
+from . import audiofile, branding, catalog, db, images, storage
 from .deps import cfg, current_user, user_or_key
+from .routes_accounts import is_admin
 
 router = APIRouter()
 
@@ -115,6 +116,56 @@ def clear_avatar(user: dict = Depends(current_user)):
     if old and old["avatar_sig"]:
         images.forget(cfg().image_dir, "avatar", user["id"], old["avatar_sig"])
     return {"avatar_url": None}
+
+
+# ------------------------------------------------------------------ the app's own icon
+#
+# Public, and it has to be: the manifest, the favicon and the icon iOS puts on a home
+# screen are all fetched by the browser itself, which has never heard of our token and
+# does most of it before anybody has signed in. It is the app's own picture, shown on
+# the login page regardless.
+@router.get("/icon")
+def app_icon(size: int = 192, v: str | None = None):
+    """The icon, at whatever size was asked for."""
+    path = branding.render(cfg().data_dir, max(16, min(size, 1024)))
+    return FileResponse(path, media_type="image/png", headers={
+        "ETag": f'"{branding.signature(cfg().data_dir)}-{path.stem.rsplit("-", 1)[-1]}"',
+        # Checked before use rather than kept: this is the one picture in the app that
+        # is meant to change, and a home screen holding last month's icon for a year
+        # is the whole reason it is served instead of built in.
+        "Cache-Control": "public, no-cache"})
+
+
+@router.get("/icon.json")
+def app_icon_state(user: dict = Depends(current_user)):
+    """What the icon is now, for the screen that changes it."""
+    return {"version": branding.signature(cfg().data_dir),
+            "custom": branding.custom(cfg().data_dir),
+            "url": "/icon",
+            "may_change": is_admin(user["id"])}
+
+
+@router.post("/icon")
+async def set_app_icon(request: Request, user: dict = Depends(current_user)):
+    """A different picture, for everybody. An admin's to change."""
+    if not is_admin(user["id"]):
+        raise HTTPException(403, "Only an admin can change the icon.")
+    raw = await request.body()
+    try:
+        sig = branding.store(cfg().data_dir, raw)
+    except branding.BadImage as e:
+        raise HTTPException(400, str(e))
+    return {"version": sig, "custom": True, "url": "/icon"}
+
+
+@router.delete("/icon")
+def clear_app_icon(user: dict = Depends(current_user)):
+    """Back to the one the app came with."""
+    if not is_admin(user["id"]):
+        raise HTTPException(403, "Only an admin can change the icon.")
+    branding.forget(cfg().data_dir)
+    return {"version": branding.signature(cfg().data_dir), "custom": False,
+            "url": "/icon"}
 
 
 @router.get("/users/{user_id}/avatar")

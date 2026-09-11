@@ -298,6 +298,37 @@ class ApiClient {
     return d['avatar_version'] as String;
   }
 
+  // ---------------- the app's own icon ----------------
+
+  /// What the icon is now, and whether this account may change it.
+  Future<({String version, bool custom, bool mayChange})> appIcon() async {
+    final d = await _decode(await net.get(_u('/icon.json'), headers: _headers))
+        as Map<String, dynamic>;
+    return (
+      version: '${d['version'] ?? ''}',
+      custom: (d['custom'] ?? false) as bool,
+      mayChange: (d['may_change'] ?? false) as bool,
+    );
+  }
+
+  /// Where to draw it. The version is in the URL so a changed icon is a different
+  /// picture as far as every cache between here and the server is concerned.
+  String appIconUrl({int size = 192, String? version}) =>
+      '$baseUrl/icon?size=$size${version == null || version.isEmpty ? '' : '&v=$version'}';
+
+  Future<String> setAppIcon(List<int> bytes) async {
+    final d = await _decode(await net.post(_u('/icon'),
+        headers: {..._headers, 'Content-Type': 'application/octet-stream'},
+        body: bytes)) as Map<String, dynamic>;
+    return '${d['version'] ?? ''}';
+  }
+
+  Future<String> clearAppIcon() async {
+    final d = await _decode(await net.delete(_u('/icon'), headers: _headers))
+        as Map<String, dynamic>;
+    return '${d['version'] ?? ''}';
+  }
+
   Future<void> clearAvatar() async =>
       await _decode(await net.delete(_u('/me/avatar'), headers: _headers));
 
