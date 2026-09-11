@@ -68,6 +68,23 @@ class PlaybackLog {
 
   static String get text => _lines.join('\n');
 
+  /// Whether the things that keep music playing in the background are there.
+  ///
+  /// Asked at the moment the app leaves the screen, which is the only moment the
+  /// answer matters. See Health.kt for why this is a measurement and not another
+  /// guess: the system's record of the last few kills says the app was *cached* at the
+  /// time, and a process running a foreground service cannot be.
+  static Future<void> checkTheService() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      final said = await const MethodChannel('muse/health')
+          .invokeMethod<String>('describe');
+      if (said != null && said.isNotEmpty) note(said);
+    } catch (_) {
+      // Nothing to say.
+    }
+  }
+
   /// What Android says about how the app stopped running last time.
   ///
   /// Three rounds of "the music stops when I leave the app" have been answered with

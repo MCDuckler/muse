@@ -21,6 +21,27 @@ class MainActivity : AudioServiceActivity() {
     /// version of the Android build tools.
     private var spectrum: Spectrum? = null
 
+    /**
+     * Asking to be allowed to show the playing notification.
+     *
+     * Declared in the manifest since the beginning and never once requested, and since
+     * Android 13 declaring it is not enough — notifications are off until an app asks.
+     * No notification is no media session anybody can see, and a process without a
+     * foreground service is a cached one, which the system may freeze the moment the
+     * app leaves the screen. That is the app going quiet a few seconds after being
+     * switched away from, and the system's own record of every kill agreeing it was
+     * "cached" at the time.
+     */
+    private fun askForNotifications() {
+        if (android.os.Build.VERSION.SDK_INT < 33) return
+        val granted = androidx.core.content.ContextCompat.checkSelfPermission(
+            this, "android.permission.POST_NOTIFICATIONS"
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (granted) return
+        androidx.core.app.ActivityCompat.requestPermissions(
+            this, arrayOf("android.permission.POST_NOTIFICATIONS"), 7301)
+    }
+
     override fun onRequestPermissionsResult(
         requestCode: Int, permissions: Array<out String>, results: IntArray
     ) {
@@ -62,6 +83,26 @@ class MainActivity : AudioServiceActivity() {
                     "open" -> result.success(
                         Installer.install(applicationContext,
                             call.argument<String>("path") ?: ""))
+                    else -> result.notImplemented()
+                }
+            }
+        // Asked once, the first time something plays — not at launch, where it is a
+        // permission prompt in front of somebody who has not yet seen the app.
+        MethodChannel(engine.dartExecutor.binaryMessenger, "muse/notify")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "ask" -> {
+                        askForNotifications()
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        // Whether the foreground service is actually there. See Health.
+        MethodChannel(engine.dartExecutor.binaryMessenger, "muse/health")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "describe" -> result.success(Health.describe(applicationContext))
                     else -> result.notImplemented()
                 }
             }

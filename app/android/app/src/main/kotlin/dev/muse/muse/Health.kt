@@ -1,0 +1,75 @@
+package dev.muse.muse
+
+import android.app.ActivityManager
+import android.app.NotificationManager
+import android.content.Context
+import android.os.Build
+
+/**
+ * Whether the things that keep music playing in the background are actually there.
+ *
+ * Audio stopping after the app is switched away from has been chased five times now,
+ * and every fix has been aimed at a mechanism nobody had confirmed was involved. The
+ * system's record of the last few kills says the app was *cached* at the time — which,
+ * if the foreground service were running, it could not have been. That is a claim worth
+ * checking directly rather than reasoning about, because it decides everything: a
+ * service that is not running explains the whole thing, and a service that is running
+ * means the fault is somewhere else entirely and five rounds of guessing at this one
+ * have been wasted.
+ */
+object Health {
+
+    /** A sentence about whether the media notification — and so the service — is up. */
+    fun describe(context: Context): String {
+        val parts = mutableListOf<String>()
+
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE)
+                as? NotificationManager
+        if (nm == null) {
+            parts += "no notification manager"
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val ours = try {
+                nm.activeNotifications.toList()
+            } catch (e: Throwable) {
+                emptyList()
+            }
+            parts += if (ours.isEmpty()) {
+                "no notification — nothing is holding this app in the foreground"
+            } else {
+                "notification up (${ours.joinToString { it.notification.channelId }})"
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = nm.getNotificationChannel("dev.muse.audio")
+                parts += when {
+                    channel == null -> "channel missing"
+                    channel.importance == NotificationManager.IMPORTANCE_NONE ->
+                        "channel blocked"
+                    else -> "channel ok"
+                }
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                if (!nm.areNotificationsEnabled()) parts += "NOTIFICATIONS ARE OFF"
+            }
+        }
+
+        // What the system thinks this process is worth right now. A process running a
+        // foreground service cannot be "cached"; one that is cached can be frozen the
+        // moment it leaves the screen, and a frozen app makes no sound and cannot say
+        // so either.
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        if (am != null) {
+            val state = ActivityManager.RunningAppProcessInfo()
+            ActivityManager.getMyMemoryState(state)
+            parts += "standing: " + when (state.importance) {
+                ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND -> "in front"
+                ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE ->
+                    "foreground service"
+                ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE -> "visible"
+                ActivityManager.RunningAppProcessInfo.IMPORTANCE_SERVICE -> "service"
+                ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED -> "cached"
+                else -> "importance ${state.importance}"
+            }
+        }
+        return parts.joinToString(" · ")
+    }
+}

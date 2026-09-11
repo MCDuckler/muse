@@ -1328,8 +1328,9 @@ class AppState extends ChangeNotifier {
     // The other end of the interesting gap: everything between this line and the next
     // "app in front" happened with nobody watching, which is exactly the stretch a
     // report of "it stops when I switch away" is about.
+    // One of these, not both: onHide and onPause both fire on the way out, and wiring
+    // the same thing to each wrote every line in the log twice.
     onHide: _travelLight,
-    onPause: _travelLight,
     onDetach: () => PlaybackLog.note('app being torn down'),
   );
 
@@ -1347,6 +1348,9 @@ class AppState extends ChangeNotifier {
   /// there rather than from the server.
   void _travelLight() {
     PlaybackLog.note('app out of sight');
+    // The one moment the answer matters: is anything holding this app up now that
+    // nobody is looking at it.
+    unawaited(PlaybackLog.checkTheService());
     final cache = PaintingBinding.instance.imageCache;
     final held = cache.currentSizeBytes ~/ (1024 * 1024);
     cache.clear();

@@ -250,8 +250,16 @@ class PlayerService {
         }
         _emit(force: true);
       });
+      // Only when something was actually playing.
+      //
+      // The log has this firing twice a minute with nothing playing between — a
+      // Bluetooth route settling, not a pair of headphones being pulled out. Pausing
+      // then costs nothing visible but it does set "nothing wanted", which is the one
+      // state the watchdog will not bring music back from. Something that was not
+      // playing cannot be interrupted.
       session.becomingNoisyEventStream.listen((_) {
-        PlaybackLog.note('headphones unplugged');
+        if (!_player.playing && !_wantPlaying) return;
+        PlaybackLog.note('audio route went away');
         unawaited(pause());
       });
     } catch (_) {
@@ -667,6 +675,7 @@ class PlayerService {
   void _startPlayback() {
     _wantPlaying = true;
     unawaited(Keepalive.set(true));
+    unawaited(Keepalive.mayWeShowThePlayer());
     unawaited(_player.play().catchError((Object e) {
       if (_isAutoplayRefusal(e)) {
         // Ask for the tap rather than reporting a failure — nothing is broken.

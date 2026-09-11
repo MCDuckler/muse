@@ -13,6 +13,28 @@ class Keepalive {
 
   static bool get supported => !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
+  static const _notify = MethodChannel('muse/notify');
+  static bool _asked = false;
+
+  /// Ask to be allowed to show the playing notification, once.
+  ///
+  /// Declared in the manifest since the beginning and never requested — and since
+  /// Android 13 declaring it is not enough. No notification means no foreground
+  /// service, and a process without one is a cached process, which the system may
+  /// freeze the moment the app leaves the screen.
+  ///
+  /// At the first play rather than at launch: a permission prompt in front of somebody
+  /// who has not yet seen the app is a prompt they say no to.
+  static Future<void> mayWeShowThePlayer() async {
+    if (!supported || _asked) return;
+    _asked = true;
+    try {
+      await _notify.invokeMethod<void>('ask');
+    } catch (_) {
+      // Older Android, or no activity to ask through. It plays either way.
+    }
+  }
+
   static Future<void> set(bool on) async {
     if (!supported || on == _on) return;
     _on = on;
