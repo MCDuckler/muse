@@ -67,17 +67,19 @@ class PlayerBar extends StatelessWidget {
             (s?.finished ?? false);
 
         return PlayerBarMarker(
-            child: DragFollow(
+            child: _OpenByHand(
+          child: DragFollow(
           // Gestures live here rather than on list rows: rows already use a
           // horizontal swipe to remove, and two meanings for one drag is how a UI
           // starts feeling unpredictable.
-          onSwipeUp: () => _openNowPlaying(context),
+          //
+          // Sideways only: up belongs to _OpenByHand around it, which does not swipe
+          // so much as drag the player open by however much the finger moved.
           // Through the app, not the player: in a jam these ask the room rather than
           // moving this device on its own.
           onSwipeLeft: app.skipNext,
           onSwipeRight: app.skipPrevious,
           horizontalTravel: 76,
-          verticalTravel: 64,
           fadeWithDrag: true,
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -162,7 +164,7 @@ class PlayerBar extends StatelessWidget {
                 ),
               ),
             ],
-        )));
+        ))));
       },
     );
   }
@@ -172,11 +174,75 @@ class PlayerBar extends StatelessWidget {
   /// The rectangle is this bar's own, read at the moment it is tapped: the route grows
   /// out of it and shrinks back into it, so the thing that was tapped is the thing
   /// that opens.
-  static void _openNowPlaying(BuildContext context) {
+  static void _openNowPlaying(BuildContext context) =>
+      Navigator.of(context).push(nowPlayingRoute(from: barRect(context)));
+
+  /// Where this bar is on the screen, for the route to come out of.
+  static Rect? barRect(BuildContext context) {
     final box = context.findRenderObject() as RenderBox?;
-    final from = box == null || !box.hasSize
+    return box == null || !box.hasSize
         ? null
         : box.localToGlobal(Offset.zero) & box.size;
-    Navigator.of(context).push(nowPlayingRoute(from: from));
   }
+}
+
+/// Dragging the player open, rather than asking for it and watching it happen.
+///
+/// The transition was a fixed 380 milliseconds whatever the hand did: a flick and a
+/// slow deliberate pull looked exactly the same, and once it had started there was no
+/// changing your mind. This takes hold of the same animation and hands it the finger —
+/// the window over the player grows by however far the drag has got, and letting go
+/// throws it the rest of the way at whatever speed it was moving, or puts it back.
+class _OpenByHand extends StatefulWidget {
+  const _OpenByHand({required this.child});
+  final Widget child;
+
+  @override
+  State<_OpenByHand> createState() => _OpenByHandState();
+}
+
+class _OpenByHandState extends State<_OpenByHand> {
+  NowPlayingHold? _hold;
+
+  double get _height => MediaQuery.sizeOf(context).height;
+
+  void _start(DragStartDetails _) {
+    if (_hold != null) return;
+    final route = NowPlayingRoute(
+        from: PlayerBar.barRect(context), byHand: true);
+    Navigator.of(context).push(route);
+    _hold = NowPlayingHold(route);
+  }
+
+  void _update(DragUpdateDetails d) =>
+      _hold?.moveBy(-(d.primaryDelta ?? 0) / _height);
+
+  void _end(DragEndDetails d) {
+    final hold = _hold;
+    _hold = null;
+    hold?.letGo(-d.velocity.pixelsPerSecond.dy / _height);
+  }
+
+  void _cancel() {
+    final hold = _hold;
+    _hold = null;
+    hold?.cancel();
+  }
+
+  @override
+  void dispose() {
+    _hold?.abandon();
+    _hold = null;
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        behavior: HitTestBehavior.deferToChild,
+        onVerticalDragStart: _start,
+        onVerticalDragUpdate: _update,
+        onVerticalDragEnd: _end,
+        onVerticalDragCancel: _cancel,
+        child: widget.child,
+      );
 }

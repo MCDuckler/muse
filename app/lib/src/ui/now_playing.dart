@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -9,7 +11,6 @@ import 'glass.dart';
 import 'record_stage.dart';
 import 'sleeve_ink.dart';
 import 'spectrum.dart';
-import 'swipe.dart';
 import 'lyrics_sheet.dart';
 import 'track_menu.dart';
 import 'song_row.dart';
@@ -109,14 +110,12 @@ class NowPlayingScreen extends StatelessWidget {
                   ]
                 : const [],
           ),
-          body: DragFollow(
-            // Drag down to close, the gesture that dismisses a sheet anywhere else.
-            // Sideways belongs to the record itself rather than to the page: dragging
-            // the whole screen to change track carried the title and the controls
-            // along with it, which is not what the gesture is about.
-            onSwipeDown: () => Navigator.of(context).maybePop(),
-            verticalTravel: 150,
-            fadeWithDrag: true,
+          body: _CloseByHand(
+            // Drag down to close, the gesture that dismisses a sheet anywhere else —
+            // and the same animation that opened it, run backwards by the finger
+            // rather than played at it. Sideways belongs to the record itself:
+            // dragging the whole screen to change track carried the title and the
+            // controls along with it, which is not what the gesture is about.
             child: AmbientBackdrop(
             colour: parseHexColour(track?.coverColor),
             // The album's own colour where it has one, so the page belongs to the
@@ -327,16 +326,184 @@ class NowPlayingScreen extends StatelessWidget {
 /// [from] is where the bar is, in screen coordinates, at the moment it was tapped.
 /// Without one — opened by a keyboard shortcut, or from a screen with no bar — it
 /// falls back to rising from the bottom edge.
-Route<void> nowPlayingRoute({Rect? from}) => PageRouteBuilder<void>(
-      // Opaque, so that once it has arrived the app underneath stops being drawn at
-      // all. A see-through route keeps every screen below it painting for as long as
-      // it is open, which is a whole app rendered behind a page that covers it.
-      transitionDuration: const Duration(milliseconds: 360),
-      reverseTransitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (_, __, ___) => const NowPlayingScreen(),
-      transitionsBuilder: (context, animation, secondary, child) =>
-          OpenFrom(animation: animation, from: from, child: child),
-    );
+class NowPlayingRoute extends PageRouteBuilder<void> {
+  NowPlayingRoute({this.from, this.byHand = false})
+      : super(
+          // Opaque, so that once it has arrived the app underneath stops being drawn
+          // at all. A see-through route keeps every screen below it painting for as
+          // long as it is open, which is a whole app rendered behind a page that
+          // covers it.
+          transitionDuration: const Duration(milliseconds: 380),
+          reverseTransitionDuration: const Duration(milliseconds: 320),
+          pageBuilder: (_, __, ___) => const NowPlayingScreen(),
+        );
+
+  /// The bar's rectangle on screen, at the moment it was taken hold of.
+  final Rect? from;
+
+  /// Pushed by a finger that is still down, and is going to say how far.
+  final bool byHand;
+
+  /// The transition itself, for a gesture to drive.
+  ///
+  /// A page that opens on a timer no matter what the hand is doing is the difference
+  /// between a control and an announcement. This is the same animation the tap uses;
+  /// a drag simply sets where it is up to.
+  AnimationController? get hand => controller;
+
+  @override
+  Widget buildTransitions(BuildContext context, Animation<double> animation,
+          Animation<double> secondaryAnimation, Widget child) =>
+      OpenFrom(animation: animation, from: from, child: child);
+
+  @override
+  TickerFuture didPush() {
+    final pushed = super.didPush();
+    if (byHand) {
+      // Pushed and immediately held still at nothing: the finger is what moves it
+      // from here, and it has not moved yet.
+      controller!
+        ..stop()
+        ..value = 0;
+    }
+    return pushed;
+  }
+}
+
+Route<void> nowPlayingRoute({Rect? from}) => NowPlayingRoute(from: from);
+
+/// Opening and closing it with a finger.
+///
+/// Both directions are the same animation seen from different ends, so they are the
+/// same code: take hold of the transition, follow the finger, and let go of it with
+/// whatever speed it was moving at. Nothing about this is a duration.
+class NowPlayingHold {
+  NowPlayingHold(this.route)
+      : navigator = route.navigator!,
+        controller = route.hand! {
+    navigator.didStartUserGesture();
+  }
+
+  final NowPlayingRoute route;
+  final NavigatorState navigator;
+  final AnimationController controller;
+
+  /// Screen-heights per second below which a flick is not a flick.
+  static const _flick = 1.0;
+
+  void moveBy(double fraction) =>
+      controller.value = (controller.value + fraction).clamp(0.0, 1.0);
+
+  /// What letting go here means.
+  ///
+  /// A flick decides it whichever way it is going, however far the drag got — throwing
+  /// it at the screen and having it fall back because it was only a third of the way
+  /// is the thing that makes a gesture feel ignored. A slow drag that got more than
+  /// halfway-ish carries on; anything less goes back.
+  static bool opens({required double at, required double velocity}) =>
+      velocity.abs() >= _flick ? velocity > 0 : at > 0.4;
+
+  /// Let go. [velocity] is in screen-heights per second, positive towards open.
+  void letGo(double velocity) {
+    final opening = opens(at: controller.value, velocity: velocity);
+    if (opening) {
+      controller.fling(velocity: math.max(velocity, _flick));
+    } else {
+      // The route has to be popped for the navigator to take it away when the
+      // animation reaches the bottom; without that it sits there at nothing,
+      // invisible and in front of everything.
+      navigator.pop();
+      if (controller.isAnimating) {
+        controller.animateBack(0,
+            duration: const Duration(milliseconds: 260),
+            curve: Curves.easeOutCubic);
+      }
+    }
+    navigator.didStopUserGesture();
+  }
+
+  /// Give up without deciding — the gesture was taken over by something else.
+  void cancel() => letGo(0);
+
+  /// Let go of the navigator without deciding anything at all.
+  ///
+  /// For the screen being taken away mid-drag: popping or flinging something that is
+  /// already on its way out is worse than leaving it, but the navigator still has to
+  /// be told the gesture is over or it stays in a gesture for ever.
+  void abandon() => navigator.didStopUserGesture();
+}
+
+/// Dragging the player shut.
+///
+/// The page used to slide down a little under the finger and then, past a threshold,
+/// let go of it and play a closing animation on its own — two different movements for
+/// one gesture, and the hand-over was the moment it stopped feeling connected. This is
+/// the opening animation in reverse, and the finger is what runs it: the window shrinks
+/// back towards the bar by exactly as much as the drag, and letting go either throws it
+/// the rest of the way shut or puts it back where it was.
+class _CloseByHand extends StatefulWidget {
+  const _CloseByHand({required this.child});
+  final Widget child;
+
+  @override
+  State<_CloseByHand> createState() => _CloseByHandState();
+}
+
+class _CloseByHandState extends State<_CloseByHand> {
+  NowPlayingHold? _hold;
+
+  double get _height => MediaQuery.sizeOf(context).height;
+
+  /// The route this screen is on, when it is one that can be driven. Opened any other
+  /// way — a keyboard shortcut, a deep link — the drag simply closes it.
+  NowPlayingRoute? get _route {
+    final route = ModalRoute.of(context);
+    return route is NowPlayingRoute && route.hand != null ? route : null;
+  }
+
+  void _start(DragStartDetails _) {
+    final route = _route;
+    if (route == null || _hold != null) return;
+    _hold = NowPlayingHold(route);
+  }
+
+  void _update(DragUpdateDetails d) =>
+      _hold?.moveBy(-(d.primaryDelta ?? 0) / _height);
+
+  void _end(DragEndDetails d) {
+    final hold = _hold;
+    _hold = null;
+    if (hold != null) {
+      hold.letGo(-d.velocity.pixelsPerSecond.dy / _height);
+      return;
+    }
+    // No hold to give back: a downward flick still means close.
+    if (d.velocity.pixelsPerSecond.dy > 600) Navigator.of(context).maybePop();
+  }
+
+  void _cancel() {
+    final hold = _hold;
+    _hold = null;
+    hold?.cancel();
+  }
+
+  @override
+  void dispose() {
+    _hold?.abandon();
+    _hold = null;
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        behavior: HitTestBehavior.deferToChild,
+        onVerticalDragStart: _start,
+        onVerticalDragUpdate: _update,
+        onVerticalDragEnd: _end,
+        onVerticalDragCancel: _cancel,
+        child: widget.child,
+      );
+}
 
 /// Leave the player and land on the queue.
 ///

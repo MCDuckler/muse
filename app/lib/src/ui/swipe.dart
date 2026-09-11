@@ -216,11 +216,24 @@ class _DragFollowState extends State<DragFollow> with SingleTickerProviderStateM
       ),
     );
 
+    // Only the directions this row actually uses.
+    //
+    // A pan recogniser claims a drag whichever way it goes, so a row that only does
+    // something sideways still took hold of an upward drag and gave nothing back —
+    // which is the gesture the player bar uses to open, and it never arrived. Asking
+    // for one axis lets the other one be somebody else's.
+    final both = _hasHorizontal && _hasVertical;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onPanStart: _onStart,
-      onPanUpdate: _onUpdate,
-      onPanEnd: _onEnd,
+      onPanStart: both ? _onStart : null,
+      onPanUpdate: both ? _onUpdate : null,
+      onPanEnd: both ? _onEnd : null,
+      onHorizontalDragStart: both || !_hasHorizontal ? null : _onStart,
+      onHorizontalDragUpdate: both || !_hasHorizontal ? null : _onUpdate,
+      onHorizontalDragEnd: both || !_hasHorizontal ? null : _onEnd,
+      onVerticalDragStart: both || !_hasVertical ? null : _onStart,
+      onVerticalDragUpdate: both || !_hasVertical ? null : _onUpdate,
+      onVerticalDragEnd: both || !_hasVertical ? null : _onEnd,
       child: widget.behind == null || _offset == Offset.zero
           ? moved
           : Stack(

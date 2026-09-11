@@ -11,14 +11,30 @@ class OpenFrom extends StatelessWidget {
   final Rect? from;
   final Widget child;
 
+  /// Stands in where there is no navigator to ask — a test, a preview.
+  static final ValueNotifier<bool> _noGesture = ValueNotifier<bool>(false);
+
   @override
-  Widget build(BuildContext context) {
-    // Decelerating in, accelerating out — thrown open and settling, rather than
-    // moving at a constant speed in both directions.
+  Widget build(BuildContext context) => ValueListenableBuilder<bool>(
+        // Whether a finger is on it right now. It changes how this is drawn, so it
+        // has to be listened to rather than read once.
+        valueListenable:
+            Navigator.maybeOf(context)?.userGestureInProgressNotifier ?? _noGesture,
+        builder: (context, byHand, _) => _build(context, byHand),
+      );
+
+  Widget _build(BuildContext context, bool byHand) {
+    // Straight through while a finger is on it, and eased when it is playing by
+    // itself.
+    //
+    // A curve is how something moves when nobody is moving it. Applied to a drag it
+    // means the window runs ahead of the finger at the start and lags it at the end,
+    // which is precisely the feeling of a thing not being held — so while the hand is
+    // on it, a millimetre of finger is a millimetre of window.
     final curve = CurvedAnimation(
       parent: animation,
-      curve: Curves.easeOutCubic,
-      reverseCurve: Curves.easeInCubic,
+      curve: byHand ? Curves.linear : Curves.easeOutCubic,
+      reverseCurve: byHand ? Curves.linear : Curves.easeInCubic,
     );
     final here = from;
     if (here == null) {
@@ -42,15 +58,39 @@ class OpenFrom extends StatelessWidget {
         // is open — and the record on it is the busiest thing the app draws.
         if (t >= 1) return page!;
         final window = Rect.lerp(here, full, t)!;
+        final corner = BorderRadius.circular(18 * (1 - t));
+        // The page arrives over the bar rather than replacing it the instant the
+        // window opens: for the first third of the way the bar is still what is in
+        // there, showing through, and the page comes up through it. That cross-fade
+        // is the difference between a panel being uncovered and the bar becoming the
+        // page.
+        final arrived = Curves.easeIn.transform((t / 0.55).clamp(0.0, 1.0));
         return Stack(
           children: [
             Positioned.fromRect(
               rect: window,
-              child: ClipRRect(
+              // Lifted off what is behind it while it travels, and flat again once it
+              // is the whole screen — a window with an edge reads as a thing being
+              // opened rather than a hole appearing.
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: corner,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.34 * (1 - t)),
+                      blurRadius: 26 * (1 - t) + 6,
+                      spreadRadius: 1,
+                      offset: Offset(0, 6 * (1 - t)),
+                    ),
+                  ],
+                ),
+                child: ClipRRect(
                 // Rounded like the bar it comes out of, square by the time it is the
                 // screen.
-                borderRadius: BorderRadius.circular(18 * (1 - t)),
-                child: OverflowBox(
+                borderRadius: corner,
+                child: Opacity(
+                  opacity: arrived,
+                  child: OverflowBox(
                   alignment: Alignment.topLeft,
                   minWidth: screen.width,
                   maxWidth: screen.width,
@@ -69,6 +109,8 @@ class OpenFrom extends StatelessWidget {
                     child: page,
                   ),
                 ),
+                ),
+              ),
               ),
             ),
           ],
