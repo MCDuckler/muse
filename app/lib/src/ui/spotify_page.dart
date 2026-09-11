@@ -349,11 +349,23 @@ class _SpotifyPageState extends State<SpotifyPage> {
               // Only what is on screen is built: this account has 460 playlists.
               for (final p in shown.take(60))
                 ListTile(
-                  leading: Icon(p.isMirrored
-                      ? Icons.cloud_done_outlined
-                      : Icons.cloud_outlined),
+                  leading: Icon(
+                      p.isShazam
+                          ? Icons.graphic_eq
+                          : p.isMirrored
+                              ? Icons.cloud_done_outlined
+                              : Icons.cloud_outlined,
+                      color: p.isShazam
+                          ? Theme.of(context).colorScheme.primary
+                          : null),
                   title: Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                  subtitle: Text(p.subtitle),
+                  // Shazam cannot be asked what somebody has tagged, but connected to
+                  // Spotify it keeps this list up to date for ever — so mirroring it
+                  // is the whole of "sync my Shazams", and saying so is the only way
+                  // anybody would know that from a playlist name among four hundred.
+                  subtitle: Text(p.isShazam
+                      ? 'Everything you have Shazammed · ${p.subtitle}'
+                      : p.subtitle),
                   trailing: _busy.contains(p.remoteId)
                       ? const SizedBox(
                           width: 20,

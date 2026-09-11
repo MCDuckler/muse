@@ -212,8 +212,16 @@ def _get(cfg, user_id: int, url: str, **params) -> dict:
 
 
 def playlists(cfg, user_id: int) -> list[dict]:
-    """Everything mirrorable, with Liked Songs first — it is the list most people mean
-    when they say "my music", and it is not in /me/playlists."""
+    """Everything mirrorable, with the two worth finding at the top.
+
+    Liked Songs first — it is the list most people mean when they say "my music", and
+    it is not in /me/playlists at all. Then whatever Shazam keeps here, because that is
+    the other list somebody actually wants and it is otherwise a needle in a haystack:
+    Shazam cannot be asked what has been tagged, but connect it to Spotify and it
+    maintains a playlist for ever, which makes mirroring that playlist the whole of
+    "sync my Shazams" — and one account here has four hundred and fifty-six playlists
+    to find it among.
+    """
     liked = _get(cfg, user_id, "/me/tracks", limit=1)
     out: list[dict] = [{
         "remote_id": LIKED,
@@ -241,7 +249,20 @@ def playlists(cfg, user_id: int) -> list[dict]:
                 "image": images[0]["url"] if images else None,
             })
         url, params = page.get("next"), {}
-    return out
+
+    # Shazam's own list, straight after Liked Songs.
+    #
+    # Matched on the word rather than on the exact title: Spotify names it in the
+    # account's own language — this one has both "My Shazam Tracks" and "Meine
+    # Shazam-Titel" — and the brand is the one part that is never translated.
+    liked_first, shazam, rest = out[:1], [], []
+    for entry in out[1:]:
+        if "shazam" in entry["name"].lower():
+            entry["shazam"] = True
+            shazam.append(entry)
+        else:
+            rest.append(entry)
+    return liked_first + shazam + rest
 
 
 def playlist(cfg, user_id: int, remote_id: str) -> dict:

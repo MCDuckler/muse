@@ -481,6 +481,11 @@ class SpotifyPlaylist {
   final int mirroredTracks;
   final int unmatched;
 
+  /// The list Shazam keeps here. Worth saying out loud because it is the answer to
+  /// "can muse have my Shazams" — and because in an account with four hundred
+  /// playlists it is otherwise impossible to find.
+  final bool isShazam;
+
   const SpotifyPlaylist({
     required this.remoteId,
     required this.name,
@@ -489,6 +494,7 @@ class SpotifyPlaylist {
     this.playlistId,
     this.mirroredTracks = 0,
     this.unmatched = 0,
+    this.isShazam = false,
   });
 
   factory SpotifyPlaylist.fromJson(Map<String, dynamic> j) {
@@ -501,6 +507,7 @@ class SpotifyPlaylist {
       playlistId: mirror?['playlist_id'] as int?,
       mirroredTracks: (mirror?['tracks'] ?? 0) as int,
       unmatched: (mirror?['unmatched'] ?? 0) as int,
+      isShazam: (j['shazam'] ?? false) as bool,
     );
   }
 
