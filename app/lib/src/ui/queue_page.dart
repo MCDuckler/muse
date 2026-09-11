@@ -8,6 +8,7 @@ import '../state/offline.dart';
 import '../state/player.dart';
 import 'dialogs.dart';
 import 'song_row.dart';
+import 'swipe.dart';
 import '../state/selection.dart';
 import 'face.dart';
 import 'selection_bar.dart';
@@ -301,26 +302,33 @@ class _QueuePageState extends State<QueuePage> {
                         pickedSet.contains(_dragging!)) {
                       return SizedBox(key: ValueKey('folded-${t.id}-$i'), height: 0);
                     }
-                    return Dismissible(
-                      key: ValueKey('${t.id}-$i'),
-                      // The playing row carries a key, so "jump to what is playing"
-                      // can ask it where it is instead of guessing from a row height.
-                      dragStartBehavior: DragStartBehavior.start,
-                      direction: DismissDirection.endToStart,
-                      background: Container(
-                        alignment: Alignment.centerRight,
-                        padding: const EdgeInsets.only(right: 20),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.errorContainer,
-                          borderRadius: BorderRadius.circular(12),
+                    // Built once and handed through: pushing the row about does not
+                    // rebuild it, only the grip inside it, which fades out of the way
+                    // while it moves. See SwipingNow.
+                    return Pushable(
+                      builder: (context, row, report) => Dismissible(
+                        key: ValueKey('${t.id}-$i'),
+                        // The playing row carries a key, so "jump to what is playing"
+                        // can ask it where it is instead of guessing from a row height.
+                        dragStartBehavior: DragStartBehavior.start,
+                        direction: DismissDirection.endToStart,
+                        background: Container(
+                          alignment: Alignment.centerRight,
+                          padding: const EdgeInsets.only(right: 20),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.errorContainer,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(Icons.delete_outline,
+                              color: Theme.of(context).colorScheme.onErrorContainer),
                         ),
-                        child: Icon(Icons.delete_outline,
-                            color: Theme.of(context).colorScheme.onErrorContainer),
-                      ),
-                      onDismissed: (_) => app.removeFromQueue(i, context: context),
-                      // Hold the row to move it. A permanent handle took the place the
-                      // artwork belongs in, and a queue of small grey grips tells you
-                      // less at a glance than a queue of records does.
+                        onDismissed: (_) => app.removeFromQueue(i, context: context),
+                        onUpdate: (d) => report(d.progress),
+                        // Hold the row to move it. A permanent handle took the place the
+                        // artwork belongs in, and a queue of small grey grips tells you
+                        // less at a glance than a queue of records does.
+                        child: row,
+                        ),
                       child: SongRow(
                         key: isCurrent ? _currentRow : null,
                         track: t,

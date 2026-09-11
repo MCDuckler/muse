@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:muse/src/ui/swipe.dart';
 
 void main() {
+  swipeDressing();
   Widget host({
     VoidCallback? left,
     VoidCallback? right,
@@ -99,5 +100,63 @@ void main() {
         reason: 'nothing should slide around for a gesture that does nothing');
     await gesture.up();
     await tester.pumpAndSettle();
+  });
+}
+
+// What is uncovered when a row is pushed, and what gets out of the way while it moves.
+void swipeDressing() {
+  testWidgets('what is behind the row is as tall as the row', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: SwipeAction(
+            onSwipe: () {},
+            child: const SizedBox(width: 300, height: 120, child: Text('row')),
+          ),
+        ),
+      ),
+    ));
+
+    final gesture = await tester.startGesture(tester.getCenter(find.text('row')));
+    await gesture.moveBy(const Offset(30, 0));
+    await tester.pump();
+
+    final row = tester.getSize(find.byType(SwipeAction));
+    final behind = tester.getSize(find.byType(FractionallySizedBox));
+    expect(behind.height, row.height,
+        reason: 'a pill floating in the gap reads as something under the list; '
+            'the row has a back, and this is it');
+
+    await gesture.up();
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('the row tells its own controls how far it is being pushed',
+      (tester) async {
+    double seen = 0;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: DragFollow(
+            onSwipeRight: () {},
+            horizontalTravel: 80,
+            child: Builder(builder: (context) {
+              seen = SwipingNow.of(context);
+              return const SizedBox(width: 300, height: 120, child: Text('row'));
+            }),
+          ),
+        ),
+      ),
+    ));
+    expect(seen, 0, reason: 'nothing is happening to a row nobody is touching');
+
+    final gesture = await tester.startGesture(tester.getCenter(find.text('row')));
+    await gesture.moveBy(const Offset(40, 0));
+    await tester.pump();
+    expect(seen, closeTo(0.5, 0.01), reason: 'half the travel');
+
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(seen, 0, reason: 'and back, so the grip comes back with it');
   });
 }

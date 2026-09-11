@@ -51,16 +51,23 @@ class OpenFrom extends StatelessWidget {
                 // screen.
                 borderRadius: BorderRadius.circular(18 * (1 - t)),
                 child: OverflowBox(
-                  // Laid out at full size the whole way and shown through a growing
-                  // window, rather than squashed into the bar and stretched: text and
-                  // artwork keep their shapes, and the bottom edge — where the
-                  // controls are in both — stays put.
-                  alignment: Alignment.bottomCenter,
+                  alignment: Alignment.topLeft,
                   minWidth: screen.width,
                   maxWidth: screen.width,
                   minHeight: screen.height,
                   maxHeight: screen.height,
-                  child: page,
+                  // The page is drawn where it will finally sit, from the first frame
+                  // to the last, and the window is a porthole opening onto it.
+                  //
+                  // Nothing inside it moves or changes shape — which matters most at
+                  // the bottom of the screen, where the queue/search/library bar is:
+                  // anchored to the window instead, it slid down into place over the
+                  // identical bar underneath, so the one row of controls that is
+                  // supposed to be constant was the thing most obviously in motion.
+                  child: Transform.translate(
+                    offset: -window.topLeft,
+                    child: page,
+                  ),
                 ),
               ),
             ),

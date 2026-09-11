@@ -29,6 +29,9 @@ void main() {
     await show(tester, 0);
     final window = tester.getRect(find.byType(ClipRRect));
     expect(window, bar, reason: 'the page is only visible where the bar was');
+    expect(tester.getRect(find.byKey(const ValueKey('page'))),
+        const Rect.fromLTWH(0, 0, 400, 800),
+        reason: 'and it is already laid out where it will finally sit');
   });
 
   testWidgets('it ends as the whole screen', (tester) async {
@@ -43,7 +46,8 @@ void main() {
         const Rect.fromLTWH(0, 0, 400, 800));
   });
 
-  testWidgets('half way it is between the two, still page-shaped', (tester) async {
+  testWidgets('half way the window is between the two and the page has not moved',
+      (tester) async {
     tester.view.physicalSize = const Size(400, 800);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -53,10 +57,12 @@ void main() {
     expect(window.width, greaterThan(bar.width));
     expect(window.width, lessThan(400));
     expect(window.bottom, greaterThan(bar.top));
-    // The page inside keeps its full size — it is seen through a window, not
-    // squashed into one, so nothing about it is stretched on the way.
-    expect(tester.getSize(find.byKey(const ValueKey('page'))),
-        const Size(400, 800));
+    // The page is where it will end up from the first frame: seen through a window
+    // rather than squashed into one and dragged into place. Everything on it holds
+    // still — including the row of controls along the bottom of the screen, which is
+    // the same row the page underneath is showing.
+    expect(tester.getRect(find.byKey(const ValueKey('page'))),
+        const Rect.fromLTWH(0, 0, 400, 800));
   });
 
   testWidgets('with nowhere to come from it rises from the bottom edge',

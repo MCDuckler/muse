@@ -164,7 +164,7 @@ class SongRow extends StatelessWidget {
               bottom: dense ? 4 : 6),
           child: Row(
             children: [
-              if (handle != null) handle!,
+              if (handle != null) _Grip(child: handle!),
               SizedBox(
                 width: 40,
                 height: 40,
@@ -320,6 +320,30 @@ class SongRow extends StatelessWidget {
             },
       onSwipeAway: onSwipeAway,
       child: row,
+    );
+  }
+}
+
+/// The grip, which gets out of the way while the row is being pushed.
+///
+/// It is the one part of a row that belongs to the list rather than to the song, and
+/// it sat there at full strength while the row slid sideways underneath it — two
+/// gestures visible at once, neither of which was the one happening. It fades with the
+/// drag rather than on a timer, so it goes as the row goes and comes back as the row
+/// comes back.
+class _Grip extends StatelessWidget {
+  const _Grip({required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    // Gone by a third of the way: far enough in that a tap or a scroll does not dim
+    // it, early enough that it is out of sight before the row has really moved.
+    final gone = (SwipingNow.of(context) * 3).clamp(0.0, 1.0);
+    if (gone == 0) return child;
+    return IgnorePointer(
+      ignoring: gone > 0.5,
+      child: Opacity(opacity: 1 - gone, child: child),
     );
   }
 }

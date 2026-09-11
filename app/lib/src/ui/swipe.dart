@@ -6,6 +6,63 @@ import 'package:flutter/material.dart';
 /// gesture either fired or did not with no sign of which. Here the child tracks the
 /// finger, springs back when the drag is too small, and completes when it is not — so
 /// the gesture is legible while it happens and cancellable half-way.
+/// How far the row this is inside is being pushed, from 0 to 1.
+///
+/// A row is not only the thing being dragged: it also holds controls that belong to
+/// the list rather than to the song — the grip you hold to move it. Those have no
+/// business staying put while the row slides out from under them, and the row itself
+/// cannot tell them, because the drag is handled above it. This is how it tells them.
+class SwipingNow extends InheritedWidget {
+  const SwipingNow({super.key, required this.progress, required super.child});
+
+  final double progress;
+
+  static double of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<SwipingNow>()?.progress ?? 0;
+
+  @override
+  bool updateShouldNotify(SwipingNow old) => old.progress != progress;
+}
+
+/// A row pushed away by a Dismissible, telling its own insides how far.
+///
+/// Dismissible knows exactly how far it has been dragged and nothing below it can
+/// hear: the row is handed to it as a finished widget. This keeps the number where
+/// [SwipingNow] can be read from, and the row is built once and passed through rather
+/// than rebuilt on every frame of the drag.
+class Pushable extends StatefulWidget {
+  const Pushable({super.key, required this.child, required this.builder});
+
+  /// The row. Built by the caller, wrapped here, and handed back to [builder].
+  final Widget child;
+
+  /// Builds whatever does the pushing around the row — a Dismissible, usually —
+  /// given the row and the reporter to hand to its `onUpdate`.
+  final Widget Function(
+      BuildContext context, Widget row, void Function(double) report) builder;
+
+  @override
+  State<Pushable> createState() => _PushableState();
+}
+
+class _PushableState extends State<Pushable> {
+  double _pushed = 0;
+
+  void _report(double progress) {
+    // A hundredth of a row is below what anybody can see and above what a rebuild is
+    // worth; Dismissible reports every pixel.
+    if ((progress - _pushed).abs() < 0.01) return;
+    setState(() => _pushed = progress);
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.builder(
+        context,
+        SwipingNow(progress: _pushed.clamp(0.0, 1.0), child: widget.child),
+        _report,
+      );
+}
+
 class DragFollow extends StatefulWidget {
   const DragFollow({
     super.key,
@@ -153,7 +210,10 @@ class _DragFollowState extends State<DragFollow> with SingleTickerProviderStateM
 
     final moved = Transform.translate(
       offset: _offset,
-      child: Opacity(opacity: opacity, child: widget.child),
+      child: Opacity(
+        opacity: opacity,
+        child: SwipingNow(progress: progress.clamp(0.0, 1.0), child: widget.child),
+      ),
     );
 
     return GestureDetector(
@@ -218,11 +278,18 @@ class SwipeAction extends StatelessWidget {
       final ink = forward ? scheme.onPrimaryContainer : scheme.onErrorContainer;
       return Align(
         alignment: forward ? Alignment.centerLeft : Alignment.centerRight,
-        child: Container(
+        // As tall as the row it is behind. It was a small pill floating in the middle
+        // of the gap, which reads as a thing lying under the list rather than as the
+        // row's own back — and the same gesture in the queue already uncovered a
+        // full-height panel, so the two did not look like one idea.
+        child: FractionallySizedBox(
+          heightFactor: 1,
+          child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 14),
+          alignment: Alignment.center,
           decoration: BoxDecoration(
             color: ground.withValues(alpha: 0.25 + 0.75 * progress),
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(12),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -239,6 +306,7 @@ class SwipeAction extends StatelessWidget {
               ],
             ],
           ),
+        ),
         ),
       );
     }
