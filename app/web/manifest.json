@@ -1,6 +1,6 @@
 {
-  "name": "Muse",
-  "short_name": "Muse",
+  "name": "WetOwl",
+  "short_name": "WetOwl",
   "description": "Your private music library.",
   "start_url": "/",
   "scope": "/",

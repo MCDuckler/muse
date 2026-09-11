@@ -312,7 +312,7 @@ class _SettingsPageState extends State<SettingsPage> {
           const _ApkRow(),
           ListTile(
             leading: const Icon(Icons.info_outline),
-            title: const Text('Muse'),
+            title: const Text('WetOwl'),
             subtitle: Text(appBuild.isEmpty
                 ? 'Version $appVersion'
                 : 'Version $appVersion · build $appBuild'),

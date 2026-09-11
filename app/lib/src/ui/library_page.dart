@@ -209,7 +209,7 @@ class LibraryPage extends StatelessWidget {
                 // and the way to empty it is to unheart them.
                 if (!p.isFavourites)
                   const PopupMenuItem(
-                      value: 'delete', child: Text('Remove from muse')),
+                      value: 'delete', child: Text('Remove from WetOwl')),
               ],
             ),
             onTap: () => Navigator.of(context).push(MaterialPageRoute(

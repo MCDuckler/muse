@@ -39,7 +39,7 @@ Future<void> main() async {
   if (!kIsWeb) {
     await JustAudioBackground.init(
       androidNotificationChannelId: 'dev.muse.audio',
-      androidNotificationChannelName: 'muse',
+      androidNotificationChannelName: 'WetOwl',
       // The service stays in the foreground through a pause.
       //
       // Every moment the engine reports "stopped" used to tear the foreground state
@@ -87,7 +87,7 @@ class MuseApp extends StatelessWidget {
           final dark = MediaQuery.platformBrightnessOf(context) == Brightness.dark;
           setPageColour(dark ? app.palette.groundDark : app.palette.groundLight);
           return MaterialApp(
-        title: 'muse',
+        title: 'WetOwl',
         debugShowCheckedModeBanner: false,
         theme: MuseTheme.light(app.palette),
         darkTheme: MuseTheme.dark(app.palette),

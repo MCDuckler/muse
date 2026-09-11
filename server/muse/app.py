@@ -97,7 +97,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             direct.stop()
         _loop = None
 
-    app = FastAPI(title="muse", docs_url="/api-docs", lifespan=lifespan)
+    app = FastAPI(title="WetOwl", docs_url="/api-docs", lifespan=lifespan)
     # Per-app, not per-module: a second app instance (tests, a worker process) gets its own.
     login_limit = auth.RateLimiter(rate=0.2, burst=5)      # 1 login / 5 s, burst 5
     resolve_limit = auth.RateLimiter(rate=2.0, burst=30)   # 2 resolves / s per device

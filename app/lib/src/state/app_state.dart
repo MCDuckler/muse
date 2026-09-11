@@ -1324,7 +1324,7 @@ class AppState extends ChangeNotifier {
   /// is making the noise. Elsewhere it names the entry in the task switcher.
   void _describeForTheOs(Track? track, {bool? playing}) {
     SystemChrome.setApplicationSwitcherDescription(ApplicationSwitcherDescription(
-      label: track == null ? 'muse' : '${track.displayTitle} · ${track.artistLine}',
+      label: track == null ? 'WetOwl' : '${track.displayTitle} · ${track.artistLine}',
       primaryColor: 0xFF121212,
     ));
     if (track == null) {
