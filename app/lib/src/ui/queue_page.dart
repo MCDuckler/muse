@@ -222,8 +222,12 @@ class _QueuePageState extends State<QueuePage> {
               ],
             ),
           ),
-        if (active != null)
-          SelectionBar(
+        const Divider(height: 1),
+        Expanded(
+          child: SelectionOver(
+            bar: active == null
+                ? const SizedBox.shrink()
+                : SelectionBar(
             where: 'queue:${active.id}',
             tracks: rows,
             removeLabel: 'Remove from queue',
@@ -240,8 +244,6 @@ class _QueuePageState extends State<QueuePage> {
               }
             },
           ),
-        const Divider(height: 1),
-        Expanded(
           child: active == null || rows.isEmpty
               ? const _EmptyQueue()
               : Builder(builder: (context) {
@@ -397,6 +399,7 @@ class _QueuePageState extends State<QueuePage> {
                 ),
                 );
               }),
+          ),
         ),
       ],
     );

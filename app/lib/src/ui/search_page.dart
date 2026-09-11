@@ -216,9 +216,10 @@ class _SearchPageState extends State<SearchPage> {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
           ),
-        SelectionBar(where: 'search', tracks: _local),
         Expanded(
-          child: _searched && !_busy && _nothingAtAll
+          child: SelectionOver(
+            bar: SelectionBar(where: 'search', tracks: _local),
+            child: _searched && !_busy && _nothingAtAll
               ? _NothingFound(query: _lastQuery)
               : !_searched && !_busy
                   ? const _SearchPrompt()
@@ -290,6 +291,7 @@ class _SearchPageState extends State<SearchPage> {
                   ),
                 ),
             ],
+          ),
           ),
         ),
       ],

@@ -10,9 +10,9 @@ import 'dialogs.dart';
 /// What you can do to the songs you have picked out.
 ///
 /// One bar, wherever a selection is running, so the answer to "how do I add these
-/// eleven to a playlist" is the same on the queue, on a record and in a search. It sits
-/// at the top of the list rather than in a menu, because it is also how you find out
-/// that a selection is running at all — and how you end it.
+/// eleven to a playlist" is the same on the queue, on a record and in a search. It is
+/// on screen rather than in a menu, because it is also how you find out that a
+/// selection is running at all — and how you end it.
 class SelectionBar extends StatelessWidget {
   const SelectionBar({
     super.key,
@@ -53,6 +53,11 @@ class SelectionBar extends StatelessWidget {
     final all = picked.length == tracks.length;
     return Material(
       color: scheme.primaryContainer,
+      // Floating, so it can be laid over the list rather than added above it — see
+      // SelectionOver for why that matters.
+      elevation: 8,
+      borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.antiAlias,
       child: SafeArea(
         top: false,
         bottom: false,
@@ -145,4 +150,34 @@ class SelectionBar extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A list with the selection bar over the bottom of it.
+///
+/// Over, not above. Putting the bar in the column pushed the whole list down by its
+/// own height the instant a selection started — so holding a row to pick it out moved
+/// that row out from under your finger, and everything you were about to pick with it
+/// shifted at the same moment. The list is what you are working on; it should not move
+/// because a control appeared.
+///
+/// The bottom of the list is where there is room for it: every one of these already
+/// leaves a gap at the end for the player bar, so the bar covers nothing.
+class SelectionOver extends StatelessWidget {
+  const SelectionOver({super.key, required this.child, required this.bar});
+
+  final Widget child;
+  final Widget bar;
+
+  @override
+  Widget build(BuildContext context) => Stack(
+        children: [
+          Positioned.fill(child: child),
+          Positioned(
+            left: 10,
+            right: 10,
+            bottom: 10,
+            child: bar,
+          ),
+        ],
+      );
 }

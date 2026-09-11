@@ -44,10 +44,10 @@ class TrackList extends StatelessWidget {
       );
     }
 
-    return Column(
-      children: [
-        if (selectable != null)
-          SelectionBar(
+    return SelectionOver(
+      bar: selectable == null
+          ? const SizedBox.shrink()
+          : SelectionBar(
             where: selectable!,
             tracks: tracks,
             removeLabel: onRemove == null ? 'Remove' : 'Remove from this list',
@@ -65,8 +65,7 @@ class TrackList extends StatelessWidget {
                     }
                   },
           ),
-        Expanded(
-          child: ListView.builder(
+      child: ListView.builder(
             padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
             physics: const AlwaysScrollableScrollPhysics(),
             itemCount: tracks.length + 1,
@@ -80,9 +79,7 @@ class TrackList extends StatelessWidget {
                 onRemove: onRemove == null ? null : () => onRemove!(i - 1),
               );
             },
-          ),
-        ),
-      ],
+      ),
     );
   }
 }

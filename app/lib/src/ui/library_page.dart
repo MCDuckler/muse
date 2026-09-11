@@ -273,9 +273,8 @@ class _PlaylistPageState extends State<_PlaylistPage> {
             return const Center(child: Text('Nothing in this playlist yet.'));
           }
           final where = 'playlist:${widget.playlistId}';
-          return Column(
-            children: [
-              SelectionBar(
+          return SelectionOver(
+            bar: SelectionBar(
                 where: where,
                 tracks: items,
                 removeLabel: 'Remove from playlist',
@@ -294,8 +293,7 @@ class _PlaylistPageState extends State<_PlaylistPage> {
                         _reload();
                       },
               ),
-              Expanded(
-                child: RefreshIndicator(
+            child: RefreshIndicator(
             onRefresh: () async => _reload(),
             child: ReorderableListView.builder(
             padding: const EdgeInsets.fromLTRB(8, 4, 8, bottomForPlayer),
@@ -347,9 +345,7 @@ class _PlaylistPageState extends State<_PlaylistPage> {
               onChanged: _reload,
             ),
           ),
-                ),
-              ),
-            ],
+          ),
           );
         },
       ),
