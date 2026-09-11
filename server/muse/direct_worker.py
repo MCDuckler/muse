@@ -17,7 +17,7 @@ import threading
 import time
 
 from . import (catalog, db, failures, follows, jobs, progress, refind,
-               shazam, sources, storage)
+               sources, storage)
 
 log = logging.getLogger("muse.direct")
 
@@ -41,7 +41,7 @@ LANES: tuple[tuple[str, tuple[str, ...]], ...] = (
     # says 429 when it has had enough — more hands do not make a rate limit lighter.
     ("fetch", ("ingest_direct",)),
     ("fetch", ("ingest_direct",)),
-    ("slow", ("mirror", "refind", "shazam_match", "follow_poll")),
+    ("slow", ("mirror", "refind", "follow_poll")),
 )
 
 
@@ -87,8 +87,6 @@ class DirectWorker:
                     try:
                         if kind == "refind":
                             self._refind(job)
-                        elif kind == "shazam_match":
-                            self._shazam(job)
                         elif kind == "mirror":
                             self._mirror(job)
                         elif kind == "follow_poll":
@@ -233,26 +231,6 @@ class DirectWorker:
             db.run("""update tracks set state='failed',
                              fail_reason='Looked everywhere — no copy of this anywhere',
                              fail_code='no_source' where id=%s""", (track_id,))
-
-    def _shazam(self, job: dict) -> None:
-        """Find the next handful of tagged songs in the catalogue.
-
-        A few at a time, queueing another when there are more left: a library of a
-        thousand tags is a thousand searches, and one job that takes twenty minutes is
-        one job that loses its lease halfway through and starts again from the top.
-        """
-        user_id = int(job["payload"]["user_id"])
-        try:
-            out = shazam.match_some(user_id)
-        except Exception as e:
-            jobs.fail(job["id"], f"{type(e).__name__}: {e}", retryable=True)
-            return
-        jobs.finish(job["id"])
-        log.info("shazam: looked at %s, found %s, %s left",
-                 out["looked_at"], out["found"], out["left"])
-        if out["left"]:
-            jobs.enqueue("shazam_match", {"user_id": user_id},
-                         priority=jobs.PRIORITY_BULK)
 
     # ------------------------------------------------------------------ mirrors
     def _mirror(self, job: dict) -> None:

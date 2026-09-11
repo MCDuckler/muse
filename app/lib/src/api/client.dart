@@ -230,28 +230,6 @@ class ApiClient {
   String? discUrl(Track t, {bool small = false}) =>
       sleeveUrl(t, small: small, part: 'disc');
 
-  // ---------------- shazams ----------------
-  Future<Shazams> shazams({bool unmatched = false}) async => Shazams.fromJson(
-      await _decode(await http.get(
-              _u('/shazams${unmatched ? '?unmatched=true' : ''}'),
-              headers: _headers)) as Map<String, dynamic>);
-
-  /// A library exported from shazam.com, as the file's own text.
-  Future<Map<String, dynamic>> importShazams(String csv) async =>
-      await _decode(await http.post(_u('/shazams/import'),
-          headers: _headers, body: jsonEncode({'csv': csv})))
-          as Map<String, dynamic>;
-
-  /// Go through the ones that found nothing, again — the answer changes as the
-  /// library grows.
-  Future<void> matchShazams() async {
-    await _decode(await http.post(_u('/shazams/match'), headers: _headers));
-  }
-
-  Future<void> forgetShazam(int id) async {
-    await _decode(await http.delete(_u('/shazams/$id'), headers: _headers));
-  }
-
   // ---------------- the back of a sleeve ----------------
   /// Everything drawn on this record's back, on whichever board this device is on:
   /// your own, or the host's when you are in a jam.

@@ -12,7 +12,6 @@ import 'feed_page.dart';
 import 'mini_player.dart';
 import 'spotify_page.dart';
 import 'selection_bar.dart';
-import 'shazam_page.dart';
 import 'song_row.dart';
 
 
@@ -47,13 +46,6 @@ class LibraryPage extends StatelessWidget {
           title: const Text('Artists'),
           onTap: () => Navigator.of(context)
               .push(MaterialPageRoute(builder: (_) => const ArtistsPage())),
-        ),
-        ListTile(
-          leading: const Icon(Icons.graphic_eq),
-          title: const Text('Shazams'),
-          subtitle: const Text('Songs you recognised, and where they went'),
-          onTap: () => Navigator.of(context)
-              .push(MaterialPageRoute(builder: (_) => const ShazamPage())),
         ),
         const _FeedRow(),
         const Divider(),
