@@ -492,3 +492,33 @@ create table if not exists sleeve_marks (
 
 create index if not exists sleeve_marks_board
   on sleeve_marks(owner_id, track_id, id);
+
+-- Songs recognised by Shazam, and what they turned out to be here.
+--
+-- Shazam has no way to ask it what somebody has tagged — there is no API for your own
+-- library — but it will hand the whole thing over as a CSV, which is the same shape as
+-- every other import here: a list of names and a time each one happened.
+--
+-- The tag is kept whether or not it was matched. A song recognised in a bar at two in
+-- the morning is worth having written down even when nothing in the catalogue answers
+-- to it, and a match that fails today may well succeed once the library has grown.
+create table if not exists shazams (
+  id         bigserial primary key,
+  user_id    int not null references users(id) on delete cascade,
+  -- Shazam's own id for the recording, where the export carries one. It is what makes
+  -- importing the same file twice cost nothing.
+  tag_key    text not null,
+  title      text not null,
+  artist     text,
+  -- When it was recognised, which is most of why anybody keeps these.
+  tagged_at  timestamptz,
+  url        text,
+  track_id   int references tracks(id) on delete set null,
+  -- How sure the match was, so a wrong one can be told from an unmatched one.
+  confidence real,
+  looked_at  timestamptz,
+  added_at   timestamptz not null default now(),
+  unique (user_id, tag_key)
+);
+
+create index if not exists shazams_for_user on shazams(user_id, tagged_at desc);

@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from . import (auth, catalog, config, db, direct_worker, enrich_worker, failures,
                follows, jobs, progress,
                jam, routes_accounts, routes_browse, routes_downloads, routes_files,
-               routes_follows, routes_jam, routes_marks,
+               routes_follows, routes_jam, routes_marks, routes_shazam,
                routes_library, routes_linked, routes_play, routes_sources,
                routes_spotify,
                routes_sync, sleeve,
@@ -617,6 +617,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     app.include_router(routes_follows.router)
     app.include_router(routes_library.router)
     app.include_router(routes_marks.router)
+    app.include_router(routes_shazam.router)
     app.include_router(routes_sync.router)
     app.include_router(routes_spotify.router)
     app.include_router(routes_files.router)
