@@ -347,6 +347,9 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
   void didChangeDependencies() {
     super.didChangeDependencies();
     _warmSleeves();
+    // The pens sit under the record and the record sits on the stage; the board is the
+    // one thing both of them hold, so it is where the way back is kept.
+    widget.board?.onTurnBack = _tossIt;
   }
 
   @override
@@ -947,7 +950,7 @@ class _Sleeve extends StatelessWidget {
           // Skipped once it is dim enough not to be seen: it is the one thing here
           // that genuinely needs a layer of its own, and the sleeves it would be
           // under at that point are themselves nearly gone.
-          if (dim > 0.25 && !upright && toss == 0 && !showingBack)
+          if (dim > 0.25 && !upright && toss == 0)
             RepaintBoundary(
               child: Mirror(
                 size: jacket,

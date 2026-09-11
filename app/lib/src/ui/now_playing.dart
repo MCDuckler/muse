@@ -162,19 +162,7 @@ class NowPlayingScreen extends StatelessWidget {
                                   horizontal: app.playerLayout == PlayerLayout.plain
                                       ? 14
                                       : 0),
-                              child: Column(
-                                children: [
-                                  // Two lines' worth of room whether or not the title
-                                  // needs two. The artwork sits above this in a
-                                  // centred column, so a title that wrapped used to
-                                  // shove the record up the screen — and going from
-                                  // one song to the next moved the picture as much as
-                                  // it changed it.
-                                  _TitleBlock(title: track.displayTitle),
-                                  const SizedBox(height: 6),
-                                  _Credits(track: track),
-                                ],
-                              ),
+                              child: _Words(app: app, track: track),
                             ),
                             if (_statusLine(s, track) != null) ...[
                               const SizedBox(height: 10),
@@ -703,6 +691,61 @@ class _SleeveTools extends StatelessWidget {
             onWidth: board.pickNib,
             // The board is the host's in a jam, and clearing it is theirs alone.
             onWipe: jam == null || jam.isHost ? board.wipe : null,
+            onTurnBack: board.onTurnBack,
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// What is playing, at whichever size the screen has room for.
+///
+/// Face up, the full thing: title over artist over album, with room reserved for all
+/// of it. Turned over, one quiet line — the record is a third larger and is the thing
+/// being looked at, and three lines of credits under a board somebody is drawing on is
+/// the screen talking over them. It is still there, because knowing what is playing is
+/// not optional; it is just said in a sentence rather than a stack.
+class _Words extends StatelessWidget {
+  const _Words({required this.app, required this.track});
+  final AppState app;
+  final Track track;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: app.sleeveBoard,
+      builder: (context, _) {
+        final flipped = app.sleeveBoard.open01 &&
+            app.coverStyle == CoverStyle.record;
+        if (!flipped) {
+          return Column(
+            children: [
+              // Two lines' worth of room whether or not the title needs two. The
+              // artwork sits above this in a centred column, so a title that wrapped
+              // used to shove the record up the screen — and going from one song to
+              // the next moved the picture as much as it changed it.
+              _TitleBlock(title: track.displayTitle),
+              const SizedBox(height: 6),
+              _Credits(track: track),
+            ],
+          );
+        }
+        final scheme = Theme.of(context).colorScheme;
+        final said = [
+          track.displayTitle,
+          track.artistLine,
+          if (track.albumLine != null) track.albumLine!,
+        ].join('  ·  ');
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2),
+          child: Text(
+            said,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: scheme.onSurfaceVariant.withValues(alpha: 0.8)),
           ),
         );
       },

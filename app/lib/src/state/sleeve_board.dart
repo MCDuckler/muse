@@ -53,6 +53,13 @@ class SleeveBoard extends ChangeNotifier {
   /// screen.
   bool get open01 => _trackId != null;
 
+  /// How to turn the record back over, set by whatever is drawing it.
+  ///
+  /// Lives here because the pens live under the record and the record lives on the
+  /// stage, and the two do not otherwise know about each other. The board is the one
+  /// thing they both hold.
+  VoidCallback? onTurnBack;
+
   // ------------------------------------------------------------- wet paint
   /// How long paint runs for after it is laid down.
   static const Duration drying = Duration(milliseconds: 2600);

@@ -117,120 +117,172 @@ class SleeveInk extends CustomPainter {
     if (live != null) _line(canvas, size, live);
   }
 
-  /// One pass of the can.
+  /// How many cells across the board is. Coarse enough that a pixel is plainly a
+  /// pixel and fine enough to write a legible word with.
+  static const int grid = 72;
+
+  /// One pass of the can, as pixels.
   ///
-  /// Three layers and it needs all three. A halo of overspray, wide and soft, which is
-  /// what a nozzle actually puts on a wall; a denser core inside it; and a scatter of
-  /// separate droplets along the way, because the edge of a sprayed line is never a
-  /// line, it is where the dots run out.
-  ///
-  /// Painted over rather than into. It used to multiply, which is how ink sinks into
-  /// paper — and it meant a pale colour laid over a dark one could not lighten it, so
-  /// everything drifted towards the darkest thing on the board and black won every
-  /// argument. Paint covers what it lands on.
+  /// Not an airbrush. A soft cone of colour with speckle round it is trying to be a
+  /// photograph of spray paint and lands somewhere between the two — what it wanted
+  /// to be was a *drawing* of spray paint, so it is one: a fixed grid, whole cells
+  /// filled or not filled, and nothing in between. Everything else follows from that.
+  /// The overspray is single stray cells rather than a blur, the runs are columns of
+  /// cells rather than tapering tails, and the magnifying glass over it enlarges
+  /// perfectly because there is nothing to enlarge but rectangles.
   void _line(Canvas canvas, Size size, SleeveStroke stroke) {
     final points = stroke.points;
     if (points.length < 4) return;
+
+    final cell = size.width / grid;
     final colour = inkAt(stroke.ink);
-    final w = stroke.width * size.width * 0.019;
+    // The nib, in cells. A fat pen is a fat brush, not a blurrier one.
+    final nib = stroke.width <= 1.5
+        ? 1
+        : stroke.width <= 3.0
+            ? 2
+            : 3;
 
-    final path = Path()
-      ..moveTo(points[0] * size.width, points[1] * size.height);
-    // Through the middle of each pair rather than corner to corner: a line drawn by a
-    // finger is sampled, and joining the samples straight gives it visible elbows.
-    for (var i = 2; i + 3 < points.length; i += 2) {
-      final cx = points[i] * size.width, cy = points[i + 1] * size.height;
-      final nx = points[i + 2] * size.width, ny = points[i + 3] * size.height;
-      path.quadraticBezierTo(cx, cy, (cx + nx) / 2, (cy + ny) / 2);
+    final filled = <int>{};
+    void stamp(int cx, int cy) {
+      // The brush is a square of cells centred on the point, so a thick line has
+      // square ends, which is what a pixel brush does.
+      final half = nib ~/ 2;
+      for (var dy = 0; dy < nib; dy++) {
+        for (var dx = 0; dx < nib; dx++) {
+          final x = cx - half + dx, y = cy - half + dy;
+          if (x < 0 || y < 0 || x >= grid || y >= grid) continue;
+          filled.add(y * grid + x);
+        }
+      }
     }
-    path.lineTo(points[points.length - 2] * size.width,
-        points[points.length - 1] * size.height);
 
-    Paint pass(double width, double alpha, double blur) => Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..isAntiAlias = true
-      ..strokeWidth = width
-      ..color = colour.withValues(alpha: alpha)
-      ..maskFilter = blur <= 0
-          ? null
-          : MaskFilter.blur(BlurStyle.normal, blur);
+    // Straight lines between the samples, on the grid. A finger is sampled every few
+    // milliseconds and the gaps between samples are wider than a cell, so without this
+    // a quick stroke is a dotted line.
+    var px = (points[0] * grid).floor();
+    var py = (points[1] * grid).floor();
+    stamp(px, py);
+    for (var i = 2; i + 1 < points.length; i += 2) {
+      final nx = (points[i] * grid).floor();
+      final ny = (points[i + 1] * grid).floor();
+      _between(px, py, nx, ny, stamp);
+      px = nx;
+      py = ny;
+    }
 
-    canvas.drawPath(path, pass(w * 2.1, 0.16, w * 0.52));   // overspray
-    canvas.drawPath(path, pass(w * 1.15, 0.55, w * 0.24));  // the edge of the cone
-    canvas.drawPath(path, pass(w * 0.62, 0.95, w * 0.08));  // the middle of it
+    final paint = Paint()
+      ..isAntiAlias = false
+      ..color = colour;
+    for (final at in filled) {
+      final x = at % grid, y = at ~/ grid;
+      canvas.drawRect(
+          Rect.fromLTWH(x * cell, y * cell, cell + 0.5, cell + 0.5), paint);
+    }
 
-    _speckle(canvas, size, stroke, colour, w);
-    _runs(canvas, size, stroke, colour, w);
+    _speckle(canvas, cell, stroke, colour, filled, nib);
+    _runs(canvas, cell, stroke, colour, filled, nib);
   }
 
-  /// The droplets that miss.
-  void _speckle(Canvas canvas, Size size, SleeveStroke stroke, Color colour,
-      double w) {
-    final rng = math.Random(_seedOf(stroke.id));
-    final points = stroke.points;
-    final dot = Paint()..isAntiAlias = true;
-    // Along the line rather than around the whole of it: spray lands where the can was
-    // pointed, and thins out with distance from it.
-    for (var i = 0; i + 1 < points.length; i += 2) {
-      if (rng.nextDouble() > 0.55) continue;
-      final x = points[i] * size.width, y = points[i + 1] * size.height;
-      for (var n = 0; n < 3; n++) {
-        final away = w * (0.6 + rng.nextDouble() * 1.5);
-        final angle = rng.nextDouble() * math.pi * 2;
-        dot.color = colour.withValues(alpha: 0.10 + rng.nextDouble() * 0.30);
-        canvas.drawCircle(
-            Offset(x + math.cos(angle) * away, y + math.sin(angle) * away),
-            w * (0.045 + rng.nextDouble() * 0.10),
-            dot);
+  /// Bresenham, so a line between two samples is a line and not a row of dots.
+  static void _between(int x0, int y0, int x1, int y1, void Function(int, int) at) {
+    var x = x0, y = y0;
+    final dx = (x1 - x).abs(), dy = -(y1 - y).abs();
+    final sx = x < x1 ? 1 : -1, sy = y < y1 ? 1 : -1;
+    var err = dx + dy;
+    // A stroke is bounded by the board, so this cannot run away — but a cap costs
+    // nothing and a runaway loop inside a painter freezes the screen.
+    for (var guard = 0; guard < grid * 4; guard++) {
+      at(x, y);
+      if (x == x1 && y == y1) return;
+      final twice = err * 2;
+      if (twice >= dy) {
+        err += dy;
+        x += sx;
+      }
+      if (twice <= dx) {
+        err += dx;
+        y += sy;
       }
     }
   }
 
-  /// Paint that has been laid on too thick, running down the board.
+  /// The cells that missed: single pixels beside the line, never touching it.
+  void _speckle(Canvas canvas, double cell, SleeveStroke stroke, Color colour,
+      Set<int> filled, int nib) {
+    final rng = math.Random(_seedOf(stroke.id));
+    final paint = Paint()..isAntiAlias = false;
+    final line = filled.toList(growable: false);
+    if (line.isEmpty) return;
+    final count = (line.length * 0.22).round().clamp(0, 160);
+    for (var n = 0; n < count; n++) {
+      final from = line[rng.nextInt(line.length)];
+      final x = from % grid + rng.nextInt(nib * 2 + 3) - (nib + 1);
+      final y = from ~/ grid + rng.nextInt(nib * 2 + 3) - (nib + 1);
+      if (x < 0 || y < 0 || x >= grid || y >= grid) continue;
+      if (filled.contains(y * grid + x)) continue;
+      // Fainter than the line itself, and never more than one cell: overspray is
+      // where the paint ran out, not a softer edge of where it did not.
+      paint.color = colour.withValues(alpha: 0.22 + rng.nextDouble() * 0.4);
+      canvas.drawRect(
+          Rect.fromLTWH(x * cell, y * cell, cell + 0.5, cell + 0.5), paint);
+    }
+  }
+
+  /// Paint laid on too thick, running down the board a cell at a time.
   ///
-  /// Worked out from the stroke itself rather than recorded with it: the same id gives
-  /// the same runs on every device that draws it, which is what makes a drip somebody
-  /// else is watching appear in the same place as it does here — and it means a board
-  /// carries no more over the wire than the lines that were drawn on it.
-  void _runs(Canvas canvas, Size size, SleeveStroke stroke, Color colour, double w) {
+  /// Worked out from the stroke's own id rather than recorded with it, so the same line
+  /// drips the same way on every device that draws it — and a board carries no more
+  /// over the wire than the lines that were drawn on it.
+  void _runs(Canvas canvas, double cell, SleeveStroke stroke, Color colour,
+      Set<int> filled, int nib) {
+    if (filled.isEmpty) return;
     final rng = math.Random(_seedOf(stroke.id) ^ 0x5eed);
-    final points = stroke.points;
-    // More paint, more runs: a fat nib held over one spot is what makes them.
-    final count = ((points.length / 24) * stroke.width).round().clamp(0, 4);
+    final count = ((filled.length / 90) * nib).round().clamp(0, 4);
     if (count == 0) return;
 
-    // How far the runs have got. One while the paint is wet, and they stop where they
-    // stopped — a drip does not climb back up when it dries.
+    // How far the runs have got. They stop where they stopped: a drip does not climb
+    // back up when it dries.
     final wet = board.wetness(stroke.id);
     final grown = wet <= 0 ? 1.0 : Curves.easeOutCubic.transform(1 - wet);
 
-    for (var n = 0; n < count; n++) {
-      final at = rng.nextInt(points.length ~/ 2) * 2;
-      final x = points[at] * size.width;
-      final y = points[at + 1] * size.height;
-      // Never off the board: paint runs down a sleeve, not off the bottom of it.
-      final room = size.height - y;
-      final full = math.min(room, size.height * (0.04 + rng.nextDouble() * 0.13));
-      if (full < w) continue;
-      final length = full * grown;
-      final thin = w * (0.16 + rng.nextDouble() * 0.16);
+    // The lowest cell in each column of the stroke — paint runs off the bottom edge of
+    // what was painted, not out of the middle of it.
+    final lowest = <int, int>{};
+    for (final at in filled) {
+      final x = at % grid, y = at ~/ grid;
+      if ((lowest[x] ?? -1) < y) lowest[x] = y;
+    }
+    final columns = lowest.keys.toList(growable: false)..sort();
 
-      // A tapering tail with a bead on the end, which is what a run actually looks
-      // like: it carries the paint down with it and leaves less behind as it goes.
-      final tail = Path()
-        ..moveTo(x - thin, y)
-        ..quadraticBezierTo(x - thin * 0.7, y + length * 0.6, x, y + length)
-        ..quadraticBezierTo(x + thin * 0.7, y + length * 0.6, x + thin, y)
-        ..close();
-      canvas.drawPath(tail, Paint()
-        ..isAntiAlias = true
-        ..color = colour.withValues(alpha: 0.72));
-      canvas.drawCircle(Offset(x, y + length), thin * 1.35,
-          Paint()
-            ..isAntiAlias = true
-            ..color = colour.withValues(alpha: 0.9));
+    final paint = Paint()
+      ..isAntiAlias = false
+      ..color = colour;
+    for (var n = 0; n < count; n++) {
+      final x = columns[rng.nextInt(columns.length)];
+      final top = lowest[x]! + 1;
+      final full = (3 + rng.nextInt(10)).clamp(0, grid - top);
+      final length = (full * grown).round();
+      if (length <= 0) continue;
+
+      for (var i = 0; i < length; i++) {
+        final y = top + i;
+        if (y >= grid) break;
+        // Thins as it goes, and the last cell sits one below a gap: a bead of paint
+        // that has run ahead of the rest of it.
+        final wide = i < length * 0.35 && nib > 1 ? 2 : 1;
+        if (i == length - 1 && length > 3) continue;       // the gap
+        for (var w = 0; w < wide; w++) {
+          canvas.drawRect(
+              Rect.fromLTWH((x + w) * cell, y * cell, cell + 0.5, cell + 0.5),
+              paint);
+        }
+      }
+      final bead = top + length;
+      if (length > 3 && bead < grid) {
+        canvas.drawRect(
+            Rect.fromLTWH(x * cell, bead * cell, cell + 0.5, cell + 0.5), paint);
+      }
     }
   }
 
@@ -261,6 +313,7 @@ class SleevePalette extends StatelessWidget {
     required this.onInk,
     required this.onWidth,
     this.onWipe,
+    this.onTurnBack,
   });
 
   final int ink;
@@ -270,6 +323,11 @@ class SleevePalette extends StatelessWidget {
 
   /// Clearing is the board owner's alone — in a jam, the host's.
   final VoidCallback? onWipe;
+
+  /// Back to the front of the record. A gesture that only works one way is a gesture
+  /// somebody is stuck inside: the way in was a swipe, and it is still there, but
+  /// there has to be a way out you can see.
+  final VoidCallback? onTurnBack;
 
   /// Fat. This is a felt pen on cardboard and it is being used with a thumb, not a
   /// stylus: the thin end of the old range drew a line you had to look for.
@@ -306,6 +364,13 @@ class SleevePalette extends StatelessWidget {
               tooltip: 'Clear the sleeve',
               visualDensity: VisualDensity.compact,
               onPressed: onWipe,
+            ),
+          if (onTurnBack != null)
+            IconButton(
+              icon: const Icon(Icons.flip_camera_android_outlined, size: 20),
+              tooltip: 'Turn the record back over',
+              visualDensity: VisualDensity.compact,
+              onPressed: onTurnBack,
             ),
         ],
       ),
@@ -457,11 +522,13 @@ class SleeveLoupe extends CustomPainter {
     canvas.drawLine(centre.translate(0, -reach), centre.translate(0, -gap), hair);
     canvas.drawLine(centre.translate(0, gap), centre.translate(0, reach), hair);
 
-    // What the can will lay down, at the size it will lay it down: the whole cone,
-    // not the dense middle of it, because the overspray is part of the mark.
-    canvas.drawCircle(
-        centre,
-        nib * sleeve.width * 0.019 * 1.05 * zoom,
+    // The cells the brush will fill, at the size it will fill them. A square, because
+    // that is the shape of the mark — a circle here would be promising something the
+    // pen cannot draw.
+    final cellSize = sleeve.width / SleeveInk.grid * zoom;
+    final wide = (board.nib <= 1.5 ? 1 : (board.nib <= 3.0 ? 2 : 3)) * cellSize;
+    canvas.drawRect(
+        Rect.fromCenter(center: centre, width: wide, height: wide),
         Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1
