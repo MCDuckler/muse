@@ -8,6 +8,7 @@
 // browser, which is what makes this runnable when the browser harness is not.
 import 'dart:async';
 
+import 'package:flutter/services.dart';
 import 'package:just_audio_platform_interface/just_audio_platform_interface.dart';
 
 class FakeJustAudio extends JustAudioPlatform {
@@ -116,9 +117,17 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
     return LoadResponse(duration: trackLength);
   }
 
+  /// Refuse to take a queued next track, the way a platform that cannot do playlists
+  /// does. The point of the test is what the player does about it, not what it is.
+  bool refuseInserts = false;
+
   @override
   Future<ConcatenatingInsertAllResponse> concatenatingInsertAll(
       ConcatenatingInsertAllRequest request) async {
+    if (refuseInserts) {
+      calls.add('insert refused');
+      throw PlatformException(code: 'nope', message: 'no playlists here');
+    }
     await _slow();
     final urls = [for (final child in request.children) ..._urlsOf(child)];
     sources.insertAll(request.index, urls);

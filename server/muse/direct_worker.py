@@ -23,7 +23,26 @@ log = logging.getLogger("muse.direct")
 
 IDLE_SLEEP = 3.0
 ERROR_SLEEP = 30.0
-KINDS = ("ingest_direct", "mirror", "follow_poll", "refind")
+
+# How long to leave a service alone once it has said to stop asking. Long enough to be
+# a real answer to a rate limit and short enough that a queue started in the morning is
+# still finished by the evening.
+HOLD_OFF_SECONDS = 300.0
+
+# What runs where, and this split is the whole point of the list.
+#
+# It used to be one thread taking one job of each kind in turn. A library import is
+# minutes of work and a download is seconds of it, so a single mirror running meant
+# exactly one track downloaded per pass of the loop — measured at one a minute against
+# a queue nine thousand deep, which is five months. Downloads get their own threads and
+# cannot end up behind an import again.
+LANES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # Two, not three. These fetch from one service at a time and it is a service that
+    # says 429 when it has had enough — more hands do not make a rate limit lighter.
+    ("fetch", ("ingest_direct",)),
+    ("fetch", ("ingest_direct",)),
+    ("slow", ("mirror", "refind", "follow_poll")),
+)
 
 
 class DirectWorker:
@@ -35,38 +54,55 @@ class DirectWorker:
         # importing it here would tie the worker to the web app.
         self.mirror = mirror
         self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+        self._threads: list[threading.Thread] = []
 
     def start(self) -> None:
-        if self._thread:
+        if self._threads:
             return
-        self._thread = threading.Thread(target=self._run, name=self.name, daemon=True)
-        self._thread.start()
-        log.info("direct worker started")
+        for n, (lane, kinds) in enumerate(LANES):
+            # Each thread leases under its own name, so a stuck one is identifiable in
+            # the job table rather than hidden behind a name three others share.
+            who = f"{self.name}-{lane}{n}"
+            thread = threading.Thread(
+                target=self._run, args=(who, kinds), name=who, daemon=True)
+            thread.start()
+            self._threads.append(thread)
+        log.info("direct worker started (%d lanes)", len(self._threads))
 
     def stop(self) -> None:
         self._stop.set()
 
-    def _run(self) -> None:
+    def _run(self, who: str, kinds: tuple[str, ...]) -> None:
         while not self._stop.is_set():
             worked = False
-            for kind in KINDS:
+            for kind in kinds:
                 try:
-                    leased = jobs.lease(self.name, kind=kind, limit=1)
+                    leased = jobs.lease(who, kind=kind, limit=1)
                 except Exception as e:                 # database restarting, say
                     log.warning("lease failed: %s", e)
                     self._stop.wait(ERROR_SLEEP)
                     break
                 for job in leased:
                     worked = True
-                    if kind == "refind":
-                        self._refind(job)
-                    elif kind == "mirror":
-                        self._mirror(job)
-                    elif kind == "follow_poll":
-                        self._follow_poll(job)
-                    else:
-                        self._ingest(job)
+                    try:
+                        if kind == "refind":
+                            self._refind(job)
+                        elif kind == "mirror":
+                            self._mirror(job)
+                        elif kind == "follow_poll":
+                            self._follow_poll(job)
+                        else:
+                            self._ingest(job)
+                    except Exception as e:
+                        # One job that goes wrong in a way nothing else caught must not
+                        # take its lane down with it — the lane would stop leasing and
+                        # that whole kind of work would quietly stop happening.
+                        log.exception("job %s (%s) crashed: %s", job["id"], kind, e)
+                        try:
+                            jobs.fail(job["id"], f"{type(e).__name__}: {e}",
+                                      retryable=True)
+                        except Exception:
+                            pass
             if not worked:
                 self._stop.wait(IDLE_SLEEP)
 
@@ -155,6 +191,19 @@ class DirectWorker:
             log.warning("%s track %s failed: %s", provider, track_id, e)
         except Exception as e:
             progress.clear(track_id)
+            # Being told to slow down is not this track's fault.
+            #
+            # Bandcamp answered nine thousand queued downloads with 429 and every one
+            # of them was written down as a failure and retried at once, which is a
+            # very good way to stay rate-limited for the rest of the day. A wait, and
+            # the attempt is not spent.
+            if "429" in str(e) or "too many requests" in str(e).lower():
+                jobs.hold(job["id"], HOLD_OFF_SECONDS,
+                          f"{provider} asked us to slow down")
+                log.info("%s is rate-limiting; holding off %ss",
+                         provider, HOLD_OFF_SECONDS)
+                self._stop.wait(HOLD_OFF_SECONDS)
+                return
             jobs.fail(job["id"], f"{type(e).__name__}: {e}", retryable=True)
             log.warning("%s track %s crashed: %s", provider, track_id, e)
 

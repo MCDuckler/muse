@@ -13,6 +13,7 @@ MAX_ATTEMPTS = 3
 
 # Lower runs sooner. The default sits in the middle so both directions are available.
 PRIORITY_NOW = 10        # you are waiting for this one
+PRIORITY_QUEUE = 50      # it is in the queue you are listening to
 PRIORITY_NORMAL = 100    # you asked for it
 PRIORITY_BULK = 500      # a playlist import filling in behind you
 
@@ -278,6 +279,27 @@ def lease(worker: str, kind: str = "ingest", limit: int = 1,
             (worker, (busy or 0) + len(rows)),
         )
     return rows
+
+
+def hold(job_id: int, seconds: float, why: str) -> None:
+    """Put a job back and leave it alone for a while.
+
+    For a service that has said, in so many words, to stop asking. That is not a
+    failure of the job — trying it again in ten minutes will work — and it must not
+    spend one of its three attempts, or a rate limit lasting an afternoon would write
+    off every track behind it as broken.
+
+    It is also the only thing that stops the queue making the problem worse: nine
+    thousand jobs each retrying a 429 immediately is a very good way to stay
+    rate-limited for ever.
+    """
+    db.run(
+        """update jobs set state='pending', leased_by=null, leased_until=null,
+                  attempts=greatest(attempts-1, 0), error=%s, updated_at=now(),
+                  next_attempt_at = now() + (%s || ' seconds')::interval
+            where id=%s""",
+        (why[:2000], seconds, job_id),
+    )
 
 
 def release(job_id: int) -> None:

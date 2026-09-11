@@ -977,12 +977,23 @@ class PlayerService {
         await _player.removeAudioSourceRange(_engineIndex + 1, length);
       }
       await _player.insertAudioSource(_engineIndex + 1, _sourceFor(next));
-      _queuedNextId = next.id;
     } catch (_) {
       // A platform that will not take a playlist still works the old way: the track
       // ends, Dart notices, and the next one is loaded. Slower, not broken.
-      _queuedNextId = null;
     } finally {
+      // Marked whether or not it worked, and this is the important part.
+      //
+      // Clearing it on failure meant a prefetch that could not succeed was tried again
+      // on the very next call — and this is called on every queue update, which with a
+      // couple of hundred songs downloading in the background is several times a
+      // second. Every attempt hands the engine a new playlist, and every one of those
+      // makes it re-prepare and re-open the stream: the log is pages of
+      // "playing loading" and "playing buffering" a second or two apart, which is the
+      // music stuttering, and it is this loop doing it.
+      //
+      // One attempt per track. If it did not take, the old path still works — the song
+      // ends, Dart notices, and loads the next one.
+      _queuedNextId = next.id;
       _mutating--;
     }
   }

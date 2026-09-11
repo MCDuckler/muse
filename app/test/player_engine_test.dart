@@ -326,6 +326,51 @@ void main() {
         reason: 'it picks up where the sound stopped: ${engine.calls}');
   });
 
+  test('a prefetch that cannot work is tried once, not for ever', () async {
+    // What this is really about: the player hands the engine the next song so the
+    // change costs nothing, and it does that again on every queue update — which, with
+    // a couple of hundred songs downloading in the background, is several times a
+    // second. Clearing the "already queued" mark when the attempt failed meant the
+    // next call tried again, and every attempt makes the engine re-prepare and re-open
+    // the stream. The music stutters, and it is this loop doing it.
+    // One song first, so the engine exists and has nothing to prefetch yet: the
+    // failure has to be the *first* attempt, or the "already queued" mark is set from
+    // the successful one and nothing ever tries again.
+    await player.loadQueue(queueOf([track(1)]));
+    await settle();
+    final engine = audio.only;
+    engine.refuseInserts = true;
+
+    await player.loadQueue(queueOf([track(1), track(2), track(3)]));
+    await player.playAt(0);
+    await settle();
+    engine.calls.clear();
+
+    // Every one of these used to be another go at the same impossible insert.
+    for (var i = 0; i < 6; i++) {
+      await player.loadQueue(queueOf([track(1), track(2), track(3)]));
+      await settle();
+    }
+
+    final tries = engine.calls.where((c) => c == 'insert refused').length;
+    expect(tries, lessThanOrEqualTo(1),
+        reason: 'tried $tries times: ${engine.calls}');
+  });
+
+  test('and the song still moves on when it ends', () async {
+    // The other half: giving up on the prefetch must not give up on the queue. The old
+    // path — the song ends, Dart notices, the next one is loaded — still has to work.
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    await player.playAt(0);
+    await settle();
+    audio.only.refuseInserts = true;
+
+    audio.only.reachEnd();
+    await settle();
+
+    expect(player.current?.id, 2, reason: 'it went on to the next song');
+  });
+
   test('an engine that dies in the background is started again', () async {
     // The complaint: leave the app and the music stops after a while. Nothing looked
     // for this. The snapshot is rebuilt from the engine on every state change, so

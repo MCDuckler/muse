@@ -587,3 +587,81 @@ def test_a_copy_that_merely_timed_out_is_not_written_off(client, hdr, wsec):
     dead = db.one("""select raw->>'dead' as dead from track_sources
                       where track_id=%s and provider_id='SLOW1'""", (track["id"],))
     assert dead["dead"] is None
+
+
+def test_the_queue_you_are_listening_to_goes_first(client, hdr):
+    """A queue is a statement about what is going to be listened to; an import is a
+    statement about what might be wanted some day.
+
+    Pressing play already moved the next few songs up, which is right for the song
+    about to be heard and no use for the forty after it — so the whole queue's songs
+    sat behind nine thousand from a library mirror, waiting their turn behind work
+    nobody was waiting for.
+    """
+    from muse import catalog, db, jobs
+
+    bulk = catalog.create_from_source("soundcloud", {
+        "provider_id": "bulk", "title": "From an import", "artists": [],
+        "url": "https://soundcloud.com/a/bulk",
+    }, priority=jobs.PRIORITY_BULK, download=True)
+    mine = catalog.create_from_source("soundcloud", {
+        "provider_id": "mine", "title": "In my queue", "artists": [],
+        "url": "https://soundcloud.com/a/mine",
+    }, priority=jobs.PRIORITY_BULK, download=True)
+
+    q = client.post("/queues", headers=hdr, json={"name": "Tonight"}).json()
+    client.post(f"/queues/{q['id']}/items", headers=hdr,
+                json={"track_ids": [mine["id"]]})
+
+    out = client.post(f"/queues/{q['id']}/prioritise", headers=hdr).json()
+    assert out["moved"] == 1
+
+    order = [r["id"] for r in db.all_(
+        """select (payload->>'track_id')::int as id from jobs
+            where kind='ingest_direct' and state='pending'
+            order by priority, created_at""")]
+    assert order.index(mine["id"]) < order.index(bulk["id"]), \
+        "the queue's own song is ahead of the import"
+
+
+def test_prioritising_a_queue_starts_what_was_never_started(client, hdr):
+    """A song recorded by a mirror and never queued at all is still a song in the queue
+    you are about to listen to."""
+    from muse import catalog, db
+
+    track = catalog.create_from_source("soundcloud", {
+        "provider_id": "never", "title": "Only listed", "artists": [],
+        "url": "https://soundcloud.com/a/never",
+    }, download=False)
+    q = client.post("/queues", headers=hdr, json={"name": "Tonight"}).json()
+    client.post(f"/queues/{q['id']}/items", headers=hdr,
+                json={"track_ids": [track["id"]]})
+
+    out = client.post(f"/queues/{q['id']}/prioritise", headers=hdr).json()
+    assert out["queued"] == 1
+    assert db.one("""select 1 from jobs where kind='ingest_direct'
+                      and (payload->>'track_id')::int=%s""", (track["id"],))
+
+
+def test_being_told_to_slow_down_is_not_the_track_s_fault(client, hdr):
+    """Nine thousand queued downloads each retrying a 429 at once is a very good way to
+    stay rate-limited all day — and it wrote every one of them off as broken."""
+    from muse import catalog, db, jobs
+
+    track = catalog.create_from_source("bandcamp", {
+        "provider_id": "slow", "title": "Too fast", "artists": [],
+        "url": "https://band.bandcamp.com/track/too-fast",
+    }, download=True)
+    job = db.one("""select id, attempts from jobs where kind='ingest_direct'
+                     and (payload->>'track_id')::int=%s""", (track["id"],))
+    db.run("""update jobs set state='leased', attempts=1, leased_by='t',
+                     leased_until=now() + interval '10 minutes' where id=%s""",
+           (job["id"],))
+
+    jobs.hold(job["id"], 300, "bandcamp asked us to slow down")
+
+    after = db.one("""select state, attempts, next_attempt_at > now() + interval '4 minutes'
+                             as waiting from jobs where id=%s""", (job["id"],))
+    assert after["state"] == "pending", "not written off"
+    assert after["attempts"] == 0, "and it did not spend an attempt"
+    assert after["waiting"], "and it is left alone for a while"

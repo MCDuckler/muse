@@ -27,11 +27,15 @@ void main() {
     expect(at('202609110900').isNewerThan('202609111200'), isFalse);
   });
 
-  test('a build that does not know when it was made is never out of date', () {
-    // A debug build somebody is working in. Nagging it to install a release over
-    // itself would be wrong every time.
-    expect(at('202609111200').isNewerThan(''), isFalse);
-    expect(at('202609111200').isNewerThan('not-a-stamp'), isFalse);
+  test('a build that does not know when it was made can still be updated', () {
+    // Every copy installed by hand before any of this existed is one of these, and
+    // refusing them was a trap with no way out: the first stamped build could not be
+    // reached from an unstamped one, so the feature could not install the version that
+    // makes the feature work.
+    expect(at('202609111200').isNewerThan(''), isTrue);
+    expect(at('202609111200').isNewerThan('not-a-stamp'), isTrue);
+    expect(Release.knows(''), isFalse, reason: 'and it says so on the screen');
+    expect(Release.knows('202609111200'), isTrue);
   });
 
   test('and neither is a server that says nothing useful', () {

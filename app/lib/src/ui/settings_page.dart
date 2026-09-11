@@ -529,8 +529,12 @@ class _UpdateRowState extends State<_UpdateRow> {
     return ListTile(
       leading: Icon(Icons.system_update, color: scheme.primary),
       title: Text('Version ${release.version} is ready'),
-      subtitle: Text('${release.size}'
-          '${release.built == null ? '' : ' · built ${release.built!.split('T').first}'}'),
+      subtitle: Text(Release.knows(appBuild)
+          ? '${release.size}'
+              '${release.built == null ? '' : ' · built ${release.built!.split('T').first}'}'
+          // Honest about why: this copy predates the app knowing when it was built, so
+          // "newer" is an assumption rather than a comparison.
+          : '${release.size} · this copy does not say when it was built'),
       trailing: FilledButton(
         onPressed: u.fetchAndOffer,
         child: const Text('Update'),

@@ -511,11 +511,23 @@ class AppState extends ChangeNotifier {
         .catchError((_) => q);
   }
 
+  /// The queue that has been selected, so its songs are not asked for twice.
+  int? _prioritised;
+
   Future<void> _applyQueue(Queue updated) async {
+    final changed = activeQueue?.id != updated.id;
     activeQueue = updated;
     await player?.loadQueue(updated);
     notifyListeners();
     unawaited(_keepTheseCovers(updated));
+    // Once per queue, when it becomes the one being listened to. Its songs go ahead of
+    // any import waiting in the download queue — the first three were already moved up
+    // by pressing play, which is right for the song about to be heard and no use at
+    // all for the forty after it.
+    if (changed || _prioritised != updated.id) {
+      _prioritised = updated.id;
+      unawaited(api.prioritiseQueue(updated.id).catchError((_) => 0));
+    }
   }
 
   /// Put the covers of a queue on the device, once, in the background.

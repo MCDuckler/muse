@@ -133,6 +133,51 @@ def download_playlist(playlist_id: int, user: dict = Depends(current_user)):
     return {"queued": queued, "unfetchable": unfetchable}
 
 
+@router.post("/queues/{queue_id}/prioritise")
+def prioritise_queue(queue_id: int, user: dict = Depends(current_user)):
+    """Everything in the queue you are listening to, ahead of everything else.
+
+    Pressing play already moves the next few songs to the front, which is right for the
+    song about to be heard and no use at all for the forty after it. A queue is a
+    statement about what is going to be listened to, and an import is a statement about
+    what might be wanted some day — so the whole queue belongs in front of the whole
+    import, not just its first three.
+
+    This is what "the downloader is not resuming" actually looked like from the outside:
+    the queue's own songs sitting behind nine thousand from a library mirror, waiting
+    their turn behind work nobody was waiting for.
+    """
+    queue = db.one("select id from queues where id=%s and user_id=%s",
+                   (queue_id, user["id"]))
+    if not queue:
+        # A jam's queue belongs to the host, and a guest listening to it is as much
+        # entitled to have it downloaded as the host is.
+        if not jam.may_touch_queue(queue_id, user["id"]):
+            raise HTTPException(404, "no such queue")
+
+    waiting = db.all_(
+        """select distinct t.id
+             from queue_items i join tracks t on t.id = i.track_id
+            where i.queue_id=%s and t.state='pending'""",
+        (queue_id,),
+    )
+    moved = queued = 0
+    for row in waiting:
+        # Already on its way: move it up rather than making a second one.
+        bumped = db.one(
+            """update jobs set priority=%s
+                where kind in ('ingest','ingest_direct') and state='pending'
+                  and (payload->>'track_id')::int = %s and priority > %s
+                returning id""",
+            (jobs.PRIORITY_QUEUE, row["id"], jobs.PRIORITY_QUEUE),
+        )
+        if bumped:
+            moved += 1
+        elif jobs.queue(row["id"], priority=jobs.PRIORITY_QUEUE):
+            queued += 1
+    return {"moved": moved, "queued": queued, "waiting": len(waiting)}
+
+
 @router.get("/playlists/{playlist_id}/cover")
 def playlist_cover(playlist_id: int, request: Request, size: str = "lg",
                    v: str | None = None, user: dict = Depends(user_or_key)):

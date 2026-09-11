@@ -40,7 +40,22 @@ Future<void> main() async {
     await JustAudioBackground.init(
       androidNotificationChannelId: 'dev.muse.audio',
       androidNotificationChannelName: 'muse',
-      androidNotificationOngoing: true,
+      // The service stays in the foreground through a pause.
+      //
+      // Every moment the engine reports "stopped" used to tear the foreground state
+      // down, and a process that is not running a foreground service is a cached one —
+      // which Android is free to freeze the instant the app leaves the screen. The log
+      // shows the engine flapping between stopped and playing a second apart while a
+      // queue downloads, so the app was spending much of its time cached, and leaving
+      // it during one of those windows froze it mid-song: no sound, and no Dart running
+      // to notice or say so. The last kill recorded by the system agrees — it had the
+      // app down as "cached" at the time.
+      //
+      // `ongoing` has to go with it: audio_service will not allow a notification that
+      // cannot be dismissed on a service that is allowed to leave the foreground, and
+      // between the two, staying alive matters more than being undismissable.
+      androidNotificationOngoing: false,
+      androidStopForegroundOnPause: false,
     );
   }
   runApp(const MuseApp());

@@ -36,12 +36,20 @@ class Release {
 
   bool isNewerThan(String mine) {
     final theirs = int.tryParse(build);
+    if (theirs == null) return false;        // the server has nothing to offer
     final ours = int.tryParse(mine);
-    // Not knowing is not the same as being out of date. A build with no stamp is a
-    // debug build somebody is working in, and it must not be nagged.
-    if (theirs == null || ours == null) return false;
+    // An app that does not know when it was made was made before any of this existed,
+    // which is exactly what every copy installed by hand up to now is. Refusing to
+    // offer an update to those was a trap with no way out of it: the first stamped
+    // build could never be reached from an unstamped one, so the feature could not
+    // install the version that makes the feature work.
+    if (ours == null) return true;
     return theirs > ours;
   }
+
+  /// Whether we can say anything about what is running, as opposed to only about what
+  /// is on the server.
+  static bool knows(String mine) => int.tryParse(mine) != null;
 
   String get size => '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
 }

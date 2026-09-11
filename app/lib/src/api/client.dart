@@ -269,6 +269,17 @@ class ApiClient {
         await http.delete(_u('/tracks/$trackId/marks'), headers: _headers));
   }
 
+  /// Put this queue's own songs ahead of everything else waiting to download.
+  ///
+  /// A queue is a statement about what is going to be listened to; an import is a
+  /// statement about what might be wanted some day. Answers with how many were moved
+  /// up or started.
+  Future<int> prioritiseQueue(int queueId) async {
+    final d = await _decode(await http.post(
+        _u('/queues/$queueId/prioritise'), headers: _headers)) as Map<String, dynamic>;
+    return ((d['moved'] ?? 0) as int) + ((d['queued'] ?? 0) as int);
+  }
+
   /// Take the whole thing: queue the audio for everything in a playlist that has none.
   Future<int> downloadPlaylist(int playlistId) async {
     final d = await _decode(await http.post(_u('/playlists/$playlistId/download'),
