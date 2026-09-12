@@ -699,13 +699,27 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
         // song's name is written on. Measured from the middle of the cover, because
         // that is where the disc starts from — and the cover does not sit in the
         // middle of the stage, it sits above the space kept for its reflection.
-        final deck = side / 2 + jacket * Mirror.defaultDepth / 2;
         // The record is the width of the room it is in, less enough that it is not
-        // touching the walls — it is the thing being played, and the cover is the
-        // thing it came out of. It does not follow the cover's size setting: making
-        // the sleeve smaller is about how much of the shelf you can see, and a record
-        // on a deck is the size a record is.
-        final platter = side - _wallClearance * 2;
+        // touching the walls. Measured from the screen rather than from the stage:
+        // the cover sits inside a page with margins of its own, and a record the
+        // width of the stage is a record two thumbs narrower than the phone. It is
+        // drawn outside the stage box, which is what the stack's clipBehavior is for.
+        //
+        // It does not follow the cover's size setting either — making the sleeve
+        // smaller is about how much of the shelf you can see, and a record on a deck
+        // is the size a record is.
+        final screen = MediaQuery.sizeOf(context).width;
+        final platter = screen - _wallClearance * 2;
+        // Far enough right that the sleeve-sized one is past the edge of the phone.
+        final away = screen * 0.85;
+        // Where the deck is: the line the song's name is written on, which is the
+        // bottom of the stage. Measured from the middle of the cover, because that is
+        // where the record is put down — and the cover does not sit in the middle of
+        // the stage, it sits above the space kept for its reflection. The last term
+        // is the sliver of record left below the cut, so the cut itself lands on the
+        // line rather than a little under it.
+        final deck =
+            side / 2 + jacket * Mirror.defaultDepth / 2 - platter * 0.02;
         // The finger covers one shelf place, so the sleeve under it stays under it —
         // and a shelf place is measured from the record, so this follows the record's
         // size as well.
@@ -816,6 +830,7 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                         jacket: jacket,
                         drop: deck,
                         platter: platter,
+                        away: away,
                         // The same picture wherever it stands. Choosing the small
                         // one for the sleeves off to the side meant the URL changed
                         // halfway through the journey, and a changed URL is a second
@@ -865,6 +880,7 @@ class _Sleeve extends StatelessWidget {
     required this.jacket,
     required this.drop,
     required this.platter,
+    required this.away,
     required this.jacketUrl,
     required this.discUrl,
     required this.spin,
@@ -900,8 +916,11 @@ class _Sleeve extends StatelessWidget {
   /// rest on, which is the bottom of the stage and the top of the song's name.
   final double drop;
 
-  /// How wide the record itself is drawn: the stage, less its margins.
+  /// How wide the record itself is drawn: the screen, less its margins.
   final double platter;
+
+  /// How far right the sleeve-sized record goes on its way off the screen.
+  final double away;
   final String? jacketUrl;
   final String? discUrl;
   final Animation<double> spin;
@@ -968,6 +987,7 @@ class _Sleeve extends StatelessWidget {
                 // thin air rather than out of the sleeve.
                 if (showing > 0.01 && showing < Disc.infront)
                   Disc(spin: spin, url: discUrl, size: platter,
+                      sleeve: jacket * 0.92, away: away,
                       out: showing, drop: drop, dim: dim),
                 _Face(
                     url: jacketUrl,
@@ -978,6 +998,7 @@ class _Sleeve extends StatelessWidget {
                     board: board),
                 if (showing >= Disc.infront) ...[
                   Disc(spin: spin, url: discUrl, size: platter,
+                      sleeve: jacket * 0.92, away: away,
                       out: showing, drop: drop, dim: dim),
                   // And then the arm, which cannot come down on a record that is not
                   // there yet: it waits for the disc to stop moving and lowers onto
@@ -1146,6 +1167,8 @@ class Disc extends StatelessWidget {
     required this.spin,
     required this.url,
     required this.size,
+    required this.sleeve,
+    required this.away,
     required this.out,
     required this.drop,
     this.dim = 1.0,
@@ -1153,7 +1176,16 @@ class Disc extends StatelessWidget {
 
   final Animation<double> spin;
   final String? url;
+
+  /// The record on the deck: the width of the screen, less its margins.
   final double size;
+
+  /// The record as it comes out of the cover, which is the cover's own size.
+  final double sleeve;
+
+  /// How far right it has to go to be off the screen entirely.
+  final double away;
+
   final double out;
 
   /// How far below the middle of the cover the deck is, in pixels: where the disc
@@ -1161,62 +1193,104 @@ class Disc extends StatelessWidget {
   final double drop;
   final double dim;
 
-  /// How far out it is before it is the thing in front rather than the thing behind.
+  /// When the record has left the sleeve and the big one starts to arrive.
   ///
-  /// The moment it is clear of the sleeve. Before this it is coming out from behind
-  /// the cover, which is where a record comes from; after it, it is in front, which is
-  /// where a record you have taken out is.
-  static const double infront = 0.45;
+  /// Two things happen here, and they are not the same object: the record slides out
+  /// of the side of its cover and off the screen, and then *the record* — the one
+  /// being played, the size of the deck — appears where it is going to be played and
+  /// clicks down into place. A small disc crawling to the middle of the screen and
+  /// growing would be a picture being resized; this is a record being taken out of a
+  /// sleeve and put on.
+  static const double leaves = 0.42;
 
-  /// How far down the disc has come, as a fraction of the whole journey.
-  ///
-  /// Straight down and no further: it slides out of the bottom of the cover and stops
-  /// where the deck is, which is the line the title is written on. It used to slide
-  /// sideways and lean against the sleeve, which is what a record does in a room and
-  /// not what one does on a turntable.
-  static double travel(double out) => Curves.easeOutCubic.transform(out.clamp(0, 1));
+  /// It is the thing in front from the moment the big one is arriving.
+  static const double infront = leaves;
+
+  /// How far the sleeve-sized disc has slid out, 0 to 1, and how far the big one has
+  /// arrived, 0 to 1. Only one of them is ever happening.
+  static double sliding(double out) =>
+      Curves.easeInCubic.transform((out / leaves).clamp(0.0, 1.0));
+
+  static double arriving(double out) =>
+      Curves.easeOutCubic.transform(((out - leaves) / (1 - leaves)).clamp(0.0, 1.0));
+
+  /// Kept for the deck's own arithmetic and for the tests: how far down the record is.
+  static double travel(double out) => arriving(out);
 
   @override
   Widget build(BuildContext context) {
     if (url == null) return const SizedBox.shrink();
-    final down = drop * travel(out);
-    // Rolling, not sliding. A disc that moves without turning is a picture being
-    // dragged; one that turns by the distance it covers divided by its own radius is
-    // a record rolling out of its sleeve — and it rolls *back* on the way in, which is
-    // the whole of why the return leg reads as a return.
-    final roll = down / (size / 2);
+    final gone = sliding(out);
+    final here = arriving(out);
 
+    // On its way out: the sleeve-sized record, sliding right, rolling as it goes, and
+    // off the edge of the screen.
+    if (here <= 0) {
+      if (gone <= 0) return const SizedBox.shrink();
+      final along = gone * away;
+      return Transform.translate(
+        offset: Offset(along, 0),
+        child: RepaintBoundary(
+          child: _spun(
+            size: sleeve,
+            // Rolling, not sliding: a disc that moves without turning is a picture
+            // being dragged, and one that turns by the distance it covers over its own
+            // radius is a record rolling out of its cover.
+            roll: along / (sleeve / 2),
+            // Faded out over the last of it, so it leaves rather than being cut off by
+            // the edge of the phone.
+            fade: (1 - (gone - 0.75) / 0.25).clamp(0.0, 1.0),
+          ),
+        ),
+      );
+    }
+
+    // Arriving: the record itself, at the deck. It fades up and comes down the last
+    // few pixels into place — the click of a record being set on the platter.
+    final settling = Curves.easeOutBack.transform(here.clamp(0.0, 1.0));
+    final down = drop - (1 - settling) * size * 0.06;
     return Transform.translate(
       offset: Offset(0, down),
       child: RepaintBoundary(
-        // Cut in half along the line it comes to rest on.
-        //
-        // What is below that line is the deck, and below the deck is the name of what
-        // is playing — so the disc is a half-record standing in the slot rather than a
-        // whole one lying over the words.
-        child: ClipRect(
-          clipper: _TopHalf(),
-          child: AnimatedBuilder(
-            animation: spin,
-            builder: (context, child) => Transform.rotate(
-              angle: spin.value * 2 * math.pi + roll,
-              child: child,
-            ),
-            // Built once and turned, rather than rebuilt every frame.
-            child: SizedBox(
-              width: size,
-              height: size,
-              child: Image(
-                  image: artwork(url!),
-                  fit: BoxFit.contain,
-                  gaplessPlayback: true,
-                  opacity: AlwaysStoppedAnimation(dim)),
-            ),
+        // Cut along the line it comes to rest on, and faded into it rather than
+        // sliced: a hard edge across a record is a mistake, and a record sinking into
+        // the deck is a record on a deck.
+        child: ShaderMask(
+          blendMode: BlendMode.dstIn,
+          shaderCallback: (rect) => const LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Colors.white, Colors.white, Colors.transparent],
+            stops: [0.0, 0.40, 0.52],
+          ).createShader(rect),
+          child: _spun(
+            size: size,
+            roll: 0,
+            fade: Curves.easeIn.transform((here * 1.8).clamp(0.0, 1.0)),
           ),
         ),
       ),
     );
   }
+
+  Widget _spun({required double size, required double roll, required double fade}) =>
+      AnimatedBuilder(
+        animation: spin,
+        builder: (context, child) => Transform.rotate(
+          angle: spin.value * 2 * math.pi + roll,
+          child: child,
+        ),
+        // Built once and turned, rather than rebuilt every frame.
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: Image(
+              image: artwork(url!),
+              fit: BoxFit.contain,
+              gaplessPlayback: true,
+              opacity: AlwaysStoppedAnimation(dim * fade)),
+        ),
+      );
 }
 
 /// The arm, riding on the record.
@@ -1295,13 +1369,13 @@ class _ArmPainter extends CustomPainter {
     final middle = Offset(size.width / 2, size.height / 2 + drop);
     // The post it turns on: outside the record, up and to the right, where the post
     // stands on a deck.
-    final pivot = middle + Offset(radius * 0.86, -radius * 1.02);
+    final pivot = middle + Offset(radius * 0.72, -radius * 0.98);
 
     // Where the needle sits, and where it waits. Only the angle between them changes;
     // everything else about the arm is rigid, which is what makes it read as one
     // object being swung rather than a line being redrawn.
-    final playing = middle + Offset(-radius * 0.10, -radius * 0.50);
-    final parked = middle + Offset(radius * 0.62, -radius * 0.80);
+    final playing = middle + Offset(-radius * 0.12, -radius * 0.46);
+    final parked = middle + Offset(radius * 0.54, -radius * 0.78);
     final head = Offset.lerp(parked, playing, landed)!;
 
     final reach = head - pivot;
@@ -1363,7 +1437,16 @@ class _ArmPainter extends CustomPainter {
     final headDepth = radius * 0.115;
     canvas.save();
     canvas.translate(length, 0);
-    canvas.rotate(-angle * 0.55);           // hung a little more upright than the arm
+    // Square to the groove, not to the arm.
+    //
+    // A groove is a circle around the middle of the record, so the cartridge sits
+    // across the tangent at the point the needle is touching — which is at right
+    // angles to the line from the middle of the record to the needle. That angle has
+    // nothing to do with the angle of the arm, and the whole reason a tonearm is bent
+    // twice is to get the head to sit at it.
+    final spoke = head - middle;
+    final groove = math.atan2(spoke.dy, spoke.dx) + math.pi / 2;
+    canvas.rotate(groove - angle);
     final body = RRect.fromRectAndRadius(
       Rect.fromCenter(
           center: Offset(headLength * 0.18, 0),
@@ -1474,15 +1557,6 @@ class _ArmPainter extends CustomPainter {
       old.landed != landed ||
       old.colour != colour ||
       old.dim != dim;
-}
-
-/// Everything above the middle, and nothing below it.
-class _TopHalf extends CustomClipper<Rect> {
-  @override
-  Rect getClip(Size size) => Rect.fromLTWH(0, 0, size.width, size.height / 2);
-
-  @override
-  bool shouldReclip(_TopHalf oldClipper) => false;
 }
 
 

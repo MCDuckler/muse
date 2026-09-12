@@ -9,35 +9,46 @@ import 'package:muse/src/ui/record_stage.dart';
 
 void main() {
   test('it starts inside the sleeve', () {
-    expect(Disc.travel(0), 0);
+    expect(Disc.sliding(0), 0);
+    expect(Disc.arriving(0), 0);
   });
 
-  test('it comes straight down and stops there', () {
-    expect(Disc.travel(1), 1, reason: 'all the way to the deck, and no further');
+  test('it leaves the sleeve first and arrives second, never both at once', () {
+    // Two things, not one: the record slides out of the side of its cover and off the
+    // screen, and then the record being played appears where it will be played. A
+    // small disc crawling to the middle and growing would be a picture being resized.
+    expect(Disc.sliding(0), 0);
+    expect(Disc.sliding(Disc.leaves), 1, reason: 'gone by the handover');
+    expect(Disc.arriving(Disc.leaves), 0, reason: 'and the big one starts there');
+    expect(Disc.arriving(1), 1);
+    for (var i = 0; i <= 40; i++) {
+      final out = i / 40;
+      final leaving = Disc.sliding(out);
+      final arriving = Disc.arriving(out);
+      expect(leaving < 1 && arriving > 0, isFalse,
+          reason: 'one at a time, at $out');
+    }
+  });
+
+  test('both halves are one way only', () {
     var last = -1.0;
     for (var i = 0; i <= 50; i++) {
-      final now = Disc.travel(i / 50);
-      expect(now, greaterThanOrEqualTo(last),
-          reason: 'one way: a record does not come out and go back in on the way out');
+      final now = Disc.sliding(i / 50);
+      expect(now, greaterThanOrEqualTo(last));
+      last = now;
+    }
+    last = -1.0;
+    for (var i = 0; i <= 50; i++) {
+      final now = Disc.arriving(i / 50);
+      expect(now, greaterThanOrEqualTo(last));
       last = now;
     }
   });
 
-  test('it slows into its place rather than arriving at speed', () {
-    // Most of the way down in the first half of the journey, and the rest of it spent
-    // settling — which is what leaves the arm something to wait for.
-    expect(Disc.travel(0.5), greaterThan(0.7));
-    expect(Disc.travel(0.9), greaterThan(0.99));
-  });
-
-  test('it is behind the sleeve on the way out and in front once it is clear', () {
-    expect(Disc.infront, greaterThan(0.0));
-    expect(Disc.infront, lessThan(1.0));
-    // Nothing jumps at the handover: where it is at the moment it changes places is
-    // the same on both sides of that moment.
-    final before = Disc.travel(Disc.infront - 0.001);
-    final after = Disc.travel(Disc.infront + 0.001);
-    expect((before - after).abs(), lessThan(0.01));
+  test('it is behind the sleeve while it leaves and in front once it arrives', () {
+    expect(Disc.infront, Disc.leaves,
+        reason: 'the record on the deck is the thing in front; the one sliding out '
+            'of the cover comes from behind it');
   });
 
   test('the arm waits for the record to settle before it comes down', () {
