@@ -70,6 +70,34 @@ object Health {
                 else -> "importance ${state.importance}"
             }
         }
+        // Whether the media service is actually there. getRunningServices only ever
+        // reports an app's own services now, which is exactly the question: is the
+        // thing that is supposed to be holding this process up running at all.
+        if (am != null) {
+            val ours = try {
+                @Suppress("DEPRECATION")
+                am.getRunningServices(64).filter {
+                    it.service.packageName == context.packageName
+                }
+            } catch (e: Throwable) {
+                emptyList()
+            }
+            parts += if (ours.isEmpty()) {
+                "no service of ours is running"
+            } else {
+                "services: " + ours.joinToString {
+                    it.service.className.substringAfterLast('.') +
+                        (if (it.foreground) " (foreground)" else " (background)")
+                }
+            }
+        }
+        if (Build.VERSION.SDK_INT >= 33) {
+            val asked = androidx.core.content.ContextCompat.checkSelfPermission(
+                context, "android.permission.POST_NOTIFICATIONS"
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            parts += if (asked) "may post notifications" else "NOT ALLOWED TO NOTIFY"
+        }
+        parts += "android ${Build.VERSION.SDK_INT}"
         return parts.joinToString(" · ")
     }
 }

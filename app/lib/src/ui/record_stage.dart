@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -101,6 +102,9 @@ enum ShelfMove {
 /// This is the whole of the bookkeeping the stage does, and every way the movement
 /// used to break was a mistake in it rather than in the drawing — so it lives on its
 /// own, where it can be checked without a screen.
+/// How much room is left between the record and the edge of the screen.
+const double _wallClearance = 14;
+
 class Shelf {
   Shelf({this.left, required this.middle, this.right});
 
@@ -696,6 +700,12 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
         // that is where the disc starts from — and the cover does not sit in the
         // middle of the stage, it sits above the space kept for its reflection.
         final deck = side / 2 + jacket * Mirror.defaultDepth / 2;
+        // The record is the width of the room it is in, less enough that it is not
+        // touching the walls — it is the thing being played, and the cover is the
+        // thing it came out of. It does not follow the cover's size setting: making
+        // the sleeve smaller is about how much of the shelf you can see, and a record
+        // on a deck is the size a record is.
+        final platter = side - _wallClearance * 2;
         // The finger covers one shelf place, so the sleeve under it stays under it —
         // and a shelf place is measured from the record, so this follows the record's
         // size as well.
@@ -805,6 +815,7 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                         grow: card.slot == 0 ? 1 + 0.30 * flipped : 1.0,
                         jacket: jacket,
                         drop: deck,
+                        platter: platter,
                         // The same picture wherever it stands. Choosing the small
                         // one for the sleeves off to the side meant the URL changed
                         // halfway through the journey, and a changed URL is a second
@@ -853,6 +864,7 @@ class _Sleeve extends StatelessWidget {
     required this.grow,
     required this.jacket,
     required this.drop,
+    required this.platter,
     required this.jacketUrl,
     required this.discUrl,
     required this.spin,
@@ -887,6 +899,9 @@ class _Sleeve extends StatelessWidget {
   /// How far below the middle of this cover the deck is — the line the disc comes to
   /// rest on, which is the bottom of the stage and the top of the song's name.
   final double drop;
+
+  /// How wide the record itself is drawn: the stage, less its margins.
+  final double platter;
   final String? jacketUrl;
   final String? discUrl;
   final Animation<double> spin;
@@ -952,7 +967,7 @@ class _Sleeve extends StatelessWidget {
                 // drawing it in front the whole way meant it appeared to come out of
                 // thin air rather than out of the sleeve.
                 if (showing > 0.01 && showing < Disc.infront)
-                  Disc(spin: spin, url: discUrl, size: jacket * 0.92,
+                  Disc(spin: spin, url: discUrl, size: platter,
                       out: showing, drop: drop, dim: dim),
                 _Face(
                     url: jacketUrl,
@@ -962,7 +977,7 @@ class _Sleeve extends StatelessWidget {
                     showingBack: showingBack,
                     board: board),
                 if (showing >= Disc.infront) ...[
-                  Disc(spin: spin, url: discUrl, size: jacket * 0.92,
+                  Disc(spin: spin, url: discUrl, size: platter,
                       out: showing, drop: drop, dim: dim),
                   // And then the arm, which cannot come down on a record that is not
                   // there yet: it waits for the disc to stop moving and lowers onto
@@ -1273,63 +1288,183 @@ class _ArmPainter extends CustomPainter {
   final Color colour;
   final double dim;
 
-  /// Where the arm is hinged: outside the record, up and to the right of it, which is
-  /// where the post stands on a deck.
-  Offset _pivot(Offset middle) =>
-      middle + Offset(radius * 0.78, -radius * 0.95);
-
   @override
   void paint(Canvas canvas, Size size) {
     // The middle of the disc, in this box's coordinates: the box is the cover, and the
     // disc has dropped by `drop` from its middle.
     final middle = Offset(size.width / 2, size.height / 2 + drop);
-    final pivot = _pivot(middle);
+    // The post it turns on: outside the record, up and to the right, where the post
+    // stands on a deck.
+    final pivot = middle + Offset(radius * 0.86, -radius * 1.02);
 
-    // Where the needle wants to be: in from the edge, on the half of the record that
-    // is above the cut, so the whole arm is visible.
-    final playing = middle + Offset(-radius * 0.05, -radius * 0.55);
-    // And where it waits: swung back towards the post, off the playing surface.
-    final parked = middle + Offset(radius * 0.62, -radius * 0.72);
-    final tip = Offset.lerp(parked, playing, landed)!;
+    // Where the needle sits, and where it waits. Only the angle between them changes;
+    // everything else about the arm is rigid, which is what makes it read as one
+    // object being swung rather than a line being redrawn.
+    final playing = middle + Offset(-radius * 0.10, -radius * 0.50);
+    final parked = middle + Offset(radius * 0.62, -radius * 0.80);
+    final head = Offset.lerp(parked, playing, landed)!;
 
-    final ink = colour.withValues(alpha: 0.82 * dim);
-    final arm = Paint()
-      ..color = ink
-      ..strokeWidth = radius * 0.055
-      ..strokeCap = StrokeCap.round
-      ..style = PaintingStyle.stroke;
+    final reach = head - pivot;
+    final angle = math.atan2(reach.dy, reach.dx);
+    final length = reach.distance;
 
-    // The counterweight end, short and stubby, on the far side of the hinge.
-    final back = pivot + (pivot - tip) * 0.34;
-    canvas.drawLine(pivot, back, arm);
-    canvas.drawCircle(
-        back,
-        radius * 0.075,
-        Paint()..color = ink);
+    // Brushed metal, warm rather than blue: the whole thing is a piece of nineteen
+    // seventies hi-fi, and hi-fi of that vintage is aluminium with the light coming
+    // off it along one edge.
+    final steel = Color.lerp(colour, const Color(0xFFF2EDE4), 0.86)!;
+    final shade = Color.lerp(colour, const Color(0xFF6A6259), 0.7)!;
+    final lit = const Color(0xFFFFFDF7);
 
-    canvas.drawLine(pivot, tip, arm);
-
-    // The head: a small block sitting across the end of the arm, angled the way the
-    // arm is.
-    final along = (tip - pivot);
-    final angle = math.atan2(along.dy, along.dx);
     canvas.save();
-    canvas.translate(tip.dx, tip.dy);
+    canvas.translate(pivot.dx, pivot.dy);
     canvas.rotate(angle);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromCenter(
-            center: Offset.zero, width: radius * 0.16, height: radius * 0.11),
-        Radius.circular(radius * 0.03),
-      ),
-      Paint()..color = ink,
-    );
+
+    // Along the arm from here: x runs from the counterweight (negative) out to the
+    // head (positive), y is across the tube.
+    final tube = radius * 0.036;
+
+    // The shadow it casts on the record, offset a little down the way the light is
+    // coming from.
+    canvas.save();
+    canvas.translate(tube * 0.7, tube * 1.5);
+    canvas.drawPath(
+        _tube(length, tube),
+        Paint()
+          ..color = const Color(0xFF000000).withValues(alpha: 0.28 * dim)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, tube * 0.8));
     canvas.restore();
 
-    // The post it turns on, with a little of the deck showing under it.
+    // The tube itself: an S, because a tonearm of this kind is bent twice so the head
+    // sits square to the groove. Filled rather than stroked so the light can run along
+    // the top of it.
+    canvas.drawPath(
+      _tube(length, tube),
+      Paint()
+        ..shader = ui.Gradient.linear(
+          Offset(0, -tube),
+          Offset(0, tube),
+          [lit.withValues(alpha: dim), steel.withValues(alpha: dim),
+           shade.withValues(alpha: dim)],
+          const [0.0, 0.45, 1.0],
+        ),
+    );
+
+    // The counterweight, behind the pivot: a heavy cylinder with a knurled collar in
+    // front of it, which is most of what makes the silhouette read as a tonearm.
+    final weight = radius * 0.105;
+    _cylinder(canvas, Offset(-length * 0.26, 0), weight * 1.15, weight,
+        steel, shade, lit, dim);
+    _cylinder(canvas, Offset(-length * 0.135, 0), weight * 0.30, weight * 0.70,
+        shade, shade, steel, dim);
+
+    // The head, square to the groove: a block with the cartridge under it and a small
+    // lift-off finger on the front.
+    final headLength = radius * 0.22;
+    final headDepth = radius * 0.115;
+    canvas.save();
+    canvas.translate(length, 0);
+    canvas.rotate(-angle * 0.55);           // hung a little more upright than the arm
+    final body = RRect.fromRectAndRadius(
+      Rect.fromCenter(
+          center: Offset(headLength * 0.18, 0),
+          width: headLength,
+          height: headDepth),
+      Radius.circular(headDepth * 0.28),
+    );
+    canvas.drawRRect(
+      body,
+      Paint()
+        ..shader = ui.Gradient.linear(
+          Offset(0, -headDepth / 2),
+          Offset(0, headDepth / 2),
+          [lit.withValues(alpha: dim), steel.withValues(alpha: dim),
+           shade.withValues(alpha: dim)],
+          const [0.0, 0.5, 1.0],
+        ),
+    );
+    // Two slots along it, the way a headshell is cut.
+    final slot = Paint()
+      ..color = shade.withValues(alpha: 0.55 * dim)
+      ..strokeWidth = headDepth * 0.09
+      ..strokeCap = StrokeCap.round;
+    for (final at in [-headDepth * 0.18, headDepth * 0.18]) {
+      canvas.drawLine(Offset(headLength * 0.02, at),
+          Offset(headLength * 0.34, at), slot);
+    }
+    // The stylus, under the front of it, touching the record.
+    canvas.drawLine(
+      Offset(-headLength * 0.34, headDepth * 0.35),
+      Offset(-headLength * 0.30, headDepth * 0.72),
+      Paint()
+        ..color = shade.withValues(alpha: dim)
+        ..strokeWidth = headDepth * 0.11
+        ..strokeCap = StrokeCap.round,
+    );
+    // The finger lift, up and forward.
+    canvas.drawLine(
+      Offset(-headLength * 0.40, -headDepth * 0.10),
+      Offset(-headLength * 0.64, -headDepth * 0.62),
+      Paint()
+        ..color = steel.withValues(alpha: dim)
+        ..strokeWidth = headDepth * 0.10
+        ..strokeCap = StrokeCap.round,
+    );
+    canvas.restore();
+    canvas.restore();
+
+    // The post, drawn last so the arm comes out of it rather than over it.
+    canvas.drawCircle(
+        pivot,
+        radius * 0.085,
+        Paint()
+          ..shader = ui.Gradient.radial(
+            pivot.translate(-radius * 0.03, -radius * 0.04),
+            radius * 0.15,
+            [lit.withValues(alpha: dim), shade.withValues(alpha: dim)],
+          ));
     canvas.drawCircle(pivot, radius * 0.085,
-        Paint()..color = colour.withValues(alpha: 0.5 * dim));
-    canvas.drawCircle(pivot, radius * 0.05, Paint()..color = ink);
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = radius * 0.012
+          ..color = shade.withValues(alpha: 0.8 * dim));
+    canvas.drawCircle(
+        pivot, radius * 0.026, Paint()..color = shade.withValues(alpha: dim));
+  }
+
+  /// The arm's outline, from the pivot at (0,0) out to (length, 0): straight for the
+  /// first stretch, then bent twice, and tapering as it goes.
+  Path _tube(double length, double tube) {
+    final path = Path();
+    final bend = tube * 1.9;
+    path.moveTo(-length * 0.30, -tube * 0.5);
+    path.lineTo(length * 0.30, -tube * 0.55);
+    // Out and down to the head, an S in two curves.
+    path.cubicTo(length * 0.52, -tube * 0.55 - bend * 0.1,
+        length * 0.62, bend * 0.5, length, tube * 0.05);
+    path.lineTo(length, tube * 0.9);
+    path.cubicTo(length * 0.62, bend * 0.5 + tube * 0.85,
+        length * 0.52, tube * 0.45 - bend * 0.1, length * 0.30, tube * 0.5);
+    path.lineTo(-length * 0.30, tube * 0.5);
+    path.close();
+    return path;
+  }
+
+  /// A short metal cylinder across the arm.
+  void _cylinder(Canvas canvas, Offset at, double halfLength, double halfDepth,
+      Color face, Color edge, Color light, double dim) {
+    final rect = Rect.fromCenter(
+        center: at, width: halfLength * 2, height: halfDepth * 2);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, Radius.circular(halfDepth * 0.45)),
+      Paint()
+        ..shader = ui.Gradient.linear(
+          rect.topCenter,
+          rect.bottomCenter,
+          [light.withValues(alpha: dim), face.withValues(alpha: dim),
+           edge.withValues(alpha: dim)],
+          const [0.0, 0.45, 1.0],
+        ),
+    );
   }
 
   @override

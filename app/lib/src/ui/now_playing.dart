@@ -224,7 +224,7 @@ class NowPlayingScreen extends StatelessWidget {
                                           height: 34,
                                         ),
                                       ),
-                                    _Scrubber(player: player, timesBeside: true),
+                                    _Scrubber(player: player),
                                     const SizedBox(height: 6),
                                     _Controls(
                                         app: app,
@@ -947,7 +947,9 @@ class _Words extends StatelessWidget {
               // used to shove the record up the screen — and going from one song to
               // the next moved the picture as much as it changed it.
               _TitleBlock(title: track.displayTitle),
-              const SizedBox(height: 6),
+              // Tight: the name of the song and who made it are one thing said in two
+              // lines, and a gap between them makes them two things.
+              const SizedBox(height: 1),
               _Credits(track: track),
             ],
           );
@@ -1004,29 +1006,24 @@ class _TitleBlock extends StatelessWidget {
 }
 
 class _Scrubber extends StatelessWidget {
-  const _Scrubber({required this.player, this.timesBeside = false});
+  const _Scrubber({required this.player});
   final PlayerService player;
-
-  /// Elapsed and total at either end of the bar rather than underneath it.
-  final bool timesBeside;
 
   @override
   Widget build(BuildContext context) => RepaintBoundary(
         child: StreamBuilder<PlayerSnapshot>(
           stream: player.snapshots,
           initialData: player.last,
-          builder: (context, snap) => _ScrubberBar(
-              player: player, snapshot: snap.data, timesBeside: timesBeside),
+          builder: (context, snap) =>
+              _ScrubberBar(player: player, snapshot: snap.data),
         ),
       );
 }
 
 class _ScrubberBar extends StatefulWidget {
-  const _ScrubberBar(
-      {required this.player, required this.snapshot, this.timesBeside = false});
+  const _ScrubberBar({required this.player, required this.snapshot});
   final PlayerService player;
   final PlayerSnapshot? snapshot;
-  final bool timesBeside;
 
   @override
   State<_ScrubberBar> createState() => _ScrubberState();
@@ -1135,20 +1132,22 @@ class _ScrubberState extends State<_ScrubberBar> {
 
         // Beside the bar rather than under it: a line less, and the two numbers read
         // as the ends of the thing they belong to.
-        if (widget.timesBeside) {
-          return Row(children: [elapsed, Expanded(child: bar), total]);
-        }
-        return Column(
+        // Under the two skip buttons, not out at the walls.
+        //
+        // The transport below is five controls spread evenly, which puts the two skip
+        // buttons a third and two thirds of the way across; the times used to sit hard
+        // against either edge, past the outermost buttons, so the panel read as two
+        // rows that had nothing to do with each other. An alignment of ∓⅓ is the
+        // middle of those two buttons whatever the buttons happen to be.
+        final times = Stack(
           children: [
-            bar,
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [elapsed, total],
-              ),
-            ),
+            Align(alignment: const Alignment(-1 / 3, 0), child: elapsed),
+            Align(alignment: const Alignment(1 / 3, 0), child: total),
           ],
+        );
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [bar, times],
         );
       },
     );

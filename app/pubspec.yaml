@@ -12,7 +12,14 @@ dependencies:
     sdk: flutter
   http: ^1.6.0
   just_audio: ^0.10.6
+  # Named directly so the app can say which audio platform is actually installed —
+  # the difference between "playing in the background" and "playing until the system
+  # notices nothing is holding this app up".
+  just_audio_platform_interface: ^4.6.0
   just_audio_background: ^0.0.1-beta.17
+  # Named directly so the app can ask the media session whether it is actually
+  # running — the one question the logs could not answer.
+  audio_service: ^0.18.19
   # Interruptions — a call, a notification, headphones pulled out — are the other
   # half of "playback stopped and nothing said why".
   audio_session: ^0.2.4
@@ -27,7 +34,6 @@ dependencies:
 dev_dependencies:
   # The fake audio engine in test/ implements this, so the player's own logic can be
   # tested without a browser or a device.
-  just_audio_platform_interface: ^4.6.0
   flutter_test:
     sdk: flutter
   integration_test:

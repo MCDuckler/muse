@@ -3,10 +3,12 @@ import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:just_audio_background/just_audio_background.dart';
+import 'package:just_audio_platform_interface/just_audio_platform_interface.dart';
 import 'package:provider/provider.dart';
 
 import 'src/state/app_state.dart';
 import 'src/state/selection.dart';
+import 'src/state/playback_log.dart';
 import 'src/state/player.dart';
 import 'src/ui/home_page.dart';
 import 'src/ui/loading.dart';
@@ -38,7 +40,8 @@ Future<void> main() async {
   // same song kept playing. Proved by hooking HTMLMediaElement: one src assignment for
   // the whole session, then nothing but repeated play() calls on it.
   if (!kIsWeb) {
-    await JustAudioBackground.init(
+    try {
+      await JustAudioBackground.init(
       androidNotificationChannelId: 'dev.muse.audio',
       androidNotificationChannelName: 'WetOwl',
       // The service stays in the foreground through a pause.
@@ -57,7 +60,16 @@ Future<void> main() async {
       // between the two, staying alive matters more than being undismissable.
       androidNotificationOngoing: false,
       androidStopForegroundOnPause: false,
-    );
+      );
+      // Written down because the one thing the logs could not say was whether this
+      // worked. A wrapper that is not installed is a player with no media session
+      // behind it: no notification, no foreground service, and a process the system
+      // may freeze the moment the app leaves the screen.
+      PlaybackLog.note(
+          'background audio ready (${JustAudioPlatform.instance.runtimeType})');
+    } catch (e) {
+      PlaybackLog.note('BACKGROUND AUDIO FAILED TO START: $e');
+    }
   }
   runApp(const MuseApp());
 }

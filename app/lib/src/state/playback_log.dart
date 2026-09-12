@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:audio_service/audio_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -76,6 +77,18 @@ class PlaybackLog {
   /// time, and a process running a foreground service cannot be.
   static Future<void> checkTheService() async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    // What the media session itself thinks, which is the other half of the answer:
+    // the system can say there is no notification, and only this can say whether
+    // anything ever asked for one.
+    try {
+      // ignore: deprecated_member_use
+      final state = AudioService.playbackState;
+      final idle = state.processingState == AudioProcessingState.idle;
+      note('${idle ? "MEDIA SESSION IDLE — nothing ever asked it to play" : "media session ${state.processingState.name}"}'
+          '${state.playing ? ", playing" : ", not playing"}');
+    } catch (e) {
+      note('media session cannot be asked: $e');
+    }
     try {
       final said = await const MethodChannel('muse/health')
           .invokeMethod<String>('describe');
