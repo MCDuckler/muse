@@ -183,14 +183,17 @@ class NowPlayingScreen extends StatelessWidget {
                                     app: app),
                               ),
                             ),
-                            // A row further down than it looks like it needs to be,
-                            // because what is above it is not the bottom of the cover
-                            // any more — it is the cover's reflection, and words that
-                            // start where that is still going read as sitting in it.
+                            // Putting a number here does not move the words: the
+                            // column fills the screen and the record's box is the
+                            // flexible one, so every pixel added to this gap comes
+                            // straight out of the box above it and the words stay
+                            // exactly where they were. What actually opens up the
+                            // room under the cover is the cover standing higher on
+                            // the stage, which is where that is done.
                             SizedBox(
                                 height: app.playerLayout == PlayerLayout.roomy
-                                    ? 40
-                                    : 54),
+                                    ? 18
+                                    : 32),
                             // Only while a record is turned over. It is the back of a
                             // sleeve, not an art program: the pens appear because
                             // there is suddenly something to draw on, and go again

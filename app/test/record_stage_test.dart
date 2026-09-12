@@ -106,7 +106,7 @@ void main() {
       (tester) async {
     await stage(tester, playing: true);
 
-    final platter = 400 - 26.0 * 2;
+    final platter = 400 - 40.0 * 2;
     final record = tester.getRect(_onTheDeck(platter).first);
     final cover = tester.getRect(_cover(352 * 0.74).first);
     // The right way up: what shows above the cover is the round top edge of the
@@ -155,9 +155,9 @@ void main() {
       ));
       await tester.pump(const Duration(milliseconds: 16));
 
-      final record = tester.getRect(_onTheDeck(400 - 26.0 * 2).first);
+      final record = tester.getRect(_onTheDeck(400 - 40.0 * 2).first);
       final peek = tester.getRect(_cover(352 * scale).first).top - record.top;
-      expect(peek, closeTo((400 - 52) * 0.45, 2), reason: 'at cover size $scale');
+      expect(peek, closeTo((400 - 80) * 0.45, 2), reason: 'at cover size $scale');
     }
   });
 
@@ -175,12 +175,15 @@ void main() {
         home: Scaffold(
           body: Center(
             child: SizedBox(
+              // Room enough for the biggest cover and its reflection, so what is
+              // being measured is the clamp rather than a sleeve that has run out of
+              // stage — which it does at this size whatever the record is doing.
               width: 352,
-              height: 352,
+              height: 420,
               child: RecordStage(
                   track: song(2),
                   playing: true,
-                  scale: 0.8,
+                  scale: 0.95,
                   previous: song(1),
                   next: song(3)),
             ),
@@ -190,12 +193,12 @@ void main() {
     ));
     await tester.pump(const Duration(milliseconds: 16));
 
-    const platter = 400 - 26.0 * 2;
-    final peek = tester.getRect(_cover(352 * 0.8).first).top -
+    const platter = 400 - 40.0 * 2;
+    final peek = tester.getRect(_cover(352 * 0.95).first).top -
         tester.getRect(_onTheDeck(platter).first).top;
     expect(peek, lessThan(platter * 0.45),
         reason: 'it gave something, because it had to');
-    expect(peek, greaterThan(platter * 0.40),
+    expect(peek, greaterThan(platter * 0.34),
         reason: 'and not much: the label is still in the open');
   });
 
@@ -205,7 +208,7 @@ void main() {
     // its sleeve and the arm went with it, so stopping the music emptied the stage.
     // A deck does not do that: the turntable stops, the arm swings to its rest, and
     // the record stays exactly where it is.
-    const platter = 400 - 26.0 * 2;
+    const platter = 400 - 40.0 * 2;
     // The second one is the picture inside the rotation; the first is the box around
     // it, which does not turn.
     final turning = _onTheDeck(platter).at(1);
@@ -240,7 +243,7 @@ void main() {
     // the cover's — as long as the record really does stay out of that band.
     await stage(tester, playing: true);
 
-    final record = tester.getRect(_onTheDeck(400 - 26.0 * 2).first);
+    final record = tester.getRect(_onTheDeck(400 - 40.0 * 2).first);
     final cover = tester.getRect(_cover(352 * 0.74).first);
     expect(record.top + record.height * 0.68, lessThan(cover.bottom),
         reason: 'the reflection hangs below the cover, and the record is cut above it');

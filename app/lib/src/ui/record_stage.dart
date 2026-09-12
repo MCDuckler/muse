@@ -103,7 +103,7 @@ enum ShelfMove {
 /// used to break was a mistake in it rather than in the drawing — so it lives on its
 /// own, where it can be checked without a screen.
 /// How much room is left between the record and the edge of the screen.
-const double _wallClearance = 26;
+const double _wallClearance = 40;
 
 class Shelf {
   Shelf({this.left, required this.middle, this.right});
@@ -742,7 +742,7 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
         // margin and the header's empty middle, and a record leaning up into that is
         // the point of the picture. It is drawn a little sheer up there, so what it
         // passes behind still reads as being in front of it.
-        final showsFrom = -side / 2 - side * 0.10;
+        final showsFrom = -side / 2 - side * 0.16;
         // And where its middle is, from the middle of the stage. The record is nearly
         // as wide as the stage is tall, so this lands close to nothing: hung by its
         // top edge, a screen-wide record sits about where it would anyway.
@@ -1596,11 +1596,10 @@ class _ArmPainter extends CustomPainter {
     // The middle of the disc, in this box's coordinates: the box is the cover, and the
     // disc has dropped by `drop` from its middle.
     final middle = Offset(size.width / 2, size.height / 2 + drop);
-    // The post it turns on: outside the record, up and to the right, where the post
-    // stands on a deck — and in far enough that the counterweight behind it is still
-    // on the screen. The record is as wide as the phone, so there is no room out
-    // there for an arm to hang over the edge.
-    final pivot = middle + Offset(radius * 0.64, -radius * 0.92);
+    // The post it turns on: out at the right-hand edge of the page, where the post
+    // stands on a deck. As far out as it goes and no further — what is behind the
+    // post is the counterweight, and that has to stay on the screen.
+    final pivot = middle + Offset(radius * 0.88, -radius * 0.82);
 
     // Where the needle sits when it is playing: out near the rim rather than halfway
     // in, because the band of record that is not behind a cover is the outer one —
@@ -1666,11 +1665,14 @@ class _ArmPainter extends CustomPainter {
       );
     }
 
-    final back = -length * 0.30;          // the counterweight end
+    // The counterweight sits close in behind the post, which is where a real one
+    // sits and, here, the difference between a weight on the screen and a weight
+    // half over the edge of it: the post is out at the margin now.
+    final back = -length * 0.22;
     final bend = length * 0.58;           // where the tube turns towards the record
     final tip = Offset(length, radius * 0.055);
-    final wide = radius * 0.021;
-    final thin = radius * 0.014;
+    final wide = radius * 0.028;
+    final thin = radius * 0.019;
 
     // Its shadow on the record: the same tube again, straight down the screen rather
     // than down the arm — a shadow falls the way the light does, not the way the
@@ -1696,7 +1698,7 @@ class _ArmPainter extends CustomPainter {
 
     // The counterweight: a turned cylinder on the end of the stub, with the rubber
     // ring that sets the tracking weight.
-    final weight = radius * 0.082;
+    final weight = radius * 0.092;
     final barrelRect = Rect.fromCenter(
         center: Offset(back - weight * 0.55, 0),
         width: weight * 2.0,
@@ -1728,7 +1730,7 @@ class _ArmPainter extends CustomPainter {
     canvas.save();
     canvas.translate(pivot.dx, pivot.dy);
     canvas.rotate(angle);
-    final yoke = radius * 0.055;
+    final yoke = radius * 0.070;
     canvas.drawRRect(
       RRect.fromRectAndRadius(
         Rect.fromCenter(center: Offset.zero, width: yoke * 1.9, height: yoke * 2.4),
@@ -1756,8 +1758,8 @@ class _ArmPainter extends CustomPainter {
     canvas.save();
     canvas.translate(head.dx, head.dy);
     canvas.rotate(groove);
-    final headLength = radius * 0.19;
-    final headDepth = radius * 0.070;
+    final headLength = radius * 0.235;
+    final headDepth = radius * 0.088;
 
     // The shell: a plate with the finger lift standing off the front of it.
     canvas.drawRRect(
@@ -1817,8 +1819,8 @@ class _ArmPainter extends CustomPainter {
     canvas.drawOval(
       Rect.fromCenter(
           center: pivot + Offset(0, radius * 0.012),
-          width: radius * 0.190,
-          height: radius * 0.120),
+          width: radius * 0.240,
+          height: radius * 0.150),
       Paint()
         ..shader = ui.Gradient.linear(
           pivot - Offset(0, radius * 0.06),
@@ -1829,7 +1831,7 @@ class _ArmPainter extends CustomPainter {
     );
     canvas.drawCircle(
       pivot,
-      radius * 0.062,
+      radius * 0.078,
       Paint()
         ..shader = ui.Gradient.radial(
           pivot - Offset(radius * 0.02, radius * 0.03),
@@ -1838,10 +1840,10 @@ class _ArmPainter extends CustomPainter {
           const [0.0, 0.55, 1.0],
         ),
     );
-    canvas.drawCircle(pivot, radius * 0.020, dark);
-    final dial = pivot + Offset(radius * 0.135, radius * 0.055);
-    canvas.drawCircle(dial, radius * 0.030, Paint()..color = mid);
-    canvas.drawCircle(dial, radius * 0.012, Paint()..color = brass);
+    canvas.drawCircle(pivot, radius * 0.026, dark);
+    final dial = pivot + Offset(radius * 0.170, radius * 0.070);
+    canvas.drawCircle(dial, radius * 0.038, Paint()..color = mid);
+    canvas.drawCircle(dial, radius * 0.015, Paint()..color = brass);
   }
 
   @override
