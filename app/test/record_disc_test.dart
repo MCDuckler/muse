@@ -1,9 +1,9 @@
-// How a record comes out of its sleeve.
+// How a record comes out of its sleeve, and what happens once it has.
 //
-// It does not slide half out and stop, which is what it used to do. It comes right out
-// — clear of the cover — and then leans back against the front of it, which is where a
-// record you have taken out actually sits. That is two movements expressed as one
-// number, so it can be checked as one number.
+// It used to slide sideways and lean against the front of the cover, which is what a
+// record does in a room. It now comes straight down into the deck below the cover and
+// stops there, cut in half by the line the song's name is written on — and once it has
+// stopped, the arm comes down on it.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muse/src/ui/record_stage.dart';
 
@@ -12,19 +12,22 @@ void main() {
     expect(Disc.travel(0), 0);
   });
 
-  test('it comes right out before it comes back', () {
-    final furthest = [
-      for (var i = 0; i <= 100; i++) Disc.travel(i / 100),
-    ].reduce((a, b) => a > b ? a : b);
-    expect(furthest, greaterThan(Disc.travel(1)),
-        reason: 'it never went further out than where it ends up');
-    expect(Disc.travel(Disc.infront), furthest,
-        reason: 'the turn is where it stops being behind the cover');
+  test('it comes straight down and stops there', () {
+    expect(Disc.travel(1), 1, reason: 'all the way to the deck, and no further');
+    var last = -1.0;
+    for (var i = 0; i <= 50; i++) {
+      final now = Disc.travel(i / 50);
+      expect(now, greaterThanOrEqualTo(last),
+          reason: 'one way: a record does not come out and go back in on the way out');
+      last = now;
+    }
   });
 
-  test('and it settles half over the cover', () {
-    // Half of a disc that is 0.92 of the jacket wide is 0.46 of the jacket.
-    expect(Disc.travel(1), closeTo(0.46, 0.01));
+  test('it slows into its place rather than arriving at speed', () {
+    // Most of the way down in the first half of the journey, and the rest of it spent
+    // settling — which is what leaves the arm something to wait for.
+    expect(Disc.travel(0.5), greaterThan(0.7));
+    expect(Disc.travel(0.9), greaterThan(0.99));
   });
 
   test('it is behind the sleeve on the way out and in front once it is clear', () {
@@ -37,18 +40,18 @@ void main() {
     expect((before - after).abs(), lessThan(0.01));
   });
 
-  test('the way out is monotonic, and so is the way back', () {
-    var last = -1.0;
-    for (var i = 0; i <= 50; i++) {
-      final now = Disc.travel(Disc.infront * i / 50);
-      expect(now, greaterThanOrEqualTo(last));
-      last = now;
-    }
-    last = double.infinity;
-    for (var i = 0; i <= 50; i++) {
-      final now = Disc.travel(Disc.infront + (1 - Disc.infront) * i / 50);
-      expect(now, lessThanOrEqualTo(last));
-      last = now;
-    }
+  test('the arm waits for the record to settle before it comes down', () {
+    expect(Tonearm.lowering(0), 0);
+    expect(Tonearm.lowering(0.5), 0, reason: 'the disc is still on its way');
+    expect(Tonearm.lowering(0.8), 0, reason: 'and still settling');
+    expect(Tonearm.lowering(0.9), greaterThan(0));
+    expect(Tonearm.lowering(1), closeTo(1, 0.001));
+  });
+
+  test('and it comes off again first when the record goes away', () {
+    // The same number read backwards: by the time the disc has started moving, the
+    // arm has already been lifted clear of it.
+    expect(Tonearm.lowering(0.85), lessThan(Tonearm.lowering(0.95)));
+    expect(Tonearm.lowering(0.79), 0);
   });
 }

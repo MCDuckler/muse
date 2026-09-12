@@ -15,6 +15,7 @@ import 'sleeve_board.dart';
 import 'coalesce.dart';
 import 'player.dart';
 import '../ui/media_session.dart';
+import '../ui/settings_page.dart' show appBuild;
 import '../ui/theme.dart';
 import '../ui/snack.dart';
 
@@ -1405,6 +1406,8 @@ class AppState extends ChangeNotifier {
       PlaybackLog.note('app in front');
       unawaited(player?.resumeIfStopped());
       unawaited(refreshJam());
+      // And say what happened while nobody was looking — see sendPlaybackLog.
+      unawaited(_sendTheLog());
     },
     // The other end of the interesting gap: everything between this line and the next
     // "app in front" happened with nobody watching, which is exactly the stretch a
@@ -1414,6 +1417,25 @@ class AppState extends ChangeNotifier {
     onHide: _travelLight,
     onDetach: () => PlaybackLog.note('app being torn down'),
   );
+
+  /// When the log was last sent up, so coming back to the app forty times in an hour
+  /// is not forty reports of the same minute.
+  DateTime? _loggedAt;
+
+  Future<void> _sendTheLog() async {
+    if (user == null) return;
+    final now = DateTime.now();
+    if (_loggedAt != null && now.difference(_loggedAt!) < const Duration(minutes: 10)) {
+      return;
+    }
+    _loggedAt = now;
+    try {
+      await api.sendPlaybackLog(PlaybackLog.lines,
+          device: platformName(), build: appBuild);
+    } catch (_) {
+      // A log that cannot be sent is not worth a word on screen.
+    }
+  }
 
   /// Give back the memory nobody is looking at.
   ///

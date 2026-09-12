@@ -298,6 +298,22 @@ class ApiClient {
     return d['avatar_version'] as String;
   }
 
+  /// Hand the phone's own record of what the audio engine did to the server.
+  ///
+  /// So that "it stopped again" can be answered by reading what happened rather than
+  /// by asking somebody to describe a minute they were not watching.
+  Future<void> sendPlaybackLog(List<String> lines,
+      {String? device, String? build}) async {
+    if (lines.isEmpty) return;
+    await _decode(await net.post(_u('/playback-log'),
+        headers: _headers,
+        body: jsonEncode({
+          'lines': lines,
+          if (device != null) 'device': device,
+          if (build != null) 'build': build,
+        })));
+  }
+
   // ---------------- the app's own icon ----------------
 
   /// What the icon is now, and whether this account may change it.
@@ -1096,6 +1112,10 @@ class QueueConflict implements Exception {
   final Queue current;
   QueueConflict(this.current);
 }
+
+/// Which kind of thing this is running on, for the server's device list and for the
+/// playback reports.
+String platformName() => _platformName();
 
 String _platformName() {
   // Avoids dart:io so the same code compiles for web.

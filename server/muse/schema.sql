@@ -141,6 +141,23 @@ create table if not exists matches (
 );
 
 
+-- What the audio engine did on somebody's phone, sent up when the app comes back to
+-- the front. "It stops when I switch to another app" is not a bug report anybody can
+-- act on, and the interesting minute is always the one with the screen off — so the
+-- phone writes it down (see PlaybackLog) and this is where it lands, rather than being
+-- read aloud from a screenshot.
+create table if not exists playback_reports (
+  id      bigserial primary key,
+  user_id int not null references users(id) on delete cascade,
+  device  text,
+  build   text,
+  at      timestamptz not null default now(),
+  lines   text not null
+);
+
+create index if not exists playback_reports_recent
+  on playback_reports(user_id, at desc);
+
 create table if not exists listens (
   id         bigserial primary key,
   user_id    int not null references users(id) on delete cascade,

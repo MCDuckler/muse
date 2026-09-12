@@ -77,6 +77,34 @@ def record_listen(body: dict = Body(...), user: dict = Depends(current_user)):
     return {"id": row["id"], "started_at": row["started_at"], "score": score}
 
 
+@router.post("/playback-log", status_code=201)
+def playback_log(body: dict = Body(...), user: dict = Depends(current_user)):
+    """What the audio engine did on a phone, as the phone wrote it down.
+
+    Sent when the app comes back to the front, because the minute worth reading is the
+    one it was not in front for. Only the last handful per person is kept — this is for
+    answering "why did it stop" this week, not a diary.
+    """
+    lines = body.get("lines") or []
+    if not isinstance(lines, list) or not lines:
+        raise HTTPException(400, "lines required")
+    text = "\n".join(str(l) for l in lines[-400:])[:60_000]
+    db.run(
+        """insert into playback_reports(user_id, device, build, lines)
+           values(%s,%s,%s,%s)""",
+        (user["id"], str(body.get("device") or "")[:120],
+         str(body.get("build") or "")[:40], text),
+    )
+    db.run(
+        """delete from playback_reports
+            where user_id=%s and id not in (
+                select id from playback_reports where user_id=%s
+                 order by at desc limit 10)""",
+        (user["id"], user["id"]),
+    )
+    return {"kept": True}
+
+
 @router.get("/history")
 def history(limit: int = 50, user: dict = Depends(current_user)):
     rows = db.all_(

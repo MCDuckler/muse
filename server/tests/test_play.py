@@ -141,3 +141,31 @@ def test_a_second_device_does_not_double_the_score(client, hdr):
 
     listed = client.get("/accounts", headers=hdr).json()["items"]
     assert next(a for a in listed if a["id"] == me)["score"] == 1
+
+
+def test_a_phone_can_hand_up_what_its_player_did(client, hdr):
+    """The interesting minute is the one the app was not in front for, so the phone
+    writes it down and sends it when it comes back."""
+    r = client.post("/playback-log", headers=hdr, json={
+        "device": "app",
+        "build": "202609120143",
+        "lines": ["21:00:01 app out of sight", "21:00:11 engine stopped ready"],
+    })
+    assert r.status_code == 201, r.text
+
+    from muse import db
+    kept = db.one("select device, build, lines from playback_reports order by id desc")
+    assert kept["device"] == "app" and kept["build"] == "202609120143"
+    assert "app out of sight" in kept["lines"]
+
+
+def test_only_the_last_few_reports_are_kept(client, hdr):
+    for n in range(14):
+        client.post("/playback-log", headers=hdr, json={"lines": ["line $n"]})
+    from muse import db
+    assert db.one("select count(*) n from playback_reports")["n"] == 10
+
+
+def test_an_empty_report_is_refused(client, hdr):
+    assert client.post("/playback-log", headers=hdr,
+                       json={"lines": []}).status_code == 400
