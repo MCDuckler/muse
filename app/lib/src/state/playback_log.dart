@@ -30,7 +30,14 @@ class PlaybackLog {
     _loaded = true;
     try {
       final prefs = await SharedPreferences.getInstance();
-      _lines.addAll(prefs.getStringList(_key) ?? const []);
+      // In front of whatever has already been written this run, not after it.
+      //
+      // The first thing this app notes is whether background audio started, and it
+      // notes it before this ever runs — so appending the stored lines put that line
+      // at the head of the buffer, where the trim takes from. The one line that said
+      // whether the whole background-playback mechanism was installed was therefore
+      // the first line thrown away, every single time.
+      _lines.insertAll(0, prefs.getStringList(_key) ?? const []);
     } catch (_) {
       // A log we cannot read is not worth failing to start over.
     }

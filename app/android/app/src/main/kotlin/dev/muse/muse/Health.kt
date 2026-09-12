@@ -46,6 +46,19 @@ object Health {
                         "channel blocked"
                     else -> "channel ok"
                 }
+                // And every channel the app actually has.
+                //
+                // "channel missing" only says the one this app asked for is not there.
+                // It cannot tell a media service that never started from one that
+                // started and made its channel under a different name, and those are
+                // two different faults — so list what is really there.
+                val all = try {
+                    nm.notificationChannels.map { it.id }
+                } catch (e: Throwable) {
+                    emptyList()
+                }
+                parts += if (all.isEmpty()) "no channels at all"
+                         else "channels: " + all.joinToString()
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 if (!nm.areNotificationsEnabled()) parts += "NOTIFICATIONS ARE OFF"

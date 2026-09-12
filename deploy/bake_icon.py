@@ -50,6 +50,35 @@ def main() -> int:
         out = ROOT / "web" / name
         master.resize((size, size), Image.LANCZOS).save(out, optimize=True)
 
+    # The little white one in the status bar.
+    #
+    # Android draws a notification's small icon as a stencil: it keeps the alpha and
+    # throws the colours away. Handed a full-colour launcher icon it shows a white
+    # blob, and on some builds refuses the notification altogether — which is a media
+    # notification that never appears, a service that never reaches the foreground and
+    # an app the system is then free to freeze the moment it leaves the screen.
+    #
+    # So: the icon's own shape, in white, with the background dropped. Anything that
+    # is not close to the darkest corner of the picture is the bird.
+    grey = master.convert("L")
+    corners = [grey.getpixel(p) for p in
+               [(8, 8), (1015, 8), (8, 1015), (1015, 1015)]]
+    ground = sum(corners) // len(corners)
+    # Whichever way round the picture is: a dark bird on a light ground keeps what is
+    # darker than the ground, a light one on a dark ground keeps what is lighter.
+    stencil = grey.point(
+        (lambda v: 255 if v < ground - 28 else 0) if ground > 127
+        else (lambda v: 255 if v > ground + 28 else 0))
+    white = Image.new("RGBA", master.size, (255, 255, 255, 0))
+    white.putalpha(stencil)
+    for folder, size in {"drawable-mdpi": 24, "drawable-hdpi": 36,
+                         "drawable-xhdpi": 48, "drawable-xxhdpi": 72,
+                         "drawable-xxxhdpi": 96}.items():
+        out = ROOT / "android/app/src/main/res" / folder
+        out.mkdir(parents=True, exist_ok=True)
+        white.resize((size, size), Image.LANCZOS).save(
+            out / "ic_stat_wetowl.png", optimize=True)
+
     # Maskable: a launcher crops it to whatever shape it likes, so the picture sits in
     # the middle 80% with its own darkness around it.
     corners = [master.crop(box).resize((1, 1), Image.LANCZOS).getpixel((0, 0))

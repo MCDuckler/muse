@@ -192,7 +192,7 @@ class NowPlayingScreen extends StatelessWidget {
                                   offset: Offset(
                                       0,
                                       app.playerLayout == PlayerLayout.plain
-                                          ? -24
+                                          ? -52
                                           : 0),
                                   child: _Artwork(
                                       track: track,

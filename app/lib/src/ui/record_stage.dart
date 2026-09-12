@@ -1008,7 +1008,14 @@ class _Sleeve extends StatelessWidget {
     // horizontal one on a stack — a record lifted off a pile tips towards you rather
     // than swinging round.
     final turn = -0.78 * d.clamp(-1.4, 1.4);
-    final fade = away <= 1 ? 1.0 - 0.62 * away : (1.9 - away).clamp(0.0, 1.0) * 0.38;
+    // The covers either side are solid records, not ghosts of them.
+    //
+    // They used to be faded to a third by the time they were one place out, which read
+    // as the next album being half there — and the thing that already says "this one
+    // is not the one you are looking at" is that it is smaller, turned away and behind
+    // the one in the middle. Only the fourth sleeve, the one arriving at the edge of
+    // the frame, still fades: it has nowhere to come from otherwise.
+    final fade = away <= 1 ? 1.0 : (2.0 - away).clamp(0.0, 1.0);
 
     // Only whatever is in the middle has its record out, and only as far as it is
     // actually in the middle: a sleeve halfway to the edge has put it away again. And

@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart'
 import 'package:audio_session/audio_session.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
+import 'package:just_audio_platform_interface/just_audio_platform_interface.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
@@ -207,6 +208,17 @@ class PlayerService {
   Future<void> Function()? onNotificationAnswer;
 
   Future<void> init() async {
+    // Which audio platform this player is built on.
+    //
+    // The whole of background playback on Android hangs off this one fact: with the
+    // background wrapper installed, everything the player does reaches a media session
+    // and a notification; without it, the same calls go straight to the engine and
+    // nothing holds the app up. It has never been written down at a moment that
+    // survives in a report, and every round of guessing since has been about
+    // mechanisms downstream of it.
+    if (!kIsWeb) {
+      PlaybackLog.note('player on ${JustAudioPlatform.instance.runtimeType}');
+    }
     var said = '';
     _player.playerStateStream.listen((s) {
       // Written down, because the minute worth reading is always the one with the
@@ -867,6 +879,11 @@ class PlayerService {
     // to do its job again even if the "interruption over" event never arrived.
     _interrupted = false;
     unawaited(Keepalive.set(true));
+    // And what came of it: a few seconds after the first play is the moment the
+    // notification should be up, the service in the foreground and the session alive.
+    // Asking only on the way out of the app means the answer always arrives after the
+    // damage, and never says what it was like while the music was actually playing.
+    Timer(const Duration(seconds: 5), () => PlaybackLog.checkTheService());
     unawaited(Keepalive.mayWeShowThePlayer().then((_) {
       // What the answer was. A refusal is not a failure to play — it is the music
       // stopping ten seconds after the app is switched away from, which is worth

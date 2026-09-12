@@ -57,6 +57,13 @@ Future<void> main() async {
       await JustAudioBackground.init(
       androidNotificationChannelId: 'dev.muse.audio',
       androidNotificationChannelName: 'WetOwl',
+      // The status bar draws a small icon as a stencil — it keeps the alpha and
+      // throws the colours away — so it is given a white one cut from the app's own
+      // icon rather than the full-colour launcher icon. A launcher icon up there is a
+      // white blob at best, and on some builds a notification the system declines to
+      // post at all: no notification is no foreground service, and no foreground
+      // service is an app the system may freeze the moment it leaves the screen.
+      androidNotificationIcon: 'drawable/ic_stat_wetowl',
       // The service stays in the foreground through a pause.
       //
       // Every moment the engine reports "stopped" used to tear the foreground state
