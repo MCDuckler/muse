@@ -74,6 +74,9 @@ publish_apk() {
   # A registrant generated during an integration-test run lists the integration_test
   # plugin, which does not exist in a release build. Deleting it forces a fresh one.
   rm -f app/android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
+  # The launcher icon lives inside the APK, so the only moment it can follow the one
+  # the server is serving is now.
+  python3 deploy/bake_icon.py "$SERVER_URL" || true
   # The moment it was built, as the build number.
   #
   # Nothing was ever going to tell a new APK from the running one: the version was a

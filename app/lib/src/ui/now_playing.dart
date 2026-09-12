@@ -994,21 +994,18 @@ class _TitleBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final style = Theme.of(context).textTheme.headlineSmall;
-    final size = MediaQuery.textScalerOf(context)
-        .scale(style?.fontSize ?? 24);
-    final line = size * (style?.height ?? 1.25);
-    return SizedBox(
-      height: line * 2,
-      child: Align(
-        alignment: Alignment.topCenter,
-        child: Text(title,
-            textAlign: TextAlign.center,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: style),
-      ),
-    );
+    // As tall as the title is, and no taller.
+    //
+    // It used to keep two lines' worth of room whether or not the title needed two,
+    // so that a song whose name wrapped did not shove the record up the screen. What
+    // that actually did, for the great majority of songs, was leave an empty line
+    // between the name and who made it — which reads as two separate things rather
+    // than one.
+    return Text(title,
+        textAlign: TextAlign.center,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.headlineSmall);
   }
 }
 
