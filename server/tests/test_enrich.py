@@ -210,3 +210,37 @@ def test_dominant_colour_survives_a_monochrome_cover(client, cfg):
 
     colour = enrich.dominant_colour(Image.new("RGB", (50, 50), (255, 255, 255)))
     assert colour.startswith("#") and len(colour) == 7
+
+
+@pytest.mark.parametrize("raw,artists,expected", [
+    # The thing itself: a video names the artist because there is nowhere else to put
+    # it, and here there is — the artist is on the row underneath.
+    ("Rick Astley - Never Gonna Give You Up", ["Rick Astley"],
+     "Never Gonna Give You Up"),
+    ("Daft Punk — Get Lucky", ["Daft Punk"], "Get Lucky"),
+    ("Tiesto | Adagio For Strings", ["Tiësto"], "Adagio For Strings"),
+    ("Drake & Future - Life Is Good", ["Drake", "Future"], "Life Is Good"),
+    ("AC/DC - Back In Black", ["AC/DC"], "Back In Black"),
+    # A channel is not a different artist from the artist it belongs to, and the
+    # longest name that matches has to win or half of it is left behind.
+    ("Somebody - Topic - Song", ["Somebody - Topic"], "Song"),
+    ("Artist - Artist - Song", ["Artist"], "Song"),
+    # And the platform's own noise still goes, on top of it.
+    ("Sia - Chandelier (Official Video)", ["Sia"], "Chandelier"),
+    # Songs whose names simply contain a dash keep them: the front of these is not
+    # the artist the track is filed under.
+    ("Hurricane - Part Two", ["Bob Dylan"], "Hurricane - Part Two"),
+    ("Song - 2011 Remaster", ["Someone"], "Song - 2011 Remaster"),
+    ("Artist - Song - Live at Wembley", ["Artist"], "Song - Live at Wembley"),
+    # A colon is not a separator here, because that is how classical works are named.
+    ("Beethoven: Symphony No. 5", ["Beethoven"], "Beethoven: Symphony No. 5"),
+    # Never leave a song with no name at all.
+    ("Artist -", ["Artist"], "Artist -"),
+    ("- Song", ["Artist"], "- Song"),
+    # Nothing to compare against is nothing to strip.
+    ("Rick Astley - Never Gonna Give You Up", [], 
+     "Rick Astley - Never Gonna Give You Up"),
+])
+def test_display_title_drops_the_artist_it_is_already_filed_under(
+        raw, artists, expected):
+    assert catalog.display_title(raw, artists) == expected

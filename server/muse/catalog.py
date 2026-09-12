@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 
 from . import artists, db, jobs, progress
 
@@ -20,11 +21,80 @@ _NOISE = re.compile(
 )
 _TRAILING = re.compile(r"\s*[-–]\s*(official\s+.*|.*\bvisualizer\b.*)$", re.I)
 
+# A dash, a pipe, or the fancier dashes a video platform's title might use.
+_SPLIT = r"\s*[-–—|]\s*"
+# What a channel calls itself when it is really an artist's release channel.
+_CHANNEL = re.compile(r"\s*[-–—]\s*(topic|official|vevo)\s*$", re.I)
 
-def display_title(raw: str | None) -> str:
+
+def _same(a: str, b: str) -> bool:
+    """Loosely the same name: case, spacing, punctuation and accents aside.
+
+    Accents especially — a video's title spells the artist "Tiesto" about as often as
+    the library spells it "Tiësto", and a comparison that calls those two different
+    names leaves the artist in the title of exactly the songs most likely to have it.
+    """
+    def flat(s: str) -> str:
+        bare = unicodedata.normalize("NFKD", s)
+        bare = "".join(c for c in bare if not unicodedata.combining(c))
+        return re.sub(r"[^0-9a-z]+", "", bare.lower())
+    return bool(flat(a)) and flat(a) == flat(b)
+
+
+def _without_the_artist(title: str, artists: list[str] | None) -> str:
+    """Drop a leading "Artist - " from a title that is already filed under Artist.
+
+    Uploads name themselves that way because on a video platform there is nowhere else
+    to put it. Here there is: the artist is on the row underneath, so the title saying
+    it again is the same word twice — and worse, it is the half of the line that gets
+    cut when there is not room, so the song's own name is the part that disappears.
+
+    Only when the front of the title really is the artist this track is filed under.
+    A song genuinely called "Hurricane - Part Two" keeps its name, and so does
+    "Beethoven: Symphony No. 5", because a colon is not one of the separators here.
+    """
+    if not title or not artists:
+        return title
+
+    names: list[str] = []
+    for a in artists:
+        if not a:
+            continue
+        names.append(a)
+        # "Somebody - Topic" is a channel, and the name in front of it is the artist.
+        shorter = _CHANNEL.sub("", a)
+        if shorter != a:
+            names.append(shorter)
+    # Everybody at once as well: a title may name the pair the track is filed under.
+    if len(artists) > 1:
+        names += [j.join(artists) for j in (", ", " & ", " and ", " x ", " X ")]
+
+    # Every place the title could be cut, not only the first: an artist's own name may
+    # have a dash in it, and cutting at the first one would never match it.
+    def cut(text: str) -> str | None:
+        # From the last possible cut back to the first, so the longest name that
+        # matches wins: an artist called "Somebody - Topic" has to beat "Somebody".
+        for sep in reversed(list(re.finditer(_SPLIT, text))):
+            head = text[:sep.start()].strip()
+            tail = text[sep.end():].strip()
+            if tail and any(_same(head, n) for n in names):
+                return tail
+        return None
+
+    # Twice at most: "Artist - Artist - Song" happens, three deep does not.
+    for _ in range(2):
+        shorter = cut(title)
+        if shorter is None:
+            break
+        title = shorter
+    return title
+
+
+def display_title(raw: str | None, artists: list[str] | None = None) -> str:
     if not raw:
         return ""
-    return _TRAILING.sub("", _NOISE.sub("", raw)).strip() or raw
+    cleaned = _TRAILING.sub("", _NOISE.sub("", raw)).strip() or raw
+    return _without_the_artist(cleaned, artists) or cleaned
 
 
 def track_row(track_id: int) -> dict | None:
@@ -45,7 +115,7 @@ def public(t: dict) -> dict:
     return {
         "id": t["id"],
         "title": t["title"],
-        "display_title": display_title(t["title"]),
+        "display_title": display_title(t["title"], t.get("artists")),
         "cover_url": f"/tracks/{t['id']}/cover" if t.get("cover_id") else None,
         "cover_color": t.get("cover_color"),
         # Changes when the artwork does, so a client that cached the old image by URL
