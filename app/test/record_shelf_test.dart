@@ -13,6 +13,7 @@ Track song(int id) =>
         source: 'youtube', displayTitle: 'Song $id');
 
 void main() {
+  spacing();
   test('a skip to the next record is a step along the shelf', () {
     final shelf = Shelf(left: song(1), middle: song(2), right: song(3));
     expect(shelf.goTo(song(3), previous: song(2), next: song(4)),
@@ -149,5 +150,36 @@ void main() {
     expect(shelf.goTo(song(3), previous: song(2), next: null), ShelfMove.forward);
     shelf.settle();
     expect([shelf.left?.id, shelf.middle.id, shelf.right?.id], [2, 3, null]);
+  });
+}
+
+// How far apart the records stand, when the record has been made bigger or smaller.
+void spacing() {
+  test('the neighbours move in when the record is made smaller', () {
+    // A full-size record on a 360 stage, and the same shelf at half that.
+    const stage = 360.0;
+    final big = Shelf.along(stage * 1.0, 1);
+    final small = Shelf.along(stage * 0.5, 1);
+
+    expect(small, lessThan(big),
+        reason: 'shrinking the cover used to leave the neighbours where they were, '
+            'so the shelf grew a gap either side of it');
+    expect(small / big, closeTo(0.5, 0.001),
+        reason: 'the arrangement is a proportion of the record, so it halves with it');
+  });
+
+  test('the shelf is symmetrical and the middle is the middle', () {
+    expect(Shelf.along(300, 0), 0);
+    expect(Shelf.along(300, -1), -Shelf.along(300, 1));
+    expect(Shelf.along(300, -2), -Shelf.along(300, 2));
+  });
+
+  test('the steps get shorter towards the edges, whatever the size', () {
+    for (final jacket in [180.0, 300.0, 360.0]) {
+      final first = Shelf.along(jacket, 1);
+      final second = Shelf.along(jacket, 2) - first;
+      expect(second, lessThan(first),
+          reason: 'the shelf is deeper at the edges, at every size');
+    }
   });
 }

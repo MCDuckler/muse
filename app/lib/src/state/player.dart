@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, kIsWeb, visibleForTesting, TargetPlatform;
 import 'package:audio_session/audio_session.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
@@ -78,6 +79,24 @@ class PlayerService {
 
   /// Whether music was playing when something else took the speaker.
   bool _wasPlayingWhenInterrupted = false;
+
+  /// When the speaker was taken for good, if it was and nobody has touched anything
+  /// since. Null means nothing is waiting to be given back.
+  DateTime? _handedOverAt;
+
+  /// How long a handover can last and still be picked up from.
+  ///
+  /// Long enough to watch something, short enough that music does not start by itself
+  /// in the middle of the night because an app let go of the speaker.
+  static const handedOverFor = Duration(minutes: 30);
+
+  /// How often to look at whether the speaker is free again.
+  static const askAgainEvery = Duration(seconds: 5);
+
+  Timer? _askingForItBack;
+
+  /// Set when the player is on its way out, so nothing scheduled outlives it.
+  bool _disposed = false;
 
   /// How many times the watchdog has tried to get a stopped engine going again.
   int _revivals = 0;
@@ -328,10 +347,12 @@ class PlayerService {
           // the next thing this app is asked to do starts cleanly.
           final forGood = type == AudioInterruptionType.unknown;
           _interrupted = !forGood;
+          _handedOverAt = forGood ? DateTime.now() : null;
           PlaybackLog.note('interrupted (${type.name}'
-              '${forGood ? ", for good" : ""})');
+              '${forGood ? ", handed over" : ""})');
           if (forGood) {
             _wantPlaying = false;
+            _watchForTheSpeaker();
           }
           await _player.pause();
         }
@@ -340,15 +361,89 @@ class PlayerService {
         _interrupted = false;
         if (type == AudioInterruptionType.duck) {
           await _player.setVolume(_volumeFor(current));
-        } else if (type == AudioInterruptionType.pause && _wasPlayingWhenInterrupted) {
+        } else if (_wasPlayingWhenInterrupted && _oursAgain(type)) {
           // A phone call or a spoken direction: it was ours before and it is ours
-          // again. (`unknown` is not resumed from — that is the user pressing pause
-          // somewhere else, and starting again over their head is worse.)
+          // again.
+          //
+          // And the speaker being handed back counts too. Switching to almost any
+          // other app takes the audio focus for good — a video, a game, a browser
+          // tab with a muted autoplay in it — and Android gives it back the moment
+          // that app is done with it. Treating that as "somebody stopped the music"
+          // is why playback stopped when you looked at something else and never came
+          // back, while turning the screen off, which takes no focus from anybody,
+          // was fine the whole time.
+          PlaybackLog.note('the speaker is ours again');
           _startPlayback();
         }
       }
       _emit(force: true);
     }
+
+  /// Wait for whoever took the speaker to stop using it.
+  ///
+  /// Android's permanent focus loss is exactly that — permanent. Nothing is coming
+  /// back: the system drops the listener, and the app that took it has no obligation
+  /// to hand anything over. So this is the other half of "switching to another app
+  /// stops the music and it never comes back": almost every app asks for the speaker
+  /// when it opens, whether or not it intends to make a sound, and a great many of
+  /// them never make one.
+  ///
+  /// So look, rather than wait: while nothing at all is playing on this phone and it
+  /// is not in a call, the speaker is nobody's, and the song that was playing when it
+  /// was taken picks up where it left off. If something *is* playing — a video, a
+  /// podcast, somebody else's music — this keeps its hands off it, and gives up
+  /// entirely after [handedOverFor].
+  void _watchForTheSpeaker() {
+    // Android's rule, and only Android's: iOS hands the audio session back on its own
+    // and the browser has no such notion at all.
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    _askingForItBack?.cancel();
+    _askingForItBack = Timer.periodic(askAgainEvery, (timer) async {
+      final handed = _handedOverAt;
+      if (handed == null ||
+          _disposed ||
+          DateTime.now().difference(handed) > handedOverFor) {
+        timer.cancel();
+        _askingForItBack = null;
+        return;
+      }
+      try {
+        final android = AndroidAudioManager();
+        if (await android.isMusicActive()) return;   // somebody is using it
+        final mode = await android.getMode();
+        if (mode == AndroidAudioHardwareMode.inCall ||
+            mode == AndroidAudioHardwareMode.inCommunication ||
+            mode == AndroidAudioHardwareMode.ringtone) {
+          return;                                    // a call is not ours to interrupt
+        }
+        timer.cancel();
+        _askingForItBack = null;
+        _handedOverAt = null;
+        PlaybackLog.note('nothing else is using the speaker — picking it back up');
+        await (await AudioSession.instance).setActive(true);
+        _startPlayback();
+        _emit(force: true);
+      } catch (_) {
+        // Not Android, or nothing will say. Leave the music where it is.
+        timer.cancel();
+        _askingForItBack = null;
+      }
+    });
+  }
+
+  /// Whether the end of this interruption is ours to start playing again from.
+  ///
+  /// A transient one always is — it was ours before the phone call and it is ours
+  /// after. A permanent one is only if we are still the last thing that was playing
+  /// and it has not been long: the person may have gone to another app for a minute,
+  /// and they may have put the phone down for a day.
+  bool _oursAgain(AudioInterruptionType type) {
+    if (type == AudioInterruptionType.pause) return true;
+    final handed = _handedOverAt;
+    if (handed == null) return false;
+    _handedOverAt = null;
+    return DateTime.now().difference(handed) <= handedOverFor;
+  }
 
   double _volumeFor(Track? t) => t == null ? userVolume : _volumeForTrack(t);
 
@@ -757,6 +852,9 @@ class PlayerService {
   /// and leave an error handler open for the whole track.
   void _startPlayback() {
     _wantPlaying = true;
+    _handedOverAt = null;
+    _askingForItBack?.cancel();
+    _askingForItBack = null;
     // Asked for, so nothing is interrupting us any more — and the watchdog is allowed
     // to do its job again even if the "interruption over" event never arrived.
     _interrupted = false;
@@ -796,6 +894,10 @@ class PlayerService {
   /// following somebody else's player is not a toggle.
   Future<void> pause() async {
     _wantPlaying = false;
+    // Stopped on purpose: the speaker is not owed back to anybody.
+    _handedOverAt = null;
+    _askingForItBack?.cancel();
+    _askingForItBack = null;
     unawaited(Keepalive.set(false));
     if (!_player.playing) return;
     try {
@@ -1392,8 +1494,10 @@ class PlayerService {
   }
 
   Future<void> dispose() async {
+    _disposed = true;
     _cursorTimer?.cancel();
     _watchdog?.cancel();
+    _askingForItBack?.cancel();
     _saveCursor();
     await _player.dispose();
     await _stateController.close();

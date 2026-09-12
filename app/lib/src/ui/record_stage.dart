@@ -104,6 +104,22 @@ enum ShelfMove {
 class Shelf {
   Shelf({this.left, required this.middle, this.right});
 
+  /// How far apart the records stand, given how big they are drawn.
+  ///
+  /// Measured from the record rather than from the stage, which is the whole of this:
+  /// shrinking the cover used to leave the neighbours standing where they were, so the
+  /// shelf grew a gap on either side and at the smallest size the record sat alone in
+  /// the middle of a field of nothing. The arrangement is a proportion — a neighbour
+  /// shows about half of itself past the one in front — and a proportion has to be of
+  /// something that moves when the record does.
+  static double step(double jacket) => jacket * 0.45;
+
+  /// Where a record stands, in pixels from the middle, when it is [d] places out.
+  ///
+  /// Nearer the edges the shelf is deeper, so the steps between places get shorter.
+  static double along(double jacket, double d) =>
+      step(jacket) * d * (1 - 0.08 * d.abs());
+
   Track? left;
   Track middle;
   Track? right;
@@ -675,9 +691,10 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
         final side =
             math.min(c.maxWidth, c.maxHeight.isFinite ? c.maxHeight : c.maxWidth);
         final jacket = side * widget.scale.clamp(0.5, 1.0);
-        // One shelf place is 0.45 of the stage; the finger covers the same ground, so
-        // the sleeve under it stays under it.
-        _reach = side * 0.45;
+        // The finger covers one shelf place, so the sleeve under it stays under it —
+        // and a shelf place is measured from the record, so this follows the record's
+        // size as well.
+        _reach = Shelf.step(jacket);
 
         return RepaintBoundary(
           child: SizedBox(
@@ -781,7 +798,6 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                         // wants the room, and the neighbours it is borrowing it from
                         // are not what anybody is looking at.
                         grow: card.slot == 0 ? 1 + 0.30 * flipped : 1.0,
-                        side: side,
                         jacket: jacket,
                         // The same picture wherever it stands. Choosing the small
                         // one for the sleeves off to the side meant the URL changed
@@ -829,7 +845,6 @@ class _Sleeve extends StatelessWidget {
     required this.board,
     required this.backKey,
     required this.grow,
-    required this.side,
     required this.jacket,
     required this.jacketUrl,
     required this.discUrl,
@@ -860,7 +875,6 @@ class _Sleeve extends StatelessWidget {
   /// drawn on wants the room.
   final double grow;
 
-  final double side;
   final double jacket;
   final String? jacketUrl;
   final String? discUrl;
@@ -874,8 +888,7 @@ class _Sleeve extends StatelessWidget {
     final away = d.abs();
     if (away > 2.2) return const SizedBox.shrink();
 
-    // Nearer the edges the shelf is deeper, so the steps between places get shorter.
-    final along = side * 0.45 * d * (1 - 0.08 * away);
+    final along = Shelf.along(jacket, d);
     final scale = (1 - 0.42 * away.clamp(0.0, 1.6)).clamp(0.24, 1.0);
     // Turned away from the middle: about the upright axis on a shelf, about the
     // horizontal one on a stack — a record lifted off a pile tips towards you rather

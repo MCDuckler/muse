@@ -726,4 +726,48 @@ void main() {
             [device(AudioDeviceType.builtInSpeaker, 'speaker')]),
         isNull);
   });
+
+  test('the speaker coming back after another app is done starts it again', () async {
+    // The complaint: switching to another app sometimes stops the music, while
+    // turning the screen off never does. Almost any app takes the audio focus for
+    // good when it opens — a video, a game, a browser tab with a muted autoplay —
+    // and Android hands it back when that app is finished with it. Treating that
+    // hand-back as "somebody stopped the music" is the whole bug: the screen going
+    // off takes no focus from anybody, which is why that case was always fine.
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    await player.playAt(0);
+    await settle();
+    audio.only.calls.clear();
+
+    await player.handleInterruption(
+        begin: true, type: AudioInterruptionType.unknown);
+    await settle();
+    expect(audio.only.calls, contains('pause'));
+
+    await player.handleInterruption(
+        begin: false, type: AudioInterruptionType.unknown);
+    await settle();
+    expect(audio.only.calls, contains('play'),
+        reason: 'the other app is done and the speaker is ours again');
+  });
+
+  test('a pause of your own is not owed the speaker back', () async {
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    await player.playAt(0);
+    await settle();
+
+    await player.handleInterruption(
+        begin: true, type: AudioInterruptionType.unknown);
+    await settle();
+    // Thought better of it and pressed pause while the other app had it.
+    await player.pause();
+    await settle();
+    audio.only.calls.clear();
+
+    await player.handleInterruption(
+        begin: false, type: AudioInterruptionType.unknown);
+    await settle();
+    expect(audio.only.calls, isNot(contains('play')),
+        reason: 'starting music over somebody who stopped it is worse than silence');
+  });
 }
