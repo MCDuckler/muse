@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
+import '../state/playback_log.dart';
 import '../state/player.dart';
 import 'artwork.dart';
 import 'glass.dart';
@@ -30,11 +31,19 @@ String formatTime(Duration d) {
 
 /// The full player. The bar at the bottom of the app is a handle onto this; every
 /// control that needs room — scrubbing, shuffle, repeat, volume — lives here.
+/// Whether the player screen has ever been drawn in this session — a breadcrumb for
+/// the log, so a browser that dies with the player open says so.
+bool _openedOnce = false;
+
 class NowPlayingScreen extends StatelessWidget {
   const NowPlayingScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
+    if (!_openedOnce) {
+      _openedOnce = true;
+      PlaybackLog.note('player screen opened');
+    }
     final app = context.watch<AppState>();
     final player = app.player;
     if (player == null) return const SizedBox.shrink();

@@ -41,8 +41,8 @@ Future<void> main() async {
   // of covers is worth far less than staying on screen.
   if (kIsWeb) {
     PaintingBinding.instance.imageCache
-      ..maximumSizeBytes = 40 << 20
-      ..maximumSize = 180;
+      ..maximumSizeBytes = 24 << 20
+      ..maximumSize = 120;
   }
   // Lockscreen / notification controls and playback that survives the screen going off.
   //

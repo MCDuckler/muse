@@ -30,11 +30,20 @@ class GlassSurface extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final radius = borderRadius ?? BorderRadius.zero;
-    // Gentler in a browser. A backdrop blur is the most expensive thing on this
-    // screen and its cost follows the radius; on the web, where there is least to
-    // spend, half of it over an opaque ground still reads as frosted glass and costs
-    // a fraction of what the full radius does.
-    final sigma = kIsWeb ? blur * 0.5 : blur;
+    final opacity = kIsWeb ? (this.opacity + 0.22).clamp(0.0, 1.0) : this.opacity;
+    // No blur at all in a browser.
+    //
+    // A backdrop filter reads back what has already been drawn and blurs it into a
+    // surface of its own — every frame, for every panel that has one. There are two on
+    // every screen here: the player bar and the row of tabs under it. On a phone that
+    // is expensive; inside Safari on an iPhone it is a page being reloaded out from
+    // under whoever was using it, because the tab's whole budget covers the engine,
+    // the canvas and these buffers together.
+    //
+    // What is left is the panel itself, a little more solid to make up for the blur
+    // that is not behind it. Nobody looking at it would say what is missing; everybody
+    // noticed the crash.
+    final sigma = kIsWeb ? 0.0 : blur;
 
     return ClipRRect(
       borderRadius: radius,
@@ -57,8 +66,8 @@ class GlassSurface extends StatelessWidget {
               ),
             ),
           ),
-      BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+      _MaybeBlurred(
+        sigma: sigma,
         child: DecoratedBox(
           decoration: BoxDecoration(
             color: scheme.surface.withValues(alpha: opacity),
@@ -84,6 +93,21 @@ class GlassSurface extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A blur, or nothing at all where one cannot be afforded.
+class _MaybeBlurred extends StatelessWidget {
+  const _MaybeBlurred({required this.sigma, required this.child});
+  final double sigma;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => sigma <= 0
+      ? child
+      : BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+          child: child,
+        );
 }
 
 /// The wash of colour behind the now-playing screen, taken from the cover.

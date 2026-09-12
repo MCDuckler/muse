@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
+import '../state/playback_log.dart';
 import 'downloads_page.dart';
 import 'jam_page.dart';
 import 'glass.dart';
@@ -20,9 +21,17 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  bool _saidHello = false;
+
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
+    // Once, the first time the shell is built: a browser that dies here leaves a log
+    // that stops at "app started", and one that dies later leaves this line in it.
+    if (!_saidHello) {
+      _saidHello = true;
+      PlaybackLog.note('home shell built');
+    }
     const pages = [QueuePage(), SearchPage(), LibraryPage()];
     const titles = ['Queues', 'Search', 'Library'];
 
@@ -77,9 +86,19 @@ class _HomePageState extends State<HomePage> {
                 child: _OfflineBanner(pending: app.downloadsPending),
               ),
             Expanded(
+              // All three tabs are built and kept — that is what an IndexedStack is
+              // for, and it is why coming back to a tab finds it where you left it.
+              // What the two you are not looking at have no business doing is
+              // *animating*: a spinner, a progress bar or a pulse in a hidden tab is
+              // a frame of work and a frame of memory for something nobody can see,
+              // which on a phone in a browser is a tab being reloaded out from under
+              // somebody.
               child: IndexedStack(
                 index: app.homeTab,
-                children: pages,
+                children: [
+                  for (var i = 0; i < pages.length; i++)
+                    TickerMode(enabled: i == app.homeTab, child: pages[i]),
+                ],
               ),
             ),
           ],
