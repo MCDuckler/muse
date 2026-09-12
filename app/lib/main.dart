@@ -31,6 +31,19 @@ String debugEngineState() {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // How much decoded artwork to keep, in a browser.
+  //
+  // Flutter's default is a hundred megabytes of decoded pictures, which is a sensible
+  // number for an app that owns the device and a dangerous one inside a tab: Safari on
+  // an iPhone gives a page a budget for everything — the pictures, the canvas, the
+  // engine itself — and reloads the page out from under you when it is spent. A queue
+  // of covers is worth far less than staying on screen.
+  if (kIsWeb) {
+    PaintingBinding.instance.imageCache
+      ..maximumSizeBytes = 40 << 20
+      ..maximumSize = 180;
+  }
   // Lockscreen / notification controls and playback that survives the screen going off.
   //
   // Not on the web, where there is no lockscreen to control and where it actively

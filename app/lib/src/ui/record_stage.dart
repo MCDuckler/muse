@@ -1369,26 +1369,70 @@ class _DeckState extends State<Deck> {
   /// One record on the platter: turning, dropped to the deck, and faded into the line
   /// it is cut on rather than sliced at it — a hard edge across a record reads as a
   /// mistake, and one sinking into the deck reads as a record on a deck.
-  Widget _record(String url, double fade, double rise) => Transform.translate(
-        offset: Offset(0, widget.drop - rise),
-        child: RepaintBoundary(
-          child: ShaderMask(
-            blendMode: BlendMode.dstIn,
-            shaderCallback: (rect) => const LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Colors.white, Colors.white, Colors.transparent],
-              stops: [0.0, 0.40, 0.52],
-            ).createShader(rect),
-            child: Disc.spinning(
-                url: url,
-                spin: widget.spin,
-                size: widget.size,
-                roll: 0,
-                fade: fade),
+  Widget _record(String url, double fade, double rise) {
+    final record = Disc.spinning(
+        url: url, spin: widget.spin, size: widget.size, roll: 0, fade: fade);
+
+    // Drawn in two pieces, and that is about memory rather than looks.
+    //
+    // A mask is an offscreen layer the size of whatever it masks, made again for every
+    // frame the record turns — a screen-wide one, three times a second, on a phone
+    // that is already holding the engine, the canvas and a queue's worth of artwork.
+    // On an iPhone that is how a tab gets reloaded out from under somebody. So the
+    // record above the fade is drawn plainly, with no layer at all, and only the inch
+    // of it that actually fades is masked.
+    const solid = 0.40;
+    const gone = 0.52;
+    return Transform.translate(
+      offset: Offset(0, widget.drop - rise),
+      child: RepaintBoundary(
+        child: SizedBox(
+          width: widget.size,
+          height: widget.size,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: ClipRect(
+                  clipper: _Band(0, solid),
+                  child: record,
+                ),
+              ),
+              Positioned.fill(
+                child: ClipRect(
+                  clipper: _Band(solid, gone),
+                  child: ShaderMask(
+                    blendMode: BlendMode.dstIn,
+                    shaderCallback: (rect) => LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: const [Colors.white, Colors.transparent],
+                    ).createShader(Rect.fromLTWH(
+                        0, solid * widget.size, rect.width,
+                        (gone - solid) * widget.size)),
+                    child: record,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
-      );
+      ),
+    );
+  }
+}
+
+/// A horizontal slice of something, as fractions of its height.
+class _Band extends CustomClipper<Rect> {
+  const _Band(this.from, this.to);
+  final double from;
+  final double to;
+
+  @override
+  Rect getClip(Size size) => Rect.fromLTRB(
+      0, size.height * from, size.width, size.height * to);
+
+  @override
+  bool shouldReclip(_Band old) => old.from != from || old.to != to;
 }
 
 /// The arm, riding on the record.

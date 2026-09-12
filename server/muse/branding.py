@@ -18,6 +18,8 @@ import pathlib
 
 from PIL import Image, ImageOps
 
+from . import images                    # for the HEIC opener it registers
+
 SHIPPED = pathlib.Path(__file__).with_name("assets") / "app_icon.png"
 
 # What a browser, a phone and a desktop actually ask for. Anything else is served by

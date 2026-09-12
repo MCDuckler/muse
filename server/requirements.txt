@@ -10,3 +10,5 @@ pillow
 pytest
 # SoundCloud is fetched here, not at home: it does not care that this is a datacenter.
 yt-dlp
+# iPhones hand over HEIC, and Pillow cannot open one without this.
+pillow-heif>=0.18

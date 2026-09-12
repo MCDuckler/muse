@@ -6,10 +6,12 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:provider/provider.dart';
 
+import '../api/client.dart';
 import '../state/app_state.dart';
 import 'dialogs.dart';
 import '../state/offline.dart';
 import '../state/art_cache.dart';
+import '../state/shrink.dart';
 import '../state/updates.dart';
 import 'kept_page.dart';
 import 'face.dart';
@@ -76,12 +78,27 @@ class _SettingsPageState extends State<SettingsPage> {
     if (file == null || !mounted) return;
     setState(() => _pickingFace = true);
     try {
-      await app.setAvatar(await file.readAsBytes());
+      // Shrunk here rather than sent whole: a picture from a camera roll is twelve
+      // megapixels for a face drawn at forty pixels across, and on a phone connection
+      // the difference is the whole of how long this takes.
+      final bytes = await shrinkForUpload(await file.readAsBytes());
+      await app.setAvatar(bytes);
+      messenger.showSnackBar(snack(const Text('That is your picture now')));
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.showSnackBar(snack(Text(_whyNot(e))));
     } finally {
       if (mounted) setState(() => _pickingFace = false);
     }
+  }
+
+  /// What went wrong, in words somebody can act on.
+  String _whyNot(Object e) {
+    final said = e is ApiException ? e.message : '$e';
+    if (said.contains('not a picture')) {
+      return 'That file is not a picture the server can read. A photo or a PNG works.';
+    }
+    if (said.contains('under 12 MB')) return 'That picture is too big — under 12 MB.';
+    return said;
   }
 
   Future<void> _upload() async {

@@ -15,6 +15,14 @@ import pathlib
 
 from PIL import Image, ImageOps
 
+try:                                    # pragma: no cover - depends on the image
+    import pillow_heif                  # what an iPhone hands over is a HEIC
+    pillow_heif.register_heif_opener()
+except Exception:                       # pragma: no cover
+    # Without it a photo straight off an iPhone is "not a picture"; everything else
+    # still works.
+    pass
+
 # Big enough to look right as a full-screen header on a phone, small enough that a list
 # of forty of them is not a download.
 SIZES = {"lg": 640, "sm": 128}

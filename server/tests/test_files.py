@@ -206,3 +206,28 @@ def test_a_playlist_can_be_given_a_cover_and_have_it_taken_back(client, hdr):
     assert after["custom_cover"] is False
     assert after["cover_version"] == before["cover_version"], \
         "and it goes back to the picture drawn from what is in it"
+
+
+def test_a_photo_the_size_a_phone_takes_them(client, hdr):
+    """Twelve megapixels of holiday photo, for a face drawn at forty pixels."""
+    import io
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (4032, 3024), (30, 90, 180)).save(buf, format="JPEG", quality=80)
+    r = client.post("/me/avatar",
+                    headers={**hdr, "Content-Type": "application/octet-stream"},
+                    content=buf.getvalue())
+    assert r.status_code == 200, r.text
+
+    small = client.get("/users/1/avatar", params={"size": "sm"}, headers=hdr)
+    assert small.status_code == 200
+    assert Image.open(io.BytesIO(small.content)).size == (128, 128), "squared and shrunk"
+
+
+def test_a_file_that_is_not_a_picture_says_so(client, hdr):
+    r = client.post("/me/avatar",
+                    headers={**hdr, "Content-Type": "application/octet-stream"},
+                    content=b"this is a text file, not a face")
+    assert r.status_code == 400
+    assert "not a picture" in r.json()["detail"]
