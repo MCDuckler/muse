@@ -124,6 +124,7 @@ class AppState extends ChangeNotifier {
   static const _kHalftone = 'muse.halftone';
   static const _kSpectrum = 'muse.spectrum';
   static const _kCoverScale = 'muse.coverScale';
+  static const _kArmStyle = 'muse.armStyle';
   static const _kLayout = 'muse.playerLayout';
   static const _kShelfAxis = 'muse.shelfAxis';
   static const _kJamListening = 'muse.jamListening';
@@ -153,6 +154,16 @@ class AppState extends ChangeNotifier {
   /// the record is the thing you are looking at — and adjustable, because how big it
   /// should be depends on the phone and on how far away it is being read from.
   double coverScale = 0.74;
+
+  /// Which tonearm is drawn on the deck, or none at all.
+  ArmStyle armStyle = ArmStyle.studio;
+
+  Future<void> setArmStyle(ArmStyle value) async {
+    armStyle = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kArmStyle, value.name);
+  }
 
   Future<void> setCoverScale(double value) async {
     coverScale = value.clamp(0.5, 1.0);
@@ -254,6 +265,9 @@ class AppState extends ChangeNotifier {
     halftone = prefs.getBool(_kHalftone) ?? true;
     spectrum = prefs.getBool(_kSpectrum) ?? false;
     coverScale = (prefs.getDouble(_kCoverScale) ?? 0.74).clamp(0.5, 1.0);
+    armStyle = ArmStyle.values.firstWhere(
+        (a) => a.name == prefs.getString(_kArmStyle),
+        orElse: () => ArmStyle.studio);
     playerLayout = PlayerLayout.values.firstWhere(
         (l) => l.name == prefs.getString(_kLayout),
         orElse: () => PlayerLayout.grouped);

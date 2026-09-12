@@ -36,11 +36,15 @@ class RecordStage extends StatefulWidget {
     this.onPrevious,
     this.scale = 0.74,
     this.axis = ShelfAxis.sideways,
+    this.armStyle = ArmStyle.studio,
     this.board,
   });
 
   /// The back of whatever is in the middle, and what is written on it.
   final SleeveBoard? board;
+
+  /// Which arm is drawn on the deck, or none at all.
+  final ArmStyle armStyle;
 
   /// Which way the shelf runs. Everything about the movement is the same either way —
   /// the same journey, the same lag, the same drag — laid along a different line.
@@ -862,6 +866,7 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                         drop: deck,
                         arriving: Curves.easeInOutCubic.transform(_out.value),
                         arm: _arm.value,
+                        armStyle: widget.armStyle,
                       ),
                     for (final card in ordered)
                       _Sleeve(
@@ -1354,7 +1359,11 @@ class Deck extends StatefulWidget {
     required this.drop,
     required this.arriving,
     required this.arm,
+    this.armStyle = ArmStyle.studio,
   });
+
+  /// Which arm is drawn on it, or none at all.
+  final ArmStyle armStyle;
 
   /// The record that is playing now.
   final String? url;
@@ -1441,12 +1450,17 @@ class _DeckState extends State<Deck> {
               // off to the side again when the music stops or the next record is on
               // its way. It stays on the deck either way: an arm that is not playing
               // anything is parked, not gone.
-              if (settled != null || arriving > 0)
+              // Nothing at all when there is no arm to draw: a widget that returns
+              // an empty box is still a widget being built, laid out and walked on
+              // every frame of the movement.
+              if ((settled != null || arriving > 0) &&
+                  widget.armStyle != ArmStyle.off)
                 Positioned.fill(
                   child: Tonearm(
                     radius: widget.size / 2,
                     drop: widget.drop,
                     landed: math.min(Tonearm.lowering(arriving), widget.arm),
+                    style: widget.armStyle,
                   ),
                 ),
             ],
@@ -1544,8 +1558,12 @@ class Tonearm extends StatelessWidget {
     required this.radius,
     required this.drop,
     required this.landed,
+    this.style = ArmStyle.studio,
     this.dim = 1.0,
   });
+
+  /// Which arm, or none at all.
+  final ArmStyle style;
 
   /// The disc's radius, which is the whole of the scale of this.
   final double radius;
@@ -1568,14 +1586,15 @@ class Tonearm extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (landed < 0) return const SizedBox.shrink();
+    if (landed < 0 || style == ArmStyle.off) return const SizedBox.shrink();
     return IgnorePointer(
       child: CustomPaint(
         painter: _ArmPainter(
           radius: radius,
           drop: drop,
           landed: landed,
-          colour: Theme.of(context).colorScheme.onSurface,
+          style: style,
+          scheme: Theme.of(context).colorScheme,
           dim: dim,
         ),
       ),
@@ -1588,15 +1607,19 @@ class _ArmPainter extends CustomPainter {
     required this.radius,
     required this.drop,
     required this.landed,
-    required this.colour,
+    required this.style,
+    required this.scheme,
     required this.dim,
   });
 
   final double radius;
   final double drop;
   final double landed;
-  final Color colour;
+  final ArmStyle style;
+  final ColorScheme scheme;
   final double dim;
+
+  Color get colour => scheme.onSurface;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1628,6 +1651,28 @@ class _ArmPainter extends CustomPainter {
     final angle = onGroove + swing * (1 - landed);
     final head = pivot + Offset(math.cos(angle), math.sin(angle)) * length;
 
+    switch (style) {
+      case ArmStyle.off:
+        return;
+      case ArmStyle.studio:
+        _studio(canvas, middle, pivot, head, playing, angle, onGroove, length);
+      case ArmStyle.drawn:
+        _drawn(canvas, middle, pivot, head, playing, angle, onGroove, length);
+      case ArmStyle.palette:
+        _painted(canvas, middle, pivot, head, playing, angle, onGroove, length);
+    }
+  }
+
+  /// A piece of hi-fi rather than a diagram of one.
+  ///
+  /// Parked while the music is stopped and down on the record while it plays, so it is
+  /// worth the handful of gradients it takes to read as a machined metal thing: a lit
+  /// edge along the top of the tube, a turned counterweight, a gimbal it actually
+  /// pivots in, and a headshell with a cartridge in it. Gradients on a paint, not
+  /// layers: there is no saveLayer anywhere in here, and none of it repaints while the
+  /// record turns.
+  void _studio(Canvas canvas, Offset middle, Offset pivot, Offset head,
+      Offset playing, double angle, double onGroove, double length) {
     // Drawn as a piece of hi-fi rather than as a diagram of one.
     //
     // It was flat line-work, which was right while the arm only appeared for a second
@@ -1867,12 +1912,190 @@ class _ArmPainter extends CustomPainter {
     canvas.drawCircle(dial, radius * 0.019, Paint()..color = brass);
   }
 
+  /// One weight of line, and nothing filled but the part that touches the record.
+  ///
+  /// Stylised rather than drawn from life: the same machine said in the fewest strokes
+  /// that still say tonearm — a tube, a bend, a circle for the post, a ring for the
+  /// weight, a bar for the head. No shading at all, because shading is what makes a
+  /// drawing a picture of a thing rather than a sign for it, and a sign is what this
+  /// is. It reads at any size and it never fights the artwork behind it.
+  void _drawn(Canvas canvas, Offset middle, Offset pivot, Offset head,
+      Offset playing, double angle, double onGroove, double length) {
+    final ink = colour.withValues(alpha: dim);
+    // Heavy enough to be a line rather than a hair: this is a drawing, and a drawing
+    // whose lines disappear against a black record is not one.
+    final weight = radius * 0.030;
+    final line = Paint()
+      ..color = ink
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = weight
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    final fill = Paint()..color = ink;
+
+    canvas.save();
+    canvas.translate(pivot.dx, pivot.dy);
+    canvas.rotate(angle);
+
+    final back = -length * 0.30;
+    // The tube: one line with one bend, and the bend is the whole character of it.
+    canvas.drawPath(
+      Path()
+        ..moveTo(back, 0)
+        ..lineTo(length * 0.58, 0)
+        ..lineTo(length, radius * 0.085),
+      line,
+    );
+    // The counterweight: a ring on the end, not a lump. A filled circle here reads as
+    // a full stop at the end of a sentence.
+    canvas.drawCircle(Offset(back, 0), radius * 0.070, line);
+    canvas.restore();
+
+    // The head, bolted on at the angle that puts it square to the groove.
+    final spoke = playing - middle;
+    final bolted = math.atan2(spoke.dy, spoke.dx) + math.pi / 2 - onGroove;
+    canvas.save();
+    canvas.translate(head.dx, head.dy);
+    canvas.rotate(angle + bolted);
+    final shell = Rect.fromCenter(
+        center: Offset.zero, width: radius * 0.26, height: radius * 0.105);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(shell, Radius.circular(radius * 0.020)),
+      line,
+    );
+    // The one thing filled: the cartridge, in the colour the app is wearing, because
+    // the part that touches the record is the part worth pointing at.
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(
+            center: Offset(-shell.width * 0.22, shell.height * 0.62),
+            width: shell.width * 0.44,
+            height: shell.height * 0.60),
+        Radius.circular(radius * 0.012),
+      ),
+      Paint()..color = scheme.primary.withValues(alpha: dim),
+    );
+    canvas.drawLine(
+      Offset(-shell.width * 0.30, shell.height * 0.92),
+      Offset(-shell.width * 0.34, shell.height * 1.55),
+      line,
+    );
+    canvas.restore();
+
+    // The post: a circle with a dot in it, which is the oldest way there is of drawing
+    // a thing that turns.
+    canvas.drawCircle(pivot, radius * 0.075, line);
+    canvas.drawCircle(pivot, radius * 0.022, fill);
+  }
+
+  /// The same arm in the colours the app is already wearing.
+  ///
+  /// Everything else on this screen is the palette somebody chose, rounded off and
+  /// laid on glass; a chrome or black arm is the one object that belongs to another
+  /// room. This one is made of the theme: the tube in the primary colour with round
+  /// ends, the weight and the head in its quieter relatives, and a soft shadow under
+  /// it of the kind the rest of the app casts.
+  void _painted(Canvas canvas, Offset middle, Offset pivot, Offset head,
+      Offset playing, double angle, double onGroove, double length) {
+    Color own(Color c, [double a = 1]) => c.withValues(alpha: c.a * a * dim);
+    final tube = own(scheme.primary);
+    final quiet = own(scheme.tertiary);
+    final soft = own(scheme.primaryContainer);
+    // Barely there: an offset copy of the arm at any strength reads as a second arm.
+    final shadow = own(scheme.shadow, 0.12);
+
+    final thick = radius * 0.034;
+    Paint rod(Color c) => Paint()
+      ..color = c
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = thick
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    // Closer in than the studio arm's, because this one's weight is a fat capsule and
+    // the post is already out at the margin.
+    final back = -length * 0.22;
+    final bent = Path()
+      ..moveTo(back, 0)
+      ..lineTo(length * 0.58, 0)
+      ..lineTo(length, radius * 0.070);
+
+    canvas.save();
+    canvas.translate(0, radius * 0.020);
+    canvas.translate(pivot.dx, pivot.dy);
+    canvas.rotate(angle);
+    canvas.drawPath(bent, rod(shadow));
+    canvas.restore();
+
+    canvas.save();
+    canvas.translate(pivot.dx, pivot.dy);
+    canvas.rotate(angle);
+    canvas.drawPath(bent, rod(tube));
+    // A highlight along the top of it, which is how every other surface in this app
+    // says it is a surface rather than a shape.
+    canvas.drawPath(
+      bent,
+      rod(own(scheme.onPrimary, 0.35))..strokeWidth = thick * 0.28,
+    );
+    // The counterweight: a soft capsule, the shape of everything else here.
+    final weight = radius * 0.115;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(
+            center: Offset(back - weight * 0.30, 0),
+            width: weight * 1.7,
+            height: weight * 1.35),
+        Radius.circular(weight * 0.68),
+      ),
+      Paint()..color = quiet,
+    );
+    canvas.restore();
+
+    // The head, bolted on at the angle that puts it square to the groove.
+    final spoke = playing - middle;
+    final bolted = math.atan2(spoke.dy, spoke.dx) + math.pi / 2 - onGroove;
+    canvas.save();
+    canvas.translate(head.dx, head.dy);
+    canvas.rotate(angle + bolted);
+    final shell = Rect.fromCenter(
+        center: Offset.zero, width: radius * 0.30, height: radius * 0.100);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(shell, Radius.circular(shell.height * 0.5)),
+      Paint()..color = soft,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(
+            center: Offset(-shell.width * 0.20, shell.height * 0.58),
+            width: shell.width * 0.46,
+            height: shell.height * 0.56),
+        Radius.circular(shell.height * 0.28),
+      ),
+      Paint()..color = quiet,
+    );
+    canvas.drawLine(
+      Offset(-shell.width * 0.28, shell.height * 0.86),
+      Offset(-shell.width * 0.32, shell.height * 1.45),
+      Paint()
+        ..color = tube
+        ..strokeWidth = radius * 0.014
+        ..strokeCap = StrokeCap.round,
+    );
+    canvas.restore();
+
+    // The post: a ring of the palette with the page showing through the middle of it.
+    canvas.drawCircle(pivot, radius * 0.098, Paint()..color = tube);
+    canvas.drawCircle(pivot, radius * 0.044, Paint()..color = own(scheme.surface));
+    canvas.drawCircle(pivot, radius * 0.016, Paint()..color = quiet);
+  }
+
   @override
   bool shouldRepaint(_ArmPainter old) =>
       old.radius != radius ||
       old.drop != drop ||
       old.landed != landed ||
-      old.colour != colour ||
+      old.style != style ||
+      old.scheme != scheme ||
       old.dim != dim;
 }
 

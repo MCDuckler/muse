@@ -778,6 +778,40 @@ enum ShelfAxis {
 /// corners, which is furthest from a thumb; grouping them under the transport put them
 /// where the hand already is; and giving the whole panel more room suits a phone used
 /// one-handed.
+/// Which arm is on the deck, if any.
+///
+/// Three ways of drawing the same machine, because the record is the one part of this
+/// app somebody sits and looks at, and what reads as right there is a matter of taste
+/// rather than of correctness. And off, because an arm across the label is still a
+/// thing between somebody and the artwork.
+enum ArmStyle {
+  off,
+
+  /// The one it has always had: black metal, lit along its top edge.
+  studio,
+
+  /// Line-work. One weight of line, no shading, nothing filled but the cartridge —
+  /// the way a part is drawn in a manual.
+  drawn,
+
+  /// Made of the app's own colours, with the app's own soft round edges.
+  palette;
+
+  String get label => switch (this) {
+        ArmStyle.off => 'No arm',
+        ArmStyle.studio => 'Studio',
+        ArmStyle.drawn => 'Drawn',
+        ArmStyle.palette => 'In your colours',
+      };
+
+  String get description => switch (this) {
+        ArmStyle.off => 'Just the record, turning',
+        ArmStyle.studio => 'Black metal, lit along its edge',
+        ArmStyle.drawn => 'One weight of line, like a diagram of itself',
+        ArmStyle.palette => "The palette you picked, in the app's own shapes",
+      };
+}
+
 enum PlayerLayout {
   /// The original: lyrics, up next and the rest in the top bar, artwork given the room.
   topBar,

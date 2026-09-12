@@ -252,4 +252,51 @@ void main() {
     expect(mine, findsOneWidget);
     expect(tester.widget<Mirror>(mine).strength, greaterThan(0.2));
   });
+
+  testWidgets('the arm can be taken off the deck, and changed for another',
+      (tester) async {
+    // Three ways of drawing the same machine and a way of having none of it: the
+    // record is the part of this app somebody sits and looks at, and an arm across
+    // the label is a thing between them and the artwork.
+    tester.view.physicalSize = const Size(400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    Future<void> withArm(ArmStyle style) => tester.pumpWidget(
+          ChangeNotifierProvider<AppState>.value(
+            value: app,
+            child: MaterialApp(
+              home: Scaffold(
+                body: Center(
+                  child: SizedBox(
+                    width: 352,
+                    height: 352,
+                    child: RecordStage(
+                        track: song(2),
+                        playing: true,
+                        armStyle: style,
+                        previous: song(1),
+                        next: song(3)),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+
+    await withArm(ArmStyle.off);
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(find.byType(Tonearm), findsNothing,
+        reason: 'no arm means no arm, not an arm drawn in nothing');
+    expect(_onTheDeck(400 - 40.0 * 2), findsWidgets,
+        reason: 'the record is still on the deck, turning');
+
+    for (final style in [ArmStyle.studio, ArmStyle.drawn, ArmStyle.palette]) {
+      await withArm(style);
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(find.byType(Tonearm), findsOneWidget, reason: '$style');
+      expect(tester.widget<Tonearm>(find.byType(Tonearm)).style, style);
+      expect(tester.takeException(), isNull, reason: 'drawing $style');
+    }
+  });
 }

@@ -58,6 +58,23 @@ class PlayerLookPage extends StatelessWidget {
               // ignore: deprecated_member_use
               onChanged: (v) => v == null ? null : app.setCoverStyle(v),
             ),
+          // Only the record has an arm over it, and whether there is one at all is
+          // the first question: it is a thing standing between somebody and the
+          // artwork, and some people want the artwork.
+          if (app.coverStyle == CoverStyle.record) ...[
+            const SizedBox(height: 12),
+            Text('The arm', style: Theme.of(context).textTheme.titleSmall),
+            for (final arm in ArmStyle.values)
+              RadioListTile<ArmStyle>(
+                value: arm,
+                // ignore: deprecated_member_use
+                groupValue: app.armStyle,
+                title: Text(arm.label),
+                subtitle: Text(arm.description),
+                // ignore: deprecated_member_use
+                onChanged: (v) => v == null ? null : app.setArmStyle(v),
+              ),
+          ],
           // Only the record moves, so only the record has a direction.
           if (app.coverStyle == CoverStyle.record) ...[
             const SizedBox(height: 12),

@@ -928,6 +928,7 @@ class _Artwork extends StatelessWidget {
               track: track,
               playing: app.musicIsPlaying,
               scale: context.watch<AppState>().coverScale,
+              armStyle: context.watch<AppState>().armStyle,
               axis: context.watch<AppState>().shelfAxis,
               previous: _at(-1),
               next: _at(1),
