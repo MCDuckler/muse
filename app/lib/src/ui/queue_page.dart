@@ -271,7 +271,36 @@ class _QueuePageState extends State<QueuePage> {
                 final pickedSet = picked.toSet();
                 return RefreshIndicator(
                   onRefresh: app.refresh,
-                  child: ReorderableListView.builder(
+                  child: Column(
+                    children: [
+                      // A queue of fourteen thousand songs is carried a few hundred
+                      // rows at a time — see Queue.windowed — and saying so is better
+                      // than a list that mysteriously stops.
+                      if (active.windowed)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(14, 2, 14, 4),
+                          child: Row(
+                            children: [
+                              Icon(Icons.unfold_more,
+                                  size: 14,
+                                  color: Theme.of(context).colorScheme.outline),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  '${rows.length} of ${active.total} songs — the part '
+                                  'around where you are',
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .outline),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      Expanded(
+                        child: ReorderableListView.builder(
                   scrollController: _scroll,
                   padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
                   itemCount: rows.length,
@@ -422,6 +451,9 @@ class _QueuePageState extends State<QueuePage> {
                     );
                   },
                 ),
+                      ),
+                    ],
+                  ),
                 );
               }),
           ),

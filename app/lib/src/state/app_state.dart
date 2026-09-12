@@ -817,6 +817,45 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// How close to the edge of the slice we hold is close enough to ask for the next.
+  static const queueEdge = 60;
+
+  DateTime? _recentred;
+  bool _recentring = false;
+
+  /// Fetch the part of a long queue around where the listener actually is.
+  ///
+  /// A queue of fourteen thousand songs is not sent whole — see Queue.windowed — so
+  /// playing towards the end of what we were given has to ask for the next few
+  /// hundred rows. Everything else about the queue keeps working: the player
+  /// recognises the song it is on inside the new slice and carries on from it.
+  Future<void> keepUpWithTheQueue() async {
+    final q = activeQueue;
+    final player = this.player;
+    if (q == null || player == null || !q.windowed || _recentring) return;
+    final within = player.index;
+    final held = player.items.length;
+    final atStart = q.windowFrom > 0 && within < queueEdge;
+    final atEnd = q.windowFrom + held < q.total && within > held - queueEdge;
+    if (!atStart && !atEnd) return;
+    final now = DateTime.now();
+    if (_recentred != null && now.difference(_recentred!) < const Duration(seconds: 5)) {
+      return;
+    }
+    _recentring = true;
+    _recentred = now;
+    try {
+      final slice = await api.queue(q.id, around: player.whereInQueue);
+      activeQueue = slice;
+      await player.loadQueue(slice);
+      notifyListeners();
+    } catch (_) {
+      // No signal: the queue stays as it is, which is still several hundred songs.
+    } finally {
+      _recentring = false;
+    }
+  }
+
   /// When it was last topped up, so a queue that is nearly finished is not asked for
   /// more of itself twice a second.
   DateTime? _toppedUp;
@@ -1441,6 +1480,9 @@ class AppState extends ChangeNotifier {
       shape = next;
       // A station is asked for more as it is listened through, not once at the start.
       unawaited(topUpStation());
+      // And a long queue is carried a few hundred rows at a time; walking towards the
+      // edge of what we have asks for the next few hundred.
+      unawaited(keepUpWithTheQueue());
       // A jam's host is the room's clock: every change here is news to everybody else.
       if (jam?.isHost ?? false) unawaited(pushJamState());
       notifyListeners();

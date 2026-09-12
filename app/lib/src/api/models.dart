@@ -260,6 +260,18 @@ class Queue {
   /// moment anything reopens a queue for them.
   final String? sharedFrom;
 
+  /// How long the queue really is, and where the part of it we have starts.
+  ///
+  /// A queue of fourteen thousand songs is sent a slice at a time: seven megabytes of
+  /// JSON and fourteen thousand objects is a browser on a phone being killed and a
+  /// browser on a laptop locking up every time anything changes. [items] is the slice,
+  /// [total] is the queue, and [windowFrom] is which row of it the slice starts at.
+  final int total;
+  final int windowFrom;
+
+  /// True when what is here is only part of it.
+  bool get windowed => total > items.length;
+
   /// What this queue is a station of — "track", "album", "artist" — or null when it
   /// is an ordinary queue somebody built themselves. A station is a queue that can be
   /// asked for more of the same when it runs down.
@@ -276,8 +288,11 @@ class Queue {
     this.items = const [],
     this.sharedFrom,
     this.stationKind,
+    this.windowFrom = 0,
+    int? total,
     int? itemCount,
-  }) : itemCount = itemCount ?? items.length;
+  })  : itemCount = itemCount ?? items.length,
+        total = total ?? itemCount ?? items.length;
 
   factory Queue.fromJson(Map<String, dynamic> j) => Queue(
         id: j['id'] as int,
@@ -293,6 +308,8 @@ class Queue {
                 .toList()
             : const [],
         itemCount: j['items'] is int ? j['items'] as int : null,
+        total: j['total'] as int?,
+        windowFrom: (j['window_from'] ?? 0) as int,
         sharedFrom: j['shared_from'] as String?,
         stationKind: j['station'] is Map
             ? ((j['station'] as Map)['kind'] as String?)

@@ -607,3 +607,44 @@ def test_a_mirrored_playlist_still_refuses_both_ways(client, hdr, tracks):
                        json={"track_ids": ids}).status_code == 409
     assert client.post(f"/playlists/{mirror['id']}/items/remove", headers=hdr,
                        json={"track_ids": ids}).status_code == 409
+
+
+def test_a_very_long_queue_is_sent_in_a_slice(client, hdr, tracks):
+    """Somebody's mirrored favourites is fourteen thousand songs. Sent whole it is
+    seven megabytes of JSON and fourteen thousand objects for a browser to hold, which
+    on a phone is the page being killed and on a laptop is a lock-up every time
+    anything about the queue changes."""
+    from muse import routes_library
+
+    q = client.post("/queues", headers=hdr, json={"name": "Everything"}).json()
+    # Longer than the window, built out of the three tracks over and over.
+    many = [tracks[i % len(tracks)]["id"]
+            for i in range(routes_library.QUEUE_WINDOW + 200)]
+    client.put(f"/queues/{q['id']}", headers=hdr,
+               json={"rev": q["rev"], "items": many})
+
+    got = client.get(f"/queues/{q['id']}", headers=hdr).json()
+    assert got["total"] == len(many), "it still says how long it really is"
+    assert len(got["items"]) == routes_library.QUEUE_WINDOW
+    assert got["window_from"] == 0, "at the start, the slice starts at the start"
+
+    # Where you are decides which slice: ask for one around the far end.
+    far = client.get(f"/queues/{q['id']}", headers=hdr,
+                     params={"around": len(many) - 10}).json()
+    assert far["window_from"] == len(many) - routes_library.QUEUE_WINDOW
+    assert far["items"][-1]["pos"] == many.__len__() - 1, "and it reaches the end"
+
+    # The cursor does the same thing without being asked.
+    client.patch(f"/queues/{q['id']}/cursor", headers=hdr,
+                 json={"cursor_index": len(many) - 5})
+    followed = client.get(f"/queues/{q['id']}", headers=hdr).json()
+    assert followed["window_from"] > 0
+
+
+def test_a_short_queue_is_sent_whole(client, hdr, tracks):
+    q = client.post("/queues", headers=hdr, json={"name": "Short"}).json()
+    client.put(f"/queues/{q['id']}", headers=hdr,
+               json={"rev": q["rev"], "items": [t["id"] for t in tracks]})
+    got = client.get(f"/queues/{q['id']}", headers=hdr).json()
+    assert got["total"] == 3 and got["window_from"] == 0
+    assert len(got["items"]) == 3

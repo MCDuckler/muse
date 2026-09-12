@@ -599,6 +599,7 @@ class PlayerService {
     final anchor = current?.id ?? _loadedTrackId ?? _waitingForTrack;
     _queueId = queue.id;
     _items = queue.items;
+    _windowFrom = queue.windowFrom;
     if (!sameQueue) {
       repeat = queueRepeatFrom(queue.repeat);
     }
@@ -626,7 +627,10 @@ class PlayerService {
       }
     }
 
-    _syncOrder(keepItemIndex: queue.cursorIndex.clamp(0, _items.length - 1));
+    // The cursor counts the whole queue; the slice we hold starts somewhere in it.
+    _syncOrder(
+        keepItemIndex:
+            (queue.cursorIndex - _windowFrom).clamp(0, _items.length - 1));
     await _loadCurrent(startAt: Duration(milliseconds: queue.positionMs));
     if (autoplay) _startPlayback();
     _emit(force: true);
@@ -1446,11 +1450,21 @@ class PlayerService {
         .catchError((_) => 0);
   }
 
+  /// Where the slice this player holds starts, in the whole queue.
+  ///
+  /// A long queue arrives a few hundred rows at a time — see Queue.windowed — so the
+  /// index of a song in `_items` is not its place in the queue, and the cursor the
+  /// server keeps is a place in the queue.
+  int _windowFrom = 0;
+
+  /// Where the listener is, counted in the whole queue rather than in the slice.
+  int get whereInQueue => _windowFrom + index;
+
   void _saveCursor() {
     final qid = _queueId;
     if (qid == null) return;
     onCursor?.call(qid,
-        cursorIndex: index, positionMs: _player.position.inMilliseconds);
+        cursorIndex: whereInQueue, positionMs: _player.position.inMilliseconds);
   }
 
   void _emit({bool force = false}) {

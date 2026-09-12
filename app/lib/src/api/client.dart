@@ -615,9 +615,14 @@ class ApiClient {
     return d.map((e) => Queue.fromJson(e)).toList();
   }
 
-  Future<Queue> queue(int id) async =>
-      Queue.fromJson(await _decode(await net.get(_u('/queues/$id'), headers: _headers))
-          as Map<String, dynamic>);
+  /// A queue — or, when it is a long one, the few hundred rows around where you are.
+  ///
+  /// [around] asks for the slice centred somewhere else, which is what the app sends
+  /// when playback has walked to the edge of the slice it was given.
+  Future<Queue> queue(int id, {int? around}) async => Queue.fromJson(
+      await _decode(await net.get(
+          _u('/queues/$id', {if (around != null) 'around': '$around'}),
+          headers: _headers)) as Map<String, dynamic>);
 
   Future<Queue> createQueue(String name) async => Queue.fromJson(await _decode(
       await net.post(_u('/queues'), headers: _headers, body: jsonEncode({'name': name})))

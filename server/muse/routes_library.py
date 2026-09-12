@@ -645,8 +645,30 @@ def set_favourite(track_id: int, body: dict = Body(default={}),
 
 
 # ------------------------------------------------------------------ queues
-def _queue_state(queue_id: int) -> dict:
+# How much of a very long queue is sent at once.
+#
+# Somebody's mirrored favourites is fourteen thousand songs. Sent whole that is seven
+# megabytes of JSON, fourteen thousand objects to build, and all of it held for as long
+# as the app is open — which a browser on a phone answers by killing the page, and a
+# browser on a laptop answers by locking up for several seconds every time anything
+# about the queue changes. Nobody is reading row nine thousand; what is wanted is where
+# you are and what is coming. So that is what is sent, and the client asks again when
+# it gets near an edge.
+QUEUE_WINDOW = 600
+
+
+def _queue_state(queue_id: int, *, around: int | None = None) -> dict:
     q = db.one("select * from queues where id=%s", (queue_id,))
+    total = db.one("select count(*) n from queue_items where queue_id=%s",
+                   (queue_id,))["n"]
+
+    # Counted in rows rather than in positions: a position is a sort key with gaps in
+    # it, and the cursor is an index into the list as the client sees it.
+    start = 0
+    if total > QUEUE_WINDOW:
+        centre = q["cursor_index"] if around is None else around
+        start = max(0, min(centre - QUEUE_WINDOW // 2, total - QUEUE_WINDOW))
+
     # The media join is not optional: without it every row comes back with no
     # stream_url, the client reads that as "not ready yet", and nothing in the queue
     # is playable no matter how ready the track actually is.
@@ -660,10 +682,13 @@ def _queue_state(queue_id: int) -> dict:
              left join users u on u.id = i.added_by
              left join media m on m.track_id=t.id and m.role='canonical'
              left join covers c on c.id=t.cover_id
-            where i.queue_id=%s order by i.pos""",
-        (queue_id,),
+            where i.queue_id=%s order by i.pos offset %s limit %s""",
+        (queue_id, start, QUEUE_WINDOW),
     )
     return {**q, "station": stations.describe(queue_id),
+            # What the whole queue is, and which slice of it this is: the client needs
+            # both to say "1 of 14,022" and to know when to ask for the next slice.
+            "total": total, "window_from": start,
             "items": [{**catalog.public(t), "origin": t["origin"], "pos": t["pos"],
                             # Only interesting in a jam, and harmless otherwise: it is
                             # how "who put this on" gets answered without asking. The
@@ -731,9 +756,15 @@ def create_queue(body: dict = Body(...), user: dict = Depends(current_user)):
 
 
 @router.get("/queues/{queue_id}")
-def get_queue(queue_id: int, user: dict = Depends(current_user)):
+def get_queue(queue_id: int, around: int | None = None,
+              user: dict = Depends(current_user)):
+    """A queue, or the part of a long one worth having.
+
+    `around` asks for the slice centred somewhere other than the cursor — what the
+    client sends when somebody has scrolled towards the end of what it was given.
+    """
     _own_queue(queue_id, user)
-    return _queue_state(queue_id)
+    return _queue_state(queue_id, around=around)
 
 
 @router.patch("/queues/{queue_id}")
