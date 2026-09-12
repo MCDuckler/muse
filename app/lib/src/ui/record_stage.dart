@@ -724,8 +724,17 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
         // the stage, it sits above the space kept for its reflection. The last term
         // is the sliver of record left below the cut, so the cut itself lands on the
         // line rather than a little under it.
-        final deck =
-            side / 2 + jacket * Mirror.defaultDepth / 2 - platter * 0.02;
+        final deck = side / 2 +
+            jacket * Mirror.defaultDepth / 2 -
+            platter * 0.02 +
+            // The covers came down, so the deck follows them: what has to stay the
+            // same is the band of record below the covers, because that band is where
+            // the label is.
+            side * 0.02;
+        // The covers stand a little lower than the middle of the stage, so that the
+        // record behind them is something they are leaning on. Not far: what has to
+        // stay clear is the band of record below them, and the label in it.
+        final coversDown = side * 0.045;
         // The finger covers one shelf place, so the sleeve under it stays under it —
         // and a shelf place is measured from the record, so this follows the record's
         // size as well.
@@ -810,6 +819,19 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                   alignment: Alignment.center,
                   clipBehavior: Clip.none,
                   children: [
+                    // The record on the deck, behind the covers rather than over
+                    // them: a sleeve stands in front of the record that came out of
+                    // it. What is left showing is the band between the bottom of the
+                    // covers and the line the record is cut on — which is where the
+                    // label is, and the label is the part worth seeing.
+                    if (!_showingBack)
+                      Deck(
+                        url: api.discUrl(widget.track),
+                        spin: _spin,
+                        size: platter,
+                        drop: deck,
+                        arriving: Curves.easeInOutCubic.transform(_out.value),
+                      ),
                     for (final card in ordered)
                       _Sleeve(
                         // Keyed by the place as well as the record: a queue of two
@@ -835,6 +857,7 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                         grow: card.slot == 0 ? 1 + 0.30 * flipped : 1.0,
                         jacket: jacket,
                         stage: side,
+                        down: coversDown,
                         drop: deck,
                         platter: platter,
                         leaving: away,
@@ -849,18 +872,6 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                         discUrl: api.discUrl(card.track),
                         spin: _spin,
                         out: Curves.easeInOutCubic.transform(_out.value),
-                      ),
-                    // The deck, in front of the covers and outside all of them: the
-                    // record that is playing stays where it is while the shelf moves
-                    // behind it, and the next one is laid on top of it rather than
-                    // swapped for it.
-                    if (!_showingBack)
-                      Deck(
-                        url: api.discUrl(widget.track),
-                        spin: _spin,
-                        size: platter,
-                        drop: deck,
-                        arriving: Curves.easeInOutCubic.transform(_out.value),
                       ),
                     // The glass, over everything, in the stage's own coordinates —
                     // outside the sleeve so that nothing about the sleeve's own scale
@@ -898,6 +909,7 @@ class _Sleeve extends StatelessWidget {
     required this.grow,
     required this.jacket,
     required this.stage,
+    required this.down,
     required this.drop,
     required this.platter,
     required this.leaving,
@@ -934,6 +946,9 @@ class _Sleeve extends StatelessWidget {
 
   /// How big the stage is, which is how much room the shelf has.
   final double stage;
+
+  /// How far below the middle of the stage the covers stand.
+  final double down;
 
   /// How far below the middle of this cover the deck is — the line the disc comes to
   /// rest on, which is the bottom of the stage and the top of the song's name.
@@ -982,12 +997,12 @@ class _Sleeve extends StatelessWidget {
       transform: upright
           ? (Matrix4.identity()
             ..setEntry(3, 2, 0.0011)
-            ..translateByDouble(0.0, along, 0.0, 1.0)
+            ..translateByDouble(0.0, along + down, 0.0, 1.0)
             ..rotateX(-turn)
             ..scaleByDouble(scale * grow, scale * grow, 1.0, 1.0))
           : (Matrix4.identity()
             ..setEntry(3, 2, 0.0011)
-            ..translateByDouble(along, 0.0, 0.0, 1.0)
+            ..translateByDouble(along, down, 0.0, 1.0)
             ..rotateY(turn)
             ..scaleByDouble(scale * grow, scale * grow, 1.0, 1.0)),
       child: Column(
