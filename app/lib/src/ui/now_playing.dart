@@ -178,28 +178,11 @@ class NowPlayingScreen extends StatelessWidget {
                                     : app.playerLayout == PlayerLayout.plain
                                         ? 0.88
                                         : 1.0,
-                                // Lifted, in the one layout whose artwork is big
-                                // enough to crowd the words under it.
-                                //
-                                // A gap put between them instead does nothing: the
-                                // column fills the screen and this box is the flexible
-                                // one in it, so every pixel of gap comes straight back
-                                // out of this box and the words stay where they were.
-                                // Moving the picture is the only thing that opens the
-                                // room, and moving it without changing its box is what
-                                // this is.
-                                child: Transform.translate(
-                                  offset: Offset(
-                                      0,
-                                      app.playerLayout == PlayerLayout.plain
-                                          ? -52
-                                          : 0),
-                                  child: _Artwork(
-                                      track: track,
-                                      snapshot: s,
-                                      player: player,
-                                      app: app),
-                                ),
+                                child: _Artwork(
+                                    track: track,
+                                    snapshot: s,
+                                    player: player,
+                                    app: app),
                               ),
                             ),
                             // Putting a number here does not move the words: the
@@ -235,7 +218,14 @@ class NowPlayingScreen extends StatelessWidget {
                             // fix from in here. See _TheMusicWillStop.
                             if (app.musicWillStopInTheBackground)
                               const _TheMusicWillStop(),
-                            const SizedBox(height: 22),
+                            // Plain sets its buttons out in the open rather than in a
+                            // panel, so the words need less air under them: the same
+                            // gap that separates a block of text from a panel leaves a
+                            // block of text stranded above a row of buttons.
+                            SizedBox(
+                                height: app.playerLayout == PlayerLayout.plain
+                                    ? 6
+                                    : 22),
                             // Plain lays the same things out in a different order and
                             // without a panel around them: the song's own buttons in a
                             // row, then the bar with its times at either end, then the
@@ -713,8 +703,6 @@ class _Credits extends StatelessWidget {
 
     final albumStyle = Theme.of(context).textTheme.bodyMedium?.copyWith(
         color: scheme.onSurfaceVariant.withValues(alpha: 0.75));
-    final sourceStyle = Theme.of(context).textTheme.labelSmall
-        ?.copyWith(color: scheme.outline);
 
     // Artist over album over source: one to a line, and always the same three lines.
     //
@@ -764,9 +752,13 @@ class _Credits extends StatelessWidget {
 
     // Each line's own height, plus what the padding inside a link adds. Measured from
     // the type rather than guessed, so it holds at any text scale.
-    final reserved = heightOf(style, 16) + 4 +
-        heightOf(albumStyle, 14) + 4 +
-        heightOf(sourceStyle, 11);
+    //
+    // Two lines, not three. There was a third — where the song came from — and it is
+    // not drawn any more, but its height was still being kept: an empty row under
+    // every song, which is a gap between the words and the buttons that nothing is
+    // ever going to fill. What has to stay reserved is the album's row, because that
+    // is the one that varies from song to song and the record sits above it.
+    final reserved = heightOf(style, 16) + 4 + heightOf(albumStyle, 14) + 4;
 
     return SizedBox(
       height: reserved,
