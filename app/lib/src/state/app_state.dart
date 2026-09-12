@@ -14,6 +14,7 @@ import 'playback_log.dart';
 import 'sleeve_board.dart';
 import 'coalesce.dart';
 import 'player.dart';
+import '../ui/favicon.dart';
 import '../ui/media_session.dart';
 import '../ui/settings_page.dart' show appBuild;
 import '../ui/theme.dart';
@@ -367,6 +368,9 @@ class AppState extends ChangeNotifier {
     //
     // A jam survives closing the app: picking it back up is how the same person on
     // two devices stays in the same room.
+    // The tab's icon, and the one a home screen keeps. Asked for rather than shipped,
+    // so an admin changing it changes it everywhere.
+    unawaited(_wearTheIcon());
     final status = _pollStatus();
     final library = refresh();
     final hearts = refreshFavourites();
@@ -1417,6 +1421,17 @@ class AppState extends ChangeNotifier {
     onHide: _travelLight,
     onDetach: () => PlaybackLog.note('app being torn down'),
   );
+
+  Future<void> _wearTheIcon() async {
+    if (!kIsWeb) return;
+    try {
+      final icon = await api.appIcon();
+      wearTheIcon(api.appIconUrl(size: 64, version: icon.version),
+          api.appIconUrl(size: 180, version: icon.version));
+    } catch (_) {
+      // An older server, or no answer. The icon in the page stays as it was.
+    }
+  }
 
   /// When the log was last sent up, so coming back to the app forty times in an hour
   /// is not forty reports of the same minute.

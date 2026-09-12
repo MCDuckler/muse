@@ -45,10 +45,11 @@ void main() {
     }
   });
 
-  test('it is behind the sleeve while it leaves and in front once it arrives', () {
-    expect(Disc.infront, Disc.leaves,
-        reason: 'the record on the deck is the thing in front; the one sliding out '
-            'of the cover comes from behind it');
+  test('the record leaving the sleeve is done by the time the deck has one', () {
+    // They are two different things in two different places — one belongs to the
+    // cover, one to the stage — and the handover is the only moment they share.
+    expect(Disc.sliding(Disc.leaves), 1);
+    expect(Disc.arriving(Disc.leaves), 0);
   });
 
   test('the arm waits for the record to settle before it comes down', () {

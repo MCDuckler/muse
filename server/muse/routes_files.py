@@ -10,7 +10,7 @@ import shutil
 import tempfile
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from . import audiofile, branding, catalog, db, images, storage
 from .deps import cfg, current_user, user_or_key
@@ -134,6 +134,39 @@ def app_icon(size: int = 192, v: str | None = None):
         # is meant to change, and a home screen holding last month's icon for a year
         # is the whole reason it is served instead of built in.
         "Cache-Control": "public, no-cache"})
+
+
+@router.get("/manifest.json")
+def web_manifest():
+    """The installed web app's own description, with the icon it has *now*.
+
+    Served rather than shipped so the icon can carry its own signature in the URL. A
+    browser that has seen /icon?size=192 once has no reason to ask for it again — the
+    picture at that address is the picture it already has — so an icon that changes
+    without the address changing is an icon nobody sees change.
+    """
+    sig = branding.signature(cfg().data_dir)
+    def icon(size: int, purpose: str) -> dict:
+        return {"src": f"/icon?size={size}&v={sig}", "sizes": f"{size}x{size}",
+                "type": "image/png", "purpose": purpose}
+    return JSONResponse(
+        {
+            "name": "WetOwl",
+            "short_name": "WetOwl",
+            "description": "Your private music library.",
+            "start_url": "/",
+            "scope": "/",
+            "display": "standalone",
+            "background_color": "#171310",
+            "theme_color": "#171310",
+            "orientation": "portrait-primary",
+            "categories": ["music", "entertainment"],
+            "prefer_related_applications": False,
+            "icons": [icon(192, "any"), icon(512, "any"),
+                      icon(192, "maskable"), icon(512, "maskable")],
+        },
+        headers={"Cache-Control": "public, no-cache"},
+    )
 
 
 @router.get("/icon.json")

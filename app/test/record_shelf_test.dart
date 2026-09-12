@@ -158,26 +158,27 @@ void spacing() {
   test('the neighbours move in when the record is made smaller', () {
     // A full-size record on a 360 stage, and the same shelf at half that.
     const stage = 360.0;
-    final big = Shelf.along(stage * 1.0, 1);
-    final small = Shelf.along(stage * 0.5, 1);
+    final big = Shelf.along(stage * 1.0, stage, 1);
+    final small = Shelf.along(stage * 0.5, stage, 1);
 
     expect(small, lessThan(big),
         reason: 'shrinking the cover used to leave the neighbours where they were, '
             'so the shelf grew a gap either side of it');
-    expect(small / big, closeTo(0.5, 0.001),
-        reason: 'the arrangement is a proportion of the record, so it halves with it');
+    expect(small / big, lessThan(0.5),
+        reason: 'it halves with the record and then some: a big cover pushes its '
+            'neighbours further out of its way than a small one does');
   });
 
   test('the shelf is symmetrical and the middle is the middle', () {
-    expect(Shelf.along(300, 0), 0);
-    expect(Shelf.along(300, -1), -Shelf.along(300, 1));
-    expect(Shelf.along(300, -2), -Shelf.along(300, 2));
+    expect(Shelf.along(300, 360, 0), 0);
+    expect(Shelf.along(300, 360, -1), -Shelf.along(300, 360, 1));
+    expect(Shelf.along(300, 360, -2), -Shelf.along(300, 360, 2));
   });
 
   test('the steps get shorter towards the edges, whatever the size', () {
     for (final jacket in [180.0, 300.0, 360.0]) {
-      final first = Shelf.along(jacket, 1);
-      final second = Shelf.along(jacket, 2) - first;
+      final first = Shelf.along(jacket, 360, 1);
+      final second = Shelf.along(jacket, 360, 2) - first;
       expect(second, lessThan(first),
           reason: 'the shelf is deeper at the edges, at every size');
     }
