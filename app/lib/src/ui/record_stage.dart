@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -736,9 +737,12 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
         final platter = screen - _wallClearance * 2;
         // Far enough right that the sleeve-sized one is past the edge of the phone.
         final away = screen * 0.85;
-        // The top edge of the record — the round one, the one that shows — a whisker
-        // inside the top of the stage rather than over the buttons above it.
-        final showsFrom = -side / 2 + side * 0.01;
+        // The top edge of the record — the round one, the one that shows. Above the
+        // stage rather than inside it: the room over the record is the page's own
+        // margin and the header's empty middle, and a record leaning up into that is
+        // the point of the picture. It is drawn a little sheer up there, so what it
+        // passes behind still reads as being in front of it.
+        final showsFrom = -side / 2 - side * 0.10;
         // And where its middle is, from the middle of the stage. The record is nearly
         // as wide as the stage is tall, so this lands close to nothing: hung by its
         // top edge, a screen-wide record sits about where it would anyway.
@@ -753,14 +757,17 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
         // and a cover hung clear of it at another. This gives the same peek at every
         // setting.
         //
-        // A quarter rather than the third there was room for under the covers. What
-        // is above them is the top of the screen, and a record that goes on past it
-        // is one drawn over the buttons up there.
-        final peek = platter * 0.26;
+        // Enough that the label is in the open, which is what a record standing
+        // behind its sleeve shows you: a quarter of the record was all edge and
+        // grooves, and the middle of it — the picture printed on the label — is the
+        // part worth having out.
+        final peek = platter * 0.45;
         // A cover's own top edge, from the middle of the sleeve's box: the box holds
         // the reflection as well, and that hangs below the cover.
         final edge = jacket * (1 + Mirror.defaultDepth) / 2;
-        final coversDown = (showsFrom + peek + edge).clamp(-side * 0.06, side * 0.30);
+        // The clamp is for the largest covers: past a point, standing them low enough
+        // to show all that record puts their own bottom edge through the song's name.
+        final coversDown = (showsFrom + peek + edge).clamp(-side * 0.06, side * 0.33);
         // The finger covers one shelf place, so the sleeve under it stays under it —
         // and a shelf place is measured from the record, so this follows the record's
         // size as well.
@@ -1291,6 +1298,13 @@ class Disc extends StatelessWidget {
   }
 
   /// A record, turning. Built once and rotated, rather than rebuilt every frame.
+  /// How solid the record on the deck is.
+  ///
+  /// Not quite. It stands above the covers and into the room the header is in, and a
+  /// black disc laid flat over that reads as a hole in the screen. A little sheer and
+  /// it reads as what it is: something behind the things in front of it.
+  static const double sheer = 0.88;
+
   static Widget spinning({
     required String url,
     required Animation<double> spin,
@@ -1312,7 +1326,7 @@ class Disc extends StatelessWidget {
               image: artwork(url),
               fit: BoxFit.contain,
               gaplessPlayback: true,
-              opacity: AlwaysStoppedAnimation(fade)),
+              opacity: AlwaysStoppedAnimation(fade * sheer)),
         ),
       );
 }
@@ -1387,7 +1401,14 @@ class _DeckState extends State<Deck> {
         maxHeight: double.infinity,
         child: SizedBox(
           width: widget.size,
-          height: widget.size + widget.drop,
+          // Room for the record wherever it is hung, above the middle or below it.
+          //
+          // It was `size + drop`, which is the same thing while the record sits below
+          // the middle and half a record short when it sits above it — and a box that
+          // is short does not clip a Stack's child, it squeezes it: the record came
+          // out as much narrower than the screen as it had been hung high, which read
+          // as the peek being wrong rather than as the record being the wrong size.
+          height: widget.size + widget.drop.abs(),
           // The right way up, and the covers do the cutting.
           //
           // Turning the whole deck over put the record above the covers in one line,
@@ -1443,8 +1464,11 @@ class _DeckState extends State<Deck> {
     // On an iPhone that is how a tab gets reloaded out from under somebody. So the
     // record above the fade is drawn plainly, with no layer at all, and only the inch
     // of it that actually fades is masked.
-    const solid = 0.40;
-    const gone = 0.52;
+    // Where the record stops being drawn: past its own middle, because the covers
+    // stand lower than they used to and the cut has to be behind one. A fade that
+    // comes out from under a cover is a record dissolving in mid-air.
+    const solid = 0.56;
+    const gone = 0.68;
     return Transform.translate(
       offset: Offset(0, widget.drop - rise),
       child: RepaintBoundary(
@@ -1573,8 +1597,10 @@ class _ArmPainter extends CustomPainter {
     // disc has dropped by `drop` from its middle.
     final middle = Offset(size.width / 2, size.height / 2 + drop);
     // The post it turns on: outside the record, up and to the right, where the post
-    // stands on a deck.
-    final pivot = middle + Offset(radius * 0.80, -radius * 1.00);
+    // stands on a deck — and in far enough that the counterweight behind it is still
+    // on the screen. The record is as wide as the phone, so there is no room out
+    // there for an arm to hang over the edge.
+    final pivot = middle + Offset(radius * 0.64, -radius * 0.92);
 
     // Where the needle sits when it is playing: out near the rim rather than halfway
     // in, because the band of record that is not behind a cover is the outer one —
@@ -1596,46 +1622,125 @@ class _ArmPainter extends CustomPainter {
     final angle = onGroove + swing * (1 - landed);
     final head = pivot + Offset(math.cos(angle), math.sin(angle)) * length;
 
-    // Drawn the way a part is drawn in a manual: one weight of line, flat metal, no
-    // highlights or shadows. It was a little chrome sculpture before — gradients along
-    // the tube, a lit edge, a blurred shadow under it — and at this size all of that
-    // amounts to noise around a shape that was already saying tonearm on its own.
-    final metal = Color.lerp(colour, const Color(0xFFEFEAE1), 0.85)!
-        .withValues(alpha: dim);
-    final dark = Color.lerp(colour, const Color(0xFF5F584F), 0.72)!
-        .withValues(alpha: dim);
+    // Drawn as a piece of hi-fi rather than as a diagram of one.
+    //
+    // It was flat line-work, which was right while the arm only appeared for a second
+    // on its way down. It sits on the stage now — parked while the music is stopped,
+    // down on the record while it plays — so it is worth the handful of gradients it
+    // takes to make it read as a machined metal thing: a lit edge along the top of the
+    // tube, a turned counterweight, a gimbal it actually pivots in, and a headshell
+    // with a cartridge in it. Gradients on a paint, not layers: there is no saveLayer
+    // anywhere in here, and none of it repaints while the record turns.
+    Color warm(Color c) => c.withValues(alpha: c.a * dim);
+    final lit = warm(const Color(0xFFFBF8F2));
+    final metal = warm(const Color(0xFFE3DCCE));
+    final mid = warm(const Color(0xFFBFB6A4));
+    final edge = warm(const Color(0xFF847C6D));
+    final rubber = warm(const Color(0xFF2B2723));
+    final brass = warm(const Color(0xFFC9A24E));
+    final shade = warm(const Color(0x33000000));
 
-    final tube = radius * 0.017;
-    final line = Paint()
-      ..color = metal
-      ..strokeWidth = tube * 2
-      ..strokeCap = StrokeCap.round
-      ..style = PaintingStyle.stroke;
-    final solid = Paint()..color = metal;
+    final dark = Paint()..color = rubber;
+
+    /// A round bar lying along the x axis, lit from above: bright along the top third,
+    /// its own colour through the middle, and darkening into the underside.
+    Shader barrel(double half) => ui.Gradient.linear(
+          Offset(0, -half),
+          Offset(0, half),
+          [edge, lit, metal, edge],
+          const [0.0, 0.26, 0.58, 1.0],
+        );
+
+    /// One run of tube, tapering from [from] to [to].
+    void run(Offset a, Offset b, double wa, double wb, Paint paint) {
+      final along = (b - a);
+      final n = Offset(-along.dy, along.dx) / along.distance;
+      canvas.drawPath(
+        Path()
+          ..moveTo(a.dx + n.dx * wa, a.dy + n.dy * wa)
+          ..lineTo(b.dx + n.dx * wb, b.dy + n.dy * wb)
+          ..lineTo(b.dx - n.dx * wb, b.dy - n.dy * wb)
+          ..lineTo(a.dx - n.dx * wa, a.dy - n.dy * wa)
+          ..close(),
+        paint,
+      );
+    }
+
+    final back = -length * 0.30;          // the counterweight end
+    final bend = length * 0.58;           // where the tube turns towards the record
+    final tip = Offset(length, radius * 0.055);
+    final wide = radius * 0.021;
+    final thin = radius * 0.014;
+
+    // Its shadow on the record: the same tube again, straight down the screen rather
+    // than down the arm — a shadow falls the way the light does, not the way the
+    // thing it belongs to happens to be pointing.
+    canvas.save();
+    canvas.translate(0, radius * 0.030);
+    canvas.translate(pivot.dx, pivot.dy);
+    canvas.rotate(angle);
+    final shadow = Paint()..color = shade;
+    run(Offset(back, 0), Offset(bend, 0), wide, thin, shadow);
+    run(Offset(bend, 0), tip, thin, thin, shadow);
+    canvas.restore();
 
     canvas.save();
     canvas.translate(pivot.dx, pivot.dy);
     canvas.rotate(angle);
 
-    // The tube: two straight runs with one bend in them, which is the shape of the
-    // thing and the whole of what has to be said about it.
-    final bent = Path()
-      ..moveTo(-length * 0.26, 0)
-      ..lineTo(length * 0.55, 0)
-      ..lineTo(length, radius * 0.055);
-    canvas.drawPath(bent, line);
+    // The tube, in two runs with the bend between them.
+    final pipe = Paint()..shader = barrel(wide);
+    run(Offset(back, 0), Offset(bend, 0), wide, thin, pipe);
+    run(Offset(bend, 0), tip, thin, thin, Paint()..shader = barrel(thin));
+    canvas.drawCircle(Offset(bend, 0), thin, Paint()..color = metal);
 
-    // The counterweight: a plain cylinder at the back of it.
-    final weight = radius * 0.070;
+    // The counterweight: a turned cylinder on the end of the stub, with the rubber
+    // ring that sets the tracking weight.
+    final weight = radius * 0.082;
+    final barrelRect = Rect.fromCenter(
+        center: Offset(back - weight * 0.55, 0),
+        width: weight * 2.0,
+        height: weight * 1.55);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(barrelRect, Radius.circular(weight * 0.5)),
+      Paint()
+        ..shader = ui.Gradient.linear(
+          Offset(0, barrelRect.top),
+          Offset(0, barrelRect.bottom),
+          [edge, lit, mid, edge],
+          const [0.0, 0.22, 0.62, 1.0],
+        ),
+    );
     canvas.drawRRect(
       RRect.fromRectAndRadius(
         Rect.fromCenter(
-            center: Offset(-length * 0.28, 0),
-            width: weight * 2.1,
-            height: weight * 1.7),
-        Radius.circular(weight * 0.45),
+            center: Offset(back + weight * 0.28, 0),
+            width: weight * 0.42,
+            height: weight * 1.62),
+        Radius.circular(weight * 0.18),
       ),
-      solid,
+      dark,
+    );
+    canvas.restore();
+
+    // The gimbal the arm turns in: a collar around the post, square to the arm, so the
+    // arm is held by something rather than growing out of a dot.
+    canvas.save();
+    canvas.translate(pivot.dx, pivot.dy);
+    canvas.rotate(angle);
+    final yoke = radius * 0.055;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset.zero, width: yoke * 1.9, height: yoke * 2.4),
+        Radius.circular(yoke * 0.55),
+      ),
+      Paint()
+        ..shader = ui.Gradient.linear(
+          Offset(0, -yoke * 1.2),
+          Offset(0, yoke * 1.2),
+          [mid, lit, edge],
+          const [0.0, 0.34, 1.0],
+        ),
     );
     canvas.restore();
 
@@ -1651,30 +1756,92 @@ class _ArmPainter extends CustomPainter {
     canvas.save();
     canvas.translate(head.dx, head.dy);
     canvas.rotate(groove);
-    final headLength = radius * 0.17;
-    final headDepth = radius * 0.075;
+    final headLength = radius * 0.19;
+    final headDepth = radius * 0.070;
+
+    // The shell: a plate with the finger lift standing off the front of it.
     canvas.drawRRect(
       RRect.fromRectAndRadius(
         Rect.fromCenter(center: Offset.zero, width: headLength, height: headDepth),
-        Radius.circular(headDepth * 0.25),
+        Radius.circular(headDepth * 0.28),
       ),
-      solid,
-    );
-    // The needle under the front of it: one short mark, because that is where the
-    // record is actually being touched.
-    canvas.drawLine(
-      Offset(-headLength * 0.30, headDepth * 0.5),
-      Offset(-headLength * 0.30, headDepth * 1.15),
       Paint()
-        ..color = dark
-        ..strokeWidth = headDepth * 0.16
+        ..shader = ui.Gradient.linear(
+          Offset(0, -headDepth / 2),
+          Offset(0, headDepth / 2),
+          [lit, metal, edge],
+          const [0.0, 0.45, 1.0],
+        ),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(
+            center: Offset(headLength * 0.44, -headDepth * 0.16),
+            width: headLength * 0.26,
+            height: headDepth * 0.34),
+        Radius.circular(headDepth * 0.16),
+      ),
+      Paint()..color = metal,
+    );
+
+    // The cartridge under it, and the brass face that says which way round it is.
+    final body = Rect.fromCenter(
+        center: Offset(-headLength * 0.16, headDepth * 0.52),
+        width: headLength * 0.52,
+        height: headDepth * 0.60);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(body, Radius.circular(headDepth * 0.14)),
+      dark,
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(body.left, body.top + body.height * 0.18,
+          body.width * 0.20, body.height * 0.42),
+      Paint()..color = brass,
+    );
+
+    // The stylus: the one part of all this that is actually touching the record.
+    canvas.drawLine(
+      Offset(body.left + body.width * 0.28, body.bottom),
+      Offset(body.left + body.width * 0.18, body.bottom + headDepth * 0.52),
+      Paint()
+        ..color = edge
+        ..strokeWidth = headDepth * 0.13
         ..strokeCap = StrokeCap.round,
     );
     canvas.restore();
 
-    // The post, drawn last so the arm comes out of it rather than over it.
-    canvas.drawCircle(pivot, radius * 0.060, solid);
-    canvas.drawCircle(pivot, radius * 0.024, Paint()..color = dark);
+    // The post it all stands on, drawn last so the arm comes out of it rather than
+    // over it: the base it is bolted to, the collar, and the anti-skate dial beside
+    // it — which is there because a deck has one, and because a bare cylinder is a
+    // pencil holder.
+    canvas.drawOval(
+      Rect.fromCenter(
+          center: pivot + Offset(0, radius * 0.012),
+          width: radius * 0.190,
+          height: radius * 0.120),
+      Paint()
+        ..shader = ui.Gradient.linear(
+          pivot - Offset(0, radius * 0.06),
+          pivot + Offset(0, radius * 0.06),
+          [mid, metal, edge],
+          const [0.0, 0.40, 1.0],
+        ),
+    );
+    canvas.drawCircle(
+      pivot,
+      radius * 0.062,
+      Paint()
+        ..shader = ui.Gradient.radial(
+          pivot - Offset(radius * 0.02, radius * 0.03),
+          radius * 0.08,
+          [lit, mid, edge],
+          const [0.0, 0.55, 1.0],
+        ),
+    );
+    canvas.drawCircle(pivot, radius * 0.020, dark);
+    final dial = pivot + Offset(radius * 0.135, radius * 0.055);
+    canvas.drawCircle(dial, radius * 0.030, Paint()..color = mid);
+    canvas.drawCircle(dial, radius * 0.012, Paint()..color = brass);
   }
 
   @override

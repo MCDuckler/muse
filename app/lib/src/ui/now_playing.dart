@@ -183,10 +183,14 @@ class NowPlayingScreen extends StatelessWidget {
                                     app: app),
                               ),
                             ),
+                            // A row further down than it looks like it needs to be,
+                            // because what is above it is not the bottom of the cover
+                            // any more — it is the cover's reflection, and words that
+                            // start where that is still going read as sitting in it.
                             SizedBox(
                                 height: app.playerLayout == PlayerLayout.roomy
-                                    ? 18
-                                    : 32),
+                                    ? 40
+                                    : 54),
                             // Only while a record is turned over. It is the back of a
                             // sleeve, not an art program: the pens appear because
                             // there is suddenly something to draw on, and go again

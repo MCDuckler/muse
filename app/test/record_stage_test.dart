@@ -102,7 +102,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 1600));
   }
 
-  testWidgets('a quarter of the record shows above the covers', (tester) async {
+  testWidgets('the record shows above the covers as far as its label',
+      (tester) async {
     await stage(tester, playing: true);
 
     final platter = 400 - 26.0 * 2;
@@ -114,19 +115,21 @@ void main() {
 
     expect(record.width, closeTo(platter, 0.5),
         reason: 'the record is the width of the screen, less its margins');
-    expect(cover.top - showsFrom, closeTo(platter * 0.26, 2),
-        reason: 'a quarter of it in the open, at the default cover size');
-    expect(showsFrom, greaterThan(tester.getRect(find.byType(RecordStage)).top - 1),
-        reason: 'and not a pixel of it over the buttons above the stage');
+    expect(cover.top - showsFrom, closeTo(platter * 0.45, 2),
+        reason: 'the label is in the open, at the default cover size');
+    // The label is printed at 0.31 of the record's radius, so this is the top of it.
+    final label = platter * 0.155;
+    expect(cover.top - (record.center.dy - label), greaterThan(label * 0.5),
+        reason: 'and a good part of the label itself is in the open, not just edge');
   });
 
-  testWidgets('the same quarter whatever size the covers are', (tester) async {
+  testWidgets('the same peek whatever size the covers are', (tester) async {
     // The sum is worth having only because it holds at both ends of the setting: a
     // fixed offset gave a sliver of record at one size and a floating cover at another.
-    // Up to the size at which a sleeve and its reflection fill the stage: past that
-    // the cover overflows the stage box, which it did long before any of this and is
-    // not what is being measured here.
-    for (final scale in [0.5, 0.6, 0.74, 0.8]) {
+    // Up to the size at which standing the cover low enough would put its own bottom
+    // edge through the song's name — past that the clamp takes over and the peek is
+    // allowed to give, which is checked separately below.
+    for (final scale in [0.5, 0.6, 0.7, 0.74]) {
       tester.view.physicalSize = const Size(400, 900);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
@@ -154,8 +157,46 @@ void main() {
 
       final record = tester.getRect(_onTheDeck(400 - 26.0 * 2).first);
       final peek = tester.getRect(_cover(352 * scale).first).top - record.top;
-      expect(peek, closeTo((400 - 52) * 0.26, 2), reason: 'at cover size $scale');
+      expect(peek, closeTo((400 - 52) * 0.45, 2), reason: 'at cover size $scale');
     }
+  });
+
+  testWidgets('a cover too big to stand that low keeps most of the peek anyway',
+      (tester) async {
+    // The clamp: a cover nearly as tall as the stage cannot come down far enough to
+    // leave the whole of that record showing without its own bottom edge landing in
+    // the song's name. What gives is the peek, and only as much as it has to.
+    tester.view.physicalSize = const Size(400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(ChangeNotifierProvider<AppState>.value(
+      value: app,
+      child: MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 352,
+              height: 352,
+              child: RecordStage(
+                  track: song(2),
+                  playing: true,
+                  scale: 0.8,
+                  previous: song(1),
+                  next: song(3)),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.pump(const Duration(milliseconds: 16));
+
+    const platter = 400 - 26.0 * 2;
+    final peek = tester.getRect(_cover(352 * 0.8).first).top -
+        tester.getRect(_onTheDeck(platter).first).top;
+    expect(peek, lessThan(platter * 0.45),
+        reason: 'it gave something, because it had to');
+    expect(peek, greaterThan(platter * 0.40),
+        reason: 'and not much: the label is still in the open');
   });
 
   testWidgets('pausing stops the record turning and swings the arm off it',
@@ -201,7 +242,7 @@ void main() {
 
     final record = tester.getRect(_onTheDeck(400 - 26.0 * 2).first);
     final cover = tester.getRect(_cover(352 * 0.74).first);
-    expect(record.top + record.height * 0.52, lessThan(cover.bottom),
+    expect(record.top + record.height * 0.68, lessThan(cover.bottom),
         reason: 'the reflection hangs below the cover, and the record is cut above it');
     final mine = find.descendant(
         of: find.byKey(const ValueKey('2@0.0')), matching: find.byType(Mirror));
