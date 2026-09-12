@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:provider/provider.dart';
 
 import '../api/client.dart';
+import '../state/keepalive.dart';
 import '../state/app_state.dart';
 import 'dialogs.dart';
 import '../state/offline.dart';
@@ -201,6 +202,19 @@ class _SettingsPageState extends State<SettingsPage> {
             onTap: () => Navigator.of(context)
                 .push(MaterialPageRoute(builder: (_) => const PlayerLookPage())),
           ),
+          // Only when the phone is actually going to stop the music: a settings row
+          // about a permission that is already granted is a row about nothing.
+          if (app.musicWillStopInTheBackground)
+            ListTile(
+              leading: Icon(Icons.notifications_off_outlined,
+                  color: Theme.of(context).colorScheme.error),
+              title: const Text('Music stops when you leave the app'),
+              subtitle: const Text(
+                  'Android needs to be allowed to show the playing notification — '
+                  'without it there is nothing holding the app up in the background'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Keepalive.takeMeToTheSettings(),
+            ),
           const Divider(),
           _label(context, 'Colours'),
           // Swatches rather than a list of names: the choice is a look, and reading

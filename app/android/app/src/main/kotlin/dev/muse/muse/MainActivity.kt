@@ -42,6 +42,31 @@ class MainActivity : AudioServiceActivity() {
             this, arrayOf("android.permission.POST_NOTIFICATIONS"), 7301)
     }
 
+    /** Whether the system will actually let this app put a notification up. */
+    private fun mayNotify(): Boolean =
+        androidx.core.app.NotificationManagerCompat.from(this).areNotificationsEnabled()
+
+    /**
+     * The app's own notification settings, opened for somebody to turn them back on.
+     *
+     * Once the permission has been refused, asking again does nothing at all — Android
+     * takes the second refusal as final and the dialog never appears again. From then
+     * on the only way back is this page, so the app has to be able to offer it.
+     */
+    private fun openNotificationSettings() {
+        val intent = android.content.Intent(
+            android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS
+        ).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName)
+        try {
+            startActivity(intent)
+        } catch (e: Throwable) {
+            startActivity(
+                android.content.Intent(
+                    android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    android.net.Uri.fromParts("package", packageName, null)))
+        }
+    }
+
     override fun onRequestPermissionsResult(
         requestCode: Int, permissions: Array<out String>, results: IntArray
     ) {
@@ -93,6 +118,11 @@ class MainActivity : AudioServiceActivity() {
                 when (call.method) {
                     "ask" -> {
                         askForNotifications()
+                        result.success(null)
+                    }
+                    "allowed" -> result.success(mayNotify())
+                    "settings" -> {
+                        openNotificationSettings()
                         result.success(null)
                     }
                     else -> result.notImplemented()

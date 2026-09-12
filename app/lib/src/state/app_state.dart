@@ -13,6 +13,7 @@ import 'art_cache.dart';
 import 'playback_log.dart';
 import 'sleeve_board.dart';
 import 'coalesce.dart';
+import 'keepalive.dart';
 import 'player.dart';
 import '../ui/favicon.dart';
 import '../ui/media_session.dart';
@@ -244,6 +245,7 @@ class AppState extends ChangeNotifier {
     // did not choose to stop — it was killed, which is a different fault entirely.
     PlaybackLog.note('--- app started');
     unawaited(PlaybackLog.askWhyItDied());
+    unawaited(checkTheBackgroundIsAllowed());
     final prefs = await SharedPreferences.getInstance();
     coverStyle = CoverStyle.values.firstWhere(
         (s) => s.name == prefs.getString(_kCoverStyle),
@@ -338,6 +340,7 @@ class AppState extends ChangeNotifier {
 
   Future<void> _afterLogin() async {
     player ??= PlayerService(api);
+    watchWhatThePhoneSaid();
     // The player writes the cursor through the app rather than knowing the API: it
     // reports where playback is, and the app decides how to persist that.
     player!.onCursor = (queueId, {cursorIndex, positionMs}) {
@@ -1498,6 +1501,8 @@ class AppState extends ChangeNotifier {
   late final AppLifecycleListener _lifecycle = AppLifecycleListener(
     onResume: () {
       PlaybackLog.note('app in front');
+      // Somebody may have just come back from the settings page having turned it on.
+      unawaited(checkTheBackgroundIsAllowed());
       unawaited(player?.resumeIfStopped());
       unawaited(refreshJam());
       // And say what happened while nobody was looking — see sendPlaybackLog.
@@ -1521,6 +1526,27 @@ class AppState extends ChangeNotifier {
     } catch (_) {
       // An older server, or no answer. The icon in the page stays as it was.
     }
+  }
+
+  /// Whether Android will stop the music the moment this app leaves the screen.
+  ///
+  /// True when the system will not let the app show its playing notification, which is
+  /// the same thing as saying it cannot run a foreground service — see
+  /// [Keepalive.allowedToShowThePlayer]. Worth a line on the screen, because it is a
+  /// setting on the phone and nothing this app does can work around it.
+  bool musicWillStopInTheBackground = false;
+
+  /// Set on the player as soon as there is one, so the first play's answer comes back.
+  void watchWhatThePhoneSaid() {
+    player?.onNotificationAnswer = checkTheBackgroundIsAllowed;
+  }
+
+  Future<void> checkTheBackgroundIsAllowed() async {
+    final allowed = await Keepalive.allowedToShowThePlayer();
+    if (_disposed) return;
+    if (musicWillStopInTheBackground == !allowed) return;
+    musicWillStopInTheBackground = !allowed;
+    notifyListeners();
   }
 
   /// When the log was last sent up, so coming back to the app forty times in an hour

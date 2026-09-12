@@ -35,6 +35,38 @@ class Keepalive {
     }
   }
 
+  /// Whether the system will let this app put its playing notification up.
+  ///
+  /// This is the whole of the background-playback question on a modern Android. No
+  /// notification is no foreground service, and a process without a foreground service
+  /// is a cached one, which the system may freeze the moment the app leaves the
+  /// screen: the music stops a few seconds after switching away and there is no Dart
+  /// running to notice or say so. Every kill the system recorded on the phone this was
+  /// chased on had the app down as cached at the time, with notifications off.
+  ///
+  /// True everywhere else: a browser tab and a desktop have no such rule.
+  static Future<bool> allowedToShowThePlayer() async {
+    if (!supported) return true;
+    try {
+      return await _notify.invokeMethod<bool>('allowed') ?? true;
+    } catch (_) {
+      return true;                      // no answer is not evidence of a problem
+    }
+  }
+
+  /// Take somebody to the page where they can turn it back on.
+  ///
+  /// Asking again is not an option once it has been refused twice — Android takes the
+  /// second refusal as final and never shows the dialog again.
+  static Future<void> takeMeToTheSettings() async {
+    if (!supported) return;
+    try {
+      await _notify.invokeMethod<void>('settings');
+    } catch (_) {
+      // Nothing to open. The warning stays up, which is the honest outcome.
+    }
+  }
+
   static Future<void> set(bool on) async {
     if (!supported || on == _on) return;
     _on = on;

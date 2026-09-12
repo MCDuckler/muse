@@ -5,9 +5,11 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
+import '../state/keepalive.dart';
 import '../state/playback_log.dart';
 import '../state/player.dart';
 import 'artwork.dart';
+import 'back_and_forth.dart';
 import 'glass.dart';
 import 'record_stage.dart';
 import 'sleeve_ink.dart';
@@ -176,11 +178,28 @@ class NowPlayingScreen extends StatelessWidget {
                                     : app.playerLayout == PlayerLayout.plain
                                         ? 0.88
                                         : 1.0,
-                                child: _Artwork(
-                                    track: track,
-                                    snapshot: s,
-                                    player: player,
-                                    app: app),
+                                // Lifted, in the one layout whose artwork is big
+                                // enough to crowd the words under it.
+                                //
+                                // A gap put between them instead does nothing: the
+                                // column fills the screen and this box is the flexible
+                                // one in it, so every pixel of gap comes straight back
+                                // out of this box and the words stay where they were.
+                                // Moving the picture is the only thing that opens the
+                                // room, and moving it without changing its box is what
+                                // this is.
+                                child: Transform.translate(
+                                  offset: Offset(
+                                      0,
+                                      app.playerLayout == PlayerLayout.plain
+                                          ? -24
+                                          : 0),
+                                  child: _Artwork(
+                                      track: track,
+                                      snapshot: s,
+                                      player: player,
+                                      app: app),
+                                ),
                               ),
                             ),
                             // Putting a number here does not move the words: the
@@ -212,6 +231,10 @@ class NowPlayingScreen extends StatelessWidget {
                                   textAlign: TextAlign.center,
                                   style: TextStyle(color: scheme.error)),
                             ],
+                            // The one thing that stops the music which this app cannot
+                            // fix from in here. See _TheMusicWillStop.
+                            if (app.musicWillStopInTheBackground)
+                              const _TheMusicWillStop(),
                             const SizedBox(height: 22),
                             // Plain lays the same things out in a different order and
                             // without a panel around them: the song's own buttons in a
@@ -331,6 +354,52 @@ class NowPlayingScreen extends StatelessWidget {
     if (track.state == 'failed') return track.failReason ?? 'This track failed';
     if (track.isPending) return 'Downloading…';
     return null;
+  }
+}
+
+/// Said on the screen, because it is the difference between music that keeps playing
+/// and music that stops ten seconds after you look at something else.
+///
+/// Android will not let an app hold itself up in the background without a notification
+/// it can show, and since Android 13 that takes a permission somebody has to agree to.
+/// Refused twice, it is never asked for again — the dialog simply stops appearing — so
+/// an app that only asks is an app that goes quiet forever with no explanation. This is
+/// the explanation, and the way to the page that fixes it.
+class _TheMusicWillStop extends StatelessWidget {
+  const _TheMusicWillStop();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: 10, left: 12, right: 12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => Keepalive.takeMeToTheSettings(),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.notifications_off_outlined,
+                  size: 18, color: scheme.error),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  'Notifications are off, so the music stops when you leave the '
+                  'app. Tap to turn them on.',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(color: scheme.error),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -634,10 +703,7 @@ class _Credits extends StatelessWidget {
           borderRadius: BorderRadius.circular(6),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-            child: Text(label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
+            child: BackAndForth(label,
                 style: (own ?? style)?.copyWith(
                     decoration: TextDecoration.underline,
                     decorationColor:
@@ -1001,17 +1067,14 @@ class _TitleBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // As tall as the title is, and no taller.
+    // One line, always, and it walks if it is too long for the row.
     //
-    // It used to keep two lines' worth of room whether or not the title needed two,
-    // so that a song whose name wrapped did not shove the record up the screen. What
-    // that actually did, for the great majority of songs, was leave an empty line
-    // between the name and who made it — which reads as two separate things rather
-    // than one.
-    return Text(title,
-        textAlign: TextAlign.center,
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
+    // Two lines' worth of room whether or not the title needed two left an empty line
+    // under most songs; letting it wrap instead made the block a different height for
+    // every song, and this block is above the record in a centred column — so the
+    // picture moved as much as it changed on every track. One line is one height, and
+    // the long names are still readable because they go past rather than being cut.
+    return BackAndForth(title,
         style: Theme.of(context).textTheme.headlineSmall);
   }
 }

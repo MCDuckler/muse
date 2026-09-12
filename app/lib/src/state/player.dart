@@ -202,6 +202,10 @@ class PlayerService {
   /// The visualiser needs it to read the shape of this app's own output.
   int? get androidAudioSessionId => _player.androidAudioSessionId;
 
+  /// Called once the phone has answered the "may we show the playing notification"
+  /// question, so whoever is drawing the screen can find out what it said.
+  Future<void> Function()? onNotificationAnswer;
+
   Future<void> init() async {
     var said = '';
     _player.playerStateStream.listen((s) {
@@ -863,7 +867,12 @@ class PlayerService {
     // to do its job again even if the "interruption over" event never arrived.
     _interrupted = false;
     unawaited(Keepalive.set(true));
-    unawaited(Keepalive.mayWeShowThePlayer());
+    unawaited(Keepalive.mayWeShowThePlayer().then((_) {
+      // What the answer was. A refusal is not a failure to play — it is the music
+      // stopping ten seconds after the app is switched away from, which is worth
+      // saying on the screen rather than in a log nobody reads.
+      unawaited(onNotificationAnswer?.call());
+    }));
     unawaited(_player.play().catchError((Object e) {
       if (_isAutoplayRefusal(e)) {
         // Ask for the tap rather than reporting a failure — nothing is broken.
