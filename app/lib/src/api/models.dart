@@ -260,6 +260,11 @@ class Queue {
   /// moment anything reopens a queue for them.
   final String? sharedFrom;
 
+  /// What this queue is a station of — "track", "album", "artist" — or null when it
+  /// is an ordinary queue somebody built themselves. A station is a queue that can be
+  /// asked for more of the same when it runs down.
+  final String? stationKind;
+
   const Queue({
     required this.id,
     required this.name,
@@ -270,6 +275,7 @@ class Queue {
     required this.rev,
     this.items = const [],
     this.sharedFrom,
+    this.stationKind,
     int? itemCount,
   }) : itemCount = itemCount ?? items.length;
 
@@ -288,7 +294,13 @@ class Queue {
             : const [],
         itemCount: j['items'] is int ? j['items'] as int : null,
         sharedFrom: j['shared_from'] as String?,
+        stationKind: j['station'] is Map
+            ? ((j['station'] as Map)['kind'] as String?)
+            : null,
       );
+
+  /// A queue that keeps going.
+  bool get isStation => stationKind != null;
 }
 
 class Playlist {

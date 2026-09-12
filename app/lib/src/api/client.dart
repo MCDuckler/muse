@@ -696,11 +696,30 @@ class ApiClient {
     await _decode(await net.delete(_u('/queues/$id'), headers: _headers));
   }
 
-  Future<Queue> radio(int queueId, int seedTrackId, {int count = 5}) async =>
-      Queue.fromJson(await _decode(await net.post(_u('/queues/$queueId/radio'),
+  // ---------------- stations ----------------
+
+  /// Put a song, a record or an artist on, and keep playing what belongs next to it.
+  ///
+  /// Answers with the queue the station is: it has its own name and its own place in
+  /// the list of queues, so everything a queue can do it can do — reorder, remove,
+  /// keep on the device, save to the library.
+  Future<Queue> startStation(
+      {String kind = 'track', int? trackId, String? album, String? artist}) async =>
+      Queue.fromJson(await _decode(await net.post(_u('/stations'),
               headers: _headers,
-              body: jsonEncode({'seed_track_id': seedTrackId, 'count': count})))
-          as Map<String, dynamic>);
+              body: jsonEncode({
+                'kind': kind,
+                if (trackId != null) 'track_id': trackId,
+                if (album != null) 'album': album,
+                if (artist != null) 'artist': artist,
+              }))) as Map<String, dynamic>);
+
+  /// More of the same, asked for as it runs down.
+  Future<Queue> extendStation(int queueId, {int count = 8}) async =>
+      Queue.fromJson(await _decode(await net.post(
+              _u('/stations/$queueId/extend'),
+              headers: _headers,
+              body: jsonEncode({'count': count}))) as Map<String, dynamic>);
 
   // ---------------- library ----------------
   Future<List<Playlist>> playlists() async {

@@ -8,6 +8,7 @@ import 'source_dot.dart';
 import 'browse_page.dart';
 import 'dialogs.dart';
 import 'lyrics_sheet.dart';
+import 'station.dart';
 import 'snack.dart';
 
 /// Everything you can do to one track, in one place.
@@ -64,6 +65,9 @@ Future<void> showTrackSheet(
                 () => here ? app.forgetOffline(track.id) : app.keepOffline([track]),
               );
             }),
+          // Everything that belongs next to this one, as a queue of its own.
+          _item(sheet, Icons.radio, 'Start a station',
+              () => startStation(context, seed: track)),
           _item(sheet, Icons.playlist_play, 'Play next',
               () => app.addTrack(track, mode: 'next')),
           _item(sheet, Icons.playlist_add, 'Add to queue', () => app.addTrack(track)),

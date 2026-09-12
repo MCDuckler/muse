@@ -8,6 +8,7 @@ import '../state/offline.dart';
 import '../state/player.dart';
 import 'dialogs.dart';
 import 'song_row.dart';
+import 'station.dart';
 import 'swipe.dart';
 import '../state/selection.dart';
 import 'face.dart';
@@ -176,10 +177,14 @@ class _QueuePageState extends State<QueuePage> {
                   onPressed: () => _scrollToCurrent(),
                 ),
                 const Spacer(),
+                // A station from whatever is playing: the song becomes the seed, and
+                // the queue it makes is its own — named, saveable, and topped up as it
+                // is listened through. The button this replaces added five songs to
+                // the end of the queue you were already on and called it radio.
                 OutlinedButton.icon(
                   icon: const Icon(Icons.radio, size: 18),
-                  label: const Text('Radio'),
-                  onPressed: () => app.startRadio(),
+                  label: Text(active.isStation ? 'New station' : 'Station'),
+                  onPressed: () => startStation(context, seed: app.player?.current),
                 ),
                 PopupMenuButton<String>(
                   tooltip: 'Queue actions',
@@ -197,6 +202,8 @@ class _QueuePageState extends State<QueuePage> {
                         await app.clearQueue(context: context);
                       case 'save':
                         await _saveAsPlaylist(context, app);
+                      case 'keep-station':
+                        await keepStation(context);
                       case 'delete':
                         if (app.activeQueue != null) {
                           await _deleteQueue(context, app.activeQueue!);
@@ -211,6 +218,10 @@ class _QueuePageState extends State<QueuePage> {
                           value: 'forget', child: Text('Stop keeping these here')),
                       PopupMenuDivider(),
                     ],
+                    if (active.isStation)
+                      const PopupMenuItem(
+                          value: 'keep-station',
+                          child: Text('Keep this station')),
                     const PopupMenuItem(
                         value: 'save', child: Text('Save as playlist')),
                     const PopupMenuItem(

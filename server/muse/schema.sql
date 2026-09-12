@@ -158,6 +158,19 @@ create table if not exists playback_reports (
 create index if not exists playback_reports_recent
   on playback_reports(user_id, at desc);
 
+-- A queue that keeps going: a song, a record or an artist, and everything the machine
+-- thinks belongs next to it. The queue is the station — everything a queue can do a
+-- station can do — and this is what it was made from, so it can be asked for more.
+create table if not exists stations (
+  queue_id   int primary key references queues(id) on delete cascade,
+  owner_id   int not null references users(id) on delete cascade,
+  kind       text not null,
+  seed_track int references tracks(id) on delete set null,
+  seed_text  text,
+  name       text not null,
+  created_at timestamptz not null default now()
+);
+
 create table if not exists listens (
   id         bigserial primary key,
   user_id    int not null references users(id) on delete cascade,

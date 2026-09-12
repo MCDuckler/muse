@@ -1,4 +1,4 @@
-"""Queues are the product. Order is versioned, the cursor is not, radio is capped."""
+"""Queues are the product. Order is versioned, the cursor is not."""
 from __future__ import annotations
 
 import pytest
@@ -120,41 +120,10 @@ def test_playlist_needs_a_name(client, hdr):
     assert client.post("/playlists", headers=hdr, json={"name": "  "}).status_code == 400
 
 
-# ---------------- radio ----------------
-def test_radio_is_capped_and_marked(client, hdr, tracks):
-    q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
-    client.put(f"/queues/{q['id']}", headers=hdr,
-               json={"rev": q["rev"], "items": [tracks[0]["id"]]})
-    r = client.post(f"/queues/{q['id']}/radio", headers=hdr,
-                    json={"seed_track_id": tracks[0]["id"], "count": 4}).json()
-    assert r["radio_added"] == 4                      # not the 12 candidates offered
-    tail = [i for i in r["items"] if i["origin"] == "radio"]
-    assert len(tail) == 4
-    assert all(i["discovered_via"] == "radio" for i in tail)   # findable for cleanup later
-    assert r["items"][0]["origin"] == "user"                    # seed still on top
-
-
-def test_radio_respects_the_hard_cap(client, hdr, tracks):
-    q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
-    r = client.post(f"/queues/{q['id']}/radio", headers=hdr,
-                    json={"seed_track_id": tracks[0]["id"], "count": 99}).json()
-    assert r["radio_added"] == 10                      # RADIO_MAX, never the whole watchlist
-
-
-def test_radio_skips_tracks_already_queued(client, hdr, tracks):
-    q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
-    first = client.post(f"/queues/{q['id']}/radio", headers=hdr,
-                        json={"seed_track_id": tracks[0]["id"], "count": 3}).json()
-    second = client.post(f"/queues/{q['id']}/radio", headers=hdr,
-                         json={"seed_track_id": tracks[0]["id"], "count": 3}).json()
-    ids = [i["id"] for i in second["items"]]
-    assert len(ids) == len(set(ids))                   # no duplicates in the queue
-    assert second["radio_skipped"] >= first["radio_added"]
-
-
-def test_radio_needs_a_seed_with_a_source(client, hdr):
-    q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
-    assert client.post(f"/queues/{q['id']}/radio", headers=hdr, json={}).status_code == 400
+# Radio moved out and became a station — a queue that keeps going rather than a tail
+# on the end of another one. See test_stations.py; what remains here is that the queue
+# still knows which of its rows a machine chose, because that is what "clear the radio
+# tracks" acts on and what "play next" has to insert above.
 
 
 def test_queued_and_playlisted_tracks_carry_a_stream_url(client, hdr, wsec, complete_job):

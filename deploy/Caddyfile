@@ -14,7 +14,7 @@
 	# Both the bare collection path and everything under it: `path /queues/*` does NOT
 	# match `/queues`, and that mismatch silently served the app shell to the client,
 	# which then tried to parse a web page as JSON.
-	@api path /accounts /accounts/* /admin /admin/* /api-docs /art /art/* /auth /auth/* /downloads /downloads/* /favourites /favourites/* /feed /feed/* /follows /follows/* /history /history/* /icon /icon.json /internal /internal/* /jams /jams/* /library /library/* /linked /linked/* /listens /linked /linked/* /listens/* /manifest.json /me /me/* /openapi.json /playback-log /playlists /playlists/* /queues /queues/* /search /search/* /sources /sources/* /spotify /spotify/* /stats /stats/* /status /status/* /sync /sync/* /tracks /tracks/* /uploads /uploads/* /users /users/*
+	@api path /accounts /accounts/* /admin /admin/* /api-docs /art /art/* /auth /auth/* /downloads /downloads/* /favourites /favourites/* /feed /feed/* /follows /follows/* /history /history/* /icon /icon.json /internal /internal/* /jams /jams/* /library /library/* /linked /linked/* /listens /linked /linked/* /listens/* /manifest.json /me /me/* /openapi.json /playback-log /playlists /playlists/* /queues /queues/* /search /search/* /sources /sources/* /spotify /spotify/* /stations /stations/* /stats /stats/* /status /status/* /sync /sync/* /tracks /tracks/* /uploads /uploads/* /users /users/*
 	handle @api {
 		reverse_proxy api:8770
 	}

@@ -14,7 +14,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse
 
-from . import catalog, db, images, jam, jobs, match, playlist_art, ytm
+from . import catalog, db, images, jam, jobs, match, playlist_art, stations, ytm
 from .deps import cfg, current_user, user_or_key
 
 router = APIRouter()
@@ -47,8 +47,6 @@ def announce_queue(queue_id: int, user: dict, cursor_moved: bool = False) -> Non
                                "position_ms": row["position_ms"],
                                "by": user.get("name"), "cursor_moved": cursor_moved})
 
-RADIO_MAX = 10          # never pull a whole 50-track watch playlist: each one is a download
-RADIO_DEFAULT = 5
 
 
 # ------------------------------------------------------------------ playlists
@@ -665,7 +663,8 @@ def _queue_state(queue_id: int) -> dict:
             where i.queue_id=%s order by i.pos""",
         (queue_id,),
     )
-    return {**q, "items": [{**catalog.public(t), "origin": t["origin"], "pos": t["pos"],
+    return {**q, "station": stations.describe(queue_id),
+            "items": [{**catalog.public(t), "origin": t["origin"], "pos": t["pos"],
                             # Only interesting in a jam, and harmless otherwise: it is
                             # how "who put this on" gets answered without asking. The
                             # id and the picture come too, so the answer can be a face
@@ -1058,49 +1057,86 @@ def save_as_playlist(queue_id: int, body: dict = Body(...), user: dict = Depends
     return get_playlist(p["id"], user)
 
 
-# ------------------------------------------------------------------ radio
-@router.post("/queues/{queue_id}/radio")
-def radio(queue_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
-    """Append a capped autoplay tail seeded from a track.
+# ------------------------------------------------------------------ stations
+@router.post("/stations", status_code=201)
+def start_station(body: dict = Body(...), user: dict = Depends(current_user)):
+    """Point at a song, a record or an artist and play what belongs next to it.
 
-    YouTube Music hands back ~50 candidates; every one we accept is a download and disk
-    forever, so the cap is deliberate and the tail is refilled on demand instead.
+    The station is a queue of its own rather than a tail on the end of whatever was
+    playing: that is the difference between "add five more" and "put this on". It can
+    be reordered, taken from, kept on the device and saved to the library, because all
+    of those are things a queue can already do.
+    """
+    kind = (body.get("kind") or "track").strip()
+    if kind not in ("track", "album", "artist"):
+        raise HTTPException(400, "a station is made from a track, an album or an artist")
+    album = (body.get("album") or "").strip() or None
+    artist = (body.get("artist") or "").strip() or None
+    track_id = body.get("track_id")
+
+    seeds = stations.seed_tracks(kind, user_id=user["id"], track_id=track_id,
+                                 album=album, artist=artist)
+    if not seeds:
+        raise HTTPException(
+            400,
+            "Nothing here to build a station from — the songs it would be seeded "
+            "with have no YouTube Music source.")
+
+    name = stations.name_for(kind, seeds, album=album, artist=artist)
+    queue = db.one(
+        "insert into queues(user_id, name) values(%s,%s) returning *",
+        (user["id"], name))
+
+    # The seeds themselves first, so a station from a song starts with that song.
+    opening = [s["id"] for s in seeds][: stations.SEEDS]
+    queue_add(queue["id"], {"track_ids": opening, "mode": "end", "origin": "user"}, user)
+
+    avoid_tracks, avoid_videos = stations.already_in(queue["id"])
+    found = stations.gather(seeds, wanted=stations.FIRST,
+                            avoid_tracks=avoid_tracks, avoid_videos=avoid_videos)
+    if found:
+        queue_add(queue["id"], {"track_ids": found, "mode": "end", "origin": "radio"},
+                  user)
+
+    db.run(
+        """insert into stations(queue_id, owner_id, kind, seed_track, seed_text, name)
+           values(%s,%s,%s,%s,%s,%s)""",
+        (queue["id"], user["id"], kind, seeds[0]["id"],
+         album if kind == "album" else artist, name),
+    )
+    return {**_queue_state(queue["id"]), "added": len(found)}
+
+
+@router.post("/stations/{queue_id}/extend")
+def extend_station(queue_id: int, body: dict = Body(default={}),
+                   user: dict = Depends(current_user)):
+    """More of the same, asked for as the station runs down.
+
+    A station is endless from where somebody is standing and finite on the disk: it is
+    topped up a handful at a time as it is listened through, so one left running for an
+    hour costs an hour of downloads and one abandoned after two songs costs almost
+    nothing.
     """
     _own_queue(queue_id, user)
-    seed_id = body.get("seed_track_id")
-    count = max(1, min(int(body.get("count", RADIO_DEFAULT)), RADIO_MAX))
-    seed = catalog.track_row(seed_id) if seed_id else None
-    if not seed or not seed.get("provider_id"):
-        raise HTTPException(400, "seed_track_id must be a track with a YouTube Music source")
+    station = stations.describe(queue_id)
+    if not station:
+        raise HTTPException(404, "that queue is not a station")
 
-    have_ids = {r["track_id"] for r in
-                db.all_("select track_id from queue_items where queue_id=%s", (queue_id,))}
-    have_videos = {r["provider_id"] for r in db.all_(
-        """select s.provider_id from queue_items i
-             join track_sources s on s.track_id=i.track_id
-            where i.queue_id=%s""", (queue_id,))}
+    seeds = stations.seed_tracks(
+        station["kind"], user_id=user["id"], track_id=station["seed_track"],
+        album=station["seed_text"] if station["kind"] == "album" else None,
+        artist=station["seed_text"] if station["kind"] == "artist" else None)
+    if not seeds:
+        # The record it was made from has been taken out of the library since.
+        seed = catalog.track_row(station["seed_track"]) if station["seed_track"] else None
+        seeds = [seed] if seed and seed.get("provider_id") else []
+    if not seeds:
+        return {**_queue_state(queue_id), "added": 0}
 
-    added, skipped = [], 0
-    for cand in ytm.watch_playlist(seed["provider_id"], limit=RADIO_MAX * 4):
-        if len(added) >= count:
-            break
-        if not cand["video_id"] or cand["video_id"] in have_videos:
-            skipped += 1
-            continue
-        known = catalog.find_by_video_id(cand["video_id"])
-        if known and known["id"] in have_ids:
-            skipped += 1
-            continue
-        # Radio candidates come from a seed, so a near-duplicate of the seed is not radio.
-        conf, _ = match.score({"title": seed["title"], "artists": seed["artists"],
-                               "duration_ms": seed["duration_ms"]}, cand)
-        if conf >= match.AUTO_ACCEPT:
-            skipped += 1
-            continue
-        track = known or catalog.create_from_ytm(cand, discovered_via=catalog.VIA_RADIO)
-        added.append(track["id"])
-        have_videos.add(cand["video_id"])
-
-    if added:
-        queue_add(queue_id, {"track_ids": added, "mode": "end", "origin": "radio"}, user)
-    return {**_queue_state(queue_id), "radio_added": len(added), "radio_skipped": skipped}
+    avoid_tracks, avoid_videos = stations.already_in(queue_id)
+    wanted = int(body.get("count") or stations.MORE)
+    found = stations.gather(seeds, wanted=wanted, avoid_tracks=avoid_tracks,
+                            avoid_videos=avoid_videos)
+    if found:
+        queue_add(queue_id, {"track_ids": found, "mode": "end", "origin": "radio"}, user)
+    return {**_queue_state(queue_id), "added": len(found)}

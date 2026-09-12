@@ -799,13 +799,59 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> startRadio({int count = 5}) async {
-    final q = activeQueue;
-    final seed = player?.current;
-    if (q == null || seed == null) return;
-    activeQueue = await api.radio(q.id, seed.id, count: count);
-    await player?.loadQueue(activeQueue!);
+  /// Put something on and keep playing what belongs next to it.
+  ///
+  /// A station of its own rather than a tail on the end of what was playing: that is
+  /// the difference between "add five more" and "put this on", and it is why it can
+  /// be named, kept, and saved to the library afterwards.
+  Future<void> startStation(
+      {String kind = 'track', Track? seed, String? album, String? artist}) async {
+    final made = await api.startStation(
+        kind: kind, trackId: seed?.id, album: album, artist: artist);
+    activeQueue = made;
+    queues = await api.queues();
+    await player?.loadQueue(made, autoplay: false);
+    if (made.items.isNotEmpty) {
+      await player?.playTrack(made.items.first.id, indexHint: 0);
+    }
     notifyListeners();
+  }
+
+  /// When it was last topped up, so a queue that is nearly finished is not asked for
+  /// more of itself twice a second.
+  DateTime? _toppedUp;
+  bool _toppingUp = false;
+
+  /// How close to the end of a station is close enough to ask for more.
+  static const stationTail = 3;
+
+  /// Keep the station going.
+  ///
+  /// A station is endless from where somebody is standing and finite on the disk: it
+  /// is topped up a handful at a time as it is listened through, so one left running
+  /// for an hour costs an hour of downloads and one abandoned after two songs costs
+  /// almost nothing.
+  Future<void> topUpStation() async {
+    final q = activeQueue;
+    final player = this.player;
+    if (q == null || !q.isStation || player == null || _toppingUp) return;
+    if (player.items.length - player.index > stationTail) return;
+    final now = DateTime.now();
+    if (_toppedUp != null && now.difference(_toppedUp!) < const Duration(seconds: 20)) {
+      return;
+    }
+    _toppingUp = true;
+    _toppedUp = now;
+    try {
+      final grown = await api.extendStation(q.id);
+      activeQueue = grown;
+      await player.loadQueue(grown);
+      notifyListeners();
+    } catch (_) {
+      // No signal, or nothing left to find. The station simply ends where it is.
+    } finally {
+      _toppingUp = false;
+    }
   }
 
   int _eventBackoff = 1;
@@ -1393,6 +1439,8 @@ class AppState extends ChangeNotifier {
       ].join('|');
       if (next == shape) return;
       shape = next;
+      // A station is asked for more as it is listened through, not once at the start.
+      unawaited(topUpStation());
       // A jam's host is the room's clock: every change here is news to everybody else.
       if (jam?.isHost ?? false) unawaited(pushJamState());
       notifyListeners();

@@ -8,6 +8,7 @@ import '../state/selection.dart';
 import 'artwork.dart';
 import 'selection_bar.dart';
 import 'song_row.dart';
+import 'station.dart';
 import 'source_dot.dart';
 import 'swipe.dart';
 import 'dialogs.dart';
@@ -370,6 +371,16 @@ class _AlbumHead extends StatelessWidget {
                 onPressed: held.isEmpty
                     ? null
                     : () => app.playNow(held, named: detail.name),
+              ),
+              // Everything that belongs next to this record, seeded from the record
+              // itself rather than from its first track.
+              TextButton.icon(
+                icon: const Icon(Icons.radio, size: 18),
+                label: const Text('Station'),
+                onPressed: held.isEmpty
+                    ? null
+                    : () => startStation(context,
+                        album: detail.name, artist: detail.artist),
               ),
               if (OfflineStore.supported)
                 Builder(builder: (context) {
@@ -742,22 +753,38 @@ class _ArtistHead extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(line, style: text.bodySmall),
                 const SizedBox(height: 8),
-                if (detail.remoteId != null)
-                  FilledButton.tonalIcon(
-                    icon: working
-                        ? const SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(strokeWidth: 2))
-                        : Icon(detail.following
-                            ? Icons.notifications_active
-                            : Icons.notifications_none),
-                    label: Text(detail.following ? 'Following' : 'Follow'),
-                    onPressed: working ? null : onFollow,
-                  )
-                else if (detail.unavailable != null)
-                  Text('Only your library — ${detail.unavailable}',
-                      style: text.bodySmall),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    if (detail.remoteId != null)
+                      FilledButton.tonalIcon(
+                        icon: working
+                            ? const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(strokeWidth: 2))
+                            : Icon(detail.following
+                                ? Icons.notifications_active
+                                : Icons.notifications_none),
+                        label: Text(detail.following ? 'Following' : 'Follow'),
+                        onPressed: working ? null : onFollow,
+                      )
+                    else if (detail.unavailable != null)
+                      Text('Only your library — ${detail.unavailable}',
+                          style: text.bodySmall),
+                    // Their songs and everything that belongs next to them, seeded
+                    // from what of theirs is already here.
+                    if (detail.tracks.isNotEmpty)
+                      TextButton.icon(
+                        icon: const Icon(Icons.radio, size: 18),
+                        label: const Text('Station'),
+                        onPressed: () =>
+                            startStation(context, artist: detail.name),
+                      ),
+                  ],
+                ),
               ],
             ),
           ),
