@@ -90,11 +90,6 @@ class NowPlayingScreen extends StatelessWidget {
                       onPressed: () => showLyrics(context, track),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.queue_music),
-                      tooltip: 'Queue',
-                      onPressed: () => showQueue(context),
-                    ),
-                    IconButton(
                       icon: Icon(app.sleepAt != null
                           ? Icons.bedtime
                           : Icons.timer_outlined),
@@ -120,14 +115,23 @@ class NowPlayingScreen extends StatelessWidget {
             colour: parseHexColour(track?.coverColor),
             // The album's own colour where it has one, so the page belongs to the
             // record rather than to the app.
+            // Once it has arrived, not while it is on its way.
+            //
+            // The printed background is a shader over the whole screen, and it was
+            // being built and first painted on the very frame the drag started — the
+            // one frame that has to be smooth, because it is the one the finger is
+            // waiting on. It costs nothing to wait for the page to land: until then
+            // there is a window the size of the player bar to look through.
             behind: app.halftone
-                ? HalftoneBackdrop(
-                    colour: parseHexColour(track?.coverColor),
-                    // What the room is doing, not what this device's own engine is: a
-                    // guest listening to somebody else's speaker can hear the music,
-                    // and a still background says it has stopped.
-                    playing: app.musicIsPlaying,
-                    loudnessDb: track?.loudnessLufs,
+                ? _OnceItHasLanded(
+                    builder: (context) => HalftoneBackdrop(
+                      colour: parseHexColour(track?.coverColor),
+                      // What the room is doing, not what this device's own engine is:
+                      // a guest listening to somebody else's speaker can hear the
+                      // music, and a still background says it has stopped.
+                      playing: app.musicIsPlaying,
+                      loudnessDb: track?.loudnessLufs,
+                    ),
                   )
                 : null,
             child: track == null
@@ -327,7 +331,7 @@ class NowPlayingScreen extends StatelessWidget {
 /// Without one — opened by a keyboard shortcut, or from a screen with no bar — it
 /// falls back to rising from the bottom edge.
 class NowPlayingRoute extends PageRouteBuilder<void> {
-  NowPlayingRoute({this.from, this.byHand = false})
+  NowPlayingRoute({this.from, this.byHand = false, WidgetBuilder? page})
       : super(
           // Opaque, so that once it has arrived the app underneath stops being drawn
           // at all. A see-through route keeps every screen below it painting for as
@@ -335,7 +339,8 @@ class NowPlayingRoute extends PageRouteBuilder<void> {
           // covers it.
           transitionDuration: const Duration(milliseconds: 380),
           reverseTransitionDuration: const Duration(milliseconds: 320),
-          pageBuilder: (_, __, ___) => const NowPlayingScreen(),
+          pageBuilder: (context, _, __) =>
+              page == null ? const NowPlayingScreen() : page(context),
         );
 
   /// The bar's rectangle on screen, at the moment it was taken hold of.
@@ -433,6 +438,52 @@ class NowPlayingHold {
   void abandon() => navigator.didStopUserGesture();
 }
 
+/// Built when the page it is on has finished arriving, and kept from then on.
+///
+/// For the expensive parts of a screen — a full-screen shader, in this case. Opening
+/// is the moment a phone has least to spare, and the thing being opened does not need
+/// all of itself on the first frame. Once shown it stays: dragging the page back down
+/// must not take the background away while the drag is happening.
+class _OnceItHasLanded extends StatefulWidget {
+  const _OnceItHasLanded({required this.builder});
+  final WidgetBuilder builder;
+
+  @override
+  State<_OnceItHasLanded> createState() => _OnceItHasLandedState();
+}
+
+class _OnceItHasLandedState extends State<_OnceItHasLanded> {
+  Animation<double>? _arriving;
+  bool _landed = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final arriving = ModalRoute.of(context)?.animation;
+    if (identical(arriving, _arriving)) return;
+    _arriving?.removeListener(_look);
+    _arriving = arriving;
+    _landed = arriving == null || arriving.isCompleted;
+    if (!_landed) arriving!.addListener(_look);
+  }
+
+  void _look() {
+    if (_landed || !(_arriving?.isCompleted ?? false)) return;
+    _arriving?.removeListener(_look);
+    setState(() => _landed = true);
+  }
+
+  @override
+  void dispose() {
+    _arriving?.removeListener(_look);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      _landed ? widget.builder(context) : const SizedBox.shrink();
+}
+
 /// Dragging the player shut.
 ///
 /// The page used to slide down a little under the finger and then, past a threshold,
@@ -503,18 +554,6 @@ class _CloseByHandState extends State<_CloseByHand> {
         onVerticalDragCancel: _cancel,
         child: widget.child,
       );
-}
-
-/// Leave the player and land on the queue.
-///
-/// This used to open a small sheet with its own list of what was coming: a second
-/// queue screen, with none of the things the real one has — reordering, the other
-/// queues, removing a track, the menu on every row. One queue, one screen.
-void showQueue(BuildContext context) {
-  context.read<AppState>().setHomeTab(0);
-  // All the way back, not one step: the player can be opened from an album or an
-  // artist, and popping once would land there instead of on the queue.
-  Navigator.of(context).popUntil((route) => route.isFirst);
 }
 
 /// Listening together, said where you are looking.
@@ -684,12 +723,6 @@ class _Extras extends StatelessWidget {
           ),
           IconButton(
             iconSize: size,
-            icon: const Icon(Icons.queue_music),
-            tooltip: 'Queue',
-            onPressed: () => showQueue(context),
-          ),
-          IconButton(
-            iconSize: size,
             icon: const Icon(Icons.more_horiz),
             tooltip: 'Track actions',
             onPressed: () =>
@@ -715,12 +748,6 @@ class _Extras extends StatelessWidget {
           icon: const Icon(Icons.lyrics_outlined),
           tooltip: 'Lyrics',
           onPressed: () => showLyrics(context, track),
-        ),
-        IconButton(
-          iconSize: size,
-          icon: const Icon(Icons.queue_music),
-          tooltip: 'Queue',
-          onPressed: () => showQueue(context),
         ),
         IconButton(
           iconSize: size,

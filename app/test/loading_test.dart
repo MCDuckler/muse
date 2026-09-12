@@ -17,7 +17,7 @@ void main() {
   });
 
   test('every circle has the same four neighbours, the same distance away', () {
-    const step = 34.0;
+    const step = 26.0;
     final spots = LoadingField.spots(screen, step: step);
     final places = spots.map((s) => s.at).toList();
     final diagonal = step * math.sqrt2;
@@ -43,7 +43,7 @@ void main() {
 
   test('it repeats across the whole screen rather than clustering in the middle', () {
     final spots = LoadingField.spots(screen);
-    expect(spots.length, greaterThan(80), reason: 'a pattern, not a handful');
+    expect(spots.length, greaterThan(150), reason: 'a pattern, not a handful');
 
     // Something in every corner region of the screen, which is what makes it a
     // repeating pattern rather than a diamond sitting in the middle of nothing.

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -186,13 +188,19 @@ class PlayerBar extends StatelessWidget {
   }
 }
 
-/// Dragging the player open, rather than asking for it and watching it happen.
+/// Pulling the player up out of the bar.
 ///
-/// The transition was a fixed 380 milliseconds whatever the hand did: a flick and a
-/// slow deliberate pull looked exactly the same, and once it had started there was no
-/// changing your mind. This takes hold of the same animation and hands it the finger —
-/// the window over the player grows by however far the drag has got, and letting go
-/// throws it the rest of the way at whatever speed it was moving, or puts it back.
+/// The bar follows the finger — it lifts, it fades, it comes back if the pull is
+/// abandoned — and how the pull ends is what opens the player and how fast: a hard
+/// flick throws it open, a slow deliberate pull opens at the speed of the pull.
+///
+/// It cannot be a one-to-one drag across the whole travel, and that is the framework's
+/// rule rather than a choice: pushing a route calls NavigatorState._cancelActivePointers,
+/// which cancels every finger that is currently down. The moment the player is pushed,
+/// the touch that pushed it no longer exists — no gesture recogniser, no raw listener
+/// and no pointer-router subscription outlives it, because the framework stops
+/// dispatching that pointer altogether. So the drag lives entirely on this side of the
+/// push, and the speed it was carrying is handed to the transition.
 class _OpenByHand extends StatefulWidget {
   const _OpenByHand({required this.child});
   final Widget child;
@@ -201,48 +209,110 @@ class _OpenByHand extends StatefulWidget {
   State<_OpenByHand> createState() => _OpenByHandState();
 }
 
-class _OpenByHandState extends State<_OpenByHand> {
-  NowPlayingHold? _hold;
+class _OpenByHandState extends State<_OpenByHand>
+    with SingleTickerProviderStateMixin {
+  /// How far the bar can be pulled before it stops following.
+  static const _travel = 110.0;
+
+  /// A pull this far, or a flick this fast, opens on release.
+  static const _enough = 34.0;
+  static const _flick = 420.0;
+
+  late final AnimationController _back = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 260),
+  )..addListener(() => setState(() {}));
+
+  double _lifted = 0;
+  double _springingFrom = 0;
 
   double get _height => MediaQuery.sizeOf(context).height;
 
-  void _start(DragStartDetails _) {
-    if (_hold != null) return;
-    final route = NowPlayingRoute(
-        from: PlayerBar.barRect(context), byHand: true);
-    Navigator.of(context).push(route);
-    _hold = NowPlayingHold(route);
-  }
-
-  void _update(DragUpdateDetails d) =>
-      _hold?.moveBy(-(d.primaryDelta ?? 0) / _height);
-
-  void _end(DragEndDetails d) {
-    final hold = _hold;
-    _hold = null;
-    hold?.letGo(-d.velocity.pixelsPerSecond.dy / _height);
-  }
-
-  void _cancel() {
-    final hold = _hold;
-    _hold = null;
-    hold?.cancel();
-  }
-
   @override
   void dispose() {
-    _hold?.abandon();
-    _hold = null;
+    _back.dispose();
     super.dispose();
   }
 
+  void _start(DragStartDetails _) {
+    _back.stop();
+    _springingFrom = 0;
+  }
+
+  void _update(DragUpdateDetails d) {
+    final want = _lifted - (d.primaryDelta ?? 0);
+    setState(() {
+      // Past the travel it keeps coming, grudgingly: the bar stays under the finger
+      // without sliding off the top of the screen.
+      _lifted = want <= _travel
+          ? math.max(want, 0)
+          : _travel + (want - _travel) * 0.35;
+    });
+  }
+
+  void _end(DragEndDetails d) {
+    final up = -d.velocity.pixelsPerSecond.dy;
+    if (_lifted >= _enough || up >= _flick) {
+      _open(up);
+    }
+    _springBack();
+  }
+
+  void _cancel() => _springBack();
+
+  void _springBack() {
+    _springingFrom = _lifted;
+    _back
+      ..value = 0
+      ..forward();
+    void settle() {
+      setState(() => _lifted =
+          _springingFrom * (1 - Curves.easeOutCubic.transform(_back.value)));
+      if (_back.isCompleted) {
+        _back.removeListener(settle);
+        _lifted = 0;
+      }
+    }
+
+    _back.addListener(settle);
+  }
+
+  /// Open it, carrying the speed of the pull into the transition.
+  ///
+  /// Somebody who threw the bar at the top of the screen gets it opening at that
+  /// speed; somebody who eased it up gets it easing open. Starting from where the
+  /// pull got to, so the window picks up where the bar left off rather than snapping
+  /// back to nothing first.
+  void _open(double upwardPixelsPerSecond) {
+    final route = NowPlayingRoute(from: PlayerBar.barRect(context), byHand: true);
+    Navigator.of(context).push(route);
+    final hand = route.hand;
+    if (hand == null) return;
+    hand.value = (_lifted / _height).clamp(0.0, 0.25);
+    hand.fling(
+        velocity: (upwardPixelsPerSecond / _height).clamp(1.2, 8.0).toDouble());
+  }
+
   @override
-  Widget build(BuildContext context) => GestureDetector(
-        behavior: HitTestBehavior.deferToChild,
-        onVerticalDragStart: _start,
-        onVerticalDragUpdate: _update,
-        onVerticalDragEnd: _end,
-        onVerticalDragCancel: _cancel,
-        child: widget.child,
-      );
+  Widget build(BuildContext context) {
+    final lifted = _lifted;
+    return GestureDetector(
+      behavior: HitTestBehavior.deferToChild,
+      onVerticalDragStart: _start,
+      onVerticalDragUpdate: _update,
+      onVerticalDragEnd: _end,
+      onVerticalDragCancel: _cancel,
+      child: lifted == 0
+          ? widget.child
+          : Transform.translate(
+              offset: Offset(0, -lifted),
+              // Fading as it goes, because what it is turning into is on its way up
+              // behind it.
+              child: Opacity(
+                opacity: (1 - lifted / (_travel * 2)).clamp(0.4, 1.0),
+                child: widget.child,
+              ),
+            ),
+    );
+  }
 }

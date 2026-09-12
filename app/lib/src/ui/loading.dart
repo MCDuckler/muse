@@ -21,7 +21,7 @@ import 'package:flutter/material.dart';
 class LoadingField extends StatefulWidget {
   const LoadingField({
     super.key,
-    this.step = 34,
+    this.step = 26,
     this.stagger = 0.17,
   });
 
@@ -32,15 +32,20 @@ class LoadingField extends StatefulWidget {
   /// How much of a turn each ring is behind the one inside it.
   final double stagger;
 
-  /// What a CircularProgressIndicator takes when nothing constrains it.
-  static const spinner = 36.0;
+  /// How big each one is drawn.
+  ///
+  /// A shade under the 36 a Material spinner takes when nothing constrains it: the
+  /// pattern is the point here, and at 36 with the room to breathe it needs, a phone
+  /// screen only fits five or six across — so the rings ran off the top and bottom
+  /// with nothing at the sides.
+  static const spinner = 30.0;
 
   /// Every place a spinner goes, in a box this size, and how far out each one is.
   ///
   /// Pure, and public, because "the middle one is where the single one used to be"
   /// and "they are evenly spaced to the edges" are the two things about this worth
   /// being sure of.
-  static List<({Offset at, int ring})> spots(Size box, {double step = 34}) {
+  static List<({Offset at, int ring})> spots(Size box, {double step = 26}) {
     final middle = Offset(box.width / 2, box.height / 2);
     final across = (box.width / 2 / step).ceil() + 1;
     final down = (box.height / 2 / step).ceil() + 1;
@@ -117,7 +122,7 @@ class _Spinners extends CustomPainter {
   static const int _rotations = cycle ~/ 2222;
 
   static const double _start = -math.pi / 2;
-  static const double _strokeWidth = 4;
+  static const double _strokeWidth = 3.5;
 
   static double _sawTooth(double t, int count) {
     final scaled = t * count;
