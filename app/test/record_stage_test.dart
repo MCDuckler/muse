@@ -1,10 +1,10 @@
 // Where the record sits against the covers.
 //
-// The record on the deck is drawn behind the sleeves and peeks out from under them,
-// and how much of it peeks is the whole point: the label is down there. Two things
-// that both move decide it — the record is the width of the screen, the cover is
-// whatever size somebody set it to — so the offset between them is worked out rather
-// than picked, and this is the sum being checked.
+// The record is drawn behind the sleeves and hangs above them, and how much of it
+// shows over their top edge is the whole point. Two things that both move decide it —
+// the record is the width of the screen, the cover is whatever size somebody set it
+// to — so the offset between them is worked out rather than picked, and this is the
+// sum being checked.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -102,26 +102,25 @@ void main() {
     await tester.pump(const Duration(milliseconds: 1600));
   }
 
-  testWidgets('a third of the record shows out from under the covers',
-      (tester) async {
+  testWidgets('a quarter of the record shows above the covers', (tester) async {
     await stage(tester, playing: true);
 
     final platter = 400 - 26.0 * 2;
     final record = tester.getRect(_onTheDeck(platter).first);
-    final coverBottom = tester.getRect(_cover(352 * 0.74).first).bottom;
-    // The record is drawn from its top to a little past its middle, fading out into
-    // the deck rather than being cut at it.
-    final showsTo = record.top + record.height * 0.52;
+    final cover = tester.getRect(_cover(352 * 0.74).first);
+    // Upside down: the record is drawn from a little above its middle to its bottom,
+    // so the topmost pixel of it is the fade rather than the edge of the picture.
+    final showsFrom = record.top + record.height * 0.48;
 
     expect(record.width, closeTo(platter, 0.5),
         reason: 'the record is the width of the screen, less its margins');
-    expect(showsTo - coverBottom, closeTo(platter * 0.34, 2),
-        reason: 'a third of it in the open, at the default cover size');
-    expect(record.center.dy, greaterThan(coverBottom),
-        reason: 'the label is the part being looked at, so it is not behind a cover');
+    expect(cover.top - showsFrom, closeTo(platter * 0.26, 2),
+        reason: 'a quarter of it in the open, at the default cover size');
+    expect(showsFrom, greaterThan(tester.getRect(find.byType(RecordStage)).top - 1),
+        reason: 'and not a pixel of it over the buttons above the stage');
   });
 
-  testWidgets('the same third whatever size the covers are', (tester) async {
+  testWidgets('the same quarter whatever size the covers are', (tester) async {
     // The sum is worth having only because it holds at both ends of the setting: a
     // fixed offset gave a sliver of record at one size and a floating cover at another.
     // Up to the size at which a sleeve and its reflection fill the stage: past that
@@ -154,28 +153,26 @@ void main() {
       await tester.pump(const Duration(milliseconds: 16));
 
       final record = tester.getRect(_onTheDeck(400 - 26.0 * 2).first);
-      final peek = record.top +
-          record.height * 0.52 -
-          tester.getRect(_cover(352 * scale).first).bottom;
-      expect(peek, closeTo((400 - 52) * 0.34, 2), reason: 'at cover size $scale');
+      final peek = tester.getRect(_cover(352 * scale).first).top -
+          (record.top + record.height * 0.48);
+      expect(peek, closeTo((400 - 52) * 0.26, 2), reason: 'at cover size $scale');
     }
   });
 
-  testWidgets('the reflection gives the deck up to the record', (tester) async {
-    // The reflection lies in exactly the band the record comes to rest in, and a
-    // cover ghosted across the label is why the record read as hidden rather than as
-    // standing behind something.
+  testWidgets('the record keeps clear of the reflections', (tester) async {
+    // The reflection under a cover is the one thing on this stage that needs a layer
+    // of its own, and it was turned off while the record lay across it. The record
+    // hangs above the covers now, so the shine below them is nobody's business but
+    // the cover's — as long as the record really does stay out of that band.
+    await stage(tester, playing: true);
+
+    final record = tester.getRect(_onTheDeck(400 - 26.0 * 2).first);
+    final cover = tester.getRect(_cover(352 * 0.74).first);
+    expect(record.bottom, lessThan(cover.bottom),
+        reason: 'the reflection hangs below the cover, and the record ends above it');
     final mine = find.descendant(
         of: find.byKey(const ValueKey('2@0.0')), matching: find.byType(Mirror));
-
-    await stage(tester, playing: false);
-    expect(mine, findsOneWidget,
-        reason: 'nothing is out, so the sleeve stands on its own reflection');
+    expect(mine, findsOneWidget);
     expect(tester.widget<Mirror>(mine).strength, greaterThan(0.2));
-
-    await stage(tester, playing: true);
-    expect(mine, findsNothing, reason: 'the record stands where the reflection was');
-    // Only the one with a record out of it: the neighbours still have theirs.
-    expect(find.byType(Mirror), findsWidgets);
   });
 }

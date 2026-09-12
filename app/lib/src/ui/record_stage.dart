@@ -718,40 +718,33 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
         final platter = screen - _wallClearance * 2;
         // Far enough right that the sleeve-sized one is past the edge of the phone.
         final away = screen * 0.85;
-        // Where the deck is: the line the song's name is written on, which is the
-        // bottom of the stage. Measured from the middle of the cover, because that is
-        // where the record is put down — and the cover does not sit in the middle of
-        // the stage, it sits above the space kept for its reflection. The last term
-        // is the sliver of record left below the cut, so the cut itself lands on the
-        // line rather than a little under it.
-        final deck = side / 2 +
-            jacket * Mirror.defaultDepth / 2 -
-            platter * 0.02 +
-            // The covers came down, so the deck follows them: what has to stay the
-            // same is the band of record below the covers, because that band is where
-            // the label is.
-            side * 0.02;
-        // Where the covers stand is wherever leaves a third of the record showing
-        // below them — a record peeking out from behind its sleeve, with its label in
-        // the open.
+        // How far above the middle of the stage the middle of the record is.
+        //
+        // The record hangs from the top of the stage: it is drawn upside down, so the
+        // edge of it that shows is its top one, and that edge is put a whisker inside
+        // the top of the stage rather than over the buttons above it. The last term
+        // is the sliver of record past the cut, which is drawn as well.
+        final deck = side / 2 - side * 0.01 - platter * 0.02;
+        // Where the covers stand is wherever leaves this much of the record showing
+        // above them: the covers are in front of it, so how far down they stand is
+        // how much of the record is left in the open over their top edge.
         //
         // Worked out rather than picked, because the two things it sits between both
         // move: the record is the width of the screen and the cover is whatever size
         // somebody set it to. A fixed offset gives a sliver of record at one setting
-        // and a cover floating clear of it at another. This gives the same peek at
-        // every setting, which is the thing actually being looked at.
+        // and a cover hung clear of it at another. This gives the same peek at every
+        // setting.
         //
-        // The clamp is for the largest cover, which is as tall as the whole stage on
-        // its own: past that point the peek has to give, or the cover climbs out of
-        // the top of the stage and into the buttons above it.
-        final peek = platter * 0.34;
-        // The record is drawn from its top down to a little past its middle, so the
-        // bottom of what is visible is the deck line plus that little.
-        final showsTo = deck + platter * 0.02;
-        // A cover's own bottom edge, from the middle of the sleeve's box: the box
-        // holds the reflection as well, and the reflection is not the cover.
-        final edge = jacket * (1 - Mirror.defaultDepth) / 2;
-        final coversDown = (showsTo - peek - edge).clamp(-side * 0.06, side * 0.24);
+        // A quarter rather than the third there was room for under the covers. What
+        // is above them is the top of the screen, and a record that goes on past it
+        // is one drawn over the buttons up there.
+        final peek = platter * 0.26;
+        // The topmost pixel of the record that is actually drawn.
+        final showsFrom = -deck - platter * 0.02;
+        // A cover's own top edge, from the middle of the sleeve's box: the box holds
+        // the reflection as well, and that hangs below the cover.
+        final edge = jacket * (1 + Mirror.defaultDepth) / 2;
+        final coversDown = (showsFrom + peek + edge).clamp(-side * 0.06, side * 0.30);
         // The finger covers one shelf place, so the sleeve under it stays under it —
         // and a shelf place is measured from the record, so this follows the record's
         // size as well.
@@ -1063,20 +1056,13 @@ class _Sleeve extends StatelessWidget {
           // cardboard only — the disc is turning, and a turning reflection is
           // something the eye follows instead of the record itself.
           //
-          // It goes out as the record comes out, because the record comes to rest in
-          // exactly the band the reflection lies in: something standing on a shelf
-          // hides the shelf's shine, and a reflected cover ghosted across the label
-          // was the whole reason the record read as hidden rather than as behind.
-          //
-          // Skipped once it is dim enough not to be seen, or once the record has
-          // taken its place: it is the one thing here that genuinely needs a layer of
-          // its own, and a mask drawn at no strength at all costs exactly as much as
-          // one you can see.
-          if (dim > 0.25 && !upright && toss == 0 && showing < 0.99)
+          // Skipped once it is dim enough not to be seen: it is the one thing here
+          // that genuinely needs a layer of its own, and the sleeves it would be
+          // under at that point are themselves nearly gone.
+          if (dim > 0.25 && !upright && toss == 0)
             RepaintBoundary(
               child: Mirror(
                 size: jacket,
-                strength: 0.28 * (1 - showing.clamp(0.0, 1.0)),
                 child: showingBack
                     ? _Back(size: jacket, dim: dim, board: board)
                     : _Jacket(url: jacketUrl, size: jacket, dim: dim),
@@ -1338,7 +1324,7 @@ class Deck extends StatefulWidget {
   /// How wide a record is: the screen, less its margins.
   final double size;
 
-  /// How far below the middle of the stage the deck is.
+  /// How far above the middle of the stage the middle of the record is.
   final double drop;
 
   /// How far the record that is playing has arrived, 0 to 1.
@@ -1379,30 +1365,43 @@ class _DeckState extends State<Deck> {
         child: SizedBox(
           width: widget.size,
           height: widget.size + widget.drop,
-          child: Stack(
+          // Upside down, about the middle of the stage: the record hangs above the
+          // covers rather than lying on a deck below them, so what shows is the top
+          // of it and the arm comes at it from underneath.
+          //
+          // A mirror rather than a second set of sums. Everything inside here — where
+          // the record sits, where the fade is, where the arm's post is and which way
+          // the head is square to the groove — was worked out once for a record on a
+          // deck, and all of it holds upside down. Turning the picture over keeps the
+          // one arrangement instead of maintaining two of them.
+          child: Transform(
             alignment: Alignment.center,
-            clipBehavior: Clip.none,
-            children: [
-              if (settled != null) _record(settled, 1, 0),
-              if (url != null && arriving > 0)
-                _record(
-                  url,
-                  Curves.easeIn.transform((arriving * 1.8).clamp(0.0, 1.0)),
-                  // Down the last few pixels as it lands: the click of a record being
-                  // set on the platter.
-                  (1 - Curves.easeOutBack.transform(arriving)) * widget.size * 0.06,
+            transform: Matrix4.diagonal3Values(1, -1, 1),
+            child: Stack(
+              alignment: Alignment.center,
+              clipBehavior: Clip.none,
+              children: [
+                if (settled != null) _record(settled, 1, 0),
+                if (url != null && arriving > 0)
+                  _record(
+                    url,
+                    Curves.easeIn.transform((arriving * 1.8).clamp(0.0, 1.0)),
+                    // Down the last few pixels as it lands: the click of a record being
+                    // set on the platter.
+                    (1 - Curves.easeOutBack.transform(arriving)) * widget.size * 0.06,
+                  ),
+                // The arm comes down once the record has stopped moving, and lifts when
+                // the next one is on its way.
+                Positioned.fill(
+                  child: Tonearm(
+                    radius: widget.size / 2,
+                    drop: widget.drop,
+                    landed: Tonearm.lowering(
+                        settled == null ? arriving : math.max(arriving, 0.0)),
+                  ),
                 ),
-              // The arm comes down once the record has stopped moving, and lifts when
-              // the next one is on its way.
-              Positioned.fill(
-                child: Tonearm(
-                  radius: widget.size / 2,
-                  drop: widget.drop,
-                  landed: Tonearm.lowering(
-                      settled == null ? arriving : math.max(arriving, 0.0)),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
