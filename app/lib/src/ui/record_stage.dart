@@ -731,10 +731,27 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
             // same is the band of record below the covers, because that band is where
             // the label is.
             side * 0.02;
-        // The covers stand a little lower than the middle of the stage, so that the
-        // record behind them is something they are leaning on. Not far: what has to
-        // stay clear is the band of record below them, and the label in it.
-        final coversDown = side * 0.045;
+        // Where the covers stand is wherever leaves a third of the record showing
+        // below them — a record peeking out from behind its sleeve, with its label in
+        // the open.
+        //
+        // Worked out rather than picked, because the two things it sits between both
+        // move: the record is the width of the screen and the cover is whatever size
+        // somebody set it to. A fixed offset gives a sliver of record at one setting
+        // and a cover floating clear of it at another. This gives the same peek at
+        // every setting, which is the thing actually being looked at.
+        //
+        // The clamp is for the largest cover, which is as tall as the whole stage on
+        // its own: past that point the peek has to give, or the cover climbs out of
+        // the top of the stage and into the buttons above it.
+        final peek = platter * 0.34;
+        // The record is drawn from its top down to a little past its middle, so the
+        // bottom of what is visible is the deck line plus that little.
+        final showsTo = deck + platter * 0.02;
+        // A cover's own bottom edge, from the middle of the sleeve's box: the box
+        // holds the reflection as well, and the reflection is not the cover.
+        final edge = jacket * (1 - Mirror.defaultDepth) / 2;
+        final coversDown = (showsTo - peek - edge).clamp(-side * 0.06, side * 0.24);
         // The finger covers one shelf place, so the sleeve under it stays under it —
         // and a shelf place is measured from the record, so this follows the record's
         // size as well.
@@ -819,11 +836,8 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                   alignment: Alignment.center,
                   clipBehavior: Clip.none,
                   children: [
-                    // The record on the deck, behind the covers rather than over
-                    // them: a sleeve stands in front of the record that came out of
-                    // it. What is left showing is the band between the bottom of the
-                    // covers and the line the record is cut on — which is where the
-                    // label is, and the label is the part worth seeing.
+                    // The record first, the covers over it: a record peeks out from
+                    // behind its sleeve, it does not lie across the front of it.
                     if (!_showingBack)
                       Deck(
                         url: api.discUrl(widget.track),
@@ -1049,13 +1063,20 @@ class _Sleeve extends StatelessWidget {
           // cardboard only — the disc is turning, and a turning reflection is
           // something the eye follows instead of the record itself.
           //
-          // Skipped once it is dim enough not to be seen: it is the one thing here
-          // that genuinely needs a layer of its own, and the sleeves it would be
-          // under at that point are themselves nearly gone.
-          if (dim > 0.25 && !upright && toss == 0)
+          // It goes out as the record comes out, because the record comes to rest in
+          // exactly the band the reflection lies in: something standing on a shelf
+          // hides the shelf's shine, and a reflected cover ghosted across the label
+          // was the whole reason the record read as hidden rather than as behind.
+          //
+          // Skipped once it is dim enough not to be seen, or once the record has
+          // taken its place: it is the one thing here that genuinely needs a layer of
+          // its own, and a mask drawn at no strength at all costs exactly as much as
+          // one you can see.
+          if (dim > 0.25 && !upright && toss == 0 && showing < 0.99)
             RepaintBoundary(
               child: Mirror(
                 size: jacket,
+                strength: 0.28 * (1 - showing.clamp(0.0, 1.0)),
                 child: showingBack
                     ? _Back(size: jacket, dim: dim, board: board)
                     : _Jacket(url: jacketUrl, size: jacket, dim: dim),
