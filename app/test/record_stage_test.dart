@@ -108,9 +108,9 @@ void main() {
     final platter = 400 - 26.0 * 2;
     final record = tester.getRect(_onTheDeck(platter).first);
     final cover = tester.getRect(_cover(352 * 0.74).first);
-    // Upside down: the record is drawn from a little above its middle to its bottom,
-    // so the topmost pixel of it is the fade rather than the edge of the picture.
-    final showsFrom = record.top + record.height * 0.48;
+    // The right way up: what shows above the cover is the round top edge of the
+    // record itself, and the cut is the far side of it, behind the cover.
+    final showsFrom = record.top;
 
     expect(record.width, closeTo(platter, 0.5),
         reason: 'the record is the width of the screen, less its margins');
@@ -153,10 +153,43 @@ void main() {
       await tester.pump(const Duration(milliseconds: 16));
 
       final record = tester.getRect(_onTheDeck(400 - 26.0 * 2).first);
-      final peek = tester.getRect(_cover(352 * scale).first).top -
-          (record.top + record.height * 0.48);
+      final peek = tester.getRect(_cover(352 * scale).first).top - record.top;
       expect(peek, closeTo((400 - 52) * 0.26, 2), reason: 'at cover size $scale');
     }
+  });
+
+  testWidgets('pausing stops the record turning and swings the arm off it',
+      (tester) async {
+    // What a pause used to do was put the record away — the whole disc slid back into
+    // its sleeve and the arm went with it, so stopping the music emptied the stage.
+    // A deck does not do that: the turntable stops, the arm swings to its rest, and
+    // the record stays exactly where it is.
+    const platter = 400 - 26.0 * 2;
+    // The second one is the picture inside the rotation; the first is the box around
+    // it, which does not turn.
+    final turning = _onTheDeck(platter).at(1);
+
+    await stage(tester, playing: true);
+    final was = tester.getTopLeft(turning);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect((tester.getTopLeft(turning) - was).distance, greaterThan(1),
+        reason: 'it is turning while it plays');
+    expect(tester.widget<Tonearm>(find.byType(Tonearm)).landed, greaterThan(0.98),
+        reason: 'and the arm is down on it');
+
+    await stage(tester, playing: false);
+    expect(_onTheDeck(platter), findsWidgets,
+        reason: 'the record is still on the deck');
+    final held = tester.getTopLeft(turning);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect((tester.getTopLeft(turning) - held).distance, lessThan(0.01),
+        reason: 'stopped where it was, rather than slowing or carrying on');
+    expect(tester.widget<Tonearm>(find.byType(Tonearm)).landed, lessThan(0.02),
+        reason: 'and the arm has swung aside — still drawn, not gone');
+
+    await stage(tester, playing: true);
+    expect(tester.widget<Tonearm>(find.byType(Tonearm)).landed, greaterThan(0.98),
+        reason: 'asking for it back puts the arm down again');
   });
 
   testWidgets('the record keeps clear of the reflections', (tester) async {
@@ -168,8 +201,8 @@ void main() {
 
     final record = tester.getRect(_onTheDeck(400 - 26.0 * 2).first);
     final cover = tester.getRect(_cover(352 * 0.74).first);
-    expect(record.bottom, lessThan(cover.bottom),
-        reason: 'the reflection hangs below the cover, and the record ends above it');
+    expect(record.top + record.height * 0.52, lessThan(cover.bottom),
+        reason: 'the reflection hangs below the cover, and the record is cut above it');
     final mine = find.descendant(
         of: find.byKey(const ValueKey('2@0.0')), matching: find.byType(Mirror));
     expect(mine, findsOneWidget);
