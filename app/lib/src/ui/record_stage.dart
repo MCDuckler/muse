@@ -1630,24 +1630,31 @@ class _ArmPainter extends CustomPainter {
     // tube, a turned counterweight, a gimbal it actually pivots in, and a headshell
     // with a cartridge in it. Gradients on a paint, not layers: there is no saveLayer
     // anywhere in here, and none of it repaints while the record turns.
+    // Black, and lit along its top edge so it is still an arm against a black record.
+    //
+    // A pale chrome arm read as a bright line laid across the record; a plain black
+    // one disappears into it. What separates them is the light: the tube carries a
+    // hard highlight down its whole upper edge, and everything under that falls away
+    // to something darker than the record. That is also what a black tonearm looks
+    // like under a lamp, which is the point.
     Color warm(Color c) => c.withValues(alpha: c.a * dim);
-    final lit = warm(const Color(0xFFFBF8F2));
-    final metal = warm(const Color(0xFFE3DCCE));
-    final mid = warm(const Color(0xFFBFB6A4));
-    final edge = warm(const Color(0xFF847C6D));
-    final rubber = warm(const Color(0xFF2B2723));
+    final lit = warm(const Color(0xFFEFE9DC));
+    final metal = warm(const Color(0xFF4A453E));
+    final mid = warm(const Color(0xFF2A2724));
+    final edge = warm(const Color(0xFF0B0A0A));
+    final rubber = warm(const Color(0xFF08080A));
     final brass = warm(const Color(0xFFC9A24E));
-    final shade = warm(const Color(0x33000000));
+    final shade = warm(const Color(0x40000000));
 
     final dark = Paint()..color = rubber;
 
-    /// A round bar lying along the x axis, lit from above: bright along the top third,
-    /// its own colour through the middle, and darkening into the underside.
+    /// A round black bar lying along the x axis, lit from above: a bright line along
+    /// the top of it, its own colour under that, and darker still on the underside.
     Shader barrel(double half) => ui.Gradient.linear(
           Offset(0, -half),
           Offset(0, half),
-          [edge, lit, metal, edge],
-          const [0.0, 0.26, 0.58, 1.0],
+          [lit, metal, mid, edge],
+          const [0.0, 0.16, 0.55, 1.0],
         );
 
     /// One run of tube, tapering from [from] to [to].
@@ -1665,14 +1672,14 @@ class _ArmPainter extends CustomPainter {
       );
     }
 
-    // The counterweight sits close in behind the post, which is where a real one
-    // sits and, here, the difference between a weight on the screen and a weight
-    // half over the edge of it: the post is out at the margin now.
-    final back = -length * 0.22;
+    // The counterweight hangs well back behind the post, and off the side of the page
+    // if that is where it lands: the deck this arm belongs to carries on past the
+    // edge of the screen, and a weight cut off by it says so.
+    final back = -length * 0.34;
     final bend = length * 0.58;           // where the tube turns towards the record
     final tip = Offset(length, radius * 0.055);
-    final wide = radius * 0.028;
-    final thin = radius * 0.019;
+    final wide = radius * 0.038;
+    final thin = radius * 0.026;
 
     // Its shadow on the record: the same tube again, straight down the screen rather
     // than down the arm — a shadow falls the way the light does, not the way the
@@ -1698,7 +1705,7 @@ class _ArmPainter extends CustomPainter {
 
     // The counterweight: a turned cylinder on the end of the stub, with the rubber
     // ring that sets the tracking weight.
-    final weight = radius * 0.092;
+    final weight = radius * 0.135;
     final barrelRect = Rect.fromCenter(
         center: Offset(back - weight * 0.55, 0),
         width: weight * 2.0,
@@ -1730,7 +1737,7 @@ class _ArmPainter extends CustomPainter {
     canvas.save();
     canvas.translate(pivot.dx, pivot.dy);
     canvas.rotate(angle);
-    final yoke = radius * 0.070;
+    final yoke = radius * 0.092;
     canvas.drawRRect(
       RRect.fromRectAndRadius(
         Rect.fromCenter(center: Offset.zero, width: yoke * 1.9, height: yoke * 2.4),
@@ -1746,20 +1753,24 @@ class _ArmPainter extends CustomPainter {
     );
     canvas.restore();
 
-    // The head, square to the groove rather than to the arm.
+    // The head is bolted to the arm, at the angle that puts it square to the groove
+    // where it plays.
     //
-    // A groove is a circle around the middle of the record, so the cartridge sits
-    // across the tangent at the point the needle is touching — which is at right
-    // angles to the line from the middle of the record to the needle, and has nothing
-    // to do with the angle of the arm. Getting the head to that angle is the entire
-    // reason a tonearm is bent at all.
-    final spoke = head - middle;
-    final groove = math.atan2(spoke.dy, spoke.dx) + math.pi / 2;
+    // A groove is a circle around the middle of the record, so the cartridge has to
+    // sit across the tangent at the point the needle is touching — and getting it
+    // there is the entire reason a tonearm is bent at all. That bend is a fixed angle
+    // between the tube and the shell, though, set once when the thing was built. It
+    // was being worked out afresh from wherever the needle happened to be, so the head
+    // turned on its own as the arm swung off the record, like a compass needle on the
+    // end of it. This is the angle it has where it plays, kept.
+    final spoke = playing - middle;
+    final bolted =
+        math.atan2(spoke.dy, spoke.dx) + math.pi / 2 - onGroove;
     canvas.save();
     canvas.translate(head.dx, head.dy);
-    canvas.rotate(groove);
-    final headLength = radius * 0.235;
-    final headDepth = radius * 0.088;
+    canvas.rotate(angle + bolted);
+    final headLength = radius * 0.300;
+    final headDepth = radius * 0.115;
 
     // The shell: a plate with the finger lift standing off the front of it.
     canvas.drawRRect(
@@ -1772,7 +1783,9 @@ class _ArmPainter extends CustomPainter {
           Offset(0, -headDepth / 2),
           Offset(0, headDepth / 2),
           [lit, metal, edge],
-          const [0.0, 0.45, 1.0],
+          // The same thin lit edge the tube has, rather than a shell lit down half
+          // its face: one light, one direction, everything under it black.
+          const [0.0, 0.20, 1.0],
         ),
     );
     canvas.drawRRect(
@@ -1783,7 +1796,7 @@ class _ArmPainter extends CustomPainter {
             height: headDepth * 0.34),
         Radius.circular(headDepth * 0.16),
       ),
-      Paint()..color = metal,
+      Paint()..color = lit,
     );
 
     // The cartridge under it, and the brass face that says which way round it is.
@@ -1801,13 +1814,14 @@ class _ArmPainter extends CustomPainter {
       Paint()..color = brass,
     );
 
-    // The stylus: the one part of all this that is actually touching the record.
+    // The stylus: the one part of all this that is actually touching the record, and
+    // the one part drawn in metal — a black needle on a black record is a rumour.
     canvas.drawLine(
       Offset(body.left + body.width * 0.28, body.bottom),
       Offset(body.left + body.width * 0.18, body.bottom + headDepth * 0.52),
       Paint()
-        ..color = edge
-        ..strokeWidth = headDepth * 0.13
+        ..color = lit
+        ..strokeWidth = headDepth * 0.11
         ..strokeCap = StrokeCap.round,
     );
     canvas.restore();
@@ -1819,8 +1833,8 @@ class _ArmPainter extends CustomPainter {
     canvas.drawOval(
       Rect.fromCenter(
           center: pivot + Offset(0, radius * 0.012),
-          width: radius * 0.240,
-          height: radius * 0.150),
+          width: radius * 0.310,
+          height: radius * 0.195),
       Paint()
         ..shader = ui.Gradient.linear(
           pivot - Offset(0, radius * 0.06),
@@ -1831,7 +1845,7 @@ class _ArmPainter extends CustomPainter {
     );
     canvas.drawCircle(
       pivot,
-      radius * 0.078,
+      radius * 0.100,
       Paint()
         ..shader = ui.Gradient.radial(
           pivot - Offset(radius * 0.02, radius * 0.03),
@@ -1840,10 +1854,10 @@ class _ArmPainter extends CustomPainter {
           const [0.0, 0.55, 1.0],
         ),
     );
-    canvas.drawCircle(pivot, radius * 0.026, dark);
-    final dial = pivot + Offset(radius * 0.170, radius * 0.070);
-    canvas.drawCircle(dial, radius * 0.038, Paint()..color = mid);
-    canvas.drawCircle(dial, radius * 0.015, Paint()..color = brass);
+    canvas.drawCircle(pivot, radius * 0.032, dark);
+    final dial = pivot + Offset(radius * 0.215, radius * 0.090);
+    canvas.drawCircle(dial, radius * 0.048, Paint()..color = metal);
+    canvas.drawCircle(dial, radius * 0.019, Paint()..color = brass);
   }
 
   @override
