@@ -46,6 +46,21 @@ def start(host_id: int, queue_id: int) -> dict:
     return jam
 
 
+def move_to(jam_id: int, queue_id: int) -> dict | None:
+    """Point the room at a different queue.
+
+    The room is a queue, and the host putting a different queue on is the room moving —
+    not the room ending. Without this the jam kept the queue it was opened with, so a
+    host who switched was the only person listening to what they had chosen and
+    everybody else was looking at a list nobody was playing.
+    """
+    return db.one(
+        """update jams set queue_id=%s
+            where id=%s and ended_at is null returning *""",
+        (queue_id, jam_id),
+    )
+
+
 def by_code(code: str) -> dict | None:
     return db.one("select * from jams where upper(code)=upper(%s) and ended_at is null",
                   (code.strip(),))

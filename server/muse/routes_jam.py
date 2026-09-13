@@ -187,6 +187,34 @@ def push_playback(jam_id: int, body: dict = Body(...),
     return {"ok": True}
 
 
+@router.post("/{jam_id}/queue")
+def move_jam(jam_id: int, body: dict = Body(...),
+             user: dict = Depends(current_user)):
+    """The host putting a different queue on, with the room following.
+
+    Only the host: a room where anybody can change what everybody is listening to by
+    opening their own queue is not a room, it is a fight.
+    """
+    row = jam.get(jam_id)
+    if not row or row["ended_at"]:
+        raise HTTPException(404, "no such jam")
+    if row["host_id"] != user["id"]:
+        raise HTTPException(403, "only the host chooses what the room is playing")
+
+    queue_id = int(body.get("queue_id") or 0)
+    if not db.one("select 1 from queues where id=%s and user_id=%s",
+                  (queue_id, user["id"])):
+        raise HTTPException(404, "no such queue")
+    if queue_id == row["queue_id"]:
+        return jam.public(row, user["id"])
+
+    moved = jam.move_to(jam_id, queue_id) or row
+    # Announced with the *new* queue on it, which is what tells everybody else to go
+    # and look at something else.
+    announce(moved, "moved", {"from_queue_id": row["queue_id"]})
+    return jam.public(moved, user["id"])
+
+
 @router.post("/{jam_id}/control")
 def control(jam_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
     """Anybody in the room reaching for the transport: play, pause, next, previous, seek.

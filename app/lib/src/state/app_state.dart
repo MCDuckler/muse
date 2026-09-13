@@ -464,6 +464,17 @@ class AppState extends ChangeNotifier {
   Future<void> openQueue(int id, {bool autoplay = false}) async {
     activeQueue = await api.queue(id);
     await player?.loadQueue(activeQueue!, autoplay: autoplay);
+    // Hosting a jam means the room is whatever queue is on. Putting a different one
+    // on and leaving the room pointed at the old one is the host listening alone
+    // while everybody else watches a list nobody is playing.
+    final room = jam;
+    if (room != null && room.isHost && room.queueId != id) {
+      try {
+        jam = await api.moveJam(room.id, id);
+      } catch (_) {
+        // The room not following is not a reason for the queue not to open here.
+      }
+    }
     notifyListeners();
   }
 
@@ -1236,6 +1247,12 @@ class AppState extends ChangeNotifier {
     if (activeQueue?.id == jam!.queueId) {
       await _reloadActiveQueue();
       if (activeQueue != null) await player?.loadQueue(activeQueue!);
+    } else if (!jam!.isHost) {
+      // The host put something else on. Following the room means following what the
+      // room is playing, which is now a different queue from the one on screen — and
+      // before this a guest kept the old one for as long as the jam lasted, watching a
+      // list nobody was playing.
+      await followJamQueue();
     }
     notifyListeners();
   }

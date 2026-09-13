@@ -233,3 +233,63 @@ def test_what_is_playing_is_part_of_choosing(client, hdr, guest, jam):
 def test_a_jam_that_has_ended_is_not_offered(client, hdr, guest, jam):
     client.post(f"/jams/{jam['id']}/leave", headers=hdr)      # the host leaving ends it
     assert client.get("/jams", headers=guest).json()["items"] == []
+
+
+def test_the_room_follows_the_host_to_another_queue(client, hdr):
+    """A host putting a different queue on is the room moving, not the room ending.
+
+    Without this the jam kept the queue it was opened with: the host listened to what
+    they had chosen and everybody else watched a list nobody was playing.
+    """
+    from muse import auth, db
+
+    first = client.post("/queues", headers=hdr, json={"name": "First"}).json()
+    second = client.post("/queues", headers=hdr, json={"name": "Second"}).json()
+    made = client.post("/jams", headers=hdr, json={"queue_id": first["id"]}).json()
+
+    guest = auth.ensure_user("guest")
+    ghdr = {"Authorization": f"Bearer {auth.issue_token(guest, 'phone', None)}"}
+    client.post("/jams/join", headers=ghdr, json={"code": made["code"]})
+
+    moved = client.post(f"/jams/{made['id']}/queue", headers=hdr,
+                        json={"queue_id": second["id"]})
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["queue_id"] == second["id"]
+
+    # And what a guest is told when they ask where the room is.
+    theirs = client.get("/jams/current", headers=ghdr).json()["jam"]
+    assert theirs["queue_id"] == second["id"]
+    assert db.one("select queue_id from jams where id=%s",
+                  (made["id"],))["queue_id"] == second["id"]
+
+
+def test_only_the_host_moves_the_room(client, hdr):
+    """A room anybody can change by opening their own queue is not a room."""
+    from muse import auth
+
+    queue = client.post("/queues", headers=hdr, json={"name": "Host's"}).json()
+    made = client.post("/jams", headers=hdr, json={"queue_id": queue["id"]}).json()
+
+    guest = auth.ensure_user("interloper")
+    ghdr = {"Authorization": f"Bearer {auth.issue_token(guest, 'phone', None)}"}
+    client.post("/jams/join", headers=ghdr, json={"code": made["code"]})
+    mine = client.post("/queues", headers=ghdr, json={"name": "Mine"}).json()
+
+    r = client.post(f"/jams/{made['id']}/queue", headers=ghdr,
+                    json={"queue_id": mine["id"]})
+    assert r.status_code == 403
+
+
+def test_the_host_cannot_move_the_room_to_somebody_elses_queue(client, hdr):
+    from muse import auth
+
+    queue = client.post("/queues", headers=hdr, json={"name": "Host's"}).json()
+    made = client.post("/jams", headers=hdr, json={"queue_id": queue["id"]}).json()
+
+    other = auth.ensure_user("elsewhere")
+    ohdr = {"Authorization": f"Bearer {auth.issue_token(other, 'phone', None)}"}
+    theirs = client.post("/queues", headers=ohdr, json={"name": "Theirs"}).json()
+
+    r = client.post(f"/jams/{made['id']}/queue", headers=hdr,
+                    json={"queue_id": theirs["id"]})
+    assert r.status_code == 404

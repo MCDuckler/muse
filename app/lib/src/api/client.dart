@@ -694,6 +694,12 @@ class ApiClient {
   }
 
   /// The jam you are in, and a heartbeat that keeps you listed as here.
+  /// The host putting a different queue on, with the room following it.
+  Future<Jam> moveJam(int jamId, int queueId) async => Jam.fromJson(await _decode(
+      await net.post(_u('/jams/$jamId/queue'),
+          headers: _headers,
+          body: jsonEncode({'queue_id': queueId}))) as Map<String, dynamic>);
+
   Future<Jam?> currentJam() async {
     final d = await _decode(await net.get(_u('/jams/current'), headers: _headers))
         as Map<String, dynamic>;
