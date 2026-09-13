@@ -167,6 +167,58 @@ class ApiClient {
     );
   }
 
+  // ---------------- the other people here ----------------
+  /// Everybody on this server, with what each has and whether they have a jam going.
+  Future<({List<Person> people, int you})> people() async {
+    final d = await _decode(await net.get(_u('/social/people'), headers: _headers))
+        as Map<String, dynamic>;
+    return (
+      people: ((d['people'] ?? const []) as List)
+          .map((e) => Person.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      you: (d['you'] ?? 0) as int,
+    );
+  }
+
+  Future<Person> person(int id) async => Person.fromJson(await _decode(
+      await net.get(_u('/social/people/$id'), headers: _headers))
+      as Map<String, dynamic>);
+
+  /// What somebody has kept, newest first.
+  Future<({List<Track> items, int total})> personLibrary(int id,
+      {int limit = 60, int offset = 0}) async {
+    final d = await _decode(await net.get(
+        _u('/social/people/$id/library',
+            {'limit': '$limit', 'offset': '$offset'}),
+        headers: _headers)) as Map<String, dynamic>;
+    return (
+      items: ((d['items'] ?? const []) as List)
+          .map((e) => Track.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      total: (d['total'] ?? 0) as int,
+    );
+  }
+
+  Future<List<Playlist>> personPlaylists(int id) async =>
+      ((await _decode(await net.get(_u('/social/people/$id/playlists'),
+              headers: _headers)) ?? const []) as List)
+          .map((e) => Playlist.fromJson(e as Map<String, dynamic>))
+          .toList();
+
+  /// Keep somebody else's playlist in your own library. A save, not a copy.
+  Future<void> savePlaylist(int id) async => await _decode(await net.post(
+      _u('/playlists/$id/save'), headers: _headers, body: '{}'));
+
+  Future<void> unsavePlaylist(int id) async => await _decode(
+      await net.delete(_u('/playlists/$id/save'), headers: _headers));
+
+  /// Let everybody else add to a list of yours, or stop letting them.
+  Future<bool> setPlaylistOpenEdit(int id, bool on) async {
+    final d = await _decode(await net.post(_u('/playlists/$id/open-edit'),
+        headers: _headers, body: jsonEncode({'open_edit': on}))) as Map;
+    return d['open_edit'] == true;
+  }
+
   /// Everything, everywhere, in one list.
   ///
   /// The old [search] answers in the shape the sectioned screen wanted — library here,

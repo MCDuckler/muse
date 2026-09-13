@@ -12,6 +12,7 @@ import 'settings_page.dart';
 import 'player_bar.dart';
 import 'queue_page.dart';
 import 'search_page.dart';
+import 'social_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -32,8 +33,8 @@ class _HomePageState extends State<HomePage> {
       _saidHello = true;
       PlaybackLog.note('home shell built');
     }
-    const pages = [QueuePage(), SearchPage(), LibraryPage()];
-    const titles = ['Queues', 'Search', 'Library'];
+    const pages = [QueuePage(), SearchPage(), LibraryPage(), SocialPage()];
+    const titles = ['Queues', 'Search', 'Library', 'People'];
 
     return _Shortcuts(
       app: app,
@@ -121,7 +122,7 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-/// The three places the app goes, wherever you happen to be standing.
+/// The four places the app goes, wherever you happen to be standing.
 ///
 /// One widget rather than one per screen, because it appears on more than one now: the
 /// player used to cover it completely, so opening what is playing meant losing every
@@ -159,6 +160,12 @@ class MuseNavigationBar extends StatelessWidget {
             icon: Icon(Icons.library_music_outlined),
             selectedIcon: Icon(Icons.library_music),
             label: 'Library'),
+        // The catalog has always been shared between everybody on the box. This is
+        // the part of that you can look at.
+        NavigationDestination(
+            icon: Icon(Icons.people_outline),
+            selectedIcon: Icon(Icons.people),
+            label: 'People'),
       ],
     );
   }

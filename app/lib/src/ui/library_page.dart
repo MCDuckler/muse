@@ -90,6 +90,10 @@ class LibraryPage extends StatelessWidget {
             // differ. The service is already on the row as an icon.
             subtitle: Text([
               '${p.itemCount} tracks',
+              // Somebody else's, kept here. Whose it is belongs on the row: a list
+              // you cannot change is confusing until you can see it is not yours.
+              if (p.saved) 'from ${p.ownerName ?? 'somebody'}',
+              if (p.openEdit && p.mine) 'shared',
               if (p.unmatched > 0) '${p.unmatched} not matched',
             ].join(' · ')),
             trailing: PopupMenuButton<String>(
@@ -213,7 +217,7 @@ class LibraryPage extends StatelessWidget {
               ],
             ),
             onTap: () => Navigator.of(context).push(MaterialPageRoute(
-              builder: (_) => _PlaylistPage(playlistId: p.id, name: p.name),
+              builder: (_) => PlaylistPage(playlistId: p.id, name: p.name),
             )),
           ),
         if (app.playlists.isEmpty)
@@ -242,32 +246,121 @@ class LibraryPage extends StatelessWidget {
   }
 }
 
-class _PlaylistPage extends StatefulWidget {
-  const _PlaylistPage({required this.playlistId, required this.name});
+class PlaylistPage extends StatefulWidget {
+  const PlaylistPage({super.key, required this.playlistId, required this.name});
   final int playlistId;
   final String name;
 
   @override
-  State<_PlaylistPage> createState() => _PlaylistPageState();
+  State<PlaylistPage> createState() => _PlaylistPageState();
 }
 
-class _PlaylistPageState extends State<_PlaylistPage> {
+class _PlaylistPageState extends State<PlaylistPage> {
   late Future<Playlist> _future;
+
+  /// What the last load said about whose list this is. Held rather than read off the
+  /// future, because the buttons that act on it live in the app bar, which is built
+  /// before the body has anything.
+  Playlist? _list;
 
   @override
   void initState() {
     super.initState();
-    _future = context.read<AppState>().api.playlist(widget.playlistId);
+    _future = _ask();
   }
 
-  void _reload() => setState(
-      () => _future = context.read<AppState>().api.playlist(widget.playlistId));
+  Future<Playlist> _ask() async {
+    final list = await context.read<AppState>().api.playlist(widget.playlistId);
+    if (mounted) setState(() => _list = list);
+    return list;
+  }
+
+  void _reload() => setState(() => _future = _ask());
+
+  /// Keeping somebody else's list, or letting it go again.
+  Future<void> _keep(Playlist list) async {
+    final api = context.read<AppState>().api;
+    final app = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      list.saved
+          ? await api.unsavePlaylist(list.id)
+          : await api.savePlaylist(list.id);
+      await app.refreshPlaylists();
+      _reload();
+      messenger.showSnackBar(snack(Text(list.saved
+          ? 'Removed from your library'
+          : 'Saved to your library')));
+    } catch (e) {
+      messenger.showSnackBar(snack(Text('$e')));
+    }
+  }
+
+  /// Letting everybody else add to a list of your own.
+  Future<void> _share(Playlist list, bool on) async {
+    final api = context.read<AppState>().api;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await api.setPlaylistOpenEdit(list.id, on);
+      _reload();
+      messenger.showSnackBar(snack(Text(on
+          ? 'Anybody here can add to "${list.name}" now'
+          : 'Only you can change "${list.name}" now')));
+    } catch (e) {
+      messenger.showSnackBar(snack(Text('$e')));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
+    final list = _list;
     return PlayerScaffold(
-      appBar: AppBar(title: Text(widget.name)),
+      appBar: AppBar(
+        title: Text(widget.name),
+        // Whose list it is, said where it matters: a list in your library that you
+        // cannot change is confusing until you can see it belongs to somebody.
+        bottom: list == null || list.mine
+            ? null
+            : PreferredSize(
+                preferredSize: const Size.fromHeight(24),
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Text(
+                    list.editable
+                        ? '${list.ownerName ?? 'Somebody'}\'s list — they let others add'
+                        : '${list.ownerName ?? 'Somebody'}\'s list',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ),
+        actions: [
+          if (list != null && !list.mine)
+            IconButton(
+              icon: Icon(
+                  list.saved ? Icons.bookmark : Icons.bookmark_add_outlined),
+              tooltip:
+                  list.saved ? 'In your library' : 'Save to your library',
+              onPressed: () => _keep(list),
+            ),
+          // Sharing is the owner's decision and nobody else's, so only they are
+          // offered it — and only for a list made here, since a mirror of somebody
+          // else's Spotify is not this app's to hand round.
+          if (list != null && list.mine && list.kind == 'local')
+            PopupMenuButton<String>(
+              tooltip: 'Sharing',
+              icon: Icon(list.openEdit ? Icons.group : Icons.group_outlined),
+              onSelected: (_) => _share(list, !list.openEdit),
+              itemBuilder: (context) => [
+                CheckedPopupMenuItem(
+                  value: 'open',
+                  checked: list.openEdit,
+                  child: const Text('Let others add to it'),
+                ),
+              ],
+            ),
+        ],
+      ),
       body: FutureBuilder<Playlist>(
         future: _future,
         builder: (context, snap) {

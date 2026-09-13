@@ -77,19 +77,39 @@ def list_playlists(user: dict = Depends(current_user)):
     # answer "how many songs" for eighteen playlists — 60ms on a request the app makes
     # at startup and again after every change. The primary key already orders
     # playlist_items by playlist, so each count is an index-only scan.
+    # Wrapped, because a UNION may only be ordered by the columns it returns — and
+    # what this wants to order by is three things that are not columns.
     rows = db.all_(
-        """select p.*,
+        """select * from (
+           select p.*, false as saved, null::text as owner_name,
                   (select count(*) from playlist_items i
                     where i.playlist_id = p.id) as items,
                   (select count(*) from playlist_unmatched u
                     where u.playlist_id = p.id) as unmatched
              from playlists p
             where p.owner_id=%s
-            -- Favourites first, then the ones made here, then the mirrors.
-            order by (p.kind <> %s), (p.kind <> 'local'), lower(p.name)""",
-        (user["id"], FAVOURITES_KIND),
+           union all
+           -- Somebody else's, kept here. Theirs still, which is why the owner's name
+           -- travels with it: a list in your library that you cannot change is
+           -- confusing until you can see whose it is.
+           select p.*, true as saved, u.name as owner_name,
+                  (select count(*) from playlist_items i
+                    where i.playlist_id = p.id) as items,
+                  (select count(*) from playlist_unmatched x
+                    where x.playlist_id = p.id) as unmatched
+             from playlist_saves s
+             join playlists p on p.id = s.playlist_id
+             join users u on u.id = p.owner_id
+            where s.user_id=%s
+           ) all_of_them
+            -- Favourites first, then the ones made here, then the mirrors, then
+            -- other people's.
+            order by saved, (kind <> %s), (kind <> 'local'), lower(name)""",
+        (user["id"], user["id"], FAVOURITES_KIND),
     )
-    return [with_cover(r) for r in rows]
+    return [{**with_cover(r), "saved": bool(r["saved"]),
+             "owner_name": r["owner_name"],
+             "open_edit": bool(r.get("open_edit"))} for r in rows]
 
 
 @router.post("/playlists/{playlist_id}/download")
@@ -430,6 +450,28 @@ def _own_playlist(playlist_id: int, user: dict) -> dict:
     return row
 
 
+def _readable(playlist_id: int, user: dict) -> dict:
+    """A list you are allowed to look at.
+
+    Everybody here was invited by whoever runs the server and the catalog is shared
+    already, so a playlist somebody made is readable by anybody signed in — that is
+    what makes keeping a friend's list possible at all. Favourites is the exception:
+    it is the heart on a row rather than a list made to be read.
+    """
+    row = db.one("select * from playlists where id=%s", (playlist_id,))
+    if not row:
+        raise HTTPException(404, "no such playlist")
+    if row["owner_id"] != user["id"] and row["kind"] == FAVOURITES_KIND:
+        raise HTTPException(404, "no such playlist")
+    return row
+
+
+def _may_write(row: dict, user: dict) -> bool:
+    """Whether this person may change what is on somebody else's list."""
+    return bool(row["owner_id"] == user["id"]
+                or (row.get("open_edit") and row["kind"] == "local"))
+
+
 def _holds_items(playlist_id: int, user: dict) -> dict:
     """A list whose *contents* you may change.
 
@@ -438,7 +480,13 @@ def _holds_items(playlist_id: int, user: dict) -> dict:
     used to come back 409 while the heart on the same song worked, which is one list
     behaving two ways depending on which button you pressed.
     """
-    row = _own_playlist(playlist_id, user)
+    row = _readable(playlist_id, user)
+    if not _may_write(row, user):
+        raise HTTPException(
+            403,
+            "This is somebody else's playlist. They can let others add to it from "
+            "its own screen.",
+        )
     if row["kind"] not in ("local", FAVOURITES_KIND):
         raise HTTPException(
             409,
@@ -454,7 +502,13 @@ def _editable(playlist_id: int, user: dict) -> dict:
     Letting it be edited would either lie (the change vanishes on the next sync) or
     corrupt the mirror. Cloning is the honest answer, and the message says so.
     """
-    row = _own_playlist(playlist_id, user)
+    row = _readable(playlist_id, user)
+    if not _may_write(row, user):
+        raise HTTPException(
+            403,
+            "This is somebody else's playlist. They can let others add to it from "
+            "its own screen.",
+        )
     if row["kind"] != "local":
         raise HTTPException(
             409,
@@ -466,7 +520,7 @@ def _editable(playlist_id: int, user: dict) -> dict:
 
 @router.get("/playlists/{playlist_id}")
 def get_playlist(playlist_id: int, user: dict = Depends(current_user)):
-    p = _own_playlist(playlist_id, user)
+    p = _readable(playlist_id, user)
     items = db.all_(
         """select i.pos, t.*, m.path, m.bytes, m.sha256, c.color as cover_color,
                     c.sha256 as cover_sha
@@ -487,8 +541,21 @@ def get_playlist(playlist_id: int, user: dict = Depends(current_user)):
     # button has to be offered on — a playlist marked "all" whose songs were found
     # already in the catalog never had a single job queued for it.
     waiting = sum(1 for t in items if t["state"] in ("pending", "failed"))
-    return {**with_cover(p), "unmatched": unmatched,
-            "editable": p["kind"] in ("local", FAVOURITES_KIND),
+    owner = db.one("select id, name, avatar_sig from users where id=%s",
+                   (p["owner_id"],)) or {}
+    saved = db.one(
+        "select 1 from playlist_saves where user_id=%s and playlist_id=%s",
+        (user["id"], playlist_id))
+    return {**with_cover(p),
+            "unmatched": unmatched,
+            "mine": p["owner_id"] == user["id"],
+            "saved": bool(saved),
+            "open_edit": bool(p.get("open_edit")),
+            "owner": {"id": owner.get("id"), "name": owner.get("name"),
+                      "avatar_url": (f"/users/{owner['id']}/avatar"
+                                     if owner.get("avatar_sig") else None)},
+            "editable": (p["kind"] in ("local", FAVOURITES_KIND)
+                         and _may_write(p, user)),
             "download_mode": p.get("download_mode", "all"),
             "waiting": waiting,
             "items": [{**catalog.public(t), "pos": t["pos"]} for t in items]}
@@ -551,6 +618,47 @@ def playlists_holding(body: dict = Body(...), user: dict = Depends(current_user)
         (list(ids), user["id"]),
     )
     return {"holding": {str(r["id"]): r["n"] for r in rows}}
+
+
+@router.post("/playlists/{playlist_id}/save", status_code=201)
+def save_playlist(playlist_id: int, user: dict = Depends(current_user)):
+    """Keep somebody else's list in your own library.
+
+    A save, not a copy: what you see is whatever is on it now. Copying it would freeze
+    a friend's playlist at the moment you liked it, which is the opposite of why
+    anybody keeps one.
+    """
+    row = _readable(playlist_id, user)
+    if row["owner_id"] == user["id"]:
+        raise HTTPException(409, "That one is already yours.")
+    db.run(
+        """insert into playlist_saves(user_id, playlist_id) values(%s,%s)
+             on conflict do nothing""",
+        (user["id"], playlist_id))
+    return {"saved": True}
+
+
+@router.delete("/playlists/{playlist_id}/save")
+def unsave_playlist(playlist_id: int, user: dict = Depends(current_user)):
+    db.run("delete from playlist_saves where user_id=%s and playlist_id=%s",
+           (user["id"], playlist_id))
+    return {"saved": False}
+
+
+@router.post("/playlists/{playlist_id}/open-edit")
+def set_open_edit(playlist_id: int, body: dict = Body(default={}),
+                  user: dict = Depends(current_user)):
+    """Let everybody else add to this list, or stop letting them.
+
+    The owner's decision and nobody else's — including somebody who has been let in,
+    who could otherwise hand the list round further.
+    """
+    row = _own_playlist(playlist_id, user)
+    if row["kind"] != "local":
+        raise HTTPException(409, "Only a list made here can be shared.")
+    on = bool(body.get("open_edit", True))
+    db.run("update playlists set open_edit=%s where id=%s", (on, playlist_id))
+    return {"open_edit": on}
 
 
 @router.patch("/playlists/{playlist_id}")

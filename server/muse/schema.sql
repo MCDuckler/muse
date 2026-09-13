@@ -531,3 +531,21 @@ create table if not exists sleeve_marks (
 
 create index if not exists sleeve_marks_board
   on sleeve_marks(owner_id, track_id, id);
+
+-- ---------------------------------------------------------------- other people
+--
+-- Somebody else's playlist, kept in your own library. A save rather than a copy: the
+-- list stays theirs, and what you see is whatever is on it now — which is the point of
+-- saving a friend's playlist rather than taking a snapshot of it.
+create table if not exists playlist_saves (
+  user_id     int not null references users(id) on delete cascade,
+  playlist_id int not null references playlists(id) on delete cascade,
+  saved_at    timestamptz not null default now(),
+  primary key (user_id, playlist_id)
+);
+create index if not exists playlist_saves_mine
+  on playlist_saves(user_id, saved_at desc);
+
+-- Whether anybody else may add to it and take things off it. Off by default: a shared
+-- list is a decision the person whose list it is makes, once, out loud.
+alter table playlists add column if not exists open_edit boolean not null default false;

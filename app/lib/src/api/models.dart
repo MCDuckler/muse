@@ -320,6 +320,85 @@ class Queue {
   bool get isStation => stationKind != null;
 }
 
+/// Somebody else on this server.
+///
+/// The catalog has always been shared; this is the part of that you can see. What
+/// matters on the list is the jam: a jam is happening now, and a thing happening now
+/// is no use to anybody who has to go looking for it.
+class Person {
+  const Person({
+    required this.id,
+    required this.name,
+    this.avatarUrl,
+    this.avatarVersion,
+    this.songs = 0,
+    this.playlists = 0,
+    this.played = 0,
+    this.lastSeen,
+    this.lastListened,
+    this.jam,
+    this.recent = const [],
+    this.since,
+  });
+
+  final int id;
+  final String name;
+  final String? avatarUrl;
+  final String? avatarVersion;
+  final int songs;
+  final int playlists;
+
+  /// Records listened to all the way through.
+  final int played;
+  final DateTime? lastSeen;
+  final DateTime? lastListened;
+  final DateTime? since;
+
+  /// The jam they are hosting right now, if any.
+  final JamGlimpse? jam;
+
+  /// What they have been playing.
+  final List<Track> recent;
+
+  static DateTime? _when(Object? v) =>
+      v == null ? null : DateTime.tryParse('$v')?.toLocal();
+
+  factory Person.fromJson(Map<String, dynamic> j) => Person(
+        id: j['id'] as int,
+        name: (j['name'] ?? '') as String,
+        avatarUrl: j['avatar_url'] as String?,
+        avatarVersion: j['avatar_version'] as String?,
+        songs: (j['songs'] ?? 0) as int,
+        playlists: (j['playlists'] ?? 0) as int,
+        played: (j['played'] ?? 0) as int,
+        lastSeen: _when(j['last_seen']),
+        lastListened: _when(j['last_listened']),
+        since: _when(j['since']),
+        jam: j['jam'] is Map
+            ? JamGlimpse.fromJson((j['jam'] as Map).cast<String, dynamic>())
+            : null,
+        recent: ((j['recent'] ?? const []) as List)
+            .map((e) => Track.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+/// Enough of somebody's jam to say it is happening and to get into it.
+class JamGlimpse {
+  const JamGlimpse({required this.code, this.people = 0, this.since});
+  final String code;
+  final int people;
+  final DateTime? since;
+
+  factory JamGlimpse.fromJson(Map<String, dynamic> j) => JamGlimpse(
+        code: (j['code'] ?? '') as String,
+        people: (j['people'] ?? 0) as int,
+        since: j['since'] == null
+            ? null
+            : DateTime.tryParse('${j['since']}')?.toLocal(),
+      );
+}
+
 class Playlist {
   final int id;
   final String name;
@@ -348,6 +427,19 @@ class Playlist {
   /// that catches that.
   final int waiting;
 
+  /// Yours, or somebody else's kept in your library.
+  final bool mine;
+
+  /// You have kept somebody else's list.
+  final bool saved;
+
+  /// Its owner let everybody add to it.
+  final bool openEdit;
+
+  /// Whose it is, when it is not yours.
+  final String? ownerName;
+  final int? ownerId;
+
   const Playlist({
     required this.id,
     required this.name,
@@ -361,8 +453,14 @@ class Playlist {
     this.coverVersion,
     this.downloadMode = 'all',
     this.waiting = 0,
+    this.mine = true,
+    this.saved = false,
+    this.openEdit = false,
+    this.ownerName,
+    this.ownerId,
     bool? editable,
-  }) : editable = editable ?? (kind == 'local' || kind == 'favourites');
+  }) : editable = editable ??
+            ((kind == 'local' || kind == 'favourites') && mine);
 
   factory Playlist.fromJson(Map<String, dynamic> j) => Playlist(
         id: j['id'] as int,
@@ -379,6 +477,14 @@ class Playlist {
         customCover: (j['custom_cover'] ?? false) as bool,
         downloadMode: (j['download_mode'] ?? 'all') as String,
         waiting: (j['waiting'] ?? 0) as int,
+        // A list of your own says nothing about ownership; one of somebody else's
+        // says both whose it is and that it is theirs.
+        mine: j['mine'] as bool? ?? !(j['saved'] == true),
+        saved: j['saved'] == true,
+        openEdit: j['open_edit'] == true,
+        ownerName: j['owner_name'] as String? ??
+            (j['owner'] is Map ? (j['owner'] as Map)['name'] as String? : null),
+        ownerId: j['owner'] is Map ? (j['owner'] as Map)['id'] as int? : null,
         editable: j['editable'] as bool?,
       );
 
