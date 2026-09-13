@@ -2118,10 +2118,11 @@ class _ArmPainter extends CustomPainter {
 
   /// One flat shape, the way an arm looks cut out of veneer and laid into a deck.
   ///
-  /// No line, no shading, no parts: a silhouette in a single warm tone, with the
-  /// pieces reading as pieces because of their shapes rather than because anything
-  /// separates them. A square weight on a stem, a round pivot, a long taper to a
-  /// wedge of a headshell with the cartridge stood across it.
+  /// Drawn from the piece it is copied from rather than from a tonearm: a small square
+  /// weight on a short neck, a *large* round bearing — the anchor of the whole shape —
+  /// a long shaft tapering away from it, a hard bend near the end with a little lift
+  /// standing off it, and a plain rectangular head. No line, no shading, no parts: the
+  /// pieces read as pieces because of their shapes and nothing else.
   void _inlay(Canvas canvas, Offset middle, Offset pivot, Offset head,
       Offset playing, double angle, double onGroove, double length) {
     // Pale wood on whatever it is laid into, which is the one thing here that does not
@@ -2133,82 +2134,87 @@ class _ArmPainter extends CustomPainter {
     canvas.translate(pivot.dx, pivot.dy);
     canvas.rotate(angle);
 
-    final back = -length * 0.38;
-    final pivotR = radius * 0.105;
-    final wide = radius * 0.034;      // at the post
-    final thin = radius * 0.020;      // at the head
+    final bearing = radius * 0.145;   // the big circle everything hangs off
+    final neck = radius * 0.030;      // the stem behind it
+    final block = radius * 0.090;     // the square weight on the end of that stem
+    final shaft = radius * 0.048;     // half the width of the shaft at the bearing
+    final thin = radius * 0.034;      // and at the elbow
+    final end = radius * 0.028;       // where it meets the head
 
-    // The stem and the weight behind the post: a plain bar with a square block on it.
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTRB(back, -radius * 0.017, 0, radius * 0.017),
-        Radius.circular(radius * 0.010),
-      ),
+    // The elbow: on the way to the head and a little above the line to it, so the two
+    // straight runs make one bend and the shaft finishes exactly where the head is.
+    // Ending it anywhere else leaves a gap between the arm and its own head, which is
+    // the one thing a shape cut from a single piece of veneer cannot have.
+    final elbow = Offset(length * 0.68, -radius * 0.085);
+
+    // The neck and the weight, behind the bearing.
+    canvas.drawRect(
+      Rect.fromLTRB(-length * 0.30, -neck, -bearing * 0.6, neck),
       fill,
     );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromCenter(
-            center: Offset(back, 0),
-            width: radius * 0.105,
-            height: radius * 0.150),
-        Radius.circular(radius * 0.014),
-      ),
+    canvas.drawRect(
+      Rect.fromCenter(
+          center: Offset(-length * 0.325, 0),
+          width: block * 1.15,
+          height: block * 2.0),
       fill,
     );
 
-    // The arm: one taper from the post to the bend, then the short run to the head.
-    final bend = length * 0.62;
-    final drop = radius * 0.075;
+    // The shaft: a long taper from the bearing to the elbow, then a straight run out
+    // to the head.
     canvas.drawPath(
       Path()
-        ..moveTo(0, -wide)
-        ..lineTo(bend, -thin)
-        ..lineTo(length, drop - thin)
-        ..lineTo(length, drop + thin)
-        ..lineTo(bend, thin)
-        ..lineTo(0, wide)
+        ..moveTo(0, -shaft)
+        ..lineTo(elbow.dx, elbow.dy - thin)
+        ..lineTo(length, -end)
+        ..lineTo(length, end)
+        ..lineTo(elbow.dx, elbow.dy + thin)
+        ..lineTo(0, shaft)
         ..close(),
       fill,
     );
+
+    // The finger lift: a short bar standing off the outside of the elbow, which is the
+    // one detail that says this is a tonearm rather than a lever.
+    canvas.save();
+    canvas.translate(elbow.dx - length * 0.02, elbow.dy - radius * 0.070);
+    canvas.rotate(-0.30);
+    canvas.drawRect(
+      Rect.fromCenter(
+          center: Offset.zero, width: radius * 0.028, height: radius * 0.120),
+      fill,
+    );
+    canvas.restore();
     canvas.restore();
 
-    // The round post it all turns on, drawn over the arm so the two read as one piece
-    // laid on top of another.
-    canvas.drawCircle(pivot, pivotR, fill);
+    // The bearing, drawn over the shaft so the two are one piece laid on another.
+    canvas.drawCircle(pivot, bearing, fill);
 
-    // The head: a wedge, bolted on at the angle that squares it to the groove.
+    // The head: a plain rectangle, bolted on at the angle that squares it to the
+    // groove, sitting back over the end of the shaft so the two are joined, with the
+    // cartridge stood across the front of it.
     final spoke = playing - middle;
     final bolted = math.atan2(spoke.dy, spoke.dx) + math.pi / 2 - onGroove;
     canvas.save();
     canvas.translate(head.dx, head.dy);
     canvas.rotate(angle + bolted);
-    canvas.drawPath(
-      Path()
-        ..moveTo(-radius * 0.150, -radius * 0.052)
-        ..lineTo(radius * 0.135, -radius * 0.030)
-        ..lineTo(radius * 0.135, radius * 0.030)
-        ..lineTo(-radius * 0.150, radius * 0.052)
-        ..close(),
+    canvas.drawRect(
+      Rect.fromCenter(
+          center: Offset(radius * 0.010, 0),
+          width: radius * 0.250,
+          height: radius * 0.086),
       fill,
     );
-    // The cartridge across the front of it, and the needle under that.
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromCenter(
-            center: Offset(-radius * 0.115, radius * 0.058),
-            width: radius * 0.062,
-            height: radius * 0.075),
-        Radius.circular(radius * 0.010),
-      ),
+    canvas.drawRect(
+      Rect.fromCenter(
+          center: Offset(-radius * 0.080, radius * 0.068),
+          width: radius * 0.074,
+          height: radius * 0.070),
       fill,
     );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTRB(-radius * 0.136, radius * 0.088, -radius * 0.118,
-            radius * 0.130),
-        Radius.circular(radius * 0.008),
-      ),
+    canvas.drawRect(
+      Rect.fromLTRB(-radius * 0.100, radius * 0.098, -radius * 0.080,
+          radius * 0.142),
       fill,
     );
     canvas.restore();
