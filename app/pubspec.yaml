@@ -29,7 +29,6 @@ dependencies:
   # The browser's own document, for the one thing Flutter cannot reach: the colour the
   # system paints the strips it draws around an installed app.
   web: ^1.1.0
-  webview_flutter: ^4.14.1
   path_provider: ^2.1.6
 dev_dependencies:
   # The fake audio engine in test/ implements this, so the player's own logic can be

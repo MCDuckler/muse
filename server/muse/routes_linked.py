@@ -12,6 +12,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from . import catalog, db, jobs, linked, sync, ytm
 from .deps import cfg, current_user
+from .routes_accounts import is_admin
 
 log = logging.getLogger("muse.linked")
 router = APIRouter(prefix="/linked")
@@ -68,6 +69,60 @@ def link_account(provider: str, body: dict = Body(...), user: dict = Depends(cur
     except Exception as e:
         raise HTTPException(502, f"{provider} did not answer: {e}")
     return linked.link(user["id"], provider, profile)
+
+
+@router.get("/youtube/oauth/client")
+def youtube_oauth_client(user: dict = Depends(current_user)):
+    """Whether this server can sign people in with a code, and where that came from.
+
+    Readable by anybody — it decides which of the two sign-in screens they are shown —
+    but only ever says whether a client is set, never what it is.
+    """
+    client_id, _, where = ytm.oauth_client(cfg())
+    return {
+        "configured": bool(client_id),
+        "from": where,
+        # Whether this person can do anything about it. For everybody else the answer
+        # to "why can I not sign in" is "ask whoever runs this".
+        "may_set": is_admin(user["id"]),
+        # The tail of it, so an admin can tell one client from another without the
+        # server ever handing back a credential.
+        "ends_with": client_id[-12:] if client_id else None,
+    }
+
+
+@router.put("/youtube/oauth/client")
+def set_youtube_oauth_client(body: dict = Body(...),
+                             user: dict = Depends(current_user)):
+    """Give this server an OAuth client, from a screen rather than a file on the box.
+
+    Checked with Google before it is kept: a client id with a typo in it would
+    otherwise turn into a sign-in screen that fails for everybody a week later, with
+    nothing to say why.
+    """
+    if not is_admin(user["id"]):
+        raise HTTPException(403, "only an admin can set this")
+    client_id = (body.get("client_id") or "").strip()
+    client_secret = (body.get("client_secret") or "").strip()
+    if not client_id or not client_secret:
+        raise HTTPException(400, "client_id and client_secret required")
+    try:
+        ytm.check_oauth_client(client_id, client_secret)
+    except ytm.NotAllowed as e:
+        raise HTTPException(400, f"Google would not take that client: {e}")
+    except Exception as e:                        # noqa: BLE001
+        raise HTTPException(502, f"Google did not answer: {e}")
+    ytm.remember_oauth_client(client_id, client_secret)
+    return {"configured": True, "from": "settings", "ends_with": client_id[-12:]}
+
+
+@router.delete("/youtube/oauth/client")
+def clear_youtube_oauth_client(user: dict = Depends(current_user)):
+    if not is_admin(user["id"]):
+        raise HTTPException(403, "only an admin can clear this")
+    ytm.forget_oauth_client()
+    client_id, _, where = ytm.oauth_client(cfg())
+    return {"configured": bool(client_id), "from": where}
 
 
 @router.post("/youtube/oauth")

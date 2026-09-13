@@ -345,3 +345,72 @@ def test_without_an_oauth_client_the_app_is_told_to_paste(client, hdr):
     assert "pasting" in r.json()["detail"]
     listed = client.get("/linked", headers=hdr).json()["accounts"]
     assert next(a for a in listed if a["provider"] == "youtube")["sign_in"] == "paste"
+
+
+
+# ---------------------------------------------------------------- signing in with a code
+#
+# Google will not sign anybody in inside an app's own browser, so the way in is the
+# device flow — which needs an OAuth client this server owns. It can come from
+# muse.toml, or be pasted in by an admin, which is what these are about.
+def test_a_server_with_no_oauth_client_says_so(client, hdr):
+    """Which sign-in screen somebody is shown comes from this."""
+    said = client.get("/linked/youtube/oauth/client", headers=hdr).json()
+    assert said["configured"] is False
+    assert said["ends_with"] is None
+    youtube = next(a for a in client.get("/linked", headers=hdr).json()["accounts"]
+                   if a["provider"] == "youtube")
+    assert youtube["sign_in"] == "paste"
+
+
+def test_only_an_admin_can_give_the_server_a_client(client, hdr):
+    from muse import auth
+
+    tok = auth.issue_token(auth.ensure_user("ordinary"), "phone", None)
+    r = client.put("/linked/youtube/oauth/client",
+                   headers={"Authorization": f"Bearer {tok}"},
+                   json={"client_id": "x.apps.googleusercontent.com",
+                         "client_secret": "y"})
+    assert r.status_code == 403
+
+
+def test_a_client_is_checked_with_google_before_it_is_kept(client, hdr, monkeypatch):
+    """A client id with a typo in it would otherwise become a sign-in screen that
+    fails for everybody a week later, with nothing on screen to say why."""
+    from muse import ytm
+
+    def refuse(client_id, client_secret):
+        raise ytm.NotAllowed("invalid_client")
+
+    monkeypatch.setattr(ytm, "check_oauth_client", refuse)
+    r = client.put("/linked/youtube/oauth/client", headers=hdr,
+                   json={"client_id": "wrong", "client_secret": "wrong"})
+    assert r.status_code == 400
+    assert "would not take" in r.json()["detail"]
+    assert client.get("/linked/youtube/oauth/client",
+                      headers=hdr).json()["configured"] is False
+
+
+def test_a_client_google_accepts_is_kept_and_never_handed_back(client, hdr, monkeypatch):
+    from muse import ytm
+
+    monkeypatch.setattr(ytm, "check_oauth_client", lambda *a: None)
+    r = client.put("/linked/youtube/oauth/client", headers=hdr,
+                   json={"client_id": "123-abcdef.apps.googleusercontent.com",
+                         "client_secret": "shhh"})
+    assert r.status_code == 200
+    assert "shhh" not in r.text, "a secret that goes in never comes back out"
+
+    said = client.get("/linked/youtube/oauth/client", headers=hdr).json()
+    assert said["configured"] is True
+    assert said["from"] == "settings"
+    assert said["ends_with"] == "seruserconten"[-12:] or len(said["ends_with"]) == 12
+
+    # And the service list now offers the code rather than a paste.
+    youtube = next(a for a in client.get("/linked", headers=hdr).json()["accounts"]
+                   if a["provider"] == "youtube")
+    assert youtube["sign_in"] == "code"
+
+    client.delete("/linked/youtube/oauth/client", headers=hdr)
+    assert client.get("/linked/youtube/oauth/client",
+                      headers=hdr).json()["configured"] is False

@@ -7,6 +7,8 @@ import logging
 import re
 from functools import lru_cache
 
+from . import db
+
 log = logging.getLogger("muse.ytm")
 
 
@@ -292,16 +294,70 @@ class NotConfigured(RuntimeError):
     """No OAuth client is set up, so the device flow cannot be offered."""
 
 
+# Where an admin's pasted client is kept. The file is the other way in and stays
+# authoritative: a server whose muse.toml names a client does not have to be told again
+# through a screen.
+CLIENT_ID_KEY = "ytmusic.client_id"
+CLIENT_SECRET_KEY = "ytmusic.client_secret"
+
+
+def _stored(key: str) -> str | None:
+    try:
+        row = db.one("select value from settings where key=%s", (key,))
+    except Exception:                             # noqa: BLE001 — no database, no value
+        return None
+    return (row or {}).get("value") or None
+
+
+def oauth_client(cfg) -> tuple[str | None, str | None, str | None]:
+    """The OAuth client this server signs people in with, and where it came from."""
+    from_file = (cfg.ytmusic or {}) if cfg else {}
+    if from_file.get("client_id") and from_file.get("client_secret"):
+        return from_file["client_id"], from_file["client_secret"], "config"
+    stored_id, stored_secret = _stored(CLIENT_ID_KEY), _stored(CLIENT_SECRET_KEY)
+    if stored_id and stored_secret:
+        return stored_id, stored_secret, "settings"
+    return None, None, None
+
+
+def remember_oauth_client(client_id: str, client_secret: str) -> None:
+    """Keep an admin's client, so nobody has to edit a file on the box to sign in."""
+    for key, value in ((CLIENT_ID_KEY, client_id), (CLIENT_SECRET_KEY, client_secret)):
+        db.run(
+            """insert into settings(key, value, set_at) values(%s, %s, now())
+                 on conflict (key) do update set value=excluded.value, set_at=now()""",
+            (key, value))
+
+
+def forget_oauth_client() -> None:
+    db.run("delete from settings where key in (%s, %s)",
+           (CLIENT_ID_KEY, CLIENT_SECRET_KEY))
+
+
 def _oauth(cfg):
     from ytmusicapi.auth.oauth import OAuthCredentials
 
-    client_id = (cfg.ytmusic or {}).get("client_id")
-    client_secret = (cfg.ytmusic or {}).get("client_secret")
+    client_id, client_secret, _ = oauth_client(cfg)
     if not client_id or not client_secret:
         raise NotConfigured(
             "This server has no YouTube OAuth client set up, so signing in has to be "
             "done by pasting the headers from a browser.")
     return OAuthCredentials(client_id=client_id, client_secret=client_secret)
+
+
+def check_oauth_client(client_id: str, client_secret: str) -> None:
+    """Ask Google whether this client can start a device sign-in at all.
+
+    The cheapest true test there is: getting a code is the first half of the flow, and
+    a client Google will not issue a code for is a client nobody can sign in with. The
+    code is thrown away — it expires on its own in half an hour.
+    """
+    from ytmusicapi.auth.oauth import OAuthCredentials
+
+    try:
+        OAuthCredentials(client_id=client_id, client_secret=client_secret).get_code()
+    except Exception as e:                        # noqa: BLE001
+        raise NotAllowed(str(e))
 
 
 def oauth_configured(cfg) -> bool:

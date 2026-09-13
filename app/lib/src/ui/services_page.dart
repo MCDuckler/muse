@@ -12,7 +12,7 @@ import '../state/app_state.dart';
 import 'dialogs.dart';
 import 'mini_player.dart';
 import 'spotify_page.dart';
-import 'youtube_sign_in.dart';
+import 'youtube_setup.dart';
 import 'snack.dart';
 
 /// Services linked by typing a name.
@@ -180,20 +180,21 @@ class _ServicesPageState extends State<ServicesPage> {
       return;
     }
 
-    // Failing that, the app's own browser is still worth offering: it works for
-    // accounts Google is relaxed about, and it is better than nothing on a phone.
-    if (youtube && canSignInToYouTube) {
-      final captured = await Navigator.of(context).push<String>(
-          MaterialPageRoute(builder: (_) => const YouTubeSignInPage()));
-      if (captured == null) return;
-      try {
-        await api.linkService(service.provider, captured);
+    // Failing that, the way to *get* the code sign-in — which is a one-off job for
+    // whoever runs the server, and after it nobody here has to paste anything again.
+    //
+    // The app's own browser used to be offered here. It cannot work: Google refuses to
+    // sign anybody in inside an embedded browser and says so with "this browser or app
+    // may not be secure", whatever user agent it claims. Offering it anyway was
+    // offering an error message.
+    if (youtube) {
+      final took = await youtubeCodeSignInSetup(context);
+      if (took) {
         await _load();
-      } catch (e) {
-        messenger.showSnackBar(snack(Text('$e')));
+        return;
       }
-      return;
     }
+    if (!mounted) return;
 
     final handle = await promptForName(
       context,

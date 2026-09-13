@@ -505,6 +505,32 @@ class ApiClient {
   Future<void> unlinkService(String provider) async =>
       await _decode(await net.delete(_u('/linked/$provider'), headers: _headers));
 
+  /// Whether this server can sign people in with a code at all, and where its OAuth
+  /// client came from. Never the client itself: the tail of the id is all that comes
+  /// back, which is enough to tell one from another.
+  Future<({bool configured, bool maySet, String? from, String? endsWith})>
+      youtubeSignInClient() async {
+    final d = await _decode(await net.get(_u('/linked/youtube/oauth/client'),
+        headers: _headers)) as Map<String, dynamic>;
+    return (
+      configured: d['configured'] == true,
+      maySet: d['may_set'] == true,
+      from: d['from'] as String?,
+      endsWith: d['ends_with'] as String?,
+    );
+  }
+
+  /// Give the server an OAuth client, so everybody on it can sign in with a code.
+  /// Admins only, and checked with Google before it is kept.
+  Future<void> setYoutubeSignInClient(String clientId, String clientSecret) async =>
+      await _decode(await net.put(_u('/linked/youtube/oauth/client'),
+          headers: _headers,
+          body: jsonEncode(
+              {'client_id': clientId, 'client_secret': clientSecret})));
+
+  Future<void> clearYoutubeSignInClient() async => await _decode(
+      await net.delete(_u('/linked/youtube/oauth/client'), headers: _headers));
+
   /// Start signing in to YouTube Music with a code. Answers with the code to read out
   /// and where to type it.
   Future<({String deviceCode, String userCode, String url, int interval})>
