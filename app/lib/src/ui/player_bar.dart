@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../state/app_state.dart';
 import '../state/player.dart';
 import 'artwork.dart';
+import 'feel.dart';
 import 'now_playing.dart';
 import 'swipe.dart';
 import 'progress.dart';
@@ -111,7 +112,10 @@ class PlayerBar extends StatelessWidget {
               ),
               ListTile(
                 dense: true,
-                onTap: () => _openNowPlaying(context),
+                onTap: () {
+              feel(Feel.tap);
+              _openNowPlaying(context);
+            },
                 leading: Stack(
                   clipBehavior: Clip.none,
                   children: [
@@ -148,7 +152,7 @@ class PlayerBar extends StatelessWidget {
                   children: [
                     IconButton(
                         icon: const Icon(Icons.skip_previous),
-                        onPressed: app.skipPrevious),
+                        onPressed: felt(Feel.commit, app.skipPrevious)),
                     IconButton(
                       iconSize: 34,
                       icon: Icon(app.musicIsPlaying
@@ -158,10 +162,10 @@ class PlayerBar extends StatelessWidget {
                       // answers a tap — the player waits for the download — and a
                       // button that greys out for the moment a state arrives late is
                       // a pale flash in the corner of the eye for no gain.
-                      onPressed: app.playPause,
+                      onPressed: felt(Feel.commit, app.playPause),
                     ),
                     IconButton(
-                        icon: const Icon(Icons.skip_next), onPressed: app.skipNext),
+                        icon: const Icon(Icons.skip_next), onPressed: felt(Feel.commit, app.skipNext)),
                   ],
                 ),
               ),

@@ -7,6 +7,7 @@ import '../state/app_state.dart';
 import '../state/offline.dart';
 import '../state/player.dart';
 import 'dialogs.dart';
+import 'feel.dart';
 import 'song_row.dart';
 import 'station.dart';
 import 'swipe.dart';
@@ -305,8 +306,16 @@ class _QueuePageState extends State<QueuePage> {
                   padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
                   itemCount: rows.length,
                   buildDefaultDragHandles: false,
-                  onReorderStart: (i) => setState(() => _dragging = i),
-                  onReorderEnd: (_) => setState(() => _dragging = null),
+                  // A row lifting out of a list and dropping back into it: the two
+                  // moments a finger is holding something that is not where it was.
+                  onReorderStart: (i) {
+                    feel(Feel.pick);
+                    setState(() => _dragging = i);
+                  },
+                  onReorderEnd: (_) {
+                    feel(Feel.tap);
+                    setState(() => _dragging = null);
+                  },
                   // While a selection is being dragged, the rest of it is drawn as one
                   // row: a stack of sleeves with a count on it, rather than a dozen
                   // rows sliding about independently.

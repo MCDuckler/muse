@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'feel.dart';
+
 /// A drag that the content actually follows.
 ///
 /// The first pass used velocity alone: nothing moved until the finger lifted, and the
@@ -121,9 +123,17 @@ class _DragFollowState extends State<DragFollow> with SingleTickerProviderStateM
   bool get _hasHorizontal => widget.onSwipeLeft != null || widget.onSwipeRight != null;
   bool get _hasVertical => widget.onSwipeUp != null || widget.onSwipeDown != null;
 
+  /// Whether the drag has been far enough to do something, as of the last frame.
+  ///
+  /// Kept so the tick happens *at* the line rather than when the finger lifts: a
+  /// gesture with a threshold is a mechanism, and a mechanism says when it has caught.
+  /// Told after the fact, all somebody can do is find out they guessed right.
+  bool _caught = false;
+
   void _onStart(DragStartDetails _) {
     _spring.stop();
     _locked = false;
+    _caught = false;
   }
 
   void _onUpdate(DragUpdateDetails d) {
@@ -147,6 +157,17 @@ class _DragFollowState extends State<DragFollow> with SingleTickerProviderStateM
         _offset = Offset(0, _resist(dy, widget.verticalTravel));
       }
     });
+
+    // Crossing the line, and crossing back: both are worth saying, because a drag that
+    // has gone too far and come back should not feel the same as one that has not gone
+    // far enough yet.
+    final travel = _horizontal ? widget.horizontalTravel : widget.verticalTravel;
+    final moved = (_horizontal ? _offset.dx : _offset.dy).abs();
+    final caught = moved >= travel * widget.completeAt;
+    if (caught != _caught) {
+      _caught = caught;
+      if (caught) feel(Feel.edge);
+    }
   }
 
   /// Past the travel distance the content keeps moving, but grudgingly — the drag
@@ -175,6 +196,7 @@ class _DragFollowState extends State<DragFollow> with SingleTickerProviderStateM
           ? (forward ? widget.onSwipeRight : widget.onSwipeLeft)
           : (forward ? widget.onSwipeDown : widget.onSwipeUp);
       if (action != null) {
+        feel(Feel.commit);
         action();
         _settle();
         return;

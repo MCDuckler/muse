@@ -6,6 +6,8 @@ import '../state/app_state.dart';
 import '../state/offline.dart';
 import '../state/selection.dart';
 import 'artwork.dart';
+import 'motion.dart';
+import 'feel.dart';
 import 'source_dot.dart';
 import 'swipe.dart';
 import 'track_menu.dart';
@@ -149,12 +151,27 @@ class SongRow extends StatelessWidget {
         // While a selection is running in this list, a tap adds to it rather than
         // playing: nobody holds a row to pick it out and then expects the next tap to
         // start the music.
-        onTap: picking ? () => selection!.toggle(selectable!, track.id) : onTap,
+        onTap: picking
+            ? () {
+                feel(Feel.pick);
+                selection!.toggle(selectable!, track.id);
+              }
+            : onTap == null
+                ? null
+                : felt(Feel.tap, onTap),
+        // A hold that turns into something has to say so under the finger: without it
+        // the only way to find out whether the hold worked is to let go.
         onLongPress: selectable != null
-            ? () => selection!.start(selectable!, track.id)
+            ? () {
+                feel(Feel.commit);
+                selection!.start(selectable!, track.id);
+              }
             : showMenu
-                ? () => showTrackSheet(context, track,
-                    onRemove: onRemove, onChanged: onChanged)
+                ? () {
+                    feel(Feel.commit);
+                    showTrackSheet(context, track,
+                        onRemove: onRemove, onChanged: onChanged);
+                  }
                 : null,
         child: Padding(
           padding: EdgeInsets.only(
@@ -368,21 +385,56 @@ class _Downloading extends StatelessWidget {
 }
 
 /// The heart, wherever it is wanted. Reads and writes the one favourites list.
-class FavouriteButton extends StatelessWidget {
+class FavouriteButton extends StatefulWidget {
   const FavouriteButton({super.key, required this.trackId, this.size = 20});
 
   final int trackId;
   final double size;
 
   @override
+  State<FavouriteButton> createState() => _FavouriteButtonState();
+}
+
+/// The heart, which is worth a little more than the rest of the row.
+///
+/// It is the one control in the app whose whole job is to say "yes, this one", and it
+/// used to swap one glyph for another with nothing in between. A quick swell as it
+/// fills — and a tick under the finger — is the difference between a button that
+/// registered and a button you have to look at to be sure of.
+class _FavouriteButtonState extends State<FavouriteButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _swell =
+      AnimationController(vsync: this, duration: Motion.base);
+
+  @override
+  void dispose() {
+    _swell.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final on = context.select<AppState, bool>((a) => a.isFavourite(trackId));
+    final on = context.select<AppState, bool>((a) => a.isFavourite(widget.trackId));
     return IconButton(
-      icon: Icon(on ? Icons.favorite : Icons.favorite_border, size: size),
+      icon: AnimatedBuilder(
+        animation: _swell,
+        builder: (context, child) => Transform.scale(
+          // Out and back, rather than out and stay: the heart is the same size after
+          // as before, and what happened is the journey.
+          scale: 1 + 0.35 * Curves.easeOut.transform(
+              (1 - (_swell.value * 2 - 1).abs()).clamp(0.0, 1.0)),
+          child: child,
+        ),
+        child: Icon(on ? Icons.favorite : Icons.favorite_border, size: widget.size),
+      ),
       color: on ? Theme.of(context).colorScheme.primary : null,
       visualDensity: VisualDensity.compact,
       tooltip: on ? 'Remove from favourites' : 'Add to favourites',
-      onPressed: () => context.read<AppState>().toggleFavourite(trackId),
+      onPressed: () {
+        feel(Feel.tap);
+        if (!stillness(context)) _swell.forward(from: 0);
+        context.read<AppState>().toggleFavourite(widget.trackId);
+      },
     );
   }
 }

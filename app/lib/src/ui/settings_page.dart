@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import '../api/client.dart';
 import '../state/keepalive.dart';
 import '../state/app_state.dart';
+import 'feel.dart';
 import 'dialogs.dart';
 import '../state/offline.dart';
 import '../state/art_cache.dart';
@@ -214,6 +215,21 @@ class _SettingsPageState extends State<SettingsPage> {
                   'without it there is nothing holding the app up in the background'),
               trailing: const Icon(Icons.chevron_right),
               onTap: () => Keepalive.takeMeToTheSettings(),
+            ),
+          if (Haptics.available)
+            SwitchListTile(
+              secondary: const Icon(Icons.vibration),
+              title: const Text('Haptics'),
+              subtitle: const Text(
+                  'A tick under the finger when something happens — a song picked, a '
+                  'swipe catching, the music starting'),
+              value: app.haptics,
+              onChanged: (on) {
+                app.setHaptics(on);
+                // Answered with the thing being switched on, which is the only
+                // honest demonstration of it.
+                if (on) feel(Feel.commit);
+              },
             ),
           const Divider(),
           _label(context, 'Colours'),

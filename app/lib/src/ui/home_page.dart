@@ -6,6 +6,7 @@ import '../state/app_state.dart';
 import '../state/playback_log.dart';
 import 'downloads_page.dart';
 import 'jam_page.dart';
+import 'feel.dart';
 import 'glass.dart';
 import 'library_page.dart';
 import 'settings_page.dart';
@@ -144,6 +145,7 @@ class MuseNavigationBar extends StatelessWidget {
     return NavigationBar(
       selectedIndex: tab,
       onDestinationSelected: (i) {
+        if (i != tab) feel(Feel.pick);
         context.read<AppState>().setHomeTab(i);
         onLeaving?.call();
       },

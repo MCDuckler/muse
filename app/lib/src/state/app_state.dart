@@ -16,6 +16,7 @@ import 'coalesce.dart';
 import 'keepalive.dart';
 import 'player.dart';
 import '../ui/favicon.dart';
+import '../ui/feel.dart';
 import '../ui/media_session.dart';
 import '../ui/settings_page.dart' show appBuild;
 import '../ui/theme.dart';
@@ -126,6 +127,7 @@ class AppState extends ChangeNotifier {
   static const _kCoverScale = 'muse.coverScale';
   static const _kArmStyle = 'muse.armStyle';
   static const _kDiscScale = 'muse.discScale';
+  static const _kHaptics = 'muse.haptics';
   static const _kLayout = 'muse.playerLayout';
   static const _kShelfAxis = 'muse.shelfAxis';
   static const _kJamListening = 'muse.jamListening';
@@ -161,6 +163,17 @@ class AppState extends ChangeNotifier {
 
   /// How wide the record on the deck is drawn, as a fraction of the room there is.
   double discScale = 1.0;
+
+  /// Whether the phone answers a finger with a tick. On where there is a motor.
+  bool haptics = true;
+
+  Future<void> setHaptics(bool on) async {
+    haptics = on;
+    Haptics.enabled = on;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kHaptics, on);
+  }
 
   Future<void> setDiscScale(double value) async {
     discScale = value.clamp(0.6, 1.15);
@@ -281,6 +294,8 @@ class AppState extends ChangeNotifier {
     spectrum = prefs.getBool(_kSpectrum) ?? false;
     coverScale = (prefs.getDouble(_kCoverScale) ?? 0.74).clamp(0.5, 1.0);
     discScale = (prefs.getDouble(_kDiscScale) ?? 1.0).clamp(0.6, 1.15);
+    haptics = prefs.getBool(_kHaptics) ?? true;
+    Haptics.enabled = haptics;
     armStyle = ArmStyle.values.firstWhere(
         (a) => a.name == prefs.getString(_kArmStyle),
         orElse: () => ArmStyle.studio);

@@ -12,7 +12,9 @@ import '../state/player.dart';
 import 'artwork.dart';
 import 'back_and_forth.dart';
 import 'dialogs.dart';
+import 'feel.dart';
 import 'glass.dart';
+import 'motion.dart';
 import 'record_stage.dart';
 import 'sleeve_ink.dart';
 import 'spectrum.dart';
@@ -892,6 +894,63 @@ class _KeepButton extends StatelessWidget {
   }
 }
 
+/// Play and pause, as one shape that turns into the other.
+///
+/// Two icons swapped is a flicker at the exact moment somebody is looking at the
+/// button they just pressed; the same triangle folding into two bars is the button
+/// answering. Material ships the drawing, so this is the animation and the tick that
+/// goes with it.
+class _PlayPauseButton extends StatefulWidget {
+  const _PlayPauseButton(
+      {required this.playing, required this.size, required this.onPressed});
+  final bool playing;
+  final double size;
+  final VoidCallback onPressed;
+
+  @override
+  State<_PlayPauseButton> createState() => _PlayPauseButtonState();
+}
+
+class _PlayPauseButtonState extends State<_PlayPauseButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _shape = AnimationController(
+    vsync: this,
+    duration: Motion.quick,
+    value: widget.playing ? 1 : 0,
+  );
+
+  @override
+  void didUpdateWidget(_PlayPauseButton old) {
+    super.didUpdateWidget(old);
+    if (old.playing == widget.playing) return;
+    // Straight there when the phone has asked for stillness: the icon still has to
+    // change, it just does not travel.
+    if (stillness(context)) {
+      _shape.value = widget.playing ? 1 : 0;
+    } else {
+      widget.playing ? _shape.forward() : _shape.reverse();
+    }
+  }
+
+  @override
+  void dispose() {
+    _shape.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => IconButton.filled(
+        iconSize: widget.size,
+        tooltip: widget.playing ? 'Pause' : 'Play',
+        icon: AnimatedIcon(
+          icon: AnimatedIcons.play_pause,
+          progress: _shape,
+          size: widget.size,
+        ),
+        onPressed: felt(Feel.commit, widget.onPressed),
+      );
+}
+
 /// Repeat, wherever it is shown: off, the whole queue, or this one song.
 class _RepeatButton extends StatelessWidget {
   const _RepeatButton({required this.app, this.size = 22});
@@ -1236,9 +1295,14 @@ class _ScrubberState extends State<_ScrubberBar> {
           child: Slider(
             value: max > 0 ? value : 0,
             max: max > 0 ? max : 1,
+            // Taking hold of the bar and letting go of it are both worth saying: a
+            // scrub is the one gesture here where the finger is somewhere the eye is
+            // not, because the eye is on the time.
+            onChangeStart: enabled ? (_) => feel(Feel.pick) : null,
             onChanged: enabled ? (v) => setState(() => _dragging = v) : null,
             onChangeEnd: enabled
                 ? (v) {
+                    feel(Feel.commit);
                     app.seekTo(Duration(milliseconds: v.round()));
                     setState(() {
                       _seeking = v;
@@ -1328,17 +1392,13 @@ class _Controls extends StatelessWidget {
             IconButton(
               iconSize: 44,
               icon: const Icon(Icons.skip_previous),
-              onPressed: app.skipPrevious,
+              onPressed: felt(Feel.commit, app.skipPrevious),
             ),
-            IconButton.filled(
-              iconSize: 56,
-              icon: Icon(playing ? Icons.pause : Icons.play_arrow),
-              onPressed: app.playPause,
-            ),
+            _PlayPauseButton(playing: playing, size: 56, onPressed: app.playPause),
             IconButton(
               iconSize: 44,
               icon: const Icon(Icons.skip_next),
-              onPressed: app.skipNext,
+              onPressed: felt(Feel.commit, app.skipNext),
             ),
             IconButton(
               iconSize: 24,
@@ -1364,17 +1424,14 @@ class _Controls extends StatelessWidget {
         IconButton(
           iconSize: big ? 42 : 34,
           icon: const Icon(Icons.skip_previous),
-          onPressed: app.skipPrevious,
+          onPressed: felt(Feel.commit, app.skipPrevious),
         ),
-        IconButton.filled(
-          iconSize: big ? 54 : 42,
-          icon: Icon(playing ? Icons.pause : Icons.play_arrow),
-          onPressed: app.playPause,
-        ),
+        _PlayPauseButton(
+            playing: playing, size: big ? 54 : 42, onPressed: app.playPause),
         IconButton(
           iconSize: big ? 42 : 34,
           icon: const Icon(Icons.skip_next),
-          onPressed: app.skipNext,
+          onPressed: felt(Feel.commit, app.skipNext),
         ),
         IconButton(
           icon: Icon(repeat == QueueRepeat.one ? Icons.repeat_one : Icons.repeat),
