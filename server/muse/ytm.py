@@ -296,6 +296,45 @@ def account_name(auth: str) -> str:
         return "YouTube Music"
 
 
+class CannotReadLibrary(RuntimeError):
+    """The sign-in is real and YouTube will not serve a library to it.
+
+    What a code sign-in gets you is a Google token, and Google is happy with it —
+    YouTube is not. Its own API answers "Request contains an invalid argument" to every
+    library call made with an OAuth token from anybody's own "TV and Limited Input"
+    client; the only OAuth it serves libraries to is its own TV app's. Nothing about
+    the Google project can be configured to change that.
+
+    Worth its own kind of failure because the answer is specific: sign in with the
+    cookie instead, which is a different button rather than a different setting.
+    """
+
+
+CANNOT_READ = (
+    "This YouTube sign-in cannot read your library. YouTube only serves library "
+    "data to its own app's sign-in, so a code from a Google project of your own "
+    "authenticates and then gets refused. Link YouTube again and paste the cookie "
+    "from a signed-in music.youtube.com instead."
+)
+
+
+def check_library_access(auth: str, cfg=None) -> None:
+    """Ask for one playlist, to find out whether this sign-in can read anything.
+
+    Done at the moment somebody links rather than the first time they tap the list: a
+    credential that cannot work is worse stored than refused, because every screen
+    after it says "internal server error" and none of them say why.
+    """
+    try:
+        _authed(auth, cfg).get_library_playlists(limit=1)
+    except NotAllowed:
+        raise
+    except Exception as e:                        # noqa: BLE001
+        if "invalid argument" in str(e).lower() or "400" in str(e):
+            raise CannotReadLibrary(CANNOT_READ) from e
+        raise Unavailable(f"YouTube Music would not answer: {e}") from e
+
+
 def library_playlists(auth: str, limit: int = 200) -> list[dict]:
     """The playlists in somebody's library, with Liked Songs first."""
     try:
@@ -303,6 +342,8 @@ def library_playlists(auth: str, limit: int = 200) -> list[dict]:
     except NotAllowed:
         raise
     except Exception as e:
+        if "invalid argument" in str(e).lower() or "400" in str(e):
+            raise CannotReadLibrary(CANNOT_READ) from e
         raise Unavailable(f"YouTube Music would not list your playlists: {e}") from e
 
     out = [{"remote_id": LIKED, "name": "Liked Songs", "count": None, "owner": "you",

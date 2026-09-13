@@ -328,6 +328,9 @@ def test_signing_in_to_youtube_with_a_code(client, hdr, monkeypatch):
     monkeypatch.setattr(ytm, "oauth_finish",
                         lambda cfg, device_code: '{"refresh_token": "SECRET"}')
     monkeypatch.setattr(ytm, "account_name", lambda auth: "Chris")
+    # Tried against the library before it is kept — see
+    # test_a_code_sign_in_that_cannot_read_a_library_is_not_kept.
+    monkeypatch.setattr(ytm, "check_library_access", lambda auth, cfg=None: None)
     done = client.post("/linked/youtube/oauth/finish", headers=hdr,
                        json={"device_code": "DEV-123"})
     assert done.status_code == 200, done.text
@@ -452,3 +455,48 @@ def test_google_turning_an_account_away_says_what_to_do(client, hdr, monkeypatch
                     json={"device_code": "xyz"})
     assert r.status_code == 403
     assert "publish the consent screen" in r.json()["detail"].lower()
+
+
+def test_a_code_sign_in_that_cannot_read_a_library_is_not_kept(client, hdr,
+                                                               monkeypatch):
+    """YouTube serves library data only to its own app's OAuth.
+
+    A code from a Google project of your own authenticates and is then refused by
+    YouTube on every call — so storing it turns every screen after the sign-in into an
+    internal server error and none of them say why. It is checked before it is kept.
+    """
+    from muse import ytm
+
+    monkeypatch.setattr(ytm, "oauth_finish", lambda cfg, code: '{"refresh_token": "x"}')
+
+    def refuse(auth, cfg=None):
+        raise ytm.CannotReadLibrary(ytm.CANNOT_READ)
+
+    monkeypatch.setattr(ytm, "check_library_access", refuse)
+    r = client.post("/linked/youtube/oauth/finish", headers=hdr,
+                    json={"device_code": "xyz"})
+    assert r.status_code == 400
+    assert "paste the cookie" in r.json()["detail"].lower()
+
+    # And nothing was linked, so nothing is there to fail later.
+    accounts = client.get("/linked", headers=hdr).json()["accounts"]
+    assert next(a for a in accounts if a["provider"] == "youtube")["linked"] is None
+
+
+def test_a_sign_in_stored_before_that_check_says_what_is_wrong(client, hdr,
+                                                              monkeypatch):
+    """Not a 500, which is what it was."""
+    from muse import linked, ytm
+
+    monkeypatch.setattr(linked, "check", lambda p, h: {
+        "handle": '{"refresh_token": "x"}', "display_name": "Somebody",
+        "secret": '{"refresh_token": "x"}'})
+    client.post("/linked/youtube", headers=hdr, json={"handle": "whatever"})
+
+    def refuse(auth):
+        raise ytm.CannotReadLibrary(ytm.CANNOT_READ)
+
+    monkeypatch.setitem(linked._PLAYLISTS, "youtube", refuse)
+    r = client.get("/linked/youtube/playlists", headers=hdr)
+    assert r.status_code == 409
+    assert "paste the cookie" in r.json()["detail"].lower()

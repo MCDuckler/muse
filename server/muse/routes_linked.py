@@ -166,6 +166,15 @@ def youtube_oauth_finish(body: dict = Body(...), user: dict = Depends(current_us
     except Exception as e:                        # noqa: BLE001
         raise HTTPException(502, f"Google would not finish the sign-in: {e}")
 
+    # Before it is kept: a sign-in that cannot read a library is not a sign-in, and
+    # storing it turns every screen after this into "internal server error".
+    try:
+        ytm.check_library_access(secret, cfg())
+    except ytm.CannotReadLibrary as e:
+        raise HTTPException(400, str(e))
+    except ytm.Unavailable as e:
+        raise HTTPException(502, str(e))
+
     name = ytm.account_name(secret)
     return linked.link(user["id"], "youtube",
                        {"handle": name, "display_name": name, "secret": secret})
@@ -188,6 +197,12 @@ def list_playlists(provider: str, user: dict = Depends(current_user)):
         remote = linked.playlists(provider, acc["handle"], user_id=user["id"])
     except linked.LinkError as e:
         raise HTTPException(400, str(e))
+    except ytm.CannotReadLibrary as e:
+        # A sign-in stored before this was checked for. Say what it is and what to do,
+        # rather than the 500 this used to be.
+        raise HTTPException(409, str(e))
+    except ytm.Unavailable as e:
+        raise HTTPException(502, str(e))
 
     mirrored = {r["remote_id"]: r for r in db.all_(
         """select remote_id, id as playlist_id, last_synced_at,

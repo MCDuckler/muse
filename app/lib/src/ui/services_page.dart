@@ -171,30 +171,28 @@ class _ServicesPageState extends State<ServicesPage> {
     final messenger = ScaffoldMessenger.of(context);
     final youtube = service.provider == 'youtube';
 
-    // Google refuses to sign anybody in inside an app's own browser — "this browser or
-    // app may not be secure" — and no amount of pretending to be Chrome gets past it,
-    // because that is what the check is for. What Google does support is a code: it is
-    // shown here and typed into a browser the person already trusts.
-    if (youtube && service.signIn == 'code') {
-      await _signInWithCode(service);
-      return;
-    }
-
-    // Failing that, the way to *get* the code sign-in — which is a one-off job for
-    // whoever runs the server, and after it nobody here has to paste anything again.
+    // The cookie first, even where this server can offer a code.
     //
-    // The app's own browser used to be offered here. It cannot work: Google refuses to
-    // sign anybody in inside an embedded browser and says so with "this browser or app
-    // may not be secure", whatever user agent it claims. Offering it anyway was
-    // offering an error message.
+    // The code sign-in works, in the sense that Google hands a token back — and then
+    // YouTube refuses it on every library call there is: "Request contains an invalid
+    // argument", for playlists, for liked songs, for the account's own name. It
+    // serves library data to its own app's sign-in and nothing else, and no Google
+    // project of your own can be configured into being that. Offering it first was
+    // offering the way in that cannot work.
     if (youtube) {
-      final took = await youtubeCodeSignInSetup(context);
-      if (took) {
-        await _load();
+      final how = await _howToSignIn(service);
+      if (how == null) return;
+      if (how == 'code') {
+        await _signInWithCode(service);
         return;
       }
+      if (how == 'setup') {
+        if (!mounted) return;
+        if (await youtubeCodeSignInSetup(context)) await _load();
+        return;
+      }
+      if (!mounted) return;
     }
-    if (!mounted) return;
 
     final handle = await promptForName(
       context,
@@ -219,6 +217,50 @@ class _ServicesPageState extends State<ServicesPage> {
       messenger.showSnackBar(snack(Text('$e')));
     }
   }
+
+  /// Which way in, for the one service with more than one.
+  ///
+  /// Answers 'paste', 'code' or 'setup' — or null when nobody chose anything.
+  Future<String?> _howToSignIn(LinkedService service) =>
+      showModalBottomSheet<String>(
+        context: context,
+        showDragHandle: true,
+        builder: (context) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.cookie_outlined),
+                title: const Text('Paste the cookie'),
+                subtitle: const Text(
+                    'From a signed-in music.youtube.com on a computer. The only way '
+                    "in that can read your library: YouTube serves that to its own "
+                    "app's sign-in and nothing else."),
+                onTap: () => Navigator.of(context).pop('paste'),
+              ),
+              if (service.signIn == 'code')
+                ListTile(
+                  leading: const Icon(Icons.pin_outlined),
+                  title: const Text('Sign in with a code'),
+                  subtitle: const Text(
+                      'Typed into a browser you trust. Google accepts it and YouTube '
+                      'then refuses it for library reads, so expect to be turned '
+                      'away.'),
+                  onTap: () => Navigator.of(context).pop('code'),
+                )
+              else
+                ListTile(
+                  leading: const Icon(Icons.settings_outlined),
+                  title: const Text('Set up code sign-in…'),
+                  subtitle: const Text(
+                      'Needs a Google project, and cannot read a library once it is '
+                      'done. For admins.'),
+                  onTap: () => Navigator.of(context).pop('setup'),
+                ),
+            ],
+          ),
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {
