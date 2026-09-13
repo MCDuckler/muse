@@ -12,6 +12,7 @@ the icon the server is serving and not whatever was in the repo months ago.
 from __future__ import annotations
 
 import io
+import json
 import pathlib
 import sys
 import urllib.request
@@ -49,6 +50,29 @@ def main() -> int:
     for name, size in WEB.items():
         out = ROOT / "web" / name
         master.resize((size, size), Image.LANCZOS).save(out, optimize=True)
+
+    # The iPhone's icons, every size its catalogue asks for.
+    #
+    # Read from Contents.json rather than listed here: the set Xcode wants has changed
+    # twice in recent memory, and a list in this file would be a list that is wrong
+    # after somebody opens the project in a newer Xcode. No alpha channel, because iOS
+    # composites an icon with transparency onto black and calls it a design.
+    icons = ROOT / "ios/Runner/Assets.xcassets/AppIcon.appiconset"
+    manifest = icons / "Contents.json"
+    if manifest.exists():
+        catalogue = json.loads(manifest.read_text())
+        done: set[str] = set()
+        for entry in catalogue.get("images", []):
+            name = entry.get("filename")
+            if not name or name in done:
+                continue
+            done.add(name)
+            points = float(entry["size"].split("x")[0])
+            scale = float(entry.get("scale", "1x").rstrip("x"))
+            px = max(1, round(points * scale))
+            master.resize((px, px), Image.LANCZOS).convert("RGB").save(
+                icons / name, optimize=True)
+        print(f"   iphone icons: {len(done)} sizes")
 
     # The little white one in the status bar.
     #

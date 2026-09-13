@@ -58,8 +58,12 @@ jobs:
         env:
           MUSE_SERVER: ${{ inputs.server || 'https://158-69-192-169.nip.io' }}
         run: |
+          # The same stamp the Android build carries: the moment it was built, which
+          # is the only thing that tells one of these apart from another on a phone.
+          # Without it the iPhone app has no version at all to report.
           flutter build ios --release --no-codesign \
-            --dart-define=MUSE_SERVER="$MUSE_SERVER"
+            --dart-define=MUSE_SERVER="$MUSE_SERVER" \
+            --dart-define=MUSE_BUILD="$(date -u +%Y%m%d%H%M)"
 
       - name: Wrap it as an ipa
         working-directory: app
@@ -69,13 +73,13 @@ jobs:
           mkdir -p build/ipa/Payload
           cp -R build/ios/iphoneos/Runner.app build/ipa/Payload/
           cd build/ipa
-          zip -qry muse.ipa Payload
-          ls -lh muse.ipa
+          zip -qry wetowl.ipa Payload
+          ls -lh wetowl.ipa
 
       - uses: actions/upload-artifact@v4
         with:
-          name: muse-ipa
-          path: app/build/ipa/muse.ipa
+          name: wetowl-ipa
+          path: app/build/ipa/wetowl.ipa
           retention-days: 30
 
       # A release makes it a plain link the phone can open, which is easier than
@@ -86,6 +90,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="ios-$(date +%Y%m%d-%H%M)"
-          gh release create "$tag" app/build/ipa/muse.ipa \
-            --title "muse for iPhone · $tag" \
+          gh release create "$tag" app/build/ipa/wetowl.ipa \
+            --title "WetOwl for iPhone · $tag" \
             --notes "Unsigned build of ${{ github.sha }}. Open it with SideStore."
