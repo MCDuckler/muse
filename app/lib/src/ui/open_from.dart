@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 /// The player growing out of the bar, and shrinking back into it.
@@ -75,22 +76,28 @@ class OpenFrom extends StatelessWidget {
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   borderRadius: corner,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.34 * (1 - t)),
-                      blurRadius: 26 * (1 - t) + 6,
-                      spreadRadius: 1,
-                      offset: Offset(0, 6 * (1 - t)),
-                    ),
-                  ],
+                  // A blurred shadow is a filter pass on a screen-sized rectangle,
+                  // every frame of the movement. Worth it where it is cheap; in a
+                  // browser it is most of a frame's budget for an edge nobody is
+                  // looking at while the thing behind it is opening.
+                  boxShadow: kIsWeb
+                      ? null
+                      : [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.34 * (1 - t)),
+                            blurRadius: 26 * (1 - t) + 6,
+                            spreadRadius: 1,
+                            offset: Offset(0, 6 * (1 - t)),
+                          ),
+                        ],
                 ),
                 child: ClipRRect(
                 // Rounded like the bar it comes out of, square by the time it is the
                 // screen.
                 borderRadius: corner,
-                child: Opacity(
-                  opacity: arrived,
-                  child: OverflowBox(
+                child: Stack(
+                  children: [
+                  OverflowBox(
                   alignment: Alignment.topLeft,
                   minWidth: screen.width,
                   maxWidth: screen.width,
@@ -109,6 +116,26 @@ class OpenFrom extends StatelessWidget {
                     child: page,
                   ),
                 ),
+                  // The page arriving through a veil rather than at half opacity.
+                  //
+                  // It used to be an Opacity around the whole page, which is a
+                  // screen-sized offscreen layer made again for every frame of the
+                  // opening — the single most expensive thing in the movement, and on
+                  // a phone or in a browser the reason it felt slow. A flat rectangle
+                  // of the surface colour fading out looks the same and costs a fill.
+                  if (arrived < 1)
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: ColoredBox(
+                          key: const Key('opening-veil'),
+                          color: Theme.of(context)
+                              .colorScheme
+                              .surface
+                              .withValues(alpha: 1 - arrived),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
               ),

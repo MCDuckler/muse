@@ -6,10 +6,12 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/keepalive.dart';
+import '../state/offline.dart';
 import '../state/playback_log.dart';
 import '../state/player.dart';
 import 'artwork.dart';
 import 'back_and_forth.dart';
+import 'dialogs.dart';
 import 'glass.dart';
 import 'record_stage.dart';
 import 'sleeve_ink.dart';
@@ -795,6 +797,17 @@ class _Extras extends StatelessWidget {
             tooltip: 'Lyrics',
             onPressed: () => showLyrics(context, track),
           ),
+          // The two things people do with a song they are listening to, next to the
+          // things they already do with it here: put it somewhere, and keep it. Both
+          // are in the sheet behind the last button as well — this is the shortcut,
+          // not the only way.
+          IconButton(
+            iconSize: size,
+            icon: const Icon(Icons.library_add_outlined),
+            tooltip: 'Add to playlist',
+            onPressed: () => addToPlaylistSheet(context, app, track),
+          ),
+          if (OfflineStore.supported) _KeepButton(app: app, track: track, size: size),
           IconButton(
             iconSize: size,
             icon: const Icon(Icons.more_horiz),
@@ -825,6 +838,13 @@ class _Extras extends StatelessWidget {
         ),
         IconButton(
           iconSize: size,
+          icon: const Icon(Icons.library_add_outlined),
+          tooltip: 'Add to playlist',
+          onPressed: () => addToPlaylistSheet(context, app, track),
+        ),
+        if (OfflineStore.supported) _KeepButton(app: app, track: track, size: size),
+        IconButton(
+          iconSize: size,
           icon: Icon(app.sleepAt != null ? Icons.bedtime : Icons.timer_outlined),
           tooltip: 'Sleep timer and speed',
           onPressed: () => showPlaybackExtras(context),
@@ -836,6 +856,38 @@ class _Extras extends StatelessWidget {
           onPressed: () => showTrackSheet(context, track, onChanged: app.refresh),
         ),
       ],
+    );
+  }
+}
+
+/// Keeping this song on the device, as one button that knows which of the three
+/// things it is: not here, on its way, or here.
+class _KeepButton extends StatelessWidget {
+  const _KeepButton(
+      {required this.app, required this.track, required this.size});
+  final AppState app;
+  final Track track;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final offline = context.watch<AppState>().offline;
+    final here = offline.has(track.id);
+    final coming = offline.isQueued(track.id);
+    return IconButton(
+      iconSize: size,
+      icon: Icon(here
+          ? Icons.download_done
+          : coming
+              ? Icons.downloading
+              : Icons.download_outlined),
+      tooltip: here
+          ? 'Kept on this device'
+          : coming
+              ? 'Being kept…'
+              : 'Keep on this device',
+      onPressed: () =>
+          here ? app.forgetOffline(track.id) : app.keepOffline([track]),
     );
   }
 }

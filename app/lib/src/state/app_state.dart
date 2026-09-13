@@ -262,7 +262,11 @@ class AppState extends ChangeNotifier {
         (s) => s.name == prefs.getString(_kCoverStyle),
         orElse: () => CoverStyle.record);
     palette = Palette.byId(prefs.getString(_kPalette));
-    halftone = prefs.getBool(_kHalftone) ?? true;
+    // On by default on a phone, off by default in a browser: it is a field of dots
+    // repainted across the whole screen for as long as the player is open, and a
+    // browser pays for that twice — once to draw it and once to composite it. Anybody
+    // who wants it can turn it on, and their choice is what is read back here.
+    halftone = prefs.getBool(_kHalftone) ?? !kIsWeb;
     spectrum = prefs.getBool(_kSpectrum) ?? false;
     coverScale = (prefs.getDouble(_kCoverScale) ?? 0.74).clamp(0.5, 1.0);
     armStyle = ArmStyle.values.firstWhere(

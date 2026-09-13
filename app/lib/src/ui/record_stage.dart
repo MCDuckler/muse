@@ -364,6 +364,24 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     });
   }
 
+  /// The route this stage is on, while it is still arriving.
+  ///
+  /// A record turning is a screen-wide picture redrawn three times a second, and the
+  /// opening animation is already compositing the whole page through a window on every
+  /// frame. Holding the record still until the page has landed costs nothing anybody
+  /// can see — it is behind a porthole that is still moving — and gives the movement
+  /// itself the frame time.
+  Animation<double>? _arriving;
+
+  void _stillArriving() {
+    final busy = !(_arriving?.isCompleted ?? true);
+    if (busy) {
+      if (_spin.isAnimating) _spin.stop();
+    } else if (widget.playing && !_spin.isAnimating) {
+      _spin.repeat();
+    }
+  }
+
   /// Decode the neighbours now rather than when they arrive on stage.
   ///
   /// An image that has never been drawn is decoded the first frame it is needed, and
@@ -393,6 +411,12 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     // The pens sit under the record and the record sits on the stage; the board is the
     // one thing both of them hold, so it is where the way back is kept.
     widget.board?.onTurnBack = _tossIt;
+    final route = ModalRoute.of(context)?.animation;
+    if (identical(route, _arriving)) return;
+    _arriving?.removeListener(_stillArriving);
+    _arriving = route;
+    _arriving?.addListener(_stillArriving);
+    _stillArriving();
   }
 
   @override
@@ -592,6 +616,7 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     // it — so the pens turned up again on a screen with no back on it, over a flat
     // cover, or over the next record entirely.
     if (_showingBack) widget.board?.close();
+    _arriving?.removeListener(_stillArriving);
     _travel.dispose();
     _out.dispose();
     _arm.dispose();
@@ -1660,6 +1685,8 @@ class _ArmPainter extends CustomPainter {
         _drawn(canvas, middle, pivot, head, playing, angle, onGroove, length);
       case ArmStyle.palette:
         _painted(canvas, middle, pivot, head, playing, angle, onGroove, length);
+      case ArmStyle.inlay:
+        _inlay(canvas, middle, pivot, head, playing, angle, onGroove, length);
     }
   }
 
@@ -2087,6 +2114,104 @@ class _ArmPainter extends CustomPainter {
     canvas.drawCircle(pivot, radius * 0.098, Paint()..color = tube);
     canvas.drawCircle(pivot, radius * 0.044, Paint()..color = own(scheme.surface));
     canvas.drawCircle(pivot, radius * 0.016, Paint()..color = quiet);
+  }
+
+  /// One flat shape, the way an arm looks cut out of veneer and laid into a deck.
+  ///
+  /// No line, no shading, no parts: a silhouette in a single warm tone, with the
+  /// pieces reading as pieces because of their shapes rather than because anything
+  /// separates them. A square weight on a stem, a round pivot, a long taper to a
+  /// wedge of a headshell with the cartridge stood across it.
+  void _inlay(Canvas canvas, Offset middle, Offset pivot, Offset head,
+      Offset playing, double angle, double onGroove, double length) {
+    // Pale wood on whatever it is laid into, which is the one thing here that does not
+    // come from the palette: an inlay is the colour of the timber it was cut from.
+    final wood = const Color(0xFFE2C68F).withValues(alpha: dim);
+    final fill = Paint()..color = wood;
+
+    canvas.save();
+    canvas.translate(pivot.dx, pivot.dy);
+    canvas.rotate(angle);
+
+    final back = -length * 0.38;
+    final pivotR = radius * 0.105;
+    final wide = radius * 0.034;      // at the post
+    final thin = radius * 0.020;      // at the head
+
+    // The stem and the weight behind the post: a plain bar with a square block on it.
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTRB(back, -radius * 0.017, 0, radius * 0.017),
+        Radius.circular(radius * 0.010),
+      ),
+      fill,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(
+            center: Offset(back, 0),
+            width: radius * 0.105,
+            height: radius * 0.150),
+        Radius.circular(radius * 0.014),
+      ),
+      fill,
+    );
+
+    // The arm: one taper from the post to the bend, then the short run to the head.
+    final bend = length * 0.62;
+    final drop = radius * 0.075;
+    canvas.drawPath(
+      Path()
+        ..moveTo(0, -wide)
+        ..lineTo(bend, -thin)
+        ..lineTo(length, drop - thin)
+        ..lineTo(length, drop + thin)
+        ..lineTo(bend, thin)
+        ..lineTo(0, wide)
+        ..close(),
+      fill,
+    );
+    canvas.restore();
+
+    // The round post it all turns on, drawn over the arm so the two read as one piece
+    // laid on top of another.
+    canvas.drawCircle(pivot, pivotR, fill);
+
+    // The head: a wedge, bolted on at the angle that squares it to the groove.
+    final spoke = playing - middle;
+    final bolted = math.atan2(spoke.dy, spoke.dx) + math.pi / 2 - onGroove;
+    canvas.save();
+    canvas.translate(head.dx, head.dy);
+    canvas.rotate(angle + bolted);
+    canvas.drawPath(
+      Path()
+        ..moveTo(-radius * 0.150, -radius * 0.052)
+        ..lineTo(radius * 0.135, -radius * 0.030)
+        ..lineTo(radius * 0.135, radius * 0.030)
+        ..lineTo(-radius * 0.150, radius * 0.052)
+        ..close(),
+      fill,
+    );
+    // The cartridge across the front of it, and the needle under that.
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(
+            center: Offset(-radius * 0.115, radius * 0.058),
+            width: radius * 0.062,
+            height: radius * 0.075),
+        Radius.circular(radius * 0.010),
+      ),
+      fill,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTRB(-radius * 0.136, radius * 0.088, -radius * 0.118,
+            radius * 0.130),
+        Radius.circular(radius * 0.008),
+      ),
+      fill,
+    );
+    canvas.restore();
   }
 
   @override

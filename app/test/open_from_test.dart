@@ -97,7 +97,10 @@ void morph() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
 
-    Future<double> opacityAt(double t) async {
+    // What is over the page while it arrives: a veil of the surface colour that fades
+    // out, rather than the page itself being drawn at half opacity — the same picture
+    // without a screen-sized offscreen layer for every frame of the movement.
+    Future<double> veilAt(double t) async {
       await tester.pumpWidget(MediaQuery(
         data: const MediaQueryData(size: Size(400, 800)),
         child: Directionality(
@@ -109,15 +112,18 @@ void morph() {
           ),
         ),
       ));
-      return tester.widget<Opacity>(find.byType(Opacity)).opacity;
+      final veil = find.byKey(const Key('opening-veil'));
+      return veil.evaluate().isEmpty
+          ? 0
+          : tester.widget<ColoredBox>(veil).color.a;
     }
 
-    expect(await opacityAt(0), 0,
+    expect(await veilAt(0), 1,
         reason: 'at the start the window is the bar, and the bar is what is in it');
-    final early = await opacityAt(0.1);
-    expect(early, greaterThan(0));
-    expect(early, lessThan(1), reason: 'still coming up through it');
-    expect(await opacityAt(0.6), 1, reason: 'and fully arrived before it lands');
+    final early = await veilAt(0.1);
+    expect(early, lessThan(1));
+    expect(early, greaterThan(0), reason: 'still coming up through it');
+    expect(await veilAt(0.6), 0, reason: 'and fully arrived before it lands');
   });
 
   test('a flick decides it, however far the drag got', () {

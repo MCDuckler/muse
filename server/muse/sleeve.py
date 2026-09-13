@@ -66,7 +66,6 @@ def edition(seed: str) -> dict:
         "condition": condition,
         "wear": {"mint": 0.35, "played": 1.0, "beat": 1.7}[condition],
         "cut_out": condition != "mint" and rng.random() < 0.14,
-        "sticker": rng.random() < 0.22,
         "light": (rng.uniform(-0.75, -0.25), rng.uniform(-0.9, -0.45)),
     }
 
@@ -86,8 +85,13 @@ def render_jacket(cover: pathlib.Path, seed: str, size: int = CANVAS) -> Image.I
 
     What is left is the object rather than the image: corners that are not perfectly
     square, and — from the cover's own hash, so a record you know stays the record you
-    know — the odd copy with a price sticker on it or a hole drilled through a corner
-    by a distributor writing it off.
+    know — the odd copy with a hole drilled through a corner by a distributor writing it
+    off.
+
+    There was a price sticker in the top corner of one cover in five as well. It was the
+    one piece of this that people noticed and did not like: on somebody else's album art
+    a pale rectangle does not read as a shop's sticker, it reads as something stuck to
+    the screen.
 
     Square and centred so the client can rotate it about any axis and still have it sit
     where it expects.
@@ -102,16 +106,6 @@ def render_jacket(cover: pathlib.Path, seed: str, size: int = CANVAS) -> Image.I
     w, h = art.size
     face = art.crop(((w - size) // 2, (h - size) // 2,
                      (w - size) // 2 + size, (h - size) // 2 + size)).convert("RGBA")
-
-    if ed["sticker"]:
-        # A price sticker someone half peeled off, in the corner shops always use.
-        sw, sh = int(size * rng.uniform(0.10, 0.15)), int(size * rng.uniform(0.05, 0.07))
-        sx, sy = int(size * rng.uniform(0.04, 0.1)), int(size * rng.uniform(0.04, 0.1))
-        sticker = Image.new("RGBA", (sw, sh), (246, 242, 230, 220))
-        ImageDraw.Draw(sticker).line([(sw * 0.15, sh * 0.55), (sw * 0.85, sh * 0.55)],
-                                     fill=(70, 66, 62, 150), width=max(2, sh // 8))
-        sticker = sticker.rotate(rng.uniform(-6, 6), expand=True, resample=Image.BICUBIC)
-        face.alpha_composite(sticker, (sx, sy))
 
     if ed["cut_out"]:
         # A hole drilled through the corner: this copy was written off as unsellable.
@@ -253,7 +247,7 @@ SIZES = {"lg": CANVAS, "sm": 320}
 # Bumped whenever the drawing changes. The art is cached under the cover's hash, which
 # does not change when the *renderer* does — so without this, a fix to how a record is
 # drawn only reaches records nobody has looked at yet.
-VERSION = 5
+VERSION = 6
 
 
 def path_for(root: pathlib.Path, sha: str, size: str, part: str = "sleeve") -> pathlib.Path:

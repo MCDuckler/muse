@@ -795,13 +795,18 @@ enum ArmStyle {
   drawn,
 
   /// Made of the app's own colours, with the app's own soft round edges.
-  palette;
+  palette,
+
+  /// One flat shape, the way a tonearm looks cut out of veneer and laid into a deck:
+  /// a square weight, a round pivot, a long taper and a wedge for the head.
+  inlay;
 
   String get label => switch (this) {
         ArmStyle.off => 'No arm',
         ArmStyle.studio => 'Studio',
         ArmStyle.drawn => 'Drawn',
         ArmStyle.palette => 'In your colours',
+        ArmStyle.inlay => 'Inlay',
       };
 
   String get description => switch (this) {
@@ -809,6 +814,7 @@ enum ArmStyle {
         ArmStyle.studio => 'Black metal, lit along its edge',
         ArmStyle.drawn => 'One weight of line, like a diagram of itself',
         ArmStyle.palette => "The palette you picked, in the app's own shapes",
+        ArmStyle.inlay => 'One flat shape, cut out and laid in like veneer',
       };
 }
 
