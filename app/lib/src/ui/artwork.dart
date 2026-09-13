@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/art_cache.dart';
+import 'motion.dart';
 
 /// Album art with a placeholder that is deliberately not a grey box: a track with no
 /// cover yet should still look like part of the app rather than a hole in it.
@@ -68,9 +69,21 @@ class Artwork extends StatelessWidget {
                 fit: BoxFit.cover,
                 gaplessPlayback: true,
                 errorBuilder: (_, __, ___) => _placeholder(scheme),
-                frameBuilder: (context, child, frame, wasSync) => wasSync || frame != null
-                    ? child
-                    : _placeholder(scheme),
+                // A cover that has come off the network arrives into the placeholder
+                // rather than replacing it between one frame and the next. Only one
+                // that had to be waited for: an image already decoded is handed over
+                // whole, and fading in something that was never missing is a list
+                // that shimmers every time it scrolls.
+                frameBuilder: (context, child, frame, wasSync) {
+                  if (wasSync) return child;
+                  return AnimatedSwitcher(
+                    duration: Motion.base,
+                    switchInCurve: Motion.enter,
+                    child: frame == null
+                        ? _placeholder(scheme)
+                        : KeyedSubtree(key: const ValueKey('art'), child: child),
+                  );
+                },
               ),
       ),
     );

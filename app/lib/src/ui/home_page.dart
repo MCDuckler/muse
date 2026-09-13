@@ -8,6 +8,7 @@ import 'downloads_page.dart';
 import 'jam_page.dart';
 import 'feel.dart';
 import 'glass.dart';
+import 'motion.dart';
 import 'library_page.dart';
 import 'settings_page.dart';
 import 'player_bar.dart';
@@ -95,12 +96,19 @@ class _HomePageState extends State<HomePage> {
               // a frame of work and a frame of memory for something nobody can see,
               // which on a phone in a browser is a tab being reloaded out from under
               // somebody.
-              child: IndexedStack(
-                index: app.homeTab,
-                children: [
-                  for (var i = 0; i < pages.length; i++)
-                    TickerMode(enabled: i == app.homeTab, child: pages[i]),
-                ],
+              // And a tab that changes settles in rather than being cut to: the same
+              // stack, faded up from three quarters over a tenth of a second. Not a
+              // cross-fade between two tabs — that would mean two of them built and
+              // painted at once, which is what the IndexedStack is here to avoid.
+              child: _Settling(
+                on: app.homeTab,
+                child: IndexedStack(
+                  index: app.homeTab,
+                  children: [
+                    for (var i = 0; i < pages.length; i++)
+                      TickerMode(enabled: i == app.homeTab, child: pages[i]),
+                  ],
+                ),
               ),
             ),
           ],
@@ -121,6 +129,38 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
+}
+
+/// A quick fade up whenever [on] changes, around something that is otherwise cut to.
+class _Settling extends StatefulWidget {
+  const _Settling({required this.on, required this.child});
+  final Object on;
+  final Widget child;
+
+  @override
+  State<_Settling> createState() => _SettlingState();
+}
+
+class _SettlingState extends State<_Settling>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _in = AnimationController(
+      vsync: this, duration: Motion.quick, value: 1);
+
+  @override
+  void didUpdateWidget(_Settling old) {
+    super.didUpdateWidget(old);
+    if (old.on != widget.on && !stillness(context)) _in.forward(from: 0.7);
+  }
+
+  @override
+  void dispose() {
+    _in.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      FadeTransition(opacity: _in, child: widget.child);
 }
 
 /// The four places the app goes, wherever you happen to be standing.

@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:provider/provider.dart';
 
 import '../api/models.dart';
@@ -1213,8 +1214,49 @@ class _ScrubberBar extends StatefulWidget {
   State<_ScrubberBar> createState() => _ScrubberState();
 }
 
-class _ScrubberState extends State<_ScrubberBar> {
+class _ScrubberState extends State<_ScrubberBar>
+    with SingleTickerProviderStateMixin {
   double? _dragging;   // while the thumb is held, the UI follows the finger
+
+  /// The clock, run between reports.
+  ///
+  /// Position arrives four times a second, so the thumb moved in four steps a second
+  /// and the time under it counted in quarter-seconds. The engine is not being asked
+  /// more often — it is the same four reports, with the seconds between them filled in
+  /// from the wall clock, which is what "the music is still playing" actually means.
+  /// Only the bar rebuilds: everything else on the player takes the coarse stream.
+  late final Ticker _clock = createTicker((_) {
+    if (mounted) setState(() {});
+  });
+
+  /// What the engine last said, and when it said it.
+  Duration _said = Duration.zero;
+  DateTime _saidAt = DateTime.now();
+
+  @override
+  void dispose() {
+    _clock.dispose();
+    super.dispose();
+  }
+
+  /// Where the music is now: the last report plus however long ago it was.
+  Duration _now(Duration reported, bool playing, Duration duration) {
+    if (reported != _said) {
+      _said = reported;
+      _saidAt = DateTime.now();
+    }
+    // Held still while paused, while a finger is on the bar, and where the phone has
+    // been asked not to animate — a clock that runs on its own through a pause is a
+    // clock that is lying.
+    if (!playing || _dragging != null || _seeking != null || stillness(context)) {
+      if (_clock.isTicking) _clock.stop();
+      return reported;
+    }
+    if (!_clock.isTicking) _clock.start();
+    final since = DateTime.now().difference(_saidAt);
+    final ahead = reported + since;
+    return ahead > duration && duration > Duration.zero ? duration : ahead;
+  }
 
   /// Where a seek was aimed, until the engine reports having got there.
   ///
@@ -1248,6 +1290,7 @@ class _ScrubberState extends State<_ScrubberBar> {
       position = app.hostPosition ?? s?.position ?? Duration.zero;
     }
 
+    position = _now(position, app.musicIsPlaying, duration);
     final max = duration.inMilliseconds.toDouble();
 
     // A seek is finished when the engine reports somewhere near where we sent it, or

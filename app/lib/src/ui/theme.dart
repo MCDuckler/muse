@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'motion.dart';
+
 /// The app's look: warm ink, amber signal, glass over content.
 ///
 /// Colours are named after what they do rather than where they are used, and both
@@ -100,6 +102,38 @@ class Palette {
       all.firstWhere((p) => p.id == id, orElse: () => ember);
 }
 
+/// Up a little and in, out the same way.
+///
+/// Eight pixels, not eighty: a page that travels half the screen to arrive is a page
+/// somebody waits for. What the movement is for is saying that something new is on
+/// top of what was there, and eight pixels with a fade says it in a fifth of a second.
+class _RiseIn extends PageTransitionsBuilder {
+  const _RiseIn();
+
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    final eased = CurvedAnimation(
+      parent: animation,
+      curve: Motion.enter,
+      reverseCurve: Motion.exit,
+    );
+    return FadeTransition(
+      opacity: eased,
+      child: SlideTransition(
+        position: Tween<Offset>(begin: const Offset(0, 0.02), end: Offset.zero)
+            .animate(eased),
+        child: child,
+      ),
+    );
+  }
+}
+
 class MuseTheme {
   static const ink = Color(0xFF171310);       // the icon's ground; app background
   static const amber = Color(0xFFF07A3E);     // accent: transport, selection, links
@@ -131,6 +165,17 @@ class MuseTheme {
     return base.copyWith(
       colorScheme: scheme,
       scaffoldBackgroundColor: scheme.surface,
+      // One way of arriving, on every platform.
+      //
+      // Material's default is a different animation per platform — a slide from the
+      // right on Android, a different slide on iOS, a fade on the desktop — which in
+      // one app means a screen that opens differently depending on where it is being
+      // looked at. This is the app's own: up a little and in, out the same way, in the
+      // time everything else here takes.
+      pageTransitionsTheme: PageTransitionsTheme(builders: {
+        for (final platform in TargetPlatform.values)
+          platform: const _RiseIn(),
+      }),
       textTheme: _text(base.textTheme, scheme),
       appBarTheme: AppBarTheme(
         backgroundColor: Colors.transparent,

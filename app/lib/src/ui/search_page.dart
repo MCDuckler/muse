@@ -8,6 +8,7 @@ import '../api/models.dart';
 import '../state/app_state.dart';
 import 'browse_page.dart';
 import 'found_row.dart';
+import 'motion.dart';
 import 'selection_bar.dart';
 import 'snack.dart';
 
@@ -351,10 +352,18 @@ class _SearchPageState extends State<SearchPage> {
                         : ListView.builder(
                             padding: const EdgeInsets.fromLTRB(8, 0, 8, 160),
                             itemCount: _found.length,
-                            itemBuilder: (context, i) => FoundRow(
-                              found: _found[i],
-                              onTap: () => _open(_found[i]),
-                              onPlayNext: () => _open(_found[i], mode: 'next'),
+                            itemBuilder: (context, i) => _Arriving(
+                              // Keyed on the query as well as the row, so a new
+                              // search arrives again rather than the old rows
+                              // silently becoming different songs.
+                              key: ValueKey('$_lastQuery/${_found[i].place}/'
+                                  '${_found[i].id}'),
+                              index: i,
+                              child: FoundRow(
+                                found: _found[i],
+                                onTap: () => _open(_found[i]),
+                                onPlayNext: () => _open(_found[i], mode: 'next'),
+                              ),
                             ),
                           ),
           ),
@@ -423,6 +432,38 @@ class _SearchPageState extends State<SearchPage> {
     } finally {
       if (mounted) setState(() => _importing = false);
     }
+  }
+}
+
+/// A row that arrives a beat after the one above it.
+///
+/// Results appearing all at once is a screen that blinks; a short stagger reads as a
+/// list being laid down, and it gives the eye somewhere to start. Capped, because
+/// nobody should wait a second and a half for the fortieth row, and skipped entirely
+/// where the phone has asked for stillness.
+class _Arriving extends StatelessWidget {
+  const _Arriving({super.key, required this.index, required this.child});
+  final int index;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (stillness(context)) return child;
+    final wait = Duration(milliseconds: 18 * (index.clamp(0, 10)));
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: Motion.base + wait,
+      curve: Interval(
+        wait.inMilliseconds / (Motion.base.inMilliseconds + wait.inMilliseconds),
+        1,
+        curve: Motion.enter,
+      ),
+      builder: (context, t, child) => Opacity(
+        opacity: t,
+        child: Transform.translate(offset: Offset(0, 8 * (1 - t)), child: child),
+      ),
+      child: child,
+    );
   }
 }
 
