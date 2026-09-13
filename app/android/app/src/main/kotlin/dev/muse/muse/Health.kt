@@ -19,38 +19,9 @@ import android.os.Build
  */
 object Health {
 
-    /**
-     * What audio_service's own service thinks, read off the object itself.
-     *
-     * Everything else here is the system's view from outside: no notification, no
-     * channel, a process that is merely cached. None of it can say whether the state
-     * the app broadcasts ever arrives at the service that is supposed to act on it,
-     * and that is the difference between a fault in this app and a fault in what it
-     * is asking Android for. The fields are private, so this is reflection — it is a
-     * diagnostic, and a diagnostic that cannot be taken is written down as one.
-     */
-    private fun audioService(): String {
-        return try {
-            val cls = Class.forName("com.ryanheise.audioservice.AudioService")
-            val instance = cls.getDeclaredField("instance")
-                .apply { isAccessible = true }.get(null)
-                ?: return "audio_service: no service object at all"
-            fun peek(name: String): Any? = try {
-                cls.getDeclaredField(name).apply { isAccessible = true }.get(instance)
-            } catch (e: Throwable) {
-                "?"
-            }
-            "audio_service: playing=${peek("playing")} state=${peek("processingState")}" +
-                " notification=${peek("notificationCreated")}"
-        } catch (e: Throwable) {
-            "audio_service: cannot be asked (${e.javaClass.simpleName})"
-        }
-    }
-
     /** A sentence about whether the media notification — and so the service — is up. */
     fun describe(context: Context): String {
         val parts = mutableListOf<String>()
-        parts += audioService()
 
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE)
                 as? NotificationManager

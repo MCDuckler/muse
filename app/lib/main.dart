@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:audio_service/audio_service.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 import 'package:just_audio_platform_interface/just_audio_platform_interface.dart';
 import 'package:provider/provider.dart';
@@ -87,6 +88,15 @@ Future<void> main() async {
       // may freeze the moment the app leaves the screen.
       PlaybackLog.note(
           'background audio ready (${JustAudioPlatform.instance.runtimeType})');
+      // Everything audio_service fails at after this point, written down.
+      //
+      // The state the app broadcasts reaches the Android service through a platform
+      // call in a loop that swallows what it throws — into this stream, which nothing
+      // was listening to. If those calls are failing, that is the whole of the
+      // background-playback bug and it has been invisible the entire time; if they are
+      // not, the fault is on the far side of them. Either answer is worth a line.
+      AudioService.asyncError.listen(
+          (e) => PlaybackLog.note('AUDIO SERVICE ERROR: $e'));
     } catch (e) {
       PlaybackLog.note('BACKGROUND AUDIO FAILED TO START: $e');
     }
