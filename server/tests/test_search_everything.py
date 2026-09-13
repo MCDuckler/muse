@@ -158,3 +158,69 @@ def test_a_line_across_two_lines_is_still_found():
     assert search._the_line(plain, "landslide no escape") == \
         "Caught in a landslide / No escape from reality"
     assert search._the_line(plain, "nothing like that") is None
+
+
+# ---------------------------------------------------------------- adding the right one
+#
+# Spotify cannot be downloaded from, so what is actually added is the same song found
+# on YouTube Music — and *found* is the word that matters. Taking the first hit for
+# "title artist" is fine until the search is bad at something, and then it is a
+# stranger's song with the right row on the screen.
+def test_a_spotify_row_is_only_added_when_the_hit_is_that_song(client, hdr,
+                                                               monkeypatch):
+    from muse import ytm
+
+    monkeypatch.setattr(ytm, "search_songs", lambda q, limit=10: [
+        {"video_id": "RIGHT", "title": "Alice und Sarah", "artists": ["Broilers"],
+         "album": None, "duration_ms": 200_000, "raw": {}},
+        {"video_id": "WRONG", "title": "Alice and Sarah",
+         "artists": ["Orion Rigel Dommisse"], "album": None,
+         "duration_ms": 240_000, "raw": {}},
+    ])
+    r = client.post("/search/add", headers=hdr, json={
+        "place": "spotify", "id": "sp1", "title": "Alice und Sarah",
+        "subtitle": "Broilers", "duration_ms": 200_000})
+    assert r.status_code in (200, 201, 202), r.text
+    from muse import db
+
+    where = db.one("select provider_id from track_sources where track_id=%s",
+                   (r.json()["id"],))
+    assert where["provider_id"] == "RIGHT", "the one that was asked for"
+
+
+def test_nothing_is_added_when_no_hit_is_the_song(client, hdr, monkeypatch):
+    """A German punk record came back as an American folk song of nearly the same
+    name, and nothing anywhere said so. Saying no is the honest answer."""
+    from muse import ytm
+
+    monkeypatch.setattr(ytm, "search_songs", lambda q, limit=10: [
+        {"video_id": "NOPE", "title": "Alice and Sarah",
+         "artists": ["Orion Rigel Dommisse"], "album": None,
+         "duration_ms": 240_000, "raw": {}},
+        {"video_id": "ALSONOPE", "title": "Sooraj Dooba Hain",
+         "artists": ["Aditi Singh Sharma"], "album": None,
+         "duration_ms": 210_000, "raw": {}},
+    ])
+    r = client.post("/search/add", headers=hdr, json={
+        "place": "spotify", "id": "sp2", "title": "Alice und Sarah",
+        "subtitle": "Broilers", "duration_ms": 200_000})
+    assert r.status_code == 404
+    assert "not on youtube music" in r.json()["detail"].lower()
+    assert "closest" in r.json()["detail"].lower(), "and it says what it nearly took"
+
+
+def test_a_youtube_row_is_still_taken_by_its_own_id(client, hdr, monkeypatch):
+    """Nothing to judge: the row came from YouTube Music and carries its id."""
+    from muse import ytm
+
+    monkeypatch.setattr(ytm, "song", lambda vid: {
+        "video_id": vid, "title": "Whatever", "artists": ["Someone"],
+        "album": None, "duration_ms": 100_000, "raw": {}})
+    r = client.post("/search/add", headers=hdr, json={
+        "place": "ytmusic", "id": "EXACTID", "title": "Whatever",
+        "subtitle": "Someone"})
+    assert r.status_code in (200, 201, 202), r.text
+    from muse import db
+
+    assert db.one("select provider_id from track_sources where track_id=%s",
+                  (r.json()["id"],))["provider_id"] == "EXACTID"

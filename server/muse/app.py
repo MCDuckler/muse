@@ -28,7 +28,7 @@ from . import (
                routes_sources,
                routes_spotify,
                routes_sync, sleeve,
-               storage, ytm)
+               match, storage, ytm)
 from . import deps
 from .deps import current_user, worker_auth
 
@@ -265,14 +265,31 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
 
         if not video_id:
             try:
-                hits = ytm.search_songs(query, limit=1)
+                hits = ytm.search_songs(query, limit=8)
             except ytm.Unavailable as e:
                 # Not our failure and not the caller's: say so, rather than answering
                 # a search with a stack trace.
                 raise HTTPException(503, f"YouTube would not answer just now: {e}")
             if not hits:
                 raise HTTPException(404, f"nothing on YouTube Music for {query!r}")
-            meta = hits[0]
+            # The first hit for a name is not the same thing as that song. For anything
+            # the search is bad at — a German title, a small label, a word that reads
+            # as an English one — it is a different record entirely, and queueing it
+            # silently is worse than saying no.
+            meta, confidence, _ = match.best(
+                {"title": body.get("title") or query,
+                 "artists": body.get("artists") or [],
+                 "duration_ms": body.get("duration_ms")},
+                hits)
+            if not meta or confidence < match.AUTO_ACCEPT:
+                # Nothing to compare against — a bare query with no artist — is the one
+                # case where the first hit is all there is to go on.
+                if body.get("title") or body.get("artists"):
+                    raise HTTPException(
+                        404,
+                        f"nothing on YouTube Music that matches {query!r} closely "
+                        f"enough to add without guessing")
+                meta = hits[0]
             video_id = meta["video_id"]
         else:
             meta = None

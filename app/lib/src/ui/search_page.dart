@@ -206,7 +206,9 @@ class _SearchPageState extends State<SearchPage> {
       await app.addTrack(track, mode: mode);
       if (mounted) saidAdded(context, found);
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      // Long enough to read, because this is where the server says it declined to
+      // add a song and why — which is a sentence, not a word.
+      messenger.showSnackBar(problem(e));
     }
   }
 

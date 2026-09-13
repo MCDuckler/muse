@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from . import catalog, search, spotify, ytm
+from . import catalog, match, search, spotify, ytm
 from .deps import cfg, current_user
 
 router = APIRouter(prefix="/search")
@@ -115,13 +115,38 @@ def add(body: dict, user: dict = Depends(current_user)):
             user)
 
     if place == "spotify":
+        # Spotify cannot be downloaded from, so what is actually added is the same song
+        # found on YouTube Music — and *found* is the word that matters. It used to
+        # take the first hit for "title artist" and queue it, which for anything the
+        # search is bad at is a stranger's song with the right row on the screen: a
+        # German punk record came back as an American folk song of nearly the same
+        # name, and nothing anywhere said so. So the hit has to be recognisably the
+        # song that was asked for, judged the same way an imported playlist's tracks
+        # are, and when nothing clears that bar the honest answer is that it was not
+        # found.
+        artists = [a.strip() for a in artist.split(",") if a.strip()]
         try:
-            hits = ytm.search_songs(f"{title} {artist.split(',')[0]}".strip(), limit=1)
+            hits = ytm.search_songs(f"{title} {artists[0] if artists else ''}".strip(),
+                                    limit=8)
         except ytm.Unavailable as e:
             raise HTTPException(503, f"YouTube would not answer just now: {e}")
-        if not hits:
-            raise HTTPException(404, f"nothing to fetch for {title!r}")
-        return _take(user, hits[0]["video_id"], hits[0])
+        want = {"title": title, "artists": artists,
+                "duration_ms": body.get("duration_ms")}
+        found, confidence, how = match.best(want, hits)
+        if not found or confidence < match.AUTO_ACCEPT:
+            # Named whatever it was, even when it scored too low to be handed back by
+            # best(): "nothing was added" is an answer, and "nothing was added, the
+            # closest thing was this" is one somebody can act on.
+            closest = max(hits, key=lambda h: match.score(want, h)[0], default=None)
+            near = (f" The closest was “{closest['title']}” by "
+                    f"{', '.join(closest['artists']) or 'somebody else'}."
+                    if closest else "")
+            raise HTTPException(
+                404,
+                f"“{title}” by {artists[0] if artists else 'that artist'} is not on "
+                f"YouTube Music under a name this could recognise, so nothing was "
+                f"added rather than the wrong thing.{near}")
+        return _take(user, found["video_id"], found)
 
     if place == "ytmusic":
         return _take(user, ident, None)

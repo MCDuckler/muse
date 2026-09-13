@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../api/client.dart';
+
 /// The little message at the bottom, said quickly and in the app's own colours.
 ///
 /// Material's default is four seconds of a white slab: long enough that three actions
@@ -20,6 +22,18 @@ SnackBar snack(
       action: action,
       duration: duration ?? (action == null ? kSnackShort : kSnackWithAction),
       backgroundColor: backgroundColor,
+    );
+
+/// What went wrong, said the way it was written rather than the way it was thrown.
+///
+/// An ApiException's toString is "ApiException(404): …", and the server's sentences are
+/// written to be read by whoever is holding the phone — "nothing was added rather than
+/// the wrong thing" is an explanation; "ApiException(404)" in front of it is a stack
+/// trace with an explanation attached.
+SnackBar problem(Object error, {SnackBarAction? action}) => snack(
+      Text(error is ApiException ? error.message : '$error'),
+      action: action,
+      duration: kSnackWithAction,
     );
 
 const kSnackShort = Duration(milliseconds: 2000);
