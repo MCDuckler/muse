@@ -111,6 +111,48 @@ class Updates extends ChangeNotifier {
   /// Where the file itself is. One link, the same one the browser downloads.
   static String apkUrl(String baseUrl) => '$baseUrl/muse.apk';
 
+  // ---------------- the iPhone build ----------------
+  //
+  // Everything above is about an app that can install itself, once somebody says yes.
+  // iOS has no such thing: an unsigned build is signed on the phone by SideStore or
+  // AltStore, which is a different app, so all this side can do is say what is on the
+  // server and hand the link over. That is still worth doing — the alternative is
+  // finding a private repository's releases page on a phone.
+
+  /// The iPhone build the server is offering, if any.
+  static Future<Release?> publishedIpa(String baseUrl) async {
+    try {
+      final r = await net
+          .get(Uri.parse('$baseUrl/wetowl.ipa.json'))
+          .timeout(const Duration(seconds: 10));
+      if (r.statusCode != 200) return null;
+      final decoded = jsonDecode(r.body);
+      return decoded is Map<String, dynamic> ? Release.fromJson(decoded) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static String ipaUrl(String baseUrl) => '$baseUrl/wetowl.ipa';
+
+  /// The same file, addressed to whichever sideloader is installed.
+  ///
+  /// Both of them register a URL scheme that takes an https link and does the fetching
+  /// and signing themselves; handing the plain link to Safari instead gets a file in
+  /// Downloads that nothing on the phone will open. SideStore first because it is the
+  /// one that works without a computer on the same network.
+  static List<Uri> sideloaders(String baseUrl) {
+    final url = Uri.encodeComponent(ipaUrl(baseUrl));
+    return [
+      Uri.parse('sidestore://install?url=$url'),
+      Uri.parse('altstore://install?url=$url'),
+    ];
+  }
+
+  /// Whether this device is the one that could use an ipa.
+  static bool get iphone =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+
   /// Look, quietly. Anything that goes wrong here is not worth a word: an update
   /// nobody knew about cannot be missed.
   Future<void> look() async {

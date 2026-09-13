@@ -28,6 +28,24 @@
 		file_server
 	}
 
+	# The iPhone build, served the same way. An ipa is handed to SideStore rather than
+	# opened, so the content type only has to be something a browser will not try to
+	# render — and the download has to keep its name, because that name is what
+	# SideStore shows while it installs.
+	handle /wetowl.ipa {
+		header Content-Type application/octet-stream
+		header Content-Disposition "attachment; filename=wetowl.ipa"
+		root * /srv
+		file_server
+	}
+
+	handle /wetowl.ipa.json {
+		header Content-Type application/json
+		header Cache-Control "no-cache"
+		root * /srv
+		file_server
+	}
+
 	# What the app reads to find out whether the APK above is newer than the one it is
 	# running. Its own handler, because the app-shell fallback below answers anything it
 	# does not recognise with index.html — so asking for a manifest that was not there

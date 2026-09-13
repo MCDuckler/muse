@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -357,6 +358,7 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           if (Updates.supported) const _UpdateRow(),
           const _ApkRow(),
+          const _IpaRow(),
           ListTile(
             leading: const Icon(Icons.info_outline),
             title: const Text('WetOwl'),
@@ -487,6 +489,91 @@ class _ArtCacheRowState extends State<_ArtCacheRow> {
 /// is the system's own installer, which is as far as an app that is not the owner of
 /// the device is allowed to go — so this fetches everything, checks it arrived whole,
 /// and then asks once.
+/// The iPhone app, from wherever you are reading this.
+///
+/// Everything the Android row does — notice, fetch, offer — iOS has no equivalent of:
+/// an unsigned build is signed on the phone by SideStore or AltStore, which is another
+/// app entirely. So this says what the server has and hands the link to whichever of
+/// those is installed. That is still worth a row: the alternative is finding a private
+/// repository's releases page on a phone.
+class _IpaRow extends StatefulWidget {
+  const _IpaRow();
+
+  @override
+  State<_IpaRow> createState() => _IpaRowState();
+}
+
+class _IpaRowState extends State<_IpaRow> {
+  Release? _release;
+  bool _looked = false;
+
+  String get _base => context.read<AppState>().api.baseUrl;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_look());
+  }
+
+  Future<void> _look() async {
+    final found = await Updates.publishedIpa(_base);
+    if (!mounted) return;
+    setState(() {
+      _release = found;
+      _looked = true;
+    });
+  }
+
+  /// Hand it to whichever sideloader is there, and fall back to the plain link.
+  ///
+  /// Tried in turn rather than asked about: there is no way to find out what is
+  /// installed, and a scheme nothing handles simply does not open.
+  Future<void> _install() async {
+    feel(Feel.commit);
+    final messenger = ScaffoldMessenger.of(context);
+    for (final url in Updates.sideloaders(_base)) {
+      try {
+        if (await launchUrl(url, mode: LaunchMode.externalApplication)) return;
+      } catch (_) {
+        // Not installed. Try the next one.
+      }
+    }
+    final plain = Uri.parse(Updates.ipaUrl(_base));
+    if (await launchUrl(plain, mode: LaunchMode.externalApplication)) {
+      messenger.showSnackBar(snack(const Text(
+          'Downloaded. Open it with SideStore or AltStore to install it.')));
+      return;
+    }
+    messenger.showSnackBar(snack(const Text('Could not open the download')));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Nothing to say where there is no build, and nothing worth saying on an Android
+    // phone: a row offering an iPhone app to somebody holding an Android is noise.
+    final release = _release;
+    if (!_looked || release == null) return const SizedBox.shrink();
+    if (!Updates.iphone && !kIsWeb) return const SizedBox.shrink();
+
+    final newer = Updates.iphone && release.isNewerThan(appBuild);
+    return ListTile(
+      leading: Icon(Icons.phone_iphone,
+          color: newer ? Theme.of(context).colorScheme.primary : null),
+      title: Text(newer ? 'A newer iPhone build is ready' : 'iPhone app'),
+      subtitle: Text([
+        release.size,
+        if (release.built != null) 'built ${release.built!.split('T').first}',
+        if (Updates.iphone) 'signed on the phone by SideStore',
+      ].join(' · ')),
+      trailing: FilledButton(
+        onPressed: _install,
+        child: Text(newer ? 'Update' : 'Install'),
+      ),
+      onTap: _install,
+    );
+  }
+}
+
 /// The Android app itself, from wherever you are reading this.
 ///
 /// The update row above only appears on a phone, and only when the server has a newer

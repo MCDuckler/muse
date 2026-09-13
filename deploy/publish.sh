@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploys muse to the box. Run from the repo root: deploy/publish.sh [server|web|apk|all]
+# Deploys muse to the box. Run from the repo root: deploy/publish.sh [server|web|apk|ios|all]
 #
 # Two mistakes this exists to prevent, both made the hard way:
 #   * rsyncing server/muse/ onto /opt/muse/server/ instead of server/ — with --delete
@@ -104,10 +104,51 @@ publish_apk() {
   echo "   $SERVER_URL/muse.apk  ($version build $build, $((bytes / 1024 / 1024))MB)"
 }
 
+# The iPhone build, fetched from the Mac that made it and put beside the APK.
+#
+# iOS binaries can only be produced on macOS, so the build itself happens on a rented
+# one for ten minutes in GitHub Actions (see .github/workflows/ios.yml) and lands on a
+# release. This brings the newest one down and serves it from the same place the APK is
+# served from, so the app has one link to offer and nobody has to go to GitHub on a
+# phone. Needs `gh` signed in, which is the same thing that can read the private repo.
+publish_ios() {
+  echo "== ipa"
+  command -v gh >/dev/null || { echo "   (no gh — skipping the iPhone build)"; return; }
+  local tmp
+  tmp=$(mktemp -d)
+  local tag
+  tag=$(gh release list --repo MCDuckler/muse --limit 20 \
+          --json tagName --jq '[.[] | select(.tagName | startswith("ios-"))][0].tagName')
+  [ -n "$tag" ] || { echo "   (no iPhone release yet)"; return; }
+  gh release download "$tag" --repo MCDuckler/muse --pattern '*.ipa' \
+     --dir "$tmp" --clobber >/dev/null
+
+  local ipa
+  ipa=$(ls "$tmp"/*.ipa | head -1)
+  local bytes
+  bytes=$(stat -c%s "$ipa")
+  # The stamp the app will report about itself, read out of the binary rather than
+  # taken from the tag: those are minutes apart, and "is this newer than what I am
+  # running" has to compare the same number the running copy says.
+  local build
+  build=$(unzip -p "$ipa" 'Payload/Runner.app/Frameworks/App.framework/App' 2>/dev/null \
+            | strings | grep -oE '^20[0-9]{10}$' | sort -u | tail -1)
+  [ -n "$build" ] || build=$(echo "$tag" | tr -dc '0-9')
+
+  scp -q -i "$KEY" "$ipa" "$HOST":/opt/muse/deploy/web/wetowl.ipa
+  printf '{"version":"%s","build":"%s","bytes":%s,"built":"%s","tag":"%s"}\n' \
+    "$(sed -n 's/^version: *\([^+]*\).*/\1/p' app/pubspec.yaml | tr -d '[:space:]')" \
+    "$build" "$bytes" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$tag" \
+    | $SSH "$HOST" 'cat > /opt/muse/deploy/web/wetowl.ipa.json'
+  rm -rf "$tmp"
+  echo "   $SERVER_URL/wetowl.ipa  ($tag, build $build, $((bytes / 1024 / 1024))MB)"
+}
+
 case "$what" in
   server) publish_server ;;
+  ios)    publish_ios ;;
   web)    publish_web ;;
   apk)    publish_apk ;;
-  all)    publish_server; publish_web; publish_apk ;;
-  *) echo "usage: deploy/publish.sh [server|web|apk|all]" >&2; exit 2 ;;
+  all)    publish_server; publish_web; publish_apk; publish_ios ;;
+  *) echo "usage: deploy/publish.sh [server|web|apk|ios|all]" >&2; exit 2 ;;
 esac
