@@ -62,13 +62,21 @@ Future<bool> youtubeCodeSignInSetup(BuildContext context) async {
               const SizedBox(height: 12),
               const _Steps([
                 'Open console.cloud.google.com and make a project (any name).',
-                'APIs & Services → OAuth consent screen → External, and add yourself '
-                    'as a test user.',
+                'APIs & Services → OAuth consent screen → External.',
+                'Publish app, on that same screen. This is the step that matters: '
+                    'left in Testing it only works for accounts listed on it one by '
+                    'one, which is Google turning everybody else away.',
                 'Credentials → Create credentials → OAuth client ID.',
                 'Application type: TV and Limited Input devices.',
                 'Copy the client ID and client secret it gives you into the boxes '
                     'below.',
               ]),
+              const SizedBox(height: 6),
+              const Text(
+                'Published without going through Google\'s review, the sign-in page '
+                'says the app is unverified and offers Advanced → Go to app. That is '
+                'expected, and it is your own server.',
+              ),
               const SizedBox(height: 8),
               TextField(
                 controller: id,

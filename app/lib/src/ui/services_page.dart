@@ -203,10 +203,11 @@ class _ServicesPageState extends State<ServicesPage> {
       youtube ? 'Paste the headers here' : 'Name',
       youtube
           ? 'Nothing about a YouTube account is public, so this one needs a '
-              'sign-in rather than a name. On a computer: open '
-              'music.youtube.com signed in, open the developer tools, Network tab, '
-              'click any request to music.youtube.com, and copy the request headers '
-              '(the block that includes "cookie:"). Paste the whole block.'
+              'sign-in rather than a name. On a computer, signed in to '
+              'music.youtube.com: open the developer tools, Network tab, click any '
+              'request to music.youtube.com, and copy the cookie — the long line '
+              'starting with "cookie:". Pasting just the cookie is enough; the whole '
+              'block of request headers works too.'
           : service.hint,
       youtube,
     );

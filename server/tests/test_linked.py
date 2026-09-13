@@ -414,3 +414,41 @@ def test_a_client_google_accepts_is_kept_and_never_handed_back(client, hdr, monk
     client.delete("/linked/youtube/oauth/client", headers=hdr)
     assert client.get("/linked/youtube/oauth/client",
                       headers=hdr).json()["configured"] is False
+
+
+def test_a_cookie_on_its_own_is_a_sign_in(client, hdr, monkeypatch):
+    """What people can actually find is the cookie, not the whole header block.
+
+    Refusing it for being the wrong shape is a sign-in turned away for a reason that
+    has nothing to do with whether it works.
+    """
+    from muse import ytm
+
+    taken = {}
+
+    def accept(blob, limit=1):
+        taken["blob"] = blob
+        return []
+
+    monkeypatch.setattr(ytm, "library_playlists", accept)
+    monkeypatch.setattr(ytm, "account_name", lambda blob: "Somebody")
+    r = client.post("/linked/youtube", headers=hdr,
+                    json={"handle": "SAPISID=abc; __Secure-3PAPISID=def"})
+    assert r.status_code == 200, r.text
+    assert taken["blob"].startswith("cookie: SAPISID=abc; __Secure-3PAPISID=def")
+    assert "user-agent:" in taken["blob"], "and it is given what a browser sends"
+
+
+def test_google_turning_an_account_away_says_what_to_do(client, hdr, monkeypatch):
+    """Google answers access_denied and explains nothing. It is almost always a
+    consent screen left in Testing, which serves only the accounts listed on it."""
+    from muse import ytm
+
+    def refuse(cfg, device_code):
+        raise ytm.NotAllowed("access_denied")
+
+    monkeypatch.setattr(ytm, "oauth_finish", refuse)
+    r = client.post("/linked/youtube/oauth/finish", headers=hdr,
+                    json={"device_code": "xyz"})
+    assert r.status_code == 403
+    assert "publish the consent screen" in r.json()["detail"].lower()

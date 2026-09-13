@@ -499,9 +499,11 @@ def _bandcamp_items(remote_id: str, offset: int = 0) -> tuple[list[dict], int | 
 def _youtube_profile(auth: str) -> dict:
     from . import ytm
 
-    blob = (auth or "").strip()
+    blob = ytm.normalise_paste(auth)
     if not blob:
-        raise LinkError("Paste the request headers from music.youtube.com.")
+        raise LinkError(
+            "Paste the cookie from a signed-in music.youtube.com, or the whole block "
+            "of request headers.")
     try:
         # The listing is the real test: a sign-in that cannot read the library is no
         # use however well-formed it looks.

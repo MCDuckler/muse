@@ -149,6 +149,17 @@ def youtube_oauth_finish(body: dict = Body(...), user: dict = Depends(current_us
     try:
         secret = ytm.oauth_finish(cfg(), device_code)
     except ytm.NotAllowed as e:
+        # "access_denied" from Google is almost never somebody pressing cancel: it is
+        # a consent screen still in Testing, which only serves the accounts listed on
+        # it. Say that, because the message Google sends says nothing at all.
+        if "access_denied" in str(e):
+            raise HTTPException(
+                403,
+                "Google turned that account away. The sign-in this server uses is "
+                "still in Testing, which only works for accounts listed on its "
+                "consent screen — whoever set it up needs to publish the consent "
+                "screen (Google Cloud console → APIs & Services → OAuth consent "
+                "screen → Publish app), or add this account under Test users.")
         raise HTTPException(409, str(e))
     except ytm.NotConfigured as e:
         raise HTTPException(409, str(e))

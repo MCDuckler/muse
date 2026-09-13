@@ -192,6 +192,37 @@ class NotAllowed(RuntimeError):
 _authed_clients: dict[str, object] = {}
 
 
+# What a signed-in browser sends, for a sign-in that arrives as a bare cookie.
+_HEADER_BLOCK = (
+    "cookie: {cookie}\n"
+    "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36\n"
+    "origin: https://music.youtube.com\n"
+    "x-goog-authuser: 0\n"
+    "accept-language: en-US,en;q=0.9"
+)
+
+
+def normalise_paste(blob: str) -> str:
+    """Take whatever somebody pasted and make it something ytmusicapi will accept.
+
+    Three things end up in that box: a token from the device flow, the whole block of
+    request headers copied out of the developer tools, and — far more often, because it
+    is the only part anybody can find — the cookie on its own. The last one used to be
+    rejected as malformed, which is a sign-in refused for being the wrong shape rather
+    than for being wrong.
+    """
+    text = (blob or "").strip()
+    if not text or '"refresh_token"' in text or "cookie:" in text.lower():
+        return text
+    # A cookie is name=value pairs separated by semicolons, and a YouTube one always
+    # carries one of these. Anything else is left alone to fail on its own terms.
+    if "=" in text and any(k in text for k in
+                           ("SAPISID", "__Secure-3PAPISID", "__Secure-1PAPISID")):
+        return _HEADER_BLOCK.format(cookie=" ".join(text.split()))
+    return text
+
+
 def _authed(auth: str, cfg=None):
     """A client for one person's library.
 
