@@ -18,11 +18,13 @@ from fastapi import (Body, Depends, FastAPI, Form, Header, HTTPException, Reques
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from . import (auth, catalog, config, db, direct_worker, enrich_worker, failures,
+from . import (
+    auth, catalog, config, db, direct_worker, enrich_worker, failures,
                follows, jobs, progress,
                jam, routes_accounts, routes_browse, routes_downloads, routes_files,
                routes_follows, routes_jam, routes_marks,
-               routes_library, routes_linked, routes_play, routes_sources,
+               routes_library, routes_linked, routes_play, routes_search,
+               routes_sources,
                routes_spotify,
                routes_sync, sleeve,
                storage, ytm)
@@ -320,6 +322,12 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         "yt3.ggpht.com",
         "i.ytimg.com",
         "i9.ytimg.com",
+        # The other three services the search reaches. A result list of grey squares is
+        # not a result list, and every one of these serves its art from one host.
+        "i.scdn.co",                              # Spotify
+        "mosaic.scdn.co",                         # Spotify, for a playlist's four-up
+        "i1.sndcdn.com",                          # SoundCloud
+        "f4.bcbits.com",                          # Bandcamp
     )
 
     @app.get("/art/remote")
@@ -613,6 +621,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     routes_library.set_publisher(publish)
     app.include_router(routes_jam.router)
     app.include_router(routes_sources.router)
+    app.include_router(routes_search.router)
     app.include_router(routes_linked.router)
     app.include_router(routes_follows.router)
     app.include_router(routes_library.router)

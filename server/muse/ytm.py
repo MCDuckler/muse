@@ -64,6 +64,72 @@ def search_songs(query: str, limit: int = 10) -> list[dict]:
     return [_flatten(r) for r in res if r.get("videoId")]
 
 
+def search_albums(query: str, limit: int = 6) -> list[dict]:
+    """Records, so a search for one can be answered with the record itself."""
+    res = _ask(lambda c: c.search(query, filter="albums", limit=limit))
+    out = []
+    for r in res:
+        if not r.get("browseId"):
+            continue
+        out.append({
+            "browse_id": r["browseId"],
+            "title": r.get("title") or "",
+            "artist": ", ".join(a.get("name", "") for a in (r.get("artists") or []))
+                      or None,
+            "year": r.get("year"),
+            "thumbnail": thumbnail_url(r),
+        })
+    return out
+
+
+def search_artists(query: str, limit: int = 4) -> list[dict]:
+    res = _ask(lambda c: c.search(query, filter="artists", limit=limit))
+    out = []
+    for r in res:
+        if not r.get("browseId"):
+            continue
+        out.append({
+            "browse_id": r["browseId"],
+            "title": r.get("artist") or r.get("title") or "",
+            "subscribers": (f"{r['subscribers']} subscribers"
+                            if r.get("subscribers") else None),
+            "thumbnail": thumbnail_url(r),
+        })
+    return out
+
+
+def album_tracks(browse_id: str) -> dict:
+    """What is on a record, so one found in a search can be opened rather than guessed.
+
+    Answers with the album's own details and its songs in the shape everything else
+    here uses, so the same row draws a search hit and a track on a record.
+    """
+    data = _ask(lambda c: c.get_album(browse_id)) or {}
+    tracks = []
+    for t in data.get("tracks") or []:
+        if not t.get("videoId"):
+            continue
+        tracks.append({
+            "video_id": t["videoId"],
+            "title": t.get("title") or "",
+            "artists": [a.get("name") for a in (t.get("artists") or [])
+                        if a.get("name")] or
+                       [a.get("name") for a in (data.get("artists") or [])
+                        if a.get("name")],
+            "album": data.get("title"),
+            "duration_ms": (t.get("duration_seconds") or 0) * 1000 or None,
+            "raw": t,
+        })
+    return {
+        "title": data.get("title") or "",
+        "artist": ", ".join(a.get("name", "") for a in (data.get("artists") or []))
+                  or None,
+        "year": data.get("year"),
+        "thumbnail": thumbnail_url(data),
+        "tracks": tracks,
+    }
+
+
 def song(video_id: str) -> dict | None:
     res = _ask(lambda c: c.search(video_id, filter="songs", limit=1))
     for r in res:

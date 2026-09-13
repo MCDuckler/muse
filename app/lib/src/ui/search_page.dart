@@ -6,13 +6,19 @@ import 'package:provider/provider.dart';
 import '../api/client.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
-import 'artwork.dart';
+import 'browse_page.dart';
+import 'found_row.dart';
 import 'selection_bar.dart';
-import 'song_row.dart';
 import 'snack.dart';
 
-/// Local catalog first, then YouTube Music. Anything already in the library is marked,
-/// so you never queue a second copy of what you have.
+/// One search across everything, in one list.
+///
+/// It used to be four lists one under another — your library, then YouTube Music, then
+/// SoundCloud, then Bandcamp — and on a phone the third of those is off the bottom of
+/// the screen, which is the same as not being there. The question somebody is actually
+/// asking is "where is this song", not "what does SoundCloud have", so the answer is
+/// one ranked list where every row is the same shape and a coloured dot says where it
+/// came from. Narrowing to one service is still a tap away.
 class SearchPage extends StatefulWidget {
   const SearchPage({super.key});
 
@@ -23,40 +29,45 @@ class SearchPage extends StatefulWidget {
 class _SearchPageState extends State<SearchPage> {
   final _controller = TextEditingController();
   final _focus = FocusNode();
-  List<Track> _local = const [];
-  List<RemoteHit> _remote = const [];
-  List<SourceHit> _soundcloud = const [];
-  List<SourceHit> _bandcamp = const [];
+
+  List<Found> _found = const [];
+  Map<String, String> _notes = const {};
   AlbumPreview? _album;
   bool _importing = false;
   bool _busy = false;
   bool _searched = false;
   String? _error;
-  /// YouTube would not answer. Not the same as finding nothing, and the difference
-  /// matters: one means try another spelling, the other means try again in a minute.
-  String? _remoteError;
   String _lastQuery = '';
   Timer? _debounce;
 
-  /// Which source the results are narrowed to, or 'all'.
-  ///
-  /// Everything used to be one list with YouTube Music in the middle of it, and the two
-  /// the server fetches itself — SoundCloud and Bandcamp, the ones that actually sound
-  /// good — underneath however many YouTube results there were. On a phone that is off
-  /// the bottom of the screen, which is the same as not being there.
-  String _only = 'all';
+  /// Which service the list is narrowed to, or 'all'.
+  String _where = 'all';
 
-  static const _sources = <String, String>{
+  /// Songs, records, artists — or all three.
+  String _kind = 'all';
+
+  /// Asking the other question: not what is this called, but what are the words.
+  bool _lyrics = false;
+
+  static const _places = <String, String>{
     'all': 'Everywhere',
     'library': 'Library',
     'ytmusic': 'YouTube Music',
+    'spotify': 'Spotify',
     'soundcloud': 'SoundCloud',
     'bandcamp': 'Bandcamp',
   };
 
-  /// Long enough not to fire on every keystroke, short enough that it feels like the
-  /// results are following you. The remote leg goes out to YouTube Music, so this is
-  /// also what keeps that from being hammered.
+  static const _kinds = <String, String>{
+    'all': 'All',
+    'song': 'Songs',
+    'album': 'Albums',
+    'artist': 'Artists',
+  };
+
+  /// Long enough not to fire on every keystroke, short enough that the results feel
+  /// like they are following you. Four services are behind it, so this is also what
+  /// keeps them from being hammered.
   static const _debounceDelay = Duration(milliseconds: 350);
 
   @override
@@ -65,17 +76,22 @@ class _SearchPageState extends State<SearchPage> {
     _controller.addListener(_onTyped);
   }
 
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _controller.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
   void _onTyped() {
     setState(() {});                       // the clear button appears and disappears
     _debounce?.cancel();
     final q = _controller.text.trim();
     if (q.isEmpty) {
       setState(() {
-        _local = const [];
-        _remote = const [];
-        _remoteError = null;
-        _soundcloud = const [];
-        _bandcamp = const [];
+        _found = const [];
+        _notes = const {};
         _album = null;
         _searched = false;
       });
@@ -103,41 +119,26 @@ class _SearchPageState extends State<SearchPage> {
         if (!mounted || _lastQuery != q) return;
         setState(() {
           _album = preview;
-          _local = const [];
-          _remote = const [];
-          _remoteError = null;
-          _soundcloud = const [];
-          _bandcamp = const [];
+          _found = const [];
           _searched = true;
         });
         return;
       }
 
-      final res = await api.search(q);
+      final res = await api.searchEverything(
+        q,
+        where: _where,
+        kind: _lyrics ? 'song' : _kind,
+        lyrics: _lyrics,
+        limit: _where == 'all' ? 40 : 50,
+      );
       if (!mounted || _lastQuery != q) return;   // a newer query already went out
       setState(() {
         _album = null;
-        _local = res.local;
-        _remote = res.remote;
-        _remoteError = res.remoteError;
+        _found = res.items;
+        _notes = res.notes;
         _searched = true;
       });
-
-      // The other two are asked separately so a slow one never holds up the rest.
-      for (final source in const ['soundcloud', 'bandcamp']) {
-        api.searchSource(source, q, limit: _only == source ? 15 : 6).then((hits) {
-          if (!mounted || _lastQuery != q) return;
-          setState(() {
-            if (source == 'soundcloud') {
-              _soundcloud = hits;
-            } else {
-              _bandcamp = hits;
-            }
-          });
-        }).catchError((_) {
-          // One source being unreachable is not a failed search.
-        });
-      }
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
     } catch (e) {
@@ -147,20 +148,86 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
+  void _again() {
+    if (_lastQuery.isEmpty) return;
+    final q = _lastQuery;
+    _lastQuery = '';
+    _run(q);
+  }
+
+  /// Tapping a row. What that means is the one thing that differs between them.
+  Future<void> _open(Found found, {String mode = 'end'}) async {
+    final app = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+
+    if (found.kind == 'artist') {
+      if (found.place == 'library') {
+        navigator.push(MaterialPageRoute(
+            builder: (_) => ArtistPage(
+                artist: ArtistSummary(
+                    name: found.title, tracks: found.tracks ?? 0))));
+      } else {
+        // Somebody else's artist page is not something this app has; what it can do
+        // is show everything of theirs that service has, which is the same search
+        // narrowed to them.
+        _controller.text = found.title;
+        setState(() {
+          _where = found.place;
+          _kind = 'all';
+        });
+        _again();
+      }
+      return;
+    }
+
+    if (found.kind == 'album') {
+      if (found.place == 'library') {
+        navigator.push(MaterialPageRoute(
+            builder: (_) => AlbumPage(
+                album: AlbumSummary(
+                    name: found.title,
+                    artist: found.subtitle,
+                    tracks: found.tracks ?? 0))));
+        return;
+      }
+      await showFoundAlbum(context, found);
+      return;
+    }
+
+    // A song: either it is here, or it is fetched.
+    try {
+      if (found.track != null) {
+        await app.addTrack(found.track!, mode: mode);
+        return;
+      }
+      final track = await app.api.addFound(found);
+      await app.addTrack(track, mode: mode);
+      if (mounted) saidAdded(context, found);
+    } catch (e) {
+      messenger.showSnackBar(snack(Text('$e')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final app = context.read<AppState>();
+    final libraryTracks = [
+      for (final f in _found)
+        if (f.place == 'library' && f.track != null) f.track!,
+    ];
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
           child: TextField(
             controller: _controller,
             textInputAction: TextInputAction.search,
             onSubmitted: (_) => _run(),
             focusNode: _focus,
             decoration: InputDecoration(
-              hintText: 'Search, or paste a Bandcamp album link',
+              hintText: _lyrics
+                  ? 'Some of the words'
+                  : 'Search, or paste a Bandcamp album link',
               prefixIcon: const Icon(Icons.search),
               suffixIcon: _busy
                   ? const Padding(
@@ -182,176 +249,129 @@ class _SearchPageState extends State<SearchPage> {
             ),
           ),
         ),
-        // Where to look. Sitting above the results rather than in a menu, because the
-        // answer to "why is there nothing from Bandcamp" should be one tap away.
+        // Where to look, and what to look for. Above the results rather than in a
+        // menu, because the answer to "why is there nothing from Bandcamp" should be
+        // one tap away.
         SizedBox(
-          height: 42,
+          height: 40,
           child: ListView(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 10),
             children: [
-              for (final entry in _sources.entries)
+              for (final entry in _places.entries)
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: ChoiceChip(
+                    avatar: entry.key == 'all'
+                        ? null
+                        : PlaceDot(entry.key, size: 8),
                     label: Text(entry.value),
-                    selected: _only == entry.key,
+                    selected: _where == entry.key,
                     onSelected: (_) {
-                      setState(() => _only = entry.key);
-                      // A narrowed search asks that source for more than the handful
-                      // it contributes to the mixed list.
-                      if (_lastQuery.isNotEmpty) {
-                        final q = _lastQuery;
-                        _lastQuery = '';
-                        _run(q);
-                      }
+                      setState(() => _where = entry.key);
+                      _again();
                     },
                   ),
                 ),
             ],
           ),
         ),
+        SizedBox(
+          height: 40,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            children: [
+              // The other question: the words rather than the name. Songs only —
+              // a record has no lyrics.
+              Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: FilterChip(
+                  avatar: const Icon(Icons.format_quote, size: 16),
+                  label: const Text('Lyrics'),
+                  selected: _lyrics,
+                  onSelected: (on) {
+                    setState(() => _lyrics = on);
+                    _again();
+                  },
+                ),
+              ),
+              if (!_lyrics)
+                for (final entry in _kinds.entries)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: ChoiceChip(
+                      label: Text(entry.value),
+                      selected: _kind == entry.key,
+                      onSelected: (_) {
+                        setState(() => _kind = entry.key);
+                        _again();
+                      },
+                    ),
+                  ),
+            ],
+          ),
+        ),
         if (_error != null)
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: Text(_error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          ),
+        // One service being unreachable is not a failed search, and it is not silence
+        // either: the difference between "nothing there" and "nobody answered" is the
+        // difference between trying another spelling and trying again in a minute.
+        for (final note in _notes.entries)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+            child: Row(
+              children: [
+                PlaceDot(note.key, size: 8),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(note.value,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.outline)),
+                ),
+              ],
+            ),
           ),
         Expanded(
           child: SelectionOver(
-            bar: SelectionBar(where: 'search', tracks: _local),
-            child: _searched && !_busy && _nothingAtAll
-              ? _NothingFound(query: _lastQuery)
-              : !_searched && !_busy
-                  ? const _SearchPrompt()
-                  : ListView(
-            padding: const EdgeInsets.fromLTRB(8, 0, 8, 160),
-            children: [
-              if (_shows('library') && _local.isNotEmpty)
-                _SectionHeader('In your library · ${_local.length}'),
-              if (_shows('library'))
-                for (final t in _local)
-                // The same menu a song has everywhere else. This list used to carry a
-                // cut-down one — queue, play next, playlist — so the six other things
-                // you can do to a song (favourite it, go to its album or its artist,
-                // read the words, correct the metadata, fetch it now) were missing in
-                // the one place you have just gone looking for that song.
-                SongRow(
-                  track: t,
-                  selectable: 'search',
-                  onTap: () => app.addTrack(t),
-                ),
-              if (_album != null) ..._albumRows(app),
-              if (_shows('ytmusic') && _remoteError != null)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                  child: Text(_remoteError!,
-                      style: TextStyle(
-                          color: Theme.of(context).colorScheme.outline)),
-                ),
-              if (_shows('ytmusic') && _remote.isNotEmpty)
-                _SectionHeader('On YouTube Music · ${_remote.length}'),
-              if (_shows('ytmusic'))
-                for (final hit in _youtubeShown)
-                ListTile(
-                  leading: Stack(
-                    alignment: Alignment.bottomRight,
-                    children: [
-                      Artwork(
-                          url: app.api.remoteCoverUrl(hit.coverPath), size: 40),
-                      if (hit.known)
-                        Container(
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.surface,
-                            shape: BoxShape.circle,
+            bar: SelectionBar(where: 'search', tracks: libraryTracks),
+            child: _album != null
+                ? ListView(
+                    padding: const EdgeInsets.fromLTRB(8, 0, 8, 160),
+                    children: _albumRows(context.read<AppState>()),
+                  )
+                : _searched && !_busy && _found.isEmpty
+                    ? _NothingFound(query: _lastQuery, lyrics: _lyrics)
+                    : !_searched && !_busy
+                        ? const _SearchPrompt()
+                        : ListView.builder(
+                            padding: const EdgeInsets.fromLTRB(8, 0, 8, 160),
+                            itemCount: _found.length,
+                            itemBuilder: (context, i) => FoundRow(
+                              found: _found[i],
+                              onTap: () => _open(_found[i]),
+                              onPlayNext: () => _open(_found[i], mode: 'next'),
+                            ),
                           ),
-                          child: Icon(Icons.check_circle,
-                              size: 14,
-                              color: Theme.of(context).colorScheme.primary),
-                        ),
-                    ],
-                  ),
-                  title: Text(hit.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                  subtitle: Text(hit.artistLine, maxLines: 1, overflow: TextOverflow.ellipsis),
-                  trailing: _queueMenu(
-                    onNext: () => _fetch(hit, mode: 'next'),
-                    onEnd: () => _fetch(hit),
-                  ),
-                  onTap: () => _fetch(hit),
-                ),
-              if (_shows('soundcloud')) ..._sourceRows(app, 'SoundCloud', _soundcloud),
-              if (_shows('bandcamp')) ..._sourceRows(app, 'Bandcamp', _bandcamp),
-              if (_shows('ytmusic') && _only == 'all' && _remote.length > _mixedCap)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-                  child: TextButton(
-                    onPressed: () => setState(() => _only = 'ytmusic'),
-                    child: Text(
-                        'All ${_remote.length} YouTube Music results'),
-                  ),
-                ),
-            ],
-          ),
           ),
         ),
       ],
     );
   }
 
-  /// How many YouTube results the mixed list shows before the other sources.
-  ///
-  /// Not a limit on the search — the rest are one tap away — but on how much of the
-  /// screen one source may take before the others get a look in.
-  static const _mixedCap = 6;
-
-  List<RemoteHit> get _youtubeShown =>
-      _only == 'all' && _remote.length > _mixedCap
-          ? _remote.sublist(0, _mixedCap)
-          : _remote;
-
-  bool _shows(String source) => _only == 'all' || _only == source;
-
-  bool get _nothingAtAll =>
-      (!_shows('library') || _local.isEmpty) &&
-      (!_shows('ytmusic') || _remote.isEmpty) &&
-      (!_shows('soundcloud') || _soundcloud.isEmpty) &&
-      (!_shows('bandcamp') || _bandcamp.isEmpty) &&
-      _album == null;
-
-  /// Hits from a source the server fetches itself. Kept below YouTube Music on purpose:
-  /// SoundCloud is full of remixes, edits and thirty-second previews, so these are for
-  /// when you have looked at them and chosen, not for a machine to pick from.
-  List<Widget> _sourceRows(AppState app, String label, List<SourceHit> hits) {
-    if (hits.isEmpty) return const [];
-    return [
-      _SectionHeader('On $label · ${hits.length}'),
-      for (final hit in hits)
-        ListTile(
-          leading: CircleAvatar(
-            backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-            child: Icon(
-                hit.provider == 'bandcamp' ? Icons.album_outlined : Icons.cloud_outlined,
-                size: 18),
-          ),
-          title: Text(hit.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-          subtitle: Text(
-              [hit.artistLine, hit.lengthLine].where((s) => s.isNotEmpty).join(' · '),
-              maxLines: 1, overflow: TextOverflow.ellipsis),
-          trailing: hit.known
-              ? const Icon(Icons.check_circle_outline, size: 20)
-              : _queueMenu(
-                  onNext: () => _addSource(app, hit, mode: 'next'),
-                  onEnd: () => _addSource(app, hit),
-                ),
-          onTap: () => _addSource(app, hit),
-        ),
-    ];
-  }
-
   /// A pasted album link: the whole record, in order, as the artist typed it.
   List<Widget> _albumRows(AppState app) {
     final album = _album!;
     return [
-      _SectionHeader('${album.artist ?? 'Album'} · ${album.album ?? ''}'),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+        child: Text('${album.artist ?? 'Album'} · ${album.album ?? ''}',
+            style: Theme.of(context).textTheme.titleSmall),
+      ),
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
         child: Row(
@@ -360,8 +380,7 @@ class _SearchPageState extends State<SearchPage> {
               child: Text(
                 [
                   '${album.tracks.length} tracks',
-                  if (album.unavailable > 0)
-                    '${album.unavailable} sold only',
+                  if (album.unavailable > 0) '${album.unavailable} sold only',
                 ].join(' · '),
                 style: Theme.of(context).textTheme.bodySmall,
               ),
@@ -369,7 +388,8 @@ class _SearchPageState extends State<SearchPage> {
             FilledButton.icon(
               icon: _importing
                   ? const SizedBox(
-                      width: 14, height: 14,
+                      width: 14,
+                      height: 14,
                       child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.download, size: 18),
               label: const Text('Add the album'),
@@ -384,20 +404,10 @@ class _SearchPageState extends State<SearchPage> {
           leading: const Icon(Icons.music_note, size: 20),
           title: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis),
           subtitle: Text(t.lengthLine),
-          trailing: t.known ? const Icon(Icons.check_circle_outline, size: 18) : null,
+          trailing:
+              t.known ? const Icon(Icons.check_circle_outline, size: 18) : null,
         ),
     ];
-  }
-
-  Future<void> _addSource(AppState app, SourceHit hit, {String mode = 'end'}) async {
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      final track = await app.api.addFromSource(hit);
-      await app.addTrack(track, mode: mode);
-      messenger.showSnackBar(snack(Text('Added "${hit.title}" from ${hit.sourceLabel}')));
-    } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
-    }
   }
 
   Future<void> _importAlbum(AppState app) async {
@@ -406,156 +416,197 @@ class _SearchPageState extends State<SearchPage> {
     try {
       final r = await app.api.importAlbum(_lastQuery);
       await app.refreshPlaylists();
-      messenger.showSnackBar(snack(Text('Added "${r['name']}" — ${r['added']} tracks')));
+      messenger.showSnackBar(
+          snack(Text('Added "${r['name']}" — ${r['added']} tracks')));
     } catch (e) {
       messenger.showSnackBar(snack(Text('$e')));
     } finally {
       if (mounted) setState(() => _importing = false);
     }
   }
+}
 
-  /// "Play next" and "add to end" both existed in the API but were distinguished only
-  /// by tap-versus-button, which nobody would ever discover.
-  Widget _queueMenu({
-    required VoidCallback onNext,
-    required VoidCallback onEnd,
-    VoidCallback? onPlaylist,
-  }) =>
-      PopupMenuButton<String>(
-        icon: const Icon(Icons.playlist_add),
-        tooltip: 'Add to queue',
-        onSelected: (v) => switch (v) {
-          'next' => onNext(),
-          'playlist' => onPlaylist?.call(),
-          _ => onEnd(),
-        },
-        itemBuilder: (context) => [
-          if (onPlaylist != null)
-            const PopupMenuItem(
-              value: 'playlist',
-              child: ListTile(
-                dense: true,
-                leading: Icon(Icons.library_add),
-                title: Text('Add to playlist…'),
-                contentPadding: EdgeInsets.zero,
-              ),
-            ),
-          ...const [
-          PopupMenuItem(
-            value: 'next',
-            child: ListTile(
-              dense: true,
-              leading: Icon(Icons.playlist_play),
-              title: Text('Play next'),
-              contentPadding: EdgeInsets.zero,
-            ),
-          ),
-          PopupMenuItem(
-            value: 'end',
-            child: ListTile(
-              dense: true,
-              leading: Icon(Icons.playlist_add),
-              title: Text('Add to end'),
-              contentPadding: EdgeInsets.zero,
-            ),
-          ),
-        ],
-        ],
-      );
+/// What is on a record found somewhere else, and a way to take it.
+Future<void> showFoundAlbum(BuildContext context, Found found) async {
+  final app = context.read<AppState>();
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (context) => DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.7,
+      maxChildSize: 0.95,
+      builder: (context, scroll) => _FoundAlbumSheet(
+          found: found, app: app, controller: scroll),
+    ),
+  );
+}
 
-  Future<void> _fetch(RemoteHit hit, {String mode = 'end'}) async {
-    final app = context.read<AppState>();
+class _FoundAlbumSheet extends StatefulWidget {
+  const _FoundAlbumSheet(
+      {required this.found, required this.app, required this.controller});
+  final Found found;
+  final AppState app;
+  final ScrollController controller;
+
+  @override
+  State<_FoundAlbumSheet> createState() => _FoundAlbumSheetState();
+}
+
+class _FoundAlbumSheetState extends State<_FoundAlbumSheet> {
+  FoundAlbum? _album;
+  String? _error;
+  bool _taking = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.app.api
+        .foundAlbum(widget.found.place, widget.found.id)
+        .then((a) => mounted ? setState(() => _album = a) : null)
+        .catchError((Object e) {
+      if (mounted) setState(() => _error = '$e');
+    });
+  }
+
+  /// The whole record, in order. One request each, because each one is a download
+  /// somewhere else and the server queues them as they arrive.
+  Future<void> _takeAll() async {
     final messenger = ScaffoldMessenger.of(context);
+    setState(() => _taking = true);
+    var added = 0;
     try {
-      final track = await app.api.resolve(videoId: hit.videoId);
-      await app.addTrack(track, mode: mode);
-      messenger.showSnackBar(snack(Text(track.isReady
-            ? 'Added ${track.title}'
-            : 'Queued ${track.title} — downloading'),
-      ));
-    } on ApiException catch (e) {
-      messenger.showSnackBar(snack(Text(e.message.trim().isEmpty ? 'Failed (${e.status})' : e.message)));
-    } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      for (final t in _album!.tracks) {
+        try {
+          await widget.app.api.addFound(t);
+          added++;
+        } catch (_) {
+          // One song of a record being unavailable is not a failed record.
+        }
+      }
+      messenger.showSnackBar(snack(
+          Text('Added $added of ${_album!.tracks.length} from "${_album!.title}"')));
+    } finally {
+      if (mounted) setState(() => _taking = false);
     }
   }
 
   @override
-  void dispose() {
-    _debounce?.cancel();
-    _controller.removeListener(_onTyped);
-    _controller.dispose();
-    _focus.dispose();
-    super.dispose();
+  Widget build(BuildContext context) {
+    final album = _album;
+    if (_error != null) {
+      return Center(
+          child: Padding(
+              padding: const EdgeInsets.all(24), child: Text(_error!)));
+    }
+    if (album == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return ListView(
+      controller: widget.controller,
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+      children: [
+        ListTile(
+          leading: PlaceDot(widget.found.place, size: 12),
+          title: Text(album.title,
+              style: Theme.of(context).textTheme.titleMedium),
+          subtitle: Text([
+            album.artist ?? '',
+            if (album.year != null) album.year!,
+            '${album.tracks.length} songs',
+          ].where((s) => s.isNotEmpty).join(' · ')),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: FilledButton.icon(
+            icon: _taking
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.download, size: 18),
+            label: const Text('Add the record'),
+            onPressed: _taking ? null : _takeAll,
+          ),
+        ),
+        for (final t in album.tracks)
+          FoundRow(
+            found: t,
+            onTap: () async {
+              try {
+                final track = await widget.app.api.addFound(t);
+                await widget.app.addTrack(track);
+                if (context.mounted) saidAdded(context, t);
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context)
+                      .showSnackBar(snack(Text('$e')));
+                }
+              }
+            },
+          ),
+      ],
+    );
   }
 }
 
-/// Before the first search. An empty list here would look like a failed search.
 class _SearchPrompt extends StatelessWidget {
   const _SearchPrompt();
 
   @override
-  Widget build(BuildContext context) => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.search,
-                  size: 44, color: Theme.of(context).colorScheme.onSurfaceVariant),
-              const SizedBox(height: 12),
-              Text('Find something to play',
-                  style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 4),
-              Text('Your library first, then YouTube Music.',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodySmall),
-            ],
-          ),
+  Widget build(BuildContext context) {
+    final style = Theme.of(context)
+        .textTheme
+        .bodyMedium
+        ?.copyWith(color: Theme.of(context).colorScheme.outline);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.search, size: 40),
+            const SizedBox(height: 12),
+            Text(
+              'Songs, records and artists, from your library and from every service '
+              'this server can reach — in one list.',
+              textAlign: TextAlign.center,
+              style: style,
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Or turn on Lyrics and type some of the words.',
+              textAlign: TextAlign.center,
+              style: style,
+            ),
+          ],
         ),
-      );
+      ),
+    );
+  }
 }
 
-/// And after one that found nothing — which used to look identical to never having
-/// searched at all.
 class _NothingFound extends StatelessWidget {
-  const _NothingFound({required this.query});
+  const _NothingFound({required this.query, required this.lyrics});
   final String query;
+  final bool lyrics;
 
   @override
   Widget build(BuildContext context) => Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.search_off,
-                  size: 44, color: Theme.of(context).colorScheme.onSurfaceVariant),
-              const SizedBox(height: 12),
-              Text('Nothing found for “$query”',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 4),
-              Text('Try a different spelling, or add the artist’s name.',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodySmall),
-            ],
-          ),
-        ),
-      );
-}
-
-class _SectionHeader extends StatelessWidget {
-  const _SectionHeader(this.text);
-  final String text;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-        child: Text(text.toUpperCase(),
+          child: Text(
+            lyrics
+                ? 'Nothing with those words in it. Try a longer line, or one from '
+                    'the chorus.'
+                : 'Nothing for "$query" anywhere.',
+            textAlign: TextAlign.center,
             style: Theme.of(context)
                 .textTheme
-                .labelSmall
-                ?.copyWith(letterSpacing: 1.2)),
+                .bodyMedium
+                ?.copyWith(color: Theme.of(context).colorScheme.outline),
+          ),
+        ),
       );
 }

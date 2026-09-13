@@ -167,6 +167,56 @@ class ApiClient {
     );
   }
 
+  /// Everything, everywhere, in one list.
+  ///
+  /// The old [search] answers in the shape the sectioned screen wanted — library here,
+  /// YouTube Music there. This one answers with rows that are all the same shape,
+  /// ranked together, each saying where it came from.
+  Future<({List<Found> items, Map<String, String> notes})> searchEverything(
+    String q, {
+    String where = 'all',
+    String kind = 'all',
+    bool lyrics = false,
+    int limit = 30,
+  }) async {
+    final d = await _decode(await net.get(
+        _u('/search/everything', {
+          'q': q,
+          'where': where,
+          'kind': kind,
+          if (lyrics) 'lyrics': 'true',
+          'limit': '$limit',
+        }),
+        headers: _headers)) as Map<String, dynamic>;
+    return (
+      items: ((d['items'] ?? const []) as List)
+          .map((e) => Found.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      notes: ((d['notes'] ?? const {}) as Map)
+          .map((k, v) => MapEntry('$k', '$v')),
+    );
+  }
+
+  /// What is on a record that was found somewhere else.
+  Future<FoundAlbum> foundAlbum(String place, String id) async =>
+      FoundAlbum.fromJson(await _decode(await net.get(
+          _u('/search/album', {'place': place, 'id': id}),
+          headers: _headers)) as Map<String, dynamic>);
+
+  /// Take one row from a search, whatever service it came from.
+  Future<Track> addFound(Found found) async => Track.fromJson(await _decode(
+      await net.post(_u('/search/add'),
+          headers: _headers,
+          body: jsonEncode({
+            'place': found.place,
+            'id': found.id,
+            'title': found.title,
+            'subtitle': found.subtitle,
+            if (found.album != null) 'album': found.album,
+            if (found.durationMs != null) 'duration_ms': found.durationMs,
+            if (found.url != null) 'url': found.url,
+          }))) as Map<String, dynamic>);
+
   /// 200 when the server already had it, 202 when it just queued a download.
   Future<Track> resolve({String? videoId, String? query}) async {
     final r = await net.post(_u('/tracks/resolve'),

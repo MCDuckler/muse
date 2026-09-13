@@ -13,4 +13,11 @@ import 'package:http/http.dart' as http;
 ///
 /// On the web this is the browser's own fetch, which was already pooling; the win is
 /// on the phone.
-final http.Client net = http.Client();
+http.Client net = http.Client();
+
+/// Hand the app a different client, and take it back again.
+///
+/// For tests, which need the answers without a socket: a screen that talks to the
+/// server can then be driven entirely on the test's own clock, where a real request
+/// would sit unfinished until somebody let the real event loop run.
+void useThisClientInstead(http.Client other) => net = other;

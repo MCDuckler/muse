@@ -784,6 +784,111 @@ enum ShelfAxis {
 /// app somebody sits and looks at, and what reads as right there is a matter of taste
 /// rather than of correctness. And off, because an arm across the label is still a
 /// thing between somebody and the artwork.
+/// One row of a search, whatever it is and wherever it came from.
+///
+/// A song in your library, a record on YouTube Music and an artist on Spotify all
+/// arrive in this one shape, because the list they go in is one list. What differs
+/// between them is what tapping does, which is [kind] and [place].
+class Found {
+  const Found({
+    required this.kind,
+    required this.place,
+    required this.id,
+    required this.title,
+    required this.subtitle,
+    this.coverUrl,
+    this.durationMs,
+    this.track,
+    this.known = false,
+    this.mine = false,
+    this.lyric,
+    this.tracks,
+    this.album,
+    this.url,
+    this.year,
+  });
+
+  /// song, album or artist.
+  final String kind;
+
+  /// library, ytmusic, spotify, soundcloud or bandcamp.
+  final String place;
+
+  /// Whatever that place calls this thing: a track id here, a video id there.
+  final String id;
+
+  final String title;
+  final String subtitle;
+
+  /// Addressed through this server, whoever's picture it is.
+  final String? coverUrl;
+  final int? durationMs;
+
+  /// The library's own row for it, when the library has one.
+  final Track? track;
+
+  /// This server already knows this song — it may still be downloading.
+  final bool known;
+
+  /// And it is in *your* library, not merely on the box.
+  final bool mine;
+
+  /// The line the words were found in, when the search was for words.
+  final String? lyric;
+
+  /// How many songs, for a record or an artist.
+  final int? tracks;
+  final String? album;
+  final String? url;
+  final String? year;
+
+  bool get isSong => kind == 'song';
+
+  static int? _ms(Object? v) => v == null ? null : (v as num).toInt();
+
+  factory Found.fromJson(Map<String, dynamic> j) => Found(
+        kind: j['kind'] as String? ?? 'song',
+        place: j['place'] as String? ?? 'library',
+        id: '${j['id']}',
+        title: j['title'] as String? ?? '',
+        subtitle: j['subtitle'] as String? ?? '',
+        coverUrl: j['cover_url'] as String?,
+        durationMs: _ms(j['duration_ms']),
+        track: j['track'] == null
+            ? null
+            : Track.fromJson(j['track'] as Map<String, dynamic>),
+        known: j['known'] == true,
+        mine: j['mine'] == true,
+        lyric: j['lyric'] as String?,
+        tracks: j['tracks'] == null ? null : (j['tracks'] as num).toInt(),
+        album: j['album'] as String?,
+        url: j['url'] as String?,
+        year: j['year']?.toString(),
+      );
+}
+
+/// A record somebody found, opened: what is on it, before any of it is added.
+class FoundAlbum {
+  const FoundAlbum(
+      {required this.title, this.artist, this.year, this.coverUrl,
+      this.tracks = const []});
+  final String title;
+  final String? artist;
+  final String? year;
+  final String? coverUrl;
+  final List<Found> tracks;
+
+  factory FoundAlbum.fromJson(Map<String, dynamic> j) => FoundAlbum(
+        title: j['title'] as String? ?? '',
+        artist: j['artist'] as String?,
+        year: j['year']?.toString(),
+        coverUrl: j['cover_url'] as String?,
+        tracks: ((j['tracks'] ?? const []) as List)
+            .map((e) => Found.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
 enum ArmStyle {
   off,
 
