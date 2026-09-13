@@ -35,6 +35,7 @@ class RecordStage extends StatefulWidget {
     this.onNext,
     this.onPrevious,
     this.scale = 0.74,
+    this.discScale = 1.0,
     this.axis = ShelfAxis.sideways,
     this.armStyle = ArmStyle.studio,
     this.board,
@@ -54,6 +55,11 @@ class RecordStage extends StatefulWidget {
   /// stand, so this trades "how big is the record" against "how much of the next one
   /// can be seen" — which is a matter of taste and is therefore a setting.
   final double scale;
+
+  /// How wide the record on the deck is drawn, as a fraction of the room there is for
+  /// it. Its own setting, because it is its own object: the covers are a shelf and the
+  /// record is the thing playing, and how much of the screen each gets is taste.
+  final double discScale;
 
   final Track track;
   final bool playing;
@@ -763,7 +769,8 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
         // smaller is about how much of the shelf you can see, and a record on a deck
         // is the size a record is.
         final screen = MediaQuery.sizeOf(context).width;
-        final platter = screen - _wallClearance * 2;
+        final platter =
+            (screen - _wallClearance * 2) * widget.discScale.clamp(0.6, 1.15);
         // Far enough right that the sleeve-sized one is past the edge of the phone.
         final away = screen * 0.85;
         // The top edge of the record — the round one, the one that shows. Above the
@@ -1335,13 +1342,6 @@ class Disc extends StatelessWidget {
   }
 
   /// A record, turning. Built once and rotated, rather than rebuilt every frame.
-  /// How solid the record on the deck is.
-  ///
-  /// Not quite. It stands above the covers and into the room the header is in, and a
-  /// black disc laid flat over that reads as a hole in the screen. A little sheer and
-  /// it reads as what it is: something behind the things in front of it.
-  static const double sheer = 0.88;
-
   static Widget spinning({
     required String url,
     required Animation<double> spin,
@@ -1363,7 +1363,7 @@ class Disc extends StatelessWidget {
               image: artwork(url),
               fit: BoxFit.contain,
               gaplessPlayback: true,
-              opacity: AlwaysStoppedAnimation(fade * sheer)),
+              opacity: AlwaysStoppedAnimation(fade)),
         ),
       );
 }
@@ -1470,6 +1470,20 @@ class _DeckState extends State<Deck> {
                   // Down the last few pixels as it lands: the click of a record being
                   // set on the platter.
                   (1 - Curves.easeOutBack.transform(arriving)) * widget.size * 0.06,
+                ),
+              // The light on it, which does not turn with it.
+              //
+              // A record turning under a lamp carries a band of light that stays where
+              // the lamp is: the grooves run through it and it holds still. Painted on
+              // the record it would be a smear going round with the label, which is
+              // what a record does not do and what the eye notices immediately.
+              if (settled != null || arriving > 0)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: CustomPaint(
+                      painter: _Sheen(size: widget.size, drop: widget.drop),
+                    ),
+                  ),
                 ),
               // The arm comes down once the record has stopped moving, and swings
               // off to the side again when the music stops or the next record is on
@@ -2231,6 +2245,58 @@ class _ArmPainter extends CustomPainter {
 }
 
 
+
+/// The light lying across a turning record.
+///
+/// Two soft bands at an angle, clipped to the record itself and fading out before the
+/// line it is cut on. Drawn over the record and outside its rotation, so the grooves
+/// run through the light rather than carrying it round with them — which is the whole
+/// point of it, and the difference between a record turning and a picture of a record
+/// being rotated.
+class _Sheen extends CustomPainter {
+  _Sheen({required this.size, required this.drop});
+
+  /// How wide the record is.
+  final double size;
+
+  /// How far from the middle of the box the middle of the record is.
+  final double drop;
+
+  @override
+  void paint(Canvas canvas, Size box) {
+    final middle = Offset(box.width / 2, box.height / 2 + drop);
+    final r = size / 2;
+    final disc = Rect.fromCircle(center: middle, radius: r);
+
+    canvas.save();
+    canvas.clipPath(Path()..addOval(disc));
+    // Only where the record is actually drawn: the light cannot go on past the edge
+    // the record fades out at.
+    canvas.clipRect(Rect.fromLTRB(
+        disc.left, disc.top, disc.right, disc.top + size * 0.62));
+    canvas.drawRect(
+      disc,
+      Paint()
+        ..shader = ui.Gradient.linear(
+          disc.topLeft,
+          disc.bottomRight,
+          [
+            const Color(0x00FFFFFF),
+            const Color(0x38FFFFFF),
+            const Color(0x10FFFFFF),
+            const Color(0x00FFFFFF),
+            const Color(0x22FFFFFF),
+            const Color(0x00FFFFFF),
+          ],
+          const [0.0, 0.20, 0.30, 0.44, 0.58, 0.80],
+        ),
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_Sheen old) => old.size != size || old.drop != drop;
+}
 
 /// A reflection under something, on a surface that is barely there.
 ///

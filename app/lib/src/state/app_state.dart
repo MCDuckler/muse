@@ -125,6 +125,7 @@ class AppState extends ChangeNotifier {
   static const _kSpectrum = 'muse.spectrum';
   static const _kCoverScale = 'muse.coverScale';
   static const _kArmStyle = 'muse.armStyle';
+  static const _kDiscScale = 'muse.discScale';
   static const _kLayout = 'muse.playerLayout';
   static const _kShelfAxis = 'muse.shelfAxis';
   static const _kJamListening = 'muse.jamListening';
@@ -157,6 +158,16 @@ class AppState extends ChangeNotifier {
 
   /// Which tonearm is drawn on the deck, or none at all.
   ArmStyle armStyle = ArmStyle.studio;
+
+  /// How wide the record on the deck is drawn, as a fraction of the room there is.
+  double discScale = 1.0;
+
+  Future<void> setDiscScale(double value) async {
+    discScale = value.clamp(0.6, 1.15);
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_kDiscScale, discScale);
+  }
 
   Future<void> setArmStyle(ArmStyle value) async {
     armStyle = value;
@@ -269,6 +280,7 @@ class AppState extends ChangeNotifier {
     halftone = prefs.getBool(_kHalftone) ?? !kIsWeb;
     spectrum = prefs.getBool(_kSpectrum) ?? false;
     coverScale = (prefs.getDouble(_kCoverScale) ?? 0.74).clamp(0.5, 1.0);
+    discScale = (prefs.getDouble(_kDiscScale) ?? 1.0).clamp(0.6, 1.15);
     armStyle = ArmStyle.values.firstWhere(
         (a) => a.name == prefs.getString(_kArmStyle),
         orElse: () => ArmStyle.studio);

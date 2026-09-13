@@ -60,6 +60,34 @@ android {
                 signingConfigs.getByName("release")
             else
                 signingConfigs.getByName("debug")
+
+            // No shrinking, and above all no renaming of resources.
+            //
+            // This is the whole of the background-playback bug. Flutter's Gradle plugin
+            // turns R8 and resource shrinking on for release builds, and resource
+            // shrinking renames every resource — res/drawable/audio_service_play
+            // becomes res/-B.png. Anything that looks a resource up by *name* at
+            // runtime then gets back id 0, and audio_service does exactly that for the
+            // icons on its media controls: every state this app broadcast came back
+            //
+            //   PlatformException(You must specify an icon resource id to build a
+            //   CustomAction)
+            //
+            // so the Android service never learned anything was playing, never built a
+            // notification, never created its channel and never went to the foreground
+            // — which leaves the process merely cached, and a cached process is frozen
+            // the moment the app leaves the screen. Music stops a few seconds after
+            // switching away, and no Dart is running to notice or say so.
+            //
+            // It also took the launcher icon's own status-bar stencil with it, and it
+            // is why a reflective read of the service object came back
+            // NoSuchFieldException.
+            //
+            // Nothing here is worth shrinking for: the APK is sixty megabytes of
+            // Flutter engine and assets, and the Java it would strip is a rounding
+            // error against that.
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }
