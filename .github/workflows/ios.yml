@@ -21,7 +21,7 @@ on:
     inputs:
       server:
         description: 'muse server the build points at'
-        default: 'https://158-69-192-169.nip.io'
+        default: 'https://89-58-49-140.nip.io'
 
 jobs:
   ipa:
@@ -56,7 +56,7 @@ jobs:
       - name: Build, unsigned
         working-directory: app
         env:
-          MUSE_SERVER: ${{ inputs.server || 'https://158-69-192-169.nip.io' }}
+          MUSE_SERVER: ${{ inputs.server || 'https://89-58-49-140.nip.io' }}
         run: |
           # The same stamp the Android build carries: the moment it was built, which
           # is the only thing that tells one of these apart from another on a phone.

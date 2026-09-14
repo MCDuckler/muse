@@ -11,7 +11,7 @@
 set -u
 cd "$(dirname "$0")"
 
-: "${MUSE_API:=https://158-69-192-169.nip.io}"
+: "${MUSE_API:=https://89-58-49-140.nip.io}"
 : "${MUSE_WORKER_NAME:=laptop}"
 : "${MUSE_CONCURRENCY:=6}"
 : "${POT_PORT:=4416}"

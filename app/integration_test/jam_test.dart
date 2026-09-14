@@ -13,7 +13,7 @@ import 'package:muse/src/api/client.dart';
 import 'package:muse/src/api/models.dart';
 
 const server =
-    String.fromEnvironment('MUSE_SERVER', defaultValue: 'https://158-69-192-169.nip.io');
+    String.fromEnvironment('MUSE_SERVER', defaultValue: 'https://89-58-49-140.nip.io');
 const user = String.fromEnvironment('MUSE_USER', defaultValue: 'chris');
 const pass = String.fromEnvironment('MUSE_PASS');
 const otherUser = String.fromEnvironment('MUSE_GUEST_USER', defaultValue: 'dar');

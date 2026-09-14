@@ -13,7 +13,7 @@ from __future__ import annotations
 import sys
 import urllib.request
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "https://158-69-192-169.nip.io"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "https://89-58-49-140.nip.io"
 
 
 def fetch(url: str) -> tuple[int, str, str]:

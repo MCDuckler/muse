@@ -118,6 +118,10 @@ class AppState extends ChangeNotifier {
     return kIsWeb ? Uri.base.origin : 'http://127.0.0.1:8770';
   }
 
+  /// Where the server used to live. It now only forwards to the new box, and only for
+  /// as long as phones still have this address saved.
+  static const _retiredServers = {'https://158-69-192-169.nip.io'};
+
   static const _kServer = 'muse.server';
   static const _kToken = 'muse.token';
   static const _kCoverStyle = 'muse.coverStyle';
@@ -306,10 +310,20 @@ class AppState extends ChangeNotifier {
         (a) => a.name == prefs.getString(_kShelfAxis),
         orElse: () => ShelfAxis.sideways);
     jamListening = prefs.getBool(_kJamListening) ?? false;
+    // The address saved at sign-in outlives the build that saved it, so a phone that
+    // signed in before the server moved would keep calling the old box after updating.
+    // The accounts and tokens moved with the database, so it is simply pointed at the
+    // address this build was made for — the session carries on without a sign-in.
+    var server = prefs.getString(_kServer);
+    if (server != null && _retiredServers.contains(server) &&
+        defaultServer.startsWith('https://') && defaultServer != server) {
+      server = defaultServer;
+      await prefs.setString(_kServer, server);
+    }
     api = ApiClient(
       // Served from the box itself on web, so the page's own origin is the server —
       // no one should have to type a URL into a page they loaded from that URL.
-      baseUrl: prefs.getString(_kServer) ?? defaultServer,
+      baseUrl: server ?? defaultServer,
       token: prefs.getString(_kToken),
     );
     if (api.token != null) {

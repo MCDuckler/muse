@@ -1,6 +1,8 @@
-# Temporary home on the CTA box. No domain, so the hostname is nip.io — Let's Encrypt
-# issues for it, which is what gives the phone real TLS instead of a cleartext login.
-158-69-192-169.nip.io {
+# The WetOwl box (netcup, 89.58.49.140). No domain, so the hostname is nip.io — Let's Encrypt
+# issues for it, which is what gives the phone real TLS instead of a cleartext login. The
+# provider's own name for the box resolves too, but megasrv.de is shared by every netcup
+# customer and Let's Encrypt refuses it for having issued too many certificates already.
+89-58-49-140.nip.io {
 	encode zstd gzip
 
 	# SSE must not be buffered or the client never sees track_ready.

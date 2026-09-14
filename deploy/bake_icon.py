@@ -19,7 +19,7 @@ import urllib.request
 
 from PIL import Image
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "https://158-69-192-169.nip.io"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "https://89-58-49-140.nip.io"
 ROOT = pathlib.Path(__file__).resolve().parents[1] / "app"
 
 # Every size the app ships, and where it goes.

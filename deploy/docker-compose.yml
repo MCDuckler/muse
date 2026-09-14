@@ -1,4 +1,4 @@
-# The OVH box runs api + db + caddy. It does NOT run the ingest worker:
+# The WetOwl box (netcup, 89.58.49.140) runs api + db + caddy. It does NOT run the ingest worker:
 # YouTube refuses datacenter IPs (measured — see worker/NOTES.md), so the worker
 # lives on a residential connection and reaches this stack outbound only.
 services:

@@ -12,9 +12,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-HOST=${MUSE_HOST:-root@158.69.192.169}
+HOST=${MUSE_HOST:-root@89.58.49.140}
 KEY=${MUSE_KEY:-$HOME/Documents/chris.pem}
-SERVER_URL=${MUSE_SERVER_URL:-https://158-69-192-169.nip.io}
+SERVER_URL=${MUSE_SERVER_URL:-https://89-58-49-140.nip.io}
 SSH="ssh -i $KEY"
 # Where the installable builds live. Deliberately not the web root: see above.
 DL=/opt/muse/deploy/downloads
