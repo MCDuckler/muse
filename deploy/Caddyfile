@@ -19,12 +19,15 @@
 		reverse_proxy api:8770
 	}
 
+	# The installable builds and their manifests, served out of /dl — a directory of
+	# their own, mounted separately, that no publish step ever deletes.
+	#
 	# The Android build, so a phone with no cable can install it. Content-Type matters:
 	# served as anything else, Android downloads a file it then refuses to open.
 	handle /muse.apk {
 		header Content-Type application/vnd.android.package-archive
 		header Content-Disposition "attachment; filename=muse.apk"
-		root * /srv
+		root * /dl
 		file_server
 	}
 
@@ -35,14 +38,25 @@
 	handle /wetowl.ipa {
 		header Content-Type application/octet-stream
 		header Content-Disposition "attachment; filename=wetowl.ipa"
-		root * /srv
+		root * /dl
+		file_server
+	}
+
+	# What SideStore and AltStore read to find out WetOwl exists and which build is
+	# current. Added once on the phone; every publish after that is an update in their
+	# list rather than a file somebody has to find again.
+	handle /wetowl-source.json {
+		header Content-Type application/json
+		header Cache-Control "no-cache"
+		header Access-Control-Allow-Origin *
+		root * /dl
 		file_server
 	}
 
 	handle /wetowl.ipa.json {
 		header Content-Type application/json
 		header Cache-Control "no-cache"
-		root * /srv
+		root * /dl
 		file_server
 	}
 
@@ -53,7 +67,7 @@
 	handle /muse.apk.json {
 		header Content-Type application/json
 		header Cache-Control "no-cache"
-		root * /srv
+		root * /dl
 		file_server
 	}
 

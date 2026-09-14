@@ -33,6 +33,11 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./data/caddy:/data
       - ./web:/srv:ro
+      # The installable builds, deliberately NOT inside ./web. The web publish rsyncs
+      # that directory with --delete, and anything parked in it is one forgotten
+      # --exclude away from being deleted the next time the web app goes out — which is
+      # exactly how the iPhone download disappeared an hour after it was published.
+      - ./downloads:/dl:ro
     depends_on: [api]
     restart: unless-stopped
 

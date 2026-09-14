@@ -149,6 +149,24 @@ class Updates extends ChangeNotifier {
     ];
   }
 
+  /// The sideloaders' own list of WetOwl builds.
+  ///
+  /// Adding this once is the difference between a download and an app that updates
+  /// itself: the build sits in SideStore's Browse tab from then on, and every publish
+  /// after this one shows up there as an update rather than as a link somebody has to
+  /// be sent again. It is as close to the Android row as iOS gets without an Apple
+  /// developer account.
+  static String sourceUrl(String baseUrl) => '$baseUrl/wetowl-source.json';
+
+  /// That list, addressed to whichever sideloader is installed.
+  static List<Uri> sourceAdders(String baseUrl) {
+    final url = Uri.encodeComponent(sourceUrl(baseUrl));
+    return [
+      Uri.parse('sidestore://source?url=$url'),
+      Uri.parse('altstore://source?url=$url'),
+    ];
+  }
+
   /// Whether this device is the one that could use an ipa.
   static bool get iphone =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;

@@ -4,8 +4,11 @@
 # Two mistakes this exists to prevent, both made the hard way:
 #   * rsyncing server/muse/ onto /opt/muse/server/ instead of server/ — with --delete
 #     that removes the Dockerfile the image is built from.
-#   * rsyncing the web build with --delete over a directory that also holds muse.apk,
-#     which quietly deletes the download people install from.
+#   * rsyncing the web build with --delete over a directory that also holds the
+#     installable builds, which quietly deletes the download people install from. The
+#     exclude that papered over it only knew about the APK, so the day an iPhone build
+#     was added it went out, worked, and was gone by the next web publish. The builds
+#     now live in a directory of their own that no rsync here points at.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -13,6 +16,8 @@ HOST=${MUSE_HOST:-root@158.69.192.169}
 KEY=${MUSE_KEY:-$HOME/Documents/chris.pem}
 SERVER_URL=${MUSE_SERVER_URL:-https://158-69-192-169.nip.io}
 SSH="ssh -i $KEY"
+# Where the installable builds live. Deliberately not the web root: see above.
+DL=/opt/muse/deploy/downloads
 what=${1:-all}
 
 publish_server() {
@@ -59,14 +64,17 @@ publish_web() {
   echo "== web"
   (cd app && flutter build web --release --dart-define=MUSE_SERVER="$SERVER_URL")
   precompress_web
-  # muse.apk* rather than muse.apk: the manifest beside the APK is published by the
-  # apk step and lives in the same directory, and a --delete that only knew about the
-  # APK itself quietly removed it every time the web app went out — so the app could
-  # never find out that a new version existed.
-  # The symbol files are for reading a stack trace off a debug build; nothing serves
-  # them and they are another megabyte and a half over the wire on every publish.
-  rsync -az --delete --exclude 'muse.apk*' --exclude '*.symbols' \
+  # No excludes for the downloads any more: they are not in this directory. The symbol
+  # files are for reading a stack trace off a debug build; nothing serves them and they
+  # are another megabyte and a half over the wire on every publish.
+  rsync -az --delete --exclude '*.symbols' \
     -e "$SSH" app/build/web/ "$HOST":/opt/muse/deploy/web/
+  # And the thing that went wrong, asserted rather than remembered: a web publish must
+  # never cost the phones their downloads.
+  for f in muse.apk wetowl.ipa; do
+    code=$(curl -s -o /dev/null -w '%{http_code}' -I "$SERVER_URL/$f")
+    [ "$code" = 200 ] || echo "   ! $SERVER_URL/$f answers $code"
+  done
 }
 
 publish_apk() {
@@ -94,13 +102,13 @@ publish_apk() {
   local apk=app/build/app/outputs/flutter-apk/app-release.apk
   local bytes
   bytes=$(stat -c%s "$apk")
-  scp -q -i "$KEY" "$apk" "$HOST":/opt/muse/deploy/web/muse.apk
+  scp -q -i "$KEY" "$apk" "$HOST":$DL/muse.apk
   # What the app reads to find out whether there is a newer one. A plain file beside
   # the APK rather than an endpoint: it is written by whatever publishes the APK, so
   # the two cannot get out of step.
   printf '{"version":"%s","build":"%s","bytes":%s,"built":"%s"}\n' \
     "$version" "$build" "$bytes" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    | $SSH "$HOST" 'cat > /opt/muse/deploy/web/muse.apk.json'
+    | $SSH "$HOST" "cat > $DL/muse.apk.json"
   echo "   $SERVER_URL/muse.apk  ($version build $build, $((bytes / 1024 / 1024))MB)"
 }
 
@@ -135,13 +143,60 @@ publish_ios() {
             | strings | grep -oE '^20[0-9]{10}$' | sort -u | tail -1)
   [ -n "$build" ] || build=$(echo "$tag" | tr -dc '0-9')
 
-  scp -q -i "$KEY" "$ipa" "$HOST":/opt/muse/deploy/web/wetowl.ipa
+  scp -q -i "$KEY" "$ipa" "$HOST":$DL/wetowl.ipa
   printf '{"version":"%s","build":"%s","bytes":%s,"built":"%s","tag":"%s"}\n' \
     "$(sed -n 's/^version: *\([^+]*\).*/\1/p' app/pubspec.yaml | tr -d '[:space:]')" \
     "$build" "$bytes" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$tag" \
-    | $SSH "$HOST" 'cat > /opt/muse/deploy/web/wetowl.ipa.json'
+    | $SSH "$HOST" "cat > $DL/wetowl.ipa.json"
+
+  # The same build again, described the way a sideloader wants to hear about it.
+  #
+  # An unsigned ipa cannot be installed by tapping it: iOS has nowhere to put it, so
+  # Safari downloads a file and that is the end of it. It has to be signed on the phone
+  # by SideStore or AltStore, and those install from a *source* — a list of apps with
+  # versions, the shape AltStore defined and SideStore reads. Added once, WetOwl sits
+  # in their Browse tab and every later build shows up there as an update, which is as
+  # close to the Android row's behaviour as iOS allows without an Apple account.
+  local date
+  date=$(date -u +%Y-%m-%d)
+  local version
+  version=$(sed -n 's/^version: *\([^+]*\).*/\1/p' app/pubspec.yaml | tr -d '[:space:]')
+  cat <<JSON | $SSH "$HOST" "cat > $DL/wetowl-source.json"
+{
+  "name": "WetOwl",
+  "identifier": "dev.muse.source",
+  "subtitle": "The music you keep, on your own box.",
+  "iconURL": "$SERVER_URL/icons/Icon-192.png",
+  "website": "$SERVER_URL",
+  "apps": [
+    {
+      "name": "WetOwl",
+      "bundleIdentifier": "dev.muse.muse",
+      "developerName": "WetOwl",
+      "subtitle": "Your own music server, on your phone.",
+      "localizedDescription": "The WetOwl client: your library, playlists, jams and downloads from your own server.",
+      "iconURL": "$SERVER_URL/icons/Icon-192.png",
+      "tintColor": "6750A4",
+      "category": "entertainment",
+      "screenshotURLs": [],
+      "versions": [
+        {
+          "version": "$version",
+          "buildVersion": "$build",
+          "date": "$date",
+          "localizedDescription": "Build $build.",
+          "downloadURL": "$SERVER_URL/wetowl.ipa",
+          "size": $bytes,
+          "minOSVersion": "15.0"
+        }
+      ]
+    }
+  ]
+}
+JSON
   rm -rf "$tmp"
   echo "   $SERVER_URL/wetowl.ipa  ($tag, build $build, $((bytes / 1024 / 1024))MB)"
+  echo "   $SERVER_URL/wetowl-source.json  (add as a source in SideStore/AltStore)"
 }
 
 case "$what" in
