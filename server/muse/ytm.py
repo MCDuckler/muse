@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import re
 from functools import lru_cache
@@ -223,33 +222,58 @@ def normalise_paste(blob: str) -> str:
     return text
 
 
-def _authed(auth: str, cfg=None):
-    """A client for one person's library.
+def _authed(auth: str):
+    """A ytmusicapi client for one person's library, from pasted browser headers.
 
-    Two kinds of sign-in end up here: a token from the device flow, which refreshes
-    itself and needs the OAuth client to do it, and a block of browser headers, which
-    is what people paste. They are told apart by what is in them.
+    A code sign-in never comes here: YouTube Music's internal API refuses those tokens,
+    so they go to YouTube's public one instead (see `_data`).
     """
     key = hashlib.sha256(auth.encode()).hexdigest()
     client = _authed_clients.get(key)
     if client is None:
         from ytmusicapi import YTMusic
         try:
-            credentials = None
-            if '"refresh_token"' in auth:
-                from . import deps
-                credentials = _oauth(cfg or deps.cfg())
-            client = YTMusic(auth, oauth_credentials=credentials)
-        except NotConfigured:
-            raise
+            client = YTMusic(auth)
         except Exception as e:
             raise NotAllowed(f"YouTube Music would not take that sign-in: {e}") from e
         _authed_clients[key] = client
     return client
 
 
+class _Missing(Unavailable):
+    """YouTube's public API does not know that playlist."""
+
+
+def _data(what, auth: str, *args, cfg=None, **kwargs):
+    """One call to YouTube's public API with a code sign-in, failing the way the rest
+    of this module fails, so nothing above has to know which API answered."""
+    from . import deps, ytdata
+
+    client_id, client_secret, _ = oauth_client(cfg or deps.cfg())
+    if not client_id or not client_secret:
+        raise NotAllowed("This YouTube sign-in was made with a Google client the server "
+                         "no longer has. Link YouTube again.")
+    try:
+        return what(auth, (client_id, client_secret), *args, **kwargs)
+    except ytdata.Refused as e:
+        raise NotAllowed(str(e)) from e
+    except ytdata.Failed as e:
+        if e.status == 404:
+            raise _Missing(str(e)) from e
+        raise Unavailable(str(e)) from e
+
+
+def _is_token(auth: str | None) -> bool:
+    from . import ytdata
+
+    return ytdata.is_token(auth)
+
+
 def forget_auth(auth: str) -> None:
+    from . import ytdata
+
     _authed_clients.pop(hashlib.sha256(auth.encode()).hexdigest(), None)
+    ytdata.forget(auth)
 
 
 def playlist_id(text: str) -> str:
@@ -285,6 +309,14 @@ def _playlist_track(t: dict) -> dict | None:
 
 def account_name(auth: str) -> str:
     """Whose library this is, for the screen that lists linked accounts."""
+    if _is_token(auth):
+        from . import ytdata
+        try:
+            return _data(ytdata.account_name, auth)
+        except NotAllowed:
+            raise
+        except Exception:
+            return "YouTube Music"
     try:
         info = _authed(auth).get_account_info()
         return (info or {}).get("accountName") or "YouTube Music"
@@ -297,24 +329,18 @@ def account_name(auth: str) -> str:
 
 
 class CannotReadLibrary(RuntimeError):
-    """The sign-in is real and YouTube will not serve a library to it.
+    """The sign-in is real and YouTube Music will not serve a library to it.
 
-    What a code sign-in gets you is a Google token, and Google is happy with it —
-    YouTube is not. Its own API answers "Request contains an invalid argument" to every
-    library call made with an OAuth token from anybody's own "TV and Limited Input"
-    client; the only OAuth it serves libraries to is its own TV app's. Nothing about
-    the Google project can be configured to change that.
-
-    Worth its own kind of failure because the answer is specific: sign in with the
-    cookie instead, which is a different button rather than a different setting.
+    A code sign-in sent to YouTube Music's internal API gets "Request contains an
+    invalid argument" on every library call: that API serves libraries only to its own
+    apps' sign-ins. Code sign-ins now go to YouTube's public API instead, so this is
+    only ever a pasted sign-in that YouTube Music took and then refused.
     """
 
 
 CANNOT_READ = (
-    "This YouTube sign-in cannot read your library. YouTube only serves library "
-    "data to its own app's sign-in, so a code from a Google project of your own "
-    "authenticates and then gets refused. Link YouTube again and paste the cookie "
-    "from a signed-in music.youtube.com instead."
+    "This YouTube sign-in cannot read your library. Link YouTube again — signing "
+    "in with a code is the way that lasts."
 )
 
 
@@ -325,8 +351,12 @@ def check_library_access(auth: str, cfg=None) -> None:
     credential that cannot work is worse stored than refused, because every screen
     after it says "internal server error" and none of them say why.
     """
+    if _is_token(auth):
+        from . import ytdata
+        _data(ytdata.check, auth, cfg=cfg)
+        return
     try:
-        _authed(auth, cfg).get_library_playlists(limit=1)
+        _authed(auth).get_library_playlists(limit=1)
     except NotAllowed:
         raise
     except Exception as e:                        # noqa: BLE001
@@ -337,6 +367,11 @@ def check_library_access(auth: str, cfg=None) -> None:
 
 def library_playlists(auth: str, limit: int = 200) -> list[dict]:
     """The playlists in somebody's library, with Liked Songs first."""
+    liked = {"remote_id": LIKED, "name": "Liked Songs", "count": None, "owner": "you",
+             "image": None}
+    if _is_token(auth):
+        from . import ytdata
+        return [liked, *_data(ytdata.playlists, auth, limit=limit)]
     try:
         rows = _authed(auth).get_library_playlists(limit=limit) or []
     except NotAllowed:
@@ -346,8 +381,7 @@ def library_playlists(auth: str, limit: int = 200) -> list[dict]:
             raise CannotReadLibrary(CANNOT_READ) from e
         raise Unavailable(f"YouTube Music would not list your playlists: {e}") from e
 
-    out = [{"remote_id": LIKED, "name": "Liked Songs", "count": None, "owner": "you",
-            "image": None}]
+    out = [liked]
     for row in rows:
         pid = row.get("playlistId")
         if not pid or pid == "LM":
@@ -368,6 +402,9 @@ LIKED = "liked-songs"
 
 
 def liked_songs(auth: str, limit: int = 5000) -> list[dict]:
+    if _is_token(auth):
+        from . import ytdata
+        return _data(ytdata.liked_songs, auth, limit=limit)
     try:
         data = _authed(auth).get_liked_songs(limit=limit) or {}
     except NotAllowed:
@@ -386,6 +423,14 @@ def playlist_tracks(remote_id: str, auth: str | None = None,
         return liked_songs(auth, limit=limit)
 
     pid = playlist_id(remote_id)
+    if _is_token(auth):
+        from . import ytdata
+        try:
+            return _data(ytdata.playlist_tracks, auth, pid, limit=limit)
+        except _Missing:
+            # A mix or a chart only YouTube Music knows: public, so ask it without
+            # the sign-in rather than give up.
+            auth = None
     client = _authed(auth) if auth else None
     try:
         data = (client.get_playlist(pid, limit=limit) if client
@@ -403,6 +448,15 @@ def playlist_name(remote_id: str, auth: str | None = None) -> str:
     if remote_id == LIKED:
         return "Liked Songs"
     pid = playlist_id(remote_id)
+    if _is_token(auth):
+        from . import ytdata
+        try:
+            name = _data(ytdata.playlist_name, auth, pid)
+            if name:
+                return name.strip()
+        except Exception:                         # noqa: BLE001 — the public way may know
+            pass
+        auth = None
     try:
         client = _authed(auth) if auth else None
         data = (client.get_playlist(pid, limit=1) if client
@@ -420,10 +474,11 @@ def playlist_name(remote_id: str, auth: str | None = None) -> str:
 # support for something without a browser of its own is the device flow: the app shows a
 # short code, the person types it into google.com/device in whatever browser they
 # already trust, and the token comes back here. It also lasts, where a copied cookie
-# expires.
+# expires. The token is read with YouTube's public API (ytdata.py), because YouTube
+# Music's internal one refuses it.
 #
 # It needs an OAuth client of type "TV and Limited Input" from the Google Cloud console,
-# named in muse.toml:
+# in a project with "YouTube Data API v3" enabled, named in muse.toml:
 #
 #     [ytmusic]
 #     client_id = "….apps.googleusercontent.com"
@@ -472,15 +527,13 @@ def forget_oauth_client() -> None:
            (CLIENT_ID_KEY, CLIENT_SECRET_KEY))
 
 
-def _oauth(cfg):
-    from ytmusicapi.auth.oauth import OAuthCredentials
-
+def _oauth(cfg) -> tuple[str, str]:
     client_id, client_secret, _ = oauth_client(cfg)
     if not client_id or not client_secret:
         raise NotConfigured(
             "This server has no YouTube OAuth client set up, so signing in has to be "
             "done by pasting the headers from a browser.")
-    return OAuthCredentials(client_id=client_id, client_secret=client_secret)
+    return client_id, client_secret
 
 
 def check_oauth_client(client_id: str, client_secret: str) -> None:
@@ -490,10 +543,10 @@ def check_oauth_client(client_id: str, client_secret: str) -> None:
     a client Google will not issue a code for is a client nobody can sign in with. The
     code is thrown away — it expires on its own in half an hour.
     """
-    from ytmusicapi.auth.oauth import OAuthCredentials
+    from . import ytdata
 
     try:
-        OAuthCredentials(client_id=client_id, client_secret=client_secret).get_code()
+        ytdata.start(client_id)
     except Exception as e:                        # noqa: BLE001
         raise NotAllowed(str(e))
 
@@ -508,7 +561,13 @@ def oauth_configured(cfg) -> bool:
 
 def oauth_start(cfg) -> dict:
     """Ask Google for a code to read out. First half of the device flow."""
-    code = _oauth(cfg).get_code()
+    from . import ytdata
+
+    client_id, _ = _oauth(cfg)
+    try:
+        code = ytdata.start(client_id)
+    except ytdata.Refused as e:
+        raise NotAllowed(str(e)) from e
     return {
         "device_code": code["device_code"],
         "user_code": code["user_code"],
@@ -524,7 +583,10 @@ def oauth_finish(cfg, device_code: str) -> str:
     Answers with the blob to store. Raises NotAllowed while they have not finished —
     which is not an error, just "not yet".
     """
-    token = _oauth(cfg).token_from_code(device_code)
-    if "refresh_token" not in token:
-        raise NotAllowed(str(token.get("error") or "not finished yet"))
-    return json.dumps(token)
+    from . import ytdata
+
+    client_id, client_secret = _oauth(cfg)
+    try:
+        return ytdata.stored(ytdata.finish(client_id, client_secret, device_code))
+    except ytdata.Refused as e:
+        raise NotAllowed(str(e)) from e

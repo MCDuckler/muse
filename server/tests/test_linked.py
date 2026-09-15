@@ -459,11 +459,10 @@ def test_google_turning_an_account_away_says_what_to_do(client, hdr, monkeypatch
 
 def test_a_code_sign_in_that_cannot_read_a_library_is_not_kept(client, hdr,
                                                                monkeypatch):
-    """YouTube serves library data only to its own app's OAuth.
+    """A sign-in that cannot read anything is refused at the moment it is made.
 
-    A code from a Google project of your own authenticates and is then refused by
-    YouTube on every call — so storing it turns every screen after the sign-in into an
-    internal server error and none of them say why. It is checked before it is kept.
+    Storing it turns every screen after the sign-in into an error, and none of them
+    say why. It is checked before it is kept.
     """
     from muse import ytm
 
@@ -476,7 +475,7 @@ def test_a_code_sign_in_that_cannot_read_a_library_is_not_kept(client, hdr,
     r = client.post("/linked/youtube/oauth/finish", headers=hdr,
                     json={"device_code": "xyz"})
     assert r.status_code == 400
-    assert "paste the cookie" in r.json()["detail"].lower()
+    assert "link youtube again" in r.json()["detail"].lower()
 
     # And nothing was linked, so nothing is there to fail later.
     accounts = client.get("/linked", headers=hdr).json()["accounts"]
@@ -499,4 +498,4 @@ def test_a_sign_in_stored_before_that_check_says_what_is_wrong(client, hdr,
     monkeypatch.setitem(linked._PLAYLISTS, "youtube", refuse)
     r = client.get("/linked/youtube/playlists", headers=hdr)
     assert r.status_code == 409
-    assert "paste the cookie" in r.json()["detail"].lower()
+    assert "link youtube again" in r.json()["detail"].lower()

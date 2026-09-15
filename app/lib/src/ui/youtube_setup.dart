@@ -62,11 +62,14 @@ Future<bool> youtubeCodeSignInSetup(BuildContext context) async {
               const SizedBox(height: 12),
               const _Steps([
                 'Open console.cloud.google.com and make a project (any name).',
-                'APIs & Services → OAuth consent screen → External.',
-                'Publish app, on that same screen. This is the step that matters: '
-                    'left in Testing it only works for accounts listed on it one by '
-                    'one, which is Google turning everybody else away.',
-                'Credentials → Create credentials → OAuth client ID.',
+                'APIs & Services → Library → YouTube Data API v3 → Enable. '
+                    'This is what reads the library.',
+                'Google Auth Platform → set it up as External.',
+                'Audience → Publish app. Left in Testing it only works for '
+                    'accounts listed on it one by one, which is Google turning '
+                    'everybody else away.',
+                'Clients → Create client (or Credentials → Create credentials → '
+                    'OAuth client ID).',
                 'Application type: TV and Limited Input devices.',
                 'Copy the client ID and client secret it gives you into the boxes '
                     'below.',

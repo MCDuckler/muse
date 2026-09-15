@@ -171,14 +171,12 @@ class _ServicesPageState extends State<ServicesPage> {
     final messenger = ScaffoldMessenger.of(context);
     final youtube = service.provider == 'youtube';
 
-    // The cookie first, even where this server can offer a code.
+    // The code first, where this server can offer one.
     //
-    // The code sign-in works, in the sense that Google hands a token back — and then
-    // YouTube refuses it on every library call there is: "Request contains an invalid
-    // argument", for playlists, for liked songs, for the account's own name. It
-    // serves library data to its own app's sign-in and nothing else, and no Google
-    // project of your own can be configured into being that. Offering it first was
-    // offering the way in that cannot work.
+    // It used to be read with YouTube Music's internal API, which refuses every token
+    // but its own apps' — so the cookie went first. The server now reads a code
+    // sign-in with YouTube's public API, which takes it, and a code lasts where a
+    // copied cookie expires or is turned away.
     if (youtube) {
       final how = await _howToSignIn(service);
       if (how == null) return;
@@ -229,23 +227,14 @@ class _ServicesPageState extends State<ServicesPage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              ListTile(
-                leading: const Icon(Icons.cookie_outlined),
-                title: const Text('Paste the cookie'),
-                subtitle: const Text(
-                    'From a signed-in music.youtube.com on a computer. The only way '
-                    "in that can read your library: YouTube serves that to its own "
-                    "app's sign-in and nothing else."),
-                onTap: () => Navigator.of(context).pop('paste'),
-              ),
               if (service.signIn == 'code')
                 ListTile(
                   leading: const Icon(Icons.pin_outlined),
                   title: const Text('Sign in with a code'),
                   subtitle: const Text(
-                      'Typed into a browser you trust. Google accepts it and YouTube '
-                      'then refuses it for library reads, so expect to be turned '
-                      'away.'),
+                      'Recommended. Type a short code into a browser you already '
+                      'use, on any device. Reads your own playlists and liked '
+                      'songs, and stays signed in.'),
                   onTap: () => Navigator.of(context).pop('code'),
                 )
               else
@@ -253,10 +242,19 @@ class _ServicesPageState extends State<ServicesPage> {
                   leading: const Icon(Icons.settings_outlined),
                   title: const Text('Set up code sign-in…'),
                   subtitle: const Text(
-                      'Needs a Google project, and cannot read a library once it is '
-                      'done. For admins.'),
+                      'Needs a Google project, once, for the whole server. For '
+                      'admins.'),
                   onTap: () => Navigator.of(context).pop('setup'),
                 ),
+              ListTile(
+                leading: const Icon(Icons.cookie_outlined),
+                title: const Text('Paste the cookie'),
+                subtitle: const Text(
+                    'From a signed-in music.youtube.com on a computer. Also sees '
+                    'playlists you saved from others, but expires, and YouTube '
+                    'often turns it away.'),
+                onTap: () => Navigator.of(context).pop('paste'),
+              ),
             ],
           ),
         ),

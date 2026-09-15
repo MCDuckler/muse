@@ -158,8 +158,8 @@ def youtube_oauth_finish(body: dict = Body(...), user: dict = Depends(current_us
                 "Google turned that account away. The sign-in this server uses is "
                 "still in Testing, which only works for accounts listed on its "
                 "consent screen — whoever set it up needs to publish the consent "
-                "screen (Google Cloud console → APIs & Services → OAuth consent "
-                "screen → Publish app), or add this account under Test users.")
+                "screen (Google Cloud console → Google Auth Platform → Audience → "
+                "Publish app), or add this account under Test users.")
         raise HTTPException(409, str(e))
     except ytm.NotConfigured as e:
         raise HTTPException(409, str(e))
@@ -170,7 +170,7 @@ def youtube_oauth_finish(body: dict = Body(...), user: dict = Depends(current_us
     # storing it turns every screen after this into "internal server error".
     try:
         ytm.check_library_access(secret, cfg())
-    except ytm.CannotReadLibrary as e:
+    except (ytm.CannotReadLibrary, ytm.NotAllowed) as e:
         raise HTTPException(400, str(e))
     except ytm.Unavailable as e:
         raise HTTPException(502, str(e))
@@ -197,9 +197,9 @@ def list_playlists(provider: str, user: dict = Depends(current_user)):
         remote = linked.playlists(provider, acc["handle"], user_id=user["id"])
     except linked.LinkError as e:
         raise HTTPException(400, str(e))
-    except ytm.CannotReadLibrary as e:
-        # A sign-in stored before this was checked for. Say what it is and what to do,
-        # rather than the 500 this used to be.
+    except (ytm.CannotReadLibrary, ytm.NotAllowed) as e:
+        # A sign-in that stopped working, or one stored before it was checked. Say what
+        # it is and what to do, rather than the 500 this used to be.
         raise HTTPException(409, str(e))
     except ytm.Unavailable as e:
         raise HTTPException(502, str(e))
