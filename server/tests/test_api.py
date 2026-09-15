@@ -33,6 +33,15 @@ def test_internal_requires_worker_secret(client):
     assert r.status_code == 401
 
 
+def test_spotify_callback_escapes_what_it_echoes(client):
+    # The page repeats Spotify's error back, and it is served from the web app's origin,
+    # where the sign-in token lives: a script in the query string must stay text.
+    r = client.get("/spotify/callback", params={"error": "<script>alert(1)</script>"})
+    assert r.status_code == 400
+    assert "<script>" not in r.text
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in r.text
+
+
 # ---------------- resolve / cache rule ----------------
 def test_resolve_creates_pending_track_and_job(client, hdr, wsec):
     r = client.post("/tracks/resolve", headers=hdr, json={"query": "test song"})

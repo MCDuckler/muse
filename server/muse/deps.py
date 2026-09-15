@@ -1,6 +1,7 @@
 """Auth dependencies. The config lives here so routers don't import the app module."""
 from __future__ import annotations
 
+import hmac
 from typing import Annotated
 
 from fastapi import Header, HTTPException
@@ -48,5 +49,8 @@ def user_or_key(k: str | None = None,
 
 
 def worker_auth(x_worker_secret: Annotated[str | None, Header()] = None) -> None:
-    if not x_worker_secret or x_worker_secret != cfg().worker_secret:
+    # Constant time, like the stream key's signature: `!=` stops at the first byte
+    # that differs, and how long that takes says how much of a guess was right.
+    if not x_worker_secret or not hmac.compare_digest(
+            x_worker_secret.encode(), cfg().worker_secret.encode()):
         raise HTTPException(401, "bad worker secret")

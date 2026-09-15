@@ -9,6 +9,7 @@ that quietly comes back three tracks shorter is worse than one that says which t
 """
 from __future__ import annotations
 
+import html
 import urllib.request
 
 import logging
@@ -66,8 +67,15 @@ def authorize(user: dict = Depends(current_user)):
 def callback(code: str | None = None, state: str | None = None,
              error: str | None = None):
     """Spotify sends the person's browser here, so it answers in HTML — this is the
-    one endpoint a human looks at directly."""
+    one endpoint a human looks at directly.
+
+    Everything put into the page is escaped. `error` is whatever the query string says,
+    and this page is served from the same origin as the web app, which keeps its sign-in
+    token in that origin's storage: a link carrying a script in `error` would have run
+    it there, and the script could have read the token.
+    """
     def page(title: str, body: str, ok: bool = True) -> HTMLResponse:
+        title, body = html.escape(title), html.escape(body)
         colour = "#1f7a4d" if ok else "#b3261e"
         return HTMLResponse(f"""<!doctype html><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
