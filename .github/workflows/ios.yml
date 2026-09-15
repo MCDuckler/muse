@@ -61,9 +61,15 @@ jobs:
           # The same stamp the Android build carries: the moment it was built, which
           # is the only thing that tells one of these apart from another on a phone.
           # Without it the iPhone app has no version at all to report.
+          #
+          # It is also the bundle's build number. Left unset, Flutter copies the pubspec
+          # version into CFBundleVersion, so every build claimed to be 0.1.0 and
+          # SideStore could neither match the ipa to its source nor see a newer one.
+          stamp="$(date -u +%Y%m%d%H%M)"
           flutter build ios --release --no-codesign \
+            --build-number="$stamp" \
             --dart-define=MUSE_SERVER="$MUSE_SERVER" \
-            --dart-define=MUSE_BUILD="$(date -u +%Y%m%d%H%M)"
+            --dart-define=MUSE_BUILD="$stamp"
 
       - name: Wrap it as an ipa
         working-directory: app

@@ -157,10 +157,19 @@ publish_ios() {
   # versions, the shape AltStore defined and SideStore reads. Added once, WetOwl sits
   # in their Browse tab and every later build shows up there as an update, which is as
   # close to the Android row's behaviour as iOS allows without an Apple account.
+  #
+  # The versions in it are read out of the ipa's own Info.plist, not from pubspec or the
+  # build stamp above. SideStore checks the file it downloads against the source and
+  # refuses the install when they differ: the source said buildVersion 202609141541, the
+  # plist said CFBundleVersion 0.1.0, and SideStore reported "expected version 2026…,
+  # found 0.1.0". The source has to describe the file, whatever the file says.
   local date
   date=$(date -u +%Y-%m-%d)
-  local version
-  version=$(sed -n 's/^version: *\([^+]*\).*/\1/p' app/pubspec.yaml | tr -d '[:space:]')
+  local version plist_build
+  read -r version plist_build < <(python3 -c '
+import plistlib, sys, zipfile
+p = plistlib.loads(zipfile.ZipFile(sys.argv[1]).read("Payload/Runner.app/Info.plist"))
+print(p["CFBundleShortVersionString"], p["CFBundleVersion"])' "$ipa")
   cat <<JSON | $SSH "$HOST" "cat > $DL/wetowl-source.json"
 {
   "name": "WetOwl",
@@ -182,7 +191,7 @@ publish_ios() {
       "versions": [
         {
           "version": "$version",
-          "buildVersion": "$build",
+          "buildVersion": "$plist_build",
           "date": "$date",
           "localizedDescription": "Build $build.",
           "downloadURL": "$SERVER_URL/wetowl.ipa",
