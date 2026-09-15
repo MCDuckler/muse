@@ -11,12 +11,13 @@
 name: iPhone app
 
 on:
-  # Every push that touches the app, and on demand from the Actions tab.
-  push:
-    branches: [master, main]
-    paths:
-      - 'app/**'
-      - '.github/workflows/ios.yml'
+  # On demand only: the Actions tab, or `gh workflow run ios.yml` from the repo.
+  #
+  # It used to build on every push that touched the app. While the repository was
+  # private a macOS minute cost ten of the plan's included ones, and a busy week of small
+  # commits spent the whole month's allowance in five days — 61 builds, most of them
+  # never installed — and blocked the one build that was actually wanted. A build is
+  # now something asked for.
   workflow_dispatch:
     inputs:
       server:
