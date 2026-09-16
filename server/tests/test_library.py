@@ -466,6 +466,30 @@ def test_shuffling_rearranges_what_is_coming_and_leaves_the_rest(client, hdr, tr
     assert [i["pos"] for i in shuffled.json()["items"]] == list(range(6))
 
 
+def test_shuffle_keeps_the_order_the_app_dealt(client, hdr, tracks):
+    """The app deals the rows itself so the list moves at once; the server keeps that
+    deal rather than dealing again on top of it — and only when it is a real
+    permutation of what is after the cursor."""
+    q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
+    ids = [t["id"] for t in tracks]
+    client.post(f"/queues/{q['id']}/items", headers=hdr, json={"track_ids": ids + ids})
+    client.patch(f"/queues/{q['id']}/cursor", headers=hdr, json={"cursor_index": 1})
+    rest = [i["id"] for i in
+            client.get(f"/queues/{q['id']}", headers=hdr).json()["items"]][2:]
+    dealt = list(reversed(rest))
+
+    kept = client.post(f"/queues/{q['id']}/shuffle", headers=hdr, json={"order": dealt})
+    assert kept.status_code == 200, kept.text
+    assert [i["id"] for i in kept.json()["items"]][2:] == dealt
+
+    # Not a permutation of what is coming — a stale cursor on the app's side — so the
+    # server deals its own rather than trusting it.
+    wrong = client.post(f"/queues/{q['id']}/shuffle", headers=hdr,
+                        json={"order": dealt[:-1]})
+    assert wrong.status_code == 200
+    assert sorted(i["id"] for i in wrong.json()["items"][2:]) == sorted(rest)
+
+
 def test_shuffling_a_queue_with_nothing_coming_is_harmless(client, hdr, tracks):
     q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
     client.post(f"/queues/{q['id']}/items", headers=hdr,

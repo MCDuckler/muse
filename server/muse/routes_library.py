@@ -1118,7 +1118,19 @@ def shuffle_queue(queue_id: int, body: dict = Body(default={}),
     if len(rest) < 2:
         return _queue_state(queue_id)
 
-    random.shuffle(rest)
+    # The app deals the rows itself the moment the button is pressed, so the list
+    # moves under the finger; this is it saying which order it dealt. Honoured when it
+    # is a permutation of what is actually after the cursor, otherwise dealt here —
+    # before, the server always dealt its own and the list reshuffled a second time
+    # when the answer arrived.
+    order = body.get("order")
+    if isinstance(order, list) and sorted(order) == sorted(r["track_id"] for r in rest):
+        pool: dict = {}
+        for r in rest:
+            pool.setdefault(r["track_id"], []).append(r)
+        rest = [pool[tid].pop(0) for tid in order]
+    else:
+        random.shuffle(rest)
     with db.pool().connection() as c:
         c.execute("delete from queue_items where queue_id=%s", (queue_id,))
         for i, r in enumerate(keep + rest):
