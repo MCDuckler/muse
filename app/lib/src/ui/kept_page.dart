@@ -42,7 +42,8 @@ class KeptPage extends StatelessWidget {
                     context,
                     'Stop keeping all ${kept.length} songs?',
                     'They stay in your library and stream as before; the '
-                        '${size(offline.bytes)} on this device is freed.');
+                        '${size(offline.bytes)} on this device is freed.',
+                    action: 'Stop keeping');
                 if (sure) await offline.forgetAll();
               },
             ),

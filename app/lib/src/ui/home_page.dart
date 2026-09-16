@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
@@ -38,9 +37,7 @@ class _HomePageState extends State<HomePage> {
     const pages = [QueuePage(), SearchPage(), LibraryPage(), SocialPage()];
     const titles = ['Queues', 'Search', 'Library', 'People'];
 
-    return _Shortcuts(
-      app: app,
-      child: Scaffold(
+    return Scaffold(
       appBar: AppBar(
         title: Text(titles[app.homeTab]),
         actions: [
@@ -125,7 +122,6 @@ class _HomePageState extends State<HomePage> {
             ],
           ),
         ),
-      ),
       ),
     );
   }
@@ -242,69 +238,4 @@ class _OfflineBanner extends StatelessWidget {
       ),
     );
   }
-}
-
-/// Keyboard control, because the web build is the client most of the time and a
-/// music player you cannot pause from the keyboard is annoying to live with.
-class _Shortcuts extends StatelessWidget {
-  const _Shortcuts({required this.app, required this.child});
-  final AppState app;
-  final Widget child;
-
-  /// True while a text field has focus.
-  ///
-  /// Checking `primaryFocus.context.widget` is not enough: the node that holds focus
-  /// belongs to a Focus widget *inside* EditableText, so the type test never matched
-  /// and every letter typed into the search box also triggered a shortcut — S toggled
-  /// shuffle, N skipped the track, space paused the music.
-  static bool get _isTyping {
-    final ctx = FocusManager.instance.primaryFocus?.context;
-    if (ctx == null) return false;
-    var typing = false;
-    ctx.visitAncestorElements((element) {
-      if (element.widget is EditableText) {
-        typing = true;
-        return false;
-      }
-      return true;
-    });
-    return typing;
-  }
-
-  KeyEventResult _handle(FocusNode node, KeyEvent event) {
-    final player = app.player;
-    if (player == null || event is! KeyDownEvent) return KeyEventResult.ignored;
-
-    // Never steal keys from a text field: space belongs to the search box.
-    if (_isTyping) return KeyEventResult.ignored;
-
-    switch (event.logicalKey) {
-      case LogicalKeyboardKey.space:
-      case LogicalKeyboardKey.mediaPlayPause:
-        app.playPause();
-      case LogicalKeyboardKey.arrowRight:
-        player.nudge(const Duration(seconds: 10));
-      case LogicalKeyboardKey.arrowLeft:
-        player.nudge(const Duration(seconds: -10));
-      case LogicalKeyboardKey.keyN:
-      case LogicalKeyboardKey.mediaTrackNext:
-        app.skipNext();
-      case LogicalKeyboardKey.keyP:
-      case LogicalKeyboardKey.mediaTrackPrevious:
-        app.skipPrevious();
-      case LogicalKeyboardKey.keyS:
-        app.shuffleWhatIsComing();
-      case LogicalKeyboardKey.keyR:
-        app.cycleRepeat();
-      case LogicalKeyboardKey.keyM:
-        player.setUserVolume(player.userVolume == 0 ? 1.0 : 0.0);
-      default:
-        return KeyEventResult.ignored;
-    }
-    return KeyEventResult.handled;
-  }
-
-  @override
-  Widget build(BuildContext context) =>
-      Focus(autofocus: true, onKeyEvent: _handle, child: child);
 }

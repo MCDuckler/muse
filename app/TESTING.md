@@ -51,6 +51,15 @@ The driver writes any `binding.takeScreenshot('name')` to `build/screenshots/nam
 reason it exists: a record standing up, lying down, or half way is something to look at
 rather than something to assert about.
 
+## Player calls inside a widget test
+
+`testWidgets` runs its body under a fake clock. Anything the player awaits — the stub
+server, the fake engine's events — only moves in real time, so
+`await app.player!.loadQueue(...)` *inside* a `testWidgets` body never returns and the
+test sits there until the runner kills it. Either do it in `setUp` (real async), or
+wrap it: `await tester.runAsync(() => app.player!.playAt(1))`. Plain `test()` files
+such as `player_engine_test.dart` do not have this problem.
+
 ## The skip test
 
 `integration_test/skip_test.dart` exists because the player screen can look right while

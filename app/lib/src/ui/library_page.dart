@@ -9,9 +9,10 @@ import 'artwork.dart';
 import 'browse_page.dart';
 import 'dialogs.dart';
 import 'feed_page.dart';
+import 'kept_page.dart';
 import 'mini_player.dart';
-import 'spotify_page.dart';
 import 'selection_bar.dart';
+import 'spotify_page.dart' show UnmatchedPage;
 import 'song_row.dart';
 import 'snack.dart';
 
@@ -48,7 +49,29 @@ class LibraryPage extends StatelessWidget {
           onTap: () => Navigator.of(context)
               .push(MaterialPageRoute(builder: (_) => const ArtistsPage())),
         ),
+        // Up here with the rest of the ways in, not under the last playlist: with
+        // twenty playlists it was a screen and a half of scrolling away.
+        ListTile(
+          leading: const Icon(Icons.history),
+          title: const Text('Recently played'),
+          onTap: () => Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => const _HistoryPage(),
+          )),
+        ),
         const _FeedRow(),
+        // What will play with no signal is part of the library, not a setting: it was
+        // only reachable from the settings page, which is not where anybody looks on
+        // the way to a plane.
+        if (OfflineStore.supported)
+          ListTile(
+            leading: const Icon(Icons.download_done_outlined),
+            title: const Text('On this device'),
+            subtitle: Text(app.offline.count == 0
+                ? 'Keep songs here to play them with no signal'
+                : '${app.offline.count} songs · ${KeptPage.size(app.offline.bytes)}'),
+            onTap: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const KeptPage())),
+          ),
         const Divider(),
         const _SectionLabel('Playlists'),
         ListTile(
@@ -136,7 +159,8 @@ class LibraryPage extends StatelessWidget {
                       'Keep "${p.name}" on this device?',
                       '$bytes ${bytes == 1 ? 'song' : 'songs'} are downloaded to the '
                           'phone and play with no signal. Songs still being fetched by '
-                          'the server are skipped.');
+                          'the server are skipped.',
+                      action: 'Keep');
                   if (!sure) return;
                   await app.keepOffline(ready);
                   messenger.showSnackBar(
@@ -172,10 +196,12 @@ class LibraryPage extends StatelessWidget {
                   await app.api.deletePlaylist(p.id);
                   await app.refreshPlaylists();
                 } else if (v == 'queue') {
+                  final messenger = ScaffoldMessenger.of(context);
                   final full = await app.api.playlist(p.id);
-                  for (final track in full.items) {
-                    await app.addTrack(track);
-                  }
+                  await app.addTracks(full.items);
+                  messenger.showSnackBar(snack(Text(
+                      '${full.items.length} added to '
+                      '"${app.activeQueue?.name ?? 'the queue'}"')));
                 }
               },
               itemBuilder: (context) => [
@@ -225,21 +251,6 @@ class LibraryPage extends StatelessWidget {
             padding: EdgeInsets.all(32),
             child: Center(child: Text('No playlists yet.')),
           ),
-        const Divider(),
-        ListTile(
-          leading: const Icon(Icons.music_note_outlined),
-          title: const Text('Spotify'),
-          subtitle: const Text('Connect an account to see your playlists'),
-          onTap: () => Navigator.of(context)
-              .push(MaterialPageRoute(builder: (_) => const SpotifyPage())),
-        ),
-        ListTile(
-          leading: const Icon(Icons.history),
-          title: const Text('Recently played'),
-          onTap: () => Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => const _HistoryPage(),
-          )),
-        ),
       ],
       ),
     );
@@ -276,6 +287,45 @@ class _PlaylistPageState extends State<PlaylistPage> {
   }
 
   void _reload() => setState(() => _future = _ask());
+
+  /// Take a row off the list, and offer to put it back where it was.
+  ///
+  /// The swipe is the easiest gesture in the app to make by accident, and this was
+  /// the one place it still could not be taken back.
+  Future<void> _remove(Playlist list, int pos) async {
+    if (pos < 0 || pos >= list.items.length) return;
+    final app = context.read<AppState>();
+    final track = list.items[pos];
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await app.api.removePlaylistItem(widget.playlistId, pos);
+    } catch (e) {
+      messenger.showSnackBar(problem(e));
+      return;
+    }
+    await app.refreshPlaylists();
+    _reload();
+    messenger.showSnackBar(snack(
+      Text('Removed ${track.displayTitle}'),
+      action: SnackBarAction(
+        label: 'Undo',
+        onPressed: () async {
+          try {
+            // Back on the end, then walked home to where it was.
+            final back = await app.api.addToPlaylist(widget.playlistId, [track.id]);
+            final landed = back.items.length - 1;
+            if (landed != pos && pos < back.items.length) {
+              await app.api.movePlaylistItem(widget.playlistId, landed, pos);
+            }
+          } catch (e) {
+            messenger.showSnackBar(problem(e));
+          }
+          await app.refreshPlaylists();
+          _reload();
+        },
+      ),
+    ));
+  }
 
   /// Keeping somebody else's list, or letting it go again.
   Future<void> _keep(Playlist list) async {
@@ -422,11 +472,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
               key: ValueKey('pl-${items[i].id}-$i'),
               track: items[i],
               selectable: where,
-              onSwipeAway: () async {
-                await app.api.removePlaylistItem(widget.playlistId, i);
-                await app.refreshPlaylists();
-                _reload();
-              },
+              onSwipeAway: () => _remove(snap.data!, i),
               handle: ReorderableDragStartListener(
                 index: i,
                 child: Padding(
@@ -436,11 +482,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                 ),
               ),
               onTap: () => app.playNow(items, startAt: i, named: widget.name),
-              onRemove: () async {
-                await app.api.removePlaylistItem(widget.playlistId, i);
-                await app.refreshPlaylists();
-                _reload();
-              },
+              onRemove: () => _remove(snap.data!, i),
               onChanged: _reload,
             ),
           ),
@@ -504,7 +546,7 @@ class _HistoryPageState extends State<_HistoryPage> {
             tooltip: 'Clear history',
             onPressed: () async {
               final ok = await confirm(context, 'Clear listening history?',
-                  'The tracks stay in your library.');
+                  'The tracks stay in your library.', action: 'Clear');
               if (!ok) return;
               await app.api.clearHistory();
               _load();
@@ -560,7 +602,10 @@ class _HistoryPageState extends State<_HistoryPage> {
                       trailing: Text(_time(played.playedAt),
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                               color: Theme.of(context).colorScheme.onSurfaceVariant)),
-                      onTap: () => app.playNow([played.track]),
+                      // Into the queue and on, not instead of the queue: tapping a
+                      // song you played yesterday used to wipe today's queue and
+                      // leave that one song in it.
+                      onTap: () => app.playTrackNow(played.track),
                     ),
                   ],
                 );

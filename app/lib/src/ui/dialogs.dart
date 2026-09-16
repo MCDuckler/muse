@@ -56,7 +56,13 @@ Future<String?> promptForName(BuildContext context, String title,
   return (trimmed == null || trimmed.isEmpty) ? null : trimmed;
 }
 
-Future<bool> confirm(BuildContext context, String title, String body) async {
+/// Ask before doing something that is hard to undo.
+///
+/// [action] is the word on the button, and it has to be the thing that will happen:
+/// the button said "Delete" under "Sign out?" and under "Keep this playlist on the
+/// device?", which is a dialog that says one thing and does another.
+Future<bool> confirm(BuildContext context, String title, String body,
+    {String action = 'Delete'}) async {
   final ok = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
@@ -67,7 +73,7 @@ Future<bool> confirm(BuildContext context, String title, String body) async {
             onPressed: () => Navigator.pop(context, false),
             child: const Text('Cancel')),
         FilledButton(
-            onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
+            onPressed: () => Navigator.pop(context, true), child: Text(action)),
       ],
     ),
   );

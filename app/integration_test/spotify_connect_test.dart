@@ -57,11 +57,15 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, 'Sign in'));
     await settle(tester, seconds: 8);
 
-    // Library tab, then the Spotify row on it. Tabs are addressed by label: the
-    // destinations swap between an outlined and a filled icon, so an icon finder
-    // matches only half the time.
-    await tester.tap(find.descendant(
-        of: find.byType(NavigationBar), matching: find.text('Library')));
+    // Settings, Connected services, then the Spotify row. It used to sit at the
+    // bottom of the Library tab as well; it lives with the other services now.
+    await tester.tap(find.byTooltip('Settings'));
+    await settle(tester, seconds: 3);
+    final services = find.widgetWithText(ListTile, 'Connected services');
+    await tester.scrollUntilVisible(services, 160,
+        scrollable: find.byType(Scrollable).last);
+    await settle(tester);
+    await tester.tap(services);
     await settle(tester, seconds: 3);
     final row = find.widgetWithText(ListTile, 'Spotify');
     await tester.scrollUntilVisible(row, 160,

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
@@ -11,6 +12,7 @@ import 'found_row.dart';
 import 'motion.dart';
 import 'selection_bar.dart';
 import 'snack.dart';
+import 'track_menu.dart';
 
 /// One search across everything, in one list.
 ///
@@ -40,6 +42,17 @@ class _SearchPageState extends State<SearchPage> {
   String? _error;
   String _lastQuery = '';
   Timer? _debounce;
+
+  /// When the last results landed, so only the rows that arrive with them are
+  /// animated in. Rows built later — scrolled back into view — used to fade in again
+  /// every time they did, which reads as the list blinking.
+  DateTime _arrivedAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// What was looked for before, newest first. A typo used to mean typing the whole
+  /// thing again; and what you looked for last week is a fair guess at what you want.
+  List<String> _recent = const [];
+  static const _kRecent = 'muse.recentSearches';
+  static const _keepRecent = 12;
 
   /// Which service the list is narrowed to, or 'all'.
   String _where = 'all';
@@ -75,6 +88,35 @@ class _SearchPageState extends State<SearchPage> {
   void initState() {
     super.initState();
     _controller.addListener(_onTyped);
+    unawaited(_loadRecent());
+  }
+
+  Future<void> _loadRecent() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() => _recent = prefs.getStringList(_kRecent) ?? const []);
+  }
+
+  Future<void> _remember(String q) async {
+    final next = [q, ..._recent.where((r) => r.toLowerCase() != q.toLowerCase())]
+        .take(_keepRecent)
+        .toList();
+    if (mounted) setState(() => _recent = next);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_kRecent, next);
+  }
+
+  Future<void> _forget(String q) async {
+    final next = [..._recent]..remove(q);
+    setState(() => _recent = next);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_kRecent, next);
+  }
+
+  void _searchAgainFor(String q) {
+    _controller.text = q;
+    _controller.selection = TextSelection.collapsed(offset: q.length);
+    _run(q);
   }
 
   @override
@@ -139,7 +181,9 @@ class _SearchPageState extends State<SearchPage> {
         _found = res.items;
         _notes = res.notes;
         _searched = true;
+        _arrivedAt = DateTime.now();
       });
+
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
     } catch (e) {
@@ -158,6 +202,7 @@ class _SearchPageState extends State<SearchPage> {
 
   /// Tapping a row. What that means is the one thing that differs between them.
   Future<void> _open(Found found, {String mode = 'end'}) async {
+    if (_lastQuery.isNotEmpty) unawaited(_remember(_lastQuery));
     final app = context.read<AppState>();
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
@@ -199,7 +244,7 @@ class _SearchPageState extends State<SearchPage> {
     // A song: either it is here, or it is fetched.
     try {
       if (found.track != null) {
-        await app.addTrack(found.track!, mode: mode);
+        await addAndSay(context, found.track!, mode: mode);
         return;
       }
       final track = await app.api.addFound(found);
@@ -225,7 +270,14 @@ class _SearchPageState extends State<SearchPage> {
           child: TextField(
             controller: _controller,
             textInputAction: TextInputAction.search,
-            onSubmitted: (_) => _run(),
+            // Remembered when it is meant — sent with the search key, or one of its
+            // results used — rather than on every pause while typing, which filled the
+            // list with "b", "be" and "bea".
+            onSubmitted: (_) {
+              final q = _controller.text.trim();
+              if (q.isNotEmpty) unawaited(_remember(q));
+              _run();
+            },
             focusNode: _focus,
             decoration: InputDecoration(
               hintText: _lyrics
@@ -350,7 +402,11 @@ class _SearchPageState extends State<SearchPage> {
                 : _searched && !_busy && _found.isEmpty
                     ? _NothingFound(query: _lastQuery, lyrics: _lyrics)
                     : !_searched && !_busy
-                        ? const _SearchPrompt()
+                        ? _SearchPrompt(
+                            recent: _recent,
+                            onPick: _searchAgainFor,
+                            onForget: _forget,
+                          )
                         : ListView.builder(
                             padding: const EdgeInsets.fromLTRB(8, 0, 8, 160),
                             itemCount: _found.length,
@@ -361,6 +417,10 @@ class _SearchPageState extends State<SearchPage> {
                               key: ValueKey('$_lastQuery/${_found[i].place}/'
                                   '${_found[i].id}'),
                               index: i,
+                              // Only rows built as the results land: a row scrolled
+                              // back into view a minute later is not arriving.
+                              animate: DateTime.now().difference(_arrivedAt) <
+                                  const Duration(milliseconds: 900),
                               child: FoundRow(
                                 found: _found[i],
                                 onTap: () => _open(_found[i]),
@@ -444,13 +504,15 @@ class _SearchPageState extends State<SearchPage> {
 /// nobody should wait a second and a half for the fortieth row, and skipped entirely
 /// where the phone has asked for stillness.
 class _Arriving extends StatelessWidget {
-  const _Arriving({super.key, required this.index, required this.child});
+  const _Arriving(
+      {super.key, required this.index, required this.child, this.animate = true});
   final int index;
   final Widget child;
+  final bool animate;
 
   @override
   Widget build(BuildContext context) {
-    if (stillness(context)) return child;
+    if (!animate || stillness(context)) return child;
     final wait = Duration(milliseconds: 18 * (index.clamp(0, 10)));
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
@@ -594,38 +656,73 @@ class _FoundAlbumSheetState extends State<_FoundAlbumSheet> {
   }
 }
 
+/// The empty search: what was looked for before, and — the first time — what this
+/// box can do.
 class _SearchPrompt extends StatelessWidget {
-  const _SearchPrompt();
+  const _SearchPrompt(
+      {required this.recent, required this.onPick, required this.onForget});
+  final List<String> recent;
+  final void Function(String) onPick;
+  final void Function(String) onForget;
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final style = Theme.of(context)
         .textTheme
         .bodyMedium
-        ?.copyWith(color: Theme.of(context).colorScheme.outline);
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.search, size: 40),
-            const SizedBox(height: 12),
-            Text(
-              'Songs, records and artists, from your library and from every service '
-              'this server can reach — in one list.',
-              textAlign: TextAlign.center,
-              style: style,
-            ),
-            const SizedBox(height: 10),
-            Text(
-              'Or turn on Lyrics and type some of the words.',
-              textAlign: TextAlign.center,
-              style: style,
-            ),
-          ],
+        ?.copyWith(color: scheme.outline);
+    if (recent.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.search, size: 40),
+              const SizedBox(height: 12),
+              Text(
+                'Songs, records and artists, from your library and from every '
+                'service this server can reach — in one list.',
+                textAlign: TextAlign.center,
+                style: style,
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Or turn on Lyrics and type some of the words.',
+                textAlign: TextAlign.center,
+                style: style,
+              ),
+            ],
+          ),
         ),
-      ),
+      );
+    }
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+          child: Text('RECENT',
+              style: Theme.of(context)
+                  .textTheme
+                  .labelSmall
+                  ?.copyWith(color: scheme.onSurfaceVariant)),
+        ),
+        for (final q in recent)
+          ListTile(
+            dense: true,
+            leading: Icon(Icons.history, color: scheme.onSurfaceVariant),
+            title: Text(q, maxLines: 1, overflow: TextOverflow.ellipsis),
+            trailing: IconButton(
+              icon: const Icon(Icons.close, size: 18),
+              tooltip: 'Forget',
+              visualDensity: VisualDensity.compact,
+              onPressed: () => onForget(q),
+            ),
+            onTap: () => onPick(q),
+          ),
+      ],
     );
   }
 }

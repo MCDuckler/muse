@@ -17,6 +17,7 @@ import '../state/art_cache.dart';
 import '../state/shrink.dart';
 import '../state/updates.dart';
 import 'kept_page.dart';
+import 'mini_player.dart';
 import 'face.dart';
 import 'downloads_page.dart';
 import 'player_look_page.dart';
@@ -142,10 +143,12 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
-    return Scaffold(
+    // With the player under it, like every other screen: the music did not stop
+    // because you opened the settings, so the controls should not vanish either.
+    return PlayerScaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
-        padding: const EdgeInsets.only(bottom: 40),
+        padding: const EdgeInsets.only(bottom: bottomForPlayer),
         children: [
           _label(context, 'Your music'),
           ListTile(
@@ -320,7 +323,8 @@ class _SettingsPageState extends State<SettingsPage> {
                 ? null
                 : () async {
                     if (await confirm(context, 'Remove your photo?',
-                        'Your name goes back to standing on its own.')) {
+                        'Your name goes back to standing on its own.',
+                        action: 'Remove')) {
                       await app.clearAvatar();
                     }
                   },
@@ -341,7 +345,8 @@ class _SettingsPageState extends State<SettingsPage> {
             title: const Text('Sign out'),
             onTap: () async {
               final ok = await confirm(context, 'Sign out?',
-                  'You will need your password to sign back in.');
+                  'You will need your password to sign back in.',
+                  action: 'Sign out');
               if (!ok) return;
               await app.logout();
               if (context.mounted) Navigator.of(context).pop();

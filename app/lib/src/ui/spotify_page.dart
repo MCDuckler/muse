@@ -53,9 +53,12 @@ class _SpotifyPageState extends State<SpotifyPage> {
 
   void _load() {
     final api = context.read<AppState>().api;
+    // Asked once: the account and the playlists both hang off the same answer, and it
+    // was being fetched twice every time the screen loaded or came back to the front.
+    final account = api.spotifyAccount();
     setState(() {
-      _account = api.spotifyAccount();
-      _playlists = api.spotifyAccount().then((a) {
+      _account = account;
+      _playlists = account.then((a) {
         if (a['account'] != null) return api.spotifyPlaylists();
         _armAuthUrl();
         return <SpotifyPlaylist>[];
@@ -117,10 +120,16 @@ class _SpotifyPageState extends State<SpotifyPage> {
   Future<void> _stopMirroring(SpotifyPlaylist p) async {
     final app = context.read<AppState>();
     final ok = await confirm(context, 'Stop mirroring ${p.name}?',
-        'It disappears from your playlists here. Nothing changes on Spotify.');
-    if (!ok) return;
-    await app.api.deletePlaylist(p.playlistId!);
-    await app.refreshPlaylists();
+        'It disappears from your playlists here. Nothing changes on Spotify.',
+                    action: 'Stop');
+    if (!ok || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await app.api.deletePlaylist(p.playlistId!);
+      await app.refreshPlaylists();
+    } catch (e) {
+      messenger.showSnackBar(problem(e));
+    }
     _load();
   }
 
@@ -273,10 +282,16 @@ class _SpotifyPageState extends State<SpotifyPage> {
                         onPressed: () async {
                           final ok = await confirm(context, 'Disconnect Spotify?',
                               'Its playlists disappear from your library. Anything '
-                              'you cloned stays.');
-                          if (!ok) return;
-                          await app.api.unlinkSpotify();
-                          await app.refreshPlaylists();
+                              'you cloned stays.',
+                    action: 'Disconnect');
+                          if (!ok || !context.mounted) return;
+                          final messenger = ScaffoldMessenger.of(context);
+                          try {
+                            await app.api.unlinkSpotify();
+                            await app.refreshPlaylists();
+                          } catch (e) {
+                            messenger.showSnackBar(problem(e));
+                          }
                           _load();
                         },
                         child: const Text('Disconnect'),

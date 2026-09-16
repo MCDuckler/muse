@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -14,7 +16,7 @@ import 'snack.dart';
 /// eleven to a playlist" is the same on the queue, on a record and in a search. It is
 /// on screen rather than in a menu, because it is also how you find out that a
 /// selection is running at all — and how you end it.
-class SelectionBar extends StatelessWidget {
+class SelectionBar extends StatefulWidget {
   const SelectionBar({
     super.key,
     required this.where,
@@ -34,6 +36,34 @@ class SelectionBar extends StatelessWidget {
   /// list is not one you can take things out of.
   final Future<void> Function(List<Track> picked)? onRemove;
   final String removeLabel;
+
+  @override
+  State<SelectionBar> createState() => _SelectionBarState();
+}
+
+class _SelectionBarState extends State<SelectionBar> {
+  Selection? _selection;
+
+  String get where => widget.where;
+  List<Track> get tracks => widget.tracks;
+  Future<void> Function(List<Track> picked)? get onRemove => widget.onRemove;
+  String get removeLabel => widget.removeLabel;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _selection = context.read<Selection>();
+  }
+
+  @override
+  void dispose() {
+    // Leaving the list ends its selection. It used to outlive the page: back out of
+    // a record with three songs picked, open it again a day later, and the bar was
+    // still up with a count on it and no rows lit.
+    final selection = _selection;
+    if (selection != null) scheduleMicrotask(() => selection.leave(where));
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -86,15 +116,11 @@ class SelectionBar extends StatelessWidget {
               onSelected: (choice) async {
                 switch (choice) {
                   case 'next':
-                    // Backwards, so the first one picked ends up first in the queue.
-                    for (final t in picked.reversed) {
-                      await app.addTrack(t, mode: 'next');
-                    }
+                    // One request, in the order they were picked.
+                    await app.addTracks(picked, mode: 'next');
                     await done('${picked.length} playing next');
                   case 'queue':
-                    for (final t in picked) {
-                      await app.addTrack(t);
-                    }
+                    await app.addTracks(picked);
                     await done('${picked.length} added to the queue');
                   case 'playlist':
                     await addTracksToPlaylistSheet(context, app, picked);
@@ -121,7 +147,8 @@ class SelectionBar extends StatelessWidget {
                     final sure = await confirm(
                         context,
                         '$removeLabel ${picked.length} songs?',
-                        'They stay in your library.');
+                        'They stay in your library.',
+                        action: 'Remove');
                     if (!sure) return;
                     await onRemove!(picked);
                     await done('${picked.length} removed');
@@ -163,6 +190,12 @@ class SelectionBar extends StatelessWidget {
 ///
 /// The bottom of the list is where there is room for it: every one of these already
 /// leaves a gap at the end for the player bar, so the bar covers nothing.
+///
+/// Above the player, not at the bottom of the screen. Every list here runs underneath
+/// the glass player and tabs so the blur has something to show, which means the
+/// bottom of the list's box is *behind* them — and a bar placed ten pixels from that
+/// edge was drawn under the player, where it could be seen through the glass and not
+/// pressed. The scaffold says how much is floating there, as the bottom padding.
 class SelectionOver extends StatelessWidget {
   const SelectionOver({super.key, required this.child, required this.bar});
 
@@ -176,7 +209,7 @@ class SelectionOver extends StatelessWidget {
           Positioned(
             left: 10,
             right: 10,
-            bottom: 10,
+            bottom: MediaQuery.paddingOf(context).bottom + 10,
             child: bar,
           ),
         ],

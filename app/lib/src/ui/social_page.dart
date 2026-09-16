@@ -8,7 +8,9 @@ import 'jam_page.dart';
 import 'library_page.dart';
 import 'mini_player.dart';
 import 'snack.dart';
+import 'dialogs.dart';
 import 'song_row.dart';
+import 'track_menu.dart';
 
 /// Everybody else on this server.
 ///
@@ -27,7 +29,7 @@ class SocialPage extends StatefulWidget {
 class _SocialPageState extends State<SocialPage> {
   List<Person>? _people;
   int _you = 0;
-  String? _error;
+  Object? _error;
 
   @override
   void initState() {
@@ -45,7 +47,7 @@ class _SocialPageState extends State<SocialPage> {
         _error = null;
       });
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted) setState(() => _error = e);
     }
   }
 
@@ -53,8 +55,13 @@ class _SocialPageState extends State<SocialPage> {
   Widget build(BuildContext context) {
     final people = _people;
     if (_error != null && people == null) {
-      return Center(
-          child: Padding(padding: const EdgeInsets.all(24), child: Text(_error!)));
+      // A way back, rather than an exception's text in the middle of a tab.
+      return ErrorRetry(
+          error: _error!,
+          onRetry: () {
+            setState(() => _error = null);
+            _load();
+          });
     }
     if (people == null) {
       return const Center(child: CircularProgressIndicator());
@@ -199,9 +206,14 @@ class _PersonPageState extends State<PersonPage> {
   Future<void> _load() async {
     final api = context.read<AppState>().api;
     try {
-      final them = await api.person(widget.person.id);
-      final lists = await api.personPlaylists(widget.person.id);
-      final library = await api.personLibrary(widget.person.id);
+      // Three questions with nothing to do with each other, asked together: one after
+      // another was three round trips of an empty page.
+      final asking = api.person(widget.person.id);
+      final listing = api.personPlaylists(widget.person.id);
+      final holding = api.personLibrary(widget.person.id);
+      final them = await asking;
+      final lists = await listing;
+      final library = await holding;
       if (!mounted) return;
       setState(() {
         _them = them;
@@ -355,7 +367,7 @@ class _PersonPageState extends State<PersonPage> {
             if (them.recent.isNotEmpty) ...[
               const _Heading('What they have been playing'),
               for (final t in them.recent)
-                SongRow(track: t, onTap: () => context.read<AppState>().addTrack(t)),
+                SongRow(track: t, onTap: () => addAndSay(context, t)),
             ],
             const _Heading('Their library'),
             if (_library.isEmpty)
@@ -364,7 +376,7 @@ class _PersonPageState extends State<PersonPage> {
                 child: Text('Nothing kept yet.'),
               ),
             for (final t in _library)
-              SongRow(track: t, onTap: () => context.read<AppState>().addTrack(t)),
+              SongRow(track: t, onTap: () => addAndSay(context, t)),
             if (_more)
               Padding(
                 padding: const EdgeInsets.all(16),

@@ -208,7 +208,8 @@ class _Synced extends StatelessWidget {
           itemBuilder: (context, i) {
             final isNow = i == active;
             return GestureDetector(
-              onTap: () => player?.seek(lines[i].at),
+              // Through the app, like the scrubber: in a jam a seek is the room's.
+              onTap: () => context.read<AppState>().seekTo(lines[i].at),
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 7),
                 child: Text(

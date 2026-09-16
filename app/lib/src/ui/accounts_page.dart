@@ -395,9 +395,15 @@ class _AccountsPageState extends State<AccountsPage> {
                                     context,
                                     'Remove ${a['name']}?',
                                     'Their queues and playlists go with them. Tracks '
-                                    'stay in the library.');
-                                if (!ok) return;
-                                await app.api.deleteAccount(a['id'] as int);
+                                    'stay in the library.',
+                                    action: 'Remove');
+                                if (!ok || !context.mounted) return;
+                                final messenger = ScaffoldMessenger.of(context);
+                                try {
+                                  await app.api.deleteAccount(a['id'] as int);
+                                } catch (e) {
+                                  messenger.showSnackBar(problem(e));
+                                }
                                 _load();
                               }
                             },

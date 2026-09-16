@@ -781,9 +781,15 @@ class ApiClient {
           headers: _headers,
           body: jsonEncode({'from': froms, 'to': to}))) as Map<String, dynamic>);
 
-  Future<Queue> shuffleQueue(int id) async => Queue.fromJson(await _decode(
-      await net.post(_u('/queues/$id/shuffle'),
-          headers: _headers, body: '{}')) as Map<String, dynamic>);
+  ///
+  /// [order] is the order the app already dealt — the track ids after the song
+  /// playing, as they now stand on screen — so the server keeps that one rather than
+  /// dealing its own on top of it. An older server ignores it and shuffles itself.
+  Future<Queue> shuffleQueue(int id, {List<int>? order}) async =>
+      Queue.fromJson(await _decode(await net.post(_u('/queues/$id/shuffle'),
+              headers: _headers,
+              body: jsonEncode({if (order != null) 'order': order})))
+          as Map<String, dynamic>);
 
   Future<Queue> addToQueue(int id, List<int> trackIds, {String mode = 'end'}) async =>
       Queue.fromJson(await _decode(await net.post(_u('/queues/$id/items'),

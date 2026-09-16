@@ -17,6 +17,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:just_audio_platform_interface/just_audio_platform_interface.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:muse/src/api/client.dart';
 import 'package:muse/src/api/models.dart';
 import 'package:muse/src/state/app_state.dart';
@@ -480,6 +481,231 @@ void main() {
     expect(after, isNot(before), reason: 'something moved');
   });
 
+  test('shuffling says what order it dealt, for the server to keep', () async {
+    final tracks = [for (var i = 1; i <= 8; i++) track(i)];
+    await player.loadQueue(queueOf(tracks));
+    await player.playAt(1);
+    await settle();
+
+    final dealt = player.shuffleWhatIsComing();
+
+    expect(dealt, isNotNull);
+    expect(dealt, [for (final t in player.items.sublist(2)) t.id],
+        reason: 'the order reported is the order now on screen');
+    expect(player.shuffleWhatIsComing(), isNotNull);
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    expect(player.shuffleWhatIsComing(), isNull,
+        reason: 'nothing worth rearranging is nothing to send');
+  });
+
+  test('where a song just added sits, counted in the whole queue', () {
+    Queue sliced(List<int> ids, {int from = 0, int? total}) => Queue.fromJson({
+          'id': 1, 'name': 'q', 'cursor_index': 0, 'position_ms': 0, 'rev': 1,
+          'total': total ?? from + ids.length, 'window_from': from,
+          'items': [
+            for (final id in ids)
+              {'id': id, 'title': 'T$id', 'artists': ['A'], 'state': 'ready',
+               'stream_url': '/tracks/$id/stream', 'source': 'youtube'},
+          ],
+        });
+
+    // Appended: the last row of the whole queue, even beyond the slice held.
+    expect(AppState.whereItLanded(sliced([1, 2, 3], from: 600, total: 2000), 9,
+            mode: 'end', after: 601),
+        1999);
+    // Put on next behind two others: the first copy after the song playing.
+    expect(AppState.whereItLanded(sliced([1, 2, 7, 8, 5, 6]), 5,
+            mode: 'next', after: 1),
+        4);
+    // A copy above the song playing is history, not the one just added.
+    expect(AppState.whereItLanded(sliced([5, 2, 3, 5]), 5, mode: 'next', after: 1), 3);
+    expect(AppState.whereItLanded(sliced([2, 3], from: 600, total: 1200), 3,
+            mode: 'next', after: 600),
+        601);
+    // Appended where the slice reaches the end: the last copy, not simply the last
+    // row — somebody else may have added a song behind it since.
+    expect(AppState.whereItLanded(sliced([9, 1, 9, 2]), 9, mode: 'end', after: 0), 2);
+  });
+
+  test('a server address typed without a scheme is still an address', () {
+    expect(AppState.normaliseServer('wetowl.example'), 'https://wetowl.example');
+    expect(AppState.normaliseServer(' https://wetowl.example// '),
+        'https://wetowl.example');
+    expect(AppState.normaliseServer('192.168.1.20:8770'), 'http://192.168.1.20:8770');
+    expect(AppState.normaliseServer('localhost:8770'), 'http://localhost:8770');
+    expect(AppState.normaliseServer('http://box:8770'), 'http://box:8770');
+    expect(AppState.normaliseServer('172.40.0.1'), 'https://172.40.0.1',
+        reason: 'outside the private range is a public address');
+  });
+
+  test('play at the end of the queue plays the last song again, from the top',
+      () async {
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    await player.playAt(1);
+    await settle();
+    audio.only.tick(const Duration(seconds: 50));
+    audio.only.reachEnd();
+    await settle();
+    expect(player.last?.finished, isTrue, reason: 'the queue has run out');
+
+    await player.playPause();
+    await settle();
+
+    expect(player.last?.finished, isFalse);
+    expect(player.current?.id, 2, reason: 'the last song, not the first');
+    final engine = audio.players.values.last;
+    expect(engine.position, Duration.zero, reason: 'from the top: ${engine.calls}');
+    expect(engine.playing, isTrue);
+  });
+
+  test('play at the end of the queue plays what was added since', () async {
+    await player.loadQueue(queueOf([track(1)]));
+    await player.playAt(0);
+    await settle();
+    audio.only.reachEnd();
+    await settle();
+    expect(player.last?.finished, isTrue);
+
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    await settle();
+    await player.playPause();
+    await settle();
+
+    expect(player.current?.id, 2, reason: 'the song added after it ran out');
+    expect(audio.players.values.last.playing, isTrue);
+  });
+
+  test('switching to repeat-one takes the queued next song back out', () async {
+    // The next song was handed to the engine while repeat was off. Left there,
+    // the engine walks to it when this one ends, and "repeat this one" did not.
+    await player.loadQueue(queueOf([track(1), track(2), track(3)]));
+    await player.playAt(0);
+    await settle();
+    expect(audio.only.sources.length, 2, reason: 'the next one is queued');
+
+    player.setRepeat(QueueRepeat.one);
+    await settle();
+
+    expect(audio.only.sources.length, 1,
+        reason: 'and is taken back: ${audio.only.calls}');
+    expect(player.queuedNextId, isNull);
+
+    audio.only.reachEnd();
+    await settle();
+    expect(player.current?.id, 1, reason: 'the same song again');
+    // Back to the top and on: just_audio still believes it is playing through the
+    // end of a song, so the only call the engine sees is the seek.
+    expect(audio.only.calls.last, 'seek 0s', reason: '${audio.only.calls}');
+  });
+
+  test('previous restarts the song through the same door a seek uses', () async {
+    final written = <int>[];
+    player.onCursor = (q, {cursorIndex, positionMs}) => written.add(positionMs ?? -1);
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    await player.playAt(1);
+    await settle();
+    audio.only.tick(const Duration(seconds: 30));
+    await settle();
+
+    await player.previous();
+    await settle();
+
+    expect(player.current?.id, 2, reason: 'deep into a song, previous restarts it');
+    expect(audio.only.calls, contains('seek 0s'));
+    expect(written.last, 0, reason: 'and the cursor is written at the top of it');
+
+    await player.previous();
+    await settle();
+    expect(player.current?.id, 1, reason: 'at the top of a song it steps back');
+  });
+
+  test('play on a song that is not here yet waits instead of asking the engine',
+      () async {
+    final pending = Track.fromJson({
+      'id': 5,
+      'title': 'Not yet',
+      'artists': ['Someone'],
+      'duration_ms': 60000,
+      'state': 'pending',
+      'source': 'youtube',
+    });
+    final queue = Queue.fromJson({
+      'id': 1, 'name': 'test', 'cursor_index': 0, 'position_ms': 0, 'rev': 1,
+      'items': [
+        {'id': 1, 'title': 'Track 1', 'artists': ['Someone'], 'duration_ms': 60000,
+         'state': 'ready', 'stream_url': '/tracks/1/stream', 'source': 'youtube'},
+        {'id': 5, 'title': 'Not yet', 'artists': ['Someone'], 'duration_ms': 60000,
+         'state': 'pending', 'source': 'youtube'},
+      ],
+    });
+    expect(pending.isReady, isFalse);
+    await player.loadQueue(queue);
+    await player.playAt(0);
+    await settle();
+    final first = audio.only;
+    // On to the one that is not here: the player parks on it and waits — and
+    // stopping there lets the platform player go, so there is no engine at all.
+    await player.next();
+    await settle();
+    expect(player.last?.waitingForDownload, isTrue);
+    final plays = first.calls.where((c) => c == 'play').length;
+
+    // Pressing play while it waits.
+    await player.playPause();
+    await settle();
+
+    expect(player.last?.waitingForDownload, isTrue, reason: 'still waiting');
+    expect(first.calls.where((c) => c == 'play').length, plays,
+        reason: 'the old engine was not asked to play nothing: ${first.calls}');
+    expect(audio.players.values.any((p) => p.calls.contains('play')), isFalse,
+        reason: 'and no new engine was made to play nothing either');
+  });
+
+  test('a stream still opening is reported as such', () async {
+    await player.loadQueue(queueOf([track(1)]));
+    await player.playAt(0);
+    await settle();
+    expect(player.last?.buffering, isFalse);
+
+    audio.only.stall();
+    await settle();
+    expect(player.last?.buffering, isTrue,
+        reason: 'waiting on the network is a state the screen can show');
+
+    audio.only.recover();
+    await settle();
+    expect(player.last?.buffering, isFalse);
+  });
+
+  test('signing out takes the session with it', () async {
+    // Only the token used to go: the player kept the old account's queue loaded and
+    // signing in as somebody else found it still there.
+    SharedPreferences.setMockInitialValues({});
+    final app = AppState();
+    app.api = api;
+    app.player = player;
+    final mine = queueOf([track(1), track(2)]);
+    app.activeQueue = mine;
+    app.queues = [mine];
+    app.user = 'chris';
+    app.favourites = {1};
+    await player.loadQueue(mine);
+    await player.playAt(0);
+    await settle();
+    expect(audio.only.playing, isTrue);
+
+    await app.logout();
+    await settle();
+
+    expect(app.user, isNull);
+    expect(app.player, isNull, reason: 'the next account gets a player of its own');
+    expect(app.activeQueue, isNull);
+    expect(app.queues, isEmpty);
+    expect(app.favourites, isEmpty);
+    expect(api.token, isNull);
+    expect(audio.players, isEmpty, reason: 'the engine was let go of');
+  });
+
   test('a guest follows the room into the right song at the right place', () async {
     // The other half of a jam: the host says where the music is, and this device puts
     // itself there. No UI, no browser — the state and the player are the whole of it.
@@ -677,13 +903,15 @@ void main() {
     await player.playPause();
     await settle();
 
-    final before = PlaybackLog.lines.length;
+    // The log keeps only its last few hundred lines, so "everything after here" is
+    // read from a marker rather than from a length that stops growing once it is full.
+    PlaybackLog.note('--- marker');
     audio.only.die();                              // and then the engine dies
     await settle();
     await player.checkForStall();
     await settle();
 
-    final said = PlaybackLog.lines.skip(before).toList();
+    final said = PlaybackLog.lines.skipWhile((l) => !l.endsWith('--- marker')).toList();
     expect(said.any((l) => l.contains('reviving')), isTrue,
         reason: 'the watchdog still works after an interruption: $said');
   });

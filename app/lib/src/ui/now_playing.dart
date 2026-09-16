@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -106,7 +107,7 @@ class NowPlayingScreen extends StatelessWidget {
                       onPressed: () => showLyrics(context, track),
                     ),
                     IconButton(
-                      icon: Icon(app.sleepAt != null
+                      icon: Icon(app.sleepSet
                           ? Icons.bedtime
                           : Icons.timer_outlined),
                       tooltip: 'Sleep timer and speed',
@@ -215,9 +216,12 @@ class NowPlayingScreen extends StatelessWidget {
                             ),
                             if (_statusLine(s, track) != null) ...[
                               const SizedBox(height: 10),
-                              Text(_statusLine(s, track)!,
+                              Text(_statusLine(s, track)!.text,
                                   textAlign: TextAlign.center,
-                                  style: TextStyle(color: scheme.error)),
+                                  style: TextStyle(
+                                      color: _statusLine(s, track)!.problem
+                                          ? scheme.error
+                                          : scheme.onSurfaceVariant)),
                             ],
                             // The one thing that stops the music which this app cannot
                             // fix from in here. See _TheMusicWillStop.
@@ -340,14 +344,21 @@ class NowPlayingScreen extends StatelessWidget {
     );
   }
 
-  static String? _statusLine(PlayerSnapshot? s, Track track) {
+  /// What to say under the song, and whether it is bad news. Only a failure is drawn
+  /// in red; a download in progress or the end of the queue is simply information.
+  static ({String text, bool problem})? _statusLine(PlayerSnapshot? s, Track track) {
     // First: the browser is only waiting to be tapped, which is not a failure.
-    if (s?.needsGesture ?? false) return 'Ready — tap play';
-    if (s?.error != null) return s!.error;
-    if (s?.waitingForDownload ?? false) return 'Waiting for download…';
-    if (s?.finished ?? false) return 'End of queue';
-    if (track.state == 'failed') return track.failReason ?? 'This track failed';
-    if (track.isPending) return 'Downloading…';
+    if (s?.needsGesture ?? false) return (text: 'Ready — tap play', problem: false);
+    if (s?.error != null) return (text: s!.error!, problem: true);
+    if (s?.waitingForDownload ?? false) {
+      return (text: 'Waiting for download…', problem: false);
+    }
+    if (s?.finished ?? false) return (text: 'End of queue', problem: false);
+    if (track.state == 'failed') {
+      return (text: track.failReason ?? 'This track failed', problem: true);
+    }
+    if (track.isPending) return (text: 'Downloading…', problem: false);
+    if (s?.buffering ?? false) return (text: 'Loading…', problem: false);
     return null;
   }
 }
@@ -564,6 +575,7 @@ class _OnceItHasLandedState extends State<_OnceItHasLanded> {
       _landed ? widget.builder(context) : const SizedBox.shrink();
 }
 
+
 /// Dragging the player shut.
 ///
 /// The page used to slide down a little under the finger and then, past a threshold,
@@ -749,10 +761,23 @@ class _Credits extends StatelessWidget {
           ),
     ];
 
+    // Measured from the font rather than worked out from a line-height factor. The
+    // factor was a guess at Manrope's line, a hair short of the real one, and the
+    // column overflowed by a fraction of a pixel — which a debug build draws as a
+    // striped bar across the album's name.
+    final scaler = MediaQuery.textScalerOf(context);
+    final ambient = DefaultTextStyle.of(context).style;
     double heightOf(TextStyle? style, double fallback) {
-      final size = MediaQuery.textScalerOf(context)
-          .scale(style?.fontSize ?? fallback);
-      return size * (style?.height ?? 1.35);
+      final painter = TextPainter(
+        text: TextSpan(
+            text: 'Ag', style: ambient.merge(style ?? TextStyle(fontSize: fallback))),
+        textDirection: TextDirection.ltr,
+        textScaler: scaler,
+        maxLines: 1,
+      )..layout();
+      final h = painter.height;
+      painter.dispose();
+      return h;
     }
 
     // Each line's own height, plus what the padding inside a link adds. Measured from
@@ -763,7 +788,8 @@ class _Credits extends StatelessWidget {
     // every song, which is a gap between the words and the buttons that nothing is
     // ever going to fill. What has to stay reserved is the album's row, because that
     // is the one that varies from song to song and the record sits above it.
-    final reserved = heightOf(style, 16) + 4 + heightOf(albumStyle, 14) + 4;
+    final reserved =
+        (heightOf(style, 16) + 4 + heightOf(albumStyle, 14) + 4).ceilToDouble();
 
     return SizedBox(
       height: reserved,
@@ -848,7 +874,7 @@ class _Extras extends StatelessWidget {
         if (OfflineStore.supported) _KeepButton(app: app, track: track, size: size),
         IconButton(
           iconSize: size,
-          icon: Icon(app.sleepAt != null ? Icons.bedtime : Icons.timer_outlined),
+          icon: Icon(app.sleepSet ? Icons.bedtime : Icons.timer_outlined),
           tooltip: 'Sleep timer and speed',
           onPressed: () => showPlaybackExtras(context),
         ),
@@ -903,10 +929,17 @@ class _KeepButton extends StatelessWidget {
 /// goes with it.
 class _PlayPauseButton extends StatefulWidget {
   const _PlayPauseButton(
-      {required this.playing, required this.size, required this.onPressed});
+      {required this.playing,
+      required this.size,
+      required this.onPressed,
+      this.busy = false});
   final bool playing;
   final double size;
   final VoidCallback onPressed;
+
+  /// Asked to play and waiting on the network: a thin ring turns around the button,
+  /// so a silent second is visibly the stream opening rather than the button ignored.
+  final bool busy;
 
   @override
   State<_PlayPauseButton> createState() => _PlayPauseButtonState();
@@ -940,16 +973,37 @@ class _PlayPauseButtonState extends State<_PlayPauseButton>
   }
 
   @override
-  Widget build(BuildContext context) => IconButton.filled(
-        iconSize: widget.size,
-        tooltip: widget.playing ? 'Pause' : 'Play',
-        icon: AnimatedIcon(
-          icon: AnimatedIcons.play_pause,
-          progress: _shape,
-          size: widget.size,
+  Widget build(BuildContext context) {
+    final button = IconButton.filled(
+      iconSize: widget.size,
+      tooltip: widget.playing ? 'Pause' : 'Play',
+      icon: AnimatedIcon(
+        icon: AnimatedIcons.play_pause,
+        progress: _shape,
+        size: widget.size,
+      ),
+      onPressed: felt(Feel.commit, widget.onPressed),
+    );
+    if (!widget.busy) return button;
+    // IconButton.filled pads the icon by 8 on each side; the ring sits just outside.
+    final ring = widget.size + 22;
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        button,
+        IgnorePointer(
+          child: SizedBox(
+            width: ring,
+            height: ring,
+            child: CircularProgressIndicator(
+              strokeWidth: 2.5,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
         ),
-        onPressed: felt(Feel.commit, widget.onPressed),
-      );
+      ],
+    );
+  }
 }
 
 /// Repeat, wherever it is shown: off, the whole queue, or this one song.
@@ -1431,13 +1485,18 @@ class _Controls extends StatelessWidget {
                   : Icons.volume_up),
               tooltip: 'Volume',
               onPressed: () => showVolume(context, player),
+              onLongPress: app.toggleMute,
             ),
             IconButton(
               iconSize: 44,
               icon: const Icon(Icons.skip_previous),
               onPressed: felt(Feel.commit, app.skipPrevious),
             ),
-            _PlayPauseButton(playing: playing, size: 56, onPressed: app.playPause),
+            _PlayPauseButton(
+                playing: playing,
+                size: 56,
+                busy: snapshot?.buffering ?? false,
+                onPressed: app.playPause),
             IconButton(
               iconSize: 44,
               icon: const Icon(Icons.skip_next),
@@ -1445,7 +1504,7 @@ class _Controls extends StatelessWidget {
             ),
             IconButton(
               iconSize: 24,
-              icon: Icon(app.sleepAt != null ? Icons.bedtime : Icons.timer_outlined),
+              icon: Icon(app.sleepSet ? Icons.bedtime : Icons.timer_outlined),
               tooltip: 'Sleep timer and speed',
               onPressed: () => showPlaybackExtras(context),
             ),
@@ -1470,7 +1529,10 @@ class _Controls extends StatelessWidget {
           onPressed: felt(Feel.commit, app.skipPrevious),
         ),
         _PlayPauseButton(
-            playing: playing, size: big ? 54 : 42, onPressed: app.playPause),
+            playing: playing,
+            size: big ? 54 : 42,
+            busy: snapshot?.buffering ?? false,
+            onPressed: app.playPause),
         IconButton(
           iconSize: big ? 42 : 34,
           icon: const Icon(Icons.skip_next),
@@ -1532,8 +1594,11 @@ class _VolumeRowState extends State<_VolumeRow> {
             value: v,
             onChanged: (nv) {
               setState(() => _value = nv);
-              widget.player.setUserVolume(nv);
+              context.read<AppState>().setVolume(nv);
             },
+            // Back to reading the player once the finger is off it, or muting from
+            // the keyboard left the slider showing the volume from before.
+            onChangeEnd: (_) => setState(() => _value = null),
           ),
         ),
         Icon(Icons.volume_up,
@@ -1550,10 +1615,49 @@ Future<void> showPlaybackExtras(BuildContext context) async {
   await showModalBottomSheet<void>(
     context: context,
     showDragHandle: true,
-    builder: (sheet) => StatefulBuilder(
-      builder: (sheet, refresh) {
-        final left = app.sleepIn;
-        return SafeArea(
+    builder: (sheet) => _PlaybackExtras(app: app),
+  );
+}
+
+class _PlaybackExtras extends StatefulWidget {
+  const _PlaybackExtras({required this.app});
+  final AppState app;
+
+  @override
+  State<_PlaybackExtras> createState() => _PlaybackExtrasState();
+}
+
+class _PlaybackExtrasState extends State<_PlaybackExtras> {
+  /// The countdown moves while the sheet is open, rather than saying "31 min" until
+  /// something else happens to rebuild it.
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  String _left(Duration left) {
+    if (left.inMinutes >= 1) return 'Stops in ${left.inMinutes + 1} min';
+    return 'Stopping in under a minute';
+  }
+
+  @override
+  Widget build(BuildContext sheet) {
+    final app = widget.app;
+    final left = app.sleepIn;
+    return AnimatedBuilder(
+      animation: app,
+      builder: (sheet, _) => SafeArea(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1563,15 +1667,23 @@ Future<void> showPlaybackExtras(BuildContext context) async {
                 child: Text('Sleep timer',
                     style: Theme.of(sheet).textTheme.titleSmall),
               ),
-              if (left != null && !left.isNegative)
+              if (app.sleepAtEndOfTrack)
                 ListTile(
                   leading: const Icon(Icons.bedtime),
-                  title: Text('Stops in ${left.inMinutes + 1} min'),
+                  title: const Text('Stops when this song ends'),
+                  subtitle: const Text('Fading out over its last seconds'),
                   trailing: TextButton(
-                    onPressed: () {
-                      app.setSleepTimer(null);
-                      refresh(() {});
-                    },
+                    onPressed: () => app.setSleepTimer(null),
+                    child: const Text('Cancel'),
+                  ),
+                )
+              else if (left != null && !left.isNegative)
+                ListTile(
+                  leading: const Icon(Icons.bedtime),
+                  title: Text(_left(left)),
+                  subtitle: const Text('The music fades out before it stops'),
+                  trailing: TextButton(
+                    onPressed: () => app.setSleepTimer(null),
                     child: const Text('Cancel'),
                   ),
                 )
@@ -1580,15 +1692,19 @@ Future<void> showPlaybackExtras(BuildContext context) async {
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: Wrap(
                     spacing: 8,
+                    runSpacing: 4,
                     children: [
                       for (final minutes in [15, 30, 45, 60, 90])
                         OutlinedButton(
-                          onPressed: () {
-                            app.setSleepTimer(Duration(minutes: minutes));
-                            refresh(() {});
-                          },
+                          onPressed: () =>
+                              app.setSleepTimer(Duration(minutes: minutes)),
                           child: Text('$minutes min'),
                         ),
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.music_off_outlined, size: 18),
+                        label: const Text('End of this song'),
+                        onPressed: () => app.setSleepTimer(null, endOfTrack: true),
+                      ),
                     ],
                   ),
                 ),
@@ -1609,7 +1725,7 @@ Future<void> showPlaybackExtras(BuildContext context) async {
                         label: Text(rate == 1.0 ? 'Normal' : '$rate×'),
                         onSelected: (_) async {
                           await app.player?.setSpeed(rate);
-                          refresh(() {});
+                          if (mounted) setState(() {});
                         },
                       ),
                   ],
@@ -1618,8 +1734,7 @@ Future<void> showPlaybackExtras(BuildContext context) async {
               const SizedBox(height: 20),
             ],
           ),
-        );
-      },
-    ),
-  );
+        ),
+    );
+  }
 }

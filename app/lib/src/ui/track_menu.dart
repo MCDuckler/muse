@@ -18,11 +18,15 @@ import 'snack.dart';
 /// metadata — simply did not exist.
 enum TrackAction { playNext, addToQueue, addToPlaylist, goToAlbum, goToArtist, lyrics, edit, retry, remove }
 
+/// [queuePosition] is where this song sits in the queue being played, when that is
+/// the list it was opened from. There, "play now" plays that row and "play next" moves
+/// it — rather than both putting a second copy of a song that is already queued.
 Future<void> showTrackSheet(
   BuildContext context,
   Track track, {
   VoidCallback? onRemove,
   VoidCallback? onChanged,
+  int? queuePosition,
 }) async {
   final app = context.read<AppState>();
   await showModalBottomSheet<void>(
@@ -65,14 +69,32 @@ Future<void> showTrackSheet(
                 () => here ? app.forgetOffline(track.id) : app.keepOffline([track]),
               );
             }),
+          // Hear it now, without losing the queue. Missing until now: "play next" put
+          // it after the current song, "play" on a record wrote over the queue, and
+          // the thing most often wanted from a song's menu was neither.
+          if (track.isReady || queuePosition != null)
+            _item(
+                sheet,
+                Icons.play_arrow,
+                'Play now',
+                queuePosition == null
+                    ? () => app.playTrackNow(track)
+                    : () => app.player
+                        ?.playTrack(track.id, indexHint: queuePosition)),
+          _item(
+              sheet,
+              Icons.playlist_play,
+              'Play next',
+              queuePosition == null
+                  ? () => app.addTrack(track, mode: 'next')
+                  : () => app.playNextFromQueue(queuePosition)),
+          if (queuePosition == null)
+            _item(sheet, Icons.playlist_add, 'Add to queue', () => app.addTrack(track)),
+          _item(sheet, Icons.library_add, 'Add to playlist…',
+              () => addToPlaylistSheet(context, app, track), close: false),
           // Everything that belongs next to this one, as a queue of its own.
           _item(sheet, Icons.radio, 'Start a station',
               () => startStation(context, seed: track)),
-          _item(sheet, Icons.playlist_play, 'Play next',
-              () => app.addTrack(track, mode: 'next')),
-          _item(sheet, Icons.playlist_add, 'Add to queue', () => app.addTrack(track)),
-          _item(sheet, Icons.library_add, 'Add to playlist…',
-              () => addToPlaylistSheet(context, app, track), close: false),
           if (track.albumLine != null)
             _item(sheet, Icons.album_outlined, 'Go to ${track.albumLine}', () {
               Navigator.of(context).push(MaterialPageRoute(
@@ -111,6 +133,41 @@ Future<void> showTrackSheet(
       ),
     ),
   );
+}
+
+/// Put a song in the queue, and say so — with a way to hear it straight away.
+///
+/// A tap that adds to the end of a queue on another tab changes nothing anybody can
+/// see, so it got tapped again, and the queue filled with copies. Said here once, for
+/// every list that adds on a tap or a swipe — including when the song was already
+/// there, which is allowed and worth knowing.
+Future<void> addAndSay(BuildContext context, Track track,
+    {String mode = 'end'}) async {
+  final app = context.read<AppState>();
+  final messenger = ScaffoldMessenger.of(context);
+  final already = app.player?.items.any((t) => t.id == track.id) ?? false;
+  try {
+    await app.addTrack(track, mode: mode);
+  } catch (e) {
+    messenger.showSnackBar(problem(e));
+    return;
+  }
+  final where = app.activeQueue?.name ?? 'the queue';
+  final title = track.displayTitle;
+  messenger.showSnackBar(snack(
+    Text(mode == 'next'
+        ? already
+            ? 'Another copy of $title plays next'
+            : '$title plays next'
+        : already
+            ? 'Added $title to "$where" again'
+            : 'Added to "$where"'),
+    // A guest's transport belongs to the room; what they can do is put it on.
+    action: track.isReady && !app.jamControlsTheRoom
+        ? SnackBarAction(
+            label: 'Play', onPressed: () => app.playAdded(track, mode: mode))
+        : null,
+  ));
 }
 
 /// Ask for a song, and say what happened.

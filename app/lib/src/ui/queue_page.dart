@@ -10,6 +10,7 @@ import 'dialogs.dart';
 import 'feel.dart';
 import 'song_row.dart';
 import 'station.dart';
+import 'track_menu.dart';
 import 'swipe.dart';
 import '../state/selection.dart';
 import 'face.dart';
@@ -28,6 +29,42 @@ class QueuePage extends StatefulWidget {
 class _QueuePageState extends State<QueuePage> {
   final _scroll = ScrollController();
   int? _followed;
+
+  /// Whether the song playing is somewhere in view, as of the last look. When it is
+  /// not, a small pill offers the way back to it.
+  bool _playingInView = true;
+
+  /// Which way the playing row is from here, for the pill's arrow.
+  bool _playingIsBelow = false;
+
+  /// How many playing rows are on the tree — one or none, except for the moment a
+  /// track changes, when the new row is built before the old one is let go of. A
+  /// count survives that order; a flag set by the last of the two did not.
+  int _playingRowsMounted = 0;
+
+  /// The playing row saying it has arrived on the tree or left it. A lazy list only
+  /// holds what is near the viewport, so this is the same as "is it near the screen"
+  /// — and unlike a scroll event, it arrives *after* the frame that took it away.
+  void _playingRowIs({required bool mounted}) {
+    _playingRowsMounted += mounted ? 1 : -1;
+    // Told from inside another widget's lifecycle, so the look waits for the frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _lookForThePlayingRow());
+  }
+
+  void _lookForThePlayingRow() {
+    if (!mounted) return;
+    final built = _playingRowsMounted > 0;
+    var below = _playingIsBelow;
+    if (!built && _scroll.hasClients) {
+      final index = context.read<AppState>().player?.index ?? 0;
+      below = index * _rowExtent > _scroll.offset;
+    }
+    if (built == _playingInView && below == _playingIsBelow) return;
+    setState(() {
+      _playingInView = built;
+      _playingIsBelow = below;
+    });
+  }
 
   /// The row being dragged, while one is. Everything else that is selected folds away
   /// behind it for the length of the drag — see the itemBuilder.
@@ -98,13 +135,22 @@ class _QueuePageState extends State<QueuePage> {
     // radio append or a change from another device.
     final rows = app.player?.items ?? const <Track>[];
 
-    // Follow the music: when the track changes on its own, bring it into view rather
-    // than leaving the person to hunt for it in an eighteen-track queue.
+    // Follow the music — but only while you are watching it.
+    //
+    // When the track changes, the list used to scroll to it whatever you were doing:
+    // half way down a long queue, looking for something to put on next, and the song
+    // ends and the list is somewhere else. So it follows only when the song that just
+    // finished was in view — which is what "following" means — and otherwise leaves
+    // you where you are and offers the way back on a pill.
     final playing = app.player?.index;
     if (playing != null && playing != _followed && rows.isNotEmpty) {
+      // Read before the list rebuilds: the key still sits on the row that was
+      // playing a moment ago, so this is whether *that* row was near the screen.
+      final wasWatching = _followed == null || _currentRow.currentContext != null;
       _followed = playing;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _scrollToCurrent();
+        if (!mounted) return;
+        if (wasWatching) _scrollToCurrent(animate: _followed != null);
       });
     }
 
@@ -120,19 +166,25 @@ class _QueuePageState extends State<QueuePage> {
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: GestureDetector(
-                    // Hold a queue to get rid of it. Queues accumulate — a name for
-                    // every evening — and until now the only way to lose one was the
-                    // terminal.
+                    // Hold a queue for what can be done to it: a new name, or gone.
+                    // Queues accumulate — a name for every evening — and until now
+                    // they could be deleted and never renamed.
                     onLongPress: q.sharedFrom != null
                         ? null
-                        : () => _deleteQueue(context, q),
+                        : () => _queueMenu(context, q),
                     child: ChoiceChip(
                       // A jam's queue is somebody else's, and saying whose is the
                       // difference between "why is this here" and "that is the one we
-                      // are listening to together".
-                      avatar: q.sharedFrom == null
-                          ? null
-                          : const Icon(Icons.people_outline, size: 16),
+                      // are listening to together". The one making the sound wears
+                      // the bars, so switching queues to look at another one still
+                      // shows which is playing.
+                      avatar: q.sharedFrom != null
+                          ? const Icon(Icons.people_outline, size: 16)
+                          : q.id == active?.id && app.musicIsPlaying
+                              ? Icon(Icons.graphic_eq,
+                                  size: 16,
+                                  color: Theme.of(context).colorScheme.primary)
+                              : null,
                       label: Text(q.sharedFrom == null
                           ? '${q.name} · ${q.itemCount}'
                           : "${q.sharedFrom}'s jam · ${q.itemCount}"),
@@ -155,38 +207,76 @@ class _QueuePageState extends State<QueuePage> {
             child: Row(
               spacing: 8,
               children: [
-                IconButton.filledTonal(
+                // Plain buttons, with colour kept for the one that is a state. Three
+                // tinted discs side by side said "on" about shuffle and "jump to what
+                // is playing", which are actions, and made repeat — the only switch
+                // among them — look like the one that was disabled.
+                IconButton(
                   icon: const Icon(Icons.shuffle),
                   tooltip: 'Shuffle what is coming',
-                  onPressed: app.shuffleWhatIsComing,
+                  onPressed: felt(Feel.tap, app.shuffleWhatIsComing),
                 ),
-                IconButton.filledTonal(
-                  isSelected: (app.player?.repeat ?? QueueRepeat.off) != QueueRepeat.off,
-                  icon: Icon(app.player?.repeat == QueueRepeat.one
-                      ? Icons.repeat_one
-                      : Icons.repeat),
-                  tooltip: switch (app.player?.repeat ?? QueueRepeat.off) {
-                    QueueRepeat.off => 'Repeat off',
-                    QueueRepeat.all => 'Repeat queue',
-                    QueueRepeat.one => 'Repeat track',
-                  },
-                  onPressed: app.cycleRepeat,
-                ),
-                IconButton.filledTonal(
+                Builder(builder: (context) {
+                  final repeat = app.player?.repeat ?? QueueRepeat.off;
+                  final on = repeat != QueueRepeat.off;
+                  return IconButton(
+                    isSelected: on,
+                    style: on
+                        ? IconButton.styleFrom(
+                            backgroundColor: Theme.of(context)
+                                .colorScheme
+                                .primary
+                                .withValues(alpha: 0.18),
+                            foregroundColor:
+                                Theme.of(context).colorScheme.primary)
+                        : null,
+                    icon: Icon(
+                        repeat == QueueRepeat.one ? Icons.repeat_one : Icons.repeat),
+                    tooltip: switch (repeat) {
+                      QueueRepeat.off => 'Repeat off',
+                      QueueRepeat.all => 'Repeat queue',
+                      QueueRepeat.one => 'Repeat track',
+                    },
+                    onPressed: felt(Feel.pick, app.cycleRepeat),
+                  );
+                }),
+                IconButton(
                   icon: const Icon(Icons.my_location),
                   tooltip: 'Jump to what is playing',
                   onPressed: () => _scrollToCurrent(),
                 ),
-                const Spacer(),
+                Expanded(
+                  child: _TimeLeft(
+                    rows: rows,
+                    at: app.player?.index ?? 0,
+                    queue: active,
+                    whereInQueue: app.player?.whereInQueue ?? 0,
+                  ),
+                ),
                 // A station from whatever is playing: the song becomes the seed, and
                 // the queue it makes is its own — named, saveable, and topped up as it
                 // is listened through. The button this replaces added five songs to
                 // the end of the queue you were already on and called it radio.
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.radio, size: 18),
-                  label: Text(active.isStation ? 'New station' : 'Station'),
-                  onPressed: () => startStation(context, seed: app.player?.current),
-                ),
+                //
+                // With its word where there is room for one, and as an icon where
+                // there is not: three buttons, this and the menu overflowed a phone
+                // by twenty pixels, which in a release build is a button cut off.
+                if (MediaQuery.sizeOf(context).width >= 430)
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.radio, size: 18),
+                    label: Text(active.isStation ? 'New station' : 'Station'),
+                    onPressed: () =>
+                        startStation(context, seed: app.player?.current),
+                  )
+                else
+                  IconButton(
+                    icon: const Icon(Icons.radio),
+                    tooltip: active.isStation
+                        ? 'New station from this song'
+                        : 'Start a station from this song',
+                    onPressed: () =>
+                        startStation(context, seed: app.player?.current),
+                  ),
                 PopupMenuButton<String>(
                   tooltip: 'Queue actions',
                   onSelected: (v) async {
@@ -203,6 +293,8 @@ class _QueuePageState extends State<QueuePage> {
                         await app.clearQueue(context: context);
                       case 'save':
                         await _saveAsPlaylist(context, app);
+                      case 'rename':
+                        await _renameQueue(context, active);
                       case 'keep-station':
                         await keepStation(context);
                       case 'delete':
@@ -223,6 +315,7 @@ class _QueuePageState extends State<QueuePage> {
                       const PopupMenuItem(
                           value: 'keep-station',
                           child: Text('Keep this station')),
+                    const PopupMenuItem(value: 'rename', child: Text('Rename…')),
                     const PopupMenuItem(
                         value: 'save', child: Text('Save as playlist')),
                     const PopupMenuItem(
@@ -301,7 +394,10 @@ class _QueuePageState extends State<QueuePage> {
                           ),
                         ),
                       Expanded(
-                        child: ReorderableListView.builder(
+                        child: Stack(
+                          children: [
+                            Positioned.fill(
+                              child: ReorderableListView.builder(
                   scrollController: _scroll,
                   padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
                   itemCount: rows.length,
@@ -383,7 +479,10 @@ class _QueuePageState extends State<QueuePage> {
                         // less at a glance than a queue of records does.
                         child: row,
                         ),
-                      child: SongRow(
+                      child: _Sighted(
+                        // Only the playing row reports; the page counts.
+                        onSeen: isCurrent ? _playingRowIs : null,
+                        child: SongRow(
                         key: isCurrent ? _currentRow : null,
                         track: t,
                         selected: isCurrent,
@@ -412,6 +511,7 @@ class _QueuePageState extends State<QueuePage> {
                         // The queue's sideways drag takes a row out; a song already in
                         // the queue has nothing to be added to.
                         swipeToPlayNext: false,
+                        queuePosition: i,
                         selectable: 'queue:${active.id}',
                         handle: ReorderableDragStartListener(
                           index: i,
@@ -444,8 +544,17 @@ class _QueuePageState extends State<QueuePage> {
                         ),
                         onRemove: () => app.removeFromQueue(i, context: context),
                         onChanged: app.refresh,
-                        onTap: t.isReady
-                            ? () async {
+                        // Every row answers a tap. A song still on its way is chosen
+                        // and waited for — the player parks on it and starts it the
+                        // moment it lands — where before the row was simply dead. A
+                        // failed one opens its menu, which is where "try again" is.
+                        onTap: t.state == 'failed'
+                            ? () => showTrackSheet(context, t,
+                                onRemove: () =>
+                                    app.removeFromQueue(i, context: context),
+                                onChanged: app.refresh,
+                                queuePosition: i)
+                            : () async {
                                 try {
                                   await app.player?.playTrack(t.id, indexHint: i);
                                 } catch (e) {
@@ -454,12 +563,34 @@ class _QueuePageState extends State<QueuePage> {
                                         snack(Text('$e')));
                                   }
                                 }
-                              }
-                            : null,
+                              },
+                      ),
                       ),
                     );
                   },
                 ),
+                            ),
+                            // The way back to what is playing, when it has scrolled
+                            // out of sight. Over the list rather than in the row of
+                            // buttons above it: it is only worth anything at the
+                            // moment the song cannot be seen.
+                            if (!_playingInView && app.player?.current != null)
+                              Positioned(
+                                left: 0,
+                                right: 0,
+                                // Above whatever is floating over the bottom of the
+                                // list — the player and the tabs, on the home screen.
+                                bottom: MediaQuery.paddingOf(context).bottom + 14,
+                                child: Center(
+                                  child: _NowPlayingPill(
+                                    track: app.player!.current!,
+                                    below: _playingIsBelow,
+                                    onTap: () => _scrollToCurrent(),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -469,6 +600,69 @@ class _QueuePageState extends State<QueuePage> {
         ),
       ],
     );
+  }
+
+  /// What can be done to a queue from its chip.
+  Future<void> _queueMenu(BuildContext context, Queue queue) async {
+    feel(Feel.commit);
+    final app = context.read<AppState>();
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheet) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: Text(queue.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(sheet).textTheme.titleMedium),
+              subtitle: Text(
+                  '${queue.itemCount} ${queue.itemCount == 1 ? 'song' : 'songs'}'),
+            ),
+            const Divider(height: 1),
+            if (queue.id != app.activeQueue?.id)
+              ListTile(
+                leading: const Icon(Icons.play_arrow),
+                title: const Text('Switch to this queue'),
+                onTap: () {
+                  Navigator.of(sheet).pop();
+                  app.openQueue(queue.id);
+                },
+              ),
+            ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('Rename…'),
+              onTap: () {
+                Navigator.of(sheet).pop();
+                _renameQueue(context, queue);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline),
+              title: const Text('Delete this queue'),
+              onTap: () {
+                Navigator.of(sheet).pop();
+                _deleteQueue(context, queue);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _renameQueue(BuildContext context, Queue queue) async {
+    final app = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    final name = await promptForName(context, 'Rename queue', queue.name);
+    if (name == null || name == queue.name) return;
+    try {
+      await app.renameQueue(queue.id, name);
+    } catch (e) {
+      messenger.showSnackBar(snack(Text('$e')));
+    }
   }
 
   Future<void> _saveAsPlaylist(BuildContext context, AppState app) async {
@@ -557,7 +751,169 @@ class _EmptyQueue extends StatelessWidget {
             const SizedBox(height: 4),
             const Text('Search for something and add it here.',
                 textAlign: TextAlign.center),
+            const SizedBox(height: 16),
+            // The sentence above used to be the whole of it: told where to go and
+            // left to find the way. This is the way.
+            FilledButton.tonalIcon(
+              icon: const Icon(Icons.search, size: 18),
+              label: const Text('Search for music'),
+              onPressed: () => context.read<AppState>().setHomeTab(1),
+            ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// How much of the queue is still to come.
+///
+/// The one fact about a queue nothing showed: whether it lasts the run, the drive, the
+/// evening. Songs whose length is not known yet are left out of the sum rather than
+/// guessed at.
+class _TimeLeft extends StatelessWidget {
+  const _TimeLeft(
+      {required this.rows,
+      required this.at,
+      required this.queue,
+      required this.whereInQueue});
+  final List<Track> rows;
+  final int at;
+  final Queue queue;
+  final int whereInQueue;
+
+  static String _span(Duration d) {
+    final h = d.inHours, m = d.inMinutes.remainder(60);
+    if (h == 0) return '${m < 1 ? '<1' : m} min';
+    return m == 0 ? '$h h' : '$h h $m min';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final String said;
+    final String detail;
+    if (queue.windowed) {
+      // Only a slice is here, so the minutes cannot be added up — the count can.
+      final left = (queue.total - whereInQueue - 1).clamp(0, queue.total);
+      said = left == 0 ? 'Last song' : '$left to go';
+      detail = '$left of ${queue.total} songs still to come';
+    } else {
+      final after = rows.skip(at + 1);
+      final left = after.length;
+      final time = after.fold<Duration>(
+          Duration.zero, (sum, t) => sum + (t.duration ?? Duration.zero));
+      said = left == 0 ? 'Last song' : '${_span(time)} left';
+      detail = left == 0
+          ? 'Nothing after this one'
+          : '$left ${left == 1 ? 'song' : 'songs'} after this one · ${_span(time)}';
+    }
+    return Tooltip(
+      message: detail,
+      child: Text(
+        said,
+        textAlign: TextAlign.end,
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.fade,
+        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant),
+      ),
+    );
+  }
+}
+
+/// A row that says when it is on the tree and when it has left it.
+///
+/// Given no [onSeen] it is nothing but its child, so the rows that are not playing
+/// cost nothing for it.
+class _Sighted extends StatefulWidget {
+  const _Sighted({required this.child, this.onSeen});
+  final Widget child;
+  final void Function({required bool mounted})? onSeen;
+
+  @override
+  State<_Sighted> createState() => _SightedState();
+}
+
+class _SightedState extends State<_Sighted> {
+  bool _reported = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _say(true);
+  }
+
+  @override
+  void didUpdateWidget(_Sighted old) {
+    super.didUpdateWidget(old);
+    // The row stopped being the playing one — or started — without leaving the tree.
+    if ((old.onSeen == null) != (widget.onSeen == null)) {
+      if (widget.onSeen == null) {
+        old.onSeen?.call(mounted: false);
+        _reported = false;
+      } else {
+        _say(true);
+      }
+    }
+  }
+
+  void _say(bool mounted) {
+    if (widget.onSeen == null || _reported == mounted) return;
+    _reported = mounted;
+    widget.onSeen!(mounted: mounted);
+  }
+
+  @override
+  void dispose() {
+    if (_reported) widget.onSeen?.call(mounted: false);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
+/// The song playing, offered from wherever the list has been scrolled to.
+class _NowPlayingPill extends StatelessWidget {
+  const _NowPlayingPill(
+      {required this.track, required this.below, required this.onTap});
+  final Track track;
+  final bool below;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.primaryContainer,
+      elevation: 4,
+      borderRadius: BorderRadius.circular(100),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: felt(Feel.tap, onTap),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 7, 14, 7),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(below ? Icons.arrow_downward : Icons.arrow_upward,
+                  size: 16, color: scheme.onPrimaryContainer),
+              const SizedBox(width: 8),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 220),
+                child: Text(
+                  track.displayTitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context)
+                      .textTheme
+                      .labelLarge
+                      ?.copyWith(color: scheme.onPrimaryContainer),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 import 'package:just_audio_platform_interface/just_audio_platform_interface.dart';
@@ -134,7 +135,11 @@ class MuseApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         theme: MuseTheme.light(app.palette),
         darkTheme: MuseTheme.dark(app.palette),
-        builder: (context, child) => _AnyTap(child: child ?? const SizedBox()),
+        // Above the navigator, so the keys work on every route. They used to sit in
+        // the home shell, and the player is a route pushed over it: open what is
+        // playing and space stopped pausing it.
+        builder: (context, child) =>
+            AppShortcuts(child: _AnyTap(child: child ?? const SizedBox())),
         home: const _Root(),
           );
         },
@@ -168,6 +173,73 @@ class _AnyTap extends StatelessWidget {
       child: child,
     );
   }
+}
+
+/// Keyboard control, because the web build is the client most of the time and a
+/// music player you cannot pause from the keyboard is annoying to live with.
+class AppShortcuts extends StatelessWidget {
+  const AppShortcuts({super.key, required this.child});
+  final Widget child;
+
+  /// True while a text field has focus.
+  ///
+  /// Checking `primaryFocus.context.widget` is not enough: the node that holds focus
+  /// belongs to a Focus widget *inside* EditableText, so the type test never matched
+  /// and every letter typed into the search box also triggered a shortcut — S toggled
+  /// shuffle, N skipped the track, space paused the music.
+  static bool get _isTyping {
+    final ctx = FocusManager.instance.primaryFocus?.context;
+    if (ctx == null) return false;
+    var typing = false;
+    ctx.visitAncestorElements((element) {
+      if (element.widget is EditableText) {
+        typing = true;
+        return false;
+      }
+      return true;
+    });
+    return typing;
+  }
+
+  static KeyEventResult handle(AppState app, KeyEvent event) {
+    final player = app.player;
+    if (player == null || event is! KeyDownEvent) return KeyEventResult.ignored;
+
+    // Never steal keys from a text field: space belongs to the search box.
+    if (_isTyping) return KeyEventResult.ignored;
+
+    switch (event.logicalKey) {
+      case LogicalKeyboardKey.space:
+      case LogicalKeyboardKey.mediaPlayPause:
+        app.playPause();
+      case LogicalKeyboardKey.arrowRight:
+        player.nudge(const Duration(seconds: 10));
+      case LogicalKeyboardKey.arrowLeft:
+        player.nudge(const Duration(seconds: -10));
+      case LogicalKeyboardKey.keyN:
+      case LogicalKeyboardKey.mediaTrackNext:
+        app.skipNext();
+      case LogicalKeyboardKey.keyP:
+      case LogicalKeyboardKey.mediaTrackPrevious:
+        app.skipPrevious();
+      case LogicalKeyboardKey.keyS:
+        app.shuffleWhatIsComing();
+      case LogicalKeyboardKey.keyR:
+        app.cycleRepeat();
+      case LogicalKeyboardKey.keyM:
+        app.toggleMute();
+      default:
+        return KeyEventResult.ignored;
+    }
+    return KeyEventResult.handled;
+  }
+
+  @override
+  Widget build(BuildContext context) => Focus(
+        autofocus: true,
+        onKeyEvent: (node, event) => handle(context.read<AppState>(), event),
+        child: child,
+      );
 }
 
 class _Root extends StatelessWidget {

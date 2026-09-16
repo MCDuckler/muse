@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -178,8 +180,13 @@ class _FeedRow extends StatelessWidget {
           ? Icon(Icons.check, size: 18, color: scheme.outline)
           : null,
       onTap: () async {
-        await context.read<AppState>().api.markFeedSeen([item.albumId]);
-        if (!context.mounted) return;
+        // Opened at once, and marked on the way. Waiting for the mark first put a
+        // round trip between the tap and the page — and a mark that failed opened
+        // nothing at all.
+        unawaited(context
+            .read<AppState>()
+            .api
+            .markFeedSeen([item.albumId]).catchError((_) {}));
         await Navigator.of(context).push(MaterialPageRoute(
           builder: (_) => AlbumPage(remoteId: item.albumId, title: item.title),
         ));

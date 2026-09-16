@@ -86,21 +86,110 @@ class AppState extends ChangeNotifier {
 
   Duration? get sleepIn => sleepAt?.difference(DateTime.now());
 
+  /// Whether a sleep timer of either kind is set.
+  bool get sleepSet => sleepAt != null || sleepAtEndOfTrack;
+
+  /// How long the music takes to go quiet before it stops.
+  static const sleepFade = Duration(seconds: 10);
+  Timer? _sleepFadeTimer;
+  Timer? _sleepFadeStep;
+  double? _volumeBeforeSleep;
+
   /// Fade out and pause. Nobody wants a record cut off mid-bar at 2am, and nobody
   /// wants to wake up to it either.
+  ///
+  /// [endOfTrack] stops when this song ends instead of at a time — the fade starts
+  /// in its last seconds, and the next song never starts.
   void setSleepTimer(Duration? after, {bool endOfTrack = false}) {
     _sleepTimer?.cancel();
+    _sleepFadeTimer?.cancel();
+    _stopFading(restore: true);
     sleepAtEndOfTrack = endOfTrack;
     sleepAt = after == null ? null : DateTime.now().add(after);
     if (after != null) {
-      _sleepTimer = Timer(after, () async {
-        if (player?.last?.playing ?? false) await player?.playPause();
-        sleepAt = null;
-        sleepAtEndOfTrack = false;
-        notifyListeners();
-      });
+      final fadeAt = after - sleepFade;
+      _sleepFadeTimer =
+          Timer(fadeAt.isNegative ? Duration.zero : fadeAt, _beginSleepFade);
+      _sleepTimer = Timer(after, _sleepNow);
     }
     notifyListeners();
+  }
+
+  /// Where in the song the fade began, so a song that comes round again on repeat —
+  /// or is dragged back to the start — is recognised as having ended.
+  Duration? _fadeBeganAt;
+
+  /// Bring the volume down over [sleepFade], leaving the listener's own setting
+  /// untouched for when the music comes back.
+  void _beginSleepFade() {
+    final p = player;
+    if (p == null || _sleepFadeStep != null) return;
+    if (!(p.last?.playing ?? false)) return;
+    final from = p.userVolume;
+    _volumeBeforeSleep = from;
+    _fadeBeganAt = p.last?.position;
+    final steps = sleepFade.inMilliseconds ~/ 250;
+    var step = 0;
+    _sleepFadeStep = Timer.periodic(const Duration(milliseconds: 250), (t) {
+      step++;
+      final left = (1 - step / steps).clamp(0.0, 1.0);
+      unawaited(p.setUserVolume(from * left * left));
+      if (step >= steps) t.cancel();
+    });
+  }
+
+  void _stopFading({required bool restore}) {
+    _sleepFadeStep?.cancel();
+    _sleepFadeStep = null;
+    _fadeBeganAt = null;
+    final back = _volumeBeforeSleep;
+    _volumeBeforeSleep = null;
+    if (restore && back != null) unawaited(player?.setUserVolume(back));
+  }
+
+  Future<void> _sleepNow() async {
+    final p = player;
+    sleepAt = null;
+    sleepAtEndOfTrack = false;
+    // Both timers, whichever of them got here first: a pause during the fade ends the
+    // timer early, and the one still waiting would otherwise pause the music somebody
+    // started again in the meantime.
+    _sleepTimer?.cancel();
+    _sleepFadeTimer?.cancel();
+    if (p != null && (p.last?.playing ?? false)) {
+      // pause(), not playPause(): a toggle that arrives after somebody paused by hand
+      // would start the music again at exactly the moment they wanted it off.
+      await p.pause();
+    }
+    // Quietly put back for next time; nothing is playing to hear it happen.
+    _stopFading(restore: true);
+    notifyListeners();
+  }
+
+  /// The player's clock, watched for the last seconds of the song a sleep timer is
+  /// waiting on. Called from the snapshot stream.
+  void _watchForEndOfTrack(PlayerSnapshot s, {required bool trackChanged}) {
+    final fading = _volumeBeforeSleep != null;
+    // The music stopped while it was being faded: paused by hand, or the queue ran
+    // out under it. The timer has nothing left to do — and leaving the volume where
+    // the fade had got to meant the next thing played started nearly silent.
+    if (fading && !s.playing) {
+      unawaited(_sleepNow());
+      return;
+    }
+    if (!sleepAtEndOfTrack) return;
+    final cameRound = fading &&
+        _fadeBeganAt != null &&
+        s.position + const Duration(seconds: 1) < _fadeBeganAt!;
+    if (fading && (trackChanged || cameRound)) {
+      // The song the timer was set on has ended: the next one has started, or on
+      // repeat the same one has begun again. This is the moment.
+      unawaited(_sleepNow());
+      return;
+    }
+    final total = s.duration;
+    if (total == null || total == Duration.zero) return;
+    if (total - s.position <= sleepFade && s.playing) _beginSleepFade();
   }
   Queue? activeQueue;
   List<Playlist> playlists = const [];
@@ -135,6 +224,21 @@ class AppState extends ChangeNotifier {
   static const _kLayout = 'muse.playerLayout';
   static const _kShelfAxis = 'muse.shelfAxis';
   static const _kJamListening = 'muse.jamListening';
+  static const _kLastQueue = 'muse.lastQueue';
+  static const _kVolume = 'muse.volume';
+
+  /// The queue that was on when the app was last closed, so opening it again lands
+  /// there rather than on whichever queue happens to be first in the list.
+  int? _lastQueueId;
+
+  /// Where the volume was before it was muted, so unmuting puts it back rather than
+  /// to full.
+  double _volumeBeforeMute = 1.0;
+
+  /// The listener's volume, kept across launches. The web build has no hardware
+  /// volume to fall back on, so forgetting it meant every visit started at full.
+  double _volume = 1.0;
+  Timer? _volumeWrite;
 
   /// How the player draws the artwork: as the record it came on, or as the cover on
   /// its own. A per-device choice — the phone in a pocket and the laptop on a desk are
@@ -310,6 +414,8 @@ class AppState extends ChangeNotifier {
         (a) => a.name == prefs.getString(_kShelfAxis),
         orElse: () => ShelfAxis.sideways);
     jamListening = prefs.getBool(_kJamListening) ?? false;
+    _lastQueueId = prefs.getInt(_kLastQueue);
+    _volume = (prefs.getDouble(_kVolume) ?? 1.0).clamp(0.0, 1.0);
     // The address saved at sign-in outlives the build that saved it, so a phone that
     // signed in before the server moved would keep calling the old box after updating.
     // The accounts and tokens moved with the database, so it is simply pointed at the
@@ -347,10 +453,32 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  void clearError() {
+    if (error == null) return;
+    error = null;
+    notifyListeners();
+  }
+
+  /// A server address as somebody types it, as something the app can call.
+  ///
+  /// "wetowl.example" with no scheme used to be taken literally, and the answer was
+  /// "Cannot reach wetowl.example" — true, and no help. A public server is https; a
+  /// machine on the same network, where nobody has a certificate, is http.
+  static String normaliseServer(String typed) {
+    var s = typed.trim().replaceAll(RegExp(r'/+$'), '');
+    if (s.isEmpty) return defaultServer;
+    if (!s.contains('://')) {
+      final local = RegExp(r'^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)')
+          .hasMatch(s);
+      s = '${local ? 'http' : 'https'}://$s';
+    }
+    return s;
+  }
+
   Future<bool> login(String server, String username, String password) async {
     error = null;
     try {
-      api.baseUrl = server.replaceAll(RegExp(r'/+$'), '');
+      api.baseUrl = normaliseServer(server);
       await api.login(username, password, 'flutter');
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_kServer, api.baseUrl);
@@ -375,7 +503,7 @@ class AppState extends ChangeNotifier {
       String password) async {
     error = null;
     try {
-      api.baseUrl = server.replaceAll(RegExp(r'/+$'), '');
+      api.baseUrl = normaliseServer(server);
       await api.redeemInvite(code.trim(), username.trim(), password, 'flutter');
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_kServer, api.baseUrl);
@@ -398,7 +526,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _afterLogin() async {
-    player ??= PlayerService(api);
+    player ??= PlayerService(api)..userVolume = _volume;
     watchWhatThePhoneSaid();
     // The player writes the cursor through the app rather than knowing the API: it
     // reports where playback is, and the app decides how to persist that.
@@ -419,7 +547,11 @@ class AppState extends ChangeNotifier {
     // The player reaches for a local file before the network — see _sourceFor.
     await offline.init();
     player!.offlinePath = offline.pathFor;
-    offline.addListener(notifyListeners);
+    // Removed first: signing out and back in runs this again, and a second listener
+    // is every change to the kept music announced twice.
+    offline
+      ..removeListener(notifyListeners)
+      ..addListener(notifyListeners);
     _lifecycle;                     // built lazily; touching it starts it listening
     bindPlayer();
     await api.ensureStreamKey();
@@ -454,12 +586,54 @@ class AppState extends ChangeNotifier {
     _jamTimer = Timer.periodic(const Duration(seconds: 5), (_) => pushJamState());
   }
 
+  /// Sign out, and take the session's state with it.
+  ///
+  /// Only the token used to go. The player kept the old account's queue loaded, the
+  /// status and jam timers kept polling with no token, and signing in as somebody else
+  /// found `activeQueue` already set — so the new account was shown, and played, the
+  /// previous one's queue.
   Future<void> logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kToken);
+    await prefs.remove(_kLastQueue);
+    _events?.cancel();
+    _events = null;
+    _statusTimer?.cancel();
+    _jamTimer?.cancel();
+    _queueReload?.cancel();
+    _playerSub?.cancel();
+    _playerSub = null;
+    setSleepTimer(null);
+
+    final old = player;
+    player = null;
+    if (old != null) {
+      // No cursor write on the way out: there is no token to write it with.
+      old.onCursor = null;
+      old.onScore = null;
+      await old.pause();
+      await old.dispose();
+    }
+
     api.token = null;
     user = null;
-    _events?.cancel();
+    userId = null;
+    score = 0;
+    avatarVersion = null;
+    queues = const [];
+    activeQueue = null;
+    playlists = const [];
+    favourites = <int>{};
+    favouritesPlaylistId = null;
+    jam = null;
+    jamPosition = null;
+    roomIsPlaying = false;
+    _jamPositionAt = null;
+    downloadsPending = 0;
+    ingestOnline = true;
+    _prioritised = null;
+    _lastQueueId = null;
+    _describeForTheOs(null);
     notifyListeners();
   }
 
@@ -470,14 +644,37 @@ class AppState extends ChangeNotifier {
     queues = await asked;
     playlists = await lists;
     if (activeQueue == null && queues.isNotEmpty) {
-      await openQueue(queues.first.id, autoplay: false);
+      // The one that was on last time, if it is still there; otherwise the first.
+      final remembered = _lastQueueId;
+      final pick = queues.firstWhere((q) => q.id == remembered,
+          orElse: () => queues.first);
+      await openQueue(pick.id, autoplay: false);
     }
     notifyListeners();
   }
 
-  Future<void> openQueue(int id, {bool autoplay = false}) async {
+  /// Which queue to come back to. Written when the listener chooses one, not on every
+  /// update to it — following a jam into somebody else's queue is not choosing it.
+  void _rememberQueue(int id) {
+    if (_lastQueueId == id) return;
+    _lastQueueId = id;
+    unawaited(SharedPreferences.getInstance()
+        .then((prefs) => prefs.setInt(_kLastQueue, id)));
+  }
+
+  /// Put a queue on.
+  ///
+  /// [autoplay] left unsaid means "keep doing what you were doing": tapping another
+  /// queue while music is playing used to load it and stop, so looking at your Gym
+  /// queue for a moment silenced whatever was on. Each queue keeps its own place, so
+  /// switching with music playing now resumes the other queue from where it was.
+  Future<void> openQueue(int id, {bool? autoplay}) async {
+    final wasPlaying = player?.last?.playing ?? false;
+    final switching = activeQueue?.id != id;
     activeQueue = await api.queue(id);
-    await player?.loadQueue(activeQueue!, autoplay: autoplay);
+    if (activeQueue?.sharedFrom == null) _rememberQueue(id);
+    await player?.loadQueue(activeQueue!,
+        autoplay: autoplay ?? (switching && wasPlaying));
     // Hosting a jam means the room is whatever queue is on. Putting a different one
     // on and leaving the room pointed at the old one is the host listening alone
     // while everybody else watches a list nobody is playing.
@@ -533,12 +730,133 @@ class AppState extends ChangeNotifier {
   }
 
   /// Add to the active queue, creating one on first use so nothing is ever dropped.
-  Future<void> addTrack(Track t, {String mode = 'end'}) async {
+  Future<void> addTrack(Track t, {String mode = 'end'}) => addTracks([t], mode: mode);
+
+  /// Add several at once, in this order, as one request.
+  ///
+  /// "Add all to queue" on a playlist used to be one request per song, each one
+  /// followed by re-reading every queue and reloading the player: two hundred songs
+  /// was four hundred round trips and a list that flickered for the whole of it.
+  Future<void> addTracks(List<Track> tracks, {String mode = 'end'}) async {
+    if (tracks.isEmpty) return;
     activeQueue ??= await ensureQueue('Now');
-    activeQueue = await api.addToQueue(activeQueue!.id, [t.id], mode: mode);
+    activeQueue = await api.addToQueue(
+        activeQueue!.id, [for (final t in tracks) t.id], mode: mode);
     queues = await api.queues();      // a queue created just now must show in the chips
     await player?.loadQueue(activeQueue!);
+    _rememberQueue(activeQueue!.id);
     notifyListeners();
+  }
+
+  /// Put this song on and play it, keeping the rest of the queue.
+  ///
+  /// The one thing you could not do to a song from a list: "play next" put it after
+  /// the current one, "play" on a record wrote over the queue. This is what tapping
+  /// a song in a search or a history means — hear it now, lose nothing.
+  Future<void> playTrackNow(Track t) async {
+    await addTracks([t], mode: 'next');
+    // A guest's transport asks the room; putting it on next is as far as a guest
+    // goes on their own.
+    if (jamControlsTheRoom) return;
+    await playAdded(t, mode: 'next');
+  }
+
+  /// Play a song that has just been added, without skipping what was queued before it.
+  ///
+  /// The copy that was added is brought up to sit straight after the song playing and
+  /// played there. Jumping to wherever it had landed instead — the end of the queue,
+  /// or behind three songs somebody had already put on next — moved playback past
+  /// everything in between, and those songs quietly became history.
+  Future<void> playAdded(Track t, {String mode = 'end'}) async {
+    final p = player;
+    final q = activeQueue;
+    if (p == null || q == null || jamControlsTheRoom) return;
+    final here = p.whereInQueue;
+    final landed = whereItLanded(q, t.id, mode: mode, after: here);
+    if (landed == null) return;
+    final to = math.min(here + 1, q.total - 1);
+    var updated = q;
+    if (landed != to) {
+      try {
+        updated = await api.moveQueueItem(q.id, landed, to);
+        await _applyQueue(updated);
+      } catch (_) {
+        await _resyncQueue();
+        return;
+      }
+    }
+    await p.playTrack(t.id, indexHint: to - updated.windowFrom);
+    await pushJamState(force: true);
+  }
+
+  /// Where, in the whole queue, the copy of [trackId] just added with [mode] sits.
+  ///
+  /// Appended is the last row, whether or not the slice held here reaches that far.
+  /// Put on next is the first copy after the song playing — behind any others that
+  /// were put on next before it.
+  @visibleForTesting
+  static int? whereItLanded(Queue q, int trackId,
+      {required String mode, required int after}) {
+    if (q.total == 0) return null;
+    if (mode != 'next') {
+      // The last copy, where the slice held here reaches the end of the queue — so a
+      // song appended by somebody else a moment later is not the one moved. Where it
+      // does not reach, the last row is all that can be said.
+      if (q.windowFrom + q.items.length < q.total) return q.total - 1;
+      for (var i = q.items.length - 1; i >= 0; i--) {
+        if (q.items[i].id == trackId) return q.windowFrom + i;
+      }
+      return null;
+    }
+    for (var i = math.max(0, after + 1 - q.windowFrom); i < q.items.length; i++) {
+      if (q.items[i].id == trackId) return q.windowFrom + i;
+    }
+    return null;
+  }
+
+  /// A row already in the queue, put on after the song playing — which is what "play
+  /// next" means for a song that is already there, rather than a second copy of it.
+  Future<void> playNextFromQueue(int pos) async {
+    final p = player;
+    if (p == null) return;
+    final here = p.index;
+    if (pos == here) return;
+    // `to` counts the list with the row already lifted out of it, the way a drag
+    // does: above the song playing, lifting it moves that song up by one.
+    await moveInQueue(pos, pos > here ? here + 1 : here);
+  }
+
+  /// Give a queue a new name.
+  Future<void> renameQueue(int id, String name) async {
+    final updated = await api.updateQueueSettings(id, name: name);
+    queues = await api.queues();
+    if (activeQueue?.id == id) await _applyQueue(updated);
+    notifyListeners();
+  }
+
+  /// The listener's own volume, kept for next time.
+  Future<void> setVolume(double v) async {
+    _volume = v.clamp(0.0, 1.0);
+    if (_volume > 0) _volumeBeforeMute = _volume;
+    await player?.setUserVolume(_volume);
+    notifyListeners();
+    // A slider fires many times a second; the disk hears about it once it settles.
+    _volumeWrite?.cancel();
+    _volumeWrite = Timer(const Duration(milliseconds: 400), () async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble(_kVolume, _volume);
+    });
+  }
+
+  /// Silence, and back to where it was — not to full.
+  Future<void> toggleMute() async {
+    final now = player?.userVolume ?? _volume;
+    if (now > 0) {
+      _volumeBeforeMute = now;
+      await setVolume(0);
+    } else {
+      await setVolume(_volumeBeforeMute <= 0 ? 1.0 : _volumeBeforeMute);
+    }
   }
 
   /// Choose a picture for this account, or take it away again.
@@ -578,10 +896,13 @@ class AppState extends ChangeNotifier {
   Future<void> shuffleWhatIsComing() async {
     final q = activeQueue;
     if (q == null) return;
-    player?.shuffleWhatIsComing();
+    // Dealt here first so the list moves at once, then the same deal is sent up — the
+    // server used to deal its own and the rows reshuffled again when it answered.
+    final order = player?.shuffleWhatIsComing();
+    if (order == null) return;                      // nothing worth rearranging
     notifyListeners();
     try {
-      await _applyQueue(await api.shuffleQueue(q.id));
+      await _applyQueue(await api.shuffleQueue(q.id, order: order));
     } catch (_) {
       await _resyncQueue();
     }
@@ -663,11 +984,15 @@ class AppState extends ChangeNotifier {
     final q = activeQueue;
     if (q == null) return;
     final removed = (player?.items.length ?? 0) > pos ? player!.items[pos] : null;
+    // [pos] counts rows on screen; the server counts the whole queue. In a queue long
+    // enough to arrive a slice at a time the two differ, and sending the first took
+    // out a song six hundred rows above the one that was swiped.
+    final row = (player?.windowFrom ?? 0) + pos;
     // Gone from the list at once — see moveInQueue for why.
     player?.removeLocally(pos);
     notifyListeners();
     try {
-      await _applyQueue(await api.removeQueueItem(q.id, pos));
+      await _applyQueue(await api.removeQueueItem(q.id, row));
     } catch (_) {
       await _resyncQueue();
       return;
@@ -677,18 +1002,20 @@ class AppState extends ChangeNotifier {
     ScaffoldMessenger.of(context).showSnackBar(snack(Text('Removed ${removed.displayTitle}'),
       action: SnackBarAction(
         label: 'Undo',
-        onPressed: () => _restoreToQueue(q.id, removed.id, pos),
+        onPressed: () => _restoreToQueue(q.id, removed.id, row),
       ),
     ));
   }
 
-  Future<void> _restoreToQueue(int queueId, int trackId, int pos) async {
+  /// [row] is counted in the whole queue.
+  Future<void> _restoreToQueue(int queueId, int trackId, int row) async {
     try {
       var updated = await api.addToQueue(queueId, [trackId]);
-      // It goes back on the end, so walk it home to where it was.
-      final landedAt = updated.items.length - 1;
-      if (landedAt != pos && pos < updated.items.length) {
-        updated = await api.moveQueueItem(queueId, landedAt, pos);
+      // It goes back on the end, so walk it home to where it was. The end of the
+      // whole queue, not of the slice held here.
+      final landedAt = updated.total - 1;
+      if (landedAt != row && row < updated.total) {
+        updated = await api.moveQueueItem(queueId, landedAt, row);
       }
       if (activeQueue?.id == queueId) await _applyQueue(updated);
     } catch (_) {
@@ -702,10 +1029,11 @@ class AppState extends ChangeNotifier {
     // On screen first, then ask. The server's answer replaces this a moment later and
     // agrees with it; if it does not — somebody else changed the queue underneath —
     // what it says is what the list goes back to.
+    final offset = player?.windowFrom ?? 0;
     player?.moveLocally(from, to);
     notifyListeners();
     try {
-      await _applyQueue(await api.moveQueueItem(q.id, from, to));
+      await _applyQueue(await api.moveQueueItem(q.id, offset + from, offset + to));
     } catch (_) {
       await _resyncQueue();
     }
@@ -715,10 +1043,12 @@ class AppState extends ChangeNotifier {
   Future<void> moveManyInQueue(List<int> froms, int to) async {
     final q = activeQueue;
     if (q == null || froms.isEmpty) return;
+    final offset = player?.windowFrom ?? 0;
     player?.moveManyLocally(froms, to);
     notifyListeners();
     try {
-      await _applyQueue(await api.moveQueueItems(q.id, froms, to));
+      await _applyQueue(await api.moveQueueItems(
+          q.id, [for (final f in froms) offset + f], offset + to));
     } catch (_) {
       await _resyncQueue();
     }
@@ -743,7 +1073,7 @@ class AppState extends ChangeNotifier {
       // Land somewhere rather than on an empty screen with no queue selected.
       final next = queues.where((q) => q.sharedFrom == null).firstOrNull;
       if (next != null) {
-        await openQueue(next.id);
+        await openQueue(next.id, autoplay: false);
       } else {
         await player?.loadQueue(await ensureQueue('Now'));
       }
@@ -866,6 +1196,7 @@ class AppState extends ChangeNotifier {
     final filled = await api.replaceQueue(target.id, live.rev, ids);
     activeQueue = filled;
     queues = await api.queues();
+    _rememberQueue(filled.id);
     await player?.loadQueue(filled);
     final at = shuffle ? 0 : startAt.clamp(0, ordered.length - 1);
     await player?.playTrack(ordered[at].id, indexHint: at);
@@ -883,6 +1214,7 @@ class AppState extends ChangeNotifier {
         kind: kind, trackId: seed?.id, album: album, artist: artist);
     activeQueue = made;
     queues = await api.queues();
+    _rememberQueue(made.id);
     await player?.loadQueue(made, autoplay: false);
     if (made.items.isNotEmpty) {
       await player?.playTrack(made.items.first.id, indexHint: 0);
@@ -1536,6 +1868,8 @@ class AppState extends ChangeNotifier {
     bool? wasPlaying;
     String? shape;
     _playerSub = player?.snapshots.listen((s) {
+      final trackChanged = named != null && s.current?.id != named;
+      _watchForEndOfTrack(s, trackChanged: trackChanged);
       if (s.current?.id != named || s.playing != wasPlaying) {
         named = s.current?.id;
         wasPlaying = s.playing;
@@ -1708,6 +2042,10 @@ class AppState extends ChangeNotifier {
     _progressed.dispose();
     _statusTimer?.cancel();
     _jamTimer?.cancel();
+    _sleepTimer?.cancel();
+    _sleepFadeTimer?.cancel();
+    _sleepFadeStep?.cancel();
+    _volumeWrite?.cancel();
     _lifecycle.dispose();
     sleeveBoard.dispose();
     _events?.cancel();

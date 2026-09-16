@@ -93,6 +93,7 @@ class _ServicesPageState extends State<ServicesPage> {
           if ((would['missing'] ?? 0) != 0)
             '${would['missing']} songs are named in the file but not described in it.',
         ].join('\n\n'),
+        action: 'Import',
       );
       if (!go) return;
 
@@ -286,8 +287,13 @@ class _ServicesPageState extends State<ServicesPage> {
                         service: s,
                         onLink: () => _link(s),
                         onUnlink: () async {
-                          await context.read<AppState>().api
-                              .unlinkService(s.provider);
+                          final messenger = ScaffoldMessenger.of(context);
+                          try {
+                            await context.read<AppState>().api
+                                .unlinkService(s.provider);
+                          } catch (e) {
+                            messenger.showSnackBar(problem(e));
+                          }
                           await _load();
                         },
                       ),
@@ -448,7 +454,14 @@ class _ServiceListsState extends State<_ServiceLists> {
           ? ErrorRetry(error: _error!, onRetry: _load)
           : lists == null
               ? const Center(child: CircularProgressIndicator())
-              : ListView(
+              : lists.isEmpty
+                  ? EmptyHint(
+                      icon: Icons.queue_music_outlined,
+                      title: 'No playlists',
+                      body: '${widget.service.label} has nothing to copy for this '
+                          'account.',
+                    )
+                  : ListView(
                   padding: const EdgeInsets.only(bottom: bottomForPlayer),
                   children: [
                     for (final l in lists)

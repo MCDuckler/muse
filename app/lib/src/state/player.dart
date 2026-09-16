@@ -181,6 +181,7 @@ class PlayerService {
       a.waitingForDownload == b.waitingForDownload &&
       a.needsGesture == b.needsGesture &&
       a.error == b.error &&
+      a.buffering == b.buffering &&
       a.duration == b.duration &&
       a.position.inSeconds ~/ 5 == b.position.inSeconds ~/ 5);
 
@@ -717,8 +718,13 @@ class PlayerService {
   ///
   /// Applied here before the server is asked, like every other queue edit, so the list
   /// changes under the finger rather than a moment later.
-  void shuffleWhatIsComing() {
-    if (_items.length - index < 3) return;      // nothing worth rearranging
+  ///
+  /// Returns the new order of what comes after the song playing, as track ids, so the
+  /// server can be told to keep *this* order rather than dealing its own — which it
+  /// used to, so the list reshuffled a second time when its answer arrived. Null when
+  /// there was nothing worth rearranging.
+  List<int>? shuffleWhatIsComing() {
+    if (_items.length - index < 3) return null;  // nothing worth rearranging
     final at = index;
     final rest = _items.sublist(at + 1)..shuffle(math.Random());
     _items = [..._items.sublist(0, at + 1), ...rest];
@@ -726,6 +732,7 @@ class PlayerService {
     _queuedNextId = null;                       // what comes next is a different song
     unawaited(_queueNext());
     _emit(force: true);
+    return [for (final t in rest) t.id];
   }
 
   /// Move a row now, rather than when the server says so.
@@ -789,8 +796,33 @@ class PlayerService {
   void setRepeat(QueueRepeat mode) {
     repeat = mode;
     finished = false;
-    unawaited(_queueNext());
+    if (mode == QueueRepeat.one) {
+      // The engine may already be holding the next song, handed over while repeat was
+      // off. Left there, it plays: the platform walks its own playlist without asking,
+      // and "repeat this one" turned into "play the next one" every time it was
+      // switched on mid-song.
+      unawaited(_dropQueuedNext());
+    } else {
+      unawaited(_queueNext());
+    }
     _emit(force: true);
+  }
+
+  /// Take back whatever was queued behind the playing song.
+  Future<void> _dropQueuedNext() async {
+    if (_queuedNextId == null) return;
+    _queuedNextId = null;
+    _mutating++;
+    try {
+      final length = _player.audioSources.length;
+      if (length > _engineIndex + 1) {
+        await _player.removeAudioSourceRange(_engineIndex + 1, length);
+      }
+    } catch (_) {
+      // A platform that never took the playlist has nothing to take back.
+    } finally {
+      _mutating--;
+    }
   }
 
   // ------------------------------------------------------------------ playback
@@ -838,6 +870,10 @@ class PlayerService {
 
   Future<void> _playOrderPos(int pos, {Duration? startAt}) async {
     _recordListen();                       // whatever we were on, log it before moving
+    // A queue that ran out still holds its last song, played to the end. Asking for
+    // that song again has to load it afresh from the top: the engine sitting at the
+    // end of it plays nothing, completes at once, and says "End of queue" again.
+    final ranOut = finished;
     _orderPos = pos;
     finished = false;
     final track = current;
@@ -850,8 +886,8 @@ class PlayerService {
 
     final token = ++_loadToken;
     try {
-      if (_loadedTrackId != track.id) {
-        await _loadCurrent(startAt: startAt, token: token);
+      if (_loadedTrackId != track.id || ranOut) {
+        await _loadCurrent(startAt: ranOut ? Duration.zero : startAt, token: token);
       }
       // A newer request came in while this one was loading: it owns playback now.
       if (token != _loadToken) return;
@@ -946,7 +982,7 @@ class PlayerService {
     if (_player.playing) return;
     try {
       if (_loadedTrackId == null) await _loadCurrent();
-      _startPlayback();
+      if (_waitingForTrack == null) _startPlayback();
     } catch (e) {
       lastError = '$e';
     }
@@ -960,9 +996,22 @@ class PlayerService {
         unawaited(Keepalive.set(false));
         await _player.pause();
         _saveCursor();
+      } else if (finished) {
+        // Play, at the end of the queue. Whatever was added since it ran out is what
+        // comes next; with nothing added, the last song again from the top — which is
+        // what every player does, and where this one used to do nothing at all.
+        if (_orderPos + 1 < _order.length) {
+          await _advance(1);
+        } else {
+          await _playOrderPos(_orderPos);
+        }
+        return;
       } else {
         if (_loadedTrackId == null) await _loadCurrent();
-        _startPlayback();
+        // A song still downloading is waited for, not played: asking the engine to
+        // play nothing set "wanted" and had the watchdog reloading an empty player
+        // every five seconds until it gave up. onTrackReady starts it when it lands.
+        if (_waitingForTrack == null) _startPlayback();
       }
     } catch (e) {
       lastError = '$e';
@@ -978,7 +1027,10 @@ class PlayerService {
   Future<void> previous() async {
     // Restart the track first, then step back — the convention every player uses.
     if (_player.position > const Duration(seconds: 3)) {
-      await _player.seek(Duration.zero);
+      // Through seek(), not the engine directly: the furthest point heard has to come
+      // back to the top with it, or a stall a minute later revives the song from where
+      // it was before "previous" was pressed.
+      await seek(Duration.zero);
       return;
     }
     _waitingForTrack = null;
@@ -1358,7 +1410,7 @@ class PlayerService {
     // load: no request, no wait, nothing to fetch. A platform that advances through
     // its own playlist never gets here at all — this is for the ones that stop at the
     // end of each item and wait to be told.
-    if (_queuedNextId != null) {
+    if (_queuedNextId != null && repeat != QueueRepeat.one) {
       unawaited(_player.seekToNext().catchError((_) {
         _queuedNextId = null;
         _recordListen(completed: true);
@@ -1486,6 +1538,11 @@ class PlayerService {
   /// Where the listener is, counted in the whole queue rather than in the slice.
   int get whereInQueue => _windowFrom + index;
 
+  /// Which row of the whole queue the slice held here starts at. Row positions sent
+  /// to the server are counted in the whole queue, and a list on screen counts from
+  /// the top of the slice — the two differ by exactly this.
+  int get windowFrom => _windowFrom;
+
   void _saveCursor() {
     final qid = _queueId;
     if (qid == null) return;
@@ -1519,6 +1576,12 @@ class PlayerService {
           ? (_player.duration ?? current?.duration)
           : current?.duration,
       buffered: _player.bufferedPosition,
+      // Asked to play and not yet making a sound: the stream is still opening, or
+      // has run dry. The one state that looks exactly like "broken" from the outside
+      // unless something says otherwise.
+      buffering: _player.playing &&
+          (_player.processingState == ProcessingState.loading ||
+              _player.processingState == ProcessingState.buffering),
       itemCount: _items.length,
       loadedTrackId: _loadedTrackId,
       error: lastError,
@@ -1551,6 +1614,9 @@ class PlayerSnapshot {
   final Duration position;
   final Duration? duration;
   final Duration buffered;
+
+  /// The engine wants to play and is waiting on the network to let it.
+  final bool buffering;
   final int itemCount;
   /// What the audio engine actually holds. When this disagrees with [current] the UI
   /// is showing one song and playing another — the failure that kept coming back.
@@ -1569,6 +1635,7 @@ class PlayerSnapshot {
     required this.position,
     required this.duration,
     this.buffered = Duration.zero,
+    this.buffering = false,
     required this.itemCount,
     this.loadedTrackId,
     this.error,

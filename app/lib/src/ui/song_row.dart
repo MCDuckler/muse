@@ -11,7 +11,6 @@ import 'feel.dart';
 import 'source_dot.dart';
 import 'swipe.dart';
 import 'track_menu.dart';
-import 'snack.dart';
 
 /// One song, drawn the same way everywhere it appears.
 ///
@@ -41,7 +40,12 @@ class SongRow extends StatelessWidget {
     this.selectable,
     this.swipeToPlayNext = true,
     this.onSwipeAway,
+    this.queuePosition,
   });
+
+  /// Where this row sits in the queue being played, when that is the list it is in —
+  /// so its menu can play or move the row itself. See showTrackSheet.
+  final int? queuePosition;
 
   /// Pushing the row away, where the list it is in has something for that — taking it
   /// off a playlist. Bounded like the other direction: the row does not leave the
@@ -170,7 +174,9 @@ class SongRow extends StatelessWidget {
                 ? () {
                     feel(Feel.commit);
                     showTrackSheet(context, track,
-                        onRemove: onRemove, onChanged: onChanged);
+                        onRemove: onRemove,
+                        onChanged: onChanged,
+                        queuePosition: queuePosition);
                   }
                 : null,
         child: Padding(
@@ -313,7 +319,9 @@ class SongRow extends StatelessWidget {
                   constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
                   tooltip: 'Track actions',
                   onPressed: () => showTrackSheet(context, track,
-                      onRemove: onRemove, onChanged: onChanged),
+                      onRemove: onRemove,
+                      onChanged: onChanged,
+                      queuePosition: queuePosition),
                 )
               else
                 const SizedBox(width: 4),
@@ -329,12 +337,7 @@ class SongRow extends StatelessWidget {
     return SwipeAction(
       onSwipe: !swipeToPlayNext
           ? null
-          : () {
-              final messenger = ScaffoldMessenger.of(context);
-              context.read<AppState>().addTrack(track, mode: 'next');
-              messenger.showSnackBar(
-                  snack(Text('${track.displayTitle} plays next')));
-            },
+          : () => addAndSay(context, track, mode: 'next'),
       onSwipeAway: onSwipeAway,
       child: row,
     );

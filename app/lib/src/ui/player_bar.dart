@@ -65,9 +65,18 @@ class PlayerBar extends StatelessWidget {
               : '${track.artistLine} · ${jam.host ?? 'a'} jam',
           _ => track.artistLine,
         };
-        final muted = (s?.error != null && !(s?.needsGesture ?? false)) ||
-            (s?.waitingForDownload ?? false) ||
-            (s?.finished ?? false);
+        // Two different things, in two different colours. A stream that failed is a
+        // problem; a song still on its way, or a queue that has reached its end, is
+        // not — and both were drawn in the error red, so the bar cried wolf every
+        // time somebody queued a song that was not here yet.
+        final problem = s?.error != null && !(s?.needsGesture ?? false);
+        final quiet = !problem &&
+            ((s?.needsGesture ?? false) ||
+                (s?.waitingForDownload ?? false) ||
+                (s?.finished ?? false) ||
+                track.isPending);
+        final buffering = s?.buffering ?? false;
+        final scheme = Theme.of(context).colorScheme;
 
         return PlayerBarMarker(
             child: _OpenByHand(
@@ -101,10 +110,16 @@ class PlayerBar extends StatelessWidget {
                   // Nothing after this one. The same slow breath as the full player's
                   // bar, so the two are obviously the same thing being said.
                   on: s?.lastInQueue ?? false,
+                  // Waiting on the network is shown as the line itself moving: a
+                  // stalled bar with a pause button on it looks like a broken app,
+                  // and this is the one place everybody looks when nothing is
+                  // coming out.
                   child: LinearProgressIndicator(
-                    value: total > 0
-                        ? (now.inMilliseconds / total).clamp(0.0, 1.0)
-                        : 0.0,
+                    value: buffering
+                        ? null
+                        : total > 0
+                            ? (now.inMilliseconds / total).clamp(0.0, 1.0)
+                            : 0.0,
                     minHeight: 2,
                     backgroundColor: Colors.transparent,
                   ),
@@ -143,9 +158,11 @@ class PlayerBar extends StatelessWidget {
                   subtitle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: muted
-                      ? TextStyle(color: Theme.of(context).colorScheme.error)
-                      : null,
+                  style: problem
+                      ? TextStyle(color: scheme.error)
+                      : quiet
+                          ? TextStyle(color: scheme.onSurfaceVariant)
+                          : null,
                 ),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,

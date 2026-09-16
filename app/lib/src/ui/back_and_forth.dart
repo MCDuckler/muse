@@ -79,6 +79,10 @@ class _BackAndForthState extends State<BackAndForth>
           text: TextSpan(text: widget.text, style: style),
           maxLines: 1,
           textDirection: Directionality.of(context),
+          // The same scale the Text below is drawn at. Without it, somebody with
+          // large text set on their phone had a title measured at the small size and
+          // clipped to that height — the bottom of every letter cut off.
+          textScaler: MediaQuery.textScalerOf(context),
         )..layout();
         final over = painter.width - c.maxWidth;
         // Flat at both ends and easing through the middle: the hold is what makes it

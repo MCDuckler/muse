@@ -81,6 +81,7 @@ class _AllTracksPageState extends State<AllTracksPage> {
             child: TrackList(
               tracks: data.items,
               selectable: 'library',
+              named: 'All tracks',
               header: '${data.total} in your library · ${_sorts[_sort]!.toLowerCase()}',
             ),
           );
@@ -278,6 +279,7 @@ class _AlbumPageState extends State<AlbumPage> {
                   _ReleaseRow(
                     row: row,
                     playable: held,
+                    named: detail.name,
                     selectable: where,
                     onFetch: detail.complete && row.remoteId != null
                         ? () => _fill(detail, one: row.remoteId)
@@ -294,9 +296,8 @@ class _AlbumPageState extends State<AlbumPage> {
                     SongRow(
                       track: t,
                       selectable: where,
-                      onTap: () => context
-                          .read<AppState>()
-                          .playNow(held, startAt: held.indexOf(t)),
+                      onTap: () => context.read<AppState>().playNow(held,
+                          startAt: held.indexOf(t), named: detail.name),
                     ),
                 ],
               ],
@@ -363,7 +364,12 @@ class _AlbumHead extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          Row(
+          // A Wrap, not a Row: five buttons and "Get 12 missing" do not fit across a
+          // phone, and a Row that does not fit is a strip of yellow and black.
+          Wrap(
+            spacing: 2,
+            runSpacing: 2,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               TextButton.icon(
                 icon: const Icon(Icons.play_arrow, size: 18),
@@ -412,7 +418,6 @@ class _AlbumHead extends StatelessWidget {
                     ? null
                     : () => app.playNow(held, shuffle: true, named: detail.name),
               ),
-              const Spacer(),
               if (detail.missing > 0)
                 FilledButton.tonalIcon(
                   icon: filling
@@ -435,9 +440,18 @@ class _AlbumHead extends StatelessWidget {
 /// One line of the record. A song we hold plays; one we do not is offered.
 class _ReleaseRow extends StatelessWidget {
   const _ReleaseRow(
-      {required this.row, required this.playable, this.onFetch, this.selectable});
+      {required this.row,
+      required this.playable,
+      this.named,
+      this.onFetch,
+      this.selectable});
   final ReleaseTrack row;
   final List<Track> playable;
+
+  /// The record's name, so tapping a row plays into the record's own queue — the same
+  /// one the Play button makes — rather than writing over whatever was on. The two
+  /// used to differ: the button kept your queue, the row emptied it.
+  final String? named;
   final VoidCallback? onFetch;
 
   /// Which list this row belongs to when songs are being picked out of it. Only rows
@@ -526,7 +540,8 @@ class _ReleaseRow extends StatelessWidget {
           ? () => selection!.toggle(selectable!, track!.id)
           : track == null
               ? onFetch
-              : () => app.playNow(playable, startAt: playable.indexOf(track)),
+              : () => app.playNow(playable,
+                  startAt: playable.indexOf(track), named: named),
     ),
     ),
     );
@@ -538,12 +553,7 @@ class _ReleaseRow extends StatelessWidget {
 Widget _maybeSwipe(BuildContext context, Track? track, Widget row) {
   if (track == null) return row;
   return SwipeAction(
-    onSwipe: () {
-      final messenger = ScaffoldMessenger.of(context);
-      context.read<AppState>().addTrack(track, mode: 'next');
-      messenger.showSnackBar(
-          snack(Text('${track.displayTitle} plays next')));
-    },
+    onSwipe: () => addAndSay(context, track, mode: 'next'),
     child: row,
   );
 }
@@ -684,7 +694,7 @@ class _ArtistPageState extends State<ArtistPage> {
                     child: Text('Best known', style: text.titleSmall),
                   ),
                   for (final row in d.top.take(8))
-                    _TopRow(row: row, playable: d.tracks),
+                    _TopRow(row: row, playable: d.tracks, named: d.name),
                 ],
                 if (d.albums.isNotEmpty) ...[
                   Padding(
@@ -710,7 +720,7 @@ class _ArtistPageState extends State<ArtistPage> {
                       dense: true,
                       onTap: () => context
                           .read<AppState>()
-                          .playNow(d.tracks, startAt: i),
+                          .playNow(d.tracks, startAt: i, named: d.name),
                     ),
                 ],
               ],
@@ -795,9 +805,10 @@ class _ArtistHead extends StatelessWidget {
 }
 
 class _TopRow extends StatelessWidget {
-  const _TopRow({required this.row, required this.playable});
+  const _TopRow({required this.row, required this.playable, this.named});
   final ReleaseTrack row;
   final List<Track> playable;
+  final String? named;
 
   @override
   Widget build(BuildContext context) {
@@ -830,9 +841,8 @@ class _TopRow extends StatelessWidget {
             ),
       onTap: track == null
           ? null
-          : () => context
-              .read<AppState>()
-              .playNow(playable, startAt: playable.indexOf(track)),
+          : () => context.read<AppState>().playNow(playable,
+              startAt: playable.indexOf(track), named: named),
     ),
     );
   }
