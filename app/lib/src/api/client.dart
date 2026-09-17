@@ -1146,6 +1146,14 @@ class ApiClient {
     return (d['items'] as List).map((e) => Track.fromJson(e)).toList();
   }
 
+  /// What one account listened to, over one stretch of time.
+  Future<Listening> listening({String since = 'month', int? who}) async {
+    final d = await _decode(await net.get(
+        _u('/library/stats', {'since': since, if (who != null) 'who': who}),
+        headers: _headers)) as Map<String, dynamic>;
+    return Listening.fromJson(d);
+  }
+
   Future<List<PlayedTrack>> playHistory() async {
     final d = await _decode(await net.get(_u('/library/history'), headers: _headers))
         as Map<String, dynamic>;

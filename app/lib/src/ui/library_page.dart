@@ -10,6 +10,7 @@ import 'browse_page.dart';
 import 'dialogs.dart';
 import 'feed_page.dart';
 import 'kept_page.dart';
+import 'listening_page.dart';
 import 'mini_player.dart';
 import 'selection_bar.dart';
 import 'spotify_page.dart' show UnmatchedPage;
@@ -51,6 +52,14 @@ class LibraryPage extends StatelessWidget {
         ),
         // Up here with the rest of the ways in, not under the last playlist: with
         // twenty playlists it was a screen and a half of scrolling away.
+        ListTile(
+          leading: const Icon(Icons.bar_chart),
+          title: const Text('Listening'),
+          subtitle: const Text('What you played most, and when'),
+          onTap: () => Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => const ListeningPage(),
+          )),
+        ),
         ListTile(
           leading: const Icon(Icons.history),
           title: const Text('Recently played'),

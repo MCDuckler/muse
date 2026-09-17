@@ -1008,6 +1008,62 @@ void main() {
     expect(player.current?.queueItemId, 102);
   });
 
+  test('the screen follows the speaker when the engine jumps', () async {
+    // Any move that was not exactly one along used to be ignored: the engine played
+    // the third song while the screen named the first, and nothing ever put the two
+    // back together. What the engine is playing is a fact — it carries the track's own
+    // tag — so that is what the screen is made to agree with.
+    await player.loadQueue(queueOf([track(1), track(2), track(3)]));
+    await player.playAt(0);
+    await settle();
+    final engine = audio.only;
+    // Three sources in the engine: this one, the one queued behind it, and one more
+    // handed over after that.
+    engine.sources.add('http://example.invalid/tracks/3/stream');
+
+    engine.jumpBy(2);
+    await settle();
+
+    expect(player.current?.id, 3,
+        reason: 'the screen names what is coming out of the speaker');
+  });
+
+  test('a queue with the same song twice moves to the copy that is playing',
+      () async {
+    final again = track(7);
+    await player.loadQueue(queueOf([again, track(5), again, track(9)],
+        rows: [200, 201, 202, 203]));
+    await player.playAt(1);                       // the row before the second copy
+    await settle();
+
+    audio.only.advanceByItself();                 // into the second copy of track 7
+    await settle();
+
+    expect(player.current?.id, 7);
+    expect(player.current?.queueItemId, 202,
+        reason: 'the copy the engine holds, not the one at the top of the queue');
+  });
+
+  test('a screen left on the wrong song is put right by the watchdog', () async {
+    await player.loadQueue(queueOf([track(1), track(2), track(3)]));
+    await player.playAt(0);
+    await settle();
+    final engine = audio.only;
+
+    // The engine moves on while the app is not listening — a transition that arrived
+    // while something else was mid-flight, which is how the two used to come apart.
+    await player.whileBusy(() async {
+      engine.advanceByItself();
+      await settle();
+    });
+    expect(player.current?.id, 1, reason: 'the setup: screen and speaker disagree');
+
+    await player.checkForStall();                 // the watchdog's round
+    await settle();
+
+    expect(player.current?.id, 2, reason: 'and the screen is put right');
+  });
+
   test('pause from the notification stays paused', () async {
     // The notification, the lockscreen, a headset button and Android Auto all reach
     // the engine through the media session without this app being asked. Playback

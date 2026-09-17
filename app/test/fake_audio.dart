@@ -243,6 +243,17 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
     _emit();
   }
 
+  /// The engine skipped a source without being asked: a stream that would not open,
+  /// a platform dropping a dead item and moving on. The app used to ignore any move
+  /// that was not exactly one along, which left the screen a song behind for good.
+  void jumpBy(int steps) {
+    index = (index + steps).clamp(0, sources.length - 1);
+    position = Duration.zero;
+    playing = true;
+    state = ProcessingStateMessage.ready;
+    _emit();
+  }
+
   /// The engine has run out of audio and is waiting for more — a network that went
   /// away, a stream the server stopped feeding. This is what a real stall looks like:
   /// the state changes and then nothing else happens at all.

@@ -113,7 +113,16 @@ class PlayerService {
 
   /// Which slot of the engine's playlist the current song sits in. An explicit load
   /// puts it back at the top; an automatic advance moves it one along.
+  ///
+  /// Only ever a fallback now: [_engineAt] asks the engine, because a transition this
+  /// class did not see left this number a slot behind — and a slot behind is enough to
+  /// drop the *playing* song out of the playlist while trying to queue the next one
+  /// behind it, which is the player going quiet or jumping a song for no visible
+  /// reason.
   int _engineIndex = 0;
+
+  /// Where the engine says it is in its own playlist.
+  int get _engineAt => _player.sequenceState.currentIndex ?? _engineIndex;
 
   /// How many playlist edits are in flight.
   ///
@@ -509,6 +518,9 @@ class PlayerService {
   /// Nothing notices that on its own, so this does: nudge it back to where it was,
   /// and if that does not take, load the song again from that spot.
   Future<void> checkForStall() async {
+    // Cheap, and the same question either way: is this player still doing what the
+    // screen says it is doing.
+    _checkTheScreenAgreesWithTheSpeaker();
     if (_loadedTrackId == null || _mutating > 0) {
       _bufferingSince = null;
       return;
@@ -879,9 +891,10 @@ class PlayerService {
     _queuedNextId = null;
     _mutating++;
     try {
+      final at = _engineAt;
       final length = _player.audioSources.length;
-      if (length > _engineIndex + 1) {
-        await _player.removeAudioSourceRange(_engineIndex + 1, length);
+      if (length > at + 1) {
+        await _player.removeAudioSourceRange(at + 1, length);
       }
     } catch (_) {
       // A platform that never took the playlist has nothing to take back.
@@ -1269,6 +1282,10 @@ class PlayerService {
           album: track.albumLine,
           duration: track.duration,
           artUri: coverUri,
+          // Which row of the queue this is. The engine hands the tag back with
+          // whatever it is playing, and that is how the screen is kept honest — see
+          // _engineIsPlaying.
+          extras: {'row': track.queueItemId},
         ),
       );
     }
@@ -1288,6 +1305,7 @@ class PlayerService {
         // The lockscreen and the car display fetch this themselves, so it has to be a
         // URL that authenticates on its own — the same signed key as audio.
         artUri: coverUri,
+        extras: {'row': track.queueItemId},
       ),
     );
   }
@@ -1319,13 +1337,14 @@ class PlayerService {
       // The queued URL is signed, and it has to still be valid when the engine gets
       // round to playing it — which may be a whole song from now.
       await api.ensureStreamKey();
+      final at = _engineAt;
       final length = _player.audioSources.length;
-      if (length > _engineIndex + 1) {
+      if (length > at + 1) {
         // Something else was queued and is no longer next. Dropping what comes after
         // the playing item does not touch the playing item.
-        await _player.removeAudioSourceRange(_engineIndex + 1, length);
+        await _player.removeAudioSourceRange(at + 1, length);
       }
-      await _player.insertAudioSource(_engineIndex + 1, _sourceFor(next));
+      await _player.insertAudioSource(at + 1, _sourceFor(next));
     } catch (_) {
       // A platform that will not take a playlist still works the old way: the track
       // ends, Dart notices, and the next one is loaded. Slower, not broken.
@@ -1347,19 +1366,58 @@ class PlayerService {
     }
   }
 
+  /// The song the engine is actually playing, as it was handed to it.
+  ///
+  /// Every source carries a MediaItem with the track's id and the queue row it came
+  /// from, and the engine gives that tag back with whatever it is playing. So this is
+  /// not an inference from indexes and expectations — it is the thing itself, and it
+  /// is what the screen is checked against.
+  ({int trackId, int? row})? _engineIsPlaying() {
+    final tag = _player.sequenceState.currentSource?.tag;
+    if (tag is! MediaItem) return null;
+    final id = int.tryParse(tag.id);
+    if (id == null) return null;
+    final row = tag.extras?['row'];
+    return (trackId: id, row: row is int ? row : null);
+  }
+
+  /// Where a song the engine names sits in the queue: its own row for choice, and
+  /// failing that the nearest copy at or after where playback was.
+  int _orderPosOf({required int trackId, int? row}) {
+    if (row != null) {
+      for (var i = 0; i < _order.length; i++) {
+        final item = _items[_order[i]];
+        if (item.queueItemId == row) return i;
+      }
+    }
+    // Forwards from here first: a queue with the same song twice would otherwise send
+    // the screen back to the earlier copy every time the engine moved on.
+    for (var step = 1; step <= _order.length; step++) {
+      final i = (_orderPos + step) % _order.length;
+      if (_items[_order[i]].id == trackId) return i;
+    }
+    return -1;
+  }
+
   /// The engine moved on by itself, because the next song was already in its playlist.
   /// Catch our own bookkeeping up to it rather than reloading anything.
   void _onEngineIndex(int? at) {
     if (at == null || at == _engineIndex || _mutating > 0) return;
-    final expected = _engineIndex + 1;
-    final queued = _queuedNextId;
     _engineIndex = at;
-    if (at != expected || queued == null) return;
+    // What it moved *to*, from the engine rather than from what we assumed it would
+    // be. An index that advanced by two — a source dropped, a platform that skipped a
+    // dead stream — used to leave the screen on the previous song for the rest of the
+    // session, because anything other than "exactly one along" was ignored.
+    final playing = _engineIsPlaying();
+    if (playing == null) return;
+    if (playing.trackId == current?.id && playing.row == current?.queueItemId) return;
+
+    final pos = _orderPosOf(trackId: playing.trackId, row: playing.row);
+    if (pos < 0) return;                        // not in the queue we hold; leave it
 
     _recordListen(completed: true);
-    final pos = _order.indexWhere((i) => _items[i].id == queued);
-    if (pos >= 0) _orderPos = pos;
-    _loadedTrackId = queued;
+    _orderPos = pos;
+    _loadedTrackId = playing.trackId;
     _queuedNextId = null;
     _waitingForTrack = null;
     finished = false;
@@ -1367,6 +1425,53 @@ class PlayerService {
     _emit(force: true);
     _saveCursor();
     unawaited(_lookAhead());
+    unawaited(_queueNext());
+  }
+
+  /// Run something while this player counts every engine event as its own doing.
+  ///
+  /// A test needs one way to produce the state this is all about: a transition that
+  /// happened while an edit was in flight and was therefore not acted on, leaving the
+  /// screen naming one song and the speaker playing another.
+  @visibleForTesting
+  Future<void> whileBusy(Future<void> Function() body) async {
+    _mutating++;
+    try {
+      await body();
+    } finally {
+      _mutating--;
+    }
+  }
+
+  /// Is the song on the screen the song coming out of the speaker?
+  ///
+  /// It is supposed to be, and every path that changes one changes the other — but a
+  /// transition that goes an unexpected way, a queue that was rewritten underneath a
+  /// hand-over or a platform that moved on its own leaves the two apart, and from the
+  /// outside that is the player naming one song while playing another, for as long as
+  /// it takes to skip out of it. The engine is the authority here: it is the one that
+  /// is making the sound.
+  void _checkTheScreenAgreesWithTheSpeaker() {
+    if (_mutating > 0 || _waitingForTrack != null) return;
+    if (!_player.playing) return;
+    final playing = _engineIsPlaying();
+    if (playing == null) return;
+    final shown = current;
+    if (shown != null &&
+        shown.id == playing.trackId &&
+        (playing.row == null || shown.queueItemId == playing.row)) {
+      return;
+    }
+    final pos = _orderPosOf(trackId: playing.trackId, row: playing.row);
+    if (pos < 0 || pos == _orderPos) return;
+    PlaybackLog.note('screen said ${shown?.id}, speaker says ${playing.trackId}'
+        ' — following the speaker');
+    _orderPos = pos;
+    _loadedTrackId = playing.trackId;
+    _queuedNextId = null;
+    finished = false;
+    _emit(force: true);
+    _saveCursor();
     unawaited(_queueNext());
   }
 

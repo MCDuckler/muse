@@ -520,6 +520,123 @@ class Playlist {
   bool get hasHoles => waiting > 0;
 }
 
+/// What one account actually listened to, over one stretch of time.
+///
+/// Every play has been written down since the first day — one row per listen — and the
+/// only questions ever asked of it were "what did I play recently" and a single
+/// lifetime tally. This is the ordinary one: what have I been listening to this month.
+class Listening {
+  final int whoId;
+  final String whoName;
+  final String since;
+  final List<({int id, String name})> people;
+  final int plays;
+  final int started;
+  final int minutes;
+  final int tracks;
+  final List<PlayedOften> songs;
+  final List<CountedRow> artists;
+  final List<CountedRow> albums;
+
+  const Listening({
+    required this.whoId,
+    required this.whoName,
+    required this.since,
+    required this.people,
+    required this.plays,
+    required this.started,
+    required this.minutes,
+    required this.tracks,
+    required this.songs,
+    required this.artists,
+    required this.albums,
+  });
+
+  factory Listening.fromJson(Map<String, dynamic> j) {
+    final who = (j['who'] ?? const {}) as Map<String, dynamic>;
+    final totals = (j['totals'] ?? const {}) as Map<String, dynamic>;
+    return Listening(
+      whoId: (who['id'] ?? 0) as int,
+      whoName: (who['name'] ?? '') as String,
+      since: (j['since'] ?? 'month') as String,
+      people: [
+        for (final p in (j['people'] ?? const []) as List)
+          (id: (p['id'] ?? 0) as int, name: (p['name'] ?? '') as String)
+      ],
+      plays: (totals['plays'] ?? 0) as int,
+      started: (totals['started'] ?? 0) as int,
+      minutes: (totals['minutes'] ?? 0) as int,
+      tracks: (totals['tracks'] ?? 0) as int,
+      songs: [
+        for (final x in (j['songs'] ?? const []) as List) PlayedOften.fromJson(x)
+      ],
+      artists: [
+        for (final x in (j['artists'] ?? const []) as List) CountedRow.fromJson(x)
+      ],
+      albums: [
+        for (final x in (j['albums'] ?? const []) as List) CountedRow.fromJson(x)
+      ],
+    );
+  }
+
+  bool get isEmpty => plays == 0 && started == 0;
+}
+
+/// A song, and how often it was played.
+class PlayedOften {
+  final int id;
+  final String title;
+  final List<String> artists;
+  final String? album;
+  final int plays;
+  final int started;
+  final int minutes;
+  final String? coverPath;
+
+  const PlayedOften({
+    required this.id,
+    required this.title,
+    required this.artists,
+    this.album,
+    required this.plays,
+    required this.started,
+    required this.minutes,
+    this.coverPath,
+  });
+
+  factory PlayedOften.fromJson(Map<String, dynamic> j) => PlayedOften(
+        id: (j['id'] ?? 0) as int,
+        title: (j['title'] ?? '') as String,
+        artists: ((j['artists'] ?? const []) as List).cast<String>(),
+        album: j['album'] as String?,
+        plays: (j['plays'] ?? 0) as int,
+        started: (j['started'] ?? 0) as int,
+        minutes: (((j['ms'] ?? 0) as num) / 60000).round(),
+        coverPath: j['cover_url'] as String?,
+      );
+
+  String get artistLine => artists.isEmpty ? 'Unknown artist' : artists.join(', ');
+}
+
+/// An artist or a record, and how much of it was played.
+class CountedRow {
+  final String name;
+  final String? subtitle;
+  final int plays;
+  final int minutes;
+
+  const CountedRow(
+      {required this.name, this.subtitle, required this.plays,
+      required this.minutes});
+
+  factory CountedRow.fromJson(Map<String, dynamic> j) => CountedRow(
+        name: (j['name'] ?? '') as String,
+        subtitle: j['artist'] as String?,
+        plays: (j['plays'] ?? 0) as int,
+        minutes: (((j['ms'] ?? 0) as num) / 60000).round(),
+      );
+}
+
 /// A song in a mirrored playlist that could not be translated into something muse can
 /// play. Kept and shown, rather than silently making the playlist shorter.
 class UnmatchedTrack {

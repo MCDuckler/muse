@@ -5,6 +5,7 @@ import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/art_cache.dart';
 import 'motion.dart';
+import 'owl.dart';
 
 /// Album art with a placeholder that is deliberately not a grey box: a track with no
 /// cover yet should still look like part of the app rather than a hole in it.
@@ -89,16 +90,11 @@ class Artwork extends StatelessWidget {
     );
   }
 
-  Widget _placeholder(ColorScheme scheme) => DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [scheme.surfaceContainerHighest, scheme.surfaceContainer],
-          ),
-        ),
-        child: Icon(Icons.music_note,
-            size: size * 0.5, color: scheme.primary.withValues(alpha: 0.5)),
+  /// A song with no cover gets a bird instead of a shrug. See GoofyOwl: the same song
+  /// gets the same one every time, and no two songs in a list get the same face.
+  Widget _placeholder(ColorScheme scheme) => GoofyOwl(
+        seed: track?.id ?? owlSeed(url),
+        size: size,
       );
 }
 

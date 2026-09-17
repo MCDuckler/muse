@@ -175,6 +175,58 @@ def test_lists_can_be_ordered_by_something_other_than_the_alphabet(
                       params={"sort": "sideways"}).status_code == 400
 
 
+def test_what_was_played_counted_over_a_stretch_of_time(client, hdr, library):
+    """One row per listen has been written down since the first day and the only
+    question anybody could ask of it was "what did I play recently"."""
+    for _ in range(3):
+        client.post("/listens", headers=hdr,
+                    json={"track_id": library[0], "ms_played": 200_000,
+                          "completed": True})
+    client.post("/listens", headers=hdr,
+                json={"track_id": library[2], "ms_played": 30_000, "completed": True})
+    # Started and abandoned: it happened, but it is not a play.
+    client.post("/listens", headers=hdr,
+                json={"track_id": library[3], "ms_played": 4_000, "completed": False})
+
+    stats = client.get("/library/stats", headers=hdr, params={"since": "month"}).json()
+    assert stats["totals"]["plays"] == 4
+    assert stats["totals"]["started"] == 5
+    assert stats["totals"]["minutes"] == 11        # 3×200s + 30s + 4s
+    assert stats["totals"]["tracks"] == 3
+
+    top = stats["songs"][0]
+    assert top["title"] == "Alpha" and top["plays"] == 3
+    assert [a["name"] for a in stats["artists"]][0] == "Bowie"
+    assert stats["albums"][0]["name"] == "Low"
+    assert stats["step"] == "day" and len(stats["shape"]) == 1
+    # Who this is about, and who else could be asked.
+    assert stats["who"]["name"] == "chris"
+    assert "chris" in [p["name"] for p in stats["people"]]
+
+
+def test_stats_can_be_asked_about_a_stretch_or_about_somebody_else(client, hdr,
+                                                                   library):
+    client.post("/listens", headers=hdr,
+                json={"track_id": library[0], "ms_played": 200_000,
+                      "completed": True})
+    year = client.get("/library/stats", headers=hdr, params={"since": "year"}).json()
+    assert year["totals"]["plays"] == 1
+    assert year["step"] == "month", "a year is drawn by month, not by day"
+
+    # Somebody else on the same box, who has played nothing.
+    from muse import auth
+    other_id = auth.ensure_user("joe", pw_hash=auth.hash_password("x"))
+    theirs = client.get("/library/stats", headers=hdr,
+                        params={"who": other_id}).json()
+    assert theirs["who"]["name"] == "joe"
+    assert theirs["totals"]["plays"] == 0 and theirs["songs"] == []
+
+    assert client.get("/library/stats", headers=hdr,
+                      params={"since": "decade"}).status_code == 400
+    assert client.get("/library/stats", headers=hdr,
+                      params={"who": 9999}).status_code == 404
+
+
 def test_history_carries_timestamps_and_can_be_cleared(client, hdr, library):
     client.post("/listens", headers=hdr,
                 json={"track_id": library[0], "ms_played": 30_000, "completed": True})

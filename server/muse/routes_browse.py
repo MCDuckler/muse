@@ -228,6 +228,113 @@ def artist_tracks(artist: str, user: dict = Depends(current_user)):
     return {"items": [catalog.public(t) for t in rows]}
 
 
+# ------------------------------------------------------------------ what was played
+#
+# Every play is already written down, one row per listen, and until now the only thing
+# read out of it was "recently played" and a single lifetime tally. What nobody could
+# ask was the ordinary question — what have I actually been listening to this month —
+# which is a grouping and a date, both of which the table can answer.
+PERIODS = {
+    "week": "7 days",
+    "month": "30 days",
+    "year": "365 days",
+    "all": None,
+}
+
+
+@router.get("/stats")
+def stats(since: str = "month", who: int | None = None, limit: int = 25,
+          user: dict = Depends(current_user)):
+    """How much of what, for one account over one stretch of time.
+
+    `who` is any account on this box, because the catalog is shared and the People
+    screen already says who has how much — this is the same fact, counted properly.
+    """
+    if since not in PERIODS:
+        raise HTTPException(400, f"since must be one of {', '.join(PERIODS)}")
+    whose = who or user["id"]
+    person = db.one("select id, name from users where id=%s", (whose,))
+    if not person:
+        raise HTTPException(404, "no such account")
+
+    window = PERIODS[since]
+    when = "" if window is None else f"and l.started_at > now() - interval '{window}'"
+    limit = max(1, min(limit, 100))
+    args: tuple = (whose,)
+
+    totals = db.one(
+        f"""select count(*) started,
+                   count(*) filter (where l.completed) plays,
+                   coalesce(sum(l.ms_played),0) ms,
+                   count(distinct l.track_id) tracks,
+                   min(l.started_at) first_at, max(l.started_at) last_at
+              from listens l where l.user_id=%s {when}""", args)
+
+    songs = db.all_(
+        f"""select t.id, t.title, t.artists, t.album,
+                   count(*) filter (where l.completed) plays,
+                   count(*) started,
+                   coalesce(sum(l.ms_played),0) ms,
+                   max(l.started_at) last_at,
+                   case when t.cover_id is not null
+                        then '/tracks/' || t.id || '/cover' end as cover_url
+              from listens l join tracks t on t.id = l.track_id
+             where l.user_id=%s {when}
+             group by t.id
+             order by plays desc, started desc, ms desc
+             limit %s""", args + (limit,))
+
+    artists = db.all_(
+        f"""select artist as name, count(*) filter (where completed) plays,
+                   coalesce(sum(ms_played),0) ms,
+                   count(distinct track_id) tracks
+              from (select unnest(t.artists) as artist, l.completed, l.ms_played,
+                           l.track_id
+                      from listens l join tracks t on t.id = l.track_id
+                     where l.user_id=%s {when}) x
+             where artist is not null and artist <> ''
+             group by {_key("artist")}, artist
+             order by plays desc, ms desc
+             limit %s""", args + (limit,))
+
+    albums = db.all_(
+        f"""select t.album as name,
+                   coalesce(t.artists[1], 'Unknown artist') as artist,
+                   count(*) filter (where l.completed) plays,
+                   coalesce(sum(l.ms_played),0) ms
+              from listens l join tracks t on t.id = l.track_id
+             where l.user_id=%s and t.album is not null and t.album <> '' {when}
+             group by t.album, coalesce(t.artists[1], 'Unknown artist')
+             order by plays desc, ms desc
+             limit %s""", args + (limit,))
+
+    # A shape for the stretch, so "this year" is a year rather than one number: by day
+    # for the short windows, by month for the long ones.
+    step = "day" if since in ("week", "month") else "month"
+    shape = db.all_(
+        f"""select date_trunc('{step}', l.started_at) at,
+                   count(*) filter (where l.completed) plays,
+                   coalesce(sum(l.ms_played),0) ms
+              from listens l where l.user_id=%s {when}
+             group by 1 order by 1""", args)
+
+    return {
+        "who": {"id": person["id"], "name": person["name"]},
+        "since": since,
+        "people": db.all_("select id, name from users order by lower(name)"),
+        "totals": {
+            "plays": totals["plays"], "started": totals["started"],
+            "minutes": round(int(totals["ms"]) / 60_000),
+            "tracks": totals["tracks"],
+            "first_at": totals["first_at"], "last_at": totals["last_at"],
+        },
+        "songs": songs, "artists": artists, "albums": albums,
+        "shape": [{"at": r["at"], "plays": r["plays"],
+                   "minutes": round(int(r["ms"]) / 60_000)} for r in shape],
+        "step": step,
+    }
+
+
 @router.get("/history")
 def history(limit: int = 200, user: dict = Depends(current_user)):
     """With timestamps this time. A flat list with no sense of when is not a history."""
