@@ -135,6 +135,82 @@ def test_a_track_without_a_cover_says_so(client, hdr, ready_track):
     assert client.get(f"/tracks/{ready_track['id']}/cover", headers=hdr).status_code == 404
 
 
+def test_a_record_shares_its_cover_with_the_rest_of_itself(client, hdr, cfg, wsec,
+                                                           complete_job, monkeypatch):
+    """One song of an album with its sleeve and the next one a grey square is the same
+    record drawn two ways in one list — and the picture is already here, filed under
+    the song beside it. Nine thousand Bandcamp tracks arrived through a mirror that
+    never asked anybody for artwork; this is what stops them being blank."""
+    made = []
+    for n in range(3):
+        t = client.post("/tracks/resolve", headers=hdr,
+                        json={"video_id": f"SAME{n}"}).json()
+        job = client.post("/internal/jobs/lease", headers=wsec,
+                          json={"worker": "w"}).json()["jobs"][0]
+        complete_job(job["id"], t["id"])
+        db.run("update tracks set album=%s, artists=%s where id=%s",
+               ("One Record", ["A Band"], t["id"]))
+        made.append(t["id"])
+
+    # The first one finds a cover of its own.
+    monkeypatch.setattr(enrich, "_deezer", lambda title, artist: [{
+        "title": "Test Song", "artists": ["Tester"], "duration_ms": 123_000,
+        "album": "One Record", "cover": "https://example.test/cover.jpg",
+        "provider": "deezer",
+    }])
+    monkeypatch.setattr(enrich, "_download", lambda url, min_px=0: _png())
+    first = enrich.enrich_track(cfg, made[0])
+    assert first["cover"] is True
+    assert first["shared_with"] == 2, "the rest of the record got it too"
+
+    for track_id in made[1:]:
+        assert client.get(f"/tracks/{track_id}", headers=hdr).json()["cover_url"] \
+            == f"/tracks/{track_id}/cover"
+
+    # And a track that turns up later, whose own lookup finds nothing, takes it.
+    late = client.post("/tracks/resolve", headers=hdr,
+                       json={"video_id": "SAMELATE"}).json()
+    job = client.post("/internal/jobs/lease", headers=wsec,
+                      json={"worker": "w"}).json()["jobs"][0]
+    complete_job(job["id"], late["id"])
+    db.run("update tracks set album=%s, artists=%s where id=%s",
+           ("One Record", ["A Band"], late["id"]))
+    monkeypatch.setattr(enrich, "_deezer", lambda title, artist: [])
+    monkeypatch.setattr(enrich, "_itunes", lambda title, artist: [])
+    monkeypatch.setattr(enrich, "_download", lambda url, min_px=0: None)
+
+    result = enrich.enrich_track(cfg, late["id"])
+    assert result["borrowed"] is True
+    assert client.get(f"/tracks/{late['id']}", headers=hdr).json()["cover_url"] \
+        is not None
+
+
+def test_a_cover_is_not_shared_with_songs_that_only_lack_an_album(client, hdr, cfg,
+                                                                  wsec, complete_job,
+                                                                  monkeypatch):
+    """"No album" is not an album: sharing across the blank would put one record's
+    sleeve on every loose track in the library."""
+    loose = []
+    for n in range(2):
+        t = client.post("/tracks/resolve", headers=hdr,
+                        json={"video_id": f"LOOSE{n}"}).json()
+        job = client.post("/internal/jobs/lease", headers=wsec,
+                          json={"worker": "w"}).json()["jobs"][0]
+        complete_job(job["id"], t["id"])
+        db.run("update tracks set album=null, artists=%s where id=%s",
+               (["Someone"], t["id"]))
+        loose.append(t["id"])
+
+    monkeypatch.setattr(enrich, "_deezer", lambda title, artist: [])
+    monkeypatch.setattr(enrich, "_itunes", lambda title, artist: [])
+    monkeypatch.setattr(enrich, "_download", lambda url, min_px=0: _png())
+    db.run("update tracks set cover_id=(select id from covers order by id limit 1) "
+           "where id=%s", (loose[0],))
+
+    result = enrich.enrich_track(cfg, loose[1])
+    assert result["borrowed"] is False
+
+
 def test_identical_covers_are_stored_once(client, hdr, cfg, ready_track, monkeypatch):
     a = enrich.store_cover(cfg, _png(), "test")
     b = enrich.store_cover(cfg, _png(), "test")

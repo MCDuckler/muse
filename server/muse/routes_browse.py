@@ -10,6 +10,8 @@ every account saw every track on the box.
 """
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from . import catalog, db, discography, follows, jobs, sync
@@ -55,6 +57,15 @@ def _key(column: str) -> str:
 
 
 ARTIST_KEY = _key("artist")
+
+
+def fold(text: str) -> str:
+    """The same folding as [_key], done here rather than in the query.
+
+    A pattern cannot be folded by the database: "%bicep%" put through it comes out as
+    "bicep" with the wildcards eaten, and matches only an artist called exactly that.
+    """
+    return re.sub(r"[^\w]+|_", "", text or "", flags=re.UNICODE).lower()
 # Any of a track's credits being this artist, whatever either spelling looks like.
 ONE_ARTIST = f"exists (select 1 from unnest(t.artists) a where {_key('a')} = {_key('%s')})"
 
@@ -75,10 +86,41 @@ def all_tracks(sort: str = "added", limit: int = 200, offset: int = 0,
             "offset": offset, "sort": sort}
 
 
+# How a list of records or of artists can be ordered. Named rather than free text: an
+# order is a handful of sensible answers, not a column somebody types in.
+ALBUM_SORTS = {
+    "name": "lower(t.album) asc",
+    "artist": "lower(coalesce(t.artists[1], '')) asc, lower(t.album) asc",
+    "year": "min(t.release_year) desc nulls last, lower(t.album) asc",
+    "tracks": "count(*) desc, lower(t.album) asc",
+    "added": "max(li.added_at) desc, lower(t.album) asc",
+}
+
+ARTIST_SORTS = {
+    "name": "lower(b.name) asc",
+    "tracks": "count(distinct c.id) desc, lower(b.name) asc",
+    "albums": "count(distinct c.album) desc, lower(b.name) asc",
+}
+
+
 @router.get("/albums")
-def albums(limit: int = 200, offset: int = 0, user: dict = Depends(current_user)):
+def albums(limit: int = 200, offset: int = 0, q: str | None = None,
+           sort: str = "name", user: dict = Depends(current_user)):
     """Grouped by album *and* artist: two records can share a title, and merging them
-    would be a worse lie than showing two rows."""
+    would be a worse lie than showing two rows.
+
+    `q` narrows to records whose name or artist contains it, which is the only way
+    through ten thousand of them that is not scrolling.
+    """
+    if sort not in ALBUM_SORTS:
+        raise HTTPException(400, f"sort must be one of {', '.join(ALBUM_SORTS)}")
+    like = f"%{(q or '').strip()}%"
+    narrow = ""
+    params: tuple = (user["id"],)
+    if (q or "").strip():
+        narrow = ("and (t.album ilike %s "
+                  "or coalesce(t.artists[1],'') ilike %s)")
+        params += (like, like)
     rows = db.all_(
         f"""
         select t.album as name,
@@ -88,21 +130,21 @@ def albums(limit: int = 200, offset: int = 0, user: dict = Depends(current_user)
                max(t.id) filter (where t.cover_id is not null) as cover_track_id,
                sum(coalesce(t.duration_ms, 0)) as duration_ms
           {_MINE}
-         where t.album is not null and t.album <> ''
+         where t.album is not null and t.album <> '' {narrow}
          group by t.album, coalesce(t.artists[1], 'Unknown artist')
-         order by lower(t.album)
+         order by {ALBUM_SORTS[sort]}
          limit %s offset %s
         """,
-        (user["id"], min(limit, 500), offset),
+        params + (min(limit, 500), offset),
     )
     # How many there are in all, so a list that arrives a page at a time knows whether
     # it has reached the end — without that the app asked once, drew two hundred of ten
     # thousand records, and had no way of telling that was not all of them.
     total = db.one(
         f"""select count(*) n from (select 1 {_MINE}
-             where t.album is not null and t.album <> ''
+             where t.album is not null and t.album <> '' {narrow}
              group by t.album, coalesce(t.artists[1], 'Unknown artist')) g""",
-        (user["id"],))["n"]
+        params)["n"]
     return {"items": [
         {**r, "cover_url": f"/tracks/{r['cover_track_id']}/cover"
          if r["cover_track_id"] else None}
@@ -123,8 +165,17 @@ def album_tracks(album: str, artist: str | None = None,
 
 
 @router.get("/artists")
-def artists(limit: int = 300, offset: int = 0, user: dict = Depends(current_user)):
-    """Every credited artist, not just the first: a feature is still an appearance."""
+def artists(limit: int = 300, offset: int = 0, q: str | None = None,
+            sort: str = "name", user: dict = Depends(current_user)):
+    """Every credited artist, not just the first: a feature is still an appearance.
+
+    `q` narrows to the ones whose name contains it — matched the same way two spellings
+    of one name are, so searching "bicep" finds "BICEP".
+    """
+    if sort not in ARTIST_SORTS:
+        raise HTTPException(400, f"sort must be one of {', '.join(ARTIST_SORTS)}")
+    asked = fold(q or "")
+    narrow = f"where {_key('b.name')} like %s" if asked else ""
     rows = db.all_(
         f"""
         with credits as (
@@ -146,17 +197,20 @@ def artists(limit: int = 300, offset: int = 0, user: dict = Depends(current_user
                max(c.id) filter (where c.cover_id is not null) as cover_track_id
           from credits c
           join best b on b.k = {_key("c.artist")}
+         {narrow}
          group by b.k, b.name
-         order by lower(b.name)
+         order by {ARTIST_SORTS[sort]}
          limit %s offset %s
         """,
-        (user["id"], min(limit, 1000), offset),
+        (user["id"],) + ((f"%{asked}%",) if asked else ())
+        + (min(limit, 1000), offset),
     )
     total = db.one(
         f"""select count(distinct {ARTIST_KEY}) n
               from (select unnest(t.artists) as artist {_MINE}) x
-             where artist is not null and artist <> ''""",
-        (user["id"],))["n"]
+             where artist is not null and artist <> ''
+               {f"and {ARTIST_KEY} like %s" if asked else ""}""",
+        (user["id"],) + ((f"%{asked}%",) if asked else ()))["n"]
     return {"items": [
         {**r, "cover_url": f"/tracks/{r['cover_track_id']}/cover"
          if r["cover_track_id"] else None}

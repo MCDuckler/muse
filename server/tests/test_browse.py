@@ -139,6 +139,42 @@ def test_a_long_list_says_how_much_more_there_is(client, hdr, library):
     assert first != second
 
 
+def test_a_long_list_can_be_narrowed(client, hdr, library):
+    """Ten thousand records cannot be scrolled through, so they can be searched."""
+    albums = client.get("/library/albums", headers=hdr,
+                        params={"q": "low"}).json()
+    assert {a["name"] for a in albums["items"]} == {"Low"}
+    assert albums["total"] == 2, "two records share that title, by different acts"
+
+    # The artist's name works as well as the record's.
+    by_artist = client.get("/library/albums", headers=hdr,
+                           params={"q": "other band"}).json()["items"]
+    assert [a["artist"] for a in by_artist] == ["Other Band"]
+
+    # And an artist is found however either side of it is spelled.
+    artists = client.get("/library/artists", headers=hdr,
+                         params={"q": "bow ie"}).json()
+    assert [a["name"] for a in artists["items"]] == ["Bowie"]
+    assert artists["total"] == 1
+
+    assert client.get("/library/artists", headers=hdr,
+                      params={"q": "nobody"}).json()["items"] == []
+
+
+def test_lists_can_be_ordered_by_something_other_than_the_alphabet(
+        client, hdr, library):
+    most = client.get("/library/artists", headers=hdr,
+                      params={"sort": "tracks"}).json()["items"]
+    assert most[0]["name"] == "Bowie", "three tracks beats two"
+
+    records = client.get("/library/albums", headers=hdr,
+                         params={"sort": "tracks"}).json()["items"]
+    assert records[0]["tracks"] >= records[-1]["tracks"]
+
+    assert client.get("/library/albums", headers=hdr,
+                      params={"sort": "sideways"}).status_code == 400
+
+
 def test_history_carries_timestamps_and_can_be_cleared(client, hdr, library):
     client.post("/listens", headers=hdr,
                 json={"track_id": library[0], "ms_played": 30_000, "completed": True})

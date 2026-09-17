@@ -945,9 +945,14 @@ class ApiClient {
   /// answers with by default, with nothing to say the list went on — so it simply
   /// stopped, a fifth of the way through the alphabet.
   Future<({List<AlbumSummary> items, int total})> albums(
-      {int limit = 200, int offset = 0}) async {
+      {int limit = 200, int offset = 0, String? q, String sort = 'name'}) async {
     final d = await _decode(await net.get(
-        _u('/library/albums', {'limit': limit, 'offset': offset}),
+        _u('/library/albums', {
+          'limit': limit,
+          'offset': offset,
+          'sort': sort,
+          if (q != null && q.trim().isNotEmpty) 'q': q.trim(),
+        }),
         headers: _headers)) as Map<String, dynamic>;
     final items =
         (d['items'] as List).map((e) => AlbumSummary.fromJson(e)).toList();
@@ -1120,9 +1125,14 @@ class ApiClient {
   }
 
   Future<({List<ArtistSummary> items, int total})> artists(
-      {int limit = 300, int offset = 0}) async {
+      {int limit = 300, int offset = 0, String? q, String sort = 'name'}) async {
     final d = await _decode(await net.get(
-        _u('/library/artists', {'limit': limit, 'offset': offset}),
+        _u('/library/artists', {
+          'limit': limit,
+          'offset': offset,
+          'sort': sort,
+          if (q != null && q.trim().isNotEmpty) 'q': q.trim(),
+        }),
         headers: _headers)) as Map<String, dynamic>;
     final items =
         (d['items'] as List).map((e) => ArtistSummary.fromJson(e)).toList();

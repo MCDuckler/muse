@@ -203,6 +203,44 @@ def store_cover(cfg, raw_bytes: bytes, source: str) -> dict | None:
 
 
 # ------------------------------------------------------------------ the job
+def _album_of(t: dict) -> tuple[str, str] | None:
+    """The record a track is on, as the library groups records: name and first credit.
+
+    Nothing without both, because "no album" is not an album — and a cover borrowed
+    across everything with an empty album name would put one record's sleeve on a
+    thousand unrelated songs.
+    """
+    album = (t.get("album") or "").strip()
+    artists = t.get("artists") or []
+    artist = (artists[0] if artists else "") or ""
+    return (album, artist) if album and artist else None
+
+
+def _album_cover(t: dict) -> int | None:
+    """A cover already held by something else on the same record."""
+    where = _album_of(t)
+    if not where:
+        return None
+    row = db.one(
+        """select cover_id from tracks
+            where album=%s and coalesce(artists[1],'')=%s and cover_id is not null
+            order by id limit 1""",
+        where)
+    return row["cover_id"] if row else None
+
+
+def _share_with_album(t: dict, cover_id: int) -> int:
+    """Give this cover to the rest of the record, where they have none."""
+    where = _album_of(t)
+    if not where:
+        return 0
+    with db.pool().connection() as c:
+        return c.execute(
+            """update tracks set cover_id=%s
+                where album=%s and coalesce(artists[1],'')=%s and cover_id is null""",
+            (cover_id, *where)).rowcount
+
+
 def enrich_track(cfg, track_id: int) -> dict:
     """Fill in album, year, ISRC and — the point of the exercise — a cover."""
     t = catalog.track_row(track_id)
@@ -281,10 +319,23 @@ def enrich_track(cfg, track_id: int) -> dict:
 
     cover = store_cover(cfg, cover_bytes, cover_source) if cover_bytes else None
 
+    # Failing that: the record this song is on, if anything else on it has a cover.
+    #
+    # One song of an album shows its sleeve and the next one shows a grey square, which
+    # is the same record drawn two ways in one list — and the picture is right there,
+    # already fetched, filed under the track next to it. Whatever this track's own
+    # lookup did, the album it belongs to is the album it belongs to.
+    borrowed = None
+    if not cover:
+        borrowed = _album_cover(t)
+        if borrowed:
+            log.info("track %s takes its cover from the rest of %s",
+                     track_id, t.get("album"))
+
     updates, params = [], []
-    if cover:
+    if cover or borrowed:
         updates.append("cover_id=%s")
-        params.append(cover["id"])
+        params.append(cover["id"] if cover else borrowed)
     if chosen:
         if not t["isrc"] and chosen.get("provider") == "deezer" \
                 and chosen.get("provider_track_id"):
@@ -302,9 +353,16 @@ def enrich_track(cfg, track_id: int) -> dict:
         params.append(track_id)
         db.run(f"update tracks set {', '.join(updates)} where id=%s", tuple(params))
 
+    # And the other way round: a cover found here is the cover of everything else on
+    # the record, so the rest of the album stops being grey squares without each one
+    # having to go and look for itself.
+    shared = _share_with_album(t, cover["id"]) if cover else 0
+
     return {
         "track_id": track_id,
-        "cover": bool(cover),
+        "cover": bool(cover) or bool(borrowed),
+        "borrowed": bool(borrowed),
+        "shared_with": shared,
         "cover_source": cover_source,
         "matched": chosen["provider"] if chosen else None,
         "confidence": chosen["confidence"] if chosen else None,

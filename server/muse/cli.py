@@ -145,6 +145,59 @@ def markdead(apply: bool = False) -> None:
     db.close()
 
 
+def covers(apply: bool = False) -> None:
+    """Find the songs with no artwork and go and get some.
+
+    Two passes, cheapest first. A track on a record that something else has a cover for
+    takes that cover — the picture is already here, filed under the song next to it,
+    and one song of an album drawn as a grey square beside its own sleeve is the same
+    record drawn two ways in one list. Whatever is still bare afterwards is queued for
+    enrichment, which goes and looks: nine thousand Bandcamp tracks arrived through a
+    mirror that never asked anybody for their artwork.
+    """
+    from . import config, db, jobs
+
+    db.init(config.load().dsn)
+    bare = db.one("select count(*) n from tracks where cover_id is null")["n"]
+    shareable = db.one(
+        """select count(*) n from tracks t
+            where t.cover_id is null and t.album is not null and t.album <> ''
+              and exists (select 1 from tracks o
+                           where o.album = t.album
+                             and coalesce(o.artists[1],'') = coalesce(t.artists[1],'')
+                             and o.cover_id is not null)""")["n"]
+    print(f"{bare} tracks with no cover, {shareable} of them on a record that has one")
+    if not apply:
+        print("dry run — pass --apply to write it")
+        db.close()
+        return
+
+    with db.pool().connection() as c:
+        took = c.execute(
+            """update tracks t set cover_id = (
+                    select o.cover_id from tracks o
+                     where o.album = t.album
+                       and coalesce(o.artists[1],'') = coalesce(t.artists[1],'')
+                       and o.cover_id is not null
+                     order by o.id limit 1)
+                where t.cover_id is null and t.album is not null and t.album <> ''
+                  and coalesce(t.artists[1],'') <> ''
+                  and exists (select 1 from tracks o
+                               where o.album = t.album
+                                 and coalesce(o.artists[1],'')
+                                     = coalesce(t.artists[1],'')
+                                 and o.cover_id is not null)""").rowcount
+    print(f"{took} took a cover from the rest of their record")
+
+    # Everything still bare, behind whatever else is waiting: this is a long tail of
+    # web requests and nobody is sitting watching it.
+    rest = db.all_("select id from tracks where cover_id is null order by id")
+    for row in rest:
+        jobs.enqueue("meta", {"track_id": row["id"]}, priority=jobs.PRIORITY_BULK)
+    print(f"{len(rest)} queued for enrichment")
+    db.close()
+
+
 def main() -> None:
     match sys.argv[1:]:
         case ["adduser", name]:
@@ -167,10 +220,15 @@ def main() -> None:
             markdead()
         case ["markdead", "--apply"]:
             markdead(apply=True)
+        case ["covers"]:
+            covers()
+        case ["covers", "--apply"]:
+            covers(apply=True)
         case _:
             sys.exit("usage: python -m muse.cli [adduser <name> | secret "
                      "| splitartists [--apply] | fixsoundcloud [--apply] "
-                     "| fixspotifynames [--apply] | markdead [--apply]]")
+                     "| fixspotifynames [--apply] | markdead [--apply] "
+                     "| covers [--apply]]")
 
 
 if __name__ == "__main__":

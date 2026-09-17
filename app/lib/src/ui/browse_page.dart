@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -17,6 +19,106 @@ import 'mini_player.dart';
 import 'track_list.dart';
 import 'track_menu.dart';
 import 'snack.dart';
+
+/// Narrowing a list that is thousands long, and saying what order it is in.
+///
+/// Ten thousand records and nine thousand artists cannot be scrolled through, and a
+/// list that can only be scrolled is a list where finding something means knowing
+/// roughly where the alphabet puts it. Typing is asked of the server rather than
+/// filtered here, because what is on this device is one page of the list.
+class _FilterBar extends StatefulWidget implements PreferredSizeWidget {
+  const _FilterBar({
+    required this.hint,
+    required this.sorts,
+    required this.sort,
+    required this.onSearch,
+    required this.onSort,
+  });
+
+  final String hint;
+  final Map<String, String> sorts;
+  final String sort;
+  final ValueChanged<String> onSearch;
+  final ValueChanged<String> onSort;
+
+  @override
+  Size get preferredSize => const Size.fromHeight(60);
+
+  @override
+  State<_FilterBar> createState() => _FilterBarState();
+}
+
+class _FilterBarState extends State<_FilterBar> {
+  final _text = TextEditingController();
+  Timer? _typing;
+
+  @override
+  void dispose() {
+    _typing?.cancel();
+    _text.dispose();
+    super.dispose();
+  }
+
+  /// A quarter of a second after the last keystroke: a request per letter would be
+  /// eight requests for a name somebody is halfway through typing.
+  void _changed(String value) {
+    _typing?.cancel();
+    _typing = Timer(const Duration(milliseconds: 250), () => widget.onSearch(value));
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(12, 0, 6, 8),
+        child: Row(
+          children: [
+            Expanded(
+              child: SizedBox(
+                height: 44,
+                child: TextField(
+                  controller: _text,
+                  onChanged: _changed,
+                  textInputAction: TextInputAction.search,
+                  onSubmitted: widget.onSearch,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    filled: true,
+                    hintText: widget.hint,
+                    prefixIcon: const Icon(Icons.search, size: 20),
+                    suffixIcon: _text.text.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.close, size: 18),
+                            tooltip: 'Clear',
+                            onPressed: () {
+                              _text.clear();
+                              widget.onSearch('');
+                              setState(() {});
+                            },
+                          ),
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(22),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.sort),
+              tooltip: 'Sort',
+              initialValue: widget.sort,
+              onSelected: widget.onSort,
+              itemBuilder: (context) => [
+                for (final e in widget.sorts.entries)
+                  PopupMenuItem(value: e.key, child: Text(e.value)),
+              ],
+            ),
+          ],
+        ),
+      );
+}
 
 /// All tracks, albums and artists — built from metadata the enrichment pipeline
 /// already writes and nothing used to read.
@@ -116,10 +218,33 @@ class AlbumsPage extends StatefulWidget {
 }
 
 class _AlbumsPageState extends State<AlbumsPage> {
-  late final Paged<AlbumSummary> _albums = Paged<AlbumSummary>(
-    fetch: (offset, limit) =>
-        context.read<AppState>().api.albums(offset: offset, limit: limit),
-  )..next();
+  static const _sorts = {
+    'name': 'Album name',
+    'artist': 'Artist',
+    'year': 'Newest first',
+    'tracks': 'Most tracks',
+    'added': 'Recently added',
+  };
+
+  String _q = '';
+  String _sort = 'name';
+  late Paged<AlbumSummary> _albums = _pager();
+
+  Paged<AlbumSummary> _pager() {
+    final api = context.read<AppState>().api;
+    final q = _q, sort = _sort;
+    return Paged<AlbumSummary>(
+      fetch: (offset, limit) =>
+          api.albums(offset: offset, limit: limit, q: q, sort: sort),
+    )..next();
+  }
+
+  /// A different search or a different order is a different list, so it starts again
+  /// from the top rather than appending to what was on screen.
+  void _again() => setState(() {
+        _albums.dispose();
+        _albums = _pager();
+      });
 
   @override
   void dispose() {
@@ -133,7 +258,31 @@ class _AlbumsPageState extends State<AlbumsPage> {
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
     return PlayerScaffold(
-      appBar: AppBar(title: const Text('Albums')),
+      appBar: AppBar(
+        // How many there are, because "Albums" over a list that stops somewhere
+        // says nothing about what you are looking at — and with a search in it, it
+        // is the answer to what you typed.
+        title: ListenableBuilder(
+          listenable: _albums,
+          builder: (context, _) => Text(
+              _albums.total > 0 ? 'Albums · ${_albums.total}' : 'Albums'),
+        ),
+        bottom: _FilterBar(
+          hint: 'Find a record or an artist',
+          sorts: _sorts,
+          sort: _sort,
+          onSearch: (v) {
+            if (v.trim() == _q) return;
+            _q = v.trim();
+            _again();
+          },
+          onSort: (v) {
+            if (v == _sort) return;
+            _sort = v;
+            _again();
+          },
+        ),
+      ),
       body: ListenableBuilder(
         listenable: _albums,
         builder: (context, _) {
@@ -145,10 +294,12 @@ class _AlbumsPageState extends State<AlbumsPage> {
           }
           final albums = _albums.items;
           if (albums.isEmpty) {
-            return const EmptyHint(
+            return EmptyHint(
               icon: Icons.album_outlined,
-              title: 'No albums yet',
-              body: 'Albums appear as tracks get their metadata.',
+              title: _q.isEmpty ? 'No albums yet' : 'Nothing called that',
+              body: _q.isEmpty
+                  ? 'Albums appear as tracks get their metadata.'
+                  : 'No record or artist here matches “$_q”.',
             );
           }
           return RefreshIndicator(
@@ -594,11 +745,30 @@ class ArtistsPage extends StatefulWidget {
 }
 
 class _ArtistsPageState extends State<ArtistsPage> {
-  late final Paged<ArtistSummary> _artists = Paged<ArtistSummary>(
-    pageSize: 300,
-    fetch: (offset, limit) =>
-        context.read<AppState>().api.artists(offset: offset, limit: limit),
-  )..next();
+  static const _sorts = {
+    'name': 'Name',
+    'tracks': 'Most songs',
+    'albums': 'Most records',
+  };
+
+  String _q = '';
+  String _sort = 'name';
+  late Paged<ArtistSummary> _artists = _pager();
+
+  Paged<ArtistSummary> _pager() {
+    final api = context.read<AppState>().api;
+    final q = _q, sort = _sort;
+    return Paged<ArtistSummary>(
+      pageSize: 300,
+      fetch: (offset, limit) =>
+          api.artists(offset: offset, limit: limit, q: q, sort: sort),
+    )..next();
+  }
+
+  void _again() => setState(() {
+        _artists.dispose();
+        _artists = _pager();
+      });
 
   @override
   void dispose() {
@@ -612,7 +782,28 @@ class _ArtistsPageState extends State<ArtistsPage> {
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
     return PlayerScaffold(
-      appBar: AppBar(title: const Text('Artists')),
+      appBar: AppBar(
+        title: ListenableBuilder(
+          listenable: _artists,
+          builder: (context, _) => Text(
+              _artists.total > 0 ? 'Artists · ${_artists.total}' : 'Artists'),
+        ),
+        bottom: _FilterBar(
+          hint: 'Find an artist',
+          sorts: _sorts,
+          sort: _sort,
+          onSearch: (v) {
+            if (v.trim() == _q) return;
+            _q = v.trim();
+            _again();
+          },
+          onSort: (v) {
+            if (v == _sort) return;
+            _sort = v;
+            _again();
+          },
+        ),
+      ),
       body: ListenableBuilder(
         listenable: _artists,
         builder: (context, _) {
@@ -623,6 +814,15 @@ class _ArtistsPageState extends State<ArtistsPage> {
             return const Center(child: CircularProgressIndicator());
           }
           final artists = _artists.items;
+          if (artists.isEmpty) {
+            return EmptyHint(
+              icon: Icons.person_outline,
+              title: _q.isEmpty ? 'No artists yet' : 'Nobody called that',
+              body: _q.isEmpty
+                  ? 'Artists appear as tracks get their metadata.'
+                  : 'No artist here matches “$_q”.',
+            );
+          }
           return RefreshIndicator(
             onRefresh: _artists.reload,
             child: NotificationListener<ScrollNotification>(
