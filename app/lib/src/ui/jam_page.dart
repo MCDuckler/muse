@@ -75,6 +75,7 @@ class _JamPageState extends State<JamPage> {
     final already = {for (final m in app.jam?.members ?? const <JamMember>[]) m.userId};
 
     await showModalBottomSheet<void>(
+   useRootNavigator: true,
       context: context,
       showDragHandle: true,
       builder: (sheet) => SafeArea(

@@ -104,6 +104,7 @@ Future<void> addTracksToPlaylistSheet(
   if (!context.mounted) return;
 
   await showModalBottomSheet<void>(
+   useRootNavigator: true,
     context: context,
     isScrollControlled: true,
     showDragHandle: true,

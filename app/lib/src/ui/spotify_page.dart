@@ -468,6 +468,7 @@ class _UnmatchedPageState extends State<UnmatchedPage> {
     if (!mounted) return;
 
     await showModalBottomSheet<void>(
+   useRootNavigator: true,
       context: context,
       showDragHandle: true,
       builder: (sheet) => SafeArea(

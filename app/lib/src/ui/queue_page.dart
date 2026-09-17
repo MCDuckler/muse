@@ -607,6 +607,7 @@ class _QueuePageState extends State<QueuePage> {
     feel(Feel.commit);
     final app = context.read<AppState>();
     await showModalBottomSheet<void>(
+   useRootNavigator: true,
       context: context,
       showDragHandle: true,
       builder: (sheet) => SafeArea(

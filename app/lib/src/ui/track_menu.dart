@@ -30,6 +30,7 @@ Future<void> showTrackSheet(
 }) async {
   final app = context.read<AppState>();
   await showModalBottomSheet<void>(
+   useRootNavigator: true,
     context: context,
     showDragHandle: true,
     builder: (sheet) => SafeArea(

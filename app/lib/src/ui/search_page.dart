@@ -531,6 +531,7 @@ class _Arriving extends StatelessWidget {
 Future<void> showFoundAlbum(BuildContext context, Found found) async {
   final app = context.read<AppState>();
   await showModalBottomSheet<void>(
+   useRootNavigator: true,
     context: context,
     isScrollControlled: true,
     showDragHandle: true,

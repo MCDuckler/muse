@@ -1584,6 +1584,7 @@ class _Controls extends StatelessWidget {
 /// Volume, as a sheet, for the arrangement that has no room for a slider of its own.
 Future<void> showVolume(BuildContext context, PlayerService player) =>
     showModalBottomSheet<void>(
+      useRootNavigator: true,
       context: context,
       showDragHandle: true,
       builder: (sheet) => SafeArea(
@@ -1637,6 +1638,7 @@ class _VolumeRowState extends State<_VolumeRow> {
 Future<void> showPlaybackExtras(BuildContext context) async {
   final app = context.read<AppState>();
   await showModalBottomSheet<void>(
+   useRootNavigator: true,
     context: context,
     showDragHandle: true,
     builder: (sheet) => _PlaybackExtras(app: app),

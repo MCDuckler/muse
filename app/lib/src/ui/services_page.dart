@@ -222,6 +222,7 @@ class _ServicesPageState extends State<ServicesPage> {
   /// Answers 'paste', 'code' or 'setup' — or null when nobody chose anything.
   Future<String?> _howToSignIn(LinkedService service) =>
       showModalBottomSheet<String>(
+        useRootNavigator: true,
         context: context,
         showDragHandle: true,
         builder: (context) => SafeArea(

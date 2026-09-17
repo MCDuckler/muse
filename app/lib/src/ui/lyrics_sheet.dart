@@ -57,6 +57,7 @@ int currentLineIndex(List<LyricLine> lines, Duration position) {
 
 Future<void> showLyrics(BuildContext context, Track track) async {
   await showModalBottomSheet<void>(
+   useRootNavigator: true,
     context: context,
     showDragHandle: true,
     isScrollControlled: true,

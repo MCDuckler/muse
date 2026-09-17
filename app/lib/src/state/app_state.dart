@@ -60,6 +60,11 @@ class AppState extends ChangeNotifier {
   void setHomeTab(int tab) {
     if (homeTab == tab) return;
     homeTab = tab;
+    // Remembered, like the queue that was playing: opening the app again lands where
+    // it was left rather than back at the queue every time.
+    SharedPreferences.getInstance()
+        .then((p) => p.setInt(_kHomeTab, tab))
+        .catchError((_) => false);
     notifyListeners();
   }
 
@@ -226,6 +231,7 @@ class AppState extends ChangeNotifier {
   static const _kJamListening = 'muse.jamListening';
   static const _kLastQueue = 'muse.lastQueue';
   static const _kVolume = 'muse.volume';
+  static const _kHomeTab = 'muse.homeTab';
 
   /// The queue that was on when the app was last closed, so opening it again lands
   /// there rather than on whichever queue happens to be first in the list.
@@ -400,6 +406,7 @@ class AppState extends ChangeNotifier {
     // who wants it can turn it on, and their choice is what is read back here.
     halftone = prefs.getBool(_kHalftone) ?? !kIsWeb;
     spectrum = prefs.getBool(_kSpectrum) ?? false;
+    homeTab = (prefs.getInt(_kHomeTab) ?? 0).clamp(0, 3);
     coverScale = (prefs.getDouble(_kCoverScale) ?? 0.74).clamp(0.5, 1.0);
     discScale = (prefs.getDouble(_kDiscScale) ?? 1.0).clamp(0.6, 1.15);
     haptics = prefs.getBool(_kHaptics) ?? true;

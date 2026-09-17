@@ -197,8 +197,12 @@ class PlayerBar extends StatelessWidget {
   /// The rectangle is this bar's own, read at the moment it is tapped: the route grows
   /// out of it and shrinks back into it, so the thing that was tapped is the thing
   /// that opens.
+  ///
+  /// On the app's own navigator, not a tab's: the player covers everything, tabs and
+  /// all, and it carries its own copy of the bar out of itself.
   static void _openNowPlaying(BuildContext context) =>
-      Navigator.of(context).push(nowPlayingRoute(from: barRect(context)));
+      Navigator.of(context, rootNavigator: true)
+          .push(nowPlayingRoute(from: barRect(context)));
 
   /// Where this bar is on the screen, for the route to come out of.
   static Rect? barRect(BuildContext context) {
@@ -306,7 +310,7 @@ class _OpenByHandState extends State<_OpenByHand>
   /// back to nothing first.
   void _open(double upwardPixelsPerSecond) {
     final route = NowPlayingRoute(from: PlayerBar.barRect(context), byHand: true);
-    Navigator.of(context).push(route);
+    Navigator.of(context, rootNavigator: true).push(route);
     final hand = route.hand;
     if (hand == null) return;
     hand.value = (_lifted / _height).clamp(0.0, 0.25);

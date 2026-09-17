@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
@@ -25,6 +26,24 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   bool _saidHello = false;
 
+  /// One navigator per tab, so a screen opened from a tab belongs to that tab.
+  ///
+  /// Pushing onto the app's own navigator put every album, artist and playlist *over*
+  /// the shell: the bar with the four tabs in it disappeared, so there was no way
+  /// anywhere except back the way you came, and going to another tab and returning
+  /// found the library back at its top rather than on the playlist you were reading.
+  /// A navigator each fixes both at once — the bars stay where they are because the
+  /// shell is still the screen, and each tab keeps its own back stack while you are
+  /// somewhere else.
+  final List<GlobalKey<NavigatorState>> _tabs =
+      [for (var i = 0; i < 4; i++) GlobalKey<NavigatorState>()];
+
+  /// Back goes back inside the tab first, and only then out of the app.
+  Future<bool> _backWithinTab() async {
+    final navigator = _tabs[context.read<AppState>().homeTab].currentState;
+    return navigator != null && await navigator.maybePop();
+  }
+
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
@@ -37,9 +56,126 @@ class _HomePageState extends State<HomePage> {
     const pages = [QueuePage(), SearchPage(), LibraryPage(), SocialPage()];
     const titles = ['Queues', 'Search', 'Library', 'People'];
 
+    return PopScope(
+      // The shell itself only leaves once the tab has nothing left to go back to.
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        final root = Navigator.of(context);
+        if (await _backWithinTab()) return;
+        // Nothing left to go back to inside the tab: out of the shell if there is
+        // anything under it, and out of the app if there is not.
+        if (root.canPop()) {
+          root.pop();
+        } else {
+          await SystemNavigator.pop();
+        }
+      },
+      child: Scaffold(
+      // IndexedStack, not pages[app.homeTab]: rebuilding the tab from scratch threw away
+      // your search results and scroll position every time you switched away and back.
+      // Content runs under the bars so the blur has something to blur. Lists add
+      // their own bottom padding, otherwise the last row hides behind the glass.
+      extendBody: true,
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          children: [
+            Expanded(
+              // All three tabs are built and kept — that is what an IndexedStack is
+              // for, and it is why coming back to a tab finds it where you left it.
+              // What the two you are not looking at have no business doing is
+              // *animating*: a spinner, a progress bar or a pulse in a hidden tab is
+              // a frame of work and a frame of memory for something nobody can see,
+              // which on a phone in a browser is a tab being reloaded out from under
+              // somebody.
+              // And a tab that changes settles in rather than being cut to: the same
+              // stack, faded up from three quarters over a tenth of a second. Not a
+              // cross-fade between two tabs — that would mean two of them built and
+              // painted at once, which is what the IndexedStack is here to avoid.
+              child: InsideShell(
+                child: _Settling(
+                  on: app.homeTab,
+                  child: IndexedStack(
+                    index: app.homeTab,
+                    children: [
+                      for (var i = 0; i < pages.length; i++)
+                        TickerMode(
+                          enabled: i == app.homeTab,
+                          child: Navigator(
+                            key: _tabs[i],
+                            onGenerateRoute: (_) => MaterialPageRoute(
+                              builder: (_) => _TabRoot(
+                                  title: titles[i], child: pages[i]),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      bottomNavigationBar: GlassSurface(
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const PlayerBar(),
+              MuseNavigationBar(
+                // Tapping the tab you are already on goes back to the top of it,
+                // which is what every app does and what somebody four screens deep
+                // in the library reaches for.
+                onSameTab: () =>
+                    _tabs[context.read<AppState>().homeTab].currentState
+                        ?.popUntil((r) => r.isFirst),
+              ),
+            ],
+          ),
+        ),
+      ),
+      ),
+    );
+  }
+}
+
+/// Marks everything drawn inside the home shell.
+///
+/// The shell already carries the player and the tabs at its bottom, so a screen opened
+/// inside a tab must not put a second player under itself. A screen opened over the
+/// whole app — from the player, say — still does. See PlayerScaffold.
+class InsideShell extends InheritedWidget {
+  const InsideShell({super.key, required super.child});
+
+  static bool of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<InsideShell>() != null;
+
+  @override
+  bool updateShouldNotify(InsideShell old) => false;
+}
+
+/// The first screen in a tab: the tab's own content, under the bar that every screen
+/// in the app shares.
+///
+/// The bar used to belong to the shell, above all four tabs at once. It cannot any
+/// more, because what is on top of a tab now is a whole screen with a bar of its own,
+/// and two bars stacked is a bar too many.
+class _TabRoot extends StatelessWidget {
+  const _TabRoot({required this.title, required this.child});
+  final String title;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
     return Scaffold(
+      backgroundColor: Colors.transparent,
+      extendBody: true,
       appBar: AppBar(
-        title: Text(titles[app.homeTab]),
+        title: Text(title),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -70,58 +206,18 @@ class _HomePageState extends State<HomePage> {
           ),
         ],
       ),
-      // IndexedStack, not pages[app.homeTab]: rebuilding the tab from scratch threw away
-      // your search results and scroll position every time you switched away and back.
-      // Content runs under the bars so the blur has something to blur. Lists add
-      // their own bottom padding, otherwise the last row hides behind the glass.
-      extendBody: true,
-      body: SafeArea(
-        bottom: false,
-        child: Column(
-          children: [
-            if (!app.ingestOnline && app.downloadsPending > 0)
-              InkWell(
-                onTap: () => Navigator.of(context)
-                    .push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
-                child: _OfflineBanner(pending: app.downloadsPending),
-              ),
-            Expanded(
-              // All three tabs are built and kept — that is what an IndexedStack is
-              // for, and it is why coming back to a tab finds it where you left it.
-              // What the two you are not looking at have no business doing is
-              // *animating*: a spinner, a progress bar or a pulse in a hidden tab is
-              // a frame of work and a frame of memory for something nobody can see,
-              // which on a phone in a browser is a tab being reloaded out from under
-              // somebody.
-              // And a tab that changes settles in rather than being cut to: the same
-              // stack, faded up from three quarters over a tenth of a second. Not a
-              // cross-fade between two tabs — that would mean two of them built and
-              // painted at once, which is what the IndexedStack is here to avoid.
-              child: _Settling(
-                on: app.homeTab,
-                child: IndexedStack(
-                  index: app.homeTab,
-                  children: [
-                    for (var i = 0; i < pages.length; i++)
-                      TickerMode(enabled: i == app.homeTab, child: pages[i]),
-                  ],
-                ),
-              ),
+      body: Column(
+        children: [
+          // Under the bar, above the tab: the same place it has always been, which is
+          // now inside the tab because the bar is.
+          if (!app.ingestOnline && app.downloadsPending > 0)
+            InkWell(
+              onTap: () => Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
+              child: _OfflineBanner(pending: app.downloadsPending),
             ),
-          ],
-        ),
-      ),
-      bottomNavigationBar: GlassSurface(
-        child: SafeArea(
-          top: false,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const PlayerBar(),
-              const MuseNavigationBar(),
-            ],
-          ),
-        ),
+          Expanded(child: child),
+        ],
       ),
     );
   }
@@ -167,11 +263,14 @@ class _SettlingState extends State<_Settling>
 /// same place, doing the same thing — the only difference is that from inside the
 /// player it has to get you out of the player first.
 class MuseNavigationBar extends StatelessWidget {
-  const MuseNavigationBar({super.key, this.onLeaving});
+  const MuseNavigationBar({super.key, this.onLeaving, this.onSameTab});
 
   /// Called before the tab changes, for screens that are sitting on top of the app and
   /// have to get out of the way. Nothing on the home screen needs it.
   final VoidCallback? onLeaving;
+
+  /// Called when the tab already showing is tapped again.
+  final VoidCallback? onSameTab;
 
   @override
   Widget build(BuildContext context) {
@@ -181,7 +280,11 @@ class MuseNavigationBar extends StatelessWidget {
     return NavigationBar(
       selectedIndex: tab,
       onDestinationSelected: (i) {
-        if (i != tab) feel(Feel.pick);
+        if (i != tab) {
+          feel(Feel.pick);
+        } else {
+          onSameTab?.call();
+        }
         context.read<AppState>().setHomeTab(i);
         onLeaving?.call();
       },

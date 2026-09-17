@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
 import 'glass.dart';
+import 'home_page.dart';
 import 'player_bar.dart';
 
 /// The player, at the bottom of a screen that is not the home shell.
@@ -38,7 +39,11 @@ class MiniPlayer extends StatelessWidget {
 /// so a list that ends where the screen ends puts its last row, or its last button,
 /// underneath the bar where it cannot be reached. Lists that end in songs already left
 /// room; this is the number, so the ones that end in a button leave it too.
-const bottomForPlayer = 140.0;
+///
+/// Room for the tabs as well now: they are under every screen rather than only under
+/// the four at the top of the app, so the last row of any list has a bar and a half
+/// beneath it.
+const bottomForPlayer = 168.0;
 
 /// A page with the player under it. Every screen that shows songs uses this instead of
 /// a bare Scaffold, so there is one answer to "where are the controls" everywhere.
@@ -56,13 +61,37 @@ class PlayerScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Inside a tab the shell is still the screen: it is already carrying the player
+    // and the four tabs at its bottom, and a second set under this page would be two
+    // players stacked on one screen.
+    final inShell = InsideShell.of(context);
     return Scaffold(
       appBar: appBar,
       body: body,
+      backgroundColor: inShell ? Colors.transparent : null,
       floatingActionButton: floatingActionButton,
       // extendBody so the blur has something to blur, as in the home shell.
       extendBody: true,
-      bottomNavigationBar: const MiniPlayer(),
+      bottomNavigationBar: inShell
+          ? null
+          : GlassSurface(
+              child: SafeArea(
+                top: false,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const PlayerBar(),
+                    // A screen opened over the whole app — from the player, say —
+                    // keeps the way out that every other screen has: tapping a tab
+                    // closes it and goes there.
+                    MuseNavigationBar(
+                      onLeaving: () => Navigator.of(context, rootNavigator: true)
+                          .popUntil((r) => r.isFirst),
+                    ),
+                  ],
+                ),
+              ),
+            ),
     );
   }
 }
