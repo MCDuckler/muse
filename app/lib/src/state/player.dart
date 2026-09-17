@@ -230,6 +230,7 @@ class PlayerService {
         PlaybackLog.note('engine $now'
             '${_wantPlaying ? '' : ' (nothing wanted)'}');
       }
+      _noticeSomebodyElse(s);
       _emit(force: true);
       if (s.processingState == ProcessingState.completed) _onCompleted();
       if (!s.playing) _saveCursor();      // pausing is a good moment to remember
@@ -248,6 +249,42 @@ class PlayerService {
     });
     _watchdog = Timer.periodic(watchInterval, (_) => checkForStall());
     unawaited(_listenToTheSession());
+  }
+
+  /// The buttons that are not in this app.
+  ///
+  /// The notification, the lockscreen, a watch, Android Auto and a headset button all
+  /// go straight to the engine through the media session: they call play and pause on
+  /// the same player this class drives, and nothing in here is told. So pressing pause
+  /// out there left `_wantPlaying` true, and a few seconds later the stall watchdog
+  /// saw music that was supposed to be playing and an engine that was not playing it,
+  /// did its job, and started the song again. Pause on the notification, music back a
+  /// moment later, over and over — the watchdog undoing a decision it could not see.
+  ///
+  /// `playing` in just_audio is what was last *asked for*, so a change in it that this
+  /// class did not ask for is somebody pressing a button somewhere else. That is a
+  /// decision, and it is recorded as one. A dying engine does not come through here:
+  /// it keeps `playing` true and changes its processing state, which is what the
+  /// watchdog actually watches for.
+  void _noticeSomebodyElse(PlayerState s) {
+    // Our own edits stop and start the engine as a matter of course.
+    if (_mutating > 0 || _interrupted) return;
+    if (s.playing == _wantPlaying) return;
+    // An engine that has run out is not a pause: the queue moving on is handled by
+    // the completion path, and reading it as "they stopped it" would leave the next
+    // song unstarted.
+    if (!s.playing && s.processingState != ProcessingState.ready) return;
+    _wantPlaying = s.playing;
+    unawaited(Keepalive.set(s.playing));
+    if (s.playing) {
+      _revivals = 0;                    // a fresh start deserves fresh attempts
+    } else {
+      _handedOverAt = null;
+      _askingForItBack?.cancel();
+      _askingForItBack = null;
+    }
+    PlaybackLog.note(
+        s.playing ? 'played from somewhere else' : 'paused from somewhere else');
   }
 
   /// What to do when something else wants the speaker.
@@ -572,10 +609,16 @@ class PlayerService {
       } else {
         // Put just_audio's own idea of playing back to false first, or the play()
         // after the load is a no-op for the same reason.
+        //
+        // Counted as one of our own edits while it happens: this pause is a step in
+        // getting the music back, not somebody pressing pause on the notification.
+        _mutating++;
         try {
           await _player.pause();
         } catch (_) {
           // A dead platform cannot be paused. It is about to be replaced anyway.
+        } finally {
+          _mutating--;
         }
         await _loadCurrent(startAt: at);
         _startPlayback();
@@ -614,6 +657,11 @@ class PlayerService {
     // you see for a moment before the new one settles. What this device means to play
     // is `current`; the loaded id is only the fallback for before there is one.
     final anchor = current?.id ?? _loadedTrackId ?? _waitingForTrack;
+    // Which *row* is playing, not which song. Two rows holding the same track are the
+    // same track, so a queue with a song in it twice could only be searched by
+    // distance — and a tie went to the copy nearer the top, which is playback sliding
+    // from copy two back to copy one and then round again.
+    final anchorRow = current?.queueItemId;
     _queueId = queue.id;
     _items = queue.items;
     _windowFrom = queue.windowFrom;
@@ -631,7 +679,7 @@ class PlayerService {
     }
 
     if (sameQueue && anchor != null) {
-      final moved = _relocate(previousIndex, anchor);
+      final moved = _relocate(previousIndex, anchor, row: anchorRow);
       if (moved >= 0) {
         _syncOrder(keepItemIndex: moved);
         // A track we were stalled on may have arrived with this update.
@@ -659,7 +707,17 @@ class PlayerService {
   /// same song twice — radio produces those, and so does adding a favourite again —
   /// snapped playback back to copy one on every refresh, advanced from there, and hit
   /// the same song again. Which is what "it just plays the same song" felt like.
-  int _relocate(int previousIndex, int trackId) {
+  int _relocate(int previousIndex, int trackId, {int? row}) {
+    // The row itself, where the queue gave us one: exact, and the only thing that can
+    // tell two copies of a song apart. An older server sends no row names, and then
+    // this falls through to the nearest copy as it always did.
+    if (row != null) {
+      for (var i = 0; i < _items.length; i++) {
+        if (_items[i].queueItemId == row) return i;
+      }
+      // The row is gone — somebody removed the copy that was playing. Fall through to
+      // the nearest other copy rather than jumping to the top of the queue.
+    }
     if (previousIndex >= 0 &&
         previousIndex < _items.length &&
         _items[previousIndex].id == trackId) {
@@ -746,11 +804,13 @@ class PlayerService {
     if (from < 0 || from >= _items.length) return;
     if (to < 0 || to >= _items.length || from == to) return;
     final playing = current?.id;
+    final playingRow = current?.queueItemId;
     final items = [..._items];
     items.insert(to, items.removeAt(from));
     _items = items;
     // Keep playing what is playing: it has a new index in the list now.
-    final at = playing == null ? index : _relocate(index, playing);
+    final at =
+        playing == null ? index : _relocate(index, playing, row: playingRow);
     _rebuildOrder(keepItemIndex: at < 0 ? 0 : at);
     unawaited(_queueNext());
     _emit(force: true);
@@ -761,6 +821,7 @@ class PlayerService {
     final picked = ({...froms}.toList()..sort());
     if (picked.isEmpty || picked.any((p) => p < 0 || p >= _items.length)) return;
     final playing = current?.id;
+    final playingRow = current?.queueItemId;
     final block = [for (final p in picked) _items[p]];
     final rest = [
       for (var i = 0; i < _items.length; i++)
@@ -768,7 +829,8 @@ class PlayerService {
     ];
     final at = to.clamp(0, rest.length);
     _items = [...rest.sublist(0, at), ...block, ...rest.sublist(at)];
-    final now = playing == null ? index : _relocate(index, playing);
+    final now =
+        playing == null ? index : _relocate(index, playing, row: playingRow);
     _rebuildOrder(keepItemIndex: now < 0 ? 0 : now);
     _queuedNextId = null;
     unawaited(_queueNext());
@@ -779,6 +841,7 @@ class PlayerService {
   void removeLocally(int pos) {
     if (pos < 0 || pos >= _items.length) return;
     final playing = current?.id;
+    final playingRow = current?.queueItemId;
     final items = [..._items]..removeAt(pos);
     _items = items;
     if (items.isEmpty) {
@@ -787,7 +850,9 @@ class PlayerService {
       _emit(force: true);
       return;
     }
-    final at = playing == null ? index : _relocate(index, playing);
+    final at = playing == null
+        ? index
+        : _relocate(index, playing, row: playingRow);
     _rebuildOrder(keepItemIndex: at < 0 ? pos.clamp(0, items.length - 1) : at);
     unawaited(_queueNext());
     _emit(force: true);
@@ -1122,11 +1187,16 @@ class PlayerService {
   /// element in place, which is all "stopped" needs to mean here.
   Future<void> _halt() async {
     _revivals = 0;
-    if (kIsWeb) {
-      await _player.pause();
-      return;
+    _mutating++;
+    try {
+      if (kIsWeb) {
+        await _player.pause();
+        return;
+      }
+      await _player.stop();
+    } finally {
+      _mutating--;
     }
-    await _player.stop();
   }
 
   Future<void> seek(Duration to) async {

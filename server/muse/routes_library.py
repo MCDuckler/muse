@@ -781,7 +781,7 @@ def _queue_state(queue_id: int, *, around: int | None = None) -> dict:
     # stream_url, the client reads that as "not ready yet", and nothing in the queue
     # is playable no matter how ready the track actually is.
     items = db.all_(
-        """select i.pos, i.origin, u.name as added_by, u.id as added_by_id,
+        """select i.pos, i.item_id, i.origin, u.name as added_by, u.id as added_by_id,
                   u.avatar_sig as added_by_avatar,
                   t.*, m.path, m.bytes, m.sha256,
                   c.color as cover_color, c.sha256 as cover_sha
@@ -798,6 +798,8 @@ def _queue_state(queue_id: int, *, around: int | None = None) -> dict:
             # both to say "1 of 14,022" and to know when to ask for the next slice.
             "total": total, "window_from": start,
             "items": [{**catalog.public(t), "origin": t["origin"], "pos": t["pos"],
+                       # The row's own name, which an insert above it does not change.
+                       "item_id": t["item_id"],
                             # Only interesting in a jam, and harmless otherwise: it is
                             # how "who put this on" gets answered without asking. The
                             # id and the picture come too, so the answer can be a face

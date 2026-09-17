@@ -323,6 +323,16 @@ create table if not exists jam_skip_votes (
 -- Who put this on. In a jam that is the difference between a queue and an argument.
 alter table queue_items add column if not exists added_by int references users(id);
 
+-- A name for the row itself.
+--
+-- A queue can hold the same song twice, and a row was only ever identified by its
+-- position — which every insert above it changes. So the player, told the queue had
+-- changed, could only look for "the copy nearest where I was", and with two copies
+-- equally near it took the earlier one: playback slid from the second copy back to the
+-- first and played the same song again. This is the one thing about a row that does
+-- not move when the rows around it do.
+alter table queue_items add column if not exists item_id bigserial;
+
 -- A mirrored library can be much bigger than the disk it would land on. Twelve thousand
 -- liked songs are a list worth having long before they are forty gigabytes worth having,
 -- so a big mirror records what is in it and fetches the audio when somebody plays it.

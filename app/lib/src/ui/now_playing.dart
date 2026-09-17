@@ -251,18 +251,10 @@ class NowPlayingScreen extends StatelessWidget {
                                   children: [
                                     _Extras(app: app, track: track, spread: true),
                                     const SizedBox(height: 2),
-                                    if (app.spectrum && Spectrum.available)
-                                      Padding(
-                                        padding: const EdgeInsets.only(
-                                            left: 6, right: 6, bottom: 2),
-                                        child: Spectrum(
-                                          sessionId: player.androidAudioSessionId,
-                                          playing: s?.playing ?? false,
-                                          colour: parseHexColour(track.coverColor),
-                                          height: 34,
-                                        ),
-                                      ),
-                                    _Scrubber(player: player, timesBeside: true),
+                                    _Scrubber(
+                                        player: player,
+                                        timesBeside: true,
+                                        on: _bars(app, player, track, s)),
                                     const SizedBox(height: 6),
                                     _Controls(
                                         app: app,
@@ -283,19 +275,10 @@ class NowPlayingScreen extends StatelessWidget {
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    // The shape of the sound, sitting on the bar it
-                                    // belongs to rather than under the artwork.
-                                    if (app.spectrum && Spectrum.available)
-                                      Padding(
-                                        padding: const EdgeInsets.only(bottom: 2),
-                                        child: Spectrum(
-                                          sessionId: player.androidAudioSessionId,
-                                          playing: s?.playing ?? false,
-                                          colour: parseHexColour(track.coverColor),
-                                          height: 34,
-                                        ),
-                                      ),
-                                    _Scrubber(player: player, timesBeside: true),
+                                    _Scrubber(
+                                        player: player,
+                                        timesBeside: true,
+                                        on: _bars(app, player, track, s)),
                                     const SizedBox(height: 4),
                                     _Controls(
                                         app: app,
@@ -341,6 +324,20 @@ class NowPlayingScreen extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+
+  /// The spectrum, where it is switched on and the platform can read one.
+  ///
+  /// Null everywhere else, which is what keeps it out of the bar's layout rather than
+  /// leaving an empty strip above it.
+  static Widget? _bars(AppState app, PlayerService player, Track track,
+      PlayerSnapshot? s) {
+    if (!app.spectrum || !Spectrum.available) return null;
+    return Spectrum(
+      sessionId: player.androidAudioSessionId,
+      playing: s?.playing ?? false,
+      colour: parseHexColour(track.coverColor),
     );
   }
 
@@ -1240,11 +1237,18 @@ class _TitleBlock extends StatelessWidget {
 }
 
 class _Scrubber extends StatelessWidget {
-  const _Scrubber({required this.player, this.timesBeside = false});
+  const _Scrubber({required this.player, this.timesBeside = false, this.on});
   final PlayerService player;
 
   /// Elapsed and total at either end of the bar rather than underneath it.
   final bool timesBeside;
+
+  /// What sits on the bar — the spectrum, where it is switched on.
+  ///
+  /// Passed in here rather than stacked above the whole panel so that it lines up
+  /// with the track itself: above the panel it spanned the times as well, which put a
+  /// band of moving bars over two numbers somebody is trying to read.
+  final Widget? on;
 
   @override
   Widget build(BuildContext context) => RepaintBoundary(
@@ -1252,17 +1256,24 @@ class _Scrubber extends StatelessWidget {
           stream: player.snapshots,
           initialData: player.last,
           builder: (context, snap) => _ScrubberBar(
-              player: player, snapshot: snap.data, timesBeside: timesBeside),
+              player: player,
+              snapshot: snap.data,
+              timesBeside: timesBeside,
+              on: on),
         ),
       );
 }
 
 class _ScrubberBar extends StatefulWidget {
   const _ScrubberBar(
-      {required this.player, required this.snapshot, this.timesBeside = false});
+      {required this.player,
+      required this.snapshot,
+      this.timesBeside = false,
+      this.on});
   final PlayerService player;
   final PlayerSnapshot? snapshot;
   final bool timesBeside;
+  final Widget? on;
 
   @override
   State<_ScrubberBar> createState() => _ScrubberState();
@@ -1422,16 +1433,29 @@ class _ScrubberState extends State<_ScrubberBar>
         //
         // Hard against the edge they read as part of the frame rather than as the two
         // ends of the thing above them.
+        // The spectrum stands on the bar, so it is stacked with it and with nothing
+        // else: the same width, the same place, whichever way the times are laid out.
+        final overBar = widget.on == null
+            ? bar
+            : Column(mainAxisSize: MainAxisSize.min, children: [widget.on!, bar]);
+
         if (widget.timesBeside) {
           return Padding(
             padding: const EdgeInsets.symmetric(horizontal: 10),
-            child: Row(children: [elapsed, Expanded(child: bar), total]),
+            child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Padding(
+                      padding: const EdgeInsets.only(bottom: 14), child: elapsed),
+                  Expanded(child: overBar),
+                  Padding(padding: const EdgeInsets.only(bottom: 14), child: total),
+                ]),
           );
         }
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            bar,
+            overBar,
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Row(

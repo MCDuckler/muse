@@ -38,6 +38,18 @@ class Track {
   final int? addedById;
   final String? addedByAvatar;
 
+  /// Which row of a queue this is, when it came from one.
+  ///
+  /// A queue can hold the same song twice — radio produces that, and so does adding a
+  /// favourite again — and two rows that are the same track are the same track: there
+  /// is nothing in the song itself to tell copy one from copy two. The row has a name
+  /// of its own for exactly that, and unlike its position it does not change when
+  /// something is inserted above it.
+  final int? queueItemId;
+
+  /// Where that row sits in the queue as it stands.
+  final int? queuePos;
+
   const Track({
     required this.id,
     required this.title,
@@ -63,6 +75,8 @@ class Track {
     this.addedBy,
     this.addedById,
     this.addedByAvatar,
+    this.queueItemId,
+    this.queuePos,
   }) : displayTitle = displayTitle ?? title;
 
   /// Queue membership carries `origin`, which a freshly fetched track does not know.
@@ -91,6 +105,8 @@ class Track {
         addedBy: addedBy,
         addedById: addedById,
         addedByAvatar: addedByAvatar,
+        queueItemId: queueItemId,
+        queuePos: queuePos,
       );
 
   Track withProgress(Map<String, dynamic>? p) => Track(
@@ -102,6 +118,7 @@ class Track {
         coverVersion: coverVersion, providerId: providerId,
         displayTitle: displayTitle, origin: origin, addedBy: addedBy,
         addedById: addedById, addedByAvatar: addedByAvatar,
+        queueItemId: queueItemId, queuePos: queuePos,
       );
 
   bool get isReady => state == 'ready' && streamPath != null;
@@ -189,6 +206,9 @@ class Track {
         addedBy: j['added_by'] as String?,
         addedById: j['added_by_id'] as int?,
         addedByAvatar: j['added_by_avatar'] as String?,
+        // Only a queue sends these; everywhere else a track has no row of its own.
+        queueItemId: (j['item_id'] as num?)?.toInt(),
+        queuePos: (j['pos'] as num?)?.toInt(),
       );
 }
 

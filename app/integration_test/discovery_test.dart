@@ -49,7 +49,7 @@ void main() {
 
     // Pick an album the library has only part of — that is the case that used to look
     // wrong, and the one worth asserting on.
-    final albums = await api.albums();
+    final albums = (await api.albums()).items;
     AlbumSummary? partial;
     AlbumDetail? detail;
     for (final a in albums.take(12)) {

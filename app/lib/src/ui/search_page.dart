@@ -208,22 +208,18 @@ class _SearchPageState extends State<SearchPage> {
     final navigator = Navigator.of(context);
 
     if (found.kind == 'artist') {
-      if (found.place == 'library') {
-        navigator.push(MaterialPageRoute(
-            builder: (_) => ArtistPage(
-                artist: ArtistSummary(
-                    name: found.title, tracks: found.tracks ?? 0))));
-      } else {
-        // Somebody else's artist page is not something this app has; what it can do
-        // is show everything of theirs that service has, which is the same search
-        // narrowed to them.
-        _controller.text = found.title;
-        setState(() {
-          _where = found.place;
-          _kind = 'all';
-        });
-        _again();
-      }
+      // Every artist row opens the artist, wherever the row came from.
+      //
+      // A row from YouTube Music or Spotify used to retype the search and run it
+      // again, which from the other side of the screen is a row that does nothing:
+      // the same list comes back with the same artist row at the top of it. The
+      // artist page is keyed by name and finds their records for itself, so it works
+      // just as well for somebody with nothing of theirs in the library yet.
+      navigator.push(MaterialPageRoute(
+          builder: (_) => ArtistPage(
+              artist: ArtistSummary(
+                  name: found.title,
+                  tracks: found.place == 'library' ? found.tracks ?? 0 : 0))));
       return;
     }
 

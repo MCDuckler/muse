@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/offline.dart';
+import '../state/paged.dart';
 import '../state/selection.dart';
 import 'artwork.dart';
 import 'selection_bar.dart';
@@ -36,16 +37,28 @@ class _AllTracksPageState extends State<AllTracksPage> {
   };
 
   String _sort = 'added';
-  Future<({List<Track> items, int total})>? _future;
+  late Paged<Track> _tracks = _pager();
 
-  @override
-  void initState() {
-    super.initState();
-    _load();
+  Paged<Track> _pager() {
+    final api = context.read<AppState>().api;
+    final sort = _sort;
+    return Paged<Track>(
+      fetch: (offset, limit) =>
+          api.libraryTracks(sort: sort, offset: offset, limit: limit),
+    )..next();
   }
 
-  void _load() => setState(() =>
-      _future = context.read<AppState>().api.libraryTracks(sort: _sort));
+  @override
+  void dispose() {
+    _tracks.dispose();
+    super.dispose();
+  }
+
+  /// A different sort is a different list, so it starts again from the top.
+  void _load() => setState(() {
+        _tracks.dispose();
+        _tracks = _pager();
+      });
 
   @override
   Widget build(BuildContext context) {
@@ -68,21 +81,25 @@ class _AllTracksPageState extends State<AllTracksPage> {
           ),
         ],
       ),
-      body: FutureBuilder<({List<Track> items, int total})>(
-        future: _future,
-        builder: (context, snap) {
-          if (snap.hasError) {
-            return ErrorRetry(error: snap.error!, onRetry: _load);
+      body: ListenableBuilder(
+        listenable: _tracks,
+        builder: (context, _) {
+          if (_tracks.error != null && _tracks.items.isEmpty) {
+            return ErrorRetry(error: _tracks.error!, onRetry: _load);
           }
-          if (!snap.hasData) return const Center(child: CircularProgressIndicator());
-          final data = snap.data!;
+          if (_tracks.items.isEmpty && _tracks.loading) {
+            return const Center(child: CircularProgressIndicator());
+          }
           return RefreshIndicator(
-            onRefresh: () async => _load(),
+            onRefresh: _tracks.reload,
             child: TrackList(
-              tracks: data.items,
+              tracks: _tracks.items,
               selectable: 'library',
               named: 'All tracks',
-              header: '${data.total} in your library · ${_sorts[_sort]!.toLowerCase()}',
+              header: '${_tracks.total} in your library · '
+                  '${_sorts[_sort]!.toLowerCase()}',
+              onEndReached: _tracks.next,
+              loadingMore: _tracks.loading,
             ),
           );
         },
@@ -99,30 +116,34 @@ class AlbumsPage extends StatefulWidget {
 }
 
 class _AlbumsPageState extends State<AlbumsPage> {
-  Future<List<AlbumSummary>>? _future;
+  late final Paged<AlbumSummary> _albums = Paged<AlbumSummary>(
+    fetch: (offset, limit) =>
+        context.read<AppState>().api.albums(offset: offset, limit: limit),
+  )..next();
 
   @override
-  void initState() {
-    super.initState();
-    _load();
+  void dispose() {
+    _albums.dispose();
+    super.dispose();
   }
 
-  void _load() {
-    final pending = context.read<AppState>().api.albums();
-    setState(() { _future = pending; });
-  }
+  void _load() => _albums.reload();
 
   @override
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
     return PlayerScaffold(
       appBar: AppBar(title: const Text('Albums')),
-      body: FutureBuilder<List<AlbumSummary>>(
-        future: _future,
-        builder: (context, snap) {
-          if (snap.hasError) return ErrorRetry(error: snap.error!, onRetry: _load);
-          if (!snap.hasData) return const Center(child: CircularProgressIndicator());
-          final albums = snap.data!;
+      body: ListenableBuilder(
+        listenable: _albums,
+        builder: (context, _) {
+          if (_albums.error != null && _albums.items.isEmpty) {
+            return ErrorRetry(error: _albums.error!, onRetry: _load);
+          }
+          if (_albums.items.isEmpty && _albums.loading) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final albums = _albums.items;
           if (albums.isEmpty) {
             return const EmptyHint(
               icon: Icons.album_outlined,
@@ -131,9 +152,15 @@ class _AlbumsPageState extends State<AlbumsPage> {
             );
           }
           return RefreshIndicator(
-            onRefresh: () async => _load(),
-            child: GridView.builder(
+            onRefresh: _albums.reload,
+            child: NotificationListener<ScrollNotification>(
+              onNotification: (n) {
+                if (n.metrics.extentAfter < 900) _albums.next();
+                return false;
+              },
+              child: GridView.builder(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 160),
+              physics: const AlwaysScrollableScrollPhysics(),
               gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                 maxCrossAxisExtent: 190,
                 childAspectRatio: 0.74,
@@ -171,6 +198,7 @@ class _AlbumsPageState extends State<AlbumsPage> {
                   ),
                 );
               },
+              ),
             ),
           );
         },
@@ -566,34 +594,45 @@ class ArtistsPage extends StatefulWidget {
 }
 
 class _ArtistsPageState extends State<ArtistsPage> {
-  Future<List<ArtistSummary>>? _future;
+  late final Paged<ArtistSummary> _artists = Paged<ArtistSummary>(
+    pageSize: 300,
+    fetch: (offset, limit) =>
+        context.read<AppState>().api.artists(offset: offset, limit: limit),
+  )..next();
 
   @override
-  void initState() {
-    super.initState();
-    _load();
+  void dispose() {
+    _artists.dispose();
+    super.dispose();
   }
 
-  void _load() {
-    final pending = context.read<AppState>().api.artists();
-    setState(() { _future = pending; });
-  }
+  void _load() => _artists.reload();
 
   @override
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
     return PlayerScaffold(
       appBar: AppBar(title: const Text('Artists')),
-      body: FutureBuilder<List<ArtistSummary>>(
-        future: _future,
-        builder: (context, snap) {
-          if (snap.hasError) return ErrorRetry(error: snap.error!, onRetry: _load);
-          if (!snap.hasData) return const Center(child: CircularProgressIndicator());
-          final artists = snap.data!;
+      body: ListenableBuilder(
+        listenable: _artists,
+        builder: (context, _) {
+          if (_artists.error != null && _artists.items.isEmpty) {
+            return ErrorRetry(error: _artists.error!, onRetry: _load);
+          }
+          if (_artists.items.isEmpty && _artists.loading) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final artists = _artists.items;
           return RefreshIndicator(
-            onRefresh: () async => _load(),
-            child: ListView.builder(
+            onRefresh: _artists.reload,
+            child: NotificationListener<ScrollNotification>(
+              onNotification: (n) {
+                if (n.metrics.extentAfter < 900) _artists.next();
+                return false;
+              },
+              child: ListView.builder(
               padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
+              physics: const AlwaysScrollableScrollPhysics(),
               itemCount: artists.length,
               itemBuilder: (context, i) => ListTile(
                 leading: ClipOval(
@@ -607,6 +646,7 @@ class _ArtistsPageState extends State<ArtistsPage> {
                 onTap: () => Navigator.of(context).push(MaterialPageRoute(
                   builder: (_) => ArtistPage(artist: artists[i]),
                 )),
+              ),
               ),
             ),
           );

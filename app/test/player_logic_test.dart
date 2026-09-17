@@ -115,10 +115,11 @@ void main() {
   });
 }
 
-/// Mirrors PlayerService._relocate: where the playing track sits after the list
-/// changed. Matching by id alone finds the *first* copy, which is why a queue holding
-/// the same song twice kept snapping playback back to copy one — and then advancing
-/// from there into the same song again.
+/// Mirrors PlayerService._relocate *without* the row names, which is what a queue from
+/// an older server arrives as: where the playing track sits after the list changed,
+/// judged only by track id and distance. The real thing prefers the row's own name and
+/// falls back to this — see player_engine_test, where a queue holding the same song
+/// twice keeps playing the copy it is on.
 int relocate(List<int> itemIds, int previousIndex, int trackId) {
   if (previousIndex >= 0 &&
       previousIndex < itemIds.length &&

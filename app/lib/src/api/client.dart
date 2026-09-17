@@ -939,10 +939,19 @@ class ApiClient {
     );
   }
 
-  Future<List<AlbumSummary>> albums() async {
-    final d = await _decode(await net.get(_u('/library/albums'), headers: _headers))
-        as Map<String, dynamic>;
-    return (d['items'] as List).map((e) => AlbumSummary.fromJson(e)).toList();
+  /// A page of records, and how many there are in all.
+  ///
+  /// A library of ten thousand albums used to arrive as the two hundred the server
+  /// answers with by default, with nothing to say the list went on — so it simply
+  /// stopped, a fifth of the way through the alphabet.
+  Future<({List<AlbumSummary> items, int total})> albums(
+      {int limit = 200, int offset = 0}) async {
+    final d = await _decode(await net.get(
+        _u('/library/albums', {'limit': limit, 'offset': offset}),
+        headers: _headers)) as Map<String, dynamic>;
+    final items =
+        (d['items'] as List).map((e) => AlbumSummary.fromJson(e)).toList();
+    return (items: items, total: (d['total'] ?? items.length) as int);
   }
 
   /// The whole record — the parts we hold and the parts we do not.
@@ -1110,10 +1119,14 @@ class ApiClient {
     return (d['items'] as List).map((e) => Track.fromJson(e)).toList();
   }
 
-  Future<List<ArtistSummary>> artists() async {
-    final d = await _decode(await net.get(_u('/library/artists'), headers: _headers))
-        as Map<String, dynamic>;
-    return (d['items'] as List).map((e) => ArtistSummary.fromJson(e)).toList();
+  Future<({List<ArtistSummary> items, int total})> artists(
+      {int limit = 300, int offset = 0}) async {
+    final d = await _decode(await net.get(
+        _u('/library/artists', {'limit': limit, 'offset': offset}),
+        headers: _headers)) as Map<String, dynamic>;
+    final items =
+        (d['items'] as List).map((e) => ArtistSummary.fromJson(e)).toList();
+    return (items: items, total: (d['total'] ?? items.length) as int);
   }
 
   Future<List<Track>> artistTracks(String artist) async {

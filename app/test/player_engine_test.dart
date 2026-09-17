@@ -77,14 +77,15 @@ Track track(int id) => Track.fromJson({
       'source': 'youtube',
     });
 
-Queue queueOf(List<Track> tracks, {int cursor = 0}) => Queue.fromJson({
+Queue queueOf(List<Track> tracks, {int cursor = 0, List<int>? rows}) =>
+    Queue.fromJson({
       'id': 1,
       'name': 'test',
       'cursor_index': cursor,
       'position_ms': 0,
       'rev': 1,
       'items': [
-        for (final t in tracks)
+        for (final (i, t) in tracks.indexed)
           {
             'id': t.id,
             'title': t.title,
@@ -93,6 +94,11 @@ Queue queueOf(List<Track> tracks, {int cursor = 0}) => Queue.fromJson({
             'state': 'ready',
             'stream_url': t.streamPath,
             'source': 'youtube',
+            'pos': i,
+            // The row's own name, which the server keeps with the row wherever it
+            // moves to. Given explicitly so a test can hold one still while the
+            // positions around it change.
+            'item_id': rows == null ? 100 + i : rows[i],
           },
       ],
     });
@@ -977,6 +983,76 @@ void main() {
     await settle();
     expect(audio.only.calls, contains('play'),
         reason: 'the other app is done and the speaker is ours again');
+  });
+
+  test('the same song twice keeps playing the copy it is on', () async {
+    // Radio produces queues like this, and so does adding a favourite again. Two rows
+    // holding the same track are the same track: only the row itself tells copy one
+    // from copy two, and matching by track id could only pick "whichever copy is
+    // nearest", which on a tie slid playback back to the earlier one and played the
+    // song again.
+    final again = track(7);
+    await player.loadQueue(queueOf([again, track(5), again, track(9)],
+        rows: [100, 101, 102, 103]));
+    await player.playAt(2);                        // the second copy
+    await settle();
+    expect(player.index, 2);
+
+    // Something is added at the top, so every row below it moves down one — and the
+    // two copies are now equally far from where playback was.
+    await player.loadQueue(queueOf([track(4), again, track(5), again, track(9)],
+        rows: [99, 100, 101, 102, 103]));
+    await settle();
+
+    expect(player.index, 3, reason: 'still the copy that was playing, one row down');
+    expect(player.current?.queueItemId, 102);
+  });
+
+  test('pause from the notification stays paused', () async {
+    // The notification, the lockscreen, a headset button and Android Auto all reach
+    // the engine through the media session without this app being asked. Playback
+    // stopped, nothing here knew a decision had been made, and a few seconds later the
+    // watchdog saw music that was supposed to be playing and started the song again.
+    PlayerService.stallAfter = const Duration(milliseconds: 100);
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    await player.playAt(0);
+    await settle();
+    final engine = audio.only;
+    expect(engine.playing, isTrue);
+
+    engine.pressedElsewhere(playing: false);
+    await settle();
+    expect(player.last?.playing, isFalse, reason: 'the app knows it stopped');
+
+    engine.calls.clear();
+    await player.checkForStall();                  // the watchdog's round
+    await settle();
+    await player.checkForStall();
+    await settle();
+
+    expect(engine.calls, isNot(contains('play')),
+        reason: 'a pause is a decision, wherever it was pressed: ${engine.calls}');
+    expect(engine.playing, isFalse);
+  });
+
+  test('play from the notification is a decision too', () async {
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    await player.playAt(0);
+    await settle();
+    final engine = audio.only;
+    engine.pressedElsewhere(playing: false);
+    await settle();
+
+    engine.pressedElsewhere(playing: true);
+    await settle();
+    expect(player.last?.playing, isTrue);
+
+    // And the watchdog is on duty again: an engine that dies now is brought back.
+    engine.die();
+    await player.checkForStall();
+    await settle();
+    expect(engine.calls.where((c) => c.startsWith('load')), isNotEmpty,
+        reason: 'music that was asked for is worth reviving: ${engine.calls}');
   });
 
   test('a pause of your own is not owed the speaker back', () async {

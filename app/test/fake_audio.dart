@@ -71,10 +71,31 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   /// with the thing being counted cannot answer "how many times did it try".
   static int loadCount = 0;
 
+  final _data = StreamController<PlayerDataMessage>.broadcast();
+
   @override
   Stream<PlaybackEventMessage> get playbackEventMessageStream => _events.stream;
 
-  void close() => _events.close();
+  /// What a platform says about itself. The background wrapper reports the media
+  /// session's own play and pause buttons through this — see [pressedElsewhere].
+  @override
+  Stream<PlayerDataMessage> get playerDataMessageStream => _data.stream;
+
+  /// Somebody pressed play or pause somewhere that is not this app: the notification,
+  /// the lockscreen, a headset button, Android Auto. just_audio_background turns that
+  /// into exactly this — the engine's own state changing with nothing in the app
+  /// having asked for it.
+  void pressedElsewhere({required bool playing}) {
+    this.playing = playing;
+    calls.add(playing ? 'play elsewhere' : 'pause elsewhere');
+    _data.add(PlayerDataMessage(playing: playing));
+    _emit();
+  }
+
+  void close() {
+    _events.close();
+    _data.close();
+  }
 
   Future<void> _slow() async {
     if (slowness > Duration.zero) await Future<void>.delayed(slowness);

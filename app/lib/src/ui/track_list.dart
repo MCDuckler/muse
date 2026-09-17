@@ -19,7 +19,13 @@ class TrackList extends StatelessWidget {
     this.onRemove,
     this.named,
     this.selectable,
+    this.onEndReached,
+    this.loadingMore = false,
   });
+
+  /// Called as the bottom comes into view, for a list that arrives a page at a time.
+  final VoidCallback? onEndReached;
+  final bool loadingMore;
 
   /// What to call this list when several songs are picked out of it — "playlist:3",
   /// "album:Low". Lists that pass nothing cannot be selected in.
@@ -65,12 +71,20 @@ class TrackList extends StatelessWidget {
                     }
                   },
           ),
-      child: ListView.builder(
+      child: NotificationListener<ScrollNotification>(
+        onNotification: (n) {
+          // Well before the last row, so the next page is there by the time somebody
+          // scrolls to where it goes.
+          if (onEndReached != null && n.metrics.extentAfter < 900) onEndReached!();
+          return false;
+        },
+        child: ListView.builder(
             padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
             physics: const AlwaysScrollableScrollPhysics(),
-            itemCount: tracks.length + 1,
+            itemCount: tracks.length + (loadingMore ? 2 : 1),
             itemBuilder: (context, i) {
               if (i == 0) return _Head(tracks: tracks, header: header, named: named);
+              if (i - 1 >= tracks.length) return const _More();
               final t = tracks[i - 1];
               return SongRow(
                 track: t,
@@ -79,9 +93,24 @@ class TrackList extends StatelessWidget {
                 onRemove: onRemove == null ? null : () => onRemove!(i - 1),
               );
             },
+        ),
       ),
     );
   }
+}
+
+/// The list is still arriving.
+class _More extends StatelessWidget {
+  const _More();
+
+  @override
+  Widget build(BuildContext context) => const Padding(
+        padding: EdgeInsets.symmetric(vertical: 18),
+        child: Center(
+          child: SizedBox(
+              width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+        ),
+      );
 }
 
 class _Head extends StatelessWidget {

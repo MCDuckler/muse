@@ -38,6 +38,26 @@ _TRACK_SELECT = """
 # Every query below starts with the user id, because the join above does.
 _MINE = "from tracks t join library_items li on li.track_id = t.id and li.user_id = %s"
 
+# One artist, however their name was typed.
+#
+# The same act arrives spelled several ways — "BICEP" and "Bicep", "S.P.Y" and "S.PY",
+# "Girls Of The Internet" with two invisible characters stuck to the end — because the
+# name comes from whoever uploaded each song. Left alone that is three artists with a
+# third of the records each, and an artist page that is missing most of their music.
+#
+# So names are compared with everything that is not a letter or a digit removed, which
+# is what a person does when they read two spellings as the same name. Zero-width
+# characters go the same way, being punctuation to Postgres. What is *shown* is the
+# spelling most of the tracks use, so the list reads the way the library does rather
+# than in some flattened form nobody typed.
+def _key(column: str) -> str:
+    return f"lower(regexp_replace({column}, '[^[:alnum:]]+', '', 'g'))"
+
+
+ARTIST_KEY = _key("artist")
+# Any of a track's credits being this artist, whatever either spelling looks like.
+ONE_ARTIST = f"exists (select 1 from unnest(t.artists) a where {_key('a')} = {_key('%s')})"
+
 
 @router.get("/tracks")
 def all_tracks(sort: str = "added", limit: int = 200, offset: int = 0,
@@ -75,11 +95,19 @@ def albums(limit: int = 200, offset: int = 0, user: dict = Depends(current_user)
         """,
         (user["id"], min(limit, 500), offset),
     )
+    # How many there are in all, so a list that arrives a page at a time knows whether
+    # it has reached the end — without that the app asked once, drew two hundred of ten
+    # thousand records, and had no way of telling that was not all of them.
+    total = db.one(
+        f"""select count(*) n from (select 1 {_MINE}
+             where t.album is not null and t.album <> ''
+             group by t.album, coalesce(t.artists[1], 'Unknown artist')) g""",
+        (user["id"],))["n"]
     return {"items": [
         {**r, "cover_url": f"/tracks/{r['cover_track_id']}/cover"
          if r["cover_track_id"] else None}
         for r in rows
-    ]}
+    ], "total": total, "offset": offset}
 
 
 @router.get("/albums/tracks")
@@ -99,29 +127,48 @@ def artists(limit: int = 300, offset: int = 0, user: dict = Depends(current_user
     """Every credited artist, not just the first: a feature is still an appearance."""
     rows = db.all_(
         f"""
-        select artist as name, count(*) as tracks,
-               count(distinct album) filter (where album is not null) as albums,
-               max(id) filter (where cover_id is not null) as cover_track_id
-          from (select unnest(t.artists) as artist, t.album, t.id, t.cover_id
-                  {_MINE}) x
-         where artist is not null and artist <> ''
-         group by artist
-         order by lower(artist)
+        with credits as (
+            select unnest(t.artists) as artist, t.album, t.id, t.cover_id {_MINE}
+        ), spelled as (
+            select {ARTIST_KEY} as k, artist, count(*) as n
+              from credits where artist is not null and artist <> ''
+             group by 1, 2
+        ), best as (
+            -- The spelling most of the tracks use, and among equals the plainest one:
+            -- shortest first, so a name with an invisible character welded to the end
+            -- loses to the same name without it.
+            select k, (array_agg(artist order by n desc, length(artist), artist))[1]
+                      as name
+              from spelled group by k
+        )
+        select b.name, count(distinct c.id) as tracks,
+               count(distinct c.album) filter (where c.album is not null) as albums,
+               max(c.id) filter (where c.cover_id is not null) as cover_track_id
+          from credits c
+          join best b on b.k = {_key("c.artist")}
+         group by b.k, b.name
+         order by lower(b.name)
          limit %s offset %s
         """,
         (user["id"], min(limit, 1000), offset),
     )
+    total = db.one(
+        f"""select count(distinct {ARTIST_KEY}) n
+              from (select unnest(t.artists) as artist {_MINE}) x
+             where artist is not null and artist <> ''""",
+        (user["id"],))["n"]
     return {"items": [
         {**r, "cover_url": f"/tracks/{r['cover_track_id']}/cover"
          if r["cover_track_id"] else None}
         for r in rows
-    ]}
+    ], "total": total, "offset": offset}
 
 
 @router.get("/artists/tracks")
 def artist_tracks(artist: str, user: dict = Depends(current_user)):
     rows = db.all_(
-        f"{_TRACK_SELECT} where %s = any(t.artists) order by lower(coalesce(t.album,'')), t.id",
+        f"{_TRACK_SELECT} where {ONE_ARTIST} "
+        "order by lower(coalesce(t.album,'')), t.id",
         (user["id"], artist),
     )
     return {"items": [catalog.public(t) for t in rows]}
@@ -305,7 +352,7 @@ def fill_album(body: dict = Body(...), user: dict = Depends(current_user)):
 def artist_detail(artist: str, user: dict = Depends(current_user)):
     """An artist, not just the four songs of theirs somebody added."""
     local = db.all_(
-        f"{_TRACK_SELECT} where %s = any(t.artists) "
+        f"{_TRACK_SELECT} where {ONE_ARTIST} "
         "order by lower(coalesce(t.album,'')), t.id",
         (user["id"], artist),
     )

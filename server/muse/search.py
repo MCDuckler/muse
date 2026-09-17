@@ -125,16 +125,23 @@ def _library_albums(user_id: int, q: str, limit: int) -> list[dict]:
 
 
 def _library_artists(user_id: int, q: str, limit: int) -> list[dict]:
+    # One row per artist however their name was typed — see routes_browse.ARTIST_KEY.
+    # Two spellings of the same act used to take two of the six artist rows a search
+    # has, each with half the songs.
+    from .routes_browse import ARTIST_KEY
+
     rows = db.all_(
-        """select artist as name, count(*) as tracks,
+        f"""select mode() within group (order by artist) as name,
+                  count(distinct t.id) as tracks,
                   max(t.id) filter (where t.cover_id is not null) as cover_track_id
              from (select unnest(t.artists) as artist, t.id, t.cover_id
                      from tracks t
                      join library_items li
                        on li.track_id = t.id and li.user_id = %s) t(artist, id, cover_id)
             where artist ilike %s
-            group by artist
-            order by (lower(artist) = lower(%s)) desc, count(*) desc
+            group by {ARTIST_KEY}
+            order by (lower(mode() within group (order by artist)) = lower(%s)) desc,
+                     count(distinct t.id) desc
             limit %s""",
         (user_id, f"%{q}%", q, limit),
     )

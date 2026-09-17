@@ -89,6 +89,56 @@ def test_artist_tracks_include_features(client, hdr, library):
     assert {t["title"] for t in items} == {"Gamma", "Epsilon"}
 
 
+def test_one_artist_however_the_name_was_typed(client, hdr, library, wsec,
+                                               complete_job):
+    """The same act arrives spelled several ways, because each song's credit comes
+    from whoever uploaded it: "BICEP" and "Bicep", "S.P.Y" and "S.PY", a name with two
+    invisible characters welded to the end. Three rows with a third of the records
+    each is an artist page missing most of their music."""
+    for n, artist in enumerate(["BICEP", "Bicep", "bicep\u2060"]):
+        t = client.post("/tracks/resolve", headers=hdr,
+                        json={"video_id": f"SPELL{n}"}).json()
+        job = client.post("/internal/jobs/lease", headers=wsec,
+                          json={"worker": "w"}).json()["jobs"][0]
+        complete_job(job["id"], t["id"])
+        db.run("update tracks set title=%s, artists=%s where id=%s",
+               (f"Spelled {n}", [artist], t["id"]))
+
+    listed = client.get("/library/artists", headers=hdr).json()
+    rows = [a for a in listed["items"] if a["name"].lower().startswith("bicep")]
+    assert len(rows) == 1, rows
+    assert rows[0]["tracks"] == 3
+    # Shown the way most of the library spells it, not flattened into a key.
+    assert rows[0]["name"] in ("BICEP", "Bicep")
+
+    # And the page collects all three, whichever spelling was asked for.
+    for asked in ("BICEP", "bicep", "Bicep\u2060"):
+        items = client.get("/library/artists/tracks", headers=hdr,
+                           params={"artist": asked}).json()["items"]
+        assert len(items) == 3, asked
+
+
+def test_a_long_list_says_how_much_more_there_is(client, hdr, library):
+    """Without a total the app asks once, draws two hundred of ten thousand records
+    and has no way of telling that was not all of them."""
+    artists = client.get("/library/artists", headers=hdr,
+                         params={"limit": 1, "offset": 0}).json()
+    assert len(artists["items"]) == 1
+    assert artists["total"] >= 3
+    assert artists["offset"] == 0
+
+    albums = client.get("/library/albums", headers=hdr, params={"limit": 1}).json()
+    assert len(albums["items"]) == 1
+    assert albums["total"] >= 3
+
+    # And a second page carries on rather than repeating the first.
+    first = client.get("/library/artists", headers=hdr,
+                       params={"limit": 1, "offset": 0}).json()["items"][0]["name"]
+    second = client.get("/library/artists", headers=hdr,
+                        params={"limit": 1, "offset": 1}).json()["items"][0]["name"]
+    assert first != second
+
+
 def test_history_carries_timestamps_and_can_be_cleared(client, hdr, library):
     client.post("/listens", headers=hdr,
                 json={"track_id": library[0], "ms_played": 30_000, "completed": True})

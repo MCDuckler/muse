@@ -6,20 +6,26 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
-/// The shape of the sound, as a row of bars under the artwork.
+/// The shape of the sound, as a low band of bars sitting on the seek bar.
 ///
-/// Wide and short on purpose: this is the bottom edge of the record, not an instrument
-/// panel. It draws what is actually coming out of the speaker — Android will report
-/// that for an app's own audio, which is what makes it a spectrum rather than an
-/// animation pretending to be one — and draws nothing at all where it cannot be read,
-/// rather than inventing something.
+/// Quiet on purpose. It draws what is actually coming out of the speaker — Android
+/// reports that for an app's own audio, which is what makes it a spectrum rather than
+/// an animation pretending to be one — and draws nothing at all where it cannot be
+/// read, rather than inventing something.
+///
+/// It used to be sixty-four hairline bars at full brightness, snapping about twenty
+/// times a second with a peak mark riding on top of each one: a busy little strip that
+/// pulled the eye away from the song. The reading is unchanged; what it is drawn like
+/// is not. Wider bands, a slower fall, neighbours smoothed into each other and the
+/// whole thing faint enough to read as texture on the panel rather than as a second
+/// thing happening on the screen.
 class Spectrum extends StatefulWidget {
   const Spectrum({
     super.key,
     required this.sessionId,
     required this.playing,
     this.colour,
-    this.height = 44,
+    this.height = 26,
   });
 
   /// The audio session the engine is playing through. Null on platforms that have no
@@ -75,6 +81,37 @@ class _SpectrumState extends State<Spectrum> with SingleTickerProviderStateMixin
   }
   List<double> _levels = const [];
 
+  /// How many bands are drawn, whatever the platform sends.
+  ///
+  /// Android folds its FFT into sixty-four, which across a phone is about two pixels a
+  /// bar — too fine to read as anything but flicker. Neighbouring bands are averaged
+  /// down to this many, which is wide enough to see a bass note arrive.
+  static const _bands = 24;
+
+  /// The readings, folded to [_bands] and smoothed sideways so one loud bin does not
+  /// stand up alone between two quiet ones.
+  List<double> _folded() {
+    final raw = _levels;
+    if (raw.isEmpty) return const [];
+    final out = List<double>.filled(_bands, 0);
+    for (var i = 0; i < _bands; i++) {
+      final from = (i * raw.length) ~/ _bands;
+      final to = (((i + 1) * raw.length) ~/ _bands).clamp(from + 1, raw.length);
+      var sum = 0.0;
+      for (var j = from; j < to; j++) {
+        sum += raw[j];
+      }
+      out[i] = sum / (to - from);
+    }
+    final smooth = List<double>.filled(_bands, 0);
+    for (var i = 0; i < _bands; i++) {
+      final left = i == 0 ? out[i] : out[i - 1];
+      final right = i == _bands - 1 ? out[i] : out[i + 1];
+      smooth[i] = (left + out[i] * 2 + right) / 4;
+    }
+    return smooth;
+  }
+
   /// What is drawn, which follows the levels rather than jumping to them: a bar that
   /// snaps to every reading reads as noise, and one that falls slowly reads as music.
   ///
@@ -82,11 +119,9 @@ class _SpectrumState extends State<Spectrum> with SingleTickerProviderStateMixin
   /// as its `repaint`. Sixty times a second is the right rate for bars to move at and
   /// the wrong rate to rebuild a widget at: setState on every tick put this subtree
   /// through build, layout and paint when only the painting had changed.
-  final ValueNotifier<_Frame> _frame =
-      ValueNotifier(const _Frame(levels: [], peaks: []));
+  final ValueNotifier<_Frame> _frame = ValueNotifier(const _Frame(levels: []));
 
   List<double> get _shown => _frame.value.levels;
-  List<double> get _peaks => _frame.value.peaks;
 
   Ticker? _ease;
 
@@ -125,30 +160,24 @@ class _SpectrumState extends State<Spectrum> with SingleTickerProviderStateMixin
 
   void _settle() {
     if (!mounted) return;
-    final target = widget.playing ? _levels : const <double>[];
+    final target = widget.playing ? _folded() : const <double>[];
     if (target.isEmpty && _shown.every((v) => v < 0.005)) return;
     final length = target.isEmpty ? _shown.length : target.length;
     final next = List<double>.filled(length, 0);
-    final peaks = List<double>.filled(length, 0);
     for (var i = 0; i < length; i++) {
       final want = i < target.length ? target[i] : 0.0;
       final have = i < _shown.length ? _shown[i] : 0.0;
-      // Up quickly, down slowly — the way a needle on a meter behaves. The reports
-      // arrive about twenty times a second and this runs at sixty, so the bars move
-      // between them rather than stepping.
-      next[i] = want > have ? have + (want - have) * 0.45 : have * 0.90;
-
-      // A mark that falls slower still, so a peak is legible after the bar under it
-      // has dropped away.
-      final was = i < _peaks.length ? _peaks[i] : 0.0;
-      peaks[i] = next[i] > was ? next[i] : was - 0.012;
-      if (peaks[i] < 0) peaks[i] = 0;
+      // Up quickly, down slowly — the way a needle on a meter behaves. Both ends are
+      // gentler than they were: a rise that lands in three frames instead of one, and
+      // a fall that takes about half a second, which is the difference between music
+      // and flicker.
+      next[i] = want > have ? have + (want - have) * 0.28 : have * 0.94;
     }
     // Whether there is anything at all to draw decides whether the box is even in the
     // tree, and that *is* a rebuild — but it happens twice a song rather than sixty
     // times a second.
     final wasEmpty = _shown.isEmpty;
-    _frame.value = _Frame(levels: next, peaks: peaks);
+    _frame.value = _Frame(levels: next);
     if (wasEmpty != next.isEmpty && mounted) setState(() {});
   }
 
@@ -181,9 +210,8 @@ class _SpectrumState extends State<Spectrum> with SingleTickerProviderStateMixin
 
 /// One reading, as the painter needs it.
 class _Frame {
-  const _Frame({required this.levels, required this.peaks});
+  const _Frame({required this.levels});
   final List<double> levels;
-  final List<double> peaks;
 }
 
 class _Bars extends CustomPainter {
@@ -197,57 +225,39 @@ class _Bars extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final levels = frame.value.levels;
-    final peaks = frame.value.peaks;
     if (levels.isEmpty) return;
-    // Thin bars with a hairline between them: at sixty-four across a phone that is
-    // about two pixels each, which is what makes it read as a spectrum rather than as
-    // a row of blocks.
-    const gap = 1.0;
+    // Wide bands with room between them, and each one faintest where it stands on the
+    // bar, so the band fades into the panel rather than sitting on top of it.
+    const gap = 2.0;
     final width = (size.width - gap * (levels.length - 1)) / levels.length;
     if (width <= 0) return;
 
     final bar = Paint()..isAntiAlias = true;
-    final mark = Paint()
-      ..isAntiAlias = true
-      ..color = colour.withValues(alpha: 0.45);
+    final radius = Radius.circular(width / 2);
 
     for (var i = 0; i < levels.length; i++) {
       final level = levels[i].clamp(0.0, 1.0);
       final left = i * (width + gap);
       final height = (size.height * level).clamp(0.0, size.height);
+      if (height <= 0.5) continue;
 
-      if (height > 0.5) {
-        // Brighter and warmer towards the top of the bar, so a loud band reads as
-        // loud at a glance rather than only as tall.
-        bar.shader = LinearGradient(
-          begin: Alignment.bottomCenter,
-          end: Alignment.topCenter,
-          colors: [
-            colour.withValues(alpha: 0.30 + 0.35 * level),
-            colour.withValues(alpha: 0.75 + 0.25 * level),
-          ],
-        ).createShader(
-            Rect.fromLTWH(left, size.height - height, width, height));
-        canvas.drawRRect(
-          RRect.fromRectAndRadius(
-            Rect.fromLTWH(left, size.height - height, width, height),
-            Radius.circular(width / 2),
-          ),
-          bar,
-        );
-      }
-
-      final peak = peaks.length > i ? peaks[i].clamp(0.0, 1.0) : 0.0;
-      if (peak > level + 0.04) {
-        final y = size.height - size.height * peak;
-        canvas.drawRRect(
-          RRect.fromRectAndRadius(
-            Rect.fromLTWH(left, y, width, 1.5),
-            const Radius.circular(1),
-          ),
-          mark,
-        );
-      }
+      // Low alpha throughout: loud is still taller and a little clearer, but even a
+      // full-height band stays something you can read the time through.
+      bar.shader = LinearGradient(
+        begin: Alignment.bottomCenter,
+        end: Alignment.topCenter,
+        colors: [
+          colour.withValues(alpha: 0.05),
+          colour.withValues(alpha: 0.16 + 0.16 * level),
+        ],
+      ).createShader(Rect.fromLTWH(left, size.height - height, width, height));
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(left, size.height - height, width, height),
+          radius,
+        ),
+        bar,
+      );
     }
   }
 

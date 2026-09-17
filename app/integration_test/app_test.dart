@@ -401,8 +401,8 @@ void main() {
     final api2 = appState.api;
     final all = await api2.libraryTracks(limit: 5);
     expect(all.total, greaterThan(0), reason: 'the library must be listable');
-    final albums = await api2.albums();
-    final artists = await api2.artists();
+    final albums = (await api2.albums()).items;
+    final artists = (await api2.artists()).items;
     expect(albums, isNotEmpty, reason: 'albums come from track metadata');
     expect(artists, isNotEmpty);
     final albumTracks = await api2.albumTracks(albums.first.name,
