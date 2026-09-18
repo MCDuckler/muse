@@ -40,10 +40,13 @@ class MiniPlayer extends StatelessWidget {
 /// underneath the bar where it cannot be reached. Lists that end in songs already left
 /// room; this is the number, so the ones that end in a button leave it too.
 ///
-/// Room for the tabs as well now: they are under every screen rather than only under
-/// the four at the top of the app, so the last row of any list has a bar and a half
-/// beneath it.
-const bottomForPlayer = 168.0;
+/// Room for the tabs as well: they are under every screen rather than only under the
+/// four at the top of the app, so the last row of any list has a bar and a half
+/// beneath it — unless there is no bar there at all, which is the case on a desk with
+/// the player folded out down the side. Reserving a phone's worth of nothing under
+/// every list is how a desk layout ends up with a hole in it.
+double bottomForPlayer(BuildContext context) =>
+    InsideShell.bottomInset(context) ?? 168.0;
 
 /// A page with the player under it. Every screen that shows songs uses this instead of
 /// a bare Scaffold, so there is one answer to "where are the controls" everywhere.

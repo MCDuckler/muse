@@ -9,12 +9,14 @@ import 'jam_page.dart';
 import 'feel.dart';
 import 'glass.dart';
 import 'motion.dart';
+import 'desk_dock.dart';
 import 'library_page.dart';
 import 'settings_page.dart';
 import 'player_bar.dart';
 import 'queue_page.dart';
 import 'search_page.dart';
 import 'social_page.dart';
+import 'widths.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -56,6 +58,11 @@ class _HomePageState extends State<HomePage> {
     const pages = [QueuePage(), SearchPage(), LibraryPage(), SocialPage()];
     const titles = ['Queues', 'Search', 'Library', 'People'];
 
+    final width = Width.of(context);
+    // A desk gets the two things a phone has to take turns showing: the page, and what
+    // is playing beside it. See DeskDock.
+    final dock = width.hasDock && app.deskDock;
+
     return PopScope(
       // The shell itself only leaves once the tab has nothing left to go back to.
       canPop: false,
@@ -79,7 +86,22 @@ class _HomePageState extends State<HomePage> {
       extendBody: true,
       body: SafeArea(
         bottom: false,
-        child: Column(
+        child: Row(
+          children: [
+            // Down the side on anything wider than a phone. Four destinations spread
+            // across fourteen hundred pixels of bottom edge is thumb furniture on a
+            // screen nobody is holding.
+            if (width.hasRail)
+              _Rail(
+                extended: width == Width.expanded,
+                dockOpen: dock,
+                onDock: width.hasDock ? app.toggleDeskDock : null,
+                onSameTab: () =>
+                    _tabs[context.read<AppState>().homeTab].currentState
+                        ?.popUntil((r) => r.isFirst),
+              ),
+            Expanded(
+              child: Column(
           children: [
             Expanded(
               // All three tabs are built and kept — that is what an IndexedStack is
@@ -94,6 +116,11 @@ class _HomePageState extends State<HomePage> {
               // cross-fade between two tabs — that would mean two of them built and
               // painted at once, which is what the IndexedStack is here to avoid.
               child: InsideShell(
+                // A player bar and a tab bar, less whichever of them this screen is
+                // not carrying.
+                bottomInsetHere: (dock ? 0.0 : 96.0) +
+                    (width.hasRail ? 0.0 : 72.0) +
+                    (dock ? 24.0 : 0.0),
                 child: _Settling(
                   on: app.homeTab,
                   child: IndexedStack(
@@ -117,6 +144,12 @@ class _HomePageState extends State<HomePage> {
             ),
           ],
         ),
+            ),
+            // What is playing and what is next, folded out of the right-hand edge.
+            if (width.hasDock)
+              DeskDock(open: dock, onClose: app.toggleDeskDock),
+          ],
+        ),
       ),
       bottomNavigationBar: GlassSurface(
         child: SafeArea(
@@ -124,20 +157,136 @@ class _HomePageState extends State<HomePage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const PlayerBar(),
-              MuseNavigationBar(
-                // Tapping the tab you are already on goes back to the top of it,
-                // which is what every app does and what somebody four screens deep
-                // in the library reaches for.
-                onSameTab: () =>
-                    _tabs[context.read<AppState>().homeTab].currentState
-                        ?.popUntil((r) => r.isFirst),
-              ),
+              // The dock has the player in it, and two players on one screen is one
+              // too many.
+              if (!dock) const PlayerBar(),
+              if (!width.hasRail)
+                MuseNavigationBar(
+                  // Tapping the tab you are already on goes back to the top of it,
+                  // which is what every app does and what somebody four screens deep
+                  // in the library reaches for.
+                  onSameTab: () =>
+                      _tabs[context.read<AppState>().homeTab].currentState
+                          ?.popUntil((r) => r.isFirst),
+                ),
             ],
           ),
         ),
       ),
       ),
+    );
+  }
+}
+
+/// The four places the app goes, down the side.
+///
+/// The same four destinations as the bar, plus the two things that were hidden in the
+/// app bar's overflow — and, at the bottom, the handle that folds the player out of
+/// the right-hand edge.
+class _Rail extends StatelessWidget {
+  const _Rail({
+    required this.extended,
+    required this.dockOpen,
+    required this.onDock,
+    required this.onSameTab,
+  });
+
+  final bool extended;
+  final bool dockOpen;
+  final VoidCallback? onDock;
+  final VoidCallback onSameTab;
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    final tab = app.homeTab;
+    return NavigationRail(
+      extended: extended,
+      minExtendedWidth: 190,
+      selectedIndex: tab,
+      labelType: extended ? null : NavigationRailLabelType.all,
+      leading: Padding(
+        padding: const EdgeInsets.only(top: 8, bottom: 4),
+        child: Column(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              tooltip: 'Refresh',
+              onPressed: app.refresh,
+            ),
+            IconButton(
+              icon: Icon(app.jam == null ? Icons.podcasts_outlined : Icons.podcasts,
+                  color:
+                      app.jam == null ? null : Theme.of(context).colorScheme.primary),
+              tooltip: app.jam == null ? 'Listen together' : 'Jam · ${app.jam!.code}',
+              onPressed: () => showJam(context),
+            ),
+          ],
+        ),
+      ),
+      trailing: Expanded(
+        child: Align(
+          alignment: Alignment.bottomCenter,
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (app.downloadsPending > 0)
+                  IconButton(
+                    icon: Badge(
+                      label: Text('${app.downloadsPending}'),
+                      child: const Icon(Icons.downloading),
+                    ),
+                    tooltip: 'Downloads',
+                    onPressed: () => Navigator.of(context)
+                        .push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
+                  ),
+                IconButton(
+                  icon: const Icon(Icons.settings_outlined),
+                  tooltip: 'Settings',
+                  onPressed: () => Navigator.of(context)
+                      .push(MaterialPageRoute(builder: (_) => const SettingsPage())),
+                ),
+                if (onDock != null)
+                  IconButton(
+                    icon: Icon(dockOpen
+                        ? Icons.keyboard_double_arrow_right
+                        : Icons.keyboard_double_arrow_left),
+                    tooltip: dockOpen ? 'Hide what is playing' : 'Show what is playing',
+                    onPressed: onDock,
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      onDestinationSelected: (i) {
+        if (i != tab) {
+          feel(Feel.pick);
+        } else {
+          onSameTab();
+        }
+        app.setHomeTab(i);
+      },
+      destinations: const [
+        NavigationRailDestination(
+            icon: Icon(Icons.queue_music_outlined),
+            selectedIcon: Icon(Icons.queue_music),
+            label: Text('Queues')),
+        NavigationRailDestination(
+            icon: Icon(Icons.search),
+            selectedIcon: Icon(Icons.search),
+            label: Text('Search')),
+        NavigationRailDestination(
+            icon: Icon(Icons.library_music_outlined),
+            selectedIcon: Icon(Icons.library_music),
+            label: Text('Library')),
+        NavigationRailDestination(
+            icon: Icon(Icons.people_outline),
+            selectedIcon: Icon(Icons.people),
+            label: Text('People')),
+      ],
     );
   }
 }
@@ -148,13 +297,24 @@ class _HomePageState extends State<HomePage> {
 /// inside a tab must not put a second player under itself. A screen opened over the
 /// whole app — from the player, say — still does. See PlayerScaffold.
 class InsideShell extends InheritedWidget {
-  const InsideShell({super.key, required super.child});
+  const InsideShell({super.key, required this.bottomInsetHere, required super.child});
+
+  /// How much room the shell is taking at the bottom of this screen — a player and a
+  /// tab bar on a phone, nothing at all on a desk with the player down the side. Lists
+  /// leave this much under their last row.
+  final double bottomInsetHere;
 
   static bool of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<InsideShell>() != null;
 
+  /// Null outside the shell, where whoever is drawing has to assume the worst.
+  static double? bottomInset(BuildContext context) => context
+      .dependOnInheritedWidgetOfExactType<InsideShell>()
+      ?.bottomInsetHere;
+
   @override
-  bool updateShouldNotify(InsideShell old) => false;
+  bool updateShouldNotify(InsideShell old) =>
+      old.bottomInsetHere != bottomInsetHere;
 }
 
 /// The first screen in a tab: the tab's own content, under the bar that every screen
@@ -177,18 +337,22 @@ class _TabRoot extends StatelessWidget {
       appBar: AppBar(
         title: Text(title),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: app.refresh,
-            tooltip: 'Refresh',
-          ),
-          IconButton(
-            icon: Icon(app.jam == null ? Icons.podcasts_outlined : Icons.podcasts,
-                color: app.jam == null ? null : Theme.of(context).colorScheme.primary),
-            tooltip: app.jam == null ? 'Listen together' : 'Jam · ${app.jam!.code}',
-            onPressed: () => showJam(context),
-          ),
-          if (app.downloadsPending > 0)
+          // On a desk these live in the rail, which is where the eye already is.
+          if (!Width.of(context).hasRail) ...[
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              onPressed: app.refresh,
+              tooltip: 'Refresh',
+            ),
+            IconButton(
+              icon: Icon(app.jam == null ? Icons.podcasts_outlined : Icons.podcasts,
+                  color:
+                      app.jam == null ? null : Theme.of(context).colorScheme.primary),
+              tooltip: app.jam == null ? 'Listen together' : 'Jam · ${app.jam!.code}',
+              onPressed: () => showJam(context),
+            ),
+          ],
+          if (!Width.of(context).hasRail && app.downloadsPending > 0)
             IconButton(
               icon: Badge(
                 label: Text('${app.downloadsPending}'),
@@ -198,12 +362,13 @@ class _TabRoot extends StatelessWidget {
               onPressed: () => Navigator.of(context)
                   .push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
             ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: 'Settings',
-            onPressed: () => Navigator.of(context)
-                .push(MaterialPageRoute(builder: (_) => const SettingsPage())),
-          ),
+          if (!Width.of(context).hasRail)
+            IconButton(
+              icon: const Icon(Icons.settings_outlined),
+              tooltip: 'Settings',
+              onPressed: () => Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => const SettingsPage())),
+            ),
         ],
       ),
       body: Column(

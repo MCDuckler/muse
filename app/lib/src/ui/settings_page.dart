@@ -148,7 +148,7 @@ class _SettingsPageState extends State<SettingsPage> {
     return PlayerScaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
-        padding: const EdgeInsets.only(bottom: bottomForPlayer),
+        padding: EdgeInsets.only(bottom: bottomForPlayer(context)),
         children: [
           _label(context, 'Your music'),
           ListTile(

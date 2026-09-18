@@ -270,7 +270,7 @@ class _PersonPageState extends State<PersonPage> {
       body: RefreshIndicator(
         onRefresh: _load,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(8, 8, 8, bottomForPlayer),
+          padding: EdgeInsets.fromLTRB(8, 8, 8, bottomForPlayer(context)),
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(8, 8, 8, 16),

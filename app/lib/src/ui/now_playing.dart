@@ -1166,6 +1166,88 @@ class _SleeveTools extends StatelessWidget {
 /// being looked at, and three lines of credits under a board somebody is drawing on is
 /// the screen talking over them. It is still there, because knowing what is playing is
 /// not optional; it is just said in a sentence rather than a stack.
+/// What is playing, in a column beside the page rather than over it.
+///
+/// On a desk there is room for the record to be on screen while you are doing
+/// something else, which is what every player on a desk does and what the phone
+/// layout has no way to offer: there, opening the player means covering everything.
+/// The parts are the same parts — the same artwork, the same words, the same bar and
+/// the same buttons — laid out narrow and tall.
+class DeskNowPlaying extends StatelessWidget {
+  const DeskNowPlaying({super.key, this.onClose});
+
+  /// Folding the panel away again.
+  final VoidCallback? onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    final player = app.player;
+    if (player == null) return const SizedBox.shrink();
+    final text = Theme.of(context).textTheme;
+
+    return StreamBuilder<PlayerSnapshot>(
+      stream: player.changes,
+      initialData: player.last,
+      builder: (context, snap) {
+        final s = snap.data;
+        final track = s?.current ?? player.current;
+        if (track == null) {
+          return Center(
+            child: Text('Nothing playing', style: text.bodyMedium),
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 4, 0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(app.activeQueue?.name ?? 'Now playing',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: text.titleSmall),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.open_in_full, size: 18),
+                    tooltip: 'Open the player',
+                    onPressed: () => Navigator.of(context, rootNavigator: true)
+                        .push(nowPlayingRoute()),
+                  ),
+                  if (onClose != null)
+                    IconButton(
+                      icon: const Icon(Icons.chevron_right),
+                      tooltip: 'Hide',
+                      onPressed: onClose,
+                    ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: AspectRatio(
+                aspectRatio: 1,
+                child:
+                    _Artwork(track: track, snapshot: s, player: player, app: app),
+              ),
+            ),
+            _Words(app: app, track: track),
+            const SizedBox(height: 6),
+            _Scrubber(player: player, timesBeside: true),
+            const SizedBox(height: 2),
+            _Controls(app: app, player: player, snapshot: s),
+            const SizedBox(height: 2),
+            _Extras(app: app, track: track, spread: true),
+            const SizedBox(height: 6),
+          ],
+        );
+      },
+    );
+  }
+}
+
 class _Words extends StatelessWidget {
   const _Words({required this.app, required this.track});
   final AppState app;

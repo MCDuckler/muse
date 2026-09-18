@@ -19,7 +19,9 @@ import 'package:muse/src/api/client.dart';
 import 'package:muse/src/api/connection.dart';
 import 'package:muse/src/state/app_state.dart';
 import 'package:muse/src/state/selection.dart';
+import 'package:muse/src/ui/desk_dock.dart';
 import 'package:muse/src/ui/home_page.dart';
+import 'package:muse/src/ui/now_playing.dart';
 import 'package:muse/src/ui/mini_player.dart';
 
 void main() {
@@ -48,6 +50,7 @@ void main() {
         home: Scaffold(
           extendBody: true,
           body: InsideShell(
+            bottomInsetHere: 96,
             child: Navigator(
               key: key,
               onGenerateRoute: (_) => MaterialPageRoute(
@@ -136,6 +139,76 @@ void main() {
     // poll, and a timer still pending when a test ends fails the test.
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(seconds: 5));
+  });
+
+  /// The whole shell at a given width, with a server that answers everything with
+  /// nothing.
+  Future<void> wholeShell(WidgetTester tester, Size size) async {
+    useThisClientInstead(MockClient((request) async => http.Response(
+        request.url.path.endsWith('/queues') ? '[]' : '{}', 200,
+        headers: {'content-type': 'application/json'})));
+    addTearDown(() => useThisClientInstead(http.Client()));
+    tester.view.physicalSize = size;
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MultiProvider(
+      providers: [
+        ChangeNotifierProvider<AppState>.value(value: app),
+        ChangeNotifierProvider(create: (_) => Selection()),
+      ],
+      child: const MaterialApp(home: HomePage()),
+    ));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+  }
+
+  /// Put the tree away and let what the tabs scheduled run out: several of them poll,
+  /// and a timer still pending when a test ends fails the test.
+  Future<void> drain(WidgetTester tester) async {
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 5));
+  }
+
+  testWidgets('a phone still gets the bar across the bottom', (tester) async {
+    await wholeShell(tester, const Size(420, 900));
+    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.byType(NavigationRail), findsNothing);
+    expect(find.byType(DeskDock), findsNothing,
+        reason: 'there is no room beside a phone');
+    await drain(tester);
+  });
+
+  testWidgets('a desk gets a rail down the side and the player beside the page',
+      (tester) async {
+    await wholeShell(tester, const Size(1440, 900));
+    expect(find.byType(NavigationRail), findsOneWidget);
+    expect(find.byType(NavigationBar), findsNothing,
+        reason: 'the four destinations are in the rail, not across the bottom');
+    expect(find.byType(DeskDock), findsOneWidget);
+    expect(find.byType(DeskNowPlaying), findsOneWidget,
+        reason: 'what is playing stays on screen while you read something else');
+    await drain(tester);
+  });
+
+  testWidgets('the dock folds away and stays folded', (tester) async {
+    await wholeShell(tester, const Size(1440, 900));
+    final dock = tester.widget<DeskDock>(find.byType(DeskDock));
+    expect(dock.open, isTrue);
+
+    app.toggleDeskDock();
+    await tester.pumpAndSettle();
+    expect(tester.widget<DeskDock>(find.byType(DeskDock)).open, isFalse);
+    expect(app.deskDock, isFalse, reason: 'and it is remembered for next time');
+    await drain(tester);
+  });
+
+  testWidgets('a middling window has the rail but keeps the player at the bottom',
+      (tester) async {
+    await wholeShell(tester, const Size(900, 900));
+    expect(find.byType(NavigationRail), findsOneWidget);
+    expect(find.byType(DeskDock), findsNothing,
+        reason: 'not enough width to give three hundred of it away');
+    await drain(tester);
   });
 
   testWidgets('the tab you left is where you left it', (tester) async {

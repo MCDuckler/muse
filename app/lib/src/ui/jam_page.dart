@@ -47,7 +47,7 @@ class _JamPageState extends State<JamPage> {
     return PlayerScaffold(
       appBar: AppBar(title: const Text('Jam')),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, bottomForPlayer),
+        padding: EdgeInsets.fromLTRB(16, 8, 16, bottomForPlayer(context)),
         children: [
           if (_error != null)
             Padding(

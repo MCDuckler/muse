@@ -274,7 +274,7 @@ class _ServicesPageState extends State<ServicesPage> {
               : RefreshIndicator(
                   onRefresh: _load,
                   child: ListView(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, bottomForPlayer),
+                    padding: EdgeInsets.fromLTRB(16, 8, 16, bottomForPlayer(context)),
                     children: [
                       Text(
                         'Most of these are read by name rather than by signing in — a '
@@ -463,7 +463,7 @@ class _ServiceListsState extends State<_ServiceLists> {
                           'account.',
                     )
                   : ListView(
-                  padding: const EdgeInsets.only(bottom: bottomForPlayer),
+                  padding: EdgeInsets.only(bottom: bottomForPlayer(context)),
                   children: [
                     for (final l in lists)
                       ListTile(

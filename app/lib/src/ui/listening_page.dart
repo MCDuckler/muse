@@ -61,7 +61,7 @@ class _ListeningPageState extends State<ListeningPage> {
           return RefreshIndicator(
             onRefresh: () async => _load(),
             child: ListView(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, bottomForPlayer),
+              padding: EdgeInsets.fromLTRB(12, 8, 12, bottomForPlayer(context)),
               children: [
                 // The stretch of time first: it changes every number under it.
                 SegmentedButton<String>(

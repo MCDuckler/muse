@@ -61,7 +61,7 @@ class KeptPage extends StatelessWidget {
           },
         ),
         child: ListView(
-        padding: const EdgeInsets.fromLTRB(8, 4, 8, bottomForPlayer),
+        padding: EdgeInsets.fromLTRB(8, 4, 8, bottomForPlayer(context)),
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),

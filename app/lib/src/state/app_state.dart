@@ -57,6 +57,18 @@ class AppState extends ChangeNotifier {
   /// people already know, not a sheet with its own half-copy of one.
   int homeTab = 0;
 
+  /// Whether the column beside the page — what is playing, what is next — is folded
+  /// out. Only ever asked on a screen wide enough to have one.
+  bool deskDock = true;
+
+  void toggleDeskDock() {
+    deskDock = !deskDock;
+    SharedPreferences.getInstance()
+        .then((p) => p.setBool(_kDeskDock, deskDock))
+        .catchError((_) => false);
+    notifyListeners();
+  }
+
   void setHomeTab(int tab) {
     if (homeTab == tab) return;
     homeTab = tab;
@@ -232,6 +244,7 @@ class AppState extends ChangeNotifier {
   static const _kLastQueue = 'muse.lastQueue';
   static const _kVolume = 'muse.volume';
   static const _kHomeTab = 'muse.homeTab';
+  static const _kDeskDock = 'muse.deskDock';
 
   /// The queue that was on when the app was last closed, so opening it again lands
   /// there rather than on whichever queue happens to be first in the list.
@@ -407,6 +420,7 @@ class AppState extends ChangeNotifier {
     halftone = prefs.getBool(_kHalftone) ?? !kIsWeb;
     spectrum = prefs.getBool(_kSpectrum) ?? false;
     homeTab = (prefs.getInt(_kHomeTab) ?? 0).clamp(0, 3);
+    deskDock = prefs.getBool(_kDeskDock) ?? true;
     coverScale = (prefs.getDouble(_kCoverScale) ?? 0.74).clamp(0.5, 1.0);
     discScale = (prefs.getDouble(_kDiscScale) ?? 1.0).clamp(0.6, 1.15);
     haptics = prefs.getBool(_kHaptics) ?? true;

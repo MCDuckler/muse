@@ -454,7 +454,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
             child: RefreshIndicator(
             onRefresh: () async => _reload(),
             child: ReorderableListView.builder(
-            padding: const EdgeInsets.fromLTRB(8, 4, 8, bottomForPlayer),
+            padding: EdgeInsets.fromLTRB(8, 4, 8, bottomForPlayer(context)),
             physics: const AlwaysScrollableScrollPhysics(),
             buildDefaultDragHandles: false,
             header: _PlaylistHeader(

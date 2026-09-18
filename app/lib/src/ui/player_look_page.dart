@@ -21,7 +21,7 @@ class PlayerLookPage extends StatelessWidget {
     return PlayerScaffold(
       appBar: AppBar(title: const Text('Now playing')),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, bottomForPlayer),
+        padding: EdgeInsets.fromLTRB(16, 12, 16, bottomForPlayer(context)),
         children: [
           Text('Arrangement', style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 8),
