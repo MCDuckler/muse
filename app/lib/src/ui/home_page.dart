@@ -381,7 +381,7 @@ class _TabRoot extends StatelessWidget {
                   .push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
               child: _OfflineBanner(pending: app.downloadsPending),
             ),
-          Expanded(child: child),
+          Expanded(child: Readable(child: child)),
         ],
       ),
     );

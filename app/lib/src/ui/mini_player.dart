@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../state/app_state.dart';
 import 'glass.dart';
 import 'home_page.dart';
+import 'widths.dart';
 import 'player_bar.dart';
 
 /// The player, at the bottom of a screen that is not the home shell.
@@ -56,7 +57,12 @@ class PlayerScaffold extends StatelessWidget {
     required this.body,
     this.appBar,
     this.floatingActionButton,
+    this.measure = 1100,
   });
+
+  /// How wide this page is allowed to get. A list wants a page's measure; a grid of
+  /// records wants the room, because more of them across is what the room is for.
+  final double measure;
 
   final Widget body;
   final PreferredSizeWidget? appBar;
@@ -70,7 +76,9 @@ class PlayerScaffold extends StatelessWidget {
     final inShell = InsideShell.of(context);
     return Scaffold(
       appBar: appBar,
-      body: body,
+      // The same measure as a tab's own page: a screen pushed on top of one should not
+      // suddenly be twice as wide as the screen it came from.
+      body: Readable(maxWidth: measure, child: body),
       backgroundColor: inShell ? Colors.transparent : null,
       floatingActionButton: floatingActionButton,
       // extendBody so the blur has something to blur, as in the home shell.

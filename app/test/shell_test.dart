@@ -22,6 +22,7 @@ import 'package:muse/src/state/selection.dart';
 import 'package:muse/src/ui/desk_dock.dart';
 import 'package:muse/src/ui/home_page.dart';
 import 'package:muse/src/ui/now_playing.dart';
+import 'package:muse/src/ui/widths.dart';
 import 'package:muse/src/ui/mini_player.dart';
 
 void main() {
@@ -208,6 +209,24 @@ void main() {
     expect(find.byType(NavigationRail), findsOneWidget);
     expect(find.byType(DeskDock), findsNothing,
         reason: 'not enough width to give three hundred of it away');
+    await drain(tester);
+  });
+
+  testWidgets('a page keeps a readable measure however wide the window is',
+      (tester) async {
+    // A song row that runs the whole width of a desk has its artwork at one end and
+    // its menu button a thousand pixels away at the other, and reading one row means
+    // crossing the screen.
+    await wholeShell(tester, const Size(1920, 900));
+    // The box Readable puts round the page, not the room it was given.
+    final page = tester.getSize(find
+        .descendant(
+            of: find.byType(Readable).first,
+            matching: find.byType(ConstrainedBox))
+        .first);
+    expect(page.width, lessThanOrEqualTo(1100),
+        reason: 'the page stops at a measure, the window does not');
+    expect(page.width, greaterThan(600), reason: 'and it does use the room it has');
     await drain(tester);
   });
 

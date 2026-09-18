@@ -18,6 +18,7 @@ import 'dialogs.dart';
 import 'mini_player.dart';
 import 'track_list.dart';
 import 'track_menu.dart';
+import 'widths.dart';
 import 'snack.dart';
 
 /// Narrowing a list that is thousands long, and saying what order it is in.
@@ -257,7 +258,11 @@ class _AlbumsPageState extends State<AlbumsPage> {
   @override
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
+    final wide = Width.of(context) == Width.expanded;
     return PlayerScaffold(
+      // Records are the one page that wants the whole desk: they are tiles, and more
+      // of them across is the point of a wider screen.
+      measure: 1600,
       appBar: AppBar(
         // How many there are, because "Albums" over a list that stops somewhere
         // says nothing about what you are looking at — and with a search in it, it
@@ -312,11 +317,13 @@ class _AlbumsPageState extends State<AlbumsPage> {
               child: GridView.builder(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 160),
               physics: const AlwaysScrollableScrollPhysics(),
-              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: 190,
+              gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                // Bigger tiles and more air between them where there is room: phone
+                // sizes on a desk are a page of postage stamps.
+                maxCrossAxisExtent: wide ? 230 : 190,
                 childAspectRatio: 0.74,
-                crossAxisSpacing: 12,
-                mainAxisSpacing: 16,
+                crossAxisSpacing: wide ? 18 : 12,
+                mainAxisSpacing: wide ? 22 : 16,
               ),
               itemCount: albums.length,
               itemBuilder: (context, i) {

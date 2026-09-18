@@ -34,3 +34,28 @@ enum Width {
   /// Room beside the page for what is playing and what is next.
   bool get hasDock => this == Width.expanded;
 }
+
+/// A page, no wider than a page wants to be.
+///
+/// A list row on a desk ran the whole width of the window: forty pixels of artwork on
+/// the left and the menu button for the same row a thousand pixels away, with the eye
+/// having to travel the distance to read one song. Books settled this centuries ago —
+/// past a certain measure a line stops being easier to read and starts being harder.
+///
+/// Grids are the exception and get the width, because more tiles across is what the
+/// extra room is *for*.
+class Readable extends StatelessWidget {
+  const Readable({super.key, required this.child, this.maxWidth = 1100});
+
+  final Widget child;
+  final double maxWidth;
+
+  @override
+  Widget build(BuildContext context) => Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxWidth),
+          child: child,
+        ),
+      );
+}

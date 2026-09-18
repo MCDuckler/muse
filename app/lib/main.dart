@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/services.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:just_audio_background/just_audio_background.dart';
@@ -17,6 +18,7 @@ import 'src/ui/loading.dart';
 import 'src/ui/login_page.dart';
 import 'src/ui/theme.dart';
 import 'src/ui/page_colour.dart';
+import 'src/ui/widths.dart';
 
 /// Exposed for the integration test: the player lives behind a stream, and a test
 /// driving real widgets needs a way to read what it actually did.
@@ -135,17 +137,50 @@ class MuseApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         theme: MuseTheme.light(app.palette),
         darkTheme: MuseTheme.dark(app.palette),
+        // A mouse gets a scrollbar and can drag a list about, which a finger has
+        // never needed: on the web the app was a phone with no scrollbar, so a
+        // library of twenty-two thousand songs was a scroll with no bottom and no
+        // sense of where in it you were.
+        scrollBehavior: const _DeskScrolling(),
         // Above the navigator, so the keys work on every route. They used to sit in
         // the home shell, and the player is a route pushed over it: open what is
         // playing and space stopped pausing it.
-        builder: (context, child) =>
-            AppShortcuts(child: _AnyTap(child: child ?? const SizedBox())),
+        //
+        // Rows also sit closer together where there is a mouse: the extra height in
+        // a list is room for a fingertip, and on a desk it is half a screen of
+        // nothing.
+        builder: (context, child) => AppShortcuts(
+          child: _AnyTap(
+            child: Theme(
+              data: Theme.of(context).copyWith(
+                  visualDensity: Width.of(context) == Width.expanded
+                      ? VisualDensity.compact
+                      : null),
+              child: child ?? const SizedBox(),
+            ),
+          ),
+        ),
         home: const _Root(),
           );
         },
       ),
     );
   }
+}
+
+/// How lists behave where there is a pointer.
+class _DeskScrolling extends MaterialScrollBehavior {
+  const _DeskScrolling();
+
+  /// Dragging a list with a mouse, which is what people do to a queue when they are
+  /// rearranging it and there is no finger involved.
+  @override
+  Set<PointerDeviceKind> get dragDevices => {
+        PointerDeviceKind.touch,
+        PointerDeviceKind.mouse,
+        PointerDeviceKind.trackpad,
+        PointerDeviceKind.stylus,
+      };
 }
 
 /// Lets any tap stand in for the one the browser was waiting for.
