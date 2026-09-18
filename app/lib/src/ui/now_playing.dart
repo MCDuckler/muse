@@ -155,20 +155,14 @@ class NowPlayingScreen extends StatelessWidget {
             child: track == null
               ? const Center(child: Text('Nothing playing'))
               : SafeArea(
-                  child: Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 520),
-                      child: Padding(
-                        // Plain runs its panel almost to the walls, so the page's own
-                        // margin gets out of the way and the words inside keep theirs.
-                        padding: EdgeInsets.symmetric(
-                            horizontal: app.playerLayout == PlayerLayout.plain
-                                ? 8
-                                : 24),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
+                  child: Builder(builder: (context) {
+                    // The record, and everything that is said under it. On a phone
+                    // that is one column, which is what the whole of this screen has
+                    // always been. On a desk the two go side by side: a record blown
+                    // up to nine hundred pixels tall is not a bigger record, it is a
+                    // title pushed off the bottom of the window.
+                    final record = <Widget>[
+
                             // Room above the record.
                             //
                             // It sat hard against the app bar, which reads as the
@@ -203,6 +197,8 @@ class NowPlayingScreen extends StatelessWidget {
                                 height: app.playerLayout == PlayerLayout.roomy
                                     ? 18
                                     : 32),
+                    ];
+                    final said = <Widget>[
                             // Only while a record is turned over. It is the back of a
                             // sleeve, not an art program: the pens appear because
                             // there is suddenly something to draw on, and go again
@@ -315,11 +311,68 @@ class NowPlayingScreen extends StatelessWidget {
                             // three places in it — two rows of controls touching, and
                             // the bottom one is the one you reach for by feel.
                             const SizedBox(height: 20),
-                          ],
+                    ];
+
+                    if (Width.of(context) != Width.expanded) {
+                      return Center(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 520),
+                          child: Padding(
+                            // Plain runs its panel almost to the walls, so the page's
+                            // own margin gets out of the way and the words inside keep
+                            // theirs.
+                            padding: EdgeInsets.symmetric(
+                                horizontal: app.playerLayout == PlayerLayout.plain
+                                    ? 8
+                                    : 24),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [...record, ...said],
+                            ),
+                          ),
+                        ),
+                      );
+                    }
+
+                    return Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 1180),
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(32, 12, 32, 12),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              // The record keeps its own square: it is the thing on
+                              // the screen, and it should be as big as the shorter
+                              // side of the window allows rather than as wide as half
+                              // of a very wide one.
+                              Expanded(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: record,
+                                ),
+                              ),
+                              const SizedBox(width: 40),
+                              Expanded(
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(maxWidth: 520),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: said,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                  ),
+                    );
+                  }),
                 ),
           ),
           ),
