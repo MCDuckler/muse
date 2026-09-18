@@ -9,6 +9,7 @@ import 'jam_page.dart';
 import 'feel.dart';
 import 'glass.dart';
 import 'motion.dart';
+import 'pane.dart';
 import 'desk_dock.dart';
 import 'library_page.dart';
 import 'settings_page.dart';
@@ -40,9 +41,26 @@ class _HomePageState extends State<HomePage> {
   final List<GlobalKey<NavigatorState>> _tabs =
       [for (var i = 0; i < 4; i++) GlobalKey<NavigatorState>()];
 
+  /// The pane beside the library's own list, where there is room for one. See
+  /// PaneScope: on a desk the library is a column of places to go, and covering it
+  /// with whichever one you picked throws away the thing you are picking from.
+  final GlobalKey<NavigatorState> _libraryPane = GlobalKey<NavigatorState>();
+
+  /// Which tab is a list with something beside it. Only the library: the queue's
+  /// second pane is the dock, and search and people are one thing each.
+  static const _splits = 2;
+
   /// Back goes back inside the tab first, and only then out of the app.
+  ///
+  /// Innermost first: with the library split in two, what somebody opened beside the
+  /// column is the nearest thing to go back from.
   Future<bool> _backWithinTab() async {
-    final navigator = _tabs[context.read<AppState>().homeTab].currentState;
+    final tab = context.read<AppState>().homeTab;
+    if (tab == _splits) {
+      final pane = _libraryPane.currentState;
+      if (pane != null && pane.canPop() && await pane.maybePop()) return true;
+    }
+    final navigator = _tabs[tab].currentState;
     return navigator != null && await navigator.maybePop();
   }
 
@@ -133,7 +151,14 @@ class _HomePageState extends State<HomePage> {
                             key: _tabs[i],
                             onGenerateRoute: (_) => MaterialPageRoute(
                               builder: (_) => _TabRoot(
-                                  title: titles[i], child: pages[i]),
+                                title: titles[i],
+                                // The library gets a pane beside it on a desk; the
+                                // others are one thing each.
+                                pane: i == _splits && width == Width.expanded
+                                    ? _libraryPane
+                                    : null,
+                                child: pages[i],
+                              ),
                             ),
                           ),
                         ),
@@ -324,9 +349,12 @@ class InsideShell extends InheritedWidget {
 /// more, because what is on top of a tab now is a whole screen with a bar of its own,
 /// and two bars stacked is a bar too many.
 class _TabRoot extends StatelessWidget {
-  const _TabRoot({required this.title, required this.child});
+  const _TabRoot({required this.title, required this.child, this.pane});
   final String title;
   final Widget child;
+
+  /// Where what this list opens should go, when there is room beside it.
+  final GlobalKey<NavigatorState>? pane;
 
   @override
   Widget build(BuildContext context) {
@@ -381,8 +409,72 @@ class _TabRoot extends StatelessWidget {
                   .push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
               child: _OfflineBanner(pending: app.downloadsPending),
             ),
-          Expanded(child: Readable(child: child)),
+          Expanded(
+            child: pane == null
+                ? Readable(child: child)
+                : _SideBySide(pane: pane!, list: child),
+          ),
         ],
+      ),
+    );
+  }
+}
+
+/// A list on the left, whatever it opens on the right.
+class _SideBySide extends StatelessWidget {
+  const _SideBySide({required this.pane, required this.list});
+  final GlobalKey<NavigatorState> pane;
+  final Widget list;
+
+  /// Wide enough for a playlist's name and the menu at the end of its row, narrow
+  /// enough that what you opened is the bigger half.
+  static const listWidth = 330.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return PaneScope(
+      pane: pane,
+      child: Row(
+        children: [
+          SizedBox(width: listWidth, child: list),
+          VerticalDivider(width: 1, color: scheme.outlineVariant),
+          Expanded(
+            child: Navigator(
+              key: pane,
+              onGenerateRoute: (_) =>
+                  MaterialPageRoute(builder: (_) => const _NothingPicked()),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// What is beside the library before anything has been picked.
+class _NothingPicked extends StatelessWidget {
+  const _NothingPicked();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.library_music_outlined,
+                size: 40, color: scheme.outlineVariant),
+            const SizedBox(height: 10),
+            Text('Pick something from the library',
+                style: Theme.of(context)
+                    .textTheme
+                    .bodyMedium
+                    ?.copyWith(color: scheme.onSurfaceVariant)),
+          ],
+        ),
       ),
     );
   }

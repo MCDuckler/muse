@@ -12,6 +12,7 @@ import 'feed_page.dart';
 import 'kept_page.dart';
 import 'listening_page.dart';
 import 'mini_player.dart';
+import 'pane.dart';
 import 'selection_bar.dart';
 import 'spotify_page.dart' show UnmatchedPage;
 import 'song_row.dart';
@@ -35,20 +36,17 @@ class LibraryPage extends StatelessWidget {
           leading: const Icon(Icons.library_music_outlined),
           title: const Text('All tracks'),
           subtitle: const Text('Everything, sortable'),
-          onTap: () => Navigator.of(context)
-              .push(MaterialPageRoute(builder: (_) => const AllTracksPage())),
+          onTap: () => openPage(context, (_) => const AllTracksPage()),
         ),
         ListTile(
           leading: const Icon(Icons.album_outlined),
           title: const Text('Albums'),
-          onTap: () => Navigator.of(context)
-              .push(MaterialPageRoute(builder: (_) => const AlbumsPage())),
+          onTap: () => openPage(context, (_) => const AlbumsPage()),
         ),
         ListTile(
           leading: const Icon(Icons.person_outline),
           title: const Text('Artists'),
-          onTap: () => Navigator.of(context)
-              .push(MaterialPageRoute(builder: (_) => const ArtistsPage())),
+          onTap: () => openPage(context, (_) => const ArtistsPage()),
         ),
         // Up here with the rest of the ways in, not under the last playlist: with
         // twenty playlists it was a screen and a half of scrolling away.
@@ -56,16 +54,12 @@ class LibraryPage extends StatelessWidget {
           leading: const Icon(Icons.bar_chart),
           title: const Text('Listening'),
           subtitle: const Text('What you played most, and when'),
-          onTap: () => Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => const ListeningPage(),
-          )),
+          onTap: () => openPage(context, (_) => const ListeningPage()),
         ),
         ListTile(
           leading: const Icon(Icons.history),
           title: const Text('Recently played'),
-          onTap: () => Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => const _HistoryPage(),
-          )),
+          onTap: () => openPage(context, (_) => const _HistoryPage()),
         ),
         const _FeedRow(),
         // What will play with no signal is part of the library, not a setting: it was
@@ -78,8 +72,7 @@ class LibraryPage extends StatelessWidget {
             subtitle: Text(app.offline.count == 0
                 ? 'Keep songs here to play them with no signal'
                 : '${app.offline.count} songs · ${KeptPage.size(app.offline.bytes)}'),
-            onTap: () => Navigator.of(context)
-                .push(MaterialPageRoute(builder: (_) => const KeptPage())),
+            onTap: () => openPage(context, (_) => const KeptPage()),
           ),
         const Divider(),
         const _SectionLabel('Playlists'),
@@ -142,10 +135,8 @@ class LibraryPage extends StatelessWidget {
                   await app.refreshPlaylists();
                 } else if (v == 'unmatched') {
                   if (!context.mounted) return;
-                  await Navigator.of(context).push(MaterialPageRoute(
-                    builder: (_) =>
-                        UnmatchedPage(playlistId: p.id, name: p.name),
-                  ));
+                  await openPage(context,
+                      (_) => UnmatchedPage(playlistId: p.id, name: p.name));
                   await app.refreshPlaylists();
                 } else if (v == 'resync') {
                   final messenger = ScaffoldMessenger.of(context);
@@ -251,9 +242,8 @@ class LibraryPage extends StatelessWidget {
                       value: 'delete', child: Text('Remove from WetOwl')),
               ],
             ),
-            onTap: () => Navigator.of(context).push(MaterialPageRoute(
-              builder: (_) => PlaylistPage(playlistId: p.id, name: p.name),
-            )),
+            onTap: () => openPage(
+                context, (_) => PlaylistPage(playlistId: p.id, name: p.name)),
           ),
         if (app.playlists.isEmpty)
           const Padding(
@@ -832,8 +822,7 @@ class _FeedRowState extends State<_FeedRow> {
           : Badge(label: Text('$_unseen'), backgroundColor:
               Theme.of(context).colorScheme.primary),
       onTap: () async {
-        await Navigator.of(context)
-            .push(MaterialPageRoute(builder: (_) => const FeedPage()));
+        await openPage(context, (_) => const FeedPage());
         _count();
       },
     );

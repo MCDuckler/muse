@@ -230,6 +230,39 @@ void main() {
     await drain(tester);
   });
 
+  testWidgets('on a desk the library keeps its column when you open something',
+      (tester) async {
+    // The library is a column of places to go — all tracks, albums, artists, twenty
+    // playlists — and on a phone opening one covers it. On a desk that throws away the
+    // very thing you are picking from.
+    app.setHomeTab(2);                                    // the library
+    await wholeShell(tester, const Size(1440, 900));
+    expect(find.text('Pick something from the library'), findsOneWidget,
+        reason: 'the pane says what it is for before anything is in it');
+
+    await tester.tap(find.text('Albums'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('All tracks'), findsOneWidget,
+        reason: 'the column is still there beside what it opened');
+    expect(find.text('Pick something from the library'), findsNothing);
+    await drain(tester);
+  });
+
+  testWidgets('a phone opens the same thing on top, as it always did',
+      (tester) async {
+    app.setHomeTab(2);
+    await wholeShell(tester, const Size(420, 900));
+    expect(find.text('Pick something from the library'), findsNothing);
+
+    await tester.tap(find.text('Albums'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('All tracks'), findsNothing,
+        reason: 'one screen, and this is the one that was opened');
+    await drain(tester);
+  });
+
   testWidgets('the tab you left is where you left it', (tester) async {
     // What "the library is saved when you leave it" means: the tab is built once and
     // kept, so the screen it was showing is still the screen it shows.
