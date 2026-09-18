@@ -13,6 +13,7 @@ import 'motion.dart';
 import 'selection_bar.dart';
 import 'snack.dart';
 import 'track_menu.dart';
+import 'widths.dart';
 
 /// One search across everything, in one list.
 ///
@@ -530,18 +531,22 @@ class _Arriving extends StatelessWidget {
 /// What is on a record found somewhere else, and a way to take it.
 Future<void> showFoundAlbum(BuildContext context, Found found) async {
   final app = context.read<AppState>();
-  await showModalBottomSheet<void>(
-   useRootNavigator: true,
-    context: context,
-    isScrollControlled: true,
-    showDragHandle: true,
-    builder: (context) => DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: 0.7,
-      maxChildSize: 0.95,
-      builder: (context, scroll) => _FoundAlbumSheet(
-          found: found, app: app, controller: scroll),
-    ),
+  // The one sheet that is a sheet on purpose: a record's tracks are a list somebody
+  // drags up to see more of. In a dialog there is nothing to drag, so it gets a plain
+  // scroll of its own and the dialog's height.
+  await ask<void>(
+    context,
+    scrollable: true,
+    builder: (context) => Width.of(context) == Width.compact
+        ? DraggableScrollableSheet(
+            expand: false,
+            initialChildSize: 0.7,
+            maxChildSize: 0.95,
+            builder: (context, scroll) => _FoundAlbumSheet(
+                found: found, app: app, controller: scroll),
+          )
+        : _FoundAlbumSheet(
+            found: found, app: app, controller: ScrollController()),
   );
 }
 

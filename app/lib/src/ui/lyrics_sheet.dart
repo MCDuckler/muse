@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/player.dart';
+import 'widths.dart';
 
 /// One timed line of an LRC file.
 class LyricLine {
@@ -56,11 +57,9 @@ int currentLineIndex(List<LyricLine> lines, Duration position) {
 }
 
 Future<void> showLyrics(BuildContext context, Track track) async {
-  await showModalBottomSheet<void>(
-   useRootNavigator: true,
-    context: context,
-    showDragHandle: true,
-    isScrollControlled: true,
+  await ask<void>(
+    context,
+    scrollable: true,
     builder: (_) => _LyricsSheet(track: track),
   );
 }

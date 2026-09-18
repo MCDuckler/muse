@@ -10,6 +10,7 @@ import 'dialogs.dart';
 import 'lyrics_sheet.dart';
 import 'station.dart';
 import 'snack.dart';
+import 'widths.dart';
 
 /// Everything you can do to one track, in one place.
 ///
@@ -29,10 +30,8 @@ Future<void> showTrackSheet(
   int? queuePosition,
 }) async {
   final app = context.read<AppState>();
-  await showModalBottomSheet<void>(
-   useRootNavigator: true,
-    context: context,
-    showDragHandle: true,
+  await ask<void>(
+    context,
     builder: (sheet) => SafeArea(
       child: ListView(
         shrinkWrap: true,

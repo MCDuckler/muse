@@ -14,6 +14,7 @@ import 'mini_player.dart';
 import 'spotify_page.dart';
 import 'youtube_setup.dart';
 import 'snack.dart';
+import 'widths.dart';
 
 /// Services linked by typing a name.
 ///
@@ -221,10 +222,8 @@ class _ServicesPageState extends State<ServicesPage> {
   ///
   /// Answers 'paste', 'code' or 'setup' — or null when nobody chose anything.
   Future<String?> _howToSignIn(LinkedService service) =>
-      showModalBottomSheet<String>(
-        useRootNavigator: true,
-        context: context,
-        showDragHandle: true,
+      ask<String>(
+        context,
         builder: (context) => SafeArea(
           child: Column(
             mainAxisSize: MainAxisSize.min,

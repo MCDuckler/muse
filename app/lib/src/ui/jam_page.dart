@@ -9,6 +9,7 @@ import 'face.dart';
 import 'glass.dart';
 import 'mini_player.dart';
 import 'snack.dart';
+import 'widths.dart';
 
 /// Listening together: one queue, several people, different rooms.
 ///
@@ -74,10 +75,8 @@ class _JamPageState extends State<JamPage> {
     if (!context.mounted) return;
     final already = {for (final m in app.jam?.members ?? const <JamMember>[]) m.userId};
 
-    await showModalBottomSheet<void>(
-   useRootNavigator: true,
-      context: context,
-      showDragHandle: true,
+    await ask<void>(
+      context,
       builder: (sheet) => SafeArea(
         child: ListView(
           shrinkWrap: true,

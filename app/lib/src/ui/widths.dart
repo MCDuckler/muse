@@ -1,4 +1,4 @@
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 
 /// What kind of screen this is.
 ///
@@ -58,4 +58,47 @@ class Readable extends StatelessWidget {
           child: child,
         ),
       );
+}
+
+/// Ask something in the way this screen asks things.
+///
+/// A bottom sheet is a phone idiom: it comes up from the bottom edge because that is
+/// where the hand is. In a browser window nine hundred pixels tall it is a panel that
+/// slides up from somewhere far below what anybody is looking at, and the thing it is
+/// about — the row that was clicked — is at the top of the screen. On a desk the same
+/// content belongs in a dialog, in the middle, where the eye already is.
+///
+/// Same builder either way, so there is one menu, one set of rows, and one place that
+/// knows which shape a screen wants.
+Future<T?> ask<T>(
+  BuildContext context, {
+  required WidgetBuilder builder,
+  bool scrollable = false,
+  double dialogWidth = 520,
+}) {
+  if (Width.of(context) == Width.compact) {
+    return showModalBottomSheet<T>(
+      useRootNavigator: true,
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: scrollable,
+      builder: builder,
+    );
+  }
+  return showDialog<T>(
+    context: context,
+    useRootNavigator: true,
+    builder: (context) => Dialog(
+      clipBehavior: Clip.antiAlias,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: dialogWidth,
+          // Tall enough for a lyric, never taller than the window.
+          maxHeight: MediaQuery.sizeOf(context).height * 0.8,
+        ),
+        child: builder(context),
+      ),
+    ),
+  );
 }

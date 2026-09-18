@@ -17,6 +17,7 @@ import 'face.dart';
 import 'selection_bar.dart';
 import 'artwork.dart';
 import 'snack.dart';
+import 'widths.dart';
 
 /// Queues are the product, so this screen shows them all, not just the one playing.
 class QueuePage extends StatefulWidget {
@@ -606,10 +607,8 @@ class _QueuePageState extends State<QueuePage> {
   Future<void> _queueMenu(BuildContext context, Queue queue) async {
     feel(Feel.commit);
     final app = context.read<AppState>();
-    await showModalBottomSheet<void>(
-   useRootNavigator: true,
-      context: context,
-      showDragHandle: true,
+    await ask<void>(
+      context,
       builder: (sheet) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,

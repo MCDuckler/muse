@@ -11,6 +11,7 @@ import 'artwork.dart';
 import 'dialogs.dart';
 import 'mini_player.dart';
 import 'snack.dart';
+import 'widths.dart';
 
 /// Connecting a Spotify account, and seeing what came across.
 class SpotifyPage extends StatefulWidget {
@@ -467,10 +468,8 @@ class _UnmatchedPageState extends State<UnmatchedPage> {
         await app.api.unmatchedSuggestions(widget.playlistId, item.pos);
     if (!mounted) return;
 
-    await showModalBottomSheet<void>(
-   useRootNavigator: true,
-      context: context,
-      showDragHandle: true,
+    await ask<void>(
+      context,
       builder: (sheet) => SafeArea(
         child: ListView(
           shrinkWrap: true,

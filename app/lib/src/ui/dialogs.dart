@@ -6,6 +6,7 @@ import 'artwork.dart';
 import '../state/app_state.dart';
 import '../state/playlist_ticks.dart';
 import 'snack.dart';
+import 'widths.dart';
 
 /// Ask for a name. Returns null when the user backs out, so callers can tell "cancel"
 /// apart from "empty".
@@ -103,11 +104,9 @@ Future<void> addTracksToPlaylistSheet(
   await app.refreshPlaylists();
   if (!context.mounted) return;
 
-  await showModalBottomSheet<void>(
-   useRootNavigator: true,
-    context: context,
-    isScrollControlled: true,
-    showDragHandle: true,
+  await ask<void>(
+    context,
+    scrollable: true,
     builder: (sheetContext) => _PlaylistPicker(app: app, tracks: tracks),
   );
 }

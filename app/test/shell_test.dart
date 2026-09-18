@@ -263,6 +263,42 @@ void main() {
     await drain(tester);
   });
 
+  testWidgets('a question comes up from the bottom on a phone and in the middle on a desk',
+      (tester) async {
+    // A bottom sheet is a phone idiom: it arrives where the hand is. In a browser
+    // window it slides up from somewhere far below what anybody is looking at, about a
+    // row at the top of the screen.
+    for (final (size, wantsDialog) in [
+      (const Size(420, 900), false),
+      (const Size(1440, 900), true),
+    ]) {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      await tester.pumpWidget(MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Center(
+              child: TextButton(
+                onPressed: () => ask<void>(context,
+                    builder: (_) => const Text('the question')),
+                child: const Text('ask'),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.tap(find.text('ask'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('the question'), findsOneWidget);
+      expect(find.byType(Dialog), wantsDialog ? findsOneWidget : findsNothing,
+          reason: 'at ${size.width} wide');
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump();
+    }
+    addTearDown(tester.view.reset);
+  });
+
   testWidgets('the tab you left is where you left it', (tester) async {
     // What "the library is saved when you leave it" means: the tab is built once and
     // kept, so the screen it was showing is still the screen it shows.
