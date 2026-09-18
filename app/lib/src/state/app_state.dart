@@ -439,7 +439,6 @@ class AppState extends ChangeNotifier {
     coverScale = (prefs.getDouble(_kCoverScale) ?? 0.74).clamp(0.5, 1.0);
     discScale = (prefs.getDouble(_kDiscScale) ?? 1.0).clamp(0.6, 1.15);
     discLabel = (prefs.getDouble(_kDiscLabel) ?? 0.31).clamp(0.18, 0.92);
-    api.discLabel = discLabel;
     haptics = prefs.getBool(_kHaptics) ?? true;
     Haptics.enabled = haptics;
     armStyle = ArmStyle.values.firstWhere(
@@ -470,6 +469,12 @@ class AppState extends ChangeNotifier {
       baseUrl: server ?? defaultServer,
       token: prefs.getString(_kToken),
     );
+    // After the client exists, not before: every setting read above is a plain field
+    // on this object, and this one is the single setting that has to reach the client
+    // as well. Set a dozen lines earlier it was read off a `late` field that nothing
+    // had assigned yet, which is not a wrong picture — it is a crash before the first
+    // frame, and a white page.
+    api.discLabel = discLabel;
     if (api.token != null) {
       try {
         final me = await api.me();
