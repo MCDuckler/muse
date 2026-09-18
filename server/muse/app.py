@@ -383,7 +383,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
 
     @app.get("/tracks/{track_id}/cover")
     def cover(track_id: int, request: Request, size: str = "lg", k: str | None = None,
-              style: str = "flat",
+              style: str = "flat", label: float | None = None,
               authorization: Annotated[str | None, Header()] = None):
         """An <img> cannot send an Authorization header either, so covers accept the
         same signed key as audio."""
@@ -408,13 +408,18 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             # the player can animate them. Rendered once per cover; see sleeve.py.
             colour = (row["color"] or "#8a8a8a").lstrip("#")
             rgb = tuple(int(colour[i:i + 2], 16) for i in (0, 2, 4))
+            # How big the picture in the middle of the record is, where that is a
+            # thing the person looking at it has an opinion about.
+            face = sleeve.label_size(label) if style == "disc" and label else None
             sleeve.build(cfg.cover_dir, pathlib.Path(row["path"]), row["sha256"], rgb,
-                         part=style)
+                         part=style, label=face)
             return _range_response(
                 sleeve.path_for(cfg.cover_dir, row["sha256"],
-                                "sm" if size == "sm" else "lg", part=style),
+                                "sm" if size == "sm" else "lg", part=style,
+                                label=face),
                 request,
-                etag=f"{row['sha256']}-{style}-{size}-v{sleeve.VERSION}")
+                etag=f"{row['sha256']}-{style}-{size}"
+                     f"{f'-l{face}' if face else ''}-v{sleeve.VERSION}")
 
         path = pathlib.Path(row["path"])
         if size == "sm":

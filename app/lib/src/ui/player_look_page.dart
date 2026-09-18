@@ -48,7 +48,7 @@ class PlayerLookPage extends StatelessWidget {
               onChanged: app.setCoverScale,
             ),
           ),
-          if (app.coverStyle == CoverStyle.record)
+          if (app.coverStyle == CoverStyle.record) ...[
             ListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('How big the record is'),
@@ -61,6 +61,23 @@ class PlayerLookPage extends StatelessWidget {
                 onChanged: app.setDiscScale,
               ),
             ),
+            // How much of the turning record is artwork: a paper label at one end, a
+            // picture disc at the other. The server draws the record, so this is a
+            // different picture rather than a different size on screen — which is why
+            // it steps rather than slides.
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('How big the picture on it is'),
+              subtitle: _WhenYouLetGo(
+                value: app.discLabel,
+                min: 0.2,
+                max: 0.9,
+                divisions: 14,
+                label: (v) => '${(v * 100).round()}%',
+                onSettled: app.setDiscLabel,
+              ),
+            ),
+          ],
           for (final style in CoverStyle.values)
             RadioListTile<CoverStyle>(
               value: style,
@@ -133,6 +150,54 @@ class PlayerLookPage extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// A slider that only says so when the finger comes off.
+///
+/// The record is drawn by the server and kept as a file per size, so every stop on the
+/// way from one end of this slider to the other would be a record to draw and a file
+/// to keep. The handle still follows the finger; the app only asks for a new record
+/// once it has landed somewhere.
+class _WhenYouLetGo extends StatefulWidget {
+  const _WhenYouLetGo({
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.divisions,
+    required this.label,
+    required this.onSettled,
+  });
+
+  final double value;
+  final double min;
+  final double max;
+  final int divisions;
+  final String Function(double) label;
+  final ValueChanged<double> onSettled;
+
+  @override
+  State<_WhenYouLetGo> createState() => _WhenYouLetGoState();
+}
+
+class _WhenYouLetGoState extends State<_WhenYouLetGo> {
+  double? _dragging;
+
+  @override
+  Widget build(BuildContext context) {
+    final at = (_dragging ?? widget.value).clamp(widget.min, widget.max);
+    return Slider(
+      value: at,
+      min: widget.min,
+      max: widget.max,
+      divisions: widget.divisions,
+      label: widget.label(at),
+      onChanged: (v) => setState(() => _dragging = v),
+      onChangeEnd: (v) {
+        setState(() => _dragging = null);
+        widget.onSettled(v);
+      },
     );
   }
 }

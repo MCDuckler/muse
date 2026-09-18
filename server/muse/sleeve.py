@@ -133,8 +133,23 @@ def render_jacket(cover: pathlib.Path, seed: str, size: int = CANVAS) -> Image.I
 
 
 # ---------------------------------------------------------------- the record
+# How much of the record the picture in the middle covers, as a fraction of its
+# radius. A real 12" single is about a third; a picture disc is the whole face. It is
+# a slider in the app because it is a matter of taste and because the artwork is the
+# thing people put the record on the screen to look at.
+LABEL = 0.31
+LABEL_RANGE = (0.18, 0.92)
+
+
+def label_size(asked: float | None) -> float:
+    """Whatever came in off a URL, as a number this will actually draw."""
+    if asked is None:
+        return LABEL
+    return max(LABEL_RANGE[0], min(LABEL_RANGE[1], round(float(asked), 2)))
+
+
 def render_disc(cover: pathlib.Path, colour: tuple[int, int, int], seed: str,
-                size: int = CANVAS) -> Image.Image:
+                size: int = CANVAS, label: float = LABEL) -> Image.Image:
     """The disc, centred in a square canvas, transparent outside its edge.
 
     Centred so the client can spin it with a plain rotation and never have to think
@@ -156,8 +171,9 @@ def render_disc(cover: pathlib.Path, colour: tuple[int, int, int], seed: str,
         pen.ellipse((size / 2 - rad, size / 2 - rad, size / 2 + rad, size / 2 + rad),
                     outline=(shade, shade, shade + 2, 255), width=max(1, size // 900))
 
-    # The label: the cover art itself, the way a picture label is printed.
-    label_r = r * 0.31
+    # The label: the cover art itself, the way a picture label is printed. How much of
+    # the face it covers is the listener's choice — see LABEL.
+    label_r = r * label
     art = Image.open(cover).convert("RGB")
     w, h = art.size
     scale = (label_r * 2) / min(w, h)
@@ -250,25 +266,32 @@ SIZES = {"lg": CANVAS, "sm": 320}
 VERSION = 6
 
 
-def path_for(root: pathlib.Path, sha: str, size: str, part: str = "sleeve") -> pathlib.Path:
+def path_for(root: pathlib.Path, sha: str, size: str, part: str = "sleeve",
+             label: float | None = None) -> pathlib.Path:
     stem = sha if part == "sleeve" else f"{sha}-{part}"
+    # A disc drawn with a bigger label is a different picture, so it is a different
+    # file: without this in the name, the first size anybody asked for would be served
+    # to everybody for ever.
+    if part == "disc" and label is not None and label != LABEL:
+        stem = f"{stem}-l{int(round(label * 100))}"
     return root / "sleeves" / f"{stem}-{size}-v{VERSION}.webp"
 
 
 def build(root: pathlib.Path, cover: pathlib.Path, sha: str,
-          colour: tuple[int, int, int], part: str = "sleeve") -> pathlib.Path:
-    out = path_for(root, sha, "lg", part)
+          colour: tuple[int, int, int], part: str = "sleeve",
+          label: float | None = None) -> pathlib.Path:
+    out = path_for(root, sha, "lg", part, label)
     if out.exists():
         return out
     out.parent.mkdir(parents=True, exist_ok=True)
     if part == "jacket":
         art = render_jacket(cover, sha)
     elif part == "disc":
-        art = render_disc(cover, colour, sha)
+        art = render_disc(cover, colour, sha, label=label_size(label))
     else:
         art = render(cover, colour, sha)
     # WebP because it keeps the alpha the shadow needs at a tenth of PNG's size.
     art.save(out, "WEBP", quality=88, method=4)
     art.resize((SIZES["sm"], SIZES["sm"]), Image.LANCZOS).save(
-        path_for(root, sha, "sm", part), "WEBP", quality=82, method=4)
+        path_for(root, sha, "sm", part, label), "WEBP", quality=82, method=4)
     return out

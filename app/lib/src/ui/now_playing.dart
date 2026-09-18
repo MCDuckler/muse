@@ -1034,11 +1034,20 @@ class _Artwork extends StatelessWidget {
       {required this.track,
       this.snapshot,
       required this.player,
-      required this.app});
+      required this.app,
+      this.shrink = 1.0});
   final Track track;
   final PlayerSnapshot? snapshot;
   final PlayerService player;
   final AppState app;
+
+  /// How much smaller than the listener's own setting to stand.
+  ///
+  /// The size of the record is a choice made for a phone, where the record is the
+  /// screen. In the column beside a page it has 340 pixels to live in, and a record
+  /// that fills them leaves its own title nowhere to go — so the panel asks for a
+  /// smaller one rather than quietly changing what the setting means.
+  final double shrink;
 
   /// The record either side of this one, so the queue is something you can see rather
   /// than something you have to remember. Read from the player's own list.
@@ -1057,7 +1066,8 @@ class _Artwork extends StatelessWidget {
           // Just the cover: still, square, and the whole width of the stage. Square
           // corners on purpose — a record sleeve has corners, and rounding them off
           // makes the art look like an app icon of itself.
-          final cover = Artwork(track: track, size: side, radius: 0, small: false);
+          final cover =
+              Artwork(track: track, size: side * shrink, radius: 0, small: false);
           return Center(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -1090,7 +1100,7 @@ class _Artwork extends StatelessWidget {
             child: RecordStage(
               track: track,
               playing: app.musicIsPlaying,
-              scale: context.watch<AppState>().coverScale,
+              scale: context.watch<AppState>().coverScale * shrink,
               armStyle: context.watch<AppState>().armStyle,
               discScale: context.watch<AppState>().discScale,
               axis: context.watch<AppState>().shelfAxis,
@@ -1225,14 +1235,23 @@ class DeskNowPlaying extends StatelessWidget {
                 ],
               ),
             ),
+            // The record, with room around it. It used to be handed the whole width
+            // of the panel at the size a phone uses, and a record that big in a column
+            // this narrow spills out of its own box and sits on top of the title
+            // underneath.
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              padding: const EdgeInsets.fromLTRB(18, 2, 18, 0),
               child: AspectRatio(
                 aspectRatio: 1,
-                child:
-                    _Artwork(track: track, snapshot: s, player: player, app: app),
+                child: _Artwork(
+                    track: track,
+                    snapshot: s,
+                    player: player,
+                    app: app,
+                    shrink: 0.78),
               ),
             ),
+            const SizedBox(height: 14),
             _Words(app: app, track: track),
             const SizedBox(height: 6),
             _Scrubber(player: player, timesBeside: true),

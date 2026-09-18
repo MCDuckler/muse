@@ -39,26 +39,34 @@ class DeskDock extends StatelessWidget {
           alignment: Alignment.centerRight,
           minWidth: width,
           maxWidth: width,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: scheme.surfaceContainerLow,
-              border: Border(
-                  left: BorderSide(color: scheme.outlineVariant, width: 1)),
-            ),
-            child: SafeArea(
-              left: false,
+          child: SafeArea(
+            left: false,
+            // Two cards rather than one wall: what is playing and what is next are two
+            // different things, and a panel with a corner on it reads as something
+            // laid on the page rather than as the page having run out.
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(4, 8, 10, 10),
               child: Column(
                 children: [
                   // What is playing, which is the thing people keep an eye on.
                   Expanded(
                     flex: 3,
-                    child: SingleChildScrollView(
-                      child: DeskNowPlaying(onClose: onClose),
+                    child: _Panel(
+                      colour: scheme.surfaceContainerLow,
+                      child: SingleChildScrollView(
+                        child: DeskNowPlaying(onClose: onClose),
+                      ),
                     ),
                   ),
-                  Divider(height: 1, color: scheme.outlineVariant),
+                  const SizedBox(height: 10),
                   // And what is coming, which is the thing they keep checking.
-                  const Expanded(flex: 2, child: _NextUp()),
+                  Expanded(
+                    flex: 2,
+                    child: _Panel(
+                      colour: scheme.surfaceContainerLow,
+                      child: const _NextUp(),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -67,6 +75,21 @@ class DeskDock extends StatelessWidget {
       ),
     );
   }
+}
+
+/// One of the two cards in the column.
+class _Panel extends StatelessWidget {
+  const _Panel({required this.child, required this.colour});
+  final Widget child;
+  final Color colour;
+
+  @override
+  Widget build(BuildContext context) => Material(
+        color: colour,
+        clipBehavior: Clip.antiAlias,
+        borderRadius: BorderRadius.circular(18),
+        child: child,
+      );
 }
 
 /// The next few songs, in the space under the record.

@@ -237,6 +237,7 @@ class AppState extends ChangeNotifier {
   static const _kCoverScale = 'muse.coverScale';
   static const _kArmStyle = 'muse.armStyle';
   static const _kDiscScale = 'muse.discScale';
+  static const _kDiscLabel = 'muse.discLabel';
   static const _kHaptics = 'muse.haptics';
   static const _kLayout = 'muse.playerLayout';
   static const _kShelfAxis = 'muse.shelfAxis';
@@ -291,6 +292,11 @@ class AppState extends ChangeNotifier {
   /// How wide the record on the deck is drawn, as a fraction of the room there is.
   double discScale = 1.0;
 
+  /// How much of the record's face the artwork covers, from a small paper label to a
+  /// picture disc. Drawn by the server, so it travels in the URL — see
+  /// ApiClient.discLabel.
+  double discLabel = 0.31;
+
   /// Whether the phone answers a finger with a tick. On where there is a motor.
   bool haptics = true;
 
@@ -307,6 +313,15 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_kDiscScale, discScale);
+  }
+
+  Future<void> setDiscLabel(double value) async {
+    discLabel = value.clamp(0.18, 0.92);
+    api.discLabel = discLabel;
+    // Every record on screen is a different picture now, including the one turning.
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_kDiscLabel, discLabel);
   }
 
   Future<void> setArmStyle(ArmStyle value) async {
@@ -423,6 +438,8 @@ class AppState extends ChangeNotifier {
     deskDock = prefs.getBool(_kDeskDock) ?? true;
     coverScale = (prefs.getDouble(_kCoverScale) ?? 0.74).clamp(0.5, 1.0);
     discScale = (prefs.getDouble(_kDiscScale) ?? 1.0).clamp(0.6, 1.15);
+    discLabel = (prefs.getDouble(_kDiscLabel) ?? 0.31).clamp(0.18, 0.92);
+    api.discLabel = discLabel;
     haptics = prefs.getBool(_kHaptics) ?? true;
     Haptics.enabled = haptics;
     armStyle = ArmStyle.values.firstWhere(

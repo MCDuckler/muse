@@ -330,8 +330,18 @@ class ApiClient {
   String? jacketUrl(Track t, {bool small = false}) =>
       sleeveUrl(t, small: small, part: 'jacket');
 
-  String? discUrl(Track t, {bool small = false}) =>
-      sleeveUrl(t, small: small, part: 'disc');
+  /// How much of the record's face the picture covers, as a fraction of its radius.
+  ///
+  /// The server draws the disc and caches it per size, so this rides in the URL: a
+  /// different number is a different picture and therefore a different address, which
+  /// is also what makes every cache between here and the disk let go of the old one.
+  double discLabel = 0.31;
+
+  String? discUrl(Track t, {bool small = false}) {
+    final url = sleeveUrl(t, small: small, part: 'disc');
+    if (url == null || (discLabel - 0.31).abs() < 0.005) return url;
+    return '$url&label=${discLabel.toStringAsFixed(2)}';
+  }
 
   // ---------------- the back of a sleeve ----------------
   /// Everything drawn on this record's back, on whichever board this device is on:
