@@ -442,10 +442,9 @@ class _Nib extends StatelessWidget {
 /// A magnifying glass over the point the pen is actually touching.
 ///
 /// Drawing on a sleeve with a finger has one problem and it is the finger: the tip
-/// covers exactly the part of the board you are trying to aim at, so you are always
-/// drawing a centimetre behind where you are looking. Two answers together — the pen
-/// draws a little above the fingertip rather than under it, and this shows that spot
-/// enlarged, in a window held clear of the hand, with a crosshair on the exact point.
+/// covers exactly the part of the board you are trying to aim at. The pen stays under
+/// the finger, where a pen belongs — what moves is the *view*: this shows the covered
+/// spot enlarged, in a window held above the hand.
 ///
 /// The board is painted again inside the glass rather than copied out of the screen:
 /// the card and the ink are both drawings we make ourselves, so magnifying them means
@@ -509,19 +508,11 @@ class SleeveLoupe extends CustomPainter {
     SleeveInk(board: board, size01: sleeve.width).paint(canvas, sleeve.size);
     canvas.restore();
 
-    // The crosshair, on the exact spot the pen is on. Broken in the middle, so the
-    // one place it matters is the one place nothing is drawn over.
-    final hair = Paint()
-      ..color = const Color(0xCC1A1714)
-      ..strokeWidth = 1
-      ..isAntiAlias = true;
-    const gap = 5.0;
-    final reach = radius * 0.42;
-    canvas.drawLine(centre.translate(-reach, 0), centre.translate(-gap, 0), hair);
-    canvas.drawLine(centre.translate(gap, 0), centre.translate(reach, 0), hair);
-    canvas.drawLine(centre.translate(0, -reach), centre.translate(0, -gap), hair);
-    canvas.drawLine(centre.translate(0, gap), centre.translate(0, reach), hair);
-
+    // No crosshair. It was there to say which point of the enlarged board the pen was
+    // on, back when the pen was somewhere the finger was not; with the nib under the
+    // finger the middle of the glass is the middle of the glass, and four little lines
+    // over the drawing are four little lines over the drawing.
+    //
     // The cells the brush will fill, at the size it will fill them. A square, because
     // that is the shape of the mark — a circle here would be promising something the
     // pen cannot draw.

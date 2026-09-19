@@ -2,7 +2,10 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../api/models.dart';
@@ -304,6 +307,7 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
       });
       // Landing face-down is what opens the board: nothing is fetched, and nothing is
       // on screen, until a record is actually turned over.
+      _keepTheShadeOut(_showingBack);
       final board = widget.board;
       if (board == null) return;
       if (_showingBack) {
@@ -312,6 +316,23 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
         board.close();
       }
     });
+
+  /// Ask the phone for the screen while somebody is drawing on it.
+  ///
+  /// A stroke that starts near the top edge and goes down is also the gesture that
+  /// pulls the notification shade, and the system decides which of the two it is
+  /// before this app hears about the finger at all — so sometimes a line, sometimes a
+  /// screenful of notifications, which is not a thing a drawing surface may do. In
+  /// immersive mode the first swipe from the edge brings the bars back instead, and
+  /// the shade needs a second one.
+  ///
+  /// Only while the record is face-down. Every other screen in the app wants its
+  /// status bar.
+  void _keepTheShadeOut(bool drawing) {
+    if (kIsWeb) return;
+    unawaited(SystemChrome.setEnabledSystemUIMode(
+        drawing ? SystemUiMode.immersiveSticky : SystemUiMode.edgeToEdge));
+  }
 
   /// Which face is towards you at rest.
   bool _showingBack = false;
@@ -527,14 +548,6 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
 
   bool get _drawable => _showingBack && _toss.value == 0 && widget.board != null;
 
-  /// How far above the fingertip the pen actually is, on screen.
-  ///
-  /// A finger covers the thing it is pointing at. Everything about drawing on a phone
-  /// with one is aiming at a spot you cannot see, and the answer every stylus-less
-  /// drawing tool has landed on is the same: put the nib a little above the contact
-  /// patch, and show that spot somewhere the hand is not.
-  static const double lift = 44;
-
   /// Where the pen is now, 0 to 1 on the sleeve. Null when nothing is being drawn.
   Offset? _penAt;
 
@@ -573,7 +586,13 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     if (box == null || box.size.width <= 0) return null;
     // globalToLocal walks back through every transform between here and the screen,
     // which is the scaling, the perspective and the tilt, all of them, exactly.
-    final local = box.globalToLocal(global.translate(0, -lift));
+    //
+    // Under the finger, not above it. The nib used to be lifted a centimetre so the
+    // fingertip did not cover it, which is the trade every stylus-less drawing tool
+    // makes — and it is the wrong one: a pen that draws where you are not touching is
+    // a pen you have to aim by guesswork. The glass above the hand is what shows the
+    // covered spot, and that is all it needs to do.
+    final local = box.globalToLocal(global);
     return Offset01(
       (local.dx / box.size.width).clamp(0.0, 1.0),
       (local.dy / box.size.height).clamp(0.0, 1.0),
@@ -621,7 +640,11 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     // Leaving the player with a sleeve face-down used to leave the board open behind
     // it — so the pens turned up again on a screen with no back on it, over a flat
     // cover, or over the next record entirely.
-    if (_showingBack) widget.board?.close();
+    if (_showingBack) {
+      widget.board?.close();
+      // Leaving with the record face-down would leave the phone without its bars.
+      _keepTheShadeOut(false);
+    }
     _arriving?.removeListener(_stillArriving);
     _travel.dispose();
     _out.dispose();
@@ -828,7 +851,18 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
           height: side,
           // One axis only, and it is the one the records travel along — so the other
           // direction still belongs to the page: a drag down closes the player.
-          child: GestureDetector(
+          child: _WhileDrawing(
+            // While the sleeve is face-down every drag is a pen, and it is a pen from
+            // the moment the finger lands — not from the moment it has moved far
+            // enough to count as a drag, and not if some ancestor fancies the gesture
+            // first. A stroke that begins by going downwards is exactly the one the
+            // player's own drag-to-close wants, and that is why the pen sometimes drew
+            // nothing at all: the two were in the same arena and the wrong one won.
+            on: _drawable,
+            onDown: (at) => _pen(at, start: true),
+            onMove: (at) => _pen(at, start: false),
+            onUp: _liftPen,
+            child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             // Tapping the record puts it back in its sleeve, or takes it out again —
             // unless it is turned over, in which case a tap is a dot of ink.
@@ -836,14 +870,6 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
             // While the sleeve is face-down every drag is a pen. The shelf keeps
             // still: you are writing on this record, not looking for the next one.
             //
-            // From the moment the finger lands, not from the moment it has moved far
-            // enough to count as a drag — the glass is most wanted before the line
-            // starts, while you are still aiming.
-            onPanDown: !_drawable ? null : (d) => _pen(d.globalPosition, start: true),
-            onPanUpdate:
-                !_drawable ? null : (d) => _pen(d.globalPosition, start: false),
-            onPanEnd: !_drawable ? null : (_) => _liftPen(),
-            onPanCancel: !_drawable ? null : _liftPen,
             onHorizontalDragStart: _drawable || _upright ? null : _dragStart,
             onHorizontalDragUpdate: _drawable || _upright ? null : _dragUpdate,
             onHorizontalDragEnd: _drawable || _upright ? null : _dragEnd,
@@ -963,7 +989,8 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
               },
             ),
           ),
-        ),
+          ),
+          ),
         );
       },
     );
@@ -1210,16 +1237,93 @@ class _Face extends StatelessWidget {
         ..scaleByDouble(1 + 0.12 * rise, 1 + 0.12 * rise, 1.0, 1.0)
         ..rotateX(-turned),
       // The far side of a rotated thing is a mirror of the near side, so whatever is
-      // painted on it has to be turned over again to be the right way up.
-      child: showing
+      // painted on it has to be turned over again to be the right way up — the front
+      // coming back out of the board as much as the back going into it. Turning only
+      // the back over is why a record leaving drawing mode landed upside down and then
+      // snapped upright: past the halfway point it was the *front* on the far side,
+      // drawn as its own mirror.
+      child: far
           ? Transform(
               alignment: Alignment.center,
               transform: Matrix4.identity()..rotateX(math.pi),
-              child: back(),
+              child: showing ? back() : front(),
             )
-          : front(),
+          : (showing ? back() : front()),
     );
   }
+}
+
+/// Drawing wins the gesture, or it does not happen.
+///
+/// A pen is not a drag that might become something else. It starts on contact, it owns
+/// the pointer until it lifts, and no ancestor gets to take it away halfway — which is
+/// what was happening: the player's drag-to-close and the shelf's own drags were in
+/// the same arena as the pen, and a stroke that started downwards was as likely to
+/// close the screen as to leave a line.
+class _WhileDrawing extends StatelessWidget {
+  const _WhileDrawing({
+    required this.on,
+    required this.onDown,
+    required this.onMove,
+    required this.onUp,
+    required this.child,
+  });
+
+  final bool on;
+  final void Function(Offset global) onDown;
+  final void Function(Offset global) onMove;
+  final VoidCallback onUp;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!on) return child;
+    return RawGestureDetector(
+      behavior: HitTestBehavior.opaque,
+      gestures: {
+        _Pen: GestureRecognizerFactoryWithHandlers<_Pen>(
+          _Pen.new,
+          (pen) => pen
+            ..onDown = onDown
+            ..onMove = onMove
+            ..onUp = onUp,
+        ),
+      },
+      child: child,
+    );
+  }
+}
+
+/// The pen itself: a recognizer that claims the pointer as it lands.
+class _Pen extends OneSequenceGestureRecognizer {
+  void Function(Offset global)? onDown;
+  void Function(Offset global)? onMove;
+  VoidCallback? onUp;
+
+  @override
+  String get debugDescription => 'sleeve pen';
+
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    startTrackingPointer(event.pointer, event.transform);
+    // Claimed on contact. Everything else in the arena loses now rather than after
+    // eighteen pixels of movement, which is the part that used to be a coin toss.
+    resolve(GestureDisposition.accepted);
+    onDown?.call(event.position);
+  }
+
+  @override
+  void handleEvent(PointerEvent event) {
+    if (event is PointerMoveEvent) {
+      onMove?.call(event.position);
+    } else if (event is PointerUpEvent || event is PointerCancelEvent) {
+      onUp?.call();
+      stopTrackingPointer(event.pointer);
+    }
+  }
+
+  @override
+  void didStopTrackingLastPointer(int pointer) {}
 }
 
 /// The back of the sleeve: bare board.

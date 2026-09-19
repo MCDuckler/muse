@@ -1088,20 +1088,11 @@ class _Artwork extends StatelessWidget {
       {required this.track,
       this.snapshot,
       required this.player,
-      required this.app,
-      this.shrink = 1.0});
+      required this.app});
   final Track track;
   final PlayerSnapshot? snapshot;
   final PlayerService player;
   final AppState app;
-
-  /// How much smaller than the listener's own setting to stand.
-  ///
-  /// The size of the record is a choice made for a phone, where the record is the
-  /// screen. In the column beside a page it has 340 pixels to live in, and a record
-  /// that fills them leaves its own title nowhere to go — so the panel asks for a
-  /// smaller one rather than quietly changing what the setting means.
-  final double shrink;
 
   /// The record either side of this one, so the queue is something you can see rather
   /// than something you have to remember. Read from the player's own list.
@@ -1120,8 +1111,7 @@ class _Artwork extends StatelessWidget {
           // Just the cover: still, square, and the whole width of the stage. Square
           // corners on purpose — a record sleeve has corners, and rounding them off
           // makes the art look like an app icon of itself.
-          final cover =
-              Artwork(track: track, size: side * shrink, radius: 0, small: false);
+          final cover = Artwork(track: track, size: side, radius: 0, small: false);
           return Center(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -1154,7 +1144,7 @@ class _Artwork extends StatelessWidget {
             child: RecordStage(
               track: track,
               playing: app.musicIsPlaying,
-              scale: context.watch<AppState>().coverScale * shrink,
+              scale: context.watch<AppState>().coverScale,
               armStyle: context.watch<AppState>().armStyle,
               discScale: context.watch<AppState>().discScale,
               axis: context.watch<AppState>().shelfAxis,
@@ -1297,10 +1287,9 @@ class DeskNowPlaying extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(18, 2, 18, 0),
               child: AspectRatio(
                 aspectRatio: 1,
-                // Full size for the box it is in. The box is the small one here —
-                // the record itself is drawn from the room the stage has, which is
-                // what was wrong with it before: sized from the window, it came out
-                // four times wider than this panel.
+                // Full size for the box it is in: what was wrong before was the
+                // record, which sized itself from the window rather than from the
+                // room this panel gives it.
                 child: _Artwork(
                     track: track, snapshot: s, player: player, app: app),
               ),
