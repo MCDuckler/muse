@@ -53,9 +53,9 @@ class _AppIconRowState extends State<AppIconRow> {
     try {
       await app.api.setAppIcon(await file.readAsBytes());
       await _load();
-      messenger.showSnackBar(snack(const Text('That is the icon now')));
+      messenger.say(snack(const Text('That is the icon now')));
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.say(snack(Text('$e')));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -68,9 +68,9 @@ class _AppIconRowState extends State<AppIconRow> {
     try {
       await app.api.clearAppIcon();
       await _load();
-      messenger.showSnackBar(snack(const Text('Back to the one it came with')));
+      messenger.say(snack(const Text('Back to the one it came with')));
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.say(snack(Text('$e')));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -183,7 +183,7 @@ class _AccountsPageState extends State<AccountsPage> {
         ),
       );
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.say(snack(Text('$e')));
     }
   }
 
@@ -229,7 +229,7 @@ class _AccountsPageState extends State<AccountsPage> {
       await app.api.createAccount(name.text.trim(), password.text);
       _load();
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.say(snack(Text('$e')));
     }
   }
 
@@ -277,11 +277,11 @@ class _AccountsPageState extends State<AccountsPage> {
     try {
       await app.api.resetPassword(account['id'] as int, password.text,
           signOutDevices: signOut);
-      messenger.showSnackBar(
+      messenger.say(
           snack(Text('Password set for ${account['name']}')));
       _load();
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.say(snack(Text('$e')));
     }
   }
 
@@ -312,9 +312,9 @@ class _AccountsPageState extends State<AccountsPage> {
     if (ok != true) return;
     try {
       await app.api.changePassword(password.text);
-      messenger.showSnackBar(snack(Text('Password changed')));
+      messenger.say(snack(Text('Password changed')));
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.say(snack(Text('$e')));
     }
   }
 
@@ -402,7 +402,7 @@ class _AccountsPageState extends State<AccountsPage> {
                                 try {
                                   await app.api.deleteAccount(a['id'] as int);
                                 } catch (e) {
-                                  messenger.showSnackBar(problem(e));
+                                  messenger.say(problem(e));
                                 }
                                 _load();
                               }

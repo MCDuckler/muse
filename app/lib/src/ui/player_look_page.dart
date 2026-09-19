@@ -142,7 +142,7 @@ class PlayerLookPage extends StatelessWidget {
                 final allowed = await Spectrum.askForPermission();
                 await app.setSpectrum(allowed);
                 if (!allowed && context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(snack(Text(
+                  ScaffoldMessenger.of(context).say(snack(Text(
                           'Without that permission Android will not say what is '
                           'playing, so there is nothing to draw.')));
                 }

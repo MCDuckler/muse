@@ -40,6 +40,48 @@ def test_everybody_here_is_listed_with_what_they_have(client, hdr, joe):
     assert said["you"] == db.one("select id from users where name='chris'")["id"]
 
 
+def test_what_somebody_has_on_right_now(client, hdr, joe):
+    """A playing device writes where it has got to every ten seconds, which is what
+    makes a queue resumable — and, read the other way round, what everybody else is
+    listening to. Nothing new is written for this."""
+    queue = db.one(
+        "insert into queues(user_id,name,cursor_index) values(%s,'Joe drives',0) "
+        "returning *", (joe["id"],))
+    # Two songs, and the cursor on the second: positions are a sort key with gaps in
+    # them, so the row the cursor names is the nth by position, not the one whose
+    # position is n.
+    other = catalog.create_from_ytm({
+        "video_id": "VJOE2", "title": "The Other One", "artists": ["A Band"],
+        "album": None, "duration_ms": 200_000, "raw": {},
+    }, discovered_via=catalog.VIA_USER)
+    db.run("insert into queue_items(queue_id,pos,track_id) values(%s,5,%s),(%s,9,%s)",
+           (queue["id"], joe["track"]["id"], queue["id"], other["id"]))
+    db.run("update queues set cursor_index=1, updated_at=now() where id=%s",
+           (queue["id"],))
+
+    people = {p["name"]: p
+              for p in client.get("/social/people", headers=hdr).json()["people"]}
+    on = people["joe"]["playing"]
+    assert on is not None, 'the screen called People is for what people are doing'
+    assert on["track"]["title"] == "The Other One"
+    assert on["queue"] == "Joe drives"
+    assert on["now"] is True
+
+    # Nobody is listening to a queue nobody has touched since breakfast.
+    db.run("update queues set updated_at=now() - interval '2 hours' where id=%s",
+           (queue["id"],))
+    people = {p["name"]: p
+              for p in client.get("/social/people", headers=hdr).json()["people"]}
+    assert people["joe"]["playing"] is None
+
+    # And one touched a few minutes ago is what they were on, not what they are on.
+    db.run("update queues set updated_at=now() - interval '5 minutes' where id=%s",
+           (queue["id"],))
+    people = {p["name"]: p
+              for p in client.get("/social/people", headers=hdr).json()["people"]}
+    assert people["joe"]["playing"]["now"] is False
+
+
 def test_a_jam_shows_without_having_to_be_looked_for(client, hdr, joe):
     """A jam is a thing happening now, and a thing happening now is no use to anybody
     who has to go looking for it."""

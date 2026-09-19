@@ -166,7 +166,7 @@ class _PlaylistPickerState extends State<_PlaylistPicker> {
       }
     } catch (e) {
       if (mounted) setState(() => _saving = false);
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.say(snack(Text('$e')));
       return;
     }
     await widget.app.refreshPlaylists();
@@ -183,7 +183,7 @@ class _PlaylistPickerState extends State<_PlaylistPicker> {
             if (added > 0) 'on $added lists',
             if (removed > 0) 'off $removed lists',
           ].join(', ')}';
-    messenger.showSnackBar(snack(Text(said)));
+    messenger.say(snack(Text(said)));
   }
 
   @override
@@ -265,7 +265,7 @@ class _PlaylistPickerState extends State<_PlaylistPicker> {
                       if (!context.mounted) return;
                       Navigator.of(context).pop();
                       ScaffoldMessenger.of(context)
-                          .showSnackBar(snack(Text('Added to "$name"')));
+                          .say(snack(Text('Added to "$name"')));
                     },
                   ),
                   for (final p in playlists)

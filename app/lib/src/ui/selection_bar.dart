@@ -78,7 +78,7 @@ class _SelectionBarState extends State<SelectionBar> {
 
     Future<void> done(String said) async {
       selection.clear();
-      messenger.showSnackBar(snack(Text(said)));
+      messenger.say(snack(Text(said)));
     }
 
     final all = picked.length == tracks.length;

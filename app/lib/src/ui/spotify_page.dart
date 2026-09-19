@@ -104,7 +104,7 @@ class _SpotifyPageState extends State<SpotifyPage> {
       final r = results.isEmpty ? null : results.first;
       if (!mounted) return;
       _load();
-      messenger.showSnackBar(snack(Text(r == null
+      messenger.say(snack(Text(r == null
             ? 'Nothing came back for ${p.name}'
             : r['error'] != null
                 ? '${p.name}: ${r['error']}'
@@ -112,7 +112,7 @@ class _SpotifyPageState extends State<SpotifyPage> {
                     '${(r['missing'] ?? 0) == 0 ? '' : ', ${r['missing']} not matched'}'),
       ));
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.say(snack(Text('$e')));
     } finally {
       if (mounted) setState(() => _busy.remove(p.remoteId));
     }
@@ -129,7 +129,7 @@ class _SpotifyPageState extends State<SpotifyPage> {
       await app.api.deletePlaylist(p.playlistId!);
       await app.refreshPlaylists();
     } catch (e) {
-      messenger.showSnackBar(problem(e));
+      messenger.say(problem(e));
     }
     _load();
   }
@@ -145,7 +145,7 @@ class _SpotifyPageState extends State<SpotifyPage> {
       _authUrl = null;                       // one address, one sign-in
       unawaited(launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication));
       unawaited(_fetchAuthUrl());
-      messenger.showSnackBar(snack(Text('Finish signing in on the Spotify tab — this page picks it up '
+      messenger.say(snack(Text('Finish signing in on the Spotify tab — this page picks it up '
             'when you come back'),
       ));
       return;
@@ -161,7 +161,7 @@ class _SpotifyPageState extends State<SpotifyPage> {
       await _fetchAuthUrl();
       final url = _authUrl;
       if (!mounted || url == null) {
-        messenger.showSnackBar(
+        messenger.say(
             snack(Text('Spotify sign-in is not available right now')));
         return;
       }
@@ -192,7 +192,7 @@ class _SpotifyPageState extends State<SpotifyPage> {
       );
       unawaited(_fetchAuthUrl());
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.say(snack(Text('$e')));
     }
   }
 
@@ -208,13 +208,13 @@ class _SpotifyPageState extends State<SpotifyPage> {
       _load();
       final missing = results.fold<int>(
           0, (sum, r) => sum + ((r['missing'] ?? 0) as int));
-      messenger.showSnackBar(snack(Text(results.isEmpty
+      messenger.say(snack(Text(results.isEmpty
             ? 'Nothing is mirrored yet — choose a playlist below'
             : '${results.length} refreshed'
                 '${missing == 0 ? '' : ' · $missing songs not matched'}'),
       ));
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.say(snack(Text('$e')));
     } finally {
       if (mounted) setState(() => _syncing = false);
     }
@@ -291,7 +291,7 @@ class _SpotifyPageState extends State<SpotifyPage> {
                             await app.api.unlinkSpotify();
                             await app.refreshPlaylists();
                           } catch (e) {
-                            messenger.showSnackBar(problem(e));
+                            messenger.say(problem(e));
                           }
                           _load();
                         },

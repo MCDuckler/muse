@@ -143,10 +143,10 @@ class LibraryPage extends StatelessWidget {
                   try {
                     await app.api.syncSpotify();
                     await app.refreshPlaylists();
-                    messenger.showSnackBar(
+                    messenger.say(
                         snack(Text('Refreshed from Spotify')));
                   } catch (e) {
-                    messenger.showSnackBar(snack(Text('$e')));
+                    messenger.say(snack(Text('$e')));
                   }
                 } else if (v == 'keep') {
                   final messenger = ScaffoldMessenger.of(context);
@@ -163,7 +163,7 @@ class LibraryPage extends StatelessWidget {
                       action: 'Keep');
                   if (!sure) return;
                   await app.keepOffline(ready);
-                  messenger.showSnackBar(
+                  messenger.say(
                       snack(Text('Keeping $bytes songs')));
                 } else if (v == 'forget') {
                   final full = await app.api.playlist(p.id);
@@ -179,7 +179,7 @@ class LibraryPage extends StatelessWidget {
                         .setPlaylistCover(p.id, await file.readAsBytes());
                     await app.refreshPlaylists();
                   } catch (e) {
-                    messenger.showSnackBar(snack(Text('$e')));
+                    messenger.say(snack(Text('$e')));
                   }
                 } else if (v == 'drawn-cover') {
                   await app.api.clearPlaylistCover(p.id);
@@ -199,7 +199,7 @@ class LibraryPage extends StatelessWidget {
                   final messenger = ScaffoldMessenger.of(context);
                   final full = await app.api.playlist(p.id);
                   await app.addTracks(full.items);
-                  messenger.showSnackBar(snack(Text(
+                  messenger.say(snack(Text(
                       '${full.items.length} added to '
                       '"${app.activeQueue?.name ?? 'the queue'}"')));
                 }
@@ -299,12 +299,12 @@ class _PlaylistPageState extends State<PlaylistPage> {
     try {
       await app.api.removePlaylistItem(widget.playlistId, pos);
     } catch (e) {
-      messenger.showSnackBar(problem(e));
+      messenger.say(problem(e));
       return;
     }
     await app.refreshPlaylists();
     _reload();
-    messenger.showSnackBar(snack(
+    messenger.say(snack(
       Text('Removed ${track.displayTitle}'),
       action: SnackBarAction(
         label: 'Undo',
@@ -317,7 +317,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
               await app.api.movePlaylistItem(widget.playlistId, landed, pos);
             }
           } catch (e) {
-            messenger.showSnackBar(problem(e));
+            messenger.say(problem(e));
           }
           await app.refreshPlaylists();
           _reload();
@@ -337,11 +337,11 @@ class _PlaylistPageState extends State<PlaylistPage> {
           : await api.savePlaylist(list.id);
       await app.refreshPlaylists();
       _reload();
-      messenger.showSnackBar(snack(Text(list.saved
+      messenger.say(snack(Text(list.saved
           ? 'Removed from your library'
           : 'Saved to your library')));
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.say(snack(Text('$e')));
     }
   }
 
@@ -352,11 +352,11 @@ class _PlaylistPageState extends State<PlaylistPage> {
     try {
       await api.setPlaylistOpenEdit(list.id, on);
       _reload();
-      messenger.showSnackBar(snack(Text(on
+      messenger.say(snack(Text(on
           ? 'Anybody here can add to "${list.name}" now'
           : 'Only you can change "${list.name}" now')));
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.say(snack(Text('$e')));
     }
   }
 
@@ -721,7 +721,7 @@ class _PlaylistHeader extends StatelessWidget {
                 onPressed: () async {
                   final messenger = ScaffoldMessenger.of(context);
                   final n = await app.api.downloadPlaylist(playlist.id);
-                  messenger.showSnackBar(snack(Text(n == 0
+                  messenger.say(snack(Text(n == 0
                           ? 'Everything here is already downloaded'
                           : 'Queued $n songs')));
                   onChanged();

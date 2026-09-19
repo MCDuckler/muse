@@ -20,9 +20,14 @@ class DeskDock extends StatelessWidget {
   final bool open;
   final VoidCallback onClose;
 
-  /// How wide it is when it is out. Narrow enough that the page keeps the screen and
-  /// wide enough for a record, a title that is not cut in half, and a row of buttons.
-  static const width = 340.0;
+  /// How wide it is when it is out.
+  ///
+  /// Three hundred and forty was too narrow: the record, the title, the bar, the
+  /// transport, the song's own buttons and the volume did not fit between the top of
+  /// the card and the bottom of it, so the whole thing scrolled — and a player you
+  /// have to scroll to press pause on is not a player. Wide enough for all of it now,
+  /// and still the smaller half of any desk.
+  static const width = 420.0;
 
   @override
   Widget build(BuildContext context) {
@@ -48,9 +53,10 @@ class DeskDock extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(4, 8, 10, 10),
               child: Column(
                 children: [
-                  // What is playing, which is the thing people keep an eye on.
+                  // What is playing, which is the thing people keep an eye on — and
+                  // the one that has to fit without scrolling.
                   Expanded(
-                    flex: 3,
+                    flex: 7,
                     child: _Panel(
                       colour: scheme.surfaceContainerLow,
                       child: SingleChildScrollView(
@@ -61,7 +67,7 @@ class DeskDock extends StatelessWidget {
                   const SizedBox(height: 10),
                   // And what is coming, which is the thing they keep checking.
                   Expanded(
-                    flex: 2,
+                    flex: 3,
                     child: _Panel(
                       colour: scheme.surfaceContainerLow,
                       child: const _NextUp(),

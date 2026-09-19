@@ -69,7 +69,7 @@ class _JamPageState extends State<JamPage> {
     try {
       people = await app.api.jamPeople();
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.say(snack(Text('$e')));
       return;
     }
     if (!context.mounted) return;
@@ -106,10 +106,10 @@ class _JamPageState extends State<JamPage> {
                   Navigator.of(sheet).pop();
                   try {
                     await app.inviteToJam(person.id);
-                    messenger.showSnackBar(
+                    messenger.say(
                         snack(Text('${person.name} is in')));
                   } catch (e) {
-                    messenger.showSnackBar(snack(Text('$e')));
+                    messenger.say(snack(Text('$e')));
                   }
                 },
               ),
@@ -201,7 +201,7 @@ class _JamPageState extends State<JamPage> {
                   onPressed: () async {
                     await Clipboard.setData(ClipboardData(text: jam.code));
                     if (!context.mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
+                    ScaffoldMessenger.of(context).say(
                         snack(Text('Code copied')));
                   },
                 ),

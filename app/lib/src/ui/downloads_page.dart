@@ -61,9 +61,9 @@ class _DownloadsPageState extends State<DownloadsPage> {
     try {
       await action();
       await _load();
-      messenger.showSnackBar(snack(Text(done)));
+      messenger.say(snack(Text(done)));
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.say(snack(Text('$e')));
     }
   }
 
@@ -196,12 +196,12 @@ class _DownloadsPageState extends State<DownloadsPage> {
                                   try {
                                     final r = await app.api.refindFailed();
                                     await _load();
-                                    messenger.showSnackBar(snack(Text(r['found'] == 0
+                                    messenger.say(snack(Text(r['found'] == 0
                                             ? 'Nothing close enough anywhere'
                                             : 'Found ${r['found']} elsewhere — '
                                                 'downloading them now')));
                                   } catch (e) {
-                                    messenger.showSnackBar(
+                                    messenger.say(
                                         snack(Text('$e')));
                                   }
                                 },

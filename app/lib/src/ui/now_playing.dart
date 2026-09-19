@@ -337,9 +337,11 @@ class NowPlayingScreen extends StatelessWidget {
 
                     return Center(
                       child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 1180),
+                        // Wider, and with less of a margin inside it: the two columns
+                        // want the room more than the walls do.
+                        constraints: const BoxConstraints(maxWidth: 1440),
                         child: Padding(
-                          padding: const EdgeInsets.fromLTRB(32, 12, 32, 12),
+                          padding: const EdgeInsets.fromLTRB(28, 8, 28, 8),
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
@@ -357,7 +359,7 @@ class NowPlayingScreen extends StatelessWidget {
                               const SizedBox(width: 40),
                               Expanded(
                                 child: ConstrainedBox(
-                                  constraints: const BoxConstraints(maxWidth: 520),
+                                  constraints: const BoxConstraints(maxWidth: 620),
                                   child: Column(
                                     mainAxisSize: MainAxisSize.min,
                                     mainAxisAlignment: MainAxisAlignment.center,
@@ -1284,7 +1286,7 @@ class DeskNowPlaying extends StatelessWidget {
             // this narrow spills out of its own box and sits on top of the title
             // underneath.
             Padding(
-              padding: const EdgeInsets.fromLTRB(18, 2, 18, 0),
+              padding: const EdgeInsets.fromLTRB(22, 2, 22, 0),
               child: AspectRatio(
                 aspectRatio: 1,
                 // Full size for the box it is in: what was wrong before was the

@@ -24,6 +24,52 @@ router = APIRouter(prefix="/social")
 FAVOURITES_KIND = "favourites"
 
 
+# How fresh a queue's stamp has to be for the song at its cursor to count as "now".
+#
+# A playing device writes where it has got to every ten seconds — that is what keeps a
+# queue resumable — so a queue touched in the last little while is a queue somebody is
+# listening to. Nothing new is written for this: the fact was already on the table,
+# nobody had ever read it out.
+NOW = "90 seconds"
+RECENTLY = "30 minutes"
+
+
+def _playing() -> dict[int, dict]:
+    """What each person has on, by user id.
+
+    Their most recently touched queue, and the song its cursor is sitting on. A pause
+    stamps the queue too, so this goes quiet a minute and a half after somebody stops
+    rather than the moment they do — which is the right way round for a screen that
+    says what the room is up to.
+    """
+    rows = db.all_(
+        f"""select distinct on (q.user_id) q.user_id, q.name as queue,
+                   q.updated_at, q.position_ms,
+                   q.updated_at > now() - interval '{NOW}' as now,
+                   t.*, c.color as cover_color, c.sha256 as cover_sha, m.path
+              from queues q
+              -- The cursor counts rows; pos is a sort key with gaps in it, so the
+              -- row it names is the nth by pos rather than the one whose pos is n.
+              join lateral (
+                    select z.track_id from (
+                           select track_id, row_number() over (order by pos) - 1 as idx
+                             from queue_items where queue_id = q.id) z
+                     where z.idx = q.cursor_index) i on true
+              join tracks t on t.id = i.track_id
+              left join covers c on c.id = t.cover_id
+              left join media m on m.track_id = t.id and m.role='canonical'
+             where q.updated_at > now() - interval '{RECENTLY}'
+             order by q.user_id, q.updated_at desc""")
+    return {
+        r["user_id"]: {
+            "track": catalog.public(r),
+            "queue": r["queue"],
+            "at": r["updated_at"],
+            "now": r["now"],
+        } for r in rows
+    }
+
+
 def _jams() -> dict[int, dict]:
     """Who has a jam going right now, by host."""
     rows = db.all_(
@@ -44,6 +90,7 @@ def people(user: dict = Depends(current_user)):
     a thing happening now is no use to anybody who has to go looking for it.
     """
     live = _jams()
+    onNow = _playing()
     rows = db.all_(
         """select u.id, u.name, u.avatar_sig, u.created_at,
                   (select count(*) from library_items li where li.user_id = u.id)
@@ -69,6 +116,8 @@ def people(user: dict = Depends(current_user)):
             "playlists": r["playlists"],
             "last_seen": r["last_seen"],
             "last_listened": r["last_listened"],
+            # What they have on. The thing a screen called People is actually for.
+            "playing": onNow.get(r["id"]),
             "jam": live.get(r["id"]),
         } for r in rows],
     }

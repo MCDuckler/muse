@@ -257,7 +257,7 @@ class _SongRow extends StatelessWidget {
         try {
           await app.playNow([await app.api.track(song.id)]);
         } catch (e) {
-          messenger.showSnackBar(problem(e));
+          messenger.say(problem(e));
         }
       },
     );

@@ -1426,7 +1426,15 @@ class Disc extends StatelessWidget {
       Curves.easeInOutSine.transform((out / leaves).clamp(0.0, 1.0));
 
   /// How much of it is left to see, as it goes.
-  static double leaving(double gone) => (1 - (gone - 0.82) / 0.18).clamp(0.0, 1.0);
+  ///
+  /// It fades with how far it has come out from behind its cover, not with how near
+  /// it is to the edge of the screen. A record that stays solid all the way across and
+  /// then vanishes in the last fifth is a picture being switched off; one that thins
+  /// out as it clears the sleeve is a record going back where it came from. Full
+  /// strength while it is still mostly behind the cover, gone by the time it is a
+  /// cover's width out.
+  static double leaving(double gone) =>
+      (1 - (gone - 0.28) / 0.52).clamp(0.0, 1.0);
 
   static double arriving(double out) =>
       Curves.easeOutCubic.transform(((out - leaves) / (1 - leaves)).clamp(0.0, 1.0));

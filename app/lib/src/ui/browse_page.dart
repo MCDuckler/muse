@@ -416,14 +416,14 @@ class _AlbumPageState extends State<AlbumPage> {
             remoteId: widget.remoteId ?? detail.remoteId,
             remoteIds: one == null ? const [] : [one],
           );
-      messenger.showSnackBar(snack(Text(r.queued == 0
+      messenger.say(snack(Text(r.queued == 0
             ? 'Nothing could be matched'
             : '${r.queued} queued'
                 '${r.notMatched == 0 ? '' : ' · ${r.notMatched} not matched'}'),
       ));
       _load();
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.say(snack(Text('$e')));
     } finally {
       if (mounted) setState(() => _filling = false);
     }
@@ -899,13 +899,13 @@ class _ArtistPageState extends State<ArtistPage> {
       } else {
         await api.follow(remoteId: d.remoteId, name: d.name, image: d.image);
       }
-      messenger.showSnackBar(snack(Text(d.following
+      messenger.say(snack(Text(d.following
             ? 'No longer following ${d.name}'
             : 'Following ${d.name} — new records show up in your feed'),
       ));
       _load();
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.say(snack(Text('$e')));
     } finally {
       if (mounted) setState(() => _working = false);
     }

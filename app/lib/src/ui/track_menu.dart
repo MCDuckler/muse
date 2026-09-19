@@ -149,12 +149,12 @@ Future<void> addAndSay(BuildContext context, Track track,
   try {
     await app.addTrack(track, mode: mode);
   } catch (e) {
-    messenger.showSnackBar(problem(e));
+    messenger.say(problem(e));
     return;
   }
   final where = app.activeQueue?.name ?? 'the queue';
   final title = track.displayTitle;
-  messenger.showSnackBar(snack(
+  messenger.say(snack(
     Text(mode == 'next'
         ? already
             ? 'Another copy of $title plays next'
@@ -179,7 +179,7 @@ Future<void> addAndSay(BuildContext context, Track track,
 Future<void> _start(BuildContext context, AppState app, Track track) async {
   final messenger = ScaffoldMessenger.of(context);
   final started = await app.fetchNow(track);
-  messenger.showSnackBar(snack(Text(started
+  messenger.say(snack(Text(started
           ? '${track.displayTitle} is downloading'
           : 'Nowhere left to fetch ${track.displayTitle} from')));
 }

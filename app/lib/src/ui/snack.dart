@@ -38,3 +38,20 @@ SnackBar problem(Object error, {SnackBarAction? action}) => snack(
 
 const kSnackShort = Duration(milliseconds: 2000);
 const kSnackWithAction = Duration(milliseconds: 3500);
+
+/// Saying something, rather than joining a queue of things to be said.
+///
+/// Material queues these: five taps in a row are five messages one after another, each
+/// waiting its full turn, and a queue of stale confirmations has to be swiped away one
+/// at a time before the screen is usable again. Nobody wants to be told five things —
+/// they want to be told the last one.
+///
+/// So a new message clears what was waiting and takes the floor. The only ones worth
+/// keeping in a queue would be the ones with something to press, and those are rare
+/// enough that being replaced by the next thing you did is still the right answer.
+extension SayIt on ScaffoldMessengerState {
+  void say(SnackBar bar) {
+    clearSnackBars();
+    showSnackBar(bar);
+  }
+}

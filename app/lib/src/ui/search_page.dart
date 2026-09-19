@@ -250,7 +250,7 @@ class _SearchPageState extends State<SearchPage> {
     } catch (e) {
       // Long enough to read, because this is where the server says it declined to
       // add a song and why — which is a sentence, not a word.
-      messenger.showSnackBar(problem(e));
+      messenger.say(problem(e));
     }
   }
 
@@ -484,10 +484,10 @@ class _SearchPageState extends State<SearchPage> {
     try {
       final r = await app.api.importAlbum(_lastQuery);
       await app.refreshPlaylists();
-      messenger.showSnackBar(
+      messenger.say(
           snack(Text('Added "${r['name']}" — ${r['added']} tracks')));
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.say(snack(Text('$e')));
     } finally {
       if (mounted) setState(() => _importing = false);
     }
@@ -592,7 +592,7 @@ class _FoundAlbumSheetState extends State<_FoundAlbumSheet> {
           // One song of a record being unavailable is not a failed record.
         }
       }
-      messenger.showSnackBar(snack(
+      messenger.say(snack(
           Text('Added $added of ${_album!.tracks.length} from "${_album!.title}"')));
     } finally {
       if (mounted) setState(() => _taking = false);
@@ -648,7 +648,7 @@ class _FoundAlbumSheetState extends State<_FoundAlbumSheet> {
               } catch (e) {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context)
-                      .showSnackBar(snack(Text('$e')));
+                      .say(snack(Text('$e')));
                 }
               }
             },

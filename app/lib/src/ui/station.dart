@@ -25,17 +25,17 @@ Future<void> startStation(
           ? 'artist'
           : 'track';
   if (kind == 'track' && seed == null) {
-    messenger.showSnackBar(snack(const Text('Nothing playing to start a station from')));
+    messenger.say(snack(const Text('Nothing playing to start a station from')));
     return;
   }
 
-  messenger.showSnackBar(snack(const Text('Starting a station…')));
+  messenger.say(snack(const Text('Starting a station…')));
   try {
     await app.startStation(
         kind: kind, seed: seed, album: album, artist: artist);
-    messenger.showSnackBar(snack(Text(app.activeQueue?.name ?? 'Station')));
+    messenger.say(snack(Text(app.activeQueue?.name ?? 'Station')));
   } catch (e) {
-    messenger.showSnackBar(snack(Text('$e')));
+    messenger.say(snack(Text('$e')));
   }
 }
 
@@ -49,8 +49,8 @@ Future<void> keepStation(BuildContext context) async {
   try {
     await app.api.saveQueueAsPlaylist(queue.id, name: queue.name);
     await app.refreshPlaylists();
-    messenger.showSnackBar(snack(Text('"${queue.name}" is in your library')));
+    messenger.say(snack(Text('"${queue.name}" is in your library')));
   } catch (e) {
-    messenger.showSnackBar(snack(Text('$e')));
+    messenger.say(snack(Text('$e')));
   }
 }

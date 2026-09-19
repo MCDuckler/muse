@@ -104,6 +104,7 @@ class _PersonRow extends StatelessWidget {
     final api = context.read<AppState>().api;
     final scheme = Theme.of(context).colorScheme;
     final jam = person.jam;
+    final on = person.playing;
     return ListTile(
       leading: Stack(
         clipBehavior: Clip.none,
@@ -145,17 +146,42 @@ class _PersonRow extends StatelessWidget {
             ),
         ],
       ),
-      subtitle: Text(
-        jam != null
-            ? 'In a jam · ${jam.people} listening'
-            : [
-                '${person.songs} songs',
-                if (person.playlists > 0) '${person.playlists} playlists',
-              ].join(' · '),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: jam != null ? TextStyle(color: scheme.primary) : null,
-      ),
+      subtitle: on != null
+          // What somebody has on says more about them than how many songs they have,
+          // and it is the one thing on this screen that changes while you watch it.
+          ? Row(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(right: 6, top: 2),
+                  child: Artwork(track: on.track, size: 22, radius: 3),
+                ),
+                if (on.now)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child:
+                        Icon(Icons.graphic_eq, size: 13, color: scheme.primary),
+                  ),
+                Expanded(
+                  child: Text(
+                    '${on.track.displayTitle} · ${on.track.artistLine}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: on.now ? TextStyle(color: scheme.primary) : null,
+                  ),
+                ),
+              ],
+            )
+          : Text(
+              jam != null
+                  ? 'In a jam · ${jam.people} listening'
+                  : [
+                      '${person.songs} songs',
+                      if (person.playlists > 0) '${person.playlists} playlists',
+                    ].join(' · '),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: jam != null ? TextStyle(color: scheme.primary) : null,
+            ),
       trailing: jam == null
           ? const Icon(Icons.chevron_right)
           : FilledButton.tonal(
@@ -164,10 +190,10 @@ class _PersonRow extends StatelessWidget {
                 final messenger = ScaffoldMessenger.of(context);
                 try {
                   await app.joinJam(jam.code);
-                  messenger.showSnackBar(
+                  messenger.say(
                       snack(Text('Listening with ${person.name}')));
                 } catch (e) {
-                  messenger.showSnackBar(snack(Text('$e')));
+                  messenger.say(snack(Text('$e')));
                 }
               },
               child: const Text('Join'),
@@ -251,11 +277,11 @@ class _PersonPageState extends State<PersonPage> {
       }
       await app.refreshPlaylists();
       await _load();
-      messenger.showSnackBar(snack(Text(list.saved
+      messenger.say(snack(Text(list.saved
           ? 'Removed "${list.name}" from your library'
           : 'Saved "${list.name}" to your library')));
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.say(snack(Text('$e')));
     }
   }
 
@@ -324,7 +350,7 @@ class _PersonPageState extends State<PersonPage> {
                         await app.joinJam(jam.code);
                         if (context.mounted) await showJam(context);
                       } catch (e) {
-                        messenger.showSnackBar(snack(Text('$e')));
+                        messenger.say(snack(Text('$e')));
                       }
                     },
                     child: const Text('Join'),

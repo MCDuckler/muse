@@ -560,7 +560,7 @@ class _QueuePageState extends State<QueuePage> {
                                   await app.player?.playTrack(t.id, indexHint: i);
                                 } catch (e) {
                                   if (context.mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
+                                    ScaffoldMessenger.of(context).say(
                                         snack(Text('$e')));
                                   }
                                 }
@@ -661,7 +661,7 @@ class _QueuePageState extends State<QueuePage> {
     try {
       await app.renameQueue(queue.id, name);
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.say(snack(Text('$e')));
     }
   }
 
@@ -674,7 +674,7 @@ class _QueuePageState extends State<QueuePage> {
     await app.refreshPlaylists();
     if (context.mounted) {
       ScaffoldMessenger.of(context)
-          .showSnackBar(snack(Text('Saved "$name"')));
+          .say(snack(Text('Saved "$name"')));
     }
   }
 
@@ -700,9 +700,9 @@ class _QueuePageState extends State<QueuePage> {
     if (!gone) return;
     try {
       await app.deleteQueue(queue.id);
-      messenger.showSnackBar(snack(Text('Deleted "${queue.name}"')));
+      messenger.say(snack(Text('Deleted "${queue.name}"')));
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.say(snack(Text('$e')));
     }
   }
 

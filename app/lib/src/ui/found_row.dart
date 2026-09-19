@@ -175,7 +175,7 @@ class FoundRow extends StatelessWidget {
 
 /// Said when something was taken from a service that has to fetch it first.
 void saidAdded(BuildContext context, Found found) {
-  ScaffoldMessenger.of(context).showSnackBar(snack(Text(found.known
+  ScaffoldMessenger.of(context).say(snack(Text(found.known
       ? 'Added "${found.title}"'
       : 'Fetching "${found.title}" from ${placeNames[found.place] ?? found.place}')));
 }

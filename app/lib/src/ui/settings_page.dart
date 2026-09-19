@@ -87,9 +87,9 @@ class _SettingsPageState extends State<SettingsPage> {
       // the difference is the whole of how long this takes.
       final bytes = await shrinkForUpload(await file.readAsBytes());
       await app.setAvatar(bytes);
-      messenger.showSnackBar(snack(const Text('That is your picture now')));
+      messenger.say(snack(const Text('That is your picture now')));
     } catch (e) {
-      messenger.showSnackBar(snack(Text(_whyNot(e))));
+      messenger.say(snack(Text(_whyNot(e))));
     } finally {
       if (mounted) setState(() => _pickingFace = false);
     }
@@ -121,7 +121,7 @@ class _SettingsPageState extends State<SettingsPage> {
       final track = await app.api.upload(bytes, file.name);
       _load();
       if (!mounted) return;
-      messenger.showSnackBar(snack(Text(track.state == 'ready'
+      messenger.say(snack(Text(track.state == 'ready'
             ? 'Added ${track.displayTitle}'
             : 'Uploaded ${file.name}'),
         action: SnackBarAction(
@@ -134,7 +134,7 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
       ));
     } catch (e) {
-      messenger.showSnackBar(snack(Text('$e')));
+      messenger.say(snack(Text('$e')));
     } finally {
       if (mounted) setState(() => _uploading = false);
     }
@@ -545,11 +545,11 @@ class _IpaRowState extends State<_IpaRow> {
     }
     final plain = Uri.parse(Updates.ipaUrl(_base));
     if (await launchUrl(plain, mode: LaunchMode.externalApplication)) {
-      messenger.showSnackBar(snack(const Text(
+      messenger.say(snack(const Text(
           'Downloaded. Open it with SideStore or AltStore to install it.')));
       return;
     }
-    messenger.showSnackBar(snack(const Text('Could not open the download')));
+    messenger.say(snack(const Text('Could not open the download')));
   }
 
   @override
@@ -632,7 +632,7 @@ class _ApkRowState extends State<_ApkRow> {
     final url = Uri.parse(Updates.apkUrl(_base));
     final opened = await launchUrl(url, mode: LaunchMode.externalApplication);
     if (!opened) {
-      messenger.showSnackBar(snack(const Text('Could not open the download')));
+      messenger.say(snack(const Text('Could not open the download')));
     }
   }
 
@@ -670,7 +670,7 @@ class _ApkRowState extends State<_ApkRow> {
                     Clipboard.setData(
                         ClipboardData(text: Updates.apkUrl(_base)));
                     ScaffoldMessenger.of(context)
-                        .showSnackBar(snack(const Text('Link copied')));
+                        .say(snack(const Text('Link copied')));
                   },
                 ),
                 FilledButton.tonal(

@@ -33,7 +33,7 @@ class _PlaybackLogPageState extends State<PlaybackLogPage> {
               await Clipboard.setData(ClipboardData(text: PlaybackLog.text));
               if (!context.mounted) return;
               ScaffoldMessenger.of(context)
-                  .showSnackBar(snack(Text('Log copied')));
+                  .say(snack(Text('Log copied')));
             },
           ),
           IconButton(

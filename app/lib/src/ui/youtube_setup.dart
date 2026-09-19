@@ -29,7 +29,7 @@ Future<bool> youtubeCodeSignInSetup(BuildContext context) async {
   try {
     final client = await api.youtubeSignInClient();
     if (!client.maySet) {
-      messenger.showSnackBar(snack(const Text(
+      messenger.say(snack(const Text(
           'Signing in with a code has to be switched on by whoever runs this '
           'server.')));
       return false;
@@ -119,7 +119,7 @@ Future<bool> youtubeCodeSignInSetup(BuildContext context) async {
                       if (context.mounted) Navigator.of(context).pop(true);
                     } catch (e) {
                       refresh(() => busy = false);
-                      messenger.showSnackBar(snack(Text('$e')));
+                      messenger.say(snack(Text('$e')));
                     }
                   },
             child: busy
@@ -135,7 +135,7 @@ Future<bool> youtubeCodeSignInSetup(BuildContext context) async {
   id.dispose();
   secret.dispose();
   if (done == true) {
-    messenger.showSnackBar(snack(
+    messenger.say(snack(
         const Text('Done — signing in is a code now, for everybody on this server.')));
   }
   return done == true;
@@ -187,7 +187,7 @@ class SignInCode extends StatelessWidget {
       onTap: () {
         Clipboard.setData(ClipboardData(text: code));
         ScaffoldMessenger.of(context)
-            .showSnackBar(snack(const Text('Code copied')));
+            .say(snack(const Text('Code copied')));
       },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),

@@ -357,6 +357,7 @@ class Person {
     this.lastSeen,
     this.lastListened,
     this.jam,
+    this.playing,
     this.recent = const [],
     this.since,
   });
@@ -376,6 +377,9 @@ class Person {
 
   /// The jam they are hosting right now, if any.
   final JamGlimpse? jam;
+
+  /// What they have on. Null when nobody has heard from them in half an hour.
+  final NowPlaying? playing;
 
   /// What they have been playing.
   final List<Track> recent;
@@ -397,9 +401,39 @@ class Person {
         jam: j['jam'] is Map
             ? JamGlimpse.fromJson((j['jam'] as Map).cast<String, dynamic>())
             : null,
+        playing: j['playing'] is Map
+            ? NowPlaying.fromJson((j['playing'] as Map).cast<String, dynamic>())
+            : null,
         recent: ((j['recent'] ?? const []) as List)
             .map((e) => Track.fromJson(e as Map<String, dynamic>))
             .toList(),
+      );
+}
+
+/// What somebody has on, and how long ago that was true.
+///
+/// Worked out from the place their player keeps in its queue, which it writes down
+/// every ten seconds while it is playing — so this is a fact the server already had
+/// and nobody had ever read out.
+class NowPlaying {
+  const NowPlaying({required this.track, this.queue, this.at, this.now = false});
+
+  final Track track;
+
+  /// The queue it is coming from, which is often the most interesting part: "Evening"
+  /// says more than the name of one song.
+  final String? queue;
+  final DateTime? at;
+
+  /// Whether this is happening rather than having happened. A pause stamps the queue
+  /// too, so it goes quiet a minute and a half after somebody stops.
+  final bool now;
+
+  factory NowPlaying.fromJson(Map<String, dynamic> j) => NowPlaying(
+        track: Track.fromJson((j['track'] as Map).cast<String, dynamic>()),
+        queue: j['queue'] as String?,
+        at: j['at'] == null ? null : DateTime.tryParse('${j['at']}')?.toLocal(),
+        now: (j['now'] ?? false) as bool,
       );
 }
 

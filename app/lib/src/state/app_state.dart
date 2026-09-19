@@ -1042,7 +1042,7 @@ class AppState extends ChangeNotifier {
     }
     if (context == null || removed == null || !context.mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(snack(Text('Removed ${removed.displayTitle}'),
+    ScaffoldMessenger.of(context).say(snack(Text('Removed ${removed.displayTitle}'),
       action: SnackBarAction(
         label: 'Undo',
         onPressed: () => _restoreToQueue(q.id, removed.id, row),
@@ -1136,7 +1136,7 @@ class AppState extends ChangeNotifier {
     if (context == null || before.isEmpty || !context.mounted) return;
 
     final removedCount = before.length - cleared.items.length;
-    ScaffoldMessenger.of(context).showSnackBar(snack(Text(origin == 'radio'
+    ScaffoldMessenger.of(context).say(snack(Text(origin == 'radio'
           ? 'Cleared $removedCount radio ${removedCount == 1 ? 'track' : 'tracks'}'
           : 'Cleared the queue'),
       action: SnackBarAction(
