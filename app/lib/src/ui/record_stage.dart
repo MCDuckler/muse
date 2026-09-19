@@ -769,8 +769,20 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
         // smaller is about how much of the shelf you can see, and a record on a deck
         // is the size a record is.
         final screen = MediaQuery.sizeOf(context).width;
+        // How much room the record has, which is not the same question as how wide
+        // the window is.
+        //
+        // On a phone the stage *is* the page, so "the screen, less its margins" was
+        // the room — and that is what this measured. Beside a page it is not: the
+        // stage is a panel three hundred pixels wide in a window of fourteen hundred,
+        // and a record sized by the window is four times wider than the box it is
+        // drawn in, spilling across everything next to it. So the room is the stage's
+        // own box, plus the same overhang a phone gives it, and never more than the
+        // window would have allowed.
+        final room = math.min(side + _wallClearance * 2 + side * 0.06,
+            screen);
         final platter =
-            (screen - _wallClearance * 2) * widget.discScale.clamp(0.6, 1.15);
+            (room - _wallClearance * 2) * widget.discScale.clamp(0.6, 1.15);
         // Far enough right that the sleeve-sized one is past the edge of the phone.
         final away = screen * 0.85;
         // The top edge of the record — the round one, the one that shows. Above the

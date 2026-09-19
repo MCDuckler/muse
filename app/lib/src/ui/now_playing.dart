@@ -1297,12 +1297,12 @@ class DeskNowPlaying extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(18, 2, 18, 0),
               child: AspectRatio(
                 aspectRatio: 1,
+                // Full size for the box it is in. The box is the small one here —
+                // the record itself is drawn from the room the stage has, which is
+                // what was wrong with it before: sized from the window, it came out
+                // four times wider than this panel.
                 child: _Artwork(
-                    track: track,
-                    snapshot: s,
-                    player: player,
-                    app: app,
-                    shrink: 0.78),
+                    track: track, snapshot: s, player: player, app: app),
               ),
             ),
             const SizedBox(height: 14),
