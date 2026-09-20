@@ -226,6 +226,23 @@ class ArtImage extends ImageProvider<ArtImage> {
   String toString() => 'ArtImage("$url")';
 }
 
-/// The right provider for wherever this is running.
-ImageProvider artwork(String url) =>
-    ArtCache.supported ? ArtImage(url) : NetworkImage(url);
+/// The right provider for wherever this is running, decoded no bigger than it is
+/// going to be drawn.
+///
+/// A cover is a 600-pixel square and a row of a list shows it at 44. Decoded at full
+/// size that is a megabyte and a half of memory and the work to fill it, per row, for
+/// rows that scroll past in a second — on a library of twenty-two thousand songs it is
+/// the single most expensive thing the app does, and on the web it is paid twice
+/// because the browser holds the bitmap as well.
+///
+/// [drawnAt] is the size the picture will occupy in logical pixels; the decode is
+/// asked for that many device pixels, rounded up a little so a picture that grows
+/// slightly — a hover, a scale — does not go soft.
+ImageProvider artwork(String url, {double? drawnAt, double? ratio}) {
+  final ImageProvider base = ArtCache.supported ? ArtImage(url) : NetworkImage(url);
+  if (drawnAt == null || drawnAt <= 0) return base;
+  final pixels = (drawnAt * (ratio ?? 2.0) * 1.15).round();
+  // Above this there is nothing to save: the file itself is about this big.
+  if (pixels >= 900) return base;
+  return ResizeImage(base, width: pixels, height: pixels, allowUpscaling: false);
+}

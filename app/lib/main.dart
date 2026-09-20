@@ -172,12 +172,15 @@ class MuseApp extends StatelessWidget {
 class _DeskScrolling extends MaterialScrollBehavior {
   const _DeskScrolling();
 
-  /// Dragging a list with a mouse, which is what people do to a queue when they are
-  /// rearranging it and there is no finger involved.
+  /// A trackpad and a finger drag a list; a mouse does not.
+  ///
+  /// Letting a mouse drag scrollables looked like a kindness and was not: a queue row
+  /// picked up to be dragged somewhere else was as likely to scroll the list under it,
+  /// and a word in a lyric could not be selected because the drag belonged to the
+  /// scroll view. A mouse has a wheel, which is what it scrolls with.
   @override
   Set<PointerDeviceKind> get dragDevices => {
         PointerDeviceKind.touch,
-        PointerDeviceKind.mouse,
         PointerDeviceKind.trackpad,
         PointerDeviceKind.stylus,
       };

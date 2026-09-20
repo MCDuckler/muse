@@ -1253,59 +1253,111 @@ class DeskNowPlaying extends StatelessWidget {
             child: Text('Nothing playing', style: text.bodyMedium),
           );
         }
-        return Column(
+        final head = Padding(
+          padding: const EdgeInsets.fromLTRB(18, 10, 8, 0),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(app.activeQueue?.name ?? 'Now playing',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: text.titleSmall),
+              ),
+              IconButton(
+                icon: const Icon(Icons.open_in_full, size: 18),
+                tooltip: 'Open the player',
+                onPressed: () => Navigator.of(context, rootNavigator: true)
+                    .push(nowPlayingRoute()),
+              ),
+              if (onClose != null)
+                IconButton(
+                  icon: const Icon(Icons.chevron_right),
+                  tooltip: 'Hide',
+                  onPressed: onClose,
+                ),
+            ],
+          ),
+        );
+        // Everything under the record. Its height is what is left for the record, and
+        // it is the part that must never be cut off: the bar and the buttons are what
+        // the panel is for.
+        final under = Column(
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 4, 0),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(app.activeQueue?.name ?? 'Now playing',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: text.titleSmall),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.open_in_full, size: 18),
-                    tooltip: 'Open the player',
-                    onPressed: () => Navigator.of(context, rootNavigator: true)
-                        .push(nowPlayingRoute()),
-                  ),
-                  if (onClose != null)
-                    IconButton(
-                      icon: const Icon(Icons.chevron_right),
-                      tooltip: 'Hide',
-                      onPressed: onClose,
-                    ),
-                ],
-              ),
-            ),
-            // The record, with room around it. It used to be handed the whole width
-            // of the panel at the size a phone uses, and a record that big in a column
-            // this narrow spills out of its own box and sits on top of the title
-            // underneath.
-            Padding(
-              padding: const EdgeInsets.fromLTRB(22, 2, 22, 0),
-              child: AspectRatio(
-                aspectRatio: 1,
-                // Full size for the box it is in: what was wrong before was the
-                // record, which sized itself from the window rather than from the
-                // room this panel gives it.
-                child: _Artwork(
-                    track: track, snapshot: s, player: player, app: app),
-              ),
-            ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 16),
             _Words(app: app, track: track),
-            const SizedBox(height: 6),
+            const SizedBox(height: 8),
             _Scrubber(player: player, timesBeside: true),
-            const SizedBox(height: 2),
+            const SizedBox(height: 4),
             _Controls(app: app, player: player, snapshot: s),
-            const SizedBox(height: 2),
+            const SizedBox(height: 4),
             _Extras(app: app, track: track, spread: true),
-            const SizedBox(height: 6),
+            const SizedBox(height: 12),
           ],
+        );
+
+        Widget record({double? side}) => Padding(
+              padding: const EdgeInsets.fromLTRB(24, 4, 24, 0),
+              child: SizedBox(
+                height: side,
+                child: AspectRatio(
+                  aspectRatio: 1,
+                  // Full size for the box it is in: what was wrong before was the
+                  // record, which sized itself from the window rather than from the
+                  // room this panel gives it.
+                  child: _Artwork(
+                      track: track, snapshot: s, player: player, app: app),
+                ),
+              ),
+            );
+
+        // The record takes whatever height is left over, so the panel fits the window
+        // at any size rather than scrolling — and when the window is genuinely too
+        // short for a record and its controls, the record stops shrinking and the
+        // whole thing scrolls instead of being squashed into a line.
+        return LayoutBuilder(
+          builder: (context, c) {
+            if (!c.maxHeight.isFinite) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [head, record(), under],
+              );
+            }
+            // What the record may have is what is left when everything that has to
+            // stay reachable has taken its share: the bar, the transport and the
+            // song's own buttons are the panel's job, and a record is not allowed to
+            // push them off the bottom. Generous on purpose — being a little smaller
+            // than it could be is nothing, and being a little too big is a scrollbar.
+            const forTheRest = 268.0;
+            const forTheHead = 54.0;
+            final side = (c.maxHeight - forTheHead - forTheRest)
+                .clamp(0.0, c.maxWidth - 48);
+            if (side >= 140) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [head, record(side: side), under],
+              );
+            }
+            // Shorter than a record and its controls together. Nothing is squashed;
+            // it scrolls, which is the honest answer to a window that small.
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                head,
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [record(side: 160), under],
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
         );
       },
     );

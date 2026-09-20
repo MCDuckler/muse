@@ -46,7 +46,7 @@ class Artwork extends StatelessWidget {
         width: size,
         height: size,
         child: Image(
-            image: artwork(url),
+            image: artwork(url, drawnAt: size, ratio: MediaQuery.devicePixelRatioOf(context)),
             fit: BoxFit.contain,
             gaplessPlayback: true,
             errorBuilder: (_, __, ___) => Artwork(
@@ -66,7 +66,9 @@ class Artwork extends StatelessWidget {
         child: url == null
             ? _placeholder(scheme)
             : Image(
-                image: artwork(url),
+                image: artwork(url,
+                    drawnAt: size,
+                    ratio: MediaQuery.devicePixelRatioOf(context)),
                 fit: BoxFit.cover,
                 gaplessPlayback: true,
                 errorBuilder: (_, __, ___) => _placeholder(scheme),
@@ -129,7 +131,9 @@ class PlaylistArt extends StatelessWidget {
         child: url == null
             ? _fallback(scheme)
             : Image(
-                image: artwork(url),
+                image: artwork(url,
+                    drawnAt: size,
+                    ratio: MediaQuery.devicePixelRatioOf(context)),
                 fit: BoxFit.cover,
                 gaplessPlayback: true,
                 errorBuilder: (_, __, ___) => _fallback(scheme),

@@ -15,19 +15,25 @@ import 'now_playing.dart';
 /// route — the player, and the queue — fold out down the right-hand side, and fold
 /// away again when the page wants the width.
 class DeskDock extends StatelessWidget {
-  const DeskDock({super.key, required this.open, required this.onClose});
+  const DeskDock(
+      {super.key,
+      required this.open,
+      required this.onClose,
+      this.width = defaultWidth});
 
   final bool open;
   final VoidCallback onClose;
 
-  /// How wide it is when it is out.
+  /// How wide it is: a line between it and the page sets this, and it is remembered.
+  final double width;
+
+  /// Where it starts, before anybody moves the line.
   ///
   /// Three hundred and forty was too narrow: the record, the title, the bar, the
   /// transport, the song's own buttons and the volume did not fit between the top of
   /// the card and the bottom of it, so the whole thing scrolled — and a player you
-  /// have to scroll to press pause on is not a player. Wide enough for all of it now,
-  /// and still the smaller half of any desk.
-  static const width = 420.0;
+  /// have to scroll to press pause on is not a player.
+  static const defaultWidth = 420.0;
 
   @override
   Widget build(BuildContext context) {
@@ -59,9 +65,10 @@ class DeskDock extends StatelessWidget {
                     flex: 7,
                     child: _Panel(
                       colour: scheme.surfaceContainerLow,
-                      child: SingleChildScrollView(
-                        child: DeskNowPlaying(onClose: onClose),
-                      ),
+                      // No scroll around it: the panel sizes the record to whatever
+                      // height it has been given, and scrolls for itself only when
+                      // the window is shorter than a record and its controls.
+                      child: DeskNowPlaying(onClose: onClose),
                     ),
                   ),
                   const SizedBox(height: 10),
@@ -108,9 +115,11 @@ class _NextUp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final app = context.watch<AppState>();
-    final player = app.player;
-    final queue = app.activeQueue;
+    // The queue, not the whole of the app's state. Watching everything meant this
+    // list — forty rows with a picture each — was rebuilt by every report the app
+    // received: a download ticking over, a cover arriving, somebody's avatar.
+    final queue = context.select<AppState, Queue?>((a) => a.activeQueue);
+    final player = context.select<AppState, PlayerService?>((a) => a.player);
     final text = Theme.of(context).textTheme;
     if (player == null || queue == null || queue.items.isEmpty) {
       return Center(child: Text('Nothing queued', style: text.bodySmall));
@@ -138,7 +147,7 @@ class _NextUp extends StatelessWidget {
                   IconButton(
                     icon: const Icon(Icons.queue_music, size: 18),
                     tooltip: 'Open the queue',
-                    onPressed: () => app.setHomeTab(0),
+                    onPressed: () => context.read<AppState>().setHomeTab(0),
                   ),
                 ],
               ),

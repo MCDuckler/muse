@@ -61,6 +61,32 @@ class AppState extends ChangeNotifier {
   /// out. Only ever asked on a screen wide enough to have one.
   bool deskDock = true;
 
+  /// How wide the column beside the page is, and how wide the library's own list is.
+  /// Both are lines somebody can pull, and both are remembered — a width is a thing
+  /// you set once and then want left alone.
+  double dockWidth = 420;
+  double paneWidth = 330;
+
+  void setDockWidth(double v, {bool remember = false}) {
+    dockWidth = v.clamp(320, 640);
+    notifyListeners();
+    if (remember) {
+      SharedPreferences.getInstance()
+          .then((p) => p.setDouble(_kDockWidth, dockWidth))
+          .catchError((_) => false);
+    }
+  }
+
+  void setPaneWidth(double v, {bool remember = false}) {
+    paneWidth = v.clamp(240, 560);
+    notifyListeners();
+    if (remember) {
+      SharedPreferences.getInstance()
+          .then((p) => p.setDouble(_kPaneWidth, paneWidth))
+          .catchError((_) => false);
+    }
+  }
+
   void toggleDeskDock() {
     deskDock = !deskDock;
     SharedPreferences.getInstance()
@@ -246,6 +272,8 @@ class AppState extends ChangeNotifier {
   static const _kVolume = 'muse.volume';
   static const _kHomeTab = 'muse.homeTab';
   static const _kDeskDock = 'muse.deskDock';
+  static const _kDockWidth = 'muse.dockWidth';
+  static const _kPaneWidth = 'muse.paneWidth';
 
   /// The queue that was on when the app was last closed, so opening it again lands
   /// there rather than on whichever queue happens to be first in the list.
@@ -436,6 +464,8 @@ class AppState extends ChangeNotifier {
     spectrum = prefs.getBool(_kSpectrum) ?? false;
     homeTab = (prefs.getInt(_kHomeTab) ?? 0).clamp(0, 3);
     deskDock = prefs.getBool(_kDeskDock) ?? true;
+    dockWidth = (prefs.getDouble(_kDockWidth) ?? 420).clamp(320, 640);
+    paneWidth = (prefs.getDouble(_kPaneWidth) ?? 330).clamp(240, 560);
     coverScale = (prefs.getDouble(_kCoverScale) ?? 0.74).clamp(0.5, 1.0);
     discScale = (prefs.getDouble(_kDiscScale) ?? 1.0).clamp(0.6, 1.15);
     discLabel = (prefs.getDouble(_kDiscLabel) ?? 0.31).clamp(0.18, 0.92);

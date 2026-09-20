@@ -22,6 +22,7 @@ import 'package:muse/src/state/selection.dart';
 import 'package:muse/src/ui/desk_dock.dart';
 import 'package:muse/src/ui/home_page.dart';
 import 'package:muse/src/ui/now_playing.dart';
+import 'package:muse/src/ui/split.dart';
 import 'package:muse/src/ui/widths.dart';
 import 'package:muse/src/ui/mini_player.dart';
 
@@ -297,6 +298,41 @@ void main() {
       await tester.pump();
     }
     addTearDown(tester.view.reset);
+  });
+
+  testWidgets('the line between the page and the dock can be pulled', (tester) async {
+    await wholeShell(tester, const Size(1440, 900));
+    final before = tester.widget<DeskDock>(find.byType(DeskDock)).width;
+
+    // The dock is on the right, so dragging its line left makes it wider.
+    await tester.drag(find.byType(Grabbable).first, const Offset(-90, 0));
+    await tester.pumpAndSettle();
+
+    final after = tester.widget<DeskDock>(find.byType(DeskDock)).width;
+    expect(after, greaterThan(before));
+    expect(app.dockWidth, closeTo(after, 1),
+        reason: 'and the app remembers it for next time');
+    await drain(tester);
+  });
+
+  testWidgets('a width saved on a bigger screen does not eat a smaller one',
+      (tester) async {
+    app.setDockWidth(640);                          // set on somebody's big monitor
+    await wholeShell(tester, const Size(1150, 800));
+    final dock = tester.widget<DeskDock>(find.byType(DeskDock)).width;
+    expect(dock, lessThanOrEqualTo(1150 / 2),
+        reason: 'never more than half the window it is actually in');
+    await drain(tester);
+  });
+
+  testWidgets('the rail says the name of the tab you are on, and no others',
+      (tester) async {
+    await wholeShell(tester, const Size(1440, 900));
+    final rail = tester.widget<NavigationRail>(find.byType(NavigationRail));
+    expect(rail.labelType, NavigationRailLabelType.selected,
+        reason: 'four words down the side of every screen is a column of labels for '
+            'things whose pictures already say what they are');
+    await drain(tester);
   });
 
   testWidgets('the tab you left is where you left it', (tester) async {

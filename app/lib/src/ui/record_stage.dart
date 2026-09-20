@@ -1375,7 +1375,8 @@ class _Jacket extends StatelessWidget {
         child: url == null
             ? const SizedBox.shrink()
             : Image(
-                image: artwork(url!),
+                image: artwork(url!,
+                    drawnAt: size, ratio: MediaQuery.devicePixelRatioOf(context)),
                 fit: BoxFit.contain,
                 gaplessPlayback: true,
                 opacity: AlwaysStoppedAnimation(dim)),

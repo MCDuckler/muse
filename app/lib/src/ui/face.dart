@@ -41,7 +41,9 @@ class Face extends StatelessWidget {
     return ClipOval(
       child: Image(
         image: artwork(
-            context.read<AppState>().api.avatarUrl(userId!, version: version)),
+            context.read<AppState>().api.avatarUrl(userId!, version: version),
+            drawnAt: size,
+            ratio: MediaQuery.devicePixelRatioOf(context)),
         width: size,
         height: size,
         fit: BoxFit.cover,

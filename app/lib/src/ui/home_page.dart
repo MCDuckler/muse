@@ -17,6 +17,7 @@ import 'player_bar.dart';
 import 'queue_page.dart';
 import 'search_page.dart';
 import 'social_page.dart';
+import 'split.dart';
 import 'widths.dart';
 
 class HomePage extends StatefulWidget {
@@ -66,7 +67,13 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    final app = context.watch<AppState>();
+    // Two facts, not the whole of the app's state. The shell was rebuilt by every
+    // report the app made — a cover arriving, a download ticking, a listen being
+    // recorded — and rebuilding the shell rebuilds the rail, the dock and the frame
+    // around all four tabs, several times a second while anything is downloading.
+    final app = context.read<AppState>();
+    final tab = context.select<AppState, int>((a) => a.homeTab);
+    final wantsDock = context.select<AppState, bool>((a) => a.deskDock);
     // Once, the first time the shell is built: a browser that dies here leaves a log
     // that stops at "app started", and one that dies later leaves this line in it.
     if (!_saidHello) {
@@ -79,7 +86,7 @@ class _HomePageState extends State<HomePage> {
     final width = Width.of(context);
     // A desk gets the two things a phone has to take turns showing: the page, and what
     // is playing beside it. See DeskDock.
-    final dock = width.hasDock && app.deskDock;
+    final dock = width.hasDock && wantsDock;
 
     return PopScope(
       // The shell itself only leaves once the tab has nothing left to go back to.
@@ -111,7 +118,6 @@ class _HomePageState extends State<HomePage> {
             // screen nobody is holding.
             if (width.hasRail)
               _Rail(
-                extended: width == Width.expanded,
                 dockOpen: dock,
                 onDock: width.hasDock ? app.toggleDeskDock : null,
                 onSameTab: () =>
@@ -140,13 +146,13 @@ class _HomePageState extends State<HomePage> {
                     (width.hasRail ? 0.0 : 72.0) +
                     (dock ? 24.0 : 0.0),
                 child: _Settling(
-                  on: app.homeTab,
+                  on: tab,
                   child: IndexedStack(
-                    index: app.homeTab,
+                    index: tab,
                     children: [
                       for (var i = 0; i < pages.length; i++)
                         TickerMode(
-                          enabled: i == app.homeTab,
+                          enabled: i == tab,
                           child: Navigator(
                             key: _tabs[i],
                             onGenerateRoute: (_) => MaterialPageRoute(
@@ -170,9 +176,30 @@ class _HomePageState extends State<HomePage> {
           ],
         ),
             ),
-            // What is playing and what is next, folded out of the right-hand edge.
+            // What is playing and what is next, folded out of the right-hand edge,
+            // with a line between it and the page that can be taken hold of.
+            if (width.hasDock && dock)
+              Grabbable(
+                width: context.select<AppState, double>((a) => a.dockWidth),
+                fromRight: true,
+                min: 320,
+                // Never more than half the window, whatever was saved on a bigger
+                // screen: a dock wider than the page it is beside is a page in a
+                // margin.
+                max: (MediaQuery.sizeOf(context).width * 0.5).clamp(320.0, 640.0),
+                onChanged: (w) => app.setDockWidth(w),
+                onSettled: (w) => app.setDockWidth(w, remember: true),
+              ),
             if (width.hasDock)
-              DeskDock(open: dock, onClose: app.toggleDeskDock),
+              DeskDock(
+                open: dock,
+                width: context
+                    .select<AppState, double>((a) => a.dockWidth)
+                    .clamp(320.0,
+                        (MediaQuery.sizeOf(context).width * 0.5)
+                            .clamp(320.0, 640.0)),
+                onClose: app.toggleDeskDock,
+              ),
           ],
         ),
       ),
@@ -210,26 +237,28 @@ class _HomePageState extends State<HomePage> {
 /// the right-hand edge.
 class _Rail extends StatelessWidget {
   const _Rail({
-    required this.extended,
     required this.dockOpen,
     required this.onDock,
     required this.onSameTab,
   });
 
-  final bool extended;
   final bool dockOpen;
   final VoidCallback? onDock;
   final VoidCallback onSameTab;
 
   @override
   Widget build(BuildContext context) {
-    final app = context.watch<AppState>();
-    final tab = app.homeTab;
+    final app = context.read<AppState>();
+    final tab = context.select<AppState, int>((a) => a.homeTab);
+    final jamming = context.select<AppState, String?>((a) => a.jam?.code);
+    final pending = context.select<AppState, int>((a) => a.downloadsPending);
     return NavigationRail(
-      extended: extended,
-      minExtendedWidth: 190,
       selectedIndex: tab,
-      labelType: extended ? null : NavigationRailLabelType.all,
+      // Icons, and the name of the one you are on. Four words down the side of every
+      // screen is a column of labels for things whose pictures already say what they
+      // are — and it was the widest part of the rail, taking room from the page.
+      labelType: NavigationRailLabelType.selected,
+      groupAlignment: -0.85,
       leading: Padding(
         padding: const EdgeInsets.only(top: 8, bottom: 4),
         child: Column(
@@ -240,10 +269,10 @@ class _Rail extends StatelessWidget {
               onPressed: app.refresh,
             ),
             IconButton(
-              icon: Icon(app.jam == null ? Icons.podcasts_outlined : Icons.podcasts,
+              icon: Icon(jamming == null ? Icons.podcasts_outlined : Icons.podcasts,
                   color:
-                      app.jam == null ? null : Theme.of(context).colorScheme.primary),
-              tooltip: app.jam == null ? 'Listen together' : 'Jam · ${app.jam!.code}',
+                      jamming == null ? null : Theme.of(context).colorScheme.primary),
+              tooltip: jamming == null ? 'Listen together' : 'Jam · $jamming',
               onPressed: () => showJam(context),
             ),
           ],
@@ -257,10 +286,10 @@ class _Rail extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (app.downloadsPending > 0)
+                if (pending > 0)
                   IconButton(
                     icon: Badge(
-                      label: Text('${app.downloadsPending}'),
+                      label: Text('$pending'),
                       child: const Icon(Icons.downloading),
                     ),
                     tooltip: 'Downloads',
@@ -294,21 +323,24 @@ class _Rail extends StatelessWidget {
         }
         app.setHomeTab(i);
       },
+      // Named on hover, since the name is not written under the icon any more: a
+      // rail of bare pictures is fine once you know it and unkind on the first day.
       destinations: const [
         NavigationRailDestination(
-            icon: Icon(Icons.queue_music_outlined),
+            icon: Tooltip(message: 'Queues', child: Icon(Icons.queue_music_outlined)),
             selectedIcon: Icon(Icons.queue_music),
             label: Text('Queues')),
         NavigationRailDestination(
-            icon: Icon(Icons.search),
+            icon: Tooltip(message: 'Search', child: Icon(Icons.search)),
             selectedIcon: Icon(Icons.search),
             label: Text('Search')),
         NavigationRailDestination(
-            icon: Icon(Icons.library_music_outlined),
+            icon: Tooltip(
+                message: 'Library', child: Icon(Icons.library_music_outlined)),
             selectedIcon: Icon(Icons.library_music),
             label: Text('Library')),
         NavigationRailDestination(
-            icon: Icon(Icons.people_outline),
+            icon: Tooltip(message: 'People', child: Icon(Icons.people_outline)),
             selectedIcon: Icon(Icons.people),
             label: Text('People')),
       ],
@@ -358,7 +390,10 @@ class _TabRoot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final app = context.watch<AppState>();
+    final app = context.read<AppState>();
+    final jamming = context.select<AppState, String?>((a) => a.jam?.code);
+    final pending = context.select<AppState, int>((a) => a.downloadsPending);
+    final offline = context.select<AppState, bool>((a) => !a.ingestOnline);
     return Scaffold(
       backgroundColor: Colors.transparent,
       extendBody: true,
@@ -373,17 +408,17 @@ class _TabRoot extends StatelessWidget {
               tooltip: 'Refresh',
             ),
             IconButton(
-              icon: Icon(app.jam == null ? Icons.podcasts_outlined : Icons.podcasts,
+              icon: Icon(jamming == null ? Icons.podcasts_outlined : Icons.podcasts,
                   color:
-                      app.jam == null ? null : Theme.of(context).colorScheme.primary),
-              tooltip: app.jam == null ? 'Listen together' : 'Jam · ${app.jam!.code}',
+                      jamming == null ? null : Theme.of(context).colorScheme.primary),
+              tooltip: jamming == null ? 'Listen together' : 'Jam · $jamming',
               onPressed: () => showJam(context),
             ),
           ],
-          if (!Width.of(context).hasRail && app.downloadsPending > 0)
+          if (!Width.of(context).hasRail && pending > 0)
             IconButton(
               icon: Badge(
-                label: Text('${app.downloadsPending}'),
+                label: Text('$pending'),
                 child: const Icon(Icons.downloading),
               ),
               tooltip: 'Downloads',
@@ -403,11 +438,11 @@ class _TabRoot extends StatelessWidget {
         children: [
           // Under the bar, above the tab: the same place it has always been, which is
           // now inside the tab because the bar is.
-          if (!app.ingestOnline && app.downloadsPending > 0)
+          if (offline && pending > 0)
             InkWell(
               onTap: () => Navigator.of(context)
                   .push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
-              child: _OfflineBanner(pending: app.downloadsPending),
+              child: _OfflineBanner(pending: pending),
             ),
           Expanded(
             child: pane == null
@@ -426,19 +461,28 @@ class _SideBySide extends StatelessWidget {
   final GlobalKey<NavigatorState> pane;
   final Widget list;
 
-  /// Wide enough for a playlist's name and the menu at the end of its row, narrow
-  /// enough that what you opened is the bigger half.
-  static const listWidth = 330.0;
-
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final app = context.read<AppState>();
+    // Wide enough for a playlist's name and the menu at the end of its row, narrow
+    // enough that what you opened is the bigger half — and then whatever the person
+    // using it decides, because that is a matter of their screen and their playlists.
+    final room = MediaQuery.sizeOf(context).width;
+    final listWidth = context
+        .select<AppState, double>((a) => a.paneWidth)
+        .clamp(240.0, (room * 0.5).clamp(240.0, 560.0));
     return PaneScope(
       pane: pane,
       child: Row(
         children: [
           SizedBox(width: listWidth, child: list),
-          VerticalDivider(width: 1, color: scheme.outlineVariant),
+          Grabbable(
+            width: listWidth,
+            min: 240,
+            max: (room * 0.5).clamp(240.0, 560.0),
+            onChanged: (w) => app.setPaneWidth(w),
+            onSettled: (w) => app.setPaneWidth(w, remember: true),
+          ),
           Expanded(
             child: Navigator(
               key: pane,
