@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
+import logging
 
 import time
 
 from . import db
+
+log = logging.getLogger("muse.jobs")
 
 LEASE_SECONDS = 600
 MAX_ATTEMPTS = 3
@@ -191,12 +194,62 @@ def promote_run(track_ids: list[int], priority: int = PRIORITY_NOW) -> int:
     return promoted
 
 
+# Whether downloads are paused, and when that was last asked.
+#
+# It is read on every lease, and a worker that is waiting for work leases four times a
+# second for as long as it is idle — which on this box has been about a million and a
+# half reads of a three-row table. The answer changes when somebody presses a button,
+# so a second of staleness is a second of a download not starting, and the query is a
+# second of a worker asking a question nobody has changed the answer to.
+_paused: tuple[bool, float] = (False, 0.0)
+PAUSE_TTL = 1.0
+
+
 def paused() -> bool:
+    known, at = _paused
+    if time.monotonic() - at < PAUSE_TTL:
+        return known
     row = db.one("select value from settings where key='downloads_paused'")
-    return bool(row and row["value"] == "1")
+    now = bool(row and row["value"] == "1")
+    _remember_paused(now)
+    return now
+
+
+def _remember_paused(value: bool) -> None:
+    global _paused
+    _paused = (value, time.monotonic())
+
+
+# How long a finished job is worth keeping.
+#
+# Long enough to answer "what happened to that album I added last week" from the
+# downloads screen, and no longer: fifty thousand done and cancelled rows were the
+# biggest table in the database, twenty-one megabytes of work nobody will read again.
+# Failures are kept longer, because a failure is a thing somebody may still want to
+# look at and there are three hundred of them rather than fifty thousand.
+KEEP_DONE_DAYS = 14
+KEEP_FAILED_DAYS = 90
+
+
+def prune() -> int:
+    """Forget finished work. Answers how many rows went."""
+    with db.pool().connection() as c:
+        gone = c.execute(
+            f"""delete from jobs
+                 where (state in ('done','cancelled')
+                        and updated_at
+                            < now() - interval '{KEEP_DONE_DAYS} days')
+                    or (state = 'failed'
+                        and updated_at
+                            < now() - interval '{KEEP_FAILED_DAYS} days')""").rowcount
+    if gone:
+        log.info("pruned %s finished jobs", gone)
+    return gone
 
 
 def set_paused(value: bool) -> None:
+    # Pressing the button is the one moment the cached answer is certainly wrong.
+    _remember_paused(value)
     db.run(
         """insert into settings(key, value, set_at) values('downloads_paused',%s,now())
            on conflict (key) do update set value=excluded.value, set_at=now()""",

@@ -51,6 +51,13 @@ jobs:
           cache: pip
           cache-dependency-path: server/requirements.txt
 
+      # The same tool the server itself needs: uploads are read for their tags,
+      # measured for loudness and transcoded when the codec is not one an iPhone will
+      # play, and every one of those is ffmpeg. Thirteen tests said so on the first run
+      # of this workflow.
+      - name: Install ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
       - name: Install what the server needs
         working-directory: server
         run: |

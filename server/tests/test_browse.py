@@ -227,6 +227,52 @@ def test_stats_can_be_asked_about_a_stretch_or_about_somebody_else(client, hdr,
                       params={"who": 9999}).status_code == 404
 
 
+def test_taking_a_record_with_you(client, hdr, library, monkeypatch):
+    """Most of this library has never been downloaded, because a mirrored collection
+    records the list and leaves the files until something is played. A playlist could
+    ask for all of it; a record could not."""
+    from muse import jobs
+
+    asked = []
+    monkeypatch.setattr(jobs, "queue",
+                        lambda tid, **kw: asked.append(tid) or True)
+    db.run("update tracks set state='pending' where album='Low'")
+
+    out = client.post("/library/fetch", headers=hdr,
+                      json={"album": "Low", "artist": "Bowie"}).json()
+    assert out["queued"] == 2, 'the two Bowie songs on it, not the other act\'s'
+    assert len(asked) == 2
+    assert out["about_mb"] >= 0
+
+    # Twice is not twice the queue: the second press finds them already on their way.
+    db.run("""insert into jobs(kind,payload,state)
+              select 'ingest', jsonb_build_object('track_id', id), 'pending'
+                from tracks where album='Low' and %s""", (True,))
+    asked.clear()
+    again = client.post("/library/fetch", headers=hdr,
+                        json={"album": "Low", "artist": "Bowie"}).json()
+    assert again["queued"] == 0 and asked == []
+
+
+def test_fetching_an_artist_or_a_handful_of_rows(client, hdr, library, monkeypatch):
+    from muse import jobs
+
+    asked = []
+    monkeypatch.setattr(jobs, "queue", lambda tid, **kw: asked.append(tid) or True)
+    db.run("update tracks set state='pending'")
+
+    by_artist = client.post("/library/fetch", headers=hdr,
+                            json={"artist": "eno"}).json()
+    assert by_artist["queued"] == 2, 'a feature is still an appearance'
+
+    asked.clear()
+    picked = client.post("/library/fetch", headers=hdr,
+                         json={"track_ids": [library[0]]}).json()
+    assert picked["queued"] == 1 and asked == [library[0]]
+
+    assert client.post("/library/fetch", headers=hdr, json={}).status_code == 400
+
+
 def test_history_carries_timestamps_and_can_be_cleared(client, hdr, library):
     client.post("/listens", headers=hdr,
                 json={"track_id": library[0], "ms_played": 30_000, "completed": True})

@@ -29,6 +29,29 @@ def queued(client, hdr):
     return tracks
 
 
+
+def test_finished_work_does_not_pile_up_for_ever(client, hdr):
+    """Fifty thousand done and cancelled rows were the biggest table in the database:
+    twenty-one megabytes of work nobody will read again. Failures are kept longer,
+    because a failure is a thing somebody may still want to look at."""
+    from muse import jobs
+
+    old_done = jobs.enqueue("meta", {"track_id": 1})
+    old_failed = jobs.enqueue("meta", {"track_id": 2})
+    recent = jobs.enqueue("meta", {"track_id": 3})
+    db.run("update jobs set state='done', updated_at=now() - interval '30 days' "
+           "where id=%s", (old_done,))
+    db.run("update jobs set state='failed', updated_at=now() - interval '30 days' "
+           "where id=%s", (old_failed,))
+    db.run("update jobs set state='done', updated_at=now() - interval '2 days' "
+           "where id=%s", (recent,))
+
+    assert jobs.prune() == 1, 'only the one nobody will read again'
+    left = {r["id"] for r in db.all_("select id from jobs")}
+    assert old_done not in left
+    assert old_failed in left, 'a failure is worth keeping for a while'
+    assert recent in left, 'and so is last week'
+
 def test_the_overview_answers_everything_in_one_request(client, hdr, queued):
     d = client.get("/downloads", headers=hdr).json()
     assert d["counts"]["waiting"] == 13

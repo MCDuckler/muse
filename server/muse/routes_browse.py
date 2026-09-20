@@ -228,6 +228,70 @@ def artist_tracks(artist: str, user: dict = Depends(current_user)):
     return {"items": [catalog.public(t) for t in rows]}
 
 
+@router.post("/fetch")
+def fetch(body: dict = Body(default={}), user: dict = Depends(current_user)):
+    """Get the audio for a set of songs that have none yet.
+
+    Most of this library has never been downloaded — eighteen thousand of twenty-two
+    thousand rows are a name and a place to get it from — because a mirrored collection
+    records the list and leaves the files until something is played. A playlist could
+    already ask for all of it; a record, an artist and a handful of rows picked out of
+    a list could not, which meant "take this album on the train" was a matter of playing
+    each song for a second.
+
+    Answers with what it queued and roughly what that will cost, because a thousand
+    songs is four gigabytes and somebody about to leave the house should be told.
+    """
+    ids = [int(i) for i in (body.get("track_ids") or [])][:2000]
+    album = (body.get("album") or "").strip()
+    artist = (body.get("artist") or "").strip()
+
+    if album:
+        where, params = "where t.album = %s", (user["id"], album)
+        if artist:
+            where += " and coalesce(t.artists[1],'') = %s"
+            params += (artist,)
+        ids = [r["id"] for r in db.all_(f"select t.id {_MINE} {where}", params)]
+    elif artist:
+        ids = [r["id"] for r in db.all_(
+            f"select t.id {_MINE} where {ONE_ARTIST}", (user["id"], artist))]
+    if not ids:
+        raise HTTPException(400, "nothing to fetch: give track_ids, an album or an artist")
+
+    # Only the ones that need it, and not the ones already on their way: pressing this
+    # twice should not double the queue.
+    waiting = db.all_(
+        """select id, duration_ms from tracks
+            where id = any(%s) and state in ('pending','failed')
+              and not exists (select 1 from jobs j
+                               where j.kind in ('ingest','ingest_direct')
+                                 and (j.payload->>'track_id')::int = tracks.id
+                                 and (j.state='pending'
+                                      or (j.state='leased' and j.leased_until > now())))""",
+        (ids,))
+
+    queued = unfetchable = 0
+    minutes = 0
+    label = album or artist or "Picked songs"
+    for row in waiting:
+        db.run("""update tracks set state='pending', fail_reason=null, fail_code=null
+                   where id=%s and state='failed'""", (row["id"],))
+        if jobs.queue(row["id"], priority=jobs.PRIORITY_BULK,
+                      batch_id=f"fetch:{label}", batch_label=label):
+            queued += 1
+            minutes += (row["duration_ms"] or 0) / 60_000
+        else:
+            unfetchable += 1
+            db.run("""update tracks set state='failed',
+                             fail_reason='There is nowhere left to fetch this from',
+                             fail_code='no_source' where id=%s""", (row["id"],))
+    # About a megabyte a minute at the bitrate everything here is kept in. A number
+    # somebody can act on beats a number that is exactly right.
+    return {"queued": queued, "unfetchable": unfetchable,
+            "already_here": len(ids) - len(waiting),
+            "about_mb": round(minutes * 0.94)}
+
+
 # ------------------------------------------------------------------ what was played
 #
 # Every play is already written down, one row per listen, and until now the only thing

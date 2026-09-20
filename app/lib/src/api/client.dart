@@ -1210,6 +1210,28 @@ class ApiClient {
       await _decode(await net.patch(_u('/devices/$deviceId'),
           headers: _headers, body: jsonEncode({'name': name})));
 
+  /// Get the audio for songs that have none yet: a record, an artist, or a handful of
+  /// rows picked out of a list.
+  Future<({int queued, int unfetchable, int alreadyHere, int aboutMb})> fetchAudio({
+    List<int>? trackIds,
+    String? album,
+    String? artist,
+  }) async {
+    final d = await _decode(await net.post(_u('/library/fetch'),
+        headers: _headers,
+        body: jsonEncode({
+          if (trackIds != null) 'track_ids': trackIds,
+          if (album != null) 'album': album,
+          if (artist != null) 'artist': artist,
+        }))) as Map<String, dynamic>;
+    return (
+      queued: (d['queued'] ?? 0) as int,
+      unfetchable: (d['unfetchable'] ?? 0) as int,
+      alreadyHere: (d['already_here'] ?? 0) as int,
+      aboutMb: (d['about_mb'] ?? 0) as int,
+    );
+  }
+
   Future<List<PlayedTrack>> playHistory() async {
     final d = await _decode(await net.get(_u('/library/history'), headers: _headers))
         as Map<String, dynamic>;

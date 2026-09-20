@@ -36,8 +36,23 @@ class EnrichWorker:
     def stop(self) -> None:
         self._stop.set()
 
+    # Housekeeping rides along with this loop rather than getting a thread of its own:
+    # it is one statement a day, and this is the thread that is already awake and doing
+    # nothing most of the time.
+    _swept = 0.0
+
+    def _sweep(self) -> None:
+        if time.monotonic() - self._swept < 86_400:
+            return
+        self._swept = time.monotonic()
+        try:
+            jobs.prune()
+        except Exception as e:                        # noqa: BLE001
+            log.warning("could not prune finished jobs: %s", e)
+
     def _run(self) -> None:
         while not self._stop.is_set():
+            self._sweep()
             try:
                 leased = jobs.lease(self.name, kind="meta", limit=1)
             except Exception as e:                     # database restarting, say

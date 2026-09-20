@@ -21,6 +21,63 @@ import 'track_menu.dart';
 import 'widths.dart';
 import 'snack.dart';
 
+/// Getting the audio for everything here.
+///
+/// Most of this library has never been downloaded: a mirrored collection records the
+/// list and leaves the files until something is played, which is right until the
+/// moment somebody is about to get on a train. A playlist could already ask for all of
+/// it; a record and an artist could not, and doing it by hand meant playing every song
+/// for a second each.
+class _TakeItWithYou extends StatefulWidget {
+  const _TakeItWithYou({this.album, this.artist});
+  final String? album;
+  final String? artist;
+
+  @override
+  State<_TakeItWithYou> createState() => _TakeItWithYouState();
+}
+
+class _TakeItWithYouState extends State<_TakeItWithYou> {
+  bool _asking = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      icon: _asking
+          ? const SizedBox(
+              width: 18, height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2))
+          : const Icon(Icons.download_outlined),
+      tooltip: widget.album == null
+          ? 'Get everything by this artist'
+          : 'Get this record',
+      onPressed: _asking ? null : _ask,
+    );
+  }
+
+  Future<void> _ask() async {
+    final app = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _asking = true);
+    try {
+      final got = await app.api
+          .fetchAudio(album: widget.album, artist: widget.artist);
+      messenger.say(snack(Text(switch (got.queued) {
+        0 when got.alreadyHere > 0 => 'All of it is already here',
+        0 => 'Nothing here can be fetched',
+        // The size is the part somebody about to leave the house needs: a thousand
+        // songs is four gigabytes.
+        _ => '${got.queued} on the way · about ${got.aboutMb} MB'
+            '${got.unfetchable == 0 ? '' : ' · ${got.unfetchable} cannot be fetched'}',
+      })));
+    } catch (e) {
+      messenger.say(problem(e));
+    } finally {
+      if (mounted) setState(() => _asking = false);
+    }
+  }
+}
+
 /// Narrowing a list that is thousands long, and saying what order it is in.
 ///
 /// Ten thousand records and nine thousand artists cannot be scrolled through, and a
@@ -432,7 +489,14 @@ class _AlbumPageState extends State<AlbumPage> {
   @override
   Widget build(BuildContext context) {
     return PlayerScaffold(
-      appBar: AppBar(title: Text(widget.album?.name ?? widget.title ?? 'Album')),
+      appBar: AppBar(
+        title: Text(widget.album?.name ?? widget.title ?? 'Album'),
+        actions: [
+          if (widget.album != null)
+            _TakeItWithYou(
+                album: widget.album!.name, artist: widget.album!.artist),
+        ],
+      ),
       body: FutureBuilder<AlbumDetail>(
         future: _future,
         builder: (context, snap) {
@@ -914,7 +978,10 @@ class _ArtistPageState extends State<ArtistPage> {
   @override
   Widget build(BuildContext context) {
     return PlayerScaffold(
-      appBar: AppBar(title: Text(widget.artist.name)),
+      appBar: AppBar(
+        title: Text(widget.artist.name),
+        actions: [_TakeItWithYou(artist: widget.artist.name)],
+      ),
       body: FutureBuilder<ArtistDetail>(
         future: _future,
         builder: (context, snap) {
