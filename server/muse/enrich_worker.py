@@ -47,8 +47,9 @@ class EnrichWorker:
         self._swept = time.monotonic()
         try:
             jobs.prune()
+            jobs.reap()
         except Exception as e:                        # noqa: BLE001
-            log.warning("could not prune finished jobs: %s", e)
+            log.warning("could not tidy the job table: %s", e)
 
     def _run(self) -> None:
         while not self._stop.is_set():

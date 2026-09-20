@@ -247,6 +247,31 @@ def prune() -> int:
     return gone
 
 
+def reap() -> int:
+    """Write off work that died holding its last lease.
+
+    A worker that stops mid-job leaves the row leased; the next lease picks it up again
+    because the lease has expired — unless the job had already used its last attempt,
+    in which case nothing will ever look at it again. It is not pending, so no worker
+    takes it; it is not failed, so nothing tells anybody; it simply sits there leased
+    by a process that died in September. Three of them were, which is how this was
+    found.
+    """
+    with db.pool().connection() as c:
+        gone = c.execute(
+            """update jobs
+                  set state='failed', leased_by=null, leased_until=null,
+                      error=coalesce(error,
+                          'the worker stopped while this was running, and it had no '
+                          'attempts left'),
+                      updated_at=now()
+                where state='leased' and leased_until < now() and attempts >= %s""",
+            (MAX_ATTEMPTS,)).rowcount
+    if gone:
+        log.info("wrote off %s jobs whose worker never came back", gone)
+    return gone
+
+
 def set_paused(value: bool) -> None:
     # Pressing the button is the one moment the cached answer is certainly wrong.
     _remember_paused(value)

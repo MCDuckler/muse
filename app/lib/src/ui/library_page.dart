@@ -413,6 +413,9 @@ class _PlaylistPageState extends State<PlaylistPage> {
       body: FutureBuilder<Playlist>(
         future: _future,
         builder: (context, snap) {
+          // A playlist that will not load used to spin for ever: the one loader in the
+          // app with no answer for a server that said no.
+          if (snap.hasError) return ErrorRetry(error: snap.error!, onRetry: _reload);
           if (!snap.hasData) {
             return const Center(child: CircularProgressIndicator());
           }

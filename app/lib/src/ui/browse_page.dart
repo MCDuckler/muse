@@ -197,14 +197,23 @@ class _AllTracksPageState extends State<AllTracksPage> {
   };
 
   String _sort = 'added';
+
+  /// Whether to show only the songs whose audio is actually here.
+  ///
+  /// Most of this library has never been downloaded — a mirror records the list and
+  /// leaves the files until something is played — so "everything" is mostly things
+  /// that need a working connection and a minute. On a train that is the wrong list.
+  bool _playable = false;
+
   late Paged<Track> _tracks = _pager();
 
   Paged<Track> _pager() {
     final api = context.read<AppState>().api;
     final sort = _sort;
+    final ready = _playable;
     return Paged<Track>(
-      fetch: (offset, limit) =>
-          api.libraryTracks(sort: sort, offset: offset, limit: limit),
+      fetch: (offset, limit) => api.libraryTracks(
+          sort: sort, offset: offset, limit: limit, readyOnly: ready),
     )..next();
   }
 
@@ -226,6 +235,16 @@ class _AllTracksPageState extends State<AllTracksPage> {
       appBar: AppBar(
         title: const Text('All tracks'),
         actions: [
+          IconButton(
+            icon: Icon(_playable ? Icons.offline_pin : Icons.offline_pin_outlined),
+            tooltip: _playable
+                ? 'Showing only what can play now'
+                : 'Only what can play now',
+            onPressed: () {
+              _playable = !_playable;
+              _load();
+            },
+          ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.sort),
             tooltip: 'Sort',
@@ -256,8 +275,11 @@ class _AllTracksPageState extends State<AllTracksPage> {
               tracks: _tracks.items,
               selectable: 'library',
               named: 'All tracks',
-              header: '${_tracks.total} in your library · '
-                  '${_sorts[_sort]!.toLowerCase()}',
+              header: _playable
+                  ? '${_tracks.total} ready to play · '
+                      '${_sorts[_sort]!.toLowerCase()}'
+                  : '${_tracks.total} in your library · '
+                      '${_sorts[_sort]!.toLowerCase()}',
               onEndReached: _tracks.next,
               loadingMore: _tracks.loading,
             ),

@@ -30,6 +30,32 @@ def queued(client, hdr):
 
 
 
+def test_work_that_died_holding_its_last_lease_is_written_off(client, hdr):
+    """It is not pending, so no worker takes it; it is not failed, so nothing tells
+    anybody; it sits there leased by a process that died a fortnight ago. Three of them
+    were on the live box, which is how this was found."""
+    from muse import jobs
+
+    stuck = jobs.enqueue("ingest", {"track_id": 1})
+    trying = jobs.enqueue("ingest", {"track_id": 2})
+    db.run("""update jobs set state='leased', leased_by='a worker that died',
+                     leased_until=now() - interval '1 hour', attempts=%s
+               where id=%s""", (jobs.MAX_ATTEMPTS, stuck))
+    # One that still has an attempt left is not written off: the next lease takes it.
+    db.run("""update jobs set state='leased', leased_by='a worker that died',
+                     leased_until=now() - interval '1 hour', attempts=1
+               where id=%s""", (trying,))
+
+    assert jobs.reap() == 1
+    assert db.one("select state, error from jobs where id=%s", (stuck,))["state"] \
+        == 'failed'
+    assert 'no attempts left' in db.one(
+        "select error from jobs where id=%s", (stuck,))["error"]
+    assert db.one("select state from jobs where id=%s", (trying,))["state"] == 'leased'
+    assert jobs.lease("somebody", kind="ingest")[0]["id"] == trying, \
+        'and the one with an attempt left is picked up again'
+
+
 def test_finished_work_does_not_pile_up_for_ever(client, hdr):
     """Fifty thousand done and cancelled rows were the biggest table in the database:
     twenty-one megabytes of work nobody will read again. Failures are kept longer,
