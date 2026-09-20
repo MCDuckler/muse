@@ -14,10 +14,14 @@ REPO=${MUSE_REPO:-MCDuckler/muse}
 
 command -v gh >/dev/null || { echo "gh is how the build is asked for" >&2; exit 2; }
 
-# What is on this machine has to be what GitHub will build.
-[ -z "$(git status --porcelain -- app server)" ] || {
-  echo "uncommitted changes in app/ or server/ — commit them first" >&2
-  git status --short -- app server >&2
+# What is on this machine has to be what GitHub will build — of the things that end up
+# inside an ipa. An Android signing config left modified in the tree says nothing about
+# an iPhone build, and a check that refuses to work for reasons that cannot matter is a
+# check people learn to skip.
+watched=(app/lib app/ios app/pubspec.yaml app/pubspec.lock)
+[ -z "$(git status --porcelain -- "${watched[@]}")" ] || {
+  echo "uncommitted changes in what the iPhone build is made of — commit them first" >&2
+  git status --short -- "${watched[@]}" >&2
   exit 1
 }
 git fetch -q origin
