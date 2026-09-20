@@ -13,6 +13,7 @@ import '../state/playback_log.dart';
 import '../state/player.dart';
 import 'artwork.dart';
 import 'back_and_forth.dart';
+import 'devices_sheet.dart';
 import 'dialogs.dart';
 import 'feel.dart';
 import 'glass.dart';
@@ -897,6 +898,10 @@ class _Extras extends StatelessWidget {
             onPressed: () =>
                 showTrackSheet(context, track, onChanged: app.refresh),
           ),
+          // Which of your devices the sound is coming out of. Beside the transport
+          // because that is what it is about, and because the question it answers —
+          // "why is nothing coming out of this laptop" — is asked while looking at it.
+          const WhereItPlays(compact: true),
           const Spacer(),
           _RepeatButton(app: app, size: size),
           IconButton(
@@ -1263,6 +1268,7 @@ class DeskNowPlaying extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: text.titleSmall),
               ),
+              const WhereItPlays(compact: true),
               IconButton(
                 icon: const Icon(Icons.open_in_full, size: 18),
                 tooltip: 'Open the player',

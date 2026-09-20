@@ -24,7 +24,7 @@ from . import (
                jam, routes_accounts, routes_browse, routes_downloads, routes_files,
                routes_follows, routes_jam, routes_marks,
                routes_library, routes_linked, routes_play, routes_search,
-               routes_social,
+               routes_devices, routes_social,
                routes_sources,
                routes_spotify,
                routes_sync, sleeve,
@@ -35,18 +35,24 @@ from .deps import current_user, worker_auth
 cfg: config.Config = None  # set in create_app
 
 # ---- in-process event bus (single API process for now; Postgres LISTEN when it grows) ----
-_subscribers: set[asyncio.Queue] = set()
+#
+# Every listener is somebody's: told apart because an event can now be addressed. Most
+# of them are not — a track finishing downloading is news to everybody on the box —
+# but telling one of your own devices to start playing is not, and neither is the fact
+# that it is playing at all.
+_subscribers: set[tuple[int, asyncio.Queue]] = set()
 _loop: asyncio.AbstractEventLoop | None = None
 
 
-def publish(event: str, data: dict) -> None:
+def publish(event: str, data: dict, to_user: int | None = None) -> None:
     if _loop is None:
         return
     payload = f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
     def _fan_out():
-        for q in list(_subscribers):
-            q.put_nowait(payload)
+        for who, q in list(_subscribers):
+            if to_user is None or who == to_user:
+                q.put_nowait(payload)
 
     _loop.call_soon_threadsafe(_fan_out)
 
@@ -449,7 +455,8 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     @app.get("/events")
     async def events(user: dict = Depends(current_user)):
         q: asyncio.Queue = asyncio.Queue()
-        _subscribers.add(q)
+        who = (user["id"], q)
+        _subscribers.add(who)
 
         async def gen():
             try:
@@ -460,7 +467,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
                     except asyncio.TimeoutError:
                         yield ": keepalive\n\n"
             finally:
-                _subscribers.discard(q)
+                _subscribers.discard(who)
 
         return StreamingResponse(gen(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
@@ -639,6 +646,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
 
     app.include_router(routes_accounts.router)
     app.include_router(routes_browse.router)
+    app.include_router(routes_devices.router)
     app.include_router(routes_downloads.router)
     routes_jam.set_publisher(publish)
     routes_library.set_publisher(publish)

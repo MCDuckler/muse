@@ -1164,6 +1164,52 @@ class ApiClient {
     return Listening.fromJson(d);
   }
 
+  // ---------------- the devices this account listens on ----------------
+  Future<({List<DeviceInfo> devices, int? thisOne})> devices() async {
+    final d = await _decode(await net.get(_u('/devices'), headers: _headers))
+        as Map<String, dynamic>;
+    return (
+      devices: (d['devices'] as List)
+          .map((e) => DeviceInfo.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      thisOne: d['this'] as int?,
+    );
+  }
+
+  /// This device, saying what it is doing. Everything any other screen shows about it
+  /// comes from here, so it is the only thing that writes it.
+  Future<void> reportDevice({
+    required bool playing,
+    int? trackId,
+    int? queueId,
+    int positionMs = 0,
+    String? kind,
+  }) async =>
+      await _decode(await net.post(_u('/devices/state'),
+          headers: _headers,
+          body: jsonEncode({
+            'playing': playing,
+            'track_id': trackId,
+            'queue_id': queueId,
+            'position_ms': positionMs,
+            if (kind != null) 'kind': kind,
+          })));
+
+  Future<void> deviceCommand(int deviceId, String action,
+          {int? queueId, int? trackId, int? positionMs}) async =>
+      await _decode(await net.post(_u('/devices/$deviceId/command'),
+          headers: _headers,
+          body: jsonEncode({
+            'action': action,
+            if (queueId != null) 'queue_id': queueId,
+            if (trackId != null) 'track_id': trackId,
+            if (positionMs != null) 'position_ms': positionMs,
+          })));
+
+  Future<void> renameDevice(int deviceId, String name) async =>
+      await _decode(await net.patch(_u('/devices/$deviceId'),
+          headers: _headers, body: jsonEncode({'name': name})));
+
   Future<List<PlayedTrack>> playHistory() async {
     final d = await _decode(await net.get(_u('/library/history'), headers: _headers))
         as Map<String, dynamic>;

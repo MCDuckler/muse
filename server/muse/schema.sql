@@ -323,6 +323,22 @@ create table if not exists jam_skip_votes (
 -- Who put this on. In a jam that is the difference between a queue and an argument.
 alter table queue_items add column if not exists added_by int references users(id);
 
+-- What each device is doing, so the others can say so and take over from it.
+--
+-- One account, several devices — a phone, a browser at a desk, a tablet on a shelf —
+-- and until now they only shared a queue: two of them could play the same music at
+-- once, each unaware of the other, and moving from one to the other meant finding your
+-- place again by hand. These few columns are what a device says about itself, and they
+-- are what makes "play this here instead" a thing the app can offer.
+alter table devices add column if not exists kind text;
+alter table devices add column if not exists playing boolean not null default false;
+alter table devices add column if not exists track_id int
+      references tracks(id) on delete set null;
+alter table devices add column if not exists queue_id int
+      references queues(id) on delete set null;
+alter table devices add column if not exists position_ms int not null default 0;
+alter table devices add column if not exists state_at timestamptz;
+
 -- A name for the row itself.
 --
 -- A queue can hold the same song twice, and a row was only ever identified by its

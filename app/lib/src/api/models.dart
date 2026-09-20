@@ -437,6 +437,63 @@ class NowPlaying {
       );
 }
 
+/// One of the things this account listens on.
+class DeviceInfo {
+  const DeviceInfo({
+    required this.id,
+    required this.name,
+    this.platform,
+    this.kind,
+    this.isThis = false,
+    this.live = false,
+    this.playing = false,
+    this.positionMs = 0,
+    this.queue,
+    this.queueId,
+    this.track,
+    this.lastSeen,
+  });
+
+  final int id;
+  final String name;
+  final String? platform;
+  final String? kind;
+
+  /// Whether this is the device you are holding.
+  final bool isThis;
+
+  /// Whether it has said anything in the last minute. One that has not is still
+  /// listed — it is still yours — but it is not offering to play anything.
+  final bool live;
+  final bool playing;
+  final int positionMs;
+  final String? queue;
+  final int? queueId;
+  final Track? track;
+  final DateTime? lastSeen;
+
+  factory DeviceInfo.fromJson(Map<String, dynamic> j) => DeviceInfo(
+        id: (j['id'] ?? 0) as int,
+        name: (j['name'] ?? 'A device') as String,
+        platform: j['platform'] as String?,
+        kind: j['kind'] as String?,
+        isThis: (j['this'] ?? false) as bool,
+        live: (j['live'] ?? false) as bool,
+        playing: (j['playing'] ?? false) as bool,
+        positionMs: (j['position_ms'] ?? 0) as int,
+        queue: j['queue'] as String?,
+        queueId: j['queue_id'] as int?,
+        track: j['track'] is Map
+            ? Track.fromJson((j['track'] as Map).cast<String, dynamic>())
+            : null,
+        lastSeen: j['last_seen'] == null
+            ? null
+            : DateTime.tryParse('${j['last_seen']}')?.toLocal(),
+      );
+
+  Duration get at => Duration(milliseconds: positionMs);
+}
+
 /// Enough of somebody's jam to say it is happening and to get into it.
 class JamGlimpse {
   const JamGlimpse({required this.code, this.people = 0, this.since});

@@ -655,6 +655,12 @@ class AppState extends ChangeNotifier {
     // The room's heartbeat. Five seconds is short enough that nobody drifts audibly
     // within a song and long enough to be nothing on a phone's battery; it costs
     // nothing at all when this device is not hosting a jam.
+    // What this device is doing, for the others. Ten seconds while something is
+    // playing; the report itself keeps quiet when nothing is.
+    _deviceTimer?.cancel();
+    _deviceTimer =
+        Timer.periodic(const Duration(seconds: 10), (_) => reportDevice());
+    unawaited(refreshDevices());
     _jamTimer?.cancel();
     _jamTimer = Timer.periodic(const Duration(seconds: 5), (_) => pushJamState());
   }
@@ -1492,6 +1498,172 @@ class AppState extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------- guest → room
+  // ------------------------------------------------------------ several devices
+  //
+  // One account, several things to listen on. A device says what it is doing every few
+  // seconds while it plays and whenever that changes; the others read it, and any one
+  // of them can ask another to pause, to skip, or to take the music over from where it
+  // has got to. What none of them do is guess: everything a screen shows about another
+  // device is something that device said about itself.
+
+  /// Which device you are on, as the server knows it.
+  int? thisDevice;
+
+  /// Everything this account listens on, as of the last look.
+  List<DeviceInfo> devices = const [];
+
+  /// The device the music is meant to be coming out of, when it is not this one.
+  ///
+  /// Null means here. While it is set, the transport on this screen is a remote
+  /// control: play, pause, skip and seek are sent there rather than done here, which
+  /// is the whole point of picking another device.
+  int? playingOn;
+
+  bool get controllingAnother => playingOn != null && playingOn != thisDevice;
+
+  /// What that device is, for a screen that wants to say its name.
+  DeviceInfo? get elsewhere => controllingAnother
+      ? devices.where((d) => d.id == playingOn).firstOrNull
+      : null;
+
+  Timer? _deviceTimer;
+  DateTime _saidDevice = DateTime.fromMillisecondsSinceEpoch(0);
+
+  Future<void> refreshDevices() async {
+    try {
+      final got = await api.devices();
+      devices = got.devices;
+      thisDevice = got.thisOne ?? thisDevice;
+      // A device that stopped answering is not where the music is any more.
+      if (controllingAnother && (elsewhere == null || !elsewhere!.live)) {
+        playingOn = null;
+      }
+      notifyListeners();
+    } catch (_) {
+      // A list of devices is not worth a message on screen.
+    }
+  }
+
+  /// Say what this device is doing, so the others can show it and take it over.
+  ///
+  /// Called when something changes and every ten seconds while playing. Quiet
+  /// otherwise: a phone in a pocket with nothing playing has nothing to report.
+  Future<void> reportDevice({bool force = false}) async {
+    if (api.token == null) return;
+    final snapshot = player?.last;
+    final playing = snapshot?.playing ?? false;
+    final now = DateTime.now();
+    if (!force && now.difference(_saidDevice) < const Duration(seconds: 9)) return;
+    _saidDevice = now;
+    try {
+      await api.reportDevice(
+        playing: playing && !controllingAnother,
+        trackId: snapshot?.current?.id,
+        queueId: activeQueue?.id,
+        positionMs: (positionNow ?? snapshot?.position ?? Duration.zero)
+            .inMilliseconds,
+        kind: kIsWeb ? 'browser' : 'phone',
+      );
+    } catch (_) {
+      // Missing one of these costs a minute of staleness on somebody else's screen.
+    }
+  }
+
+  /// Move the music to one of your other devices, from exactly where it is.
+  ///
+  /// The device being handed to is told what to play and where to start; everything
+  /// else of yours is told to let go. Handing it back to *this* device is the same
+  /// conversation in reverse: it takes what the other one had and starts there.
+  Future<void> playOn(DeviceInfo device) async {
+    final snapshot = player?.last;
+    final here = device.id == thisDevice;
+    if (here) {
+      final from = elsewhere ?? devices.where((d) => d.playing).firstOrNull;
+      playingOn = null;
+      notifyListeners();
+      if (from != null && from.queueId != null) {
+        await openQueue(from.queueId!);
+        if (from.track != null) {
+          await player?.playTrack(from.track!.id);
+          await player?.seek(from.at);
+        }
+        // And whoever had it lets go, so the room is not playing two of the same song.
+        await api.deviceCommand(from.id, 'stop').catchError((_) {});
+      } else {
+        await player?.playPause();
+      }
+      await reportDevice(force: true);
+      return;
+    }
+
+    await api.deviceCommand(
+      device.id,
+      'take',
+      queueId: activeQueue?.id,
+      trackId: snapshot?.current?.id,
+      positionMs:
+          (positionNow ?? snapshot?.position ?? Duration.zero).inMilliseconds,
+    );
+    // Stop making a sound here the moment the other one is asked to start: two rooms
+    // playing the same song a second apart is worse than either of them.
+    await player?.pause();
+    playingOn = device.id;
+    notifyListeners();
+    await reportDevice(force: true);
+    await refreshDevices();
+  }
+
+  /// Something one of your other devices asked this one to do.
+  ///
+  /// Public so a test can be the other device: this is a protocol between two copies
+  /// of this app, and the half that receives is the half worth checking.
+  @visibleForTesting
+  Future<void> obey(Map<String, dynamic> order) async {
+    final to = order['to'] as int?;
+    final action = (order['action'] ?? '') as String;
+    if (action == 'yield') {
+      // Somebody else is taking the music. Everything except the one taking it stops.
+      if (order['except'] != thisDevice) {
+        await player?.pause();
+        playingOn = order['except'] as int?;
+        notifyListeners();
+      }
+      return;
+    }
+    if (to != thisDevice || thisDevice == null) return;
+
+    switch (action) {
+      case 'take':
+        playingOn = null;
+        final queueId = order['queue_id'] as int?;
+        if (queueId != null && queueId != activeQueue?.id) {
+          await openQueue(queueId);
+        }
+        final trackId = order['track_id'] as int?;
+        if (trackId != null) await player?.playTrack(trackId);
+        final at = order['position_ms'] as int?;
+        if (at != null && at > 0) {
+          await player?.seek(Duration(milliseconds: at));
+        }
+        await player?.resumeForJam();
+      case 'play':
+        playingOn = null;
+        await player?.resumeForJam();
+      case 'pause':
+      case 'stop':
+        await player?.pause();
+      case 'next':
+        await player?.next();
+      case 'previous':
+        await player?.previous();
+      case 'seek':
+        await player?.seek(
+            Duration(milliseconds: (order['position_ms'] ?? 0) as int));
+    }
+    notifyListeners();
+    await reportDevice(force: true);
+  }
+
   /// The transport, wherever it is pressed.
   ///
   /// In a jam a guest's play button is a request: the host's device is the clock, and
@@ -1502,26 +1674,55 @@ class AppState extends ChangeNotifier {
       await _ask(playing ? 'pause' : 'play');
       return;
     }
+    // The music is in another room: this is a remote control, and the button under
+    // the finger belongs to the device that is actually making the sound.
+    if (controllingAnother) {
+      return _tell((elsewhere?.playing ?? false) ? 'pause' : 'play');
+    }
     await player?.playPause();
     await pushJamState(force: true);
+    await reportDevice(force: true);
   }
 
   Future<void> skipNext() async {
     if (jamControlsTheRoom) return _ask('next');
+    if (controllingAnother) return _tell('next');
     await player?.next();
     await pushJamState(force: true);
+    await reportDevice(force: true);
   }
 
   Future<void> skipPrevious() async {
     if (jamControlsTheRoom) return _ask('previous');
+    if (controllingAnother) return _tell('previous');
     await player?.previous();
     await pushJamState(force: true);
+    await reportDevice(force: true);
   }
 
   Future<void> seekTo(Duration to) async {
     if (jamControlsTheRoom) return _ask('seek', positionMs: to.inMilliseconds);
+    if (controllingAnother) {
+      return _tell('seek', positionMs: to.inMilliseconds);
+    }
     await player?.seek(to);
     await pushJamState(force: true);
+    await reportDevice(force: true);
+  }
+
+  /// Pass one of these on to whichever device has the music.
+  Future<void> _tell(String action, {int? positionMs}) async {
+    final there = playingOn;
+    if (there == null) return;
+    try {
+      await api.deviceCommand(there, action, positionMs: positionMs);
+      // It will say what it did; this is so the screen does not sit still until then.
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      await refreshDevices();
+    } catch (e) {
+      error = '$e';
+      notifyListeners();
+    }
   }
 
   /// What went wrong last time somebody reached for the controls, if anything.
@@ -1861,6 +2062,12 @@ class AppState extends ChangeNotifier {
         }
       } else if (e.event == 'queue_changed') {
         await _onQueueChanged(e.data);
+      } else if (e.event == 'device_command') {
+        await obey(Map<String, dynamic>.from(e.data));
+      } else if (e.event == 'devices') {
+        // Somebody's state changed — usually whoever is playing. Cheap, and it is
+        // what keeps an open picker honest.
+        await refreshDevices();
       } else if (e.event == 'jam') {
         await _onJamEvent(e.data);
       } else if (e.event == 'sleeve_mark') {
@@ -1949,6 +2156,9 @@ class AppState extends ChangeNotifier {
         // Also on play and pause: a lockscreen showing a play button on something that
         // is playing is worse than no lockscreen control at all.
         _describeForTheOs(s.current, playing: s.playing);
+        // And the other devices of this account, so "where is it playing" is answered
+        // the moment it changes rather than at the next heartbeat.
+        unawaited(reportDevice(force: true));
       }
       final next = [
         s.current?.id,
