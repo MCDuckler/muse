@@ -101,7 +101,14 @@ class NowPlayingScreen extends StatelessWidget {
             // Where these live is a setting: the top corners are furthest from a
             // thumb, which is why they moved, but it is also the arrangement people
             // knew — so it is still here to choose.
-            actions: app.playerLayout == PlayerLayout.topBar && track != null
+            //
+            // Which device the sound comes out of is not one of them. It belongs to
+            // the screen rather than to the song, every arrangement needs it, and a
+            // button that exists in two of the four layouts is a button nobody can
+            // find — which is exactly what happened.
+            actions: [
+              const WhereItPlays(compact: true),
+              ...(app.playerLayout == PlayerLayout.topBar && track != null
                 ? [
                     IconButton(
                       icon: const Icon(Icons.lyrics_outlined),
@@ -122,7 +129,8 @@ class NowPlayingScreen extends StatelessWidget {
                           onChanged: app.refresh),
                     ),
                   ]
-                : const [],
+                : const <Widget>[]),
+            ],
           ),
           body: _CloseByHand(
             // Drag down to close, the gesture that dismisses a sheet anywhere else —

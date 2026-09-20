@@ -10,8 +10,14 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:muse/src/api/client.dart';
+import 'package:muse/src/api/models.dart';
 import 'package:muse/src/api/connection.dart';
 import 'package:muse/src/state/app_state.dart';
+
+import 'package:muse/src/state/selection.dart';
+import 'package:muse/src/ui/devices_sheet.dart';
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -123,6 +129,40 @@ void main() {
     await app.obey({'to': 2, 'action': 'pause'});
     expect(sent.where((r) => r.path == '/devices/state'), isEmpty,
         reason: 'nothing happened here, so there is nothing to report');
+  });
+
+  testWidgets('the button says where the music is, and opens the list',
+      (tester) async {
+    // A live PlayerService cannot be pumped in a widget test — it hangs the binding —
+    // so what is checked here is the button itself: that it names the device with the
+    // music rather than only offering to change it, which is the question somebody is
+    // asking when they go looking for it. Which arrangements of the player carry the
+    // button is now a matter of one place in the app bar rather than four rows.
+    await app.refreshDevices();
+    await app.playOn(app.devices[1]);
+
+    tester.view.physicalSize = const Size(420, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MultiProvider(
+      providers: [
+        ChangeNotifierProvider<AppState>.value(value: app),
+        ChangeNotifierProvider(create: (_) => Selection()),
+      ],
+      child: const MaterialApp(
+        home: Scaffold(body: Center(child: WhereItPlays())),
+      ),
+    ));
+    await tester.pump();
+
+    expect(tester.widget<IconButton>(find.byType(IconButton)).tooltip,
+        'Playing on The desk',
+        reason: 'the answer to "why is nothing coming out of this laptop"');
+
+    await tester.tap(find.byType(IconButton));
+    await tester.pumpAndSettle();
+    expect(find.text('Where it plays'), findsOneWidget);
+    expect(find.text('The desk'), findsWidgets);
   });
 
   test('a device that stops answering is not where the music is', () async {
