@@ -10,7 +10,6 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:muse/src/api/client.dart';
-import 'package:muse/src/api/models.dart';
 import 'package:muse/src/api/connection.dart';
 import 'package:muse/src/state/app_state.dart';
 

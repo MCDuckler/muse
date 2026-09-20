@@ -1,0 +1,88 @@
+# Both suites, on every push.
+#
+# Until now the only thing that ran anywhere but this laptop was the iPhone build, and
+# it runs the *app's* tests as a side effect of building it. The server's four hundred
+# and seventeen ran nowhere: a push that broke them was caught by whoever next ran
+# pytest by hand, which is a bad way to find out and no way at all to find out on a
+# branch.
+#
+# Ubuntu runners are free for public repositories and cheap for private ones — unlike
+# the macOS minutes the iPhone build spends, which is why that one is still asked for
+# rather than automatic.
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      # The tests talk to a real Postgres, because what they are checking is mostly
+      # SQL: a grouping, a window, an upsert, a cursor that counts rows rather than
+      # positions. A fake would be a second implementation of the thing under test.
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: muse
+          POSTGRES_DB: postgres
+          # No password, reachable only from this job's network namespace — the same
+          # arrangement the laptop's own test cluster uses.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        # 5433 because that is the port the tests look for: the laptop runs a portable
+        # cluster beside a system one, and the tests were written for it.
+        ports: ['5433:5432']
+        options: >-
+          --health-cmd "pg_isready -U muse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: server/requirements.txt
+
+      - name: Install what the server needs
+        working-directory: server
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run the tests
+        working-directory: server
+        run: python -m pytest tests -q
+
+  app:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Fetch packages
+        working-directory: app
+        run: flutter pub get
+
+      - name: Check it compiles cleanly
+        working-directory: app
+        # The tests too: a test that no longer compiles is a test that stopped being
+        # run, and that is exactly the failure this workflow exists to catch.
+        run: flutter analyze lib test
+
+      - name: Run the tests
+        working-directory: app
+        run: flutter test
