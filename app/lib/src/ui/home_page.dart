@@ -10,6 +10,8 @@ import 'feel.dart';
 import 'glass.dart';
 import 'motion.dart';
 import 'pane.dart';
+import '../api/models.dart';
+import 'browse_page.dart';
 import 'desk_dock.dart';
 import 'library_page.dart';
 import 'settings_page.dart';
@@ -63,6 +65,65 @@ class _HomePageState extends State<HomePage> {
     }
     final navigator = _tabs[tab].currentState;
     return navigator != null && await navigator.maybePop();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    // A link that opened this tab, now that there is something to open it with.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _followTheLink());
+  }
+
+  /// Open whatever the address bar was pointing at when the app started.
+  ///
+  /// /p/12 a playlist, /t/34 a song, /a/Low a record, /r/Bicep an artist. Anything
+  /// else is somebody's typo or an old link, and the app opens where it always does
+  /// rather than saying so: a link that no longer works should not be a wall.
+  Future<void> _followTheLink() async {
+    final app = context.read<AppState>();
+    final link = app.takeTheLink();
+    if (link == null || !mounted) return;
+    final bits = link.split('/').where((p) => p.isNotEmpty).toList();
+    if (bits.length < 2) return;
+    final what = bits[0];
+    final which = Uri.decodeComponent(bits.sublist(1).join('/'));
+
+    switch (what) {
+      case 'p':
+        final id = int.tryParse(which);
+        if (id == null) return;
+        app.setHomeTab(2);
+        final name = app.playlists
+            .where((p) => p.id == id)
+            .map((p) => p.name)
+            .firstOrNull;
+        _openInTab(2, (_) => PlaylistPage(playlistId: id, name: name ?? 'Playlist'));
+      case 't':
+        final id = int.tryParse(which);
+        if (id == null) return;
+        try {
+          await app.playNow([await app.api.track(id)]);
+        } catch (_) {
+          // A song that is gone, or a server that will not say. The app is open and
+          // that is enough.
+        }
+      case 'a':
+        app.setHomeTab(2);
+        _openInTab(
+            2,
+            (_) => AlbumPage(
+                album: AlbumSummary(name: which, artist: '', tracks: 0)));
+      case 'r':
+        app.setHomeTab(2);
+        _openInTab(2,
+            (_) => ArtistPage(artist: ArtistSummary(name: which, tracks: 0)));
+    }
+  }
+
+  void _openInTab(int tab, WidgetBuilder page) {
+    final navigator = _tabs[tab].currentState;
+    if (navigator == null) return;
+    navigator.push(MaterialPageRoute(builder: page));
   }
 
   @override

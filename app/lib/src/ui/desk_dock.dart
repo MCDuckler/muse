@@ -6,6 +6,7 @@ import '../state/app_state.dart';
 import '../state/player.dart';
 import 'artwork.dart';
 import 'now_playing.dart';
+import 'song_row.dart';
 
 /// The column beside the page: what is playing, and what is next.
 ///
@@ -173,6 +174,8 @@ class _NextUp extends StatelessWidget {
                             : text.bodyMedium),
                     subtitle: Text(row.track.artistLine,
                         maxLines: 1, overflow: TextOverflow.ellipsis),
+                    // The same mark as everywhere else: here, coming, not here yet.
+                    trailing: TrackMark(track: row.track),
                     onTap: () => player.playTrack(row.track.id,
                         indexHint: row.index - player.windowFrom),
                   );

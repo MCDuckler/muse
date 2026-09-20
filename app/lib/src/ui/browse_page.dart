@@ -514,9 +514,17 @@ class _AlbumPageState extends State<AlbumPage> {
       appBar: AppBar(
         title: Text(widget.album?.name ?? widget.title ?? 'Album'),
         actions: [
-          if (widget.album != null)
+          if (widget.album != null) ...[
+            IconButton(
+              icon: const Icon(Icons.link),
+              tooltip: 'Copy a link to this record',
+              onPressed: () => copyLink(
+                  context, '/a/${Uri.encodeComponent(widget.album!.name)}',
+                  widget.album!.name),
+            ),
             _TakeItWithYou(
                 album: widget.album!.name, artist: widget.album!.artist),
+          ],
         ],
       ),
       body: FutureBuilder<AlbumDetail>(
@@ -1002,7 +1010,15 @@ class _ArtistPageState extends State<ArtistPage> {
     return PlayerScaffold(
       appBar: AppBar(
         title: Text(widget.artist.name),
-        actions: [_TakeItWithYou(artist: widget.artist.name)],
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.link),
+            tooltip: 'Copy a link to this artist',
+            onPressed: () => copyLink(context,
+                '/r/${Uri.encodeComponent(widget.artist.name)}', widget.artist.name),
+          ),
+          _TakeItWithYou(artist: widget.artist.name),
+        ],
       ),
       body: FutureBuilder<ArtistDetail>(
         future: _future,

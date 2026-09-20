@@ -1232,6 +1232,14 @@ class ApiClient {
     );
   }
 
+  /// A playlist as a file something else can read. A URL rather than bytes: the
+  /// browser should save it the way it saves anything else.
+  String playlistExportUrl(int playlistId, {String format = 'm3u'}) {
+    final key = _streamKey;
+    final auth = key == null ? '' : '&k=${Uri.encodeQueryComponent(key)}';
+    return '$baseUrl/playlists/$playlistId/export?format=$format$auth';
+  }
+
   Future<List<PlayedTrack>> playHistory() async {
     final d = await _decode(await net.get(_u('/library/history'), headers: _headers))
         as Map<String, dynamic>;

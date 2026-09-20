@@ -14,6 +14,34 @@ def tracks(client, hdr):
 
 
 # ---------------- queues ----------------
+
+def test_a_playlist_can_leave_the_building(client, hdr, tracks):
+    """Everything about this library comes in — Spotify, YouTube Music, a folder of
+    files — and until now nothing went out, which makes it a place music arrives and
+    never leaves."""
+    made = client.post("/playlists", headers=hdr,
+                       json={"name": "Evening songs"}).json()
+    client.post(f"/playlists/{made['id']}/items", headers=hdr,
+                json={"track_ids": [t["id"] for t in tracks[:2]]})
+
+    m3u = client.get(f"/playlists/{made['id']}/export", headers=hdr)
+    assert m3u.status_code == 200
+    body = m3u.text
+    assert body.startswith("#EXTM3U")
+    assert "#PLAYLIST:Evening songs" in body
+    assert body.count("#EXTINF:") == 2
+    assert f"/tracks/{tracks[0]['id']}/stream" in body, \
+        'a playlist for this library, not a description of somebody else\'s files'
+    assert 'filename="Evening songs.m3u"' in m3u.headers["content-disposition"]
+
+    sheet = client.get(f"/playlists/{made['id']}/export", headers=hdr,
+                       params={"format": "csv"})
+    assert sheet.text.splitlines()[0] == "title,artist,album,seconds"
+    assert len(sheet.text.strip().splitlines()) == 3
+
+    assert client.get(f"/playlists/{made['id']}/export", headers=hdr,
+                      params={"format": "xml"}).status_code == 400
+
 def test_queues_are_named_and_separate(client, hdr, tracks):
     a = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
     b = client.post("/queues", headers=hdr, json={"name": "Sleep"}).json()

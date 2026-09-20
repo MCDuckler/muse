@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
@@ -350,6 +352,26 @@ class _PlaylistTick extends StatelessWidget {
 
 /// A failure with a way out. A blank area and a spinner that never resolves is the
 /// worst of the three things a failed load can look like.
+/// A link to something here, copied.
+///
+/// Everything in this app arrives from somewhere else and nothing ever leaves it: on
+/// a box four people share, with a People screen showing what everybody has on, there
+/// was no way to say "listen to this". A link is the smallest thing that fixes it —
+/// and because every one of those people signs in to the same server, the link is
+/// simply this server with a path on it: whoever opens it lands on the thing, signing
+/// in first if they have to.
+///
+/// Copied rather than handed to a share sheet: a share sheet is a plugin, a set of
+/// platform permissions and a different story on each of the three platforms, and a
+/// link on the clipboard works in all of them today.
+Future<void> copyLink(BuildContext context, String path, String what) async {
+  final app = context.read<AppState>();
+  final messenger = ScaffoldMessenger.of(context);
+  final link = '${app.api.baseUrl}$path';
+  await Clipboard.setData(ClipboardData(text: link));
+  messenger.say(snack(Text('Link to $what copied')));
+}
+
 class ErrorRetry extends StatelessWidget {
   const ErrorRetry({super.key, required this.error, required this.onRetry});
   final Object error;

@@ -69,6 +69,9 @@ Future<void> showTrackSheet(
                 () => here ? app.forgetOffline(track.id) : app.keepOffline([track]),
               );
             }),
+          // Out, for once: a link to this song that anybody signed in here can open.
+          _item(sheet, Icons.link, 'Copy a link',
+              () => copyLink(sheet, '/t/${track.id}', track.displayTitle)),
           // Hear it now, without losing the queue. Missing until now: "play next" put
           // it after the current song, "play" on a record wrote over the queue, and
           // the thing most often wanted from a song's menu was neither.

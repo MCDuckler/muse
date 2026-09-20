@@ -115,7 +115,11 @@ class MuseApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) {
-          final state = AppState()..boot();
+          final state = AppState();
+          // Where this tab was opened, before anything has had a chance to navigate
+          // away from it. On the phone there is no address to read and this is "/".
+          state.arrivedAt(Uri.base.path);
+          state.boot();
           debugAppState = state;
           return state;
         }),

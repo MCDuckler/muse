@@ -8,11 +8,14 @@ because the device that is playing is the authority on where playback is.
 """
 from __future__ import annotations
 
+import csv
+import io
 import random
+import re
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from . import catalog, db, images, jam, jobs, match, playlist_art, stations, ytm
 from .deps import cfg, current_user, user_or_key
@@ -110,6 +113,60 @@ def list_playlists(user: dict = Depends(current_user)):
     return [{**with_cover(r), "saved": bool(r["saved"]),
              "owner_name": r["owner_name"],
              "open_edit": bool(r.get("open_edit"))} for r in rows]
+
+
+@router.get("/playlists/{playlist_id}/export")
+def export_playlist(playlist_id: int, format: str = "m3u",
+                    user: dict = Depends(current_user)):
+    """A playlist, in a shape something else can read.
+
+    Everything about this library comes *in* — Spotify, YouTube Music, a folder of
+    files — and nothing has ever gone out, which makes it a place music arrives and
+    never leaves. M3U because every player made in the last thirty years reads it, and
+    CSV because a spreadsheet is how people actually keep lists of things.
+
+    The M3U points at this server's own stream URLs: it is a playlist for *this*
+    library, playable in VLC on the same network, not a description of files somebody
+    else has.
+    """
+    if format not in ("m3u", "csv"):
+        raise HTTPException(400, "format must be m3u or csv")
+    p = db.one("select * from playlists where id=%s", (playlist_id,))
+    if not p:
+        raise HTTPException(404, "no such playlist")
+    if p["owner_id"] != user["id"] and p["kind"] == FAVOURITES_KIND:
+        raise HTTPException(403, "that list is private")
+    rows = db.all_(
+        """select t.title, t.artists, t.album, t.duration_ms, t.id
+             from playlist_items i join tracks t on t.id=i.track_id
+            where i.playlist_id=%s order by i.pos""",
+        (playlist_id,))
+
+    name = re.sub(r"[^\w .-]+", "", p["name"]).strip() or f"playlist-{playlist_id}"
+    if format == "csv":
+        out = io.StringIO()
+        writer = csv.writer(out)
+        writer.writerow(["title", "artist", "album", "seconds"])
+        for r in rows:
+            writer.writerow([r["title"], ", ".join(r["artists"] or []),
+                             r["album"] or "",
+                             round((r["duration_ms"] or 0) / 1000)])
+        body, kind, suffix = out.getvalue(), "text/csv", "csv"
+    else:
+        lines = ["#EXTM3U", f"#PLAYLIST:{p['name']}"]
+        for r in rows:
+            seconds = round((r["duration_ms"] or 0) / 1000)
+            who = ", ".join(r["artists"] or []) or "Unknown artist"
+            lines.append(f"#EXTINF:{seconds},{who} - {r['title']}")
+            lines.append(f"/tracks/{r['id']}/stream")
+        body, kind, suffix = "\n".join(lines) + "\n", "audio/x-mpegurl", "m3u"
+
+    return Response(
+        content=body,
+        media_type=kind,
+        headers={"Content-Disposition":
+                 f'attachment; filename="{name}.{suffix}"'},
+    )
 
 
 @router.post("/playlists/{playlist_id}/download")

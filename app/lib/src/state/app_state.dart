@@ -1498,6 +1498,33 @@ class AppState extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------- guest → room
+  // ------------------------------------------------------------ arriving by link
+  //
+  // Everything here arrives from somewhere else and nothing ever left: on a box four
+  // people share there was no way to say "listen to this". A link is the smallest
+  // thing that fixes it, and because everybody signs in to the same server the link
+  // is this server with a path on it — /p/12 a playlist, /t/34 a song, /a/Low a
+  // record, /r/Bicep an artist.
+  //
+  // Held rather than acted on, because a link usually arrives before there is anybody
+  // to show it to: the app may still be signing in, and the screen that knows how to
+  // open a playlist does not exist yet. The shell asks for this once it is up.
+  String? _arrivedAt;
+
+  /// Where this session was opened, if it was opened at something.
+  ///
+  /// Read once: a link is a thing that happened, not a place the app stays.
+  String? takeTheLink() {
+    final link = _arrivedAt;
+    _arrivedAt = null;
+    return link;
+  }
+
+  void arrivedAt(String path) {
+    if (path.isEmpty || path == '/') return;
+    _arrivedAt = path;
+  }
+
   // ------------------------------------------------------------ several devices
   //
   // One account, several things to listen on. A device says what it is doing every few

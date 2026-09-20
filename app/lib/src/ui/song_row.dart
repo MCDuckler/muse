@@ -11,6 +11,7 @@ import 'feel.dart';
 import 'source_dot.dart';
 import 'swipe.dart';
 import 'track_menu.dart';
+import 'snack.dart';
 
 /// One song, drawn the same way everywhere it appears.
 ///
@@ -255,49 +256,8 @@ class SongRow extends StatelessWidget {
                 _Downloading(track: track),
               ],
               if (trailing != null) ...[const SizedBox(width: 6), trailing!],
-              // On the device, said quietly. A small filled arrow rather than a word:
-              // in a list of four hundred what matters is which ones have it.
-              // Listed but not here, and nothing fetching it. A cloud rather than a
-              // spinner: a spinner is a promise that something is happening, and in a
-              // mirrored library of twenty thousand songs it was a promise made to
-              // every one of them.
-              if (track.isNotFetched)
-                Padding(
-                  padding: const EdgeInsets.only(left: 6),
-                  child: Icon(Icons.cloud_outlined,
-                      size: 14, color: scheme.onSurfaceVariant),
-                ),
-              if (!track.isPending && OfflineStore.supported)
-                Builder(builder: (context) {
-                  // Only this song's two facts, not the whole app: a row in a list of
-                  // four hundred rebuilt every time anything anywhere changed —
-                  // including every download progress report — to draw a 14-pixel
-                  // tick that had not moved.
-                  final offline = context.select<AppState, ({bool here, bool coming})>(
-                      (a) => (
-                            here: a.offline.has(track.id),
-                            coming: a.offline.isQueued(track.id)
-                          ));
-                  if (offline.here) {
-                    return Padding(
-                      padding: const EdgeInsets.only(left: 6),
-                      child: Icon(Icons.download_done,
-                          size: 14, color: scheme.onSurfaceVariant),
-                    );
-                  }
-                  if (offline.coming) {
-                    return Padding(
-                      padding: const EdgeInsets.only(left: 6),
-                      child: SizedBox(
-                        width: 12,
-                        height: 12,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 1.6, color: scheme.outline),
-                      ),
-                    );
-                  }
-                  return const SizedBox.shrink();
-                }),
+              TrackMark(track: track),
+
               // Where the file came from, immediately left of how long it is: the
               // right-hand end of the row is where the eye already goes for the
               // facts about a song, and on the artwork the mark was competing with
@@ -437,6 +397,120 @@ class _FavouriteButtonState extends State<FavouriteButton>
         feel(Feel.tap);
         if (!stillness(context)) _swell.forward(from: 0);
         context.read<AppState>().toggleFavourite(widget.trackId);
+      },
+    );
+  }
+}
+
+/// Where a song *is*, in one small mark.
+///
+/// Four states and they matter: the audio is here and kept on this device; it is on
+/// its way; it is listed but not fetched; it tried and failed. Most of this library is
+/// the third — eighteen thousand of twenty-two thousand rows are a name and a place to
+/// get it from — so the mark is quiet by design: a cloud rather than a spinner,
+/// because a spinner is a promise that something is happening and in a mirrored
+/// library that promise would be made to every row on screen.
+///
+/// It lives here rather than inside the row because the row is not the only place a
+/// song appears: the queue beside the page, what you have played most, the songs on a
+/// record. They all used to draw nothing at all, which made "why will this not play"
+/// a question with no answer on the screen it was asked from.
+class TrackMark extends StatelessWidget {
+  const TrackMark({super.key, required this.track, this.canFetch = true});
+
+  final Track track;
+
+  /// Whether the cloud is a button. Where a row is only being read — a list of what
+  /// somebody played most — it is not.
+  final bool canFetch;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    // Listed, and nothing on its way. Tapping it asks for this one song, which is the
+    // thing the cloud has always looked like it should do.
+    if (track.isNotFetched) {
+      final mark = Icon(Icons.cloud_outlined,
+          size: 16, color: scheme.onSurfaceVariant);
+      if (!canFetch) {
+        return Padding(padding: const EdgeInsets.only(left: 6), child: mark);
+      }
+      return _Fetch(track: track, child: mark);
+    }
+
+    if (!OfflineStore.supported) return const SizedBox.shrink();
+    return Builder(builder: (context) {
+      // Only this song's two facts, not the whole app: a row in a list of four hundred
+      // rebuilt every time anything anywhere changed — including every download
+      // progress report — to draw a 14-pixel tick that had not moved.
+      final offline = context.select<AppState, ({bool here, bool coming})>((a) => (
+            here: a.offline.has(track.id),
+            coming: a.offline.isQueued(track.id),
+          ));
+      if (offline.here) {
+        return Padding(
+          padding: const EdgeInsets.only(left: 6),
+          child: Icon(Icons.download_done, size: 14, color: scheme.onSurfaceVariant),
+        );
+      }
+      if (offline.coming) {
+        return Padding(
+          padding: const EdgeInsets.only(left: 6),
+          child: SizedBox(
+            width: 12,
+            height: 12,
+            child:
+                CircularProgressIndicator(strokeWidth: 1.6, color: scheme.outline),
+          ),
+        );
+      }
+      return const SizedBox.shrink();
+    });
+  }
+}
+
+/// The cloud, as a button: one song, fetched.
+class _Fetch extends StatefulWidget {
+  const _Fetch({required this.track, required this.child});
+  final Track track;
+  final Widget child;
+
+  @override
+  State<_Fetch> createState() => _FetchState();
+}
+
+class _FetchState extends State<_Fetch> {
+  bool _asked = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_asked) {
+      return const Padding(
+        padding: EdgeInsets.only(left: 6),
+        child: SizedBox(
+            width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.6)),
+      );
+    }
+    return IconButton(
+      visualDensity: VisualDensity.compact,
+      padding: const EdgeInsets.only(left: 6),
+      constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+      icon: widget.child,
+      tooltip: 'Not here yet — get it',
+      onPressed: () async {
+        final app = context.read<AppState>();
+        final messenger = ScaffoldMessenger.of(context);
+        setState(() => _asked = true);
+        try {
+          final got = await app.api.fetchAudio(trackIds: [widget.track.id]);
+          messenger.say(snack(Text(got.queued > 0
+              ? 'Getting “${widget.track.displayTitle}”'
+              : 'There is nowhere left to fetch that from')));
+        } catch (e) {
+          messenger.say(problem(e));
+          if (mounted) setState(() => _asked = false);
+        }
       },
     );
   }

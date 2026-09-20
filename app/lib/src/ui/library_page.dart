@@ -1,6 +1,7 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
@@ -124,7 +125,17 @@ class LibraryPage extends StatelessWidget {
             trailing: PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert, size: 20),
               onSelected: (v) async {
-                if (v == 'play' || v == 'shuffle') {
+                if (v == 'link') {
+                  await copyLink(context, '/p/${p.id}', p.name);
+                } else if (v == 'export' || v == 'export-csv') {
+                  // Opened rather than downloaded here: the server answers with a
+                  // file and a filename, so the browser saves it and a phone hands it
+                  // to whatever opens playlists.
+                  await launchUrl(
+                      Uri.parse(app.api.playlistExportUrl(p.id,
+                          format: v == 'export' ? 'm3u' : 'csv')),
+                      mode: LaunchMode.externalApplication);
+                } else if (v == 'play' || v == 'shuffle') {
                   final full = await app.api.playlist(p.id);
                   await app.playNow(full.items, shuffle: v == 'shuffle');
                 } else if (v == 'clone') {
@@ -217,6 +228,12 @@ class LibraryPage extends StatelessWidget {
                 // A playlist draws its own cover from the records in it; this is for
                 // when you have a picture in mind instead.
                 const PopupMenuItem(value: 'cover', child: Text('Choose a cover…')),
+                // Out, for once. Everything about this library comes in and nothing
+                // has ever left it.
+                const PopupMenuItem(value: 'link', child: Text('Copy a link')),
+                const PopupMenuItem(value: 'export', child: Text('Export as M3U')),
+                const PopupMenuItem(
+                    value: 'export-csv', child: Text('Export as a spreadsheet')),
                 if (p.customCover)
                   const PopupMenuItem(
                       value: 'drawn-cover', child: Text('Use the drawn cover')),
