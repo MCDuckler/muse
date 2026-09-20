@@ -11,7 +11,67 @@ import 'song_row.dart';
 ///
 /// It carries the actions that were previously scattered or missing: play the whole
 /// list from here, shuffle it, queue a single track, or put one in a playlist.
-class TrackList extends StatelessWidget {
+/// Finding one song in a list that is longer than a screen.
+///
+/// A playlist of four hundred and a queue of nine thousand could only be scrolled.
+/// The library's own lists have been searchable for a while; the lists *inside* it
+/// were not, which is where somebody is standing when they think "where is that song".
+///
+/// Filtered here rather than asked of the server: these lists are already in the app's
+/// hands, and a round trip to narrow forty rows is a round trip nobody needs.
+class _Filter extends StatefulWidget {
+  const _Filter({required this.onChanged});
+  final ValueChanged<String> onChanged;
+
+  @override
+  State<_Filter> createState() => _FilterState();
+}
+
+class _FilterState extends State<_Filter> {
+  final _text = TextEditingController();
+
+  @override
+  void dispose() {
+    _text.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
+        child: SizedBox(
+          height: 40,
+          child: TextField(
+            controller: _text,
+            onChanged: (v) => setState(() => widget.onChanged(v)),
+            textInputAction: TextInputAction.search,
+            decoration: InputDecoration(
+              isDense: true,
+              filled: true,
+              hintText: 'Find in this list',
+              prefixIcon: const Icon(Icons.search, size: 18),
+              suffixIcon: _text.text.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.close, size: 16),
+                      tooltip: 'Clear',
+                      onPressed: () {
+                        _text.clear();
+                        setState(() => widget.onChanged(''));
+                      },
+                    ),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: BorderSide.none,
+              ),
+            ),
+          ),
+        ),
+      );
+}
+
+class TrackList extends StatefulWidget {
   const TrackList({
     super.key,
     required this.tracks,
@@ -21,7 +81,12 @@ class TrackList extends StatelessWidget {
     this.selectable,
     this.onEndReached,
     this.loadingMore = false,
+    this.searchable = true,
   });
+
+  /// Whether this list offers a way to find one song in it. On by default, and off
+  /// where the list is short by construction — the songs on one record.
+  final bool searchable;
 
   /// Called as the bottom comes into view, for a list that arrives a page at a time.
   final VoidCallback? onEndReached;
@@ -40,9 +105,35 @@ class TrackList extends StatelessWidget {
   final String? named;
 
   @override
+  State<TrackList> createState() => _TrackListState();
+}
+
+class _TrackListState extends State<TrackList> {
+  String _looking = '';
+
+  /// What a song has to match: its title, whoever made it, or the record it is on.
+  bool _matches(Track t, String q) =>
+      t.displayTitle.toLowerCase().contains(q) ||
+      t.artistLine.toLowerCase().contains(q) ||
+      (t.albumLine ?? '').toLowerCase().contains(q);
+
+  @override
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
-    if (tracks.isEmpty) {
+    final q = _looking.trim().toLowerCase();
+    // A search in a list of nine thousand is a search over what is in this app's
+    // hands, which is the window the server sent.
+    final tracks = q.isEmpty
+        ? widget.tracks
+        : [for (final t in widget.tracks) if (_matches(t, q)) t];
+    final onRemove = widget.onRemove;
+    final selectable = widget.selectable;
+    final named = widget.named;
+    final header = widget.header;
+    final onEndReached = widget.onEndReached;
+    final loadingMore = widget.loadingMore;
+
+    if (widget.tracks.isEmpty) {
       return const EmptyHint(
         icon: Icons.music_note,
         title: 'Nothing here yet',
@@ -54,7 +145,7 @@ class TrackList extends StatelessWidget {
       bar: selectable == null
           ? const SizedBox.shrink()
           : SelectionBar(
-            where: selectable!,
+            where: selectable,
             tracks: tracks,
             removeLabel: onRemove == null ? 'Remove' : 'Remove from this list',
             onRemove: onRemove == null
@@ -67,7 +158,7 @@ class TrackList extends StatelessWidget {
                         if (picked.any((p) => p.id == tracks[i].id)) i
                     ];
                     for (final i in at.reversed) {
-                      onRemove!(i);
+                      onRemove(i);
                     }
                   },
           ),
@@ -75,7 +166,7 @@ class TrackList extends StatelessWidget {
         onNotification: (n) {
           // Well before the last row, so the next page is there by the time somebody
           // scrolls to where it goes.
-          if (onEndReached != null && n.metrics.extentAfter < 900) onEndReached!();
+          if (onEndReached != null && n.metrics.extentAfter < 900) onEndReached();
           return false;
         },
         child: ListView.builder(
@@ -83,14 +174,30 @@ class TrackList extends StatelessWidget {
             physics: const AlwaysScrollableScrollPhysics(),
             itemCount: tracks.length + (loadingMore ? 2 : 1),
             itemBuilder: (context, i) {
-              if (i == 0) return _Head(tracks: tracks, header: header, named: named);
+              if (i == 0) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _Head(tracks: tracks, header: header, named: named),
+                    // Only where there is enough to lose something in.
+                    if (widget.searchable && widget.tracks.length >= 12)
+                      _Filter(onChanged: (v) => setState(() => _looking = v)),
+                    if (q.isNotEmpty && tracks.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                        child: Text('Nothing here matches “$_looking”.',
+                            style: Theme.of(context).textTheme.bodySmall),
+                      ),
+                  ],
+                );
+              }
               if (i - 1 >= tracks.length) return const _More();
               final t = tracks[i - 1];
               return SongRow(
                 track: t,
                 selectable: selectable,
                 onTap: () => app.playNow(tracks, startAt: i - 1, named: named),
-                onRemove: onRemove == null ? null : () => onRemove!(i - 1),
+                onRemove: onRemove == null ? null : () => onRemove(i - 1),
               );
             },
         ),

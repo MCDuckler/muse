@@ -27,10 +27,17 @@ class GoofyOwl extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return CustomPaint(
-      size: Size.square(size),
-      painter: _Owl(seed: seed, scheme: scheme),
-      isComplex: false,
+    return Semantics(
+      // What it is standing in for, said in the one place a screen reader will find
+      // it: a drawing has nothing for it to read, so without this the row where a
+      // cover should be is silent.
+      label: 'No cover art',
+      image: true,
+      child: CustomPaint(
+        size: Size.square(size),
+        painter: _Owl(seed: seed, scheme: scheme),
+        isComplex: false,
+      ),
     );
   }
 }

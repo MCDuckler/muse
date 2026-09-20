@@ -193,7 +193,11 @@ class _SpectrumState extends State<Spectrum> with SingleTickerProviderStateMixin
   @override
   Widget build(BuildContext context) {
     if (_shown.isEmpty) return SizedBox(height: widget.height);
-    return RepaintBoundary(
+    return ExcludeSemantics(
+      // Deliberately silent rather than unlabelled: it is the shape of the sound
+      // sixty times a second, and a screen reader announcing it would be reading out
+      // a decoration on top of the song it is decorating.
+      child: RepaintBoundary(
       child: SizedBox(
         height: widget.height,
         child: CustomPaint(
@@ -203,6 +207,7 @@ class _SpectrumState extends State<Spectrum> with SingleTickerProviderStateMixin
           ),
           size: Size.infinite,
         ),
+      ),
       ),
     );
   }

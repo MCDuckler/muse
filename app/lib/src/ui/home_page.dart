@@ -10,6 +10,7 @@ import 'feel.dart';
 import 'glass.dart';
 import 'motion.dart';
 import 'pane.dart';
+import '../../main.dart' show showShortcuts;
 import '../api/models.dart';
 import 'browse_page.dart';
 import 'desk_dock.dart';
@@ -357,6 +358,11 @@ class _Rail extends StatelessWidget {
                     onPressed: () => Navigator.of(context)
                         .push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
                   ),
+                IconButton(
+                  icon: const Icon(Icons.keyboard_outlined),
+                  tooltip: 'Keys (?)',
+                  onPressed: () => showShortcuts(context),
+                ),
                 IconButton(
                   icon: const Icon(Icons.settings_outlined),
                   tooltip: 'Settings',

@@ -844,7 +844,22 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
         // size as well.
         _reach = Shelf.step(jacket, side);
 
-        return RepaintBoundary(
+        return Semantics(
+          // The whole stage, said once. Everything inside it is drawn — the sleeve,
+          // the record, the arm, the board on its back — so to a screen reader this is
+          // a square of nothing at all, sitting where the song's cover should be. What
+          // it does is worth saying too: this is the surface a drag changes records
+          // on, and a tap turns over.
+          label: _showingBack
+              ? 'The back of the sleeve for '
+                  '${widget.track.displayTitle}, a surface you can draw on'
+              : '${widget.track.displayTitle} by '
+                  '${widget.track.artistLine}, on a record',
+          hint: _showingBack
+              ? 'Double tap to turn it back over'
+              : 'Swipe for the next record, double tap to take it out of its sleeve',
+          container: true,
+          child: RepaintBoundary(
           child: SizedBox(
           key: _stageKey,
           width: side,
@@ -988,6 +1003,7 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                 );
               },
             ),
+          ),
           ),
           ),
           ),

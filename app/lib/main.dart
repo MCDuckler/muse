@@ -243,6 +243,21 @@ class AppShortcuts extends StatelessWidget {
     return typing;
   }
 
+  /// Every key that does something, and what it does.
+  ///
+  /// One list, read by the handler below and by the sheet that shows it: a shortcut
+  /// nobody is told about is a shortcut nobody uses, and two lists would be one list
+  /// and a lie.
+  static const keys = <(String, String)>[
+    ('Space', 'Play or pause'),
+    ('← / →', 'Back or forward ten seconds'),
+    ('N / P', 'Next song, previous song'),
+    ('S', 'Shuffle what is coming'),
+    ('R', 'Repeat: off, all, one'),
+    ('M', 'Mute'),
+    ('?', 'This list'),
+  ];
+
   static KeyEventResult handle(AppState app, KeyEvent event) {
     final player = app.player;
     if (player == null || event is! KeyDownEvent) return KeyEventResult.ignored;
@@ -279,9 +294,58 @@ class AppShortcuts extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Focus(
         autofocus: true,
-        onKeyEvent: (node, event) => handle(context.read<AppState>(), event),
+        onKeyEvent: (node, event) {
+          // The question mark is the one key that is about the keys themselves, so it
+          // is handled here where there is a context to show a dialog with.
+          if (event is KeyDownEvent &&
+              !_isTyping &&
+              (event.logicalKey == LogicalKeyboardKey.question ||
+                  event.character == '?')) {
+            showShortcuts(context);
+            return KeyEventResult.handled;
+          }
+          return handle(context.read<AppState>(), event);
+        },
         child: child,
       );
+}
+
+/// What the keys do, for anybody who has not been told.
+void showShortcuts(BuildContext context) {
+  showDialog<void>(
+    context: context,
+    useRootNavigator: true,
+    builder: (context) => AlertDialog(
+      title: const Text('Keys'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final (key, what) in AppShortcuts.keys)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 72,
+                    child: Text(key,
+                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                            fontFeatures: const [FontFeature.tabularFigures()])),
+                  ),
+                  Expanded(child: Text(what)),
+                ],
+              ),
+            ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Right'),
+        ),
+      ],
+    ),
+  );
 }
 
 class _Root extends StatelessWidget {

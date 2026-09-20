@@ -72,39 +72,6 @@ class _SettingsPageState extends State<SettingsPage> {
     return '${(bytes / 1e3).toStringAsFixed(0)} kB';
   }
 
-  bool _pickingFace = false;
-
-  /// A picture for the account. It shows up beside your name here, on who is in a jam,
-  /// and against the songs you put in a shared queue.
-  Future<void> _pickFace(AppState app) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final file = await FilePicker.pickFile(type: FileType.image);
-    if (file == null || !mounted) return;
-    setState(() => _pickingFace = true);
-    try {
-      // Shrunk here rather than sent whole: a picture from a camera roll is twelve
-      // megapixels for a face drawn at forty pixels across, and on a phone connection
-      // the difference is the whole of how long this takes.
-      final bytes = await shrinkForUpload(await file.readAsBytes());
-      await app.setAvatar(bytes);
-      messenger.say(snack(const Text('That is your picture now')));
-    } catch (e) {
-      messenger.say(snack(Text(_whyNot(e))));
-    } finally {
-      if (mounted) setState(() => _pickingFace = false);
-    }
-  }
-
-  /// What went wrong, in words somebody can act on.
-  String _whyNot(Object e) {
-    final said = e is ApiException ? e.message : '$e';
-    if (said.contains('not a picture')) {
-      return 'That file is not a picture the server can read. A photo or a PNG works.';
-    }
-    if (said.contains('under 12 MB')) return 'That picture is too big — under 12 MB.';
-    return said;
-  }
-
   Future<void> _upload() async {
     // Read the bytes rather than a path: the web build never has one.
     final file = await FilePicker.pickFile(type: FileType.audio);
@@ -236,7 +203,84 @@ class _SettingsPageState extends State<SettingsPage> {
               },
             ),
           const Divider(),
-          _label(context, 'Colours'),
+          _label(context, 'Everything else'),
+          // Four screens rather than eleven sections in one scroll. What somebody
+          // changes often — where their music comes from, how the player looks — is
+          // still here in front of them; what they set once and forget is one tap
+          // away, with its current answer on the row so the tap is only needed when
+          // the answer is wrong.
+          ListTile(
+            leading: const Icon(Icons.palette_outlined),
+            title: const Text('Look'),
+            subtitle: Text(app.palette.name),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const _LookPage())),
+          ),
+          ListTile(
+            leading: const Icon(Icons.download_outlined),
+            title: const Text('Downloads'),
+            subtitle: Text(app.downloadsPending > 0
+                ? '${app.downloadsPending} waiting'
+                : OfflineStore.supported && app.offline.count > 0
+                    ? '${app.offline.count} kept on this device'
+                    : 'Nothing waiting'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const _StoragePage())),
+          ),
+          ListTile(
+            leading: const Icon(Icons.hub_outlined),
+            title: const Text('Connected services'),
+            subtitle: const Text(
+                'Spotify, YouTube Music, Deezer, SoundCloud, Bandcamp'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const ServicesPage())),
+          ),
+          ListTile(
+            leading: const Icon(Icons.person_outline),
+            title: const Text('Account'),
+            subtitle: Text(app.user ?? 'Signed in'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const _AccountPage())),
+          ),
+          ListTile(
+            leading: const Icon(Icons.info_outline),
+            title: const Text('About'),
+            subtitle: Text(appBuild.isEmpty
+                ? 'Version $appVersion'
+                : 'Version $appVersion · build $appBuild'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const _AboutPage())),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _label(BuildContext context, String text) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 18, 16, 6),
+        child: Text(text.toUpperCase(),
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant)),
+      );
+}
+
+/// Look — one of the four screens the settings list became.
+class _LookPage extends StatelessWidget {
+  const _LookPage();
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    return PlayerScaffold(
+      appBar: AppBar(title: const Text('Look')),
+      body: ListView(
+        padding: EdgeInsets.only(bottom: bottomForPlayer(context)),
+        children: [
           // Swatches rather than a list of names: the choice is a look, and reading
           // "Midnight" tells you less than seeing it.
           SizedBox(
@@ -259,8 +303,24 @@ class _SettingsPageState extends State<SettingsPage> {
             child: Text(app.palette.blurb,
                 style: Theme.of(context).textTheme.bodySmall),
           ),
-          const Divider(),
-          _label(context, 'Downloads'),
+        ],
+      ),
+    );
+  }
+}
+
+/// Downloads — one of the four screens the settings list became.
+class _StoragePage extends StatelessWidget {
+  const _StoragePage();
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    return PlayerScaffold(
+      appBar: AppBar(title: const Text('Downloads')),
+      body: ListView(
+        padding: EdgeInsets.only(bottom: bottomForPlayer(context)),
+        children: [
           if (OfflineStore.supported)
             ListTile(
               leading: const Icon(Icons.phone_iphone),
@@ -297,19 +357,59 @@ class _SettingsPageState extends State<SettingsPage> {
                 ? Chip(label: Text('${app.downloadsPending} waiting'))
                 : null,
           ),
-          const Divider(),
-          _label(context, 'Connected services'),
-          ListTile(
-            leading: const Icon(Icons.hub_outlined),
-            title: const Text('Connected services'),
-            subtitle: const Text(
-                'Spotify, YouTube Music, Deezer, SoundCloud, Bandcamp'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.of(context)
-                .push(MaterialPageRoute(builder: (_) => const ServicesPage())),
-          ),
-          const Divider(),
-          _label(context, 'Account'),
+        ],
+      ),
+    );
+  }
+}
+
+/// Account — one of the four screens the settings list became.
+class _AccountPage extends StatefulWidget {
+  const _AccountPage();
+
+  @override
+  State<_AccountPage> createState() => _AccountPageState();
+}
+
+class _AccountPageState extends State<_AccountPage> {
+  bool _pickingFace = false;
+
+  /// A picture for the account. It shows up beside your name here, on who is in a jam,
+  /// and against the songs you put in a shared queue.
+  Future<void> _pickFace(AppState app) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final file = await FilePicker.pickFile(type: FileType.image);
+    if (file == null || !mounted) return;
+    setState(() => _pickingFace = true);
+    try {
+      // Shrunk here rather than sent whole: a picture from a camera roll is twelve
+      // megapixels for a face drawn at forty pixels across, and on a phone connection
+      // the difference is the whole of how long this takes.
+      final bytes = await shrinkForUpload(await file.readAsBytes());
+      await app.setAvatar(bytes);
+      messenger.say(snack(const Text('That is your picture now')));
+    } catch (e) {
+      messenger.say(snack(Text(_whyNot(e))));
+    } finally {
+      if (mounted) setState(() => _pickingFace = false);
+    }
+  }
+
+  /// What went wrong with a picture, in words somebody can act on.
+  String _whyNot(Object e) {
+    final said = e is ApiException ? e.message : '$e';
+    if (said.contains('under 12 MB')) return 'That picture is too big — under 12 MB.';
+    return said;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    return PlayerScaffold(
+      appBar: AppBar(title: const Text('Account')),
+      body: ListView(
+        padding: EdgeInsets.only(bottom: bottomForPlayer(context)),
+        children: [
           ListTile(
             leading: Face(
                 name: app.user, userId: app.userId, version: app.avatarVersion),
@@ -375,13 +475,41 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
     );
   }
+}
 
-  Widget _label(BuildContext context, String text) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 18, 16, 6),
-        child: Text(text.toUpperCase(),
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant)),
-      );
+/// About — one of the four screens the settings list became.
+class _AboutPage extends StatelessWidget {
+  const _AboutPage();
+
+  @override
+  Widget build(BuildContext context) {
+    return PlayerScaffold(
+      appBar: AppBar(title: const Text('About')),
+      body: ListView(
+        padding: EdgeInsets.only(bottom: bottomForPlayer(context)),
+        children: [
+          ListTile(
+            leading: const Icon(Icons.receipt_long_outlined),
+            title: const Text('Playback log'),
+            subtitle: const Text('What the audio engine did, and when'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const PlaybackLogPage())),
+          ),
+          if (Updates.supported) const _UpdateRow(),
+          const _ApkRow(),
+          const _IpaRow(),
+          ListTile(
+            leading: const Icon(Icons.info_outline),
+            title: const Text('WetOwl'),
+            subtitle: Text(appBuild.isEmpty
+                ? 'Version $appVersion'
+                : 'Version $appVersion · build $appBuild'),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 
