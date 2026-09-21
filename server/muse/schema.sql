@@ -583,3 +583,21 @@ create index if not exists playlist_saves_mine
 -- Whether anybody else may add to it and take things off it. Off by default: a shared
 -- list is a decision the person whose list it is makes, once, out loud.
 alter table playlists add column if not exists open_edit boolean not null default false;
+
+-- Scrobbling: telling a listening diary elsewhere what was played here. ListenBrainz
+-- takes a token a person pastes in — no app registration, no redirect — which is why it
+-- comes first. The token is theirs and stays on this row; it is never handed back out.
+alter table users add column if not exists listenbrainz_token text;
+alter table users add column if not exists listenbrainz_name text;
+
+-- What is owed to the diary. A row per listen worth reporting, marked when it has gone:
+-- the service being down for an evening should cost nothing, and "did that one get
+-- there" should have an answer.
+create table if not exists scrobbles (
+  listen_id bigint primary key references listens(id) on delete cascade,
+  user_id   int not null references users(id) on delete cascade,
+  sent_at   timestamptz,
+  attempts  int not null default 0,
+  error     text
+);
+create index if not exists scrobbles_owed on scrobbles(user_id) where sent_at is null;

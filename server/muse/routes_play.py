@@ -9,6 +9,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Response
 
 from . import catalog, db
 from . import peaks as _peaks
+from . import scrobble
 from .deps import cfg, current_user
 
 router = APIRouter()
@@ -86,13 +87,19 @@ def lyrics(track_id: int, refresh: bool = False, user: dict = Depends(current_us
 def record_listen(body: dict = Body(...), user: dict = Depends(current_user)):
     """One row per play attempt. `completed` is the client's call, not a guess from ms."""
     track_id = body.get("track_id")
-    if not track_id or not catalog.track_row(track_id):
+    track = catalog.track_row(track_id) if track_id else None
+    if not track:
         raise HTTPException(404, "no such track")
+    ms_played, completed = int(body.get("ms_played", 0)), bool(body.get("completed", False))
     row = db.one(
         """insert into listens(user_id,track_id,ms_played,completed)
            values(%s,%s,%s,%s) returning id, started_at""",
-        (user["id"], track_id, int(body.get("ms_played", 0)), bool(body.get("completed", False))),
+        (user["id"], track_id, ms_played, completed),
     )
+    # Into a listening diary elsewhere, if this person keeps one. After the listen is
+    # written and off to one side: see scrobble.after_a_listen.
+    scrobble.after_a_listen(user["id"], row["id"], ms_played,
+                            track.get("duration_ms"), completed)
     # The tally comes back with it, so a score can tick up at the moment the record
     # ends rather than the next time the app is opened. Counted rather than kept: the
     # listens are the record of what happened, and a number kept beside them can only

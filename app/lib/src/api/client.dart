@@ -187,6 +187,20 @@ class ApiClient {
     ];
   }
 
+  // ---------------- a listening diary kept elsewhere ----------------
+  Future<Scrobbling> scrobbling() async => Scrobbling.fromJson(
+      await _decode(await net.get(_u('/scrobbling'), headers: _headers))
+          as Map<String, dynamic>);
+
+  /// The token is checked by the server before it is kept, and never comes back.
+  Future<Scrobbling> connectListenBrainz(String token) async => Scrobbling.fromJson(
+      await _decode(await net.put(_u('/scrobbling/listenbrainz'),
+          headers: _headers, body: jsonEncode({'token': token}))) as Map<String, dynamic>);
+
+  Future<Scrobbling> disconnectListenBrainz() async => Scrobbling.fromJson(
+      await _decode(await net.delete(_u('/scrobbling/listenbrainz'), headers: _headers))
+          as Map<String, dynamic>);
+
   /// A nod at what somebody is playing. See routes_social.react: one of a fixed
   /// handful, to that one person, kept nowhere.
   Future<void> react(int personId, String emoji, {int? trackId}) async =>

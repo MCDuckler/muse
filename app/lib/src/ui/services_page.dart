@@ -16,6 +16,7 @@ import 'youtube_setup.dart';
 import 'snack.dart';
 import 'widths.dart';
 import 'record_refresh.dart';
+import 'scrobbling.dart';
 
 /// Services linked by typing a name.
 ///
@@ -316,6 +317,14 @@ class _ServicesPageState extends State<ServicesPage> {
                         ),
                       ),
                       const SizedBox(height: 18),
+                      const Divider(),
+                      // The other direction: not where music comes in from, but where
+                      // what was played is written down.
+                      Text('A listening diary',
+                          style: Theme.of(context).textTheme.titleSmall),
+                      const SizedBox(height: 8),
+                      const ScrobblingCard(),
+                      const SizedBox(height: 8),
                       const Divider(),
                       Text('From a link',
                           style: Theme.of(context).textTheme.titleSmall),

@@ -1997,3 +1997,39 @@ class Reaction {
 
 /// The ones there are. The server has the same list and takes nothing else.
 const reactionEmoji = ['❤️', '🔥', '🕺', '😮', '😂', '🤘'];
+
+/// Whether what is played here is being written into a diary kept elsewhere, and how
+/// that is going. Never the token: it goes to the server once and stays there.
+class Scrobbling {
+  const Scrobbling({
+    this.connected = false,
+    this.name,
+    this.sent = 0,
+    this.owed = 0,
+    this.lastSent,
+    this.error,
+  });
+
+  final bool connected;
+  final String? name;
+  final int sent;
+
+  /// Plays not yet written down — the service was unreachable, or has not been tried.
+  final int owed;
+  final DateTime? lastSent;
+  final String? error;
+
+  factory Scrobbling.fromJson(Map<String, dynamic> j) {
+    final lb = (j['listenbrainz'] ?? const <String, dynamic>{}) as Map<String, dynamic>;
+    return Scrobbling(
+      connected: (lb['connected'] ?? false) as bool,
+      name: lb['name'] as String?,
+      sent: (lb['sent'] ?? 0) as int,
+      owed: (lb['owed'] ?? 0) as int,
+      lastSent: lb['last_sent'] == null
+          ? null
+          : DateTime.tryParse('${lb['last_sent']}')?.toLocal(),
+      error: lb['error'] as String?,
+    );
+  }
+}
