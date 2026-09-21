@@ -276,7 +276,14 @@ class SongRow extends StatelessWidget {
                 const SizedBox(width: 8),
                 SourceDot(source: track.source),
               ],
-              if (showDuration && duration.isNotEmpty && !track.isDownloading) ...[
+              // The first thing to go when the type is turned up: a row has a fixed
+              // width and a title that has to be read, and the length is also in the
+              // song's sheet. At twice the size the title was squeezed to nothing and
+              // the row still ran off the edge.
+              if (showDuration &&
+                  duration.isNotEmpty &&
+                  !track.isDownloading &&
+                  MediaQuery.textScalerOf(context).scale(14) / 14 < 1.4) ...[
                 const SizedBox(width: 6),
                 Text(duration,
                     style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),

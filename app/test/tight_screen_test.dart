@@ -118,6 +118,22 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    testWidgets('a song that is not here yet, an hour long, holds at ${scale}x',
+        (tester) async {
+      // The row's widest case: a fetch button, the source, a five-character length
+      // and the menu, all fixed width, beside a title that has to fit somewhere.
+      final pending = Track.fromJson({
+        'id': 8,
+        'title': 'Everything In Its Right Place (2017 Remastered Anniversary Edition)',
+        'artists': ['A Band With A Very Long And Deliberate Name'],
+        'state': 'pending',
+        'source': 'youtube',
+        'duration': 3600,
+      });
+      await tight(tester, SongRow(track: pending, onTap: () {}), scale: scale);
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('the not-connected line holds at ${scale}x', (tester) async {
       serverIsThere.value = false;
       await tight(tester, const Column(children: [NotConnected()]), scale: scale);

@@ -649,6 +649,8 @@ class _SourceTag extends StatelessWidget {
   }
 }
 
+/// The head of a playlist's page, set like a compilation's sleeve notes: the cover cut
+/// out and taped down, the name as big as it goes, and a typed line of what is in it.
 class _PlaylistHeader extends StatelessWidget {
   const _PlaylistHeader(
       {required this.items, required this.playlist, required this.onChanged});
@@ -656,125 +658,147 @@ class _PlaylistHeader extends StatelessWidget {
   final Playlist playlist;
   final VoidCallback onChanged;
 
+  String? _length() {
+    var ms = 0;
+    for (final t in items) {
+      ms += t.durationMs ?? 0;
+    }
+    if (ms == 0) return null;
+    final minutes = (ms / 60000).round();
+    return minutes < 60 ? '$minutes MIN' : '${minutes ~/ 60} H ${minutes % 60} MIN';
+  }
+
   @override
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
+    final scheme = Theme.of(context).colorScheme;
+    final kicker = [
+      if (playlist.isFavourites) 'Favourites' else 'Playlist',
+      if (playlist.saved && playlist.ownerName != null) 'from ${playlist.ownerName}',
+      if (playlist.isMirror) 'mirrored',
+      if (playlist.openEdit && playlist.mine) 'shared',
+    ].join(' · ');
+    final facts = [
+      '${items.length} ${items.length == 1 ? 'SONG' : 'SONGS'}',
+      if (_length() != null) _length()!,
+      if (playlist.waiting > 0) '${playlist.waiting} NOT DOWNLOADED',
+      if (playlist.unmatched > 0) '${playlist.unmatched} NOT MATCHED',
+    ].join(' · ');
+
+    Widget note(String text, String action, VoidCallback onTap) => Padding(
+          padding: const EdgeInsets.only(top: 10),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(text,
+                    style: Mag.typewriter(11.5, color: scheme.onSurfaceVariant)),
+              ),
+              const SizedBox(width: 10),
+              PressButton(label: action, onTap: onTap),
+            ],
+          ),
+        );
+
     return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (playlist.isMirror)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
-              child: Row(
-                children: [
-                  _SourceTag(kind: playlist.kind),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      playlist.unmatched > 0
-                          ? 'Read-only · ${playlist.unmatched} songs could not be matched'
-                          : 'Read-only mirror',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: () async {
-                      final name = await promptForName(
-                          context, 'Copy playlist', '${playlist.name} (copy)');
-                      if (name == null) return;
-                      await app.api.clonePlaylist(playlist.id, name: name);
-                      await app.refreshPlaylists();
-                      onChanged();
-                    },
-                    child: const Text('Copy'),
-                  ),
-                ],
-              ),
-            ),
-      // Offered whenever songs here have no audio, not only when the playlist was
-      // *marked* fetch-on-play. An import that found its songs already in the catalog
-      // is marked "download everything" and has nothing queued, which is exactly the
-      // case that needs this button most.
-      if (playlist.hasHoles)
-        Padding(
-          padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
-          child: Row(
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(Icons.cloud_queue, size: 18),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  playlist.fetchesOnPlay
-                      ? 'Songs download when you play them — this library is too big '
-                          'to fetch all at once.'
-                      : '${playlist.waiting} of these are not downloaded yet.',
-                  style: Theme.of(context).textTheme.bodySmall,
+              Padding(
+                padding: const EdgeInsets.only(top: 8, left: 4),
+                child: CutOut(
+                  turn: -0.035,
+                  taped: true,
+                  child: PlaylistArt(
+                      playlist: playlist, size: 112, radius: 0, small: false),
                 ),
               ),
-              TextButton(
-                onPressed: () async {
-                  final messenger = ScaffoldMessenger.of(context);
-                  final n = await app.api.downloadPlaylist(playlist.id);
-                  messenger.say(snack(Text(n == 0
-                          ? 'Everything here is already downloaded'
-                          : 'Queued $n songs')));
-                  onChanged();
-                },
-                child: const Text('Get all'),
+              const SizedBox(width: 18),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Kicker(kicker),
+                    const SizedBox(height: 4),
+                    Text(playlist.name.toUpperCase(),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: Mag.headline(32, color: scheme.onSurface)),
+                    const SizedBox(height: 6),
+                    Text(facts,
+                        style: Mag.typewriter(11, color: scheme.onSurfaceVariant, bold: true)),
+                  ],
+                ),
               ),
             ],
           ),
-        ),
-      Row(
-        children: [
-          PlaylistArt(playlist: playlist, size: 108, radius: 10, small: false),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // The name is already in the app bar; repeating it here would just
-                // push the art down.
-                Text('${items.length} tracks',
-                    style: Theme.of(context).textTheme.titleMedium),
-                if (playlist.unmatched > 0)
-                  Text('${playlist.unmatched} could not be matched',
-                      style: Theme.of(context).textTheme.bodySmall),
-              ],
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              PressButton(
+                label: 'Play',
+                loud: true,
+                onTap: items.isEmpty ? null : () => app.playNow(items),
+              ),
+              PressButton(
+                label: 'Shuffle',
+                onTap: items.isEmpty ? null : () => app.playNow(items, shuffle: true),
+              ),
+            ],
+          ),
+          if (playlist.isMirror)
+            note(
+              playlist.unmatched > 0
+                  ? 'A read-only mirror of ${_sourceName(playlist.kind)}. '
+                      '${playlist.unmatched} songs could not be matched.'
+                  : 'A read-only mirror of ${_sourceName(playlist.kind)}.',
+              'Copy',
+              () async {
+                final name = await promptForName(
+                    context, 'Copy playlist', '${playlist.name} (copy)');
+                if (name == null) return;
+                await app.api.clonePlaylist(playlist.id, name: name);
+                await app.refreshPlaylists();
+                onChanged();
+              },
             ),
-          ),
-        ],
-      ),
-      const SizedBox(height: 10),
-      Row(
-        children: [
-          FilledButton.icon(
-            icon: const Icon(Icons.play_arrow, size: 18),
-            label: const Text('Play'),
-            onPressed: () => app.playNow(items),
-          ),
-          const SizedBox(width: 8),
-          OutlinedButton.icon(
-            icon: const Icon(Icons.shuffle, size: 18),
-            label: const Text('Shuffle'),
-            onPressed: () => app.playNow(items, shuffle: true),
-          ),
-        ],
-      ),
+          // Offered whenever songs here have no audio, not only when the playlist
+          // was *marked* fetch-on-play. An import that found its songs already in the
+          // catalog is marked "download everything" and has nothing queued, which is
+          // exactly the case that needs this button most.
+          if (playlist.hasHoles)
+            note(
+              playlist.fetchesOnPlay
+                  ? 'Songs download when you play them: this list is too big to '
+                      'fetch all at once.'
+                  : '${playlist.waiting} of these are not downloaded yet.',
+              'Get all',
+              () async {
+                final messenger = ScaffoldMessenger.of(context);
+                final n = await app.api.downloadPlaylist(playlist.id);
+                messenger.say(snack(Text(n == 0
+                    ? 'Everything here is already downloaded'
+                    : 'Queued $n songs')));
+                onChanged();
+              },
+            ),
         ],
       ),
     );
   }
+
+  static String _sourceName(String kind) => switch (kind) {
+        'spotify' => 'a Spotify playlist',
+        'ytmusic' => 'a YouTube Music playlist',
+        _ => 'a playlist elsewhere',
+      };
 }
 
-
-/// The feed row, with what is waiting in it.
-///
-/// The count is the point: a feed you have to open to find out whether it is worth
-/// opening is a feed nobody opens.
 
 
 /// Every way into the library, as a contents page: an index card each, with a number on
