@@ -7,6 +7,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -60,6 +61,17 @@ void main() {
         // Taken, and not here yet: the server has only just started fetching it.
         other = {'id': 77, 'title': 'Live at the Roundhouse', 'artists': ['Queen Archive'],
                  'state': 'pending'};
+      } else if (path == '/library/smart') {
+        other = {
+          'lists': [
+            {'id': 'never', 'name': 'Never played', 'blurb': 'Not once put on', 'count': 41},
+            {'id': 'once', 'name': 'Played once', 'blurb': 'Worth a second go?', 'count': 0},
+          ],
+          'decades': [
+            {'id': 'd1990', 'name': 'The 1990s', 'short': '90s', 'blurb': '1990 to 1999',
+             'count': 112},
+          ],
+        };
       } else if (path == '/queues') {
         other = [
           {'id': 99, 'name': 'Now', 'cursor_index': 0, 'position_ms': 0, 'rev': 1, 'items': 0},
@@ -104,8 +116,9 @@ void main() {
 
   tearDown(() => useThisClientInstead(http.Client()));
 
-  Future<void> show(WidgetTester tester) async {
-    tester.view.physicalSize = const Size(420, 900);
+  Future<void> show(WidgetTester tester,
+      {Size size = const Size(420, 900), double text = 1}) async {
+    tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(MultiProvider(
@@ -113,7 +126,12 @@ void main() {
         ChangeNotifierProvider<AppState>.value(value: app),
         ChangeNotifierProvider(create: (_) => Selection()),
       ],
-      child: const MaterialApp(home: Scaffold(body: SearchPage())),
+      child: MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(size: size, textScaler: TextScaler.linear(text)),
+          child: const Scaffold(body: SearchPage()),
+        ),
+      ),
     ));
     await tester.pump();
   }
@@ -130,6 +148,12 @@ void main() {
     // the first frame that sees one — so give it the time to finish.
     await tester.pump(const Duration(milliseconds: 250));
   }
+
+  Map<String, dynamic> body(http.Request r) => jsonDecode(r.body) as Map<String, dynamic>;
+
+  /// The last question put to the server — not the last request, which is as likely
+  /// to be a cover being fetched for one of the answers.
+  Uri lastSearch() => asked.lastWhere((u) => u.path == '/search/everything');
 
   Future<void> type(WidgetTester tester, String what) async {
     await tester.enterText(find.byType(TextField), what);
@@ -184,6 +208,67 @@ void main() {
     expect(find.byType(SongsComing), findsNothing);
   });
 
+  testWidgets('before anything is typed, the page is somewhere to start from',
+      (tester) async {
+    await show(tester);
+    await tester.pump();
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    expect(find.text('NEVER PLAYED'), findsOneWidget);
+    expect(find.text('41'), findsOneWidget);
+    expect(find.text('PLAYED ONCE'), findsNothing, reason: 'nothing in it: not offered');
+    expect(find.text('90S'), findsOneWidget);
+    // And it goes away the moment there is a question.
+    await type(tester, 'queen');
+    expect(find.text('NEVER PLAYED'), findsNothing);
+  });
+
+  for (final scale in [1.6, 2.0]) {
+    testWidgets('the start page holds on a small phone at ${scale}x text',
+        (tester) async {
+      await show(tester, size: const Size(320, 640), text: scale);
+      await tester.pump();
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+      expect(find.text('NEVER PLAYED'), findsOneWidget);
+    });
+  }
+
+  testWidgets('at a desk, the keys walk the results', (tester) async {
+    await show(tester);
+    await type(tester, 'queen');
+
+    // Down three: the top result, the record under it, then the song from Spotify —
+    // the order on the page, not the order they arrived in.
+    for (var i = 0; i < 3; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+    }
+    await tester.pump(const Duration(milliseconds: 200));
+
+    // Shift-Enter: on the queue, and the music left alone.
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await settle(tester);
+
+    final taken = sent.firstWhere((r) => r.url.path == '/search/add');
+    expect(body(taken)['title'], 'Bohemian Rhapsody - Live');
+    final queued = sent.firstWhere((r) => r.url.path == '/queues/99/items');
+    expect(body(queued)['mode'], 'end');
+
+    // Up past the first one lets go, and Enter is a search again.
+    for (var i = 0; i < 4; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pump();
+    }
+    sent.clear();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await settle(tester);
+    expect(sent.where((r) => r.url.path == '/search/add'), isEmpty);
+    await tester.pumpAndSettle(const Duration(seconds: 6));
+  });
+
   testWidgets('a service that would not answer says so, without emptying the list',
       (tester) async {
     await show(tester);
@@ -203,13 +288,13 @@ void main() {
     await tester.tap(find.text('YouTube').last);
     await tester.pumpAndSettle();
     await settle(tester);
-    expect(asked.last.queryParameters['where'], 'youtube');
+    expect(lastSearch().queryParameters['where'], 'youtube');
 
     // It says so where it can be seen, and one tap there takes it off again.
     expect(find.widgetWithText(InputChip, 'YouTube'), findsOneWidget);
     await tester.tap(find.widgetWithText(InputChip, 'YouTube'));
     await settle(tester);
-    expect(asked.last.queryParameters['where'], 'all');
+    expect(lastSearch().queryParameters['where'], 'all');
     expect(find.byType(InputChip), findsNothing);
   });
 
@@ -223,12 +308,12 @@ void main() {
 
     await tester.tap(find.widgetWithText(ChoiceChip, 'Videos'));
     await settle(tester);
-    expect(asked.last.queryParameters['kind'], 'video');
+    expect(lastSearch().queryParameters['kind'], 'video');
 
     // There is no "All" chip: the same one again takes it off.
     await tester.tap(find.widgetWithText(ChoiceChip, 'Videos'));
     await settle(tester);
-    expect(asked.last.queryParameters['kind'], 'all');
+    expect(lastSearch().queryParameters['kind'], 'all');
   });
 
   testWidgets('a video is a row like a song, and says how long it is', (tester) async {
@@ -240,7 +325,6 @@ void main() {
         reason: 'a song or a two-hour set: the length is half of what you want to know');
   });
 
-  Map<String, dynamic> body(http.Request r) => jsonDecode(r.body) as Map<String, dynamic>;
 
   testWidgets('tapping something that plays, plays it', (tester) async {
     await show(tester);
@@ -278,8 +362,8 @@ void main() {
     await tester.tap(find.widgetWithText(FilterChip, 'Lyrics'));
     await settle(tester);
 
-    expect(asked.last.queryParameters['lyrics'], 'true');
-    expect(asked.last.queryParameters['kind'], 'song',
+    expect(lastSearch().queryParameters['lyrics'], 'true');
+    expect(lastSearch().queryParameters['kind'], 'song',
         reason: 'a record has no lyrics');
     // The kind chips are gone while it is on, because there is only one kind.
     expect(find.widgetWithText(ChoiceChip, 'Records'), findsNothing);

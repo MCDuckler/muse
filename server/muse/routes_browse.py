@@ -128,6 +128,30 @@ SMART = {
     },
 }
 
+_DECADE = re.compile(r"d((?:19|20)\d0)")
+
+
+def _smart_spec(kind: str) -> dict | None:
+    """One of the named lists, or a decade: `d1990` is everything from the nineties.
+
+    A decade is a list that fills itself in like the others — nobody files a song under
+    one — so it is answered the same way. What you have played most of it comes first:
+    a decade is somewhere to go and put something on, not a catalogue to read.
+    """
+    if kind in SMART:
+        return SMART[kind]
+    m = _DECADE.fullmatch(kind)
+    if not m:
+        return None
+    start = int(m.group(1))
+    return {
+        "name": f"The {start}s",
+        "blurb": f"Everything here that came out between {start} and {start + 9}",
+        "where": f"t.release_year between {start} and {start + 9}",
+        "order": "p.plays desc nulls last, t.release_year, lower(coalesce(t.album, ''))",
+    }
+
+
 _SMART_FROM = """
       from tracks t
       join library_items li on li.track_id = t.id and li.user_id = %s
@@ -147,15 +171,31 @@ def smart_lists(user: dict = Depends(current_user)):
             for key, spec in SMART.items())
         + _SMART_FROM + " where t.state = 'ready'",
         (user["id"], user["id"]))
-    return {"lists": [
-        {"id": key, "name": spec["name"], "blurb": spec["blurb"], "count": counts[key]}
-        for key, spec in SMART.items()]}
+    # And the decades there is anything from. Only the ones with something in them: a
+    # shelf marked "1950s" with nothing on it is not a way of browsing.
+    decades = db.all_(
+        """select (t.release_year / 10) * 10 as start, count(*) as n
+             from tracks t
+             join library_items li on li.track_id = t.id and li.user_id = %s
+            where t.state = 'ready' and t.release_year between 1900 and 2099
+            group by 1 order by 1 desc""",
+        (user["id"],))
+    return {
+        "lists": [
+            {"id": key, "name": spec["name"], "blurb": spec["blurb"], "count": counts[key]}
+            for key, spec in SMART.items()],
+        "decades": [
+            {"id": f"d{d['start']}", "name": f"The {d['start']}s",
+             "short": f"{d['start'] % 100:02d}s", "count": d["n"],
+             "blurb": _smart_spec(f"d{d['start']}")["blurb"]}
+            for d in decades],
+    }
 
 
 @router.get("/smart/{kind}")
 def smart_list(kind: str, limit: int = 200, user: dict = Depends(current_user)):
     """One of them, answered now."""
-    spec = SMART.get(kind)
+    spec = _smart_spec(kind)
     if spec is None:
         raise HTTPException(404, "no such list")
     rows = db.all_(

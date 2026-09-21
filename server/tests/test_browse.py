@@ -504,3 +504,29 @@ def test_remote_playlists_say_which_are_mirrored(client, hdr, mirrored, monkeypa
     assert by_id["SP1"]["mirror"]["playlist_id"] == mirrored
     assert by_id["SP1"]["mirror"]["unmatched"] == 1
     assert by_id["SP2"]["mirror"] is None
+
+
+def test_a_decade_is_a_list_that_fills_itself_in(client, hdr, library):
+    """Nobody files a song under the nineties. The year it came out does that, and the
+    shelves offered are only the ones with something on them."""
+    alpha, beta, gamma = library[0], library[1], library[2]
+    db.run("update tracks set state='ready' where id = any(%s)", ([alpha, beta, gamma],))
+    db.run("update tracks set release_year=1994 where id=%s", (alpha,))
+    db.run("update tracks set release_year=1999 where id=%s", (beta,))
+    db.run("update tracks set release_year=2016 where id=%s", (gamma,))
+    client.post("/listens", headers=hdr,
+                json={"track_id": beta, "ms_played": 200_000, "completed": True})
+
+    decades = client.get("/library/smart", headers=hdr).json()["decades"]
+    by_id = {d["id"]: d for d in decades}
+    assert by_id["d1990"]["count"] == 2 and by_id["d1990"]["short"] == "90s"
+    assert by_id["d2010"]["count"] == 1
+    assert "d1980" not in by_id, "nothing from the eighties, so no shelf for it"
+    assert [d["id"] for d in decades] == sorted(by_id, reverse=True), "newest first"
+
+    nineties = client.get("/library/smart/d1990", headers=hdr).json()
+    assert nineties["name"] == "The 1990s"
+    assert [t["id"] for t in nineties["items"]] == [beta, alpha], "what you play, first"
+
+    assert client.get("/library/smart/d1995", headers=hdr).status_code == 404
+    assert client.get("/library/smart/d1990;drop", headers=hdr).status_code == 404

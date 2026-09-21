@@ -1163,18 +1163,39 @@ class ApiClient {
   }
 
   /// The lists that fill themselves in, and how many songs each has right now.
-  Future<List<({String id, String name, String blurb, int count})>> smartLists() async {
+  Future<List<({String id, String name, String blurb, int count})>> smartLists() async =>
+      (await smartShelves()).lists;
+
+  /// The lists that fill themselves in, and the decades there is anything from: both
+  /// are ways into the library that nobody had to file anything under.
+  Future<
+      ({
+        List<({String id, String name, String blurb, int count})> lists,
+        List<({String id, String name, String short, String blurb, int count})> decades,
+      })> smartShelves() async {
     final d = await _decode(await net.get(_u('/library/smart'), headers: _headers))
         as Map<String, dynamic>;
-    return [
-      for (final l in (d['lists'] ?? const []) as List)
-        (
-          id: '${l['id']}',
-          name: (l['name'] ?? '') as String,
-          blurb: (l['blurb'] ?? '') as String,
-          count: (l['count'] ?? 0) as int,
-        )
-    ];
+    return (
+      lists: [
+        for (final l in (d['lists'] ?? const []) as List)
+          (
+            id: '${l['id']}',
+            name: (l['name'] ?? '') as String,
+            blurb: (l['blurb'] ?? '') as String,
+            count: (l['count'] ?? 0) as int,
+          )
+      ],
+      decades: [
+        for (final l in (d['decades'] ?? const []) as List)
+          (
+            id: '${l['id']}',
+            name: (l['name'] ?? '') as String,
+            short: (l['short'] ?? '') as String,
+            blurb: (l['blurb'] ?? '') as String,
+            count: (l['count'] ?? 0) as int,
+          )
+      ],
+    );
   }
 
   /// One of them, answered now.

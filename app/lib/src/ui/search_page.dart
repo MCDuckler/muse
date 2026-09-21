@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -14,7 +15,9 @@ import 'mag.dart';
 import 'artwork.dart';
 import 'dialogs.dart' show Roomy;
 import 'found_row.dart';
+import 'library_page.dart' show SmartListPage;
 import 'motion.dart';
+import 'pane.dart';
 import 'selection_bar.dart';
 import 'snack.dart';
 import 'track_menu.dart';
@@ -46,6 +49,12 @@ final ValueNotifier<int> searchWanted = ValueNotifier<int>(0);
 class _SearchPageState extends State<SearchPage> {
   final _controller = TextEditingController();
   final _focus = FocusNode();
+
+  /// The result the arrow keys have got to, on a keyboard. None until one is pressed:
+  /// Enter with nothing marked still means "search for this".
+  Found? _marked;
+  final _results = ScrollController();
+  final Map<Found, GlobalKey> _rowKeys = {};
 
   List<Found> _found = const [];
   Map<String, String> _notes = const {};
@@ -106,6 +115,9 @@ class _SearchPageState extends State<SearchPage> {
   void initState() {
     super.initState();
     _controller.addListener(_onTyped);
+    // On the field's own node: the keys have to be heard before the text field's own
+    // shortcuts take up and down to mean "start and end of the line".
+    _focus.onKeyEvent = _keys;
     searchWanted.addListener(_wanted);
     unawaited(_loadRecent());
   }
@@ -141,6 +153,73 @@ class _SearchPageState extends State<SearchPage> {
     await prefs.setStringList(_kRecent, next);
   }
 
+  /// The results in the order they are on the page: the top one, then each kind's in
+  /// the order the kinds turned up.
+  List<Found> get _inPageOrder {
+    if (_found.isEmpty) return const [];
+    final rest = _found.skip(1).toList();
+    final kinds = <String>[];
+    for (final f in rest) {
+      if (!kinds.contains(f.kind)) kinds.add(f.kind);
+    }
+    return [
+      _found.first,
+      for (final kind in kinds)
+        for (final f in rest)
+          if (f.kind == kind) f,
+    ];
+  }
+
+  /// The keyboard, for somebody at a desk: down and up walk the results, Enter plays
+  /// or opens the one marked, Shift-Enter puts it on the queue instead, Escape lets go.
+  KeyEventResult _keys(FocusNode node, KeyEvent event) {
+    if (event is KeyUpEvent || _album != null) return KeyEventResult.ignored;
+    final rows = _inPageOrder;
+    if (rows.isEmpty) return KeyEventResult.ignored;
+    final key = event.logicalKey;
+    final at = _marked == null ? -1 : rows.indexOf(_marked!);
+
+    if (key == LogicalKeyboardKey.arrowDown || key == LogicalKeyboardKey.arrowUp) {
+      final to = key == LogicalKeyboardKey.arrowDown
+          ? (at + 1).clamp(0, rows.length - 1)
+          : at - 1;
+      // Up from the first one is back to the field, with nothing marked.
+      setState(() => _marked = to < 0 ? null : rows[to]);
+      if (to >= 0) _bringIntoView(rows[to], to, rows.length);
+      return KeyEventResult.handled;
+    }
+    if (_marked == null || at < 0) return KeyEventResult.ignored;
+    if (key == LogicalKeyboardKey.escape) {
+      setState(() => _marked = null);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.numpadEnter) {
+      final queue = HardwareKeyboard.instance.isShiftPressed && _marked!.plays;
+      unawaited(_open(_marked!, mode: queue ? 'end' : null));
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  void _bringIntoView(Found f, int index, int of) {
+    void show() {
+      final there = _rowKeys[f]?.currentContext;
+      if (there == null) return;
+      Scrollable.ensureVisible(there,
+          alignment: 0.5,
+          alignmentPolicy: ScrollPositionAlignmentPolicy.explicit,
+          duration: const Duration(milliseconds: 120));
+    }
+
+    if (_rowKeys[f]?.currentContext != null) return show();
+    // Not built: the list only makes the rows near the screen. Go to roughly where it
+    // is, and settle on it once it exists.
+    if (!_results.hasClients) return;
+    final p = _results.position;
+    _results.jumpTo((p.maxScrollExtent * index / of).clamp(0.0, p.maxScrollExtent));
+    WidgetsBinding.instance.addPostFrameCallback((_) => show());
+  }
+
   void _searchAgainFor(String q) {
     _controller.text = q;
     _controller.selection = TextSelection.collapsed(offset: q.length);
@@ -152,6 +231,7 @@ class _SearchPageState extends State<SearchPage> {
     _debounce?.cancel();
     searchWanted.removeListener(_wanted);
     _controller.dispose();
+    _results.dispose();
     _focus.dispose();
     super.dispose();
   }
@@ -208,6 +288,8 @@ class _SearchPageState extends State<SearchPage> {
       setState(() {
         _album = null;
         _found = res.items;
+        _marked = null;
+        _rowKeys.clear();
         _notes = res.notes;
         _searched = true;
         _arrivedAt = DateTime.now();
@@ -539,7 +621,11 @@ class _SearchPageState extends State<SearchPage> {
           // Only rows built as the results land: a row scrolled back into view a
           // minute later is not arriving.
           animate: animate,
-          child: child,
+          child: _Marked(
+            key: _rowKeys.putIfAbsent(f, GlobalKey.new),
+            on: identical(f, _marked),
+            child: child,
+          ),
         );
 
     rows.add(arriving(
@@ -572,6 +658,7 @@ class _SearchPageState extends State<SearchPage> {
       }
     }
     return ListView.builder(
+      controller: _results,
       padding: const EdgeInsets.fromLTRB(8, 0, 8, 160),
       itemCount: rows.length,
       itemBuilder: (context, i) => rows[i],
@@ -807,7 +894,7 @@ class _FoundAlbumSheetState extends State<_FoundAlbumSheet> {
 
 /// The empty search: what was looked for before, and — the first time — what this
 /// box can do.
-class _SearchPrompt extends StatelessWidget {
+class _SearchPrompt extends StatefulWidget {
   const _SearchPrompt(
       {required this.recent, required this.onPick, required this.onForget});
   final List<String> recent;
@@ -815,13 +902,57 @@ class _SearchPrompt extends StatelessWidget {
   final void Function(String) onForget;
 
   @override
+  State<_SearchPrompt> createState() => _SearchPromptState();
+}
+
+/// The page before anything has been typed: somewhere to start from.
+///
+/// It used to be a paragraph explaining what a search box is. Half the time somebody
+/// opens this tab they do not have a name in mind — they want something to put on —
+/// and the library already knows several answers to that which nobody had to file
+/// anything under: what has never been played, what was added this month, what came
+/// out in the nineties.
+class _SearchPromptState extends State<_SearchPrompt> {
+  /// Kept between visits to the tab, so the page is not rebuilt from nothing each
+  /// time it is come back to; asked for again anyway, because plays change it.
+  static List<({String id, String name, String blurb, int count})> _lists = const [];
+  static List<({String id, String name, String short, String blurb, int count})>
+      _decades = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _ask();
+  }
+
+  Future<void> _ask() async {
+    try {
+      final got = await context.read<AppState>().api.smartShelves();
+      if (!mounted) return;
+      setState(() {
+        _lists = [for (final l in got.lists) if (l.count > 0) l];
+        _decades = got.decades;
+      });
+    } catch (_) {
+      // No connection, or a server from before these existed: the page is the recent
+      // searches and nothing else, which is what it always was.
+    }
+  }
+
+  Future<void> _open(String id, String name, String blurb) async {
+    await openPage(context, (_) => SmartListPage(id: id, name: name, blurb: blurb));
+    if (mounted) unawaited(_ask());
+  }
+
+  @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final style = Theme.of(context)
-        .textTheme
-        .bodyMedium
-        ?.copyWith(color: scheme.outline);
-    if (recent.isEmpty) {
+    final recent = widget.recent;
+    final quiet = Mag.typewriter(11, color: scheme.onSurfaceVariant);
+
+    if (recent.isEmpty && _lists.isEmpty && _decades.isEmpty) {
+      final style =
+          Theme.of(context).textTheme.bodyMedium?.copyWith(color: scheme.outline);
       return Roomy(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -845,31 +976,170 @@ class _SearchPrompt extends StatelessWidget {
         ),
       );
     }
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
-          child: Text('RECENT',
-              style: Theme.of(context)
-                  .textTheme
-                  .labelSmall
-                  ?.copyWith(color: scheme.onSurfaceVariant)),
-        ),
-        for (final q in recent)
-          ListTile(
-            dense: true,
-            leading: Icon(Icons.history, color: scheme.onSurfaceVariant),
-            title: Text(q, maxLines: 1, overflow: TextOverflow.ellipsis),
-            trailing: IconButton(
-              icon: const Icon(Icons.close, size: 18),
-              tooltip: 'Forget',
-              visualDensity: VisualDensity.compact,
-              onPressed: () => onForget(q),
+
+    return LayoutBuilder(builder: (context, box) {
+      // Two cards to a row on a phone, more where there is the room for them.
+      final across = (box.maxWidth / 230).floor().clamp(2, 4);
+      final gap = 8.0;
+      final card = (box.maxWidth - 32 - gap * (across - 1)) / across;
+      return ListView(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 160),
+        children: [
+          if (recent.isNotEmpty) ...[
+            const _IndexHead('Recent', flush: true),
+            const SizedBox(height: 6),
+            // Chips rather than a row each: they are a few words, there are a dozen
+            // of them, and as a list they pushed everything else off the page.
+            Wrap(
+              spacing: 6,
+              runSpacing: 2,
+              children: [
+                for (final q in recent)
+                  InputChip(
+                    label: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 200),
+                      child: Text(q, maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => widget.onPick(q),
+                    deleteButtonTooltipMessage: 'Forget',
+                    onDeleted: () => widget.onForget(q),
+                  ),
+              ],
             ),
-            onTap: () => onPick(q),
+          ],
+          if (_lists.isNotEmpty) ...[
+            const _IndexHead('Or start from', flush: true),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: gap,
+              runSpacing: gap,
+              children: [
+                for (final l in _lists)
+                  _BrowseCard(
+                    width: card,
+                    name: l.name,
+                    blurb: l.blurb,
+                    count: l.count,
+                    onTap: () => _open(l.id, l.name, l.blurb),
+                  ),
+              ],
+            ),
+          ],
+          if (_decades.isNotEmpty) ...[
+            const _IndexHead('By decade', flush: true),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: gap,
+              runSpacing: gap,
+              children: [
+                for (final d in _decades)
+                  _DecadeTile(
+                    short: d.short,
+                    count: d.count,
+                    label: d.name,
+                    onTap: () => _open(d.id, d.name, d.blurb),
+                  ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 22),
+          Text('A pasted YouTube or Bandcamp link works too. Lyrics looks for the words.',
+              style: quiet),
+        ],
+      );
+    });
+  }
+}
+
+/// One way into the library: what it is called, what it is, how much is in it.
+class _BrowseCard extends StatelessWidget {
+  const _BrowseCard({
+    required this.width,
+    required this.name,
+    required this.blurb,
+    required this.count,
+    required this.onTap,
+  });
+
+  final double width;
+  final String name;
+  final String blurb;
+  final int count;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      width: width,
+      child: Material(
+        color: scheme.surfaceContainerHighest,
+        child: InkWell(
+          onTap: onTap,
+          child: Container(
+            decoration: BoxDecoration(
+                border: Border(top: BorderSide(color: scheme.onSurface, width: 2))),
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('$count', style: Mag.numerals(26, color: scheme.primary)),
+                const SizedBox(height: 2),
+                Text(name.toUpperCase(),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Mag.headline(18, color: scheme.onSurface)),
+                const SizedBox(height: 3),
+                Text(blurb,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: Mag.typewriter(10.5, color: scheme.onSurfaceVariant)),
+              ],
+            ),
           ),
-      ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A decade, the way a magazine would flag one: two figures and an s.
+class _DecadeTile extends StatelessWidget {
+  const _DecadeTile(
+      {required this.short, required this.count, required this.label, required this.onTap});
+
+  final String short;
+  final int count;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      button: true,
+      label: '$label, $count songs',
+      excludeSemantics: true,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Container(
+            constraints: const BoxConstraints(minWidth: 76),
+            padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
+            decoration: BoxDecoration(border: Border.all(color: scheme.onSurface)),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(short.toUpperCase(), style: Mag.headline(30, color: scheme.onSurface)),
+                Text('$count', style: Mag.typewriter(10.5, color: scheme.onSurfaceVariant)),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -896,6 +1166,40 @@ class _NothingFound extends StatelessWidget {
           ),
         ),
       );
+}
+
+/// The row the arrow keys are on: a rule down its left edge in the accent, and the
+/// faintest tint, over the row so that marking it does not move what is in it.
+class _Marked extends StatelessWidget {
+  const _Marked({super.key, required this.on, required this.child});
+
+  final bool on;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // Painted over the row rather than put behind it as a decoration: a row's own ink
+    // is drawn on the Material underneath, and a coloured box in between hides it.
+    return CustomPaint(
+      foregroundPainter: on ? _MarkPainter(scheme.primary) : null,
+      child: child,
+    );
+  }
+}
+
+class _MarkPainter extends CustomPainter {
+  const _MarkPainter(this.colour);
+  final Color colour;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(Offset.zero & size, Paint()..color = colour.withValues(alpha: 0.07));
+    canvas.drawRect(Rect.fromLTWH(0, 0, 3, size.height), Paint()..color = colour);
+  }
+
+  @override
+  bool shouldRepaint(_MarkPainter old) => old.colour != colour;
 }
 
 /// The best match, on a card of its own at the top of the index.
@@ -991,9 +1295,12 @@ class _TopResult extends StatelessWidget {
 
 /// A head in the index: the kind, in spaced red capitals over a rule.
 class _IndexHead extends StatelessWidget {
-  const _IndexHead(this.text);
+  const _IndexHead(this.text, {this.flush = false});
 
   final String text;
+
+  /// On a page that already has its own margins.
+  final bool flush;
 
   @override
   Widget build(BuildContext context) {
@@ -1001,7 +1308,9 @@ class _IndexHead extends StatelessWidget {
     return Semantics(
       header: true,
       child: Container(
-        margin: const EdgeInsets.fromLTRB(16, 16, 16, 2),
+        margin: flush
+            ? const EdgeInsets.only(top: 18, bottom: 2)
+            : const EdgeInsets.fromLTRB(16, 16, 16, 2),
         padding: const EdgeInsets.only(bottom: 3),
         decoration: BoxDecoration(border: Border(bottom: BorderSide(color: scheme.onSurface))),
         child: Text(text.toUpperCase(), style: Mag.flag(10.5, color: scheme.primary)),
