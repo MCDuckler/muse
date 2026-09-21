@@ -7,6 +7,7 @@ import logging
 import mimetypes
 import pathlib
 import re
+import subprocess
 from contextlib import asynccontextmanager
 from typing import Annotated
 from urllib.parse import quote, urlparse
@@ -56,6 +57,11 @@ def publish(event: str, data: dict, to_user: int | None = None) -> None:
                 q.put_nowait(payload)
 
     _loop.call_soon_threadsafe(_fan_out)
+
+
+# The most one upload from somebody's computer may be: a song is a few megabytes and
+# an hour-long set is sixty; anything past this is not a song.
+DEVICE_UPLOAD_LIMIT = 400 * 1024 * 1024
 
 
 def create_app(configuration: config.Config, start_workers: bool = False) -> FastAPI:
@@ -489,9 +495,36 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         if not row or row["leased_by"] != device["worker"]:
             raise HTTPException(403, "that job is not this device's")
 
-    # The most one upload from somebody's computer may be: a song is a few megabytes and
-    # an hour-long set is sixty; anything past this is not a song.
-    DEVICE_UPLOAD_LIMIT = 400 * 1024 * 1024
+    def _is_a_song(path: pathlib.Path) -> str | None:
+        """Whether ffprobe can find a sound in it. What a device hands in is served to
+        everybody as the song, so it has to at least be one: a file that is not audio
+        would go out to every phone in the house as if it were."""
+        try:
+            out = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries",
+                 "stream=codec_type:format=duration", "-of", "default=nw=1", str(path)],
+                capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return f"could not look at it: {e}"
+        if out.returncode != 0 or "codec_type=audio" not in out.stdout:
+            return "not an audio file"
+        m = re.search(r"duration=([\d.]+)", out.stdout)
+        if not m or float(m.group(1)) < 0.5:
+            return "no sound in it"
+        return None
+
+    def _number(info: dict, key: str, kind):
+        """A number out of what a device said, or None; never something that the
+        database would refuse and turn into a stack trace."""
+        v = info.get(key)
+        if v is None or isinstance(v, bool):
+            return None
+        try:
+            v = kind(v)
+        except (TypeError, ValueError):
+            return None
+        # Inside what the column holds; NaN and infinity are not numbers to it either.
+        return v if v == v and abs(v) < 2**31 else None
 
     @app.post("/internal/jobs/lease")
     def lease(body: dict, device: dict | None = Depends(worker_auth)):
@@ -542,8 +575,11 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     def complete(job_id: int, meta: str = Form(...), audio: UploadFile = None,
                  device: dict | None = Depends(worker_auth)):
         _holds(job_id, device)
-        info = json.loads(meta)
-        track_id = int(info["track_id"])
+        try:
+            info = json.loads(meta)
+            track_id = int(info["track_id"])
+        except (ValueError, TypeError, KeyError):
+            raise HTTPException(400, "meta must say which track, as a number")
         if audio is None:
             raise HTTPException(400, "audio file required")
         if device is not None:
@@ -552,20 +588,32 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             job = db.one("select payload from jobs where id=%s", (job_id,))
             if int((job or {}).get("payload", {}).get("track_id") or -1) != track_id:
                 raise HTTPException(403, "that is not the song this job was for")
-            if (audio.size or 0) > DEVICE_UPLOAD_LIMIT:
-                raise HTTPException(413, "too large to be a song")
-        digest, path, size = storage.store_stream(cfg.audio_dir, audio.file, ".m4a")
+        # The house's own downloader is trusted with what it hands in; somebody's
+        # computer is held to a size, counted as it comes in rather than read off a
+        # header it wrote itself, and to the file being a sound at all.
+        try:
+            digest, path, size = storage.store_stream(
+                cfg.audio_dir, audio.file, ".m4a",
+                limit=DEVICE_UPLOAD_LIMIT if device is not None else None,
+                accept=_is_a_song if device is not None else None)
+        except storage.TooBig:
+            raise HTTPException(413, "too large to be a song")
+        except storage.NotAccepted as e:
+            raise HTTPException(400, f"that is not a song: {e}")
+        codec = info.get("codec")
         db.run(
             """insert into media(track_id,sha256,codec,bitrate,bytes,path)
                values(%s,%s,%s,%s,%s,%s) on conflict (track_id,sha256) do nothing""",
-            (track_id, digest, info.get("codec"), info.get("bitrate"), size, str(path)),
+            (track_id, digest, str(codec)[:32] if codec is not None else None,
+             _number(info, "bitrate", int), size, str(path)),
         )
         db.run(
             """update tracks set state='ready', fail_reason=null,
                       duration_ms=coalesce(%s,duration_ms),
                       loudness_lufs=%s, gain_db=%s
                 where id=%s""",
-            (info.get("duration_ms"), info.get("loudness_lufs"), info.get("gain_db"), track_id),
+            (_number(info, "duration_ms", int), _number(info, "loudness_lufs", float),
+             _number(info, "gain_db", float), track_id),
         )
         jobs.finish(job_id)
         progress.clear(track_id)

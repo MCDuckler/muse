@@ -112,8 +112,15 @@ Future<void> resumeFetching(AppState app) async {
   if (await _takeTheLock()) await d.start();
 }
 
+/// On the way out of an account. The token in the helper's file was that account's;
+/// it goes with it, and so does the helper, which cannot fetch without one.
 Future<void> stopFetching() async {
   await _downloader?.stop();
+  await _dropTheLock();
+  try {
+    final bg = await _background();
+    if (await bg.files.config.exists()) await bg.stop();
+  } catch (_) {}
 }
 
 Widget thisComputerPage() => const _ThisComputerPage();

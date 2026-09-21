@@ -57,14 +57,7 @@ class HelperFiles {
 
   /// The token in it is this device's sign-in, so the file is the user's alone where
   /// the system has a way of saying so. (On Windows the folder already is.)
-  Future<void> writeConfig(HelperConfig c) async {
-    await _write(config, c.toJson());
-    if (!Platform.isWindows) {
-      try {
-        await Process.run('chmod', ['600', config.path]);
-      } catch (_) {}
-    }
-  }
+  Future<void> writeConfig(HelperConfig c) => _write(config, c.toJson(), private: true);
 
   Future<void> writeStatus(FetchStatus s) => _write(status, s.toJson());
 
@@ -77,15 +70,24 @@ class HelperFiles {
     }
   }
 
-  /// Written beside and moved into place, so a reader never sees half a file.
-  Future<void> _write(File f, Object what) async {
+  /// Written beside and moved into place, so a reader never sees half a file. A
+  /// [private] one is made empty and closed to everybody else *before* anything goes in
+  /// it: a file that is created with the token already inside and locked down after is
+  /// readable by the whole machine for the moment in between.
+  Future<void> _write(File f, Object what, {bool private = false}) async {
     try {
       await dir.create(recursive: true);
       final beside = File('${f.path}.new');
+      if (private && !Platform.isWindows) {
+        await beside.writeAsString('', flush: true);
+        final r = await Process.run('chmod', ['600', beside.path]);
+        if (r.exitCode != 0) throw FileSystemException('could not make it private', beside.path);
+      }
       await beside.writeAsString(jsonEncode(what), flush: true);
       await beside.rename(f.path);
     } catch (_) {
-      // A status nobody could write is a status nobody reads; the fetching goes on.
+      // A status nobody could write is a status nobody reads; the fetching goes on. A
+      // config that could not be made private is not written at all.
     }
   }
 }

@@ -44,10 +44,14 @@ void main() {
     expect(await files.readConfig(), isNull, reason: 'no token is no config');
   });
 
-  test('the token is the user\'s alone on disk', () async {
+  test('the token is the user\'s alone on disk, from the first byte', () async {
     await files.writeConfig(const HelperConfig(on: true, server: 'https://x', token: 'secret'));
     final mode = (await files.config.stat()).mode & 0x1FF;
     expect(mode, 0x180, reason: 'rw for the owner and nothing for anybody else');
+    // Written over: still private, and nothing left beside it.
+    await files.writeConfig(const HelperConfig(on: false, server: 'https://x', token: '-'));
+    expect((await files.config.stat()).mode & 0x1FF, 0x180);
+    expect(await File('${files.config.path}.new').exists(), isFalse);
   }, skip: Platform.isWindows);
 
   test('switching it off takes the token out of the file', () async {

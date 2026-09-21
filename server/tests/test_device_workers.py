@@ -10,10 +10,26 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
+import subprocess
 
 import pytest
 
 from muse import auth, db
+
+
+@pytest.fixture(scope="module")
+def a_song(tmp_path_factory) -> bytes:
+    """A second of tone as an m4a, which is what a device would really hand in. Made
+    with ffmpeg, which the server needs anyway to look at what comes in."""
+    if not shutil.which("ffmpeg"):
+        pytest.skip("no ffmpeg here")
+    out = tmp_path_factory.mktemp("song") / "tone.m4a"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+         "-c:a", "aac", "-b:a", "48k", str(out)],
+        capture_output=True, check=True)
+    return out.read_bytes()
 
 
 @pytest.fixture()
@@ -82,7 +98,7 @@ def test_a_device_touches_only_the_jobs_it_holds(client, hdr, wsec, sam):
     assert db.one("select state from tracks where id=%s", (tid,))["state"] != "ready"
 
 
-def test_a_device_cannot_file_its_upload_under_another_song(client, hdr, sam):
+def test_a_device_cannot_file_its_upload_under_another_song(client, hdr, sam, a_song):
     client.post(f"/devices/{sam['device']}/ingest", headers=hdr, json={"allowed": True})
     wanted = _queue_a_song(client, hdr, "DEVW0000003")
     other = _queue_a_song(client, hdr, "DEVW0000004")
@@ -99,8 +115,59 @@ def test_a_device_cannot_file_its_upload_under_another_song(client, hdr, sam):
                      data={"meta": json.dumps({"track_id": job["payload"]["track_id"],
                                                "codec": "aac", "bitrate": 128000,
                                                "duration_ms": 1000})},
-                     files={"audio": ("a.m4a", io.BytesIO(b"x" * 64), "audio/mp4")})
+                     files={"audio": ("a.m4a", io.BytesIO(a_song), "audio/mp4")})
     assert ok.status_code == 200, ok.text
+
+
+def test_what_a_device_hands_in_has_to_be_a_song(client, hdr, sam, a_song, monkeypatch, cfg):
+    """It is served to everybody as the song, so it has to be one: not sixty-four
+    bytes of x, not a file bigger than any song — counted as it comes in, since the
+    sender writes the header — and not a meta that would make the database throw."""
+    from muse import app as app_module
+    client.post(f"/devices/{sam['device']}/ingest", headers=hdr, json={"allowed": True})
+
+    def take():
+        _queue_a_song(client, hdr, f"DEVW00000{take.n:02d}")
+        take.n += 1
+        return client.post("/internal/jobs/lease", headers=sam["hdr"],
+                           json={"limit": 1}).json()["jobs"][0]
+    take.n = 10
+
+    job = take()
+    tid = job["payload"]["track_id"]
+    not_a_song = client.post(f"/internal/jobs/{job['id']}/complete", headers=sam["hdr"],
+                             data={"meta": json.dumps({"track_id": tid})},
+                             files={"audio": ("a.m4a", io.BytesIO(b"x" * 64), "audio/mp4")})
+    assert not_a_song.status_code == 400, not_a_song.text
+    assert db.one("select state from tracks where id=%s", (tid,))["state"] != "ready"
+    # And nothing of it was kept where songs are served from.
+    assert not any(p.is_file() and p.stat().st_size == 64 for p in cfg.audio_dir.rglob("*"))
+
+    # Too big, whatever the header says: the limit is counted on the way in.
+    monkeypatch.setattr(app_module, "DEVICE_UPLOAD_LIMIT", 1024)
+    job = take()
+    tid = job["payload"]["track_id"]
+    big = client.post(f"/internal/jobs/{job['id']}/complete", headers=sam["hdr"],
+                      data={"meta": json.dumps({"track_id": tid})},
+                      files={"audio": ("a.m4a", io.BytesIO(a_song + b"\0" * 4096), "audio/mp4")})
+    assert big.status_code == 413, big.text
+    monkeypatch.undo()
+
+    # A meta full of nonsense is a bad request, not a stack trace — and a good file with
+    # a nonsense number in its meta is still taken, minus the number.
+    job = take()
+    tid = job["payload"]["track_id"]
+    assert client.post(f"/internal/jobs/{job['id']}/complete", headers=sam["hdr"],
+                       data={"meta": "not json"},
+                       files={"audio": ("a.m4a", io.BytesIO(a_song), "audio/mp4")}
+                       ).status_code == 400
+    ok = client.post(f"/internal/jobs/{job['id']}/complete", headers=sam["hdr"],
+                     data={"meta": json.dumps({"track_id": tid, "duration_ms": "long",
+                                               "loudness_lufs": "NaN", "bitrate": True})},
+                     files={"audio": ("a.m4a", io.BytesIO(a_song), "audio/mp4")})
+    assert ok.status_code == 200, ok.text
+    row = db.one("select state, loudness_lufs from tracks where id=%s", (tid,))
+    assert row["state"] == "ready" and row["loudness_lufs"] is None
 
 
 def test_taking_the_permission_away_gives_the_work_back(client, hdr, sam):

@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/client.dart';
 import '../api/connection.dart';
+import '../worker/this_computer.dart' show stopFetching;
 import '../api/models.dart';
 import 'eq_engines.dart';
 import 'equalizer.dart';
@@ -875,6 +876,11 @@ class AppState extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kToken);
     await prefs.remove(_kLastQueue);
+    // The downloader was working under this account's token; it stops, and the copy
+    // of the token it keeps on disk for the windowless fetcher goes.
+    try {
+      await stopFetching();
+    } catch (_) {}
     _events?.cancel();
     _events = null;
     _statusTimer?.cancel();
