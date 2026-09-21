@@ -10,6 +10,7 @@ import 'dialogs.dart';
 import 'mini_player.dart';
 import 'snack.dart';
 import 'skeleton.dart';
+import 'record_refresh.dart';
 
 /// One screen for the whole download queue.
 ///
@@ -121,7 +122,7 @@ class _DownloadsPageState extends State<DownloadsPage> {
           ? ErrorRetry(error: _error!, onRetry: _load)
           : d == null
               ? const SongsComing()
-              : RefreshIndicator(
+              : RecordRefresh(
                   onRefresh: _load,
                   child: ListView(
                     padding: EdgeInsets.only(bottom: bottomForPlayer(context)),

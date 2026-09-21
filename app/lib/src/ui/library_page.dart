@@ -23,6 +23,7 @@ import 'snack.dart';
 import 'skeleton.dart';
 import 'theme.dart';
 import 'track_list.dart';
+import 'record_refresh.dart';
 
 
 class LibraryPage extends StatelessWidget {
@@ -31,7 +32,7 @@ class LibraryPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
-    return RefreshIndicator(
+    return RecordRefresh(
       onRefresh: app.refresh,
       child: ListView(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
@@ -440,7 +441,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                         _reload();
                       },
               ),
-            child: RefreshIndicator(
+            child: RecordRefresh(
             onRefresh: () async => _reload(),
             child: ReorderableListView.builder(
             padding: EdgeInsets.fromLTRB(8, 4, 8, bottomForPlayer(context)),
@@ -576,7 +577,7 @@ class _HistoryPageState extends State<_HistoryPage> {
           final tracks = [for (final p in items) p.track];
           return SelectionOver(
             bar: SelectionBar(where: 'history', tracks: tracks),
-            child: RefreshIndicator(
+            child: RecordRefresh(
             onRefresh: () async => _load(),
             child: ListView.builder(
               padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
@@ -1143,7 +1144,7 @@ class _SmartListPageState extends State<SmartListPage> {
               );
             }
             context.read<AppState>().keepCoversFor(tracks);
-            return RefreshIndicator(
+            return RecordRefresh(
               onRefresh: () async => _load(),
               child: TrackList(
                 tracks: tracks,

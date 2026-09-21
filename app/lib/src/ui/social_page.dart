@@ -16,6 +16,7 @@ import 'when.dart';
 import 'theme.dart';
 import 'mag_parts.dart';
 import 'mag.dart';
+import 'record_refresh.dart';
 
 /// Everybody else on this server.
 ///
@@ -87,7 +88,7 @@ class _SocialPageState extends State<SocialPage> {
         if (p.jam != null || (p.playing?.now ?? false)) p
     ];
     final scheme = Theme.of(context).colorScheme;
-    return RefreshIndicator(
+    return RecordRefresh(
       onRefresh: _load,
       child: ListView(
         padding: const EdgeInsets.fromLTRB(8, 8, 8, 160),
@@ -394,7 +395,7 @@ class _PersonPageState extends State<PersonPage> {
     final jam = them.jam;
     return PlayerScaffold(
       appBar: AppBar(title: Text(them.name)),
-      body: RefreshIndicator(
+      body: RecordRefresh(
         onRefresh: _load,
         child: ListView(
           padding: EdgeInsets.fromLTRB(8, 8, 8, bottomForPlayer(context)),

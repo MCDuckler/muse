@@ -19,6 +19,7 @@ import 'selection_bar.dart';
 import 'artwork.dart';
 import 'snack.dart';
 import 'widths.dart';
+import 'record_refresh.dart';
 
 /// The queue as a page of its own: Up next.
 ///
@@ -397,7 +398,7 @@ class _QueuePageState extends State<QueuePage> {
                 // question a dozen times.
                 final picked = _pickedPositions(context, rows, active);
                 final pickedSet = picked.toSet();
-                return RefreshIndicator(
+                return RecordRefresh(
                   onRefresh: app.refresh,
                   child: Column(
                     children: [

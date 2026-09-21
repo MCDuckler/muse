@@ -11,6 +11,7 @@ import 'dialogs.dart';
 import 'mini_player.dart';
 import 'snack.dart';
 import 'skeleton.dart';
+import 'record_refresh.dart';
 
 /// What the artists you follow have put out.
 ///
@@ -108,7 +109,7 @@ class _FeedPageState extends State<FeedPage> {
               body: 'Nothing has come out since you started following.',
             );
           }
-          return RefreshIndicator(
+          return RecordRefresh(
             onRefresh: () async => _load(),
             child: ListView.builder(
               padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),

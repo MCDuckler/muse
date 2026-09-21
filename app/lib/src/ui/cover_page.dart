@@ -18,6 +18,7 @@ import 'mini_player.dart' show bottomForPlayer;
 import 'skeleton.dart';
 import 'song_row.dart';
 import 'snack.dart';
+import 'record_refresh.dart';
 
 /// Home: this week's issue.
 ///
@@ -132,7 +133,7 @@ class _CoverPageState extends State<CoverPage> {
     final now = DateTime.now();
     final scheme = Theme.of(context).colorScheme;
 
-    return RefreshIndicator(
+    return RecordRefresh(
       onRefresh: _print,
       child: ListView(
         padding: EdgeInsets.only(bottom: bottomForPlayer(context)),

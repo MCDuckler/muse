@@ -13,6 +13,7 @@ import 'mini_player.dart';
 import 'snack.dart';
 import 'skeleton.dart';
 import 'theme.dart';
+import 'record_refresh.dart';
 
 /// The charts: what was actually listened to, ranked.
 ///
@@ -78,7 +79,7 @@ class _ListeningPageState extends State<ListeningPage> {
           final d = snap.data!;
           final scheme = Theme.of(context).colorScheme;
           final mine = d.whoId == 0 || d.people.length < 2;
-          return RefreshIndicator(
+          return RecordRefresh(
             onRefresh: () async => _load(),
             child: ListView(
               padding: EdgeInsets.fromLTRB(14, 4, 14, bottomForPlayer(context)),

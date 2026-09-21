@@ -29,6 +29,7 @@ import 'track_list.dart';
 import 'track_menu.dart';
 import 'widths.dart';
 import 'snack.dart';
+import 'record_refresh.dart';
 
 /// Getting the audio for everything here.
 ///
@@ -279,7 +280,7 @@ class _AllTracksPageState extends State<AllTracksPage> {
             // The shape of the list, rather than a spinner in front of a blank page.
             return const SongsComing(rows: 9);
           }
-          return RefreshIndicator(
+          return RecordRefresh(
             onRefresh: _tracks.reload,
             child: TrackList(
               tracks: _tracks.items,
@@ -397,7 +398,7 @@ class _AlbumsPageState extends State<AlbumsPage> {
                   : 'No record or artist here matches “$_q”.',
             );
           }
-          return RefreshIndicator(
+          return RecordRefresh(
             onRefresh: _albums.reload,
             child: NotificationListener<ScrollNotification>(
               onNotification: (n) {
@@ -592,7 +593,7 @@ class _AlbumPageState extends State<AlbumPage> {
           final where = 'album:${widget.album?.name ?? widget.remoteId ?? ''}';
           return SelectionOver(
             bar: SelectionBar(where: where, tracks: held),
-            child: RefreshIndicator(
+            child: RecordRefresh(
             onRefresh: () async => _load(),
             child: ListView(
               padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
@@ -1167,7 +1168,7 @@ class _ArtistsPageState extends State<ArtistsPage> {
                   : 'No artist here matches “$_q”.',
             );
           }
-          return RefreshIndicator(
+          return RecordRefresh(
             onRefresh: _artists.reload,
             child: NotificationListener<ScrollNotification>(
               onNotification: (n) {
@@ -1274,7 +1275,7 @@ class _ArtistPageState extends State<ArtistPage> {
           final where = 'artist:${d.name}';
           return SelectionOver(
             bar: SelectionBar(where: where, tracks: d.tracks),
-            child: RefreshIndicator(
+            child: RecordRefresh(
             onRefresh: () async => _load(),
             child: ListView(
               padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),

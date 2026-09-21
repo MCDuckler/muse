@@ -15,6 +15,7 @@ import 'spotify_page.dart';
 import 'youtube_setup.dart';
 import 'snack.dart';
 import 'widths.dart';
+import 'record_refresh.dart';
 
 /// Services linked by typing a name.
 ///
@@ -270,7 +271,7 @@ class _ServicesPageState extends State<ServicesPage> {
           ? ErrorRetry(error: _error!, onRetry: _load)
           : services == null
               ? const Center(child: CircularProgressIndicator())
-              : RefreshIndicator(
+              : RecordRefresh(
                   onRefresh: _load,
                   child: ListView(
                     padding: EdgeInsets.fromLTRB(16, 8, 16, bottomForPlayer(context)),

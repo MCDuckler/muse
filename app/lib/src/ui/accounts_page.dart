@@ -10,6 +10,7 @@ import '../state/app_state.dart';
 import 'artwork.dart';
 import 'dialogs.dart';
 import 'snack.dart';
+import 'record_refresh.dart';
 
 /// The picture on everybody's home screen.
 ///
@@ -330,7 +331,7 @@ class _AccountsPageState extends State<AccountsPage> {
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           final data = snap.data!;
 
-          return RefreshIndicator(
+          return RecordRefresh(
             onRefresh: () async => _load(),
             child: ListView(
               children: [
