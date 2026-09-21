@@ -1,11 +1,15 @@
 """Lyrics and listening history — the two things a player needs that are not audio."""
 from __future__ import annotations
 
+import pathlib
+import subprocess
+
 import httpx
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Response
 
 from . import catalog, db
-from .deps import current_user
+from . import peaks as _peaks
+from .deps import cfg, current_user
 
 router = APIRouter()
 
@@ -14,6 +18,27 @@ LRCLIB = "https://lrclib.net/api/get"
 # is fetch-on-demand and cached forever. A miss is cached too — an instrumental will
 # not gain lyrics by being asked twice.
 UA = "muse/0.1 (personal music server; https://github.com/local/muse)"
+
+
+@router.get("/tracks/{track_id}/peaks")
+def peaks(track_id: int, response: Response, user: dict = Depends(current_user)):
+    """The song's loudness, a slice at a time, for drawing the seek bar as its shape.
+
+    Only for a song whose audio is here: the shape of something not downloaded yet is
+    not known, and the bar draws flat until it is."""
+    t = catalog.track_row(track_id)
+    if not t or not t.get("path"):
+        raise HTTPException(404, "not ready" if t else "no such track")
+    audio = pathlib.Path(t["path"])
+    if not audio.exists():
+        raise HTTPException(404, "the audio is missing")
+    try:
+        shape = _peaks.for_track(cfg().data_dir, audio, t["sha256"])
+    except (subprocess.SubprocessError, OSError) as e:
+        raise HTTPException(502, "could not read the audio") from e
+    # The same file always has the same shape, and the file is named by its hash.
+    response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+    return {"peaks": shape, "slices": len(shape)}
 
 
 @router.get("/tracks/{track_id}/lyrics")

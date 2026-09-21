@@ -1647,10 +1647,32 @@ class _ScrubberState extends State<_ScrubberBar>
   double? _seeking;
   DateTime? _seekAt;
 
+  /// Each song's shape, asked for once when it comes on. A song not asked for yet is
+  /// missing from the map; one with no shape to give is in it as null.
+  static final Map<int, List<int>?> _shapes = {};
+  static final Set<int> _asking = {};
+
+  void _askForShape(AppState app, int id) {
+    if (_shapes.containsKey(id) || _asking.contains(id)) return;
+    _asking.add(id);
+    app.api.peaks(id).then((shape) {
+      _shapes[id] = shape;
+    }).catchError((_) {
+      // A flat bar is what there was before; nothing is lost by drawing it.
+      _shapes[id] = null;
+    }).whenComplete(() {
+      _asking.remove(id);
+      if (mounted) setState(() {});
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = widget.snapshot;
     final app = context.watch<AppState>();
+    final songId = s?.current?.id;
+    if (songId != null) _askForShape(app, songId);
+    final shape = songId == null ? null : _shapes[songId];
 
     // The engine only knows a duration once it has read the file's header. The track
     // itself has always known, so a bar that is dead for the first second of every
@@ -1709,11 +1731,38 @@ class _ScrubberState extends State<_ScrubberBar>
           // The last song in the queue, said quietly on the one thing that is already
           // about how much is left.
           on: widget.snapshot?.lastInQueue ?? false,
-          child: SliderTheme(
+          // The song's own shape behind the bar, where it is known: the played part
+          // inked in, the rest faint. The slider on top keeps doing all the work —
+          // the drag, the seek, the reading aloud — with its own track made clear.
+          child: Stack(
+          alignment: Alignment.center,
+          children: [
+          if (shape != null && shape.isNotEmpty)
+            Positioned.fill(
+              child: Padding(
+                // The slider's track is held in by its overlay's radius; the shape
+                // sits on exactly the same line.
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: IgnorePointer(
+                  child: CustomPaint(
+                    painter: _Waveform(
+                      shape: shape,
+                      played: max > 0 ? (value / max).clamp(0.0, 1.0) : 0,
+                      ink: Theme.of(context).colorScheme.primary,
+                      rest: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.22),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          SliderTheme(
           data: SliderTheme.of(context).copyWith(
             trackHeight: 3,
             thumbShape: RoundSliderThumbShape(enabledThumbRadius: enabled ? 7 : 4),
             overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
+            activeTrackColor: shape != null && shape.isNotEmpty ? Colors.transparent : null,
+            inactiveTrackColor:
+                shape != null && shape.isNotEmpty ? Colors.transparent : null,
           ),
           child: Slider(
             value: max > 0 ? value : 0,
@@ -1736,6 +1785,8 @@ class _ScrubberState extends State<_ScrubberBar>
                 : null,
           ),
         ),
+          ],
+          ),
         );
         final elapsed = Text(formatTime(Duration(milliseconds: value.round())),
             style: Theme.of(context).textTheme.labelMedium);
@@ -2074,4 +2125,43 @@ class _PlaybackExtrasState extends State<_PlaybackExtras> {
         ),
     );
   }
+}
+
+/// A song's shape as a seek bar: a bar for each slice of it, as tall as that slice is
+/// loud, mirrored about the line. What has played is inked in; what is to come is
+/// faint.
+class _Waveform extends CustomPainter {
+  _Waveform({required this.shape, required this.played, required this.ink, required this.rest});
+
+  final List<int> shape;
+  final double played;
+  final Color ink;
+  final Color rest;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (shape.isEmpty || size.isEmpty) return;
+    final step = size.width / shape.length;
+    final width = (step * 0.6).clamp(1.0, 4.0);
+    final mid = size.height / 2;
+    final done = Paint()
+      ..color = ink
+      ..strokeWidth = width
+      ..strokeCap = StrokeCap.round;
+    final todo = Paint()
+      ..color = rest
+      ..strokeWidth = width
+      ..strokeCap = StrokeCap.round;
+    final edge = played * size.width;
+    for (var i = 0; i < shape.length; i++) {
+      final x = (i + 0.5) * step;
+      // Never quite flat: a silent slice still shows as a dot on the line.
+      final h = (shape[i] / 255 * mid).clamp(1.0, mid);
+      canvas.drawLine(Offset(x, mid - h), Offset(x, mid + h), x <= edge ? done : todo);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_Waveform old) =>
+      old.played != played || old.shape != shape || old.ink != ink || old.rest != rest;
 }

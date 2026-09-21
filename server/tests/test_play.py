@@ -169,3 +169,28 @@ def test_only_the_last_few_reports_are_kept(client, hdr):
 def test_an_empty_report_is_refused(client, hdr):
     assert client.post("/playback-log", headers=hdr,
                        json={"lines": []}).status_code == 400
+
+
+def test_a_song_has_a_shape_for_its_seek_bar(client, hdr, track, monkeypatch):
+    """Its loudness a slice at a time, measured once and kept."""
+    from muse import peaks
+
+    r = client.get(f"/tracks/{track['id']}/peaks", headers=hdr)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["slices"] == peaks.SLICES == len(body["peaks"])
+    assert max(body["peaks"]) == 255, "the loudest slice is the top of the bar"
+    assert all(0 <= v <= 255 for v in body["peaks"])
+    assert "immutable" in r.headers["cache-control"]
+
+    # The second ask reads what the first worked out: measuring again would fail here.
+    def never(*a, **kw):
+        raise AssertionError("measured twice")
+
+    monkeypatch.setattr(peaks, "measure", never)
+    again = client.get(f"/tracks/{track['id']}/peaks", headers=hdr).json()
+    assert again["peaks"] == body["peaks"]
+
+
+def test_a_song_with_no_audio_has_no_shape_yet(client, hdr):
+    assert client.get("/tracks/999999/peaks", headers=hdr).status_code == 404

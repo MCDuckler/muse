@@ -1,4 +1,10 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:muse/src/api/client.dart';
+import 'package:muse/src/api/connection.dart';
 import 'package:muse/src/api/models.dart';
 
 void main() {
@@ -280,5 +286,17 @@ void _mirrorTests() {
     final l = Listening.fromJson({'songs': []});
     expect(l.plays, 0);
     expect(l.whoName, '');
+  });
+
+  test('a song\'s shape, and none for a song that is not here', () async {
+    useThisClientInstead(MockClient((request) async => request.url.path == '/tracks/1/peaks'
+        ? http.Response(jsonEncode({'peaks': [0, 128, 255], 'slices': 3}), 200,
+            headers: {'content-type': 'application/json'})
+        : http.Response(jsonEncode({'detail': 'not ready'}), 404,
+            headers: {'content-type': 'application/json'})));
+    addTearDown(() => useThisClientInstead(http.Client()));
+    final api = ApiClient(baseUrl: 'http://example.invalid')..token = 'x';
+    expect(await api.peaks(1), [0, 128, 255]);
+    expect(await api.peaks(2), isNull, reason: 'the bar draws flat until it is known');
   });
 }

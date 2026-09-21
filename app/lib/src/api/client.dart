@@ -1260,6 +1260,20 @@ class ApiClient {
               headers: _headers, body: jsonEncode({'from': from, 'to': to})))
           as Map<String, dynamic>);
 
+  /// The song's loudness a slice at a time, 0 to 255, for drawing the seek bar as its
+  /// shape. Null for a song whose audio is not here yet: its shape is not known.
+  Future<List<int>?> peaks(int trackId) async {
+    try {
+      final d = await _decode(
+              await net.get(_u('/tracks/$trackId/peaks'), headers: _headers))
+          as Map<String, dynamic>;
+      return [for (final v in (d['peaks'] as List)) (v as num).toInt()];
+    } on ApiException catch (e) {
+      if (e.status == 404) return null;
+      rethrow;
+    }
+  }
+
   Future<({String? synced, String? plain, String? source})> lyrics(int trackId) async {
     final d = await _decode(
             await net.get(_u('/tracks/$trackId/lyrics'), headers: _headers))
