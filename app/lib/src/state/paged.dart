@@ -32,14 +32,18 @@ class Paged<T> extends ChangeNotifier {
   bool get more => !_done && (total == 0 || items.length < total);
 
   /// The first page, or all of it again after a pull to refresh.
+  ///
+  /// What is on screen stays there until the new rows arrive. Clearing first made a
+  /// refresh a flash of nothing — the list vanished, the scroll jumped to the top, and
+  /// the same rows came back a moment later, which reads as the app losing your place
+  /// rather than as it checking.
   Future<void> reload() async {
     _done = false;
     error = null;
-    final had = items.length;
-    items.clear();
     // Ask for as much as was already on screen, so a refresh does not throw away
     // everything somebody scrolled to.
-    await _get(limit: had > pageSize ? had : pageSize);
+    final had = items.length;
+    await _get(limit: had > pageSize ? had : pageSize, replacing: true);
   }
 
   /// The next page, if there is one and nothing is already in flight.
@@ -48,11 +52,12 @@ class Paged<T> extends ChangeNotifier {
     await _get(limit: pageSize);
   }
 
-  Future<void> _get({required int limit}) async {
+  Future<void> _get({required int limit, bool replacing = false}) async {
     _loading = true;
     notifyListeners();
     try {
-      final page = await fetch(items.length, limit);
+      final page = await fetch(replacing ? 0 : items.length, limit);
+      if (replacing) items.clear();
       items.addAll(page.items);
       total = page.total;
       if (page.items.length < limit) _done = true;

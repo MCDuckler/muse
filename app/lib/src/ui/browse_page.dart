@@ -10,6 +10,7 @@ import '../state/paged.dart';
 import '../state/selection.dart';
 import 'artwork.dart';
 import 'selection_bar.dart';
+import 'skeleton.dart';
 import 'song_row.dart';
 import 'station.dart';
 import 'source_dot.dart';
@@ -267,7 +268,8 @@ class _AllTracksPageState extends State<AllTracksPage> {
             return ErrorRetry(error: _tracks.error!, onRetry: _load);
           }
           if (_tracks.items.isEmpty && _tracks.loading) {
-            return const Center(child: CircularProgressIndicator());
+            // The shape of the list, rather than a spinner in front of a blank page.
+            return const SongsComing(rows: 9);
           }
           return RefreshIndicator(
             onRefresh: _tracks.reload,
@@ -374,7 +376,8 @@ class _AlbumsPageState extends State<AlbumsPage> {
             return ErrorRetry(error: _albums.error!, onRetry: _load);
           }
           if (_albums.items.isEmpty && _albums.loading) {
-            return const Center(child: CircularProgressIndicator());
+            return RecordsComing(
+                extent: Width.of(context) == Width.expanded ? 230 : 190);
           }
           final albums = _albums.items;
           if (albums.isEmpty) {
@@ -531,13 +534,16 @@ class _AlbumPageState extends State<AlbumPage> {
         future: _future,
         builder: (context, snap) {
           if (snap.hasError) return ErrorRetry(error: snap.error!, onRetry: _load);
-          if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+          if (!snap.hasData) return const SongsComing(rows: 7);
           final detail = snap.data!;
           final held = [
             for (final r in detail.tracks)
               if (r.track != null) r.track!,
             ...detail.extra,
           ];
+          // Ask for the artwork of what just arrived, so scrolling it is not a screen
+          // of grey squares filling in one at a time.
+          context.read<AppState>().keepCoversFor(held);
           // A record is a list like any other: several of its songs can be picked
           // out and queued, kept or put on a playlist together. Only the ones we
           // actually hold — a row for a track nobody has fetched has nothing to pick.
@@ -912,7 +918,7 @@ class _ArtistsPageState extends State<ArtistsPage> {
             return ErrorRetry(error: _artists.error!, onRetry: _load);
           }
           if (_artists.items.isEmpty && _artists.loading) {
-            return const Center(child: CircularProgressIndicator());
+            return const SongsComing(rows: 10);
           }
           final artists = _artists.items;
           if (artists.isEmpty) {
@@ -1024,8 +1030,9 @@ class _ArtistPageState extends State<ArtistPage> {
         future: _future,
         builder: (context, snap) {
           if (snap.hasError) return ErrorRetry(error: snap.error!, onRetry: _load);
-          if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+          if (!snap.hasData) return const SongsComing(rows: 7);
           final d = snap.data!;
+          context.read<AppState>().keepCoversFor(d.tracks);
           final text = Theme.of(context).textTheme;
           final where = 'artist:${d.name}';
           return SelectionOver(

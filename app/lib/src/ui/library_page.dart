@@ -18,6 +18,7 @@ import 'selection_bar.dart';
 import 'spotify_page.dart' show UnmatchedPage;
 import 'song_row.dart';
 import 'snack.dart';
+import 'skeleton.dart';
 
 
 class LibraryPage extends StatelessWidget {
@@ -433,8 +434,13 @@ class _PlaylistPageState extends State<PlaylistPage> {
           // A playlist that will not load used to spin for ever: the one loader in the
           // app with no answer for a server that said no.
           if (snap.hasError) return ErrorRetry(error: snap.error!, onRetry: _reload);
+          // Ask for the artwork of what just arrived, so scrolling it is not a screen
+          // of grey squares filling in one at a time.
+          if (snap.hasData) {
+            context.read<AppState>().keepCoversFor(snap.data!.items);
+          }
           if (!snap.hasData) {
-            return const Center(child: CircularProgressIndicator());
+            return const SongsComing(rows: 8);
           }
           final items = snap.data!.items;
           if (items.isEmpty) {
@@ -578,7 +584,7 @@ class _HistoryPageState extends State<_HistoryPage> {
         builder: (context, snap) {
           if (snap.hasError) return ErrorRetry(error: snap.error!, onRetry: _load);
           if (!snap.hasData) {
-            return const Center(child: CircularProgressIndicator());
+            return const SongsComing(rows: 8);
           }
           final items = snap.data!;
           if (items.isEmpty) {

@@ -1022,6 +1022,24 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Put the covers of a list somebody just opened on the device, quietly.
+  ///
+  /// The queue has done this for a while — it is the list you are certain to scroll —
+  /// and every other list filled in as you went: a screen of grey squares turning into
+  /// covers one at a time, every time, because nothing had asked for them until they
+  /// were on screen. A playlist somebody just opened is about to be scrolled too.
+  void keepCoversFor(List<Track> tracks) {
+    if (!ArtCache.supported || tracks.isEmpty) return;
+    final small = <String>[];
+    for (final t in tracks.take(80)) {
+      final url = api.coverUrl(t, small: true);
+      if (url != null) small.add(url);
+    }
+    // Not awaited and not reported: it is four at a time behind whatever is playing,
+    // and if it does not finish the pictures arrive the old way.
+    unawaited(ArtCache.warm(small));
+  }
+
   /// Put the covers of a queue on the device, once, in the background.
   ///
   /// A queue is the one list you are certain to scroll: it is what you chose to

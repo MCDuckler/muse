@@ -8,6 +8,7 @@ import 'browse_page.dart';
 import 'dialogs.dart';
 import 'mini_player.dart';
 import 'snack.dart';
+import 'skeleton.dart';
 
 /// What was actually listened to, and how much of it.
 ///
@@ -55,7 +56,7 @@ class _ListeningPageState extends State<ListeningPage> {
         future: _future,
         builder: (context, snap) {
           if (snap.hasError) return ErrorRetry(error: snap.error!, onRetry: _load);
-          if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+          if (!snap.hasData) return const SongsComing(rows: 6);
           final d = snap.data!;
           final text = Theme.of(context).textTheme;
           return RefreshIndicator(
