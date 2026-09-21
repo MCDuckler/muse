@@ -9,6 +9,8 @@ import 'home_page.dart' show openInTab;
 import 'now_playing.dart';
 import 'queue_page.dart' show QueueScreen;
 import 'song_row.dart';
+import 'mag.dart';
+import 'mag_parts.dart';
 
 /// The column beside the page: what is playing, and what is next.
 ///
@@ -67,7 +69,7 @@ class DeskDock extends StatelessWidget {
                   Expanded(
                     flex: 7,
                     child: _Panel(
-                      colour: scheme.surfaceContainerLow,
+                      colour: scheme.surface,
                       // No scroll around it: the panel sizes the record to whatever
                       // height it has been given, and scrolls for itself only when
                       // the window is shorter than a record and its controls.
@@ -79,7 +81,7 @@ class DeskDock extends StatelessWidget {
                   Expanded(
                     flex: 3,
                     child: _Panel(
-                      colour: scheme.surfaceContainerLow,
+                      colour: scheme.surface,
                       child: const _NextUp(),
                     ),
                   ),
@@ -99,13 +101,22 @@ class _Panel extends StatelessWidget {
   final Widget child;
   final Color colour;
 
+  // A ruled box with square corners, like everything else printed here. These were the
+  // last two rounded, tinted cards in the app — from before it was a magazine — and at
+  // the side of a page of ink and hard edges they read as another app's widget.
   @override
-  Widget build(BuildContext context) => Material(
-        color: colour,
-        clipBehavior: Clip.antiAlias,
-        borderRadius: BorderRadius.circular(18),
-        child: child,
-      );
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: colour,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(3),
+        side: BorderSide(color: scheme.onSurface.withValues(alpha: 0.85), width: 1.5),
+      ),
+      child: child,
+    );
+  }
 }
 
 /// The next few songs, in the space under the record.
@@ -125,7 +136,21 @@ class _NextUp extends StatelessWidget {
     final player = context.select<AppState, PlayerService?>((a) => a.player);
     final text = Theme.of(context).textTheme;
     if (player == null || queue == null || queue.items.isEmpty) {
-      return Center(child: Text('Nothing queued', style: text.bodySmall));
+      final scheme = Theme.of(context).colorScheme;
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SectionFlag('Up next'),
+            const Spacer(),
+            Text('Nothing is lined up. Whatever you play, and whatever you add to it, '
+                'is listed here.',
+                style: Mag.typewriter(11.5, color: scheme.onSurfaceVariant)),
+            const Spacer(),
+          ],
+        ),
+      );
     }
 
     return StreamBuilder<PlayerSnapshot>(

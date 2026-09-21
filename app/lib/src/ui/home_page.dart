@@ -588,7 +588,13 @@ class _TabRoot extends StatelessWidget {
     return Scaffold(
       backgroundColor: Colors.transparent,
       extendBody: true,
-      appBar: AppBar(
+      // On a desk Home has no bar of its own. The bar is a title and a row of buttons:
+      // the buttons are in the sidebar there, and the title would be the word "Home"
+      // over a page whose first line is already a nameplate the width of the window —
+      // with the sidebar's own above that, three headings for one page.
+      appBar: title == 'Home' && Width.of(context).hasRail
+          ? null
+          : AppBar(
         title: Text(title),
         actions: [
           // On a desk these live in the rail, which is where the eye already is.
@@ -677,39 +683,14 @@ class _SideBySide extends StatelessWidget {
           Expanded(
             child: Navigator(
               key: pane,
+              // Every song, until something else is picked: the half of the window
+              // beside the library used to open on an icon and the words "pick
+              // something", which is a third of a desktop saying nothing.
               onGenerateRoute: (_) =>
-                  MaterialPageRoute(builder: (_) => const _NothingPicked()),
+                  MaterialPageRoute(builder: (_) => const AllTracksPage()),
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-/// What is beside the library before anything has been picked.
-class _NothingPicked extends StatelessWidget {
-  const _NothingPicked();
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.library_music_outlined,
-                size: 40, color: scheme.outlineVariant),
-            const SizedBox(height: 10),
-            Text('Pick something from the library',
-                style: Theme.of(context)
-                    .textTheme
-                    .bodyMedium
-                    ?.copyWith(color: scheme.onSurfaceVariant)),
-          ],
-        ),
       ),
     );
   }

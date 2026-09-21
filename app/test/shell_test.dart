@@ -240,15 +240,18 @@ void main() {
     // very thing you are picking from.
     app.setHomeTab(Tabs.library);                                    // the library
     await wholeShell(tester, const Size(1440, 900));
-    expect(find.text('Pick something from the library'), findsOneWidget,
-        reason: 'the pane says what it is for before anything is in it');
+    // The half of the window beside the column opens on every song, not on an icon
+    // and the words "pick something": a third of a desktop saying nothing.
+    expect(find.text('All tracks'), findsOneWidget,
+        reason: 'something to look at before anything has been picked');
+    expect(find.text('Pick something from the library'), findsNothing);
 
     await tester.tap(find.text('RECORDS'));
     await tester.pumpAndSettle();
 
     expect(find.text('SONGS'), findsOneWidget,
         reason: 'the column is still there beside what it opened');
-    expect(find.text('Pick something from the library'), findsNothing);
+    expect(find.text('All tracks'), findsNothing, reason: 'and the pane is the records now');
     await drain(tester);
   });
 

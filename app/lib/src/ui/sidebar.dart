@@ -282,7 +282,13 @@ class _PlaylistRow extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: scheme.onSurface, fontWeight: FontWeight.w600)),
-                  Text('${p.itemCount} songs',
+                  // "0 songs" is a zero in print: an empty list is called empty.
+                  Text(
+                      p.itemCount == 0
+                          ? 'empty'
+                          : p.itemCount == 1
+                              ? '1 song'
+                              : '${p.itemCount} songs',
                       style: Mag.typewriter(10.5, color: scheme.onSurfaceVariant)),
                 ],
               ),

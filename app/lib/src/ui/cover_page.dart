@@ -166,9 +166,37 @@ class _CoverPageState extends State<CoverPage> {
           if (issue == null)
             const SizedBox(height: 520, child: RecordsComing(tiles: 4, extent: 220))
           else ...[
-            _CoverStar(issue: issue),
-            _CoverLines(issue: issue),
-            if ((issue.week?.songs.length ?? 0) > 1) _OnRepeat(songs: issue.week!.songs),
+            // A spread where there is the width for one: the cover star on the left-hand
+            // page and the cover lines and the chart on the right, as a magazine opened
+            // flat. On a phone, and beside an open dock, it is one column as it always
+            // was — a cover star a third of a window wide is a thumbnail.
+            LayoutBuilder(builder: (context, box) {
+              final star = _CoverStar(issue: issue);
+              final rest = [
+                _CoverLines(issue: issue),
+                if ((issue.week?.songs.length ?? 0) > 1)
+                  _OnRepeat(songs: issue.week!.songs),
+              ];
+              if (box.maxWidth < 860) {
+                return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [star, ...rest]);
+              }
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(flex: 11, child: star),
+                  Expanded(
+                    flex: 10,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 18),
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch, children: rest),
+                    ),
+                  ),
+                ],
+              );
+            }),
             if (issue.added.isNotEmpty) _JustIn(tracks: issue.added),
             _Folio(issue: issue, number: issueNumber(now)),
           ],

@@ -25,6 +25,7 @@ import 'stage/arm_grip.dart';
 import 'spectrum.dart';
 import 'lyrics_sheet.dart';
 import 'mag.dart';
+import 'mag_parts.dart';
 import 'mirror_ball.dart';
 import 'track_menu.dart';
 import 'song_row.dart';
@@ -1089,9 +1090,10 @@ class _KeepButton extends StatelessWidget {
 /// button they just pressed; the same triangle folding into two bars is the button
 /// answering. Material ships the drawing, so this is the animation and the tick that
 /// goes with it.
-class _PlayPauseButton extends StatefulWidget {
-  const _PlayPauseButton(
-      {required this.playing,
+class PlayPauseButton extends StatefulWidget {
+  const PlayPauseButton(
+      {super.key,
+      required this.playing,
       required this.size,
       required this.onPressed,
       this.busy = false});
@@ -1104,10 +1106,10 @@ class _PlayPauseButton extends StatefulWidget {
   final bool busy;
 
   @override
-  State<_PlayPauseButton> createState() => _PlayPauseButtonState();
+  State<PlayPauseButton> createState() => _PlayPauseButtonState();
 }
 
-class _PlayPauseButtonState extends State<_PlayPauseButton>
+class _PlayPauseButtonState extends State<PlayPauseButton>
     with SingleTickerProviderStateMixin {
   late final AnimationController _shape = AnimationController(
     vsync: this,
@@ -1116,7 +1118,7 @@ class _PlayPauseButtonState extends State<_PlayPauseButton>
   );
 
   @override
-  void didUpdateWidget(_PlayPauseButton old) {
+  void didUpdateWidget(PlayPauseButton old) {
     super.didUpdateWidget(old);
     if (old.playing == widget.playing) return;
     // Straight there when the phone has asked for stillness: the icon still has to
@@ -1134,38 +1136,168 @@ class _PlayPauseButtonState extends State<_PlayPauseButton>
     super.dispose();
   }
 
+  bool _down = false;
+
   @override
   Widget build(BuildContext context) {
-    final button = IconButton.filled(
-      iconSize: widget.size,
-      tooltip: widget.playing ? 'Pause' : 'Play',
-      icon: AnimatedIcon(
-        icon: AnimatedIcons.play_pause,
-        progress: _shape,
-        size: widget.size,
-      ),
-      onPressed: felt(Feel.commit, widget.onPressed),
-    );
-    if (!widget.busy) return button;
-    // IconButton.filled pads the icon by 8 on each side; the ring sits just outside.
-    final ring = widget.size + 22;
-    return Stack(
-      alignment: Alignment.center,
-      children: [
-        button,
-        IgnorePointer(
+    final scheme = Theme.of(context).colorScheme;
+    // One footprint, whatever is happening. The ring that says "the stream is opening"
+    // used to be a bigger box wrapped round the button only while it showed, so the
+    // whole row of controls grew by six points at the start of every song and shrank
+    // again a moment later — the controls twitching on every skip. The room for the
+    // ring is always kept now, and the ring is drawn in it.
+    final face = widget.size + 16;
+    final whole = face + 8;
+    final still = stillness(context);
+    return Semantics(
+      button: true,
+      label: widget.playing ? 'Pause' : 'Play',
+      excludeSemantics: true,
+      child: Tooltip(
+        message: widget.playing ? 'Pause' : 'Play',
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (_) => setState(() => _down = true),
+          onTapCancel: () => setState(() => _down = false),
+          onTapUp: (_) => setState(() => _down = false),
+          onTap: felt(Feel.commit, widget.onPressed),
           child: SizedBox(
-            width: ring,
-            height: ring,
-            child: CircularProgressIndicator(
-              strokeWidth: 2.5,
-              color: Theme.of(context).colorScheme.primary,
+            width: whole,
+            height: whole,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                // The ring, in the room kept for it; faded rather than popped.
+                AnimatedOpacity(
+                  opacity: widget.busy ? 1 : 0,
+                  duration: still ? Duration.zero : const Duration(milliseconds: 180),
+                  child: SizedBox(
+                    width: whole - 2,
+                    height: whole - 2,
+                    child: widget.busy
+                        ? CircularProgressIndicator(strokeWidth: 2.5, color: scheme.primary)
+                        : null,
+                  ),
+                ),
+                AnimatedScale(
+                  scale: _down ? 0.955 : 1,
+                  duration: still ? Duration.zero : const Duration(milliseconds: 90),
+                  curve: Curves.easeOut,
+                  child: CustomPaint(
+                    size: Size.square(face),
+                    painter: _ButtonFace(
+                      colour: scheme.primary,
+                      pressed: _down,
+                      dark: Theme.of(context).brightness == Brightness.dark,
+                    ),
+                    child: SizedBox.square(
+                      dimension: face,
+                      child: Center(
+                        child: AnimatedIcon(
+                          icon: AnimatedIcons.play_pause,
+                          progress: _shape,
+                          size: widget.size,
+                          color: scheme.onPrimary,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
-      ],
+      ),
     );
   }
+}
+
+/// The play button's face: a moulded button on the front of a hi-fi, lit from above.
+///
+/// A shadow under it that it sinks into when pressed, a body that is lighter at the top
+/// than the bottom, a bright lip round the upper rim where the light catches the edge and
+/// a dark one round the lower, and a soft sheen across the top half. Slight, all of it:
+/// it should read as a thing you can press, not as a picture of a button.
+class _ButtonFace extends CustomPainter {
+  const _ButtonFace({required this.colour, required this.pressed, required this.dark});
+
+  final Color colour;
+  final bool pressed;
+  final bool dark;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = size.center(Offset.zero);
+    final r = size.shortestSide / 2;
+    final hsl = HSLColor.fromColor(colour);
+    Color shade(double by) =>
+        hsl.withLightness((hsl.lightness + by).clamp(0.0, 1.0)).toColor();
+
+    // What it stands on: a contact shadow close in, and a softer one further out.
+    // Pressed, it is nearly down on the panel and both draw in.
+    final lift = pressed ? 0.35 : 1.0;
+    canvas.drawCircle(
+        c.translate(0, 3.5 * lift),
+        r * 0.98,
+        Paint()
+          ..color = Colors.black.withValues(alpha: (dark ? 0.55 : 0.30) * (0.6 + 0.4 * lift))
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 7 * lift + 1.5));
+    canvas.drawCircle(
+        c.translate(0, 1.2 * lift),
+        r * 0.99,
+        Paint()
+          ..color = Colors.black.withValues(alpha: 0.28)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.6));
+
+    // The body: lit from above, and the other way up while it is held down.
+    final body = Rect.fromCircle(center: c, radius: r);
+    canvas.drawCircle(
+        c,
+        r,
+        Paint()
+          ..shader = LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: pressed
+                ? [shade(-0.07), shade(-0.01)]
+                : [shade(0.09), shade(0.0), shade(-0.09)],
+          ).createShader(body));
+
+    // A sheen across the top half, fading out by the middle.
+    if (!pressed) {
+      canvas.save();
+      canvas.clipPath(Path()..addOval(body));
+      canvas.drawOval(
+          Rect.fromCenter(center: c.translate(0, -r * 0.55), width: r * 1.7, height: r * 1.1),
+          Paint()
+            ..shader = RadialGradient(colors: [
+              Colors.white.withValues(alpha: dark ? 0.15 : 0.22),
+              Colors.white.withValues(alpha: 0.0),
+            ]).createShader(Rect.fromCenter(
+                center: c.translate(0, -r * 0.55), width: r * 1.7, height: r * 1.1)));
+      canvas.restore();
+    }
+
+    // The lip: bright where the light catches the upper edge, dark round the lower.
+    final rim = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          Colors.white.withValues(alpha: pressed ? 0.10 : 0.55),
+          Colors.white.withValues(alpha: 0.0),
+          Colors.black.withValues(alpha: pressed ? 0.18 : 0.32),
+        ],
+        stops: const [0.0, 0.5, 1.0],
+      ).createShader(body);
+    canvas.drawCircle(c, r - 0.7, rim);
+  }
+
+  @override
+  bool shouldRepaint(_ButtonFace old) =>
+      old.colour != colour || old.pressed != pressed || old.dark != dark;
 }
 
 /// Repeat, wherever it is shown: off, the whole queue, or this one song.
@@ -1430,7 +1562,8 @@ class DeskNowPlaying extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
     final player = app.player;
-    if (player == null) return const SizedBox.shrink();
+    // No player yet is the same sight as a player with nothing on it.
+    if (player == null) return _DeckIdle(onClose: onClose);
     final text = Theme.of(context).textTheme;
 
     // The whole player is where the arm can be picked up from: see ArmReach.
@@ -1440,11 +1573,7 @@ class DeskNowPlaying extends StatelessWidget {
       builder: (context, snap) {
         final s = snap.data;
         final track = s?.current ?? player.current;
-        if (track == null) {
-          return Center(
-            child: Text('Nothing playing', style: text.bodyMedium),
-          );
-        }
+        if (track == null) return _DeckIdle(onClose: onClose);
         final head = Padding(
           padding: const EdgeInsets.fromLTRB(18, 10, 8, 0),
           child: Row(
@@ -2003,7 +2132,7 @@ class _Controls extends StatelessWidget {
               icon: const Icon(Icons.skip_previous),
               onPressed: felt(Feel.commit, app.skipPrevious),
             ),
-            _PlayPauseButton(
+            PlayPauseButton(
                 playing: playing,
                 size: 56,
                 busy: snapshot?.buffering ?? false,
@@ -2039,7 +2168,7 @@ class _Controls extends StatelessWidget {
           icon: const Icon(Icons.skip_previous),
           onPressed: felt(Feel.commit, app.skipPrevious),
         ),
-        _PlayPauseButton(
+        PlayPauseButton(
             playing: playing,
             size: big ? 54 : 42,
             busy: snapshot?.buffering ?? false,
@@ -2562,6 +2691,95 @@ class _HowItPlaysState extends State<_HowItPlays> {
           : about.join(' · ')),
       value: app.seamless,
       onChanged: app.setSeamless,
+    );
+  }
+}
+
+
+/// A turntable with no record on it: the platter, its mat, the spindle, drawn in line.
+class _EmptyPlatter extends CustomPainter {
+  const _EmptyPlatter(this.ink);
+  final Color ink;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = size.center(Offset.zero);
+    final r = size.shortestSide / 2;
+    final line = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5
+      ..color = ink.withValues(alpha: 0.75);
+    final faint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..color = ink.withValues(alpha: 0.22);
+    canvas.drawCircle(c, r - 1, line);
+    // The strobe dots round the rim of a platter.
+    for (var i = 0; i < 60; i++) {
+      final a = i * math.pi * 2 / 60;
+      canvas.drawCircle(c + Offset(math.cos(a), math.sin(a)) * (r - 7), 0.9,
+          Paint()..color = ink.withValues(alpha: 0.45));
+    }
+    for (final at in [0.84, 0.66, 0.48]) {
+      canvas.drawCircle(c, r * at, faint);
+    }
+    canvas.drawCircle(c, r * 0.30, line);
+    canvas.drawCircle(c, 3.2, Paint()..color = ink);
+  }
+
+  @override
+  bool shouldRepaint(_EmptyPlatter old) => old.ink != ink;
+}
+
+
+/// The deck with nothing on it: said the way the rest of the app says things, with the
+/// way to fold it away still where it always is. It used to be two words in the middle
+/// of four hundred empty pixels.
+class _DeckIdle extends StatelessWidget {
+  const _DeckIdle({this.onClose});
+  final VoidCallback? onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 8, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Expanded(child: SectionFlag('The deck', rule: false)),
+              if (onClose != null)
+                IconButton(
+                  icon: const Icon(Icons.chevron_right),
+                  tooltip: 'Hide',
+                  onPressed: onClose,
+                ),
+            ],
+          ),
+          const Spacer(),
+          Center(
+            child: LayoutBuilder(
+              builder: (context, box) => CustomPaint(
+                size: Size.square((box.maxWidth * 0.62).clamp(120.0, 260.0)),
+                painter: _EmptyPlatter(scheme.onSurface),
+              ),
+            ),
+          ),
+          const SizedBox(height: 22),
+          Text('NOTHING ON', style: Mag.headline(30, color: scheme.onSurface)),
+          const SizedBox(height: 4),
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: Text(
+                'Put a record on from anywhere — a song, an album, one of the '
+                'lists — and it plays here, beside whatever page you are on.',
+                style: Mag.typewriter(11.5, color: scheme.onSurfaceVariant)),
+          ),
+          const Spacer(flex: 2),
+        ],
+      ),
     );
   }
 }
