@@ -588,6 +588,53 @@ def _editable(playlist_id: int, user: dict) -> dict:
     return row
 
 
+@router.get("/playlists/{playlist_id}/suggested")
+def suggested_for(playlist_id: int, limit: int = 8, user: dict = Depends(current_user)):
+    """Songs from your own library that would sit well in this list.
+
+    Nothing clever and nothing fetched from anywhere: the artists already in the list,
+    weighted by how often they are, and what else of theirs you hold that is not in it
+    yet. No more than two from any one artist, so a list with a lot of one act does not
+    get a page of nothing else; and the order turns over each day, so going back to the
+    list tomorrow offers something other than the same eight that were passed over.
+    Only songs that can play now.
+    """
+    _readable(playlist_id, user)
+    rows = db.all_(
+        """
+        with listed as (
+            select track_id from playlist_items where playlist_id = %s
+        ), acts as (
+            select lower(a) as k, count(*) as n
+              from listed join tracks t on t.id = listed.track_id, unnest(t.artists) a
+             group by 1
+        ), scored as (
+            select t.id, sum(acts.n) as score,
+                   row_number() over (
+                       partition by lower(coalesce(t.artists[1], ''))
+                       order by sum(acts.n) desc,
+                                md5(t.id::text || current_date::text)) as nth
+              from tracks t
+              join library_items li on li.track_id = t.id and li.user_id = %s
+              cross join lateral unnest(t.artists) a
+              join acts on acts.k = lower(a)
+             where t.state = 'ready'
+               and t.id not in (select track_id from listed)
+             group by t.id
+        )
+        select t.*, m.path, m.bytes, m.sha256, c.color as cover_color,
+               c.sha256 as cover_sha
+          from scored s
+          join tracks t on t.id = s.id
+          left join media m on m.track_id = t.id and m.role = 'canonical'
+          left join covers c on c.id = t.cover_id
+         where s.nth <= 2
+         order by s.score desc, md5(t.id::text || current_date::text)
+         limit %s""",
+        (playlist_id, user["id"], max(1, min(limit, 24))))
+    return {"items": [catalog.public(t) for t in rows]}
+
+
 @router.get("/playlists/{playlist_id}")
 def get_playlist(playlist_id: int, user: dict = Depends(current_user)):
     p = _readable(playlist_id, user)

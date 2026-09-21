@@ -449,6 +449,18 @@ class _PlaylistPageState extends State<PlaylistPage> {
             buildDefaultDragHandles: false,
             header: _PlaylistHeader(
                 items: items, playlist: snap.data!, onChanged: _reload),
+            // Only on a list that can be added to: offering songs for somebody
+            // else's playlist is offering something that cannot be done.
+            footer: snap.data!.editable
+                ? _WouldSitWell(
+                    playlistId: widget.playlistId,
+                    songs: items.length,
+                    onAdded: () async {
+                      await app.refreshPlaylists();
+                      _reload();
+                    },
+                  )
+                : null,
             onReorderItem: (from, to) async {
               if (!snap.data!.editable) return;
               await app.api.movePlaylistItem(widget.playlistId, from, to);
@@ -655,6 +667,108 @@ class _SourceTag extends StatelessWidget {
 
 /// The head of a playlist's page, set like a compilation's sleeve notes: the cover cut
 /// out and taped down, the name as big as it goes, and a typed line of what is in it.
+/// Under a playlist: what else you have that would sit well in it.
+///
+/// A playlist is usually half-finished — three songs by somebody put in one evening,
+/// and the other nine of theirs in the library never thought of again. This is those
+/// nine: from your own library, by the artists already in the list, one tap to add and
+/// a tap on the row to hear it first. Nothing is shown when there is nothing to offer.
+class _WouldSitWell extends StatefulWidget {
+  const _WouldSitWell(
+      {required this.playlistId, required this.songs, required this.onAdded});
+
+  final int playlistId;
+
+  /// How many songs the list has: when that changes, what suits it has changed too.
+  final int songs;
+  final Future<void> Function() onAdded;
+
+  @override
+  State<_WouldSitWell> createState() => _WouldSitWellState();
+}
+
+class _WouldSitWellState extends State<_WouldSitWell> {
+  List<Track> _offered = const [];
+  final _adding = <int>{};
+
+  @override
+  void initState() {
+    super.initState();
+    _ask();
+  }
+
+  @override
+  void didUpdateWidget(_WouldSitWell old) {
+    super.didUpdateWidget(old);
+    if (old.songs != widget.songs || old.playlistId != widget.playlistId) _ask();
+  }
+
+  Future<void> _ask() async {
+    try {
+      final got = await context.read<AppState>().api.suggestedFor(widget.playlistId);
+      if (mounted) setState(() => _offered = got);
+    } catch (_) {
+      // A server from before this, or no connection: the playlist is still a playlist.
+    }
+  }
+
+  Future<void> _add(Track t) async {
+    final app = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _adding.add(t.id));
+    try {
+      await app.api.addToPlaylist(widget.playlistId, [t.id]);
+      if (mounted) setState(() => _offered = [for (final o in _offered) if (o.id != t.id) o]);
+      await widget.onAdded();
+    } catch (e) {
+      messenger.say(problem(e));
+    } finally {
+      if (mounted) setState(() => _adding.remove(t.id));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_offered.isEmpty) return const SizedBox.shrink();
+    final app = context.read<AppState>();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(8, 28, 8, 2),
+          child: SectionFlag('Would sit well here'),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 2, 8, 6),
+          child: Text('From your own library, by who is already in the list.',
+              style: Mag.typewriter(11,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant)),
+        ),
+        for (final t in _offered)
+          SongRow(
+            key: ValueKey('suits-${t.id}'),
+            track: t,
+            showDuration: false,
+            onTap: () => app.playTrackNow(t),
+            trailing: _adding.contains(t.id)
+                ? const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2)),
+                  )
+                : IconButton(
+                    icon: const Icon(Icons.add_circle_outline),
+                    tooltip: 'Add to this playlist',
+                    onPressed: () => _add(t),
+                  ),
+          ),
+      ],
+    );
+  }
+}
+
 class _PlaylistHeader extends StatelessWidget {
   const _PlaylistHeader(
       {required this.items, required this.playlist, required this.onChanged});

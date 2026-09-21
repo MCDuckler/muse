@@ -922,6 +922,18 @@ class ApiClient {
               headers: _headers, body: jsonEncode({'name': name})))
           as Map<String, dynamic>);
 
+  /// Songs from your own library that would sit well in this playlist: more by the
+  /// artists already in it, never one that is in it, turned over daily.
+  Future<List<Track>> suggestedFor(int playlistId, {int limit = 8}) async {
+    final d = await _decode(await net.get(
+        _u('/playlists/$playlistId/suggested', {'limit': limit}),
+        headers: _headers)) as Map<String, dynamic>;
+    return [
+      for (final t in (d['items'] ?? const []) as List)
+        Track.fromJson((t as Map).cast<String, dynamic>())
+    ];
+  }
+
   Future<Playlist> addToPlaylist(int id, List<int> trackIds) async =>
       Playlist.fromJson(await _decode(await net.post(_u('/playlists/$id/items'),
               headers: _headers, body: jsonEncode({'track_ids': trackIds})))

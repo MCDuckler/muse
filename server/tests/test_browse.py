@@ -628,3 +628,27 @@ def test_an_artist_as_this_house_knows_them(client, hdr, library, monkeypatch):
     quiet = client.get("/library/artists/detail", headers=hdr,
                        params={"artist": "Other Band"}).json()["yours"]
     assert quiet["plays"] == 0 and quiet["top"] == [] and quiet["with"] == []
+
+
+def test_a_playlist_is_offered_more_of_what_is_already_in_it(client, hdr, library):
+    """From your own library, by the artists the list already has — and never a song
+    that is in it, or one that cannot play yet."""
+    alpha, beta, gamma, delta, epsilon = library
+    p = client.post("/playlists", headers=hdr, json={"name": "Berlin"}).json()
+    client.post(f"/playlists/{p['id']}/items", headers=hdr, json={"track_ids": [alpha]})
+
+    def offered():
+        return {t["id"] for t in client.get(f"/playlists/{p['id']}/suggested",
+                                            headers=hdr).json()["items"]}
+
+    assert offered() == {beta, gamma}, "the rest of Bowie; not the one already in it"
+
+    # A feature is a connection: with Gamma in, Eno's own song is on the table.
+    client.post(f"/playlists/{p['id']}/items", headers=hdr, json={"track_ids": [gamma]})
+    assert offered() == {beta, epsilon}
+
+    # Not offered while it still needs fetching.
+    db.run("update tracks set state='pending' where id=%s", (beta,))
+    assert offered() == {epsilon}
+
+    assert client.get("/playlists/999999/suggested", headers=hdr).status_code == 404
