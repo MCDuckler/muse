@@ -1226,6 +1226,11 @@ class FoundAlbum {
 enum ArmStyle {
   off,
 
+  /// A real deck's: a matte black S-arm on a charcoal plinth, drawn after a photograph
+  /// of one from above. The one that can be picked up and put down anywhere on the
+  /// record.
+  classic,
+
   /// The one it has always had: black metal, lit along its top edge.
   studio,
 
@@ -1242,6 +1247,7 @@ enum ArmStyle {
 
   String get label => switch (this) {
         ArmStyle.off => 'No arm',
+        ArmStyle.classic => 'Classic',
         ArmStyle.studio => 'Studio',
         ArmStyle.drawn => 'Drawn',
         ArmStyle.palette => 'In your colours',
@@ -1250,6 +1256,7 @@ enum ArmStyle {
 
   String get description => switch (this) {
         ArmStyle.off => 'Just the record, turning',
+        ArmStyle.classic => 'A matte black S-arm on its plinth',
         ArmStyle.studio => 'Black metal, lit along its edge',
         ArmStyle.drawn => 'One weight of line, like a diagram of itself',
         ArmStyle.palette => "The palette you picked, in the app's own shapes",

@@ -262,6 +262,7 @@ class AppState extends ChangeNotifier {
   static const _kSpectrum = 'muse.spectrum';
   static const _kCoverScale = 'muse.coverScale';
   static const _kArmStyle = 'muse.armStyle';
+  static const _kArmMoved = 'muse.armStyle.classic';
   static const _kDiscScale = 'muse.discScale';
   static const _kDiscLabel = 'muse.discLabel';
   static const _kHaptics = 'muse.haptics';
@@ -315,7 +316,7 @@ class AppState extends ChangeNotifier {
   double coverScale = 0.74;
 
   /// Which tonearm is drawn on the deck, or none at all.
-  ArmStyle armStyle = ArmStyle.studio;
+  ArmStyle armStyle = ArmStyle.classic;
 
   /// How wide the record on the deck is drawn, as a fraction of the room there is.
   double discScale = 1.0;
@@ -473,7 +474,15 @@ class AppState extends ChangeNotifier {
     Haptics.enabled = haptics;
     armStyle = ArmStyle.values.firstWhere(
         (a) => a.name == prefs.getString(_kArmStyle),
-        orElse: () => ArmStyle.studio);
+        orElse: () => ArmStyle.classic);
+    // Studio was the default for as long as there was one, so a phone that says
+    // studio almost certainly never chose it. Once, move those to the arm that can be
+    // picked up; anybody who then picks studio again keeps it.
+    if (armStyle == ArmStyle.studio && !(prefs.getBool(_kArmMoved) ?? false)) {
+      armStyle = ArmStyle.classic;
+      unawaited(prefs.setString(_kArmStyle, armStyle.name));
+    }
+    unawaited(prefs.setBool(_kArmMoved, true));
     playerLayout = PlayerLayout.values.firstWhere(
         (l) => l.name == prefs.getString(_kLayout),
         orElse: () => PlayerLayout.grouped);

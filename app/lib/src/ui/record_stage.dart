@@ -13,6 +13,9 @@ import '../state/app_state.dart';
 import '../state/art_cache.dart';
 import '../state/sleeve_board.dart';
 import 'sleeve_ink.dart';
+import 'stage/arm_geometry.dart';
+import 'stage/arm_grip.dart';
+import 'stage/classic_arm.dart';
 
 /// The record on the stage, and the two either side of it.
 ///
@@ -40,12 +43,22 @@ class RecordStage extends StatefulWidget {
     this.scale = 0.74,
     this.discScale = 1.0,
     this.axis = ShelfAxis.sideways,
-    this.armStyle = ArmStyle.studio,
+    this.armStyle = ArmStyle.classic,
     this.board,
+    this.hand,
+    this.label = 0.31,
   });
 
   /// The back of whatever is in the middle, and what is written on it.
   final SleeveBoard? board;
+
+  /// A hand on the arm: where the song is, and what to do when the needle is put down
+  /// or lifted off. Without one the arm is a picture of an arm.
+  final ArmHand? hand;
+
+  /// How much of the record's radius the picture in its middle covers — where the
+  /// grooves end, and so where the needle stops.
+  final double label;
 
   /// Which arm is drawn on the deck, or none at all.
   final ArmStyle armStyle;
@@ -952,6 +965,8 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                         arriving: Curves.easeInOutCubic.transform(_out.value),
                         arm: _arm.value,
                         armStyle: widget.armStyle,
+                        hand: widget.hand,
+                        label: widget.label,
                       ),
                     for (final card in ordered)
                       _Sleeve(
@@ -1525,11 +1540,17 @@ class Deck extends StatefulWidget {
     required this.drop,
     required this.arriving,
     required this.arm,
-    this.armStyle = ArmStyle.studio,
+    this.armStyle = ArmStyle.classic,
+    this.hand,
+    this.label = 0.31,
   });
 
   /// Which arm is drawn on it, or none at all.
   final ArmStyle armStyle;
+
+  /// See RecordStage.hand and RecordStage.label.
+  final ArmHand? hand;
+  final double label;
 
   /// The record that is playing now.
   final String? url;
@@ -1574,11 +1595,13 @@ class _DeckState extends State<Deck> {
     if (url == null && settled == null) return const SizedBox.shrink();
     final arriving = widget.arriving.clamp(0.0, 1.0);
 
-    return IgnorePointer(
-      // The stage is a square the size of the cover's box; a record is wider than
-      // that. Without this, the Stack it sits in shrinks it back to the box — which
-      // is why a record "the width of the screen" kept coming out cover-sized.
-      child: OverflowBox(
+    // The stage is a square the size of the cover's box; a record is wider than that.
+    // Without this, the Stack it sits in shrinks it back to the box — which is why a
+    // record "the width of the screen" kept coming out cover-sized.
+    //
+    // The records ignore the pointer, as the whole deck used to; the arm is the one
+    // thing on it a hand can take hold of.
+    return OverflowBox(
         maxWidth: double.infinity,
         maxHeight: double.infinity,
         child: SizedBox(
@@ -1603,6 +1626,22 @@ class _DeckState extends State<Deck> {
             alignment: Alignment.center,
             clipBehavior: Clip.none,
             children: [
+              // The classic arm's plinth, which the record's edge lies over.
+              if ((settled != null || arriving > 0) &&
+                  widget.armStyle == ArmStyle.classic)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: CustomPaint(
+                      painter: ClassicPlinthPainter(
+                        radius: widget.size / 2,
+                        drop: widget.drop,
+                        label: widget.label,
+                        dim: math.min(Tonearm.lowering(arriving) * 1.4, 1.0)
+                            .clamp(settled != null ? 1.0 : 0.0, 1.0),
+                      ),
+                    ),
+                  ),
+                ),
               if (settled != null) _record(settled, 1, 0),
               if (url != null && arriving > 0)
                 _record(
@@ -1641,12 +1680,13 @@ class _DeckState extends State<Deck> {
                     drop: widget.drop,
                     landed: math.min(Tonearm.lowering(arriving), widget.arm),
                     style: widget.armStyle,
+                    hand: widget.hand,
+                    label: widget.label,
                   ),
                 ),
             ],
           ),
         ),
-      ),
     );
   }
 
@@ -1670,7 +1710,8 @@ class _DeckState extends State<Deck> {
     // comes out from under a cover is a record dissolving in mid-air.
     const solid = 0.56;
     const gone = 0.68;
-    return Transform.translate(
+    return IgnorePointer(
+      child: Transform.translate(
       offset: Offset(0, widget.drop - rise),
       child: RepaintBoundary(
         child: SizedBox(
@@ -1703,6 +1744,7 @@ class _DeckState extends State<Deck> {
             ],
           ),
         ),
+      ),
       ),
     );
   }
@@ -1738,12 +1780,22 @@ class Tonearm extends StatelessWidget {
     required this.radius,
     required this.drop,
     required this.landed,
-    this.style = ArmStyle.studio,
+    this.style = ArmStyle.classic,
     this.dim = 1.0,
+    this.hand,
+    this.label = 0.31,
   });
 
   /// Which arm, or none at all.
   final ArmStyle style;
+
+  /// Where the song is and what a hand on the arm does. Without one the arm sits at
+  /// the start of the side and cannot be picked up — a guest in somebody else's jam,
+  /// or a phone steering a different speaker.
+  final ArmHand? hand;
+
+  /// How much of the record's radius its picture label covers.
+  final double label;
 
   /// The disc's radius, which is the whole of the scale of this.
   final double radius;
@@ -1767,15 +1819,36 @@ class Tonearm extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (landed < 0 || style == ArmStyle.off) return const SizedBox.shrink();
-    return IgnorePointer(
-      child: CustomPaint(
-        painter: _ArmPainter(
+    final scheme = Theme.of(context).colorScheme;
+    Widget draw(double groove, double? held, double lift) => CustomPaint(
+          painter: _ArmPainter(
+            radius: radius,
+            drop: drop,
+            landed: landed,
+            style: style,
+            scheme: scheme,
+            dim: dim,
+            groove: groove,
+            label: label,
+            held: held,
+            lift: lift,
+          ),
+        );
+    final hand = this.hand;
+    if (hand == null) return IgnorePointer(child: draw(0, null, 0));
+    // Its own layer: the needle creeps inwards as the song plays, and that should
+    // repaint the arm and nothing else.
+    return RepaintBoundary(
+      child: ValueListenableBuilder<ArmReading>(
+        valueListenable: hand.reading,
+        builder: (context, reading, _) => ArmGrip(
+          hand: hand,
+          reading: reading,
           radius: radius,
           drop: drop,
+          label: label,
           landed: landed,
-          style: style,
-          scheme: Theme.of(context).colorScheme,
-          dim: dim,
+          paint: (held, lift) => draw(reading.groove, held, lift),
         ),
       ),
     );
@@ -1790,6 +1863,10 @@ class _ArmPainter extends CustomPainter {
     required this.style,
     required this.scheme,
     required this.dim,
+    this.groove = 0,
+    this.label = 0.31,
+    this.held,
+    this.lift = 0,
   });
 
   final double radius;
@@ -1799,41 +1876,43 @@ class _ArmPainter extends CustomPainter {
   final ColorScheme scheme;
   final double dim;
 
+  /// How far through the side the song is, 0 to 1: the needle travels inwards.
+  final double groove;
+  final double label;
+
+  /// The angle a hand is holding it at, if one is.
+  final double? held;
+
+  /// How far it is lifted off the record by that hand, 0 to 1.
+  final double lift;
+
   Color get colour => scheme.onSurface;
 
   @override
   void paint(Canvas canvas, Size size) {
-    // The middle of the disc, in this box's coordinates: the box is the cover, and the
-    // disc has dropped by `drop` from its middle.
-    final middle = Offset(size.width / 2, size.height / 2 + drop);
-    // The post it turns on: out at the right-hand edge of the page, where the post
-    // stands on a deck. As far out as it goes and no further — what is behind the
-    // post is the counterweight, and that has to stay on the screen.
-    final pivot = middle + Offset(radius * 0.88, -radius * 0.82);
+    // Where everything is: the post, the arm's length, and the angle that puts the
+    // needle on the groove the song has reached. Worked out once, in one place, so
+    // every style agrees about where the music is and where a hand can put it.
+    final g = ArmGeometry.of(size, radius: radius, drop: drop, label: label);
+    final middle = g.middle;
+    final pivot = g.pivot;
+    final length = g.length;
 
-    // Where the needle sits when it is playing: out near the rim rather than halfway
-    // in, because the band of record that is not behind a cover is the outer one —
-    // and the outside of a record is where a side starts anyway.
-    final playing = middle + Offset(-radius * 0.12, -radius * 0.72);
-    final rest = playing - pivot;
-    final length = rest.distance;
-    final onGroove = math.atan2(rest.dy, rest.dx);
+    // The headshell is bolted on at the angle that suits the start of the side, once,
+    // the way a real one is — it does not turn on its own as the arm travels in.
+    final playing = g.referencePoint;
+    final onGroove = g.referenceAngle;
 
-    // Parked is the same arm at a different angle, not a shorter one.
-    //
-    // It used to be a second point, and the arm was drawn from the post to whichever
-    // point it was nearest — so it grew and shrank as it swung. Nothing showed while
-    // that only happened on the way in, but a pause parks the arm and leaves it there
-    // to be looked at, and a tonearm that is two thirds the length it was is the kind
-    // of wrong you cannot stop seeing. The swing is small because a real one is: far
-    // enough to lift the needle past the edge of the record, no further.
-    const swing = 0.30;
-    final angle = onGroove + swing * (1 - landed);
-    final head = pivot + Offset(math.cos(angle), math.sin(angle)) * length;
+    // Parked is the same arm at a different angle, not a shorter one: an arm that
+    // grew and shrank as it swung was the kind of wrong you cannot stop seeing.
+    final angle = held ?? g.angle(landed: landed, groove: groove);
+    final head = g.needleAt(angle);
 
     switch (style) {
       case ArmStyle.off:
         return;
+      case ArmStyle.classic:
+        paintClassicArm(canvas, g, angle: angle, lift: lift, dim: dim);
       case ArmStyle.studio:
         _studio(canvas, middle, pivot, head, playing, angle, onGroove, length);
       case ArmStyle.drawn:
@@ -2382,7 +2461,11 @@ class _ArmPainter extends CustomPainter {
       old.landed != landed ||
       old.style != style ||
       old.scheme != scheme ||
-      old.dim != dim;
+      old.dim != dim ||
+      old.groove != groove ||
+      old.label != label ||
+      old.held != held ||
+      old.lift != lift;
 }
 
 

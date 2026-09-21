@@ -20,6 +20,7 @@ import 'glass.dart';
 import 'motion.dart';
 import 'record_stage.dart';
 import 'sleeve_ink.dart';
+import 'stage/arm_grip.dart';
 import 'spectrum.dart';
 import 'lyrics_sheet.dart';
 import 'track_menu.dart';
@@ -58,7 +59,8 @@ class NowPlayingScreen extends StatelessWidget {
     final player = app.player;
     if (player == null) return const SizedBox.shrink();
 
-    return StreamBuilder<PlayerSnapshot>(
+    // The whole player is where the arm can be picked up from: see ArmReach.
+    return ArmReach(child: StreamBuilder<PlayerSnapshot>(
       // Coarse on purpose. The record turning, the disc sliding out and the printed
       // background are animations with their own clocks; rebuilding the screen under
       // them four times a second is what made them stutter. The scrubber keeps its own
@@ -389,7 +391,7 @@ class NowPlayingScreen extends StatelessWidget {
           ),
         );
       },
-    );
+    ));
   }
 
   /// The spectrum, where it is switched on and the platform can read one.
@@ -1156,7 +1158,12 @@ class _Artwork extends StatelessWidget {
           child: SizedBox(
             width: side,
             height: side,
-            child: RecordStage(
+            child: _ArmFeed(
+              player: player,
+              app: app,
+              builder: (hand) => RecordStage(
+              hand: hand,
+              label: context.watch<AppState>().discLabel,
               track: track,
               playing: app.musicIsPlaying,
               scale: context.watch<AppState>().coverScale,
@@ -1175,10 +1182,87 @@ class _Artwork extends StatelessWidget {
               onNext: context.read<AppState>().skipNext,
               board: context.read<AppState>().sleeveBoard,
             ),
+            ),
           ),
         );
       },
     );
+  }
+}
+
+/// Where the song is, for the tonearm, and what putting it down does.
+///
+/// From the player's fine-grained stream — the coarse one the rest of this screen is
+/// drawn from does not carry the position — but only passed on when the needle would
+/// actually move: a third of a second of a four-minute song is a fraction of a pixel
+/// of arm, and repainting it for that is work nobody can see.
+///
+/// No hand at all where this device is not the one making the sound: a guest in
+/// somebody else's jam, or a phone steering another speaker. The arm is still drawn;
+/// it just cannot be picked up, because the music it would be sitting on is not here.
+class _ArmFeed extends StatefulWidget {
+  const _ArmFeed({required this.player, required this.app, required this.builder});
+
+  final PlayerService player;
+  final AppState app;
+  final Widget Function(ArmHand? hand) builder;
+
+  @override
+  State<_ArmFeed> createState() => _ArmFeedState();
+}
+
+class _ArmFeedState extends State<_ArmFeed> {
+  late final ValueNotifier<ArmReading> _reading =
+      ValueNotifier(_read(widget.player.last));
+  StreamSubscription<PlayerSnapshot>? _feed;
+
+  late final ArmHand _hand = ArmHand(
+    reading: _reading,
+    onPlace: (at) async {
+      final app = widget.app;
+      await app.seekTo(at);
+      if (!app.musicIsPlaying) await app.playPause();
+    },
+    onPark: () {
+      final app = widget.app;
+      if (app.musicIsPlaying) app.playPause();
+    },
+  );
+
+  static ArmReading _read(PlayerSnapshot? s) => ArmReading(
+        position: s?.position ?? Duration.zero,
+        length: s?.duration,
+        playing: s?.playing ?? false,
+      );
+
+  @override
+  void initState() {
+    super.initState();
+    _feed = widget.player.snapshots.listen((s) {
+      final next = _read(s);
+      final now = _reading.value;
+      if (next.playing != now.playing ||
+          next.length != now.length ||
+          (next.groove - now.groove).abs() >= 0.0015 ||
+          // A seek backwards to the very start is worth drawing however small.
+          (next.position < now.position && next.groove < 0.0015)) {
+        _reading.value = next;
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _feed?.cancel();
+    _reading.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = widget.app;
+    final here = !app.isJamGuest && !app.controllingAnother;
+    return widget.builder(here ? _hand : null);
   }
 }
 
@@ -1255,7 +1339,8 @@ class DeskNowPlaying extends StatelessWidget {
     if (player == null) return const SizedBox.shrink();
     final text = Theme.of(context).textTheme;
 
-    return StreamBuilder<PlayerSnapshot>(
+    // The whole player is where the arm can be picked up from: see ArmReach.
+    return ArmReach(child: StreamBuilder<PlayerSnapshot>(
       stream: player.changes,
       initialData: player.last,
       builder: (context, snap) {
@@ -1374,7 +1459,7 @@ class DeskNowPlaying extends StatelessWidget {
           },
         );
       },
-    );
+    ));
   }
 }
 
