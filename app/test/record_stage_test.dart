@@ -202,7 +202,7 @@ void main() {
         reason: 'and not much: the label is still in the open');
   });
 
-  testWidgets('pausing stops the record turning and swings the arm off it',
+  testWidgets('pausing lets the record coast to a stop and swings the arm off it',
       (tester) async {
     // What a pause used to do was put the record away — the whole disc slid back into
     // its sleeve and the arm went with it, so stopping the music emptied the stage.
@@ -224,10 +224,20 @@ void main() {
     await stage(tester, playing: false);
     expect(_onTheDeck(platter), findsWidgets,
         reason: 'the record is still on the deck');
+    // A platter has weight: it coasts for a moment rather than freezing mid-turn,
+    // and then it is still.
+    final letGo = tester.getTopLeft(turning);
+    await tester.pump(const Duration(milliseconds: 16));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect((tester.getTopLeft(turning) - letGo).distance, greaterThan(0.5),
+        reason: 'still carrying on a little, just after the motor lets go');
+    for (var i = 0; i < 80; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
     final held = tester.getTopLeft(turning);
     await tester.pump(const Duration(milliseconds: 300));
     expect((tester.getTopLeft(turning) - held).distance, lessThan(0.01),
-        reason: 'stopped where it was, rather than slowing or carrying on');
+        reason: 'and then stopped, for good');
     expect(tester.widget<Tonearm>(find.byType(Tonearm)).landed, lessThan(0.02),
         reason: 'and the arm has swung aside — still drawn, not gone');
 

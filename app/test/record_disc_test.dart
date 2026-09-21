@@ -1,69 +1,52 @@
-// How a record comes out of its sleeve, and what happens once it has.
+// One record, the whole way.
 //
-// It used to slide sideways and lean against the front of the cover, which is what a
-// record does in a room. It now comes straight down into the deck below the cover and
-// stops there, cut in half by the line the song's name is written on — and once it has
-// stopped, the arm comes down on it.
+// There used to be two: a sleeve-sized disc rolled out of the side of the cover and
+// faded away while a second, bigger one appeared on the deck, and these tests policed
+// the handover between them. There is nothing to hand over now. The record starts
+// behind its sleeve at the size a record is inside one, and comes up to where it plays
+// at the size it plays at — the same object at every moment in between.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muse/src/ui/record_stage.dart';
 
 void main() {
-  test('it starts inside the sleeve', () {
-    expect(Disc.sliding(0), 0);
-    expect(Disc.arriving(0), 0);
+  const sleeveAt = 60.0, sleeveSize = 280.0, drop = -20.0, size = 400.0;
+  ({double dy, double scale}) at(double t) => Deck.pose(t,
+      sleeveAt: sleeveAt, sleeveSize: sleeveSize, drop: drop, size: size);
+
+  test('in its sleeve it is behind the cover, and smaller than it', () {
+    final p = at(0);
+    expect(p.dy, sleeveAt, reason: 'centred on the cover it is hidden by');
+    expect(size * p.scale, lessThan(sleeveSize), reason: 'or its edge would show');
+    expect(size * p.scale, greaterThan(sleeveSize * 0.9), reason: 'a record fills its sleeve');
   });
 
-  test('it leaves the sleeve first and arrives second, never both at once', () {
-    // Two things, not one: the record slides out of the side of its cover and off the
-    // screen, and then the record being played appears where it will be played. A
-    // small disc crawling to the middle and growing would be a picture being resized.
-    expect(Disc.sliding(0), 0);
-    expect(Disc.sliding(Disc.leaves), 1, reason: 'gone by the handover');
-    expect(Disc.arriving(Disc.leaves), 0, reason: 'and the big one starts there');
-    expect(Disc.arriving(1), 1);
-    for (var i = 0; i <= 40; i++) {
-      final out = i / 40;
-      final leaving = Disc.sliding(out);
-      final arriving = Disc.arriving(out);
-      expect(leaving < 1 && arriving > 0, isFalse,
-          reason: 'one at a time, at $out');
-    }
+  test('out, it is where it plays and the size it plays at', () {
+    final p = at(1);
+    expect(p.dy, closeTo(drop, 1e-9));
+    expect(p.scale, closeTo(1, 1e-9));
   });
 
-  test('both halves are one way only', () {
-    var last = -1.0;
-    for (var i = 0; i <= 50; i++) {
-      final now = Disc.sliding(i / 50);
-      expect(now, greaterThanOrEqualTo(last));
-      last = now;
-    }
-    last = -1.0;
-    for (var i = 0; i <= 50; i++) {
-      final now = Disc.arriving(i / 50);
-      expect(now, greaterThanOrEqualTo(last));
+  test('it only ever rises and only ever grows on the way', () {
+    var last = at(0);
+    for (var i = 1; i <= 50; i++) {
+      final now = at(i / 50);
+      expect(now.dy, lessThanOrEqualTo(last.dy + 1e-9), reason: 'up is towards the top');
+      expect(now.scale, greaterThanOrEqualTo(last.scale - 1e-9));
       last = now;
     }
   });
 
-  test('the record leaving the sleeve is done by the time the deck has one', () {
-    // They are two different things in two different places — one belongs to the
-    // cover, one to the stage — and the handover is the only moment they share.
-    expect(Disc.sliding(Disc.leaves), 1);
-    expect(Disc.arriving(Disc.leaves), 0);
+  test('it rises before it grows', () {
+    // Clear of the cover as a record first, and only then up to size: growing first
+    // would push its edges out past the sides of the sleeve it is still inside.
+    final mid = at(0.4);
+    final risen = (sleeveAt - mid.dy) / (sleeveAt - drop);
+    final grown = (mid.scale - at(0).scale) / (1 - at(0).scale);
+    expect(risen, greaterThan(grown));
   });
 
-  test('the arm waits for the record to settle before it comes down', () {
-    expect(Tonearm.lowering(0), 0);
-    expect(Tonearm.lowering(0.5), 0, reason: 'the disc is still on its way');
-    expect(Tonearm.lowering(0.8), 0, reason: 'and still settling');
-    expect(Tonearm.lowering(0.9), greaterThan(0));
-    expect(Tonearm.lowering(1), closeTo(1, 0.001));
-  });
-
-  test('and it comes off again first when the record goes away', () {
-    // The same number read backwards: by the time the disc has started moving, the
-    // arm has already been lifted clear of it.
-    expect(Tonearm.lowering(0.85), lessThan(Tonearm.lowering(0.95)));
-    expect(Tonearm.lowering(0.79), 0);
+  test('outside the range it holds its ends', () {
+    expect(at(-1).dy, at(0).dy);
+    expect(at(2).scale, at(1).scale);
   });
 }

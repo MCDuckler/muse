@@ -157,19 +157,62 @@ def render_disc(cover: pathlib.Path, colour: tuple[int, int, int], seed: str,
     """
     ed = edition(seed)
     rng = ed["rng"]
+    # Drawn at twice the size and brought down: a groove is a hairline, and hairlines
+    # drawn at their final size are a moire of stair-steps once the record turns.
+    final = size
+    size = size * 2
     disc = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     pen = ImageDraw.Draw(disc)
-    r = size / 2 - 1
-    pen.ellipse((0, 0, size - 1, size - 1), fill=(15, 14, 16, 255))
+    r = size / 2 - 2
+    cx = cy = size / 2
 
-    # Grooves. Two bands of them, with the smooth lands between sides, which is what
-    # makes a record read as a record rather than a black circle.
-    for i in range(46):
-        t = i / 46
-        rad = r * (0.34 + 0.62 * t)
-        shade = 33 + int(15 * math.sin(i * 2.1)) + (10 if 0.44 < t < 0.47 else 0)
-        pen.ellipse((size / 2 - rad, size / 2 - rad, size / 2 + rad, size / 2 + rad),
-                    outline=(shade, shade, shade + 2, 255), width=max(1, size // 900))
+    def ring(rad, colour, width=1):
+        pen.ellipse((cx - rad, cy - rad, cx + rad, cy + rad), outline=colour, width=width)
+
+    pen.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(13, 12, 14, 255))
+
+    # Where the music is: from just inside the lead-in at the rim to the dead wax
+    # around the label. Whatever size the label is set to, there is wax before it.
+    outer = r * 0.955
+    inner = r * max(label + 0.085, 0.36)
+
+    # The songs on the side: a handful of bands of groove with a gap between each. The
+    # gaps are what a record looks like from across a room — you can count the tracks.
+    songs = rng.randint(3, 6)
+    cuts = sorted(rng.uniform(0.12, 0.9) for _ in range(songs - 1))
+    gaps = [inner + (outer - inner) * (1 - c) for c in cuts]
+    gap_half = r * 0.0045
+
+    # Grooves: a fine ring every couple of pixels, each a slightly different grey. The
+    # unevenness is the point — loud passages cut wider, and a record lit from one side
+    # shows that as bands of lighter and darker black.
+    step = max(2.0, size / 760)
+    rad = inner
+    drift = 0.0
+    while rad < outer:
+        if any(abs(rad - g) < gap_half for g in gaps):
+            rad += step
+            continue
+        drift = max(-1.0, min(1.0, drift + rng.uniform(-0.35, 0.35)))
+        shade = int(30 + 9 * drift + rng.uniform(-3, 3))
+        ring(rad, (shade, shade, shade + 2, 255), width=max(1, int(step * 0.55)))
+        rad += step
+
+    # The gaps between songs: smooth, so they catch the light as a bright hairline with
+    # a dark one beside it.
+    for g in gaps:
+        ring(g, (8, 8, 9, 255), width=max(2, int(gap_half * 1.6)))
+        ring(g + gap_half, (58, 58, 62, 255), width=max(1, size // 1100))
+
+    # The lead-in at the rim and the dead wax round the label: smooth vinyl, a shade
+    # glossier than the grooves, with the run-out groove spiralling through the wax.
+    ring(r * 0.978, (24, 23, 26, 255), width=max(2, int(r * 0.04)))
+    ring(r - 1, (70, 70, 74, 255), width=max(2, size // 500))       # the moulded edge
+    ring(outer, (52, 52, 56, 255), width=max(1, size // 1100))
+    wax_mid = (inner + r * label) / 2
+    ring(wax_mid, (20, 19, 22, 255), width=max(2, int(inner - r * label)))
+    ring(wax_mid + r * 0.008, (44, 44, 48, 255), width=max(1, size // 1100))
+    ring(inner, (50, 50, 54, 255), width=max(1, size // 1100))
 
     # The label: the cover art itself, the way a picture label is printed. How much of
     # the face it covers is the listener's choice — see LABEL.
@@ -186,13 +229,31 @@ def render_disc(cover: pathlib.Path, colour: tuple[int, int, int], seed: str,
     label_mask = Image.new("L", art.size, 0)
     ImageDraw.Draw(label_mask).ellipse((0, 0, art.size[0] - 1, art.size[1] - 1), fill=255)
     disc.paste(art, (int(size / 2 - label_r), int(size / 2 - label_r)), label_mask)
-    pen.ellipse((size / 2 - label_r, size / 2 - label_r,
-                 size / 2 + label_r, size / 2 + label_r),
-                outline=(0, 0, 0, 110), width=max(2, size // 340))
 
-    hole = r * 0.028
-    pen.ellipse((size / 2 - hole, size / 2 - hole, size / 2 + hole, size / 2 + hole),
-                fill=(26, 24, 26, 255))
+    # The ring a press leaves in every label, a third of the way out.
+    press = label_r * 0.42
+    # On a layer of its own and laid over: drawing a see-through line straight on to
+    # the picture replaces what is under it rather than tinting it, which punches a
+    # see-through ring in the label.
+    marks = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    mp = ImageDraw.Draw(marks)
+    for rad, colour, width in [
+        # The label's own edge, where the paper stops: it had the same fault.
+        (label_r, (0, 0, 0, 110), max(2, size // 340)),
+        (press, (0, 0, 0, 60), max(2, size // 450)),
+        (press + max(2, size // 450), (255, 255, 255, 34), max(1, size // 900)),
+    ]:
+        mp.ellipse((cx - rad, cy - rad, cx + rad, cy + rad), outline=colour, width=width)
+    disc = Image.alpha_composite(disc, marks)
+    pen = ImageDraw.Draw(disc)
+
+    # The spindle through the hole: chrome, and the one bright thing on the record.
+    hole = r * 0.030
+    pen.ellipse((cx - hole * 1.25, cy - hole * 1.25, cx + hole * 1.25, cy + hole * 1.25),
+                fill=(12, 12, 14, 255))
+    pen.ellipse((cx - hole, cy - hole, cx + hole, cy + hole), fill=(168, 170, 176, 255))
+    pen.ellipse((cx - hole * 0.62, cy - hole * 0.72, cx + hole * 0.30, cy + hole * 0.20),
+                fill=(232, 234, 238, 255))
 
     # Playing wear: hairlines and the dust a record collects, plus the sheen that runs
     # across the vinyl and gives the spin something to catch.
@@ -213,10 +274,10 @@ def render_disc(cover: pathlib.Path, colour: tuple[int, int, int], seed: str,
     # light on a record. The grooves and the wear carry it.
 
     edge = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(edge).ellipse((0, 0, size - 1, size - 1), fill=255)
+    ImageDraw.Draw(edge).ellipse((1, 1, size - 2, size - 2), fill=255)
     disc.putalpha(ImageChops.darker(disc.getchannel("A"),
                                     edge.filter(ImageFilter.GaussianBlur(size / 900))))
-    return disc
+    return disc.resize((final, final), Image.LANCZOS)
 
 
 # ---------------------------------------------------------------- the still
@@ -263,7 +324,7 @@ SIZES = {"lg": CANVAS, "sm": 320}
 # Bumped whenever the drawing changes. The art is cached under the cover's hash, which
 # does not change when the *renderer* does — so without this, a fix to how a record is
 # drawn only reaches records nobody has looked at yet.
-VERSION = 6
+VERSION = 7
 
 
 def path_for(root: pathlib.Path, sha: str, size: str, part: str = "sleeve",

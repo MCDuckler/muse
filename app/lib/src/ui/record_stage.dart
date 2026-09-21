@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
@@ -279,10 +280,10 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
   /// record can start and stop playing without anything moving along the shelf.
   late final AnimationController _out = AnimationController(
     vsync: this,
-    // Two movements and time for both: a record rolls out of its sleeve slowly — that
-    // is the weight of it — and then the one being played arrives on the deck.
-    duration: const Duration(milliseconds: 1500),
-    reverseDuration: const Duration(milliseconds: 520),
+    // One movement: the record comes up out of its sleeve and on to the deck. Back
+    // down is quicker, the way putting something away is.
+    duration: const Duration(milliseconds: 1050),
+    reverseDuration: const Duration(milliseconds: 400),
   );
 
   /// The arm, swinging between its rest and the record. Slow, because an arm is
@@ -293,11 +294,42 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     reverseDuration: const Duration(milliseconds: 620),
   );
 
-  /// One turn every 1.8 s, which is 33⅓ rpm — the speed the record would really run.
-  late final AnimationController _spin = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1800),
-  );
+  /// How far the record has turned, in turns. Driven by the motor below rather than
+  /// run on a loop, because a platter has weight: it takes a moment to come up to
+  /// speed and it coasts to a stop. Full speed or frozen solid, switched between the
+  /// two in one frame, is a picture being rotated rather than a record being played.
+  late final AnimationController _spin = AnimationController.unbounded(vsync: this);
+  late final Ticker _motor = createTicker(_turn);
+
+  /// 33⅓ rpm: one turn every 1.8 s, the speed the record would really run.
+  static const double _fullSpeed = 1 / 1.8;
+  double _speed = 0;
+  bool _powered = false;
+  Duration _lastTick = Duration.zero;
+
+  void _turn(Duration now) {
+    final dt = ((now - _lastTick).inMicroseconds / 1e6).clamp(0.0, 0.05);
+    _lastTick = now;
+    // Up to speed in about a second; a little longer to coast down, as a belt lets go.
+    final tau = _powered ? 0.38 : 0.75;
+    _speed += ((_powered ? _fullSpeed : 0.0) - _speed) * (1 - math.exp(-dt / tau));
+    if (!_powered && _speed < 0.004) {
+      _speed = 0;
+      _motor.stop();
+      return;
+    }
+    // Kept small: the angle only needs the fraction, and a double that has counted
+    // turns for an evening has fewer digits left for it.
+    _spin.value = (_spin.value + _speed * dt) % 1024;
+  }
+
+  void _power(bool on) {
+    _powered = on;
+    if (on && !_motor.isActive) {
+      _lastTick = Duration.zero;
+      _motor.start();
+    }
+  }
 
   /// What is on the shelf right now. Held separately from the widget so a skip can be
   /// *travelled to* rather than appearing already finished.
@@ -359,6 +391,22 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
   /// to follow whether anything was playing, which is what made a pause put it away.
   bool get _discWanted => _discByHand ?? true;
 
+  /// The record on the deck is being swapped: it is on its way down behind its sleeve,
+  /// and the next one comes up when it has gone.
+  bool _changing = false;
+
+  void _changeTheRecord() {
+    if (_out.value == 0) return;
+    _changing = true;
+    _out.reverse().whenCompleteOrCancel(() {
+      if (!mounted) return;
+      _changing = false;
+      if (_discWanted && !_travel.isAnimating && !_scrubbing && !_showingBack) {
+        _out.forward();
+      }
+    });
+  }
+
   /// A finger on the shelf, moving it by hand.
   ///
   /// The gesture used to slide the whole stage sideways and spring back — a picture of
@@ -382,7 +430,9 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     _out.value = 1;
     if (widget.playing) {
       _arm.value = 1;
-      _spin.repeat();
+      // Already playing when the screen opens: already up to speed.
+      _speed = _fullSpeed;
+      _power(true);
     }
     _travel.addStatusListener((status) {
       if (status == AnimationStatus.completed) {
@@ -399,8 +449,9 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
       } else {
         return;
       }
-      // Either way, the record now at rest in the middle comes out.
-      if (widget.playing) _out.forward();
+      // Either way, the record now at rest in the middle comes out — unless the last
+      // one is still on its way down, which brings the next one up when it is done.
+      if (widget.playing && !_changing) _out.forward();
     });
   }
 
@@ -416,9 +467,9 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
   void _stillArriving() {
     final busy = !(_arriving?.isCompleted ?? true);
     if (busy) {
-      if (_spin.isAnimating) _spin.stop();
-    } else if (widget.playing && !_spin.isAnimating) {
-      _spin.repeat();
+      if (_motor.isActive) _motor.stop();
+    } else if (widget.playing) {
+      _power(true);
     }
   }
 
@@ -485,16 +536,14 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
         // A step along the shelf. Everything slides one place; the sleeve that was
         // next is now the one in the middle, in the place the middle one has left.
         _travel.forward(from: 0);
-        // The record on the deck stays exactly where it is. What starts again is the
-        // *next* record coming out of its sleeve — and when it arrives it is laid on
-        // top of the one playing, which is what happens on a table and what the deck
-        // draws. Taking the record off and putting it back for every skip was the
-        // sleeve's idea of what was going on, not the deck's.
-        _out.value = 0;
+        // One record, so a skip is what it is on a real deck: the one playing goes
+        // back down behind its sleeve while the shelf moves along, and the next comes
+        // up out of its own once the shelf has stopped.
+        _changeTheRecord();
       case ShelfMove.resume:
-        // The hand started this one. It is already running; nothing to do but let it
-        // finish where it was always going.
-        break;
+        // The hand started this one and the shelf is already where it is going. The
+        // record still has to be changed.
+        _changeTheRecord();
       case ShelfMove.abandon:
         // Not while the hand is still on it. The player rebuilds this a few times a
         // second as the song plays, and every one of those rebuilds arrives with the
@@ -512,7 +561,9 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     // Not while a sleeve is still travelling, and not while a finger is holding one
     // halfway across the stage: a disc sliding out of something that is moving is two
     // movements fighting, and under a finger it is a third.
-    if (_discWanted && !_travel.isAnimating && !_scrubbing && !_showingBack) {
+    if (_changing) {
+      // On its way down to be swapped; it comes back up by itself.
+    } else if (_discWanted && !_travel.isAnimating && !_scrubbing && !_showingBack) {
       _out.forward();
     } else if (!_scrubbing && !_discWanted) {
       // Only ever because somebody put it away by hand.
@@ -520,14 +571,14 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     }
 
     if (widget.playing) {
-      if (!_spin.isAnimating) _spin.repeat();
+      _power(true);
       _arm.forward();
     } else {
-      // Pausing stops the turntable where it is and swings the arm off to the side.
-      // The record stays on the deck: taking it off and putting it back every time
-      // the music stops is not what stopping looks like, and it made a pause read as
-      // the record being packed away.
-      _spin.stop();
+      // Pausing lifts the arm and lets the platter coast to a stop. The record stays
+      // on the deck: taking it off and putting it back every time the music stops is
+      // not what stopping looks like, and it made a pause read as the record being
+      // packed away.
+      _power(false);
       _arm.reverse();
     }
   }
@@ -662,6 +713,7 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
     _travel.dispose();
     _out.dispose();
     _arm.dispose();
+    _motor.dispose();
     _spin.dispose();
     _toss.dispose();
     super.dispose();
@@ -963,6 +1015,10 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                         size: platter,
                         drop: deck,
                         arriving: Curves.easeInOutCubic.transform(_out.value),
+                        // Where the middle sleeve stands and how big it is: the record
+                        // comes up from behind it.
+                        sleeveAt: coversDown - jacket * Mirror.defaultDepth / 2,
+                        sleeveSize: jacket,
                         arm: _arm.value,
                         armStyle: widget.armStyle,
                         hand: widget.hand,
@@ -1124,13 +1180,6 @@ class _Sleeve extends StatelessWidget {
     // the frame, still fades: it has nowhere to come from otherwise.
     final fade = away <= 1 ? 1.0 : (2.0 - away).clamp(0.0, 1.0);
 
-    // Only whatever is in the middle has its record out, and only as far as it is
-    // actually in the middle: a sleeve halfway to the edge has put it away again. And
-    // nothing is out of a sleeve that is in the air — the disc would be turning over
-    // with it, and a record has no back.
-    final centre = (1 - away).clamp(0.0, 1.0);
-    final showing = out * centre * (1 - toss.clamp(0.0, 1.0));
-
     // Faded by the pictures themselves rather than by an Opacity around them.
     // Opacity between 0 and 1 saves a layer, and there is one of these for every
     // sleeve on stage on every frame of every journey — four full-size offscreen
@@ -1161,25 +1210,11 @@ class _Sleeve extends StatelessWidget {
               alignment: Alignment.center,
               clipBehavior: Clip.none,
               children: [
-                // Behind the sleeve on the way out, in front of it once it is clear.
-                //
-                // That order *is* the movement: a record comes out from behind its
-                // cover, and once it is out it is the thing in front. Drawing it
-                // behind the whole way meant it slid out and then sat half-hidden, and
-                // drawing it in front the whole way meant it appeared to come out of
-                // thin air rather than out of the sleeve.
-                // Only the record on its way out of this sleeve. What it becomes —
-                // the record on the deck — belongs to the stage rather than to any
-                // one cover, and stays where it is while the covers move about
-                // behind it.
-                if (showing > 0.01 && showing < Disc.leaves)
-                  Disc(
-                      spin: spin,
-                      url: discUrl,
-                      sleeve: jacket * 0.92,
-                      away: leaving,
-                      out: showing,
-                      dim: dim),
+                // No disc of its own. There used to be one: a sleeve-sized record
+                // rolled out of the side of the cover and faded away while a second,
+                // bigger one appeared on the deck — two records, and the one you
+                // watched leave was never the one that played. The record is the
+                // deck's now, and it comes up from behind this cover: see Deck.
                 _Face(
                     url: jacketUrl,
                     size: jacket,
@@ -1414,89 +1449,12 @@ class _Jacket extends StatelessWidget {
       );
 }
 
-/// The disc: comes out from behind the jacket, and turns while it plays.
-class Disc extends StatelessWidget {
-  const Disc({
-    super.key,
-    required this.spin,
-    required this.url,
-    required this.sleeve,
-    required this.away,
-    required this.out,
-    this.dim = 1.0,
-  });
-
-  final Animation<double> spin;
-  final String? url;
-
-  /// The record as it comes out of the cover, which is the cover's own size.
-  final double sleeve;
-
-  /// How far right it has to go to be off the screen entirely.
-  final double away;
-
-  final double out;
-  final double dim;
-
-  /// When the record has left the sleeve and the one on the deck starts to arrive.
-  ///
-  /// Two things happen here, and they are not the same object: the record slides out
-  /// of the side of its cover and off the screen, and then *the record* — the one
-  /// being played, the width of the deck — appears where it is going to be played and
-  /// clicks down into place. A small disc crawling to the middle of the screen and
-  /// growing would be a picture being resized; this is a record being taken out of a
-  /// sleeve and put on.
-  static const double leaves = 0.62;
-
-  /// How far the sleeve-sized record has slid out, 0 to 1, and how far the one on the
-  /// deck has arrived, 0 to 1. Only one of them is ever happening.
-  ///
-  /// Out at an even, unhurried pace — a record has weight, and a cover does not throw
-  /// one across the room — and then gone quickly at the end of it rather than fading
-  /// for the whole journey.
-  static double sliding(double out) =>
-      Curves.easeInOutSine.transform((out / leaves).clamp(0.0, 1.0));
-
-  /// How much of it is left to see, as it goes.
-  ///
-  /// It fades with how far it has come out from behind its cover, not with how near
-  /// it is to the edge of the screen. A record that stays solid all the way across and
-  /// then vanishes in the last fifth is a picture being switched off; one that thins
-  /// out as it clears the sleeve is a record going back where it came from. Full
-  /// strength while it is still mostly behind the cover, gone by the time it is a
-  /// cover's width out.
-  static double leaving(double gone) =>
-      (1 - (gone - 0.28) / 0.52).clamp(0.0, 1.0);
-
-  static double arriving(double out) =>
-      Curves.easeOutCubic.transform(((out - leaves) / (1 - leaves)).clamp(0.0, 1.0));
-
-  @override
-  Widget build(BuildContext context) {
-    if (url == null) return const SizedBox.shrink();
-    final gone = sliding(out);
-    if (gone <= 0) return const SizedBox.shrink();
-
-    final along = gone * away;
-    return Transform.translate(
-      offset: Offset(along, 0),
-      child: RepaintBoundary(
-        child: spinning(
-          url: url!,
-          spin: spin,
-          size: sleeve,
-          // Rolling, not sliding: a disc that moves without turning is a picture being
-          // dragged, and one that turns by the distance it covers over its own radius
-          // is a record rolling out of its cover.
-          roll: along / (sleeve / 2),
-          // Gone in the last fifth of the way out: it leaves, rather than being cut
-          // off by the edge of the phone or dimming the whole way across it.
-          fade: dim * leaving(gone),
-        ),
-      ),
-    );
-  }
-
+/// A record, as a picture that turns.
+///
+/// There used to be a widget here as well: a sleeve-sized record that rolled out of
+/// the side of its cover and faded away, while a second, bigger one appeared on the
+/// deck. The record is one object now and belongs to the deck — see [Deck.pose].
+abstract final class Disc {
   /// A record, turning. Built once and rotated, rather than rebuilt every frame.
   static Widget spinning({
     required String url,
@@ -1540,10 +1498,39 @@ class Deck extends StatefulWidget {
     required this.drop,
     required this.arriving,
     required this.arm,
+    this.sleeveAt = 0,
+    this.sleeveSize = 0,
     this.armStyle = ArmStyle.classic,
     this.hand,
     this.label = 0.31,
   });
+
+  /// The middle of the sleeve the record lives in, from the middle of the stage, and
+  /// how wide that sleeve is.
+  final double sleeveAt;
+  final double sleeveSize;
+
+  /// Where the record is and how big, [t] of the way out of its sleeve.
+  ///
+  /// One object the whole way. At 0 it is the size a record is inside its cover — a
+  /// shade smaller than the sleeve — and exactly behind it, so nothing shows. It comes
+  /// straight up and towards you, to where it plays, at the size it plays at.
+  static ({double dy, double scale}) pose(double t,
+      {required double sleeveAt,
+      required double sleeveSize,
+      required double drop,
+      required double size}) {
+    final inSleeve = sleeveSize <= 0 ? 1.0 : (sleeveSize * 0.94 / size).clamp(0.2, 1.0);
+    final u = t.clamp(0.0, 1.0);
+    // Up first, then forward: most of the rise is done before most of the growing, so
+    // it clears the top of the cover as a record and only then comes up to size.
+    final up = Curves.easeOutCubic.transform(u);
+    final grow = Curves.easeInOutSine.transform(u);
+    return (
+      dy: sleeveAt + (drop - sleeveAt) * up,
+      scale: inSleeve + (1 - inSleeve) * grow,
+    );
+  }
 
   /// Which arm is drawn on it, or none at all.
   final ArmStyle armStyle;
@@ -1575,25 +1562,32 @@ class Deck extends StatefulWidget {
 }
 
 class _DeckState extends State<Deck> {
-  /// What is already on the platter, while something new is being laid on it.
-  String? _under;
+  /// The record actually on the deck. Not always the one asked for: a record is only
+  /// ever swapped while it is down behind its sleeve, where nobody can see it happen.
+  String? _shown;
+
+  @override
+  void initState() {
+    super.initState();
+    _shown = widget.url;
+  }
 
   @override
   void didUpdateWidget(Deck old) {
     super.didUpdateWidget(old);
-    if (old.url != widget.url && old.url != null) {
-      // Whatever was playing stays where it is until the new one covers it.
-      _under = old.url;
+    if (_shown != widget.url && (widget.arriving <= 0.02 || _shown == null)) {
+      _shown = widget.url;
     }
-    if (widget.arriving >= 1 || widget.url == null) _under = null;
   }
 
   @override
   Widget build(BuildContext context) {
-    final url = widget.url;
-    final settled = _under;
-    if (url == null && settled == null) return const SizedBox.shrink();
+    final url = _shown;
+    if (url == null) return const SizedBox.shrink();
     final arriving = widget.arriving.clamp(0.0, 1.0);
+    // Everything that belongs to a record in its place — the light across it, the
+    // arm, the plinth — waits until it is nearly there.
+    final placed = ((arriving - 0.82) / 0.18).clamp(0.0, 1.0);
 
     // The stage is a square the size of the cover's box; a record is wider than that.
     // Without this, the Stack it sits in shrinks it back to the box — which is why a
@@ -1607,28 +1601,16 @@ class _DeckState extends State<Deck> {
         child: SizedBox(
           width: widget.size,
           // Room for the record wherever it is hung, above the middle or below it.
-          //
-          // It was `size + drop`, which is the same thing while the record sits below
-          // the middle and half a record short when it sits above it — and a box that
-          // is short does not clip a Stack's child, it squeezes it: the record came
-          // out as much narrower than the screen as it had been hung high, which read
-          // as the peek being wrong rather than as the record being the wrong size.
           height: widget.size + widget.drop.abs(),
-          // The right way up, and the covers do the cutting.
-          //
-          // Turning the whole deck over put the record above the covers in one line,
-          // and turned everything else over with it: a record that ran backwards, a
-          // label upside down, and a soft faded edge where the round edge of a record
-          // should be. What shows above a cover is the top of a record, so the record
-          // is drawn the way a record is and the cover is simply in front of the rest
-          // of it.
+          // The right way up, and the covers do the cutting: what shows above a cover
+          // is the top of a record, so the record is drawn the way a record is and the
+          // cover is simply in front of the rest of it.
           child: Stack(
             alignment: Alignment.center,
             clipBehavior: Clip.none,
             children: [
               // The classic arm's plinth, which the record's edge lies over.
-              if ((settled != null || arriving > 0) &&
-                  widget.armStyle == ArmStyle.classic)
+              if (placed > 0 && widget.armStyle == ArmStyle.classic)
                 Positioned.fill(
                   child: IgnorePointer(
                     child: CustomPaint(
@@ -1636,44 +1618,37 @@ class _DeckState extends State<Deck> {
                         radius: widget.size / 2,
                         drop: widget.drop,
                         label: widget.label,
-                        dim: math.min(Tonearm.lowering(arriving) * 1.4, 1.0)
-                            .clamp(settled != null ? 1.0 : 0.0, 1.0),
+                        dim: placed,
                       ),
                     ),
                   ),
                 ),
-              if (settled != null) _record(settled, 1, 0),
-              if (url != null && arriving > 0)
-                _record(
-                  url,
-                  Curves.easeIn.transform((arriving * 1.8).clamp(0.0, 1.0)),
-                  // Down the last few pixels as it lands: the click of a record being
-                  // set on the platter.
-                  (1 - Curves.easeOutBack.transform(arriving)) * widget.size * 0.06,
-                ),
+              if (arriving > 0) _record(url, arriving),
               // The light on it, which does not turn with it.
               //
-              // A record turning under a lamp carries a band of light that stays where
-              // the lamp is: the grooves run through it and it holds still. Painted on
-              // the record it would be a smear going round with the label, which is
-              // what a record does not do and what the eye notices immediately.
-              if (settled != null || arriving > 0)
+              // A record turning under a lamp carries its highlights where the lamp
+              // is: the grooves run through them and they hold still. Painted on the
+              // record they would go round with the label, which is what a record does
+              // not do and what the eye notices immediately.
+              if (placed > 0)
                 Positioned.fill(
                   child: IgnorePointer(
-                    child: CustomPaint(
-                      painter: _Sheen(size: widget.size, drop: widget.drop),
+                    child: RepaintBoundary(
+                      child: CustomPaint(
+                        painter: RecordLight(
+                          size: widget.size,
+                          drop: widget.drop,
+                          label: widget.label,
+                          strength: placed,
+                          spin: widget.spin,
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              // The arm comes down once the record has stopped moving, and swings
-              // off to the side again when the music stops or the next record is on
-              // its way. It stays on the deck either way: an arm that is not playing
-              // anything is parked, not gone.
-              // Nothing at all when there is no arm to draw: a widget that returns
-              // an empty box is still a widget being built, laid out and walked on
-              // every frame of the movement.
-              if ((settled != null || arriving > 0) &&
-                  widget.armStyle != ArmStyle.off)
+              // The arm comes down once the record is in its place, and swings off to
+              // the side again when the music stops or the record is being changed.
+              if (placed > 0 && widget.armStyle != ArmStyle.off)
                 Positioned.fill(
                   child: Tonearm(
                     radius: widget.size / 2,
@@ -1693,9 +1668,17 @@ class _DeckState extends State<Deck> {
   /// One record on the platter: turning, dropped to the deck, and faded into the line
   /// it is cut on rather than sliced at it — a hard edge across a record reads as a
   /// mistake, and one sinking into the deck reads as a record on a deck.
-  Widget _record(String url, double fade, double rise) {
+  Widget _record(String url, double arriving) {
     final record = Disc.spinning(
-        url: url, spin: widget.spin, size: widget.size, roll: 0, fade: fade);
+        url: url, spin: widget.spin, size: widget.size, roll: 0, fade: 1);
+    final pose = Deck.pose(arriving,
+        sleeveAt: widget.sleeveAt,
+        sleeveSize: widget.sleeveSize,
+        drop: widget.drop,
+        size: widget.size);
+    // Down the last few pixels as it lands: the click of a record being set on the
+    // platter.
+    final rise = (1 - Curves.easeOutBack.transform(arriving)) * widget.size * 0.03;
 
     // Drawn in two pieces, and that is about memory rather than looks.
     //
@@ -1712,7 +1695,9 @@ class _DeckState extends State<Deck> {
     const gone = 0.68;
     return IgnorePointer(
       child: Transform.translate(
-      offset: Offset(0, widget.drop - rise),
+      offset: Offset(0, pose.dy - rise),
+      child: Transform.scale(
+      scale: pose.scale,
       child: RepaintBoundary(
         child: SizedBox(
           width: widget.size,
@@ -1744,6 +1729,7 @@ class _DeckState extends State<Deck> {
             ],
           ),
         ),
+      ),
       ),
       ),
     );
@@ -2477,8 +2463,14 @@ class _ArmPainter extends CustomPainter {
 /// run through the light rather than carrying it round with them — which is the whole
 /// point of it, and the difference between a record turning and a picture of a record
 /// being rotated.
-class _Sheen extends CustomPainter {
-  _Sheen({required this.size, required this.drop});
+class RecordLight extends CustomPainter {
+  RecordLight({
+    required this.size,
+    required this.drop,
+    required this.label,
+    required this.strength,
+    required this.spin,
+  }) : super(repaint: spin);
 
   /// How wide the record is.
   final double size;
@@ -2486,40 +2478,108 @@ class _Sheen extends CustomPainter {
   /// How far from the middle of the box the middle of the record is.
   final double drop;
 
+  /// How much of the radius the picture label covers: paper does not shine.
+  final double label;
+
+  /// 0 to 1: the light comes up as the record settles into its place.
+  final double strength;
+
+  /// The record's turning, which the light answers to — see below.
+  final Animation<double> spin;
+
+  /// One lobe of light, as stops round a sweep: nothing, up to a peak, nothing.
+  static void _lobe(List<Color> colours, List<double> stops, double at, double half,
+      double peak) {
+    for (final (where, much) in [
+      (at - half, 0.0),
+      (at - half * 0.35, peak * 0.72),
+      (at, peak),
+      (at + half * 0.35, peak * 0.72),
+      (at + half, 0.0),
+    ]) {
+      stops.add(where.clamp(0.0, 1.0));
+      colours.add(Color.fromRGBO(255, 255, 255, much));
+    }
+  }
+
   @override
   void paint(Canvas canvas, Size box) {
+    if (strength <= 0) return;
     final middle = Offset(box.width / 2, box.height / 2 + drop);
     final r = size / 2;
     final disc = Rect.fromCircle(center: middle, radius: r);
 
+    // What light does on vinyl. A groove is a tiny mirrored ridge running round the
+    // record, so it only throws a lamp back at you where it runs at the right angle to
+    // it — which, for rings about a centre, is along two opposite spokes. That is the
+    // pair of bright wedges every record under a lamp has, fanning out from the label,
+    // and it is why a straight stripe of gloss across a record never looks like one.
+    //
+    // Two lamps: a strong one up and to the left, a weaker one up and to the right.
+    final turn = spin.value * 2 * math.pi;
+    // No record is flat. The highlights rock a degree or two once a turn, and shiver a
+    // little on top of that — which is most of what makes it look like it is turning.
+    final warp = 0.030 * math.sin(turn) + 0.012 * math.sin(2 * turn + 1.3);
+    final colours = <Color>[];
+    final stops = <double>[];
+    // Each has a twin straight across the record, on the half that is behind the
+    // covers. Not drawn: they would only show as a wedge cut off along the line the
+    // record sinks into the deck at.
+    _lobe(colours, stops, 0.125, 0.105, 0.30 * strength);   // the lamp
+    _lobe(colours, stops, 0.345, 0.070, 0.13 * strength);   // the second lamp
+    // The first lobe's centre points up and to the left.
+    final start = -2.20 - 0.125 * 2 * math.pi + warp;
+
     canvas.save();
-    canvas.clipPath(Path()..addOval(disc));
     // Only where the record is actually drawn: the light cannot go on past the edge
     // the record fades out at.
     canvas.clipRect(Rect.fromLTRB(
         disc.left, disc.top, disc.right, disc.top + size * 0.62));
-    canvas.drawRect(
-      disc,
+    // And only on the grooves: from the dead wax round the label out to the rim.
+    final inner = r * math.max(label + 0.085, 0.36);
+    canvas.drawPath(
+      Path()
+        ..fillType = PathFillType.evenOdd
+        ..addOval(Rect.fromCircle(center: middle, radius: r * 0.992))
+        ..addOval(Rect.fromCircle(center: middle, radius: inner)),
       Paint()
-        ..shader = ui.Gradient.linear(
-          disc.topLeft,
-          disc.bottomRight,
-          [
-            const Color(0x00FFFFFF),
-            const Color(0x38FFFFFF),
-            const Color(0x10FFFFFF),
-            const Color(0x00FFFFFF),
-            const Color(0x22FFFFFF),
-            const Color(0x00FFFFFF),
-          ],
-          const [0.0, 0.20, 0.30, 0.44, 0.58, 0.80],
+        // Turned with a matrix rather than by moving the start angle: a sweep that
+        // starts below zero draws nothing at all on some renderers.
+        ..shader = ui.Gradient.sweep(
+          middle,
+          colours,
+          stops,
+          TileMode.clamp,
+          0,
+          2 * math.pi,
+          (Matrix4.identity()
+                ..translateByDouble(middle.dx, middle.dy, 0, 1)
+                ..rotateZ(start)
+                ..translateByDouble(-middle.dx, -middle.dy, 0, 1))
+              .storage,
         ),
+    );
+    // The moulded rim catches the lamp as a bright thread along its edge.
+    canvas.drawArc(
+      Rect.fromCircle(center: middle, radius: r - 1.2),
+      -2.20 - 0.55 + warp,
+      1.10,
+      false,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = math.max(1.0, r * 0.006)
+        ..strokeCap = StrokeCap.round
+        ..color = Color.fromRGBO(255, 255, 255, 0.34 * strength),
     );
     canvas.restore();
   }
 
   @override
-  bool shouldRepaint(_Sheen old) => old.size != size || old.drop != drop;
+  bool shouldRepaint(RecordLight old) =>
+      old.size != size ||
+      old.drop != drop ||
+      old.label != label ||
+      old.strength != strength;
 }
 
 /// A reflection under something, on a surface that is barely there.
