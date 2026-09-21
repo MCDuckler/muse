@@ -17,10 +17,12 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:muse/src/api/client.dart';
 import 'package:muse/src/api/connection.dart';
+import 'package:muse/src/api/models.dart';
 import 'package:muse/src/state/app_state.dart';
 import 'package:muse/src/state/selection.dart';
 import 'package:muse/src/ui/desk_dock.dart';
 import 'package:muse/src/ui/home_page.dart';
+import 'package:muse/src/ui/sidebar.dart';
 import 'package:muse/src/ui/now_playing.dart';
 import 'package:muse/src/ui/split.dart';
 import 'package:muse/src/ui/widths.dart';
@@ -180,12 +182,12 @@ void main() {
     await drain(tester);
   });
 
-  testWidgets('a desk gets a rail down the side and the player beside the page',
+  testWidgets('a desk gets its library down the side and the player beside the page',
       (tester) async {
     await wholeShell(tester, const Size(1440, 900));
-    expect(find.byType(NavigationRail), findsOneWidget);
+    expect(find.byType(LibrarySidebar), findsOneWidget);
     expect(find.byType(NavigationBar), findsNothing,
-        reason: 'the four destinations are in the rail, not across the bottom');
+        reason: 'the four places are down the side, not across the bottom');
     expect(find.byType(DeskDock), findsOneWidget);
     expect(find.byType(DeskNowPlaying), findsOneWidget,
         reason: 'what is playing stays on screen while you read something else');
@@ -325,8 +327,43 @@ void main() {
     await drain(tester);
   });
 
+  testWidgets('the side lists every playlist, and finds one by name', (tester) async {
+    app.playlists = [
+      for (final (i, name) in ['Gym', 'Sunday Driving', 'Late', 'Rain', 'Work', 'Cooking',
+          'Night Bus', 'Summer', 'Old Faves'].indexed)
+        Playlist.fromJson({'id': i + 1, 'name': name, 'items': 10 + i}),
+    ];
+    await wholeShell(tester, const Size(1440, 900));
+    expect(find.text('YOUR PLAYLISTS · 9'), findsOneWidget);
+    expect(find.text('Sunday Driving'), findsOneWidget);
+    await tester.enterText(
+        find.descendant(of: find.byType(LibrarySidebar), matching: find.byType(TextField)),
+        'gym');
+    await tester.pump();
+    expect(find.descendant(of: find.byType(LibrarySidebar), matching: find.text('Gym')),
+        findsOneWidget);
+    expect(find.text('Sunday Driving'), findsNothing);
+    await drain(tester);
+  });
+
+  testWidgets('folded away, the library leaves the rail, and it is remembered',
+      (tester) async {
+    await wholeShell(tester, const Size(1440, 900));
+    app.toggleSidebar();
+    await tester.pumpAndSettle();
+    expect(find.byType(LibrarySidebar), findsNothing);
+    expect(find.byType(NavigationRail), findsOneWidget);
+    expect(app.sidebar, isFalse);
+    app.toggleSidebar();
+    await tester.pumpAndSettle();
+    expect(find.byType(LibrarySidebar), findsOneWidget);
+    await drain(tester);
+  });
+
   testWidgets('the rail says the name of the tab you are on, and no others',
       (tester) async {
+    // The rail is what a desk gets with the library folded away.
+    app.sidebar = false;
     await wholeShell(tester, const Size(1440, 900));
     final rail = tester.widget<NavigationRail>(find.byType(NavigationRail));
     expect(rail.labelType, NavigationRailLabelType.selected,

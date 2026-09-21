@@ -21,6 +21,7 @@ import 'dropped_files.dart';
 import 'snack.dart';
 import 'library_page.dart';
 import 'settings_page.dart';
+import 'sidebar.dart';
 import 'not_connected.dart';
 import 'player_bar.dart';
 import 'search_page.dart';
@@ -242,12 +243,20 @@ class _HomePageState extends State<HomePage> {
             // Down the side on anything wider than a phone. Four destinations spread
             // across fourteen hundred pixels of bottom edge is thumb furniture on a
             // screen nobody is holding.
+            // On a desk, your library down the side; narrower, or folded away, the rail.
             if (width.hasRail)
-              _Rail(
-                dockOpen: dock,
-                onDock: width.hasDock ? app.toggleDeskDock : null,
-                onSameTab: _sameTab,
-              ),
+              width == Width.expanded &&
+                      context.select<AppState, bool>((a) => a.sidebar)
+                  ? LibrarySidebar(
+                      dockOpen: dock,
+                      onDock: width.hasDock ? app.toggleDeskDock : null,
+                      onSameTab: _sameTab,
+                    )
+                  : _Rail(
+                      dockOpen: dock,
+                      onDock: width.hasDock ? app.toggleDeskDock : null,
+                      onSameTab: _sameTab,
+                    ),
             Expanded(
               child: Column(
           children: [
@@ -455,6 +464,12 @@ class _Rail extends StatelessWidget {
                     tooltip: 'Downloads',
                     onPressed: () => Navigator.of(context)
                         .push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
+                  ),
+                if (Width.of(context) == Width.expanded)
+                  IconButton(
+                    icon: const Icon(Icons.keyboard_double_arrow_right),
+                    tooltip: 'Show your library down the side',
+                    onPressed: app.toggleSidebar,
                   ),
                 // Jump to anything: the desk's other way in. See CommandPalette.
                 IconButton(
