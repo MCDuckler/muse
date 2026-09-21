@@ -244,6 +244,33 @@ void main() {
       expect(app.equalizer.gains[5].abs(), lessThan(3.5));
     });
 
+    testWidgets('a finger drawn across the graph is the curve', (tester) async {
+      await show(tester);
+      final graph = tester.getRect(find.bySemanticsLabel(RegExp('Response curve')));
+      // Low on the left, high on the right: less bass and more top, in one stroke.
+      final finger = await tester.startGesture(graph.bottomLeft + const Offset(36, -30));
+      await tester.pump();
+      expect(app.equalizer.enabled, isTrue, reason: 'drawing a curve is asking to hear it');
+      for (var i = 1; i <= 12; i++) {
+        await finger.moveTo(Offset.lerp(graph.bottomLeft + const Offset(36, -30),
+            graph.topRight + const Offset(-14, 16), i / 12)!);
+        await tester.pump();
+      }
+      await finger.up();
+      await tester.pump();
+
+      final g = app.equalizer.gains;
+      expect(g.first, lessThan(-4));
+      expect(g.last, greaterThan(4));
+      for (var i = 1; i < g.length; i++) {
+        expect(g[i], greaterThanOrEqualTo(g[i - 1]), reason: 'every band it passed, in order');
+      }
+      expect(engine.said.last.gains.last, g.last, reason: 'and the sound followed');
+      expect(tester.takeException(), isNull);
+      // What it came to rest at is written down a moment later, not on every move.
+      await tester.pump(const Duration(milliseconds: 500));
+    });
+
     testWidgets('a device with no equalizer says so, and nothing can be pushed',
         (tester) async {
       app.equalizer.engine = NoEqEngine('Not on this one.');

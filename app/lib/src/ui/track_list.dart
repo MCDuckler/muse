@@ -86,7 +86,12 @@ class TrackList extends StatefulWidget {
     this.headKey,
     this.firstRowKey,
     this.roomAtTheSide = 0,
+    this.trailingFor,
   });
+
+  /// Something to say about each song at the end of its row, where this list knows
+  /// something the row does not show by itself — its tempo, in a list ordered by tempo.
+  final Widget? Function(Track track)? trailingFor;
 
   /// For a page that puts the list somewhere itself — at a letter, from a rail down
   /// its side. The two keys are how it finds out how far down a row is without the
@@ -211,6 +216,7 @@ class _TrackListState extends State<TrackList> {
               final t = tracks[i - 1];
               final row = SongRow(
                 track: t,
+                trailing: widget.trailingFor?.call(t),
                 selectable: selectable,
                 onTap: () => app.playNow(tracks, startAt: i - 1, named: named),
                 onRemove: onRemove == null ? null : () => onRemove(i - 1),

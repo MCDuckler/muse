@@ -606,3 +606,7 @@ create index if not exists scrobbles_owed on scrobbles(user_id) where sent_at is
 -- the beats themselves are on disk beside the audio — so that songs can one day be
 -- ordered and chosen by it without opening a file per song.
 alter table tracks add column if not exists bpm real;
+
+-- When a song was listened to for its beats, whether or not it turned out to have any:
+-- a song with no pulse has no tempo, and must not be listened to again every night.
+alter table tracks add column if not exists analysed_at timestamptz;

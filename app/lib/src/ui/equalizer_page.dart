@@ -124,18 +124,11 @@ class _FaceplateState extends State<_Faceplate> {
         ],
         const SizedBox(height: 14),
         // The curve: what all of the rest of this page is a way of drawing.
-        AspectRatio(
-          aspectRatio: 2.4,
-          child: CustomPaint(
-            painter: _CurvePainter(
-              gains: eq.gains,
-              live: live,
-              ink: scheme.onSurface,
-              accent: scheme.primary,
-              paper: scheme.surfaceContainerHighest,
-              deviceBands: fitted ? [for (final b in bands) b.hz] : const [],
-            ),
-          ),
+        _DrawableCurve(
+          eq: eq,
+          enabled: there,
+          live: live,
+          deviceBands: fitted ? [for (final b in bands) b.hz] : const [],
         ),
         const SizedBox(height: 6),
         Row(
@@ -145,7 +138,7 @@ class _FaceplateState extends State<_Faceplate> {
                 eq.listeningFlat
                     ? 'As the record is, while you hold.'
                     : !eq.enabled
-                        ? 'Switched off: this is the curve it would play.'
+                        ? 'Switched off. Draw on the graph, or pick a curve.'
                         : eq.current != null
                             ? '“${eq.current!.name}”'
                             : 'A curve of your own.',
@@ -313,6 +306,92 @@ class _HoldToCompare extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------- curve
+/// The graph, which is also the fastest way to set the thing: put a finger on it and
+/// draw the curve. The band nearest the finger goes to the height of the finger, and a
+/// finger dragged across goes through each band it passes, so "less bass, more top" is
+/// one stroke rather than ten faders. The faders underneath move with it; they are the
+/// same ten numbers.
+class _DrawableCurve extends StatefulWidget {
+  const _DrawableCurve(
+      {required this.eq, required this.enabled, required this.live, required this.deviceBands});
+  final Equalizer eq;
+  final bool enabled;
+  final bool live;
+  final List<double> deviceBands;
+
+  @override
+  State<_DrawableCurve> createState() => _DrawableCurveState();
+}
+
+class _DrawableCurveState extends State<_DrawableCurve> {
+  int? _held;
+
+  void _draw(Offset at, Size size) {
+    final plot = _CurvePainter.plotOf(size);
+    final hz = _CurvePainter.hzAt(at.dx, plot);
+    var nearest = 0;
+    for (var i = 1; i < eqFrequencies.length; i++) {
+      if ((math.log(eqFrequencies[i]) - math.log(hz)).abs() <
+          (math.log(eqFrequencies[nearest]) - math.log(hz)).abs()) {
+        nearest = i;
+      }
+    }
+    var db = _CurvePainter.dbAt(at.dy, plot).clamp(-eqRange, eqRange);
+    // Half-decibel steps and a catch at level, as on the faders.
+    db = (db * 2).round() / 2;
+    if (db.abs() <= 0.5) db = 0;
+    if (nearest != _held || (db == 0 && widget.eq.gains[nearest] != 0)) {
+      HapticFeedback.selectionClick();
+    }
+    if (_held != nearest) setState(() => _held = nearest);
+    if (widget.eq.gains[nearest] != db) {
+      // Drawing a curve is asking to hear it.
+      if (!widget.eq.enabled) widget.eq.setEnabled(true);
+      widget.eq.setBand(nearest, db);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return AspectRatio(
+      aspectRatio: 2.4,
+      child: LayoutBuilder(builder: (context, box) {
+        final size = Size(box.maxWidth, box.maxHeight);
+        return Semantics(
+          label: 'Response curve. Drag on it to draw the curve.',
+          child: Listener(
+            // As the finger lands, and wherever it goes: the page underneath scrolls,
+            // and a graph that waited to find out whether this was a scroll would be a
+            // graph that mostly scrolled.
+            onPointerDown: widget.enabled ? (e) => _draw(e.localPosition, size) : null,
+            onPointerMove: widget.enabled ? (e) => _draw(e.localPosition, size) : null,
+            onPointerUp: (_) => setState(() => _held = null),
+            onPointerCancel: (_) => setState(() => _held = null),
+            child: GestureDetector(
+              // Only here to win the drag, so the list does not take it.
+              onVerticalDragUpdate: widget.enabled ? (_) {} : null,
+              onHorizontalDragUpdate: widget.enabled ? (_) {} : null,
+              child: CustomPaint(
+                size: size,
+                painter: _CurvePainter(
+                  gains: widget.eq.gains,
+                  live: widget.live,
+                  ink: scheme.onSurface,
+                  accent: scheme.primary,
+                  paper: scheme.surfaceContainerHighest,
+                  deviceBands: widget.deviceBands,
+                  held: _held,
+                ),
+              ),
+            ),
+          ),
+        );
+      }),
+    );
+  }
+}
+
 class _CurvePainter extends CustomPainter {
   const _CurvePainter({
     required this.gains,
@@ -321,6 +400,7 @@ class _CurvePainter extends CustomPainter {
     required this.accent,
     required this.paper,
     required this.deviceBands,
+    this.held,
   });
 
   final List<double> gains;
@@ -330,14 +410,24 @@ class _CurvePainter extends CustomPainter {
   final Color paper;
   final List<double> deviceBands;
 
+  /// The band under a finger, if there is one: ringed, and labelled with what it is at.
+  final int? held;
+
   static final _lo = math.log(20.0), _hi = math.log(20000.0);
+
+  // Where on the panel the graph itself is, and the way back from a point on it to a
+  // frequency and a level — shared with whoever is putting a finger on it.
+  static Rect plotOf(Size size) => Rect.fromLTRB(28, 6, size.width - 8, size.height - 16);
+  static double hzAt(double x, Rect plot) => math.exp(
+      _lo + (_hi - _lo) * ((x - plot.left) / plot.width).clamp(0.0, 1.0));
+  static double dbAt(double y, Rect plot) =>
+      (plot.center.dy - y) / (plot.height / 2) * (eqRange + 2);
 
   @override
   void paint(Canvas canvas, Size size) {
     final box = Offset.zero & size;
     canvas.drawRect(box, Paint()..color = paper);
-    const padL = 28.0, padB = 16.0, padT = 6.0, padR = 8.0;
-    final plot = Rect.fromLTRB(padL, padT, size.width - padR, size.height - padB);
+    final plot = plotOf(size);
     double x(double hz) => plot.left + plot.width * (math.log(hz) - _lo) / (_hi - _lo);
     double y(double db) => plot.center.dy - plot.height / 2 * (db / (eqRange + 2));
 
@@ -408,6 +498,32 @@ class _CurvePainter extends CustomPainter {
       canvas.drawCircle(Offset(x(eqFrequencies[i]), y(gains[i])), live ? 3 : 2.2,
           Paint()..color = live ? accent : ink.withValues(alpha: 0.45));
     }
+    final h = held;
+    if (h != null) {
+      final at = Offset(x(eqFrequencies[h]), y(gains[h]));
+      canvas.drawCircle(
+          at,
+          9,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2
+            ..color = ink);
+      final g = gains[h];
+      final said = '${eqLabel(eqFrequencies[h])}  '
+          '${g.abs() < 0.05 ? '0' : '${g > 0 ? '+' : '-'}${g.abs().toStringAsFixed(1)}'} dB';
+      final p = TextPainter(
+        text: TextSpan(text: said, style: Mag.typewriter(11, color: paper, bold: true)),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      // Above the finger where there is room, below it where there is not, and never
+      // off either side.
+      final w = p.width + 12, hgt = p.height + 6;
+      final left = (at.dx - w / 2).clamp(plot.left, plot.right - w);
+      final top = at.dy - 16 - hgt < plot.top ? at.dy + 16 : at.dy - 16 - hgt;
+      canvas.drawRect(Rect.fromLTWH(left, top, w, hgt), Paint()..color = ink);
+      p.paint(canvas, Offset(left + 6, top + 3));
+      p.dispose();
+    }
     // Where this phone's own bands fall, when it has fewer than ten.
     for (final hz in deviceBands) {
       final at = Offset(x(hz.clamp(20.0, 20000.0)), y(eqCurveAt(gains, hz)));
@@ -429,6 +545,7 @@ class _CurvePainter extends CustomPainter {
   @override
   bool shouldRepaint(_CurvePainter old) =>
       old.live != live ||
+      old.held != held ||
       old.ink != ink ||
       old.accent != accent ||
       old.deviceBands.length != deviceBands.length ||

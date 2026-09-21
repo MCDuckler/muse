@@ -26,6 +26,9 @@ SORTS = {
     "artist": "lower(coalesce(t.artists[1], '')) asc, lower(t.title) asc",
     "album": "lower(coalesce(t.album, '')) asc, lower(t.title) asc",
     "duration": "t.duration_ms desc nulls last",
+    # Slowest first, and the ones with no tempo — not listened to yet, or with no pulse
+    # to have one — after everything that has.
+    "tempo": "t.bpm asc nulls last, lower(t.title) asc",
 }
 
 _TRACK_SELECT = """
@@ -145,6 +148,18 @@ SMART = {
         "blurb": "Added to your library in the last thirty days",
         "where": "li.added_at > now() - interval '30 days'",
         "order": "li.added_at desc",
+    },
+    "slow": {
+        "name": "Slow ones",
+        "blurb": "Under ninety beats a minute: for when the day is over",
+        "where": "t.bpm < 90",
+        "order": "t.bpm asc",
+    },
+    "quick": {
+        "name": "Up-tempo",
+        "blurb": "A hundred and twenty-five beats a minute and up",
+        "where": "t.bpm >= 125",
+        "order": "p.plays desc nulls last, t.bpm desc",
     },
     "once": {
         "name": "Played once",

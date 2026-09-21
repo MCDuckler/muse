@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -205,7 +206,7 @@ class Equalizer extends ChangeNotifier {
       for (var i = 0; i < gains.length; i++)
         (gains[i] + by * shape[i]).clamp(-eqRange, eqRange)
     ];
-    await _changed();
+    await _changed(dragging: true);
   }
 
   // ---------------------------------------------------------------- changing it
@@ -216,12 +217,12 @@ class Equalizer extends ChangeNotifier {
 
   Future<void> setBand(int i, double db) async {
     gains = [...gains]..[i] = db.clamp(-eqRange, eqRange);
-    await _changed();
+    await _changed(dragging: true);
   }
 
   Future<void> setPreamp(double db) async {
     preamp = db.clamp(-eqRange, eqRange);
-    await _changed();
+    await _changed(dragging: true);
   }
 
   Future<void> setProtect(bool on) async {
@@ -260,10 +261,31 @@ class Equalizer extends ChangeNotifier {
     await _changed();
   }
 
-  Future<void> _changed() async {
+  /// [dragging] is a change that is one of many in a row — a fader being pulled, the
+  /// curve being drawn with a finger. The sound follows every one of them; what is
+  /// written down is where it came to rest, a moment after it stops, rather than sixty
+  /// times a second while it moves.
+  Future<void> _changed({bool dragging = false}) async {
     notifyListeners();
     await _apply();
-    await _save();
+    _saveSoon?.cancel();
+    if (dragging) {
+      _saveSoon = Timer(const Duration(milliseconds: 400), _save);
+    } else {
+      await _save();
+    }
+  }
+
+  Timer? _saveSoon;
+
+  @override
+  void dispose() {
+    // Whatever was still waiting to be written down is written down.
+    if (_saveSoon?.isActive ?? false) {
+      _saveSoon!.cancel();
+      _save();
+    }
+    super.dispose();
   }
 
   // ---------------------------------------------------------------- the device

@@ -206,6 +206,7 @@ class _AllTracksPageState extends State<AllTracksPage> {
     'artist': 'Artist',
     'album': 'Album',
     'duration': 'Longest',
+    'tempo': 'Tempo',
   };
 
   String _sort = 'added';
@@ -334,6 +335,14 @@ class _AllTracksPageState extends State<AllTracksPage> {
                       '${_sorts[_sort]!.toLowerCase()}'
                   : '${_tracks.total} in your library · '
                       '${_sorts[_sort]!.toLowerCase()}',
+              // Ordered by tempo, the tempo is the thing the list is about.
+              trailingFor: _sort != 'tempo'
+                  ? null
+                  : (t) => t.bpm == null
+                      ? null
+                      : Text('${t.bpm!.round()}',
+                          style: Mag.numerals(15,
+                              color: Theme.of(context).colorScheme.primary)),
               onEndReached: _tracks.next,
               loadingMore: _tracks.loading,
             ),

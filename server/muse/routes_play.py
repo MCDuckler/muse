@@ -60,8 +60,9 @@ def analysis(track_id: int, response: Response, user: dict = Depends(current_use
         found = _beats.for_track(cfg().data_dir, audio, t["sha256"])
     except (subprocess.SubprocessError, OSError) as e:
         raise HTTPException(502, "could not read the audio") from e
-    if found.get("bpm") and t.get("bpm") != found["bpm"]:
-        db.run("update tracks set bpm=%s where id=%s", (found["bpm"], track_id))
+    if t.get("analysed_at") is None or t.get("bpm") != found.get("bpm"):
+        db.run("update tracks set bpm=%s, analysed_at=now() where id=%s",
+               (found.get("bpm"), track_id))
     # The same file always has the same beats, and the file is named by its hash.
     response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
     return found

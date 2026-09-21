@@ -124,3 +124,57 @@ def test_it_is_asked_for_once_and_kept(client, hdr, monkeypatch):
 def test_a_song_with_no_audio_has_no_beats_yet(client, hdr):
     t = client.post("/tracks/resolve", headers=hdr, json={"video_id": "NOAUDIO0001"}).json()
     assert client.get(f"/tracks/{t['id']}/analysis", headers=hdr).status_code == 404
+
+
+def test_the_library_is_listened_to_a_song_at_a_time(client, hdr, tmp_path, monkeypatch):
+    """So that "sort by tempo" is the library and not the last week's listening. A song
+    with no pulse is marked as listened to as well, or it would be the only one tried."""
+    from muse import beats_worker, deps
+
+    audio, _ = drums(128, 15, lead=0.5, tail=0.5)
+    fast = client.post("/uploads", headers=hdr,
+                       files={"audio": ("a.wav", io.BytesIO(audio), "audio/wav")}).json()
+    audio, _ = drums(84, 15, lead=0.5, tail=0.5)
+    slow = client.post("/uploads", headers=hdr,
+                       files={"audio": ("b.wav", io.BytesIO(audio), "audio/wav")}).json()
+
+    from muse import catalog
+    me = db.one("select id from users where name='chris'")["id"]
+    for t in (fast, slow):
+        catalog.remember(me, t["id"])
+
+    data_dir = deps.cfg().data_dir
+    assert beats_worker.one(data_dir) is True           # newest first
+    assert db.one("select bpm from tracks where id=%s", (slow["id"],))["bpm"] == \
+        pytest.approx(84, abs=0.5)
+    assert db.one("select analysed_at from tracks where id=%s", (fast["id"],))["analysed_at"] is None
+    assert beats_worker.one(data_dir) is True
+    assert beats_worker.one(data_dir) is False, "and then there is nothing left to do"
+
+    # Slowest first, and what has no tempo after everything that has.
+    nothing = client.post("/tracks/resolve", headers=hdr, json={"video_id": "NOTEMPO0001"}).json()
+    listed = client.get("/library/tracks", headers=hdr, params={"sort": "tempo"}).json()["items"]
+    ids = [t["id"] for t in listed]
+    assert ids.index(slow["id"]) < ids.index(fast["id"]) < ids.index(nothing["id"])
+
+    lists = {l["id"]: l["count"] for l in client.get("/library/smart", headers=hdr).json()["lists"]}
+    assert lists["slow"] == 1 and lists["quick"] == 1
+    got = client.get("/library/smart/quick", headers=hdr).json()["items"]
+    assert [t["id"] for t in got] == [fast["id"]]
+
+
+def test_a_file_that_cannot_be_read_is_not_tried_for_ever(client, hdr, monkeypatch):
+    from muse import beats_worker, deps
+
+    audio, _ = drums(100, 12, lead=0.0, tail=0.0)
+    t = client.post("/uploads", headers=hdr,
+                    files={"audio": ("c.wav", io.BytesIO(audio), "audio/wav")}).json()
+
+    def broken(*a, **kw):
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(beats, "for_track", broken)
+    assert beats_worker.one(deps.cfg().data_dir) is True
+    row = db.one("select bpm, analysed_at from tracks where id=%s", (t["id"],))
+    assert row["bpm"] is None and row["analysed_at"] is not None
+    assert beats_worker.one(deps.cfg().data_dir) is False

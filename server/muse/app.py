@@ -18,6 +18,7 @@ from fastapi import (Body, Depends, FastAPI, Form, Header, HTTPException, Reques
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+from . import beats_worker
 from . import (
     auth, catalog, config, db, direct_worker, enrich_worker, failures,
                follows, jobs, progress,
@@ -83,6 +84,8 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     direct = (direct_worker.DirectWorker(cfg, publish=publish, mirror=run_mirror)
               if start_workers else None)
 
+    listener = beats_worker.BeatsWorker(cfg) if start_workers else None
+
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         global _loop
@@ -91,6 +94,8 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             worker.start()
         if direct:
             direct.start()
+        if listener:
+            listener.start()
         if start_workers:
             # One outstanding poll job is the scheduler; it re-queues itself when it
             # runs. Asking at boot covers a box that was off when the last one was due.
@@ -104,6 +109,8 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             worker.stop()
         if direct:
             direct.stop()
+        if listener:
+            listener.stop()
         _loop = None
 
     app = FastAPI(title="WetOwl", docs_url="/api-docs", lifespan=lifespan)

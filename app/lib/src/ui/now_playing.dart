@@ -1722,6 +1722,7 @@ class _ScrubberState extends State<_ScrubberBar>
   /// the target keeps the bar where the finger left it.
   double? _seeking;
   DateTime? _seekAt;
+  int? _askedTimingFor;
 
   /// Each song's shape, asked for once when it comes on. A song not asked for yet is
   /// missing from the map; one with no shape to give is in it as null.
@@ -1770,6 +1771,29 @@ class _ScrubberState extends State<_ScrubberBar>
 
     position = _now(position, app.musicIsPlaying, duration);
     final max = duration.inMilliseconds.toDouble();
+
+    // The nothing at either end that is being skipped, so the bar says so: a song that
+    // moves on with two seconds still showing looks like a fault unless those two
+    // seconds look like what they are.
+    var skips = (before: 0.0, after: 0.0);
+    final current = s?.current;
+    if (app.seamless && current != null && max > 0) {
+      final store = widget.player.timing;
+      final timing = store.peek(current.id);
+      if (timing == null) {
+        if (_askedTimingFor != current.id) {
+          _askedTimingFor = current.id;
+          store.of(current).then((_) {
+            if (mounted) setState(() {});
+          });
+        }
+      } else {
+        skips = (
+          before: (timing.leadMs / max).clamp(0.0, 0.5),
+          after: (timing.tailMs / max).clamp(0.0, 0.5),
+        );
+      }
+    }
 
     // A seek is finished when the engine reports somewhere near where we sent it, or
     // when it has had long enough that something must have gone wrong.
@@ -1826,6 +1850,8 @@ class _ScrubberState extends State<_ScrubberBar>
                   shape: shape,
                   loading: songId != null && !_shapes.containsKey(songId),
                   played: max > 0 ? (value / max).clamp(0.0, 1.0) : 0,
+                  skippedBefore: skips.before,
+                  skippedAfter: skips.after,
                 ),
               ),
             ),
@@ -2255,11 +2281,24 @@ class _PlaybackExtrasState extends State<_PlaybackExtras> {
 /// half a second; where there is none to be had they sit flat. A phone asked to keep
 /// still gets no swell and no rise, just the result.
 class WaveBar extends StatefulWidget {
-  const WaveBar({super.key, required this.shape, required this.loading, required this.played});
+  const WaveBar({
+    super.key,
+    required this.shape,
+    required this.loading,
+    required this.played,
+    this.skippedBefore = 0,
+    this.skippedAfter = 0,
+  });
 
   final List<int>? shape;
   final bool loading;
   final double played;
+
+  /// How much of either end of the file is nothing, as a share of its length — and is
+  /// being skipped, with songs played one into the next. Drawn as dots rather than
+  /// bars: the bar is the file, and these are the parts of the file that are not song.
+  final double skippedBefore;
+  final double skippedAfter;
 
   @override
   State<WaveBar> createState() => _WaveBarState();
@@ -2325,6 +2364,8 @@ class _WaveBarState extends State<WaveBar> with TickerProviderStateMixin {
           shape: widget.shape,
           played: widget.played,
           loading: widget.loading,
+          skippedBefore: widget.skippedBefore,
+          skippedAfter: widget.skippedAfter,
           swell: _swell,
           rise: _rising,
           ink: scheme.primary,
@@ -2343,6 +2384,8 @@ class _Waveform extends CustomPainter {
     required this.shape,
     required this.played,
     required this.loading,
+    this.skippedBefore = 0,
+    this.skippedAfter = 0,
     required this.swell,
     required this.rise,
     required this.ink,
@@ -2352,6 +2395,8 @@ class _Waveform extends CustomPainter {
   final List<int>? shape;
   final double played;
   final bool loading;
+  final double skippedBefore;
+  final double skippedAfter;
   final Animation<double> swell;
   final Animation<double> rise;
   final Color ink;
@@ -2400,6 +2445,12 @@ class _Waveform extends CustomPainter {
         h = flat + (mid * 0.22) * strength * (0.5 + 0.5 * math.sin(phase - i * 0.35));
       }
       final x = left + i * (_bar + _gap);
+      // Dead air at either end, which is not played: a dot where a bar would be.
+      final along = (x + _bar / 2) / size.width;
+      if (along < skippedBefore || along > 1 - skippedAfter) {
+        canvas.drawCircle(Offset(x + _bar / 2, mid), _bar / 2.4, todo);
+        continue;
+      }
       canvas.drawRRect(
         RRect.fromRectAndRadius(
             Rect.fromLTRB(x, mid - h, x + _bar, mid + h), const Radius.circular(1.5)),
@@ -2412,6 +2463,8 @@ class _Waveform extends CustomPainter {
   bool shouldRepaint(_Waveform old) =>
       old.played != played ||
       old.loading != loading ||
+      old.skippedBefore != skippedBefore ||
+      old.skippedAfter != skippedAfter ||
       !identical(old.shape, shape) ||
       old.ink != ink ||
       old.rest != rest;

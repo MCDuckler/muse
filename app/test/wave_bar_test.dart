@@ -64,4 +64,30 @@ void main() {
     await tester.pumpAndSettle();
     expect(moving(), 0);
   });
+
+  testWidgets('dead air that is being skipped is drawn as dots, not as song',
+      (tester) async {
+    Future<void> bar({double before = 0, double after = 0}) => tester.pumpWidget(MaterialApp(
+          home: Center(
+            child: SizedBox(
+              width: 300,
+              height: 40,
+              child: WaveBar(
+                  shape: List<int>.filled(160, 200),
+                  loading: false,
+                  played: 0.3,
+                  skippedBefore: before,
+                  skippedAfter: after),
+            ),
+          ),
+        ));
+    final drawn = find.descendant(of: find.byType(WaveBar), matching: find.byType(CustomPaint));
+
+    await bar();
+    expect(drawn, isNot(paints..circle()), reason: 'a file with no dead air is all bars');
+
+    await bar(before: 0.05, after: 0.1);
+    expect(drawn, paints..circle(), reason: 'and one with some says which part is not song');
+    expect(tester.takeException(), isNull);
+  });
 }

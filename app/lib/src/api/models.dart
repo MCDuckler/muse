@@ -16,6 +16,10 @@ class Track {
   final String? discoveredVia;
   final double? gainDb;
 
+  /// Beats a minute, once the server has listened to the song for them. Null before
+  /// that, and for something with no steady pulse.
+  final double? bpm;
+
   /// How loud the track was measured to be, in LUFS. The player normalises with
   /// [gainDb]; this is the raw figure, and it is what the halftone breathes to.
   final double? loudnessLufs;
@@ -63,6 +67,7 @@ class Track {
     required this.source,
     this.discoveredVia,
     this.gainDb,
+    this.bpm,
     this.loudnessLufs,
     this.bytes,
     this.streamPath,
@@ -98,6 +103,7 @@ class Track {
         source: source,
         discoveredVia: discoveredVia,
         gainDb: gainDb,
+        bpm: bpm,
         loudnessLufs: loudnessLufs,
         bytes: bytes,
         streamPath: streamPath,
@@ -118,7 +124,7 @@ class Track {
         id: id, title: title, artists: artists, album: album,
         durationMs: durationMs, state: state, failReason: failReason,
         failCode: failCode, progress: p, source: source,
-        discoveredVia: discoveredVia, gainDb: gainDb, bytes: bytes,
+        discoveredVia: discoveredVia, gainDb: gainDb, bpm: bpm, bytes: bytes,
         streamPath: streamPath, coverPath: coverPath, coverColor: coverColor,
         coverVersion: coverVersion, providerId: providerId,
         displayTitle: displayTitle, origin: origin, addedBy: addedBy,
@@ -199,6 +205,7 @@ class Track {
         source: (j['source'] ?? 'youtube') as String,
         discoveredVia: j['discovered_via'] as String?,
         gainDb: (j['gain_db'] as num?)?.toDouble(),
+        bpm: (j['bpm'] as num?)?.toDouble(),
         loudnessLufs: (j['loudness_lufs'] as num?)?.toDouble(),
         bytes: j['bytes'] as int?,
         streamPath: j['stream_url'] as String?,
