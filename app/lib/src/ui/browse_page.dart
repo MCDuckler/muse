@@ -218,6 +218,27 @@ class _AllTracksPageState extends State<AllTracksPage> {
 
   late Paged<Track> _tracks = _pager();
 
+  /// The orders that are an alphabet, and so have letters down the side.
+  static const _lettered = {'title', 'artist', 'album'};
+
+  /// What stands above the first song, and how tall a song is: how far down song
+  /// 3,000 is, without building the 2,999 before it.
+  final _head = GlobalKey();
+  final _firstSong = GlobalKey();
+  double _headHeight = 0, _songHeight = 64;
+
+  late final LetterJump _jump = LetterJump(
+    // Asked again for every order: by artist they are the artists' initials.
+    ask: () async => _lettered.contains(_sort)
+        ? context
+            .read<AppState>()
+            .api
+            .letters('tracks', sort: _sort, readyOnly: _playable)
+        : const [],
+    reach: (i) => _tracks.reach(i),
+    pixelsTo: (i) => _headHeight + i * _songHeight,
+  )..load();
+
   Paged<Track> _pager() {
     final api = context.read<AppState>().api;
     final sort = _sort;
@@ -231,6 +252,7 @@ class _AllTracksPageState extends State<AllTracksPage> {
   @override
   void dispose() {
     _tracks.dispose();
+    _jump.dispose();
     super.dispose();
   }
 
@@ -238,6 +260,8 @@ class _AllTracksPageState extends State<AllTracksPage> {
   void _load() => setState(() {
         _tracks.dispose();
         _tracks = _pager();
+        _jump.letters.value = const [];
+        _jump.load();
       });
 
   @override
@@ -281,9 +305,26 @@ class _AllTracksPageState extends State<AllTracksPage> {
             // The shape of the list, rather than a spinner in front of a blank page.
             return const SongsComing(rows: 9);
           }
-          return RecordRefresh(
-            onRefresh: _tracks.reload,
+          final lettered = _lettered.contains(_sort) && _tracks.total > 40;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            final head = _head.currentContext?.size?.height;
+            final song = _firstSong.currentContext?.size?.height;
+            if (head != null) _headHeight = head;
+            if (song != null && song > 0) _songHeight = song;
+          });
+          return WithLetters(
+            jump: _jump,
+            show: lettered,
+            child: RecordRefresh(
+            onRefresh: () async {
+              await _tracks.reload();
+              await _jump.load();
+            },
             child: TrackList(
+              controller: _jump.scroll,
+              headKey: _head,
+              firstRowKey: _firstSong,
+              roomAtTheSide: lettered ? 18 : 0,
               tracks: _tracks.items,
               selectable: 'library',
               named: 'All tracks',
@@ -295,6 +336,7 @@ class _AllTracksPageState extends State<AllTracksPage> {
               onEndReached: _tracks.next,
               loadingMore: _tracks.loading,
             ),
+          ),
           );
         },
       ),

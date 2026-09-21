@@ -170,9 +170,17 @@ class ApiClient {
   // ---------------- the other people here ----------------
   /// Everybody on this server, with what each has and whether they have a jam going.
   /// Where each letter starts in the records list or the artists list, sorted by name.
-  Future<List<({String letter, int offset})>> letters(String of) async {
-    final d = await _decode(await net.get(_u('/library/$of/index'), headers: _headers))
-        as Map<String, dynamic>;
+  ///
+  /// The songs list has several alphabetical orders, so it says which: [sort] is
+  /// 'title', 'artist' or 'album', and [readyOnly] as the list itself is asked.
+  Future<List<({String letter, int offset})>> letters(String of,
+      {String? sort, bool readyOnly = false}) async {
+    final d = await _decode(await net.get(
+        _u('/library/$of/index', {
+          if (sort != null) 'sort': sort,
+          if (readyOnly) 'ready_only': true,
+        }),
+        headers: _headers)) as Map<String, dynamic>;
     return [
       for (final l in (d['letters'] ?? const []) as List)
         (letter: '${l['letter']}', offset: (l['offset'] ?? 0) as int)

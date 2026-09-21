@@ -548,3 +548,21 @@ def test_the_letters_say_where_in_the_list_they_start(client, hdr, library):
             if l["offset"] > 0 and l["letter"] != "#":
                 before = listed[l["offset"] - 1]["name"][:1].upper()
                 assert before != l["letter"], "the first of its letter, not one in the middle"
+
+
+def test_the_songs_list_has_letters_in_whichever_alphabet_it_is_in(client, hdr, library):
+    for sort, field in (("title", "title"), ("artist", "artists"), ("album", "album")):
+        listed = client.get("/library/tracks", headers=hdr,
+                            params={"limit": 500, "sort": sort}).json()["items"]
+        letters = client.get("/library/tracks/index", headers=hdr,
+                             params={"sort": sort}).json()["letters"]
+        assert sum(l["count"] for l in letters) == len(listed)
+        for l in letters:
+            value = listed[l["offset"]][field]
+            name = (value[0] if value else "") if isinstance(value, list) else (value or "")
+            initial = name[:1].upper()
+            assert (initial if "A" <= initial <= "Z" else "#") == l["letter"], (sort, l, name)
+
+    # Newest first is not an alphabet.
+    assert client.get("/library/tracks/index", headers=hdr,
+                      params={"sort": "added"}).status_code == 400

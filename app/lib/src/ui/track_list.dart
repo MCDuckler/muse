@@ -82,7 +82,21 @@ class TrackList extends StatefulWidget {
     this.onEndReached,
     this.loadingMore = false,
     this.searchable = true,
+    this.controller,
+    this.headKey,
+    this.firstRowKey,
+    this.roomAtTheSide = 0,
   });
+
+  /// For a page that puts the list somewhere itself — at a letter, from a rail down
+  /// its side. The two keys are how it finds out how far down a row is without the
+  /// rows before it being built: what stands above the first row, and how tall a row is.
+  final ScrollController? controller;
+  final GlobalKey? headKey;
+  final GlobalKey? firstRowKey;
+
+  /// Kept clear on the right, for that rail.
+  final double roomAtTheSide;
 
   /// Whether this list offers a way to find one song in it. On by default, and off
   /// where the list is short by construction — the songs on one record.
@@ -170,12 +184,14 @@ class _TrackListState extends State<TrackList> {
           return false;
         },
         child: ListView.builder(
-            padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
+            controller: widget.controller,
+            padding: EdgeInsets.fromLTRB(8, 4, 8 + widget.roomAtTheSide, 160),
             physics: const AlwaysScrollableScrollPhysics(),
             itemCount: tracks.length + (loadingMore ? 2 : 1),
             itemBuilder: (context, i) {
               if (i == 0) {
                 return Column(
+                  key: widget.headKey,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _Head(tracks: tracks, header: header, named: named),
@@ -193,12 +209,15 @@ class _TrackListState extends State<TrackList> {
               }
               if (i - 1 >= tracks.length) return const _More();
               final t = tracks[i - 1];
-              return SongRow(
+              final row = SongRow(
                 track: t,
                 selectable: selectable,
                 onTap: () => app.playNow(tracks, startAt: i - 1, named: named),
                 onRemove: onRemove == null ? null : () => onRemove(i - 1),
               );
+              return i == 1 && widget.firstRowKey != null
+                  ? KeyedSubtree(key: widget.firstRowKey, child: row)
+                  : row;
             },
         ),
       ),

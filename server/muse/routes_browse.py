@@ -86,6 +86,32 @@ def all_tracks(sort: str = "added", limit: int = 200, offset: int = 0,
             "offset": offset, "sort": sort}
 
 
+# What a sort's letters are the first letters *of*: the column it orders by first.
+_LETTERED = {
+    "title": "t.title",
+    "artist": "coalesce(t.artists[1], '')",
+    "album": "coalesce(t.album, '')",
+}
+
+
+@router.get("/tracks/index")
+def all_tracks_index(sort: str = "title", ready_only: bool = False,
+                     user: dict = Depends(current_user)):
+    """The letters of the songs list, in whichever alphabetical order it is in.
+
+    Sorted by artist they are the artists' initials, by record the records'. The orders
+    that are not alphabetical — newest, longest — have no letters, and say so.
+    """
+    if sort not in _LETTERED:
+        raise HTTPException(400, f"only {', '.join(_LETTERED)} have letters")
+    where = "where t.state='ready'" if ready_only else ""
+    return {"sort": sort, "letters": _letters(
+        f"""select {_LETTERED[sort]} as name,
+                   row_number() over (order by {SORTS[sort]}) as rn
+              {_MINE} {where}""",
+        (user["id"],))}
+
+
 # Lists that fill themselves in.
 #
 # A playlist is something somebody made. These are the other kind: a question about
