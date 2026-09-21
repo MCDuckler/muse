@@ -287,6 +287,7 @@ class AppState extends ChangeNotifier {
   static const _kPalette = 'muse.palette';
   static const _kHalftone = 'muse.halftone';
   static const _kDiscoLights = 'muse.discoLights';
+  static const _kAlbumsAcross = 'muse.albumsAcross';
   static const _kSeamless = 'muse.seamless';
   static const _kSpectrum = 'muse.spectrum';
   static const _kCoverScale = 'muse.coverScale';
@@ -496,6 +497,21 @@ class AppState extends ChangeNotifier {
     await prefs.setBool(_kHalftone, on);
   }
 
+  /// How many covers go across the wall of records, or null to fit as many as sit
+  /// comfortably. Per device: what suits a phone is a row of two on a desk.
+  int? albumsAcross;
+
+  Future<void> setAlbumsAcross(int? across) async {
+    albumsAcross = across;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    if (across == null) {
+      await prefs.remove(_kAlbumsAcross);
+    } else {
+      await prefs.setInt(_kAlbumsAcross, across);
+    }
+  }
+
   Future<void> setDiscoLights(bool on) async {
     discoLights = on;
     notifyListeners();
@@ -530,6 +546,7 @@ class AppState extends ChangeNotifier {
     halftone = prefs.getBool(_kHalftone) ?? !kIsWeb;
     // Whoever had the background on had the lights too, and keeps them.
     discoLights = prefs.getBool(_kDiscoLights) ?? halftone;
+    albumsAcross = prefs.getInt(_kAlbumsAcross);
     seamless = prefs.getBool(_kSeamless) ?? true;
     player?.seamless = seamless;
     spectrum = prefs.getBool(_kSpectrum) ?? false;

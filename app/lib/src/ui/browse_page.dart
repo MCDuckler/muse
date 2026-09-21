@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -10,6 +11,8 @@ import '../state/art_cache.dart';
 import '../state/offline.dart';
 import '../state/paged.dart';
 import '../state/selection.dart';
+import 'album_grid.dart';
+import 'feel.dart';
 import 'artwork.dart';
 import 'selection_bar.dart';
 import 'skeleton.dart';
@@ -379,6 +382,9 @@ class _AlbumsPageState extends State<AlbumsPage> {
   double _stride = 1;
   int _across = 1;
 
+  /// The most covers this window could show across, for the menu that offers them.
+  int _most = 6;
+
   late final LetterJump _jump = LetterJump(
     ask: () => context.read<AppState>().api.letters('albums'),
     reach: (i) => _albums.reach(i),
@@ -413,12 +419,32 @@ class _AlbumsPageState extends State<AlbumsPage> {
   @override
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
+    final chosen = context.select<AppState, int?>((a) => a.albumsAcross);
     final wide = Width.of(context) == Width.expanded;
     return PlayerScaffold(
       // Records are the one page that wants the whole desk: they are tiles, and more
       // of them across is the point of a wider screen.
       measure: 1600,
       appBar: AppBar(
+        actions: [
+          // How many across. A menu of numbers rather than a slider: the answer is a
+          // small whole number, and it is quicker to say "four" than to drag to it.
+          PopupMenuButton<int>(
+            tooltip: 'Covers across',
+            icon: const Icon(Icons.grid_view_outlined),
+            initialValue: chosen ?? 0,
+            onSelected: (n) {
+              feel(Feel.pick);
+              app.setAlbumsAcross(n == 0 ? null : n);
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(value: 0, child: Text('As many as fit well')),
+              const PopupMenuDivider(),
+              for (var n = 2; n <= math.max(2, _most); n++)
+                PopupMenuItem(value: n, child: Text('$n across')),
+            ],
+          ),
+        ],
         // How many there are, because "Albums" over a list that stops somewhere
         // says nothing about what you are looking at — and with a search in it, it
         // is the answer to what you typed.
@@ -465,17 +491,21 @@ class _AlbumsPageState extends State<AlbumsPage> {
           }
           // The same sums the grid does, so that a record's number can be turned into
           // how far down it is without the rows in between ever having been built.
-          final maxTile = wide ? 230.0 : 190.0;
-          final gapAcross = wide ? 18.0 : 12.0, gapDown = wide ? 22.0 : 16.0;
           // The rail has a column of its own, so that it never lies over a cover.
           final lettered = _q.isEmpty && _sort == 'name' && _albums.total > 40;
           final railRoom = lettered ? 18.0 : 0.0;
           final room = MediaQuery.sizeOf(context).width;
           return LayoutBuilder(builder: (context, box) {
             final usable = (box.maxWidth.isFinite ? box.maxWidth : room) - 24 - railRoom;
-            _across = (usable / (maxTile + gapAcross)).ceil().clamp(1, 99);
-            final tile = (usable - gapAcross * (_across - 1)) / _across;
-            _stride = tile / 0.74 + gapDown;
+            final grid = AlbumGrid.of(
+              usable: usable,
+              wide: wide,
+              chosen: chosen,
+              textScale: MediaQuery.textScalerOf(context).scale(14) / 14,
+            );
+            _across = grid.across;
+            _stride = grid.stride;
+            _most = AlbumGrid.mostAcross(usable);
             return WithLetters(
             jump: _jump,
             show: lettered,
@@ -493,22 +523,42 @@ class _AlbumsPageState extends State<AlbumsPage> {
               controller: _jump.scroll,
               padding: EdgeInsets.fromLTRB(12, 12, 12 + railRoom, 160),
               physics: const AlwaysScrollableScrollPhysics(),
-              gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                 // Bigger tiles and more air between them where there is room: phone
                 // sizes on a desk are a page of postage stamps.
-                maxCrossAxisExtent: maxTile,
-                childAspectRatio: 0.74,
-                crossAxisSpacing: gapAcross,
-                mainAxisSpacing: gapDown,
+                crossAxisCount: grid.across,
+                mainAxisExtent: grid.extent,
+                crossAxisSpacing: grid.gapAcross,
+                mainAxisSpacing: grid.gapDown,
               ),
               itemCount: albums.length,
               itemBuilder: (context, i) {
                 final a = albums[i];
+                void open() => Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => AlbumPage(album: a),
+                    ));
+                // Too small to write under: the cover alone, which still says what it
+                // is to anyone who asks — a long press, a pointer held over it, a
+                // screen reader.
+                if (!grid.captions) {
+                  return Tooltip(
+                    message: '${a.name} · ${a.subtitle}',
+                    child: InkWell(
+                      onTap: open,
+                      child: Hero(
+                        tag: albumHeroTag(a.name, a.artist),
+                        child: Artwork(
+                          url: app.api.coverUrlForPath(a.coverPath, small: false),
+                          size: grid.tile,
+                          radius: 2,
+                        ),
+                      ),
+                    ),
+                  );
+                }
                 return InkWell(
                   borderRadius: BorderRadius.circular(12),
-                  onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                    builder: (_) => AlbumPage(album: a),
-                  )),
+                  onTap: open,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
