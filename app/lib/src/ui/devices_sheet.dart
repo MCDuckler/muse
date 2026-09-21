@@ -97,7 +97,8 @@ class _DeviceRow extends StatelessWidget {
   final DeviceInfo device;
 
   IconData get _icon => switch (device.kind ?? device.platform ?? '') {
-        'browser' || 'web' => Icons.desktop_windows_outlined,
+        'browser' || 'web' => Icons.language,
+        'desktop' || 'linux' || 'windows' => Icons.desktop_windows_outlined,
         'android' || 'phone' || 'ios' => Icons.smartphone,
         _ => Icons.devices_other,
       };

@@ -1,0 +1,141 @@
+# Build the desktop app: Windows and Linux.
+#
+# A Windows binary can only be produced on Windows — Flutter's build shells out to
+# Visual Studio's compiler — and there is no Windows machine in this project, so it is a
+# rented one for ten minutes at a time, the same way the iPhone build is. Linux is built
+# here too rather than on the laptop it is developed on: that laptop runs a rolling
+# distribution, and a binary linked against this month's glibc does not start on
+# anybody's Ubuntu LTS. Built on the oldest supported Ubuntu, it starts everywhere newer.
+#
+# On demand only, like the iPhone build, and for the same reason.
+name: Desktop app
+
+on:
+  workflow_dispatch:
+    inputs:
+      server:
+        description: 'muse server the build points at'
+        default: 'https://89-58-49-140.nip.io'
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Fetch packages
+        working-directory: app
+        run: flutter pub get
+      - name: Build
+        working-directory: app
+        shell: bash
+        env:
+          MUSE_SERVER: ${{ inputs.server || 'https://89-58-49-140.nip.io' }}
+        run: |
+          stamp="$(date -u +%Y%m%d%H%M)"
+          echo "$stamp" > build-stamp.txt
+          flutter build windows --release \
+            --build-number="$stamp" \
+            --dart-define=MUSE_SERVER="$MUSE_SERVER" \
+            --dart-define=MUSE_BUILD="$stamp"
+      - name: Zip it
+        working-directory: app
+        shell: pwsh
+        run: |
+          # Everything the exe needs is beside it — the engine, the plugins, libmpv, the
+          # assets — so the folder is the program: unzip it anywhere and run wetowl.exe.
+          $out = "build\windows\x64\runner\Release"
+          Copy-Item build-stamp.txt "$out\build-stamp.txt"
+          Compress-Archive -Path "$out\*" -DestinationPath wetowl-windows.zip
+          Get-Item wetowl-windows.zip | Format-List Name, Length
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wetowl-windows
+          path: app/wetowl-windows.zip
+          retention-days: 30
+
+  linux:
+    # The oldest Ubuntu GitHub still runs: see the note at the top.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: What the build needs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libmpv-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Fetch packages
+        working-directory: app
+        run: flutter pub get
+      - name: Check it compiles cleanly
+        working-directory: app
+        run: flutter analyze lib
+      - name: Run the tests
+        working-directory: app
+        run: flutter test
+      - name: Build
+        working-directory: app
+        env:
+          MUSE_SERVER: ${{ inputs.server || 'https://89-58-49-140.nip.io' }}
+        run: |
+          stamp="$(date -u +%Y%m%d%H%M)"
+          flutter build linux --release \
+            --build-number="$stamp" \
+            --dart-define=MUSE_SERVER="$MUSE_SERVER" \
+            --dart-define=MUSE_BUILD="$stamp"
+          echo "$stamp" > build/linux/x64/release/bundle/build-stamp.txt
+      - name: Pack it
+        working-directory: app
+        run: |
+          # The sound comes from the system's libmpv, which is not in the box: on Linux
+          # it belongs to the distribution. The app says so in its window if it is
+          # missing. See README-linux.txt, which goes in with it.
+          cat > build/linux/x64/release/bundle/README-linux.txt <<'TXT'
+          WetOwl for Linux
+
+          Run ./wetowl
+
+          It plays through libmpv, which your distribution provides:
+            Arch / CachyOS / Manjaro:   sudo pacman -S mpv
+            Debian / Ubuntu / Mint:     sudo apt install libmpv2      (libmpv1 on older releases)
+            Fedora:                     sudo dnf install mpv-libs
+
+          Without it the app opens and says so, and makes no sound.
+          TXT
+          mv build/linux/x64/release/bundle build/linux/x64/release/wetowl
+          tar -C build/linux/x64/release -czf wetowl-linux.tar.gz wetowl
+          ls -lh wetowl-linux.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wetowl-linux
+          path: app/wetowl-linux.tar.gz
+          retention-days: 30
+
+  release:
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Publish them as a release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="desktop-$(date +%Y%m%d-%H%M)"
+          gh release create "$tag" out/wetowl-windows.zip out/wetowl-linux.tar.gz \
+            --title "WetOwl for Windows and Linux · $tag" \
+            --notes "Build of ${{ github.sha }}. Windows: unzip and run wetowl.exe. Linux: unpack and run ./wetowl (needs libmpv — see README-linux.txt)."

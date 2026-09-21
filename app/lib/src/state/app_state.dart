@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -2013,7 +2013,13 @@ class AppState extends ChangeNotifier {
                 snapshot?.position ??
                 Duration.zero)
             .inMilliseconds,
-        kind: kIsWeb ? 'browser' : 'phone',
+        kind: kIsWeb
+            ? 'browser'
+            : (defaultTargetPlatform == TargetPlatform.linux ||
+                    defaultTargetPlatform == TargetPlatform.windows ||
+                    defaultTargetPlatform == TargetPlatform.macOS)
+                ? 'desktop'
+                : 'phone',
       );
     } catch (_) {
       // Missing one of these costs a minute of staleness on somebody else's screen.

@@ -141,3 +141,44 @@ class _NotConnectedState extends State<NotConnected> {
     );
   }
 }
+
+/// Why this computer makes no sound, when it cannot: set once at start-up, by the one
+/// place that finds out (see main). Null everywhere it can.
+final noSoundBecause = ValueNotifier<String?>(null);
+
+/// One line, above the player, when the audio engine did not start.
+///
+/// A desktop build's engine is a library the system has to have. A player that opens,
+/// shows the whole library, and then silently does nothing when play is pressed is the
+/// worst way to find that out; this says it, with what to install.
+class NoSound extends StatelessWidget {
+  const NoSound({super.key});
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<String?>(
+        valueListenable: noSoundBecause,
+        builder: (context, why, _) {
+          if (why == null) return const SizedBox.shrink();
+          final scheme = Theme.of(context).colorScheme;
+          return Material(
+            color: scheme.errorContainer,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
+              child: Row(
+                children: [
+                  Icon(Icons.volume_off, size: 18, color: scheme.onErrorContainer),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(why,
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(color: scheme.onErrorContainer)),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+}

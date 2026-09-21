@@ -1,11 +1,13 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry, kIsWeb;
+import 'package:flutter/foundation.dart'
+    show LicenseEntryWithLineBreaks, LicenseRegistry, TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/services.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:just_audio_background/just_audio_background.dart';
+import 'package:just_audio_media_kit/just_audio_media_kit.dart';
 import 'package:just_audio_platform_interface/just_audio_platform_interface.dart';
 import 'package:provider/provider.dart';
 
@@ -22,6 +24,7 @@ import 'src/ui/theme.dart';
 import 'src/ui/page_colour.dart';
 import 'src/ui/paper.dart';
 import 'src/ui/widths.dart';
+import 'src/ui/not_connected.dart' show noSoundBecause;
 import 'src/ui/reactions.dart';
 
 /// Exposed for the integration test: the player lives behind a stream, and a test
@@ -36,6 +39,12 @@ String debugEngineState() {
   return 'processing=${p.processingState} playing=${p.playing} '
       'volume=${p.volume} duration=${p.duration} position=${p.position}';
 }
+
+/// A window on a computer, rather than a phone or a browser tab.
+bool get onADesk =>
+    !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.linux ||
+        defaultTargetPlatform == TargetPlatform.windows);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -61,7 +70,31 @@ Future<void> main() async {
   // keeps the first file it was ever given, so skipping moved the screen on while the
   // same song kept playing. Proved by hooking HTMLMediaElement: one src assignment for
   // the whole session, then nothing but repeated play() calls on it.
-  if (!kIsWeb) {
+  // On a desk — Linux, Windows — the engine is libmpv (just_audio has none of its own
+  // there), and there is no lockscreen or foreground service to keep alive: the
+  // background wrapper is a phone's, and its one rule — a single player, a MediaItem on
+  // every source — buys nothing on a machine that does not suspend the app.
+  if (onADesk) {
+    JustAudioMediaKit.title = 'WetOwl';
+    // The next song is handed to the engine ahead of time; this is what makes mpv open
+    // it ahead of time too, so the step to it is as free as it is on a phone.
+    JustAudioMediaKit.prefetchPlaylist = true;
+    try {
+      JustAudioMediaKit.ensureInitialized(linux: true, windows: true);
+      PlaybackLog.note('desktop audio ready (libmpv)');
+    } catch (e) {
+      // libmpv is not on this machine. On Windows it comes in the box; on Linux it is
+      // the system's, and a system without it is a player that opens, shows the whole
+      // library, and makes no sound — which has to be said, in the window, with what to
+      // do about it, rather than being a crash before the first frame.
+      noSoundBecause.value = defaultTargetPlatform == TargetPlatform.linux
+          ? 'No sound yet: this computer has no libmpv. Install "mpv" with your '
+              "package manager (pacman -S mpv, apt install libmpv2), then start WetOwl again."
+          : 'No sound: the audio engine did not start ($e).';
+      PlaybackLog.note('desktop audio NOT ready: $e');
+    }
+  }
+  if (!kIsWeb && !onADesk) {
     try {
       await JustAudioBackground.init(
       androidNotificationChannelId: 'dev.muse.audio',

@@ -208,11 +208,40 @@ JSON
   echo "   $SERVER_URL/wetowl-source.json  (add as a source in SideStore/AltStore)"
 }
 
+# The desktop builds: whatever the last "Desktop app" run on GitHub released. See
+# .github/workflows/desktop.yml for why neither is built here, and deploy/desktop.sh for
+# asking for a build and publishing it in one go.
+publish_desktop() {
+  echo "== desktop"
+  command -v gh >/dev/null || { echo "   (no gh — skipping the desktop builds)"; return; }
+  local tmp tag
+  tmp=$(mktemp -d)
+  tag=$(gh release list --repo MCDuckler/muse --limit 30 \
+          --json tagName --jq '[.[] | select(.tagName | startswith("desktop-"))][0].tagName')
+  [ -n "$tag" ] || { echo "   (no desktop release yet)"; return; }
+  gh release download "$tag" --repo MCDuckler/muse --dir "$tmp" --clobber >/dev/null
+  local version
+  version=$(sed -n 's/^version: *\([^+]*\).*/\1/p' app/pubspec.yaml | tr -d '[:space:]')
+  local f name bytes
+  for f in wetowl-windows.zip wetowl-linux.tar.gz; do
+    [ -f "$tmp/$f" ] || { echo "   ! $tag has no $f"; continue; }
+    bytes=$(stat -c%s "$tmp/$f")
+    name=${f%%.*}
+    scp -q -i "$KEY" "$tmp/$f" "$HOST":$DL/$f
+    printf '{"version":"%s","bytes":%s,"built":"%s","tag":"%s"}\n' \
+      "$version" "$bytes" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$tag" \
+      | $SSH "$HOST" "cat > $DL/$name.json"
+    echo "   $SERVER_URL/$f  ($tag, $((bytes / 1024 / 1024))MB)"
+  done
+  rm -rf "$tmp"
+}
+
 case "$what" in
   server) publish_server ;;
+  desktop) publish_desktop ;;
   ios)    publish_ios ;;
   web)    publish_web ;;
   apk)    publish_apk ;;
   all)    publish_server; publish_web; publish_apk; publish_ios ;;
-  *) echo "usage: deploy/publish.sh [server|web|apk|ios|all]" >&2; exit 2 ;;
+  *) echo "usage: deploy/publish.sh [server|web|apk|ios|desktop|all]" >&2; exit 2 ;;
 esac

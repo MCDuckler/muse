@@ -33,6 +33,22 @@
 		file_server
 	}
 
+	# The desktop builds: a zip for Windows, a tarball for Linux, and what each one is.
+	@desktop path /wetowl-windows.zip /wetowl-linux.tar.gz
+	handle @desktop {
+		header Content-Type application/octet-stream
+		header Content-Disposition attachment
+		root * /dl
+		file_server
+	}
+	@desktopjson path /wetowl-windows.json /wetowl-linux.json
+	handle @desktopjson {
+		header Content-Type application/json
+		header Cache-Control "no-cache"
+		root * /dl
+		file_server
+	}
+
 	# The iPhone build, served the same way. An ipa is handed to SideStore rather than
 	# opened, so the content type only has to be something a browser will not try to
 	# render — and the download has to keep its name, because that name is what

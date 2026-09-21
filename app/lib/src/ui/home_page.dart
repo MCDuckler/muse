@@ -352,6 +352,7 @@ class _HomePageState extends State<HomePage> {
               // Above the player rather than over the page: it is a fact about the
               // whole app, and it must not cover the thing somebody was reading.
               const NotConnected(),
+              const NoSound(),
               // The dock has the player in it, and two players on one screen is one
               // too many.
               if (!dock) const PlayerBar(),
