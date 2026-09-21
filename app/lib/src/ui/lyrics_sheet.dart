@@ -4,6 +4,10 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/player.dart';
+import 'mag.dart';
+import 'motion.dart';
+import 'skeleton.dart';
+import 'theme.dart';
 import 'widths.dart';
 
 /// One timed line of an LRC file.
@@ -92,7 +96,7 @@ class _LyricsSheetState extends State<_LyricsSheet> {
   void _follow(int index, int total) {
     if (index < 0 || index == _lastLine || !_scroll.hasClients) return;
     _lastLine = index;
-    const lineHeight = 38.0;
+    const lineHeight = 42.0;
     final target = (index * lineHeight - 140)
         .clamp(0.0, _scroll.position.maxScrollExtent);
     _scroll.animateTo(target,
@@ -108,18 +112,38 @@ class _LyricsSheetState extends State<_LyricsSheet> {
       maxChildSize: 0.95,
       builder: (context, controller) => Column(
         children: [
+          // The lyric page's head: a flag, the song set big, who it is by, and a rule.
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(widget.track.displayTitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleMedium),
-                Text(widget.track.artistLine,
-                    style: Theme.of(context).textTheme.bodySmall),
-              ],
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+            child: Container(
+              padding: const EdgeInsets.only(bottom: 8),
+              decoration: BoxDecoration(
+                border: Border(
+                    bottom: BorderSide(
+                        color: Theme.of(context).colorScheme.onSurface, width: 2)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    color: MuseTheme.masthead,
+                    padding: const EdgeInsets.fromLTRB(6, 3, 6, 2),
+                    child: Text('LYRICS', style: Mag.flag(10, color: Colors.white)),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(widget.track.displayTitle.toUpperCase(),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Mag.headline(30,
+                          color: Theme.of(context).colorScheme.onSurface)),
+                  const SizedBox(height: 2),
+                  Text(widget.track.artistLine.toUpperCase(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Mag.flag(10.5,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                ],
+              ),
             ),
           ),
           Expanded(
@@ -127,7 +151,23 @@ class _LyricsSheetState extends State<_LyricsSheet> {
               future: _future,
               builder: (context, snap) {
                 if (snap.connectionState != ConnectionState.done) {
-                  return const Center(child: CircularProgressIndicator());
+                  // The shape of a verse while it comes.
+                  return ListView(
+                    padding: const EdgeInsets.fromLTRB(24, 4, 24, 40),
+                    physics: const NeverScrollableScrollPhysics(),
+                    children: [
+                      for (var i = 0; i < 9; i++)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 9),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Bone(
+                                width: 140.0 + (i * 53 % 130),
+                                height: i % 4 == 3 ? 0 : 14),
+                          ),
+                        ),
+                    ],
+                  );
                 }
                 if (snap.hasError) {
                   return _Message(
@@ -156,10 +196,9 @@ class _LyricsSheetState extends State<_LyricsSheet> {
                     padding: const EdgeInsets.fromLTRB(24, 0, 24, 40),
                     children: [
                       Text(plain,
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodyLarge
-                              ?.copyWith(height: 1.7)),
+                          style: Mag.title(17,
+                                  color: Theme.of(context).colorScheme.onSurface)
+                              .copyWith(height: 1.55)),
                     ],
                   );
                 }
@@ -211,14 +250,26 @@ class _Synced extends StatelessWidget {
               // Through the app, like the scrubber: in a jam a seek is the room's.
               onTap: () => context.read<AppState>().seekTo(lines[i].at),
               child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 7),
-                child: Text(
-                  lines[i].text,
-                  style: TextStyle(
-                    fontSize: isNow ? 19 : 16.5,
-                    height: 1.3,
-                    fontWeight: isNow ? FontWeight.w700 : FontWeight.w400,
-                    color: isNow ? scheme.primary : scheme.onSurfaceVariant,
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                // The line being sung gets a swipe of highlighter, the way somebody
+                // follows along on a printed lyric sheet; the rest stay in ink, the
+                // ones already sung a little fainter.
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: AnimatedContainer(
+                    duration: moving(context, const Duration(milliseconds: 220)),
+                    padding: EdgeInsets.fromLTRB(isNow ? 6 : 0, 2, isNow ? 6 : 0, 1),
+                    color: isNow ? MuseTheme.highlighter : Colors.transparent,
+                    child: Text(
+                      lines[i].text,
+                      style: Mag.title(isNow ? 21 : 18,
+                              color: isNow
+                                  ? MuseTheme.ink
+                                  : i < active
+                                      ? scheme.onSurfaceVariant.withValues(alpha: 0.6)
+                                      : scheme.onSurface)
+                          .copyWith(height: 1.25),
+                    ),
                   ),
                 ),
               ),
