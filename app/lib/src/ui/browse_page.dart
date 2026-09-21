@@ -720,6 +720,117 @@ class _AlbumPageState extends State<AlbumPage> {
   }
 }
 
+/// An artist as this house knows them, ahead of what the world knows them for.
+///
+/// "Best known" is a list every listener to this artist would be shown. What comes
+/// first here is the one only this library can print: what you have actually played of
+/// theirs and how often, who else in the house has them on, and who they turn up beside
+/// on the songs you have. Any part with nothing to say is left off.
+class _OnYourTurntable extends StatelessWidget {
+  const _OnYourTurntable({required this.notes, required this.artist});
+
+  final ArtistNotes notes;
+  final String artist;
+
+  @override
+  Widget build(BuildContext context) {
+    if (notes.isEmpty) return const SizedBox.shrink();
+    final scheme = Theme.of(context).colorScheme;
+    final app = context.read<AppState>();
+    final typed = Mag.typewriter(12, color: scheme.onSurfaceVariant);
+    final played = [for (final t in notes.top) t.track];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (notes.plays > 0 || notes.house.isNotEmpty) ...[
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 18, 16, 8),
+            child: SectionFlag('On your turntable'),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (notes.plays > 0) ...[
+                  Text('${notes.plays}', style: Mag.numerals(44, color: scheme.primary)),
+                  const SizedBox(width: 12),
+                ],
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (notes.plays > 0)
+                        Text(
+                          '${notes.plays == 1 ? 'song' : 'songs'} of theirs played '
+                          'through by you'
+                          '${notes.lastPlayed == null ? '' : ', most recently ${ago(notes.lastPlayed)}'}.',
+                          style: typed,
+                        ),
+                      if (notes.house.isNotEmpty) ...[
+                        if (notes.plays > 0) const SizedBox(height: 6),
+                        Text(
+                          'Also on in this house: '
+                          '${[
+                            for (final h in notes.house) '${h.name} (${h.plays})'
+                          ].join(', ')}.',
+                          style: typed,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+        if (notes.top.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          for (final (i, t) in notes.top.indexed)
+            SongRow(
+              track: t.track,
+              // How often, on a label of its own: it sits over the corner of the
+              // cover, where bare type would be lost in the picture.
+              corner: Container(
+                color: scheme.onSurface,
+                padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+                child: Text('${t.plays}×',
+                    textScaler: TextScaler.noScaling,
+                    style: Mag.typewriter(10, color: scheme.surface, bold: true)),
+              ),
+              onTap: () => app.playNow(played, startAt: i, named: '$artist, as you play them'),
+            ),
+        ],
+        if (notes.beside.isNotEmpty) ...[
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 20, 16, 8),
+            child: SectionFlag('Turns up with'),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 2,
+              children: [
+                for (final w in notes.beside)
+                  ActionChip(
+                    label: Text(w.songs > 1 ? '${w.name} · ${w.songs}' : w.name),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) =>
+                          ArtistPage(artist: ArtistSummary(name: w.name, tracks: w.songs)),
+                    )),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
 /// Under the tracklist: what this house has made of the record.
 ///
 /// A review ends with the facts about the record; this is the facts about the record
@@ -1513,6 +1624,7 @@ class _ArtistPageState extends State<ArtistPage> {
                   working: _working,
                   onFollow: () => _toggleFollow(d),
                 ),
+                _OnYourTurntable(notes: d.yours, artist: d.name),
                 if (d.top.isNotEmpty) ...[
                   const Padding(
                     padding: EdgeInsets.fromLTRB(16, 18, 16, 6),

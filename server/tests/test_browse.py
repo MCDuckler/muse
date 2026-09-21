@@ -599,3 +599,32 @@ def test_a_records_page_says_what_the_house_has_made_of_it(client, hdr, library,
     quiet = client.get("/library/albums/detail", headers=hdr,
                        params={"album": "Heroes", "artist": "Bowie"}).json()["notes"]
     assert quiet["plays"] == 0 and quiet["house"] == [] and quiet["last_played"] is None
+
+
+def test_an_artist_as_this_house_knows_them(client, hdr, library, monkeypatch):
+    """What the world plays of theirs is one list; what you play of theirs is another,
+    and it is the one that says something."""
+    from muse import auth, discography
+
+    monkeypatch.setattr(discography, "find_artist", lambda *a, **k: None)
+    alpha, beta, gamma = library[0], library[1], library[2]
+    for track, times in ((beta, 3), (alpha, 1)):
+        for _ in range(times):
+            client.post("/listens", headers=hdr,
+                        json={"track_id": track, "ms_played": 200_000, "completed": True})
+    sam = auth.ensure_user("sam")
+    sams = {"Authorization": f"Bearer {auth.issue_token(sam, 'sams phone', None)}"}
+    client.post("/listens", headers=sams,
+                json={"track_id": gamma, "ms_played": 200_000, "completed": True})
+
+    yours = client.get("/library/artists/detail", headers=hdr,
+                       params={"artist": "bowie"}).json()["yours"]
+    assert yours["plays"] == 4 and yours["last_played"] is not None
+    assert [(t["track"]["id"], t["plays"]) for t in yours["top"]] == [(beta, 3), (alpha, 1)]
+    assert [(h["name"], h["plays"]) for h in yours["house"]] == [("sam", 1)]
+    assert yours["with"] == [{"name": "Eno", "songs": 1}], "credited beside them on Gamma"
+
+    # Somebody nobody has played: nothing, rather than zeros dressed up as facts.
+    quiet = client.get("/library/artists/detail", headers=hdr,
+                       params={"artist": "Other Band"}).json()["yours"]
+    assert quiet["plays"] == 0 and quiet["top"] == [] and quiet["with"] == []

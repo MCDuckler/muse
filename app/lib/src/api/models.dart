@@ -1831,6 +1831,9 @@ class ArtistDetail {
   final List<ReleaseTrack> top;
   final List<Track> tracks;
 
+  /// The artist as this house knows them: see [ArtistNotes].
+  final ArtistNotes yours;
+
   const ArtistDetail({
     required this.name,
     this.image,
@@ -1841,6 +1844,7 @@ class ArtistDetail {
     this.albums = const [],
     this.top = const [],
     this.tracks = const [],
+    this.yours = const ArtistNotes(),
   });
 
   factory ArtistDetail.fromJson(Map<String, dynamic> j) {
@@ -1861,8 +1865,59 @@ class ArtistDetail {
       tracks: ((j['tracks'] ?? const []) as List)
           .map((e) => Track.fromJson(e as Map<String, dynamic>))
           .toList(),
+      yours: j['yours'] is Map
+          ? ArtistNotes.fromJson((j['yours'] as Map).cast<String, dynamic>())
+          : const ArtistNotes(),
     );
   }
+}
+
+/// An artist as this house knows them: what *you* play of theirs — which is not what
+/// the world plays of theirs — how much the others here have them on, and who they
+/// turn up alongside in your library.
+class ArtistNotes {
+  const ArtistNotes({
+    this.plays = 0,
+    this.lastPlayed,
+    this.top = const [],
+    this.house = const [],
+    this.beside = const [],
+  });
+
+  final int plays;
+  final DateTime? lastPlayed;
+  final List<({Track track, int plays})> top;
+  final List<({int id, String name, int plays})> house;
+  final List<({String name, int songs})> beside;
+
+  bool get isEmpty => plays == 0 && house.isEmpty && beside.isEmpty;
+
+  factory ArtistNotes.fromJson(Map<String, dynamic> j) => ArtistNotes(
+        plays: (j['plays'] ?? 0) as int,
+        lastPlayed: j['last_played'] == null
+            ? null
+            : DateTime.tryParse('${j['last_played']}')?.toLocal(),
+        top: [
+          for (final t in (j['top'] ?? const []) as List)
+            if (t['track'] is Map)
+              (
+                track: Track.fromJson((t['track'] as Map).cast<String, dynamic>()),
+                plays: (t['plays'] ?? 0) as int,
+              )
+        ],
+        house: [
+          for (final h in (j['house'] ?? const []) as List)
+            (
+              id: (h['id'] ?? 0) as int,
+              name: '${h['name'] ?? ''}',
+              plays: (h['plays'] ?? 0) as int,
+            )
+        ],
+        beside: [
+          for (final w in (j['with'] ?? const []) as List)
+            (name: '${w['name'] ?? ''}', songs: (w['songs'] ?? 0) as int)
+        ],
+      );
 }
 
 class FollowedArtist {

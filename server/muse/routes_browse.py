@@ -891,6 +891,52 @@ def fill_album(body: dict = Body(...), user: dict = Depends(current_user)):
     return {"queued": len(added), "not_matched": review}
 
 
+def _artist_notes(user_id: int, artist: str, local: list[dict]) -> dict:
+    """An artist as this house knows them, from the library and the listens alone.
+
+    "Best known" is what the world plays of theirs; this is what *you* play of theirs,
+    which is a different list and the one that says something. With it: how much you
+    and the others here have them on, and who they turn up alongside in your library —
+    every credit on a song counts, so a feature is a connection.
+    """
+    ids = [r["id"] for r in local]
+    if not ids:
+        return {"plays": 0, "last_played": None, "top": [], "house": [], "with": []}
+    mine = {r["track_id"]: r["plays"] for r in db.all_(
+        """select track_id, count(*) as plays from listens
+            where user_id = %s and completed and track_id = any(%s)
+            group by track_id""", (user_id, ids))}
+    last = db.one(
+        "select max(started_at) as at from listens where user_id=%s and track_id = any(%s)",
+        (user_id, ids))["at"]
+    house = db.all_(
+        """select u.id, u.name, count(*) as plays
+             from listens l join users u on u.id = l.user_id
+            where l.track_id = any(%s) and l.completed and l.user_id <> %s
+            group by u.id, u.name order by count(*) desc, u.name limit 4""",
+        (ids, user_id))
+    top = sorted((r for r in local if mine.get(r["id"])),
+                 key=lambda r: (-mine[r["id"]], r["id"]))[:5]
+
+    # Everybody credited beside them, folded the way the artists list folds spellings.
+    me = fold(artist)
+    beside: dict[str, dict] = {}
+    for r in local:
+        for name in r.get("artists") or []:
+            k = fold(name)
+            if not k or k == me:
+                continue
+            entry = beside.setdefault(k, {"name": name, "songs": 0})
+            entry["songs"] += 1
+    return {
+        "plays": sum(mine.values()),
+        "last_played": last,
+        "top": [{"plays": mine[r["id"]], "track": catalog.public(r)} for r in top],
+        "house": [{"id": h["id"], "name": h["name"], "plays": h["plays"]} for h in house],
+        "with": sorted(beside.values(), key=lambda e: (-e["songs"], e["name"].lower()))[:10],
+    }
+
+
 @router.get("/artists/detail")
 def artist_detail(artist: str, user: dict = Depends(current_user)):
     """An artist, not just the four songs of theirs somebody added."""
@@ -911,6 +957,7 @@ def artist_detail(artist: str, user: dict = Depends(current_user)):
                    "following": False},
         "albums": [], "top": [],
         "tracks": [catalog.public(r) for r in local],
+        "yours": _artist_notes(user["id"], artist, local),
     }
     if not found:
         return out

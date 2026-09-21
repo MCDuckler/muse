@@ -23,9 +23,11 @@ void main() {
 
   late AppState app;
   var following = false;
+  var played = false;
 
   setUp(() {
     following = false;
+    played = false;
     SharedPreferences.setMockInitialValues({});
     useThisClientInstead(MockClient((request) async {
       final body = request.url.path == '/library/artists/detail'
@@ -47,6 +49,27 @@ void main() {
                 {'id': 1, 'title': 'Harbour Lights', 'artists': ['Low Tide Radio'], 'state': 'ready'},
                 {'id': 2, 'title': 'Low Water', 'artists': ['Low Tide Radio'], 'state': 'ready'},
               ],
+              if (played)
+                'yours': {
+                  'plays': 23,
+                  'last_played': DateTime.now()
+                      .subtract(const Duration(hours: 5))
+                      .toUtc()
+                      .toIso8601String(),
+                  'top': [
+                    {
+                      'plays': 17,
+                      'track': {'id': 2, 'title': 'Low Water',
+                                'artists': ['Low Tide Radio'], 'state': 'ready'},
+                    },
+                  ],
+                  'house': [
+                    {'id': 2, 'name': 'Joe', 'plays': 4},
+                  ],
+                  'with': [
+                    {'name': 'The Overhead Lights', 'songs': 2},
+                  ],
+                },
             }
           : <String, dynamic>{};
       return http.Response(jsonEncode(body), 200,
@@ -95,8 +118,30 @@ void main() {
     expect(find.text('FOLLOWING'), findsOneWidget);
   });
 
+  testWidgets('what you play of theirs comes before what the world does',
+      (tester) async {
+    played = true;
+    await show(tester, size: const Size(420, 2000));
+    expect(tester.takeException(), isNull);
+    expect(find.text('ON YOUR TURNTABLE'), findsOneWidget);
+    expect(find.text('23'), findsOneWidget);
+    expect(find.textContaining('most recently 5 hours ago'), findsOneWidget);
+    expect(find.textContaining('Joe (4)'), findsOneWidget);
+    expect(find.text('17×'), findsOneWidget);
+    expect(find.text('The Overhead Lights · 2'), findsOneWidget);
+    expect(tester.getTopLeft(find.text('ON YOUR TURNTABLE')).dy,
+        lessThan(tester.getTopLeft(find.text('BEST KNOWN')).dy));
+  });
+
+  testWidgets('somebody never played gets no row of zeros', (tester) async {
+    await show(tester, size: const Size(420, 2000));
+    expect(find.text('ON YOUR TURNTABLE'), findsNothing);
+    expect(find.text('TURNS UP WITH'), findsNothing);
+  });
+
   for (final scale in [1.6, 2.0]) {
     testWidgets('it holds on a small phone at ${scale}x text', (tester) async {
+      played = true;
       await show(tester, size: const Size(320, 1800), text: scale);
       expect(tester.takeException(), isNull);
     });
