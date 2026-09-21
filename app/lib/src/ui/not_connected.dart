@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:provider/provider.dart';
 
 import '../api/connection.dart';
@@ -175,6 +176,14 @@ class NoSound extends StatelessWidget {
                             .bodySmall
                             ?.copyWith(color: scheme.onErrorContainer)),
                   ),
+                  // Where it comes from, for whoever has no package manager to ask.
+                  if (why.contains('libmpv'))
+                    TextButton(
+                      onPressed: () => launchUrl(Uri.parse('https://mpv.io/installation/'),
+                          mode: LaunchMode.externalApplication),
+                      child: Text('How',
+                          style: TextStyle(color: scheme.onErrorContainer)),
+                    ),
                 ],
               ),
             ),

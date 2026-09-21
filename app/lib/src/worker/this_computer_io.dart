@@ -1,20 +1,25 @@
-import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../api/client.dart';
+import '../api/connection.dart';
 import '../state/app_state.dart';
 import '../ui/mag.dart';
 import '../ui/mag_parts.dart';
 import '../ui/mini_player.dart';
 import '../ui/snack.dart';
+import 'background.dart';
 import 'downloader.dart';
+import 'helper_files.dart';
+import 'ingest_http.dart';
+import 'status.dart';
 import 'tools.dart';
 
 /// Only on a desk. A phone could run the loop but not the programs, and should not be
@@ -27,76 +32,13 @@ bool get canFetchMusicHere =>
 const _kWanted = 'muse.fetchHere';
 const _kSlots = 'muse.fetchHere.slots';
 
+/// Fetched by the windowless program beside the app rather than by the app, so that it
+/// goes on when the app is shut.
+const _kBackground = 'muse.fetchHere.background';
+
 Downloader? _downloader;
 ApiClient? _api;
 RandomAccessFile? _lock;
-
-/// The server, spoken to with the token this device already signs in with.
-class _AppServer implements IngestServer {
-  _AppServer(this.api);
-  final ApiClient api;
-
-  @override
-  Future<List<IngestJob>> lease(
-      {required int limit, required int busy, bool urgentOnly = false, int wait = 0}) async {
-    try {
-      final d = await api.workerPost(
-          '/internal/jobs/lease',
-          {
-            'kind': 'ingest',
-            'limit': limit,
-            'busy': busy,
-            'wait': wait,
-            if (urgentOnly) 'max_priority': 90,
-          },
-          timeout: Duration(seconds: wait + 15));
-      return [
-        for (final j in (d['jobs'] ?? const []) as List)
-          if (IngestJob.fromJson((j as Map).cast<String, dynamic>()) case final job?) job
-      ];
-    } on ApiException catch (e) {
-      // Not allowed, or no longer: there is nothing to be gained by asking again.
-      if (e.status == 403 || e.status == 401) throw IngestRefused(e.message);
-      rethrow;
-    }
-  }
-
-  @override
-  Future<void> progress(IngestJob job, String stage, {double? percent, String? speed}) =>
-      api.workerPost('/internal/jobs/${job.id}/progress',
-          {'track_id': job.trackId, 'stage': stage, 'percent': percent, 'speed': speed},
-          timeout: const Duration(seconds: 10));
-
-  @override
-  Future<void> fail(IngestJob job, String reason, {required bool retryable}) =>
-      api.workerPost('/internal/jobs/${job.id}/fail', {
-        'reason': reason.length > 500 ? reason.substring(0, 500) : reason,
-        'retryable': retryable,
-        'track_id': job.trackId,
-      });
-
-  @override
-  Future<void> release(IngestJob job) =>
-      api.workerPost('/internal/jobs/${job.id}/release', {'track_id': job.trackId},
-          timeout: const Duration(seconds: 10));
-
-  @override
-  Future<void> complete(IngestJob job, File audio, Map<String, dynamic> meta) async {
-    final request = http.MultipartRequest(
-        'POST', Uri.parse('${api.baseUrl}/internal/jobs/${job.id}/complete'))
-      ..headers.addAll({if (api.token != null) 'Authorization': 'Bearer ${api.token}'})
-      ..fields['meta'] = jsonEncode(meta)
-      // From the file, not from memory: an hour-long set is sixty megabytes.
-      ..files.add(await http.MultipartFile.fromPath('audio', audio.path,
-          filename: audio.uri.pathSegments.last));
-    final response = await http.Response.fromStream(
-        await request.send().timeout(const Duration(minutes: 5)));
-    if (response.statusCode >= 300) {
-      throw ApiException(response.statusCode, response.body);
-    }
-  }
-
-}
 
 Future<Directory> _toolsDir() async {
   final base = await getApplicationSupportDirectory();
@@ -124,11 +66,27 @@ Downloader _downloaderFor(AppState app) {
   if (_downloader != null && identical(_api, app.api)) return _downloader!;
   _downloader?.dispose();
   _api = app.api;
+  final api = app.api;
   return _downloader = Downloader(
-    server: _AppServer(app.api),
+    // The token this device already signs in with, asked for each time: it changes
+    // when somebody signs in again.
+    server: HttpIngestServer(
+        baseUrl: () => api.baseUrl, token: () => api.token, client: net),
     findTools: () async => Tools.find(own: await _toolsDir()),
   );
 }
+
+Future<void> _dropTheLock() async {
+  final held = _lock;
+  _lock = null;
+  try {
+    await held?.unlock();
+    await held?.close();
+  } catch (_) {}
+}
+
+Future<BackgroundFetcher> _background() async =>
+    BackgroundFetcher(files: HelperFiles(await getApplicationSupportDirectory()));
 
 /// When the app starts and somebody is signed in: carry on fetching if this computer was
 /// left doing so.
@@ -136,6 +94,19 @@ Future<void> resumeFetching(AppState app) async {
   if (!canFetchMusicHere) return;
   final prefs = await SharedPreferences.getInstance();
   if (prefs.getBool(_kWanted) != true) return;
+  if (prefs.getBool(_kBackground) == true) {
+    // The other program's job. It is very likely running already — that is the point
+    // of it — and this only sees that it is, with the token as it is now.
+    final bg = await _background();
+    final token = app.api.token;
+    if (await bg.available && token != null) {
+      try {
+        await bg.start(
+            server: app.api.baseUrl, token: token, slots: prefs.getInt(_kSlots) ?? 3);
+      } catch (_) {}
+      return;
+    }
+  }
   final d = _downloaderFor(app)..maxSlots = prefs.getInt(_kSlots) ?? 3;
   d.slots = d.maxSlots;
   if (await _takeTheLock()) await d.start();
@@ -163,15 +134,58 @@ class _ThisComputerPageState extends State<_ThisComputerPage> {
   late final AppState _app = context.read<AppState>();
   late final Downloader _d = _downloaderFor(_app);
 
+  /// The windowless fetcher: whether this copy of the app has one beside it, whether
+  /// it is the one doing the fetching, and the last thing it said.
+  BackgroundFetcher? _bg;
+  bool _hasHelper = false;
+  bool _inBackground = false;
+  bool _atLogin = false;
+  FetchStatus? _heard;
+  Timer? _listening;
+
+  /// What is being done, whichever program is doing it.
+  FetchStatus get _now {
+    if (!_inBackground) return FetchStatus.of(_d);
+    final heard = _heard;
+    // A file goes on saying "fetching" after the program that wrote it has died.
+    if (heard == null || !heard.fresh()) return const FetchStatus(state: DownloaderState.off);
+    return heard;
+  }
+
   @override
   void initState() {
     super.initState();
+    _d.addListener(_changed);
     _look();
+    _listening = Timer.periodic(const Duration(seconds: 2), (_) => _hear());
+  }
+
+  @override
+  void dispose() {
+    _listening?.cancel();
+    _d.removeListener(_changed);
+    super.dispose();
+  }
+
+  void _changed() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _hear() async {
+    if (!_inBackground) return;
+    final heard = await _bg?.status();
+    if (mounted) setState(() => _heard = heard);
   }
 
   Future<void> _look() async {
     final prefs = await SharedPreferences.getInstance();
     _slots = prefs.getInt(_kSlots) ?? 3;
+    final bg = _bg = await _background();
+    _hasHelper = await bg.available;
+    _inBackground = _hasHelper && prefs.getBool(_kBackground) == true;
+    _atLogin = await bg.startsAtLogin;
+    await _hear();
+    if (mounted) setState(() {});
     try {
       final s = await _app.api.ingestStanding();
       if (mounted) setState(() => _standing = s);
@@ -197,6 +211,11 @@ class _ThisComputerPageState extends State<_ThisComputerPage> {
               'Asked. An admin has to say yes before this computer is given work.')));
           return;
         }
+        if (_inBackground) {
+          await prefs.setBool(_kWanted, true);
+          await _startInBackground();
+          return;
+        }
         if (!await _takeTheLock()) {
           messenger.say(snack(const Text('Another WetOwl on this computer is already fetching.')));
           return;
@@ -208,13 +227,95 @@ class _ThisComputerPageState extends State<_ThisComputerPage> {
         await _d.start();
       } else {
         await prefs.setBool(_kWanted, false);
+        if (_inBackground) {
+          await _bg?.stop();
+          // Not left to start by itself tomorrow, having been switched off today.
+          await _bg?.setStartsAtLogin(false);
+          if (mounted) setState(() => _atLogin = false);
+        }
         await _d.stop();
+        await _dropTheLock();
       }
     } catch (e) {
       messenger.say(problem(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// Hand the work to the other program: the app lets go of it first, because there is
+  /// one lock and whoever holds it is the fetcher.
+  Future<void> _startInBackground() async {
+    final bg = _bg, token = _app.api.token;
+    if (bg == null || token == null) return;
+    await _d.stop();
+    await _dropTheLock();
+    await bg.start(server: _app.api.baseUrl, token: token, slots: _slots);
+    await bg.setStartsAtLogin(true);
+    if (mounted) setState(() => _atLogin = true);
+    // It says something as soon as it is up; no need to sit through a whole tick.
+    for (var i = 0; i < 6 && mounted && !(_heard?.fresh() ?? false); i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      await _hear();
+    }
+  }
+
+  /// Which program does the fetching. Changing it while fetching moves the work over
+  /// rather than stopping it.
+  Future<void> _setBackground(bool on) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _busy = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final fetching = _now.running || prefs.getBool(_kWanted) == true;
+      await prefs.setBool(_kBackground, on);
+      setState(() => _inBackground = on);
+      if (on) {
+        if (fetching) await _startInBackground();
+      } else {
+        await _bg?.stop();
+        await _bg?.setStartsAtLogin(false);
+        if (mounted) setState(() => _atLogin = false);
+        if (fetching) {
+          // It lets go within a few seconds of being told; the lock says when.
+          var mine = false;
+          for (var i = 0; i < 12 && !mine; i++) {
+            await Future<void>.delayed(const Duration(milliseconds: 500));
+            mine = await _takeTheLock();
+          }
+          if (mine) {
+            _d
+              ..maxSlots = _slots
+              ..slots = _slots;
+            await _d.start();
+          }
+        }
+      }
+    } catch (e) {
+      messenger.say(problem(e));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// After installing what was missing: have another go, whoever is doing the going.
+  Future<void> _lookAgain() async {
+    setState(() => _busy = true);
+    try {
+      if (_inBackground) {
+        await _startInBackground();
+      } else if (await _takeTheLock()) {
+        await _d.start();
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _openToolsFolder() async {
+    final dir = await _toolsDir();
+    await dir.create(recursive: true);
+    await launchUrl(Uri.file(dir.path));
   }
 
   @override
@@ -224,11 +325,11 @@ class _ThisComputerPageState extends State<_ThisComputerPage> {
     return PlayerScaffold(
       measure: 760,
       appBar: AppBar(title: const Text('This computer')),
-      body: ListenableBuilder(
-        listenable: _d,
-        builder: (context, _) {
+      body: Builder(
+        builder: (context) {
           final s = _standing;
-          final line = switch (_d.state) {
+          final now = _now;
+          final line = switch (now.state) {
             DownloaderState.off => s == null
                 ? 'Looking…'
                 : s.allowed
@@ -238,13 +339,13 @@ class _ThisComputerPageState extends State<_ThisComputerPage> {
                         : 'Off.',
             DownloaderState.starting => 'Starting…',
             DownloaderState.idle => 'On, and waiting for something to fetch.',
-            DownloaderState.working => 'Fetching ${_d.inFlight.length} '
-                '${_d.inFlight.length == 1 ? 'song' : 'songs'}.',
-            DownloaderState.coolingDown => 'YouTube pushed back. Resting until '
-                '${TimeOfDay.fromDateTime(_d.coolingUntil!).format(context)}, then '
-                '${_d.slots} at a time.',
-            DownloaderState.noTools => _d.problem ?? 'Some programs are missing.',
-            DownloaderState.refused => _d.problem ?? 'The server said no.',
+            DownloaderState.working => 'Fetching ${now.inFlight.length} '
+                '${now.inFlight.length == 1 ? 'song' : 'songs'}.',
+            DownloaderState.coolingDown => 'YouTube pushed back. Resting'
+                '${now.coolingUntil == null ? '' : ' until ${TimeOfDay.fromDateTime(now.coolingUntil!).format(context)}'}'
+                ', then ${now.slots} at a time.',
+            DownloaderState.noTools => 'Some programs it needs are not on this computer.',
+            DownloaderState.refused => now.problem ?? 'The server said no.',
           };
           return ListView(
             padding: EdgeInsets.fromLTRB(16, 8, 16, bottomForPlayer(context)),
@@ -256,22 +357,36 @@ class _ThisComputerPageState extends State<_ThisComputerPage> {
               Text(
                   'YouTube answers a home connection and refuses a server in a datacentre, '
                   'so the songs everybody adds are fetched by a computer in somebody’s '
-                  'house. This can be one of them: while WetOwl is open it fetches what is '
-                  'asked for, hands it to the server, and keeps nothing.',
+                  'house. This can be one of them: it fetches what is asked for, hands it '
+                  'to the server, and keeps nothing.',
                   style: typed),
               const SizedBox(height: 14),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 title: const Text('Fetch music on this computer'),
                 subtitle: Text(line),
-                value: _d.running,
+                value: now.running,
                 onChanged: _busy ? null : _turn,
               ),
-              if (_d.state == DownloaderState.noTools) ...[
-                const SizedBox(height: 4),
-                SelectableText(Tools.howToInstall(_d.tools?.missing ?? const []),
-                    style: Mag.typewriter(12, color: scheme.onSurface, bold: true)),
-              ],
+              if (now.state == DownloaderState.noTools)
+                _Missing(
+                  missing: now.missing,
+                  onLookAgain: _busy ? null : _lookAgain,
+                  onOpenFolder: _openToolsFolder,
+                ),
+              if (_hasHelper)
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Keep fetching when WetOwl is closed'),
+                  subtitle: Text(_inBackground
+                      ? 'A small program with no window does the fetching'
+                          '${_atLogin ? ', and starts by itself when you log in' : ''}. '
+                          'It stops when this is switched off.'
+                      : 'Fetching stops when the app is shut. Switched on, a small program '
+                          'with no window does it instead and starts when you log in.'),
+                  value: _inBackground,
+                  onChanged: _busy ? null : _setBackground,
+                ),
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 title: const Text('At a time'),
@@ -287,27 +402,28 @@ class _ThisComputerPageState extends State<_ThisComputerPage> {
                     _d
                       ..maxSlots = n
                       ..slots = n;
+                    if (_inBackground) await _bg?.setSlots(n);
                   },
                 ),
               ),
-              if (_d.done + _d.failed > 0)
+              if (now.done + now.failed > 0)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 6),
                   child: Text(
                       [
-                        if (_d.done > 0) '${_d.done} fetched since it was switched on',
-                        if (_d.failed > 0) '${_d.failed} could not be',
+                        if (now.done > 0) '${now.done} fetched since it was switched on',
+                        if (now.failed > 0) '${now.failed} could not be',
                       ].join(' · '),
                       style: typed),
                 ),
-              if (_d.inFlight.isNotEmpty) ...[
+              if (now.inFlight.isNotEmpty) ...[
                 const SizedBox(height: 14),
                 const SectionFlag('Now'),
-                for (final f in _d.inFlight.values)
+                for (final f in now.inFlight)
                   ListTile(
                     dense: true,
                     contentPadding: EdgeInsets.zero,
-                    title: Text(f.job.videoId, style: Mag.typewriter(12, color: scheme.onSurface)),
+                    title: Text(f.videoId, style: Mag.typewriter(12, color: scheme.onSurface)),
                     subtitle: LinearProgressIndicator(
                         value: f.stage == 'downloading' ? f.percent : null),
                     trailing: Text(
@@ -316,16 +432,96 @@ class _ThisComputerPageState extends State<_ThisComputerPage> {
                   ),
               ],
               if (_workers != null) _Workers(workers: _workers!, onChanged: _look),
-              if (_d.log.isNotEmpty) ...[
+              if ((_inBackground ? _heard?.log ?? const <String>[] : _d.log).isNotEmpty) ...[
                 const SizedBox(height: 18),
                 const SectionFlag('What it has been doing'),
                 const SizedBox(height: 6),
-                SelectableText(_d.log.reversed.take(40).join('\n'),
+                SelectableText(
+                    (_inBackground ? _heard?.log ?? const <String>[] : _d.log)
+                        .reversed
+                        .take(40)
+                        .join('\n'),
                     style: Mag.typewriter(10.5, color: scheme.onSurfaceVariant)),
               ],
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+/// What is not on this computer, and where each of them comes from.
+///
+/// Two ways in, because there are two kinds of person: a command for whoever has a
+/// package manager and knows it, and for everybody else a link to the project's own
+/// download and a folder to drop the file in — the app looks there before anywhere.
+class _Missing extends StatelessWidget {
+  const _Missing({required this.missing, this.onLookAgain, required this.onOpenFolder});
+
+  final List<String> missing;
+  final VoidCallback? onLookAgain;
+  final VoidCallback onOpenFolder;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final typed = Mag.typewriter(11.5, color: scheme.onSurfaceVariant);
+    return Container(
+      margin: const EdgeInsets.only(top: 6, bottom: 10),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+      decoration: BoxDecoration(border: Border.all(color: scheme.onSurface, width: 1.5)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Kicker('Needed first'),
+          const SizedBox(height: 8),
+          for (final link in Tools.linksFor(missing)) ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(link.name, style: Theme.of(context).textTheme.titleSmall),
+                      Text('${link.whatFor}. ${link.note}', style: typed),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                OutlinedButton.icon(
+                  onPressed: () =>
+                      launchUrl(Uri.parse(link.url), mode: LaunchMode.externalApplication),
+                  icon: const Icon(Icons.open_in_new, size: 16),
+                  label: const Text('Get it'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+          ],
+          Text('Or, with a package manager:', style: typed),
+          const SizedBox(height: 2),
+          SelectableText(Tools.howToInstall(missing),
+              style: Mag.typewriter(12, color: scheme.onSurface, bold: true)),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            children: [
+              TextButton.icon(
+                onPressed: onOpenFolder,
+                icon: const Icon(Icons.folder_open, size: 18),
+                label: const Text('Open the tools folder'),
+              ),
+              FilledButton.tonalIcon(
+                onPressed: onLookAgain,
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text('Look again'),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

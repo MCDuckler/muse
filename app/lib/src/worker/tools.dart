@@ -42,6 +42,47 @@ class Tools {
     return 'pacman -S $wanted   ·   apt install $wanted   ·   dnf install $wanted';
   }
 
+  /// Where to get each of them, for whoever would rather click than type: the
+  /// project's own page every time, never a mirror. The direct file where a project
+  /// publishes one that simply runs; its download page where there is a choice to make.
+  static List<ToolLink> linksFor(List<String> missing, {bool? windows}) {
+    final win = windows ?? Platform.isWindows;
+    return [
+      if (missing.contains('yt-dlp'))
+        ToolLink(
+          'yt-dlp',
+          'fetches the audio',
+          win
+              ? 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
+              : 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux',
+          win
+              ? 'One file. Put it in the tools folder as yt-dlp.exe.'
+              : 'One file. Put it in the tools folder as yt-dlp and make it executable '
+                  '(chmod +x) — or install your distribution\'s package.',
+        ),
+      if (missing.contains('ffmpeg') || missing.contains('ffprobe'))
+        ToolLink(
+          'ffmpeg and ffprobe',
+          'look at what was fetched, and convert it when it has to be',
+          win ? 'https://www.gyan.dev/ffmpeg/builds/' : 'https://ffmpeg.org/download.html#build-linux',
+          win
+              ? 'Take "ffmpeg-release-essentials.zip"; ffmpeg.exe and ffprobe.exe are in its '
+                  'bin folder. Put both in the tools folder.'
+              : 'Every distribution has an ffmpeg package, and it includes ffprobe.',
+        ),
+      if (missing.contains('node or deno'))
+        ToolLink(
+          'Deno (or Node.js)',
+          'yt-dlp needs a JavaScript runtime to read YouTube\'s player',
+          win ? 'https://github.com/denoland/deno/releases/latest' : 'https://deno.com/',
+          win
+              ? 'Take "deno-x86_64-pc-windows-msvc.zip"; deno.exe is the one file in it. '
+                  'Put it in the tools folder. Node.js from nodejs.org does as well.'
+              : 'Either will do; nodejs is in every distribution.',
+        ),
+    ];
+  }
+
   static Future<Tools> find({Directory? own}) async {
     Future<String?> where(String name) async {
       final exe = Platform.isWindows ? '$name.exe' : name;
@@ -72,4 +113,13 @@ class Tools {
               : null,
     );
   }
+}
+
+/// One missing program: what it is for and where it comes from.
+class ToolLink {
+  const ToolLink(this.name, this.whatFor, this.url, this.note);
+  final String name;
+  final String whatFor;
+  final String url;
+  final String note;
 }

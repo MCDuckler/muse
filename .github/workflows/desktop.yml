@@ -42,6 +42,18 @@ jobs:
             --build-number="$stamp" \
             --dart-define=MUSE_SERVER="$MUSE_SERVER" \
             --dart-define=MUSE_BUILD="$stamp"
+      - name: Build the windowless fetcher
+        working-directory: app
+        shell: bash
+        run: |
+          # bin/wetowl_fetch.dart: the downloader with no window, which the app starts
+          # when asked to keep fetching after it is shut. It goes beside wetowl.exe,
+          # which is where the app looks for it. `dart build` rather than `dart compile`
+          # because a package in the tree has build hooks and compile refuses those.
+          dart build cli --target bin/wetowl_fetch.dart -o build/fetcher
+          cp build/fetcher/bundle/bin/wetowl_fetch.exe \
+             build/windows/x64/runner/Release/wetowl-fetch.exe
+          ls -l build/windows/x64/runner/Release/wetowl-fetch.exe
       - name: Zip it
         working-directory: app
         shell: pwsh
@@ -77,7 +89,7 @@ jobs:
         run: flutter pub get
       - name: Check it compiles cleanly
         working-directory: app
-        run: flutter analyze lib
+        run: flutter analyze lib bin
       - name: Run the tests
         working-directory: app
         run: flutter test
@@ -92,6 +104,16 @@ jobs:
             --dart-define=MUSE_SERVER="$MUSE_SERVER" \
             --dart-define=MUSE_BUILD="$stamp"
           echo "$stamp" > build/linux/x64/release/bundle/build-stamp.txt
+      - name: Build the windowless fetcher
+        working-directory: app
+        run: |
+          # See the same step for Windows. Beside ./wetowl, where the app looks for it.
+          dart build cli --target bin/wetowl_fetch.dart -o build/fetcher
+          cp build/fetcher/bundle/bin/wetowl_fetch build/linux/x64/release/bundle/wetowl-fetch
+          chmod +x build/linux/x64/release/bundle/wetowl-fetch
+          # It has to start and say what it wants, or it is not worth shipping.
+          said="$(build/linux/x64/release/bundle/wetowl-fetch 2>&1 || true)"
+          echo "$said" | grep -q 'usage: wetowl-fetch'
       - name: Pack it
         working-directory: app
         run: |
@@ -109,6 +131,11 @@ jobs:
             Fedora:                     sudo dnf install mpv-libs
 
           Without it the app opens and says so, and makes no sound.
+
+          Fetching music for the house (Settings > This computer) also wants
+          yt-dlp, ffmpeg and nodejs (or deno): all three are ordinary packages.
+          ./wetowl-fetch is the part that keeps fetching when the window is shut;
+          the app starts it, there is no need to run it yourself.
           TXT
           mv build/linux/x64/release/bundle build/linux/x64/release/wetowl
           tar -C build/linux/x64/release -czf wetowl-linux.tar.gz wetowl

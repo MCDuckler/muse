@@ -2,8 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
-
+import 'told.dart';
 import 'tools.dart';
 import 'ytdlp.dart';
 
@@ -97,7 +96,7 @@ enum DownloaderState { off, starting, idle, working, coolingDown, noTools, refus
 /// yt-dlp, look at it, hand it over, and say how it went. A few at a time; fewer after
 /// YouTube has pushed back, and none at all for ten minutes when it does. When somebody
 /// is waiting for a song, nothing else is taken until they have it.
-class Downloader extends ChangeNotifier {
+class Downloader extends Told {
   Downloader({
     required this.server,
     required this.findTools,
