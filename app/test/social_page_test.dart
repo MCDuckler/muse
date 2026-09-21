@@ -79,16 +79,17 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.text('chris'), findsOneWidget);
     expect(find.text('joe'), findsOneWidget);
-    expect(find.text('you'), findsOneWidget, reason: 'which one of them is you');
+    expect(find.text('YOU'), findsOneWidget, reason: 'which one of them is you');
     expect(find.text('12 songs · 2 playlists'), findsOneWidget);
   });
 
   testWidgets('a jam is visible without being looked for, and joinable from the row',
       (tester) async {
     await show(tester);
-    expect(find.text('In a jam · 2 listening'), findsOneWidget);
-    expect(find.widgetWithText(FilledButton, 'Join'), findsOneWidget,
-        reason: 'and the way in is on the row, not two screens away');
+    // Spotted at the top of the page, before anybody has to look for it.
+    expect(find.textContaining('in a jam · 2 listening'), findsOneWidget);
+    expect(find.text('JOIN'), findsOneWidget,
+        reason: 'and the way in is right there, not two screens away');
 
     // Whoever has a jam going comes first, whatever their name: a list sorted by
     // anything else buries the one thing on it that is happening now.
