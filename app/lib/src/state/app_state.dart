@@ -29,10 +29,11 @@ import '../ui/snack.dart';
 /// and every tab number written out by hand was a number that then meant the wrong tab.
 abstract final class Tabs {
   static const home = 0;
-  static const search = 1;
-  static const library = 2;
-  static const people = 3;
-  static const count = 4;
+  static const queue = 1;
+  static const search = 2;
+  static const library = 3;
+  static const people = 4;
+  static const count = 5;
 }
 
 class AppState extends ChangeNotifier {
@@ -295,10 +296,11 @@ class AppState extends ChangeNotifier {
   static const _kJamListening = 'muse.jamListening';
   static const _kLastQueue = 'muse.lastQueue';
   static const _kVolume = 'muse.volume';
-  // Moved each time the tabs did — Home put in front, then Queues taken out into the
-  // player — because every number an old key holds means some other tab now.
-  static const _kHomeTab = 'muse.homeTab.v3';
-  static const _kHomeTabV2 = 'muse.homeTab.v2';
+  // Moved each time the tabs did — Home put in front, Queues taken out into the
+  // player, the queue put back in the bar — because every number an old key holds
+  // means some other tab now.
+  static const _kHomeTab = 'muse.homeTab.v4';
+  static const _kHomeTabV3 = 'muse.homeTab.v3';
   static const _kDeskDock = 'muse.deskDock';
   static const _kSidebar = 'muse.sidebar';
   static const _kDockWidth = 'muse.dockWidth';
@@ -493,14 +495,14 @@ class AppState extends ChangeNotifier {
     spectrum = prefs.getBool(_kSpectrum) ?? false;
     // A phone that remembers a tab from before Home existed opens on Home, once:
     // it is the new thing, and the place the app now starts.
-    // One step back from the last move: the same tabs, less Queues. Anything older
-    // opens on Home.
-    final v2 = prefs.getInt(_kHomeTabV2);
+    // One step back from the last move: v3 was the same tabs without the queue
+    // between Home and Search. Anything older opens on Home.
+    final v3 = prefs.getInt(_kHomeTabV3);
     homeTab = (prefs.getInt(_kHomeTab) ??
-            switch (v2) {
-              2 => Tabs.search,
-              3 => Tabs.library,
-              4 => Tabs.people,
+            switch (v3) {
+              1 => Tabs.search,
+              2 => Tabs.library,
+              3 => Tabs.people,
               _ => Tabs.home,
             })
         .clamp(0, Tabs.count - 1);
@@ -954,6 +956,8 @@ class AppState extends ChangeNotifier {
   /// was four hundred round trips and a list that flickered for the whole of it.
   Future<void> addTracks(List<Track> tracks, {String mode = 'end'}) async {
     if (tracks.isEmpty) return;
+    // Queued again is wanted again: it is back in the library, so back in the lists.
+    _removedTracks.removeAll([for (final t in tracks) t.id]);
     if (_queueIsLocal) activeQueue = null;
     activeQueue ??= await ensureQueue('Now');
     activeQueue = await api.addToQueue(
@@ -1289,6 +1293,30 @@ class AppState extends ChangeNotifier {
   }
 
   /// Put the list back to whatever the server actually has.
+  /// Songs taken out of the library this session. Every list draws its rows through
+  /// SongRow, which asks here — so a removed song is gone from whatever is open, at
+  /// once, without each of a dozen lists having to be told to fetch itself again.
+  final Set<int> _removedTracks = <int>{};
+  bool wasRemoved(int trackId) => _removedTracks.contains(trackId);
+
+  /// Take songs out of the library: the wrong match, the one that was never wanted.
+  ///
+  /// The server takes them off this person's playlists and queues as well, and deletes
+  /// outright whatever nobody else holds. Here: the kept copy on the device goes, the
+  /// heart goes, and the queue is read again since it may just have lost rows.
+  Future<({int removed, int deleted})> removeFromLibrary(List<int> trackIds) async {
+    final done = await api.removeFromLibrary(trackIds);
+    _removedTracks.addAll(trackIds);
+    favourites.removeAll(trackIds);
+    for (final id in trackIds) {
+      await offline.forget(id);
+    }
+    notifyListeners();
+    await _resyncQueue();
+    unawaited(refreshPlaylists().catchError((_) {}));
+    return done;
+  }
+
   Future<void> _resyncQueue() async {
     await _reloadActiveQueue();
     final live = activeQueue;
@@ -1416,6 +1444,7 @@ class AppState extends ChangeNotifier {
   Future<void> playNow(List<Track> tracks,
       {int startAt = 0, bool shuffle = false, String? named}) async {
     if (tracks.isEmpty) return;
+    _removedTracks.removeAll([for (final t in tracks) t.id]);
     if (offlineSession || !serverIsThere.value) {
       return _playFromTheDevice(tracks, startAt: startAt, shuffle: shuffle, named: named);
     }

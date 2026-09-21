@@ -700,3 +700,32 @@ def test_a_short_queue_is_sent_whole(client, hdr, tracks):
     got = client.get(f"/queues/{q['id']}", headers=hdr).json()
     assert got["total"] == 3 and got["window_from"] == 0
     assert len(got["items"]) == 3
+
+
+def test_moving_with_a_song_in_twice_keeps_the_copy_that_was_playing(client, hdr, tracks):
+    """The cursor used to follow "the first row holding this track", which with a song
+    queued twice is the other copy — playback slid from copy two back to copy one."""
+    a, b, c = (t["id"] for t in tracks)
+    q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
+    full = client.put(f"/queues/{q['id']}", headers=hdr,
+                      json={"rev": q["rev"], "items": [a, b, a, c]}).json()
+    rows = [i["item_id"] for i in full["items"]]
+    client.patch(f"/queues/{q['id']}/cursor", headers=hdr, json={"cursor_index": 2})
+
+    moved = client.post(f"/queues/{q['id']}/move", headers=hdr,
+                        json={"from": 3, "to": 0}).json()
+    assert [i["id"] for i in moved["items"]] == [c, a, b, a]
+    assert moved["cursor_index"] == 3, "the second copy, where it went"
+    assert [i["item_id"] for i in moved["items"]] == [rows[3], rows[0], rows[1], rows[2]], \
+        "rows keep their names through a reorder"
+
+
+def test_shuffling_keeps_row_names(client, hdr, tracks):
+    a, b, c = (t["id"] for t in tracks)
+    q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
+    full = client.put(f"/queues/{q['id']}", headers=hdr,
+                      json={"rev": q["rev"], "items": [a, b, c, a, b]}).json()
+    shuffled = client.post(f"/queues/{q['id']}/shuffle", headers=hdr, json={}).json()
+    assert sorted(i["item_id"] for i in shuffled["items"]) == \
+        sorted(i["item_id"] for i in full["items"])
+    assert shuffled["items"][0]["item_id"] == full["items"][0]["item_id"]

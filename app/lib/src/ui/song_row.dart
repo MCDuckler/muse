@@ -108,6 +108,11 @@ class SongRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Taken out of the library a moment ago: gone from every list that is open,
+    // whichever one it was removed from.
+    if (context.select<AppState?, bool>((a) => a?.wasRemoved(track.id) ?? false)) {
+      return const SizedBox.shrink();
+    }
     final scheme = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
     final failed = track.state == 'failed';

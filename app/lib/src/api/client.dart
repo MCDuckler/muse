@@ -1307,6 +1307,18 @@ class ApiClient {
     );
   }
 
+  /// Out of the library, its playlists and its queues — and off the server, audio and
+  /// all, when nobody else holds the song. `deleted` says how many went that far.
+  Future<({int removed, int deleted})> removeFromLibrary(List<int> trackIds) async {
+    final j = await _decode(await net.post(_u('/library/remove'),
+        headers: _headers,
+        body: jsonEncode({'track_ids': trackIds}))) as Map<String, dynamic>;
+    return (
+      removed: (j['removed'] as num?)?.toInt() ?? 0,
+      deleted: (j['deleted'] as num?)?.toInt() ?? 0,
+    );
+  }
+
   Future<Track> updateTrack(int id, Map<String, dynamic> fields) async =>
       Track.fromJson(await _decode(await net.patch(_u('/tracks/$id'),
               headers: _headers, body: jsonEncode(fields))) as Map<String, dynamic>);

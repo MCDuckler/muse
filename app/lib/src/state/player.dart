@@ -51,6 +51,11 @@ class PlayerService {
   int _orderPos = 0;
   int? _queueId;
   int? _loadedTrackId;
+
+  /// Which *row* of the queue the engine's source was built from. A song can be in the
+  /// queue twice, and the source carries its row's name in its tag — so moving from one
+  /// copy to the other needs a load of its own even though the audio is identical.
+  int? _loadedRow;
   int? _waitingForTrack;         // stalled on a download; resume when it lands
 
   /// How often playback is checked for having quietly stopped, and how long it has to
@@ -964,7 +969,14 @@ class PlayerService {
 
     final token = ++_loadToken;
     try {
-      if (_loadedTrackId != track.id || ranOut) {
+      // The same song on another row is still another row. Playing the second copy of
+      // a song while the first was loaded used to load nothing, so the engine went on
+      // naming copy one — and every few seconds the watchdog believed the engine,
+      // moved the screen back to copy one, and the queue hopped between the two.
+      final otherRow = _loadedRow != null &&
+          track.queueItemId != null &&
+          _loadedRow != track.queueItemId;
+      if (_loadedTrackId != track.id || otherRow || ranOut) {
         await _loadCurrent(startAt: ranOut ? Duration.zero : startAt, token: token);
       }
       // A newer request came in while this one was loading: it owns playback now.
@@ -1429,6 +1441,7 @@ class PlayerService {
     _recordListen(completed: true);
     _orderPos = pos;
     _loadedTrackId = playing.trackId;
+    _loadedRow = playing.row;
     _queuedNextId = null;
     _waitingForTrack = null;
     finished = false;
@@ -1473,12 +1486,21 @@ class PlayerService {
         (playing.row == null || shown.queueItemId == playing.row)) {
       return;
     }
+    // The right song, under a row name this queue no longer has — a reorder renamed
+    // the rows, or the list was patched. That is agreement: going looking for "the
+    // nearest other copy" here is what made a song queued twice hop between its copies.
+    if (shown != null &&
+        shown.id == playing.trackId &&
+        !_items.any((t) => t.queueItemId == playing.row)) {
+      return;
+    }
     final pos = _orderPosOf(trackId: playing.trackId, row: playing.row);
     if (pos < 0 || pos == _orderPos) return;
     PlaybackLog.note('screen said ${shown?.id}, speaker says ${playing.trackId}'
         ' — following the speaker');
     _orderPos = pos;
     _loadedTrackId = playing.trackId;
+    _loadedRow = playing.row;
     _queuedNextId = null;
     finished = false;
     _emit(force: true);
@@ -1546,6 +1568,7 @@ class PlayerService {
       await _player.setVolume(_volumeForTrack(track));
       if (speed != 1.0) await _player.setSpeed(speed);
       _loadedTrackId = track.id;
+      _loadedRow = track.queueItemId;
       // An explicit load puts this song at the top of the engine's playlist and throws
       // away whatever was queued behind it, so the next song has to be handed over
       // again — see _queueNext.
@@ -1615,7 +1638,7 @@ class PlayerService {
     final fresh = await api.track(trackId);
     // Update every copy: the same track can sit in a queue more than once.
     _items = [
-      for (final t in _items) t.id == trackId ? fresh.copyWithOrigin(t.origin) : t
+      for (final t in _items) t.id == trackId ? fresh.inRowOf(t) : t
     ];
     // Only the track we are actually stalled on may start playback, and only while
     // nothing is playing. Anything else is a download finishing somewhere further down
@@ -1670,7 +1693,7 @@ class PlayerService {
     if (!_items.any((t) => t.id == trackId)) return;
     final fresh = await api.track(trackId);
     _items = [
-      for (final t in _items) t.id == trackId ? fresh.copyWithOrigin(t.origin) : t
+      for (final t in _items) t.id == trackId ? fresh.inRowOf(t) : t
     ];
     if (_loadedTrackId == trackId && !_player.playing) {
       // Only when paused: reloading the source mid-song would restart it, and a cover
@@ -1687,7 +1710,11 @@ class PlayerService {
   /// on to. If the thing we were waiting for is not in the queue any more, the wait is
   /// simply over.
   Future<void> _resumeIfPossible() async {
-    final waitingPos = _order.indexWhere((i) => _items[i].id == _waitingForTrack);
+    // The copy we are standing on, when that is the one: a song in the queue twice
+    // would otherwise start from its first copy whichever one was being waited for.
+    final waitingPos = current?.id == _waitingForTrack
+        ? _orderPos
+        : _order.indexWhere((i) => _items[i].id == _waitingForTrack);
     if (waitingPos < 0) {
       _waitingForTrack = null;
       return;

@@ -17,7 +17,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, Response
 
-from . import catalog, db, images, jam, jobs, match, playlist_art, stations, ytm
+from . import catalog, db, images, jam, jobs, match, playlist_art, removal, stations, ytm
 from .deps import cfg, current_user, user_or_key
 
 router = APIRouter()
@@ -1116,7 +1116,7 @@ def move_item(queue_id: int, body: dict = Body(...), user: dict = Depends(curren
     if src is None or dst is None:
         raise HTTPException(400, "from and to are required")
 
-    rows = db.all_("select pos, track_id, origin, added_by from queue_items "
+    rows = db.all_("select pos, item_id, track_id, origin, added_by from queue_items "
                    "where queue_id=%s order by pos", (queue_id,))
     # `from` may be several positions: dragging one row of a selection brings the rest
     # with it, and doing that as one edit keeps them together and costs one request
@@ -1131,24 +1131,24 @@ def move_item(queue_id: int, body: dict = Body(...), user: dict = Depends(curren
     # `to` is where it lands in the list it is landing in — that is, with the rows
     # being moved already taken out of it, which is what a drag reports.
     at = max(0, min(len(remaining), dst))
-    rows = remaining[:at] + block + remaining[at:]
     cursor = db.one("select cursor_index from queues where id=%s",
                     (queue_id,))["cursor_index"]
-    playing = None
-    if 0 <= cursor < len(rows):
-        # Follow the track that was playing rather than the index it happened to have.
-        original = db.all_("select track_id from queue_items where queue_id=%s "
-                           "order by pos", (queue_id,))
-        if cursor < len(original):
-            playing = original[cursor]["track_id"]
+    # Follow the *row* that was playing rather than the index it happened to have —
+    # and not the track either: with a song in the queue twice, "the first row holding
+    # this track" is the other copy, and the cursor jumped to it.
+    playing = rows[cursor]["item_id"] if 0 <= cursor < len(rows) else None
+    rows = remaining[:at] + block + remaining[at:]
 
     with db.pool().connection() as c:
         c.execute("delete from queue_items where queue_id=%s", (queue_id,))
         for i, r in enumerate(rows):
-            c.execute("insert into queue_items(queue_id,pos,track_id,origin,added_by) "
-                      "values(%s,%s,%s,%s,%s)",
-                      (queue_id, i, r["track_id"], r["origin"], r["added_by"]))
-        new_cursor = next((i for i, r in enumerate(rows) if r["track_id"] == playing),
+            # Rows keep their names through a reorder: a client holds on to the one
+            # that is playing by its item_id.
+            c.execute("insert into queue_items(queue_id,pos,item_id,track_id,origin,added_by) "
+                      "values(%s,%s,%s,%s,%s,%s)",
+                      (queue_id, i, r["item_id"], r["track_id"], r["origin"],
+                       r["added_by"]))
+        new_cursor = next((i for i, r in enumerate(rows) if r["item_id"] == playing),
                           cursor)
         c.execute("update queues set rev=rev+1, cursor_index=%s, updated_at=now() "
                   "where id=%s", (new_cursor, queue_id))
@@ -1170,7 +1170,7 @@ def shuffle_queue(queue_id: int, body: dict = Body(default={}),
     _own_queue(queue_id, user)
     cursor = db.one("select cursor_index from queues where id=%s",
                     (queue_id,))["cursor_index"]
-    rows = db.all_("select pos, track_id, origin, added_by from queue_items "
+    rows = db.all_("select pos, item_id, track_id, origin, added_by from queue_items "
                    "where queue_id=%s order by pos", (queue_id,))
     keep = [r for r in rows if r["pos"] <= cursor]
     rest = [r for r in rows if r["pos"] > cursor]
@@ -1193,9 +1193,10 @@ def shuffle_queue(queue_id: int, body: dict = Body(default={}),
     with db.pool().connection() as c:
         c.execute("delete from queue_items where queue_id=%s", (queue_id,))
         for i, r in enumerate(keep + rest):
-            c.execute("""insert into queue_items(queue_id,pos,track_id,origin,added_by)
-                         values(%s,%s,%s,%s,%s)""",
-                      (queue_id, i, r["track_id"], r["origin"], r["added_by"]))
+            c.execute("""insert into queue_items(queue_id,pos,item_id,track_id,origin,added_by)
+                         values(%s,%s,%s,%s,%s,%s)""",
+                      (queue_id, i, r["item_id"], r["track_id"], r["origin"],
+                       r["added_by"]))
         c.execute("update queues set rev=rev+1, updated_at=now() where id=%s",
                   (queue_id,))
     announce_queue(queue_id, user)
@@ -1243,6 +1244,23 @@ def remove_playlist_item(playlist_id: int, pos: int,
         c.execute("update playlist_items set pos = pos - 1 where playlist_id=%s and pos > %s",
                   (playlist_id, pos))
     return get_playlist(playlist_id, user)
+
+
+@router.post("/library/remove")
+def remove_from_library(body: dict = Body(...), user: dict = Depends(current_user)):
+    """Take songs out of your library — the wrong match, the one you never wanted.
+
+    Out of your playlists and queues too, since a song that is still on a list is back
+    in the library the next time that list is touched. Whatever nobody else holds is
+    deleted from the server with its audio; see removal.py.
+    """
+    ids = body.get("track_ids")
+    if not isinstance(ids, list) or not ids or not all(isinstance(i, int) for i in ids):
+        raise HTTPException(400, "track_ids must be a list of track ids")
+    done = removal.remove_from_library(user["id"], ids, cfg().data_dir)
+    for queue_id in done.pop("queues"):
+        announce_queue(queue_id, user)
+    return done
 
 
 @router.delete("/queues/{queue_id}")

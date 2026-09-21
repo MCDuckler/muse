@@ -21,6 +21,9 @@ SnackBar snack(
       content: content,
       action: action,
       duration: duration ?? (action == null ? kSnackShort : kSnackWithAction),
+      // Flutter keeps a message with a button on screen until it is pressed or swiped
+      // unless told otherwise — "Undo" would sit there for good.
+      persist: false,
       backgroundColor: backgroundColor,
     );
 

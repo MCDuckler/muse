@@ -9,6 +9,7 @@ import '../state/offline.dart';
 import '../state/selection.dart';
 import 'dialogs.dart';
 import 'snack.dart';
+import 'track_menu.dart';
 
 /// What you can do to the songs you have picked out.
 ///
@@ -152,6 +153,10 @@ class _SelectionBarState extends State<SelectionBar> {
                     if (!sure) return;
                     await onRemove!(picked);
                     await done('${picked.length} removed');
+                  case 'delete':
+                    final said = await removeFromLibrarySaying(context, app, picked);
+                    if (said == null) return;
+                    await done(said);
                 }
               },
               itemBuilder: (context) => [
@@ -171,6 +176,8 @@ class _SelectionBarState extends State<SelectionBar> {
                 ],
                 if (onRemove != null)
                   PopupMenuItem(value: 'remove', child: Text(removeLabel)),
+                const PopupMenuItem(
+                    value: 'delete', child: Text('Remove from library…')),
               ],
             ),
           ],

@@ -128,7 +128,25 @@ class MuseTheme {
   static ThemeData light([Palette palette = Palette.red]) =>
       _build(Brightness.light, palette);
 
-  static ThemeData _build(Brightness brightness, [Palette palette = Palette.red]) {
+  /// One theme per edition and brightness, built once.
+  ///
+  /// A theme built twice from the same edition is not *equal* to itself — it holds
+  /// closures (what a button does when pressed), and a closure only equals itself.
+  /// MaterialApp animates between any two themes that differ, so handing it a fresh
+  /// build meant a 200 ms cross-fade of every themed surface each time the app state
+  /// said anything at all: a track finishing its download, a cover arriving, a friend
+  /// pressing play. Buttons and panels drifting pale and back, at random, was that.
+  static final Map<(Brightness, String), ThemeData> _built = {};
+
+  static ThemeData _build(Brightness brightness, [Palette palette = Palette.red]) =>
+      _built[(brightness, palette.id)] ??= _make(brightness, palette);
+
+  /// The same theme, closer set, for where there is a mouse. Kept for the same reason.
+  static final Map<ThemeData, ThemeData> _compact = Map.identity();
+  static ThemeData compact(ThemeData theme) => _compact[theme] ??=
+      theme.copyWith(visualDensity: VisualDensity.compact);
+
+  static ThemeData _make(Brightness brightness, Palette palette) {
     final isDark = brightness == Brightness.dark;
     final ground = isDark ? palette.groundDark : palette.groundLight;
     final scheme = ColorScheme.fromSeed(

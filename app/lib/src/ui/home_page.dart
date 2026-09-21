@@ -24,6 +24,7 @@ import 'settings_page.dart';
 import 'sidebar.dart';
 import 'not_connected.dart';
 import 'player_bar.dart';
+import 'queue_page.dart';
 import 'search_page.dart';
 import 'social_page.dart';
 import 'split.dart';
@@ -205,8 +206,8 @@ class _HomePageState extends State<HomePage> {
       PlaybackLog.note('home shell built');
     }
     // In the order of Tabs.
-    const pages = [CoverPage(), SearchPage(), LibraryPage(), SocialPage()];
-    const titles = ['Home', 'Search', 'Library', 'People'];
+    const pages = [CoverPage(), QueuePage(), SearchPage(), LibraryPage(), SocialPage()];
+    const titles = ['Home', 'Queue', 'Search', 'Library', 'People'];
 
     final width = Width.of(context);
     // A desk gets the two things a phone has to take turns showing: the page, and what
@@ -399,7 +400,7 @@ Future<void> _addDropped(
   })));
 }
 
-/// The four places the app goes, down the side.
+/// The places the app goes, down the side.
 ///
 /// The same four destinations as the bar, plus the two things that were hidden in the
 /// app bar's overflow — and, at the bottom, the handle that folds the player out of
@@ -516,6 +517,10 @@ class _Rail extends StatelessWidget {
             icon: Tooltip(message: 'Home', child: Icon(Icons.newspaper_outlined)),
             selectedIcon: Icon(Icons.newspaper),
             label: Text('Home')),
+        NavigationRailDestination(
+            icon: Tooltip(message: 'Queue', child: Icon(Icons.queue_music_outlined)),
+            selectedIcon: Icon(Icons.queue_music),
+            label: Text('Queue')),
         NavigationRailDestination(
             icon: Tooltip(message: 'Search', child: Icon(Icons.search)),
             selectedIcon: Icon(Icons.search),
@@ -742,7 +747,7 @@ class _SettlingState extends State<_Settling>
       FadeTransition(opacity: _in, child: widget.child);
 }
 
-/// The four places the app goes, wherever you happen to be standing.
+/// The places the app goes, wherever you happen to be standing.
 ///
 /// One widget rather than one per screen, because it appears on more than one now: the
 /// player used to cover it completely, so opening what is playing meant losing every
@@ -781,6 +786,12 @@ class MuseNavigationBar extends StatelessWidget {
             icon: Icon(Icons.newspaper_outlined),
             selectedIcon: Icon(Icons.newspaper),
             label: 'Home'),
+        // Back in the bar: what plays next is one thumb away from anywhere, without
+        // opening the player first. Second, not first — the app still opens on Home.
+        NavigationDestination(
+            icon: Icon(Icons.queue_music_outlined),
+            selectedIcon: Icon(Icons.queue_music),
+            label: 'Queue'),
         NavigationDestination(
             icon: Icon(Icons.search),
             selectedIcon: Icon(Icons.search),

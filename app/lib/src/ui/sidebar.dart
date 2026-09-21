@@ -51,6 +51,7 @@ class _LibrarySidebarState extends State<LibrarySidebar> {
 
   static const _places = [
     (Tabs.home, 'Home', Icons.newspaper_outlined, Icons.newspaper),
+    (Tabs.queue, 'Queue', Icons.queue_music_outlined, Icons.queue_music),
     (Tabs.search, 'Search', Icons.search, Icons.search),
     (Tabs.library, 'Library', Icons.library_music_outlined, Icons.library_music),
     (Tabs.people, 'People', Icons.people_outline, Icons.people),

@@ -133,18 +133,22 @@ class MuseApp extends StatelessWidget {
       ],
       // Watched, not read: changing the palette has to repaint the whole app, and the
       // app is what holds the theme.
-      child: Consumer<AppState>(
-        builder: (context, app, _) {
+      //
+      // The palette and nothing else: the app state speaks several times a second
+      // while music downloads, and none of that is a reason to build the app again.
+      child: Selector<AppState, Palette>(
+        selector: (_, app) => app.palette,
+        builder: (context, palette, _) {
           // The strips the app does not draw — the clock at the top, the home bar at
           // the bottom — are painted by the system from the page's colour, so it has to
           // follow the palette rather than sit at whatever was compiled in.
           final dark = MediaQuery.platformBrightnessOf(context) == Brightness.dark;
-          setPageColour(dark ? app.palette.groundDark : app.palette.groundLight);
+          setPageColour(dark ? palette.groundDark : palette.groundLight);
           return MaterialApp(
         title: 'WetOwl',
         debugShowCheckedModeBanner: false,
-        theme: MuseTheme.light(app.palette),
-        darkTheme: MuseTheme.dark(app.palette),
+        theme: MuseTheme.light(palette),
+        darkTheme: MuseTheme.dark(palette),
         // A mouse gets a scrollbar and can drag a list about, which a finger has
         // never needed: on the web the app was a phone with no scrollbar, so a
         // library of twenty-two thousand songs was a scroll with no bottom and no
@@ -160,10 +164,10 @@ class MuseApp extends StatelessWidget {
         builder: (context, child) => AppShortcuts(
           child: _AnyTap(
             child: Theme(
-              data: Theme.of(context).copyWith(
-                  visualDensity: Width.of(context) == Width.expanded
-                      ? VisualDensity.compact
-                      : null),
+              // The very same theme object each time — see MuseTheme._built.
+              data: Width.of(context) == Width.expanded
+                  ? MuseTheme.compact(Theme.of(context))
+                  : Theme.of(context),
               child: PaperGrain(child: child ?? const SizedBox()),
             ),
           ),

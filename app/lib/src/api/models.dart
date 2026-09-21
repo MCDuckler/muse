@@ -79,8 +79,13 @@ class Track {
     this.queuePos,
   }) : displayTitle = displayTitle ?? title;
 
-  /// Queue membership carries `origin`, which a freshly fetched track does not know.
-  Track copyWithOrigin(String origin) => Track(
+  /// This song's fresh details, sitting in the queue row [row] was sitting in.
+  ///
+  /// A freshly fetched track knows nothing about the queue: not who added it, not
+  /// where it sits, and not which *row* it is. Losing the row name is the expensive
+  /// one — with a song in the queue twice, the player could no longer tell its copies
+  /// apart, disagreed with the engine about which was playing, and hopped between them.
+  Track inRowOf(Track row) => Track(
         id: id,
         title: title,
         artists: artists,
@@ -101,12 +106,12 @@ class Track {
         coverVersion: coverVersion,
         providerId: providerId,
         displayTitle: displayTitle,
-        origin: origin,
-        addedBy: addedBy,
-        addedById: addedById,
-        addedByAvatar: addedByAvatar,
-        queueItemId: queueItemId,
-        queuePos: queuePos,
+        origin: row.origin,
+        addedBy: row.addedBy,
+        addedById: row.addedById,
+        addedByAvatar: row.addedByAvatar,
+        queueItemId: row.queueItemId,
+        queuePos: row.queuePos,
       );
 
   Track withProgress(Map<String, dynamic>? p) => Track(

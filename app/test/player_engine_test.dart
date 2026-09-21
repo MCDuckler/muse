@@ -52,6 +52,14 @@ Future<HttpServer> stubServer() async {
           {'id': 99, 'name': 'Mine', 'cursor_index': 0, 'position_ms': 0,
            'rev': 1, 'items': 0},
         ]));
+      } else if (RegExp(r'^/tracks/\d+$').hasMatch(path) && request.method == 'GET') {
+        // One song's details, the way the server sends them outside a queue: no row.
+        final id = int.parse(path.split('/')[2]);
+        request.response.write(jsonEncode({
+          'id': id, 'title': 'Track $id (tidied)', 'artists': ['Someone'],
+          'duration_ms': 60000, 'state': 'ready',
+          'stream_url': '/tracks/$id/stream', 'source': 'youtube',
+        }));
       } else if (path.startsWith('/queues/') && request.method == 'GET') {
         request.response.write(jsonEncode({
           'id': int.tryParse(path.split('/')[2]) ?? 99,
@@ -1042,6 +1050,53 @@ void main() {
     expect(player.current?.id, 7);
     expect(player.current?.queueItemId, 202,
         reason: 'the copy the engine holds, not the one at the top of the queue');
+  });
+
+  test('a song in the queue twice does not hop copies when its details change',
+      () async {
+    // Covers and tidied titles arrive for a song while it plays — several a minute
+    // while a library is being enriched. The fresh details were put into the queue's
+    // rows *in place of* the rows, which lost each row its name; the watchdog then
+    // could not match the row the engine was playing, went looking for "the next copy
+    // of this song", and found the other one. And then the first again.
+    final again = track(7);
+    await player.loadQueue(queueOf([again, track(5), again, track(9)],
+        rows: [300, 301, 302, 303]));
+    await player.playAt(2);                       // the second copy
+    await settle();
+
+    await player.onTrackUpdated(7);
+    await settle();
+    expect(player.current?.title, 'Track 7 (tidied)', reason: 'the news did arrive');
+    expect(player.current?.queueItemId, 302, reason: 'and the row is still the row');
+
+    await player.checkForStall();                 // the watchdog's round
+    await settle();
+    expect(player.index, 2, reason: 'still the second copy');
+
+    await player.onTrackReady(7);
+    await player.checkForStall();
+    await settle();
+    expect(player.index, 2);
+    expect(player.items[0].queueItemId, 300);
+  });
+
+  test('a row renamed by the server is not a reason to change copies', () async {
+    // An older server renames every row on a reorder. The engine still holds the old
+    // name; the right song under a name nobody has any more is agreement.
+    final again = track(7);
+    await player.loadQueue(queueOf([again, track(5), again, track(9)],
+        rows: [400, 401, 402, 403]));
+    await player.playAt(2);
+    await settle();
+    await player.loadQueue(queueOf([again, track(5), again, track(9)],
+        rows: [500, 501, 502, 503]));
+    await settle();
+    expect(player.index, 2);
+
+    await player.checkForStall();
+    await settle();
+    expect(player.index, 2, reason: 'not the copy at the top');
   });
 
   test('a screen left on the wrong song is put right by the watchdog', () async {

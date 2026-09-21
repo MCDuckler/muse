@@ -132,10 +132,52 @@ Future<void> showTrackSheet(
                 () => _start(context, app, track)),
           if (onRemove != null)
             _item(sheet, Icons.delete_outline, 'Remove', onRemove),
+          // Last, and spelt out: the one thing here that cannot be taken back.
+          _item(sheet, Icons.delete_forever_outlined, 'Remove from library…', () async {
+            final messenger = ScaffoldMessenger.of(context);
+            final said = await removeFromLibrarySaying(context, app, [track]);
+            if (said == null) return;
+            messenger.say(snack(Text(said)));
+            onChanged?.call();
+          }),
         ],
       ),
     ),
   );
+}
+
+/// Ask, then take these songs out of the library — the wrong match a sync made, the
+/// upload that was the wrong file. Returns what to say about it, or null when the
+/// answer was no (or it failed, which has been said already).
+///
+/// The question says where else they go from, because "remove from library" that also
+/// empties a playlist is a surprise, and that the server copy goes too, because that
+/// is what makes this different from every other "remove" in the app.
+Future<String?> removeFromLibrarySaying(
+    BuildContext context, AppState app, List<Track> tracks) async {
+  if (tracks.isEmpty) return null;
+  final one = tracks.length == 1;
+  final what = one ? '“${tracks.first.displayTitle}”' : '${tracks.length} songs';
+  final messenger = ScaffoldMessenger.of(context);
+  final sure = await confirm(
+      context,
+      'Remove $what from your library?',
+      '${one ? 'It comes' : 'They come'} out of your playlists and queues too, and '
+          '${one ? 'is' : 'are'} deleted from the server. This cannot be undone.',
+      action: 'Remove');
+  if (!sure) return null;
+  try {
+    final done = await app.removeFromLibrary([for (final t in tracks) t.id]);
+    // Somebody else on this server still has it: gone from here, not from there.
+    final shared = done.removed - done.deleted;
+    final tail = shared > 0
+        ? ' — ${shared == done.removed ? '' : '$shared '}still in someone else’s library'
+        : '';
+    return one ? 'Removed ${tracks.first.displayTitle}$tail' : '${done.removed} removed$tail';
+  } catch (e) {
+    messenger.say(problem(e));
+    return null;
+  }
 }
 
 /// Put a song in the queue, and say so — with a way to hear it straight away.
