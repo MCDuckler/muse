@@ -349,7 +349,9 @@ class _OpenJamsState extends State<_OpenJams> {
 
   void _load() {
     if (!mounted) return;
-    setState(() => _future = context.read<AppState>().api.openJams());
+    setState(() {
+      _future = context.read<AppState>().api.openJams();
+    });
   }
 
   @override

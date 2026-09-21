@@ -165,3 +165,36 @@ class PlaylistArt extends StatelessWidget {
             size: size * 0.42, color: scheme.onSurfaceVariant),
       );
 }
+
+/// A song's picture from what stats and history rows carry: a cover path when there is
+/// one, and the song's printed sleeve when there is not.
+class CoverByPath extends StatelessWidget {
+  const CoverByPath({
+    super.key,
+    required this.id,
+    required this.title,
+    required this.coverPath,
+    required this.size,
+  });
+
+  final int id;
+  final String title;
+  final String? coverPath;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final api = context.read<AppState>().api;
+    final url = api.coverUrlForPath(coverPath, small: size < 120);
+    if (url == null) return PrintedSleeve(seed: id, title: title, size: size);
+    return SizedBox.square(
+      dimension: size,
+      child: Image(
+        image: artwork(url, drawnAt: size, ratio: MediaQuery.devicePixelRatioOf(context)),
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        errorBuilder: (_, __, ___) => PrintedSleeve(seed: id, title: title, size: size),
+      ),
+    );
+  }
+}

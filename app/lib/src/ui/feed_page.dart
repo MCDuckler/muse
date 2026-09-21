@@ -35,7 +35,9 @@ class _FeedPageState extends State<FeedPage> {
     _load();
   }
 
-  void _load() => setState(() => _future = context.read<AppState>().api.feed());
+  void _load() => setState(() {
+        _future = context.read<AppState>().api.feed();
+      });
 
   /// Marking as read is deliberate rather than automatic on scroll: something you
   /// glanced past on a train is exactly what you wanted to still be marked later.
@@ -217,7 +219,9 @@ class _FollowingPageState extends State<FollowingPage> {
     _load();
   }
 
-  void _load() => setState(() => _future = context.read<AppState>().api.follows());
+  void _load() => setState(() {
+        _future = context.read<AppState>().api.follows();
+      });
 
   /// Bring over the artists this person already follows elsewhere.
   ///

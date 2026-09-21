@@ -5,7 +5,6 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
-import '../state/art_cache.dart';
 import 'artwork.dart';
 import 'feed_page.dart';
 import 'feel.dart';
@@ -14,7 +13,6 @@ import 'mag_parts.dart';
 import 'pane.dart';
 import 'mini_player.dart' show bottomForPlayer;
 import 'skeleton.dart';
-import 'sleeve_art.dart';
 
 /// Home: this week's issue.
 ///
@@ -209,7 +207,7 @@ class _CoverStar extends StatelessWidget {
                   child: CutOut(
                     turn: -0.05,
                     taped: true,
-                    child: _Picture(
+                    child: CoverByPath(
                         id: top.id, title: top.title, coverPath: top.coverPath, size: art),
                   ),
                 ),
@@ -471,7 +469,7 @@ class _OnRepeat extends StatelessWidget {
                       child: Text('${i + 2}',
                           style: Mag.numerals(22, color: scheme.onSurfaceVariant)),
                     ),
-                    _Picture(
+                    CoverByPath(
                         id: rest[i].id,
                         title: rest[i].title,
                         coverPath: rest[i].coverPath,
@@ -592,38 +590,6 @@ class _Folio extends StatelessWidget {
         decoration: BoxDecoration(border: Border(top: BorderSide(color: scheme.onSurface))),
         child: Text(bits.join('  ·  '),
             style: Mag.typewriter(10.5, color: scheme.onSurfaceVariant, bold: true)),
-      ),
-    );
-  }
-}
-
-/// A song's picture from what the stats give: a cover path if there is one, and a
-/// printed sleeve if not.
-class _Picture extends StatelessWidget {
-  const _Picture({
-    required this.id,
-    required this.title,
-    required this.coverPath,
-    required this.size,
-  });
-
-  final int id;
-  final String title;
-  final String? coverPath;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    final api = context.read<AppState>().api;
-    final url = api.coverUrlForPath(coverPath, small: size < 120);
-    if (url == null) return PrintedSleeve(seed: id, title: title, size: size);
-    return SizedBox.square(
-      dimension: size,
-      child: Image(
-        image: artwork(url, drawnAt: size, ratio: MediaQuery.devicePixelRatioOf(context)),
-        fit: BoxFit.cover,
-        gaplessPlayback: true,
-        errorBuilder: (_, __, ___) => PrintedSleeve(seed: id, title: title, size: size),
       ),
     );
   }

@@ -686,6 +686,12 @@ class PlayedOften {
   final int minutes;
   final String? coverPath;
 
+  /// Its place on this chart, and on the one before: null there means it was not on
+  /// the last one — a new entry. And how many charts it has been on, looking back.
+  final int? rank;
+  final int? lastRank;
+  final int charts;
+
   const PlayedOften({
     required this.id,
     required this.title,
@@ -695,6 +701,9 @@ class PlayedOften {
     required this.started,
     required this.minutes,
     this.coverPath,
+    this.rank,
+    this.lastRank,
+    this.charts = 0,
   });
 
   factory PlayedOften.fromJson(Map<String, dynamic> j) => PlayedOften(
@@ -706,6 +715,9 @@ class PlayedOften {
         started: (j['started'] ?? 0) as int,
         minutes: (((j['ms'] ?? 0) as num) / 60000).round(),
         coverPath: j['cover_url'] as String?,
+        rank: j['rank'] as int?,
+        lastRank: j['last_rank'] as int?,
+        charts: (j['charts'] ?? 0) as int,
       );
 
   String get artistLine => artists.isEmpty ? 'Unknown artist' : artists.join(', ');

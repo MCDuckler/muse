@@ -305,6 +305,52 @@ PERIODS = {
     "all": None,
 }
 
+# The same stretches in seconds, for cutting the past into charts of equal length.
+_SPAN = {"week": 7 * 86400, "month": 30 * 86400, "year": 365 * 86400}
+
+# How far back "weeks on chart" looks: half a year of weeklies, two years of monthlies.
+_LOOKBACK = {"week": 26, "month": 24, "year": 5}
+
+
+def _chart_runs(whose: int, since: str, limit: int, ids: list[int]) -> dict[int, dict]:
+    """Where each of these songs stood on the last chart, and how many charts it has
+    been on.
+
+    A chart is a stretch of the same length as the one asked about, counted back from
+    now: this week, the week before, the one before that. Each is ranked the way the
+    main list is — plays, then starts, then time — and a song "on the chart" is one in
+    its top `limit`. So a song's movement is its place on this chart against its place
+    on the last one, and its weeks on chart are the number of charts it made.
+    """
+    span = _SPAN.get(since)
+    if span is None or not ids:
+        return {}
+    rows = db.all_(
+        """with b as (
+             select l.track_id,
+                    floor(extract(epoch from (now() - l.started_at)) / %s)::int as chart,
+                    count(*) filter (where l.completed) plays,
+                    count(*) started,
+                    coalesce(sum(l.ms_played), 0) ms
+               from listens l
+              where l.user_id = %s
+                and l.started_at > now() - make_interval(secs => %s)
+              group by 1, 2
+           ), r as (
+             select track_id, chart,
+                    row_number() over (partition by chart
+                                       order by plays desc, started desc, ms desc) as rank
+               from b
+           )
+           select track_id,
+                  min(rank) filter (where chart = 1) as last_rank,
+                  count(*) filter (where rank <= %s) as charts
+             from r
+            where track_id = any(%s)
+            group by track_id""",
+        (span, whose, span * _LOOKBACK[since], limit, ids))
+    return {r["track_id"]: r for r in rows}
+
 
 @router.get("/stats")
 def stats(since: str = "month", who: int | None = None, limit: int = 25,
@@ -347,6 +393,16 @@ def stats(since: str = "month", who: int | None = None, limit: int = 25,
              group by t.id
              order by plays desc, started desc, ms desc
              limit %s""", args + (limit,))
+
+    # Where each song was last time, and how long it has been charting.
+    runs = _chart_runs(whose, since, limit, [r["id"] for r in songs])
+    for i, row in enumerate(songs):
+        run = runs.get(row["id"])
+        last = run["last_rank"] if run else None
+        # Off the last chart altogether is a new entry, however many plays it had.
+        row["last_rank"] = last if last is not None and last <= limit else None
+        row["charts"] = int(run["charts"]) if run else (1 if since in _SPAN else 0)
+        row["rank"] = i + 1
 
     artists = db.all_(
         f"""select artist as name, count(*) filter (where completed) plays,

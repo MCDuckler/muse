@@ -158,8 +158,14 @@ class StickerText extends StatelessWidget {
   final String? small;
   final Color colour;
 
+  // A sticker is printed, not typeset: its words keep their size when the phone's
+  // type is turned up, and shrink to fit if they have to, because the burst they sit
+  // in does not grow.
   @override
-  Widget build(BuildContext context) => Column(
+  Widget build(BuildContext context) => MediaQuery.withNoTextScaling(
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(big.toUpperCase(),
@@ -170,6 +176,8 @@ class StickerText extends StatelessWidget {
                 textAlign: TextAlign.center,
                 style: Mag.headline(10, color: colour, width: 75).copyWith(height: 0.9)),
         ],
+          ),
+        ),
       );
 }
 

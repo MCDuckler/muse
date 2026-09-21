@@ -54,8 +54,8 @@ class LibraryPage extends StatelessWidget {
         // twenty playlists it was a screen and a half of scrolling away.
         ListTile(
           leading: const Icon(Icons.bar_chart),
-          title: const Text('Listening'),
-          subtitle: const Text('What you played most, and when'),
+          title: const Text('The charts'),
+          subtitle: const Text('Your top songs, and what moved this week'),
           onTap: () => openPage(context, (_) => const ListeningPage()),
         ),
         ListTile(
@@ -303,7 +303,9 @@ class _PlaylistPageState extends State<PlaylistPage> {
     return list;
   }
 
-  void _reload() => setState(() => _future = _ask());
+  void _reload() => setState(() {
+        _future = _ask();
+      });
 
   /// Take a row off the list, and offer to put it back where it was.
   ///

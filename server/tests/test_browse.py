@@ -227,6 +227,44 @@ def test_stats_can_be_asked_about_a_stretch_or_about_somebody_else(client, hdr,
                       params={"who": 9999}).status_code == 404
 
 
+def test_the_charts_know_where_a_song_was_last_week(client, hdr, library):
+    """A chart is only a chart if it moves: this week's place against last week's, a
+    new entry when a song was not on last week's at all, and how many weeks it has
+    been on one."""
+    alpha, beta, gamma = library[0], library[1], library[2]
+
+    def play(track, times, days_ago):
+        for _ in range(times):
+            client.post("/listens", headers=hdr,
+                        json={"track_id": track, "ms_played": 200_000,
+                              "completed": True})
+        db.run("""update listens set started_at = now() - make_interval(days => %s)
+                   where track_id = %s and started_at > now() - interval '1 minute'""",
+               (days_ago, track))
+
+    # Last week: beta at the top, gamma second. Three weeks ago: beta again.
+    play(beta, 5, 9)
+    play(gamma, 3, 10)
+    play(beta, 2, 22)
+    # This week: alpha arrives, beta holds on below it, gamma is gone.
+    play(alpha, 4, 1)
+    play(beta, 2, 2)
+
+    chart = client.get("/library/stats", headers=hdr, params={"since": "week"}).json()
+    songs = {s["id"]: s for s in chart["songs"]}
+
+    assert [s["id"] for s in chart["songs"]] == [alpha, beta]
+    assert songs[alpha]["rank"] == 1
+    assert songs[alpha]["last_rank"] is None, "not on last week's chart: a new entry"
+    assert songs[alpha]["charts"] == 1
+    assert songs[beta]["rank"] == 2 and songs[beta]["last_rank"] == 1, "down one"
+    assert songs[beta]["charts"] == 3, "this week, last week and three weeks ago"
+
+    # Everything-ever has no last week to compare with.
+    ever = client.get("/library/stats", headers=hdr, params={"since": "all"}).json()
+    assert all(s["last_rank"] is None and s["charts"] == 0 for s in ever["songs"])
+
+
 def test_taking_a_record_with_you(client, hdr, library, monkeypatch):
     """Most of this library has never been downloaded, because a mirrored collection
     records the list and leaves the files until something is played. A playlist could
