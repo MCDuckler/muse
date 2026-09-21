@@ -22,6 +22,7 @@ import 'song_row.dart';
 import 'snack.dart';
 import 'skeleton.dart';
 import 'theme.dart';
+import 'track_list.dart';
 
 
 class LibraryPage extends StatelessWidget {
@@ -39,6 +40,8 @@ class LibraryPage extends StatelessWidget {
         // The contents page: every way into the library, each with a number that is
         // true about it.
         const _Contents(),
+        // Lists nobody made: questions about the library, answered when asked.
+        const _SmartLists(),
         Padding(
           padding: const EdgeInsets.fromLTRB(8, 24, 8, 8),
           child: Row(
@@ -1015,4 +1018,141 @@ class _IndexCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The lists that fill themselves in: never played, most played, not heard in a while.
+///
+/// A playlist is something somebody made and has to keep up. These are questions about
+/// the library and what has been played from it, asked again each time one is opened —
+/// so "never played" gets shorter as you work through it, without anybody editing it.
+/// One with nothing in it is left off.
+class _SmartLists extends StatefulWidget {
+  const _SmartLists();
+
+  @override
+  State<_SmartLists> createState() => _SmartListsState();
+}
+
+class _SmartListsState extends State<_SmartLists> {
+  List<({String id, String name, String blurb, int count})> _lists = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _ask();
+  }
+
+  Future<void> _ask() async {
+    try {
+      final lists = await context.read<AppState>().api.smartLists();
+      if (mounted) setState(() => _lists = lists);
+    } catch (_) {
+      // A server from before these existed, or no connection: the section is left off.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final shown = [for (final l in _lists) if (l.count > 0) l];
+    if (shown.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 18, 8, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SectionFlag('Lists that fill themselves in'),
+          const SizedBox(height: 4),
+          for (final l in shown)
+            InkWell(
+              onTap: () async {
+                await openPage(context, (_) => SmartListPage(id: l.id, name: l.name, blurb: l.blurb));
+                _ask();
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 4),
+                decoration: BoxDecoration(
+                  border: Border(
+                      bottom: BorderSide(color: scheme.onSurface.withValues(alpha: 0.16))),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(l.name.toUpperCase(),
+                              style: Mag.headline(20, color: scheme.onSurface)),
+                          const SizedBox(height: 2),
+                          Text(l.blurb,
+                              style: Mag.typewriter(11, color: scheme.onSurfaceVariant)),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Text('${l.count}', style: Mag.numerals(22, color: scheme.primary)),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One of the lists that fill themselves in, opened.
+class SmartListPage extends StatefulWidget {
+  const SmartListPage({super.key, required this.id, required this.name, required this.blurb});
+
+  final String id;
+  final String name;
+  final String blurb;
+
+  @override
+  State<SmartListPage> createState() => _SmartListPageState();
+}
+
+class _SmartListPageState extends State<SmartListPage> {
+  Future<List<Track>>? _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  void _load() => setState(() {
+        _future = context.read<AppState>().api.smartList(widget.id);
+      });
+
+  @override
+  Widget build(BuildContext context) => PlayerScaffold(
+        appBar: AppBar(title: Text(widget.name)),
+        body: FutureBuilder<List<Track>>(
+          future: _future,
+          builder: (context, snap) {
+            if (snap.hasError) return ErrorRetry(error: snap.error!, onRetry: _load);
+            if (!snap.hasData) return const SongsComing();
+            final tracks = snap.data!;
+            if (tracks.isEmpty) {
+              return EmptyHint(
+                icon: Icons.auto_awesome_outlined,
+                title: 'Nothing in it just now',
+                body: widget.blurb,
+              );
+            }
+            context.read<AppState>().keepCoversFor(tracks);
+            return RefreshIndicator(
+              onRefresh: () async => _load(),
+              child: TrackList(
+                tracks: tracks,
+                header: '${tracks.length} songs · ${widget.blurb}',
+                named: widget.name,
+                selectable: 'smart:${widget.id}',
+              ),
+            );
+          },
+        ),
+      );
 }

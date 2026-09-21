@@ -1156,6 +1156,28 @@ class ApiClient {
     return (d['items'] as List).map((e) => Track.fromJson(e)).toList();
   }
 
+  /// The lists that fill themselves in, and how many songs each has right now.
+  Future<List<({String id, String name, String blurb, int count})>> smartLists() async {
+    final d = await _decode(await net.get(_u('/library/smart'), headers: _headers))
+        as Map<String, dynamic>;
+    return [
+      for (final l in (d['lists'] ?? const []) as List)
+        (
+          id: '${l['id']}',
+          name: (l['name'] ?? '') as String,
+          blurb: (l['blurb'] ?? '') as String,
+          count: (l['count'] ?? 0) as int,
+        )
+    ];
+  }
+
+  /// One of them, answered now.
+  Future<List<Track>> smartList(String id) async {
+    final d = await _decode(await net.get(_u('/library/smart/$id'), headers: _headers))
+        as Map<String, dynamic>;
+    return [for (final t in (d['items'] ?? const []) as List) Track.fromJson(t)];
+  }
+
   /// What one account listened to, over one stretch of time.
   Future<Listening> listening({String since = 'month', int? who}) async {
     final d = await _decode(await net.get(

@@ -86,6 +86,92 @@ def all_tracks(sort: str = "added", limit: int = 200, offset: int = 0,
             "offset": offset, "sort": sort}
 
 
+# Lists that fill themselves in.
+#
+# A playlist is something somebody made. These are the other kind: a question about
+# the library and what has been played from it, asked again every time the list is
+# opened. Each is a name, a line saying what it is, and the SQL that answers it — a
+# `where` over the library's songs with the listener's plays joined on as `p`.
+#
+# Only songs that can play now: a list made for putting on should not be mostly songs
+# that need fetching first.
+SMART = {
+    "never": {
+        "name": "Never played",
+        "blurb": "In your library, downloaded, and not once put on",
+        "where": "p.plays is null",
+        "order": "li.added_at desc",
+    },
+    "most": {
+        "name": "Most played",
+        "blurb": "What you have played most, of everything, ever",
+        "where": "p.plays >= 2",
+        "order": "p.plays desc, p.last_at desc",
+    },
+    "forgotten": {
+        "name": "Not heard in a while",
+        "blurb": "Played more than once, and not for a month",
+        "where": "p.plays >= 2 and p.last_at < now() - interval '30 days'",
+        "order": "p.plays desc, p.last_at asc",
+    },
+    "fresh": {
+        "name": "New this month",
+        "blurb": "Added to your library in the last thirty days",
+        "where": "li.added_at > now() - interval '30 days'",
+        "order": "li.added_at desc",
+    },
+    "once": {
+        "name": "Played once",
+        "blurb": "Heard the whole way through exactly once: worth a second go?",
+        "where": "p.plays = 1",
+        "order": "p.last_at desc",
+    },
+}
+
+_SMART_FROM = """
+      from tracks t
+      join library_items li on li.track_id = t.id and li.user_id = %s
+      left join (select track_id, count(*) filter (where completed) plays,
+                        max(started_at) last_at
+                   from listens where user_id = %s group by track_id) p
+             on p.track_id = t.id
+"""
+
+
+@router.get("/smart")
+def smart_lists(user: dict = Depends(current_user)):
+    """The lists there are, and how many songs each would have right now."""
+    counts = db.one(
+        "select " + ", ".join(
+            f"count(*) filter (where {spec['where']}) as {key}"
+            for key, spec in SMART.items())
+        + _SMART_FROM + " where t.state = 'ready'",
+        (user["id"], user["id"]))
+    return {"lists": [
+        {"id": key, "name": spec["name"], "blurb": spec["blurb"], "count": counts[key]}
+        for key, spec in SMART.items()]}
+
+
+@router.get("/smart/{kind}")
+def smart_list(kind: str, limit: int = 200, user: dict = Depends(current_user)):
+    """One of them, answered now."""
+    spec = SMART.get(kind)
+    if spec is None:
+        raise HTTPException(404, "no such list")
+    rows = db.all_(
+        f"""select t.*, m.path, m.bytes, m.sha256, c.color as cover_color,
+                   c.sha256 as cover_sha
+            {_SMART_FROM}
+              left join media m on m.track_id = t.id and m.role = 'canonical'
+              left join covers c on c.id = t.cover_id
+             where t.state = 'ready' and {spec['where']}
+             order by {spec['order']}, t.id
+             limit %s""",
+        (user["id"], user["id"], max(1, min(limit, 500))))
+    return {"id": kind, "name": spec["name"], "blurb": spec["blurb"],
+            "items": [catalog.public(t) for t in rows]}
+
+
 # How a list of records or of artists can be ordered. Named rather than free text: an
 # order is a handful of sensible answers, not a column somebody types in.
 ALBUM_SORTS = {

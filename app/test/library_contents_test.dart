@@ -33,6 +33,17 @@ void main() {
         '/library/albums' => {'items': [], 'total': 1203},
         '/library/artists' => {'items': [], 'total': 4550},
         '/feed' => {'items': [], 'unseen': unseen, 'following': following},
+        '/library/smart' => {
+            'lists': [
+              {'id': 'never', 'name': 'Never played', 'blurb': 'Not once put on', 'count': 812},
+              {'id': 'once', 'name': 'Played once', 'blurb': 'Worth a second go?', 'count': 0},
+            ],
+          },
+        '/library/smart/never' => {
+            'items': [
+              {'id': 3, 'title': 'Unheard Song', 'artists': ['Somebody'], 'state': 'ready'},
+            ],
+          },
         _ => <String, dynamic>{},
       };
       return http.Response(jsonEncode(body), 200,
@@ -72,6 +83,19 @@ void main() {
     expect(find.text('4,550'), findsOneWidget);
     expect(find.text('3 NEW'), findsOneWidget, reason: 'news goes on a sticker');
     expect(find.text('PLAYLISTS · 0'), findsOneWidget);
+  });
+
+  testWidgets('lists that fill themselves in, and an empty one left off',
+      (tester) async {
+    await show(tester);
+    expect(find.text('LISTS THAT FILL THEMSELVES IN'), findsOneWidget);
+    expect(find.text('NEVER PLAYED'), findsOneWidget);
+    expect(find.text('812'), findsOneWidget);
+    expect(find.text('PLAYED ONCE'), findsNothing, reason: 'nothing in it, so not offered');
+
+    await tester.tap(find.text('NEVER PLAYED'));
+    await tester.pumpAndSettle();
+    expect(find.text('Unheard Song'), findsOneWidget);
   });
 
   testWidgets('nothing to say is not printed as a zero', (tester) async {

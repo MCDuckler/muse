@@ -265,6 +265,44 @@ def test_the_charts_know_where_a_song_was_last_week(client, hdr, library):
     assert all(s["last_rank"] is None and s["charts"] == 0 for s in ever["songs"])
 
 
+def test_lists_that_fill_themselves_in(client, hdr, library):
+    """Questions about the library, answered when asked: never played, most played,
+    not heard in a while. Only songs that can actually play."""
+    alpha, beta, gamma = library[0], library[1], library[2]
+    db.run("update tracks set state='ready' where id = any(%s)", ([alpha, beta, gamma],))
+
+    def play(track, times, days_ago=0):
+        for _ in range(times):
+            client.post("/listens", headers=hdr,
+                        json={"track_id": track, "ms_played": 200_000, "completed": True})
+        db.run("""update listens set started_at = now() - make_interval(days => %s)
+                   where track_id = %s and started_at > now() - interval '1 minute'""",
+               (days_ago, track))
+
+    play(alpha, 3)               # played lately
+    play(beta, 2, days_ago=60)   # played, and then left alone
+
+    lists = {l["id"]: l for l in
+             client.get("/library/smart", headers=hdr).json()["lists"]}
+    assert lists["most"]["count"] == 2
+    assert lists["forgotten"]["count"] == 1
+    assert lists["never"]["count"] >= 1
+
+    def ids(kind):
+        return [t["id"] for t in
+                client.get(f"/library/smart/{kind}", headers=hdr).json()["items"]]
+
+    assert ids("most")[:2] == [alpha, beta]
+    assert ids("forgotten") == [beta]
+    assert gamma in ids("never") and alpha not in ids("never")
+
+    # A song that still needs fetching is not offered as something to put on.
+    db.run("update tracks set state='pending' where id=%s", (gamma,))
+    assert gamma not in ids("never")
+
+    assert client.get("/library/smart/nonsense", headers=hdr).status_code == 404
+
+
 def test_taking_a_record_with_you(client, hdr, library, monkeypatch):
     """Most of this library has never been downloaded, because a mirrored collection
     records the list and leaves the files until something is played. A playlist could
