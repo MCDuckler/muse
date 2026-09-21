@@ -286,6 +286,7 @@ class AppState extends ChangeNotifier {
   static const _kCoverStyle = 'muse.coverStyle';
   static const _kPalette = 'muse.palette';
   static const _kHalftone = 'muse.halftone';
+  static const _kDiscoLights = 'muse.discoLights';
   static const _kSeamless = 'muse.seamless';
   static const _kSpectrum = 'muse.spectrum';
   static const _kCoverScale = 'muse.coverScale';
@@ -342,6 +343,11 @@ class AppState extends ChangeNotifier {
   /// screen is emptier without it — but a phone with a small battery is a good reason
   /// to turn a moving background off, so it is a switch and not a fact.
   bool halftone = true;
+
+  /// The mirror ball's light across the player. Its own switch: it used to come and go
+  /// with the printed background, and somebody who likes one does not have to like
+  /// the other.
+  bool discoLights = true;
 
   /// How much of the stage the record in the middle takes up. Bigger than it was —
   /// the record is the thing you are looking at — and adjustable, because how big it
@@ -490,6 +496,13 @@ class AppState extends ChangeNotifier {
     await prefs.setBool(_kHalftone, on);
   }
 
+  Future<void> setDiscoLights(bool on) async {
+    discoLights = on;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kDiscoLights, on);
+  }
+
   Future<void> setCoverStyle(CoverStyle style) async {
     coverStyle = style;
     notifyListeners();
@@ -515,6 +528,8 @@ class AppState extends ChangeNotifier {
     // browser pays for that twice — once to draw it and once to composite it. Anybody
     // who wants it can turn it on, and their choice is what is read back here.
     halftone = prefs.getBool(_kHalftone) ?? !kIsWeb;
+    // Whoever had the background on had the lights too, and keeps them.
+    discoLights = prefs.getBool(_kDiscoLights) ?? halftone;
     seamless = prefs.getBool(_kSeamless) ?? true;
     player?.seamless = seamless;
     spectrum = prefs.getBool(_kSpectrum) ?? false;

@@ -124,10 +124,18 @@ class PlayerLookPage extends StatelessWidget {
           SwitchListTile(
             secondary: const Icon(Icons.grain),
             title: const Text('Printed background'),
-            subtitle: const Text('A halftone screen behind the record, breathing with '
-                'the song, and the mirror ball\'s light drifting across it'),
+            subtitle: const Text('A halftone screen behind the record, rocking slowly '
+                'to the beat of the song'),
             value: app.halftone,
             onChanged: app.setHalftone,
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.blur_on),
+            title: const Text('Mirror ball'),
+            subtitle: const Text('Spots of light swinging across the player while a '
+                'song plays, flaring on the beat'),
+            value: app.discoLights,
+            onChanged: app.setDiscoLights,
           ),
           if (Spectrum.available)
             SwitchListTile(

@@ -7,7 +7,9 @@
 import 'dart:math' as math;
 import 'dart:ui' show Size;
 
+import 'package:flutter/material.dart' hide Size;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:muse/src/ui/beat_pulse.dart';
 import 'package:muse/src/ui/halftone.dart';
 
 /// Every cell the painter would actually draw, found the slow, obvious way.
@@ -64,5 +66,32 @@ void main() {
       expect(now * 4, lessThan(before),
           reason: '$size: $before -> $now cells is not worth the arithmetic');
     }
+  });
+
+  // The page rocks to the song. What is checked is that a beat arriving is enough to
+  // repaint it — nothing else tells the dots to move between two steps of the drift —
+  // and that a page with no beat to go by still stands up.
+  testWidgets('a beat repaints the page, and no beat is no trouble', (tester) async {
+    final beat = BeatSignal();
+    Widget page(BeatSignal? beat) => MaterialApp(
+          home: Scaffold(
+            body: HalftoneBackdrop(colour: null, playing: true, beat: beat),
+          ),
+        );
+    await tester.pumpWidget(page(null));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(page(beat));
+    await tester.pump(const Duration(milliseconds: 300));
+    beat
+      ..beatSeconds = 0.5
+      ..swing = 1
+      ..value = 1;
+    expect(tester.binding.hasScheduledFrame, isTrue);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox());
   });
 }

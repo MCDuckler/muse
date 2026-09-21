@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'beat_pulse.dart';
+
 /// A printed halftone behind the record.
 ///
 /// The idea is a magazine page rather than a visualiser: a screen of ink dots, the kind
@@ -12,8 +14,10 @@ import 'package:flutter/material.dart';
 /// It does not pretend to be a spectrum. Nothing in the player gives us the audio
 /// itself, and a bar chart invented from a timer would be a lie told sixty times a
 /// second. What it does have is real: it moves while the song plays and settles when it
-/// stops, and how much it moves comes from the track's own measured loudness, so a
-/// quiet record breathes quietly.
+/// stops, how much it moves comes from the track's own measured loudness, so a quiet
+/// record breathes quietly — and where the server has found the song's beats, it moves
+/// to them. Slowly: the sheet drifts at the song's tempo and the dots swell on the one
+/// and the three, the way a head nods. A page that flashed would be a strobe.
 ///
 /// Colour comes from the album and the theme together — the album's own tone for the
 /// dots, the screen's ground behind them — so it belongs to whatever is on screen
@@ -24,6 +28,7 @@ class HalftoneBackdrop extends StatefulWidget {
     required this.colour,
     required this.playing,
     this.loudnessDb,
+    this.beat,
   });
 
   /// The album's colour, if it has one. The theme's accent stands in when it does not.
@@ -32,6 +37,9 @@ class HalftoneBackdrop extends StatefulWidget {
 
   /// The track's measured loudness in LUFS, roughly -30 (quiet) to -5 (loud).
   final double? loudnessDb;
+
+  /// The song's beat, where it has one. Without it the page drifts at its own pace.
+  final BeatSignal? beat;
 
   @override
   State<HalftoneBackdrop> createState() => _HalftoneBackdropState();
@@ -56,9 +64,28 @@ class _HalftoneBackdropState extends State<HalftoneBackdrop>
     reverseDuration: const Duration(milliseconds: 2200),
   );
 
+  /// How far the sheet has drifted, in passes. Added up rather than read off the
+  /// clock, because how fast it goes changes with the song: read off a clock, a change
+  /// of tempo would be a jump of the whole page.
+  double _travel = 0;
+  Duration? _last;
+
+  /// One pass every twelve seconds with nothing to go by; one every sixteen beats with
+  /// a song that has them — eight seconds at a dance tempo, eleven for a slow one.
+  void _drift() {
+    final now = _clock.lastElapsedDuration;
+    final last = _last;
+    _last = now;
+    if (now == null || last == null || now < last) return;
+    final dt = ((now - last).inMicroseconds / 1e6).clamp(0.0, 0.1);
+    final beat = widget.beat?.beatSeconds;
+    _travel += dt / (beat == null ? 12.0 : (beat * 16).clamp(5.0, 16.0));
+  }
+
   @override
   void initState() {
     super.initState();
+    _clock.addListener(_drift);
     if (widget.playing) {
       _clock.repeat();
       _life.forward();
@@ -109,7 +136,7 @@ class _HalftoneBackdropState extends State<HalftoneBackdrop>
     // fill behind its content instead, so the content is laid out exactly as before.
     return RepaintBoundary(
       child: AnimatedBuilder(
-        animation: Listenable.merge([_clock, _life]),
+        animation: Listenable.merge([_clock, _life, widget.beat]),
         builder: (context, _) => CustomPaint(
           painter: _HalftonePainter(
             // Stepped rather than continuous. The field takes twelve seconds to drift
@@ -118,7 +145,10 @@ class _HalftoneBackdropState extends State<HalftoneBackdrop>
             // recomputed. Two hundred and forty steps is a new frame every fiftieth of
             // a second, which nobody can tell from smooth and which the painter can
             // then skip entirely when nothing has changed.
-            phase: (_clock.value * 240).round() / 240,
+            phase: (_travel * 240).round() / 240,
+            // In twelfths, for the same reason: a dot that grows by a fortieth of a
+            // pixel has not changed.
+            swing: ((widget.beat?.swing ?? 0) * 12).round() / 12,
             life: Curves.easeInOut.transform(_life.value),
             swell: 0.35 + 0.65 * loud,
             ink: ink,
@@ -168,14 +198,18 @@ const double halftonePitch = 26.0;
 class _HalftonePainter extends CustomPainter {
   _HalftonePainter({
     required this.phase,
+    required this.swing,
     required this.life,
     required this.swell,
     required this.ink,
     required this.ground,
   });
 
-  /// 0 to 1, wrapping. The field drifts by this much each pass.
+  /// How many passes the field has drifted through itself.
   final double phase;
+
+  /// The beat as a slow swell: one on it, nothing between.
+  final double swing;
 
   /// How awake the pattern is.
   final double life;
@@ -250,7 +284,13 @@ class _HalftonePainter extends CustomPainter {
 
         // A dot is mostly its own noise, nudged by the wave so the page has a
         // direction to it. Never bigger than the gap: touching dots are a smear.
-        final amount = (0.34 * slow + 0.30 * fine + 0.36 * wave) * swell * life;
+        //
+        // The beat lifts the crest of the wave more than its trough, so what is seen
+        // is the wave rocking across the page in time rather than every dot on it
+        // blinking at once.
+        final rock = 1 + swing * (0.10 + 0.26 * wave) - 0.08;
+        final amount = math.min(
+            1.0, (0.34 * slow + 0.30 * fine + 0.36 * wave) * swell * life * rock);
         final radius = amount * _pitch * 0.46;
         if (radius < 0.35) continue;
 
@@ -264,6 +304,7 @@ class _HalftonePainter extends CustomPainter {
   @override
   bool shouldRepaint(_HalftonePainter old) =>
       old.phase != phase ||
+      old.swing != swing ||
       old.life != life ||
       old.swell != swell ||
       old.ink != ink ||

@@ -18,19 +18,45 @@ import 'motion.dart';
 /// Nothing at all for a song with no steady pulse, before the first beat, after the
 /// last, while paused, and where the phone has been asked not to animate: a light that
 /// flashes in time with nothing is worse than one that holds still.
+/// The pulse, and a little more about the beat it came from.
+///
+/// The value is the sharp one — a flash, for a light. A page of printed dots should not
+/// flash; it should rock. [swing] is the same beat as a slow swell, highest on the beat
+/// and lowest half way to the next, with no corner in it anywhere, and [beatSeconds] is
+/// how long a beat lasts, for anything that wants to travel at the song's speed rather
+/// than jump to it.
+class BeatSignal extends ValueNotifier<double> {
+  BeatSignal() : super(0);
+
+  /// 0 to 1: one on the beat, nothing half way to the next, and smooth between.
+  double swing = 0;
+
+  /// How long a beat of this song lasts, or null where it has no steady pulse.
+  double? beatSeconds;
+
+  void rest() {
+    swing = 0;
+    if (value != 0) {
+      value = 0;
+    } else {
+      notifyListeners();
+    }
+  }
+}
+
 class BeatPulse extends StatefulWidget {
   const BeatPulse({super.key, required this.app, required this.track, required this.builder});
 
   final AppState app;
   final Track? track;
-  final Widget Function(BuildContext context, ValueNotifier<double> pulse) builder;
+  final Widget Function(BuildContext context, BeatSignal pulse) builder;
 
   @override
   State<BeatPulse> createState() => _BeatPulseState();
 }
 
 class _BeatPulseState extends State<BeatPulse> with SingleTickerProviderStateMixin {
-  final _pulse = ValueNotifier<double>(0);
+  final _pulse = BeatSignal();
   late final Ticker _ticker = createTicker(_tick);
   TrackTiming? _timing;
   int? _askedFor;
@@ -69,11 +95,13 @@ class _BeatPulseState extends State<BeatPulse> with SingleTickerProviderStateMix
 
   void _run() {
     final worth = (_timing?.hasBeats ?? false) && !stillness(context);
+    final bpm = _timing?.bpm;
+    _pulse.beatSeconds = worth && bpm != null && bpm > 0 ? 60 / bpm : null;
     if (worth && !_ticker.isActive) {
       _ticker.start();
     } else if (!worth && _ticker.isActive) {
       _ticker.stop();
-      _pulse.value = 0;
+      _pulse.rest();
     }
   }
 
@@ -81,7 +109,7 @@ class _BeatPulseState extends State<BeatPulse> with SingleTickerProviderStateMix
     final app = widget.app;
     final timing = _timing;
     if (timing == null || !app.musicIsPlaying) {
-      if (_pulse.value != 0) _pulse.value = 0;
+      if (_pulse.value != 0 || _pulse.swing != 0) _pulse.rest();
       return;
     }
     // Wherever the music actually is: this device's engine, the host of a jam, the
@@ -91,12 +119,21 @@ class _BeatPulseState extends State<BeatPulse> with SingleTickerProviderStateMix
         : app.player?.livePosition;
     final beat = at == null ? null : timing.beatAt(at);
     if (beat == null) {
-      if (_pulse.value != 0) _pulse.value = 0;
+      if (_pulse.value != 0 || _pulse.swing != 0) _pulse.rest();
       return;
     }
     // Sharp up, quick down: most of it is over in the first third of the beat.
     final fall = math.exp(-beat.phase * 5.5);
     final one = (beat.index - timing.barStartsOn) % 4 == 0;
+    // The swell is slower than the flash. At a dance tempo a page that rocks on every
+    // beat is a page that shivers, so there it rocks on every other one — the one and
+    // the three, which is where a head nods — and only a slow song gets all four.
+    final span = timing.beats[beat.index + 1] - timing.beats[beat.index];
+    final inTwos = span < 600;
+    final along = inTwos
+        ? (((beat.index - timing.barStartsOn) % 2) + beat.phase) / 2
+        : beat.phase;
+    _pulse.swing = 0.5 + 0.5 * math.cos(along * 2 * math.pi);
     _pulse.value = fall * (one ? 1.0 : 0.72);
   }
 

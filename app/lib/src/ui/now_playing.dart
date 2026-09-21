@@ -172,13 +172,18 @@ class NowPlayingScreen extends StatelessWidget {
             // there is a window the size of the player bar to look through.
             behind: app.halftone
                 ? _OnceItHasLanded(
-                    builder: (context) => HalftoneBackdrop(
-                      colour: parseHexColour(track?.coverColor),
-                      // What the room is doing, not what this device's own engine is:
-                      // a guest listening to somebody else's speaker can hear the
-                      // music, and a still background says it has stopped.
-                      playing: app.musicIsPlaying,
-                      loudnessDb: track?.loudnessLufs,
+                    builder: (context) => BeatPulse(
+                      app: app,
+                      track: track,
+                      builder: (context, beat) => HalftoneBackdrop(
+                        colour: parseHexColour(track?.coverColor),
+                        // What the room is doing, not what this device's own engine
+                        // is: a guest listening to somebody else's speaker can hear
+                        // the music, and a still background says it has stopped.
+                        playing: app.musicIsPlaying,
+                        loudnessDb: track?.loudnessLufs,
+                        beat: beat,
+                      ),
                     ),
                   )
                 : null,
@@ -419,10 +424,8 @@ class NowPlayingScreen extends StatelessWidget {
                       ),
                     ),
                     // The disco ball's light, over everything and taking nothing:
-                    // specks drifting across the page while the song plays. With
-                    // the printed background, because both are decoration a browser
-                    // pays twice for.
-                    if (app.halftone)
+                    // spots of it swinging across the page while the song plays.
+                    if (app.discoLights)
                       Positioned.fill(
                         child: BeatPulse(
                           app: app,
