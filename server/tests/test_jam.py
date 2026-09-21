@@ -174,6 +174,66 @@ def test_the_room_hears_where_the_host_is(client, hdr, guest, jam):
     assert 0 <= seen["age_ms"] < 5_000
 
 
+def test_a_report_overtaken_on_the_way_is_not_believed(client, hdr, guest, jam, monkeypatch):
+    """The heartbeat and the skip that came just after it are two requests, and they can
+    arrive the other way round. The room was told the new song and then the old one,
+    which from a guest's phone is the queue jumping backwards and forwards."""
+    from muse import routes_jam
+
+    said: list[dict] = []
+    monkeypatch.setattr(routes_jam, "_publish",
+                        lambda event, data: said.append(data) if data.get("what") == "playback" else None)
+    a = client.post("/tracks/resolve", headers=hdr, json={"video_id": "SEQA"}).json()
+    b = client.post("/tracks/resolve", headers=hdr, json={"video_id": "SEQB"}).json()
+
+    # The skip lands first…
+    client.post(f"/jams/{jam['id']}/playback", headers=hdr,
+                json={"track_id": b["id"], "position_ms": 0, "playing": True,
+                      "item_id": 12, "seq": 2000})
+    # …and then the heartbeat that was sent before it.
+    late = client.post(f"/jams/{jam['id']}/playback", headers=hdr,
+                       json={"track_id": a["id"], "position_ms": 238_000, "playing": True,
+                             "item_id": 11, "seq": 1000})
+    assert late.status_code == 200 and late.json().get("stale") is True
+
+    assert [d["track_id"] for d in said] == [b["id"]], "the late one is not announced"
+    assert said[0]["item_id"] == 12 and said[0]["seq"] == 2000
+
+    client.post("/jams/join", headers=guest, json={"code": jam["code"]})
+    seen = client.get("/jams/current", headers=guest).json()["jam"]["playback"]
+    assert seen["track_id"] == b["id"] and seen["item_id"] == 12
+
+    # An app from before there was a count is still believed.
+    client.post(f"/jams/{jam['id']}/playback", headers=hdr,
+                json={"track_id": a["id"], "position_ms": 5, "playing": False})
+    assert said[-1]["track_id"] == a["id"]
+
+
+def test_a_queue_announcement_in_a_jam_carries_the_rooms_clock(client, hdr, jam, monkeypatch):
+    """Older apps draw a guest's seek bar from this. The queue's saved position is up to
+    ten seconds stale, and after a skip it is a place in the previous song."""
+    from muse import routes_library
+
+    published: list[dict] = []
+    monkeypatch.setattr(routes_library, "_publish",
+                        lambda event, data: published.append(data))
+    tracks = [client.post("/tracks/resolve", headers=hdr, json={"video_id": f"CLK{n}"}).json()
+              for n in range(2)]
+    client.patch(f"/queues/{jam['queue']['id']}/cursor", headers=hdr,
+                 json={"position_ms": 3_000})
+    client.post(f"/jams/{jam['id']}/playback", headers=hdr,
+                json={"track_id": tracks[0]["id"], "position_ms": 95_000, "playing": False})
+
+    client.post(f"/queues/{jam['queue']['id']}/items", headers=hdr,
+                json={"track_ids": [t["id"] for t in tracks]})
+    assert published[-1]["position_ms"] == 95_000, "what the host said, not the saved cursor"
+
+    client.patch(f"/queues/{jam['queue']['id']}/cursor", headers=hdr,
+                 json={"cursor_index": 1, "position_ms": 0})
+    assert published[-1]["cursor_moved"] is True
+    assert published[-1]["position_ms"] == 0, "a new song starts at the top"
+
+
 def test_only_the_host_sets_the_time(client, hdr, guest, jam):
     client.post("/jams/join", headers=guest, json={"code": jam["code"]})
     r = client.post(f"/jams/{jam['id']}/playback", headers=guest,

@@ -503,7 +503,14 @@ class _SearchPageState extends State<SearchPage> {
                             onPick: _searchAgainFor,
                             onForget: _forget,
                           )
-                        : _index(context.read<AppState>()),
+                        // Asked and not answered yet, with nothing from before to
+                        // show in the meantime. The index begins with its first
+                        // result, and with no results there is no first — which threw,
+                        // and for as long as four services took to answer the page was
+                        // the blank that a widget which could not be built turns into.
+                        : _found.isEmpty
+                            ? const SongsComing()
+                            : _index(context.read<AppState>()),
           ),
         ),
       ],

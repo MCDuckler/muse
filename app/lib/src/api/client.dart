@@ -719,13 +719,19 @@ class ApiClient {
   /// The host telling the room where the music is. Fire and forget: a dropped one is
   /// replaced by the next heartbeat a few seconds later.
   Future<void> pushJamPlayback(int jamId,
-          {int? trackId, required int positionMs, required bool playing}) async =>
+          {int? trackId,
+          int? itemId,
+          int? seq,
+          required int positionMs,
+          required bool playing}) async =>
       await _decode(await net.post(_u('/jams/$jamId/playback'),
           headers: _headers,
           body: jsonEncode({
             'track_id': trackId,
             'position_ms': positionMs,
             'playing': playing,
+            if (itemId != null) 'item_id': itemId,
+            if (seq != null) 'seq': seq,
           })));
 
   /// A guest reaching for the transport. The host's device does the work.
@@ -1204,6 +1210,7 @@ class ApiClient {
     required bool playing,
     int? trackId,
     int? queueId,
+    int? itemId,
     int positionMs = 0,
     String? kind,
   }) async =>
@@ -1213,6 +1220,7 @@ class ApiClient {
             'playing': playing,
             'track_id': trackId,
             'queue_id': queueId,
+            if (itemId != null) 'item_id': itemId,
             'position_ms': positionMs,
             if (kind != null) 'kind': kind,
           })));

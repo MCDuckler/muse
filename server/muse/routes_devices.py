@@ -44,6 +44,8 @@ def _rows(user_id: int) -> list[dict]:
     return db.all_(
         f"""select d.id as device, d.name as device_name, d.platform, d.kind,
                    d.last_seen, d.playing, d.position_ms, d.state_at, d.queue_id,
+                   d.item_id as device_item,
+                   (extract(epoch from now() - d.state_at) * 1000)::int as age_ms,
                    d.track_id as has_track,
                    d.state_at > now() - interval '{LIVE}' as live,
                    q.name as queue,
@@ -70,6 +72,10 @@ def _public(row: dict, me: int) -> dict:
         "live": bool(row["live"]),
         "playing": bool(row["playing"]) and bool(row["live"]),
         "position_ms": row["position_ms"],
+        # How old that position is, by the server's clock: a screen showing where another
+        # device has got to carries it forward by this much and then by its own clock.
+        "age_ms": max(0, row["age_ms"] or 0),
+        "item_id": row["device_item"],
         "queue": row["queue"],
         "queue_id": row["queue_id"],
         "last_seen": row["last_seen"],
@@ -98,19 +104,27 @@ def report(body: dict = Body(default={}), user: dict = Depends(current_user)):
     itself rather than something another one assumed.
     """
     playing = bool(body.get("playing"))
+    position_ms = int(body.get("position_ms") or 0)
     db.run(
         """update devices
-              set playing=%s, track_id=%s, queue_id=%s, position_ms=%s,
+              set playing=%s, track_id=%s, queue_id=%s, position_ms=%s, item_id=%s,
                   state_at=now(), last_seen=now(),
                   kind=coalesce(%s, kind)
             where id=%s""",
-        (playing, body.get("track_id"), body.get("queue_id"),
-         int(body.get("position_ms") or 0), body.get("kind"), user["device_id"]),
+        (playing, body.get("track_id"), body.get("queue_id"), position_ms,
+         body.get("item_id"), body.get("kind"), user["device_id"]),
     )
     from .app import publish
 
-    # The other screens of this account, so a picker that is open updates itself.
-    publish("devices", {"device_id": user["device_id"], "playing": playing},
+    # The other screens of this account — with everything that was said, not only that
+    # something was. A screen working this device as a remote control draws its seek
+    # bar from this, and one that had to go and ask again after every report was always
+    # a round trip behind the music.
+    publish("devices", {"device_id": user["device_id"], "playing": playing,
+                        "track_id": body.get("track_id"),
+                        "queue_id": body.get("queue_id"),
+                        "item_id": body.get("item_id"),
+                        "position_ms": position_ms},
             to_user=user["id"])
     return {"ok": True}
 

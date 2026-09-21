@@ -73,6 +73,12 @@ class _BackAndForthState extends State<BackAndForth>
     // inside Text, and a painter that did not do the same measured a shorter line than
     // the one that got drawn.
     final style = DefaultTextStyle.of(context).style.merge(widget.style);
+    // The line is as tall as the type says, whatever is written in it. Left to itself
+    // a line is as tall as its tallest glyph, and a name with an emoji in it, or in a
+    // script this typeface does not have, borrows those glyphs from another font with
+    // a taller line: a pixel or two more for that one song. On the player the record
+    // stands on top of this row, so it moved by that much on every such skip.
+    final strut = StrutStyle.fromTextStyle(style, forceStrutHeight: true);
     return LayoutBuilder(
       builder: (context, c) {
         final painter = TextPainter(
@@ -83,6 +89,7 @@ class _BackAndForthState extends State<BackAndForth>
           // large text set on their phone had a title measured at the small size and
           // clipped to that height — the bottom of every letter cut off.
           textScaler: MediaQuery.textScalerOf(context),
+          strutStyle: strut,
         )..layout();
         final over = painter.width - c.maxWidth;
         // Flat at both ends and easing through the middle: the hold is what makes it
@@ -99,7 +106,7 @@ class _BackAndForthState extends State<BackAndForth>
 
         if (over <= 0.5) {
           return Text(widget.text,
-              maxLines: 1, textAlign: widget.align, style: style);
+              maxLines: 1, textAlign: widget.align, style: style, strutStyle: strut);
         }
         // As tall as the line, and no taller: the row it is walking in is loosely
         // constrained, and a clip around an overflow box will happily take all the
@@ -123,7 +130,8 @@ class _BackAndForthState extends State<BackAndForth>
               maxWidth: double.infinity,
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: Text(widget.text, maxLines: 1, softWrap: false, style: style),
+                child: Text(widget.text,
+                    maxLines: 1, softWrap: false, style: style, strutStyle: strut),
               ),
             ),
           ),

@@ -43,11 +43,24 @@ def announce_queue(queue_id: int, user: dict, cursor_moved: bool = False) -> Non
                  (queue_id,))
     if not row:
         return
-    # position_ms too: in a jam the host's device is the one making sound, and without
-    # it a guest's seek bar is drawing their own silent player.
+    # position_ms too, for apps from before the room had a clock of its own: they draw a
+    # guest's seek bar from this. The queue's saved position is up to ten seconds old,
+    # and straight after a skip it is a place in the *previous* song — so every skip and
+    # every song somebody added threw the bar somewhere wrong. In a jam this is what the
+    # host last said, carried forward; after a skip it is the top of the new song.
+    position_ms = row["position_ms"]
+    room = db.one(
+        """select p.position_ms, p.playing,
+                  (extract(epoch from now() - p.at) * 1000)::int as age_ms
+             from jams j join jam_playback p on p.jam_id = j.id
+            where j.queue_id = %s and j.ended_at is null""",
+        (queue_id,))
+    if room:
+        position_ms = 0 if cursor_moved else (
+            room["position_ms"] + (max(0, room["age_ms"] or 0) if room["playing"] else 0))
     _publish("queue_changed", {"queue_id": queue_id, "rev": row["rev"],
                                "cursor_index": row["cursor_index"],
-                               "position_ms": row["position_ms"],
+                               "position_ms": position_ms,
                                "by": user.get("name"), "cursor_moved": cursor_moved})
 
 

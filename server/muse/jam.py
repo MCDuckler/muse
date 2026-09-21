@@ -196,28 +196,38 @@ def public(jam: dict, user_id: int) -> dict:
 
 # ------------------------------------------------------------------ transport
 def set_playback(jam_id: int, track_id: int | None, position_ms: int,
-                 playing: bool) -> dict:
+                 playing: bool, item_id: int | None = None,
+                 seq: int | None = None) -> dict | None:
     """Record what the host's player is doing, as of now.
 
     Only the host writes this. `at` is the server's clock rather than the device's:
     phones disagree about the time by seconds, and the whole point of the row is to
     work out how far the music has moved since it was written.
+
+    `seq` is the host's own count of what it has said. Two reports sent a moment apart
+    — the five-second heartbeat, and the skip that happened just after it — can arrive
+    the other way round, and then the room is told the old song after the new one. A
+    report older than the one already held is not written, and None comes back so that
+    it is not announced either. A host that sends no count is always believed.
     """
     return db.one(
-        """insert into jam_playback(jam_id, track_id, position_ms, playing, at)
-           values(%s,%s,%s,%s, now())
+        """insert into jam_playback(jam_id, track_id, position_ms, playing, item_id, seq, at)
+           values(%s,%s,%s,%s,%s,%s, now())
            on conflict (jam_id) do update
              set track_id=excluded.track_id, position_ms=excluded.position_ms,
-                 playing=excluded.playing, at=now()
+                 playing=excluded.playing, item_id=excluded.item_id,
+                 seq=excluded.seq, at=now()
+             where excluded.seq is null or jam_playback.seq is null
+                or jam_playback.seq <= excluded.seq
            returning *""",
-        (jam_id, track_id, max(0, int(position_ms)), bool(playing)),
+        (jam_id, track_id, max(0, int(position_ms)), bool(playing), item_id, seq),
     )
 
 
 def playback(jam_id: int) -> dict | None:
     """Where the music is, with how old that answer is."""
     row = db.one(
-        """select track_id, position_ms, playing,
+        """select track_id, position_ms, playing, item_id, seq,
                   (extract(epoch from now() - at) * 1000)::int as age_ms
              from jam_playback where jam_id=%s""",
         (jam_id,),
@@ -228,5 +238,7 @@ def playback(jam_id: int) -> dict | None:
         "track_id": row["track_id"],
         "position_ms": row["position_ms"],
         "playing": row["playing"],
+        "item_id": row["item_id"],
+        "seq": row["seq"],
         "age_ms": max(0, row["age_ms"] or 0),
     }

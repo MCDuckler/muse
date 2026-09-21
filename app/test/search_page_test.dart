@@ -3,6 +3,7 @@
 // The screen used to be four lists one under another, one per service. What this is
 // about is that it is not any more: the rows are ranked together, they are all the
 // same shape, and each one says where it came from.
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -17,6 +18,7 @@ import 'package:muse/src/state/app_state.dart';
 import 'package:muse/src/state/selection.dart';
 import 'package:muse/src/ui/found_row.dart';
 import 'package:muse/src/ui/search_page.dart';
+import 'package:muse/src/ui/skeleton.dart';
 
 Map<String, dynamic> row(String kind, String place, String title,
         {String subtitle = 'Someone',
@@ -155,6 +157,31 @@ void main() {
 
     // And every row says where it came from.
     expect(find.byType(PlaceDot), findsWidgets);
+  });
+
+  testWidgets('while the first search is still out, the page is not blank',
+      (tester) async {
+    // Four services can take seconds between them. There is nothing to show yet, and
+    // building the index out of nothing threw — a white page until they answered.
+    final gate = Completer<void>();
+    useThisClientInstead(MockClient((request) async {
+      await gate.future;
+      return http.Response(jsonEncode({'items': [], 'notes': {}}), 200,
+          headers: {'content-type': 'application/json'});
+    }));
+    await show(tester);
+    await tester.enterText(find.byType(TextField), 'queen');
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump(const Duration(milliseconds: 250));
+
+    expect(tester.takeException(), isNull);
+    expect(find.byType(SongsComing), findsOneWidget);
+
+    gate.complete();
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(find.byType(SongsComing), findsNothing);
   });
 
   testWidgets('a service that would not answer says so, without emptying the list',

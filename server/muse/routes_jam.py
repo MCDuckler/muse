@@ -176,13 +176,21 @@ def push_playback(jam_id: int, body: dict = Body(...),
     if row["host_id"] != user["id"]:
         raise HTTPException(403, "only the host's player sets the time")
 
+    seq = body.get("seq")
     state = jam.set_playback(jam_id, body.get("track_id"),
                              int(body.get("position_ms") or 0),
-                             bool(body.get("playing")))
+                             bool(body.get("playing")),
+                             item_id=body.get("item_id"),
+                             seq=int(seq) if seq is not None else None)
+    if state is None:
+        # Overtaken on the way here by something the host said afterwards.
+        return {"ok": True, "stale": True}
     announce(row, "playback", {
         "track_id": state["track_id"],
         "position_ms": state["position_ms"],
         "playing": state["playing"],
+        "item_id": state["item_id"],
+        "seq": state["seq"],
     })
     return {"ok": True}
 

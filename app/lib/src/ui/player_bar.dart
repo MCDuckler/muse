@@ -42,7 +42,10 @@ class PlayerBar extends StatelessWidget {
 
         // The small bar answers to the host in a jam too, for the same reason the big
         // one does: this device is not the one playing.
-        final host = app.hostPosition;
+        // And to another device of yours when this one is its remote control.
+        final host = (app.isJamGuest && !app.jamListening) || app.controllingAnother
+            ? app.positionNow
+            : null;
         // Same fallback as the big bar: the engine learns the length late, the track
         // has always known it.
         var length = s?.duration ?? Duration.zero;

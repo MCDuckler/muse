@@ -13,6 +13,7 @@ import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/art_cache.dart';
 import '../state/sleeve_board.dart';
+import 'sleeve_art.dart';
 import 'sleeve_ink.dart';
 import 'stage/arm_geometry.dart';
 import 'stage/arm_grip.dart';
@@ -1010,7 +1011,7 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                     // behind its sleeve, it does not lie across the front of it.
                     if (!_showingBack)
                       Deck(
-                        url: api.discUrl(widget.track),
+                        url: api.discUrl(widget.track) ?? Disc.plain(widget.track),
                         spin: _spin,
                         size: platter,
                         drop: deck,
@@ -1060,6 +1061,7 @@ class _RecordStageState extends State<RecordStage> with TickerProviderStateMixin
                         // movement — which is precisely where a stutter is visible.
                         // It saved nothing either: _warmSleeves already fetches the
                         // full-size one for all three.
+                        track: card.track,
                         jacketUrl: api.jacketUrl(card.track, small: false),
                         discUrl: api.discUrl(card.track),
                         spin: _spin,
@@ -1107,6 +1109,7 @@ class _Sleeve extends StatelessWidget {
     required this.drop,
     required this.platter,
     required this.leaving,
+    required this.track,
     required this.jacketUrl,
     required this.discUrl,
     required this.spin,
@@ -1153,6 +1156,10 @@ class _Sleeve extends StatelessWidget {
 
   /// How far right the record goes on its way off the screen.
   final double leaving;
+  /// The record this is the sleeve of. A song with no cover has no picture to fetch,
+  /// and its sleeve is printed from this instead — the same one every list gives it.
+  /// Without it the stage simply left the song out: a gap where a record should be.
+  final Track track;
   final String? jacketUrl;
   final String? discUrl;
   final Animation<double> spin;
@@ -1160,7 +1167,6 @@ class _Sleeve extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (jacketUrl == null) return const SizedBox.shrink();
 
     final away = d.abs();
     if (away > 2.2) return const SizedBox.shrink();
@@ -1216,6 +1222,7 @@ class _Sleeve extends StatelessWidget {
                 // watched leave was never the one that played. The record is the
                 // deck's now, and it comes up from behind this cover: see Deck.
                 _Face(
+                    track: track,
                     url: jacketUrl,
                     size: jacket,
                     dim: dim,
@@ -1238,7 +1245,7 @@ class _Sleeve extends StatelessWidget {
                 size: jacket,
                 child: showingBack
                     ? _Back(size: jacket, dim: dim, board: board)
-                    : _Jacket(url: jacketUrl, size: jacket, dim: dim),
+                    : _Jacket(url: jacketUrl, track: track, size: jacket, dim: dim),
               ),
             )
           else
@@ -1260,6 +1267,7 @@ class _Sleeve extends StatelessWidget {
 /// being rotated in place.
 class _Face extends StatelessWidget {
   const _Face({
+    required this.track,
     required this.url,
     required this.size,
     required this.dim,
@@ -1268,6 +1276,7 @@ class _Face extends StatelessWidget {
     this.board,
   });
 
+  final Track track;
   final String? url;
   final double size;
   final double dim;
@@ -1277,7 +1286,7 @@ class _Face extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Widget front() => _Jacket(url: url, size: size, dim: dim);
+    Widget front() => _Jacket(url: url, track: track, size: size, dim: dim);
     // Nothing is drawn on it mid-throw: the board is not a surface until it has landed.
     Widget back() =>
         _Back(size: size, dim: dim, board: toss > 0 ? null : board);
@@ -1425,9 +1434,12 @@ class _Back extends StatelessWidget {
 
 /// The cardboard. Its pose comes from the stage; here it is just the picture.
 class _Jacket extends StatelessWidget {
-  const _Jacket({required this.url, required this.size, this.dim = 1.0});
+  const _Jacket({required this.url, this.track, required this.size, this.dim = 1.0});
 
   final String? url;
+
+  /// Whose sleeve, for when there is no picture of it.
+  final Track? track;
   final double size;
 
   /// How present it is, 0 to 1 — applied while the picture is painted rather than by
@@ -1439,7 +1451,18 @@ class _Jacket extends StatelessWidget {
         width: size,
         height: size,
         child: url == null
-            ? const SizedBox.shrink()
+            ? (track == null
+                ? const SizedBox.shrink()
+                // No cover: the sleeve printed for it, as everywhere else. Only the
+                // one arriving at the edge of the frame is ever less than solid, so
+                // the layer an Opacity costs is paid for a moment, not a journey.
+                : dim >= 1
+                    ? PrintedSleeve(
+                        seed: track!.id, title: track!.displayTitle, size: size)
+                    : Opacity(
+                        opacity: dim,
+                        child: PrintedSleeve(
+                            seed: track!.id, title: track!.displayTitle, size: size)))
             : Image(
                 image: artwork(url!,
                     drawnAt: size, ratio: MediaQuery.devicePixelRatioOf(context)),
@@ -1455,6 +1478,10 @@ class _Jacket extends StatelessWidget {
 /// the side of its cover and faded away, while a second, bigger one appeared on the
 /// deck. The record is one object now and belongs to the deck — see [Deck.pose].
 abstract final class Disc {
+  /// What stands in for the address of a record's picture when it has none: a plain
+  /// pressing, its label in the inks its printed sleeve uses.
+  static String plain(Track track) => 'plain:${track.id}';
+
   /// A record, turning. Built once and rotated, rather than rebuilt every frame.
   static Widget spinning({
     required String url,
@@ -1462,6 +1489,7 @@ abstract final class Disc {
     required double size,
     required double roll,
     required double fade,
+    double label = 0.31,
   }) =>
       AnimatedBuilder(
         animation: spin,
@@ -1473,13 +1501,80 @@ abstract final class Disc {
         child: SizedBox(
           width: size,
           height: size,
-          child: Image(
-              image: artwork(url),
-              fit: BoxFit.contain,
-              gaplessPlayback: true,
-              opacity: AlwaysStoppedAnimation(fade)),
+          child: url.startsWith('plain:')
+              ? RepaintBoundary(
+                  child: CustomPaint(
+                    painter: _PlainPressing(
+                        seed: int.tryParse(url.substring(6)) ?? 0,
+                        label: label,
+                        fade: fade),
+                  ),
+                )
+              : Image(
+                  image: artwork(url),
+                  fit: BoxFit.contain,
+                  gaplessPlayback: true,
+                  opacity: AlwaysStoppedAnimation(fade)),
         ),
       );
+}
+
+/// A record with no picture to put on its label.
+///
+/// The server draws a record from its cover, and a song without one had no record at
+/// all: no disc on the deck, no arm, an empty stage with the controls under it. This
+/// is the pressing every such song gets — black vinyl, the bands of a side, and a
+/// label in the two inks its printed sleeve is made of, so the pair belong together.
+class _PlainPressing extends CustomPainter {
+  const _PlainPressing({required this.seed, required this.label, required this.fade});
+
+  final int seed;
+  final double label;
+  final double fade;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = size.center(Offset.zero);
+    final r = size.shortestSide / 2;
+    if (r <= 0) return;
+    final (ground, ink) = SleevePainter(seed: seed, title: '').inks;
+    Color f(Color of, [double a = 1]) => of.withValues(alpha: a * fade);
+
+    canvas.drawCircle(c, r, Paint()..color = f(const Color(0xFF131211)));
+    // The grooves: fine rings, with the wider gaps between songs.
+    final groove = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = math.max(0.6, r * 0.003);
+    final inner = r * (label + 0.07), outer = r * 0.96;
+    for (var i = 0; i < 46; i++) {
+      final at = inner + (outer - inner) * i / 45;
+      final gap = i % 12 == 11;
+      groove.color = gap ? f(Colors.black, 0.55) : f(Colors.white, i.isEven ? 0.05 : 0.025);
+      groove.strokeWidth = math.max(0.6, r * (gap ? 0.008 : 0.003));
+      canvas.drawCircle(c, at, groove);
+    }
+    // The label, off-centre marks on it so that its turning can be seen.
+    final lr = r * label;
+    canvas.drawCircle(c, lr, Paint()..color = f(ground));
+    canvas.drawCircle(
+        c,
+        lr * 0.86,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = math.max(1, lr * 0.03)
+          ..color = f(ink, 0.9));
+    canvas.drawRect(
+        Rect.fromCenter(center: c.translate(0, -lr * 0.5), width: lr * 0.9, height: lr * 0.13),
+        Paint()..color = f(ink));
+    canvas.drawRect(
+        Rect.fromCenter(center: c.translate(0, lr * 0.52), width: lr * 0.5, height: lr * 0.06),
+        Paint()..color = f(ink, 0.7));
+    canvas.drawCircle(c, math.max(1.5, r * 0.022), Paint()..color = f(const Color(0xFF0A0A0A)));
+  }
+
+  @override
+  bool shouldRepaint(_PlainPressing old) =>
+      old.seed != seed || old.label != label || old.fade != fade;
 }
 
 /// The record that is playing, on the deck, with the arm on it.
@@ -1670,7 +1765,12 @@ class _DeckState extends State<Deck> {
   /// mistake, and one sinking into the deck reads as a record on a deck.
   Widget _record(String url, double arriving) {
     final record = Disc.spinning(
-        url: url, spin: widget.spin, size: widget.size, roll: 0, fade: 1);
+        url: url,
+        spin: widget.spin,
+        size: widget.size,
+        roll: 0,
+        fade: 1,
+        label: widget.label);
     final pose = Deck.pose(arriving,
         sleeveAt: widget.sleeveAt,
         sleeveSize: widget.sleeveSize,

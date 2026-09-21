@@ -457,6 +457,9 @@ class DeviceInfo {
     this.queueId,
     this.track,
     this.lastSeen,
+    this.ageMs = 0,
+    this.itemId,
+    this.heardAt,
   });
 
   final int id;
@@ -477,6 +480,14 @@ class DeviceInfo {
   final Track? track;
   final DateTime? lastSeen;
 
+  /// How old [positionMs] already was when the server handed it over, and when this
+  /// device heard it: together, how far the music has moved since it was true.
+  final int ageMs;
+  final DateTime? heardAt;
+
+  /// Which row of its queue it is on.
+  final int? itemId;
+
   factory DeviceInfo.fromJson(Map<String, dynamic> j) => DeviceInfo(
         id: (j['id'] ?? 0) as int,
         name: (j['name'] ?? 'A device') as String,
@@ -494,9 +505,38 @@ class DeviceInfo {
         lastSeen: j['last_seen'] == null
             ? null
             : DateTime.tryParse('${j['last_seen']}')?.toLocal(),
+        ageMs: (j['age_ms'] ?? 0) as int,
+        itemId: j['item_id'] as int?,
+        heardAt: DateTime.now(),
       );
 
-  Duration get at => Duration(milliseconds: positionMs);
+  /// The same device, having just said something new about itself.
+  DeviceInfo saying({required bool playing, required int positionMs, int? itemId}) =>
+      DeviceInfo(
+        id: id,
+        name: name,
+        platform: platform,
+        kind: kind,
+        isThis: isThis,
+        live: true,
+        playing: playing,
+        positionMs: positionMs,
+        queue: queue,
+        queueId: queueId,
+        track: track,
+        lastSeen: lastSeen,
+        itemId: itemId ?? this.itemId,
+        heardAt: DateTime.now(),
+      );
+
+  /// Where it has got to *now*: what it said, carried forward while it plays. What it
+  /// said alone is up to ten seconds old, which on a seek bar is a thumb that stands
+  /// still and then jumps.
+  Duration get at {
+    final heard = heardAt;
+    if (!playing || heard == null) return Duration(milliseconds: positionMs);
+    return Duration(milliseconds: positionMs + ageMs) + DateTime.now().difference(heard);
+  }
 }
 
 /// Enough of somebody's jam to say it is happening and to get into it.
@@ -1395,22 +1435,34 @@ class JamMember {
 /// the song.
 class JamPlayback {
   final int? trackId;
+
+  /// Which row of the queue, where the host said: a queue can hold a song twice, and
+  /// the song alone does not say which copy the room is on.
+  final int? itemId;
   final int positionMs;
   final bool playing;
   final int ageMs;
 
+  /// The host's own count of its reports. One with a lower count than the last one
+  /// heard was overtaken on the way and is about the past.
+  final int? seq;
+
   const JamPlayback({
     this.trackId,
+    this.itemId,
     this.positionMs = 0,
     this.playing = false,
     this.ageMs = 0,
+    this.seq,
   });
 
   factory JamPlayback.fromJson(Map<String, dynamic> j) => JamPlayback(
         trackId: j['track_id'] as int?,
+        itemId: j['item_id'] as int?,
         positionMs: (j['position_ms'] ?? 0) as int,
         playing: (j['playing'] ?? false) as bool,
         ageMs: (j['age_ms'] ?? 0) as int,
+        seq: (j['seq'] as num?)?.toInt(),
       );
 
   /// Where the music is now, rather than where it was when this was written.

@@ -73,4 +73,16 @@ void main() {
     final long = tester.getSize(find.byType(BackAndForth));
     expect(long.height, short.height);
   });
+
+  testWidgets('the line is as tall as the type, whatever is written in it',
+      (tester) async {
+    // A name with an emoji or another script in it borrows glyphs from a font with a
+    // taller line. The test font has no such glyphs to borrow, so what is checked is
+    // the thing that prevents it: every line is set on a forced strut.
+    for (final name in ['Short', 'A very long name that will certainly have to walk']) {
+      await show(tester, name);
+      final drawn = tester.widget<Text>(find.text(name));
+      expect(drawn.strutStyle?.forceStrutHeight, isTrue, reason: name);
+    }
+  });
 }

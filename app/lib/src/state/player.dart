@@ -915,13 +915,28 @@ class PlayerService {
   /// radio append can reorder the queue between the row being drawn and the finger
   /// landing on it, and then the index points at a different song. The index is kept
   /// as a hint so the right copy is chosen when a track appears more than once.
-  Future<void> playTrack(int trackId, {int? indexHint}) async {
-    final itemIndex = _relocate(indexHint ?? index, trackId);
+  ///
+  /// [row] is the queue's own name for the row, where whoever is asking knows it —
+  /// another device saying which copy it is on. [startAt] is for joining a song that is
+  /// already under way somewhere else: starting at the top and seeking afterwards is a
+  /// second of the intro before the music jumps.
+  Future<void> playTrack(int trackId, {int? indexHint, int? row, Duration? startAt}) async {
+    final itemIndex = _relocate(indexHint ?? index, trackId, row: row);
     if (itemIndex < 0) return;
     final pos = _order.indexOf(itemIndex);
     if (pos < 0) return;
-    await _playOrderPos(pos);
+    await _playOrderPos(pos, startAt: startAt);
   }
+
+  /// Where the engine is this instant, rather than where the last snapshot said.
+  ///
+  /// Snapshots are for drawing and come a few times a second at best — and not at all
+  /// while nothing is listening for them. What is told to *other* devices is carried
+  /// forward by their clocks from the moment it is said, so it has to be true then.
+  Duration get livePosition =>
+      _loadedTrackId != null && _loadedTrackId == current?.id
+          ? _player.position
+          : _pendingStart;
 
   /// Move to a song without making a sound.
   ///
@@ -929,8 +944,8 @@ class PlayerService {
   /// device: the screen has to show what everyone is playing, and the audio has to
   /// stay off. Loading the stream to immediately pause it would be a download nobody
   /// asked for, on somebody's phone data, for a song they are not hearing.
-  Future<void> showTrack(int trackId) async {
-    final itemIndex = _relocate(index, trackId);
+  Future<void> showTrack(int trackId, {int? row}) async {
+    final itemIndex = _relocate(index, trackId, row: row);
     if (itemIndex < 0) return;
     final pos = _order.indexOf(itemIndex);
     if (pos < 0 || pos == _orderPos) return;

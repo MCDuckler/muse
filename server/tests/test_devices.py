@@ -48,6 +48,8 @@ def test_a_device_says_what_it_is_doing_and_the_others_can_read_it(
     assert others["The desk"]["track"]["title"] == "Something On"
     assert others["The desk"]["queue"] == "Evening"
     assert others["The desk"]["position_ms"] == 42_000
+    # How old that is, so a screen following the desk can carry it forward.
+    assert 0 <= others["The desk"]["age_ms"] < 5_000
     assert others["The desk"]["this"] is False
     assert others["The desk"]["live"] is True
 
@@ -130,3 +132,19 @@ def test_a_device_can_be_given_a_name_you_chose(client, hdr, desk):
 def test_nonsense_is_not_an_action(client, hdr, desk):
     assert client.post(f"/devices/{desk['id']}/command", headers=hdr,
                        json={"action": "explode"}).status_code == 400
+
+
+def test_what_a_device_says_reaches_the_others_whole(client, hdr, desk, song, monkeypatch):
+    """A phone working the desk as a remote control draws its seek bar from this. Told
+    only "something changed", it had to ask again every time and was always behind."""
+    said: list[tuple[str, dict]] = []
+    monkeypatch.setattr(app_mod, "publish",
+                        lambda event, data, to_user=None: said.append((event, data)))
+    client.post("/devices/state", headers=desk["hdr"], json={
+        "playing": True, "track_id": song["id"], "position_ms": 61_500, "item_id": 7,
+    })
+    event, data = said[-1]
+    assert event == "devices"
+    assert data["device_id"] == desk["id"]
+    assert data["track_id"] == song["id"] and data["item_id"] == 7
+    assert data["position_ms"] == 61_500 and data["playing"] is True

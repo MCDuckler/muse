@@ -523,6 +523,14 @@ create table if not exists jam_playback (
 -- Pictures somebody chose: a profile photo, a cover for a playlist that should not be
 -- the one drawn from its contents. Both are a signature rather than a path — the file
 -- is named from it, so a changed picture is a changed URL and nothing caches wrongly.
+-- Which *row* of the queue is playing, not only which song: a queue can hold a song
+-- twice, and a guest told only the song lands on whichever copy is nearer. And the
+-- host's own count of its reports, so one that arrives late — a heartbeat overtaken by
+-- the skip that came after it — is dropped rather than dragging the room back.
+alter table jam_playback add column if not exists item_id int;
+alter table jam_playback add column if not exists seq bigint;
+alter table devices add column if not exists item_id int;
+
 alter table users add column if not exists avatar_sig text;
 alter table playlists add column if not exists cover_sig text;
 

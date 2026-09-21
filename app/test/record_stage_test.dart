@@ -16,6 +16,7 @@ import 'package:muse/src/api/client.dart';
 import 'package:muse/src/api/models.dart';
 import 'package:muse/src/state/app_state.dart';
 import 'package:muse/src/ui/record_stage.dart';
+import 'package:muse/src/ui/sleeve_art.dart';
 
 Track song(int id) => Track(
     id: id,
@@ -244,6 +245,45 @@ void main() {
     await stage(tester, playing: true);
     expect(tester.widget<Tonearm>(find.byType(Tonearm)).landed, greaterThan(0.98),
         reason: 'asking for it back puts the arm down again');
+  });
+
+  testWidgets('a song with no cover still has a sleeve and a record', (tester) async {
+    // There is no picture to fetch for it, and the stage used to leave it out: an
+    // empty space above the controls, with no record and no arm.
+    tester.view.physicalSize = const Size(400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    const bare = Track(
+        id: 9,
+        title: 'Bare',
+        artists: ['Nobody'],
+        state: 'ready',
+        source: 'youtube',
+        displayTitle: 'Bare');
+    await tester.pumpWidget(ChangeNotifierProvider<AppState>.value(
+      value: app,
+      child: MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 352,
+              height: 352,
+              child: RecordStage(
+                  track: bare, playing: true, previous: song(1), next: song(3)),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.pump(const Duration(milliseconds: 16));
+    await tester.pump(const Duration(milliseconds: 1600));
+
+    expect(tester.takeException(), isNull);
+    final printed = tester.widgetList<PrintedSleeve>(find.byType(PrintedSleeve));
+    expect(printed.any((p) => p.seed == 9 && p.title == 'Bare'), isTrue,
+        reason: 'the sleeve every list already gives it');
+    expect(find.byType(Deck), findsOneWidget);
+    expect(find.byType(Tonearm), findsOneWidget, reason: 'a record, so an arm on it');
   });
 
   testWidgets('the record keeps clear of the reflections', (tester) async {

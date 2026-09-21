@@ -431,8 +431,15 @@ class AppState extends ChangeNotifier {
     if (!on) {
       await player?.pause();
     } else {
-      final state = jam?.playback;
-      if (state != null) await followJamPlayback(state);
+      // From the room's clock as it stands now. What came with the jam when it was
+      // last read is up to half a minute old, and joining there was joining the song
+      // half a minute ago.
+      if (hostPosition != null) {
+        await _followTheRoomAgain();
+      } else {
+        final state = jam?.playback;
+        if (state != null) await followJamPlayback(state);
+      }
     }
   }
 
@@ -1621,6 +1628,24 @@ class AppState extends ChangeNotifier {
   /// heartbeat would stutter through the whole song.
   DateTime? _lastFollowSeek;
 
+  /// The count on the last report sent as host, and on the last one heard as a guest.
+  int _jamSeqOut = 0;
+  int? _jamSeqIn;
+  int? _clockIsFor;
+
+  /// Which song the room is on and which row of the queue, as the host last said.
+  int? _roomTrack;
+  int? _roomRow;
+
+  /// How long catching up takes on this device and this connection.
+  ///
+  /// A seek on a stream is not instant, and while it happens the room plays on: a guest
+  /// sent to exactly where the host *was* arrives late by however long the seek took.
+  /// When that was longer than the drift allowed, it was out of step again at once,
+  /// sought again at the next chance, and never got there. So it aims ahead by what the
+  /// last ones cost.
+  Duration _catchUpCost = Duration.zero;
+
   /// True while this device is somebody else's guest.
   bool get isJamGuest => jam != null && !(jam?.isHost ?? true);
 
@@ -1640,17 +1665,28 @@ class AppState extends ChangeNotifier {
     final p = player;
     if (current == null || p == null || !current.isHost) return;
     final snap = p.last;
-    final shape = '${snap?.current?.id}|${snap?.playing}';
+    final shape = '${snap?.current?.id}|${snap?.current?.queueItemId}|${snap?.playing}';
     final now = DateTime.now();
+    // A little under the heartbeat's own five seconds: asked "has it been more than
+    // five" by a timer that fires every five, the answer was no about half the time,
+    // and the room heard from its host every ten.
     final due = _pushedAt == null ||
-        now.difference(_pushedAt!) > const Duration(seconds: 5);
+        now.difference(_pushedAt!) >= const Duration(seconds: 4);
     if (!force && shape == _pushedState && !due) return;
     _pushedState = shape;
     _pushedAt = now;
+    // Counted, so that two of these overtaking each other on the way are put back in
+    // order at the other end rather than played out as a skip backwards.
+    final stamp = now.millisecondsSinceEpoch;
+    _jamSeqOut = stamp > _jamSeqOut ? stamp : _jamSeqOut + 1;
     try {
       await api.pushJamPlayback(current.id,
           trackId: snap?.current?.id,
-          positionMs: (snap?.position ?? Duration.zero).inMilliseconds,
+          itemId: snap?.current?.queueItemId,
+          seq: _jamSeqOut,
+          // The engine's position as this is sent, not the last one drawn: everybody
+          // else carries it forward from the moment they hear it.
+          positionMs: p.livePosition.inMilliseconds,
           playing: snap?.playing ?? false);
     } catch (_) {
       // The next heartbeat says the same thing; a dropped one costs nothing.
@@ -1664,29 +1700,56 @@ class AppState extends ChangeNotifier {
     final p = player;
     if (p == null) return;
 
+    // Another room has another host, whose count starts wherever it starts.
+    if (_clockIsFor != jam?.id) {
+      _clockIsFor = jam?.id;
+      _jamSeqIn = null;
+    }
+    // Overtaken on the way: this is about where the room was, and something newer has
+    // already been heard.
+    final heard = _jamSeqIn;
+    if (state.seq != null && heard != null && state.seq! < heard) return;
+    _jamSeqIn = state.seq ?? heard;
+
+    // The room's clock, which everything on screen reads and which is carried forward
+    // from here until the host speaks again.
+    jamPosition = state.position;
+    _jamPositionAt = DateTime.now();
+    roomIsPlaying = state.playing;
+    _roomTrack = state.trackId;
+    _roomRow = state.itemId;
+
+    final onAnother = state.trackId != null &&
+        (p.current?.id != state.trackId ||
+            (state.itemId != null &&
+                p.current?.queueItemId != null &&
+                p.current?.queueItemId != state.itemId));
+
     // Following without listening: the screen keeps up with the room, the speaker
     // stays out of it. This is the normal case — everyone in one room hearing the
     // same record out of five phones is not listening together.
     if (!jamListening) {
-      // The clock the screen runs on, kept up to date even though the speaker is not:
-      // the record still turns, the bar still moves, the button still says pause.
-      jamPosition = state.position;
-      _jamPositionAt = DateTime.now();
-      roomIsPlaying = state.playing;
       if (p.last?.playing ?? false) await p.pause();
-      if (state.trackId != null && p.current?.id != state.trackId) {
-        await p.showTrack(state.trackId!);
-      }
+      if (onAnother) await p.showTrack(state.trackId!, row: state.itemId);
       notifyListeners();
       return;
     }
-    // Reported position plus however long the message took to get here.
-    final target = state.position;
 
-    if (state.trackId != null && p.current?.id != state.trackId) {
-      // A different song: catch up to it, then to the place in it.
-      await p.playTrack(state.trackId!);
-      await p.seek(target);
+    if (onAnother) {
+      // This device reached the end of the song a moment before the host did and has
+      // gone on to the next, which is where the host will be in a second or two. Going
+      // back for the last bars of the old one and forward again is the queue skipping
+      // about, and it is audible.
+      if (_onlyJustAhead(p, state)) {
+        notifyListeners();
+        return;
+      }
+      // A different song: join it where the room is, not at the top.
+      final began = DateTime.now();
+      await p.playTrack(state.trackId!,
+          row: state.itemId, startAt: _whereTheRoomWillBe());
+      _learnWhatCatchingUpCosts(DateTime.now().difference(began));
+      _lastFollowSeek = DateTime.now();
       if (!state.playing) await p.pause();
       notifyListeners();
       return;
@@ -1695,21 +1758,70 @@ class AppState extends ChangeNotifier {
     if (!state.playing) {
       if (p.last?.playing ?? false) await p.pause();
       // Still worth landing on the right spot: a paused room is paused *somewhere*.
-      await p.seek(target);
+      if (((p.last?.position ?? Duration.zero) - state.position).abs() >
+          const Duration(milliseconds: 400)) {
+        await p.seek(state.position);
+      }
       notifyListeners();
       return;
     }
 
-    final here = p.last?.position ?? Duration.zero;
-    final drift = (here - target).abs();
+    final here = p.livePosition;
+    final drift = (here - (hostPosition ?? state.position)).abs();
     final settled = _lastFollowSeek == null ||
-        DateTime.now().difference(_lastFollowSeek!) > const Duration(seconds: 4);
-    if (drift > const Duration(milliseconds: 2500) && settled) {
+        DateTime.now().difference(_lastFollowSeek!) > const Duration(seconds: 6);
+    if (drift > const Duration(milliseconds: 1500) && settled) {
       _lastFollowSeek = DateTime.now();
-      await p.seek(target);
+      final began = DateTime.now();
+      await p.seek(_whereTheRoomWillBe());
+      _learnWhatCatchingUpCosts(DateTime.now().difference(began));
     }
     if (!(p.last?.playing ?? false)) await p.resumeForJam();
     notifyListeners();
+  }
+
+  /// Where the room will have got to by the time this device has caught up with it.
+  Duration _whereTheRoomWillBe() {
+    final now = hostPosition ?? jamPosition ?? Duration.zero;
+    return roomIsPlaying ? now + _catchUpCost : now;
+  }
+
+  void _learnWhatCatchingUpCosts(Duration took) {
+    final next = (_catchUpCost + took) ~/ 2;
+    _catchUpCost = next > const Duration(seconds: 3) ? const Duration(seconds: 3) : next;
+  }
+
+  /// True when this device is on the song straight after the one the host is still
+  /// finishing.
+  bool _onlyJustAhead(PlayerService p, JamPlayback state) {
+    if (!state.playing) return false;
+    final i = p.index;
+    if (i <= 0 || i >= p.items.length) return false;
+    final before = p.items[i - 1];
+    if (before.id != state.trackId) return false;
+    if (state.itemId != null &&
+        before.queueItemId != null &&
+        before.queueItemId != state.itemId) {
+      return false;
+    }
+    final length = before.duration;
+    if (length == null || length == Duration.zero) return false;
+    return length - state.position < const Duration(seconds: 8) &&
+        p.livePosition < const Duration(seconds: 8);
+  }
+
+  /// Get back in step with what the room last said, after something here changed —
+  /// the queue was re-read, the speaker was turned on.
+  Future<void> _followTheRoomAgain() async {
+    final at = hostPosition;
+    if (!isJamGuest || at == null) return;
+    await followJamPlayback(JamPlayback(
+      trackId: _roomTrack,
+      itemId: _roomRow,
+      positionMs: at.inMilliseconds,
+      playing: roomIsPlaying,
+      seq: _jamSeqIn,
+    ));
   }
 
   // ---------------------------------------------------------------- guest → room
@@ -1769,6 +1881,7 @@ class AppState extends ChangeNotifier {
       : null;
 
   Timer? _deviceTimer;
+  Timer? _tellFallback;
   DateTime _saidDevice = DateTime.fromMillisecondsSinceEpoch(0);
 
   Future<void> refreshDevices() async {
@@ -1780,9 +1893,74 @@ class AppState extends ChangeNotifier {
       if (controllingAnother && (elsewhere == null || !elsewhere!.live)) {
         playingOn = null;
       }
+      await _followTheOtherDevice();
       notifyListeners();
     } catch (_) {
       // A list of devices is not worth a message on screen.
+    }
+  }
+
+  /// One of this account's devices said what it is doing.
+  ///
+  /// What it said comes with the announcement, so the list is corrected where it
+  /// stands. Going to ask for the list again after every report — which is what this
+  /// did — put a screen working another device a round trip behind it, and its seek
+  /// bar was not following that device at all.
+  @visibleForTesting
+  Future<void> heardFromADevice(Map<String, dynamic> data) async {
+    _tellFallback?.cancel();
+    final id = data['device_id'] as int?;
+    final known = devices.where((d) => d.id == id).firstOrNull;
+    final said = data.containsKey('position_ms');
+    // A rename, a device never seen, a server from before it said all this, or a song
+    // and a queue this list has no names for yet: ask.
+    if (!said ||
+        known == null ||
+        known.track?.id != data['track_id'] ||
+        known.queueId != data['queue_id']) {
+      await refreshDevices();
+      return;
+    }
+    devices = [
+      for (final d in devices)
+        d.id == id
+            ? d.saying(
+                playing: (data['playing'] ?? false) as bool,
+                positionMs: (data['position_ms'] ?? 0) as int,
+                itemId: data['item_id'] as int?)
+            : d,
+    ];
+    await _followTheOtherDevice();
+    notifyListeners();
+  }
+
+  /// Show what the device being worked from here is playing.
+  ///
+  /// This screen is its remote control, and a remote control that shows the song this
+  /// phone happened to be on when it was picked up, at the place it was paused, is
+  /// showing nothing about the music. The player here stays silent and is moved to the
+  /// other one's queue, song and row; where in the song comes from [positionNow].
+  Future<void> _followTheOtherDevice() async {
+    final there = elsewhere;
+    final p = player;
+    if (there == null || p == null || isJamGuest) return;
+    try {
+      final queueId = there.queueId;
+      if (queueId != null && queueId != activeQueue?.id) {
+        activeQueue = await api.queue(queueId);
+        await p.loadQueue(activeQueue!);
+      }
+      final song = there.track;
+      if (song == null) return;
+      final row = there.itemId;
+      if (p.current?.id != song.id ||
+          (row != null &&
+              p.current?.queueItemId != null &&
+              p.current?.queueItemId != row)) {
+        await p.showTrack(song.id, row: row);
+      }
+    } catch (_) {
+      // Not being able to show it is not a reason to stop being able to work it.
     }
   }
 
@@ -1802,7 +1980,14 @@ class AppState extends ChangeNotifier {
         playing: playing && !controllingAnother,
         trackId: snapshot?.current?.id,
         queueId: activeQueue?.id,
-        positionMs: (positionNow ?? snapshot?.position ?? Duration.zero)
+        itemId: snapshot?.current?.queueItemId,
+        // While this is the device making the sound, the engine's position as this is
+        // sent: whoever reads it carries it forward from the moment they hear it.
+        positionMs: ((playing && !controllingAnother && !isJamGuest
+                    ? player?.livePosition
+                    : positionNow) ??
+                snapshot?.position ??
+                Duration.zero)
             .inMilliseconds,
         kind: kIsWeb ? 'browser' : 'phone',
       );
@@ -1826,8 +2011,11 @@ class AppState extends ChangeNotifier {
       if (from != null && from.queueId != null) {
         await openQueue(from.queueId!);
         if (from.track != null) {
-          await player?.playTrack(from.track!.id);
-          await player?.seek(from.at);
+          // Straight in at where it has got to — carried forward from what it last
+          // said — and on the row it is on, rather than the top of the song and a
+          // jump a moment later.
+          await player?.playTrack(from.track!.id,
+              row: from.itemId, startAt: from.at);
         }
         // And whoever had it lets go, so the room is not playing two of the same song.
         await api.deviceCommand(from.id, 'stop').catchError((_) {});
@@ -1882,9 +2070,11 @@ class AppState extends ChangeNotifier {
           await openQueue(queueId);
         }
         final trackId = order['track_id'] as int?;
-        if (trackId != null) await player?.playTrack(trackId);
         final at = order['position_ms'] as int?;
-        if (at != null && at > 0) {
+        if (trackId != null) {
+          await player?.playTrack(trackId,
+              startAt: at != null && at > 0 ? Duration(milliseconds: at) : null);
+        } else if (at != null && at > 0) {
           await player?.seek(Duration(milliseconds: at));
         }
         await player?.resumeForJam();
@@ -1956,11 +2146,30 @@ class AppState extends ChangeNotifier {
   Future<void> _tell(String action, {int? positionMs}) async {
     final there = playingOn;
     if (there == null) return;
+    // On screen at once. The other device says what it did a moment later and that is
+    // what is believed — but a pause button that waits for a round trip before it
+    // looks pressed gets pressed twice, and the second press is "play".
+    final was = elsewhere;
+    if (was != null) {
+      final at = positionMs ?? was.at.inMilliseconds;
+      final DeviceInfo? will = switch (action) {
+        'pause' => was.saying(playing: false, positionMs: at),
+        'play' => was.saying(playing: true, positionMs: at),
+        'seek' => was.saying(playing: was.playing, positionMs: at),
+        _ => null,
+      };
+      if (will != null) {
+        devices = [for (final d in devices) d.id == there ? will : d];
+        notifyListeners();
+      }
+    }
     try {
       await api.deviceCommand(there, action, positionMs: positionMs);
-      // It will say what it did; this is so the screen does not sit still until then.
-      await Future<void>.delayed(const Duration(milliseconds: 350));
-      await refreshDevices();
+      // It says what it did, and that arrives by itself. Only if nothing has been
+      // heard after a while is it asked — asking straight away read back what it was
+      // doing *before* it obeyed, and undid what had just been drawn.
+      _tellFallback?.cancel();
+      _tellFallback = Timer(const Duration(seconds: 3), refreshDevices);
     } catch (e) {
       error = '$e';
       notifyListeners();
@@ -2015,6 +2224,8 @@ class AppState extends ChangeNotifier {
   /// player to somebody who could hear the song.
   bool get musicIsPlaying {
     if (isJamGuest && !jamListening) return roomIsPlaying;
+    // A remote control: the music is wherever it was sent, and so is the answer.
+    if (controllingAnother) return elsewhere?.playing ?? false;
     return player?.last?.playing ?? false;
   }
 
@@ -2025,6 +2236,7 @@ class AppState extends ChangeNotifier {
   /// engine is the thing making the sound they can hear.
   Duration? get positionNow {
     if (isJamGuest && !jamListening) return hostPosition;
+    if (controllingAnother) return elsewhere?.at;
     return player?.last?.position;
   }
 
@@ -2033,23 +2245,32 @@ class AppState extends ChangeNotifier {
     if (at == null || base == null || jam == null || (jam?.isHost ?? true)) return null;
     final since = DateTime.now().difference(at);
     if (since > const Duration(minutes: 2)) return null;   // stale: say nothing
-    return base + since;
+    // A paused room is paused somewhere, and stays there: carried forward regardless,
+    // the bar crept on through a pause every time something redrew it.
+    if (!roomIsPlaying) return base;
+    final now = base + since;
+    final length = player?.current?.duration;
+    return length != null && length > Duration.zero && now > length ? length : now;
   }
 
   Future<void> _onQueueChanged(Map<String, dynamic> data) async {
     final id = data['queue_id'] as int?;
     if (id == null || id != activeQueue?.id) return;
-    final reported = data['position_ms'] as int?;
-    if (reported != null && jam != null && !(jam?.isHost ?? false)) {
-      jamPosition = Duration(milliseconds: reported);
-      _jamPositionAt = DateTime.now();
-    }
+    // The position that comes with this is not read. It is the queue's *saved* place —
+    // written every ten seconds, and straight after a skip still a place in the song
+    // before — and a guest's seek bar used to be set from it: every skip and every song
+    // anybody added threw the bar somewhere wrong until the host next spoke. The room
+    // has a clock of its own; see followJamPlayback.
     final rev = data['rev'] as int?;
     // Every client of this user hears every announcement, this one included: a skip
     // writes its cursor, the server tells everybody, and the device that skipped is
     // told about its own move. Re-reading the queue for that is at best wasted work
     // and at worst a reload landing on top of a load still in flight.
-    final ourOwnMove = jam == null &&
+    //
+    // In a jam that is still true of the host: nobody else writes the cursor. Without
+    // it the host re-read and reloaded its own queue after every one of its own skips,
+    // and two quick skips had the first reload landing on top of the second song.
+    final ourOwnMove = (jam == null || (jam?.isHost ?? false)) &&
         _cursorWrittenAt != null &&
         DateTime.now().difference(_cursorWrittenAt!) < const Duration(seconds: 3);
     if (rev != null &&
@@ -2064,6 +2285,9 @@ class AppState extends ChangeNotifier {
     // loadQueue keeps the song that is playing where it is: it relocates the loaded
     // track rather than starting anything over.
     await player?.loadQueue(live);
+    // Which for a guest may be the wrong place: the host went to a song that was not
+    // in this device's copy of the queue until just now.
+    await _followTheRoomAgain();
     notifyListeners();
   }
 
@@ -2079,11 +2303,8 @@ class AppState extends ChangeNotifier {
     // minute and neither of them needs the jam re-read from the server.
     if (data['what'] == 'playback') {
       if (isJamGuest) {
-        final state = JamPlayback.fromJson(Map<String, dynamic>.from(data));
-        jamPosition = state.position;
-        _jamPositionAt = DateTime.now();
-        roomIsPlaying = state.playing;
-        await followJamPlayback(state);
+        await followJamPlayback(
+            JamPlayback.fromJson(Map<String, dynamic>.from(data)));
       }
       return;
     }
@@ -2109,6 +2330,7 @@ class AppState extends ChangeNotifier {
     if (activeQueue?.id == jam!.queueId) {
       await _reloadActiveQueue();
       if (activeQueue != null) await player?.loadQueue(activeQueue!);
+      await _followTheRoomAgain();
     } else if (!jam!.isHost) {
       // The host put something else on. Following the room means following what the
       // room is playing, which is now a different queue from the one on screen — and
@@ -2308,9 +2530,8 @@ class AppState extends ChangeNotifier {
       } else if (e.event == 'device_command') {
         await obey(Map<String, dynamic>.from(e.data));
       } else if (e.event == 'devices') {
-        // Somebody's state changed — usually whoever is playing. Cheap, and it is
-        // what keeps an open picker honest.
-        await refreshDevices();
+        // Somebody's state changed — usually whoever is playing.
+        await heardFromADevice(Map<String, dynamic>.from(e.data));
       } else if (e.event == 'jam') {
         await _onJamEvent(e.data);
       } else if (e.event == 'sleeve_mark') {
@@ -2390,9 +2611,28 @@ class AppState extends ChangeNotifier {
     int? named;
     bool? wasPlaying;
     String? shape;
+    var heardPosition = Duration.zero;
+    DateTime? heardAt;
     _playerSub = player?.snapshots.listen((s) {
       final trackChanged = named != null && s.current?.id != named;
       _watchForEndOfTrack(s, trackChanged: trackChanged);
+      // The music is somewhere it did not get to by playing: a seek from the lock
+      // screen or a headset, which never passes through seekTo, or a stream that
+      // stalled. Anybody following this device is carrying the old position forward
+      // and would go on doing so until the next heartbeat.
+      final seen = DateTime.now();
+      final expected = heardAt == null
+          ? null
+          : heardPosition + ((wasPlaying ?? false) ? seen.difference(heardAt!) : Duration.zero);
+      final jumped = expected != null &&
+          !trackChanged &&
+          (s.position - expected).abs() > const Duration(milliseconds: 1500);
+      heardPosition = s.position;
+      heardAt = seen;
+      if (jumped) {
+        if (jam?.isHost ?? false) unawaited(pushJamState(force: true));
+        unawaited(reportDevice(force: true));
+      }
       if (s.current?.id != named || s.playing != wasPlaying) {
         named = s.current?.id;
         wasPlaying = s.playing;

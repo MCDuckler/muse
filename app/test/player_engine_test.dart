@@ -753,6 +753,135 @@ void main() {
     expect(audio.only.playing, isFalse);
   });
 
+  AppState guestOf(PlayerService player, ApiClient api, {bool listening = true}) {
+    final app = AppState();
+    app.api = api;
+    app.player = player;
+    app.jamListening = listening;
+    app.jam = Jam.fromJson({
+      'id': 7,
+      'code': 'ABC123',
+      'queue_id': 1,
+      'host': 'somebody',
+      'is_host': false,
+    });
+    return app;
+  }
+
+  test('a report overtaken on the way does not drag a guest back', () async {
+    // The heartbeat sent just before a skip can arrive just after it. Believed, it is
+    // the queue jumping back to the old song and forward again five seconds later.
+    final app = guestOf(player, api);
+    await player.loadQueue(queueOf([track(1), track(2), track(3)]));
+    await settle();
+
+    await app.followJamPlayback(const JamPlayback(
+        trackId: 2, positionMs: 0, playing: true, seq: 2000));
+    await settle();
+    await app.followJamPlayback(const JamPlayback(
+        trackId: 1, positionMs: 58000, playing: true, seq: 1000));
+    await settle();
+    expect(player.current?.id, 2, reason: 'the late one was about the past');
+  });
+
+  test('a guest lands on the copy of the song the host is on', () async {
+    final app = guestOf(player, api, listening: false);
+    await player.loadQueue(
+        queueOf([track(1), track(2), track(1), track(3)], rows: [10, 11, 12, 13]));
+    await settle();
+
+    await app.followJamPlayback(const JamPlayback(
+        trackId: 1, itemId: 12, positionMs: 1000, playing: true, seq: 1));
+    await settle();
+    expect(player.current?.queueItemId, 12,
+        reason: 'the second copy, though the first is the one already on');
+    expect(audio.players.values.any((a) => a.playing), isFalse,
+        reason: 'and still without a sound');
+  });
+
+  test('a guest who reached the end first is not sent back for the last bars',
+      () async {
+    final app = guestOf(player, api);
+    await player.loadQueue(queueOf([track(1), track(2), track(3)]));
+    await settle();
+    // This device finished the first song a moment before the host and went on.
+    await player.playTrack(2);
+    await settle();
+
+    // The host, still two seconds from the end of it.
+    await app.followJamPlayback(const JamPlayback(
+        trackId: 1, positionMs: 58000, playing: true, seq: 1));
+    await settle();
+    expect(player.current?.id, 2, reason: 'where the host will be in two seconds');
+
+    // But a host who really is somewhere else in that song is followed.
+    await app.followJamPlayback(const JamPlayback(
+        trackId: 1, positionMs: 20000, playing: true, seq: 2));
+    await settle();
+    expect(player.current?.id, 1);
+  });
+
+  test('the room has one clock, and a change to the queue is not it', () async {
+    final app = guestOf(player, api, listening: false);
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    await settle();
+
+    await app.followJamPlayback(const JamPlayback(
+        trackId: 1, positionMs: 30000, playing: true, seq: 1));
+    expect(app.hostPosition!.inSeconds, inInclusiveRange(30, 31));
+
+    // A paused room stays where it paused, however long ago that was said.
+    await app.followJamPlayback(const JamPlayback(
+        trackId: 1, positionMs: 31000, playing: false, seq: 2));
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(app.hostPosition, const Duration(milliseconds: 31000));
+    expect(app.musicIsPlaying, isFalse);
+
+    // And it never runs off the end of the song.
+    await app.followJamPlayback(const JamPlayback(
+        trackId: 1, positionMs: 59900, playing: true, seq: 3));
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(app.hostPosition, const Duration(seconds: 60));
+  });
+
+  test('a remote control shows what the other device is doing', () async {
+    final app = AppState();
+    app.api = api;
+    app.player = player;
+    app.thisDevice = 1;
+    app.activeQueue = queueOf([track(1), track(2), track(3)]);
+    await player.loadQueue(app.activeQueue!);
+    await settle();
+    app.devices = [
+      DeviceInfo(
+          id: 5, name: 'The desk', live: true, playing: true, positionMs: 1000,
+          queueId: 1, track: track(1), itemId: 100, heardAt: DateTime.now()),
+    ];
+    app.playingOn = 5;
+
+    // The desk says where it is: the screen here runs from that, not from the silent
+    // player in this hand.
+    await app.heardFromADevice({
+      'device_id': 5, 'playing': true, 'track_id': 1, 'queue_id': 1,
+      'item_id': 100, 'position_ms': 20000,
+    });
+    expect(app.musicIsPlaying, isTrue);
+    expect(app.positionNow!.inSeconds, inInclusiveRange(20, 21));
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    expect(app.positionNow!.inMilliseconds, greaterThan(20200),
+        reason: 'carried forward between reports');
+    expect(audio.players.values.any((a) => a.playing), isFalse,
+        reason: 'this one makes no sound');
+
+    // Pause is on screen before the desk has answered.
+    unawaited(app.playPause());
+    await Future<void>.delayed(Duration.zero);
+    expect(app.musicIsPlaying, isFalse);
+    final held = app.positionNow;
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    expect(app.positionNow, held, reason: 'and the clock stops with it');
+  });
+
   test('a guest in the room follows it without making a sound', () async {
     // The normal case, and the reason it is the default: everybody in one room hearing
     // the same record out of five phones a half-second apart is not listening
