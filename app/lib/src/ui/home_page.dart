@@ -49,6 +49,41 @@ class _HomePageState extends State<HomePage> {
   final List<GlobalKey<NavigatorState>> _tabs =
       [for (var i = 0; i < 4; i++) GlobalKey<NavigatorState>()];
 
+  /// One scroll controller per tab, for the second half of tapping the tab you are
+  /// already on.
+  ///
+  /// The first half — going back to the top of the tab's own stack — was already
+  /// here. What was missing is what every other app does once you are already at the
+  /// root: go back to the top of the *list*. Four hundred rows down the library,
+  /// tapping Library did nothing at all.
+  final List<ScrollController> _tops =
+      [for (var i = 0; i < 4; i++) ScrollController()];
+
+  @override
+  void dispose() {
+    for (final c in _tops) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  /// The tab you are on, tapped again.
+  void _sameTab() {
+    final tab = context.read<AppState>().homeTab;
+    final navigator = _tabs[tab].currentState;
+    if (navigator != null && navigator.canPop()) {
+      navigator.popUntil((r) => r.isFirst);
+      return;
+    }
+    final top = _tops[tab];
+    // Only when there is exactly one list listening: a page with two scrollables of
+    // its own has no single top to go to, and asking a controller with several
+    // positions to animate is an error rather than a no-op.
+    if (top.positions.length != 1 || top.offset <= 0) return;
+    top.animateTo(0,
+        duration: const Duration(milliseconds: 280), curve: Curves.easeOutCubic);
+  }
+
   /// The pane beside the library's own list, where there is room for one. See
   /// PaneScope: on a desk the library is a column of places to go, and covering it
   /// with whichever one you picked throws away the thing you are picking from.
@@ -188,9 +223,7 @@ class _HomePageState extends State<HomePage> {
               _Rail(
                 dockOpen: dock,
                 onDock: width.hasDock ? app.toggleDeskDock : null,
-                onSameTab: () =>
-                    _tabs[context.read<AppState>().homeTab].currentState
-                        ?.popUntil((r) => r.isFirst),
+                onSameTab: _sameTab,
               ),
             Expanded(
               child: Column(
@@ -221,7 +254,12 @@ class _HomePageState extends State<HomePage> {
                       for (var i = 0; i < pages.length; i++)
                         TickerMode(
                           enabled: i == tab,
-                          child: Navigator(
+                          // The tab's lists attach here, which is what makes "back to
+                          // the top" possible from a bar that knows nothing about
+                          // whatever page is currently inside the tab.
+                          child: PrimaryScrollController(
+                            controller: _tops[i],
+                            child: Navigator(
                             key: _tabs[i],
                             onGenerateRoute: (_) => MaterialPageRoute(
                               builder: (_) => _TabRoot(
@@ -234,6 +272,7 @@ class _HomePageState extends State<HomePage> {
                                 child: pages[i],
                               ),
                             ),
+                          ),
                           ),
                         ),
                     ],
@@ -288,9 +327,7 @@ class _HomePageState extends State<HomePage> {
                   // Tapping the tab you are already on goes back to the top of it,
                   // which is what every app does and what somebody four screens deep
                   // in the library reaches for.
-                  onSameTab: () =>
-                      _tabs[context.read<AppState>().homeTab].currentState
-                          ?.popUntil((r) => r.isFirst),
+                  onSameTab: _sameTab,
                 ),
             ],
           ),
