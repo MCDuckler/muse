@@ -12,3 +12,5 @@ pytest
 yt-dlp
 # iPhones hand over HEIC, and Pillow cannot open one without this.
 pillow-heif>=0.18
+# Beat tracking and silence detection (beats.py): an FFT is not a thing to write by hand.
+numpy>=2.1

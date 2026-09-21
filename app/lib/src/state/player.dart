@@ -12,6 +12,7 @@ import '../api/client.dart';
 import '../api/models.dart';
 import 'keepalive.dart';
 import 'playback_log.dart';
+import 'timing.dart';
 
 enum QueueRepeat { off, one, all }
 
@@ -48,6 +49,70 @@ class PlayerService {
         ? null
         : AudioPipeline(androidAudioEffects: [androidLoudness!, androidEqualizer!]),
   );
+
+  // ------------------------------------------------------------------ seamless
+  //
+  // Most files have a second or two of nothing at either end, and a queue played
+  // straight through is a queue with a pause after every song. The server knows where
+  // each song's sound really starts and ends (see TrackTiming); this is what is done
+  // with it. A song starts where its sound does, and the moment its sound is over the
+  // next one — already waiting in the engine — is stepped to, rather than the silence
+  // being sat through. Positions stay what they always were, places in the file: a
+  // song trimmed by clipping its source would report times a second out from the
+  // lyrics, the seek bar's shape, and everybody else in a jam.
+
+  /// Where songs start and end, their tempo and their beats; asked for ahead of need.
+  late final TimingStore timing = TimingStore(api);
+
+  /// Whether the dead air between songs is skipped. A setting, on by default.
+  bool seamless = true;
+
+  Timer? _soundEnds;
+  int? _soundEndsFor;
+
+  /// How many songs were joined to the next at the end of their sound. For tests, and
+  /// for the playback log.
+  @visibleForTesting
+  int joins = 0;
+
+  /// Near the end of the sound, set a timer for the exact moment: the position arrives
+  /// a few times a second, which is far too coarse to cut on.
+  void _watchForTheEndOfTheSound() {
+    final track = current;
+    if (!seamless || track == null || !_player.playing) return;
+    if (_queuedNextId == null || repeat == QueueRepeat.one) return;
+    if (_loadedTrackId != track.id || _soundEndsFor == track.id) return;
+    final ends = timing.peek(track.id)?.soundEnds;
+    if (ends == null) return;
+    final left = ends - _player.position;
+    if (left > const Duration(milliseconds: 1500)) return;
+    _soundEndsFor = track.id;
+    _soundEnds?.cancel();
+    _soundEnds = Timer(
+        left.isNegative ? Duration.zero : left * (1 / speed), () => _theSoundHasEnded(track.id));
+  }
+
+  void _theSoundHasEnded(int trackId) {
+    _soundEndsFor = null;
+    final ends = timing.peek(trackId)?.soundEnds;
+    // Asked again, because a second and a half is long enough to pause, to seek back
+    // into the song, or to skip: only a song still playing out its last moment is cut.
+    if (ends == null || current?.id != trackId || _loadedTrackId != trackId) return;
+    if (!seamless || !_player.playing || _mutating > 0) return;
+    if (_queuedNextId == null || repeat == QueueRepeat.one) return;
+    if (_player.position + const Duration(milliseconds: 120) < ends) return;
+    joins++;
+    PlaybackLog.note('joined to the next song ${timing.peek(trackId)!.tailMs}ms early');
+    // The same step a song ending takes: the next one is already in the engine, so
+    // this costs nothing, and the bookkeeping is done where it always is — see
+    // _onEngineIndex.
+    unawaited(_player.seekToNext().catchError((_) {}));
+  }
+
+  /// Where a song about to be played from the top should start: where its sound does,
+  /// when that is known and worth the jump.
+  Duration _topOf(Track track) =>
+      seamless ? (timing.peek(track.id)?.lead ?? Duration.zero) : Duration.zero;
 
   /// How often the play position is written back while audio is playing. This used to
   /// be a debounce re-armed on every position tick, which meant it never fired at all
@@ -1270,6 +1335,14 @@ class PlayerService {
     }
     if (run.isEmpty) return;
 
+    // Where these start and end, before it is needed: the next song's has to be here
+    // at the moment it begins, not a request afterwards.
+    if (seamless) {
+      for (final soon in run) {
+        unawaited(timing.of(soon));
+      }
+    }
+
     final pending = run.where((t) => !t.isReady).map((t) => t.id).toList();
     if (pending.isNotEmpty) {
       try {
@@ -1473,6 +1546,18 @@ class PlayerService {
     _waitingForTrack = null;
     finished = false;
     _pendingStart = Duration.zero;
+    _soundEndsFor = null;
+    // The engine started it at the top of the file. If that is a second of nothing,
+    // go to where the sound is: it is already buffered, so this is not a wait.
+    final arrived = current;
+    if (arrived != null) {
+      final top = _topOf(arrived);
+      if (top > Duration.zero && _player.position < top) {
+        _pendingStart = top;
+        _heardUpTo = top;
+        unawaited(_player.seek(top).catchError((_) {}));
+      }
+    }
     _emit(force: true);
     _saveCursor();
     unawaited(_lookAhead());
@@ -1539,6 +1624,11 @@ class PlayerService {
     final mine = token ?? ++_loadToken;
     final track = current;
     if (track == null) return;
+    // From the top means from where the sound starts.
+    if (startAt == null || startAt == Duration.zero) {
+      final top = _topOf(track);
+      if (top > Duration.zero) startAt = top;
+    }
     _pendingStart = startAt ?? Duration.zero;
     _heardUpTo = _pendingStart;
     unawaited(_lookAhead());
@@ -1804,6 +1894,7 @@ class PlayerService {
     }
     // Sound is coming out, so whatever permission was missing is not missing now.
     if (_player.playing) needsGesture = false;
+    _watchForTheEndOfTheSound();
     last = PlayerSnapshot(
       current: current,
       index: index,
@@ -1841,6 +1932,7 @@ class PlayerService {
     _cursorTimer?.cancel();
     _watchdog?.cancel();
     _askingForItBack?.cancel();
+    _soundEnds?.cancel();
     _saveCursor();
     await _player.dispose();
     await _stateController.close();

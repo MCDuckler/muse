@@ -33,6 +33,10 @@ Duration stubDelay = Duration.zero;
 /// A server that says yes. The player talks to one for the stream key, for warming the
 /// cache and for reporting what was listened to; none of that is what these tests are
 /// about, and none of it should reach the real one.
+/// Where songs start and end, for the tests that are about that: by track id. A song
+/// not in here is answered the way a server from before this would — with nothing.
+final timings = <int, Map<String, dynamic>>{};
+
 Future<HttpServer> stubServer() async {
   final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
   unawaited(() async {
@@ -40,7 +44,10 @@ Future<HttpServer> stubServer() async {
       if (stubDelay > Duration.zero) await Future<void>.delayed(stubDelay);
       request.response.headers.contentType = ContentType.json;
       final path = request.uri.path;
-      if (path == '/auth/stream-key') {
+      final timingFor = RegExp(r'^/tracks/(\d+)/analysis$').firstMatch(path);
+      if (timingFor != null && timings.containsKey(int.parse(timingFor.group(1)!))) {
+        request.response.write(jsonEncode(timings[int.parse(timingFor.group(1)!)]));
+      } else if (path == '/auth/stream-key') {
         request.response.write(jsonEncode({
           'key': 'test-key',
           'expires_at': DateTime.now().millisecondsSinceEpoch ~/ 1000 + 86400,
@@ -137,6 +144,7 @@ void main() {
     // right default and the wrong one here: the stub server below is the network.
     HttpOverrides.global = null;
     stubDelay = Duration.zero;
+    timings.clear();
     server = await stubServer();
     audio = FakeJustAudio();
     JustAudioPlatform.instance = audio;
@@ -164,6 +172,103 @@ void main() {
     expect(engine.sources.length, 2,
         reason: 'the engine holds this song and the next: ${engine.calls}');
     expect(engine.sources[1], contains('/tracks/2/stream'));
+  });
+
+  group('one song into the next', () {
+    // Songs here are a minute long. This one has two seconds of nothing after it.
+    Map<String, dynamic> timed({int lead = 0, int tail = 0}) =>
+        {'duration_ms': 60000, 'lead_ms': lead, 'tail_ms': tail, 'beats': <int>[]};
+
+    test('the moment its sound is over, the next one is on', () async {
+      timings[1] = timed(tail: 2000);
+      await player.loadQueue(queueOf([track(1), track(2), track(3)]));
+      await player.playAt(0);
+      await settle();
+      final engine = audio.only;
+
+      engine.tick(const Duration(seconds: 50));
+      await settle();
+      expect(player.current?.id, 1);
+
+      // A tenth of a second before the sound ends: the timer is set for the rest.
+      engine.tick(const Duration(milliseconds: 57900));
+      await settle(3);
+      expect(player.current?.id, 1, reason: 'not before it is over');
+      await Future<void>.delayed(const Duration(milliseconds: 160));
+      await settle();
+
+      expect(player.current?.id, 2, reason: 'two seconds of nothing, not sat through');
+      expect(player.joins, 1);
+      expect(engine.calls, contains('seek 0s index:1'),
+          reason: 'a step through the engine, which already had it: ${engine.calls}');
+      expect(engine.calls.where((c) => c.startsWith('load')).length, 1,
+          reason: 'and not a load');
+    });
+
+    test('a song paused in its last second is left where it is', () async {
+      timings[1] = timed(tail: 2000);
+      await player.loadQueue(queueOf([track(1), track(2)]));
+      await player.playAt(0);
+      await settle();
+      audio.only.tick(const Duration(milliseconds: 57900));
+      await settle(3);
+      await player.playPause();
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      await settle();
+      expect(player.current?.id, 1);
+      expect(player.joins, 0);
+    });
+
+    test('the last song plays out: there is nothing to join it to', () async {
+      timings[2] = timed(tail: 2000);
+      await player.loadQueue(queueOf([track(1), track(2)]));
+      await player.playAt(1);
+      await settle();
+      audio.only.tick(const Duration(milliseconds: 57950));
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      await settle();
+      expect(player.joins, 0);
+      expect(player.current?.id, 2);
+    });
+
+    test('a song starts where its sound does', () async {
+      timings[2] = timed(lead: 1500);
+      await player.loadQueue(queueOf([track(1), track(2), track(3)]));
+      await player.playAt(0);
+      await settle();                       // and the next song's timing is asked for
+      final engine = audio.only;
+
+      // The engine moves on by itself, at the top of the file…
+      engine.advanceByItself();
+      await settle();
+      expect(player.current?.id, 2);
+      expect(engine.position, const Duration(milliseconds: 1500),
+          reason: '…and is put where the sound is: ${engine.calls}');
+
+      // Chosen by hand, it is loaded there in the first place.
+      await player.playAt(0);
+      await settle();
+      await player.playAt(1);
+      await settle();
+      expect(engine.position, const Duration(milliseconds: 1500));
+    });
+
+    test('switched off, files play from end to end as they are', () async {
+      timings[1] = timed(tail: 2000);
+      timings[2] = timed(lead: 1500);
+      player.seamless = false;
+      await player.loadQueue(queueOf([track(1), track(2)]));
+      await player.playAt(0);
+      await settle();
+      final engine = audio.only;
+      engine.tick(const Duration(milliseconds: 57950));
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      await settle();
+      expect(player.joins, 0);
+      engine.advanceByItself();
+      await settle();
+      expect(engine.position, Duration.zero);
+    });
   });
 
   test('a song ending is a step through the engine, not a fetch', () async {

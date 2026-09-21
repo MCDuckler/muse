@@ -187,6 +187,11 @@ class ApiClient {
     ];
   }
 
+  /// Where a song's sound starts and ends, its tempo and its beats. See TrackTiming.
+  Future<TrackTiming> timing(int trackId) async => TrackTiming.fromJson(
+      await _decode(await net.get(_u('/tracks/$trackId/analysis'), headers: _headers))
+          as Map<String, dynamic>);
+
   // ---------------- a listening diary kept elsewhere ----------------
   Future<Scrobbling> scrobbling() async => Scrobbling.fromJson(
       await _decode(await net.get(_u('/scrobbling'), headers: _headers))

@@ -37,6 +37,7 @@ import 'pulse.dart';
 import 'open_from.dart';
 import 'widths.dart';
 import 'equalizer_page.dart';
+import 'beat_pulse.dart';
 
 String formatTime(Duration d) {
   final m = d.inMinutes;
@@ -422,9 +423,14 @@ class NowPlayingScreen extends StatelessWidget {
                     // pays twice for.
                     if (app.halftone)
                       Positioned.fill(
-                        child: MirrorBallLight(
-                          playing: app.musicIsPlaying,
-                          tint: parseHexColour(track.coverColor),
+                        child: BeatPulse(
+                          app: app,
+                          track: track,
+                          builder: (context, pulse) => MirrorBallLight(
+                            playing: app.musicIsPlaying,
+                            tint: parseHexColour(track.coverColor),
+                            pulse: pulse,
+                          ),
                         ),
                       ),
                   ],
@@ -2163,6 +2169,7 @@ class _PlaybackExtrasState extends State<_PlaybackExtras> {
                   );
                 },
               ),
+              _HowItPlays(app: app),
               const Divider(height: 8),
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 4, 20, 6),
@@ -2408,4 +2415,55 @@ class _Waveform extends CustomPainter {
       !identical(old.shape, shape) ||
       old.ink != ink ||
       old.rest != rest;
+}
+
+
+/// One song into the next, and what is known about this one's time.
+///
+/// The switch, and under it what the server found when it listened to the song on now:
+/// how fast it goes, and how much nothing there is at either end of its file that is
+/// being skipped. Said only when there is something to say.
+class _HowItPlays extends StatefulWidget {
+  const _HowItPlays({required this.app});
+  final AppState app;
+
+  @override
+  State<_HowItPlays> createState() => _HowItPlaysState();
+}
+
+class _HowItPlaysState extends State<_HowItPlays> {
+  TrackTiming? _timing;
+
+  @override
+  void initState() {
+    super.initState();
+    final player = widget.app.player;
+    final track = player?.current;
+    if (player == null || track == null) return;
+    _timing = player.timing.peek(track.id);
+    player.timing.of(track).then((found) {
+      if (mounted) setState(() => _timing = found);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = widget.app;
+    final t = _timing;
+    String seconds(int ms) => '${(ms / 1000).toStringAsFixed(1)} s';
+    final about = [
+      if (t?.bpm != null) '${t!.bpm!.round()} beats a minute',
+      if (app.seamless && t != null && t.leadMs + t.tailMs > 0)
+        '${seconds(t.leadMs + t.tailMs)} of silence skipped in this song',
+    ];
+    return SwitchListTile(
+      secondary: const Icon(Icons.linear_scale),
+      title: const Text('One song into the next'),
+      subtitle: Text(about.isEmpty
+          ? 'Skips the second or two of nothing at the ends of files'
+          : about.join(' · ')),
+      value: app.seamless,
+      onChanged: app.setSeamless,
+    );
+  }
 }

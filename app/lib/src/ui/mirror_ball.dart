@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'motion.dart';
+import 'package:flutter/foundation.dart';
 
 /// Light thrown off the mirror ball.
 ///
@@ -20,9 +21,15 @@ import 'motion.dart';
 /// Its own layer: the specks repaint every frame while they move, and nothing else on
 /// the screen has to.
 class MirrorBallLight extends StatefulWidget {
-  const MirrorBallLight({super.key, required this.playing, this.tint, this.count = 16});
+  const MirrorBallLight(
+      {super.key, required this.playing, this.tint, this.count = 16, this.pulse});
 
   final bool playing;
+
+  /// The song's beat, one on it and falling to nothing: the light flares with it. A
+  /// mirror ball in a room is lit by whatever the lighting desk is doing, and the desk
+  /// is doing it in time. Null, or a song with no beats, and it drifts as it always did.
+  final ValueListenable<double>? pulse;
 
   /// The record's own colour, which the light picks up a little of, the way a room's
   /// light is coloured by what it bounces off.
@@ -79,6 +86,7 @@ class _MirrorBallLightState extends State<MirrorBallLight>
                   clock: _clock,
                   count: widget.count,
                   tint: widget.tint,
+                  pulse: widget.pulse,
                 ),
               ),
             ),
@@ -88,11 +96,13 @@ class _MirrorBallLightState extends State<MirrorBallLight>
 }
 
 class _Specks extends CustomPainter {
-  _Specks({required this.clock, required this.count, this.tint}) : super(repaint: clock);
+  _Specks({required this.clock, required this.count, this.tint, this.pulse})
+      : super(repaint: pulse == null ? clock : Listenable.merge([clock, pulse]));
 
   final AnimationController clock;
   final int count;
   final Color? tint;
+  final ValueListenable<double>? pulse;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -100,6 +110,7 @@ class _Specks extends CustomPainter {
     final seconds = clock.value * 240;
     final rng = math.Random(39);
     final light = Color.lerp(Colors.white, tint ?? Colors.white, 0.18)!;
+    final beat = pulse?.value ?? 0.0;
     for (var i = 0; i < count; i++) {
       // Everything about a speck is fixed by its number; only time moves it.
       final x0 = rng.nextDouble();
@@ -113,9 +124,12 @@ class _Specks extends CustomPainter {
       final x = ((x0 + speed * seconds) % 1.2) - 0.1;
       final y = ((y0 + lift * seconds) % 1.1) - 0.05;
       final glint = 0.5 + 0.5 * math.sin(seconds * twinkle + phase);
-      final alpha = 0.10 + 0.42 * glint;
+      // On the beat every speck is brighter and a little bigger, some more than
+      // others — a room's worth of tiles does not catch the light equally.
+      final catches = 0.45 + 0.55 * ((i * 7) % 5) / 4;
+      final alpha = (0.10 + 0.42 * glint + 0.38 * beat * catches).clamp(0.0, 0.95);
       final at = Offset(x * size.width, y * size.height);
-      final r = size0 * (0.8 + 0.4 * glint);
+      final r = size0 * (0.8 + 0.4 * glint) * (1 + 0.45 * beat * catches);
 
       // A soft square of light, the shape a mirror tile throws, turned a little.
       canvas.save();
@@ -134,5 +148,6 @@ class _Specks extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_Specks old) => old.count != count || old.tint != tint;
+  bool shouldRepaint(_Specks old) =>
+      old.count != count || old.tint != tint || old.pulse != pulse;
 }

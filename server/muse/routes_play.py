@@ -8,6 +8,7 @@ import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Response
 
 from . import catalog, db
+from . import beats as _beats
 from . import peaks as _peaks
 from . import scrobble
 from .deps import cfg, current_user
@@ -40,6 +41,30 @@ def peaks(track_id: int, response: Response, user: dict = Depends(current_user))
     # The same file always has the same shape, and the file is named by its hash.
     response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
     return {"peaks": shape, "slices": len(shape)}
+
+
+@router.get("/tracks/{track_id}/analysis")
+def analysis(track_id: int, response: Response, user: dict = Depends(current_user)):
+    """Where the song really starts and ends, how fast it goes, and where its beats are.
+
+    What playing one song straight into the next is done from, and what anything that
+    moves with the music keeps time by. Worked out on the first ask — about half a
+    second a song — and kept; see beats.py."""
+    t = catalog.track_row(track_id)
+    if not t or not t.get("path"):
+        raise HTTPException(404, "not ready" if t else "no such track")
+    audio = pathlib.Path(t["path"])
+    if not audio.exists():
+        raise HTTPException(404, "the audio is missing")
+    try:
+        found = _beats.for_track(cfg().data_dir, audio, t["sha256"])
+    except (subprocess.SubprocessError, OSError) as e:
+        raise HTTPException(502, "could not read the audio") from e
+    if found.get("bpm") and t.get("bpm") != found["bpm"]:
+        db.run("update tracks set bpm=%s where id=%s", (found["bpm"], track_id))
+    # The same file always has the same beats, and the file is named by its hash.
+    response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+    return found
 
 
 @router.get("/tracks/{track_id}/lyrics")

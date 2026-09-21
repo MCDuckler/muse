@@ -2033,3 +2033,76 @@ class Scrobbling {
     );
   }
 }
+
+/// What a song is made of in time: where the sound really starts and ends in its file,
+/// how fast it goes, and where its beats fall. Worked out by the server, once per song.
+class TrackTiming {
+  const TrackTiming({
+    this.durationMs = 0,
+    this.leadMs = 0,
+    this.tailMs = 0,
+    this.bpm,
+    this.beats = const [],
+    this.barStartsOn = 0,
+    this.ends = '',
+  });
+
+  final int durationMs;
+
+  /// Nothing, at the start of the file, before the first sound.
+  final int leadMs;
+
+  /// Nothing, at the end of it, after the last.
+  final int tailMs;
+
+  /// Beats a minute — null for something with no steady pulse, which is not given one.
+  final double? bpm;
+
+  /// Where each beat falls, in milliseconds from the start of the file.
+  final List<int> beats;
+
+  /// Which beat of four the bar most likely starts on. A guess, and treated as one.
+  final int barStartsOn;
+
+  /// 'cold', 'fade', or '' when it could not be said.
+  final String ends;
+
+  Duration get lead => Duration(milliseconds: leadMs);
+
+  /// Where the sound ends — null when the file has no dead air after it worth skipping,
+  /// or its length is not known.
+  Duration? get soundEnds =>
+      tailMs > 0 && durationMs > tailMs ? Duration(milliseconds: durationMs - tailMs) : null;
+
+  bool get hasBeats => beats.length >= 8;
+
+  /// Which beat the music is on at [at], and how far through it: 0 on the beat, rising
+  /// to 1 at the next. Null before the first beat, after the last, and where there are
+  /// none — a light that pulses through a silence is keeping time with nothing.
+  ({int index, double phase})? beatAt(Duration at) {
+    if (!hasBeats) return null;
+    final ms = at.inMilliseconds;
+    if (ms < beats.first || ms >= beats.last) return null;
+    var lo = 0, hi = beats.length - 1;
+    while (hi - lo > 1) {
+      final mid = (lo + hi) >> 1;
+      if (beats[mid] <= ms) {
+        lo = mid;
+      } else {
+        hi = mid;
+      }
+    }
+    final span = beats[hi] - beats[lo];
+    return (index: lo, phase: span <= 0 ? 0 : (ms - beats[lo]) / span);
+  }
+
+  factory TrackTiming.fromJson(Map<String, dynamic> j) => TrackTiming(
+        durationMs: (j['duration_ms'] ?? 0) as int,
+        leadMs: (j['lead_ms'] ?? 0) as int,
+        tailMs: (j['tail_ms'] ?? 0) as int,
+        bpm: (j['bpm'] as num?)?.toDouble(),
+        beats: [for (final b in (j['beats'] ?? const []) as List) (b as num).toInt()],
+        barStartsOn: (j['bar_starts_on'] ?? 0) as int,
+        ends: (j['ends'] ?? '') as String,
+      );
+}

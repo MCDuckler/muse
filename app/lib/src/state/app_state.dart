@@ -286,6 +286,7 @@ class AppState extends ChangeNotifier {
   static const _kCoverStyle = 'muse.coverStyle';
   static const _kPalette = 'muse.palette';
   static const _kHalftone = 'muse.halftone';
+  static const _kSeamless = 'muse.seamless';
   static const _kSpectrum = 'muse.spectrum';
   static const _kCoverScale = 'muse.coverScale';
   static const _kArmStyle = 'muse.armStyle';
@@ -469,6 +470,19 @@ class AppState extends ChangeNotifier {
     await prefs.setString(_kLayout, next.name);
   }
 
+  /// Whether one song is played straight into the next, without the second or two of
+  /// nothing most files have at either end. On unless somebody turns it off: the
+  /// silence is an accident of how files are made, not part of the record.
+  bool seamless = true;
+
+  Future<void> setSeamless(bool on) async {
+    seamless = on;
+    player?.seamless = on;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kSeamless, on);
+  }
+
   Future<void> setHalftone(bool on) async {
     halftone = on;
     notifyListeners();
@@ -501,6 +515,8 @@ class AppState extends ChangeNotifier {
     // browser pays for that twice — once to draw it and once to composite it. Anybody
     // who wants it can turn it on, and their choice is what is read back here.
     halftone = prefs.getBool(_kHalftone) ?? !kIsWeb;
+    seamless = prefs.getBool(_kSeamless) ?? true;
+    player?.seamless = seamless;
     spectrum = prefs.getBool(_kSpectrum) ?? false;
     // A phone that remembers a tab from before Home existed opens on Home, once:
     // it is the new thing, and the place the app now starts.
@@ -740,7 +756,9 @@ class AppState extends ChangeNotifier {
   /// The player and the kept music: everything about starting that needs no server.
   Future<void> _startThePlayer() async {
     if (_playerStarted && player != null) return;
-    player ??= PlayerService(api)..userVolume = _volume;
+    player ??= PlayerService(api)
+      ..userVolume = _volume
+      ..seamless = seamless;
     // The equalizer belongs to the player it shapes the sound of: started with it, from
     // whatever was kept, on whichever kind of equalizer this device has.
     unawaited(equalizer.start(eqEngineFor(

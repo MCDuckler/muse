@@ -601,3 +601,8 @@ create table if not exists scrobbles (
   error     text
 );
 create index if not exists scrobbles_owed on scrobbles(user_id) where sent_at is null;
+
+-- How fast a song goes, once it has been listened to by beats.py. Kept on the row —
+-- the beats themselves are on disk beside the audio — so that songs can one day be
+-- ordered and chosen by it without opening a file per song.
+alter table tracks add column if not exists bpm real;

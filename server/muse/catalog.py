@@ -124,6 +124,8 @@ def public(t: dict) -> dict:
         "artists": t["artists"],
         "album": t["album"],
         "duration_ms": t["duration_ms"],
+        # Beats a minute, once the song has been listened to for them. See beats.py.
+        "bpm": t.get("bpm"),
         "state": t["state"],
         "fail_reason": t["fail_reason"],
         "fail_code": t.get("fail_code"),
