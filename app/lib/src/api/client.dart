@@ -1294,9 +1294,15 @@ class ApiClient {
   }
 
   /// What one account listened to, over one stretch of time.
-  Future<Listening> listening({String since = 'month', int? who}) async {
+  ///
+  /// Or, with [everyone], what the whole house did: every account added together.
+  Future<Listening> listening(
+      {String since = 'month', int? who, bool everyone = false}) async {
     final d = await _decode(await net.get(
-        _u('/library/stats', {'since': since, if (who != null) 'who': who}),
+        _u('/library/stats', {
+          'since': since,
+          if (everyone) 'everyone': 'true' else if (who != null) 'who': who,
+        }),
         headers: _headers)) as Map<String, dynamic>;
     return Listening.fromJson(d);
   }

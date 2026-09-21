@@ -535,7 +535,7 @@ _SPAN = {"week": 7 * 86400, "month": 30 * 86400, "year": 365 * 86400}
 _LOOKBACK = {"week": 26, "month": 24, "year": 5}
 
 
-def _chart_runs(whose: int, since: str, limit: int, ids: list[int]) -> dict[int, dict]:
+def _chart_runs(whose: int | None, since: str, limit: int, ids: list[int]) -> dict[int, dict]:
     """Where each of these songs stood on the last chart, and how many charts it has
     been on.
 
@@ -556,7 +556,7 @@ def _chart_runs(whose: int, since: str, limit: int, ids: list[int]) -> dict[int,
                     count(*) started,
                     coalesce(sum(l.ms_played), 0) ms
                from listens l
-              where l.user_id = %s
+              where (%s::int is null or l.user_id = %s)
                 and l.started_at > now() - make_interval(secs => %s)
               group by 1, 2
            ), r as (
@@ -571,48 +571,58 @@ def _chart_runs(whose: int, since: str, limit: int, ids: list[int]) -> dict[int,
              from r
             where track_id = any(%s)
             group by track_id""",
-        (span, whose, span * _LOOKBACK[since], limit, ids))
+        (span, whose, whose, span * _LOOKBACK[since], limit, ids))
     return {r["track_id"]: r for r in rows}
 
 
 @router.get("/stats")
 def stats(since: str = "month", who: int | None = None, limit: int = 25,
-          user: dict = Depends(current_user)):
-    """How much of what, for one account over one stretch of time.
+          everyone: bool = False, user: dict = Depends(current_user)):
+    """How much of what, for one account over one stretch of time — or for the house.
 
     `who` is any account on this box, because the catalog is shared and the People
     screen already says who has how much — this is the same fact, counted properly.
+    `everyone` is all of them added together: the house's chart rather than a person's.
+    It tells nobody anything `who` did not already; it only saves them the adding up.
     """
     if since not in PERIODS:
         raise HTTPException(400, f"since must be one of {', '.join(PERIODS)}")
-    whose = who or user["id"]
-    person = db.one("select id, name from users where id=%s", (whose,))
-    if not person:
-        raise HTTPException(404, "no such account")
+    if everyone:
+        whose, person = None, None
+    else:
+        whose = who or user["id"]
+        person = db.one("select id, name from users where id=%s", (whose,))
+        if not person:
+            raise HTTPException(404, "no such account")
 
     window = PERIODS[since]
     when = "" if window is None else f"and l.started_at > now() - interval '{window}'"
     limit = max(1, min(limit, 100))
-    args: tuple = (whose,)
+    # One person's listens, or all of them. The same queries either way: a house chart
+    # that was counted differently from a person's could not be compared with one.
+    mine = "true" if everyone else "l.user_id=%s"
+    args: tuple = () if everyone else (whose,)
 
     totals = db.one(
         f"""select count(*) started,
                    count(*) filter (where l.completed) plays,
                    coalesce(sum(l.ms_played),0) ms,
                    count(distinct l.track_id) tracks,
+                   count(distinct l.user_id) listeners,
                    min(l.started_at) first_at, max(l.started_at) last_at
-              from listens l where l.user_id=%s {when}""", args)
+              from listens l where {mine} {when}""", args)
 
     songs = db.all_(
         f"""select t.id, t.title, t.artists, t.album,
                    count(*) filter (where l.completed) plays,
                    count(*) started,
                    coalesce(sum(l.ms_played),0) ms,
+                   count(distinct l.user_id) listeners,
                    max(l.started_at) last_at,
                    case when t.cover_id is not null
                         then '/tracks/' || t.id || '/cover' end as cover_url
               from listens l join tracks t on t.id = l.track_id
-             where l.user_id=%s {when}
+             where {mine} {when}
              group by t.id
              order by plays desc, started desc, ms desc
              limit %s""", args + (limit,))
@@ -634,7 +644,7 @@ def stats(since: str = "month", who: int | None = None, limit: int = 25,
               from (select unnest(t.artists) as artist, l.completed, l.ms_played,
                            l.track_id
                       from listens l join tracks t on t.id = l.track_id
-                     where l.user_id=%s {when}) x
+                     where {mine} {when}) x
              where artist is not null and artist <> ''
              group by {_key("artist")}, artist
              order by plays desc, ms desc
@@ -646,7 +656,7 @@ def stats(since: str = "month", who: int | None = None, limit: int = 25,
                    count(*) filter (where l.completed) plays,
                    coalesce(sum(l.ms_played),0) ms
               from listens l join tracks t on t.id = l.track_id
-             where l.user_id=%s and t.album is not null and t.album <> '' {when}
+             where {mine} and t.album is not null and t.album <> '' {when}
              group by t.album, coalesce(t.artists[1], 'Unknown artist')
              order by plays desc, ms desc
              limit %s""", args + (limit,))
@@ -658,17 +668,18 @@ def stats(since: str = "month", who: int | None = None, limit: int = 25,
         f"""select date_trunc('{step}', l.started_at) at,
                    count(*) filter (where l.completed) plays,
                    coalesce(sum(l.ms_played),0) ms
-              from listens l where l.user_id=%s {when}
+              from listens l where {mine} {when}
              group by 1 order by 1""", args)
 
     return {
-        "who": {"id": person["id"], "name": person["name"]},
+        "who": {"id": person["id"], "name": person["name"]} if person else None,
+        "everyone": everyone,
         "since": since,
         "people": db.all_("select id, name from users order by lower(name)"),
         "totals": {
             "plays": totals["plays"], "started": totals["started"],
             "minutes": round(int(totals["ms"]) / 60_000),
-            "tracks": totals["tracks"],
+            "tracks": totals["tracks"], "listeners": totals["listeners"],
             "first_at": totals["first_at"], "last_at": totals["last_at"],
         },
         "songs": songs, "artists": artists, "albums": albums,

@@ -227,6 +227,34 @@ def test_stats_can_be_asked_about_a_stretch_or_about_somebody_else(client, hdr,
                       params={"who": 9999}).status_code == 404
 
 
+def test_the_house_has_a_chart_of_its_own(client, hdr, library):
+    """Everybody's listening added together. The house chart counts everyone and says
+    how many people that was, per song and in all, and a person's own chart is left
+    exactly as it was."""
+    from muse import auth, db
+    other_id = auth.ensure_user("joe", pw_hash=auth.hash_password("x"))
+    client.post("/listens", headers=hdr,
+                json={"track_id": library[0], "ms_played": 200_000, "completed": True})
+    for _ in range(2):
+        db.run("""insert into listens (user_id, track_id, ms_played, completed)
+                  values (%s, %s, 200000, true)""", (other_id, library[1]))
+    db.run("""insert into listens (user_id, track_id, ms_played, completed)
+              values (%s, %s, 200000, true)""", (other_id, library[0]))
+
+    house = client.get("/library/stats", headers=hdr,
+                       params={"since": "month", "everyone": True}).json()
+    assert house["everyone"] is True and house["who"] is None
+    assert house["totals"]["plays"] == 4
+    assert house["totals"]["listeners"] == 2
+    by_id = {r["id"]: r for r in house["songs"]}
+    assert by_id[library[0]]["plays"] == 2 and by_id[library[0]]["listeners"] == 2
+    assert by_id[library[1]]["plays"] == 2 and by_id[library[1]]["listeners"] == 1
+
+    mine = client.get("/library/stats", headers=hdr, params={"since": "month"}).json()
+    assert mine["everyone"] is False
+    assert mine["totals"]["plays"] == 1 and mine["totals"]["listeners"] == 1
+
+
 def test_the_charts_know_where_a_song_was_last_week(client, hdr, library):
     """A chart is only a chart if it moves: this week's place against last week's, a
     new entry when a song was not on last week's at all, and how many weeks it has

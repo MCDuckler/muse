@@ -43,6 +43,9 @@ class _ListeningPageState extends State<ListeningPage> {
   // Weekly by default: a chart is a weekly thing, and it is the one with movement.
   String _since = 'week';
   int? _who;
+
+  /// The house's chart rather than a person's: everybody's listening added together.
+  bool _everyone = false;
   Future<Listening>? _future;
 
   @override
@@ -54,7 +57,10 @@ class _ListeningPageState extends State<ListeningPage> {
   // A block, not an arrow: `() => _future = …` hands the Future back to setState,
   // which refuses it.
   void _load() => setState(() {
-        _future = context.read<AppState>().api.listening(since: _since, who: _who);
+        _future = context
+            .read<AppState>()
+            .api
+            .listening(since: _since, who: _who, everyone: _everyone);
       });
 
   String _when() {
@@ -78,7 +84,7 @@ class _ListeningPageState extends State<ListeningPage> {
           if (!snap.hasData) return const SongsComing(rows: 6);
           final d = snap.data!;
           final scheme = Theme.of(context).colorScheme;
-          final mine = d.whoId == 0 || d.people.length < 2;
+          final mine = !d.everyone && (d.whoId == 0 || d.people.length < 2);
           return RecordRefresh(
             onRefresh: () async => _load(),
             child: ListView(
@@ -115,18 +121,32 @@ class _ListeningPageState extends State<ListeningPage> {
                 if (d.people.length > 1) ...[
                   const SizedBox(height: 10),
                   // Whose chart. One account is the usual answer, so it is a row of
-                  // names rather than a screen of its own.
+                  // names rather than a screen of its own — and first in it the house,
+                  // which is all of them at once.
                   SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     child: Row(
                       children: [
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: ChoiceChip(
+                            avatar: d.everyone ? null : const Icon(Icons.groups_outlined, size: 18),
+                            label: const Text('Everyone'),
+                            selected: d.everyone,
+                            onSelected: (_) {
+                              _everyone = true;
+                              _load();
+                            },
+                          ),
+                        ),
                         for (final p in d.people)
                           Padding(
                             padding: const EdgeInsets.only(right: 8),
                             child: ChoiceChip(
                               label: Text(p.name),
-                              selected: p.id == d.whoId,
+                              selected: !d.everyone && p.id == d.whoId,
                               onSelected: (_) {
+                                _everyone = false;
                                 _who = p.id;
                                 _load();
                               },
@@ -139,7 +159,8 @@ class _ListeningPageState extends State<ListeningPage> {
                 const SizedBox(height: 14),
                 _Masthead(
                   when: _when(),
-                  whose: mine ? null : d.whoName,
+                  whose: mine || d.everyone ? null : d.whoName,
+                  house: d.everyone,
                 ),
                 if (d.isEmpty)
                   Padding(
@@ -245,10 +266,13 @@ class _Tab extends StatelessWidget {
 
 /// The head of the page: THE CHARTS, and which chart this is.
 class _Masthead extends StatelessWidget {
-  const _Masthead({required this.when, this.whose});
+  const _Masthead({required this.when, this.whose, this.house = false});
 
   final String when;
   final String? whose;
+
+  /// Everybody's chart, which gets a name of its own.
+  final bool house;
 
   @override
   Widget build(BuildContext context) {
@@ -263,7 +287,12 @@ class _Masthead extends StatelessWidget {
         children: [
           Text.rich(
             TextSpan(children: [
-              TextSpan(text: whose == null ? 'THE ' : '${whose!.toUpperCase()}\'S '),
+              TextSpan(
+                  text: house
+                      ? 'THE HOUSE '
+                      : whose == null
+                          ? 'THE '
+                          : '${whose!.toUpperCase()}\'S '),
               TextSpan(text: 'CHARTS', style: TextStyle(color: scheme.primary)),
             ]),
             style: Mag.headline(56, color: scheme.onSurface),
@@ -334,6 +363,8 @@ class _Totals extends StatelessWidget {
           if (d.plays > 0) fact('${d.plays}', d.plays == 1 ? 'play' : 'plays'),
           if (d.minutes > 0) fact(_hours(d.minutes), d.minutes < 90 ? 'minutes' : 'hours'),
           if (d.tracks > 0) fact('${d.tracks}', d.tracks == 1 ? 'song' : 'songs'),
+          // Only where it is a fact about the chart: a person's own is always one.
+          if (d.everyone && d.listeners > 1) fact('${d.listeners}', 'listeners'),
         ],
       ),
     );
@@ -520,6 +551,11 @@ class _ChartRow extends StatelessWidget {
                     style: Mag.typewriter(12, color: scheme.onSurface, bold: true)),
                 if (run.isNotEmpty)
                   Text(run, style: Mag.typewriter(10.5, color: scheme.onSurfaceVariant)),
+                // On the house's chart, how many of the house: two plays each from
+                // three people is a different song from six plays from one.
+                if (song.listeners > 1)
+                  Text('${song.listeners} people',
+                      style: Mag.typewriter(10.5, color: scheme.onSurfaceVariant)),
               ],
             ),
           ],

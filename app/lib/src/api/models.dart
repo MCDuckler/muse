@@ -671,6 +671,12 @@ class Playlist {
 class Listening {
   final int whoId;
   final String whoName;
+
+  /// The whole house added together, rather than one account.
+  final bool everyone;
+
+  /// How many accounts the listening was done by: one, unless it is [everyone]'s.
+  final int listeners;
   final String since;
   final List<({int id, String name})> people;
   final int plays;
@@ -684,6 +690,8 @@ class Listening {
   const Listening({
     required this.whoId,
     required this.whoName,
+    this.everyone = false,
+    this.listeners = 0,
     required this.since,
     required this.people,
     required this.plays,
@@ -703,6 +711,8 @@ class Listening {
     return Listening(
       whoId: (who['id'] ?? 0) as int,
       whoName: (who['name'] ?? '') as String,
+      everyone: j['everyone'] == true,
+      listeners: (totals['listeners'] ?? 0) as int,
       since: (j['since'] ?? 'month') as String,
       people: [
         for (final p in (j['people'] ?? const []) as List)
@@ -744,6 +754,9 @@ class PlayedOften {
   final int? lastRank;
   final int charts;
 
+  /// How many accounts played it. Only worth saying on the house's chart.
+  final int listeners;
+
   const PlayedOften({
     required this.id,
     required this.title,
@@ -756,6 +769,7 @@ class PlayedOften {
     this.rank,
     this.lastRank,
     this.charts = 0,
+    this.listeners = 0,
   });
 
   factory PlayedOften.fromJson(Map<String, dynamic> j) => PlayedOften(
@@ -770,6 +784,7 @@ class PlayedOften {
         rank: j['rank'] as int?,
         lastRank: j['last_rank'] as int?,
         charts: (j['charts'] ?? 0) as int,
+        listeners: (j['listeners'] ?? 0) as int,
       );
 
   String get artistLine => artists.isEmpty ? 'Unknown artist' : artists.join(', ');

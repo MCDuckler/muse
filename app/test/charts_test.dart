@@ -35,26 +35,37 @@ void main() {
   late AppState app;
   final asked = <String>[];
   var empty = false;
+  var housemates = false;
+  final askedForEveryone = <bool>[];
 
   setUp(() {
     asked.clear();
+    askedForEveryone.clear();
     empty = false;
+    housemates = false;
     SharedPreferences.setMockInitialValues({});
     useThisClientInstead(MockClient((request) async {
       final since = request.url.queryParameters['since'] ?? '';
       asked.add(since);
+      final everyone = request.url.queryParameters['everyone'] == 'true';
+      askedForEveryone.add(everyone);
       final body = {
-        'who': {'id': 1, 'name': 'chris'},
+        'who': everyone ? null : {'id': 1, 'name': 'chris'},
+        'everyone': everyone,
         'since': since,
         'people': [
-          {'id': 1, 'name': 'chris'}
+          {'id': 1, 'name': 'chris'},
+          if (housemates) {'id': 2, 'name': 'joe'},
         ],
-        'totals': {'plays': empty ? 0 : 41, 'started': empty ? 0 : 44, 'minutes': 152, 'tracks': 18},
+        'totals': {
+          'plays': empty ? 0 : 41, 'started': empty ? 0 : 44, 'minutes': 152, 'tracks': 18,
+          'listeners': everyone ? 2 : 1,
+        },
         'songs': empty
             ? []
             : [
                 song(1, 'Tape Hiss', 1, 1, 3, 14),
-                song(2, 'Salt on the Window', 2, 5, 2, 9),
+                {...song(2, 'Salt on the Window', 2, 5, 2, 9), 'listeners': everyone ? 2 : 1},
                 song(3, 'Night Bus', 3, null, 1, 8),
                 song(4, 'Harbour Lights', 4, 2, 5, 7),
                 song(5, 'Dunes', 5, 5, 3, 6),
@@ -105,6 +116,32 @@ void main() {
         reason: 'second last week, fourth now');
     expect(find.bySemanticsLabel(RegExp(r'no change')), findsNWidgets(2), reason: 'number one held, and fifth held');
     expect(find.text('5 wks'), findsOneWidget);
+  });
+
+  testWidgets('the whole house has a chart, first in the row of names', (tester) async {
+    housemates = true;
+    await show(tester);
+    expect(find.text('2 people'), findsNothing, reason: 'a person\'s chart is one person');
+    await tester.tap(find.text('Everyone'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(tester.takeException(), isNull);
+    expect(askedForEveryone.last, isTrue);
+    expect(find.textContaining('THE HOUSE', findRichText: true), findsOneWidget);
+    expect(find.text('LISTENERS'), findsOneWidget);
+    expect(find.text('2 people'), findsOneWidget);
+
+    // And back to a person.
+    await tester.tap(find.text('joe'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(askedForEveryone.last, isFalse);
+    expect(find.textContaining('THE HOUSE', findRichText: true), findsNothing);
+  });
+
+  testWidgets('one account alone is not offered a house', (tester) async {
+    await show(tester);
+    expect(find.text('Everyone'), findsNothing);
   });
 
   testWidgets('the all-time chart has nothing to move against', (tester) async {
