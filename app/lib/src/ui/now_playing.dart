@@ -1752,32 +1752,30 @@ class _ScrubberState extends State<_ScrubberBar>
           child: Stack(
           alignment: Alignment.center,
           children: [
-          if (shape != null && shape.isNotEmpty)
-            Positioned.fill(
-              child: Padding(
-                // The slider's track is held in by its overlay's radius; the shape
-                // sits on exactly the same line.
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: IgnorePointer(
-                  child: CustomPaint(
-                    painter: _Waveform(
-                      shape: shape,
-                      played: max > 0 ? (value / max).clamp(0.0, 1.0) : 0,
-                      ink: Theme.of(context).colorScheme.primary,
-                      rest: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.22),
-                    ),
-                  ),
+          // Always the segmented bar: breathing quietly while the shape is being
+          // fetched, flat where there is none, and rising into the song's shape when
+          // it arrives — never a plain line that is swapped for something else.
+          Positioned.fill(
+            child: Padding(
+              // The slider's track is held in by its overlay's radius; the shape
+              // sits on exactly the same line.
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: IgnorePointer(
+                child: WaveBar(
+                  shape: shape,
+                  loading: songId != null && !_shapes.containsKey(songId),
+                  played: max > 0 ? (value / max).clamp(0.0, 1.0) : 0,
                 ),
               ),
             ),
+          ),
           SliderTheme(
           data: SliderTheme.of(context).copyWith(
             trackHeight: 3,
             thumbShape: RoundSliderThumbShape(enabledThumbRadius: enabled ? 7 : 4),
             overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
-            activeTrackColor: shape != null && shape.isNotEmpty ? Colors.transparent : null,
-            inactiveTrackColor:
-                shape != null && shape.isNotEmpty ? Colors.transparent : null,
+            activeTrackColor: Colors.transparent,
+            inactiveTrackColor: Colors.transparent,
           ),
           child: Slider(
             value: max > 0 ? value : 0,
@@ -1803,10 +1801,31 @@ class _ScrubberState extends State<_ScrubberBar>
           ],
           ),
         );
-        final elapsed = Text(formatTime(Duration(milliseconds: value.round())),
-            style: Theme.of(context).textTheme.labelMedium);
-        final total = Text(max > 0 ?  formatTime(duration) : '--:--',
-            style: Theme.of(context).textTheme.labelMedium);
+        // Both times in a box as wide as the longer of them will ever be, in figures
+        // that are all one width. They were sized by whatever they said, so "1:11" was
+        // narrower than "0:48" and the bar between them changed length every second.
+        final timeStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
+            fontFeatures: const [FontFeature.tabularFigures()]);
+        final widest = TextPainter(
+          text: TextSpan(
+              text: (max > 0 ? formatTime(duration) : '--:--')
+                  .replaceAll(RegExp(r'\d'), '0'),
+              style: timeStyle),
+          textDirection: TextDirection.ltr,
+          textScaler: MediaQuery.textScalerOf(context),
+        )..layout();
+        final timeWidth = widest.width.ceilToDouble() + 1;
+        widest.dispose();
+        final elapsed = SizedBox(
+          width: timeWidth,
+          child: Text(formatTime(Duration(milliseconds: value.round())),
+              maxLines: 1, softWrap: false, style: timeStyle),
+        );
+        final total = SizedBox(
+          width: timeWidth,
+          child: Text(max > 0 ? formatTime(duration) : '--:--',
+              maxLines: 1, softWrap: false, textAlign: TextAlign.end, style: timeStyle),
+        );
 
         // Beside the bar rather than under it: a line less, and the two numbers read
         // as the ends of the thing they belong to.
@@ -2142,41 +2161,163 @@ class _PlaybackExtrasState extends State<_PlaybackExtras> {
   }
 }
 
-/// A song's shape as a seek bar: a bar for each slice of it, as tall as that slice is
-/// loud, mirrored about the line. What has played is inked in; what is to come is
-/// faint.
-class _Waveform extends CustomPainter {
-  _Waveform({required this.shape, required this.played, required this.ink, required this.rest});
+/// The seek bar's segments, and how they move.
+///
+/// Three states, one look. While the song's shape is being fetched the segments are
+/// low and a slow swell travels along them; when it arrives they rise into it over
+/// half a second; where there is none to be had they sit flat. A phone asked to keep
+/// still gets no swell and no rise, just the result.
+class WaveBar extends StatefulWidget {
+  const WaveBar({super.key, required this.shape, required this.loading, required this.played});
 
-  final List<int> shape;
+  final List<int>? shape;
+  final bool loading;
   final double played;
+
+  @override
+  State<WaveBar> createState() => _WaveBarState();
+}
+
+class _WaveBarState extends State<WaveBar> with TickerProviderStateMixin {
+  late final AnimationController _swell =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 2400));
+  late final AnimationController _rise = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 520),
+      value: widget.shape == null ? 0 : 1);
+
+  late final Animation<double> _rising =
+      CurvedAnimation(parent: _rise, curve: Curves.easeOutCubic);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _settle();
+  }
+
+  @override
+  void didUpdateWidget(WaveBar old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.shape, widget.shape)) {
+      if (widget.shape == null) {
+        _rise.value = 0;                  // another song: back down, then up again
+      } else if (stillness(context)) {
+        _rise.value = 1;
+      } else {
+        _rise.forward(from: 0);
+      }
+    }
+    _settle();
+  }
+
+  void _settle() {
+    final moving = widget.loading && !stillness(context);
+    if (moving && !_swell.isAnimating) _swell.repeat();
+    if (!moving && _swell.isAnimating) _swell.stop();
+  }
+
+  @override
+  void dispose() {
+    _swell.dispose();
+    _rise.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return RepaintBoundary(
+      child: CustomPaint(
+        size: Size.infinite,
+        painter: _Waveform(
+          shape: widget.shape,
+          played: widget.played,
+          loading: widget.loading,
+          swell: _swell,
+          rise: _rising,
+          ink: scheme.primary,
+          rest: scheme.onSurface.withValues(alpha: 0.24),
+        ),
+      ),
+    );
+  }
+}
+
+/// A song's shape as a seek bar: evenly cut segments, each as tall as its slice of the
+/// song is loud, mirrored about the line. What has played is inked in; what is to come
+/// is faint.
+class _Waveform extends CustomPainter {
+  _Waveform({
+    required this.shape,
+    required this.played,
+    required this.loading,
+    required this.swell,
+    required this.rise,
+    required this.ink,
+    required this.rest,
+  }) : super(repaint: Listenable.merge([swell, rise]));
+
+  final List<int>? shape;
+  final double played;
+  final bool loading;
+  final Animation<double> swell;
+  final Animation<double> rise;
   final Color ink;
   final Color rest;
 
+  /// A segment and the gap after it, in whole pixels: the same everywhere, on every
+  /// width of screen. The server's 160 slices were drawn one to a bar at whatever
+  /// fraction of a pixel that came to, so the gaps beat against the pixel grid — some
+  /// closed up, some doubled.
+  static const _bar = 3.0;
+  static const _gap = 2.0;
+
   @override
   void paint(Canvas canvas, Size size) {
-    if (shape.isEmpty || size.isEmpty) return;
-    final step = size.width / shape.length;
-    final width = (step * 0.6).clamp(1.0, 4.0);
+    if (size.isEmpty) return;
+    final count = math.max(1, ((size.width + _gap) / (_bar + _gap)).floor());
+    // Centred, so whatever is left over is shared between the two ends.
+    final left = ((size.width - (count * (_bar + _gap) - _gap)) / 2).floorToDouble();
     final mid = size.height / 2;
-    final done = Paint()
-      ..color = ink
-      ..strokeWidth = width
-      ..strokeCap = StrokeCap.round;
-    final todo = Paint()
-      ..color = rest
-      ..strokeWidth = width
-      ..strokeCap = StrokeCap.round;
+    final flat = math.min(2.0, mid);
+    final peaks = shape;
+    final up = rise.value;
+    final phase = swell.value * 2 * math.pi;
     final edge = played * size.width;
-    for (var i = 0; i < shape.length; i++) {
-      final x = (i + 0.5) * step;
-      // Never quite flat: a silent slice still shows as a dot on the line.
-      final h = (shape[i] / 255 * mid).clamp(1.0, mid);
-      canvas.drawLine(Offset(x, mid - h), Offset(x, mid + h), x <= edge ? done : todo);
+    final done = Paint()..color = ink;
+    final todo = Paint()..color = rest;
+
+    for (var i = 0; i < count; i++) {
+      var h = flat;
+      if (peaks != null && peaks.isNotEmpty) {
+        // The loudest of the slices this segment covers, so a drum hit is not lost
+        // between two bars.
+        final from = (i * peaks.length / count).floor();
+        final to = math.max(from + 1, ((i + 1) * peaks.length / count).ceil());
+        var top = 0;
+        for (var k = from; k < to && k < peaks.length; k++) {
+          if (peaks[k] > top) top = peaks[k];
+        }
+        final full = (top / 255 * mid).clamp(flat, mid);
+        h = flat + (full - flat) * up;
+      } else if (loading) {
+        // A slow swell travelling along the bar: enough to say "working on it".
+        h = flat + (mid * 0.22) * (0.5 + 0.5 * math.sin(phase - i * 0.35));
+      }
+      final x = left + i * (_bar + _gap);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+            Rect.fromLTRB(x, mid - h, x + _bar, mid + h), const Radius.circular(1.5)),
+        x + _bar / 2 <= edge ? done : todo,
+      );
     }
   }
 
   @override
   bool shouldRepaint(_Waveform old) =>
-      old.played != played || old.shape != shape || old.ink != ink || old.rest != rest;
+      old.played != played ||
+      old.loading != loading ||
+      !identical(old.shape, shape) ||
+      old.ink != ink ||
+      old.rest != rest;
 }
