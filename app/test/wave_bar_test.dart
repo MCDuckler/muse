@@ -34,6 +34,14 @@ void main() {
     expect(moving(), greaterThan(0));
   });
 
+  testWidgets('a shape that never arrives does not keep the bar moving for ever',
+      (tester) async {
+    await show(tester, loading: true);
+    await tester.pumpAndSettle(const Duration(milliseconds: 100),
+        EnginePhase.sendSemanticsUpdate, const Duration(seconds: 30));
+    expect(moving(), 0, reason: 'a few swells, then it rests');
+  });
+
   testWidgets('the shape arriving rises into place, and then it is still',
       (tester) async {
     await show(tester, loading: true);

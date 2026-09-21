@@ -2179,8 +2179,10 @@ class WaveBar extends StatefulWidget {
 }
 
 class _WaveBarState extends State<WaveBar> with TickerProviderStateMixin {
+  /// Four slow swells and then it rests: a request that never comes back must not
+  /// leave the bar moving for as long as the player is open.
   late final AnimationController _swell =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 2400));
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 9600));
   late final AnimationController _rise = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 520),
@@ -2212,8 +2214,11 @@ class _WaveBarState extends State<WaveBar> with TickerProviderStateMixin {
 
   void _settle() {
     final moving = widget.loading && !stillness(context);
-    if (moving && !_swell.isAnimating) _swell.repeat();
-    if (!moving && _swell.isAnimating) _swell.stop();
+    if (moving && !_swell.isAnimating && _swell.value == 0) _swell.forward();
+    if (!moving) {
+      _swell.stop();
+      _swell.value = 0;
+    }
   }
 
   @override
@@ -2282,7 +2287,10 @@ class _Waveform extends CustomPainter {
     final flat = math.min(2.0, mid);
     final peaks = shape;
     final up = rise.value;
-    final phase = swell.value * 2 * math.pi;
+    final phase = swell.value * 4 * 2 * math.pi;
+    // Eased in at the start and out at the end, so it neither snaps on nor freezes
+    // mid-wave when it rests.
+    final strength = math.min(1.0, swell.value * 8) * math.min(1.0, (1 - swell.value) * 6);
     final edge = played * size.width;
     final done = Paint()..color = ink;
     final todo = Paint()..color = rest;
@@ -2302,7 +2310,7 @@ class _Waveform extends CustomPainter {
         h = flat + (full - flat) * up;
       } else if (loading) {
         // A slow swell travelling along the bar: enough to say "working on it".
-        h = flat + (mid * 0.22) * (0.5 + 0.5 * math.sin(phase - i * 0.35));
+        h = flat + (mid * 0.22) * strength * (0.5 + 0.5 * math.sin(phase - i * 0.35));
       }
       final x = left + i * (_bar + _gap);
       canvas.drawRRect(
