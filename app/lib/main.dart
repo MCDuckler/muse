@@ -292,7 +292,7 @@ class AppShortcuts extends StatelessWidget {
       case LogicalKeyboardKey.slash:
         // Every app with a search box answers this key, and this one has a search
         // *tab*: go there first, then take the cursor.
-        app.setHomeTab(1);
+        app.setHomeTab(Tabs.search);
         searchWanted.value++;
       default:
         return KeyEventResult.ignored;

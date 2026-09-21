@@ -644,8 +644,10 @@ class Listening {
   });
 
   factory Listening.fromJson(Map<String, dynamic> j) {
-    final who = (j['who'] ?? const {}) as Map<String, dynamic>;
-    final totals = (j['totals'] ?? const {}) as Map<String, dynamic>;
+    // Typed empties: a bare `const {}` is a Map<dynamic, dynamic>, and casting that to
+    // Map<String, dynamic> throws — so a reply missing either part failed whole.
+    final who = (j['who'] ?? const <String, dynamic>{}) as Map<String, dynamic>;
+    final totals = (j['totals'] ?? const <String, dynamic>{}) as Map<String, dynamic>;
     return Listening(
       whoId: (who['id'] ?? 0) as int,
       whoName: (who['name'] ?? '') as String,
@@ -1647,7 +1649,7 @@ class AlbumDetail {
       (releaseDate != null && releaseDate!.length >= 4) ? releaseDate!.substring(0, 4) : null;
 
   factory AlbumDetail.fromJson(Map<String, dynamic> j) {
-    final a = (j['album'] ?? const {}) as Map<String, dynamic>;
+    final a = (j['album'] ?? const <String, dynamic>{}) as Map<String, dynamic>;
     return AlbumDetail(
       name: (a['name'] ?? '') as String,
       artist: a['artist'] as String?,
@@ -1726,7 +1728,7 @@ class ArtistDetail {
   });
 
   factory ArtistDetail.fromJson(Map<String, dynamic> j) {
-    final a = (j['artist'] ?? const {}) as Map<String, dynamic>;
+    final a = (j['artist'] ?? const <String, dynamic>{}) as Map<String, dynamic>;
     return ArtistDetail(
       name: (a['name'] ?? '') as String,
       image: a['image'] as String?,

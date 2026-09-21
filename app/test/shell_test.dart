@@ -236,7 +236,7 @@ void main() {
     // The library is a column of places to go — all tracks, albums, artists, twenty
     // playlists — and on a phone opening one covers it. On a desk that throws away the
     // very thing you are picking from.
-    app.setHomeTab(2);                                    // the library
+    app.setHomeTab(Tabs.library);                                    // the library
     await wholeShell(tester, const Size(1440, 900));
     expect(find.text('Pick something from the library'), findsOneWidget,
         reason: 'the pane says what it is for before anything is in it');
@@ -252,7 +252,7 @@ void main() {
 
   testWidgets('a phone opens the same thing on top, as it always did',
       (tester) async {
-    app.setHomeTab(2);
+    app.setHomeTab(Tabs.library);
     await wholeShell(tester, const Size(420, 900));
     expect(find.text('Pick something from the library'), findsNothing);
 

@@ -148,7 +148,7 @@ class _NextUp extends StatelessWidget {
                   IconButton(
                     icon: const Icon(Icons.queue_music, size: 18),
                     tooltip: 'Open the queue',
-                    onPressed: () => context.read<AppState>().setHomeTab(0),
+                    onPressed: () => context.read<AppState>().setHomeTab(Tabs.queues),
                   ),
                 ],
               ),

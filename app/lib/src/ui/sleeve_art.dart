@@ -90,6 +90,17 @@ class SleevePainter extends CustomPainter {
     canvas.save();
     canvas.clipRect(Offset.zero & size);
     canvas.drawRect(Offset.zero & size, Paint()..color = ground);
+    // A pale sleeve on a paper page has no edge of its own, and a cut-out without an
+    // edge is a hole in the page. A hairline of the ink gives it one.
+    if (ground.computeLuminance() > 0.7) {
+      canvas.drawRect(
+        (Offset.zero & size).deflate(0.5),
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1
+          ..color = const Color(0xFF141210).withValues(alpha: 0.16),
+      );
+    }
 
     final words = title.trim().toUpperCase();
     // Below this a title cannot be read, so it is not set: a row in a list gets the

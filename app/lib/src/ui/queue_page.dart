@@ -757,7 +757,7 @@ class _EmptyQueue extends StatelessWidget {
             FilledButton.tonalIcon(
               icon: const Icon(Icons.search, size: 18),
               label: const Text('Search for music'),
-              onPressed: () => context.read<AppState>().setHomeTab(1),
+              onPressed: () => context.read<AppState>().setHomeTab(Tabs.search),
             ),
           ],
         ),

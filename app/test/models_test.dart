@@ -273,4 +273,12 @@ void _mirrorTests() {
       expect(u.reason, isNotEmpty);
     });
   });
+
+  test('a listening reply missing its parts still parses', () {
+    // A bare `const {}` fallback is a Map<dynamic, dynamic>, and casting it to
+    // Map<String, dynamic> threw — so one missing field lost the whole page.
+    final l = Listening.fromJson({'songs': []});
+    expect(l.plays, 0);
+    expect(l.whoName, '');
+  });
 }

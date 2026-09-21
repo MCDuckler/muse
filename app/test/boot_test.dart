@@ -26,7 +26,7 @@ void main() {
   test('a start with settings already saved keeps them', () async {
     SharedPreferences.setMockInitialValues({
       'muse.discLabel': 0.6,
-      'muse.homeTab': 2,
+      'muse.homeTab.v2': Tabs.library,
       'muse.deskDock': false,
       'muse.coverScale': 0.9,
     });
@@ -36,7 +36,7 @@ void main() {
     expect(app.discLabel, closeTo(0.6, 0.001));
     expect(app.api.discLabel, closeTo(0.6, 0.001),
         reason: 'the record is drawn with the label that was chosen');
-    expect(app.homeTab, 2);
+    expect(app.homeTab, Tabs.library);
     expect(app.deskDock, isFalse);
     expect(app.coverScale, closeTo(0.9, 0.001));
   });
@@ -44,14 +44,23 @@ void main() {
   test('nonsense in the settings is clamped rather than obeyed', () async {
     SharedPreferences.setMockInitialValues({
       'muse.discLabel': 40.0,
-      'muse.homeTab': 99,
+      'muse.homeTab.v2': 99,
       'muse.coverScale': -3.0,
     });
     final app = AppState();
     await app.boot();
 
     expect(app.discLabel, lessThanOrEqualTo(0.92));
-    expect(app.homeTab, inInclusiveRange(0, 3));
+    expect(app.homeTab, inInclusiveRange(0, Tabs.count - 1));
     expect(app.coverScale, inInclusiveRange(0.5, 1.0));
+  });
+
+  test('a tab remembered from before Home existed opens on Home, once', () async {
+    // The old key counted from Queues; the same number now means the tab to its left.
+    // Rather than guess, a phone coming from before opens on the new front page.
+    SharedPreferences.setMockInitialValues({'muse.homeTab': 2});
+    final app = AppState();
+    await app.boot();
+    expect(app.homeTab, Tabs.home);
   });
 }

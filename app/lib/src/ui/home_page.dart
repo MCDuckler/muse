@@ -13,6 +13,7 @@ import 'pane.dart';
 import '../../main.dart' show showShortcuts;
 import '../api/models.dart';
 import 'browse_page.dart';
+import 'cover_page.dart';
 import '../api/client.dart' show ApiException;
 import 'desk_dock.dart';
 import 'dropped_files.dart';
@@ -47,7 +48,7 @@ class _HomePageState extends State<HomePage> {
   /// shell is still the screen, and each tab keeps its own back stack while you are
   /// somewhere else.
   final List<GlobalKey<NavigatorState>> _tabs =
-      [for (var i = 0; i < 4; i++) GlobalKey<NavigatorState>()];
+      [for (var i = 0; i < Tabs.count; i++) GlobalKey<NavigatorState>()];
 
   /// One scroll controller per tab, for the second half of tapping the tab you are
   /// already on.
@@ -57,7 +58,7 @@ class _HomePageState extends State<HomePage> {
   /// root: go back to the top of the *list*. Four hundred rows down the library,
   /// tapping Library did nothing at all.
   final List<ScrollController> _tops =
-      [for (var i = 0; i < 4; i++) ScrollController()];
+      [for (var i = 0; i < Tabs.count; i++) ScrollController()];
 
   @override
   void dispose() {
@@ -91,7 +92,7 @@ class _HomePageState extends State<HomePage> {
 
   /// Which tab is a list with something beside it. Only the library: the queue's
   /// second pane is the dock, and search and people are one thing each.
-  static const _splits = 2;
+  static const _splits = Tabs.library;
 
   /// Back goes back inside the tab first, and only then out of the app.
   ///
@@ -132,12 +133,12 @@ class _HomePageState extends State<HomePage> {
       case 'p':
         final id = int.tryParse(which);
         if (id == null) return;
-        app.setHomeTab(2);
+        app.setHomeTab(Tabs.library);
         final name = app.playlists
             .where((p) => p.id == id)
             .map((p) => p.name)
             .firstOrNull;
-        _openInTab(2, (_) => PlaylistPage(playlistId: id, name: name ?? 'Playlist'));
+        _openInTab(Tabs.library, (_) => PlaylistPage(playlistId: id, name: name ?? 'Playlist'));
       case 't':
         final id = int.tryParse(which);
         if (id == null) return;
@@ -148,14 +149,14 @@ class _HomePageState extends State<HomePage> {
           // that is enough.
         }
       case 'a':
-        app.setHomeTab(2);
+        app.setHomeTab(Tabs.library);
         _openInTab(
-            2,
+            Tabs.library,
             (_) => AlbumPage(
                 album: AlbumSummary(name: which, artist: '', tracks: 0)));
       case 'r':
-        app.setHomeTab(2);
-        _openInTab(2,
+        app.setHomeTab(Tabs.library);
+        _openInTab(Tabs.library,
             (_) => ArtistPage(artist: ArtistSummary(name: which, tracks: 0)));
     }
   }
@@ -181,8 +182,9 @@ class _HomePageState extends State<HomePage> {
       _saidHello = true;
       PlaybackLog.note('home shell built');
     }
-    const pages = [QueuePage(), SearchPage(), LibraryPage(), SocialPage()];
-    const titles = ['Queues', 'Search', 'Library', 'People'];
+    // In the order of Tabs.
+    const pages = [CoverPage(), QueuePage(), SearchPage(), LibraryPage(), SocialPage()];
+    const titles = ['Home', 'Queues', 'Search', 'Library', 'People'];
 
     final width = Width.of(context);
     // A desk gets the two things a phone has to take turns showing: the page, and what
@@ -469,6 +471,10 @@ class _Rail extends StatelessWidget {
       // rail of bare pictures is fine once you know it and unkind on the first day.
       destinations: const [
         NavigationRailDestination(
+            icon: Tooltip(message: 'Home', child: Icon(Icons.newspaper_outlined)),
+            selectedIcon: Icon(Icons.newspaper),
+            label: Text('Home')),
+        NavigationRailDestination(
             icon: Tooltip(message: 'Queues', child: Icon(Icons.queue_music_outlined)),
             selectedIcon: Icon(Icons.queue_music),
             label: Text('Queues')),
@@ -732,6 +738,11 @@ class MuseNavigationBar extends StatelessWidget {
         onLeaving?.call();
       },
       destinations: const [
+        // This week's issue: see CoverPage.
+        NavigationDestination(
+            icon: Icon(Icons.newspaper_outlined),
+            selectedIcon: Icon(Icons.newspaper),
+            label: 'Home'),
         NavigationDestination(
             icon: Icon(Icons.queue_music_outlined),
             selectedIcon: Icon(Icons.queue_music),

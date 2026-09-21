@@ -24,6 +24,17 @@ import '../ui/snack.dart';
 
 /// One place the UI reads from. Deliberately small: the server is the truth, and a
 /// local mirror (drift) is a later phase, not something to half-build now.
+/// Where each tab is. Named, because they move: Home was put in front of the others,
+/// and every tab number written out by hand was a number that then meant the wrong tab.
+abstract final class Tabs {
+  static const home = 0;
+  static const queues = 1;
+  static const search = 2;
+  static const library = 3;
+  static const people = 4;
+  static const count = 5;
+}
+
 class AppState extends ChangeNotifier {
   AppState();
 
@@ -55,7 +66,7 @@ class AppState extends ChangeNotifier {
   /// It lives here rather than in the shell's own State because other screens need to
   /// send you to a tab — the player's "up next" is the queue, and the queue is a page
   /// people already know, not a sheet with its own half-copy of one.
-  int homeTab = 0;
+  int homeTab = Tabs.home;
 
   /// Whether the column beside the page — what is playing, what is next — is folded
   /// out. Only ever asked on a screen wide enough to have one.
@@ -271,7 +282,9 @@ class AppState extends ChangeNotifier {
   static const _kJamListening = 'muse.jamListening';
   static const _kLastQueue = 'muse.lastQueue';
   static const _kVolume = 'muse.volume';
-  static const _kHomeTab = 'muse.homeTab';
+  // Moved when Home was put in front of the other tabs: every number the old key
+  // held now means the tab to the left of the one it meant.
+  static const _kHomeTab = 'muse.homeTab.v2';
   static const _kDeskDock = 'muse.deskDock';
   static const _kDockWidth = 'muse.dockWidth';
   static const _kPaneWidth = 'muse.paneWidth';
@@ -463,7 +476,9 @@ class AppState extends ChangeNotifier {
     // who wants it can turn it on, and their choice is what is read back here.
     halftone = prefs.getBool(_kHalftone) ?? !kIsWeb;
     spectrum = prefs.getBool(_kSpectrum) ?? false;
-    homeTab = (prefs.getInt(_kHomeTab) ?? 0).clamp(0, 3);
+    // A phone that remembers a tab from before Home existed opens on Home, once:
+    // it is the new thing, and the place the app now starts.
+    homeTab = (prefs.getInt(_kHomeTab) ?? Tabs.home).clamp(0, Tabs.count - 1);
     deskDock = prefs.getBool(_kDeskDock) ?? true;
     dockWidth = (prefs.getDouble(_kDockWidth) ?? 420).clamp(320, 640);
     paneWidth = (prefs.getDouble(_kPaneWidth) ?? 330).clamp(240, 560);
