@@ -480,10 +480,26 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
                                  headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
     # ---------------- worker protocol ----------------
-    @app.post("/internal/jobs/lease", dependencies=[Depends(worker_auth)])
-    def lease(body: dict):
+    # Somebody's computer may only touch the jobs it is holding. The house's own
+    # downloader is trusted with all of them, as it always was.
+    def _holds(job_id: int, device: dict | None) -> None:
+        if device is None:
+            return
+        row = db.one("select leased_by, state from jobs where id=%s", (job_id,))
+        if not row or row["leased_by"] != device["worker"]:
+            raise HTTPException(403, "that job is not this device's")
+
+    # The most one upload from somebody's computer may be: a song is a few megabytes and
+    # an hour-long set is sixty; anything past this is not a song.
+    DEVICE_UPLOAD_LIMIT = 400 * 1024 * 1024
+
+    @app.post("/internal/jobs/lease")
+    def lease(body: dict, device: dict | None = Depends(worker_auth)):
+        # A device works under its own name, whatever it says its name is.
+        if device is not None and body.get("kind", "ingest") != "ingest":
+            raise HTTPException(403, "a device fetches music and nothing else")
         leased = jobs.lease_wait(
-            body.get("worker", "anon"),
+            device["worker"] if device else body.get("worker", "anon"),
             body.get("kind", "ingest"),
             int(body.get("limit", 1)),
             wait_seconds=float(body.get("wait", 0)),
@@ -502,28 +518,42 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
                           "batch_id": j.get("batch_id"),
                           "batch_label": j.get("batch_label")} for j in leased]}
 
-    @app.post("/internal/jobs/{job_id}/release", dependencies=[Depends(worker_auth)])
-    def release_job(job_id: int, body: dict | None = None):
+    @app.post("/internal/jobs/{job_id}/release")
+    def release_job(job_id: int, body: dict | None = None,
+                    device: dict | None = Depends(worker_auth)):
         """A worker shutting down gives back what it will not finish."""
+        _holds(job_id, device)
         jobs.release(job_id)
         if body and (tid := body.get("track_id")):
             progress.clear(int(tid))
         return {"released": job_id}
 
-    @app.post("/internal/jobs/{job_id}/progress", dependencies=[Depends(worker_auth)])
-    def report_progress(job_id: int, body: dict):
+    @app.post("/internal/jobs/{job_id}/progress")
+    def report_progress(job_id: int, body: dict,
+                        device: dict | None = Depends(worker_auth)):
+        _holds(job_id, device)
         track_id = int(body["track_id"])
         entry = progress.update(track_id, body.get("stage", "downloading"),
                                 body.get("percent"), body.get("speed"))
         publish("track_progress", {"track_id": track_id, **entry})
         return {"ok": True}
 
-    @app.post("/internal/jobs/{job_id}/complete", dependencies=[Depends(worker_auth)])
-    def complete(job_id: int, meta: str = Form(...), audio: UploadFile = None):
+    @app.post("/internal/jobs/{job_id}/complete")
+    def complete(job_id: int, meta: str = Form(...), audio: UploadFile = None,
+                 device: dict | None = Depends(worker_auth)):
+        _holds(job_id, device)
         info = json.loads(meta)
         track_id = int(info["track_id"])
         if audio is None:
             raise HTTPException(400, "audio file required")
+        if device is not None:
+            # The song it was given, and no other: a device says which track its upload
+            # is for, and what it says has to be what the job says.
+            job = db.one("select payload from jobs where id=%s", (job_id,))
+            if int((job or {}).get("payload", {}).get("track_id") or -1) != track_id:
+                raise HTTPException(403, "that is not the song this job was for")
+            if (audio.size or 0) > DEVICE_UPLOAD_LIMIT:
+                raise HTTPException(413, "too large to be a song")
         digest, path, size = storage.store_stream(cfg.audio_dir, audio.file, ".m4a")
         db.run(
             """insert into media(track_id,sha256,codec,bitrate,bytes,path)
@@ -545,8 +575,9 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         publish("track_ready", {"track_id": track_id, "bytes": size})
         return {"ok": True, "sha256": digest, "bytes": size}
 
-    @app.post("/internal/jobs/{job_id}/fail", dependencies=[Depends(worker_auth)])
-    def fail(job_id: int, body: dict):
+    @app.post("/internal/jobs/{job_id}/fail")
+    def fail(job_id: int, body: dict, device: dict | None = Depends(worker_auth)):
+        _holds(job_id, device)
         raw = body.get("reason", "")
         # Named by where the song actually lives, not by where the worker happens to
         # fetch from — see failures.classify.

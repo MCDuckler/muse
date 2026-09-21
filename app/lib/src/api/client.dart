@@ -192,6 +192,38 @@ class ApiClient {
       await _decode(await net.get(_u('/tracks/$trackId/analysis'), headers: _headers))
           as Map<String, dynamic>);
 
+  // ---------------- this computer fetching music ----------------
+  /// Whether this device may fetch music for the house, and whether it has asked.
+  Future<({bool allowed, bool asked})> ingestStanding() async => _standing(
+      await _decode(await net.get(_u('/devices/ingest'), headers: _headers)));
+
+  /// Offer this computer. An admin's own is allowed at once; anybody else's waits for
+  /// an admin to say yes.
+  Future<({bool allowed, bool asked})> askToIngest() async => _standing(
+      await _decode(await net.post(_u('/devices/ingest/ask'), headers: _headers)));
+
+  Future<({bool allowed, bool asked})> stopIngesting() async => _standing(
+      await _decode(await net.delete(_u('/devices/ingest'), headers: _headers)));
+
+  ({bool allowed, bool asked}) _standing(dynamic d) =>
+      (allowed: d['allowed'] == true, asked: d['asked'] == true);
+
+  /// Everything that fetches, and everything asking to. Admins only.
+  Future<Map<String, dynamic>> ingestWorkers() async =>
+      await _decode(await net.get(_u('/devices/workers'), headers: _headers))
+          as Map<String, dynamic>;
+
+  Future<void> allowIngest(int deviceId, bool allowed) async =>
+      await _decode(await net.post(_u('/devices/$deviceId/ingest'),
+          headers: _headers, body: jsonEncode({'allowed': allowed})));
+
+  /// The worker protocol, for a device that has been allowed. Raw, because what uses it
+  /// lives with the downloader: see worker/this_computer_io.dart.
+  Future<dynamic> workerPost(String path, Map<String, dynamic> body, {Duration? timeout}) async {
+    final asked = net.post(_u(path), headers: _headers, body: jsonEncode(body));
+    return _decode(await (timeout == null ? asked : asked.timeout(timeout)));
+  }
+
   // ---------------- a listening diary kept elsewhere ----------------
   Future<Scrobbling> scrobbling() async => Scrobbling.fromJson(
       await _decode(await net.get(_u('/scrobbling'), headers: _headers))

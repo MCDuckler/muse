@@ -129,6 +129,102 @@ def report(body: dict = Body(default={}), user: dict = Depends(current_user)):
     return {"ok": True}
 
 
+# ------------------------------------------------------------------ fetching music
+#
+# A computer on a home connection can fetch what the server cannot: YouTube answers a
+# house and refuses a datacentre. Any signed-in desktop can *offer* to; only an admin
+# says yes, because a device that fetches is a device that writes audio into everybody's
+# library.
+
+def _workers() -> dict[str, dict]:
+    return {w["name"]: w for w in db.all_(
+        """select name, last_seen, leased,
+                  last_seen > now() - interval '90 seconds' as live
+             from workers""")}
+
+
+@router.get("/ingest")
+def my_ingest(user: dict = Depends(current_user)):
+    """Whether this device may fetch music, and whether it has asked to."""
+    d = db.one("select can_ingest, ingest_asked_at from devices where id=%s",
+               (user["device_id"],)) or {}
+    return {"allowed": bool(d.get("can_ingest")),
+            "asked": d.get("ingest_asked_at") is not None,
+            "worker": f"device:{user['device_id']}"}
+
+
+@router.post("/ingest/ask")
+def ask_to_ingest(user: dict = Depends(current_user)):
+    """Offer this computer. An admin's own device is simply allowed."""
+    from .routes_accounts import is_admin
+
+    if is_admin(user["id"]):
+        db.run("update devices set can_ingest=true, ingest_asked_at=now() where id=%s",
+               (user["device_id"],))
+    else:
+        db.run("update devices set ingest_asked_at=now() where id=%s", (user["device_id"],))
+    return my_ingest(user)
+
+
+@router.delete("/ingest")
+def stop_ingesting(user: dict = Depends(current_user)):
+    """Take the offer back. Whatever this device was holding is given back too."""
+    db.run("update devices set can_ingest=false, ingest_asked_at=null where id=%s",
+           (user["device_id"],))
+    db.run("""update jobs set state='pending', leased_by=null, leased_until=null
+               where state='leased' and leased_by=%s""", (f"device:{user['device_id']}",))
+    return my_ingest(user)
+
+
+@router.get("/workers")
+def workers(user: dict = Depends(current_user)):
+    """Everything that fetches music, and everything asking to: for an admin."""
+    from .routes_accounts import _admin
+
+    _admin(user)
+    known = _workers()
+    rows = db.all_(
+        """select d.id, d.name, d.platform, d.kind, d.can_ingest, d.ingest_asked_at,
+                  u.name as owner
+             from devices d join users u on u.id = d.user_id
+            where d.can_ingest or d.ingest_asked_at is not null
+            order by d.can_ingest desc, d.ingest_asked_at desc""")
+    devices_ = []
+    for r in rows:
+        w = known.pop(f"device:{r['id']}", None) or {}
+        devices_.append({
+            "device_id": r["id"], "name": r["name"], "owner": r["owner"],
+            "kind": r["kind"] or r["platform"],
+            "allowed": bool(r["can_ingest"]), "asked_at": r["ingest_asked_at"],
+            "live": bool(w.get("live")), "busy": w.get("leased") or 0,
+            "last_seen": w.get("last_seen"),
+        })
+    # Whatever is left signs in with the server's own secret: the house's downloader.
+    house = [{"name": n, "live": bool(w["live"]), "busy": w["leased"] or 0,
+              "last_seen": w["last_seen"]}
+             for n, w in sorted(known.items()) if not n.startswith("device:")]
+    return {"devices": devices_, "house": house}
+
+
+@router.post("/{device_id}/ingest")
+def allow_ingest(device_id: int, body: dict = Body(...),
+                 user: dict = Depends(current_user)):
+    """An admin saying yes, or no, to somebody's computer."""
+    from .routes_accounts import _admin
+
+    _admin(user)
+    if not db.one("select 1 from devices where id=%s", (device_id,)):
+        raise HTTPException(404, "no such device")
+    allowed = bool(body.get("allowed"))
+    db.run("update devices set can_ingest=%s, ingest_asked_at=case when %s then "
+           "coalesce(ingest_asked_at, now()) else null end where id=%s",
+           (allowed, allowed, device_id))
+    if not allowed:
+        db.run("""update jobs set state='pending', leased_by=null, leased_until=null
+                   where state='leased' and leased_by=%s""", (f"device:{device_id}",))
+    return {"device_id": device_id, "allowed": allowed}
+
+
 @router.patch("/{device_id}")
 def rename(device_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
     """A name you chose, rather than the one the browser gave itself."""

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -29,6 +30,7 @@ import 'search_page.dart';
 import 'social_page.dart';
 import 'split.dart';
 import 'widths.dart';
+import '../worker/this_computer.dart';
 
 /// Something asked to open a page inside a tab, from outside the shell.
 ///
@@ -128,6 +130,9 @@ class _HomePageState extends State<HomePage> {
     // A link that opened this tab, now that there is something to open it with.
     WidgetsBinding.instance.addPostFrameCallback((_) => _followTheLink());
     _openRequests.addListener(_opened);
+    // A computer that was left fetching music for the house carries on doing so. Here
+    // because this is the first place that exists only once somebody is signed in.
+    unawaited(resumeFetching(context.read<AppState>()));
   }
 
   void _opened() {

@@ -30,6 +30,7 @@ import 'snack.dart';
 import 'mag.dart';
 import 'mag_parts.dart';
 import 'equalizer_page.dart';
+import '../worker/this_computer.dart';
 
 const appVersion = '0.1.0';
 
@@ -259,6 +260,16 @@ class _SettingsPageState extends State<SettingsPage> {
               onTap: () => openEqualizer(context),
             ),
           ),
+          // Only where there is a computer to do it: see worker/this_computer.dart.
+          if (canFetchMusicHere)
+            ListTile(
+              leading: const Icon(Icons.download_for_offline_outlined),
+              title: const Text('This computer'),
+              subtitle: const Text('Fetch music for the house while WetOwl is open'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => thisComputerPage())),
+            ),
           ListTile(
             leading: const Icon(Icons.hub_outlined),
             title: const Text('Connected services'),

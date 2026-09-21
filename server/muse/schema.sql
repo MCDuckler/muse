@@ -610,3 +610,12 @@ alter table tracks add column if not exists bpm real;
 -- When a song was listened to for its beats, whether or not it turned out to have any:
 -- a song with no pulse has no tempo, and must not be listened to again every night.
 alter table tracks add column if not exists analysed_at timestamptz;
+
+-- A computer that fetches music for the house. The downloader used to be one machine
+-- holding the server's own secret — the same secret that signs every stream key, which
+-- can therefore never be put in an app or on anybody else's computer. A device is
+-- instead *allowed* to fetch, by an admin, and proves who it is with the token it
+-- already signs in with. `ingest_asked_at` is somebody offering their computer and
+-- waiting to be told yes.
+alter table devices add column if not exists can_ingest boolean not null default false;
+alter table devices add column if not exists ingest_asked_at timestamptz;
