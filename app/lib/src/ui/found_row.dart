@@ -4,7 +4,6 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import 'artwork.dart';
-import 'mag.dart';
 import 'snack.dart';
 import 'song_row.dart';
 
@@ -174,8 +173,14 @@ class FoundRow extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     if (found.durationMs != null)
+                      // Set as it is on every other row of songs in the app: a length
+                      // is a length, and two ways of printing one on two pages reads
+                      // as two apps.
                       Text(_length(found.durationMs!),
-                          style: Mag.typewriter(11, color: scheme.onSurfaceVariant)),
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(color: scheme.onSurfaceVariant)),
                     GestureDetector(
                       // Held, it goes next rather than last.
                       onLongPress: onPlayNext,
