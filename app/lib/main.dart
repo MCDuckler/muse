@@ -14,6 +14,7 @@ import 'src/state/selection.dart';
 import 'src/state/playback_log.dart';
 import 'src/state/player.dart';
 import 'src/ui/search_page.dart' show searchWanted;
+import 'src/ui/command_palette.dart';
 import 'src/ui/home_page.dart';
 import 'src/ui/loading.dart';
 import 'src/ui/login_page.dart';
@@ -259,6 +260,7 @@ class AppShortcuts extends StatelessWidget {
     ('R', 'Repeat: off, all, one'),
     ('M', 'Mute'),
     ('/', 'Search'),
+    ('Ctrl K', 'Jump to anything'),
     ('?', 'This list'),
   ];
 
@@ -311,6 +313,15 @@ class AppShortcuts extends StatelessWidget {
               (event.logicalKey == LogicalKeyboardKey.question ||
                   event.character == '?')) {
             showShortcuts(context);
+            return KeyEventResult.handled;
+          }
+          // Ctrl-K, or ⌘K: the one shortcut that works while typing, because it is
+          // how you leave whatever you are typing in to go somewhere else.
+          if (event is KeyDownEvent &&
+              event.logicalKey == LogicalKeyboardKey.keyK &&
+              (HardwareKeyboard.instance.isControlPressed ||
+                  HardwareKeyboard.instance.isMetaPressed)) {
+            showCommandPalette(context);
             return KeyEventResult.handled;
           }
           return handle(context.read<AppState>(), event);

@@ -13,6 +13,7 @@ import 'pane.dart';
 import '../../main.dart' show showShortcuts;
 import '../api/models.dart';
 import 'browse_page.dart';
+import 'command_palette.dart';
 import 'cover_page.dart';
 import '../api/client.dart' show ApiException;
 import 'desk_dock.dart';
@@ -27,6 +28,17 @@ import 'search_page.dart';
 import 'social_page.dart';
 import 'split.dart';
 import 'widths.dart';
+
+/// Something asked to open a page inside a tab, from outside the shell.
+///
+/// The command palette is a dialog over the whole app: it has no tab navigator of its
+/// own to push onto, and pushing onto the app's navigator covers the tabs, the player
+/// and the rail. So it says which tab and what page, and the shell does the opening
+/// where the page belongs.
+final ValueNotifier<({int tab, WidgetBuilder page})?> _openRequests = ValueNotifier(null);
+
+/// Open [page] inside [tab], switching to it.
+void openInTab(int tab, WidgetBuilder page) => _openRequests.value = (tab: tab, page: page);
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -62,6 +74,7 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    _openRequests.removeListener(_opened);
     for (final c in _tops) {
       c.dispose();
     }
@@ -113,6 +126,15 @@ class _HomePageState extends State<HomePage> {
     super.initState();
     // A link that opened this tab, now that there is something to open it with.
     WidgetsBinding.instance.addPostFrameCallback((_) => _followTheLink());
+    _openRequests.addListener(_opened);
+  }
+
+  void _opened() {
+    final asked = _openRequests.value;
+    if (asked == null || !mounted) return;
+    _openRequests.value = null;
+    context.read<AppState>().setHomeTab(asked.tab);
+    _openInTab(asked.tab, asked.page);
   }
 
   /// Open whatever the address bar was pointing at when the app started.
@@ -435,6 +457,12 @@ class _Rail extends StatelessWidget {
                     onPressed: () => Navigator.of(context)
                         .push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
                   ),
+                // Jump to anything: the desk's other way in. See CommandPalette.
+                IconButton(
+                  icon: const Icon(Icons.keyboard_command_key),
+                  tooltip: 'Jump to anything (Ctrl K)',
+                  onPressed: () => showCommandPalette(context),
+                ),
                 IconButton(
                   icon: const Icon(Icons.keyboard_outlined),
                   tooltip: 'Keys (?)',
