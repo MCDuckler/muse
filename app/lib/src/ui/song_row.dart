@@ -149,7 +149,17 @@ class SongRow extends StatelessWidget {
                   width: picked ? 1.6 : 1.2),
             )
           : null,
-      child: InkWell(
+      // A right-click is how a desk asks a row what it can do, and the answer is the
+      // sheet the three dots already open: one question, one answer.
+      child: GestureDetector(
+        behavior: HitTestBehavior.deferToChild,
+        onSecondaryTap: !showMenu
+            ? null
+            : () => showTrackSheet(context, track,
+                onRemove: onRemove,
+                onChanged: onChanged,
+                queuePosition: queuePosition),
+        child: InkWell(
         // The feedback is the point: a list that does not answer a touch immediately
         // reads as broken long before anything has actually gone wrong.
         //
@@ -287,6 +297,7 @@ class SongRow extends StatelessWidget {
                 const SizedBox(width: 4),
             ],
           ),
+        ),
         ),
       ),
     );

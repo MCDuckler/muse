@@ -8,6 +8,7 @@ import '../state/app_state.dart';
 import 'artwork.dart';
 import 'dialogs.dart';
 import 'snack.dart';
+import 'when.dart';
 import 'widths.dart';
 
 /// Where the music comes out.
@@ -133,7 +134,10 @@ class _DeviceRow extends StatelessWidget {
             ? '${device.track!.displayTitle} · ${device.track!.artistLine}'
             : device.live
                 ? (device.queue == null ? 'Ready' : 'Ready · ${device.queue}')
-                : 'Not answering',
+                // Not "Not answering" alone: whether a phone went quiet a minute ago
+                // or in March is the difference between waiting for it and giving up
+                // on it.
+                : 'Not answering · last heard from ${ago(device.lastSeen)}',
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),

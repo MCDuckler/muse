@@ -13,7 +13,10 @@ import 'pane.dart';
 import '../../main.dart' show showShortcuts;
 import '../api/models.dart';
 import 'browse_page.dart';
+import '../api/client.dart' show ApiException;
 import 'desk_dock.dart';
+import 'dropped_files.dart';
+import 'snack.dart';
 import 'library_page.dart';
 import 'settings_page.dart';
 import 'player_bar.dart';
@@ -165,7 +168,9 @@ class _HomePageState extends State<HomePage> {
           await SystemNavigator.pop();
         }
       },
-      child: Scaffold(
+      child: DropToAdd(
+        onFiles: (files) => _addDropped(context, files),
+        child: Scaffold(
       // IndexedStack, not pages[app.homeTab]: rebuilding the tab from scratch threw away
       // your search results and scroll position every time you switched away and back.
       // Content runs under the bars so the blur has something to blur. Lists add
@@ -288,8 +293,37 @@ class _HomePageState extends State<HomePage> {
         ),
       ),
       ),
+      ),
     );
   }
+}
+
+/// Music dragged onto the window: uploaded, one after another, and said out loud.
+///
+/// Adding a file the downloader cannot fetch — a bootleg, a friend's mix, a rip of a
+/// CD — meant going to Settings and through a file picker. On a desk the file is in a
+/// window next to this one and the gesture people try first is to drag it in.
+Future<void> _addDropped(
+    BuildContext context, List<({String name, List<int> bytes})> files) async {
+  final app = context.read<AppState>();
+  final messenger = ScaffoldMessenger.of(context);
+  var added = 0;
+  String? refused;
+  for (final file in files) {
+    try {
+      await app.api.upload(file.bytes, file.name);
+      added++;
+    } catch (e) {
+      refused = e is ApiException ? e.message : '$e';
+    }
+  }
+  if (added > 0) await app.refresh();
+  messenger.say(snack(Text(switch ((added, refused)) {
+    (0, final why?) => why,
+    (0, _) => 'Nothing there this could add',
+    (1, _) => 'Added ${files.first.name}',
+    _ => 'Added $added songs',
+  })));
 }
 
 /// The four places the app goes, down the side.
