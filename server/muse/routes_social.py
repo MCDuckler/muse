@@ -12,7 +12,9 @@ writing, which stays with whoever owns the list unless they say otherwise.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+import time
+
+from fastapi import APIRouter, Body, Depends, HTTPException
 
 from . import catalog, db
 from .deps import current_user
@@ -216,3 +218,44 @@ def their_playlists(person_id: int, user: dict = Depends(current_user)):
 
     return [{**with_cover(r), "saved": bool(r["saved"]),
              "open_edit": bool(r.get("open_edit"))} for r in rows]
+
+
+# ------------------------------------------------------------------ reactions
+# The handful of things you can say about what somebody has on without typing: a fixed
+# set, because this is a nod across the room and not a message, and because what arrives
+# is drawn large on somebody else's screen.
+REACTIONS = ("❤️", "🔥", "🕺", "😮", "😂", "🤘")
+
+# One a second from one person to another. Enough to be enthusiastic; not enough to
+# cover somebody's player in hearts.
+_last_reaction: dict[tuple[int, int], float] = {}
+
+
+@router.post("/people/{person_id}/react")
+def react(person_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
+    """A nod at whatever somebody is playing: it floats up their screen and is gone.
+
+    Nothing is kept. It goes down the event stream to that one person, and if they are
+    not looking it was never there — which is what makes it cheap to send.
+    """
+    emoji = body.get("emoji")
+    if emoji not in REACTIONS:
+        raise HTTPException(400, "not one of the reactions")
+    if person_id == user["id"]:
+        raise HTTPException(400, "that is you")
+    them = db.one("select id, name from users where id=%s", (person_id,))
+    if not them:
+        raise HTTPException(404, "nobody here by that id")
+
+    now = time.monotonic()
+    key = (user["id"], person_id)
+    if now - _last_reaction.get(key, 0.0) < 1.0:
+        raise HTTPException(429, "one at a time")
+    _last_reaction[key] = now
+
+    from .app import publish
+
+    publish("reaction", {"from": user["name"], "from_id": user["id"], "emoji": emoji,
+                         "track_id": body.get("track_id")},
+            to_user=person_id)
+    return {"sent": emoji, "to": them["name"]}

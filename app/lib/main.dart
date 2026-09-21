@@ -22,6 +22,7 @@ import 'src/ui/theme.dart';
 import 'src/ui/page_colour.dart';
 import 'src/ui/paper.dart';
 import 'src/ui/widths.dart';
+import 'src/ui/reactions.dart';
 
 /// Exposed for the integration test: the player lives behind a stream, and a test
 /// driving real widgets needs a way to read what it actually did.
@@ -168,7 +169,8 @@ class MuseApp extends StatelessWidget {
               data: Width.of(context) == Width.expanded
                   ? MuseTheme.compact(Theme.of(context))
                   : Theme.of(context),
-              child: PaperGrain(child: child ?? const SizedBox()),
+              child: PaperGrain(
+                  child: ReactionLayer(child: child ?? const SizedBox())),
             ),
           ),
         ),

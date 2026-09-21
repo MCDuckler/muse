@@ -2176,6 +2176,34 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  // ------------------------------------------------------------------ reactions
+  final _reactions = StreamController<Reaction>.broadcast();
+
+  /// Nods at the music, arriving and leaving. Drawn by ReactionLayer.
+  Stream<Reaction> get reactions => _reactions.stream;
+
+  /// One arriving from somebody else. Only the handful there are: what comes down the
+  /// stream is drawn large on this screen, and it is not a way to send text.
+  @visibleForTesting
+  void heardAReaction(Map<String, dynamic> data) {
+    final emoji = data['emoji'];
+    if (emoji is String && reactionEmoji.contains(emoji)) {
+      _reactions.add(Reaction(emoji: emoji, who: '${data['from'] ?? 'somebody'}'));
+    }
+  }
+
+  /// Send one. It goes up this screen at once as well — the other end is somebody
+  /// else's phone, and a button that does nothing you can see gets pressed again.
+  Future<void> react(int personId, String name, String emoji, {int? trackId}) async {
+    _reactions.add(Reaction(emoji: emoji, who: name, sent: true));
+    try {
+      await api.react(personId, emoji, trackId: trackId);
+    } catch (_) {
+      // One a second is all the server passes on, and one that did not get there is
+      // not worth a message: it was a nod.
+    }
+  }
+
   /// What went wrong last time somebody reached for the controls, if anything.
   String? jamRefusal;
 
@@ -2534,6 +2562,8 @@ class AppState extends ChangeNotifier {
         await heardFromADevice(Map<String, dynamic>.from(e.data));
       } else if (e.event == 'jam') {
         await _onJamEvent(e.data);
+      } else if (e.event == 'reaction') {
+        heardAReaction(Map<String, dynamic>.from(e.data));
       } else if (e.event == 'sleeve_mark') {
         // Somebody drawing on the record in front of you, as they draw it.
         sleeveBoard.arrived(Map<String, dynamic>.from(e.data));

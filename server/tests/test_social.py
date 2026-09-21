@@ -184,3 +184,34 @@ def test_nobody_can_read_somebody_elses_favourites(client, hdr, joe):
     theirs = db.one("select id from playlists where owner_id=%s and kind='favourites'",
                     (joe["id"],))
     assert client.get(f"/playlists/{theirs['id']}", headers=hdr).status_code == 404
+
+
+def test_a_reaction_reaches_the_one_it_is_for_and_nobody_else(client, hdr, joe, monkeypatch):
+    from muse import app as app_mod, routes_social
+
+    said: list[tuple[str, dict, int | None]] = []
+    monkeypatch.setattr(app_mod, "publish",
+                        lambda event, data, to_user=None: said.append((event, data, to_user)))
+    routes_social._last_reaction.clear()
+
+    sent = client.post(f"/social/people/{joe['id']}/react", headers=hdr,
+                       json={"emoji": "🔥", "track_id": joe["track"]["id"]})
+    assert sent.status_code == 200, sent.text
+    event, data, to = said[-1]
+    assert event == "reaction" and to == joe["id"], "to them, not to the house"
+    assert data["emoji"] == "🔥" and data["from"] == "chris"
+    assert data["track_id"] == joe["track"]["id"]
+
+    # A nod, not a flood.
+    again = client.post(f"/social/people/{joe['id']}/react", headers=hdr, json={"emoji": "🔥"})
+    assert again.status_code == 429
+
+    routes_social._last_reaction.clear()
+    # Not a message: only the handful there are, and not to yourself or to nobody.
+    assert client.post(f"/social/people/{joe['id']}/react", headers=hdr,
+                       json={"emoji": "<b>hello</b>"}).status_code == 400
+    me = db.one("select id from users where name='chris'")["id"]
+    assert client.post(f"/social/people/{me}/react", headers=hdr,
+                       json={"emoji": "🔥"}).status_code == 400
+    assert client.post("/social/people/999999/react", headers=hdr,
+                       json={"emoji": "🔥"}).status_code == 404

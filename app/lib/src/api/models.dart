@@ -1877,3 +1877,24 @@ class FeedItem {
         inLibrary: (j['in_library'] ?? false) as bool,
       );
 }
+
+/// A nod at what somebody has on: a fire, a heart, a dancer.
+///
+/// Sent from the People page at whoever is playing something, and drawn here on the
+/// other end — it comes up the screen from the bottom, says who it was from, and is
+/// gone in three seconds. Nothing is kept and nothing has to be answered.
+class Reaction {
+  const Reaction({required this.emoji, required this.who, this.sent = false});
+
+  final String emoji;
+
+  /// Who it is from — or, for one of your own, who it went to.
+  final String who;
+
+  /// One you sent: shown going up your own screen too, so that pressing the button
+  /// visibly did something.
+  final bool sent;
+}
+
+/// The ones there are. The server has the same list and takes nothing else.
+const reactionEmoji = ['❤️', '🔥', '🕺', '😮', '😂', '🤘'];

@@ -17,6 +17,7 @@ import 'theme.dart';
 import 'mag_parts.dart';
 import 'mag.dart';
 import 'record_refresh.dart';
+import 'reactions.dart';
 
 /// Everybody else on this server.
 ///
@@ -215,6 +216,13 @@ class _Spotted extends StatelessWidget {
                 ],
               ],
             ),
+            // Something to say about it, without typing anything.
+            if (on != null && on.now && !you)
+              Padding(
+                padding: const EdgeInsets.only(top: 4, left: 54),
+                child: ReactionRow(
+                    personId: person.id, name: person.name, trackId: on.track.id),
+              ),
             // A jam is the one thing on this page you can walk into.
             if (jam != null && !you)
               Padding(

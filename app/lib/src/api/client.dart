@@ -169,6 +169,13 @@ class ApiClient {
 
   // ---------------- the other people here ----------------
   /// Everybody on this server, with what each has and whether they have a jam going.
+  /// A nod at what somebody is playing. See routes_social.react: one of a fixed
+  /// handful, to that one person, kept nowhere.
+  Future<void> react(int personId, String emoji, {int? trackId}) async =>
+      await _decode(await net.post(_u('/social/people/$personId/react'),
+          headers: _headers,
+          body: jsonEncode({'emoji': emoji, if (trackId != null) 'track_id': trackId})));
+
   Future<({List<Person> people, int you})> people() async {
     final d = await _decode(await net.get(_u('/social/people'), headers: _headers))
         as Map<String, dynamic>;
