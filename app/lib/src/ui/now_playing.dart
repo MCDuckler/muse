@@ -909,7 +909,7 @@ class _Extras extends StatelessWidget {
           // Which of your devices the sound is coming out of. Beside the transport
           // because that is what it is about, and because the question it answers —
           // "why is nothing coming out of this laptop" — is asked while looking at it.
-          const WhereItPlays(compact: true),
+     //      WhereItPlays( compact: true, size: size),
           const Spacer(),
           _RepeatButton(app: app, size: size),
           IconButton(
@@ -1636,7 +1636,7 @@ class _ScrubberState extends State<_ScrubberBar>
         );
         final elapsed = Text(formatTime(Duration(milliseconds: value.round())),
             style: Theme.of(context).textTheme.labelMedium);
-        final total = Text(max > 0 ? formatTime(duration) : '--:--',
+        final total = Text(max > 0 ?  formatTime(duration) : '--:--',
             style: Theme.of(context).textTheme.labelMedium);
 
         // Beside the bar rather than under it: a line less, and the two numbers read
@@ -1658,9 +1658,9 @@ class _ScrubberState extends State<_ScrubberBar>
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Padding(
-                      padding: const EdgeInsets.only(bottom: 14), child: elapsed),
+                      padding: const EdgeInsets.only(bottom: 8), child: elapsed),
                   Expanded(child: overBar),
-                  Padding(padding: const EdgeInsets.only(bottom: 14), child: total),
+                  Padding(padding: const EdgeInsets.only(bottom: 8), child: total),
                 ]),
           );
         }

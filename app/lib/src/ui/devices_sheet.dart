@@ -188,8 +188,8 @@ class _DeviceRow extends StatelessWidget {
 /// "why is nothing coming out of this laptop", and the answer is the name of the phone
 /// in the next room.
 class WhereItPlays extends StatelessWidget {
-  const WhereItPlays({super.key, this.compact = false});
-
+  const WhereItPlays({super.key, this.compact = false, this.size = 22});
+  final double size;
   final bool compact;
 
   @override
@@ -202,6 +202,7 @@ class WhereItPlays extends StatelessWidget {
       return IconButton(
         icon: Icon(
             somewhereElse ? Icons.speaker_group : Icons.speaker_group_outlined,
+            size: size,
             color: somewhereElse ? scheme.primary : null),
         tooltip: somewhereElse ? 'Playing on ${there.name}' : 'Where it plays',
         onPressed: () => showDevices(context),
@@ -211,7 +212,7 @@ class WhereItPlays extends StatelessWidget {
       onPressed: () => showDevices(context),
       icon: Icon(
           somewhereElse ? Icons.speaker_group : Icons.speaker_group_outlined,
-          size: 18,
+          size: size,
           color: somewhereElse ? scheme.primary : null),
       label: Text(somewhereElse ? there.name : 'This device',
           maxLines: 1,
