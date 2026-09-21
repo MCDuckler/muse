@@ -34,8 +34,10 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   late AppState app;
+  var withNotes = false;
 
   setUp(() {
+    withNotes = false;
     SharedPreferences.setMockInitialValues({});
     useThisClientInstead(MockClient((request) async {
       final body = request.url.path == '/library/albums/detail'
@@ -54,6 +56,21 @@ void main() {
               ],
               'extra': [],
               'missing': 1,
+              if (withNotes)
+                'notes': {
+                  'plays': 14,
+                  'last_played': DateTime.now()
+                      .subtract(const Duration(days: 3))
+                      .toUtc()
+                      .toIso8601String(),
+                  'house': [
+                    {'id': 2, 'name': 'Joe', 'plays': 9},
+                  ],
+                  'more': [
+                    {'name': 'Harbour Lights EP', 'artist': 'Low Tide Radio',
+                     'tracks': 4, 'year': 1992},
+                  ],
+                },
             }
           : <String, dynamic>{};
       return http.Response(jsonEncode(body), 200,
@@ -129,6 +146,25 @@ void main() {
     await tester.pumpAndSettle();
   });
 
+  testWidgets('under the tracklist, what this house has made of it', (tester) async {
+    withNotes = true;
+    await show(tester, size: const Size(420, 1800));
+    expect(tester.takeException(), isNull);
+    expect(find.text('LINER NOTES'), findsOneWidget);
+    expect(find.text('14'), findsOneWidget);
+    expect(find.textContaining('most recently 3 days ago'), findsOneWidget);
+    expect(find.textContaining('Joe (9)'), findsOneWidget);
+    expect(find.text('MORE BY LOW TIDE RADIO ON YOUR SHELF'), findsOneWidget);
+    expect(find.text('Harbour Lights EP'), findsOneWidget);
+    expect(find.text('1992 · 4 here'), findsOneWidget);
+  });
+
+  testWidgets('a record nobody has played is not told so in zeros', (tester) async {
+    await show(tester, size: const Size(420, 1800));
+    expect(find.text('LINER NOTES'), findsNothing);
+    expect(find.textContaining('on your shelf'), findsNothing);
+  });
+
   testWidgets('a record with no cover gets a sleeve with its own name', (tester) async {
     await show(tester);
     final sleeve = tester.widget<PrintedSleeve>(find.byType(PrintedSleeve).first);
@@ -137,7 +173,8 @@ void main() {
 
   for (final scale in [1.6, 2.0]) {
     testWidgets('it holds on a small phone at ${scale}x text', (tester) async {
-      await show(tester, size: const Size(320, 1600), text: scale);
+      withNotes = true;
+      await show(tester, size: const Size(320, 2600), text: scale);
       expect(tester.takeException(), isNull);
     });
   }

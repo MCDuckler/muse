@@ -1702,6 +1702,9 @@ class AlbumDetail {
   final List<Track> extra;
   final int missing;
 
+  /// What this house has made of it: see [LinerNotes].
+  final LinerNotes notes;
+
   const AlbumDetail({
     required this.name,
     this.artist,
@@ -1713,6 +1716,7 @@ class AlbumDetail {
     this.tracks = const [],
     this.extra = const [],
     this.missing = 0,
+    this.notes = const LinerNotes(),
   });
 
   bool get complete => remoteId != null;
@@ -1737,8 +1741,48 @@ class AlbumDetail {
           .map((e) => Track.fromJson(e as Map<String, dynamic>))
           .toList(),
       missing: (j['missing'] ?? 0) as int,
+      notes: j['notes'] is Map
+          ? LinerNotes.fromJson((j['notes'] as Map).cast<String, dynamic>())
+          : const LinerNotes(),
     );
   }
+}
+
+/// What goes under a record's tracklist: how often you have played it, who else in
+/// the house plays it, and what else by the same artist is already on your shelf.
+class LinerNotes {
+  const LinerNotes({
+    this.plays = 0,
+    this.lastPlayed,
+    this.house = const [],
+    this.more = const [],
+  });
+
+  final int plays;
+  final DateTime? lastPlayed;
+  final List<({int id, String name, int plays})> house;
+  final List<AlbumSummary> more;
+
+  bool get isEmpty => plays == 0 && house.isEmpty && more.isEmpty;
+
+  factory LinerNotes.fromJson(Map<String, dynamic> j) => LinerNotes(
+        plays: (j['plays'] ?? 0) as int,
+        lastPlayed: j['last_played'] == null
+            ? null
+            : DateTime.tryParse('${j['last_played']}')?.toLocal(),
+        house: [
+          for (final h in (j['house'] ?? const []) as List)
+            (
+              id: (h['id'] ?? 0) as int,
+              name: '${h['name'] ?? ''}',
+              plays: (h['plays'] ?? 0) as int,
+            )
+        ],
+        more: [
+          for (final m in (j['more'] ?? const []) as List)
+            AlbumSummary.fromJson((m as Map).cast<String, dynamic>())
+        ],
+      );
 }
 
 /// A record in an artist's discography.

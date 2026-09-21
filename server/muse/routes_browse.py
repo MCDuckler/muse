@@ -755,9 +755,14 @@ def album_detail(album: str | None = None, artist: str | None = None,
             params += (artist,)
         local = db.all_(f"{_TRACK_SELECT} {clause} order by t.id", params)
 
+    notes = _liner_notes(user["id"], [r["id"] for r in local], name,
+                         (release or {}).get("artist") or artist
+                         or (local[0]["artists"][0] if local and local[0]["artists"] else None))
+
     if not release:
         # No match, or the service is down: the library is still an album page.
-        return {"album": {"name": album, "artist": artist, "source": None,
+        return {"notes": notes,
+                "album": {"name": album, "artist": artist, "source": None,
                           "unavailable": error},
                 "tracks": [{"pos": n + 1, "title": r["title"],
                             "artists": r["artists"], "duration_ms": r["duration_ms"],
@@ -767,6 +772,7 @@ def album_detail(album: str | None = None, artist: str | None = None,
 
     merged, extra = _match_into(release["tracks"], local)
     return {
+        "notes": notes,
         "album": {
             "name": album or release["title"],
             "release_name": release["title"],
@@ -780,6 +786,54 @@ def album_detail(album: str | None = None, artist: str | None = None,
         "tracks": merged,
         "extra": [catalog.public(r) for r in extra],
         "missing": sum(1 for m in merged if m["track"] is None),
+    }
+
+
+def _liner_notes(user_id: int, track_ids: list[int], album: str | None,
+                 artist: str | None) -> dict:
+    """What goes under a record's tracklist: what this house has made of it.
+
+    How often you have played it and when last, who else here plays it, and what else
+    by the same artist is already on your shelf. All of it from what the library and the
+    listens already know — nothing is looked up anywhere, so it is there when the
+    metadata service is not.
+    """
+    plays = {"plays": 0, "last": None}
+    house: list[dict] = []
+    if track_ids:
+        plays = db.one(
+            """select count(*) filter (where completed) as plays, max(started_at) as last
+                 from listens where user_id = %s and track_id = any(%s)""",
+            (user_id, track_ids))
+        house = db.all_(
+            """select u.id, u.name, count(*) as plays
+                 from listens l join users u on u.id = l.user_id
+                where l.track_id = any(%s) and l.completed and l.user_id <> %s
+                group by u.id, u.name order by count(*) desc, u.name limit 4""",
+            (track_ids, user_id))
+    more: list[dict] = []
+    if artist:
+        more = db.all_(
+            f"""select t.album as name,
+                       coalesce(t.artists[1], 'Unknown artist') as artist,
+                       count(*) as tracks, min(t.release_year) as year,
+                       max(t.id) filter (where t.cover_id is not null) as cover_track_id
+                  {_MINE}
+                 where t.album is not null and t.album <> ''
+                   and {_key("coalesce(t.artists[1], '')")} = {_key('%s')}
+                   and lower(t.album) <> lower(%s)
+                 group by t.album, coalesce(t.artists[1], 'Unknown artist')
+                 order by min(t.release_year) desc nulls last, lower(t.album)
+                 limit 12""",
+            (user_id, artist, album or ""))
+    return {
+        "plays": plays["plays"] or 0,
+        "last_played": plays["last"],
+        "house": [{"id": h["id"], "name": h["name"], "plays": h["plays"]} for h in house],
+        "more": [{"name": m["name"], "artist": m["artist"], "tracks": m["tracks"],
+                  "year": m["year"],
+                  "cover_url": f"/tracks/{m['cover_track_id']}/cover"
+                  if m["cover_track_id"] else None} for m in more],
     }
 
 

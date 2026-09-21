@@ -566,3 +566,36 @@ def test_the_songs_list_has_letters_in_whichever_alphabet_it_is_in(client, hdr, 
     # Newest first is not an alphabet.
     assert client.get("/library/tracks/index", headers=hdr,
                       params={"sort": "added"}).status_code == 400
+
+
+def test_a_records_page_says_what_the_house_has_made_of_it(client, hdr, library, monkeypatch):
+    """Under the tracklist: how often you have played it, who else here plays it, and
+    what else by them is already on your shelf. From the library alone — it is there
+    when the metadata service is not."""
+    from muse import auth, discography
+
+    monkeypatch.setattr(discography, "find_album", lambda *a, **k: None)
+    alpha, beta, gamma = library[0], library[1], library[2]
+
+    for _ in range(3):
+        client.post("/listens", headers=hdr,
+                    json={"track_id": alpha, "ms_played": 200_000, "completed": True})
+    client.post("/listens", headers=hdr,
+                json={"track_id": beta, "ms_played": 2_000, "completed": False})
+    sam = auth.ensure_user("sam")
+    sams = {"Authorization": f"Bearer {auth.issue_token(sam, 'sams phone', None)}"}
+    client.post("/listens", headers=sams,
+                json={"track_id": beta, "ms_played": 200_000, "completed": True})
+
+    notes = client.get("/library/albums/detail", headers=hdr,
+                       params={"album": "Low", "artist": "Bowie"}).json()["notes"]
+    assert notes["plays"] == 3, "played through, not glanced at"
+    assert notes["last_played"] is not None
+    assert [(h["name"], h["plays"]) for h in notes["house"]] == [("sam", 1)]
+    assert [m["name"] for m in notes["more"]] == ["Heroes"], \
+        "theirs, not this one, and not the other band's record of the same name"
+
+    # A record nobody has played says nothing rather than printing zeros for it.
+    quiet = client.get("/library/albums/detail", headers=hdr,
+                       params={"album": "Heroes", "artist": "Bowie"}).json()["notes"]
+    assert quiet["plays"] == 0 and quiet["house"] == [] and quiet["last_played"] is None

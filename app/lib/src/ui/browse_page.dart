@@ -21,6 +21,7 @@ import 'dialogs.dart';
 import 'glass.dart' show parseHexColour;
 import 'mag.dart';
 import 'mag_parts.dart';
+import 'when.dart';
 import 'sleeve_art.dart';
 import 'mini_player.dart';
 import 'motion.dart';
@@ -708,12 +709,133 @@ class _AlbumPageState extends State<AlbumPage> {
                           startAt: held.indexOf(t), named: detail.name),
                     ),
                 ],
+                _LinerNotes(notes: detail.notes, artist: detail.artist),
               ],
             ),
             ),
           );
         },
       ),
+    );
+  }
+}
+
+/// Under the tracklist: what this house has made of the record.
+///
+/// A review ends with the facts about the record; this is the facts about the record
+/// *here* — how often it has been on, who else plays it, what else of theirs is already
+/// on the shelf. Each part is left off when there is nothing to say: a record never
+/// played is not told so with a row of zeros.
+class _LinerNotes extends StatelessWidget {
+  const _LinerNotes({required this.notes, required this.artist});
+
+  final LinerNotes notes;
+  final String? artist;
+
+  @override
+  Widget build(BuildContext context) {
+    if (notes.isEmpty) return const SizedBox.shrink();
+    final scheme = Theme.of(context).colorScheme;
+    final app = context.read<AppState>();
+    final typed = Mag.typewriter(12, color: scheme.onSurfaceVariant);
+    final scale = (MediaQuery.textScalerOf(context).scale(14) / 14).clamp(1.0, 2.4);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (notes.plays > 0 || notes.house.isNotEmpty) ...[
+          const Padding(
+            padding: EdgeInsets.fromLTRB(8, 26, 8, 8),
+            child: SectionFlag('Liner notes'),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (notes.plays > 0) ...[
+                  Text('${notes.plays}', style: Mag.numerals(44, color: scheme.primary)),
+                  const SizedBox(width: 12),
+                ],
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (notes.plays > 0)
+                        Text(
+                          '${notes.plays == 1 ? 'song' : 'songs'} from it played '
+                          'through by you'
+                          '${notes.lastPlayed == null ? '' : ', most recently ${ago(notes.lastPlayed)}'}.',
+                          style: typed,
+                        ),
+                      if (notes.house.isNotEmpty) ...[
+                        if (notes.plays > 0) const SizedBox(height: 6),
+                        Text(
+                          'Also on in this house: '
+                          '${[
+                            for (final h in notes.house) '${h.name} (${h.plays})'
+                          ].join(', ')}.',
+                          style: typed,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+        if (notes.more.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 26, 8, 4),
+            child: SectionFlag(
+                artist == null ? 'More on your shelf' : 'More by $artist on your shelf'),
+          ),
+          SizedBox(
+            height: 132 + 46 * scale,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+              itemCount: notes.more.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 16),
+              itemBuilder: (context, i) {
+                final a = notes.more[i];
+                return SizedBox(
+                  width: 116,
+                  child: InkWell(
+                    onTap: () => Navigator.of(context)
+                        .push(MaterialPageRoute(builder: (_) => AlbumPage(album: a))),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Taped down a little crooked, each its own way.
+                        CutOut(
+                          turn: (i.isEven ? -1 : 1) * (0.018 + 0.006 * (i % 3)),
+                          child: Artwork(
+                              url: app.api.coverUrlForPath(a.coverPath, small: false),
+                              size: 112,
+                              radius: 0),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(a.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleSmall),
+                        Text(
+                          [if (a.year != null) '${a.year}', '${a.tracks} here'].join(' · '),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Mag.typewriter(10.5, color: scheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
