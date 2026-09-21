@@ -46,6 +46,23 @@ class Paged<T> extends ChangeNotifier {
     await _get(limit: had > pageSize ? had : pageSize, replacing: true);
   }
 
+  /// Everything up to and including row [index], fetched a page at a time.
+  ///
+  /// For going somewhere in the list rather than reading down it: the letter T starts
+  /// at row 1,640, and the rows between here and there have to have arrived before
+  /// the list can be put there. In pages, because the server hands out no more than a
+  /// page however much is asked for — and a short page is how the end is recognised.
+  Future<void> reach(int index) async {
+    while (items.length <= index && more && error == null) {
+      if (_loading) {
+        // Something is already on its way; let it land and look again.
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+        continue;
+      }
+      await _get(limit: pageSize);
+    }
+  }
+
   /// The next page, if there is one and nothing is already in flight.
   Future<void> next() async {
     if (_loading || !more) return;

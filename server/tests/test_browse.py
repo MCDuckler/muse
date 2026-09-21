@@ -530,3 +530,21 @@ def test_a_decade_is_a_list_that_fills_itself_in(client, hdr, library):
 
     assert client.get("/library/smart/d1995", headers=hdr).status_code == 404
     assert client.get("/library/smart/d1990;drop", headers=hdr).status_code == 404
+
+
+def test_the_letters_say_where_in_the_list_they_start(client, hdr, library):
+    """Dragging down the side of a long list goes to a letter, and a letter is a row
+    number in exactly the order the list itself is paged in."""
+    for what in ("albums", "artists"):
+        listed = client.get(f"/library/{what}", headers=hdr,
+                            params={"limit": 500, "sort": "name"}).json()["items"]
+        letters = client.get(f"/library/{what}/index", headers=hdr).json()["letters"]
+        assert letters, what
+        assert sum(l["count"] for l in letters) == len(listed), "every row under one letter"
+        for l in letters:
+            first = listed[l["offset"]]["name"]
+            initial = first[:1].upper()
+            assert (initial if "A" <= initial <= "Z" else "#") == l["letter"], (what, l, first)
+            if l["offset"] > 0 and l["letter"] != "#":
+                before = listed[l["offset"] - 1]["name"][:1].upper()
+                assert before != l["letter"], "the first of its letter, not one in the middle"

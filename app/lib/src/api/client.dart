@@ -169,6 +169,16 @@ class ApiClient {
 
   // ---------------- the other people here ----------------
   /// Everybody on this server, with what each has and whether they have a jam going.
+  /// Where each letter starts in the records list or the artists list, sorted by name.
+  Future<List<({String letter, int offset})>> letters(String of) async {
+    final d = await _decode(await net.get(_u('/library/$of/index'), headers: _headers))
+        as Map<String, dynamic>;
+    return [
+      for (final l in (d['letters'] ?? const []) as List)
+        (letter: '${l['letter']}', offset: (l['offset'] ?? 0) as int)
+    ];
+  }
+
   /// A nod at what somebody is playing. See routes_social.react: one of a fixed
   /// handful, to that one person, kept nowhere.
   Future<void> react(int personId, String emoji, {int? trackId}) async =>

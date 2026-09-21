@@ -30,6 +30,7 @@ import 'track_menu.dart';
 import 'widths.dart';
 import 'snack.dart';
 import 'record_refresh.dart';
+import 'letter_rail.dart';
 
 /// Getting the audio for everything here.
 ///
@@ -321,6 +322,17 @@ class _AlbumsPageState extends State<AlbumsPage> {
   String _sort = 'name';
   late Paged<AlbumSummary> _albums = _pager();
 
+  /// How far apart the rows of the grid are and how many records are in each, as last
+  /// laid out: what turns "record 1,640" into "this far down".
+  double _stride = 1;
+  int _across = 1;
+
+  late final LetterJump _jump = LetterJump(
+    ask: () => context.read<AppState>().api.letters('albums'),
+    reach: (i) => _albums.reach(i),
+    pixelsTo: (i) => (i ~/ _across) * _stride,
+  )..load();
+
   Paged<AlbumSummary> _pager() {
     final api = context.read<AppState>().api;
     final q = _q, sort = _sort;
@@ -340,6 +352,7 @@ class _AlbumsPageState extends State<AlbumsPage> {
   @override
   void dispose() {
     _albums.dispose();
+    _jump.dispose();
     super.dispose();
   }
 
@@ -398,23 +411,43 @@ class _AlbumsPageState extends State<AlbumsPage> {
                   : 'No record or artist here matches “$_q”.',
             );
           }
-          return RecordRefresh(
-            onRefresh: _albums.reload,
+          // The same sums the grid does, so that a record's number can be turned into
+          // how far down it is without the rows in between ever having been built.
+          final maxTile = wide ? 230.0 : 190.0;
+          final gapAcross = wide ? 18.0 : 12.0, gapDown = wide ? 22.0 : 16.0;
+          // The rail has a column of its own, so that it never lies over a cover.
+          final lettered = _q.isEmpty && _sort == 'name' && _albums.total > 40;
+          final railRoom = lettered ? 18.0 : 0.0;
+          final room = MediaQuery.sizeOf(context).width;
+          return LayoutBuilder(builder: (context, box) {
+            final usable = (box.maxWidth.isFinite ? box.maxWidth : room) - 24 - railRoom;
+            _across = (usable / (maxTile + gapAcross)).ceil().clamp(1, 99);
+            final tile = (usable - gapAcross * (_across - 1)) / _across;
+            _stride = tile / 0.74 + gapDown;
+            return WithLetters(
+            jump: _jump,
+            show: lettered,
+            child: RecordRefresh(
+            onRefresh: () async {
+              await _albums.reload();
+              await _jump.load();
+            },
             child: NotificationListener<ScrollNotification>(
               onNotification: (n) {
                 if (n.metrics.extentAfter < 900) _albums.next();
                 return false;
               },
               child: GridView.builder(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 160),
+              controller: _jump.scroll,
+              padding: EdgeInsets.fromLTRB(12, 12, 12 + railRoom, 160),
               physics: const AlwaysScrollableScrollPhysics(),
               gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
                 // Bigger tiles and more air between them where there is room: phone
                 // sizes on a desk are a page of postage stamps.
-                maxCrossAxisExtent: wide ? 230 : 190,
+                maxCrossAxisExtent: maxTile,
                 childAspectRatio: 0.74,
-                crossAxisSpacing: wide ? 18 : 12,
-                mainAxisSpacing: wide ? 22 : 16,
+                crossAxisSpacing: gapAcross,
+                mainAxisSpacing: gapDown,
               ),
               itemCount: albums.length,
               itemBuilder: (context, i) {
@@ -454,7 +487,9 @@ class _AlbumsPageState extends State<AlbumsPage> {
               },
               ),
             ),
+          ),
           );
+          });
         },
       ),
     );
@@ -1100,6 +1135,17 @@ class _ArtistsPageState extends State<ArtistsPage> {
   String _sort = 'name';
   late Paged<ArtistSummary> _artists = _pager();
 
+  /// How tall a row is, from the first one: every row is the same, which is also what
+  /// lets the list be put at row nine hundred without building the nine hundred.
+  final _firstRow = GlobalKey();
+  double _rowHeight = 72;
+
+  late final LetterJump _jump = LetterJump(
+    ask: () => context.read<AppState>().api.letters('artists'),
+    reach: (i) => _artists.reach(i),
+    pixelsTo: (i) => i * _rowHeight,
+  )..load();
+
   Paged<ArtistSummary> _pager() {
     final api = context.read<AppState>().api;
     final q = _q, sort = _sort;
@@ -1118,6 +1164,7 @@ class _ArtistsPageState extends State<ArtistsPage> {
   @override
   void dispose() {
     _artists.dispose();
+    _jump.dispose();
     super.dispose();
   }
 
@@ -1168,32 +1215,49 @@ class _ArtistsPageState extends State<ArtistsPage> {
                   : 'No artist here matches “$_q”.',
             );
           }
-          return RecordRefresh(
-            onRefresh: _artists.reload,
+          final lettered = _q.isEmpty && _sort == 'name' && _artists.total > 40;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            final h = _firstRow.currentContext?.size?.height;
+            if (h != null && h > 0) _rowHeight = h;
+          });
+          return WithLetters(
+            jump: _jump,
+            show: lettered,
+            child: RecordRefresh(
+            onRefresh: () async {
+              await _artists.reload();
+              await _jump.load();
+            },
             child: NotificationListener<ScrollNotification>(
               onNotification: (n) {
                 if (n.metrics.extentAfter < 900) _artists.next();
                 return false;
               },
               child: ListView.builder(
-              padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
+              controller: _jump.scroll,
+              padding: EdgeInsets.fromLTRB(8, 4, lettered ? 26 : 8, 160),
               physics: const AlwaysScrollableScrollPhysics(),
               itemCount: artists.length,
               itemBuilder: (context, i) => ListTile(
+                key: i == 0 ? _firstRow : null,
                 leading: ClipOval(
                   child: Artwork(
                       url: app.api.coverUrlForPath(artists[i].coverPath),
                       size: 44,
                       radius: 22),
                 ),
-                title: Text(artists[i].name),
-                subtitle: Text(artists[i].subtitle),
+                // One line each, always: every row the same height is what lets the
+                // list be put at a letter without building the rows before it.
+                title: Text(artists[i].name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                subtitle: Text(artists[i].subtitle,
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
                 onTap: () => Navigator.of(context).push(MaterialPageRoute(
                   builder: (_) => ArtistPage(artist: artists[i]),
                 )),
               ),
               ),
             ),
+          ),
           );
         },
       ),

@@ -278,6 +278,40 @@ def albums(limit: int = 200, offset: int = 0, q: str | None = None,
     ], "total": total, "offset": offset}
 
 
+def _letters(numbered_sql: str, params: tuple) -> list[dict]:
+    """Where each letter starts in a list sorted by name.
+
+    `numbered_sql` is the list itself — the same rows in the same order, each with its
+    name and its place (`rn`, from one) — so the offsets are offsets into exactly what
+    the list endpoint pages through. Anything that does not start with a letter is
+    filed under '#', wherever the database's idea of alphabetical order puts it.
+    """
+    rows = db.all_(
+        f"""select ch, min(rn) - 1 as "offset", count(*) as n from (
+                select rn, case when upper(left(name, 1)) between 'A' and 'Z'
+                                then upper(left(name, 1)) else '#' end as ch
+                  from ({numbered_sql}) numbered) lettered
+             group by ch order by min(rn)""",
+        params)
+    return [{"letter": r["ch"], "offset": r["offset"], "count": r["n"]} for r in rows]
+
+
+@router.get("/albums/index")
+def albums_index(user: dict = Depends(current_user)):
+    """The letters of the records list, for dragging down the side of it.
+
+    Two thousand records is a long way to scroll to reach the Ts. This says that T
+    starts at row 1,640, and the list goes there.
+    """
+    return {"letters": _letters(
+        f"""select t.album as name,
+                   row_number() over (order by {ALBUM_SORTS['name']}) as rn
+              {_MINE}
+             where t.album is not null and t.album <> ''
+             group by t.album, coalesce(t.artists[1], 'Unknown artist')""",
+        (user["id"],))}
+
+
 @router.get("/albums/tracks")
 def album_tracks(album: str, artist: str | None = None,
                  user: dict = Depends(current_user)):
@@ -342,6 +376,28 @@ def artists(limit: int = 300, offset: int = 0, q: str | None = None,
          if r["cover_track_id"] else None}
         for r in rows
     ], "total": total, "offset": offset}
+
+
+@router.get("/artists/index")
+def artists_index(user: dict = Depends(current_user)):
+    """The letters of the artists list. The same artists in the same order as the list
+    itself: the same spellings folded together, the same one of them chosen."""
+    return {"letters": _letters(
+        f"""
+        with credits as (
+            select unnest(t.artists) as artist, t.id {_MINE}
+        ), spelled as (
+            select {ARTIST_KEY} as k, artist, count(*) as n
+              from credits where artist is not null and artist <> ''
+             group by 1, 2
+        ), best as (
+            select k, (array_agg(artist order by n desc, length(artist), artist))[1]
+                      as name
+              from spelled group by k
+        )
+        select b.name, row_number() over (order by {ARTIST_SORTS['name']}) as rn
+          from best b""",
+        (user["id"],))}
 
 
 @router.get("/artists/tracks")
