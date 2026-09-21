@@ -277,3 +277,41 @@ class SectionFlag extends StatelessWidget {
     );
   }
 }
+
+/// A button set like a word on a page rather than a pill: heavy capitals in a ruled
+/// box, and — for the one that matters — solid red with its shadow printed hard
+/// behind it.
+class PressButton extends StatelessWidget {
+  const PressButton({super.key, required this.label, required this.onTap, this.loud = false});
+
+  final String label;
+  final VoidCallback? onTap;
+  final bool loud;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final off = onTap == null;
+    final ink = off ? scheme.onSurface.withValues(alpha: 0.35) : scheme.onSurface;
+    return Semantics(
+      button: true,
+      enabled: !off,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(14, 8, 14, 7),
+          decoration: BoxDecoration(
+            color: loud && !off ? scheme.primary : null,
+            border: Border.all(color: loud && !off ? scheme.primary : ink, width: 2),
+            boxShadow: loud && !off
+                ? [BoxShadow(color: scheme.onSurface, offset: const Offset(3, 3))]
+                : null,
+          ),
+          child: Text(label.toUpperCase(),
+              style: Mag.flag(11, color: loud && !off ? scheme.onPrimary : ink)
+                  .copyWith(letterSpacing: 1.0)),
+        ),
+      ),
+    );
+  }
+}

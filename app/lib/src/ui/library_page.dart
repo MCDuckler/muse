@@ -9,6 +9,8 @@ import '../state/offline.dart';
 import 'artwork.dart';
 import 'browse_page.dart';
 import 'dialogs.dart';
+import 'mag.dart';
+import 'mag_parts.dart';
 import 'feed_page.dart';
 import 'kept_page.dart';
 import 'listening_page.dart';
@@ -19,6 +21,7 @@ import 'spotify_page.dart' show UnmatchedPage;
 import 'song_row.dart';
 import 'snack.dart';
 import 'skeleton.dart';
+import 'theme.dart';
 
 
 class LibraryPage extends StatelessWidget {
@@ -33,60 +36,25 @@ class LibraryPage extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
       physics: const AlwaysScrollableScrollPhysics(),
       children: [
-        // The library itself, which until now could not be browsed at all.
-        ListTile(
-          leading: const Icon(Icons.library_music_outlined),
-          title: const Text('All tracks'),
-          subtitle: const Text('Everything, sortable'),
-          onTap: () => openPage(context, (_) => const AllTracksPage()),
-        ),
-        ListTile(
-          leading: const Icon(Icons.album_outlined),
-          title: const Text('Albums'),
-          onTap: () => openPage(context, (_) => const AlbumsPage()),
-        ),
-        ListTile(
-          leading: const Icon(Icons.person_outline),
-          title: const Text('Artists'),
-          onTap: () => openPage(context, (_) => const ArtistsPage()),
-        ),
-        // Up here with the rest of the ways in, not under the last playlist: with
-        // twenty playlists it was a screen and a half of scrolling away.
-        ListTile(
-          leading: const Icon(Icons.bar_chart),
-          title: const Text('The charts'),
-          subtitle: const Text('Your top songs, and what moved this week'),
-          onTap: () => openPage(context, (_) => const ListeningPage()),
-        ),
-        ListTile(
-          leading: const Icon(Icons.history),
-          title: const Text('Recently played'),
-          onTap: () => openPage(context, (_) => const _HistoryPage()),
-        ),
-        const _FeedRow(),
-        // What will play with no signal is part of the library, not a setting: it was
-        // only reachable from the settings page, which is not where anybody looks on
-        // the way to a plane.
-        if (OfflineStore.supported)
-          ListTile(
-            leading: const Icon(Icons.download_done_outlined),
-            title: const Text('On this device'),
-            subtitle: Text(app.offline.count == 0
-                ? 'Keep songs here to play them with no signal'
-                : '${app.offline.count} songs · ${KeptPage.size(app.offline.bytes)}'),
-            onTap: () => openPage(context, (_) => const KeptPage()),
+        // The contents page: every way into the library, each with a number that is
+        // true about it.
+        const _Contents(),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 24, 8, 8),
+          child: Row(
+            children: [
+              Expanded(child: SectionFlag('Playlists · ${app.playlists.length}')),
+              PressButton(
+                label: 'New',
+                onTap: () async {
+                  final name = await promptForName(context, 'New playlist');
+                  if (name == null) return;
+                  await app.api.createPlaylist(name);
+                  await app.refreshPlaylists();
+                },
+              ),
+            ],
           ),
-        const Divider(),
-        const _SectionLabel('Playlists'),
-        ListTile(
-          leading: const Icon(Icons.add),
-          title: const Text('New playlist'),
-          onTap: () async {
-            final name = await promptForName(context, 'New playlist');
-            if (name == null) return;
-            await app.api.createPlaylist(name);
-            await app.refreshPlaylists();
-          },
         ),
         for (final p in app.playlists)
           ListTile(
@@ -807,14 +775,25 @@ class _PlaylistHeader extends StatelessWidget {
 ///
 /// The count is the point: a feed you have to open to find out whether it is worth
 /// opening is a feed nobody opens.
-class _FeedRow extends StatefulWidget {
-  const _FeedRow();
+
+
+/// Every way into the library, as a contents page: an index card each, with a number on
+/// it that is true — how many songs, records and artists there are, which week the
+/// chart is, how many new records are waiting, how many songs are kept here.
+///
+/// The numbers are asked for once when the page opens, a page of one row each, and a
+/// card whose number has not arrived is still a card that opens.
+class _Contents extends StatefulWidget {
+  const _Contents();
 
   @override
-  State<_FeedRow> createState() => _FeedRowState();
+  State<_Contents> createState() => _ContentsState();
 }
 
-class _FeedRowState extends State<_FeedRow> {
+class _ContentsState extends State<_Contents> {
+  int? _songs;
+  int? _records;
+  int? _artists;
   int _unseen = 0;
   int _following = 0;
 
@@ -825,34 +804,191 @@ class _FeedRowState extends State<_FeedRow> {
   }
 
   Future<void> _count() async {
-    try {
-      final f = await context.read<AppState>().api.feed(limit: 60);
-      if (!mounted) return;
-      setState(() {
+    final api = context.read<AppState>().api;
+    Future<void> quietly(Future<void> Function() part) async {
+      try {
+        await part();
+      } catch (_) {}
+    }
+
+    await Future.wait([
+      quietly(() async => _songs = (await api.libraryTracks(limit: 1)).total),
+      quietly(() async => _records = (await api.albums(limit: 1)).total),
+      quietly(() async => _artists = (await api.artists(limit: 1)).total),
+      quietly(() async {
+        final f = await api.feed(limit: 1);
         _unseen = f.unseen;
         _following = f.following;
-      });
-    } catch (_) {
-      // A row that cannot count is still a row that opens.
+      }),
+    ]);
+    if (mounted) setState(() {});
+  }
+
+  static String _n(int? n) {
+    if (n == null) return '·';
+    final s = '$n';
+    final out = StringBuffer();
+    for (var i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) out.write(',');
+      out.write(s[i]);
     }
+    return out.toString();
   }
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      leading: const Icon(Icons.notifications_none),
-      title: const Text('New releases'),
-      subtitle: Text(_following == 0
-          ? 'Follow an artist to hear about their next record'
-          : '$_following followed'),
-      trailing: _unseen == 0
-          ? null
-          : Badge(label: Text('$_unseen'), backgroundColor:
-              Theme.of(context).colorScheme.primary),
-      onTap: () async {
-        await openPage(context, (_) => const FeedPage());
-        _count();
-      },
+    final app = context.watch<AppState>();
+    final kept = app.offline.count;
+    final cards = <Widget>[
+      _IndexCard(
+        number: _n(_songs),
+        title: 'Songs',
+        blurb: 'Everything, sortable',
+        onTap: () => openPage(context, (_) => const AllTracksPage()),
+      ),
+      _IndexCard(
+        number: _n(_records),
+        title: 'Records',
+        blurb: 'Every album and EP',
+        onTap: () => openPage(context, (_) => const AlbumsPage()),
+      ),
+      _IndexCard(
+        number: _n(_artists),
+        title: 'Artists',
+        blurb: 'Everybody on them',
+        onTap: () => openPage(context, (_) => const ArtistsPage()),
+      ),
+      _IndexCard(
+        number: 'Wk ${issueNumber(DateTime.now())}',
+        title: 'The charts',
+        blurb: 'Your top songs, and what moved',
+        onTap: () => openPage(context, (_) => const ListeningPage()),
+      ),
+      _IndexCard(
+        number: _unseen > 0 ? '$_unseen' : (_following > 0 ? '$_following' : ''),
+        title: 'New releases',
+        blurb: _following == 0
+            ? 'Follow an artist to hear about their next record'
+            : _unseen > 0
+                ? 'New from $_following artists you follow'
+                : 'From the $_following artists you follow',
+        sticker: _unseen > 0,
+        onTap: () async {
+          await openPage(context, (_) => const FeedPage());
+          _count();
+        },
+      ),
+      _IndexCard(
+        number: '',
+        title: 'Recently played',
+        blurb: 'Everything, in the order you heard it',
+        onTap: () => openPage(context, (_) => const _HistoryPage()),
+      ),
+      // What will play with no signal is part of the library, not a setting: it was
+      // only reachable from the settings page, which is not where anybody looks on
+      // the way to a plane.
+      if (OfflineStore.supported)
+        _IndexCard(
+          number: kept == 0 ? '' : _n(kept),
+          title: 'On this device',
+          blurb: kept == 0
+              ? 'Keep songs here to play them with no signal'
+              : KeptPage.size(app.offline.bytes),
+          onTap: () => openPage(context, (_) => const KeptPage()),
+        ),
+    ];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 10, 8, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SectionFlag('Contents'),
+          const SizedBox(height: 10),
+          // Two to a row, each row as tall as its tallest card, so the cards line up
+          // at any text size.
+          for (var i = 0; i < cards.length; i += 2)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(child: cards[i]),
+                    const SizedBox(width: 8),
+                    Expanded(
+                        child: i + 1 < cards.length ? cards[i + 1] : const SizedBox()),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One entry on the contents page: a number, a name, a line about it.
+class _IndexCard extends StatelessWidget {
+  const _IndexCard({
+    required this.number,
+    required this.title,
+    required this.blurb,
+    required this.onTap,
+    this.sticker = false,
+  });
+
+  final String number;
+  final String title;
+  final String blurb;
+  final VoidCallback onTap;
+
+  /// Whether the number is news, and set on a sticker rather than in ink.
+  final bool sticker;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      button: true,
+      label: '$title${number.isEmpty || number == '·' ? '' : ', $number'}. $blurb',
+      child: ExcludeSemantics(
+        child: InkWell(
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+            decoration: BoxDecoration(
+              border: Border.all(color: scheme.onSurface, width: 1.5),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (number.isNotEmpty)
+                  sticker
+                      ? Container(
+                          padding: const EdgeInsets.fromLTRB(6, 2, 6, 0),
+                          color: MuseTheme.highlighter,
+                          child: Text('$number NEW',
+                              style: Mag.headline(22, color: MuseTheme.ink)),
+                        )
+                      : Text(number,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Mag.numerals(26, color: scheme.primary)),
+                const SizedBox(height: 4),
+                Text(title.toUpperCase(),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Mag.headline(22, color: scheme.onSurface)),
+                const SizedBox(height: 3),
+                Text(blurb,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: Mag.typewriter(11, color: scheme.onSurfaceVariant)),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

@@ -764,12 +764,12 @@ class _AlbumHead extends StatelessWidget {
             runSpacing: 8,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              _PressButton(
+              PressButton(
                 label: 'Play',
                 loud: true,
                 onTap: held.isEmpty ? null : () => app.playNow(held, named: detail.name),
               ),
-              _PressButton(
+              PressButton(
                 label: 'Shuffle',
                 onTap: held.isEmpty
                     ? null
@@ -777,14 +777,14 @@ class _AlbumHead extends StatelessWidget {
               ),
               // Everything that belongs next to this record, seeded from the record
               // itself rather than from its first track.
-              _PressButton(
+              PressButton(
                 label: 'Station',
                 onTap: held.isEmpty
                     ? null
                     : () => startStation(context, album: detail.name, artist: detail.artist),
               ),
               if (OfflineStore.supported)
-                _PressButton(
+                PressButton(
                   label: kept ? 'Kept' : 'Keep',
                   onTap: held.isEmpty
                       ? null
@@ -799,7 +799,7 @@ class _AlbumHead extends StatelessWidget {
                         },
                 ),
               if (detail.missing > 0)
-                _PressButton(
+                PressButton(
                   label: filling ? 'Getting…' : 'Get ${detail.missing} missing',
                   onTap: filling ? null : onFill,
                 ),
@@ -860,43 +860,6 @@ class _FactFile extends StatelessWidget {
   }
 }
 
-/// A button set like a word on a page rather than a pill: heavy capitals in a ruled
-/// box, and — for the one that matters — solid red with its shadow printed hard
-/// behind it.
-class _PressButton extends StatelessWidget {
-  const _PressButton({required this.label, required this.onTap, this.loud = false});
-
-  final String label;
-  final VoidCallback? onTap;
-  final bool loud;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final off = onTap == null;
-    final ink = off ? scheme.onSurface.withValues(alpha: 0.35) : scheme.onSurface;
-    return Semantics(
-      button: true,
-      enabled: !off,
-      child: InkWell(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(14, 8, 14, 7),
-          decoration: BoxDecoration(
-            color: loud && !off ? scheme.primary : null,
-            border: Border.all(color: loud && !off ? scheme.primary : ink, width: 2),
-            boxShadow: loud && !off
-                ? [BoxShadow(color: scheme.onSurface, offset: const Offset(3, 3))]
-                : null,
-          ),
-          child: Text(label.toUpperCase(),
-              style: Mag.flag(11, color: loud && !off ? scheme.onPrimary : ink)
-                  .copyWith(letterSpacing: 1.0)),
-        ),
-      ),
-    );
-  }
-}
 
 /// One line of the record. A song we hold plays; one we do not is offered.
 class _ReleaseRow extends StatelessWidget {
@@ -1397,7 +1360,7 @@ class _ArtistHead extends StatelessWidget {
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               if (detail.remoteId != null)
-                _PressButton(
+                PressButton(
                   label: working
                       ? '…'
                       : detail.following
@@ -1411,7 +1374,7 @@ class _ArtistHead extends StatelessWidget {
               // Their songs and everything that belongs next to them, seeded from
               // what of theirs is already here.
               if (detail.tracks.isNotEmpty)
-                _PressButton(
+                PressButton(
                   label: 'Station',
                   onTap: () => startStation(context, artist: detail.name),
                 ),

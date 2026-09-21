@@ -241,10 +241,10 @@ void main() {
     expect(find.text('Pick something from the library'), findsOneWidget,
         reason: 'the pane says what it is for before anything is in it');
 
-    await tester.tap(find.text('Albums'));
+    await tester.tap(find.text('RECORDS'));
     await tester.pumpAndSettle();
 
-    expect(find.text('All tracks'), findsOneWidget,
+    expect(find.text('SONGS'), findsOneWidget,
         reason: 'the column is still there beside what it opened');
     expect(find.text('Pick something from the library'), findsNothing);
     await drain(tester);
@@ -256,10 +256,10 @@ void main() {
     await wholeShell(tester, const Size(420, 900));
     expect(find.text('Pick something from the library'), findsNothing);
 
-    await tester.tap(find.text('Albums'));
+    await tester.tap(find.text('RECORDS'));
     await tester.pumpAndSettle();
 
-    expect(find.text('All tracks'), findsNothing,
+    expect(find.text('SONGS'), findsNothing,
         reason: 'one screen, and this is the one that was opened');
     await drain(tester);
   });
