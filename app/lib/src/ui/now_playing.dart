@@ -2124,6 +2124,8 @@ Future<void> showPlaybackExtras(BuildContext context) async {
   final app = context.read<AppState>();
   await ask<void>(
     context,
+    // As tall as it needs, up to the screen: see the note on scrolling in the sheet.
+    scrollable: true,
     builder: (sheet) => _PlaybackExtras(app: app),
   );
 }
@@ -2167,6 +2169,10 @@ class _PlaybackExtrasState extends State<_PlaybackExtras> {
     return AnimatedBuilder(
       animation: app,
       builder: (sheet, _) => SafeArea(
+          // Scrolls, because it has to: how it sounds, how songs join, the sleep timer
+          // and the speed are more than a sheet's height on a small phone, and a column
+          // that does not scroll simply loses its last rows off the bottom of the screen.
+          child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2192,6 +2198,44 @@ class _PlaybackExtrasState extends State<_PlaybackExtras> {
                       navigator.push(MaterialPageRoute<void>(
                           builder: (_) => const EqualizerPage()));
                     },
+                  );
+                },
+              ),
+              // The curves, a tap away: changing how it sounds for this room or these
+              // headphones should not mean leaving the player for a page of faders.
+              ListenableBuilder(
+                listenable: app.equalizer,
+                builder: (context, _) {
+                  final eq = app.equalizer;
+                  if (!eq.engine.available) return const SizedBox.shrink();
+                  final now = eq.enabled ? eq.current?.name : null;
+                  // A dozen chips: all built, in a row that scrolls, as tall as they are.
+                  return SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Row(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: ChoiceChip(
+                            label: const Text('Off'),
+                            visualDensity: VisualDensity.compact,
+                            selected: !eq.enabled,
+                            onSelected: (_) => eq.setEnabled(false),
+                          ),
+                        ),
+                        for (final p in eq.presets)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: ChoiceChip(
+                              label: Text(p.name),
+                              visualDensity: VisualDensity.compact,
+                              selected: now == p.name,
+                              onSelected: (_) => eq.use(p),
+                            ),
+                          ),
+                      ],
+                    ),
                   );
                 },
               ),
@@ -2268,6 +2312,7 @@ class _PlaybackExtrasState extends State<_PlaybackExtras> {
               ),
               const SizedBox(height: 20),
             ],
+          ),
           ),
         ),
     );
