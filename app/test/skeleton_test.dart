@@ -30,6 +30,19 @@ void main() {
     expect(find.byType(Bone), findsWidgets);
   });
 
+  testWidgets('and people look like people, faces and all', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: PeopleComing(rows: 4))),
+    );
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    // A face is round; a name is not. The difference is the whole point of having a
+    // second shape rather than reusing the song rows.
+    final bones = tester.widgetList<Bone>(find.byType(Bone));
+    expect(bones.where((b) => b.shape == BoxShape.circle).length, 4);
+    expect(bones.where((b) => b.shape == BoxShape.rectangle).length, 8);
+  });
+
   testWidgets('it breathes rather than sweeping a light across the screen',
       (tester) async {
     await tester.pumpWidget(

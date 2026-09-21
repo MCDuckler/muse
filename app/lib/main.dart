@@ -13,6 +13,7 @@ import 'src/state/app_state.dart';
 import 'src/state/selection.dart';
 import 'src/state/playback_log.dart';
 import 'src/state/player.dart';
+import 'src/ui/search_page.dart' show searchWanted;
 import 'src/ui/home_page.dart';
 import 'src/ui/loading.dart';
 import 'src/ui/login_page.dart';
@@ -255,6 +256,7 @@ class AppShortcuts extends StatelessWidget {
     ('S', 'Shuffle what is coming'),
     ('R', 'Repeat: off, all, one'),
     ('M', 'Mute'),
+    ('/', 'Search'),
     ('?', 'This list'),
   ];
 
@@ -285,6 +287,11 @@ class AppShortcuts extends StatelessWidget {
         app.cycleRepeat();
       case LogicalKeyboardKey.keyM:
         app.toggleMute();
+      case LogicalKeyboardKey.slash:
+        // Every app with a search box answers this key, and this one has a search
+        // *tab*: go there first, then take the cursor.
+        app.setHomeTab(1);
+        searchWanted.value++;
       default:
         return KeyEventResult.ignored;
     }

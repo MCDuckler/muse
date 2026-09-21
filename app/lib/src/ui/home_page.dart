@@ -19,6 +19,7 @@ import 'dropped_files.dart';
 import 'snack.dart';
 import 'library_page.dart';
 import 'settings_page.dart';
+import 'not_connected.dart';
 import 'player_bar.dart';
 import 'queue_page.dart';
 import 'search_page.dart';
@@ -276,6 +277,9 @@ class _HomePageState extends State<HomePage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Above the player rather than over the page: it is a fact about the
+              // whole app, and it must not cover the thing somebody was reading.
+              const NotConnected(),
               // The dock has the player in it, and two players on one screen is one
               // too many.
               if (!dock) const PlayerBar(),

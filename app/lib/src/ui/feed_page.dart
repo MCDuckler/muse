@@ -10,6 +10,7 @@ import 'browse_page.dart';
 import 'dialogs.dart';
 import 'mini_player.dart';
 import 'snack.dart';
+import 'skeleton.dart';
 
 /// What the artists you follow have put out.
 ///
@@ -88,7 +89,7 @@ class _FeedPageState extends State<FeedPage> {
         future: _future,
         builder: (context, snap) {
           if (snap.hasError) return ErrorRetry(error: snap.error!, onRetry: _load);
-          if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+          if (!snap.hasData) return const SongsComing();
           final data = snap.data!;
           if (data.following == 0) {
             return const EmptyHint(
@@ -293,7 +294,7 @@ class _FollowingPageState extends State<FollowingPage> {
         future: _future,
         builder: (context, snap) {
           if (snap.hasError) return ErrorRetry(error: snap.error!, onRetry: _load);
-          if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+          if (!snap.hasData) return const PeopleComing();
           final items = snap.data!;
           if (items.isEmpty) {
             return const EmptyHint(

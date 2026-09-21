@@ -110,6 +110,39 @@ class SongsComing extends StatelessWidget {
       );
 }
 
+/// People, before they arrive: a face, a name, a line about what they are playing.
+class PeopleComing extends StatelessWidget {
+  const PeopleComing({super.key, this.rows = 5});
+
+  final int rows;
+
+  @override
+  Widget build(BuildContext context) => ListView.builder(
+        padding: const EdgeInsets.fromLTRB(8, 12, 8, 8),
+        itemCount: rows,
+        physics: const NeverScrollableScrollPhysics(),
+        itemBuilder: (context, i) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+          child: Row(
+            children: [
+              const Bone(width: 40, height: 40, shape: BoxShape.circle),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Bone(width: 90 + (i % 3) * 34),
+                    const SizedBox(height: 8),
+                    Bone(width: 140 + (i % 4) * 30, height: 10),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+}
+
 /// A wall of records, before there are any.
 class RecordsComing extends StatelessWidget {
   const RecordsComing({super.key, this.tiles = 12, this.extent = 190});

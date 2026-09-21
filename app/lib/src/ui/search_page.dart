@@ -14,6 +14,7 @@ import 'selection_bar.dart';
 import 'snack.dart';
 import 'track_menu.dart';
 import 'widths.dart';
+import 'skeleton.dart';
 
 /// One search across everything, in one list.
 ///
@@ -29,6 +30,13 @@ class SearchPage extends StatefulWidget {
   @override
   State<SearchPage> createState() => _SearchPageState();
 }
+
+/// Bumped by anything that means "search now" — the slash key, for one.
+///
+/// A notifier rather than a flag on the app state: wanting the cursor in the search
+/// box is a momentary thing, not a piece of the app's condition, and asking twice in
+/// a row has to work, which a boolean cannot do.
+final ValueNotifier<int> searchWanted = ValueNotifier<int>(0);
 
 class _SearchPageState extends State<SearchPage> {
   final _controller = TextEditingController();
@@ -89,7 +97,17 @@ class _SearchPageState extends State<SearchPage> {
   void initState() {
     super.initState();
     _controller.addListener(_onTyped);
+    searchWanted.addListener(_wanted);
     unawaited(_loadRecent());
+  }
+
+  /// Somebody pressed the slash key. Take the cursor, and select what is already
+  /// there so the next thing typed replaces the last search rather than extending it.
+  void _wanted() {
+    if (!mounted) return;
+    _focus.requestFocus();
+    _controller.selection =
+        TextSelection(baseOffset: 0, extentOffset: _controller.text.length);
   }
 
   Future<void> _loadRecent() async {
@@ -123,6 +141,7 @@ class _SearchPageState extends State<SearchPage> {
   @override
   void dispose() {
     _debounce?.cancel();
+    searchWanted.removeListener(_wanted);
     _controller.dispose();
     _focus.dispose();
     super.dispose();
@@ -608,7 +627,7 @@ class _FoundAlbumSheetState extends State<_FoundAlbumSheet> {
               padding: const EdgeInsets.all(24), child: Text(_error!)));
     }
     if (album == null) {
-      return const Center(child: CircularProgressIndicator());
+      return const SongsComing();
     }
     return ListView(
       controller: widget.controller,

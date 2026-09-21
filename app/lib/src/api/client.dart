@@ -1375,7 +1375,10 @@ class ApiClient {
   /// Server-sent events: a track finishing its download un-greys it everywhere.
   Stream<({String event, Map<String, dynamic> data})> events() async* {
     final req = http.Request('GET', _u('/events'))..headers.addAll(_headers);
-    final res = await req.send();
+    // Through the app's own client rather than `req.send()`, which opens a client of
+    // its own: this is the longest-lived request the app makes, and it is the one
+    // whose failure says soonest that the box has gone away.
+    final res = await net.send(req);
     String? current;
     await for (final line
         in res.stream.transform(utf8.decoder).transform(const LineSplitter())) {

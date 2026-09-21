@@ -9,6 +9,7 @@ import 'artwork.dart';
 import 'dialogs.dart';
 import 'mini_player.dart';
 import 'snack.dart';
+import 'skeleton.dart';
 
 /// One screen for the whole download queue.
 ///
@@ -119,7 +120,7 @@ class _DownloadsPageState extends State<DownloadsPage> {
       body: _error != null && d == null
           ? ErrorRetry(error: _error!, onRetry: _load)
           : d == null
-              ? const Center(child: CircularProgressIndicator())
+              ? const SongsComing()
               : RefreshIndicator(
                   onRefresh: _load,
                   child: ListView(

@@ -11,6 +11,7 @@ import 'snack.dart';
 import 'dialogs.dart';
 import 'song_row.dart';
 import 'track_menu.dart';
+import 'skeleton.dart';
 
 /// Everybody else on this server.
 ///
@@ -64,7 +65,9 @@ class _SocialPageState extends State<SocialPage> {
           });
     }
     if (people == null) {
-      return const Center(child: CircularProgressIndicator());
+      // The shape of the page it is about to be, rather than a spinner in the
+      // middle of an empty tab.
+      return const PeopleComing();
     }
     // Whoever has a jam going, first. Then everybody else by name — a list of people
     // sorted by how much they have listened to is a leaderboard, which this is not.
