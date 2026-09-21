@@ -2569,8 +2569,8 @@ class RecordLight extends CustomPainter {
     required this.drop,
     required this.label,
     required this.strength,
-    required this.spin,
-  }) : super(repaint: spin);
+    this.spin,
+  });
 
   /// How wide the record is.
   final double size;
@@ -2584,8 +2584,12 @@ class RecordLight extends CustomPainter {
   /// 0 to 1: the light comes up as the record settles into its place.
   final double strength;
 
-  /// The record's turning, which the light answers to — see below.
-  final Animation<double> spin;
+  /// No longer used: the light holds still. The highlights used to rock a degree or two
+  /// with every turn, on the grounds that no record is flat — but a lamp does not move,
+  /// and light that wanders across a record reads as the *light* moving, which is the
+  /// one thing this was here to avoid. The grooves turning under a fixed light is what
+  /// says the record is turning. Kept as a parameter so nothing that builds one breaks.
+  final Animation<double>? spin;
 
   /// One lobe of light, as stops round a sweep: nothing, up to a peak, nothing.
   static void _lobe(List<Color> colours, List<double> stops, double at, double half,
@@ -2616,10 +2620,6 @@ class RecordLight extends CustomPainter {
     // and it is why a straight stripe of gloss across a record never looks like one.
     //
     // Two lamps: a strong one up and to the left, a weaker one up and to the right.
-    final turn = spin.value * 2 * math.pi;
-    // No record is flat. The highlights rock a degree or two once a turn, and shiver a
-    // little on top of that — which is most of what makes it look like it is turning.
-    final warp = 0.030 * math.sin(turn) + 0.012 * math.sin(2 * turn + 1.3);
     final colours = <Color>[];
     final stops = <double>[];
     // Each has a twin straight across the record, on the half that is behind the
@@ -2628,7 +2628,7 @@ class RecordLight extends CustomPainter {
     _lobe(colours, stops, 0.125, 0.105, 0.30 * strength);   // the lamp
     _lobe(colours, stops, 0.345, 0.070, 0.13 * strength);   // the second lamp
     // The first lobe's centre points up and to the left.
-    final start = -2.20 - 0.125 * 2 * math.pi + warp;
+    final start = -2.20 - 0.125 * 2 * math.pi;
 
     canvas.save();
     // Only where the record is actually drawn: the light cannot go on past the edge
@@ -2662,7 +2662,7 @@ class RecordLight extends CustomPainter {
     // The moulded rim catches the lamp as a bright thread along its edge.
     canvas.drawArc(
       Rect.fromCircle(center: middle, radius: r - 1.2),
-      -2.20 - 0.55 + warp,
+      -2.20 - 0.55,
       1.10,
       false,
       Paint()

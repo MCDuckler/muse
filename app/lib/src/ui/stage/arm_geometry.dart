@@ -34,11 +34,16 @@ class ArmGeometry {
     final middle = Offset(box.width / 2, box.height / 2 + drop);
     // The post: out at the top right, where the part of the record that is not behind
     // a sleeve is.
-    final pivot = middle + Offset(radius * 0.88, -radius * 0.82);
-    // The arm's length is the one it has always had — from the post to the place the
-    // needle used to sit — so every style drawn for it still fits.
+    final pivot = middle + Offset(radius * 0.91, -radius * 0.90);
+    // A real arm is about one and a half times a record's radius from its post to its
+    // needle; this one was barely one, which is what made it look like a toy's. It
+    // cannot simply be made as long as a real one: the post has to stay on the screen,
+    // and the needle has to come down on the part of the record that shows above its
+    // sleeve. A quarter longer, from a post a little further out, keeps the needle on
+    // the upper left of the record from the first groove to the last — worked out for
+    // every radius it plays at, not guessed.
     final reference = middle + Offset(-radius * 0.12, -radius * 0.72);
-    final length = (reference - pivot).distance;
+    final length = radius * 1.27;
     final toMiddle = middle - pivot;
     final base = math.atan2(toMiddle.dy, toMiddle.dx);
     // Which side of the post-to-middle line the needle swings on: the side the old
