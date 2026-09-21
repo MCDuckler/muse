@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
+import '../state/art_cache.dart';
 import '../state/offline.dart';
 import '../state/paged.dart';
 import '../state/selection.dart';
@@ -21,6 +23,7 @@ import 'mag.dart';
 import 'mag_parts.dart';
 import 'sleeve_art.dart';
 import 'mini_player.dart';
+import 'theme.dart';
 import 'track_list.dart';
 import 'track_menu.dart';
 import 'widths.dart';
@@ -1165,8 +1168,9 @@ class _ArtistPageState extends State<ArtistPage> {
     _load();
   }
 
-  void _load() => setState(() =>
-      _future = context.read<AppState>().api.artistDetail(widget.artist.name));
+  void _load() => setState(() {
+        _future = context.read<AppState>().api.artistDetail(widget.artist.name);
+      });
 
   Future<void> _toggleFollow(ArtistDetail d) async {
     if (d.remoteId == null) return;
@@ -1213,7 +1217,6 @@ class _ArtistPageState extends State<ArtistPage> {
           if (!snap.hasData) return const SongsComing(rows: 7);
           final d = snap.data!;
           context.read<AppState>().keepCoversFor(d.tracks);
-          final text = Theme.of(context).textTheme;
           final where = 'artist:${d.name}';
           return SelectionOver(
             bar: SelectionBar(where: where, tracks: d.tracks),
@@ -1228,25 +1231,24 @@ class _ArtistPageState extends State<ArtistPage> {
                   onFollow: () => _toggleFollow(d),
                 ),
                 if (d.top.isNotEmpty) ...[
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                    child: Text('Best known', style: text.titleSmall),
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 18, 16, 6),
+                    child: SectionFlag('Best known'),
                   ),
                   for (final row in d.top.take(8))
                     _TopRow(row: row, playable: d.tracks, named: d.name),
                 ],
                 if (d.albums.isNotEmpty) ...[
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
-                    child: Text('Records', style: text.titleSmall),
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 22, 16, 10),
+                    child: SectionFlag('Discography'),
                   ),
                   _AlbumStrip(albums: d.albums, artist: d.name),
                 ],
                 if (d.tracks.isNotEmpty) ...[
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 20, 16, 4),
-                    child: Text('In your library (${d.tracks.length})',
-                        style: text.titleSmall),
+                    padding: const EdgeInsets.fromLTRB(16, 22, 16, 6),
+                    child: SectionFlag('In your library · ${d.tracks.length}'),
                   ),
                   // Was a tile of its own with a menu button and nothing else: no
                   // swipe to play next, no source, no sign of what is on the device,
@@ -1272,6 +1274,12 @@ class _ArtistPageState extends State<ArtistPage> {
   }
 }
 
+/// The head of an artist's page, set as a profile.
+///
+/// Their picture printed the way a music paper printed a band it could not afford
+/// colour for: one ink, the masthead red, over paper, through a halftone screen. Where
+/// there is no picture of them, the covers of their records stand in, printed the same
+/// way. Their name is pasted over the bottom of it on a slip.
 class _ArtistHead extends StatelessWidget {
   const _ArtistHead(
       {required this.detail, required this.working, required this.onFollow});
@@ -1281,66 +1289,178 @@ class _ArtistHead extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    final ratio = MediaQuery.devicePixelRatioOf(context);
+    final covers = [
+      for (final a in detail.albums)
+        if (a.cover != null) a.cover!
+    ].take(4).toList();
     final line = [
-      if (detail.albums.isNotEmpty) '${detail.albums.length} records',
+      if (detail.albums.isNotEmpty)
+        '${detail.albums.length} ${detail.albums.length == 1 ? 'record' : 'records'}',
       '${detail.tracks.length} in your library',
+      if (detail.fans != null && detail.fans! > 0) '${_count(detail.fans!)} fans',
     ].join(' · ');
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    Widget picture(double width) {
+      if (detail.image != null) {
+        return Image(
+          image: artwork(detail.image!, drawnAt: width, ratio: ratio),
+          fit: BoxFit.cover,
+          alignment: const Alignment(0, -0.3),
+          errorBuilder: (_, __, ___) => const SizedBox.expand(),
+        );
+      }
+      if (covers.isEmpty) return const SizedBox.expand();
+      return Row(
         children: [
-          ClipOval(child: Artwork(url: detail.image, size: 84, radius: 42)),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          for (final c in covers)
+            Expanded(
+              child: Image(
+                image: artwork(c, drawnAt: width / covers.length, ratio: ratio),
+                fit: BoxFit.cover,
+                height: double.infinity,
+                errorBuilder: (_, __, ___) => const SizedBox.expand(),
+              ),
+            ),
+        ],
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          height: 230,
+          child: LayoutBuilder(builder: (context, box) {
+            return Stack(
+              fit: StackFit.expand,
               children: [
-                Text(detail.name, style: text.titleMedium),
-                const SizedBox(height: 4),
-                Text(line, style: text.bodySmall),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 4,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    if (detail.remoteId != null)
-                      FilledButton.tonalIcon(
-                        icon: working
-                            ? const SizedBox(
-                                width: 14,
-                                height: 14,
-                                child: CircularProgressIndicator(strokeWidth: 2))
-                            : Icon(detail.following
-                                ? Icons.notifications_active
-                                : Icons.notifications_none),
-                        label: Text(detail.following ? 'Following' : 'Follow'),
-                        onPressed: working ? null : onFollow,
-                      )
-                    else if (detail.unavailable != null)
-                      Text('Only your library — ${detail.unavailable}',
-                          style: text.bodySmall),
-                    // Their songs and everything that belongs next to them, seeded
-                    // from what of theirs is already here.
-                    if (detail.tracks.isNotEmpty)
-                      TextButton.icon(
-                        icon: const Icon(Icons.radio, size: 18),
-                        label: const Text('Station'),
-                        onPressed: () =>
-                            startStation(context, artist: detail.name),
+                ColoredBox(color: MuseTheme.paper),
+                // One ink: the picture in greys, then the red multiplied into it,
+                // so the lights are red and the darks go to black.
+                ColorFiltered(
+                  colorFilter: const ColorFilter.matrix(<double>[
+                    0.30, 0.59, 0.11, 0, 0,
+                    0.30, 0.59, 0.11, 0, 0,
+                    0.30, 0.59, 0.11, 0, 0,
+                    0, 0, 0, 1, 0,
+                  ]),
+                  child: picture(box.maxWidth),
+                ),
+                const DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: MuseTheme.masthead,
+                    backgroundBlendMode: BlendMode.multiply,
+                  ),
+                ),
+                // The screen it was printed through.
+                IgnorePointer(child: CustomPaint(painter: _Screen())),
+                Positioned(
+                  left: 14,
+                  right: 40,
+                  bottom: 12,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        color: MuseTheme.paper,
+                        padding: const EdgeInsets.fromLTRB(6, 3, 6, 2),
+                        child: Text('PROFILE',
+                            style: Mag.flag(10, color: MuseTheme.masthead)),
                       ),
-                  ],
+                      Container(
+                        color: MuseTheme.paper,
+                        padding: const EdgeInsets.fromLTRB(6, 4, 8, 0),
+                        child: Text(detail.name.toUpperCase(),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Mag.headline(44, color: MuseTheme.ink)),
+                      ),
+                    ],
+                  ),
                 ),
               ],
-            ),
+            );
+          }),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          child: Text(line.toUpperCase(),
+              style: Mag.typewriter(11, color: scheme.onSurfaceVariant, bold: true)),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              if (detail.remoteId != null)
+                _PressButton(
+                  label: working
+                      ? '…'
+                      : detail.following
+                          ? 'Following'
+                          : 'Follow',
+                  // Loud until you follow: the one thing to do on a page about
+                  // somebody you have not followed yet.
+                  loud: !detail.following,
+                  onTap: working ? null : onFollow,
+                ),
+              // Their songs and everything that belongs next to them, seeded from
+              // what of theirs is already here.
+              if (detail.tracks.isNotEmpty)
+                _PressButton(
+                  label: 'Station',
+                  onTap: () => startStation(context, artist: detail.name),
+                ),
+              if (detail.remoteId == null && detail.unavailable != null)
+                Text('Only your library: ${detail.unavailable}',
+                    style: Mag.typewriter(11, color: scheme.onSurfaceVariant)),
+            ],
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
+
+  static String _count(int n) => n >= 1000000
+      ? '${(n / 1000000).toStringAsFixed(1)}M'
+      : n >= 1000
+          ? '${(n / 1000).round()}K'
+          : '$n';
+}
+
+/// A halftone screen laid over a picture: rows of paper-coloured dots at an angle,
+/// bigger towards the bottom, the way a coarse screen shows on newsprint.
+class _Screen extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    const step = 7.0;
+    canvas.save();
+    canvas.clipRect(Offset.zero & size);
+    canvas.translate(size.width / 2, size.height / 2);
+    canvas.rotate(0.26);
+    // Only as far as the turned grid has to reach to cover the box, and each row as
+    // one batch of round points rather than a circle drawn at a time: a few dozen
+    // calls instead of several thousand.
+    final reach = size.center(Offset.zero).distance + step;
+    for (var y = -reach; y < reach; y += step) {
+      // Heavier dots lower down, so the name sits on the densest part.
+      final t = ((y + size.height / 2) / size.height).clamp(0.0, 1.0);
+      final paint = Paint()
+        ..color = MuseTheme.paper.withValues(alpha: 0.22)
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = 2 * (0.6 + 1.6 * t);
+      canvas.drawPoints(ui.PointMode.points,
+          [for (var x = -reach; x < reach; x += step) Offset(x, y)], paint);
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_Screen old) => false;
 }
 
 class _TopRow extends StatelessWidget {
@@ -1396,13 +1516,17 @@ class _AlbumStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    // The strip is a fixed height because a sideways list has to be told how tall to
+    // be; the words under each cover are not, so the height follows the text size.
+    final scale = (MediaQuery.textScalerOf(context).scale(14) / 14).clamp(1.0, 2.4);
     return SizedBox(
-      height: 186,
+      height: 140 + 54 * scale,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        padding: const EdgeInsets.fromLTRB(14, 6, 14, 0),
         itemCount: albums.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 12),
+        separatorBuilder: (_, __) => const SizedBox(width: 16),
         itemBuilder: (context, i) {
           final a = albums[i];
           return SizedBox(
@@ -1415,35 +1539,41 @@ class _AlbumStrip extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Stack(
+                    clipBehavior: Clip.none,
                     children: [
-                      Artwork(url: a.cover, size: 124, radius: 8),
+                      CutOut(
+                        // Pasted a little differently each, as a hand does.
+                        turn: (i.isEven ? -1 : 1) * (0.02 + (i % 3) * 0.01),
+                        child: a.cover == null
+                            ? PrintedSleeve(
+                                seed: PrintedSleeve.seedOf('$artist·${a.title}'),
+                                title: a.title,
+                                size: 112)
+                            : Artwork(url: a.cover, size: 112, radius: 0),
+                      ),
+                      // How many of its songs are already here.
                       if (a.have > 0)
                         Positioned(
-                          right: 4,
-                          top: 4,
+                          right: -4,
+                          top: -6,
                           child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: Theme.of(context).colorScheme.primaryContainer,
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Text('${a.have}',
-                                style: text.labelSmall?.copyWith(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .onPrimaryContainer)),
+                            padding: const EdgeInsets.fromLTRB(5, 2, 5, 1),
+                            color: scheme.onSurface,
+                            child: Text('${a.have} HERE',
+                                style: Mag.flag(9, color: scheme.surface)),
                           ),
                         ),
                     ],
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 10),
                   Text(a.title,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: text.bodySmall),
-                  Text([a.year, a.recordType].whereType<String>().join(' · '),
-                      style: text.labelSmall),
+                      style: text.labelLarge),
+                  Text([a.year, a.recordType].whereType<String>().join(' · ').toUpperCase(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Mag.typewriter(10.5, color: scheme.onSurfaceVariant)),
                 ],
               ),
             ),
