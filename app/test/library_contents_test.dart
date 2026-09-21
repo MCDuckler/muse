@@ -82,7 +82,9 @@ void main() {
     expect(find.text('1,203'), findsOneWidget);
     expect(find.text('4,550'), findsOneWidget);
     expect(find.text('3 NEW'), findsOneWidget, reason: 'news goes on a sticker');
-    expect(find.text('PLAYLISTS · 0'), findsOneWidget);
+    // None yet, and not told so with a zero.
+    expect(find.text('PLAYLISTS'), findsOneWidget);
+    expect(find.textContaining('· 0'), findsNothing);
   });
 
   testWidgets('lists that fill themselves in, and an empty one left off',

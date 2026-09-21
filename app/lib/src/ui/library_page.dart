@@ -47,7 +47,11 @@ class LibraryPage extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(8, 24, 8, 8),
           child: Row(
             children: [
-              Expanded(child: SectionFlag('Playlists · ${app.playlists.length}')),
+              // How many, when there are any: "Playlists · 0" is a zero in print.
+              Expanded(
+                  child: SectionFlag(app.playlists.isEmpty
+                      ? 'Playlists'
+                      : 'Playlists · ${app.playlists.length}')),
               PressButton(
                 label: 'New',
                 onTap: () async {
@@ -1055,10 +1059,12 @@ class _ContentsState extends State<_Contents> {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Expanded(child: cards[i]),
+                    Expanded(child: _Numbered(i + 1, cards[i])),
                     const SizedBox(width: 8),
                     Expanded(
-                        child: i + 1 < cards.length ? cards[i + 1] : const SizedBox()),
+                        child: i + 1 < cards.length
+                            ? _Numbered(i + 2, cards[i + 1])
+                            : const SizedBox()),
                   ],
                 ),
               ),
@@ -1067,6 +1073,20 @@ class _ContentsState extends State<_Contents> {
       ),
     );
   }
+}
+
+/// Which entry on the contents page this is, for the card inside to print in its
+/// corner — a contents page numbers its entries, and the number is what makes a grid of
+/// boxes read as a page of a magazine.
+class _Numbered extends InheritedWidget {
+  const _Numbered(this.number, Widget child) : super(child: child);
+  final int number;
+
+  static int? of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_Numbered>()?.number;
+
+  @override
+  bool updateShouldNotify(_Numbered old) => old.number != number;
 }
 
 /// One entry on the contents page: a number, a name, a line about it.
@@ -1090,6 +1110,11 @@ class _IndexCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final entry = _Numbered.of(context);
+    // The figure's line is kept whether or not there is a figure, so the names in a
+    // row sit on the same line; a card with nothing to count carries a short rule
+    // there instead of a gap.
+    final figure = (MediaQuery.textScalerOf(context).scale(26) * 1.2).ceilToDouble();
     return Semantics(
       button: true,
       label: '$title${number.isEmpty || number == '·' ? '' : ', $number'}. $blurb',
@@ -1097,25 +1122,42 @@ class _IndexCard extends StatelessWidget {
         child: InkWell(
           onTap: onTap,
           child: Container(
-            padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+            // A heavy rule with a hairline inside it: the frame a printer puts round
+            // anything that is meant to be looked at as a thing.
+            padding: const EdgeInsets.all(3),
             decoration: BoxDecoration(
               border: Border.all(color: scheme.onSurface, width: 1.5),
+            ),
+            child: Container(
+            padding: const EdgeInsets.fromLTRB(8, 5, 8, 8),
+            decoration: BoxDecoration(
+              border: Border.all(
+                  color: scheme.onSurface.withValues(alpha: 0.35), width: 0.7),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (number.isNotEmpty)
-                  sticker
-                      ? Container(
-                          padding: const EdgeInsets.fromLTRB(6, 2, 6, 0),
-                          color: MuseTheme.highlighter,
-                          child: Text('$number NEW',
-                              style: Mag.headline(22, color: MuseTheme.ink)),
-                        )
-                      : Text(number,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Mag.numerals(26, color: scheme.primary)),
+                SizedBox(
+                  height: figure,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: number.isEmpty
+                              ? Container(width: 22, height: 3, color: scheme.primary)
+                              : _figure(scheme),
+                        ),
+                      ),
+                      if (entry != null)
+                        Text('${entry < 10 ? '0' : ''}$entry',
+                            textScaler: TextScaler.noScaling,
+                            style: Mag.typewriter(10,
+                                color: scheme.onSurfaceVariant.withValues(alpha: 0.8))),
+                    ],
+                  ),
+                ),
                 const SizedBox(height: 4),
                 Text(title.toUpperCase(),
                     maxLines: 2,
@@ -1128,11 +1170,27 @@ class _IndexCard extends StatelessWidget {
                     style: Mag.typewriter(11, color: scheme.onSurfaceVariant)),
               ],
             ),
+            ),
           ),
         ),
       ),
     );
   }
+
+  Widget _figure(ColorScheme scheme) => sticker
+      ? Container(
+          padding: const EdgeInsets.fromLTRB(6, 2, 6, 0),
+          color: MuseTheme.highlighter,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text('$number NEW', style: Mag.headline(22, color: MuseTheme.ink)),
+          ),
+        )
+      : FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text(number, maxLines: 1, style: Mag.numerals(26, color: scheme.primary)),
+        );
 }
 
 /// The lists that fill themselves in: never played, most played, not heard in a while.

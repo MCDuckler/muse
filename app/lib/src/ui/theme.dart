@@ -286,9 +286,11 @@ class MuseTheme {
         backgroundColor: Colors.transparent,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
-        indicatorColor: scheme.primary.withValues(alpha: 0.18),
-        indicatorShape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(3)),
+        // Where you are is a short heavy rule in the accent over the icon — a tab on a
+        // page divider — rather than Material's tinted pill, which is the one rounded,
+        // translucent thing on a page of ink and hard edges.
+        indicatorColor: scheme.primary,
+        indicatorShape: const _RuleAbove(),
         height: 64,
         labelTextStyle: WidgetStateProperty.resolveWith((states) => TextStyle(
               fontFamily: 'Manrope',
@@ -379,4 +381,31 @@ class MuseTheme {
       labelSmall: s(base.labelSmall, 11, FontWeight.w600, spacing: 0.6),
     );
   }
+}
+
+/// The bottom bar's "you are here": a short heavy rule above the icon.
+///
+/// The bar fills whatever outline its indicator shape gives it, so the shape *is* the
+/// rule — a bar three points tall across the top of where the pill would have been.
+class _RuleAbove extends ShapeBorder {
+  const _RuleAbove();
+
+  @override
+  EdgeInsetsGeometry get dimensions => EdgeInsets.zero;
+
+  Path _rule(Rect rect) => Path()
+    ..addRect(Rect.fromLTWH(rect.left + rect.width * 0.18, rect.top - 6,
+        rect.width * 0.64, 3));
+
+  @override
+  Path getOuterPath(Rect rect, {TextDirection? textDirection}) => _rule(rect);
+
+  @override
+  Path getInnerPath(Rect rect, {TextDirection? textDirection}) => _rule(rect);
+
+  @override
+  void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) {}
+
+  @override
+  ShapeBorder scale(double t) => this;
 }

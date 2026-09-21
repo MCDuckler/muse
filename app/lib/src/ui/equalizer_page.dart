@@ -157,7 +157,7 @@ class _FaceplateState extends State<_Faceplate> {
           crossAxisAlignment: WrapCrossAlignment.center,
           runSpacing: 8,
           children: [
-            const SectionFlag('Set it by'),
+            const SectionFlag('Set it by', rule: false),
             _TwoWay(
               left: 'Faders',
               right: 'Knobs',

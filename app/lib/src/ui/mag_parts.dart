@@ -276,23 +276,69 @@ class Kicker extends StatelessWidget {
 
 /// A section flag: a black bar with the section's name knocked out of it.
 class SectionFlag extends StatelessWidget {
-  const SectionFlag(this.text, {super.key});
+  const SectionFlag(this.text, {super.key, this.rule = true});
 
   final String text;
+
+  /// Whether a hairline runs on from the flag to the margin, closed by a small square:
+  /// the way a magazine sets the head of a department, so that the head is the width of
+  /// the column and not the width of its own word. Off where the flag shares its line
+  /// with something else that needs the room.
+  final bool rule;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final flag = Container(
+      color: scheme.onSurface,
+      padding: const EdgeInsets.fromLTRB(10, 4, 10, 3),
+      child: Text(text.toUpperCase(), style: Mag.flag(12, color: scheme.surface)),
+    );
     return Semantics(
       header: true,
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: Container(
-          color: scheme.onSurface,
-          padding: const EdgeInsets.fromLTRB(10, 4, 10, 3),
-          child: Text(text.toUpperCase(), style: Mag.flag(12, color: scheme.surface)),
-        ),
-      ),
+      child: LayoutBuilder(builder: (context, box) {
+        // Only where there is a column to run across: in a line that wraps or scrolls
+        // sideways there is no margin to run to.
+        if (!rule || !box.maxWidth.isFinite) {
+          return Align(alignment: Alignment.centerLeft, child: flag);
+        }
+        return Row(
+          children: [
+            // The flag is as wide as its word (and no wider than the column, less
+            // room for a stub of rule); the rule has all of what is left.
+            ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: box.maxWidth - 28), child: flag),
+            Expanded(
+              child: Container(
+                height: 1,
+                margin: const EdgeInsets.only(left: 8),
+                color: scheme.onSurface.withValues(alpha: 0.55),
+              ),
+            ),
+            Container(width: 5, height: 5, color: scheme.onSurface),
+          ],
+        );
+      }),
+    );
+  }
+}
+
+/// A thick rule over a thin one: what a newspaper puts under its nameplate, and the
+/// oldest way there is of saying "the page starts here".
+class ThickAndThin extends StatelessWidget {
+  const ThickAndThin({super.key, this.colour});
+  final Color? colour;
+
+  @override
+  Widget build(BuildContext context) {
+    final ink = colour ?? Theme.of(context).colorScheme.onSurface;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(height: 3, color: ink),
+        const SizedBox(height: 2),
+        Container(height: 1, color: ink),
+      ],
     );
   }
 }

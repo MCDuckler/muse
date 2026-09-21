@@ -85,21 +85,32 @@ class _ListeningPageState extends State<ListeningPage> {
               padding: EdgeInsets.fromLTRB(14, 4, 14, bottomForPlayer(context)),
               children: [
                 // Which chart first: it changes everything under it.
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    for (final e in _periods.entries)
-                      _Tab(
-                        label: e.value,
-                        on: e.key == _since,
-                        onTap: () {
-                          feel(Feel.pick);
-                          _since = e.key;
-                          _load();
-                        },
-                      ),
-                  ],
+                // One strip, joined, each as wide as the next: four loose boxes ran on to
+                // a second line on a phone and left "All time" alone under the others.
+                Container(
+                  decoration: BoxDecoration(
+                      border: Border.all(color: scheme.onSurface, width: 1.5)),
+                  child: IntrinsicHeight(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        for (final (i, e) in _periods.entries.indexed) ...[
+                          if (i > 0) Container(width: 1.5, color: scheme.onSurface),
+                          Expanded(
+                            child: _Tab(
+                              label: e.value,
+                              on: e.key == _since,
+                              onTap: () {
+                                feel(Feel.pick);
+                                _since = e.key;
+                                _load();
+                              },
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
                 ),
                 if (d.people.length > 1) ...[
                   const SizedBox(height: 10),
@@ -215,13 +226,17 @@ class _Tab extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         child: Container(
-          padding: const EdgeInsets.fromLTRB(10, 6, 10, 5),
-          decoration: BoxDecoration(
-            color: on ? scheme.onSurface : null,
-            border: Border.all(color: scheme.onSurface, width: 1.5),
+          padding: const EdgeInsets.fromLTRB(4, 7, 4, 6),
+          alignment: Alignment.center,
+          color: on ? scheme.onSurface : null,
+          // The strip is four to a line whatever the type is set to, so the word gives
+          // way rather than the line.
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(label.toUpperCase(),
+                maxLines: 1,
+                style: Mag.flag(10.5, color: on ? scheme.surface : scheme.onSurface)),
           ),
-          child: Text(label.toUpperCase(),
-              style: Mag.flag(10.5, color: on ? scheme.surface : scheme.onSurface)),
         ),
       ),
     );
@@ -260,8 +275,17 @@ class _Masthead extends StatelessWidget {
                 child: Text(when.toUpperCase(),
                     style: Mag.typewriter(11, color: scheme.onSurface, bold: true)),
               ),
-              Text('▲ UP  ▼ DOWN',
-                  style: Mag.typewriter(11, color: scheme.onSurfaceVariant, bold: true)),
+              // The key to the arrows, in the arrows themselves.
+              for (final (direction, word) in [(1, 'UP'), (-1, 'DOWN')]) ...[
+                const SizedBox(width: 10),
+                CustomPaint(
+                    size: const Size(8, 8),
+                    painter: _Arrow(direction,
+                        direction > 0 ? scheme.onSurface : scheme.primary)),
+                const SizedBox(width: 4),
+                Text(word,
+                    style: Mag.typewriter(11, color: scheme.onSurfaceVariant, bold: true)),
+              ],
             ],
           ),
         ],
@@ -305,9 +329,11 @@ class _Totals extends StatelessWidget {
       ),
       child: Row(
         children: [
-          fact('${d.plays}', d.plays == 1 ? 'play' : 'plays'),
-          fact(_hours(d.minutes), d.minutes < 90 ? 'minutes' : 'hours'),
-          fact('${d.tracks}', d.tracks == 1 ? 'song' : 'songs'),
+          // Each only when it is something: a nought set in forty-point Bodoni is a
+          // headline about nothing.
+          if (d.plays > 0) fact('${d.plays}', d.plays == 1 ? 'play' : 'plays'),
+          if (d.minutes > 0) fact(_hours(d.minutes), d.minutes < 90 ? 'minutes' : 'hours'),
+          if (d.tracks > 0) fact('${d.tracks}', d.tracks == 1 ? 'song' : 'songs'),
         ],
       ),
     );
@@ -525,16 +551,60 @@ class _Move extends StatelessWidget {
       -1 => scheme.primary,
       _ => scheme.onSurfaceVariant,
     };
-    return Text(
-      move.text,
-      semanticsLabel: switch (move.direction) {
-        1 => 'up ${move.text.substring(1)}',
-        -1 => 'down ${move.text.substring(1)}',
+    // The arrow is drawn, not typed: the typewriter face was cut down to the letters
+    // the app uses and has no triangles in it, so a typed one came from whatever other
+    // font the phone had to hand — a different weight and size on every device.
+    final by = move.direction == 0 ? '' : move.text.substring(1);
+    return Semantics(
+      label: switch (move.direction) {
+        1 => 'up $by',
+        -1 => 'down $by',
         _ => 'no change',
       },
-      style: Mag.typewriter(12, color: colour, bold: true),
+      excludeSemantics: true,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CustomPaint(
+              size: const Size(9, 9), painter: _Arrow(move.direction, colour)),
+          if (by.isNotEmpty) ...[
+            const SizedBox(width: 3),
+            Text(by,
+                textScaler: TextScaler.noScaling,
+                style: Mag.typewriter(12, color: colour, bold: true)),
+          ],
+        ],
+      ),
     );
   }
+}
+
+/// Up, down, or holding: a solid triangle, a solid triangle the other way, a short bar.
+class _Arrow extends CustomPainter {
+  const _Arrow(this.direction, this.colour);
+  final int direction;
+  final Color colour;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final ink = Paint()..color = colour;
+    if (direction == 0) {
+      canvas.drawRect(
+          Rect.fromLTWH(0, size.height / 2 - 1.2, size.width, 2.4), ink);
+      return;
+    }
+    final up = direction > 0;
+    canvas.drawPath(
+        Path()
+          ..moveTo(size.width / 2, up ? 0.5 : size.height - 0.5)
+          ..lineTo(size.width, up ? size.height - 0.5 : 0.5)
+          ..lineTo(0, up ? size.height - 0.5 : 0.5)
+          ..close(),
+        ink);
+  }
+
+  @override
+  bool shouldRepaint(_Arrow old) => old.direction != direction || old.colour != colour;
 }
 
 /// A ranked artist or record: a numeral, a name, a count.

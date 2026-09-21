@@ -98,10 +98,12 @@ void main() {
     expect(asked.first, 'week', reason: 'a chart is a weekly thing first');
     expect(find.text('TAPE HISS'), findsOneWidget, reason: 'the number one, set big');
     expect(find.text('No.1'.toUpperCase()), findsOneWidget);
-    expect(find.text('▲3'), findsOneWidget, reason: 'fifth last week, second now');
+    expect(find.bySemanticsLabel(RegExp(r'\bup 3\b')), findsOneWidget,
+        reason: 'fifth last week, second now');
     expect(find.text('NEW'), findsOneWidget, reason: 'not on last week\'s chart');
-    expect(find.text('▼2'), findsOneWidget, reason: 'second last week, fourth now');
-    expect(find.text('='), findsNWidgets(2), reason: 'number one held, and fifth held');
+    expect(find.bySemanticsLabel(RegExp(r'\bdown 2\b')), findsOneWidget,
+        reason: 'second last week, fourth now');
+    expect(find.bySemanticsLabel(RegExp(r'no change')), findsNWidgets(2), reason: 'number one held, and fifth held');
     expect(find.text('5 wks'), findsOneWidget);
   });
 
@@ -112,7 +114,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
     expect(asked.last, 'all');
     expect(find.text('NEW'), findsNothing);
-    expect(find.text('▲3'), findsNothing);
+    expect(find.bySemanticsLabel(RegExp(r'\bup 3\b')), findsNothing);
   });
 
   testWidgets('an empty stretch says there is no chart rather than printing zeros',

@@ -150,9 +150,6 @@ class _CoverPageState extends State<CoverPage> {
             ),
           ),
           Container(
-            decoration: BoxDecoration(
-              border: Border(bottom: BorderSide(color: scheme.onSurface)),
-            ),
             padding: const EdgeInsets.fromLTRB(14, 5, 14, 5),
             child: Row(
               children: [
@@ -165,6 +162,7 @@ class _CoverPageState extends State<CoverPage> {
               ],
             ),
           ),
+          const ThickAndThin(),
           if (issue == null)
             const SizedBox(height: 520, child: RecordsComing(tiles: 4, extent: 220))
           else ...[
@@ -489,8 +487,15 @@ class _OnRepeat extends StatelessWidget {
                 feel(Feel.commit);
                 await app.playNow([await app.api.track(rest[i].id)]);
               },
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
+              // A hairline under each but the last: a chart is a ruled table.
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 7),
+                decoration: i == rest.length - 1
+                    ? null
+                    : BoxDecoration(
+                        border: Border(
+                            bottom: BorderSide(
+                                color: scheme.onSurface.withValues(alpha: 0.14)))),
                 child: Row(
                   children: [
                     SizedBox(
