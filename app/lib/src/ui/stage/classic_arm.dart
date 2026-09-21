@@ -164,11 +164,13 @@ void paintClassicArm(
 
   // The arm's own frame: the post at the origin, the needle at (length, 0).
   //
-  // The headshell is not in line with the tube. It is turned away from the middle of
-  // the record — which is what puts the cartridge across the groove, and what gives a
-  // real S-arm its curve — so the tube bends to meet it.
+  // The headshell is not in line with the tube. It is turned in towards the middle of
+  // the record, so from the post the tube runs out over the rim and the shell hangs
+  // down from the end of it onto the grooves — and the tube bends to meet it. (It was
+  // turned the other way, up and off the record; the needle and the post are where
+  // they were, the moving part is simply the other way up.)
   final middleLocal = _toLocal(g.middle, g.pivot, angle);
-  final away = middleLocal.dy >= 0 ? -1.0 : 1.0;
+  final away = middleLocal.dy >= 0 ? 1.0 : -1.0;
   const offsetAngle = 0.46;                       // about 26 degrees
   final forward = Offset(math.cos(away * offsetAngle), math.sin(away * offsetAngle));
   final needle = Offset(length, 0);
@@ -377,8 +379,8 @@ void paintClassicArm(
         Paint()..color = _dim(_screwLit, dim),
       );
     }
-    // The finger lift: a small rounded tab standing off the front corner, away from
-    // the middle of the record, where a finger goes.
+    // The finger lift: a small rounded tab standing off the front corner, on the side
+    // the shell is turned to.
     final tab = RRect.fromRectAndRadius(
       Rect.fromLTWH(headLength * 0.30, away < 0 ? -headWidth * 0.86 : headWidth * 0.44,
           headLength * 0.16, headWidth * 0.42),

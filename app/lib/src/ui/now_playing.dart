@@ -73,7 +73,6 @@ class NowPlayingScreen extends StatelessWidget {
       builder: (context, snap) {
         final s = snap.data;
         final track = s?.current ?? player.current;
-        final scheme = Theme.of(context).colorScheme;
 
         return Scaffold(
           extendBodyBehindAppBar: true,
@@ -241,15 +240,6 @@ class NowPlayingScreen extends StatelessWidget {
                                       : 0),
                               child: _Words(app: app, track: track),
                             ),
-                            if (_statusLine(s, track) != null) ...[
-                              const SizedBox(height: 10),
-                              Text(_statusLine(s, track)!.text,
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                      color: _statusLine(s, track)!.problem
-                                          ? scheme.error
-                                          : scheme.onSurfaceVariant)),
-                            ],
                             // The one thing that stops the music which this app cannot
                             // fix from in here. See _TheMusicWillStop.
                             if (app.musicWillStopInTheBackground)
@@ -406,6 +396,25 @@ class NowPlayingScreen extends StatelessWidget {
                     );
                   }),
                 )),
+                    // What the player has to say for itself — loading, waiting for
+                    // a download, a stream that failed — in the air above the record.
+                    //
+                    // It was a row between the words and the controls, and a row that
+                    // comes and goes moves everything around it: every skip is a
+                    // moment of "Loading…", so every skip shoved the record up and let
+                    // it drop again. Laid over the page it takes no room, and so
+                    // nothing moves when it arrives or when it leaves.
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: SafeArea(
+                        bottom: false,
+                        child: IgnorePointer(
+                          child: _StatusSlip(status: _statusLine(s, track)),
+                        ),
+                      ),
+                    ),
                     // The disco ball's light, over everything and taking nothing:
                     // specks drifting across the page while the song plays. With
                     // the printed background, because both are decoration a browser
@@ -456,6 +465,51 @@ class NowPlayingScreen extends StatelessWidget {
     if (track.isPending) return (text: 'Downloading…', problem: false);
     if (s?.buffering ?? false) return (text: 'Loading…', problem: false);
     return null;
+  }
+}
+
+/// A slip of paper with the player's state typed on it, fading in and out.
+class _StatusSlip extends StatelessWidget {
+  const _StatusSlip({required this.status});
+  final ({String text, bool problem})? status;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final said = status;
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 220),
+      child: said == null
+          ? const SizedBox(key: ValueKey('nothing'), height: 0)
+          : Padding(
+              key: ValueKey(said.text),
+              padding: const EdgeInsets.fromLTRB(24, 2, 24, 0),
+              child: Center(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: scheme.surface.withValues(alpha: 0.92),
+                    borderRadius: BorderRadius.circular(2),
+                    border: Border.all(
+                        color: (said.problem ? scheme.error : scheme.onSurface)
+                            .withValues(alpha: 0.35)),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                    child: Text(
+                      said.text,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: Mag.typewriter(11.5,
+                          color: said.problem
+                              ? scheme.error
+                              : scheme.onSurfaceVariant),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+    );
   }
 }
 
