@@ -124,8 +124,8 @@ class PlayerLookPage extends StatelessWidget {
           SwitchListTile(
             secondary: const Icon(Icons.grain),
             title: const Text('Printed background'),
-            subtitle: const Text(
-                'A halftone screen behind the record, breathing with the song'),
+            subtitle: const Text('A halftone screen behind the record, breathing with '
+                'the song, and the mirror ball\'s light drifting across it'),
             value: app.halftone,
             onChanged: app.setHalftone,
           ),

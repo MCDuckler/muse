@@ -23,6 +23,8 @@ import 'sleeve_ink.dart';
 import 'stage/arm_grip.dart';
 import 'spectrum.dart';
 import 'lyrics_sheet.dart';
+import 'mag.dart';
+import 'mirror_ball.dart';
 import 'track_menu.dart';
 import 'song_row.dart';
 import 'browse_page.dart';
@@ -165,7 +167,9 @@ class NowPlayingScreen extends StatelessWidget {
                 : null,
             child: track == null
               ? const Center(child: Text('Nothing playing'))
-              : SafeArea(
+              : Stack(
+                  children: [
+                    Positioned.fill(child: SafeArea(
                   child: Builder(builder: (context) {
                     // The record, and everything that is said under it. On a phone
                     // that is one column, which is what the whole of this screen has
@@ -386,6 +390,19 @@ class NowPlayingScreen extends StatelessWidget {
                       ),
                     );
                   }),
+                )),
+                    // The disco ball's light, over everything and taking nothing:
+                    // specks drifting across the page while the song plays. With
+                    // the printed background, because both are decoration a browser
+                    // pays twice for.
+                    if (app.halftone)
+                      Positioned.fill(
+                        child: MirrorBallLight(
+                          playing: app.musicIsPlaying,
+                          tint: parseHexColour(track.coverColor),
+                        ),
+                      ),
+                  ],
                 ),
           ),
           ),
@@ -766,8 +783,9 @@ class _Credits extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final style = Theme.of(context).textTheme.bodyLarge
-        ?.copyWith(color: scheme.onSurfaceVariant);
+    // Set the way a magazine credits a record: the artist in spaced capitals under
+    // the title, the record's name typed under that.
+    final style = Mag.flag(12, color: scheme.onSurface);
 
     Widget link(String label, VoidCallback onTap, {TextStyle? own}) => InkWell(
           onTap: onTap,
@@ -775,15 +793,15 @@ class _Credits extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
             child: BackAndForth(label,
-                style: (own ?? style)?.copyWith(
+                style: (own ?? style).copyWith(
                     decoration: TextDecoration.underline,
                     decorationColor:
                         scheme.onSurfaceVariant.withValues(alpha: 0.4))),
           ),
         );
 
-    final albumStyle = Theme.of(context).textTheme.bodyMedium?.copyWith(
-        color: scheme.onSurfaceVariant.withValues(alpha: 0.75));
+    final albumStyle =
+        Mag.typewriter(12.5, color: scheme.onSurfaceVariant.withValues(alpha: 0.85));
 
     // Artist over album over source: one to a line, and always the same three lines.
     //
@@ -798,7 +816,7 @@ class _Credits extends StatelessWidget {
     // every track, which is the thing that is actually noticed.
     final lines = <Widget>[
         link(
-          track.artistLine,
+          track.artistLine.toUpperCase(),
           () => Navigator.of(context).push(MaterialPageRoute(
             builder: (_) => ArtistPage(
               artist: ArtistSummary(
