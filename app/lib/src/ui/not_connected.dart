@@ -71,7 +71,7 @@ class _NotConnectedState extends State<NotConnected> {
       // The cheapest authenticated call there is. Success flips the flag inside the
       // client itself, so there is nothing to do with the answer.
       await app.api.me();
-      if (mounted) await app.refresh();
+      if (mounted) await app.backOnline();
     } catch (_) {
       // Still away. The next tick will try again.
     } finally {

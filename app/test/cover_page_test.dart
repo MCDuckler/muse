@@ -139,6 +139,25 @@ void main() {
     expect(find.textContaining('NOTHING PLAYED'), findsOneWidget);
   });
 
+  testWidgets('with no connection it is the offline edition, and it comes back',
+      (tester) async {
+    serverIsThere.value = false;
+    addTearDown(() => serverIsThere.value = true);
+    await show(tester);
+    expect(tester.takeException(), isNull);
+    expect(find.text('NO SIGNAL'), findsOneWidget);
+    expect(find.textContaining('NOTHING IS KEPT'), findsOneWidget,
+        reason: 'nothing on this device, said plainly rather than a cover of blanks');
+    expect(find.text('TAPE HISS'), findsNothing);
+
+    // The connection returns: the real cover is printed again, without being asked.
+    serverIsThere.value = true;
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.text('NO SIGNAL'), findsNothing);
+    expect(find.text('TAPE HISS'), findsOneWidget);
+  });
+
   for (final scale in [1.6, 2.0]) {
     testWidgets('it holds on a small phone at ${scale}x text', (tester) async {
       await show(tester, size: const Size(320, 640), text: scale);

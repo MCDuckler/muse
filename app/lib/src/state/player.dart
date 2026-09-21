@@ -1265,6 +1265,17 @@ class PlayerService {
   /// store is ready; null everywhere that has no filesystem.
   String? Function(int trackId)? offlinePath;
 
+  /// A signed key for the stream, unless the song is on the device.
+  ///
+  /// A kept song is played from its file and asks the server nothing — except that it
+  /// used to ask for a stream key first, like any other, and with no connection that
+  /// request failed and took the play with it. Music kept for the flight did not play
+  /// on the flight.
+  Future<void> _keyFor(Track track) async {
+    if (offlinePath?.call(track.id) != null) return;
+    await api.ensureStreamKey();
+  }
+
   /// One track, as something the audio engine can play.
   AudioSource _sourceFor(Track track) {
     final cover = api.coverUrl(track, small: false);
@@ -1336,7 +1347,7 @@ class PlayerService {
     try {
       // The queued URL is signed, and it has to still be valid when the engine gets
       // round to playing it — which may be a whole song from now.
-      await api.ensureStreamKey();
+      await _keyFor(next);
       final at = _engineAt;
       final length = _player.audioSources.length;
       if (length > at + 1) {
@@ -1495,7 +1506,7 @@ class PlayerService {
     lastError = null;
     _mutating++;
     try {
-      await api.ensureStreamKey();
+      await _keyFor(track);
       if (mine != _loadToken) return;      // superseded while fetching the key
 
       final sourceUrl = api.streamUrl(track);

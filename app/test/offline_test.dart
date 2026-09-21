@@ -9,6 +9,11 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio_platform_interface/just_audio_platform_interface.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:muse/src/api/connection.dart';
+import 'package:muse/src/state/app_state.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:muse/src/api/client.dart';
 import 'package:muse/src/state/offline.dart';
 import 'package:muse/src/state/player.dart';
@@ -202,5 +207,77 @@ void main() {
     expect(offline.bytes, 0);
     expect(home.listSync().whereType<File>().where(
         (f) => f.path.contains('track-')).isEmpty, isTrue);
+  });
+
+  group('with no connection at all', () {
+    /// The server, gone: every request fails the way a phone in a tunnel fails.
+    void noSignal() => useThisClientInstead(watching(
+        MockClient((_) async => throw const SocketException('no route to host'))));
+
+    tearDown(() {
+      useThisClientInstead(http.Client());
+      serverIsThere.value = true;
+    });
+
+    test('a kept song plays without asking the server for anything', () async {
+      // It used to ask for a stream key first, like any other song, and that request
+      // failing took the play with it: music kept for the flight did not play on it.
+      await offline.keep([track(1)]);
+      await finished();
+
+      noSignal();
+      final audio = FakeJustAudio();
+      JustAudioPlatform.instance = audio;
+      final away = ApiClient(baseUrl: 'http://nowhere.invalid')..token = 'test-token';
+      final player = PlayerService(away);
+      await player.init();
+      player.offlinePath = offline.pathFor;
+
+      await player.loadQueue(queueOf([track(1)]));
+      await player.playAt(0);
+      await settle();
+
+      expect(player.lastError, isNull);
+      expect(audio.only.sources.first, startsWith('file://'));
+      await player.dispose();
+    });
+
+    test('the app starts, signed in, with what is on the device', () async {
+      // Nothing caught a start with no connection: the app sat on its loading screen
+      // for ever, with a phone full of kept music behind it.
+      await offline.keep([track(1)]);
+      await finished();
+
+      noSignal();
+      JustAudioPlatform.instance = FakeJustAudio();
+      SharedPreferences.setMockInitialValues({
+        'muse.token': 'test-token',
+        'muse.server': 'http://nowhere.invalid',
+        'muse.user': 'chris',
+        'muse.userId': 1,
+      });
+      final app = AppState();
+      await app.boot();
+
+      expect(app.ready, isTrue, reason: 'a start with no connection is still a start');
+      expect(app.user, 'chris', reason: 'the same person, as far as anybody knows');
+      expect(app.offlineSession, isTrue);
+      expect(serverIsThere.value, isFalse, reason: 'and the app knows it is on its own');
+      expect(app.offline.has(1), isTrue, reason: 'it found what is kept here');
+
+      // Playing a list from here plays what of it is on the device, as a queue the
+      // server has never heard of.
+      final audio = FakeJustAudio();
+      JustAudioPlatform.instance = audio;
+      await app.playNow([track(1), track(2)], named: 'On this device');
+      await settle();
+      expect(app.activeQueue!.id, lessThan(0));
+      expect([for (final t in app.activeQueue!.items) t.id], [1],
+          reason: 'only the one that is kept');
+
+      // And a list with nothing kept in it says so rather than spinning.
+      await expectLater(app.playNow([track(2)]), throwsA(isA<ApiException>()));
+      await app.player?.dispose();
+    });
   });
 }

@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../api/connection.dart';
+import '../state/offline.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import 'artwork.dart';
@@ -14,6 +16,8 @@ import 'pane.dart';
 import 'queue_page.dart' show openQueueScreen;
 import 'mini_player.dart' show bottomForPlayer;
 import 'skeleton.dart';
+import 'song_row.dart';
+import 'snack.dart';
 
 /// Home: this week's issue.
 ///
@@ -51,7 +55,22 @@ class _CoverPageState extends State<CoverPage> {
   @override
   void initState() {
     super.initState();
+    serverIsThere.addListener(_connectionChanged);
     unawaited(_print());
+  }
+
+  @override
+  void dispose() {
+    serverIsThere.removeListener(_connectionChanged);
+    super.dispose();
+  }
+
+  /// The connection went or came back: the other edition, and when it is back, a
+  /// fresh printing of the real one.
+  void _connectionChanged() {
+    if (!mounted) return;
+    setState(() {});
+    if (serverIsThere.value) unawaited(_print());
   }
 
   /// Everything on the cover, each part asked for separately so one that fails does
@@ -104,6 +123,10 @@ class _CoverPageState extends State<CoverPage> {
     if (looking && stale && !_printing) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _print());
     }
+
+    // No connection, on a device that keeps music: the offline edition, which is made
+    // only of what is here.
+    if (!serverIsThere.value && OfflineStore.supported) return const _OfflineEdition();
 
     final issue = _issue;
     final now = DateTime.now();
@@ -596,6 +619,114 @@ class _Folio extends StatelessWidget {
         child: Text(bits.join('  ·  '),
             style: Mag.typewriter(10.5, color: scheme.onSurfaceVariant, bold: true)),
       ),
+    );
+  }
+}
+
+/// The front page with no connection: what is kept on this device, and nothing that
+/// would need the box.
+///
+/// The ordinary cover is written from the server — the week's plays, the new releases,
+/// who is listening — and with no server every line of it fails. Rather than a cover
+/// of blanks, this is an edition of its own: it says there is no signal, says how much
+/// music is here anyway, and plays it.
+class _OfflineEdition extends StatelessWidget {
+  const _OfflineEdition();
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    final scheme = Theme.of(context).colorScheme;
+    final kept = app.offline.kept.toList()
+      ..sort((a, b) => b.keptAt.compareTo(a.keptAt));
+    final tracks = [for (final e in kept) e.asTrack];
+
+    Future<void> play({int at = 0, bool shuffle = false}) async {
+      final messenger = ScaffoldMessenger.of(context);
+      feel(Feel.commit);
+      try {
+        await app.playNow(tracks, startAt: at, shuffle: shuffle, named: 'On this device');
+      } catch (e) {
+        messenger.say(problem(e));
+      }
+    }
+
+    return ListView(
+      padding: EdgeInsets.only(bottom: bottomForPlayer(context)),
+      children: [
+        Masthead(
+          trailing: Text('OFFLINE\nEDITION',
+              textAlign: TextAlign.end,
+              style: Mag.typewriter(11, color: Colors.white, bold: true)),
+        ),
+        Container(
+          decoration:
+              BoxDecoration(border: Border(bottom: BorderSide(color: scheme.onSurface))),
+          padding: const EdgeInsets.fromLTRB(14, 5, 14, 5),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text('PRINTED ON THIS DEVICE',
+                    style: Mag.typewriter(11, color: scheme.onSurface, bold: true)),
+              ),
+              Text(coverDate(DateTime.now()).toUpperCase(),
+                  style: Mag.typewriter(11, color: scheme.onSurface, bold: true)),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 22, 16, 6),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Kicker('No signal'),
+              const SizedBox(height: 4),
+              Text(
+                kept.isEmpty
+                    ? 'NOTHING IS KEPT\nON THIS DEVICE'
+                    : '${kept.length} ${kept.length == 1 ? 'SONG' : 'SONGS'} STILL PLAY',
+                style: Mag.headline(40, color: scheme.onSurface),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                kept.isEmpty
+                    ? 'Keep songs on this device, from any song, record or playlist, and '
+                        'they play here with no connection at all.'
+                    : 'The server cannot be reached. These are kept on this device and '
+                        'need nothing else. Everything comes back when the connection does.',
+                style: Mag.typewriter(12, color: scheme.onSurfaceVariant),
+              ),
+              if (kept.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    PressButton(label: 'Play all', loud: true, onTap: play),
+                    PressButton(label: 'Shuffle', onTap: () => play(shuffle: true)),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
+        if (kept.isNotEmpty)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(14, 16, 14, 4),
+            child: SectionFlag('On this device'),
+          ),
+        for (var i = 0; i < tracks.length; i++)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: SongRow(
+              track: tracks[i],
+              // Nothing in a song's menu works without the server.
+              showMenu: false,
+              swipeToPlayNext: false,
+              onTap: () => play(at: i),
+            ),
+          ),
+      ],
     );
   }
 }

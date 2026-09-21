@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/client.dart';
+import '../api/connection.dart';
 import '../api/models.dart';
 import 'offline.dart';
 import 'art_cache.dart';
@@ -276,6 +277,8 @@ class AppState extends ChangeNotifier {
   static const _retiredServers = {'https://158-69-192-169.nip.io'};
 
   static const _kServer = 'muse.server';
+  static const _kUser = 'muse.user';
+  static const _kUserId = 'muse.userId';
   static const _kToken = 'muse.token';
   static const _kCoverStyle = 'muse.coverStyle';
   static const _kPalette = 'muse.palette';
@@ -554,17 +557,92 @@ class AppState extends ChangeNotifier {
     api.discLabel = discLabel;
     if (api.token != null) {
       try {
-        final me = await api.me();
-        user = me['user'] as String?;
-        userId = me['user_id'] as int?;
-        score = (me['score'] ?? 0) as int;
-        avatarVersion = me['avatar_version'] as String?;
+        await _signedInAs(await api.me(), prefs);
         await _afterLogin();
       } on ApiException {
         api.token = null; // revoked or a different server
+      } catch (_) {
+        // No answer at all: a plane, a tunnel, the box switched off. That used to be
+        // the end of it — nothing caught this, `ready` was never set, and the app sat
+        // on its loading screen for ever with a phone full of kept music behind it.
+        // The token is still good as far as anybody knows, so this is the same
+        // person, signed in, with whatever is on the device.
+        user = prefs.getString(_kUser) ?? 'you';
+        userId = prefs.getInt(_kUserId);
+        await _startWithoutTheServer();
       }
     }
     ready = true;
+    notifyListeners();
+  }
+
+  /// Who this is, as the server just said — and remembered, for a start with no
+  /// server to ask.
+  Future<void> _signedInAs(Map<String, dynamic> me, SharedPreferences prefs) async {
+    user = me['user'] as String?;
+    userId = me['user_id'] as int?;
+    score = (me['score'] ?? 0) as int;
+    avatarVersion = me['avatar_version'] as String?;
+    if (user != null) await prefs.setString(_kUser, user!);
+    if (userId != null) await prefs.setInt(_kUserId, userId!);
+  }
+
+  /// Started with no connection: the player and the kept music, and nothing that
+  /// needs the box. See [backOnline] for the rest of the start, when it can happen.
+  bool offlineSession = false;
+
+  Future<void> _startWithoutTheServer() async {
+    offlineSession = true;
+    await _startThePlayer();
+  }
+
+  /// The connection is back. For a session that started without one, this is the rest
+  /// of signing in; for any other, it is a refresh.
+  Future<void> backOnline() async {
+    if (!offlineSession) return refresh();
+    final prefs = await SharedPreferences.getInstance();
+    try {
+      await _signedInAs(await api.me(), prefs);
+    } on ApiException {
+      // The token did not survive the time away. Signed out, properly.
+      offlineSession = false;
+      await logout();
+      return;
+    }
+    offlineSession = false;
+    await _afterLogin();
+    notifyListeners();
+  }
+
+  /// A queue that exists only on this device: made offline, from kept songs. The
+  /// server has never heard of it, so nothing about it is sent there.
+  bool get _queueIsLocal => (activeQueue?.id ?? 0) < 0;
+
+  /// Play these from the device, asking the server nothing.
+  Future<void> _playFromTheDevice(List<Track> tracks,
+      {required int startAt, required bool shuffle, String? named}) async {
+    final first = tracks[startAt.clamp(0, tracks.length - 1)];
+    var kept = [for (final t in tracks) if (offline.has(t.id)) t];
+    if (kept.isEmpty) {
+      throw ApiException(0, 'None of that is kept on this device, and the server '
+          'cannot be reached.');
+    }
+    if (shuffle) kept = [...kept]..shuffle(math.Random());
+    final local = Queue(
+      id: -1,
+      name: named ?? 'On this device',
+      cursorIndex: 0,
+      positionMs: 0,
+      shuffle: false,
+      repeat: 'off',
+      rev: 1,
+      items: kept,
+    );
+    activeQueue = local;
+    await player?.loadQueue(local, autoplay: false);
+    // The song that was tapped if it is here, the top of the list if it is not.
+    final at = shuffle ? 0 : kept.indexWhere((t) => t.id == first.id);
+    await player?.playTrack(kept[at < 0 ? 0 : at].id, indexHint: at < 0 ? 0 : at);
     notifyListeners();
   }
 
@@ -604,6 +682,7 @@ class AppState extends ChangeNotifier {
       await prefs.setString(_kServer, api.baseUrl);
       await prefs.setString(_kToken, api.token!);
       user = username;
+      await prefs.setString(_kUser, username);
       await _afterLogin();
       notifyListeners();
       return true;
@@ -645,7 +724,11 @@ class AppState extends ChangeNotifier {
     return false;
   }
 
-  Future<void> _afterLogin() async {
+  bool _playerStarted = false;
+
+  /// The player and the kept music: everything about starting that needs no server.
+  Future<void> _startThePlayer() async {
+    if (_playerStarted && player != null) return;
     player ??= PlayerService(api)..userVolume = _volume;
     watchWhatThePhoneSaid();
     // The player writes the cursor through the app rather than knowing the API: it
@@ -674,6 +757,11 @@ class AppState extends ChangeNotifier {
       ..addListener(notifyListeners);
     _lifecycle;                     // built lazily; touching it starts it listening
     bindPlayer();
+    _playerStarted = true;
+  }
+
+  Future<void> _afterLogin() async {
+    await _startThePlayer();
     await api.ensureStreamKey();
     // All at once. These four ask the server four unrelated questions and used to ask
     // them one after another, so opening the app was five round trips of waiting
@@ -733,6 +821,7 @@ class AppState extends ChangeNotifier {
 
     final old = player;
     player = null;
+    _playerStarted = false;
     if (old != null) {
       // No cursor write on the way out: there is no token to write it with.
       old.onCursor = null;
@@ -865,6 +954,7 @@ class AppState extends ChangeNotifier {
   /// was four hundred round trips and a list that flickered for the whole of it.
   Future<void> addTracks(List<Track> tracks, {String mode = 'end'}) async {
     if (tracks.isEmpty) return;
+    if (_queueIsLocal) activeQueue = null;
     activeQueue ??= await ensureQueue('Now');
     activeQueue = await api.addToQueue(
         activeQueue!.id, [for (final t in tracks) t.id], mode: mode);
@@ -1326,6 +1416,11 @@ class AppState extends ChangeNotifier {
   Future<void> playNow(List<Track> tracks,
       {int startAt = 0, bool shuffle = false, String? named}) async {
     if (tracks.isEmpty) return;
+    if (offlineSession || !serverIsThere.value) {
+      return _playFromTheDevice(tracks, startAt: startAt, shuffle: shuffle, named: named);
+    }
+    // A queue made offline is this device's own; the server gets a real one.
+    if (_queueIsLocal) activeQueue = null;
     final target = named == null
         ? (activeQueue ?? await ensureQueue('Now'))
         : await ensureQueue(named, fresh: true);
