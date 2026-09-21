@@ -53,6 +53,55 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   /// playlist the engine already held.
   final List<String> calls = [];
 
+  // ---------------------------------------------------------------- audio effects
+  /// The phone's own equalizer, as a phone reports it: five bands at frequencies of the
+  /// maker's choosing, fifteen decibels either way.
+  static const bandHz = <double>[60, 230, 910, 3600, 14000];
+  final List<double> bandGains = List<double>.filled(bandHz.length, 0);
+  final Map<String, bool> effectsOn = {};
+  double loudnessGain = 0;
+
+  @override
+  Future<AndroidEqualizerGetParametersResponse> androidEqualizerGetParameters(
+          AndroidEqualizerGetParametersRequest request) async =>
+      AndroidEqualizerGetParametersResponse(
+        parameters: AndroidEqualizerParametersMessage(
+          minDecibels: -15,
+          maxDecibels: 15,
+          bands: [
+            for (final (i, hz) in bandHz.indexed)
+              AndroidEqualizerBandMessage(
+                index: i,
+                lowerFrequency: hz / 2,
+                upperFrequency: hz * 2,
+                centerFrequency: hz,
+                gain: bandGains[i],
+              ),
+          ],
+        ),
+      );
+
+  @override
+  Future<AndroidEqualizerBandSetGainResponse> androidEqualizerBandSetGain(
+      AndroidEqualizerBandSetGainRequest request) async {
+    bandGains[request.bandIndex] = request.gain;
+    return AndroidEqualizerBandSetGainResponse();
+  }
+
+  @override
+  Future<AndroidLoudnessEnhancerSetTargetGainResponse> androidLoudnessEnhancerSetTargetGain(
+      AndroidLoudnessEnhancerSetTargetGainRequest request) async {
+    loudnessGain = request.targetGain;
+    return AndroidLoudnessEnhancerSetTargetGainResponse();
+  }
+
+  @override
+  Future<AudioEffectSetEnabledResponse> audioEffectSetEnabled(
+      AudioEffectSetEnabledRequest request) async {
+    effectsOn[request.type] = request.enabled;
+    return AudioEffectSetEnabledResponse();
+  }
+
   /// How long the engine takes to accept a source. Nothing interesting happens while
   /// a load is instant: the races this exists to catch all live in the window between
   /// asking for a song and the engine holding it.

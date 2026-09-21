@@ -29,6 +29,7 @@ import 'theme.dart';
 import 'snack.dart';
 import 'mag.dart';
 import 'mag_parts.dart';
+import 'equalizer_page.dart';
 
 const appVersion = '0.1.0';
 
@@ -245,6 +246,18 @@ class _SettingsPageState extends State<SettingsPage> {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.of(context)
                 .push(MaterialPageRoute(builder: (_) => const _StoragePage())),
+          ),
+          ListenableBuilder(
+            listenable: app.equalizer,
+            builder: (context, _) => ListTile(
+              leading: const Icon(Icons.graphic_eq),
+              title: const Text('Equalizer'),
+              subtitle: Text(!app.equalizer.enabled
+                  ? 'Off'
+                  : app.equalizer.current?.name ?? 'A curve of your own'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => openEqualizer(context),
+            ),
           ),
           ListTile(
             leading: const Icon(Icons.hub_outlined),

@@ -35,7 +35,19 @@ class PlayerService {
 
   final ApiClient api;
   final int _instance;
-  final AudioPlayer _player = AudioPlayer();
+  /// Android's own equalizer and loudness stage, which have to be named when the
+  /// player is made: they are part of its audio pipeline, not something attached
+  /// afterwards. Null everywhere else — see eqEngineFor for what the others do.
+  static bool get _hasSystemEffects =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+  final AndroidEqualizer? androidEqualizer = _hasSystemEffects ? AndroidEqualizer() : null;
+  final AndroidLoudnessEnhancer? androidLoudness =
+      _hasSystemEffects ? AndroidLoudnessEnhancer() : null;
+  late final AudioPlayer _player = AudioPlayer(
+    audioPipeline: androidEqualizer == null
+        ? null
+        : AudioPipeline(androidAudioEffects: [androidLoudness!, androidEqualizer!]),
+  );
 
   /// How often the play position is written back while audio is playing. This used to
   /// be a debounce re-armed on every position tick, which meant it never fired at all

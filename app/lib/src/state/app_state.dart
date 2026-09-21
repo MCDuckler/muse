@@ -9,6 +9,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api/client.dart';
 import '../api/connection.dart';
 import '../api/models.dart';
+import 'eq_engines.dart';
+import 'equalizer.dart';
 import 'offline.dart';
 import 'art_cache.dart';
 import 'playback_log.dart';
@@ -739,6 +741,10 @@ class AppState extends ChangeNotifier {
   Future<void> _startThePlayer() async {
     if (_playerStarted && player != null) return;
     player ??= PlayerService(api)..userVolume = _volume;
+    // The equalizer belongs to the player it shapes the sound of: started with it, from
+    // whatever was kept, on whichever kind of equalizer this device has.
+    unawaited(equalizer.start(eqEngineFor(
+        equalizer: player!.androidEqualizer, loudness: player!.androidLoudness)));
     watchWhatThePhoneSaid();
     // The player writes the cursor through the app rather than knowing the API: it
     // reports where playback is, and the app decides how to persist that.
@@ -2175,6 +2181,11 @@ class AppState extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+  // ------------------------------------------------------------------ the equalizer
+  /// The curve somebody drew, and whatever this device can do about it. Its own
+  /// notifier: a slider being dragged redraws the equalizer, not the whole app.
+  final equalizer = Equalizer(NoEqEngine('The equalizer starts with the player.'));
 
   // ------------------------------------------------------------------ reactions
   final _reactions = StreamController<Reaction>.broadcast();

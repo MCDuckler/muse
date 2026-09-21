@@ -16,6 +16,7 @@ import 'mag.dart';
 import 'queue_page.dart' show QueueScreen;
 import 'settings_page.dart';
 import 'theme.dart';
+import 'equalizer_page.dart';
 
 /// Jump to anything: Ctrl-K, or ⌘K on a Mac.
 ///
@@ -214,6 +215,12 @@ class _PaletteState extends State<_Palette> {
           group: 'Go to',
           icon: Icons.download_outlined,
           run: () => openInTab(app.homeTab, (_) => const DownloadsPage())),
+      PaletteItem(
+          title: 'Equalizer',
+          group: 'Go to',
+          icon: Icons.graphic_eq,
+          also: 'eq bass treble tone sound presets',
+          run: () => openInTab(app.homeTab, (_) => const EqualizerPage())),
       PaletteItem(
           title: 'Settings',
           group: 'Go to',

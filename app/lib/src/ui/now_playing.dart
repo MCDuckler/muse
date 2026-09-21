@@ -36,6 +36,7 @@ import 'progress.dart';
 import 'pulse.dart';
 import 'open_from.dart';
 import 'widths.dart';
+import 'equalizer_page.dart';
 
 String formatTime(Duration d) {
   final m = d.inMinutes;
@@ -2138,6 +2139,31 @@ class _PlaybackExtrasState extends State<_PlaybackExtras> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // How it sounds, first: it is what somebody reaching for this sheet
+              // from the player is most often after.
+              ListenableBuilder(
+                listenable: app.equalizer,
+                builder: (context, _) {
+                  final eq = app.equalizer;
+                  return ListTile(
+                    leading: const Icon(Icons.graphic_eq),
+                    title: const Text('Equalizer'),
+                    subtitle: Text(!eq.enabled
+                        ? 'Off'
+                        : eq.current != null
+                            ? eq.current!.name
+                            : 'A curve of your own'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      final navigator = Navigator.of(sheet);
+                      navigator.pop();
+                      navigator.push(MaterialPageRoute<void>(
+                          builder: (_) => const EqualizerPage()));
+                    },
+                  );
+                },
+              ),
+              const Divider(height: 8),
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 4, 20, 6),
                 child: Text('Sleep timer',
