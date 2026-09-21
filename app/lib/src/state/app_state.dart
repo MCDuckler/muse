@@ -973,12 +973,38 @@ class AppState extends ChangeNotifier {
   /// The one thing you could not do to a song from a list: "play next" put it after
   /// the current one, "play" on a record wrote over the queue. This is what tapping
   /// a song in a search or a history means — hear it now, lose nothing.
+  ///
+  /// A song that is still being fetched is the exception. Going to it at once would
+  /// stop the music and leave silence until the download lands, so while something
+  /// is on it waits its turn as the next song, and is put on the moment it can be
+  /// played — unless whoever asked has moved on to something else by then.
   Future<void> playTrackNow(Track t) async {
     await addTracks([t], mode: 'next');
     // A guest's transport asks the room; putting it on next is as far as a guest
     // goes on their own.
     if (jamControlsTheRoom) return;
+    final p = player;
+    if (!t.isReady && p != null && p.isPlaying) {
+      _wantedWhenReady = (track: t, during: p.current?.id);
+      return;
+    }
+    _wantedWhenReady = null;
     await playAdded(t, mode: 'next');
+  }
+
+  /// The song somebody tapped while it was still being fetched, and what was on when
+  /// they did.
+  ({Track track, int? during})? _wantedWhenReady;
+
+  Future<void> _playWhatWasWanted(int readyId, Future<void>? refreshed) async {
+    final wanted = _wantedWhenReady;
+    if (wanted == null || wanted.track.id != readyId) return;
+    _wantedWhenReady = null;
+    await refreshed;
+    // Still on the song that was playing when they asked: nothing else was chosen
+    // in the meantime, so this is still what they want to hear.
+    if (player?.current?.id != wanted.during) return;
+    await playAdded(wanted.track, mode: 'next');
   }
 
   /// Play a song that has just been added, without skipping what was queued before it.
@@ -2249,8 +2275,9 @@ class AppState extends ChangeNotifier {
       if (e.event == 'track_ready') {
         final id = e.data['track_id'] as int?;
         if (id != null) {
-          player?.onTrackReady(id);
+          final refreshed = player?.onTrackReady(id);
           _queueMayHaveChanged(trackId: id);
+          unawaited(_playWhatWasWanted(id, refreshed));
           notifyListeners();
         }
       } else if (e.event == 'track_progress') {

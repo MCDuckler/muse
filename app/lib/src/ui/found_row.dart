@@ -4,9 +4,9 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import 'artwork.dart';
+import 'mag.dart';
 import 'snack.dart';
 import 'song_row.dart';
-import 'track_menu.dart';
 
 /// Which service a row came from, as a colour.
 ///
@@ -17,6 +17,7 @@ import 'track_menu.dart';
 const Map<String, Color> placeColours = {
   'library': Color(0xFF7BAF7B),
   'ytmusic': Color(0xFFE05C4B),
+  'youtube': Color(0xFFB3261E),
   'spotify': Color(0xFF4BB463),
   'soundcloud': Color(0xFFE8833A),
   'bandcamp': Color(0xFF4A9DB5),
@@ -25,6 +26,7 @@ const Map<String, Color> placeColours = {
 const Map<String, String> placeNames = {
   'library': 'In your library',
   'ytmusic': 'YouTube Music',
+  'youtube': 'YouTube',
   'spotify': 'Spotify',
   'soundcloud': 'SoundCloud',
   'bandcamp': 'Bandcamp',
@@ -70,14 +72,28 @@ class FoundRow extends StatelessWidget {
     super.key,
     required this.found,
     required this.onTap,
+    this.onAdd,
     this.onPlayNext,
     this.trailing,
   });
 
   final Found found;
+
+  /// A tap on the row: play it, or open it.
   final VoidCallback onTap;
+
+  /// The plus: on to the end of the queue, without playing it.
+  final VoidCallback? onAdd;
   final VoidCallback? onPlayNext;
   final Widget? trailing;
+
+  static String _length(int ms) {
+    final s = ms ~/ 1000;
+    final h = s ~/ 3600, m = (s % 3600) ~/ 60, sec = s % 60;
+    return h > 0
+        ? '$h:${m.toString().padLeft(2, '0')}:${sec.toString().padLeft(2, '0')}'
+        : '$m:${sec.toString().padLeft(2, '0')}';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -148,26 +164,31 @@ class FoundRow extends StatelessWidget {
         ],
       ),
       trailing: trailing ??
-          (found.kind != 'song'
+          (!found.plays
               ? const Icon(Icons.chevron_right)
-              : found.known && found.track != null
-                  ? IconButton(
-                      icon: const Icon(Icons.more_vert),
-                      tooltip: 'Track actions',
-                      onPressed: () => showTrackSheet(context, found.track!),
-                    )
-                  : PopupMenuButton<String>(
-                      tooltip: 'Add',
-                      icon: Icon(found.known
-                          ? Icons.check_circle_outline
-                          : Icons.add_circle_outline),
-                      onSelected: (what) =>
-                          what == 'next' ? onPlayNext?.call() : onTap(),
-                      itemBuilder: (context) => const [
-                        PopupMenuItem(value: 'next', child: Text('Play next')),
-                        PopupMenuItem(value: 'end', child: Text('Add to the queue')),
-                      ],
-                    )),
+              // Two things to do with something that plays, and both are on the row:
+              // tap it to hear it, or the plus to put it on the queue for later. How
+              // long it is sits beside that — for a video it is half of what you want
+              // to know, the difference between a song and a two-hour set.
+              : Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (found.durationMs != null)
+                      Text(_length(found.durationMs!),
+                          style: Mag.typewriter(11, color: scheme.onSurfaceVariant)),
+                    GestureDetector(
+                      // Held, it goes next rather than last.
+                      onLongPress: onPlayNext,
+                      child: IconButton(
+                        icon: Icon(found.known
+                            ? Icons.playlist_add_check
+                            : Icons.add_circle_outline),
+                        tooltip: 'Add to the queue (hold: play next)',
+                        onPressed: onAdd ?? onTap,
+                      ),
+                    ),
+                  ],
+                )),
       onTap: onTap,
     );
   }

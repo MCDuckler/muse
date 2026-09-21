@@ -63,6 +63,61 @@ def search_songs(query: str, limit: int = 10) -> list[dict]:
     return [_flatten(r) for r in res if r.get("videoId")]
 
 
+def search_videos(query: str, limit: int = 10) -> list[dict]:
+    """Videos: everything on YouTube that is not filed as a song.
+
+    Live sets, bootlegs, a DJ's hour-long mix, somebody's upload of a record that was
+    never released anywhere else, a session filmed in a kitchen. None of it is on a
+    streaming service and none of it turns up in a search for songs, which is most of
+    the reason to want it. The channel stands in for the artist, because that is all
+    a video says about who made it.
+    """
+    res = _ask(lambda c: c.search(query, filter="videos", limit=limit))
+    out = []
+    for r in res:
+        if not r.get("videoId"):
+            continue
+        flat = _flatten(r)
+        flat["views"] = r.get("views")
+        out.append(flat)
+    return out
+
+
+_VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
+_LINK = re.compile(
+    r"(?:youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|live/|embed/)|youtu\.be/)"
+    r"([A-Za-z0-9_-]{11})")
+
+
+def video_id_in(text: str) -> str | None:
+    """The video a pasted YouTube link points at, if that is what was pasted."""
+    m = _LINK.search(text or "")
+    return m.group(1) if m else None
+
+
+def video(video_id: str) -> dict | None:
+    """One video by its id, whatever kind of video it is.
+
+    [song] only finds what YouTube Music files as a song; a link somebody pasted is as
+    likely to be anything else.
+    """
+    if not _VIDEO_ID.match(video_id or ""):
+        return None
+    data = _ask(lambda c: c.get_song(video_id))
+    d = (data or {}).get("videoDetails") or {}
+    if not d.get("videoId"):
+        return None
+    secs = d.get("lengthSeconds")
+    return {
+        "video_id": d["videoId"],
+        "title": d.get("title") or video_id,
+        "artists": [d["author"]] if d.get("author") else [],
+        "album": None,
+        "duration_ms": int(secs) * 1000 if secs and str(secs).isdigit() else None,
+        "raw": {"thumbnails": ((d.get("thumbnail") or {}).get("thumbnails") or [])},
+    }
+
+
 def search_albums(query: str, limit: int = 6) -> list[dict]:
     """Records, so a search for one can be answered with the record itself."""
     res = _ask(lambda c: c.search(query, filter="albums", limit=limit))

@@ -23,16 +23,18 @@ from . import catalog, db, sources, spotify, ytm
 log = logging.getLogger("muse.search")
 
 # Where results can come from. "library" is this box; the rest are somebody else's.
-PLACES = ("library", "ytmusic", "spotify", "soundcloud", "bandcamp")
-KINDS = ("song", "album", "artist")
+PLACES = ("library", "ytmusic", "youtube", "spotify", "soundcloud", "bandcamp")
+KINDS = ("song", "album", "artist", "video")
 
 # How much a result is worth before anything is known about how well it matches.
 #
 # The library first: a song you already have is one tap from playing, and one you do not
 # is a download. Then the two that can be searched for anything, then the two that are
 # good when they have it.
+# A plain video last of all: when the same thing exists as a proper song, the song is the
+# better copy — tagged, the right length, no talking at the start.
 WEIGHT = {"library": 0.32, "ytmusic": 0.12, "spotify": 0.10,
-          "soundcloud": 0.04, "bandcamp": 0.04}
+          "soundcloud": 0.04, "bandcamp": 0.04, "youtube": 0.0}
 
 # Nothing from one service may fill the list when everything was asked for.
 PER_PLACE = 8
@@ -175,6 +177,36 @@ def _ytm_songs(q: str, limit: int) -> list[dict]:
             "known": r["video_id"] in have,
         })
     return out
+
+
+def _video_hit(r: dict, have: set[str]) -> dict:
+    who = ", ".join(r.get("artists") or []) or "YouTube"
+    return {
+        "kind": "video", "place": "youtube", "id": r["video_id"],
+        "title": r["title"],
+        "subtitle": " · ".join(x for x in (who, f"{r['views']} views" if r.get("views") else None) if x),
+        "cover_url": _art(ytm.thumbnail_url(r.get("raw") or {})),
+        "duration_ms": r.get("duration_ms"),
+        "known": r["video_id"] in have,
+        "url": f"https://www.youtube.com/watch?v={r['video_id']}",
+    }
+
+
+def _yt_videos(q: str, limit: int) -> list[dict]:
+    """Ordinary YouTube videos, to be kept as their sound: see ytm.search_videos."""
+    have = _known_video_ids()
+    return [_video_hit(r, have) for r in ytm.search_videos(q, limit=limit)]
+
+
+def _pasted(q: str) -> dict | None:
+    """A YouTube link, answered with the one video it points at."""
+    video_id = ytm.video_id_in(q)
+    if not video_id:
+        return None
+    found = ytm.video(video_id)
+    if not found:
+        return None
+    return _video_hit(found, _known_video_ids())
 
 
 def _ytm_albums(q: str, limit: int) -> list[dict]:
@@ -379,6 +411,14 @@ def everything(cfg, user_id: int, q: str, *, where: str = "all", kind: str = "al
         items, notes = by_lyrics(user_id, q, limit)
         return {"items": items, "notes": notes}
 
+    # A link is not a question. Somebody who pastes one wants that video, not whatever
+    # a search for the text of its address turns up.
+    if ytm.video_id_in(q):
+        hit, error = _safely(lambda: [h for h in [_pasted(q)] if h])
+        return {"items": hit,
+                "notes": {"youtube": error} if error else
+                         ({} if hit else {"youtube": "That link did not lead to a video"})}
+
     places = PLACES if where in ("all", "") else (where,)
     kinds = KINDS if kind in ("all", "") else (kind,)
     # Asked for on its own, a place is allowed to fill the screen.
@@ -400,6 +440,10 @@ def everything(cfg, user_id: int, q: str, *, where: str = "all", kind: str = "al
             jobs["ytmusic:album"] = lambda: _ytm_albums(q, 5)
         if "artist" in kinds:
             jobs["ytmusic:artist"] = lambda: _ytm_artists(q, 3)
+    if "youtube" in places and "video" in kinds:
+        # A handful beside everything else; the screen, when they are what was asked for.
+        jobs["youtube:video"] = lambda: _yt_videos(
+            q, each if (kind == "video" or where == "youtube") else 5)
     if "spotify" in places:
         jobs["spotify:all"] = lambda: _spotify_hits(cfg, user_id, q, kinds, 6)
     for place in ("soundcloud", "bandcamp"):
@@ -416,6 +460,11 @@ def everything(cfg, user_id: int, q: str, *, where: str = "all", kind: str = "al
             if error:
                 notes[name.split(":")[0]] = error
             found += rows
+
+    # The same video is often filed as a song as well. The song is the better copy of it,
+    # so the video is only listed when there is no such song in the list.
+    songs = {h["id"] for h in found if h["place"] == "ytmusic" and h["kind"] == "song"}
+    found = [h for h in found if not (h["kind"] == "video" and h["id"] in songs)]
 
     for hit in found:
         hit["score"] = _score(q, hit["title"], hit.get("subtitle") or "",

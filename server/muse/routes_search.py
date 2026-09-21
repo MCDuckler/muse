@@ -151,6 +151,21 @@ def add(body: dict, user: dict = Depends(current_user)):
     if place == "ytmusic":
         return _take(user, ident, None)
 
+    if place == "youtube":
+        # An ordinary video, kept as its sound. It is fetched exactly as a song is —
+        # the id is a YouTube id either way — but it has no song's metadata to look up,
+        # so what it is called is what the video is called and who it is by is the
+        # channel, until somebody edits it.
+        try:
+            meta = ytm.video(ident)
+        except ytm.Unavailable:
+            meta = None
+        meta = meta or {
+            "video_id": ident, "title": title or ident,
+            "artists": [a for a in [artist.split(" · ")[0].strip()] if a],
+            "album": None, "duration_ms": body.get("duration_ms"), "raw": {}}
+        return _take(user, ident, meta)
+
     raise HTTPException(400, f"{place} is not somewhere a song can be taken from")
 
 

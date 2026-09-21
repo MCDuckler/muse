@@ -1197,6 +1197,9 @@ class Found {
 
   bool get isSong => kind == 'song';
 
+  /// Something that plays: a song, or an ordinary YouTube video kept as its sound.
+  bool get plays => kind == 'song' || kind == 'video';
+
   static int? _ms(Object? v) => v == null ? null : (v as num).toInt();
 
   factory Found.fromJson(Map<String, dynamic> j) => Found(

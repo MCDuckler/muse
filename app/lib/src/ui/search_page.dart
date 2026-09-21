@@ -81,6 +81,7 @@ class _SearchPageState extends State<SearchPage> {
     'all': 'Everywhere',
     'library': 'Library',
     'ytmusic': 'YouTube Music',
+    'youtube': 'YouTube',
     'spotify': 'Spotify',
     'soundcloud': 'SoundCloud',
     'bandcamp': 'Bandcamp',
@@ -89,7 +90,10 @@ class _SearchPageState extends State<SearchPage> {
   static const _kinds = <String, String>{
     'all': 'All',
     'song': 'Songs',
-    'album': 'Albums',
+    // Ordinary YouTube videos, kept as their sound: the live set, the bootleg, the
+    // thing that was never released anywhere a music service would carry it.
+    'video': 'Videos',
+    'album': 'Records',
     'artist': 'Artists',
   };
 
@@ -218,6 +222,12 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
+  void _look(String where) {
+    if (where == _where) return;
+    setState(() => _where = where);
+    _again();
+  }
+
   void _again() {
     if (_lastQuery.isEmpty) return;
     final q = _lastQuery;
@@ -225,8 +235,14 @@ class _SearchPageState extends State<SearchPage> {
     _run(q);
   }
 
-  /// Tapping a row. What that means is the one thing that differs between them.
-  Future<void> _open(Found found, {String mode = 'end'}) async {
+  /// Tapping a row. What that means is the one thing that differs between them: an
+  /// artist or a record opens, and anything that plays is played.
+  ///
+  /// It used to go on the end of the queue, and hearing it meant catching the "Play"
+  /// on the toast before it went away. Somebody who searches for a song and taps it
+  /// wants to hear it; the plus on the row is for the other thing. With [mode] it is
+  /// that other thing: 'end' or 'next', on the queue and nothing else touched.
+  Future<void> _open(Found found, {String? mode}) async {
     if (_lastQuery.isNotEmpty) unawaited(_remember(_lastQuery));
     final app = context.read<AppState>();
     final messenger = ScaffoldMessenger.of(context);
@@ -262,15 +278,27 @@ class _SearchPageState extends State<SearchPage> {
       return;
     }
 
-    // A song: either it is here, or it is fetched.
+    // A song or a video: either it is here, or it is fetched.
     try {
-      if (found.track != null) {
-        await addAndSay(context, found.track!, mode: mode);
+      if (mode != null) {
+        if (found.track != null) {
+          await addAndSay(context, found.track!, mode: mode);
+          return;
+        }
+        final track = await app.api.addFound(found);
+        await app.addTrack(track, mode: mode);
+        if (mounted) saidAdded(context, found);
         return;
       }
-      final track = await app.api.addFound(found);
-      await app.addTrack(track, mode: mode);
-      if (mounted) saidAdded(context, found);
+      final track = found.track ?? await app.api.addFound(found);
+      await app.playTrackNow(track);
+      // Something already here simply starts, and the player says so better than a
+      // toast would. Something being fetched does not start yet, so that is said.
+      if (mounted && !track.isReady) {
+        messenger.say(snack(Text(
+            'Fetching "${found.title}" from ${placeNames[found.place] ?? found.place}'
+            ' — it plays as soon as it is here')));
+      }
     } catch (e) {
       // Long enough to read, because this is where the server says it declined to
       // add a song and why — which is a sentence, not a word.
@@ -289,109 +317,151 @@ class _SearchPageState extends State<SearchPage> {
       for (final f in _found)
         if (f.place == 'library' && f.track != null) f.track!,
     ];
+    final asking = _controller.text.trim().isNotEmpty ||
+        _where != 'all' ||
+        _kind != 'all' ||
+        _lyrics;
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-          child: TextField(
-            controller: _controller,
-            textInputAction: TextInputAction.search,
-            // Remembered when it is meant — sent with the search key, or one of its
-            // results used — rather than on every pause while typing, which filled the
-            // list with "b", "be" and "bea".
-            onSubmitted: (_) {
-              final q = _controller.text.trim();
-              if (q.isNotEmpty) unawaited(_remember(q));
-              _run();
-            },
-            focusNode: _focus,
-            decoration: InputDecoration(
-              hintText: _lyrics
-                  ? 'Some of the words'
-                  : 'Search, or paste a Bandcamp album link',
-              prefixIcon: const Icon(Icons.search),
-              suffixIcon: _busy
-                  ? const Padding(
-                      padding: EdgeInsets.all(14),
-                      child: SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2)))
-                  : (_controller.text.isEmpty
-                      ? null
-                      : IconButton(
-                          icon: const Icon(Icons.close),
-                          tooltip: 'Clear',
-                          onPressed: () {
-                            _controller.clear();
-                            _focus.requestFocus();
-                          },
-                        )),
-            ),
-          ),
-        ),
-        // Where to look, and what to look for. Above the results rather than in a
-        // menu, because the answer to "why is there nothing from Bandcamp" should be
-        // one tap away.
-        SizedBox(
-          height: chipRow,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 10),
+          padding: const EdgeInsets.fromLTRB(12, 12, 4, 8),
+          child: Row(
             children: [
-              for (final entry in _places.entries)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: ChoiceChip(
-                    avatar: entry.key == 'all'
-                        ? null
-                        : PlaceDot(entry.key, size: 8),
-                    label: Text(entry.value),
-                    selected: _where == entry.key,
-                    onSelected: (_) {
-                      setState(() => _where = entry.key);
-                      _again();
-                    },
-                  ),
-                ),
-            ],
-          ),
-        ),
-        SizedBox(
-          height: chipRow,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 10),
-            children: [
-              // The other question: the words rather than the name. Songs only —
-              // a record has no lyrics.
-              Padding(
-                padding: const EdgeInsets.only(right: 12),
-                child: FilterChip(
-                  avatar: const Icon(Icons.format_quote, size: 16),
-                  label: const Text('Lyrics'),
-                  selected: _lyrics,
-                  onSelected: (on) {
-                    setState(() => _lyrics = on);
-                    _again();
+              Expanded(
+                child: TextField(
+                  controller: _controller,
+                  textInputAction: TextInputAction.search,
+                  // Remembered when it is meant — sent with the search key, or one of
+                  // its results used — rather than on every pause while typing, which
+                  // filled the list with "b", "be" and "bea".
+                  onSubmitted: (_) {
+                    final q = _controller.text.trim();
+                    if (q.isNotEmpty) unawaited(_remember(q));
+                    _run();
                   },
+                  focusNode: _focus,
+                  decoration: InputDecoration(
+                    hintText: _lyrics
+                        ? 'Some of the words'
+                        : 'Search, or paste a link',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: _busy
+                        ? const Padding(
+                            padding: EdgeInsets.all(14),
+                            child: SizedBox(
+                                width: 16,
+                                height: 16,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2)))
+                        : (_controller.text.isEmpty
+                            ? null
+                            : IconButton(
+                                icon: const Icon(Icons.close),
+                                tooltip: 'Clear',
+                                onPressed: () {
+                                  _controller.clear();
+                                  _focus.requestFocus();
+                                },
+                              )),
+                  ),
                 ),
               ),
-              if (!_lyrics)
-                for (final entry in _kinds.entries)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: ChoiceChip(
-                      label: Text(entry.value),
-                      selected: _kind == entry.key,
-                      onSelected: (_) {
-                        setState(() => _kind = entry.key);
-                        _again();
-                      },
+              // Where to look. Six chips in a row of their own said this before anything
+              // had been typed, and nearly always said "Everywhere"; it is one button
+              // now, and when it is set to something it says so in the row below, where
+              // it can be taken off again.
+              PopupMenuButton<String>(
+                tooltip: 'Where to look',
+                icon: Badge(
+                  isLabelVisible: _where != 'all',
+                  smallSize: 8,
+                  child: const Icon(Icons.travel_explore),
+                ),
+                onSelected: _look,
+                itemBuilder: (context) => [
+                  for (final entry in _places.entries)
+                    PopupMenuItem(
+                      value: entry.key,
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: 20,
+                            child: entry.key == 'all'
+                                ? null
+                                : Center(child: PlaceDot(entry.key, size: 8)),
+                          ),
+                          Expanded(child: Text(entry.value)),
+                          if (_where == entry.key)
+                            const Icon(Icons.check, size: 18),
+                        ],
+                      ),
                     ),
-                  ),
+                ],
+              ),
             ],
           ),
+        ),
+        // What to look for: one row, and only once there is a question to narrow.
+        AnimatedSize(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: !asking
+              ? const SizedBox(width: double.infinity)
+              : SizedBox(
+                  height: chipRow,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    children: [
+                      if (_where != 'all')
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: InputChip(
+                            avatar: PlaceDot(_where, size: 8),
+                            label: Text(_places[_where] ?? _where),
+                            deleteButtonTooltipMessage: 'Look everywhere',
+                            onDeleted: () => _look('all'),
+                            onPressed: () => _look('all'),
+                          ),
+                        ),
+                      // The other question: the words rather than the name. Songs
+                      // only — a record has no lyrics. First in the row, because last
+                      // in the row is off the side of a phone.
+                      Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: FilterChip(
+                            avatar: const Icon(Icons.format_quote, size: 16),
+                            label: const Text('Lyrics'),
+                            visualDensity: VisualDensity.compact,
+                            selected: _lyrics,
+                            onSelected: (on) {
+                              setState(() => _lyrics = on);
+                              _again();
+                            },
+                          )),
+                      if (!_lyrics)
+                        // No chip for "all": that is what none of them means, and
+                        // a second tap on the one that is on takes it off. One chip
+                        // fewer is the difference between a row that fits a phone
+                        // and one that runs off the side of it.
+                        for (final entry in _kinds.entries)
+                          if (entry.key != 'all')
+                            Padding(
+                              padding: const EdgeInsets.only(right: 8),
+                              child: ChoiceChip(
+                                label: Text(entry.value),
+                                visualDensity: VisualDensity.compact,
+                                selected: _kind == entry.key,
+                                onSelected: (on) {
+                                  setState(() => _kind = on ? entry.key : 'all');
+                                  _again();
+                                },
+                              ),
+                            ),
+                    ],
+                  ),
+                ),
         ),
         if (_error != null)
           Padding(
@@ -465,11 +535,19 @@ class _SearchPageState extends State<SearchPage> {
           child: child,
         );
 
-    rows.add(arriving(top, _TopResult(found: top, onTap: () => _open(top))));
+    rows.add(arriving(
+      top,
+      _TopResult(
+        found: top,
+        onTap: () => _open(top),
+        onAdd: top.plays ? () => _open(top, mode: 'end') : null,
+      ),
+    ));
     for (final kind in order) {
       final group = [for (final f in rest) if (f.kind == kind) f];
       rows.add(_IndexHead(switch (kind) {
         'song' => 'Songs',
+        'video' => 'Videos',
         'album' => 'Records',
         'artist' => 'Artists',
         _ => kind,
@@ -480,6 +558,7 @@ class _SearchPageState extends State<SearchPage> {
           FoundRow(
             found: f,
             onTap: () => _open(f),
+            onAdd: () => _open(f, mode: 'end'),
             onPlayNext: () => _open(f, mode: 'next'),
           ),
         ));
@@ -743,14 +822,15 @@ class _SearchPrompt extends StatelessWidget {
             const Icon(Icons.search, size: 40),
             const SizedBox(height: 12),
             Text(
-              'Songs, records and artists, from your library and from every '
-              'service this server can reach — in one list.',
+              'Songs, records, artists and videos, from your library and from every '
+              'service this server can reach — in one list. Tap to play, + to queue.',
               textAlign: TextAlign.center,
               style: style,
             ),
             const SizedBox(height: 10),
             Text(
-              'Or turn on Lyrics and type some of the words.',
+              'Or paste a YouTube or Bandcamp link. Or turn on Lyrics and type some '
+              'of the words.',
               textAlign: TextAlign.center,
               style: style,
             ),
@@ -813,10 +893,13 @@ class _NothingFound extends StatelessWidget {
 
 /// The best match, on a card of its own at the top of the index.
 class _TopResult extends StatelessWidget {
-  const _TopResult({required this.found, required this.onTap});
+  const _TopResult({required this.found, required this.onTap, this.onAdd});
 
   final Found found;
   final VoidCallback onTap;
+
+  /// On to the queue instead of played. Only for something that plays.
+  final VoidCallback? onAdd;
 
   @override
   Widget build(BuildContext context) {
@@ -839,6 +922,7 @@ class _TopResult extends StatelessWidget {
     final what = switch (f.kind) {
       'album' => 'Record',
       'artist' => 'Artist',
+      'video' => 'Video',
       _ => 'Song',
     };
     return Padding(
@@ -873,7 +957,22 @@ class _TopResult extends StatelessWidget {
                     ],
                   ),
                 ),
-                PlaceDot(f.place, size: 8),
+                if (onAdd == null)
+                  PlaceDot(f.place, size: 8)
+                else
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      PlaceDot(f.place, size: 8),
+                      IconButton(
+                        icon: Icon(f.known
+                            ? Icons.playlist_add_check
+                            : Icons.add_circle_outline),
+                        tooltip: 'Add to the queue',
+                        onPressed: onAdd,
+                      ),
+                    ],
+                  ),
               ],
             ),
           ),

@@ -19,6 +19,12 @@ def _song(title: str, artists: list[str], album: str | None = None) -> dict:
     }, discovered_via=catalog.VIA_USER)
 
 
+@pytest.fixture(autouse=True)
+def no_real_videos(monkeypatch):
+    """No test here searches the real YouTube for videos by accident."""
+    monkeypatch.setattr(ytm, "search_videos", lambda q, limit=10: [])
+
+
 @pytest.fixture()
 def mine(client, hdr):
     """A small library belonging to whoever the tests log in as."""
@@ -224,3 +230,71 @@ def test_a_youtube_row_is_still_taken_by_its_own_id(client, hdr, monkeypatch):
 
     assert db.one("select provider_id from track_sources where track_id=%s",
                   (r.json()["id"],))["provider_id"] == "EXACTID"
+
+
+def _video(vid, title, channel="Some Channel", secs=3600, views="1.2M"):
+    return {"video_id": vid, "title": title, "artists": [channel], "album": None,
+            "duration_ms": secs * 1000, "views": views, "raw": {}}
+
+
+def test_ordinary_videos_are_found_beside_the_songs(client, hdr, monkeypatch):
+    """A live set, a bootleg, an upload of something never released: on YouTube, and
+    on no streaming service, and until now not in any search here."""
+    monkeypatch.setattr(ytm, "search_songs", lambda q, limit=10: [
+        {"video_id": "SONG0000001", "title": "Boiler Room", "artists": ["Someone"],
+         "album": None, "duration_ms": 200_000, "raw": {}}])
+    monkeypatch.setattr(ytm, "search_albums", lambda q, limit=6: [])
+    monkeypatch.setattr(ytm, "search_artists", lambda q, limit=4: [])
+    monkeypatch.setattr(ytm, "search_videos", lambda q, limit=10: [
+        _video("VIDEO000001", "Someone | Boiler Room Berlin (full set)"),
+        # The same upload YouTube also files as a song: the song is the better copy.
+        _video("SONG0000001", "Boiler Room (Official Video)"),
+    ])
+    items = client.get("/search/everything", headers=hdr,
+                       params={"q": "boiler room"}).json()["items"]
+    videos = [i for i in items if i["kind"] == "video"]
+    assert [v["id"] for v in videos] == ["VIDEO000001"], "and not the duplicate"
+    v = videos[0]
+    assert v["place"] == "youtube"
+    assert v["subtitle"] == "Some Channel · 1.2M views"
+    assert v["duration_ms"] == 3_600_000
+
+    only = client.get("/search/everything", headers=hdr,
+                      params={"q": "boiler room", "kind": "video"}).json()["items"]
+    assert only and all(i["kind"] == "video" for i in only)
+
+
+def test_a_pasted_youtube_link_is_that_video(client, hdr, monkeypatch):
+    asked = []
+    monkeypatch.setattr(ytm, "video", lambda vid: asked.append(vid) or
+                        _video(vid, "A set filmed in a kitchen", secs=1800) | {"views": None})
+    for link in ("https://youtu.be/dQw4w9WgXcQ?si=abc",
+                 "https://www.youtube.com/watch?feature=share&v=dQw4w9WgXcQ",
+                 "https://music.youtube.com/watch?v=dQw4w9WgXcQ&list=x",
+                 "https://youtube.com/shorts/dQw4w9WgXcQ"):
+        items = client.get("/search/everything", headers=hdr,
+                           params={"q": link}).json()["items"]
+        assert [i["id"] for i in items] == ["dQw4w9WgXcQ"], link
+        assert items[0]["title"] == "A set filmed in a kitchen"
+    assert set(asked) == {"dQw4w9WgXcQ"}
+
+
+def test_a_video_is_added_as_its_sound_under_its_own_name(client, hdr, monkeypatch):
+    monkeypatch.setattr(ytm, "video", lambda vid: _video(vid, "Live at the Roxy 1994",
+                                                         channel="tapes4ever"))
+    r = client.post("/search/add", headers=hdr, json={
+        "place": "youtube", "id": "ROXY1994abc", "title": "ignored",
+        "subtitle": "tapes4ever · 3K views"})
+    assert r.status_code in (200, 201, 202), r.text
+    made = r.json()
+    assert made["title"] == "Live at the Roxy 1994"
+    assert made["artists"] == ["tapes4ever"]
+    assert db.one("select provider_id from track_sources where track_id=%s",
+                  (made["id"],))["provider_id"] == "ROXY1994abc"
+
+    # And when YouTube will not describe it, what the row said is used.
+    monkeypatch.setattr(ytm, "video", lambda vid: None)
+    r = client.post("/search/add", headers=hdr, json={
+        "place": "youtube", "id": "OTHER000001", "title": "Basement tape",
+        "subtitle": "somebody · 40 views"})
+    assert r.json()["title"] == "Basement tape" and r.json()["artists"] == ["somebody"]
