@@ -8,6 +8,10 @@ import '../api/client.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import 'browse_page.dart';
+import 'sleeve_art.dart';
+import 'mag_parts.dart';
+import 'mag.dart';
+import 'artwork.dart';
 import 'dialogs.dart' show Roomy;
 import 'found_row.dart';
 import 'motion.dart';
@@ -429,30 +433,62 @@ class _SearchPageState extends State<SearchPage> {
                             onPick: _searchAgainFor,
                             onForget: _forget,
                           )
-                        : ListView.builder(
-                            padding: const EdgeInsets.fromLTRB(8, 0, 8, 160),
-                            itemCount: _found.length,
-                            itemBuilder: (context, i) => _Arriving(
-                              // Keyed on the query as well as the row, so a new
-                              // search arrives again rather than the old rows
-                              // silently becoming different songs.
-                              key: ValueKey('$_lastQuery/${_found[i].place}/'
-                                  '${_found[i].id}'),
-                              index: i,
-                              // Only rows built as the results land: a row scrolled
-                              // back into view a minute later is not arriving.
-                              animate: DateTime.now().difference(_arrivedAt) <
-                                  const Duration(milliseconds: 900),
-                              child: FoundRow(
-                                found: _found[i],
-                                onTap: () => _open(_found[i]),
-                                onPlayNext: () => _open(_found[i], mode: 'next'),
-                              ),
-                            ),
-                          ),
+                        : _index(context.read<AppState>()),
           ),
         ),
       ],
+    );
+  }
+
+  /// The results, set as a magazine's index: the best match on a card of its own,
+  /// then the rest under a head for each kind — songs, records, artists — in the order
+  /// each kind first turned up, so the kind that matched best still comes first.
+  Widget _index(AppState app) {
+    final top = _found.first;
+    final rest = _found.skip(1).toList();
+    final order = <String>[];
+    for (final f in rest) {
+      if (!order.contains(f.kind)) order.add(f.kind);
+    }
+    final rows = <Widget>[];
+    var n = 0;
+    final animate =
+        DateTime.now().difference(_arrivedAt) < const Duration(milliseconds: 900);
+    Widget arriving(Found f, Widget child) => _Arriving(
+          // Keyed on the query as well as the row, so a new search arrives again
+          // rather than the old rows silently becoming different songs.
+          key: ValueKey('$_lastQuery/${f.place}/${f.id}/${f.kind}'),
+          index: n++,
+          // Only rows built as the results land: a row scrolled back into view a
+          // minute later is not arriving.
+          animate: animate,
+          child: child,
+        );
+
+    rows.add(arriving(top, _TopResult(found: top, onTap: () => _open(top))));
+    for (final kind in order) {
+      final group = [for (final f in rest) if (f.kind == kind) f];
+      rows.add(_IndexHead(switch (kind) {
+        'song' => 'Songs',
+        'album' => 'Records',
+        'artist' => 'Artists',
+        _ => kind,
+      }));
+      for (final f in group) {
+        rows.add(arriving(
+          f,
+          FoundRow(
+            found: f,
+            onTap: () => _open(f),
+            onPlayNext: () => _open(f, mode: 'next'),
+          ),
+        ));
+      }
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(8, 0, 8, 160),
+      itemCount: rows.length,
+      itemBuilder: (context, i) => rows[i],
     );
   }
 
@@ -773,4 +809,97 @@ class _NothingFound extends StatelessWidget {
           ),
         ),
       );
+}
+
+/// The best match, on a card of its own at the top of the index.
+class _TopResult extends StatelessWidget {
+  const _TopResult({required this.found, required this.onTap});
+
+  final Found found;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.read<AppState>();
+    final scheme = Theme.of(context).colorScheme;
+    final f = found;
+    final Widget art;
+    if (f.track != null) {
+      art = Artwork(track: f.track, size: 72, radius: 0, small: true);
+    } else {
+      final url = f.coverUrl == null
+          ? null
+          : app.api.remoteCoverUrl(
+              f.coverUrl!.contains('?') ? f.coverUrl! : '${f.coverUrl!}?size=sm');
+      art = url == null
+          ? PrintedSleeve(
+              seed: PrintedSleeve.seedOf('${f.title}·${f.subtitle}'), title: f.title, size: 72)
+          : Artwork(url: url, size: 72, radius: 0);
+    }
+    final what = switch (f.kind) {
+      'album' => 'Record',
+      'artist' => 'Artist',
+      _ => 'Song',
+    };
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 4),
+      child: Material(
+        color: scheme.surfaceContainerHighest,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: Row(
+              children: [
+                CutOut(turn: -0.03, child: art),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Kicker('Top result · $what'),
+                      const SizedBox(height: 3),
+                      Text(f.title.toUpperCase(),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Mag.headline(24, color: scheme.onSurface)),
+                      if (f.subtitle.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(f.subtitle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Mag.typewriter(11.5, color: scheme.onSurfaceVariant)),
+                      ],
+                    ],
+                  ),
+                ),
+                PlaceDot(f.place, size: 8),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A head in the index: the kind, in spaced red capitals over a rule.
+class _IndexHead extends StatelessWidget {
+  const _IndexHead(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      header: true,
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(16, 16, 16, 2),
+        padding: const EdgeInsets.only(bottom: 3),
+        decoration: BoxDecoration(border: Border(bottom: BorderSide(color: scheme.onSurface))),
+        child: Text(text.toUpperCase(), style: Mag.flag(10.5, color: scheme.primary)),
+      ),
+    );
+  }
 }

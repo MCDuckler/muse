@@ -110,12 +110,16 @@ void main() {
     await type(tester, 'queen');
 
     expect(tester.takeException(), isNull);
-    // Four rows, one list, in the order the server ranked them — not grouped under a
-    // heading per service, which is the thing this replaced.
-    expect(find.byType(FoundRow), findsNWidgets(4));
-    expect(find.text('Bohemian Rhapsody'), findsOneWidget);
-    expect(find.text('A Night at the Opera'), findsOneWidget);
-    expect(find.text('Queen tribute'), findsOneWidget);
+    // Four results in one index: the best match on its own card, the rest as rows under
+    // a head for each *kind* of thing — never a heading per service, which is the thing
+    // this replaced.
+    expect(find.text('TOP RESULT · SONG'), findsOneWidget);
+    expect(find.byType(FoundRow), findsNWidgets(3));
+    Finder either(String t) => find.byWidgetPredicate(
+        (w) => w is Text && (w.data == t || w.data == t.toUpperCase()));
+    expect(either('Bohemian Rhapsody'), findsOneWidget);
+    expect(either('A Night at the Opera'), findsOneWidget);
+    expect(either('Queen tribute'), findsOneWidget);
     expect(find.textContaining('On YouTube Music'), findsNothing,
         reason: 'no section headings: the list is one list');
 
@@ -128,7 +132,7 @@ void main() {
     await show(tester);
     await type(tester, 'queen');
     expect(find.text('Bandcamp would not answer'), findsOneWidget);
-    expect(find.byType(FoundRow), findsNWidgets(4));
+    expect(find.byType(FoundRow), findsNWidgets(3), reason: 'and the top result');
   });
 
   testWidgets('narrowing to one service asks for that service', (tester) async {
@@ -157,5 +161,17 @@ void main() {
         reason: 'a record has no lyrics');
     // The kind chips are gone while it is on, because there is only one kind.
     expect(find.widgetWithText(ChoiceChip, 'Albums'), findsNothing);
+  });
+
+  testWidgets('the rest go under a head for each kind, in the order they turned up',
+      (tester) async {
+    await show(tester);
+    await type(tester, 'queen');
+    // After the top song: a record, then another song, then an artist — so the heads
+    // come in that order, and the kind that matched best after the top is first.
+    final records = tester.getTopLeft(find.text('RECORDS')).dy;
+    final songs = tester.getTopLeft(find.text('SONGS')).dy;
+    final artists = tester.getTopLeft(find.text('ARTISTS')).dy;
+    expect(records < songs && songs < artists, isTrue);
   });
 }
