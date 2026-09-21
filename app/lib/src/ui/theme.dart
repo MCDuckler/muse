@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 
+import 'mag.dart';
 import 'motion.dart';
 
 /// The app's look: warm ink, amber signal, glass over content.
 ///
 /// Colours are named after what they do rather than where they are used, and both
 /// themes are defined from the same roles so nothing is only legible in one of them.
-/// A palette: what the app is made of, in five colours.
+/// An edition: the same magazine, printed a different way.
 ///
 /// Each one is a ground and an accent rather than a theme wholesale, so every screen
 /// keeps its shape and only its colour changes — and the dark and light versions come
@@ -35,71 +36,49 @@ class Palette {
   /// panels stay just off black so the glass still has an edge to sit on.
   final bool oled;
 
-  static const ember = Palette(
-    id: 'ember',
-    name: 'Ember',
-    blurb: 'Warm ink and amber. The one it has always been.',
-    accentDark: Color(0xFFF07A3E),
-    accentLight: Color(0xFFC8511B),
-    groundDark: Color(0xFF171310),
-    groundLight: Color(0xFFF6F3EF),
+  /// The default. White coated stock and the masthead red — and at night, when the
+  /// phone goes dark, the late edition: black gloss with the same red, brighter.
+  static const red = Palette(
+    id: 'red',
+    name: 'Red',
+    blurb: 'White stock and the masthead red. At night, the late edition: black gloss.',
+    // A shade deeper than the logo's red on paper, so small red text still reads;
+    // the masthead itself keeps the logo's own colour, MuseTheme.masthead.
+    accentLight: Color(0xFFD42A20),
+    accentDark: Color(0xFFFF4A3D),
+    groundLight: Color(0xFFFBFAF6),
+    groundDark: Color(0xFF0C0C0E),
   );
 
-  static const midnight = Palette(
-    id: 'midnight',
-    name: 'Midnight',
-    blurb: 'Deep blue with a cold signal, for listening after dark.',
-    accentDark: Color(0xFF7BA7FF),
-    accentLight: Color(0xFF2E5AAC),
-    groundDark: Color(0xFF0E1218),
-    groundLight: Color(0xFFF1F3F7),
+  /// Grey paper and black ink, the way the weekly music papers were printed. Red is
+  /// left to the masthead.
+  static const newsprint = Palette(
+    id: 'newsprint',
+    name: 'Newsprint',
+    blurb: 'Grey paper and black ink. Red is kept for the masthead.',
+    accentLight: Color(0xFF141210),
+    accentDark: Color(0xFFEDE9E1),
+    groundLight: Color(0xFFE6E3DC),
+    groundDark: Color(0xFF1A1917),
   );
 
-  static const oledBlack = Palette(
-    id: 'oled',
-    name: 'OLED',
-    blurb: 'True black. On this screen the background is off, not dark.',
-    accentDark: Color(0xFFE9E4DC),
-    accentLight: Color(0xFF2A2A2A),
-    groundDark: Color(0xFF000000),
-    groundLight: Color(0xFFFFFFFF),
-    oled: true,
+  /// A late-80s club flyer: fluoro pink on black.
+  static const club = Palette(
+    id: 'club',
+    name: 'Club flyer',
+    blurb: 'Fluoro pink on black, like a flyer for the Saturday night.',
+    accentLight: Color(0xFFC8007A),
+    accentDark: Color(0xFFFF4FB8),
+    groundLight: Color(0xFFFFF7FB),
+    groundDark: Color(0xFF111111),
   );
 
-  static const forest = Palette(
-    id: 'forest',
-    name: 'Forest',
-    blurb: 'Green and moss, quieter than the amber.',
-    accentDark: Color(0xFF7BC98B),
-    accentLight: Color(0xFF2E6B41),
-    groundDark: Color(0xFF10150F),
-    groundLight: Color(0xFFF1F4EE),
-  );
-
-  static const plum = Palette(
-    id: 'plum',
-    name: 'Plum',
-    blurb: 'Purple ground, pink signal. The loudest of them.',
-    accentDark: Color(0xFFE47ACB),
-    accentLight: Color(0xFF8B2F79),
-    groundDark: Color(0xFF15101A),
-    groundLight: Color(0xFFF7F1F6),
-  );
-
-  static const paperWhite = Palette(
-    id: 'paper',
-    name: 'Paper',
-    blurb: 'Ink on paper, with as little colour as the app can manage.',
-    accentDark: Color(0xFFD8D2C8),
-    accentLight: Color(0xFF3B372F),
-    groundDark: Color(0xFF191817),
-    groundLight: Color(0xFFFAF8F4),
-  );
-
-  static const all = <Palette>[ember, midnight, oledBlack, forest, plum, paperWhite];
+  /// The editions. The six palettes the app had before are gone; a phone that had one
+  /// of them chosen gets the default, which is Red.
+  static const all = <Palette>[red, newsprint, club];
 
   static Palette byId(String? id) =>
-      all.firstWhere((p) => p.id == id, orElse: () => ember);
+      all.firstWhere((p) => p.id == id, orElse: () => red);
 }
 
 /// Up a little and in, out the same way.
@@ -135,23 +114,29 @@ class _RiseIn extends PageTransitionsBuilder {
 }
 
 class MuseTheme {
-  static const ink = Color(0xFF171310);       // the icon's ground; app background
-  static const amber = Color(0xFFF07A3E);     // accent: transport, selection, links
-  static const ember = Color(0xFFC8511B);     // accent on light, where amber is thin
-  static const paper = Color(0xFFF6F3EF);
+  /// The logo's red, exactly: the masthead, stickers, anything set big enough that
+  /// its contrast is not a question.
+  static const masthead = Color(0xFFE83328);
+  static const ink = Color(0xFF141210);
+  static const paper = Color(0xFFFBFAF6);
 
-  static ThemeData dark([Palette palette = Palette.ember]) =>
+  /// Sticker yellow. For stickers only.
+  static const highlighter = Color(0xFFFFE14D);
+
+  static ThemeData dark([Palette palette = Palette.red]) =>
       _build(Brightness.dark, palette);
-  static ThemeData light([Palette palette = Palette.ember]) =>
+  static ThemeData light([Palette palette = Palette.red]) =>
       _build(Brightness.light, palette);
 
-  static ThemeData _build(Brightness brightness, [Palette palette = Palette.ember]) {
+  static ThemeData _build(Brightness brightness, [Palette palette = Palette.red]) {
     final isDark = brightness == Brightness.dark;
     final ground = isDark ? palette.groundDark : palette.groundLight;
     final scheme = ColorScheme.fromSeed(
       seedColor: isDark ? palette.accentDark : palette.accentLight,
       brightness: brightness,
     ).copyWith(
+      primary: isDark ? palette.accentDark : palette.accentLight,
+      onPrimary: _on(isDark ? palette.accentDark : palette.accentLight),
       surface: ground,
       // Layers, not shadows: surfaces separate by tone so the glass has something to
       // blur that is not flat grey. On a true-black palette they step up from black
@@ -182,13 +167,9 @@ class MuseTheme {
         surfaceTintColor: Colors.transparent,
         scrolledUnderElevation: 0,
         centerTitle: false,
-        titleTextStyle: TextStyle(
-          fontFamily: 'Manrope',
-          fontSize: 20,
-          fontWeight: FontWeight.w700,
-          letterSpacing: -0.2,
-          color: scheme.onSurface,
-        ),
+        // A page's name is set the way a magazine sets a section: condensed and
+        // heavy, a size up from the words under it.
+        titleTextStyle: Mag.headline(26, color: scheme.onSurface),
       ),
       // Nothing lights up because a button happens to hold focus.
       //
@@ -294,6 +275,9 @@ class MuseTheme {
     return hsl.withLightness((hsl.lightness + by).clamp(0.0, 1.0)).toColor();
   }
 
+  /// Ink or white, whichever reads on [c].
+  static Color _on(Color c) => c.computeLuminance() > 0.45 ? ink : Colors.white;
+
   static TextTheme _text(TextTheme base, ColorScheme scheme) {
     TextStyle s(TextStyle? from, double size, FontWeight w, {double spacing = 0}) =>
         (from ?? const TextStyle()).copyWith(
@@ -304,9 +288,16 @@ class MuseTheme {
           color: scheme.onSurface,
         );
 
+    // Headlines in the magazine's face; everything that is read in a list or pressed
+    // stays in Manrope, which is what it is good at.
     return base.copyWith(
-      headlineSmall: s(base.headlineSmall, 23, FontWeight.w700, spacing: -0.3),
-      titleLarge: s(base.titleLarge, 20, FontWeight.w700, spacing: -0.2),
+      displayLarge: Mag.headline(56, color: scheme.onSurface),
+      displayMedium: Mag.headline(44, color: scheme.onSurface),
+      displaySmall: Mag.headline(36, color: scheme.onSurface),
+      headlineLarge: Mag.headline(32, color: scheme.onSurface),
+      headlineMedium: Mag.headline(28, color: scheme.onSurface),
+      headlineSmall: Mag.headline(24, color: scheme.onSurface),
+      titleLarge: Mag.title(21, color: scheme.onSurface),
       titleMedium: s(base.titleMedium, 16, FontWeight.w600),
       titleSmall: s(base.titleSmall, 14, FontWeight.w600),
       bodyLarge: s(base.bodyLarge, 15.5, FontWeight.w500),

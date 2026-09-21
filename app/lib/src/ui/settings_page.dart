@@ -282,7 +282,7 @@ class _LookPage extends StatelessWidget {
         padding: EdgeInsets.only(bottom: bottomForPlayer(context)),
         children: [
           // Swatches rather than a list of names: the choice is a look, and reading
-          // "Midnight" tells you less than seeing it.
+          // "Club flyer" tells you less than seeing it.
           SizedBox(
             height: 96,
             child: ListView(

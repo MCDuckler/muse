@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/services.dart';
@@ -19,6 +19,7 @@ import 'src/ui/loading.dart';
 import 'src/ui/login_page.dart';
 import 'src/ui/theme.dart';
 import 'src/ui/page_colour.dart';
+import 'src/ui/paper.dart';
 import 'src/ui/widths.dart';
 
 /// Exposed for the integration test: the player lives behind a stream, and a test
@@ -36,6 +37,7 @@ String debugEngineState() {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  _fontLicences();
 
   // How much decoded artwork to keep, in a browser.
   //
@@ -161,7 +163,7 @@ class MuseApp extends StatelessWidget {
                   visualDensity: Width.of(context) == Width.expanded
                       ? VisualDensity.compact
                       : null),
-              child: child ?? const SizedBox(),
+              child: PaperGrain(child: child ?? const SizedBox()),
             ),
           ),
         ),
@@ -366,4 +368,24 @@ class _Root extends StatelessWidget {
     }
     return app.user == null ? const LoginPage() : const HomePage();
   }
+}
+
+/// The typefaces' licences, on the licences page with everything else's.
+///
+/// The fonts are open, and the licence they are open under asks for itself to travel
+/// with them. Read from the files bundled beside the fonts, only when the page that
+/// lists them is opened.
+void _fontLicences() {
+  LicenseRegistry.addLicense(() async* {
+    for (final (names, file) in const [
+      (['Archivo'], 'OFL-Archivo.txt'),
+      (['Bodoni Moda'], 'OFL-BodoniModa.txt'),
+      (['Courier Prime'], 'OFL-CourierPrime.txt'),
+      (['Manrope'], 'OFL-Manrope.txt'),
+      (['Permanent Marker'], 'LICENSE-PermanentMarker.txt'),
+    ]) {
+      yield LicenseEntryWithLineBreaks(
+          names, await rootBundle.loadString('assets/fonts/$file'));
+    }
+  });
 }

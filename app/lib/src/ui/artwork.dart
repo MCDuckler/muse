@@ -5,7 +5,7 @@ import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/art_cache.dart';
 import 'motion.dart';
-import 'owl.dart';
+import 'sleeve_art.dart';
 
 /// Album art with a placeholder that is deliberately not a grey box: a track with no
 /// cover yet should still look like part of the app rather than a hole in it.
@@ -64,14 +64,14 @@ class Artwork extends StatelessWidget {
         width: size,
         height: size,
         child: url == null
-            ? _placeholder(scheme)
+            ? _missing()
             : Image(
                 image: artwork(url,
                     drawnAt: size,
                     ratio: MediaQuery.devicePixelRatioOf(context)),
                 fit: BoxFit.cover,
                 gaplessPlayback: true,
-                errorBuilder: (_, __, ___) => _placeholder(scheme),
+                errorBuilder: (_, __, ___) => _missing(),
                 // A cover that has come off the network arrives into the placeholder
                 // rather than replacing it between one frame and the next. Only one
                 // that had to be waited for: an image already decoded is handed over
@@ -83,7 +83,7 @@ class Artwork extends StatelessWidget {
                     duration: Motion.base,
                     switchInCurve: Motion.enter,
                     child: frame == null
-                        ? _placeholder(scheme)
+                        ? _loading(scheme)
                         : KeyedSubtree(key: const ValueKey('art'), child: child),
                   );
                 },
@@ -92,12 +92,21 @@ class Artwork extends StatelessWidget {
     );
   }
 
-  /// A song with no cover gets a bird instead of a shrug. See GoofyOwl: the same song
-  /// gets the same one every time, and no two songs in a list get the same face.
-  Widget _placeholder(ColorScheme scheme) => GoofyOwl(
-        seed: track?.id ?? owlSeed(url),
+  /// A song with no cover gets a sleeve printed for it. See PrintedSleeve: the same
+  /// song gets the same one every time, and no two songs in a list look alike.
+  Widget _missing() => PrintedSleeve(
+        seed: track?.id ?? PrintedSleeve.seedOf(url),
+        title: track?.displayTitle ?? '',
         size: size,
       );
+
+  /// A cover on its way: plain paper, the colour of the page a shade deeper.
+  ///
+  /// Not the printed sleeve. That is for a song with no cover at all, and loud on
+  /// purpose; shown while a real cover is loading, every list would flash a row of
+  /// posters and then swap them all for the real thing.
+  Widget _loading(ColorScheme scheme) =>
+      ColoredBox(color: scheme.surfaceContainerHighest);
 }
 
 /// A playlist's own cover: bands of the records in it, built by the server.

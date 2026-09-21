@@ -296,7 +296,7 @@ class AppState extends ChangeNotifier {
 
   /// The colours. Per device like the cover style, because a phone at night and a
   /// laptop in a bright room do not want the same thing.
-  Palette palette = Palette.ember;
+  Palette palette = Palette.red;
 
   Future<void> setPalette(Palette next) async {
     palette = next;

@@ -46,8 +46,29 @@ flutter:
 
   assets:
     - assets/fonts/
+    - assets/texture/
 
   fonts:
     - family: Manrope
       fonts:
         - asset: assets/fonts/Manrope.ttf
+    # The magazine's faces, cut down to Latin (German included) and to the weights the
+    # design uses, so the web app does not load a megabyte of glyphs nobody sees.
+    # Archivo keeps its width axis: extra condensed headlines and expanded flags are
+    # the same font. See lib/src/ui/mag.dart.
+    - family: Archivo
+      fonts:
+        - asset: assets/fonts/Archivo.ttf
+    - family: BodoniModa
+      fonts:
+        - asset: assets/fonts/BodoniModa.ttf
+        - asset: assets/fonts/BodoniModa-Italic.ttf
+          style: italic
+    - family: CourierPrime
+      fonts:
+        - asset: assets/fonts/CourierPrime-Regular.ttf
+        - asset: assets/fonts/CourierPrime-Bold.ttf
+          weight: 700
+    - family: PermanentMarker
+      fonts:
+        - asset: assets/fonts/PermanentMarker.ttf
