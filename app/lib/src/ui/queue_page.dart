@@ -8,6 +8,7 @@ import '../state/offline.dart';
 import '../state/player.dart';
 import 'dialogs.dart';
 import 'feel.dart';
+import 'mini_player.dart' show PlayerScaffold;
 import 'song_row.dart';
 import 'station.dart';
 import 'track_menu.dart';
@@ -18,6 +19,38 @@ import 'selection_bar.dart';
 import 'artwork.dart';
 import 'snack.dart';
 import 'widths.dart';
+
+/// The queue as a page of its own: Up next.
+///
+/// It was a tab, the first one, which put the machinery at the front of the app and
+/// made the queue the thing you opened it onto. It belongs to what is playing — it is
+/// what plays after this — so it opens from the player, from the bar in the dock, from
+/// the cover's line about the queue you left, and from the palette, and closes back to
+/// wherever you were.
+class QueueScreen extends StatelessWidget {
+  const QueueScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) => const PlayerScaffold(
+        appBar: _UpNextBar(),
+        body: QueuePage(),
+      );
+}
+
+class _UpNextBar extends StatelessWidget implements PreferredSizeWidget {
+  const _UpNextBar();
+
+  @override
+  Size get preferredSize => const Size.fromHeight(kToolbarHeight);
+
+  @override
+  Widget build(BuildContext context) => AppBar(title: const Text('Up next'));
+}
+
+/// Open Up next on whichever navigator is nearest: over the player when it is asked
+/// for from the player, inside the tab when it is asked for from a page.
+Future<void> openQueueScreen(BuildContext context) => Navigator.of(context)
+    .push(MaterialPageRoute(builder: (_) => const QueueScreen()));
 
 /// Queues are the product, so this screen shows them all, not just the one playing.
 class QueuePage extends StatefulWidget {
@@ -757,7 +790,12 @@ class _EmptyQueue extends StatelessWidget {
             FilledButton.tonalIcon(
               icon: const Icon(Icons.search, size: 18),
               label: const Text('Search for music'),
-              onPressed: () => context.read<AppState>().setHomeTab(Tabs.search),
+              onPressed: () {
+                // Out of Up next first: it is a page over the tabs now, and a tab
+                // changed behind it is a change nobody sees.
+                Navigator.of(context).popUntil((r) => r.isFirst);
+                context.read<AppState>().setHomeTab(Tabs.search);
+              },
             ),
           ],
         ),

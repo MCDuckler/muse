@@ -23,7 +23,6 @@ import 'library_page.dart';
 import 'settings_page.dart';
 import 'not_connected.dart';
 import 'player_bar.dart';
-import 'queue_page.dart';
 import 'search_page.dart';
 import 'social_page.dart';
 import 'split.dart';
@@ -205,8 +204,8 @@ class _HomePageState extends State<HomePage> {
       PlaybackLog.note('home shell built');
     }
     // In the order of Tabs.
-    const pages = [CoverPage(), QueuePage(), SearchPage(), LibraryPage(), SocialPage()];
-    const titles = ['Home', 'Queues', 'Search', 'Library', 'People'];
+    const pages = [CoverPage(), SearchPage(), LibraryPage(), SocialPage()];
+    const titles = ['Home', 'Search', 'Library', 'People'];
 
     final width = Width.of(context);
     // A desk gets the two things a phone has to take turns showing: the page, and what
@@ -503,10 +502,6 @@ class _Rail extends StatelessWidget {
             selectedIcon: Icon(Icons.newspaper),
             label: Text('Home')),
         NavigationRailDestination(
-            icon: Tooltip(message: 'Queues', child: Icon(Icons.queue_music_outlined)),
-            selectedIcon: Icon(Icons.queue_music),
-            label: Text('Queues')),
-        NavigationRailDestination(
             icon: Tooltip(message: 'Search', child: Icon(Icons.search)),
             selectedIcon: Icon(Icons.search),
             label: Text('Search')),
@@ -771,10 +766,6 @@ class MuseNavigationBar extends StatelessWidget {
             icon: Icon(Icons.newspaper_outlined),
             selectedIcon: Icon(Icons.newspaper),
             label: 'Home'),
-        NavigationDestination(
-            icon: Icon(Icons.queue_music_outlined),
-            selectedIcon: Icon(Icons.queue_music),
-            label: 'Queues'),
         NavigationDestination(
             icon: Icon(Icons.search),
             selectedIcon: Icon(Icons.search),

@@ -5,7 +5,9 @@ import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/player.dart';
 import 'artwork.dart';
+import 'home_page.dart' show openInTab;
 import 'now_playing.dart';
+import 'queue_page.dart' show QueueScreen;
 import 'song_row.dart';
 
 /// The column beside the page: what is playing, and what is next.
@@ -148,7 +150,7 @@ class _NextUp extends StatelessWidget {
                   IconButton(
                     icon: const Icon(Icons.queue_music, size: 18),
                     tooltip: 'Open the queue',
-                    onPressed: () => context.read<AppState>().setHomeTab(Tabs.queues),
+                    onPressed: () => openInTab(context.read<AppState>().homeTab, (_) => const QueueScreen()),
                   ),
                 ],
               ),

@@ -18,6 +18,7 @@ import 'dialogs.dart';
 import 'feel.dart';
 import 'glass.dart';
 import 'motion.dart';
+import 'queue_page.dart' show openQueueScreen;
 import 'record_stage.dart';
 import 'sleeve_ink.dart';
 import 'stage/arm_grip.dart';
@@ -97,9 +98,16 @@ class NowPlayingScreen extends StatelessWidget {
               onPressed: () => Navigator.of(context).maybePop(),
               tooltip: 'Close',
             ),
+            // The queue's name, and the way into it: what plays after this.
             title: app.jam == null
-                ? Text(app.activeQueue?.name ?? 'Now playing',
-                    style: Theme.of(context).textTheme.titleSmall)
+                ? InkWell(
+                    onTap: () => openQueueScreen(context),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      child: Text(app.activeQueue?.name ?? 'Now playing',
+                          style: Theme.of(context).textTheme.titleSmall),
+                    ),
+                  )
                 : _JamTitle(app: app),
             centerTitle: true,
             // Where these live is a setting: the top corners are furthest from a
@@ -111,6 +119,13 @@ class NowPlayingScreen extends StatelessWidget {
             // button that exists in two of the four layouts is a button nobody can
             // find — which is exactly what happened.
             actions: [
+              // Up next: the queue, which used to be a tab of its own and belongs to
+              // what is playing.
+              IconButton(
+                icon: const Icon(Icons.queue_music),
+                tooltip: 'Up next',
+                onPressed: () => openQueueScreen(context),
+              ),
               const WhereItPlays(compact: true),
               ...(app.playerLayout == PlayerLayout.topBar && track != null
                 ? [

@@ -91,6 +91,25 @@ void main() {
     await server.close(force: true);
   });
 
+  testWidgets('Up next is a page of its own, with the queue on it', (tester) async {
+    // The queue left the tabs for the player; opened from there it is a page with a
+    // title of its own and the same rows as ever.
+    await tester.pumpWidget(MultiProvider(
+      providers: [
+        ChangeNotifierProvider<AppState>.value(value: app),
+        ChangeNotifierProvider(create: (_) => Selection()),
+      ],
+      child: const MaterialApp(home: QueueScreen()),
+    ));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(tester.takeException(), isNull);
+    expect(find.text('Up next'), findsOneWidget);
+    // In the list, and on the player bar the page carries with it.
+    expect(find.text('Song 1'), findsWidgets);
+    expect(find.text('Song 3'), findsOneWidget);
+  });
+
   testWidgets('the queue draws its rows', (tester) async {
     await tester.pumpWidget(MultiProvider(
       providers: [

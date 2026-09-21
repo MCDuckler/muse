@@ -11,6 +11,7 @@ import 'feel.dart';
 import 'mag.dart';
 import 'mag_parts.dart';
 import 'pane.dart';
+import 'queue_page.dart' show openQueueScreen;
 import 'mini_player.dart' show bottomForPlayer;
 import 'skeleton.dart';
 
@@ -309,7 +310,11 @@ class _CoverLines extends StatelessWidget {
           note: app.musicIsPlaying
               ? 'Playing now: ${now.displayTitle}'
               : 'Jump back in: ${now.displayTitle}',
-          onTap: app.musicIsPlaying ? null : () => app.playPause(),
+          // Playing, the line is about what comes next, so it opens Up next;
+          // stopped, it is an offer to carry on, so it plays.
+          onTap: app.musicIsPlaying
+              ? () => openQueueScreen(context)
+              : () => app.playPause(),
         ),
       if (issue.unseen > 0)
         _Line(

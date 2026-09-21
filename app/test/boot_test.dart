@@ -26,7 +26,7 @@ void main() {
   test('a start with settings already saved keeps them', () async {
     SharedPreferences.setMockInitialValues({
       'muse.discLabel': 0.6,
-      'muse.homeTab.v2': Tabs.library,
+      'muse.homeTab.v3': Tabs.library,
       'muse.deskDock': false,
       'muse.coverScale': 0.9,
     });
@@ -44,7 +44,7 @@ void main() {
   test('nonsense in the settings is clamped rather than obeyed', () async {
     SharedPreferences.setMockInitialValues({
       'muse.discLabel': 40.0,
-      'muse.homeTab.v2': 99,
+      'muse.homeTab.v3': 99,
       'muse.coverScale': -3.0,
     });
     final app = AppState();
@@ -62,5 +62,16 @@ void main() {
     final app = AppState();
     await app.boot();
     expect(app.homeTab, Tabs.home);
+  });
+
+  test('a tab remembered from when Queues was one keeps its place, less Queues', () async {
+    // v2 counted Home, Queues, Search, Library, People. The same tab is still there,
+    // one to the left; Queues itself is in the player now, and that opens on Home.
+    for (final (before, now) in [(3, Tabs.library), (2, Tabs.search), (4, Tabs.people), (1, Tabs.home)]) {
+      SharedPreferences.setMockInitialValues({'muse.homeTab.v2': before});
+      final app = AppState();
+      await app.boot();
+      expect(app.homeTab, now, reason: 'v2 tab $before');
+    }
   });
 }

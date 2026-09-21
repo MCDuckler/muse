@@ -28,11 +28,10 @@ import '../ui/snack.dart';
 /// and every tab number written out by hand was a number that then meant the wrong tab.
 abstract final class Tabs {
   static const home = 0;
-  static const queues = 1;
-  static const search = 2;
-  static const library = 3;
-  static const people = 4;
-  static const count = 5;
+  static const search = 1;
+  static const library = 2;
+  static const people = 3;
+  static const count = 4;
 }
 
 class AppState extends ChangeNotifier {
@@ -282,9 +281,10 @@ class AppState extends ChangeNotifier {
   static const _kJamListening = 'muse.jamListening';
   static const _kLastQueue = 'muse.lastQueue';
   static const _kVolume = 'muse.volume';
-  // Moved when Home was put in front of the other tabs: every number the old key
-  // held now means the tab to the left of the one it meant.
-  static const _kHomeTab = 'muse.homeTab.v2';
+  // Moved each time the tabs did — Home put in front, then Queues taken out into the
+  // player — because every number an old key holds means some other tab now.
+  static const _kHomeTab = 'muse.homeTab.v3';
+  static const _kHomeTabV2 = 'muse.homeTab.v2';
   static const _kDeskDock = 'muse.deskDock';
   static const _kDockWidth = 'muse.dockWidth';
   static const _kPaneWidth = 'muse.paneWidth';
@@ -478,7 +478,17 @@ class AppState extends ChangeNotifier {
     spectrum = prefs.getBool(_kSpectrum) ?? false;
     // A phone that remembers a tab from before Home existed opens on Home, once:
     // it is the new thing, and the place the app now starts.
-    homeTab = (prefs.getInt(_kHomeTab) ?? Tabs.home).clamp(0, Tabs.count - 1);
+    // One step back from the last move: the same tabs, less Queues. Anything older
+    // opens on Home.
+    final v2 = prefs.getInt(_kHomeTabV2);
+    homeTab = (prefs.getInt(_kHomeTab) ??
+            switch (v2) {
+              2 => Tabs.search,
+              3 => Tabs.library,
+              4 => Tabs.people,
+              _ => Tabs.home,
+            })
+        .clamp(0, Tabs.count - 1);
     deskDock = prefs.getBool(_kDeskDock) ?? true;
     dockWidth = (prefs.getDouble(_kDockWidth) ?? 420).clamp(320, 640);
     paneWidth = (prefs.getDouble(_kPaneWidth) ?? 330).clamp(240, 560);

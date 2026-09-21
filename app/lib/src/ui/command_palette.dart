@@ -13,6 +13,7 @@ import 'home_page.dart' show openInTab;
 import 'library_page.dart';
 import 'listening_page.dart';
 import 'mag.dart';
+import 'queue_page.dart' show QueueScreen;
 import 'settings_page.dart';
 import 'theme.dart';
 
@@ -193,7 +194,12 @@ class _PaletteState extends State<_Palette> {
           also: 'timer stop',
           run: () => app.setSleepTimer(null, endOfTrack: true)),
       go('Home', Tabs.home, Icons.newspaper, also: 'cover issue'),
-      go('Queues', Tabs.queues, Icons.queue_music),
+      PaletteItem(
+          title: 'Up next',
+          group: 'Go to',
+          icon: Icons.queue_music,
+          also: 'queue queues',
+          run: () => openInTab(app.homeTab, (_) => const QueueScreen())),
       go('Search', Tabs.search, Icons.search, also: 'find'),
       go('Library', Tabs.library, Icons.library_music),
       go('People', Tabs.people, Icons.people_outline, also: 'house friends jam'),
@@ -259,7 +265,7 @@ class _PaletteState extends State<_Palette> {
         also: 'queue',
         run: () async {
           await app.openQueue(queue.id);
-          app.setHomeTab(Tabs.queues);
+          openInTab(app.homeTab, (_) => const QueueScreen());
         },
       ));
     }
