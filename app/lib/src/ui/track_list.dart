@@ -229,27 +229,54 @@ class _Head extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
+    void play() => app.playNow(tracks, named: named);
+    void shuffle() => app.playNow(tracks, shuffle: true, named: named);
+    // How big the words are, as a multiple of what they were designed at.
+    final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(header ?? '${tracks.length} tracks',
-                style: Theme.of(context).textTheme.bodySmall),
-          ),
-          TextButton.icon(
-            icon: const Icon(Icons.play_arrow, size: 18),
-            label: const Text('Play'),
-            onPressed: () => app.playNow(tracks, named: named),
-          ),
-          const SizedBox(width: 4),
-          TextButton.icon(
-            icon: const Icon(Icons.shuffle, size: 18),
-            label: const Text('Shuffle'),
-            onPressed: () => app.playNow(tracks, shuffle: true, named: named),
-          ),
-        ],
-      ),
+      child: LayoutBuilder(builder: (context, box) {
+        // Two labelled buttons need about two hundred and fifty points at the size
+        // they were drawn at, and more as the type grows. A small phone with large
+        // text had neither: the row ran forty points off the edge of the screen. Where
+        // the words will not fit, the buttons keep their icons and say what they do
+        // when held.
+        final labelled = box.maxWidth >= 250 * scale;
+        return Row(
+          children: [
+            Expanded(
+              child: Text(header ?? '${tracks.length} tracks',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall),
+            ),
+            if (labelled) ...[
+              TextButton.icon(
+                icon: const Icon(Icons.play_arrow, size: 18),
+                label: const Text('Play'),
+                onPressed: play,
+              ),
+              const SizedBox(width: 4),
+              TextButton.icon(
+                icon: const Icon(Icons.shuffle, size: 18),
+                label: const Text('Shuffle'),
+                onPressed: shuffle,
+              ),
+            ] else ...[
+              IconButton(
+                icon: const Icon(Icons.play_arrow),
+                tooltip: 'Play',
+                onPressed: play,
+              ),
+              IconButton(
+                icon: const Icon(Icons.shuffle),
+                tooltip: 'Shuffle',
+                onPressed: shuffle,
+              ),
+            ],
+          ],
+        );
+      }),
     );
   }
 }

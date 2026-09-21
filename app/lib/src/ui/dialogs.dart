@@ -382,25 +382,55 @@ class ErrorRetry extends StatelessWidget {
     final message = error is ApiException
         ? (error as ApiException).message
         : 'Could not load that';
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.cloud_off,
-                size: 40, color: Theme.of(context).colorScheme.onSurfaceVariant),
-            const SizedBox(height: 12),
-            Text(message,
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.titleSmall),
-            const SizedBox(height: 12),
-            FilledButton.tonal(onPressed: onRetry, child: const Text('Try again')),
-          ],
-        ),
+    return Roomy(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.cloud_off,
+              size: 40, color: Theme.of(context).colorScheme.onSurfaceVariant),
+          const SizedBox(height: 12),
+          Text(message,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 12),
+          FilledButton.tonal(onPressed: onRetry, child: const Text('Try again')),
+        ],
       ),
     );
   }
+}
+
+/// Centred where there is room, scrollable where there is not.
+///
+/// A message in the middle of an empty page is three or four lines, which fits
+/// anywhere — until the phone's text is set to twice the size, where the same
+/// three lines on a small screen ran a hundred and seventy points off the bottom and
+/// the button that was the whole point of the message was among what went missing.
+///
+/// Inside a list, where the height is unbounded, it is only the message: the list is
+/// already the thing that scrolls.
+class Roomy extends StatelessWidget {
+  const Roomy({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(builder: (context, box) {
+        final padded = Padding(padding: const EdgeInsets.all(32), child: child);
+        if (!box.hasBoundedHeight) return Center(child: padded);
+        return SingleChildScrollView(
+          // Not the tab's list: this is a message, and "back to the top" is about the
+          // page's real content.
+          primary: false,
+          // So a pull to refresh works on an empty page too, which is exactly the page
+          // somebody is most likely to pull on.
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: box.maxHeight),
+            child: Center(child: padded),
+          ),
+        );
+      });
 }
 
 class EmptyHint extends StatelessWidget {
@@ -411,22 +441,23 @@ class EmptyHint extends StatelessWidget {
   final String body;
 
   @override
-  Widget build(BuildContext context) => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon,
-                  size: 40, color: Theme.of(context).colorScheme.onSurfaceVariant),
-              const SizedBox(height: 12),
-              Text(title, style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 4),
-              Text(body,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodySmall),
-            ],
-          ),
+  Widget build(BuildContext context) => Roomy(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon,
+                size: 40, color: Theme.of(context).colorScheme.onSurfaceVariant),
+            const SizedBox(height: 12),
+            // Centred like the line under it: a title that wraps onto a second line
+            // hung off to the left of a centred page.
+            Text(title,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 4),
+            Text(body,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodySmall),
+          ],
         ),
       );
 }

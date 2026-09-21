@@ -8,6 +8,7 @@ import '../api/client.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import 'browse_page.dart';
+import 'dialogs.dart' show Roomy;
 import 'found_row.dart';
 import 'motion.dart';
 import 'selection_bar.dart';
@@ -275,6 +276,11 @@ class _SearchPageState extends State<SearchPage> {
 
   @override
   Widget build(BuildContext context) {
+    // The rows of chips are a fixed height, because a horizontal list has to be told
+    // how tall to be. Forty points was right for the type as designed; with the phone's
+    // text made large the chips grew and the row did not, and the bottom half of every
+    // label was cut off — four hundred and fifty points of it at twice the size.
+    final chipRow = 40 * (MediaQuery.textScalerOf(context).scale(14) / 14).clamp(1.0, 2.2);
     final libraryTracks = [
       for (final f in _found)
         if (f.place == 'library' && f.track != null) f.track!,
@@ -324,7 +330,7 @@ class _SearchPageState extends State<SearchPage> {
         // menu, because the answer to "why is there nothing from Bandcamp" should be
         // one tap away.
         SizedBox(
-          height: 40,
+          height: chipRow,
           child: ListView(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -348,7 +354,7 @@ class _SearchPageState extends State<SearchPage> {
           ),
         ),
         SizedBox(
-          height: 40,
+          height: chipRow,
           child: ListView(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -694,28 +700,25 @@ class _SearchPrompt extends StatelessWidget {
         .bodyMedium
         ?.copyWith(color: scheme.outline);
     if (recent.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.search, size: 40),
-              const SizedBox(height: 12),
-              Text(
-                'Songs, records and artists, from your library and from every '
-                'service this server can reach — in one list.',
-                textAlign: TextAlign.center,
-                style: style,
-              ),
-              const SizedBox(height: 10),
-              Text(
-                'Or turn on Lyrics and type some of the words.',
-                textAlign: TextAlign.center,
-                style: style,
-              ),
-            ],
-          ),
+      return Roomy(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.search, size: 40),
+            const SizedBox(height: 12),
+            Text(
+              'Songs, records and artists, from your library and from every '
+              'service this server can reach — in one list.',
+              textAlign: TextAlign.center,
+              style: style,
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Or turn on Lyrics and type some of the words.',
+              textAlign: TextAlign.center,
+              style: style,
+            ),
+          ],
         ),
       );
     }

@@ -93,30 +93,50 @@ class _NotConnectedState extends State<NotConnected> {
               width: double.infinity,
               color: scheme.errorContainer,
               padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
-              child: Row(
-                children: [
-                  Icon(Icons.cloud_off, size: 18, color: scheme.onErrorContainer),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      // What is true *and* what can still be done: on a train with
-                      // kept music, "no connection" is a very different sentence
-                      // depending on whether anything will still play.
-                      kept > 0
-                          ? "Can't reach the server — $kept kept songs still play"
-                          : "Can't reach the server",
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            color: scheme.onErrorContainer,
-                          ),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: _inFlight ? null : _ask,
-                    style: TextButton.styleFrom(foregroundColor: scheme.onErrorContainer),
-                    child: const Text('Try again'),
-                  ),
-                ],
-              ),
+              child: LayoutBuilder(builder: (context, box) {
+                final say = Text(
+                  // What is true *and* what can still be done: on a train with kept
+                  // music, "no connection" is a very different sentence depending on
+                  // whether anything will still play.
+                  kept > 0
+                      ? "Can't reach the server — $kept kept songs still play"
+                      : "Can't reach the server",
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: scheme.onErrorContainer,
+                      ),
+                );
+                final retry = TextButton(
+                  onPressed: _inFlight ? null : _ask,
+                  style: TextButton.styleFrom(foregroundColor: scheme.onErrorContainer),
+                  child: const Text('Try again'),
+                );
+                final icon =
+                    Icon(Icons.cloud_off, size: 18, color: scheme.onErrorContainer);
+                // Side by side where there is room. With the type made large on a small
+                // phone the button took most of the row and squeezed the sentence into a
+                // column one word wide, so there the button goes underneath instead.
+                final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+                if (box.maxWidth >= 300 * scale) {
+                  return Row(children: [
+                    icon,
+                    const SizedBox(width: 10),
+                    Expanded(child: say),
+                    retry,
+                  ]);
+                }
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Padding(padding: const EdgeInsets.only(top: 2), child: icon),
+                      const SizedBox(width: 10),
+                      Expanded(child: say),
+                    ]),
+                    Align(alignment: Alignment.centerRight, child: retry),
+                  ],
+                );
+              }),
             ),
     );
   }
