@@ -100,6 +100,35 @@ void main() {
     expect(find.text('GET 1 MISSING'), findsOneWidget);
   });
 
+  testWidgets('the record is on the page before anything has been fetched',
+      (tester) async {
+    // The cover that was tapped flies here, so it has to have somewhere to land on the
+    // very first frame: the title and the cut-out from what the library already knew,
+    // and the facts only once they have arrived.
+    tester.view.physicalSize = const Size(420, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MultiProvider(
+      providers: [
+        ChangeNotifierProvider<AppState>.value(value: app),
+        ChangeNotifierProvider(create: (_) => Selection()),
+      ],
+      child: const MaterialApp(
+        home: AlbumPage(
+            album: AlbumSummary(name: 'Salt on the Window', artist: 'Low Tide Radio', tracks: 3)),
+      ),
+    ));
+    expect(find.text('SALT ON THE WINDOW'), findsOneWidget);
+    expect(find.byType(Hero), findsOneWidget);
+    expect(find.text('FACT FILE'), findsNothing, reason: 'not fetched yet');
+
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.text('FACT FILE'), findsOneWidget);
+    expect(find.byType(Hero), findsOneWidget, reason: 'the same cover, where it landed');
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('a record with no cover gets a sleeve with its own name', (tester) async {
     await show(tester);
     final sleeve = tester.widget<PrintedSleeve>(find.byType(PrintedSleeve).first);

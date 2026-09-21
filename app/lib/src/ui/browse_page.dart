@@ -23,6 +23,7 @@ import 'mag.dart';
 import 'mag_parts.dart';
 import 'sleeve_art.dart';
 import 'mini_player.dart';
+import 'motion.dart';
 import 'theme.dart';
 import 'track_list.dart';
 import 'track_menu.dart';
@@ -425,11 +426,16 @@ class _AlbumsPageState extends State<AlbumsPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // The cover is what travels: tapped here, it flies to where it
+                      // is pasted on the record's own page.
                       LayoutBuilder(
-                        builder: (context, c) => Artwork(
-                          url: app.api.coverUrlForPath(a.coverPath, small: false),
-                          size: c.maxWidth,
-                          radius: 10,
+                        builder: (context, c) => Hero(
+                          tag: albumHeroTag(a.name, a.artist),
+                          child: Artwork(
+                            url: app.api.coverUrlForPath(a.coverPath, small: false),
+                            size: c.maxWidth,
+                            radius: 2,
+                          ),
                         ),
                       ),
                       const SizedBox(height: 8),
@@ -518,6 +524,15 @@ class _AlbumPageState extends State<AlbumPage> {
     }
   }
 
+  /// What ties this page's cover to the one that was tapped to get here.
+  String? get _heroTag => widget.album == null
+      ? null
+      : albumHeroTag(widget.album!.name, widget.album!.artist);
+
+  /// The library's own cover for it, known before anything has been asked for.
+  String? _knownCover(AppState app) =>
+      app.api.coverUrlForPath(widget.album?.coverPath, small: false);
+
   @override
   Widget build(BuildContext context) {
     return PlayerScaffold(
@@ -541,7 +556,27 @@ class _AlbumPageState extends State<AlbumPage> {
         future: _future,
         builder: (context, snap) {
           if (snap.hasError) return ErrorRetry(error: snap.error!, onRetry: _load);
-          if (!snap.hasData) return const SongsComing(rows: 7);
+          if (!snap.hasData) {
+            // What is already known, in the place it will stay: the cover that was
+            // tapped lands on the page while the rest of it is fetched, rather than
+            // on a page of grey bars that is replaced a moment later.
+            final album = widget.album;
+            if (album == null) return const SongsComing(rows: 7);
+            return ListView(
+              padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
+              physics: const NeverScrollableScrollPhysics(),
+              children: [
+                _ReviewTop(
+                  name: album.name,
+                  artist: album.artist,
+                  type: 'RECORD',
+                  cover: _knownCover(context.read<AppState>()),
+                  heroTag: _heroTag,
+                ),
+                const SizedBox(height: 300, child: SongsComing(rows: 5)),
+              ],
+            );
+          }
           final detail = snap.data!;
           final held = [
             for (final r in detail.tracks)
@@ -567,6 +602,8 @@ class _AlbumPageState extends State<AlbumPage> {
                   held: held,
                   filling: _filling,
                   onFill: () => _fill(detail),
+                  heroTag: _heroTag,
+                  knownCover: _knownCover(context.read<AppState>()),
                 ),
                 for (final row in detail.tracks)
                   _ReleaseRow(
@@ -613,11 +650,22 @@ class _AlbumPageState extends State<AlbumPage> {
 /// it is here.
 class _AlbumHead extends StatelessWidget {
   const _AlbumHead(
-      {required this.detail, required this.held, required this.filling, required this.onFill});
+      {required this.detail,
+      required this.held,
+      required this.filling,
+      required this.onFill,
+      this.heroTag,
+      this.knownCover});
   final AlbumDetail detail;
   final List<Track> held;
   final bool filling;
   final VoidCallback onFill;
+
+  /// See _AlbumPageState: the tag the tapped cover flew in under, and the cover it was
+  /// showing — kept, so the picture that landed is not swapped for another URL of the
+  /// same picture the moment the details arrive.
+  final String? heroTag;
+  final String? knownCover;
 
   /// The record's length, from whatever lengths are known.
   String? _length() {
@@ -646,7 +694,6 @@ class _AlbumHead extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
-    final scheme = Theme.of(context).colorScheme;
     final offline = context.watch<AppState>().offline;
     final kept = OfflineStore.supported &&
         held.isNotEmpty &&
@@ -656,7 +703,8 @@ class _AlbumHead extends StatelessWidget {
     final type = (detail.recordType ?? 'record').toUpperCase();
     final total = detail.tracks.isNotEmpty ? detail.tracks.length : held.length;
     final length = _length();
-    final cover = detail.cover ??
+    final cover = knownCover ??
+        detail.cover ??
         (held.isEmpty ? null : app.api.coverUrl(held.first, small: false));
 
     final facts = <(String, String)>[
@@ -677,79 +725,14 @@ class _AlbumHead extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-          child: Row(
-            children: [
-              Container(
-                color: scheme.primary,
-                padding: const EdgeInsets.fromLTRB(8, 3, 8, 2),
-                child: Text('REVIEWS', style: Mag.flag(10, color: scheme.onPrimary)),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text('WETOWL · $type',
-                    textAlign: TextAlign.end,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Mag.typewriter(10.5, color: scheme.onSurfaceVariant, bold: true)),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        Container(
-          // A wash of the record's colour behind the cut-out, faint enough that the
-          // page is still paper.
-          color: (tint ?? scheme.primary).withValues(alpha: 0.14),
-          padding: const EdgeInsets.fromLTRB(16, 20, 16, 16),
-          child: LayoutBuilder(builder: (context, box) {
-            final art = (box.maxWidth * 0.42).clamp(110.0, 220.0);
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: CutOut(
-                    turn: 0.04,
-                    taped: true,
-                    child: cover == null
-                        // A record with no cover gets a sleeve printed with its own
-                        // name, not its first song's.
-                        ? PrintedSleeve(
-                            seed: PrintedSleeve.seedOf('${detail.artist}·${detail.name}'),
-                            title: detail.name,
-                            size: art)
-                        : Artwork(url: cover, size: art, radius: 0, small: false),
-                  ),
-                ),
-                const SizedBox(width: 18),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(detail.name.toUpperCase(),
-                          maxLines: 4,
-                          overflow: TextOverflow.ellipsis,
-                          style: Mag.headline(34, color: scheme.onSurface)),
-                      if (detail.artist != null && detail.artist!.isNotEmpty) ...[
-                        const SizedBox(height: 8),
-                        Text(detail.artist!.toUpperCase(),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: Mag.flag(10.5, color: scheme.onSurface)),
-                      ],
-                      if (detail.unavailable != null) ...[
-                        const SizedBox(height: 8),
-                        Text('Only what you have: ${detail.unavailable}',
-                            style: Mag.typewriter(11, color: scheme.onSurfaceVariant)),
-                      ],
-                    ],
-                  ),
-                ),
-              ],
-            );
-          }),
+        _ReviewTop(
+          name: detail.name,
+          artist: detail.artist,
+          type: type,
+          cover: cover,
+          tint: tint,
+          unavailable: detail.unavailable,
+          heroTag: heroTag,
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
@@ -805,6 +788,114 @@ class _AlbumHead extends StatelessWidget {
                 ),
             ],
           ),
+        ),
+      ],
+    );
+  }
+}
+
+/// A cover's tag for its flight from the racks to the record's own page.
+String albumHeroTag(String name, String artist) => 'record:$artist·$name';
+
+/// The top of a review: the REVIEWS tab and folio, then the cover cut out and taped
+/// down on a wash of the record's colour beside its title. On its own so the page can
+/// show it from what it already knows, before the rest has been fetched.
+class _ReviewTop extends StatelessWidget {
+  const _ReviewTop({
+    required this.name,
+    required this.type,
+    this.artist,
+    this.cover,
+    this.tint,
+    this.unavailable,
+    this.heroTag,
+  });
+
+  final String name;
+  final String? artist;
+  final String type;
+  final String? cover;
+  final Color? tint;
+  final String? unavailable;
+  final String? heroTag;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+          child: Row(
+            children: [
+              Container(
+                color: scheme.primary,
+                padding: const EdgeInsets.fromLTRB(8, 3, 8, 2),
+                child: Text('REVIEWS', style: Mag.flag(10, color: scheme.onPrimary)),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text('WETOWL · $type',
+                    textAlign: TextAlign.end,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Mag.typewriter(10.5, color: scheme.onSurfaceVariant, bold: true)),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        AnimatedContainer(
+          // A wash of the record's colour behind the cut-out, faint enough that the
+          // page is still paper. It arrives with the details, so it fades in.
+          duration: moving(context, Motion.slow),
+          color: (tint ?? scheme.primary).withValues(alpha: tint == null ? 0.07 : 0.14),
+          padding: const EdgeInsets.fromLTRB(16, 20, 16, 16),
+          child: LayoutBuilder(builder: (context, box) {
+            final art = (box.maxWidth * 0.42).clamp(110.0, 220.0);
+            Widget picture = CutOut(
+              turn: 0.04,
+              taped: true,
+              child: cover == null
+                  // A record with no cover gets a sleeve printed with its own
+                  // name, not its first song's.
+                  ? PrintedSleeve(
+                      seed: PrintedSleeve.seedOf('$artist·$name'), title: name, size: art)
+                  : Artwork(url: cover, size: art, radius: 0, small: false),
+            );
+            if (heroTag != null) picture = Hero(tag: heroTag!, child: picture);
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(padding: const EdgeInsets.only(top: 6), child: picture),
+                const SizedBox(width: 18),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(name.toUpperCase(),
+                          maxLines: 4,
+                          overflow: TextOverflow.ellipsis,
+                          style: Mag.headline(34, color: scheme.onSurface)),
+                      if (artist != null && artist!.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Text(artist!.toUpperCase(),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Mag.flag(10.5, color: scheme.onSurface)),
+                      ],
+                      if (unavailable != null) ...[
+                        const SizedBox(height: 8),
+                        Text('Only what you have: $unavailable',
+                            style: Mag.typewriter(11, color: scheme.onSurfaceVariant)),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            );
+          }),
         ),
       ],
     );

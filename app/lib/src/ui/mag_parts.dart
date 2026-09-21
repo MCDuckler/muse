@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'mag.dart';
+import 'motion.dart';
 import 'theme.dart';
 
 /// The pieces a magazine page is pasted up from: the masthead, a sticker, a cut-out
@@ -192,8 +193,26 @@ class CutOut extends StatelessWidget {
   final double turn;
   final bool taped;
 
+  /// Pasted down: it arrives a little more crooked and a little proud of the page, and
+  /// settles to where it stays — once, when it first appears, the way a hand presses a
+  /// cutting flat. Nothing at all for a phone asked to keep still.
   @override
-  Widget build(BuildContext context) => Transform.rotate(
+  Widget build(BuildContext context) {
+    final pasted = _pasted(context);
+    if (stillness(context)) return pasted;
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: Motion.slow,
+      curve: Curves.easeOutBack,
+      builder: (context, t, child) => Transform.rotate(
+        angle: turn * 1.6 * (1 - t),
+        child: Transform.scale(scale: 1.06 - 0.06 * t, child: child),
+      ),
+      child: pasted,
+    );
+  }
+
+  Widget _pasted(BuildContext context) => Transform.rotate(
         angle: turn,
         child: Stack(
           clipBehavior: Clip.none,
