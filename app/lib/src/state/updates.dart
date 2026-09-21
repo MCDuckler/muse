@@ -111,6 +111,36 @@ class Updates extends ChangeNotifier {
   /// Where the file itself is. One link, the same one the browser downloads.
   static String apkUrl(String baseUrl) => '$baseUrl/muse.apk';
 
+  // ---------------- the desktop builds ----------------
+  //
+  // A zip for Windows and a tarball for Linux, beside the others. Nothing installs
+  // itself here either: the app says a newer one is there and opens the download.
+
+  /// Which desktop build this is running as, or null when it is not one.
+  static String? get desktop => kIsWeb
+      ? null
+      : switch (defaultTargetPlatform) {
+          TargetPlatform.windows => 'windows',
+          TargetPlatform.linux => 'linux',
+          _ => null,
+        };
+
+  static String desktopUrl(String baseUrl, String os) =>
+      os == 'windows' ? '$baseUrl/wetowl-windows.zip' : '$baseUrl/wetowl-linux.tar.gz';
+
+  static Future<Release?> publishedDesktop(String baseUrl, String os) async {
+    try {
+      final r = await net
+          .get(Uri.parse('$baseUrl/wetowl-$os.json'))
+          .timeout(const Duration(seconds: 10));
+      if (r.statusCode != 200) return null;
+      final decoded = jsonDecode(r.body);
+      return decoded is Map<String, dynamic> ? Release.fromJson(decoded) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   // ---------------- the iPhone build ----------------
   //
   // Everything above is about an app that can install itself, once somebody says yes.

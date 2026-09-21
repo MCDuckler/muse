@@ -504,6 +504,7 @@ class _AccountPageState extends State<_AccountPage> {
           if (Updates.supported) const _UpdateRow(),
           const _ApkRow(),
           const _IpaRow(),
+          const _DesktopRow(),
           ListTile(
             leading: const Icon(Icons.info_outline),
             title: const Text('WetOwl'),
@@ -539,6 +540,7 @@ class _AboutPage extends StatelessWidget {
           if (Updates.supported) const _UpdateRow(),
           const _ApkRow(),
           const _IpaRow(),
+          const _DesktopRow(),
           ListTile(
             leading: const Icon(Icons.info_outline),
             title: const Text('WetOwl'),
@@ -743,6 +745,69 @@ class _IpaRowState extends State<_IpaRow> {
         child: Text(newer ? 'Update' : 'Install'),
       ),
       onTap: _install,
+    );
+  }
+}
+
+/// The desktop app: a newer build when this *is* the desktop app, and the way to get it
+/// when this is a browser on a computer — which is exactly who it is for.
+class _DesktopRow extends StatefulWidget {
+  const _DesktopRow();
+
+  @override
+  State<_DesktopRow> createState() => _DesktopRowState();
+}
+
+class _DesktopRowState extends State<_DesktopRow> {
+  final _found = <String, Release>{};
+
+  String get _base => context.read<AppState>().api.baseUrl;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_look());
+  }
+
+  Future<void> _look() async {
+    // The one this is, on a desk; both, in a browser, which cannot know which it is on.
+    for (final os in Updates.desktop != null ? [Updates.desktop!] : ['windows', 'linux']) {
+      final r = await Updates.publishedDesktop(_base, os);
+      if (r != null && mounted) setState(() => _found[os] = r);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_found.isEmpty) return const SizedBox.shrink();
+    if (Updates.desktop == null && !kIsWeb) return const SizedBox.shrink();
+    return Column(
+      children: [
+        for (final MapEntry(key: os, value: release) in _found.entries)
+          Builder(builder: (context) {
+            final newer = Updates.desktop == os && release.isNewerThan(appBuild);
+            // On a desk, only worth a row when there is something newer.
+            if (Updates.desktop != null && !newer) return const SizedBox.shrink();
+            Future<void> get() => launchUrl(Uri.parse(Updates.desktopUrl(_base, os)),
+                mode: LaunchMode.externalApplication);
+            return ListTile(
+              leading: Icon(Icons.desktop_windows_outlined,
+                  color: newer ? Theme.of(context).colorScheme.primary : null),
+              title: Text(newer
+                  ? 'A newer build is ready'
+                  : os == 'windows'
+                      ? 'WetOwl for Windows'
+                      : 'WetOwl for Linux'),
+              subtitle: Text([
+                release.size,
+                if (release.built != null) 'built ${release.built!.split('T').first}',
+                os == 'windows' ? 'unzip and run wetowl.exe' : 'unpack and run ./wetowl',
+              ].join(' · ')),
+              trailing: FilledButton(onPressed: get, child: Text(newer ? 'Get it' : 'Download')),
+              onTap: get,
+            );
+          }),
+      ],
     );
   }
 }

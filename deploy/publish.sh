@@ -227,9 +227,17 @@ publish_desktop() {
     [ -f "$tmp/$f" ] || { echo "   ! $tag has no $f"; continue; }
     bytes=$(stat -c%s "$tmp/$f")
     name=${f%%.*}
+    # The stamp the app will report about itself, out of the archive: "is this newer
+    # than what I am running" has to compare the same number the running copy says.
+    local build=""
+    case "$f" in
+      *.zip)    build=$(unzip -p "$tmp/$f" build-stamp.txt 2>/dev/null | tr -dc '0-9') ;;
+      *.tar.gz) build=$(tar -xOzf "$tmp/$f" wetowl/build-stamp.txt 2>/dev/null | tr -dc '0-9') ;;
+    esac
+    [ -n "$build" ] || build=$(echo "$tag" | tr -dc '0-9')
     scp -q -i "$KEY" "$tmp/$f" "$HOST":$DL/$f
-    printf '{"version":"%s","bytes":%s,"built":"%s","tag":"%s"}\n' \
-      "$version" "$bytes" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$tag" \
+    printf '{"version":"%s","build":"%s","bytes":%s,"built":"%s","tag":"%s"}\n' \
+      "$version" "$build" "$bytes" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$tag" \
       | $SSH "$HOST" "cat > $DL/$name.json"
     echo "   $SERVER_URL/$f  ($tag, $((bytes / 1024 / 1024))MB)"
   done

@@ -33,6 +33,7 @@ dependencies:
   just_audio_media_kit: ^2.1.0
   media_kit_libs_linux: ^1.2.1
   media_kit_libs_windows_audio: ^1.0.9
+  desktop_drop: ^0.8.4
 # just_audio with one addition: an equalizer for iOS, which has to be attached where the
 # player item is made — inside the plugin. See third_party/just_audio/WETOWL.md.
 dependency_overrides:
