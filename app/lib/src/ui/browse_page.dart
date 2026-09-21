@@ -16,6 +16,10 @@ import 'station.dart';
 import 'source_dot.dart';
 import 'swipe.dart';
 import 'dialogs.dart';
+import 'glass.dart' show parseHexColour;
+import 'mag.dart';
+import 'mag_parts.dart';
+import 'sleeve_art.dart';
 import 'mini_player.dart';
 import 'track_list.dart';
 import 'track_menu.dart';
@@ -596,6 +600,14 @@ class _AlbumPageState extends State<AlbumPage> {
   }
 }
 
+/// The head of a record's page, set as a review.
+///
+/// The record's own page used to be a small cover beside two lines of grey text over
+/// a row of buttons: the same weight as a search result. It is the one page in the app
+/// that is about one record, so it is set the way a magazine sets a review — the cover
+/// cut out and taped down on a wash of the record's own colour, the title as big as it
+/// will go, and the facts in a typewritten box: when, how long, where from, and whether
+/// it is here.
 class _AlbumHead extends StatelessWidget {
   const _AlbumHead(
       {required this.detail, required this.held, required this.filling, required this.onFill});
@@ -604,120 +616,280 @@ class _AlbumHead extends StatelessWidget {
   final bool filling;
   final VoidCallback onFill;
 
+  /// The record's length, from whatever lengths are known.
+  String? _length() {
+    var ms = 0;
+    for (final row in detail.tracks) {
+      ms += row.durationMs ?? row.track?.durationMs ?? 0;
+    }
+    if (ms == 0) {
+      for (final t in held) {
+        ms += t.durationMs ?? 0;
+      }
+    }
+    if (ms == 0) return null;
+    final minutes = (ms / 60000).round();
+    return minutes < 60 ? '$minutes min' : '${minutes ~/ 60} h ${minutes % 60} min';
+  }
+
+  static String _source(String s) => switch (s) {
+        'youtube' => 'YouTube Music',
+        'bandcamp' => 'Bandcamp',
+        'soundcloud' => 'SoundCloud',
+        'custom' => 'Uploaded',
+        _ => s,
+      };
+
   @override
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
-    final text = Theme.of(context).textTheme;
-    final line = [
-      if (detail.artist != null && detail.artist!.isNotEmpty) detail.artist!,
-      if (detail.year != null) detail.year!,
-      if (detail.complete)
-        '${detail.have} of ${detail.tracks.length}'
-      else
-        '${detail.tracks.length} tracks',
-    ].join(' · ');
+    final scheme = Theme.of(context).colorScheme;
+    final offline = context.watch<AppState>().offline;
+    final kept = OfflineStore.supported &&
+        held.isNotEmpty &&
+        held.every((t) => offline.has(t.id));
+    // The record's own colour, where the server has read one off its cover.
+    final tint = parseHexColour(held.firstOrNull?.coverColor);
+    final type = (detail.recordType ?? 'record').toUpperCase();
+    final total = detail.tracks.isNotEmpty ? detail.tracks.length : held.length;
+    final length = _length();
+    final cover = detail.cover ??
+        (held.isEmpty ? null : app.api.coverUrl(held.first, small: false));
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    final facts = <(String, String)>[
+      if (detail.year != null) ('Year', detail.year!),
+      ('Tracks', detail.complete ? '${detail.have} of $total' : '$total'),
+      if (length != null) ('Length', length),
+      if (held.isNotEmpty) ('From', _source(held.first.source)),
+      (
+        'Here',
+        kept
+            ? 'Kept on this device'
+            : detail.missing > 0
+                ? '${detail.missing} still to get'
+                : 'On the server'
+      ),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+          child: Row(
             children: [
-              Artwork(
-                url: detail.cover ??
-                    (held.isEmpty ? null : app.api.coverUrl(held.first, small: false)),
-                size: 96,
-                radius: 8,
+              Container(
+                color: scheme.primary,
+                padding: const EdgeInsets.fromLTRB(8, 3, 8, 2),
+                child: Text('REVIEWS', style: Mag.flag(10, color: scheme.onPrimary)),
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(detail.name, style: text.titleMedium),
-                    const SizedBox(height: 4),
-                    Text(line, style: text.bodySmall),
-                    if (detail.unavailable != null) ...[
-                      const SizedBox(height: 4),
-                      Text('Only what you have — ${detail.unavailable}',
-                          style: text.bodySmall),
-                    ],
-                  ],
-                ),
+                child: Text('WETOWL · $type',
+                    textAlign: TextAlign.end,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Mag.typewriter(10.5, color: scheme.onSurfaceVariant, bold: true)),
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          // A Wrap, not a Row: five buttons and "Get 12 missing" do not fit across a
+        ),
+        const SizedBox(height: 12),
+        Container(
+          // A wash of the record's colour behind the cut-out, faint enough that the
+          // page is still paper.
+          color: (tint ?? scheme.primary).withValues(alpha: 0.14),
+          padding: const EdgeInsets.fromLTRB(16, 20, 16, 16),
+          child: LayoutBuilder(builder: (context, box) {
+            final art = (box.maxWidth * 0.42).clamp(110.0, 220.0);
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: CutOut(
+                    turn: 0.04,
+                    taped: true,
+                    child: cover == null
+                        // A record with no cover gets a sleeve printed with its own
+                        // name, not its first song's.
+                        ? PrintedSleeve(
+                            seed: PrintedSleeve.seedOf('${detail.artist}·${detail.name}'),
+                            title: detail.name,
+                            size: art)
+                        : Artwork(url: cover, size: art, radius: 0, small: false),
+                  ),
+                ),
+                const SizedBox(width: 18),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(detail.name.toUpperCase(),
+                          maxLines: 4,
+                          overflow: TextOverflow.ellipsis,
+                          style: Mag.headline(34, color: scheme.onSurface)),
+                      if (detail.artist != null && detail.artist!.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Text(detail.artist!.toUpperCase(),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Mag.flag(10.5, color: scheme.onSurface)),
+                      ],
+                      if (detail.unavailable != null) ...[
+                        const SizedBox(height: 8),
+                        Text('Only what you have: ${detail.unavailable}',
+                            style: Mag.typewriter(11, color: scheme.onSurfaceVariant)),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            );
+          }),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+          child: _FactFile(facts: facts),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+          // A Wrap, not a Row: every button and "Get 12 missing" do not fit across a
           // phone, and a Row that does not fit is a strip of yellow and black.
-          Wrap(
-            spacing: 2,
-            runSpacing: 2,
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              TextButton.icon(
-                icon: const Icon(Icons.play_arrow, size: 18),
-                label: const Text('Play'),
-                onPressed: held.isEmpty
-                    ? null
-                    : () => app.playNow(held, named: detail.name),
+              _PressButton(
+                label: 'Play',
+                loud: true,
+                onTap: held.isEmpty ? null : () => app.playNow(held, named: detail.name),
               ),
-              // Everything that belongs next to this record, seeded from the record
-              // itself rather than from its first track.
-              TextButton.icon(
-                icon: const Icon(Icons.radio, size: 18),
-                label: const Text('Station'),
-                onPressed: held.isEmpty
-                    ? null
-                    : () => startStation(context,
-                        album: detail.name, artist: detail.artist),
-              ),
-              if (OfflineStore.supported)
-                Builder(builder: (context) {
-                  final offline = context.watch<AppState>().offline;
-                  final here = held.isNotEmpty &&
-                      held.every((t) => offline.has(t.id));
-                  return TextButton.icon(
-                    icon: Icon(
-                        here ? Icons.download_done : Icons.download_outlined,
-                        size: 18),
-                    label: Text(here ? 'Kept' : 'Keep'),
-                    onPressed: held.isEmpty
-                        ? null
-                        : () async {
-                            if (here) {
-                              for (final t in held) {
-                                await offline.forget(t.id);
-                              }
-                              return;
-                            }
-                            await offline.keep(held);
-                          },
-                  );
-                }),
-              TextButton.icon(
-                icon: const Icon(Icons.shuffle, size: 18),
-                label: const Text('Shuffle'),
-                onPressed: held.isEmpty
+              _PressButton(
+                label: 'Shuffle',
+                onTap: held.isEmpty
                     ? null
                     : () => app.playNow(held, shuffle: true, named: detail.name),
               ),
+              // Everything that belongs next to this record, seeded from the record
+              // itself rather than from its first track.
+              _PressButton(
+                label: 'Station',
+                onTap: held.isEmpty
+                    ? null
+                    : () => startStation(context, album: detail.name, artist: detail.artist),
+              ),
+              if (OfflineStore.supported)
+                _PressButton(
+                  label: kept ? 'Kept' : 'Keep',
+                  onTap: held.isEmpty
+                      ? null
+                      : () async {
+                          if (kept) {
+                            for (final t in held) {
+                              await offline.forget(t.id);
+                            }
+                            return;
+                          }
+                          await offline.keep(held);
+                        },
+                ),
               if (detail.missing > 0)
-                FilledButton.tonalIcon(
-                  icon: filling
-                      ? const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Icon(Icons.download, size: 18),
-                  label: Text('Get ${detail.missing} missing'),
-                  onPressed: filling ? null : onFill,
+                _PressButton(
+                  label: filling ? 'Getting…' : 'Get ${detail.missing} missing',
+                  onTap: filling ? null : onFill,
                 ),
             ],
           ),
+        ),
+      ],
+    );
+  }
+}
+
+/// The facts, typed in a ruled box the way a review's panel is.
+class _FactFile extends StatelessWidget {
+  const _FactFile({required this.facts});
+
+  final List<(String, String)> facts;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      decoration: BoxDecoration(border: Border.all(color: scheme.onSurface, width: 1.5)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            color: scheme.onSurface,
+            padding: const EdgeInsets.fromLTRB(8, 3, 8, 2),
+            child: Text('FACT FILE', style: Mag.flag(10, color: scheme.surface)),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+            child: Column(
+              children: [
+                for (final (k, v) in facts)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 1.5),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(
+                          width: 70,
+                          child: Text(k,
+                              style: Mag.typewriter(12, color: scheme.onSurface, bold: true)),
+                        ),
+                        Expanded(
+                          child: Text(v, style: Mag.typewriter(12, color: scheme.onSurface)),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
         ],
+      ),
+    );
+  }
+}
+
+/// A button set like a word on a page rather than a pill: heavy capitals in a ruled
+/// box, and — for the one that matters — solid red with its shadow printed hard
+/// behind it.
+class _PressButton extends StatelessWidget {
+  const _PressButton({required this.label, required this.onTap, this.loud = false});
+
+  final String label;
+  final VoidCallback? onTap;
+  final bool loud;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final off = onTap == null;
+    final ink = off ? scheme.onSurface.withValues(alpha: 0.35) : scheme.onSurface;
+    return Semantics(
+      button: true,
+      enabled: !off,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(14, 8, 14, 7),
+          decoration: BoxDecoration(
+            color: loud && !off ? scheme.primary : null,
+            border: Border.all(color: loud && !off ? scheme.primary : ink, width: 2),
+            boxShadow: loud && !off
+                ? [BoxShadow(color: scheme.onSurface, offset: const Offset(3, 3))]
+                : null,
+          ),
+          child: Text(label.toUpperCase(),
+              style: Mag.flag(11, color: loud && !off ? scheme.onPrimary : ink)
+                  .copyWith(letterSpacing: 1.0)),
+        ),
       ),
     );
   }
@@ -776,10 +948,18 @@ class _ReleaseRow extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.end,
           children: [
-            Text('${row.pos}',
-                textAlign: TextAlign.end,
-                style: TextStyle(
-                    color: faded ? scheme.outline : scheme.onSurfaceVariant)),
+            // The slot is fixed and the type is not: a two-digit numeral at twice
+            // the size shrinks to fit rather than pushing the row off the edge.
+            Flexible(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerRight,
+                child: Text('${row.pos}',
+                    textAlign: TextAlign.end,
+                    style: Mag.numerals(16,
+                        color: faded ? scheme.outline : scheme.onSurfaceVariant)),
+              ),
+            ),
             // No artwork on this row to put the mark on, so it sits beside the
             // number instead — and a track we do not have gets no mark at all.
             const SizedBox(width: 8),
