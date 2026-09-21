@@ -11,6 +11,7 @@ import 'now_playing.dart';
 import 'swipe.dart';
 import 'progress.dart';
 import 'pulse.dart';
+import 'mag.dart';
 
 /// The bar that is always there. It shows what is playing, and it shows when what
 /// you queued is still downloading instead of pretending nothing happened.
@@ -134,7 +135,7 @@ class PlayerBar extends StatelessWidget {
                 leading: Stack(
                   clipBehavior: Clip.none,
                   children: [
-                    Artwork(track: track, size: 42),
+                    Artwork(track: track, size: 42, radius: 2),
                     if (jam != null)
                       Positioned(
                         right: -4,
@@ -152,17 +153,22 @@ class PlayerBar extends StatelessWidget {
                       ),
                   ],
                 ),
+                // The song in the headline face, the rest typed under it: the same
+                // two voices as every page it sits under.
                 title: Text(track.displayTitle,
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Mag.title(15.5, color: scheme.onSurface)),
                 subtitle: Text(
                   subtitle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: problem
-                      ? TextStyle(color: scheme.error)
-                      : quiet
-                          ? TextStyle(color: scheme.onSurfaceVariant)
-                          : null,
+                  style: Mag.typewriter(11.5,
+                      color: problem
+                          ? scheme.error
+                          : quiet
+                              ? scheme.onSurfaceVariant
+                              : scheme.onSurface),
                 ),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -170,11 +176,15 @@ class PlayerBar extends StatelessWidget {
                     IconButton(
                         icon: const Icon(Icons.skip_previous),
                         onPressed: felt(Feel.commit, app.skipPrevious)),
-                    IconButton(
-                      iconSize: 34,
-                      icon: Icon(app.musicIsPlaying
-                          ? Icons.pause_circle_filled
-                          : Icons.play_circle_fill),
+                    // Solid red, the one loud thing on the bar: it is the button.
+                    IconButton.filled(
+                      style: IconButton.styleFrom(
+                        backgroundColor: scheme.primary,
+                        foregroundColor: scheme.onPrimary,
+                        fixedSize: const Size.square(40),
+                      ),
+                      iconSize: 24,
+                      icon: Icon(app.musicIsPlaying ? Icons.pause : Icons.play_arrow),
                       // Never disabled. A track whose file has not landed yet still
                       // answers a tap — the player waits for the download — and a
                       // button that greys out for the moment a state arrives late is
