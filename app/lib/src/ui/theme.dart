@@ -185,8 +185,42 @@ class MuseTheme {
                   : Colors.transparent),
         ),
       ),
+      // Print has corners. The soft rounding everything had was an app's idea of a
+      // surface; a magazine's boxes are ruled, and at most a hair off square.
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(3)),
+          textStyle: Mag.title(14.5).copyWith(letterSpacing: 0.3),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(3)),
+          side: BorderSide(color: scheme.onSurface, width: 1.5),
+          foregroundColor: scheme.onSurface,
+          textStyle: Mag.title(14.5).copyWith(letterSpacing: 0.3),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(3)),
+          textStyle: Mag.title(14.5).copyWith(letterSpacing: 0.3),
+        ),
+      ),
+      cardTheme: CardThemeData(
+        elevation: 0,
+        color: scheme.surfaceContainer,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+      ),
+      // Pull to refresh in the masthead's red, on the page's own paper.
+      progressIndicatorTheme: ProgressIndicatorThemeData(
+        color: scheme.primary,
+        refreshBackgroundColor: scheme.surface,
+      ),
       listTileTheme: ListTileThemeData(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
         selectedTileColor: scheme.primary.withValues(alpha: 0.10),
         selectedColor: scheme.primary,
         horizontalTitleGap: 12,
@@ -197,8 +231,8 @@ class MuseTheme {
         space: 1,
       ),
       chipTheme: ChipThemeData(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
-        side: BorderSide(color: scheme.onSurface.withValues(alpha: 0.12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(3)),
+        side: BorderSide(color: scheme.onSurface.withValues(alpha: 0.35)),
         backgroundColor: Colors.transparent,
         selectedColor: scheme.primary.withValues(alpha: 0.18),
         showCheckmark: false,
@@ -216,15 +250,15 @@ class MuseTheme {
         filled: true,
         fillColor: scheme.surfaceContainer,
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(3),
           borderSide: BorderSide.none,
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(3),
           borderSide: BorderSide.none,
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(3),
           borderSide: BorderSide(color: scheme.primary, width: 1.5),
         ),
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -235,6 +269,8 @@ class MuseTheme {
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         indicatorColor: scheme.primary.withValues(alpha: 0.18),
+        indicatorShape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(3)),
         height: 64,
         labelTextStyle: WidgetStateProperty.resolveWith((states) => TextStyle(
               fontFamily: 'Manrope',
@@ -250,21 +286,38 @@ class MuseTheme {
       // In the app's colours rather than Material's inverse surface, which in a dark
       // theme is a white slab: the brightest thing on the screen, appearing at the
       // bottom for a message about something that already worked.
+      // A message is a typed slip. On paper it is printed in ink, the other way round
+      // from the page so it reads as laid on top; on the late edition it stays dark —
+      // turned round there it would be a white slab, the brightest thing on the screen,
+      // for a message about something that already worked.
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        backgroundColor: scheme.surfaceContainerHighest,
-        contentTextStyle: TextStyle(
-            fontFamily: 'Manrope', fontSize: 13.5, color: scheme.onSurface),
-        actionTextColor: scheme.primary,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(2)),
+        backgroundColor: isDark ? scheme.surfaceContainerHighest : scheme.onSurface,
+        contentTextStyle:
+            Mag.typewriter(13.5, color: isDark ? scheme.onSurface : scheme.surface),
+        // Yellow on ink, red on paper: the action has to be the loudest thing on it.
+        actionTextColor: isDark ? scheme.primary : highlighter,
         elevation: 6,
         insetPadding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
       ),
       popupMenuTheme: PopupMenuThemeData(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(3),
+          side: BorderSide(color: scheme.onSurface.withValues(alpha: 0.5)),
+        ),
       ),
+      // A dialog is a box ruled on the page.
       dialogTheme: DialogThemeData(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(3),
+          side: BorderSide(color: scheme.onSurface, width: 2),
+        ),
+        titleTextStyle: Mag.headline(26, color: scheme.onSurface),
+      ),
+      bottomSheetTheme: const BottomSheetThemeData(
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(6))),
       ),
     );
   }

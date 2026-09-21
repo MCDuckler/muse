@@ -9,6 +9,9 @@ import '../state/app_state.dart';
 import '../state/playlist_ticks.dart';
 import 'snack.dart';
 import 'widths.dart';
+import 'mag.dart';
+import 'mag_parts.dart';
+import 'theme.dart';
 
 /// Ask for a name. Returns null when the user backs out, so callers can tell "cancel"
 /// apart from "empty".
@@ -372,6 +375,8 @@ Future<void> copyLink(BuildContext context, String path, String what) async {
   messenger.say(snack(Text('Link to $what copied')));
 }
 
+/// A page that could not be fetched, said the way a paper says it: STOP PRESS, what
+/// happened in its own words, and the one thing to do about it.
 class ErrorRetry extends StatelessWidget {
   const ErrorRetry({super.key, required this.error, required this.onRetry});
   final Object error;
@@ -379,6 +384,7 @@ class ErrorRetry extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final message = error is ApiException
         ? (error as ApiException).message
         : 'Could not load that';
@@ -386,14 +392,21 @@ class ErrorRetry extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.cloud_off,
-              size: 40, color: Theme.of(context).colorScheme.onSurfaceVariant),
-          const SizedBox(height: 12),
+          Container(
+            color: MuseTheme.masthead,
+            padding: const EdgeInsets.fromLTRB(8, 3, 8, 2),
+            child: Text('STOP PRESS', style: Mag.flag(11, color: Colors.white)),
+          ),
+          const SizedBox(height: 10),
+          Text('THIS PAGE DID NOT PRINT',
+              textAlign: TextAlign.center,
+              style: Mag.headline(28, color: scheme.onSurface)),
+          const SizedBox(height: 8),
           Text(message,
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.titleSmall),
-          const SizedBox(height: 12),
-          FilledButton.tonal(onPressed: onRetry, child: const Text('Try again')),
+              style: Mag.typewriter(13, color: scheme.onSurfaceVariant)),
+          const SizedBox(height: 16),
+          PressButton(label: 'Try again', loud: true, onTap: onRetry),
         ],
       ),
     );
@@ -433,6 +446,8 @@ class Roomy extends StatelessWidget {
       });
 }
 
+/// A page with nothing on it yet: the headline says so, the line under it says what
+/// would put something there.
 class EmptyHint extends StatelessWidget {
   const EmptyHint(
       {super.key, required this.icon, required this.title, required this.body});
@@ -441,23 +456,25 @@ class EmptyHint extends StatelessWidget {
   final String body;
 
   @override
-  Widget build(BuildContext context) => Roomy(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon,
-                size: 40, color: Theme.of(context).colorScheme.onSurfaceVariant),
-            const SizedBox(height: 12),
-            // Centred like the line under it: a title that wraps onto a second line
-            // hung off to the left of a centred page.
-            Text(title,
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 4),
-            Text(body,
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodySmall),
-          ],
-        ),
-      );
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Roomy(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 32, color: scheme.onSurfaceVariant),
+          const SizedBox(height: 10),
+          // Centred like the line under it: a title that wraps onto a second line
+          // hung off to the left of a centred page.
+          Text(title.toUpperCase(),
+              textAlign: TextAlign.center,
+              style: Mag.headline(28, color: scheme.onSurface)),
+          const SizedBox(height: 6),
+          Text(body,
+              textAlign: TextAlign.center,
+              style: Mag.typewriter(12.5, color: scheme.onSurfaceVariant)),
+        ],
+      ),
+    );
+  }
 }

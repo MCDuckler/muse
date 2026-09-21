@@ -27,6 +27,8 @@ import 'playback_log_page.dart';
 import 'track_menu.dart';
 import 'theme.dart';
 import 'snack.dart';
+import 'mag.dart';
+import 'mag_parts.dart';
 
 const appVersion = '0.1.0';
 
@@ -117,6 +119,21 @@ class _SettingsPageState extends State<SettingsPage> {
       body: ListView(
         padding: EdgeInsets.only(bottom: bottomForPlayer(context)),
         children: [
+          // The back pages: everything the app does, and how you would like it done.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('THE SMALL PRINT',
+                    style: Mag.headline(40,
+                        color: Theme.of(context).colorScheme.onSurface)),
+                Text('How this copy of the app is set up',
+                    style: Mag.typewriter(12,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant)),
+              ],
+            ),
+          ),
           _label(context, 'Your music'),
           ListTile(
             leading: _uploading
@@ -261,11 +278,10 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  // The same black flags as every other page's sections.
   Widget _label(BuildContext context, String text) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 18, 16, 6),
-        child: Text(text.toUpperCase(),
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant)),
+        padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
+        child: SectionFlag(text),
       );
 }
 
