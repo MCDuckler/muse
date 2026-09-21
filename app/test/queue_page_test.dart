@@ -273,6 +273,35 @@ void main() {
     expect(routes.whereType<NowPlayingRoute>(), isEmpty);
     expect(tester.getRect(inside), at, reason: 'and it springs back where it was');
   });
+
+  // See tight_screen_test: the same question, for the two things that need a real
+  // player to draw — the queue, and the bar that is on every screen.
+  for (final scale in [1.6, 2.0]) {
+    testWidgets('the queue and the bar hold on a small phone at ${scale}x text',
+        (tester) async {
+      tester.view.physicalSize = const Size(320, 640);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(MultiProvider(
+        providers: [
+          ChangeNotifierProvider<AppState>.value(value: app),
+          ChangeNotifierProvider(create: (_) => Selection()),
+        ],
+        child: MaterialApp(
+          home: MediaQuery(
+            data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+            child: const Scaffold(
+              body: QueuePage(),
+              bottomNavigationBar: PlayerBar(),
+            ),
+          ),
+        ),
+      ));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(tester.takeException(), isNull);
+    });
+  }
 }
 
 /// Every route that went past, so a test can say what a gesture pushed.
