@@ -59,7 +59,7 @@ def _rows(user_id: int, me: int) -> list[dict]:
               left join covers c on c.id = t.cover_id
               left join media m on m.track_id = t.id and m.role = 'canonical'
              where d.user_id = %s
-               and (d.last_seen > now() - interval '30 days' or d.id = %s)
+               and (coalesce(d.last_seen, now()) > now() - interval '30 days' or d.id = %s)
              order by d.last_seen desc nulls last""",
         (user_id, me))
 
