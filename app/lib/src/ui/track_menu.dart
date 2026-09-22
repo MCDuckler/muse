@@ -98,6 +98,10 @@ Future<void> showTrackSheet(
           // Everything that belongs next to this one, as a queue of its own.
           _item(sheet, Icons.radio, 'Start a station',
               () => startStation(context, seed: track)),
+          // The same station, to look through first: put on when you say, not
+          // the moment it exists.
+          _item(sheet, Icons.radio_outlined, 'Make a station, without playing it',
+              () => startStation(context, seed: track, play: false)),
           if (track.albumLine != null)
             _item(sheet, Icons.album_outlined, 'Go to ${track.albumLine}', () {
               Navigator.of(context).push(MaterialPageRoute(

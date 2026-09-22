@@ -12,6 +12,7 @@ import 'package:muse/src/api/models.dart';
 import 'package:muse/src/state/app_state.dart';
 import 'package:muse/src/state/player.dart';
 import 'package:muse/src/state/selection.dart';
+import 'package:muse/src/ui/found_row.dart';
 import 'package:muse/src/ui/mag_parts.dart';
 import 'package:muse/src/ui/song_row.dart';
 import 'package:muse/src/ui/swipe.dart';
@@ -134,6 +135,19 @@ void main() {
               pushed(70, t: song(62, 'Pushed far enough', 'Caught: play next')),
               const SizedBox(height: 6),
               pushed(70, away: true, t: song(63, 'Pushed away', 'Caught: remove')),
+            ]);
+          }),
+          block('A search: one list', rest, (context) {
+            Found f(String kind, String place, String title, String sub, {Track? track, String? lyric}) => Found(
+                kind: kind, place: place, id: '$title/$place', title: title, subtitle: sub,
+                durationMs: 214000, track: track, lyric: lyric, known: place == 'library');
+            return Column(children: [
+              FoundRow(found: f('song', 'library', 'Get Lucky', 'Daft Punk', track: song(81, 'Get Lucky', 'Daft Punk', album: 'Random Access Memories')), onTap: () {}),
+              FoundRow(found: f('song', 'ytmusic', 'Get Lucky (Radio Edit)', 'Daft Punk', lyric: 'we\'re up all night to get lucky'), onTap: () {}, onAdd: () {}, onMore: () {}),
+              FoundRow(found: f('song', 'spotify', 'Get Lucky', 'Daft Punk, Pharrell Williams'), onTap: () {}, onAdd: () {}, onMore: () {}),
+              FoundRow(found: f('video', 'youtube', 'Daft Punk - Get Lucky (Official Video)', 'DaftPunkVEVO'), onTap: () {}, onAdd: () {}, onMore: () {}),
+              FoundRow(found: f('album', 'ytmusic', 'Random Access Memories', 'Daft Punk'), onTap: () {}, onMore: () {}),
+              FoundRow(found: f('artist', 'ytmusic', 'Daft Punk', 'Artist'), onTap: () {}, onMore: () {}),
             ]);
           }),
           block('In the queue, dense, with a grip', (trackId: 72, itemId: null, playing: true, buffering: false), (context) {

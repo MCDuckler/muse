@@ -56,6 +56,7 @@ class SongRow extends StatefulWidget {
     this.onSwipeAway,
     this.queuePosition,
     this.plays = true,
+    this.showArtist = true,
   });
 
   /// Where this row sits in the queue being played, when that is the list it is in —
@@ -118,6 +119,10 @@ class SongRow extends StatefulWidget {
   /// Tighter still, for the queue and for lists inside a sheet.
   final bool dense;
 
+  /// Whether the artist is said under the title. Off on a record's own page, where
+  /// every row would say the same name.
+  final bool showArtist;
+
   static String formatDuration(Duration? d) {
     if (d == null || d == Duration.zero) return '';
     final minutes = d.inMinutes;
@@ -134,12 +139,6 @@ class SongRow extends StatefulWidget {
 }
 
 class _SongRowState extends State<SongRow> {
-  /// Under a finger or a mouse button right now.
-  bool _pressed = false;
-
-  /// Under a mouse. Nothing on a phone, where nothing hovers.
-  bool _hovering = false;
-
   /// Tapped, and the player has not yet said this is the song playing.
   ///
   /// Between the tap and the first sound there is a wait — the queue is written to
@@ -218,7 +217,10 @@ class _SongRowState extends State<SongRow> {
     final subtitle = track.isDownloading
         ? track.statusLine
         : <String>[
-            if (failed) (track.failReason ?? 'Download failed') else track.artistLine,
+            if (failed)
+              (track.failReason ?? 'Download failed')
+            else if (widget.showArtist)
+              track.artistLine,
             if (widget.showAlbum && !failed && track.albumLine != null)
               track.albumLine!,
           ].join(' · ');
@@ -238,202 +240,291 @@ class _SongRowState extends State<SongRow> {
     // hundred rows of identical grey rings, no way to tell one record from another.
     // The covers stay and the row is simply lit.
     //
-    // A row being pushed sideways lifts off the page as a card. Without that, the
-    // colour behind it showed through the row's own transparent ground, so the words
-    // slid over a slab of colour and the whole thing looked half-drawn.
+    // How the row answers a hand — hover, press, the card it lifts into while it is
+    // pushed — is RowChrome's, shared with every other song-shaped row in the app.
     final ground = picked
         ? scheme.primary.withValues(alpha: 0.16)
         : current
             ? wash.withValues(alpha: isDark ? 0.18 : 0.13)
-            : _hovering
-                ? scheme.onSurface.withValues(alpha: 0.05)
-                : Colors.transparent;
+            : Colors.transparent;
 
-    final artwork = _Art(
-      track: track,
-      leading: widget.leading,
-      corner: widget.corner,
-      state: picked
-          ? _ArtState.picked
-          : _starting
-              ? _ArtState.starting
-              : current
-                  ? (buffering
-                      ? _ArtState.buffering
-                      : playing
-                          ? _ArtState.playing
-                          : _ArtState.paused)
-                  : _hovering && widget.onTap != null && !picking
-                      ? _ArtState.hover
-                      : _ArtState.plain,
-    );
+    return RowChrome(
+      ground: ground,
+      outlined: picked,
+      // While a selection is running in this list, a tap adds to it rather than
+      // playing: nobody holds a row to pick it out and then expects the next tap to
+      // start the music.
+      onTap: picking
+          ? () {
+              feel(Feel.pick);
+              selectionOf(context)!.toggle(widget.selectable!, track.id);
+            }
+          : widget.onTap == null
+              ? null
+              : () => _tapped(widget.onTap!),
+      // A hold that turns into something has to say so under the finger: without it
+      // the only way to find out whether the hold worked is to let go.
+      onLongPress: widget.selectable != null
+          ? () {
+              feel(Feel.commit);
+              selectionOf(context)!.start(widget.selectable!, track.id);
+            }
+          : widget.showMenu
+              ? () {
+                  feel(Feel.commit);
+                  _sheet(context);
+                }
+              : null,
+      // A right-click is how a desk asks a row what it can do, and the answer is the
+      // sheet the three dots already open: one question, one answer.
+      onSecondaryTap: !widget.showMenu ? null : () => _sheet(context),
+      // Not while a selection is running: the same sideways drag would be doing two
+      // things at once, and the bar at the top is how you act on a selection.
+      onSwipe: picking || !widget.swipeToPlayNext
+          ? null
+          : () => addAndSay(context, track, mode: 'next'),
+      onSwipeAway: picking ? null : widget.onSwipeAway,
+      builder: (context, hovering) {
+        final artwork = _Art(
+          track: track,
+          leading: widget.leading,
+          corner: widget.corner,
+          state: picked
+              ? _ArtState.picked
+              : _starting
+                  ? _ArtState.starting
+                  : current
+                      ? (buffering
+                          ? _ArtState.buffering
+                          : playing
+                              ? _ArtState.playing
+                              : _ArtState.paused)
+                      : hovering && widget.onTap != null && !picking
+                          ? _ArtState.hover
+                          : _ArtState.plain,
+        );
 
-    final body = Padding(
-      padding: EdgeInsets.only(
-          left: widget.handle == null ? 8 : 0,
-          right: 8,
-          top: widget.dense ? 4 : 6,
-          bottom: widget.dense ? 4 : 6),
-      child: Row(
-        children: [
-          if (widget.handle != null) _Grip(child: widget.handle!),
-          artwork,
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  track.displayTitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: text.bodyMedium?.copyWith(
-                    color: failed
-                        ? scheme.error
-                        : current || picked
+        final body = Padding(
+          padding: EdgeInsets.only(
+              left: widget.handle == null ? 8 : 0,
+              right: 8,
+              top: widget.dense ? 4 : 6,
+              bottom: widget.dense ? 4 : 6),
+          child: Row(
+            children: [
+              if (widget.handle != null) _Grip(child: widget.handle!),
+              artwork,
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      track.displayTitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: text.bodyMedium?.copyWith(
+                        color: failed
+                            ? scheme.error
+                            : current || picked
+                                ? scheme.primary
+                                : null,
+                        fontWeight: current || picked ? FontWeight.w700 : null,
+                      ),
+                    ),
+                    if (subtitle.isNotEmpty)
+                      Text(
+                        subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: text.bodySmall?.copyWith(
+                          color: failed
+                              ? scheme.error
+                              : track.isDownloading
+                                  ? scheme.primary
+                                  : scheme.onSurfaceVariant,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (widget.trailing != null) ...[
+                const SizedBox(width: 6),
+                widget.trailing!
+              ],
+              TrackMark(track: track),
+              // Where the file came from, immediately left of how long it is: the
+              // right-hand end of the row is where the eye already goes for the
+              // facts about a song. Nothing at all for the common case.
+              if (!track.isDownloading &&
+                  SourceTag.worthShowing(track.source)) ...[
+                const SizedBox(width: 8),
+                SourceTag(source: track.source),
+              ],
+              // The first thing to go when the type is turned up: a row has a fixed
+              // width and a title that has to be read, and the length is also in
+              // the song's sheet. At twice the size the title was squeezed to
+              // nothing and the row still ran off the edge.
+              if (widget.showDuration &&
+                  duration.isNotEmpty &&
+                  !track.isDownloading &&
+                  MediaQuery.textScalerOf(context).scale(14) / 14 < 1.4) ...[
+                const SizedBox(width: 6),
+                Text(duration,
+                    style: text.bodySmall?.copyWith(
+                        color: current
                             ? scheme.primary
-                            : null,
-                    fontWeight: current || picked ? FontWeight.w700 : null,
+                            : scheme.onSurfaceVariant)),
+              ],
+              if (widget.showMenu && !picking)
+                IconButton(
+                  icon: const Icon(Icons.more_vert, size: 18),
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                  tooltip: 'Track actions',
+                  onPressed: () => _sheet(context),
+                )
+              else
+                const SizedBox(width: 4),
+            ],
+          ),
+        );
+
+        return Stack(
+          children: [
+            body,
+            // The rule down the left: where you are, the way the tabs say it.
+            Positioned(
+              left: 0,
+              top: 6,
+              bottom: 6,
+              width: 3,
+              child: AnimatedOpacity(
+                opacity: current && !picked ? 1 : 0,
+                duration: Motion.base,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: scheme.primary,
+                    borderRadius: BorderRadius.circular(2),
                   ),
                 ),
-                if (subtitle.isNotEmpty)
-                  Text(
-                    subtitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: text.bodySmall?.copyWith(
-                      color: failed
-                          ? scheme.error
-                          : track.isDownloading
-                              ? scheme.primary
-                              : scheme.onSurfaceVariant,
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          if (widget.trailing != null) ...[
-            const SizedBox(width: 6),
-            widget.trailing!
-          ],
-          TrackMark(track: track),
-          // Where the file came from, immediately left of how long it is: the
-          // right-hand end of the row is where the eye already goes for the facts
-          // about a song. Nothing at all for the common case.
-          if (!track.isDownloading && SourceTag.worthShowing(track.source)) ...[
-            const SizedBox(width: 8),
-            SourceTag(source: track.source),
-          ],
-          // The first thing to go when the type is turned up: a row has a fixed
-          // width and a title that has to be read, and the length is also in the
-          // song's sheet. At twice the size the title was squeezed to nothing and
-          // the row still ran off the edge.
-          if (widget.showDuration &&
-              duration.isNotEmpty &&
-              !track.isDownloading &&
-              MediaQuery.textScalerOf(context).scale(14) / 14 < 1.4) ...[
-            const SizedBox(width: 6),
-            Text(duration,
-                style: text.bodySmall?.copyWith(
-                    color: current ? scheme.primary : scheme.onSurfaceVariant)),
-          ],
-          if (widget.showMenu && !picking)
-            IconButton(
-              icon: const Icon(Icons.more_vert, size: 18),
-              visualDensity: VisualDensity.compact,
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
-              tooltip: 'Track actions',
-              onPressed: () => _sheet(context),
-            )
-          else
-            const SizedBox(width: 4),
-        ],
-      ),
-    );
-
-    final inside = Stack(
-      children: [
-        body,
-        // The rule down the left: where you are, the way the tabs say it.
-        Positioned(
-          left: 0,
-          top: 6,
-          bottom: 6,
-          width: 3,
-          child: AnimatedOpacity(
-            opacity: current && !picked ? 1 : 0,
-            duration: Motion.base,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: scheme.primary,
-                borderRadius: BorderRadius.circular(2),
               ),
             ),
-          ),
-        ),
-        // How much of the song has arrived, along the foot of the row. The row is
-        // no taller for it: a list of rows that jump in height as downloads come
-        // and go is a list that cannot be scrolled while it happens.
-        if (track.isDownloading)
-          Positioned(
-            left: widget.handle == null ? 58 : 50,
-            right: 8,
-            bottom: 0,
-            height: 2,
-            child: LinearProgressIndicator(
-              minHeight: 2,
-              value: track.progressFraction?.clamp(0.0, 1.0),
-              backgroundColor: scheme.primary.withValues(alpha: 0.15),
-            ),
-          ),
-      ],
+            // How much of the song has arrived, along the foot of the row. The row
+            // is no taller for it: a list of rows that jump in height as downloads
+            // come and go is a list that cannot be scrolled while it happens.
+            if (track.isDownloading)
+              Positioned(
+                left: widget.handle == null ? 58 : 50,
+                right: 8,
+                bottom: 0,
+                height: 2,
+                child: LinearProgressIndicator(
+                  minHeight: 2,
+                  value: track.progressFraction?.clamp(0.0, 1.0),
+                  backgroundColor: scheme.primary.withValues(alpha: 0.15),
+                ),
+              ),
+          ],
+        );
+      },
     );
+  }
 
-    // A right-click is how a desk asks a row what it can do, and the answer is the
-    // sheet the three dots already open: one question, one answer.
+  Selection? selectionOf(BuildContext context) =>
+      widget.selectable == null ? null : context.read<Selection>();
+
+  void _sheet(BuildContext context) => showTrackSheet(context, widget.track,
+      onRemove: widget.onRemove,
+      onChanged: widget.onChanged,
+      queuePosition: widget.queuePosition);
+}
+
+/// The frame every song-shaped row sits in, and how it answers a hand.
+///
+/// A row is a row wherever it is — a song in a list, a search hit from a service the
+/// library has never heard of, a line of a record, what is next in the dock — and
+/// they had drifted: some answered a touch by giving a little, some lit under a
+/// mouse, some could be pushed aside and some could not, and one of them was a
+/// stock ListTile with none of it. This is all of that in one place: the ground it
+/// sits on, the lift under a mouse, the give under a finger, the card it becomes
+/// while it is being pushed, and the push itself. What is *in* the row is the
+/// caller's, told whether a mouse is over it so it can say so on its own artwork.
+class RowChrome extends StatefulWidget {
+  const RowChrome({
+    super.key,
+    required this.builder,
+    this.onTap,
+    this.onLongPress,
+    this.onSecondaryTap,
+    this.ground = Colors.transparent,
+    this.outlined = false,
+    this.onSwipe,
+    this.onSwipeAway,
+  });
+
+  /// The row's contents, given whether a mouse is over it.
+  final Widget Function(BuildContext context, bool hovering) builder;
+
+  final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
+
+  /// A right-click, on a desk: what the three dots open.
+  final VoidCallback? onSecondaryTap;
+
+  /// The row's own colour: the playing song's wash, a picked row's tint. Transparent
+  /// rows lift a little under a mouse.
+  final Color ground;
+
+  /// Ruled round, for a row picked out along with others.
+  final bool outlined;
+
+  /// Pulled towards you, and pushed away. Neither, and the row does not move.
+  final VoidCallback? onSwipe;
+  final VoidCallback? onSwipeAway;
+
+  @override
+  State<RowChrome> createState() => _RowChromeState();
+}
+
+class _RowChromeState extends State<RowChrome> {
+  /// Under a finger or a mouse button right now.
+  bool _pressed = false;
+
+  /// Under a mouse. Nothing on a phone, where nothing hovers.
+  bool _hovering = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final ground = widget.ground == Colors.transparent &&
+            _hovering &&
+            widget.onTap != null
+        ? scheme.onSurface.withValues(alpha: 0.05)
+        : widget.ground;
+
     final row = GestureDetector(
       behavior: HitTestBehavior.deferToChild,
-      onSecondaryTap: !widget.showMenu ? null : () => _sheet(context),
+      onSecondaryTap: widget.onSecondaryTap,
       child: InkWell(
         borderRadius: BorderRadius.circular(10),
         // The feedback is the point: a list that does not answer a touch immediately
         // reads as broken long before anything has actually gone wrong.
-        //
-        // While a selection is running in this list, a tap adds to it rather than
-        // playing: nobody holds a row to pick it out and then expects the next tap to
-        // start the music.
-        onTap: picking
-            ? () {
-                feel(Feel.pick);
-                selectionOf(context)!.toggle(widget.selectable!, track.id);
-              }
-            : widget.onTap == null
-                ? null
-                : () => _tapped(widget.onTap!),
-        // A hold that turns into something has to say so under the finger: without it
-        // the only way to find out whether the hold worked is to let go.
-        onLongPress: widget.selectable != null
-            ? () {
-                feel(Feel.commit);
-                selectionOf(context)!.start(widget.selectable!, track.id);
-              }
-            : widget.showMenu
-                ? () {
-                    feel(Feel.commit);
-                    _sheet(context);
-                  }
-                : null,
+        onTap: widget.onTap,
+        onLongPress: widget.onLongPress,
         onHighlightChanged: (down) => setState(() => _pressed = down),
         onHover: (over) => setState(() => _hovering = over),
-        child: inside,
+        child: widget.builder(context, _hovering),
       ),
     );
 
-    // The card the row becomes while it is pushed. Read in its own builder so that
-    // only this ground, and not the row's words and artwork, is rebuilt for every
-    // hundredth of the drag.
+    // The card the row becomes while it is pushed. Without it, what the row
+    // uncovered showed through the row's own transparent ground, so the words slid
+    // over a slab of colour and the whole thing looked half-drawn. Read in its own
+    // builder so that only this ground, and not the row's words and artwork, is
+    // rebuilt for every hundredth of the drag.
     final lifted = Builder(builder: (context) {
       final pushed = SwipingNow.of(context);
       final up = (pushed * 4).clamp(0.0, 1.0);
@@ -444,7 +535,7 @@ class _SongRowState extends State<SongRow> {
           // tint on it, not a tint with the back showing through.
           color: up == 0 ? ground : Color.alphaBlend(ground, scheme.surface),
           borderRadius: BorderRadius.circular(10),
-          border: picked
+          border: widget.outlined
               ? Border.all(
                   color: scheme.primary.withValues(alpha: 0.7), width: 1.2)
               : null,
@@ -476,27 +567,54 @@ class _SongRowState extends State<SongRow> {
       child: lifted,
     );
 
-    // Not while a selection is running: the same sideways drag would be doing two
-    // things at once, and the bar at the top is how you act on a selection.
-    if (picking || (!widget.swipeToPlayNext && widget.onSwipeAway == null)) {
-      return pressed;
-    }
+    if (widget.onSwipe == null && widget.onSwipeAway == null) return pressed;
     return SwipeAction(
-      onSwipe: !widget.swipeToPlayNext
-          ? null
-          : () => addAndSay(context, track, mode: 'next'),
+      onSwipe: widget.onSwipe,
       onSwipeAway: widget.onSwipeAway,
       child: pressed,
     );
   }
+}
 
-  Selection? selectionOf(BuildContext context) =>
-      widget.selectable == null ? null : context.read<Selection>();
+/// A hand over a picture: the mark a row's artwork wears under a mouse, or while
+/// the row is waiting for something. Shared by the rows that are not a song of the
+/// library's — a search hit, a line of a record we do not hold.
+class ArtMark extends StatelessWidget {
+  const ArtMark({super.key, required this.child, this.mark, this.radius = 5, this.size = 40});
 
-  void _sheet(BuildContext context) => showTrackSheet(context, widget.track,
-      onRemove: widget.onRemove,
-      onChanged: widget.onChanged,
-      queuePosition: widget.queuePosition);
+  final Widget child;
+  final Widget? mark;
+  final double radius;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        width: size,
+        height: size,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            child,
+            Positioned.fill(
+              child: AnimatedSwitcher(
+                duration: Motion.base,
+                switchInCurve: Motion.enter,
+                switchOutCurve: Motion.exit,
+                child: mark == null
+                    ? const SizedBox.shrink(key: ValueKey('none'))
+                    : DecoratedBox(
+                        key: mark!.key ?? const ValueKey('mark'),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(radius),
+                          color: Colors.black.withValues(alpha: 0.5),
+                        ),
+                        child: Center(child: mark),
+                      ),
+              ),
+            ),
+          ],
+        ),
+      );
 }
 
 /// What is drawn over the artwork, if anything.

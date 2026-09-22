@@ -345,7 +345,7 @@ void main() {
     await type(tester, 'queen');
     final plus = find.descendant(
         of: find.widgetWithText(FoundRow, 'Live at the Roundhouse'),
-        matching: find.byType(IconButton));
+        matching: find.byTooltip('Add to the queue (hold: play next)'));
     await tester.tap(plus);
     await settle(tester);
 

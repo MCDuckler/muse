@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
+import 'queue_page.dart' show QueueScreen;
 import 'snack.dart';
 
 /// Put something on, and keep playing what belongs next to it.
@@ -11,11 +12,16 @@ import 'snack.dart';
 /// an artist, the queue — so that "station" means the same thing wherever it is asked
 /// for: a queue of its own, named after what it came from, which is topped up as it
 /// runs down and can be saved to the library like any other.
+///
+/// With [play] off it is only made: what is playing carries on, the station sits
+/// beside it as a queue of its own, and the message offers the way in. Nothing
+/// playing, and it is opened straight away, parked on its first song.
 Future<void> startStation(
   BuildContext context, {
   Track? seed,
   String? album,
   String? artist,
+  bool play = true,
 }) async {
   final app = context.read<AppState>();
   final messenger = ScaffoldMessenger.of(context);
@@ -29,13 +35,28 @@ Future<void> startStation(
     return;
   }
 
-  messenger.say(snack(const Text('Starting a station…')));
+  messenger.say(snack(Text(play ? 'Starting a station…' : 'Making a station…')));
   try {
-    await app.startStation(
-        kind: kind, seed: seed, album: album, artist: artist);
-    messenger.say(snack(Text(app.activeQueue?.name ?? 'Station')));
+    final made = await app.startStation(
+        kind: kind, seed: seed, album: album, artist: artist, play: play);
+    if (play) {
+      messenger.say(snack(Text(made.name)));
+    } else if (app.activeQueue?.id == made.id) {
+      messenger.say(snack(Text('"${made.name}" is on, waiting for play')));
+      if (context.mounted) {
+        Navigator.of(context)
+            .push(MaterialPageRoute(builder: (_) => const QueueScreen()));
+      }
+    } else {
+      messenger.say(snack(
+        Text('"${made.name}" is ready'),
+        action: SnackBarAction(
+            label: 'Open',
+            onPressed: () => app.openQueue(made.id, autoplay: false)),
+      ));
+    }
   } catch (e) {
-    messenger.say(snack(Text('$e')));
+    messenger.say(problem(e));
   }
 }
 

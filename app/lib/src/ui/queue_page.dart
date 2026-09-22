@@ -330,6 +330,9 @@ class _QueuePageState extends State<QueuePage> {
                         await _saveAsPlaylist(context, app);
                       case 'rename':
                         await _renameQueue(context, active);
+                      case 'make-station':
+                        await startStation(context,
+                            seed: app.player?.current, play: false);
                       case 'keep-station':
                         await keepStation(context);
                       case 'delete':
@@ -346,6 +349,10 @@ class _QueuePageState extends State<QueuePage> {
                           value: 'forget', child: Text('Stop keeping these here')),
                       PopupMenuDivider(),
                     ],
+                    if (app.player?.current != null)
+                      const PopupMenuItem(
+                          value: 'make-station',
+                          child: Text('Make a station from this song, without playing it')),
                     if (active.isStation)
                       const PopupMenuItem(
                           value: 'keep-station',

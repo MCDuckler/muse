@@ -1571,18 +1571,32 @@ class AppState extends ChangeNotifier {
   /// A station of its own rather than a tail on the end of what was playing: that is
   /// the difference between "add five more" and "put this on", and it is why it can
   /// be named, kept, and saved to the library afterwards.
-  Future<void> startStation(
-      {String kind = 'track', Track? seed, String? album, String? artist}) async {
+  ///
+  /// Or only made, with [play] off: the station is there to be looked through and
+  /// put on when wanted. What is playing keeps playing — the station waits as a
+  /// queue of its own; with nothing playing it is opened, parked on its first song.
+  Future<Queue> startStation(
+      {String kind = 'track',
+      Track? seed,
+      String? album,
+      String? artist,
+      bool play = true}) async {
     final made = await api.startStation(
         kind: kind, trackId: seed?.id, album: album, artist: artist);
-    activeQueue = made;
     queues = await api.queues();
+    if (!play) {
+      if (!musicIsPlaying) await openQueue(made.id, autoplay: false);
+      notifyListeners();
+      return made;
+    }
+    activeQueue = made;
     _rememberQueue(made.id);
     await player?.loadQueue(made, autoplay: false);
     if (made.items.isNotEmpty) {
       await player?.playTrack(made.items.first.id, indexHint: 0);
     }
     notifyListeners();
+    return made;
   }
 
   /// How close to the edge of the slice we hold is close enough to ask for the next.

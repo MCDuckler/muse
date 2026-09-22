@@ -10,7 +10,6 @@ import '../state/app_state.dart';
 import '../state/art_cache.dart';
 import '../state/offline.dart';
 import '../state/paged.dart';
-import '../state/selection.dart';
 import 'album_grid.dart';
 import 'feel.dart';
 import 'artwork.dart';
@@ -18,8 +17,6 @@ import 'selection_bar.dart';
 import 'skeleton.dart';
 import 'song_row.dart';
 import 'station.dart';
-import 'source_dot.dart';
-import 'swipe.dart';
 import 'dialogs.dart';
 import 'glass.dart' show parseHexColour;
 import 'mag.dart';
@@ -30,7 +27,6 @@ import 'mini_player.dart';
 import 'motion.dart';
 import 'theme.dart';
 import 'track_list.dart';
-import 'track_menu.dart';
 import 'widths.dart';
 import 'snack.dart';
 import 'record_refresh.dart';
@@ -1346,109 +1342,93 @@ class _ReleaseRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
-    final scheme = Theme.of(context).colorScheme;
     final track = row.track;
-    final faded = track == null;
-    final selection =
-        selectable == null || track == null ? null : context.watch<Selection>();
-    final picking = selection?.inside(selectable!) ?? false;
-    final picked = picking && selection!.has(track!.id);
+    // The number stands where the artwork would: on a record every row has the
+    // same picture, and the order is the thing worth reading. Fixed slot, flexible
+    // type: a two-digit numeral at twice the size shrinks to fit rather than pushing
+    // the row off the edge.
+    Widget numeral(Color colour) => SizedBox(
+          width: 40,
+          height: 40,
+          child: Center(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text('${row.pos}',
+                  style: Mag.numerals(18, color: colour)),
+            ),
+          ),
+        );
 
-    // A row for a song we hold swipes to put it on next, like every other list. One we
-    // do not hold has nothing to queue yet, so it does not.
-    return _maybeSwipe(
-      context,
-      picking ? null : track,
-      Material(
-      color: picked ? scheme.primary.withValues(alpha: 0.26) : Colors.transparent,
-      shape: picked
-          ? RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-              side: BorderSide(
-                  color: scheme.primary.withValues(alpha: 0.85), width: 1.6),
-            )
-          : null,
-      child: ListTile(
-      dense: true,
-      leading: SizedBox(
-        width: 40,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            // The slot is fixed and the type is not: a two-digit numeral at twice
-            // the size shrinks to fit rather than pushing the row off the edge.
-            Flexible(
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerRight,
-                child: Text('${row.pos}',
-                    textAlign: TextAlign.end,
-                    style: Mag.numerals(16,
-                        color: faded ? scheme.outline : scheme.onSurfaceVariant)),
-              ),
-            ),
-            // No artwork on this row to put the mark on, so it sits beside the
-            // number instead — and a track we do not have gets no mark at all.
-            const SizedBox(width: 8),
-            SizedBox(
-              width: 7,
-              child: track == null
-                  ? null
-                  : SourceDot(source: track.source),
-            ),
-          ],
-        ),
-      ),
-      title: Text(
-        track?.displayTitle ?? row.title,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: faded ? TextStyle(color: scheme.outline) : null,
-      ),
-      subtitle: track == null
-          ? Text('Not in your library',
-              style: TextStyle(color: scheme.outline))
-          : (track.isReady
-              ? null
-              : Text(track.state == 'failed'
-                  ? (track.failReason ?? 'Download failed')
-                  : 'Downloading…')),
-      trailing: picking
-          ? null
-          : track == null
-              ? IconButton(
-                  icon: const Icon(Icons.add_circle_outline, size: 20),
-                  tooltip: 'Fetch this one',
-                  onPressed: onFetch,
-                )
-              : IconButton(
-                  icon: const Icon(Icons.more_vert, size: 20),
-                  tooltip: 'Track actions',
-                  onPressed: () => showTrackSheet(context, track),
-                ),
-      onLongPress: track == null || selectable == null
-          ? null
-          : () => selection!.start(selectable!, track.id),
-      onTap: picking
-          ? () => selection!.toggle(selectable!, track!.id)
-          : track == null
-              ? onFetch
-              : () => app.playNow(playable,
-                  startAt: playable.indexOf(track), named: named),
-    ),
-    ),
-    );
+    // A song we hold is a song row like every other: the same menu, the same push
+    // to play it next, the same way of being picked out along with others, lit
+    // when it is the one playing.
+    if (track != null) {
+      return SongRow(
+        track: track,
+        leading: numeral(Theme.of(context).colorScheme.onSurfaceVariant),
+        selectable: selectable,
+        showArtist: false,
+        showAlbum: false,
+        onTap: () => app.playNow(playable,
+            startAt: playable.indexOf(track), named: named),
+      );
+    }
+    return _UnheldRow(
+        leading: numeral(Theme.of(context).colorScheme.outline),
+        title: row.title,
+        onFetch: onFetch);
   }
 }
 
-/// Wrap a row that is not a SongRow in the same play-next gesture SongRow has, so a
-/// record and an artist behave like the lists everywhere else.
-Widget _maybeSwipe(BuildContext context, Track? track, Widget row) {
-  if (track == null) return row;
-  return SwipeAction(
-    onSwipe: () => addAndSay(context, track, mode: 'next'),
-    child: row,
-  );
+/// A line of a record the library does not hold: listed, faded, and offered.
+class _UnheldRow extends StatelessWidget {
+  const _UnheldRow({required this.leading, required this.title, this.onFetch});
+  final Widget leading;
+  final String title;
+  final VoidCallback? onFetch;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    return RowChrome(
+      onTap: onFetch,
+      builder: (context, _) => Padding(
+        padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+        child: Row(
+          children: [
+            leading,
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: text.bodyMedium?.copyWith(color: scheme.outline)),
+                  Text('Not in your library',
+                      style: text.bodySmall?.copyWith(color: scheme.outline)),
+                ],
+              ),
+            ),
+            if (onFetch != null)
+              IconButton(
+                icon: const Icon(Icons.add_circle_outline, size: 20),
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                tooltip: 'Fetch this one',
+                onPressed: onFetch,
+              )
+            else
+              const SizedBox(width: 4),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class ArtistsPage extends StatefulWidget {
@@ -1925,38 +1905,19 @@ class _TopRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final track = row.track;
-    return _maybeSwipe(
-      context,
-      track,
-      ListTile(
-      dense: true,
-      leading: track == null
-          ? Artwork(track: track, size: 36, radius: 4)
-          : MarkedArtwork(
-              source: track.source,
-              child: Artwork(track: track, size: 36, radius: 4),
-            ),
-      title: Text(track?.displayTitle ?? row.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: track == null ? TextStyle(color: scheme.outline) : null),
-      subtitle: track == null
-          ? Text('Not in your library', style: TextStyle(color: scheme.outline))
-          : null,
-      trailing: track == null
-          ? null
-          : IconButton(
-              icon: const Icon(Icons.more_vert, size: 20),
-              tooltip: 'Track actions',
-              onPressed: () => showTrackSheet(context, track),
-            ),
-      onTap: track == null
-          ? null
-          : () => context.read<AppState>().playNow(playable,
-              startAt: playable.indexOf(track), named: named),
-    ),
+    if (track != null) {
+      return SongRow(
+        track: track,
+        dense: true,
+        showAlbum: false,
+        onTap: () => context.read<AppState>().playNow(playable,
+            startAt: playable.indexOf(track), named: named),
+      );
+    }
+    return _UnheldRow(
+      leading: Artwork(track: null, size: 40, radius: 5),
+      title: row.title,
     );
   }
 }

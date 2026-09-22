@@ -14,7 +14,9 @@ import 'mag_parts.dart';
 import 'mag.dart';
 import 'artwork.dart';
 import 'dialogs.dart' show Roomy;
+import 'feel.dart';
 import 'found_row.dart';
+import 'song_row.dart';
 import 'library_page.dart' show SmartListPage;
 import 'motion.dart';
 import 'pane.dart';
@@ -324,6 +326,17 @@ class _SearchPageState extends State<SearchPage> {
   /// on the toast before it went away. Somebody who searches for a song and taps it
   /// wants to hear it; the plus on the row is for the other thing. With [mode] it is
   /// that other thing: 'end' or 'next', on the queue and nothing else touched.
+  /// Everything else that can be done with a hit: the library's own sheet for a
+  /// song the library holds, and the search's own for the rest.
+  Future<void> _more(Found found) async {
+    final app = context.read<AppState>();
+    if (found.track != null) {
+      await showTrackSheet(context, found.track!, onChanged: app.refresh);
+      return;
+    }
+    await showFoundSheet(context, found, open: (mode) => _open(found, mode: mode));
+  }
+
   Future<void> _open(Found found, {String? mode}) async {
     if (_lastQuery.isNotEmpty) unawaited(_remember(_lastQuery));
     final app = context.read<AppState>();
@@ -634,6 +647,8 @@ class _SearchPageState extends State<SearchPage> {
         found: top,
         onTap: () => _open(top),
         onAdd: top.plays ? () => _open(top, mode: 'end') : null,
+        onPlayNext: top.plays ? () => _open(top, mode: 'next') : null,
+        onMore: () => _more(top),
       ),
     ));
     for (final kind in order) {
@@ -653,6 +668,7 @@ class _SearchPageState extends State<SearchPage> {
             onTap: () => _open(f),
             onAdd: () => _open(f, mode: 'end'),
             onPlayNext: () => _open(f, mode: 'next'),
+            onMore: () => _more(f),
           ),
         ));
       }
@@ -1204,13 +1220,24 @@ class _MarkPainter extends CustomPainter {
 
 /// The best match, on a card of its own at the top of the index.
 class _TopResult extends StatelessWidget {
-  const _TopResult({required this.found, required this.onTap, this.onAdd});
+  const _TopResult(
+      {required this.found,
+      required this.onTap,
+      this.onAdd,
+      this.onPlayNext,
+      this.onMore});
 
   final Found found;
   final VoidCallback onTap;
 
   /// On to the queue instead of played. Only for something that plays.
   final VoidCallback? onAdd;
+
+  /// Pushed aside, like every other row: on next.
+  final VoidCallback? onPlayNext;
+
+  /// Held, or right-clicked: the rest.
+  final VoidCallback? onMore;
 
   @override
   Widget build(BuildContext context) {
@@ -1236,12 +1263,18 @@ class _TopResult extends StatelessWidget {
       'video' => 'Video',
       _ => 'Song',
     };
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 6, 8, 4),
-      child: Material(
-        color: scheme.surfaceContainerHighest,
-        child: InkWell(
-          onTap: onTap,
+    // The card is a row like the others, with a bigger picture: it can be pushed
+    // aside to play next, held for its menu, and it gives under a finger.
+    return RowChrome(
+      onTap: felt(Feel.tap, onTap),
+      onLongPress: onMore == null ? null : felt(Feel.commit, onMore!),
+      onSecondaryTap: onMore,
+      onSwipe: onPlayNext,
+      ground: scheme.surfaceContainerHighest,
+      builder: (context, hovering) => Padding(
+        padding: const EdgeInsets.fromLTRB(0, 6, 0, 4),
+        child: Material(
+          color: Colors.transparent,
           child: Padding(
             padding: const EdgeInsets.all(10),
             child: Row(
@@ -1268,22 +1301,27 @@ class _TopResult extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (onAdd == null)
-                  PlaceDot(f.place, size: 8)
-                else
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      PlaceDot(f.place, size: 8),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    PlaceDot(f.place, size: 8),
+                    if (onAdd != null)
                       IconButton(
                         icon: Icon(f.known
                             ? Icons.playlist_add_check
                             : Icons.add_circle_outline),
-                        tooltip: 'Add to the queue',
+                        tooltip: 'Add to the queue (hold: play next)',
                         onPressed: onAdd,
                       ),
-                    ],
-                  ),
+                    if (onMore != null)
+                      IconButton(
+                        icon: const Icon(Icons.more_vert, size: 18),
+                        visualDensity: VisualDensity.compact,
+                        tooltip: 'More',
+                        onPressed: onMore,
+                      ),
+                  ],
+                ),
               ],
             ),
           ),

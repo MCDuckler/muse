@@ -6,7 +6,6 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/player.dart';
-import 'artwork.dart';
 import 'home_page.dart' show openInTab;
 import 'now_playing.dart';
 import 'queue_page.dart' show QueueScreen;
@@ -199,25 +198,21 @@ class _NextUp extends StatelessWidget {
                 itemCount: rest.length,
                 itemBuilder: (context, i) {
                   final row = rest[i];
-                  return ListTile(
-                    dense: true,
-                    visualDensity: VisualDensity.compact,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 10),
-                    leading: Artwork(track: row.track, size: 32, radius: 4),
-                    title: Text(row.track.displayTitle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: row.playing
-                            ? text.bodyMedium?.copyWith(
-                                fontWeight: FontWeight.w600,
-                                color: Theme.of(context).colorScheme.primary)
-                            : text.bodyMedium),
-                    subtitle: Text(row.track.artistLine,
-                        maxLines: 1, overflow: TextOverflow.ellipsis),
-                    // The same mark as everywhere else: here, coming, not here yet.
-                    trailing: TrackMark(track: row.track),
-                    onTap: () => player.playTrack(row.track.id,
-                        indexHint: row.index - player.windowFrom),
+                  // The same row as the queue's: lit when it is the one playing,
+                  // the same menu, the same marks. It was a ListTile of its own.
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: SongRow(
+                      track: row.track,
+                      dense: true,
+                      showAlbum: false,
+                      selected: row.playing,
+                      swipeToPlayNext: false,
+                      queuePosition: row.index,
+                      onChanged: context.read<AppState>().refresh,
+                      onTap: () => player.playTrack(row.track.id,
+                          indexHint: row.index - player.windowFrom),
+                    ),
                   );
                 },
               ),

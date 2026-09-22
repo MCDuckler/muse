@@ -234,8 +234,13 @@ def _spotify_hits(cfg, user_id: int, q: str, kinds: tuple[str, ...],
     """Spotify, but only for somebody who has linked it — it has no public search."""
     if not spotify.account(user_id):
         return []
-    types = ",".join({"song": "track", "album": "album", "artist": "artist"}[k]
-                     for k in kinds)
+    # Only the kinds Spotify has a name for. Asking for "video" raised a KeyError
+    # inside the leg, and the search page printed the exception's class name beside a
+    # green dot on every search that included videos — which is every search.
+    named = {"song": "track", "album": "album", "artist": "artist"}
+    types = ",".join(named[k] for k in kinds if k in named)
+    if not types:
+        return []
     data = spotify._get(cfg, user_id, "/search", q=q, type=types, limit=limit)
     out: list[dict] = []
     for t in ((data.get("tracks") or {}).get("items") or []):
@@ -495,5 +500,7 @@ def _safely(fn) -> tuple[list[dict], str | None]:
     except sources.SourceError as e:
         return [], str(e)
     except Exception as e:                        # noqa: BLE001
-        log.warning("search leg failed: %s", e)
-        return [], f"{type(e).__name__}"
+        # The class name goes to the log, where it means something; the screen gets a
+        # sentence, because "KeyError" beside a coloured dot is not one.
+        log.warning("search leg failed: %s: %s", type(e).__name__, e)
+        return [], "Could not be searched just now"
