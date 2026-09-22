@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart'
-    show defaultTargetPlatform, kIsWeb, visibleForTesting, TargetPlatform;
+    show defaultTargetPlatform, kIsWeb, visibleForTesting, TargetPlatform, ValueNotifier;
 import 'package:audio_session/audio_session.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
@@ -248,6 +248,19 @@ class PlayerService {
   bool finished = false;         // queue ran out with repeat off
 
   PlayerSnapshot? last;
+
+  /// What is playing, for the rows that want to know whether it is them.
+  ///
+  /// A list of four hundred songs has four hundred rows asking the same question, and
+  /// subscribing each of them to [changes] is four hundred copies of a stream being
+  /// compared on every report. This is one number, and a row only wakes when it
+  /// actually changes — a record, so "the same song, still playing" is equal to itself.
+  ///
+  /// Never disposed: a row can outlive the player on sign-out, and a listener taken
+  /// off a disposed notifier is an assertion in a debug build. One small object per
+  /// sign-in is the cheaper mistake.
+  final playingNow = ValueNotifier<PlayingNow>(
+      (trackId: null, itemId: null, playing: false, buffering: false));
 
   final _stateController = StreamController<PlayerSnapshot>.broadcast();
   Stream<PlayerSnapshot> get snapshots => _stateController.stream;
@@ -1925,6 +1938,12 @@ class PlayerService {
     // an SSE update landing while the app tears down, say. Adding to a closed stream
     // throws into nothing and looks like a crash in the logs.
     if (!_stateController.isClosed) _stateController.add(last!);
+    playingNow.value = (
+      trackId: current?.id,
+      itemId: current?.queueItemId,
+      playing: _player.playing,
+      buffering: last!.buffering,
+    );
   }
 
   Future<void> dispose() async {
@@ -1938,6 +1957,9 @@ class PlayerService {
     await _stateController.close();
   }
 }
+
+/// The one fact a song row needs about the player. See PlayerService.playingNow.
+typedef PlayingNow = ({int? trackId, int? itemId, bool playing, bool buffering});
 
 class PlayerSnapshot {
   final Track? current;

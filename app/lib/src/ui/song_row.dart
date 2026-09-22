@@ -1,11 +1,17 @@
+import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/offline.dart';
+import '../state/player.dart';
 import '../state/selection.dart';
 import 'artwork.dart';
+import 'glass.dart';
+import 'mag.dart';
 import 'motion.dart';
 import 'feel.dart';
 import 'source_dot.dart';
@@ -22,7 +28,14 @@ import 'snack.dart';
 ///
 /// Compact on purpose: 56 logical pixels rather than a ListTile's 72, because these
 /// appear in lists of hundreds and the difference is two more songs on a phone screen.
-class SongRow extends StatelessWidget {
+///
+/// The row answers for itself. It asks the player whether it is the song playing, so
+/// the one playing is lit in every list it appears in rather than only in the queue;
+/// it says under the finger that a tap was taken, before the player has had time to
+/// do anything about it; and while it is being pushed sideways it lifts off the page
+/// as a card, so what is uncovered behind it is *behind* it rather than showing
+/// through.
+class SongRow extends StatefulWidget {
   const SongRow({
     super.key,
     required this.track,
@@ -31,7 +44,7 @@ class SongRow extends StatelessWidget {
     this.handle,
     this.corner,
     this.trailing,
-    this.selected = false,
+    this.selected,
     this.showAlbum = true,
     this.showDuration = true,
     this.showMenu = true,
@@ -42,6 +55,7 @@ class SongRow extends StatelessWidget {
     this.swipeToPlayNext = true,
     this.onSwipeAway,
     this.queuePosition,
+    this.plays = true,
   });
 
   /// Where this row sits in the queue being played, when that is the list it is in —
@@ -69,6 +83,12 @@ class SongRow extends StatelessWidget {
   final Track track;
   final VoidCallback? onTap;
 
+  /// Whether a tap on this row starts the song, which is what a tap on a song row
+  /// does nearly everywhere. Off where it does something else — a list that adds to
+  /// the queue on a tap — so the row does not stand there saying "starting" about a
+  /// song that was never going to start.
+  final bool plays;
+
   /// Replaces the artwork — a position number, a check.
   final Widget? leading;
 
@@ -85,7 +105,10 @@ class SongRow extends StatelessWidget {
   /// Sits before the menu button. Durations and state chips go here.
   final Widget? trailing;
 
-  final bool selected;
+  /// Whether this is the song playing. Left null, the row asks the player itself;
+  /// the queue says so explicitly, because a queue can hold the same song twice and
+  /// only one of the two rows is the one being played.
+  final bool? selected;
   final bool showAlbum;
   final bool showDuration;
   final bool showMenu;
@@ -107,64 +130,274 @@ class SongRow extends StatelessWidget {
   }
 
   @override
+  State<SongRow> createState() => _SongRowState();
+}
+
+class _SongRowState extends State<SongRow> {
+  /// Under a finger or a mouse button right now.
+  bool _pressed = false;
+
+  /// Under a mouse. Nothing on a phone, where nothing hovers.
+  bool _hovering = false;
+
+  /// Tapped, and the player has not yet said this is the song playing.
+  ///
+  /// Between the tap and the first sound there is a wait — the queue is written to
+  /// the server, the stream is opened — and a row that does nothing for that long
+  /// reads as a row that did not hear. This is the row saying it did. Cleared the
+  /// moment the player names this song, or after a while if it never does: the tap
+  /// may have opened a menu, or failed, and a spinner that never stops is a lie.
+  bool _starting = false;
+  Timer? _giveUp;
+
+  @override
+  void dispose() {
+    _giveUp?.cancel();
+    super.dispose();
+  }
+
+  void _tapped(VoidCallback onTap) {
+    feel(Feel.tap);
+    onTap();
+    if (!widget.plays || !mounted) return;
+    _giveUp?.cancel();
+    setState(() => _starting = true);
+    _giveUp = Timer(const Duration(seconds: 6), () {
+      if (mounted && _starting) setState(() => _starting = false);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final track = widget.track;
     // Taken out of the library a moment ago: gone from every list that is open,
     // whichever one it was removed from.
     if (context.select<AppState?, bool>((a) => a?.wasRemoved(track.id) ?? false)) {
       return const SizedBox.shrink();
     }
+    final selection =
+        widget.selectable == null ? null : context.watch<Selection>();
+    final picking = selection?.inside(widget.selectable!) ?? false;
+    final picked = picking && selection!.has(track.id);
+
+    // Only the player, not the whole app: the row wakes when what is playing
+    // changes and for nothing else.
+    final player = context.select<AppState?, PlayerService?>((a) => a?.player);
+    if (player == null) {
+      return _build(context, picking: picking, picked: picked, now: null);
+    }
+    return ValueListenableBuilder<PlayingNow>(
+      valueListenable: player.playingNow,
+      builder: (context, now, _) =>
+          _build(context, picking: picking, picked: picked, now: now),
+    );
+  }
+
+  Widget _build(BuildContext context,
+      {required bool picking, required bool picked, required PlayingNow? now}) {
+    final track = widget.track;
     final scheme = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final failed = track.state == 'failed';
-    final selection = selectable == null ? null : context.watch<Selection>();
-    final picking = selection?.inside(selectable!) ?? false;
-    final picked = picking && selection!.has(track.id);
+
+    final current = widget.selected ?? (now?.trackId == track.id);
+    final playing = current && (now?.playing ?? false);
+    final buffering = current && (now?.buffering ?? false);
+    // The player has caught up with the tap.
+    if (_starting && current) {
+      _starting = false;
+      _giveUp?.cancel();
+    }
 
     // Artist · album on one line: an album that is only in the metadata is not much
     // use, and two lines of subtitle in a list of four hundred is a lot of scrolling.
-    final subtitle = <String>[
-      if (failed) (track.failReason ?? 'Download failed') else track.artistLine,
-      if (showAlbum && !failed && track.albumLine != null) track.albumLine!,
-    ].join(' · ');
+    //
+    // A song on its way says what it is doing instead — "Fetching 42% · 1.1 MB/s" —
+    // because that is the one moment the artist is not the thing being wondered about.
+    final subtitle = track.isDownloading
+        ? track.statusLine
+        : <String>[
+            if (failed) (track.failReason ?? 'Download failed') else track.artistLine,
+            if (widget.showAlbum && !failed && track.albumLine != null)
+              track.albumLine!,
+          ].join(' · ');
 
     final duration = SongRow.formatDuration(track.duration);
+    final wash = parseHexColour(track.coverColor) ?? scheme.primary;
 
-    // Two different things a row can be, both said by the row itself.
+    // Three things a row can be, all said by the row itself.
     //
-    // The song playing used to be a ten-percent wash, which is nothing to catch on
-    // while scrolling past four hundred of them; it is a chip now — filled, outlined,
-    // its title in the accent colour, and a small mark on the artwork.
+    // The song playing is lit: a wash of its own cover's colour, a rule down the left
+    // in the accent, its title in the accent, and the sound itself over the artwork.
+    // It used to be a filled, outlined chip, which was a box drawn round a row, and
+    // in a list of chips it was one more box.
     //
-    // A song you have picked out is the same idea, stronger, and that is all it is.
-    // Picking used to replace every cover in the list with a circle: a hundred rows of
-    // identical grey rings, no way to tell one record from another, and the thing you
-    // were choosing between taken away at the moment of choosing. The covers stay and
-    // the row is simply lit.
-    final row = Material(
-      color: picked
-          ? scheme.primary.withValues(alpha: 0.26)
-          : selected
-              ? scheme.primary.withValues(alpha: 0.20)
-              : Colors.transparent,
-      shape: picked || selected
-          ? RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-              side: BorderSide(
-                  color: scheme.primary.withValues(alpha: picked ? 0.85 : 0.55),
-                  width: picked ? 1.6 : 1.2),
+    // A song picked out is the accent, plainer and stronger — a choice rather than
+    // an event. Picking used to replace every cover in the list with a circle: a
+    // hundred rows of identical grey rings, no way to tell one record from another.
+    // The covers stay and the row is simply lit.
+    //
+    // A row being pushed sideways lifts off the page as a card. Without that, the
+    // colour behind it showed through the row's own transparent ground, so the words
+    // slid over a slab of colour and the whole thing looked half-drawn.
+    final ground = picked
+        ? scheme.primary.withValues(alpha: 0.16)
+        : current
+            ? wash.withValues(alpha: isDark ? 0.18 : 0.13)
+            : _hovering
+                ? scheme.onSurface.withValues(alpha: 0.05)
+                : Colors.transparent;
+
+    final artwork = _Art(
+      track: track,
+      leading: widget.leading,
+      corner: widget.corner,
+      state: picked
+          ? _ArtState.picked
+          : _starting
+              ? _ArtState.starting
+              : current
+                  ? (buffering
+                      ? _ArtState.buffering
+                      : playing
+                          ? _ArtState.playing
+                          : _ArtState.paused)
+                  : _hovering && widget.onTap != null && !picking
+                      ? _ArtState.hover
+                      : _ArtState.plain,
+    );
+
+    final body = Padding(
+      padding: EdgeInsets.only(
+          left: widget.handle == null ? 8 : 0,
+          right: 8,
+          top: widget.dense ? 4 : 6,
+          bottom: widget.dense ? 4 : 6),
+      child: Row(
+        children: [
+          if (widget.handle != null) _Grip(child: widget.handle!),
+          artwork,
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  track.displayTitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: text.bodyMedium?.copyWith(
+                    color: failed
+                        ? scheme.error
+                        : current || picked
+                            ? scheme.primary
+                            : null,
+                    fontWeight: current || picked ? FontWeight.w700 : null,
+                  ),
+                ),
+                if (subtitle.isNotEmpty)
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: text.bodySmall?.copyWith(
+                      color: failed
+                          ? scheme.error
+                          : track.isDownloading
+                              ? scheme.primary
+                              : scheme.onSurfaceVariant,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          if (widget.trailing != null) ...[
+            const SizedBox(width: 6),
+            widget.trailing!
+          ],
+          TrackMark(track: track),
+          // Where the file came from, immediately left of how long it is: the
+          // right-hand end of the row is where the eye already goes for the facts
+          // about a song. Nothing at all for the common case.
+          if (!track.isDownloading && SourceTag.worthShowing(track.source)) ...[
+            const SizedBox(width: 8),
+            SourceTag(source: track.source),
+          ],
+          // The first thing to go when the type is turned up: a row has a fixed
+          // width and a title that has to be read, and the length is also in the
+          // song's sheet. At twice the size the title was squeezed to nothing and
+          // the row still ran off the edge.
+          if (widget.showDuration &&
+              duration.isNotEmpty &&
+              !track.isDownloading &&
+              MediaQuery.textScalerOf(context).scale(14) / 14 < 1.4) ...[
+            const SizedBox(width: 6),
+            Text(duration,
+                style: text.bodySmall?.copyWith(
+                    color: current ? scheme.primary : scheme.onSurfaceVariant)),
+          ],
+          if (widget.showMenu && !picking)
+            IconButton(
+              icon: const Icon(Icons.more_vert, size: 18),
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+              tooltip: 'Track actions',
+              onPressed: () => _sheet(context),
             )
-          : null,
-      // A right-click is how a desk asks a row what it can do, and the answer is the
-      // sheet the three dots already open: one question, one answer.
-      child: GestureDetector(
-        behavior: HitTestBehavior.deferToChild,
-        onSecondaryTap: !showMenu
-            ? null
-            : () => showTrackSheet(context, track,
-                onRemove: onRemove,
-                onChanged: onChanged,
-                queuePosition: queuePosition),
-        child: InkWell(
+          else
+            const SizedBox(width: 4),
+        ],
+      ),
+    );
+
+    final inside = Stack(
+      children: [
+        body,
+        // The rule down the left: where you are, the way the tabs say it.
+        Positioned(
+          left: 0,
+          top: 6,
+          bottom: 6,
+          width: 3,
+          child: AnimatedOpacity(
+            opacity: current && !picked ? 1 : 0,
+            duration: Motion.base,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: scheme.primary,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+        ),
+        // How much of the song has arrived, along the foot of the row. The row is
+        // no taller for it: a list of rows that jump in height as downloads come
+        // and go is a list that cannot be scrolled while it happens.
+        if (track.isDownloading)
+          Positioned(
+            left: widget.handle == null ? 58 : 50,
+            right: 8,
+            bottom: 0,
+            height: 2,
+            child: LinearProgressIndicator(
+              minHeight: 2,
+              value: track.progressFraction?.clamp(0.0, 1.0),
+              backgroundColor: scheme.primary.withValues(alpha: 0.15),
+            ),
+          ),
+      ],
+    );
+
+    // A right-click is how a desk asks a row what it can do, and the answer is the
+    // sheet the three dots already open: one question, one answer.
+    final row = GestureDetector(
+      behavior: HitTestBehavior.deferToChild,
+      onSecondaryTap: !widget.showMenu ? null : () => _sheet(context),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
         // The feedback is the point: a list that does not answer a touch immediately
         // reads as broken long before anything has actually gone wrong.
         //
@@ -174,157 +407,325 @@ class SongRow extends StatelessWidget {
         onTap: picking
             ? () {
                 feel(Feel.pick);
-                selection!.toggle(selectable!, track.id);
+                selectionOf(context)!.toggle(widget.selectable!, track.id);
               }
-            : onTap == null
+            : widget.onTap == null
                 ? null
-                : felt(Feel.tap, onTap),
+                : () => _tapped(widget.onTap!),
         // A hold that turns into something has to say so under the finger: without it
         // the only way to find out whether the hold worked is to let go.
-        onLongPress: selectable != null
+        onLongPress: widget.selectable != null
             ? () {
                 feel(Feel.commit);
-                selection!.start(selectable!, track.id);
+                selectionOf(context)!.start(widget.selectable!, track.id);
               }
-            : showMenu
+            : widget.showMenu
                 ? () {
                     feel(Feel.commit);
-                    showTrackSheet(context, track,
-                        onRemove: onRemove,
-                        onChanged: onChanged,
-                        queuePosition: queuePosition);
+                    _sheet(context);
                   }
                 : null,
-        child: Padding(
-          padding: EdgeInsets.only(
-              left: handle == null ? 8 : 0,
-              right: 8,
-              top: dense ? 4 : 6,
-              bottom: dense ? 4 : 6),
-          child: Row(
-            children: [
-              if (handle != null) _Grip(child: handle!),
-              SizedBox(
-                width: 40,
-                height: 40,
-                child: Center(
-                  child: corner == null && !selected
-                      ? leading ?? Artwork(track: track, size: 40, radius: 5)
-                      : Stack(
-                          clipBehavior: Clip.none,
-                          children: [
-                            leading ?? Artwork(track: track, size: 40, radius: 5),
-                            // The mark on the record itself. Held back behind a
-                            // scrim so it reads against any artwork — a bright
-                            // glyph on a bright cover is invisible, which is the
-                            // failure this whole change is about.
-                            if (selected)
-                              Positioned.fill(
-                                child: DecoratedBox(
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(5),
-                                    color: Colors.black.withValues(alpha: 0.45),
-                                  ),
-                                  child: Icon(Icons.graphic_eq,
-                                      size: 20, color: scheme.primary),
-                                ),
-                              ),
-                            if (corner != null)
-                              Positioned(left: -4, bottom: -4, child: corner!),
-                          ],
-                        ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      track.displayTitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: text.bodyMedium?.copyWith(
-                        color: failed
-                            ? scheme.error
-                            : selected
-                                ? scheme.primary
-                                : null,
-                        fontWeight: selected ? FontWeight.w700 : null,
-                      ),
-                    ),
-                    if (subtitle.isNotEmpty)
-                      Text(
-                        subtitle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: text.bodySmall?.copyWith(
-                          color: failed ? scheme.error : scheme.onSurfaceVariant,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              if (track.isDownloading) ...[
-                const SizedBox(width: 8),
-                _Downloading(track: track),
-              ],
-              if (trailing != null) ...[const SizedBox(width: 6), trailing!],
-              TrackMark(track: track),
-
-              // Where the file came from, immediately left of how long it is: the
-              // right-hand end of the row is where the eye already goes for the
-              // facts about a song, and on the artwork the mark was competing with
-              // the picture it sat on.
-              if (!track.isDownloading) ...[
-                const SizedBox(width: 8),
-                SourceDot(source: track.source),
-              ],
-              // The first thing to go when the type is turned up: a row has a fixed
-              // width and a title that has to be read, and the length is also in the
-              // song's sheet. At twice the size the title was squeezed to nothing and
-              // the row still ran off the edge.
-              if (showDuration &&
-                  duration.isNotEmpty &&
-                  !track.isDownloading &&
-                  MediaQuery.textScalerOf(context).scale(14) / 14 < 1.4) ...[
-                const SizedBox(width: 6),
-                Text(duration,
-                    style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
-              ],
-              if (showMenu && !picking)
-                IconButton(
-                  icon: const Icon(Icons.more_vert, size: 18),
-                  visualDensity: VisualDensity.compact,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
-                  tooltip: 'Track actions',
-                  onPressed: () => showTrackSheet(context, track,
-                      onRemove: onRemove,
-                      onChanged: onChanged,
-                      queuePosition: queuePosition),
-                )
-              else
-                const SizedBox(width: 4),
-            ],
-          ),
-        ),
-        ),
+        onHighlightChanged: (down) => setState(() => _pressed = down),
+        onHover: (over) => setState(() => _hovering = over),
+        child: inside,
       ),
+    );
+
+    // The card the row becomes while it is pushed. Read in its own builder so that
+    // only this ground, and not the row's words and artwork, is rebuilt for every
+    // hundredth of the drag.
+    final lifted = Builder(builder: (context) {
+      final pushed = SwipingNow.of(context);
+      final up = (pushed * 4).clamp(0.0, 1.0);
+      return AnimatedContainer(
+        duration: Motion.quick,
+        decoration: BoxDecoration(
+          // Solid the moment it moves: the card is opaque paper with the row's own
+          // tint on it, not a tint with the back showing through.
+          color: up == 0 ? ground : Color.alphaBlend(ground, scheme.surface),
+          borderRadius: BorderRadius.circular(10),
+          border: picked
+              ? Border.all(
+                  color: scheme.primary.withValues(alpha: 0.7), width: 1.2)
+              : null,
+          boxShadow: up == 0
+              ? null
+              : [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.28 * up),
+                    blurRadius: 14 * up,
+                    offset: Offset(0, 4 * up),
+                  ),
+                ],
+        ),
+        child: Material(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+          clipBehavior: Clip.antiAlias,
+          child: row,
+        ),
+      );
+    });
+
+    // A touch is answered by the row giving a little under it, the way a key does.
+    // Small: this is the row saying "yes", not a button being pressed home.
+    final pressed = AnimatedScale(
+      scale: _pressed && !stillness(context) ? 0.985 : 1,
+      duration: Motion.quick,
+      curve: Motion.enter,
+      child: lifted,
     );
 
     // Not while a selection is running: the same sideways drag would be doing two
     // things at once, and the bar at the top is how you act on a selection.
-    if (picking || (!swipeToPlayNext && onSwipeAway == null)) return row;
+    if (picking || (!widget.swipeToPlayNext && widget.onSwipeAway == null)) {
+      return pressed;
+    }
     return SwipeAction(
-      onSwipe: !swipeToPlayNext
+      onSwipe: !widget.swipeToPlayNext
           ? null
           : () => addAndSay(context, track, mode: 'next'),
-      onSwipeAway: onSwipeAway,
-      child: row,
+      onSwipeAway: widget.onSwipeAway,
+      child: pressed,
     );
   }
+
+  Selection? selectionOf(BuildContext context) =>
+      widget.selectable == null ? null : context.read<Selection>();
+
+  void _sheet(BuildContext context) => showTrackSheet(context, widget.track,
+      onRemove: widget.onRemove,
+      onChanged: widget.onChanged,
+      queuePosition: widget.queuePosition);
+}
+
+/// What is drawn over the artwork, if anything.
+enum _ArtState { plain, hover, starting, playing, paused, buffering, picked }
+
+/// The artwork, with the row's state drawn on it.
+///
+/// The mark goes on the record itself, held back behind a scrim so it reads against
+/// any cover — a bright glyph on a bright cover is invisible. One place for all of
+/// them, so the change from one to the next is a cross-fade rather than a jump.
+class _Art extends StatelessWidget {
+  const _Art({
+    required this.track,
+    required this.state,
+    this.leading,
+    this.corner,
+  });
+
+  final Track track;
+  final _ArtState state;
+  final Widget? leading;
+  final Widget? corner;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final art = leading ?? Artwork(track: track, size: 40, radius: 5);
+    final Widget? mark = switch (state) {
+      _ArtState.plain => null,
+      _ArtState.hover => Icon(Icons.play_arrow_rounded,
+          key: const ValueKey('hover'), size: 24, color: Colors.white),
+      _ArtState.starting => const SizedBox(
+          key: ValueKey('starting'),
+          width: 16,
+          height: 16,
+          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+      _ArtState.playing ||
+      _ArtState.paused ||
+      _ArtState.buffering =>
+        PlayingBars(
+          key: const ValueKey('bars'),
+          playing: state == _ArtState.playing,
+          buffering: state == _ArtState.buffering,
+          colour: scheme.primary,
+          size: 18,
+        ),
+      _ArtState.picked => Icon(Icons.check_rounded,
+          key: const ValueKey('picked'), size: 22, color: scheme.primary),
+    };
+
+    return SizedBox(
+      width: 40,
+      height: 40,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          art,
+          Positioned.fill(
+            child: AnimatedSwitcher(
+              duration: Motion.base,
+              switchInCurve: Motion.enter,
+              switchOutCurve: Motion.exit,
+              child: mark == null
+                  ? const SizedBox.shrink(key: ValueKey('none'))
+                  : DecoratedBox(
+                      key: mark.key,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(5),
+                        color: Colors.black.withValues(alpha: 0.5),
+                      ),
+                      child: Center(child: mark),
+                    ),
+            ),
+          ),
+          if (corner != null) Positioned(left: -4, bottom: -4, child: corner!),
+        ],
+      ),
+    );
+  }
+}
+
+/// The sound, as three bars.
+///
+/// They move while the song is playing and hold still, low, while it is paused —
+/// still there, because the song is still the one on — and breathe together while
+/// the player is waiting on the network, which is the one state that otherwise looks
+/// like nothing happening. Not a reading of the audio: that exists, on Android, and
+/// lives on the player screen. This is a sign, at eighteen pixels, that this row is
+/// the one making the noise.
+class PlayingBars extends StatefulWidget {
+  const PlayingBars({
+    super.key,
+    required this.playing,
+    this.buffering = false,
+    required this.colour,
+    this.size = 18,
+  });
+
+  final bool playing;
+  final bool buffering;
+  final Color colour;
+  final double size;
+
+  @override
+  State<PlayingBars> createState() => _PlayingBarsState();
+}
+
+class _PlayingBarsState extends State<PlayingBars> with TickerProviderStateMixin {
+  late final AnimationController _run = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1400),
+  );
+
+  /// How far into motion the bars are, 0 at rest and 1 in full swing, so a pause
+  /// settles them rather than freezing them mid-jump.
+  late final AnimationController _life =
+      AnimationController(vsync: this, duration: Motion.slow);
+
+  bool get _moving => (widget.playing || widget.buffering);
+
+  bool _started = false;
+
+  /// Not initState: whether the phone wants stillness is asked of the tree, and the
+  /// tree cannot be asked until the state is in it.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) return;
+    _started = true;
+    _settle();
+  }
+
+  @override
+  void didUpdateWidget(PlayingBars old) {
+    super.didUpdateWidget(old);
+    if (old.playing != widget.playing || old.buffering != widget.buffering) _settle();
+  }
+
+  void _settle() {
+    if (_moving && !stillness(context)) {
+      if (!_run.isAnimating) _run.repeat();
+      _life.animateTo(1, curve: Motion.enter);
+    } else {
+      _life.animateTo(0, curve: Motion.exit).whenComplete(() {
+        if (mounted && _life.value == 0) _run.stop();
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _run.dispose();
+    _life.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => RepaintBoundary(
+        child: SizedBox(
+          width: widget.size,
+          height: widget.size,
+          child: AnimatedBuilder(
+            animation: Listenable.merge([_run, _life]),
+            builder: (context, _) => CustomPaint(
+              painter: _BarsPainter(
+                t: _run.value,
+                life: _life.value,
+                breathing: widget.buffering,
+                colour: widget.colour,
+              ),
+            ),
+          ),
+        ),
+      );
+}
+
+class _BarsPainter extends CustomPainter {
+  const _BarsPainter({
+    required this.t,
+    required this.life,
+    required this.breathing,
+    required this.colour,
+  });
+
+  final double t;
+  final double life;
+  final bool breathing;
+  final Color colour;
+
+  /// Where each bar rests, and how it moves: three different rhythms so they never
+  /// line up, which is what makes three bars read as music rather than a metronome.
+  static const _rest = [0.30, 0.55, 0.40];
+  static const _turns = [2.0, 3.0, 2.5];
+  static const _phase = [0.0, 0.35, 0.7];
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = colour;
+    const n = 3;
+    final gap = size.width * 0.16;
+    final w = (size.width - gap * (n - 1)) / n;
+    for (var i = 0; i < n; i++) {
+      double h;
+      if (breathing) {
+        // All together, slowly: waiting, not playing.
+        final b = 0.5 + 0.5 * math.sin(t * 2 * math.pi);
+        h = 0.25 + 0.35 * b;
+      } else {
+        final s = math.sin((t * _turns[i] + _phase[i]) * 2 * math.pi);
+        h = 0.5 + 0.42 * s;
+      }
+      final height = (_rest[i] + (h - _rest[i]) * life) * size.height;
+      final x = i * (w + gap);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(x, size.height - height, w, height),
+          Radius.circular(w / 2),
+        ),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_BarsPainter old) =>
+      old.t != t ||
+      old.life != life ||
+      old.breathing != breathing ||
+      old.colour != colour;
 }
 
 /// The grip, which gets out of the way while the row is being pushed.
@@ -347,25 +748,6 @@ class _Grip extends StatelessWidget {
     return IgnorePointer(
       ignoring: gone > 0.5,
       child: Opacity(opacity: 1 - gone, child: child),
-    );
-  }
-}
-
-/// A song still coming down the wire, with however much of it has arrived.
-class _Downloading extends StatelessWidget {
-  const _Downloading({required this.track});
-  final Track track;
-
-  @override
-  Widget build(BuildContext context) {
-    final percent = (track.progress?['percent'] as num?)?.toDouble();
-    return SizedBox(
-      width: 16,
-      height: 16,
-      child: CircularProgressIndicator(
-        strokeWidth: 2,
-        value: percent == null ? null : (percent / 100).clamp(0.0, 1.0),
-      ),
     );
   }
 }
@@ -462,6 +844,10 @@ class TrackMark extends StatelessWidget {
       return _Fetch(track: track, child: mark);
     }
 
+    // Coming down the wire: the row's foot says how far, and the subtitle says
+    // what. A third mark here would be saying it a third time.
+    if (track.isDownloading) return const SizedBox.shrink();
+
     if (!OfflineStore.supported) return const SizedBox.shrink();
     return Builder(builder: (context) {
       // Only this song's two facts, not the whole app: a row in a list of four hundred
@@ -524,6 +910,7 @@ class _FetchState extends State<_Fetch> {
       onPressed: () async {
         final app = context.read<AppState>();
         final messenger = ScaffoldMessenger.of(context);
+        feel(Feel.tap);
         setState(() => _asked = true);
         try {
           final got = await app.api.fetchAudio(trackIds: [widget.track.id]);
@@ -535,6 +922,46 @@ class _FetchState extends State<_Fetch> {
           if (mounted) setState(() => _asked = false);
         }
       },
+    );
+  }
+}
+
+/// A small printed tag naming where a recording came from, for a row.
+///
+/// The dot said a song was different without saying how, and at seven pixels a
+/// colour is a thing you have to already know. Two letters in the same colour say
+/// it, in the typewriter face the fact files are set in. Nothing at all for YouTube:
+/// nearly everything is, and a tag on every row is a tag on none of them.
+class SourceTag extends StatelessWidget {
+  const SourceTag({super.key, required this.source});
+
+  final String source;
+
+  static bool worthShowing(String source) => lettersOf(source) != null;
+
+  static String? lettersOf(String source) => switch (source) {
+        'soundcloud' => 'SC',
+        'bandcamp' => 'BC',
+        'custom' => 'YOURS',
+        _ => null,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final letters = lettersOf(source);
+    if (letters == null) return const SizedBox.shrink();
+    final colour = SourceDot.colourOf(source, Theme.of(context).colorScheme);
+    return Tooltip(
+      message: SourceDot.labelOf(source),
+      waitDuration: const Duration(milliseconds: 600),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(4, 1, 4, 0),
+        decoration: BoxDecoration(
+          border: Border.all(color: colour.withValues(alpha: 0.8), width: 1),
+          borderRadius: BorderRadius.circular(2),
+        ),
+        child: Text(letters, style: Mag.typewriter(9.5, color: colour, bold: true)),
+      ),
     );
   }
 }

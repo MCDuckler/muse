@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import 'feel.dart';
+import 'mag.dart';
+import 'motion.dart';
 
 /// A drag that the content actually follows.
 ///
@@ -58,10 +60,13 @@ class _PushableState extends State<Pushable> {
   }
 
   @override
-  Widget build(BuildContext context) => widget.builder(
-        context,
-        SwipingNow(progress: _pushed.clamp(0.0, 1.0), child: widget.child),
-        _report,
+  Widget build(BuildContext context) => SwipingNow(
+        // Over the whole of it rather than only the row, so what the Dismissible
+        // uncovers can hear the drag too and draw itself to it. The row is the same
+        // widget on every frame, so it is not rebuilt for this; only the parts that
+        // ask are.
+        progress: _pushed.clamp(0.0, 1.0),
+        child: widget.builder(context, widget.child, _report),
       );
 }
 
@@ -305,56 +310,111 @@ class SwipeAction extends StatelessWidget {
   final String awayLabel;
 
   @override
+  Widget build(BuildContext context) => DragFollow(
+        horizontalTravel: 84,
+        onSwipeRight: onSwipe,
+        onSwipeLeft: onSwipeAway,
+        behind: (context, progress, forward) =>
+            (forward ? onSwipe : onSwipeAway) == null
+                ? const SizedBox.shrink()
+                : SwipeBack(
+                    away: !forward,
+                    icon: forward ? icon : awayIcon,
+                    label: forward ? label : awayLabel,
+                    progress: progress,
+                  ),
+        child: child,
+      );
+}
+
+/// What a row uncovers as it is pushed: the thing letting go will do.
+///
+/// A tinted back the height and width of the row — the row is a card now and covers
+/// it, so only the strip the drag has opened shows — with a badge at the open edge
+/// that grows with the drag and fills at the line where letting go means it. The
+/// word comes with the fill, printed small under the glyph the way a caption sits
+/// under a picture, so it fits in the strip rather than sliding half under the row.
+///
+/// Told how far by [progress], or by the [SwipingNow] above it when it is the back of
+/// a Dismissible, which reports the drag to that and nothing else.
+class SwipeBack extends StatelessWidget {
+  const SwipeBack({
+    super.key,
+    required this.icon,
+    required this.label,
+    this.away = false,
+    this.progress,
+    this.caughtAt = 0.45,
+  });
+
+  final IconData icon;
+  final String label;
+
+  /// Pushed away — the destructive one — rather than pulled towards.
+  final bool away;
+
+  /// 0 to 1 of the travel. Null to read it from the row being pushed.
+  final double? progress;
+
+  /// The fraction of the travel at which letting go completes. Matches DragFollow.
+  final double caughtAt;
+
+  @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-
-    Widget hint(bool forward, double progress) {
-      final ground = forward ? scheme.primaryContainer : scheme.errorContainer;
-      final ink = forward ? scheme.onPrimaryContainer : scheme.onErrorContainer;
-      return Align(
-        alignment: forward ? Alignment.centerLeft : Alignment.centerRight,
-        // As tall as the row it is behind. It was a small pill floating in the middle
-        // of the gap, which reads as a thing lying under the list rather than as the
-        // row's own back — and the same gesture in the queue already uncovered a
-        // full-height panel, so the two did not look like one idea.
-        child: FractionallySizedBox(
-          heightFactor: 1,
-          child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: ground.withValues(alpha: 0.25 + 0.75 * progress),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(forward ? icon : awayIcon, size: 18, color: ink),
-              // The words appear only once the drag is far enough to mean it.
-              if (progress > 0.5) ...[
-                const SizedBox(width: 8),
-                Text(forward ? label : awayLabel,
-                    style: Theme.of(context)
-                        .textTheme
-                        .labelMedium
-                        ?.copyWith(color: ink)),
+    final p = (progress ?? SwipingNow.of(context)).clamp(0.0, 1.0);
+    final caught = p >= caughtAt;
+    final ink = away ? scheme.error : scheme.primary;
+    final onInk = away ? scheme.onError : scheme.onPrimary;
+    final still = stillness(context);
+    return FractionallySizedBox(
+      heightFactor: 1,
+      widthFactor: 1,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: ink.withValues(alpha: 0.10 + 0.16 * p),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Align(
+          alignment: away ? Alignment.centerRight : Alignment.centerLeft,
+          // As wide as the strip a full drag opens, with the badge in the middle of
+          // it: a word set off the edge slid half under the row.
+          child: SizedBox(
+            width: 84,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AnimatedScale(
+                  scale: caught ? 1 : 0.7 + 0.25 * (p / caughtAt).clamp(0.0, 1.0),
+                  duration: still ? Duration.zero : Motion.quick,
+                  curve: caught ? Motion.pop : Motion.enter,
+                  child: AnimatedContainer(
+                    duration: still ? Duration.zero : Motion.quick,
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: caught ? ink : ink.withValues(alpha: 0.18),
+                    ),
+                    child: Icon(icon, size: 17, color: caught ? onInk : ink),
+                  ),
+                ),
+                AnimatedOpacity(
+                  opacity: caught ? 1 : 0,
+                  duration: still ? Duration.zero : Motion.quick,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Text(label.toUpperCase(),
+                        maxLines: 1,
+                        style: Mag.flag(7.5, color: ink)
+                            .copyWith(letterSpacing: 0.5)),
+                  ),
+                ),
               ],
-            ],
+            ),
           ),
         ),
-        ),
-      );
-    }
-
-    return DragFollow(
-      horizontalTravel: 76,
-      onSwipeRight: onSwipe,
-      onSwipeLeft: onSwipeAway,
-      behind: (context, progress, forward) =>
-          (forward ? onSwipe : onSwipeAway) == null
-              ? const SizedBox.shrink()
-              : hint(forward, progress),
-      child: child,
+      ),
     );
   }
 }

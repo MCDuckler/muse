@@ -497,15 +497,12 @@ class _QueuePageState extends State<QueuePage> {
                         // can ask it where it is instead of guessing from a row height.
                         dragStartBehavior: DragStartBehavior.start,
                         direction: DismissDirection.endToStart,
-                        background: Container(
-                          alignment: Alignment.centerRight,
-                          padding: const EdgeInsets.only(right: 20),
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.errorContainer,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Icon(Icons.delete_outline,
-                              color: Theme.of(context).colorScheme.onErrorContainer),
+                        // The same back every other row uncovers, hearing the drag
+                        // through the Pushable around it.
+                        background: const SwipeBack(
+                          away: true,
+                          icon: Icons.delete_outline,
+                          label: 'Remove',
                         ),
                         onDismissed: (_) => app.removeFromQueue(i, context: context),
                         onUpdate: (d) => report(d.progress),

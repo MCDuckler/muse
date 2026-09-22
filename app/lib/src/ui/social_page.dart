@@ -503,7 +503,7 @@ class _PersonPageState extends State<PersonPage> {
             if (them.recent.isNotEmpty) ...[
               const _Heading('What they have been playing'),
               for (final t in them.recent)
-                SongRow(track: t, onTap: () => addAndSay(context, t)),
+                SongRow(track: t, plays: false, onTap: () => addAndSay(context, t)),
             ],
             const _Heading('Their library'),
             if (_library.isEmpty)
@@ -512,7 +512,7 @@ class _PersonPageState extends State<PersonPage> {
                 child: Text('Nothing kept yet.'),
               ),
             for (final t in _library)
-              SongRow(track: t, onTap: () => addAndSay(context, t)),
+              SongRow(track: t, plays: false, onTap: () => addAndSay(context, t)),
             if (_more)
               Padding(
                 padding: const EdgeInsets.all(16),
