@@ -780,7 +780,9 @@ class _DesktopRowState extends State<_DesktopRow> {
   @override
   Widget build(BuildContext context) {
     if (_found.isEmpty) return const SizedBox.shrink();
-    if (Updates.desktop == null && !kIsWeb) return const SizedBox.shrink();
+    // Only in a browser on a computer: that is who the download is for. On a desk the
+    // app updates itself — see _UpdateRow — and this row would be the same news twice.
+    if (!kIsWeb) return const SizedBox.shrink();
     return Column(
       children: [
         for (final MapEntry(key: os, value: release) in _found.entries)
@@ -855,7 +857,7 @@ class _ApkRowState extends State<_ApkRow> {
   /// this app could.
   Future<void> _get() async {
     final messenger = ScaffoldMessenger.of(context);
-    if (Updates.supported) {
+    if (Updates.android) {
       final u = _updates ??= Updates(baseUrl: _base, running: appBuild)
         ..addListener(() { if (mounted) setState(() {}); });
       if (u.release == null) await u.look();
@@ -908,7 +910,7 @@ class _ApkRowState extends State<_ApkRow> {
                 ),
                 FilledButton.tonal(
                   onPressed: downloading ? null : _get,
-                  child: Text(Updates.supported ? 'Install' : 'Download'),
+                  child: Text(Updates.android ? 'Install' : 'Download'),
                 ),
               ],
             ),
@@ -966,13 +968,16 @@ class _UpdateRowState extends State<_UpdateRow> {
     }
 
     if (u.state == Updating.waiting) {
+      final desk = Updates.desktop != null;
       return ListTile(
         leading: Icon(Icons.system_update, color: scheme.primary),
         title: const Text('Ready to install'),
-        subtitle: const Text('Android asks before it installs anything — say yes'),
+        subtitle: Text(desk
+            ? 'The app closes, swaps itself for the new build and opens again'
+            : 'Android asks before it installs anything — say yes'),
         trailing: FilledButton(
           onPressed: u.offer,
-          child: const Text('Install'),
+          child: Text(desk ? 'Restart and install' : 'Install'),
         ),
       );
     }
@@ -993,7 +998,7 @@ class _UpdateRowState extends State<_UpdateRow> {
         title: const Text('Up to date'),
         subtitle: Text(u.state == Updating.checking
             ? 'Looking…'
-            : appBuild.isEmpty
+            : !Release.knows(u.running)
                 ? 'This build was not made by the publisher'
                 : 'This is the newest version on the server'),
         trailing: IconButton(
@@ -1008,7 +1013,7 @@ class _UpdateRowState extends State<_UpdateRow> {
     return ListTile(
       leading: Icon(Icons.system_update, color: scheme.primary),
       title: Text('Version ${release.version} is ready'),
-      subtitle: Text(Release.knows(appBuild)
+      subtitle: Text(Release.knows(u.running)
           ? '${release.size}'
               '${release.built == null ? '' : ' · built ${release.built!.split('T').first}'}'
           // Honest about why: this copy predates the app knowing when it was built, so

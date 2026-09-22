@@ -74,11 +74,20 @@ class Updates extends ChangeNotifier {
   String baseUrl;
 
   /// The build this app was made from, or empty when it was not made by the publisher.
-  final String running;
+  ///
+  /// Not final: a desktop build carries its stamp in a file beside the program as well
+  /// as in the binary, and a copy that was built without the define can still read it
+  /// from there. See [look].
+  String running;
 
   static const _channel = MethodChannel('muse/install');
 
-  static bool get supported =>
+  /// Whether this app can bring a newer build of itself in: the phone, through the
+  /// system's installer, and the desktop, by swapping its own files. Not the browser,
+  /// which reloads; not the iPhone, which is signed by somebody else.
+  static bool get supported => android || desktop != null;
+
+  static bool get android =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
   Updating state = Updating.idle;
@@ -207,7 +216,13 @@ class Updates extends ChangeNotifier {
     if (!supported || state == Updating.downloading) return;
     state = Updating.checking;
     notifyListeners();
-    release = await published(baseUrl) ?? release;
+    final os = desktop;
+    if (os != null) {
+      if (!Release.knows(running)) running = await stampBeside() ?? running;
+      release = await publishedDesktop(baseUrl, os) ?? release;
+    } else {
+      release = await published(baseUrl) ?? release;
+    }
     state = available ? Updating.ready : Updating.idle;
     notifyListeners();
   }
@@ -230,12 +245,16 @@ class Updates extends ChangeNotifier {
       // fill the phone with sixty-megabyte copies of the same app.
       for (final old in dir.listSync()) {
         try {
-          old.deleteSync();
+          old.deleteSync(recursive: true);
         } catch (_) {}
       }
-      final into = File('${dir.path}/muse-${want.build}.apk');
+      final os = desktop;
+      final into = File(os == null
+          ? '${dir.path}/muse-${want.build}.apk'
+          : '${dir.path}/wetowl-$os-${want.build}${os == 'windows' ? '.zip' : '.tar.gz'}');
 
-      final request = http.Request('GET', Uri.parse('$baseUrl/muse.apk'));
+      final request = http.Request(
+          'GET', Uri.parse(os == null ? '$baseUrl/muse.apk' : desktopUrl(baseUrl, os)));
       final response = await http.Client().send(request);
       if (response.statusCode != 200) {
         throw HttpException('the server answered ${response.statusCode}');
@@ -269,9 +288,14 @@ class Updates extends ChangeNotifier {
       }
 
       _fetched = into;
+      if (desktop != null) {
+        // Unpacked now, while the app is still here to say what went wrong. The
+        // swap itself waits for a word: it closes the window.
+        _staged = await stageDesktop(into, Directory('${dir.path}/stage'));
+      }
       state = Updating.waiting;
       notifyListeners();
-      await offer();
+      if (desktop == null) await offer();
     } catch (e) {
       trouble = '$e';
       state = Updating.failed;
@@ -279,10 +303,12 @@ class Updates extends ChangeNotifier {
     }
   }
 
-  /// Open the system installer on what was fetched.
+  /// Open the system installer on what was fetched — or, on a desk, close the app
+  /// and let the new build take its place.
   Future<void> offer() async {
     final file = _fetched;
     if (!supported || file == null) return;
+    if (desktop != null) return _applyDesktop();
     try {
       final allowed =
           await _channel.invokeMethod<bool>('allowed') ?? false;
@@ -304,4 +330,167 @@ class Updates extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+  // ---------------- updating a desktop build in place ----------------
+  //
+  // The desktop build is a folder: the program, its libraries, its assets and the
+  // fetcher beside it. Updating it is replacing that folder's contents with the next
+  // build's — which the program cannot do to itself while it is running, on Windows
+  // because the files are locked and on Linux because the running one would be
+  // swapped out from under itself. So it does everything it can while running —
+  // fetch, check, unpack — then writes a few lines of shell that wait for it to be
+  // gone, copy the new build over the old, and start it again; starts them; and quits.
+
+  Directory? _staged;
+
+  /// Where this program is: the folder the build is.
+  static Directory get installDir => File(Platform.resolvedExecutable).parent;
+
+  /// The program's own file name in that folder.
+  static String get exeName => Platform.isWindows ? 'wetowl.exe' : 'wetowl';
+
+  /// The build stamp the build put beside the program, if it did.
+  static Future<String?> stampBeside() async {
+    try {
+      final f = File('${installDir.path}${Platform.pathSeparator}build-stamp.txt');
+      if (!await f.exists()) return null;
+      final s = (await f.readAsString()).trim();
+      return Release.knows(s) ? s : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Whether the folder the program is in can be written to. A build unpacked into
+  /// somebody's home can be; one an administrator put under /opt or Program Files
+  /// cannot, and then the honest answer is the download.
+  static Future<bool> canWriteInstallDir([Directory? dir]) async {
+    final probe = File('${(dir ?? installDir).path}${Platform.pathSeparator}.wetowl-write-test');
+    try {
+      await probe.writeAsString('', flush: true);
+      await probe.delete();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Unpack [archive] into [stage] and say where the build is inside it.
+  ///
+  /// The system's own tar, which every Linux has and Windows 10 has had since 2018 —
+  /// and which reads a zip as well as a tarball — rather than a library for a thing
+  /// that happens once a fortnight. Windows without it falls back to PowerShell.
+  static Future<Directory> stageDesktop(File archive, Directory stage) async {
+    if (await stage.exists()) await stage.delete(recursive: true);
+    await stage.create(recursive: true);
+    final zip = archive.path.endsWith('.zip');
+    var r = await Process.run(
+        'tar', [zip ? '-xf' : '-xzf', archive.path, '-C', stage.path]);
+    if (r.exitCode != 0 && zip && Platform.isWindows) {
+      r = await Process.run('powershell', [
+        '-NoProfile',
+        '-Command',
+        'Expand-Archive -Force -LiteralPath "${archive.path}" -DestinationPath "${stage.path}"',
+      ]);
+    }
+    if (r.exitCode != 0) {
+      throw FormatException('it could not be unpacked: ${r.stderr}'.trim());
+    }
+    final root = sourceRootIn(stage, exeName);
+    if (root == null) throw FormatException('there is no $exeName in what arrived');
+    return root;
+  }
+
+  /// The folder holding [exe], inside what was unpacked: the stage itself when the
+  /// archive was flat (the Windows zip), or the one folder in it (the Linux tarball,
+  /// which carries a `wetowl/` folder at its top).
+  static Directory? sourceRootIn(Directory stage, String exe) {
+    if (File('${stage.path}${Platform.pathSeparator}$exe').existsSync()) return stage;
+    final dirs = stage.listSync().whereType<Directory>().toList();
+    if (dirs.length == 1 &&
+        File('${dirs.single.path}${Platform.pathSeparator}$exe').existsSync()) {
+      return dirs.single;
+    }
+    return null;
+  }
+
+  /// The few lines that do the swap once the app is gone.
+  ///
+  /// Given the app's process id, the unpacked build, the folder to put it in and the
+  /// program's name. They wait for the process to end, copy the new build over the
+  /// old — over, not instead of: a file the new build no longer ships is left, which
+  /// is harmless, where deleting the folder first and then failing to copy would be
+  /// no app at all — and start the program again from where it is.
+  static String swapScript({
+    required String os,
+    required int pid,
+    required String from,
+    required String into,
+    required String exe,
+  }) {
+    if (os == 'windows') {
+      return [
+        '@echo off',
+        'rem Written by WetOwl to bring in a new build of itself. Safe to delete.',
+        ':wait',
+        'tasklist /FI "PID eq $pid" 2>NUL | find "$pid" >NUL',
+        'if not errorlevel 1 (timeout /t 1 /nobreak >NUL & goto wait)',
+        'robocopy "$from" "$into" /E /R:10 /W:1 >NUL',
+        'if errorlevel 8 exit /b 1',
+        'start "" "$into\\$exe"',
+        '',
+      ].join('\r\n');
+    }
+    return [
+      '#!/bin/sh',
+      '# Written by WetOwl to bring in a new build of itself. Safe to delete.',
+      'pid=$pid',
+      'from=${_sh(from)}',
+      'into=${_sh(into)}',
+      'exe=${_sh(exe)}',
+      'while kill -0 "\$pid" 2>/dev/null; do sleep 0.3; done',
+      'cp -a "\$from/." "\$into/" || exit 1',
+      'chmod +x "\$into/\$exe" "\$into/wetowl-fetch" 2>/dev/null',
+      'cd "\$into" && nohup "./\$exe" >/dev/null 2>&1 &',
+      '',
+    ].join('\n');
+  }
+
+  static String _sh(String s) => "'${s.replaceAll("'", "'\\''")}'";
+
+  /// Close, and come back as the new build.
+  Future<void> _applyDesktop() async {
+    final os = desktop;
+    final from = _staged;
+    if (os == null || from == null) return;
+    try {
+      final into = installDir;
+      if (!await canWriteInstallDir(into)) {
+        throw FileSystemException(
+            'this copy is installed somewhere it cannot write to; '
+            'download the build and unpack it over the old one by hand',
+            into.path);
+      }
+      final scripts = from.parent;
+      final script = File(
+          '${scripts.path}${Platform.pathSeparator}swap${os == 'windows' ? '.cmd' : '.sh'}');
+      await script.writeAsString(swapScript(
+          os: os, pid: pid, from: from.path, into: into.path, exe: exeName));
+      // Detached: not this app's child, so it is still there after this app is not.
+      if (os == 'windows') {
+        await Process.start('cmd.exe', ['/c', script.path],
+            mode: ProcessStartMode.detached);
+      } else {
+        await Process.start('sh', [script.path], mode: ProcessStartMode.detached);
+      }
+      // A moment for the shell to be up, then out of its way.
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      exit(0);
+    } catch (e) {
+      trouble = e is FileSystemException ? e.message : '$e';
+      state = Updating.failed;
+      notifyListeners();
+    }
+  }
+
 }
