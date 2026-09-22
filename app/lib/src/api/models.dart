@@ -518,7 +518,14 @@ class DeviceInfo {
       );
 
   /// The same device, having just said something new about itself.
-  DeviceInfo saying({required bool playing, required int positionMs, int? itemId}) =>
+  DeviceInfo saying({
+    required bool playing,
+    required int positionMs,
+    int? itemId,
+    Track? track,
+    int? queueId,
+    String? queue,
+  }) =>
       DeviceInfo(
         id: id,
         name: name,
@@ -528,10 +535,10 @@ class DeviceInfo {
         live: true,
         playing: playing,
         positionMs: positionMs,
-        queue: queue,
-        queueId: queueId,
-        track: track,
-        lastSeen: lastSeen,
+        queue: queue ?? this.queue,
+        queueId: queueId ?? this.queueId,
+        track: track ?? this.track,
+        lastSeen: DateTime.now(),
         itemId: itemId ?? this.itemId,
         heardAt: DateTime.now(),
       );

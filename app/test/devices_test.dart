@@ -88,6 +88,30 @@ void main() {
     expect(app.musicIsPlaying, isTrue, reason: 'and this screen says so');
   });
 
+  test('a device starting a song is shown at once, without asking again', () async {
+    await app.refreshDevices();
+    sent.clear();
+    await app.heardFromADevice({
+      'device_id': 2,
+      'playing': true,
+      'track_id': 78,
+      'queue_id': 9,
+      'queue': 'Evening',
+      'item_id': 5,
+      'position_ms': 1000,
+      'track': {
+        'id': 78,
+        'title': 'The next song',
+        'artists': ['Somebody'],
+        'state': 'ready',
+        'source': 'youtube',
+      },
+    });
+    expect(app.elsewhere?.track?.title, 'The next song');
+    expect(sent.where((r) => r.path == '/devices'), isEmpty,
+        reason: 'the report carried the song; nothing to go back for');
+  });
+
   test('a report from a device that has gone quiet is not followed', () async {
     useThisClientInstead(MockClient((request) async => http.Response(
         jsonEncode({

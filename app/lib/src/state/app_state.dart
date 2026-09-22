@@ -860,8 +860,11 @@ class AppState extends ChangeNotifier {
     // What this device is doing, for the others. Ten seconds while something is
     // playing; the report itself keeps quiet when nothing is.
     _deviceTimer?.cancel();
+    // Five seconds, not ten: a report that was missed — a phone's radio in a lift —
+    // costs the other screens that long before the next one, and the report itself
+    // is a few hundred bytes.
     _deviceTimer =
-        Timer.periodic(const Duration(seconds: 10), (_) => reportDevice());
+        Timer.periodic(const Duration(seconds: 5), (_) => reportDevice());
     unawaited(refreshDevices());
     _jamTimer?.cancel();
     _jamTimer = Timer.periodic(const Duration(seconds: 5), (_) => pushJamState());
@@ -2051,12 +2054,17 @@ class AppState extends ChangeNotifier {
     final id = data['device_id'] as int?;
     final known = devices.where((d) => d.id == id).firstOrNull;
     final said = data.containsKey('position_ms');
-    // A rename, a device never seen, a server from before it said all this, or a song
-    // and a queue this list has no names for yet: ask.
-    if (!said ||
-        known == null ||
-        known.track?.id != data['track_id'] ||
-        known.queueId != data['queue_id']) {
+    // The song comes with the report, so a device starting one is shown at once.
+    // A server from before it did leaves the song out; then, as before, ask.
+    final track = data['track'] is Map
+        ? Track.fromJson((data['track'] as Map).cast<String, dynamic>())
+        : null;
+    final sameSong = known?.track?.id == data['track_id'] || track != null;
+    final sameQueue =
+        known?.queueId == data['queue_id'] || data['queue'] != null;
+    // A rename, a device never seen, a device forgotten, or a song and a queue this
+    // list has no names for yet: ask.
+    if (!said || known == null || !sameSong || !sameQueue) {
       await refreshDevices();
       return;
     }
@@ -2066,7 +2074,10 @@ class AppState extends ChangeNotifier {
             ? d.saying(
                 playing: (data['playing'] ?? false) as bool,
                 positionMs: (data['position_ms'] ?? 0) as int,
-                itemId: data['item_id'] as int?)
+                itemId: data['item_id'] as int?,
+                track: track ?? (data['track_id'] == null ? null : d.track),
+                queueId: data['queue_id'] as int?,
+                queue: data['queue'] as String?)
             : d,
     ];
     _followTheMusic();
@@ -2124,7 +2135,7 @@ class AppState extends ChangeNotifier {
     final snapshot = player?.last;
     final playing = snapshot?.playing ?? false;
     final now = DateTime.now();
-    if (!force && now.difference(_saidDevice) < const Duration(seconds: 9)) return;
+    if (!force && now.difference(_saidDevice) < const Duration(seconds: 4)) return;
     _saidDevice = now;
     try {
       await api.reportDevice(

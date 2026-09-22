@@ -124,13 +124,36 @@ def report(body: dict = Body(default={}), user: dict = Depends(current_user)):
     # something was. A screen working this device as a remote control draws its seek
     # bar from this, and one that had to go and ask again after every report was always
     # a round trip behind the music.
+    #
+    # The song itself goes too. A screen that had only its id went back for the list
+    # and then for the queue before it could show anything: two round trips between
+    # the phone starting a song and the desk saying so. With the song in hand the desk
+    # says so at once and fetches the queue behind it.
+    track = _track(body.get("track_id"))
+    queue = db.one("select name from queues where id=%s", (body.get("queue_id"),)) \
+        if body.get("queue_id") else None
     publish("devices", {"device_id": user["device_id"], "playing": playing,
                         "track_id": body.get("track_id"),
                         "queue_id": body.get("queue_id"),
+                        "queue": queue["name"] if queue else None,
                         "item_id": body.get("item_id"),
-                        "position_ms": position_ms},
+                        "position_ms": position_ms,
+                        "track": track},
             to_user=user["id"])
     return {"ok": True}
+
+
+def _track(track_id) -> dict | None:
+    if not track_id:
+        return None
+    row = db.one(
+        """select t.*, c.color as cover_color, c.sha256 as cover_sha, m.path
+             from tracks t
+             left join covers c on c.id = t.cover_id
+             left join media m on m.track_id = t.id and m.role = 'canonical'
+            where t.id = %s""",
+        (track_id,))
+    return catalog.public(row) if row else None
 
 
 # ------------------------------------------------------------------ fetching music
