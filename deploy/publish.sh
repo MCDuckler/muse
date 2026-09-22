@@ -16,17 +16,37 @@ HOST=${MUSE_HOST:-root@89.58.49.140}
 KEY=${MUSE_KEY:-$HOME/Documents/chris.pem}
 SERVER_URL=${MUSE_SERVER_URL:-https://89-58-49-140.nip.io}
 SSH="ssh -i $KEY"
+# Run on the box itself and there is no box to reach: the checkout in /opt/muse is the
+# source, and what would have gone over SSH goes to the same disk. Detected from the
+# directory rather than asked for, so the same command works in both places.
+if [ "${MUSE_HOST:-}" = here ] || [ "$(pwd -P)" = /opt/muse ]; then
+  HERE=1
+  on_box() { bash -c "$1"; }
+  put() { cp "$1" "$2"; }
+  at() { echo "$1"; }
+  RSYNC_TO=()
+else
+  HERE=
+  on_box() { $SSH "$HOST" "$1"; }
+  put() { scp -q -i "$KEY" "$1" "$HOST":"$2"; }
+  at() { echo "$HOST:$1"; }
+  RSYNC_TO=(-e "$SSH")
+fi
 # Where the installable builds live. Deliberately not the web root: see above.
 DL=/opt/muse/deploy/downloads
 what=${1:-all}
 
 publish_server() {
   echo "== server"
-  rsync -az --delete --exclude __pycache__ --exclude tests --exclude 'muse.toml' \
-    -e "$SSH" server/ "$HOST":/opt/muse/server/
-  scp -q -i "$KEY" deploy/Caddyfile "$HOST":/opt/muse/deploy/Caddyfile
+  # On the box the tree being built from is this one; rsyncing it onto itself with
+  # --delete would take the tests with it.
+  if [ -z "$HERE" ]; then
+    rsync -az --delete --exclude __pycache__ --exclude tests --exclude 'muse.toml' \
+      -e "$SSH" server/ "$HOST":/opt/muse/server/
+    scp -q -i "$KEY" deploy/Caddyfile "$HOST":/opt/muse/deploy/Caddyfile
+  fi
   # The API is a built image, not a bind mount: restarting alone runs the old code.
-  $SSH "$HOST" 'cd /opt/muse/deploy && docker compose up -d --build api && docker compose restart caddy'
+  on_box 'cd /opt/muse/deploy && docker compose up -d --build api && docker compose restart caddy'
   sleep 6
   python3 deploy/check_routes.py "$SERVER_URL"
 }
@@ -68,7 +88,7 @@ publish_web() {
   # files are for reading a stack trace off a debug build; nothing serves them and they
   # are another megabyte and a half over the wire on every publish.
   rsync -az --delete --exclude '*.symbols' \
-    -e "$SSH" app/build/web/ "$HOST":/opt/muse/deploy/web/
+    "${RSYNC_TO[@]}" app/build/web/ "$(at /opt/muse/deploy/web/)"
   # And the thing that went wrong, asserted rather than remembered: a web publish must
   # never cost the phones their downloads.
   for f in muse.apk wetowl.ipa; do
@@ -102,13 +122,13 @@ publish_apk() {
   local apk=app/build/app/outputs/flutter-apk/app-release.apk
   local bytes
   bytes=$(stat -c%s "$apk")
-  scp -q -i "$KEY" "$apk" "$HOST":$DL/muse.apk
+  put "$apk" $DL/muse.apk
   # What the app reads to find out whether there is a newer one. A plain file beside
   # the APK rather than an endpoint: it is written by whatever publishes the APK, so
   # the two cannot get out of step.
   printf '{"version":"%s","build":"%s","bytes":%s,"built":"%s"}\n' \
     "$version" "$build" "$bytes" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    | $SSH "$HOST" "cat > $DL/muse.apk.json"
+    | on_box "cat > $DL/muse.apk.json"
   echo "   $SERVER_URL/muse.apk  ($version build $build, $((bytes / 1024 / 1024))MB)"
 }
 
@@ -143,11 +163,11 @@ publish_ios() {
             | strings | grep -oE '^20[0-9]{10}$' | sort -u | tail -1)
   [ -n "$build" ] || build=$(echo "$tag" | tr -dc '0-9')
 
-  scp -q -i "$KEY" "$ipa" "$HOST":$DL/wetowl.ipa
+  put "$ipa" $DL/wetowl.ipa
   printf '{"version":"%s","build":"%s","bytes":%s,"built":"%s","tag":"%s"}\n' \
     "$(sed -n 's/^version: *\([^+]*\).*/\1/p' app/pubspec.yaml | tr -d '[:space:]')" \
     "$build" "$bytes" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$tag" \
-    | $SSH "$HOST" "cat > $DL/wetowl.ipa.json"
+    | on_box "cat > $DL/wetowl.ipa.json"
 
   # The same build again, described the way a sideloader wants to hear about it.
   #
@@ -170,7 +190,7 @@ publish_ios() {
 import plistlib, sys, zipfile
 p = plistlib.loads(zipfile.ZipFile(sys.argv[1]).read("Payload/Runner.app/Info.plist"))
 print(p["CFBundleShortVersionString"], p["CFBundleVersion"])' "$ipa")
-  cat <<JSON | $SSH "$HOST" "cat > $DL/wetowl-source.json"
+  cat <<JSON | on_box "cat > $DL/wetowl-source.json"
 {
   "name": "WetOwl",
   "identifier": "dev.muse.source",
@@ -235,10 +255,10 @@ publish_desktop() {
       *.tar.gz) build=$(tar -xOzf "$tmp/$f" wetowl/build-stamp.txt 2>/dev/null | tr -dc '0-9') ;;
     esac
     [ -n "$build" ] || build=$(echo "$tag" | tr -dc '0-9')
-    scp -q -i "$KEY" "$tmp/$f" "$HOST":$DL/$f
+    put "$tmp/$f" $DL/$f
     printf '{"version":"%s","build":"%s","bytes":%s,"built":"%s","tag":"%s"}\n' \
       "$version" "$build" "$bytes" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$tag" \
-      | $SSH "$HOST" "cat > $DL/$name.json"
+      | on_box "cat > $DL/$name.json"
     echo "   $SERVER_URL/$f  ($tag, $((bytes / 1024 / 1024))MB)"
   done
   rm -rf "$tmp"
