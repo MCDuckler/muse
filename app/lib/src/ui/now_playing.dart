@@ -200,14 +200,13 @@ class NowPlayingScreen extends StatelessWidget {
                     // title pushed off the bottom of the window.
                     final record = <Widget>[
 
-                            // Room above the record.
-                            //
-                            // It sat hard against the app bar, which reads as the
-                            // screen having run out rather than as a record standing
-                            // on a shelf with air around it. The arm's post is at the
-                            // top of the stage and wants air of its own; the air that
-                            // was under the controls, above the bar, is spent here.
-                            const SizedBox(height: 44),
+                            // Room above the record: a little, always. The rest of
+                            // whatever the screen has spare is above this too — the
+                            // column stands on the bar at the bottom, see below — and
+                            // the record's own box now holds the arm and the top of
+                            // the disc, so neither can be under the header whatever
+                            // this is.
+                            const SizedBox(height: 8),
                             // Roomy trades artwork for buttons: the panel below wants
                             // the space more than the record does when the phone is
                             // being held in one hand.
@@ -232,10 +231,13 @@ class NowPlayingScreen extends StatelessWidget {
                             // exactly where they were. What actually opens up the
                             // room under the cover is the cover standing higher on
                             // the stage, which is where that is done.
+                            // The box above already keeps the sleeve's bottom edge
+                            // inside itself; this is the air between that edge and
+                            // the song's name, where the reflection fades out.
                             SizedBox(
                                 height: app.playerLayout == PlayerLayout.roomy
-                                    ? 18
-                                    : 32),
+                                    ? 12
+                                    : 22),
                     ];
                     final said = <Widget>[
                             // Only while a record is turned over. It is the back of a
@@ -338,7 +340,7 @@ class NowPlayingScreen extends StatelessWidget {
                             // the bar with the three places in it are not two rows of
                             // controls touching, and no more — the rest of the room
                             // goes over the record, where the arm's post is.
-                            const SizedBox(height: 8),
+                            const SizedBox(height: 6),
                     ];
 
                     if (Width.of(context) != Width.expanded) {
@@ -354,7 +356,14 @@ class NowPlayingScreen extends StatelessWidget {
                                     ? 8
                                     : 24),
                             child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
+                              // Standing on the bar. Centred, whatever the screen
+                              // had spare was split above and below, and the half
+                              // below sat between the controls and the bar as a
+                              // strip of nothing — while the arm's post was up
+                              // against the header. The controls are what a thumb
+                              // reaches for; they belong at the bottom, and the air
+                              // belongs over the record.
+                              mainAxisAlignment: MainAxisAlignment.end,
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [...record, ...said],
                             ),
@@ -1348,12 +1357,35 @@ class _Artwork extends StatelessWidget {
     return i >= 0 && i < items.length ? items[i] : null;
   }
 
+  /// How far the picture reaches above and below the stage's own square, as a
+  /// fraction of its side.
+  ///
+  /// The stage is a square, and what is drawn on it is not: the record leans up out of
+  /// the top of it by a sixth of the side, the arm's plinth stands a little higher
+  /// still, and the sleeve's bottom edge hangs a little below. Laid out as a square
+  /// those parts fell wherever the screen put them — the arm under the header's
+  /// buttons on a phone, the record through the panel's title on a desk, and on a
+  /// short phone the whole top of it cut off. So the box the stage is given is the
+  /// height of the picture, and the square sits inside it where the picture fits.
+  static const headroom = 0.24;
+  static const footroom = 0.06;
+
+  /// The box's height for a stage of this side, and the side a box of this height holds.
+  static double boxFor(double side) => side * (1 + headroom + footroom);
+  static double sideIn(double height) => height / (1 + headroom + footroom);
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, c) {
-        final side = c.maxWidth;
         if (context.watch<AppState>().coverStyle == CoverStyle.flat) {
+          // The cover and its reflection: as wide as the room, unless the room is not
+          // tall enough for both, in which case as tall.
+          final side = math.min(
+              c.maxWidth,
+              c.maxHeight.isFinite
+                  ? c.maxHeight / (1 + Mirror.defaultDepth)
+                  : c.maxWidth);
           // Just the cover: still, square, and the whole width of the stage. Square
           // corners on purpose — a record sleeve has corners, and rounding them off
           // makes the art look like an app icon of itself.
@@ -1381,10 +1413,19 @@ class _Artwork extends StatelessWidget {
           );
         }
 
+        // The side of the square: the width, unless the height given will not hold
+        // the picture that side draws, in which case the side the height holds.
+        final side = math.min(
+            c.maxWidth, c.maxHeight.isFinite ? sideIn(c.maxHeight) : c.maxWidth);
         // No clip and no shadow of our own: the pieces carry their own, and a rounded
         // rectangle around them would cut the disc off as it slides out.
         return Center(
           child: SizedBox(
+            width: side,
+            height: boxFor(side),
+            child: Align(
+            alignment: Alignment(0, -1 + 2 * headroom / (headroom + footroom)),
+            child: SizedBox(
             width: side,
             height: side,
             child: _ArmFeed(
@@ -1410,6 +1451,8 @@ class _Artwork extends StatelessWidget {
               onPrevious: context.read<AppState>().skipPrevious,
               onNext: context.read<AppState>().skipNext,
               board: context.read<AppState>().sleeveBoard,
+            ),
+            ),
             ),
             ),
           ),
@@ -1561,6 +1604,19 @@ class DeskNowPlaying extends StatelessWidget {
   /// Folding the panel away again.
   final VoidCallback? onClose;
 
+  /// What everything but the record takes: the head above it, and under it the
+  /// words, the panel with the bar, the transport, the song's buttons and the volume.
+  /// Measured, and generous by a few pixels — being a little smaller than it could be
+  /// is nothing, and being a little too big is a scrollbar.
+  static const forTheHead = 54.0;
+  static const forTheRest = 304.0;
+
+  /// The height this wants in a panel [width] wide: the record as wide as the panel
+  /// allows, and everything else at its size. Any less and the record shrinks; any
+  /// more is air under the controls.
+  static double wanted(double width) =>
+      forTheHead + _Artwork.boxFor(width - 48) + forTheRest;
+
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
@@ -1606,34 +1662,56 @@ class DeskNowPlaying extends StatelessWidget {
         // Everything under the record. Its height is what is left for the record, and
         // it is the part that must never be cut off: the bar and the buttons are what
         // the panel is for.
+        //
+        // The same panel the phone's player has, with the same things in it in the
+        // same order: the bar, the transport, the song's own buttons, the volume. It
+        // was a loose stack of the first three, which read as a different, lesser
+        // player rather than the same one seen from the side.
         final under = Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const SizedBox(height: 16),
+            const SizedBox(height: 10),
             _Words(app: app, track: track),
-            const SizedBox(height: 8),
-            _Scrubber(player: player, timesBeside: true),
-            const SizedBox(height: 4),
-            _Controls(app: app, player: player, snapshot: s),
-            const SizedBox(height: 4),
-            _Extras(app: app, track: track, spread: true),
+            const SizedBox(height: 14),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: GlassSurface(
+                borderRadius: BorderRadius.circular(22),
+                topBorder: false,
+                opacity: 0.55,
+                blur: 30,
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _Scrubber(player: player, timesBeside: true),
+                    const SizedBox(height: 4),
+                    _Controls(app: app, player: player, snapshot: s),
+                    const SizedBox(height: 2),
+                    _Extras(app: app, track: track),
+                    const SizedBox(height: 2),
+                    _VolumeRow(player: player),
+                  ],
+                ),
+              ),
+            ),
             const SizedBox(height: 12),
           ],
         );
 
+        // The record's box is the height of the picture — the arm and the top of the
+        // disc above the square, the sleeve's edge below it — so none of it runs into
+        // the panel's head or the song's name. See _Artwork.headroom.
         Widget record({double? side}) => Padding(
               padding: const EdgeInsets.fromLTRB(24, 4, 24, 0),
               child: SizedBox(
-                height: side,
-                child: AspectRatio(
-                  aspectRatio: 1,
-                  // Full size for the box it is in: what was wrong before was the
-                  // record, which sized itself from the window rather than from the
-                  // room this panel gives it.
-                  child: _Artwork(
-                      track: track, snapshot: s, player: player, app: app),
-                ),
+                height: side == null ? null : _Artwork.boxFor(side),
+                // Full size for the box it is in: what was wrong before was the
+                // record, which sized itself from the window rather than from the
+                // room this panel gives it.
+                child: _Artwork(
+                    track: track, snapshot: s, player: player, app: app),
               ),
             );
 
@@ -1641,7 +1719,7 @@ class DeskNowPlaying extends StatelessWidget {
         // at any size rather than scrolling — and when the window is genuinely too
         // short for a record and its controls, the record stops shrinking and the
         // whole thing scrolls instead of being squashed into a line.
-        return LayoutBuilder(
+        final laidOut = LayoutBuilder(
           builder: (context, c) {
             if (!c.maxHeight.isFinite) {
               return Column(
@@ -1655,9 +1733,7 @@ class DeskNowPlaying extends StatelessWidget {
             // song's own buttons are the panel's job, and a record is not allowed to
             // push them off the bottom. Generous on purpose — being a little smaller
             // than it could be is nothing, and being a little too big is a scrollbar.
-            const forTheRest = 268.0;
-            const forTheHead = 54.0;
-            final side = (c.maxHeight - forTheHead - forTheRest)
+            final side = _Artwork.sideIn(c.maxHeight - forTheHead - forTheRest)
                 .clamp(0.0, c.maxWidth - 48);
             if (side >= 140) {
               return Column(
@@ -1683,6 +1759,51 @@ class DeskNowPlaying extends StatelessWidget {
               ],
             );
           },
+        );
+
+        // The same room the phone's player is in: the record's own colour washed
+        // over the card, the printed dots breathing to the song behind it, the
+        // disco ball's light over it, and the player's state on a slip at the top.
+        // The panel was the same parts on plain paper, which is a different player.
+        return AmbientBackdrop(
+          colour: parseHexColour(track.coverColor),
+          behind: app.halftone
+              ? BeatPulse(
+                  app: app,
+                  track: track,
+                  builder: (context, beat) => HalftoneBackdrop(
+                    colour: parseHexColour(track.coverColor),
+                    playing: app.musicIsPlaying,
+                    loudnessDb: track.loudnessLufs,
+                    beat: beat,
+                  ),
+                )
+              : null,
+          child: Stack(
+            children: [
+              Positioned.fill(child: laidOut),
+              Positioned(
+                top: DeskNowPlaying.forTheHead - 8,
+                left: 0,
+                right: 0,
+                child: IgnorePointer(
+                  child: _StatusSlip(status: NowPlayingScreen._statusLine(s, track)),
+                ),
+              ),
+              if (app.discoLights)
+                Positioned.fill(
+                  child: BeatPulse(
+                    app: app,
+                    track: track,
+                    builder: (context, pulse) => MirrorBallLight(
+                      playing: app.musicIsPlaying,
+                      tint: parseHexColour(track.coverColor),
+                      pulse: pulse,
+                    ),
+                  ),
+                ),
+            ],
+          ),
         );
       },
     ));

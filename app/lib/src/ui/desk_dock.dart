@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -62,31 +64,42 @@ class DeskDock extends StatelessWidget {
             // laid on the page rather than as the page having run out.
             child: Padding(
               padding: const EdgeInsets.fromLTRB(4, 8, 10, 10),
-              child: Column(
-                children: [
-                  // What is playing, which is the thing people keep an eye on — and
-                  // the one that has to fit without scrolling.
-                  Expanded(
-                    flex: 7,
-                    child: _Panel(
-                      colour: scheme.surface,
-                      // No scroll around it: the panel sizes the record to whatever
-                      // height it has been given, and scrolls for itself only when
-                      // the window is shorter than a record and its controls.
-                      child: DeskNowPlaying(onClose: onClose),
+              child: LayoutBuilder(builder: (context, c) {
+                // The player takes what it needs and no more, and what is next takes
+                // the rest — down to a floor, below which the record gives way
+                // instead. A fixed split gave the player a strip of nothing under its
+                // controls on a short window and a record the size of a stamp on it.
+                const gap = 10.0;
+                const forNextUp = 190.0;
+                // Inside the card's own rule.
+                final player = DeskNowPlaying.wanted(c.maxWidth - 3)
+                    .clamp(0.0, math.max(0.0, c.maxHeight - gap - forNextUp))
+                    .toDouble();
+                return Column(
+                  children: [
+                    // What is playing, which is the thing people keep an eye on — and
+                    // the one that has to fit without scrolling.
+                    SizedBox(
+                      height: player,
+                      child: _Panel(
+                        colour: scheme.surface,
+                        // No scroll around it: the panel sizes the record to whatever
+                        // height it has been given, and scrolls for itself only when
+                        // the window is shorter than a record and its controls.
+                        child: DeskNowPlaying(onClose: onClose),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 10),
-                  // And what is coming, which is the thing they keep checking.
-                  Expanded(
-                    flex: 3,
-                    child: _Panel(
-                      colour: scheme.surface,
-                      child: const _NextUp(),
+                    const SizedBox(height: gap),
+                    // And what is coming, which is the thing they keep checking.
+                    Expanded(
+                      child: _Panel(
+                        colour: scheme.surface,
+                        child: const _NextUp(),
+                      ),
                     ),
-                  ),
-                ],
-              ),
+                  ],
+                );
+              }),
             ),
           ),
         ),
