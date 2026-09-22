@@ -204,8 +204,10 @@ class NowPlayingScreen extends StatelessWidget {
                             //
                             // It sat hard against the app bar, which reads as the
                             // screen having run out rather than as a record standing
-                            // on a shelf with air around it.
-                            const SizedBox(height: 28),
+                            // on a shelf with air around it. The arm's post is at the
+                            // top of the stage and wants air of its own; the air that
+                            // was under the controls, above the bar, is spent here.
+                            const SizedBox(height: 44),
                             // Roomy trades artwork for buttons: the panel below wants
                             // the space more than the record does when the phone is
                             // being held in one hand.
@@ -332,13 +334,11 @@ class NowPlayingScreen extends StatelessWidget {
                                   ],
                                 ),
                               ),
-                            // Air under the panel.
-                            //
-                            // The controls ended where the body ended, which put the
-                            // volume slider a couple of pixels above the bar with the
-                            // three places in it — two rows of controls touching, and
-                            // the bottom one is the one you reach for by feel.
-                            const SizedBox(height: 20),
+                            // Air under the panel: enough that the volume slider and
+                            // the bar with the three places in it are not two rows of
+                            // controls touching, and no more — the rest of the room
+                            // goes over the record, where the arm's post is.
+                            const SizedBox(height: 8),
                     ];
 
                     if (Width.of(context) != Width.expanded) {
