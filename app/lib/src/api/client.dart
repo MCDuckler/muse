@@ -1351,6 +1351,10 @@ class ApiClient {
             if (positionMs != null) 'position_ms': positionMs,
           })));
 
+  /// Gone from the list, and signed out.
+  Future<void> forgetDevice(int deviceId) async =>
+      await _decode(await net.delete(_u('/devices/$deviceId'), headers: _headers));
+
   Future<void> renameDevice(int deviceId, String name) async =>
       await _decode(await net.patch(_u('/devices/$deviceId'),
           headers: _headers, body: jsonEncode({'name': name})));

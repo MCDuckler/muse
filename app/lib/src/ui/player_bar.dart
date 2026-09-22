@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../state/app_state.dart';
 import '../state/player.dart';
 import 'artwork.dart';
+import 'devices_sheet.dart';
 import 'feel.dart';
 import 'now_playing.dart';
 import 'swipe.dart';
@@ -67,6 +68,10 @@ class PlayerBar extends StatelessWidget {
           _ when jam != null => jam.isHost
               ? '${track.artistLine} · your jam · ${jam.listening} listening'
               : '${track.artistLine} · ${jam.host ?? 'a'} jam',
+          // The music is in another room, and this bar is its remote: said here,
+          // because "why is nothing coming out of this one" is asked looking at it.
+          _ when app.elsewhere != null =>
+            '${track.artistLine} · on ${labelFor(app.elsewhere!)}',
           _ => track.artistLine,
         };
         // Two different things, in two different colours. A stream that failed is a

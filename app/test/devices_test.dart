@@ -81,7 +81,42 @@ void main() {
     expect(app.devices.map((d) => d.name), ['This phone', 'The desk']);
     expect(app.devices[1].playing, isTrue);
     expect(app.devices[1].track?.title, 'A song');
-    expect(app.controllingAnother, isFalse, reason: 'nothing has been picked yet');
+    // The desk has the music, so this screen is its remote without being asked:
+    // the same song, the same play button, and nothing to pick.
+    expect(app.controllingAnother, isTrue, reason: 'the music is on the desk');
+    expect(app.elsewhere?.name, 'The desk');
+    expect(app.musicIsPlaying, isTrue, reason: 'and this screen says so');
+  });
+
+  test('a report from a device that has gone quiet is not followed', () async {
+    useThisClientInstead(MockClient((request) async => http.Response(
+        jsonEncode({
+          'this': 1,
+          'devices': [device(1, 'This phone'), device(2, 'The desk', playing: true, live: false)],
+        }),
+        200,
+        headers: {'content-type': 'application/json'})));
+    await app.refreshDevices();
+    expect(app.controllingAnother, isFalse,
+        reason: 'a device nobody has heard from is not where the music is');
+  });
+
+  test('taking the music here is remembered long enough not to be undone', () async {
+    await app.refreshDevices();
+    expect(app.playingOn, 2);
+    await app.playOn(app.devices[0]);
+    expect(app.playingOn, isNull);
+    // The desk still says "playing" until it obeys; the list is read again meanwhile.
+    await app.refreshDevices();
+    expect(app.playingOn, isNull, reason: 'this device just took it, and keeps it');
+  });
+
+  test('forgetting a device takes it off the list', () async {
+    await app.refreshDevices();
+    await app.forgetDevice(2);
+    expect(sent.any((r) => r.path == '/devices/2'), isTrue);
+    expect(app.devices.map((d) => d.id), [1]);
+    expect(app.playingOn, isNull);
   });
 
   test('handing the music to another device asks it, and quiets this one', () async {
@@ -159,9 +194,12 @@ void main() {
         reason: 'the answer to "why is nothing coming out of this laptop"');
 
     await tester.tap(find.byType(IconButton));
-    await tester.pumpAndSettle();
+    // Not pumpAndSettle: the sheet draws the sound moving on the device that has
+    // it, and that never settles.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
     expect(find.text('Where it plays'), findsOneWidget);
-    expect(find.text('The desk'), findsWidgets);
+    expect(find.textContaining('The desk'), findsWidgets);
   });
 
   test('a device that stops answering is not where the music is', () async {

@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform, kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -12,6 +12,7 @@ import '../worker/this_computer.dart' show stopFetching;
 import '../api/models.dart';
 import 'eq_engines.dart';
 import 'equalizer.dart';
+import 'device_name.dart';
 import 'offline.dart';
 import 'art_cache.dart';
 import 'playback_log.dart';
@@ -737,7 +738,7 @@ class AppState extends ChangeNotifier {
     error = null;
     try {
       api.baseUrl = normaliseServer(server);
-      await api.login(username, password, 'flutter');
+      await api.login(username, password, deviceName());
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_kServer, api.baseUrl);
       await prefs.setString(_kToken, api.token!);
@@ -763,7 +764,7 @@ class AppState extends ChangeNotifier {
     error = null;
     try {
       api.baseUrl = normaliseServer(server);
-      await api.redeemInvite(code.trim(), username.trim(), password, 'flutter');
+      await api.redeemInvite(code.trim(), username.trim(), password, deviceName());
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_kServer, api.baseUrl);
       await prefs.setString(_kToken, api.token!);
@@ -1969,11 +1970,73 @@ class AppState extends ChangeNotifier {
       if (controllingAnother && (elsewhere == null || !elsewhere!.live)) {
         playingOn = null;
       }
+      unawaited(_sayMyName());
+      _followTheMusic();
       await _followTheOtherDevice();
       notifyListeners();
     } catch (_) {
       // A list of devices is not worth a message on screen.
     }
+  }
+
+  /// A device that signed in before the app named its own devices is called
+  /// "flutter" on the server. Once, on first sight of that, it says what it is.
+  bool _saidMyName = false;
+  Future<void> _sayMyName() async {
+    final me = devices.where((d) => d.isThis).firstOrNull;
+    if (_saidMyName || me == null || me.name.trim().toLowerCase() != 'flutter') return;
+    _saidMyName = true;
+    try {
+      await api.renameDevice(me.id, deviceName());
+      final got = await api.devices();
+      devices = got.devices;
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  /// When this device last took the music for itself, so a report from the device
+  /// it took it from — still saying "playing" for the seconds until it obeys — does
+  /// not hand the screen straight back.
+  DateTime? _claimedAt;
+
+  /// Follow the music to whichever of your devices has it.
+  ///
+  /// The music is on one device, and every other screen of the account is its
+  /// remote: the same song, the same place in it, the same play button, without
+  /// anybody having to say so. This is that, decided from what the devices say —
+  /// as long as this one is not the one making the sound, and did not just take it.
+  void _followTheMusic() {
+    if (jam != null) return;
+    if (player?.last?.playing ?? false) return;
+    final since = _claimedAt == null ? null : DateTime.now().difference(_claimedAt!);
+    if (since != null && since < const Duration(seconds: 15)) return;
+    if (playingOn != null) return;
+    final sounding = devices.where((d) => !d.isThis && d.live && d.playing).firstOrNull;
+    if (sounding != null) playingOn = sounding.id;
+  }
+
+  /// Take the music for this device: whoever had it lets go.
+  ///
+  /// Called when this device starts making a sound of its own while it was somebody
+  /// else's remote — a song tapped in a list, a record put on — because the tap said
+  /// "play this here", and a screen that keeps working the other room while this
+  /// one plays is two rooms playing at once.
+  Future<void> _claimHere() async {
+    final from = elsewhere;
+    playingOn = null;
+    _claimedAt = DateTime.now();
+    player?.sayRemote(null);
+    notifyListeners();
+    if (from != null) await api.deviceCommand(from.id, 'stop').catchError((_) {});
+    await reportDevice(force: true);
+  }
+
+  /// Forget one of your devices: gone from the list, and signed out.
+  Future<void> forgetDevice(int id) async {
+    await api.forgetDevice(id);
+    devices = [for (final d in devices) if (d.id != id) d];
+    if (playingOn == id) playingOn = null;
+    notifyListeners();
   }
 
   /// One of this account's devices said what it is doing.
@@ -2006,6 +2069,7 @@ class AppState extends ChangeNotifier {
                 itemId: data['item_id'] as int?)
             : d,
     ];
+    _followTheMusic();
     await _followTheOtherDevice();
     notifyListeners();
   }
@@ -2019,7 +2083,18 @@ class AppState extends ChangeNotifier {
   Future<void> _followTheOtherDevice() async {
     final there = elsewhere;
     final p = player;
-    if (there == null || p == null || isJamGuest) return;
+    if (p == null || isJamGuest) return;
+    // The rows and the bars on this screen say what the other device says, or what
+    // this one's own engine does, whichever the music is.
+    p.sayRemote(there == null
+        ? null
+        : (
+            trackId: there.track?.id,
+            itemId: there.itemId,
+            playing: there.playing,
+            buffering: false,
+          ));
+    if (there == null) return;
     try {
       final queueId = there.queueId;
       if (queueId != null && queueId != activeQueue?.id) {
@@ -2065,13 +2140,7 @@ class AppState extends ChangeNotifier {
                 snapshot?.position ??
                 Duration.zero)
             .inMilliseconds,
-        kind: kIsWeb
-            ? 'browser'
-            : (defaultTargetPlatform == TargetPlatform.linux ||
-                    defaultTargetPlatform == TargetPlatform.windows ||
-                    defaultTargetPlatform == TargetPlatform.macOS)
-                ? 'desktop'
-                : 'phone',
+        kind: deviceKind(),
       );
     } catch (_) {
       // Missing one of these costs a minute of staleness on somebody else's screen.
@@ -2089,15 +2158,23 @@ class AppState extends ChangeNotifier {
     if (here) {
       final from = elsewhere ?? devices.where((d) => d.playing).firstOrNull;
       playingOn = null;
+      _claimedAt = DateTime.now();
+      player?.sayRemote(null);
       notifyListeners();
       if (from != null && from.queueId != null) {
-        await openQueue(from.queueId!);
-        if (from.track != null) {
-          // Straight in at where it has got to — carried forward from what it last
-          // said — and on the row it is on, rather than the top of the song and a
-          // jump a moment later.
-          await player?.playTrack(from.track!.id,
-              row: from.itemId, startAt: from.at);
+        try {
+          await openQueue(from.queueId!);
+          if (from.track != null) {
+            // Straight in at where it has got to — carried forward from what it
+            // last said — and on the row it is on, rather than the top of the song
+            // and a jump a moment later.
+            await player?.playTrack(from.track!.id,
+                row: from.itemId, startAt: from.at);
+          }
+        } catch (e) {
+          // Its queue could not be fetched: the music is still taken here, and
+          // what was on this device is what plays.
+          error = '$e';
         }
         // And whoever had it lets go, so the room is not playing two of the same song.
         await api.deviceCommand(from.id, 'stop').catchError((_) {});
@@ -2147,6 +2224,8 @@ class AppState extends ChangeNotifier {
     switch (action) {
       case 'take':
         playingOn = null;
+        _claimedAt = DateTime.now();
+        player?.sayRemote(null);
         final queueId = order['queue_id'] as int?;
         if (queueId != null && queueId != activeQueue?.id) {
           await openQueue(queueId);
@@ -2749,6 +2828,11 @@ class AppState extends ChangeNotifier {
       if (jumped) {
         if (jam?.isHost ?? false) unawaited(pushJamState(force: true));
         unawaited(reportDevice(force: true));
+      }
+      // This device started making a sound of its own while it was working another
+      // one: the tap that did that meant "here", and the other one lets go.
+      if (s.playing && wasPlaying != true && controllingAnother) {
+        unawaited(_claimHere());
       }
       if (s.current?.id != named || s.playing != wasPlaying) {
         named = s.current?.id;

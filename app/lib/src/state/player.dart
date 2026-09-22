@@ -262,6 +262,21 @@ class PlayerService {
   final playingNow = ValueNotifier<PlayingNow>(
       (trackId: null, itemId: null, playing: false, buffering: false));
 
+  /// What another device of this account says it is playing, while this screen is
+  /// its remote control. While set, it is what [playingNow] says: the rows and the
+  /// bars on this screen are about the music, and the music is over there.
+  PlayingNow? _remote;
+  void sayRemote(PlayingNow? what) {
+    _remote = what;
+    playingNow.value = what ??
+        (
+          trackId: current?.id,
+          itemId: current?.queueItemId,
+          playing: _player.playing,
+          buffering: last?.buffering ?? false,
+        );
+  }
+
   final _stateController = StreamController<PlayerSnapshot>.broadcast();
   Stream<PlayerSnapshot> get snapshots => _stateController.stream;
 
@@ -1938,12 +1953,13 @@ class PlayerService {
     // an SSE update landing while the app tears down, say. Adding to a closed stream
     // throws into nothing and looks like a crash in the logs.
     if (!_stateController.isClosed) _stateController.add(last!);
-    playingNow.value = (
-      trackId: current?.id,
-      itemId: current?.queueItemId,
-      playing: _player.playing,
-      buffering: last!.buffering,
-    );
+    playingNow.value = _remote ??
+        (
+          trackId: current?.id,
+          itemId: current?.queueItemId,
+          playing: _player.playing,
+          buffering: last!.buffering,
+        );
   }
 
   Future<void> dispose() async {

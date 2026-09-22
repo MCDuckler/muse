@@ -37,7 +37,10 @@ LIVE = "60 seconds"
 ACTIONS = ("play", "pause", "next", "previous", "seek", "take", "stop")
 
 
-def _rows(user_id: int) -> list[dict]:
+def _rows(user_id: int, me: int) -> list[dict]:
+    # Only what has been heard from this month, and the one asking. Every browser
+    # that ever signed in is a row here, and a list of every laptop you have used
+    # since spring is not an answer to "where shall this play".
     # The device's own columns are named apart from the track's: `t.*` has an `id`
     # and a `name` of its own, and a row where the song's id has quietly replaced the
     # device's is a device that thinks it is the one you are holding.
@@ -56,8 +59,9 @@ def _rows(user_id: int) -> list[dict]:
               left join covers c on c.id = t.cover_id
               left join media m on m.track_id = t.id and m.role = 'canonical'
              where d.user_id = %s
+               and (d.last_seen > now() - interval '30 days' or d.id = %s)
              order by d.last_seen desc nulls last""",
-        (user_id,))
+        (user_id, me))
 
 
 def _public(row: dict, me: int) -> dict:
@@ -87,7 +91,7 @@ def _public(row: dict, me: int) -> dict:
 @router.get("")
 def devices(user: dict = Depends(current_user)):
     """Everything this account listens on, and what each one is doing."""
-    rows = _rows(user["id"])
+    rows = _rows(user["id"], user["device_id"])
     return {
         "this": user["device_id"],
         "devices": [_public(r, user["device_id"]) for r in rows],
@@ -239,6 +243,25 @@ def rename(device_id: int, body: dict = Body(...), user: dict = Depends(current_
 
     publish("devices", {"device_id": device_id, "renamed": True}, to_user=user["id"])
     return {"id": device_id, "name": name[:60]}
+
+
+@router.delete("/{device_id}")
+def forget(device_id: int, user: dict = Depends(current_user)):
+    """Forget one of your devices: gone from the list, and signed out.
+
+    Its token goes with the row, so a browser on a machine you no longer have is no
+    longer a way in. Not the device asking — that is what signing out is for.
+    """
+    if device_id == user["device_id"]:
+        raise HTTPException(400, "sign out instead of forgetting the device you are on")
+    if not db.one("select id from devices where id=%s and user_id=%s",
+                  (device_id, user["id"])):
+        raise HTTPException(404, "no device of yours by that id")
+    db.run("delete from devices where id=%s", (device_id,))
+    from .app import publish
+
+    publish("devices", {"device_id": device_id, "forgotten": True}, to_user=user["id"])
+    return {"forgotten": device_id}
 
 
 @router.post("/{device_id}/command")
