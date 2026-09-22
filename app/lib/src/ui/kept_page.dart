@@ -1,10 +1,14 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../state/app_state.dart';
+import '../state/offline.dart';
 import 'dialogs.dart';
 import 'mini_player.dart';
 import 'selection_bar.dart';
+import 'snack.dart';
 import 'song_row.dart';
 
 /// What is on the phone.
@@ -74,6 +78,9 @@ class KeptPage extends StatelessWidget {
               style: Theme.of(context).textTheme.bodyMedium,
             ),
           ),
+          // Where it all is, on a machine where that is a choice.
+          if (OfflineStore.canChooseHome && offline.home != null)
+            _WhereItIsKept(offline: offline),
           if (offline.downloading != null || offline.waiting > 0)
             Card(
               margin: const EdgeInsets.fromLTRB(8, 0, 8, 12),
@@ -118,6 +125,74 @@ class KeptPage extends StatelessWidget {
               onRemove: () => offline.forget(entry.id),
             ),
         ],
+        ),
+      ),
+    );
+  }
+}
+
+
+/// The folder the music is kept in, and the way to change it.
+///
+/// On a desk kept music is a library on a disk — artist folders, record folders,
+/// `cover.jpg` beside the songs — and a library wants to live where the person keeps
+/// their music, not in an application-support folder nobody can find. Changing it
+/// takes what is already kept along.
+class _WhereItIsKept extends StatelessWidget {
+  const _WhereItIsKept({required this.offline});
+  final OfflineStore offline;
+
+  Future<void> _choose(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final picked = await FilePicker.getDirectoryPath(
+        dialogTitle: 'Keep music in…', initialDirectory: offline.home);
+    if (picked == null) return;
+    final n = offline.count;
+    await offline.moveTo(picked);
+    messenger.say(snack(Text(offline.lastError ??
+        (n == 0
+            ? 'Music is kept in $picked from now on'
+            : '$n songs moved to $picked'))));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      margin: const EdgeInsets.fromLTRB(8, 0, 8, 12),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Kept in', style: text.labelMedium?.copyWith(color: scheme.onSurfaceVariant)),
+            const SizedBox(height: 2),
+            SelectableText(offline.home!, style: text.bodyMedium),
+            const SizedBox(height: 2),
+            Text('As a library: a folder for each artist, one inside it for each record.',
+                style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                TextButton.icon(
+                  icon: const Icon(Icons.folder_open, size: 18),
+                  label: const Text('Open'),
+                  onPressed: () => launchUrl(Uri.file(offline.home!)),
+                ),
+                TextButton.icon(
+                  icon: const Icon(Icons.drive_file_move_outline, size: 18),
+                  label: const Text('Change folder'),
+                  onPressed: () => _choose(context),
+                ),
+                if (offline.homeIsChosen)
+                  TextButton(
+                    onPressed: () => offline.moveTo(null),
+                    child: const Text('Back to default'),
+                  ),
+              ],
+            ),
+          ],
         ),
       ),
     );

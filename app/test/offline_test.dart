@@ -15,6 +15,7 @@ import 'package:muse/src/api/connection.dart';
 import 'package:muse/src/state/app_state.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:muse/src/api/client.dart';
+import 'package:muse/src/api/models.dart';
 import 'package:muse/src/state/offline.dart';
 import 'package:muse/src/state/player.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
@@ -72,6 +73,7 @@ void main() {
 
   setUp(() async {
     HttpOverrides.global = null;
+    SharedPreferences.setMockInitialValues({});
     home = await Directory.systemTemp.createTemp('muse-offline-');
     PathProviderPlatform.instance = _Somewhere(home.path);
     server = await audioServer();
@@ -139,7 +141,8 @@ void main() {
     expect(audio.only.sources.first, startsWith('file://'),
         reason: 'the engine was handed the file on the device: '
             '${audio.only.sources}');
-    expect(audio.only.sources.first, contains('track-1'));
+    expect(audio.only.sources.first, contains('Track%201'),
+        reason: 'filed by its name, in its artist\'s folder');
 
     // The one that is not kept still comes from the server.
     await player.next();
@@ -205,8 +208,90 @@ void main() {
     await offline.forgetAll();
     expect(offline.count, 0);
     expect(offline.bytes, 0);
-    expect(home.listSync().whereType<File>().where(
-        (f) => f.path.contains('track-')).isEmpty, isTrue);
+    expect(home.listSync(recursive: true).whereType<File>().where(
+        (f) => f.path.endsWith('.m4a')).isEmpty, isTrue);
+  });
+
+  group('filed like a library', () {
+    Track song(int id, {String? album, String title = 'A Song', String artist = 'Some Band'}) =>
+        Track.fromJson({
+          'id': id,
+          'title': title,
+          'artists': [artist],
+          if (album != null) 'album': album,
+          'state': 'ready',
+          'stream_url': '/tracks/$id/stream',
+          'cover_url': '/tracks/$id/cover',
+          'source': 'youtube',
+        });
+
+    test('a song goes in its artist\'s folder, in its record\'s folder', () async {
+      await offline.keep([song(1, album: 'The Record')]);
+      await finished();
+      final path = offline.pathFor(1)!;
+      expect(path, endsWith('/Some Band/The Record/A Song.m4a'),
+          reason: 'the shape every other player expects: ${offline.lastError}');
+      expect(File('${offline.home}/Some Band/The Record/cover.jpg').existsSync(), isTrue,
+          reason: 'the picture, once, named the way players look for it');
+    });
+
+    test('a song from no record sits in the artist\'s folder', () async {
+      await offline.keep([song(2)]);
+      await finished();
+      expect(offline.pathFor(2), endsWith('/Some Band/A Song.m4a'));
+    });
+
+    test('names a filesystem would refuse are made safe', () {
+      expect(OfflineStore.safeName('AC/DC'), 'ACDC');
+      expect(OfflineStore.safeName('What? "Yes": <no>|'), 'What Yes no');
+      expect(OfflineStore.safeName('Trailing dots...'), 'Trailing dots');
+      expect(OfflineStore.safeName('   '), 'Unknown');
+      expect(OfflineStore.safeName('CON'), '_CON');
+    });
+
+    test('two songs of one name on one record both keep their names', () async {
+      await offline.keep([
+        song(3, album: 'Live', title: 'Encore'),
+        song(4, album: 'Live', title: 'Encore'),
+      ]);
+      await finished();
+      expect(offline.pathFor(3), endsWith('/Live/Encore.m4a'));
+      expect(offline.pathFor(4), endsWith('/Live/Encore (4).m4a'));
+      // And the record's one picture stays until the last song from it goes.
+      final cover = File('${offline.home}/Some Band/Live/cover.jpg');
+      await offline.forget(3);
+      expect(cover.existsSync(), isTrue);
+      await offline.forget(4);
+      expect(cover.existsSync(), isFalse);
+      expect(Directory('${offline.home}/Some Band').existsSync(), isFalse,
+          reason: 'empty folders go with the last song');
+    });
+
+    test('moving the folder takes the library with it, and a later start finds it',
+        () async {
+      await offline.keep([song(5, album: 'The Record'), song(6)]);
+      await finished();
+      final elsewhere = await Directory.systemTemp.createTemp('muse-elsewhere-');
+      addTearDown(() => elsewhere.delete(recursive: true));
+
+      await offline.moveTo(elsewhere.path);
+      expect(offline.lastError, isNull);
+      expect(offline.home, elsewhere.path);
+      expect(offline.pathFor(5), '${elsewhere.path}/Some Band/The Record/A Song.m4a');
+      expect(File('${elsewhere.path}/Some Band/The Record/cover.jpg').existsSync(), isTrue);
+      expect(File('${home.path}/offline/Some Band/A Song.m4a').existsSync(), isFalse,
+          reason: 'moved, not copied');
+
+      final later = OfflineStore(api);
+      await later.init();
+      expect(later.home, elsewhere.path, reason: 'the choice is remembered');
+      expect(later.has(5), isTrue);
+      expect(later.has(6), isTrue);
+
+      await later.moveTo(null);
+      expect(later.home, '${home.path}/offline', reason: 'and can be undone');
+      expect(later.pathFor(6), endsWith('/offline/Some Band/A Song.m4a'));
+    });
   });
 
   group('with no connection at all', () {
