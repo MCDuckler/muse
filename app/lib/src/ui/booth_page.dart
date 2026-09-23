@@ -231,10 +231,19 @@ Future<void> openBooth(BuildContext context,
     {List<Track>? tracks, int at = 0, Map<String, dynamic>? mix}) async {
   final app = context.read<AppState>();
   final booth = app.booth;
+  // Where the ordinary player had got to, if the record it was on is the one the
+  // booth starts with: the music carries on from there.
+  final was = app.player?.last;
+  final carryOn = tracks != null &&
+          at < tracks.length &&
+          was?.current?.id == tracks[at].id &&
+          mix == null
+      ? was?.position
+      : null;
   await app.player?.pause();
   if (tracks != null && tracks.isNotEmpty) {
     await booth.init();
-    unawaited(booth.auto.start(tracks, at: at, kept: MixMove.allIn(mix)));
+    unawaited(booth.auto.start(tracks, at: at, kept: MixMove.allIn(mix), from: carryOn));
   }
   if (!context.mounted) return;
   await Navigator.of(context, rootNavigator: true)

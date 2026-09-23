@@ -270,6 +270,13 @@ void main() {
       booth.auto.stop();
     });
 
+    test('the booth carries on from where the first record was', () async {
+      booth.timing.put(1, grid(500));
+      await booth.auto.start([song(1), song(2)], from: const Duration(seconds: 42));
+      expect(booth.master.position.inSeconds, greaterThanOrEqualTo(42));
+      booth.auto.stop();
+    });
+
     test('a fade over the bars moves the fader and ends with the other deck', () async {
       await booth.load(booth.a, song(1));
       booth.a.timing = grid(50);           // 1200 bpm: a bar is 200 ms, for a quick test

@@ -375,7 +375,9 @@ class Booth extends ChangeNotifier {
     final length = barsLength(from, bars);
     // The kills the plan opens with, set before the incoming makes a sound.
     await _applyKills(steps.first);
-    if (!to.playing) await startOnBeat(to, every: kind == Transition.fade ? 1 : 4);
+    // A blend goes in on the master's next phrase, where a DJ would bring one in;
+    // a fade on the next beat, which is soon enough for something with no grid.
+    if (!to.playing) await startOnBeat(to, every: kind == Transition.fade ? 1 : 16);
 
     final began = DateTime.now();
     final done = Completer<void>();

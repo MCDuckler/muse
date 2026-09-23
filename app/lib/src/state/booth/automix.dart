@@ -93,14 +93,18 @@ class AutoMix extends ChangeNotifier {
 
   /// Play [tracks] from [at], record into record, until they run out or [stop] —
   /// or, given the [kept] moves of a mix, do that mix again.
-  Future<void> start(List<Track> tracks, {int at = 0, List<MixMove> kept = const []}) async {
+  ///
+  /// [from] is where in the first record to begin — where the ordinary player had
+  /// got to when it handed over, so the music carries on rather than starting again.
+  Future<void> start(List<Track> tracks,
+      {int at = 0, List<MixMove> kept = const [], Duration? from}) async {
     _tracks = [for (final t in tracks) if (t.isReady) t];
     if (_tracks.isEmpty) return;
     _kept = kept;
     _at = at.clamp(0, _tracks.length - 1);
     running = true;
     final deck = booth.master;
-    await booth.load(deck, _tracks[_at]);
+    await booth.load(deck, _tracks[_at], at: from);
     await deck.play();
     await booth.setCrossfader(identical(deck, booth.b) ? 1 : 0);
     await _prepareNext();
