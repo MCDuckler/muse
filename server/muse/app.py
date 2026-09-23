@@ -475,9 +475,12 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             raise HTTPException(404, "not ready" if t else "no such track")
         try:
             path = stems.for_track(cfg.data_dir, pathlib.Path(t["path"]),
-                                   t["sha256"], name)
+                                   t["sha256"], name, t.get("duration_ms"))
         except ValueError:
             raise HTTPException(404, f"a record has no {name}")
+        except stems.TooLong:
+            raise HTTPException(
+                404, f"too long to take apart (over {stems.UP_TO_S // 60} minutes)")
         except stems.NotReady:
             return Response(status_code=202,
                             headers={"Retry-After": "10", "Cache-Control": "no-store"})

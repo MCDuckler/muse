@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../../api/client.dart';
 import '../../api/models.dart';
 import 'booth.dart';
 
@@ -67,7 +68,7 @@ class AutoMix extends ChangeNotifier {
       final t = _tracks[i];
       if (_inParts[t.id] == true) continue;
       try {
-        _inParts[t.id] = await booth.api.stemReady(t, 'drums');
+        _inParts[t.id] = await booth.api.stemState(t, 'drums') == Stem.ready;
       } catch (_) {
         // Not a record the server can take apart, or cannot be reached. Either way
         // the booth mixes it the ordinary way and says nothing about it.

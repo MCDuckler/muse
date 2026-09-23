@@ -146,13 +146,14 @@ void main() {
       // The server makes a part the first time anybody asks and answers 202 until it
       // has. A deck told to swap to one that is not made yet keeps playing the record
       // — going quiet would be the worst of the three possible answers.
-      var made = false;
+      bool? made = false;   // false: being made. true: there. null: never.
       useThisClientInstead(MockClient((r) async {
         if (r.url.path.contains('/stream-key')) {
           return http.Response(
               '{"key": "signed", "expires_at": 99999999999}', 200);
         }
         if (r.url.path.contains('/stem/')) {
+          if (made == null) return http.Response('too long to take apart', 404);
           return made ? http.Response('x', 206) : http.Response('', 202);
         }
         return http.Response('{}', 200);
@@ -171,6 +172,13 @@ void main() {
       expect(audio.players.values.expand((p) => p.sources),
           contains(contains('/tracks/1/stem/drums')));
       expect(booth.a.playing, isTrue, reason: 'a swap is not a stop');
+
+      // A record too long to take apart says so once, and keeps saying so rather
+      // than promising a part in a minute for ever.
+      made = null;
+      expect(await booth.a.swapTo('music'), isFalse);
+      expect(booth.a.noParts, isTrue);
+      expect(booth.a.part, 'drums', reason: 'what was on stays on');
 
       // And back to the record it was made from.
       expect(await booth.a.swapTo(null), isTrue);

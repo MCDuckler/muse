@@ -80,6 +80,11 @@ class Deck extends ChangeNotifier {
   /// because "in a minute" and "no" are different answers.
   bool makingPart = false;
 
+  /// This record does not get taken apart at all: it is longer than a record, and the
+  /// server will not spend twenty minutes on it. The last answer, kept so the booth
+  /// can say "not this one" rather than "in a minute" for ever.
+  bool noParts = false;
+
   /// The rate it plays at: 1.0 is the record as recorded.
   double tempo = 1.0;
 
@@ -216,6 +221,7 @@ class Deck extends ChangeNotifier {
     this.timing = timing ?? knew;
     _ended_ = false;
     trouble = null;
+    noParts = false;
     hotCues.clear();
     loopStart = loopEnd = null;
     _loopBars = null;
@@ -271,16 +277,17 @@ class Deck extends ChangeNotifier {
     if (part != null) {
       makingPart = true;
       notifyListeners();
+      Stem state;
       try {
-        final ready = await api.stemReady(t, part);
-        makingPart = false;
-        if (!ready) {
-          notifyListeners();
-          return false;
-        }
-      } catch (e) {
-        makingPart = false;
-        trouble = '$e';
+        state = await api.stemState(t, part);
+      } catch (_) {
+        // The server could not be asked. Not the deck's problem to report: it is
+        // still holding a record and still playing it.
+        state = Stem.beingMade;
+      }
+      makingPart = false;
+      noParts = state == Stem.never;
+      if (state != Stem.ready) {
         notifyListeners();
         return false;
       }

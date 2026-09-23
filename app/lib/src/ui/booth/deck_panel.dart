@@ -451,7 +451,11 @@ class _DeckPanelState extends State<DeckPanel> with SingleTickerProviderStateMix
     };
     return _group(
       context,
-      _making == null ? 'parts' : 'parts · making the $_making',
+      d.noParts
+          ? 'parts · too long to take apart'
+          : _making == null
+              ? 'parts'
+              : 'parts · making the $_making',
       [
         for (final e in named.entries)
           PressButton(
@@ -463,7 +467,8 @@ class _DeckPanelState extends State<DeckPanel> with SingleTickerProviderStateMix
                     feel(Feel.pick);
                     final done = await d.swapTo(e.value);
                     if (!mounted) return;
-                    setState(() => _making = done ? null : e.key.toLowerCase());
+                    setState(() =>
+                        _making = done || d.noParts ? null : e.key.toLowerCase());
                   },
           ),
       ],

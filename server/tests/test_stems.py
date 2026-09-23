@@ -226,3 +226,14 @@ def test_a_record_has_no_vocals_part(client, hdr, a_record):
 
 def test_a_part_needs_a_token_or_a_key(client, a_record):
     assert client.get(f"/tracks/{a_record['id']}/stem/drums").status_code == 401
+
+
+def test_a_set_is_not_a_record(client, hdr, a_record):
+    """Past the cap the answer is no, not a part that runs out before the record
+    does — which on a deck in front of a room is silence."""
+    from muse import db
+    db.run("update tracks set duration_ms=%s where id=%s",
+           (stems.UP_TO_S * 1000 + 1, a_record["id"]))
+    r = client.get(f"/tracks/{a_record['id']}/stem/drums", headers=hdr)
+    assert r.status_code == 404
+    assert "too long" in r.text

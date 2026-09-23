@@ -7,6 +7,18 @@ import 'package:http/http.dart' as http;
 import 'connection.dart';
 import 'models.dart';
 
+/// What the server has of one part of a record.
+enum Stem {
+  /// Made, and playing it is a fetch like any other.
+  ready,
+
+  /// Being made, or waiting its turn to be. A minute, give or take.
+  beingMade,
+
+  /// Not something this record gets: too long to take apart.
+  never,
+}
+
 class ApiException implements Exception {
   final int status;
   final String message;
@@ -375,14 +387,17 @@ class ApiClient {
   /// Whether that part has been made yet, asking for it to be if not.
   ///
   /// The server answers 202 while it is on the bench, so this is both the question
-  /// and the request: ask once, wait, ask again.
-  Future<bool> stemReady(Track t, String part) async {
+  /// and the request: ask once, wait, ask again. A record it will not take apart at
+  /// all — one longer than a record — answers 404, which is a different answer from
+  /// "not yet" and has to stay one.
+  Future<Stem> stemState(Track t, String part) async {
     await ensureStreamKey();
     final r = await net.get(Uri.parse(stemUrl(t, part)),
         headers: {...(kIsWeb ? const {} : streamHeaders), 'Range': 'bytes=0-0'});
-    if (r.statusCode == 202) return false;
-    if (r.statusCode >= 400) throw ApiException(r.statusCode, 'no $part for that record');
-    return true;
+    if (r.statusCode == 202) return Stem.beingMade;
+    if (r.statusCode == 404) return Stem.never;
+    if (r.statusCode >= 400) throw ApiException(r.statusCode, 'could not ask for the $part');
+    return Stem.ready;
   }
 
   /// Same signed-key trick as audio: an <img> cannot send an Authorization header.

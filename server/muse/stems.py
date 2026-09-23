@@ -66,9 +66,11 @@ _BLOCK = 384
 _VOICE_LOW = 200.0
 _VOICE_HIGH = 8000.0
 
-# Past this only the first of it is separated: an hour-long set is not a record, and
-# the parts of one are not worth twenty minutes of a small server's afternoon.
-_UP_TO_S = 12 * 60
+# The longest record that gets taken apart. An hour-long set is not a record, and the
+# parts of one are not worth twenty minutes of a small server's afternoon — so past
+# this the answer is no rather than a part that runs out before the record does, which
+# is silence on a deck in front of a room.
+UP_TO_S = 12 * 60
 
 # How long the bench waits for more work before standing down.
 IDLE = 120.0
@@ -78,6 +80,14 @@ NAMES = ("instrumental", "drums", "music")
 
 class NotReady(Exception):
     """It is being made. Ask again shortly."""
+
+
+class TooLong(Exception):
+    """Longer than a record. Nothing is made of it."""
+
+
+def too_long(duration_ms: int | None) -> bool:
+    return duration_ms is not None and duration_ms > UP_TO_S * 1000
 
 
 def cache_path(data_dir: pathlib.Path, sha: str, name: str) -> pathlib.Path:
@@ -95,7 +105,7 @@ def _decode(audio: pathlib.Path) -> np.ndarray:
     take out, and it falls out of the arithmetic as silence rather than as a wrong
     guess."""
     proc = subprocess.run(
-        ["ffmpeg", "-v", "error", "-t", str(_UP_TO_S), "-i", str(audio),
+        ["ffmpeg", "-v", "error", "-t", str(UP_TO_S), "-i", str(audio),
          "-ac", "2", "-ar", str(RATE), "-f", "f32le", "-"],
         capture_output=True, timeout=600, check=True)
     flat = np.frombuffer(proc.stdout[: len(proc.stdout) // 8 * 8], dtype="<f4")
@@ -278,8 +288,8 @@ def make(audio: pathlib.Path, name: str) -> np.ndarray:
     return parts_of(audio, name)[name]
 
 
-def for_track(data_dir: pathlib.Path, audio: pathlib.Path, sha: str,
-              name: str) -> pathlib.Path:
+def for_track(data_dir: pathlib.Path, audio: pathlib.Path, sha: str, name: str,
+              duration_ms: int | None = None) -> pathlib.Path:
     """Where this part of the record is, asking for it to be made if it has not been.
 
     Raises [NotReady] until it exists — a minute or so for the first ask, longer if
@@ -287,6 +297,8 @@ def for_track(data_dir: pathlib.Path, audio: pathlib.Path, sha: str,
     held on to."""
     if name not in NAMES:
         raise ValueError(f"no such part: {name}")
+    if too_long(duration_ms):
+        raise TooLong(name)
     cached = cache_path(data_dir, sha, name)
     if cached.exists():
         return cached
