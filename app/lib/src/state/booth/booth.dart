@@ -9,6 +9,7 @@ import '../timing.dart';
 import 'automix.dart';
 import 'deck.dart';
 import 'mixer.dart';
+import 'parts.dart';
 
 /// How one record gives way to the next.
 enum Transition {
@@ -42,9 +43,11 @@ enum Transition {
   /// old one; the old one gives up its own drums half way, so there is never a second
   /// kick fighting the first; then the new record becomes whole and the old one goes.
   ///
-  /// The most convincing thing here when it works, and it only works on records the
-  /// server has taken apart — which is why nothing chooses it until it has. See the
-  /// server's stems.py for how good that separation is, and what it costs.
+  /// The most convincing thing here when it works, and it only works on records that
+  /// have been taken apart — by this computer where there is one to do it, by the
+  /// server otherwise — which is why nothing chooses it until they have. See
+  /// PartsStore for which machine does it, and the server's stems.py for how good
+  /// that separation is and what it costs.
   swap,
 }
 
@@ -158,7 +161,8 @@ class Booth extends ChangeNotifier {
     Deck? a,
     Deck? b,
   })  : mixer = mixer ?? Mixer.forThisDevice(),
-        timing = timing ?? TimingStore(api) {
+        timing = timing ?? TimingStore(api),
+        parts = PartsStore(api, offlinePath: offlinePath) {
     // Each deck says which it is at the moment its player is handed a record, which
     // is when a browser makes the element that plays it. Said here, in the
     // constructor, it was said twice before either existed — so the first element
@@ -173,6 +177,8 @@ class Booth extends ChangeNotifier {
             api: api,
             offlinePath: offlinePath,
             claiming: () => this.mixer.expecting('B'));
+    this.a.parts = parts;
+    this.b.parts = parts;
     this.a.addListener(notifyListeners);
     this.b.addListener(notifyListeners);
   }
@@ -180,6 +186,9 @@ class Booth extends ChangeNotifier {
   final ApiClient api;
   final Mixer mixer;
   final TimingStore timing;
+
+  /// Where the parts of a record come from. See PartsStore.
+  final PartsStore parts;
   late final Deck a;
   late final Deck b;
 
@@ -225,6 +234,9 @@ class Booth extends ChangeNotifier {
     await b.player.setVolume(1);
     await mixer.prepare(decks);
     await setCrossfader(crossfader);
+    // Anything an interrupted run left in the parts folder. Nothing of this run's is
+    // there yet, which is what makes it safe to do here and nowhere else.
+    unawaited(parts.tidyAtStart());
   }
 
   // ------------------------------------------------------------------ the shapes

@@ -68,7 +68,7 @@ class AutoMix extends ChangeNotifier {
       final t = _tracks[i];
       if (_inParts[t.id] == true) continue;
       try {
-        _inParts[t.id] = await booth.api.stemState(t, 'drums') == Stem.ready;
+        _inParts[t.id] = await booth.parts.want(t, 'drums') == Stem.ready;
       } catch (_) {
         // Not a record the server can take apart, or cannot be reached. Either way
         // the booth mixes it the ordinary way and says nothing about it.

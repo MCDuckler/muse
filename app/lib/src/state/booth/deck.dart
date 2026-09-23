@@ -6,6 +6,7 @@ import 'package:just_audio_background/just_audio_background.dart';
 
 import '../../api/client.dart';
 import '../../api/models.dart';
+import 'parts.dart';
 
 /// One of the two records on the deck.
 ///
@@ -47,6 +48,10 @@ class Deck extends ChangeNotifier {
   final String name;
   final ApiClient api;
   final String? Function(int trackId)? offlinePath;
+
+  /// Where the parts of a record come from — this computer where there is one, the
+  /// server otherwise. Null falls back to asking the server directly.
+  PartsStore? parts;
 
   /// Said just before this deck's player is handed a record, because that is when
   /// the engine underneath finally makes the thing that plays it — a browser makes
@@ -249,8 +254,13 @@ class Deck extends ChangeNotifier {
       artist: track.artistLine,
       duration: track.duration,
     );
-    // A part only exists on the server; what is on the device is the whole record.
-    if (local != null && part == null) return AudioSource.uri(Uri.file(local), tag: tag);
+    if (part == null) {
+      if (local != null) return AudioSource.uri(Uri.file(local), tag: tag);
+    } else {
+      // A part this computer made itself: no network, no waiting.
+      final mine = parts?.pathFor(track.id, part!);
+      if (mine != null) return AudioSource.uri(Uri.file(mine), tag: tag);
+    }
     return AudioSource.uri(
       Uri.parse(part == null ? api.streamUrl(track) : api.stemUrl(track, part!)),
       headers: kIsWeb ? null : api.streamHeaders,
@@ -279,7 +289,10 @@ class Deck extends ChangeNotifier {
       notifyListeners();
       Stem state;
       try {
-        state = await api.stemState(t, part);
+        final store = parts;
+        state = store != null
+            ? await store.want(t, part)
+            : await api.stemState(t, part);
       } catch (_) {
         // The server could not be asked. Not the deck's problem to report: it is
         // still holding a record and still playing it.
