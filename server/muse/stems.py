@@ -94,6 +94,20 @@ def cache_path(data_dir: pathlib.Path, sha: str, name: str) -> pathlib.Path:
     return data_dir / "stems" / f"{sha}-{name}-v{VERSION}.m4a"
 
 
+def sweep(data_dir: pathlib.Path) -> int:
+    """Throw away the half-written file of a render the server did not live to
+    finish. The bench is a daemon thread, so a restart in the middle of one leaves a
+    part-file nobody will ever look at again."""
+    gone = 0
+    for stale in (data_dir / "stems").glob("*.tmp.m4a"):
+        try:
+            stale.unlink()
+            gone += 1
+        except OSError:
+            pass
+    return gone
+
+
 # Sound is carried about here the way a wave file carries it: one row per sample,
 # one column per channel. That is the shape ffmpeg wants either way round, so
 # nothing is transposed and nothing is copied to say it.

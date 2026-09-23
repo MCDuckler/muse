@@ -103,6 +103,11 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         if listener:
             listener.start()
         if start_workers:
+            # Anything a restart interrupted half way through separating.
+            left = stems.sweep(cfg.data_dir)
+            if left:
+                logging.getLogger("muse.stems").info(
+                    "cleared %d unfinished part%s", left, "" if left == 1 else "s")
             # One outstanding poll job is the scheduler; it re-queues itself when it
             # runs. Asking at boot covers a box that was off when the last one was due.
             try:

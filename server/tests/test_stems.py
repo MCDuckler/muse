@@ -237,3 +237,14 @@ def test_a_set_is_not_a_record(client, hdr, a_record):
     r = client.get(f"/tracks/{a_record['id']}/stem/drums", headers=hdr)
     assert r.status_code == 404
     assert "too long" in r.text
+
+
+def test_a_render_the_server_did_not_live_to_finish_is_swept(tmp_path):
+    (tmp_path / "stems").mkdir(parents=True)
+    half = tmp_path / "stems" / "abc-drums-v1.tmp.m4a"
+    half.write_bytes(b"half a part")
+    whole = tmp_path / "stems" / "abc-drums-v1.m4a"
+    whole.write_bytes(b"a part")
+    assert stems.sweep(tmp_path) == 1
+    assert not half.exists() and whole.exists()
+    assert stems.sweep(tmp_path) == 0
