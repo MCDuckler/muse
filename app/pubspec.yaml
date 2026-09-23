@@ -45,6 +45,10 @@ dependency_overrides:
   # filters on a deck. See third_party/just_audio_media_kit/WETOWL.md.
   just_audio_media_kit:
     path: third_party/just_audio_media_kit
+  # And the background plugin, which refuses a second player — the booth is two.
+  # See third_party/just_audio_background/WETOWL.md.
+  just_audio_background:
+    path: third_party/just_audio_background
 
 dev_dependencies:
   # The fake audio engine in test/ implements this, so the player's own logic can be

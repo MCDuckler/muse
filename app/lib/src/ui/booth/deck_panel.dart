@@ -151,6 +151,7 @@ class _DeckPanelState extends State<DeckPanel> with SingleTickerProviderStateMix
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: Mag.typewriter(11, color: scheme.onSurfaceVariant)),
+                        if (d.trouble != null) _trouble(context),
                         if (widget.showWave) ...[
                           const SizedBox(height: 6),
                           WaveLane(
@@ -308,7 +309,21 @@ class _DeckPanelState extends State<DeckPanel> with SingleTickerProviderStateMix
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: Mag.typewriter(11, color: scheme.onSurfaceVariant)),
+        if (d.trouble != null) _trouble(context),
       ],
+    );
+  }
+
+  /// A deck that could not take the record says so. Without this the deck looks
+  /// loaded and makes no sound, which is what a fader turned down looks like too.
+  Widget _trouble(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: 3),
+      child: Text('WOULD NOT LOAD · ${widget.deck.trouble}',
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: Mag.typewriter(10, color: scheme.error)),
     );
   }
 

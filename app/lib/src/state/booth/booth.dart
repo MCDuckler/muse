@@ -109,12 +109,20 @@ class Booth extends ChangeNotifier {
     Deck? b,
   })  : mixer = mixer ?? Mixer.forThisDevice(),
         timing = timing ?? TimingStore(api) {
-    // The browser has to be told which deck is about to make its element, before it
-    // does; the deck makes it the first time it is spoken to.
-    this.mixer.expecting('A');
-    this.a = a ?? Deck('A', api: api, offlinePath: offlinePath);
-    this.mixer.expecting('B');
-    this.b = b ?? Deck('B', api: api, offlinePath: offlinePath);
+    // Each deck says which it is at the moment its player is handed a record, which
+    // is when a browser makes the element that plays it. Said here, in the
+    // constructor, it was said twice before either existed — so the first element
+    // made was claimed as the second deck and the real one was never claimed at all.
+    this.a = a ??
+        Deck('A',
+            api: api,
+            offlinePath: offlinePath,
+            claiming: () => this.mixer.expecting('A'));
+    this.b = b ??
+        Deck('B',
+            api: api,
+            offlinePath: offlinePath,
+            claiming: () => this.mixer.expecting('B'));
     this.a.addListener(notifyListeners);
     this.b.addListener(notifyListeners);
   }
@@ -189,9 +197,17 @@ class Booth extends ChangeNotifier {
   }
 
   // ------------------------------------------------------------------ loading
+  /// What went wrong on either deck, if anything did.
+  String? get trouble => a.trouble ?? b.trouble;
+
   Future<void> load(Deck deck, Track track, {Duration? at}) async {
     final t = await timing.of(track);
-    await deck.load(track, timing: t, at: at);
+    try {
+      await deck.load(track, timing: t, at: at);
+    } catch (_) {
+      // The deck has written down what happened and said so; the room reads it off
+      // the deck rather than the booth throwing out of whatever asked for the load.
+    }
     // A different record is a different loudness: the levels are worked out again.
     await _levels();
     notifyListeners();
@@ -405,6 +421,7 @@ class Booth extends ChangeNotifier {
 
     if (kind == Transition.cut) {
       await startOnBeat(to, every: 4);
+      if (!_reallyPlaying(to)) return;
       await setCrossfader(identical(to, b) ? 1 : 0);
       await from.pause();
       master = to;
@@ -418,6 +435,12 @@ class Booth extends ChangeNotifier {
     // A blend goes in on the master's next phrase, where a DJ would bring one in;
     // a fade on the next beat, which is soon enough for something with no grid.
     if (!to.playing) await startOnBeat(to, every: kind == Transition.fade ? 1 : 16);
+    // And if it did not start, nothing is handed over: fading out of a record into
+    // a deck that is not playing is fading out into silence.
+    if (!_reallyPlaying(to)) {
+      await _applyKills(MixStep(0, kills: {to.name: EqSet.flat}));
+      return;
+    }
 
     final began = DateTime.now();
     final done = Completer<void>();
@@ -458,6 +481,25 @@ class Booth extends ChangeNotifier {
       }
     });
     return done.future;
+  }
+
+  /// Whether the deck being mixed into is actually making a sound. A record that
+  /// would not load looks loaded — it has a title and a cover — and a transition into
+  /// one is a transition into nothing, so it is refused and said rather than done.
+  bool _reallyPlaying(Deck deck) {
+    if (deck.playing) return true;
+    _wouldNotPlay = deck.trouble ?? 'Deck ${deck.name} did not start';
+    notifyListeners();
+    return false;
+  }
+
+  /// Why the last transition did not happen, if it did not.
+  String? get wouldNotPlay => _wouldNotPlay;
+  String? _wouldNotPlay;
+
+  void forgetTrouble() {
+    _wouldNotPlay = null;
+    notifyListeners();
   }
 
   Future<void> _applyKills(MixStep step) async {

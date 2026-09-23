@@ -18,7 +18,16 @@
     try {
       if (String(tag).toLowerCase() === 'audio' && expecting) {
         el.__wetowlBooth = expecting;        // eq.js leaves these alone
-        decks[expecting] = { el: el, chain: null, wanted: { level: 1, low: 0, mid: 0, high: 0, filter: 0 } };
+        // A deck is handed a new element every time it is handed a new record, and
+        // what the mixer was set to is about the deck rather than about the record:
+        // it is kept, or the fader and the bands would spring back to nothing every
+        // time a record went on.
+        var was = decks[expecting];
+        decks[expecting] = {
+          el: el,
+          chain: null,
+          wanted: was ? was.wanted : { level: 1, low: 0, mid: 0, high: 0, filter: 0 }
+        };
         expecting = null;
       }
     } catch (e) {}
@@ -41,6 +50,9 @@
     var lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 22000; lp.Q.value = 0.9;
     var hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 10; hp.Q.value = 0.9;
     var level = ctx.createGain(); level.gain.value = deck.wanted.level;
+    // And the element's own volume is let go of: from here the gain is the level, and
+    // a volume left at half from before it was routed would halve it twice.
+    try { deck.el.volume = 1; } catch (e) {}
     [low, mid, high, lp, hp, level].reduce(function (a, b) { a.connect(b); return b; }, source);
     level.connect(ctx.destination);
     deck.chain = { low: low, mid: mid, high: high, lp: lp, hp: hp, level: level };

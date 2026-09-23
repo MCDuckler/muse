@@ -23,6 +23,7 @@ class Deck extends ChangeNotifier {
     this.name, {
     required this.api,
     this.offlinePath,
+    this.claiming,
     AudioPlayer? player,
     AndroidEqualizer? equalizer,
   })  : equalizer = equalizer ??
@@ -46,6 +47,16 @@ class Deck extends ChangeNotifier {
   final String name;
   final ApiClient api;
   final String? Function(int trackId)? offlinePath;
+
+  /// Said just before this deck's player is handed a record, because that is when
+  /// the engine underneath finally makes the thing that plays it — a browser makes
+  /// its audio element *there*, not when the player is constructed, and the mixer
+  /// has to know which deck the next one belongs to. See Mixer.expecting.
+  final void Function()? claiming;
+
+  /// What went wrong the last time this deck was asked to hold a record. A deck that
+  /// cannot play has to say so: silence is the same sound as a mixer turned down.
+  String? trouble;
 
   /// Android's own, attached to this deck's player: what its kills are done with.
   final AndroidEqualizer? equalizer;
@@ -146,8 +157,42 @@ class Deck extends ChangeNotifier {
   }
 
   // ------------------------------------------------------------------ loading and transport
+  /// One deck at a time takes its turn at the engine, across both of them.
+  ///
+  /// Not for the engine's sake but for the browser's: the page recognises a deck's
+  /// audio element by which deck said it was about to make one, and two loads
+  /// overlapping would have the second deck claim the first one's element — which is
+  /// exactly the bug that made the booth play one record and not the other. It is
+  /// only the claim and the handover that are taken in turn; whatever a load has to
+  /// ask the server for happens before the turn is taken, and a turn that somehow
+  /// never ends is given up on rather than stopping the other deck for good.
+  static Future<void> _turn = Future.value();
+  static const _waitForATurn = Duration(seconds: 8);
+
   /// Put [track] on, parked at [at] — its first sound, unless told otherwise.
   Future<void> load(Track track, {TrackTiming? timing, Duration? at}) async {
+    // A stream is signed and the signature ages out, so it is refreshed before a
+    // load — but never at the price of the load itself: a deck that cannot reach the
+    // server still plays what is kept on the device.
+    if (offlinePath?.call(track.id) == null) {
+      try {
+        await api.ensureStreamKey().timeout(const Duration(seconds: 5));
+      } catch (_) {
+        // An old key, or none: the request that follows will say so plainly.
+      }
+    }
+    final before = _turn;
+    final mine = Completer<void>();
+    _turn = mine.future;
+    try {
+      await before.timeout(_waitForATurn, onTimeout: () {});
+      await _load(track, timing: timing, at: at);
+    } finally {
+      mine.complete();
+    }
+  }
+
+  Future<void> _load(Track track, {TrackTiming? timing, Duration? at}) async {
     // What is already known about this record is not forgotten because the server
     // could not be asked again: a deck that loses its grid loses its sync, its loop
     // and its beat light, and the grid had not changed.
@@ -155,13 +200,22 @@ class Deck extends ChangeNotifier {
     this.track = track;
     this.timing = timing ?? knew;
     _ended_ = false;
+    trouble = null;
     hotCues.clear();
     loopStart = loopEnd = null;
+    _loopBars = null;
     // Parked where a DJ would drop it: on the first downbeat, if there is one.
     final start =
         at ?? this.timing?.cues?.firstDownbeat ?? this.timing?.lead ?? Duration.zero;
-    await _player.setAudioSource(_sourceFor(track), initialPosition: start);
-    if (tempo != 1.0) await _player.setSpeed(tempo);
+    try {
+      claiming?.call();
+      await _player.setAudioSource(_sourceFor(track), initialPosition: start);
+      if (tempo != 1.0) await _player.setSpeed(tempo);
+    } catch (e) {
+      trouble = '$e';
+      notifyListeners();
+      rethrow;
+    }
     _anchor(start);
     notifyListeners();
   }

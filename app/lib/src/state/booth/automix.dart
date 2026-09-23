@@ -275,7 +275,17 @@ class AutoMix extends ChangeNotifier {
       return;
     }
     final length = booth.barsLength(from, chosen.bars);
-    goesAt = from.timing == null ? null : outPoint(from.timing!, length: length);
+    // A record nobody has analysed still has to be mixed out of: without a timing
+    // the booth simply waited for ever, which is a queue that stops after one song.
+    // Its own length, less the transition, is where it goes.
+    final timed = from.timing;
+    if (timed != null) {
+      goesAt = outPoint(timed, length: length);
+    } else {
+      final total = from.duration ?? Duration.zero;
+      final at = total - length;
+      goesAt = at > Duration.zero ? at : total;
+    }
     final at = timing == null ? null : inPoint(timing, bars: chosen.bars);
     // Only if it is not the one already waiting there, parked where it should be.
     if (to.track?.id != coming.id || to.playing) {
@@ -325,12 +335,26 @@ class AutoMix extends ChangeNotifier {
       if (!from.playing) stop();
       return;
     }
-    if (go == null || !from.playing) return;
-    if (from.position < go) return;
+    if (go == null) return;
+    // The record ran out — or never started. Either way the next one is what the
+    // queue is for: the booth does not sit in silence waiting for a clock that has
+    // stopped.
+    final ended = !from.playing &&
+        from.duration != null &&
+        from.position >= from.duration! - const Duration(milliseconds: 400);
+    if (!from.playing && !ended) return;
+    if (from.position < go && !ended) return;
     _going = true;
     try {
       final chosen = plan ?? choose(from.timing, booth.other(from).timing);
+      final was = booth.master;
       await booth.go(chosen.kind, bars: chosen.bars);
+      if (identical(booth.master, was)) {
+        // It refused: the record it was going into would not play. Say so and stop,
+        // rather than trying the same thing again every fifth of a second.
+        stop();
+        return;
+      }
       _at++;
       await _prepareNext();
     } finally {

@@ -326,6 +326,21 @@ class _AutoPanel extends StatelessWidget {
             ),
           ],
         ),
+        if (booth.wouldNotPlay != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 4, bottom: 2),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(booth.wouldNotPlay!,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Mag.typewriter(10, color: scheme.error)),
+                ),
+                PressButton(label: 'Right', onTap: booth.forgetTrouble),
+              ],
+            ),
+          ),
         const SizedBox(height: 5),
         if (!auto.running)
           Row(

@@ -36,6 +36,8 @@ Track song(int id) => Track.fromJson({
 
 /// A mixer that only writes down what it was told.
 class NotedMixer extends Mixer {
+  /// Which deck said it was about to make its player, in the order they said it.
+  final claims = <String>[];
   final levels = <Map<String, double>>[];
   final kills = <(String, EqSet)>[];
   @override
@@ -46,6 +48,9 @@ class NotedMixer extends Mixer {
   Future<void> setLevels(Map<Deck, double> levels, {Duration over = Duration.zero}) async {
     this.levels.add({for (final e in levels.entries) e.key.name: e.value});
   }
+
+  @override
+  void expecting(String deck) => claims.add(deck);
 
   @override
   Future<void> setEq(Deck deck, EqSet eq) async {
@@ -121,6 +126,39 @@ void main() {
     });
 
     tearDown(() => booth.dispose());
+
+    test('each deck says which it is as its record goes on, never before', () async {
+      // A browser makes the thing that plays a record when the record is handed to
+      // it, so a claim made any earlier is a claim for an element that does not
+      // exist — and the next one made is claimed by the wrong deck.
+      expect(mixer.claims, isEmpty, reason: 'nothing has been loaded yet');
+      await booth.load(booth.a, song(1));
+      expect(mixer.claims, ['A']);
+      await booth.load(booth.b, song(2));
+      expect(mixer.claims, ['A', 'B']);
+    });
+
+    test('two records going on at once do not claim each other\'s player', () async {
+      // Started together, finished in order: the claim and the load it belongs to
+      // are never separated by the other deck's.
+      await Future.wait([
+        booth.load(booth.a, song(1)),
+        booth.load(booth.b, song(2)),
+      ]);
+      expect(mixer.claims, ['A', 'B']);
+      expect(booth.a.track?.id, 1);
+      expect(booth.b.track?.id, 2);
+    });
+
+    test('a record nobody has analysed is still mixed out of', () async {
+      // No timing at all: the booth used to wait for a moment it could not work out,
+      // which is a queue that plays one record and stops.
+      await booth.auto.start([song(1), song(2)]);
+      expect(booth.auto.goesAt, isNotNull,
+          reason: 'its own length, less the transition');
+      expect(booth.auto.plan?.kind, Transition.fade, reason: 'no grid, no blend');
+      booth.auto.stop();
+    });
 
     test('two records are two players', () async {
       expect(booth.master.name, 'A', reason: 'nothing playing: A leads');

@@ -1,0 +1,42 @@
+<!doctype html><html><body>
+<!--
+  The page script the booth's mixer talks to, checked in a real browser.
+
+  Not a Flutter test: the thing being checked is web/booth.js, which hooks
+  document.createElement to recognise each deck's audio element as the engine makes
+  it. Copy web/eq.js and web/booth.js beside this file, serve the folder and open it.
+
+    cp app/web/eq.js app/web/booth.js /tmp/jstest/ && cp app/dev/booth_js_test.html /tmp/jstest/index.html
+    cd /tmp/jstest && python3 -m http.server 8771
+
+  The bug it was written for: the app claimed both decks before either element
+  existed, so the first element made was claimed as the second deck and the real one
+  was never claimed at all — one record played and the other was silent.
+--><pre id="out"></pre>
+<script src="eq.js"></script><script src="booth.js"></script>
+<script>
+var lines = [];
+function check(name, got, want) { lines.push((String(got)===String(want)?'ok  ':'FAIL') + ' ' + name + ' = ' + got + (String(got)===String(want)?'':' (wanted ' + want + ')')); }
+// The order the app does it in: a deck says which it is, then its element is made.
+wetowlBooth.expect('A'); var a1 = document.createElement('audio');
+wetowlBooth.expect('B'); var b1 = document.createElement('audio');
+check('first element is A', a1.__wetowlBooth, 'A');
+check('second element is B', b1.__wetowlBooth, 'B');
+// An element made with nobody expecting is nobody's: the ordinary player's.
+var other = document.createElement('audio');
+check('an unclaimed element belongs to no deck', other.__wetowlBooth, 'undefined');
+// Levels reach the right element while there is no audio graph yet.
+wetowlBooth.levels('A', 0.25, 0); wetowlBooth.levels('B', 0.75, 0);
+check('A volume', a1.volume, 0.25);
+check('B volume', b1.volume, 0.75);
+// A deck handed a new record gets a new element, and keeps what the mixer was set to.
+wetowlBooth.eq('B', -40, 0, 0);
+wetowlBooth.expect('B'); var b2 = document.createElement('audio');
+check('B has a new element', b2.__wetowlBooth, 'B');
+wetowlBooth.levels('B', 0.5, 0);
+check('new B element takes the level', b2.volume, 0.5);
+check('the old B element is left alone', b1.volume, 0.75);
+// And eq.js keeps its hands off the decks.
+check('eq leaves the decks to the booth', typeof wetowlEq.apply, 'function');
+document.getElementById('out').textContent = lines.join('\n');
+</script></body></html>
