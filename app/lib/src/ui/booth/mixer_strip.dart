@@ -1,7 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../../api/models.dart';
+import '../../state/app_state.dart';
 import '../../state/booth/booth.dart';
 import '../feel.dart';
 import '../mag.dart';
@@ -90,6 +93,10 @@ class _MixerStripState extends State<MixerStrip> {
               ),
             ],
           ),
+          const SizedBox(height: 8),
+          // Or let the booth do it: the queue, record into record, each transition
+          // chosen from what is known about the two and landed on the phrase.
+          _AutoRow(booth: b),
           if (!b.mixer.canKill)
             Padding(
               padding: const EdgeInsets.only(top: 6),
@@ -193,4 +200,60 @@ class _FaderPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_FaderPainter old) => old.value != value || old.ink != ink || old.accent != accent;
+}
+
+
+/// The booth mixing the queue on its own, and what it has decided about the next one.
+class _AutoRow extends StatelessWidget {
+  const _AutoRow({required this.booth});
+  final Booth booth;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final auto = booth.auto;
+    final app = context.read<AppState>();
+    final items = app.player?.items ?? const <Track>[];
+    final plan = auto.plan;
+    final next = auto.next;
+    String said;
+    if (!auto.running) {
+      said = items.isEmpty ? 'Queue some records and the booth can mix them for you.' : 'The queue, record into record.';
+    } else if (next == null) {
+      said = 'The last record. It plays out.';
+    } else {
+      final at = auto.goesAt;
+      final left = at == null ? null : at - booth.master.position;
+      said = 'Next: ${next.displayTitle} · ${plan?.kind.name ?? '…'} over ${plan?.bars ?? '…'} bars'
+          '${left == null ? '' : left.isNegative ? ' · going' : ' · in ${left.inSeconds}s'}';
+    }
+    return Row(
+      children: [
+        PressButton(
+          label: auto.running ? 'Stop mixing' : 'Let the booth mix',
+          loud: !auto.running && items.isNotEmpty,
+          onTap: items.isEmpty
+              ? null
+              : () {
+                  feel(Feel.commit);
+                  if (auto.running) {
+                    auto.stop();
+                  } else {
+                    // From the record on the master, if it is in the queue; the top otherwise.
+                    final on = booth.master.track;
+                    final at = on == null ? 0 : items.indexWhere((t) => t.id == on.id).clamp(0, items.length - 1);
+                    unawaited(auto.start(items, at: at));
+                  }
+                },
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(said,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Mag.typewriter(10.5, color: auto.running ? scheme.onSurface : scheme.onSurfaceVariant)),
+        ),
+      ],
+    );
+  }
 }

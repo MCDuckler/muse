@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio_platform_interface/just_audio_platform_interface.dart';
 import 'package:muse/src/api/client.dart';
 import 'package:muse/src/api/models.dart';
+import 'package:muse/src/state/booth/automix.dart';
 import 'package:muse/src/state/booth/booth.dart';
 import 'package:muse/src/state/booth/deck.dart';
 import 'package:muse/src/state/booth/mixer.dart';
@@ -56,6 +57,7 @@ class NotedMixer extends Mixer {
 
 void main() {
   analysisModel();
+  autoMixRules();
   TestWidgetsFlutterBinding.ensureInitialized();
   TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
       .setMockMethodCallHandler(const MethodChannel('com.ryanheise.audio_session'), (c) async => null);
@@ -186,6 +188,40 @@ void main() {
       expect(mixer.levels.last, {'A': closeTo(0, 1e-9), 'B': closeTo(1, 1e-9)});
     });
 
+    test('the booth mixes a queue on its own: out at the outro, the next one loaded',
+        () async {
+      // A fast grid so a four-bar fade is a moment: 1200 bpm, a bar is 200 ms.
+      TrackTiming quick(int id) => TrackTiming(
+            durationMs: 60000,
+            bpm: 1200,
+            beats: [for (var i = 0; i < 1200; i++) i * 50],
+            downbeats: [for (var i = 0; i < 1200; i += 4) i * 50],
+            ends: 'fade',
+            cues: const MixCues(firstDownbeatMs: 0, mixInMs: 2000, mixOutMs: 3000, soundEndMs: 59000),
+          );
+      // The timing store is asked for each; the API is not there, so hand them in.
+      final tracks = [song(1), song(2), song(3)];
+      for (final t in tracks) {
+        booth.timing.put(t.id, quick(t.id));
+      }
+      await booth.auto.start(tracks);
+      expect(booth.auto.running, isTrue);
+      expect(booth.master.track?.id, 1);
+      expect(booth.other(booth.master).track?.id, 2, reason: 'the next is on the free deck');
+      expect(booth.auto.plan?.kind, Transition.fade, reason: 'a record that fades itself');
+      expect(booth.auto.goesAt, const Duration(seconds: 3));
+
+      // The outgoing reaches its outro.
+      await booth.master.seek(const Duration(milliseconds: 3100));
+      for (var i = 0; i < 40 && booth.master.track?.id == 1; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      expect(booth.master.track?.id, 2, reason: 'the transition ran and handed over');
+      expect(booth.other(booth.master).track?.id, 3, reason: 'and the one after is loaded');
+      booth.auto.stop();
+      expect(booth.auto.running, isFalse);
+    });
+
     test('a fade over the bars moves the fader and ends with the other deck', () async {
       await booth.load(booth.a, song(1));
       booth.a.timing = grid(50);           // 1200 bpm: a bar is 200 ms, for a quick test
@@ -232,5 +268,49 @@ void analysisModel() {
     expect(at('12A').inKeyWith(at('1A')), isTrue, reason: 'the wheel goes round');
     expect(at('8A').inKeyWith(at('2A')), isFalse);
     expect(at('8A').inKeyWith(TrackTiming()), isFalse, reason: 'no key, no claim');
+  });
+}
+
+
+/// What the booth decides on its own.
+void autoMixRules() {
+  TrackTiming t({double? bpm, String ends = '', String? camelot, bool beats = true}) => TrackTiming(
+        durationMs: 200000,
+        bpm: bpm,
+        beats: beats ? [for (var i = 0; i < 400; i++) i * 469] : const [],
+        ends: ends,
+        camelot: camelot,
+        downbeats: beats ? [for (var i = 0; i < 400; i += 4) i * 469] : const [],
+        cues: const MixCues(firstDownbeatMs: 469, mixInMs: 15000, mixOutMs: 160000, soundEndMs: 198000),
+      );
+
+  test('the transition is chosen from what is known about the two records', () {
+    expect(AutoMix.choose(t(bpm: 128, camelot: '8A'), t(bpm: 130, camelot: '9A')),
+        (kind: Transition.blend, bars: 16), reason: 'in key, in tempo: the long blend');
+    expect(AutoMix.choose(t(bpm: 128, camelot: '8A'), t(bpm: 130, camelot: '3B')),
+        (kind: Transition.blend, bars: 8), reason: 'a clash is shorter');
+    expect(AutoMix.choose(t(bpm: 128), t(bpm: 150)).kind, Transition.fade,
+        reason: 'too far apart to sync');
+    expect(AutoMix.choose(t(bpm: 128, ends: 'fade'), t(bpm: 128)).kind, Transition.fade,
+        reason: 'a record that fades itself has made its own exit');
+    expect(AutoMix.choose(t(bpm: 128, ends: 'cold', camelot: '8A'), t(bpm: 128, camelot: '8A')).kind,
+        Transition.cut, reason: 'a cold ending in key: on the one');
+    expect(AutoMix.choose(t(beats: false), t(bpm: 128)).kind, Transition.fade,
+        reason: 'no grid, no blend');
+    expect(AutoMix.choose(null, t(bpm: 128)).kind, Transition.fade);
+  });
+
+  test('the outgoing goes at its outro; the incoming is parked before its intro ends', () {
+    final from = t(bpm: 128);
+    expect(AutoMix.outPoint(from, length: const Duration(seconds: 30)), const Duration(milliseconds: 160000));
+    final none = TrackTiming(durationMs: 100000, tailMs: 2000);
+    expect(AutoMix.outPoint(none, length: const Duration(seconds: 30)), const Duration(seconds: 68),
+        reason: 'no outro read: the bars before the sound ends');
+    // 128 bpm: a bar is 1875 ms; 8 bars before 15 s is a shade under 0, so the first
+    // downbeat; 4 bars before is 7.5 s, on the grid at the downbeat before it.
+    expect(AutoMix.inPoint(t(bpm: 128), bars: 8), const Duration(milliseconds: 469));
+    final four = AutoMix.inPoint(t(bpm: 128), bars: 4);
+    expect(four.inMilliseconds, lessThanOrEqualTo(7500));
+    expect(four.inMilliseconds % 469, 0, reason: 'on a downbeat of its own');
   });
 }

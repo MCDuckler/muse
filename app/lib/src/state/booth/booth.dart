@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../../api/client.dart';
 import '../../api/models.dart';
 import '../timing.dart';
+import 'automix.dart';
 import 'deck.dart';
 import 'mixer.dart';
 
@@ -71,6 +72,9 @@ class Booth extends ChangeNotifier {
   final TimingStore timing;
   late final Deck a;
   late final Deck b;
+
+  /// The booth mixing on its own. See AutoMix.
+  late final AutoMix auto = AutoMix(this)..addListener(notifyListeners);
 
   List<Deck> get decks => [a, b];
   Deck other(Deck d) => identical(d, a) ? b : a;
@@ -318,6 +322,7 @@ class Booth extends ChangeNotifier {
   @override
   void dispose() {
     _running?.cancel();
+    auto.dispose();
     a.dispose();
     b.dispose();
     super.dispose();

@@ -18,6 +18,9 @@ class TimingStore {
   /// What is already here, without asking.
   TrackTiming? peek(int trackId) => _known[trackId];
 
+  /// An answer from elsewhere — a test, a mix that carried its own — kept as if asked.
+  void put(int trackId, TrackTiming timing) => _known[trackId] = timing;
+
   Future<TrackTiming?> of(Track track) {
     if (!track.isReady) return Future.value(null);
     if (_known.containsKey(track.id)) return Future.value(_known[track.id]);
