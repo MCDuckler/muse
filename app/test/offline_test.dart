@@ -91,7 +91,17 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 20));
     }
     await server.close(force: true);
-    if (home.existsSync()) await home.delete(recursive: true);
+    // And a cover fetched alongside a song can still be landing after the song
+    // itself is done, which made a delete fail with "directory not empty" and
+    // failed a test that had already passed. Try a few times, then leave it: this is
+    // a temporary directory, and tidying up is not what any of this is testing.
+    for (var i = 0; i < 20 && home.existsSync(); i++) {
+      try {
+        await home.delete(recursive: true);
+      } on FileSystemException {
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+      }
+    }
   });
 
   /// Wait for the queue of downloads to run dry.
