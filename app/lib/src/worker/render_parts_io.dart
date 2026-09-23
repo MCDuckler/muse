@@ -160,11 +160,17 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
   if (decoded.exitCode != 0) throw StateError('ffmpeg could not read it');
   final raw = decoded.stdout as List<int>;
   final bytes = Uint8List.fromList(raw.sublist(0, raw.length ~/ 8 * 8));
-  final stereo = bytes.buffer.asFloat32List(0, bytes.lengthInBytes ~/ 4);
 
   // Off the frame thread. A booth that stutters while it thinks is worse than one
   // that cannot take a record apart at all.
-  final parts = await Isolate.run(() => separate(stereo, name));
+  //
+  // Handed over rather than copied: a closure that captures the samples sends a copy
+  // of them, and twelve minutes of stereo is a hundred and eighty megabytes to have
+  // two of. Transferring empties this side's buffer, which is why nothing reads it
+  // after this line.
+  final moved = TransferableTypedData.fromList([bytes]);
+  final parts = await Isolate.run(
+      () => separate(moved.materialize().asFloat32List(), name));
 
   for (final e in parts.sound.entries) {
     final file = into[e.key];
