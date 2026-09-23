@@ -93,6 +93,7 @@
     if (!ctx || ctx.state !== 'running') return;
     elements.forEach(function (el) {
       try {
+        if (el.__wetowlBooth) return;            // a deck's: the booth routes those
         if (!route(el) && !el.__wetowlEqWatching) {
           // Not loaded yet, or from elsewhere: look again when it loads something.
           el.__wetowlEqWatching = true;

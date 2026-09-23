@@ -12,6 +12,7 @@ import '../worker/this_computer.dart' show stopFetching;
 import '../api/models.dart';
 import 'eq_engines.dart';
 import 'equalizer.dart';
+import 'booth/booth.dart';
 import 'device_name.dart';
 import 'offline.dart';
 import 'art_cache.dart';
@@ -288,6 +289,7 @@ class AppState extends ChangeNotifier {
   static const _kCoverStyle = 'muse.coverStyle';
   static const _kPalette = 'muse.palette';
   static const _kHalftone = 'muse.halftone';
+  static const _kBooth = 'muse.booth';
   static const _kDiscoLights = 'muse.discoLights';
   static const _kAlbumsAcross = 'muse.albumsAcross';
   static const _kSeamless = 'muse.seamless';
@@ -346,6 +348,18 @@ class AppState extends ChangeNotifier {
   /// screen is emptier without it — but a phone with a small battery is a good reason
   /// to turn a moving background off, so it is a switch and not a fact.
   bool halftone = true;
+
+  /// The booth: two records mixed by hand. Early, and behind a switch until it is not.
+  bool boothOn = false;
+  Booth? _booth;
+  Booth get booth => _booth ??= Booth(api, offlinePath: offline.pathFor);
+
+  Future<void> setBoothOn(bool on) async {
+    boothOn = on;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kBooth, on);
+  }
 
   /// The mirror ball's light across the player. Its own switch: it used to come and go
   /// with the printed background, and somebody who likes one does not have to like
@@ -546,6 +560,7 @@ class AppState extends ChangeNotifier {
     // browser pays for that twice — once to draw it and once to composite it. Anybody
     // who wants it can turn it on, and their choice is what is read back here.
     halftone = prefs.getBool(_kHalftone) ?? !kIsWeb;
+    boothOn = prefs.getBool(_kBooth) ?? false;
     // Whoever had the background on had the lights too, and keeps them.
     discoLights = prefs.getBool(_kDiscoLights) ?? halftone;
     albumsAcross = prefs.getInt(_kAlbumsAcross);

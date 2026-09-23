@@ -16,6 +16,7 @@ import '../state/offline.dart';
 import '../state/art_cache.dart';
 import '../state/shrink.dart';
 import '../state/updates.dart';
+import 'booth_page.dart';
 import 'kept_page.dart';
 import 'mini_player.dart';
 import 'face.dart';
@@ -361,6 +362,22 @@ class _StoragePage extends StatelessWidget {
       body: ListView(
         padding: EdgeInsets.only(bottom: bottomForPlayer(context)),
         children: [
+          // The booth, while it is early: a switch, and the way in once it is on.
+          SwitchListTile(
+            secondary: const Icon(Icons.album_outlined),
+            title: const Text('The booth'),
+            subtitle: const Text('Two records, mixed by hand. Early: the engine is here, the room is not'),
+            value: app.boothOn,
+            onChanged: app.setBoothOn,
+          ),
+          if (app.boothOn)
+            ListTile(
+              leading: const Icon(Icons.speaker_group_outlined),
+              title: const Text('Open the booth'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => const BoothPage())),
+            ),
           if (OfflineStore.supported)
             ListTile(
               leading: const Icon(Icons.phone_iphone),
