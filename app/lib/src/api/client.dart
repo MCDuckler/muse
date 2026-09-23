@@ -364,6 +364,27 @@ class ApiClient {
         : '$baseUrl${t.streamPath}?k=${Uri.encodeQueryComponent(key)}';
   }
 
+  /// Where a part of a record is: its drums, the music under them, or the whole of
+  /// it with the voice taken out. Signed the same way the record itself is.
+  String stemUrl(Track t, String part) {
+    final key = _streamKey;
+    return '$baseUrl${t.streamPath}'.replaceFirst(RegExp(r'/stream$'), '/stem/$part') +
+        (key == null ? '' : '?k=${Uri.encodeQueryComponent(key)}');
+  }
+
+  /// Whether that part has been made yet, asking for it to be if not.
+  ///
+  /// The server answers 202 while it is on the bench, so this is both the question
+  /// and the request: ask once, wait, ask again.
+  Future<bool> stemReady(Track t, String part) async {
+    await ensureStreamKey();
+    final r = await net.get(Uri.parse(stemUrl(t, part)),
+        headers: {...(kIsWeb ? const {} : streamHeaders), 'Range': 'bytes=0-0'});
+    if (r.statusCode == 202) return false;
+    if (r.statusCode >= 400) throw ApiException(r.statusCode, 'no $part for that record');
+    return true;
+  }
+
   /// Same signed-key trick as audio: an <img> cannot send an Authorization header.
   String? coverUrl(Track t, {bool small = false}) {
     if (t.coverPath == null) return null;

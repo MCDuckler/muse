@@ -68,6 +68,18 @@ class Deck extends ChangeNotifier {
   Track? track;
   TrackTiming? timing;
 
+  /// Which part of the record is on the platter: its drums, the music under them, or
+  /// the whole of it with the voice taken out. Null is the record itself.
+  ///
+  /// The parts are made by the server the first time anybody asks for them and kept
+  /// after that; see the server's stems.py for what they are and what they are not.
+  String? part;
+
+  /// A part has been asked for and is being made. Nothing changes on the deck while
+  /// this is true — the record it is holding keeps playing — but the booth says so,
+  /// because "in a minute" and "no" are different answers.
+  bool makingPart = false;
+
   /// The rate it plays at: 1.0 is the record as recorded.
   double tempo = 1.0;
 
@@ -169,12 +181,15 @@ class Deck extends ChangeNotifier {
   static Future<void> _turn = Future.value();
   static const _waitForATurn = Duration(seconds: 8);
 
-  /// Put [track] on, parked at [at] — its first sound, unless told otherwise.
-  Future<void> load(Track track, {TrackTiming? timing, Duration? at}) async {
+  /// Put [track] on, parked at [at] — its first sound, unless told otherwise. With a
+  /// [part], that part of it rather than the whole record.
+  Future<void> load(Track track,
+      {TrackTiming? timing, Duration? at, String? part}) async {
+    this.part = part;
     // A stream is signed and the signature ages out, so it is refreshed before a
     // load — but never at the price of the load itself: a deck that cannot reach the
     // server still plays what is kept on the device.
-    if (offlinePath?.call(track.id) == null) {
+    if (part != null || offlinePath?.call(track.id) == null) {
       try {
         await api.ensureStreamKey().timeout(const Duration(seconds: 5));
       } catch (_) {
@@ -228,12 +243,76 @@ class Deck extends ChangeNotifier {
       artist: track.artistLine,
       duration: track.duration,
     );
-    if (local != null) return AudioSource.uri(Uri.file(local), tag: tag);
+    // A part only exists on the server; what is on the device is the whole record.
+    if (local != null && part == null) return AudioSource.uri(Uri.file(local), tag: tag);
     return AudioSource.uri(
-      Uri.parse(api.streamUrl(track)),
+      Uri.parse(part == null ? api.streamUrl(track) : api.stemUrl(track, part!)),
       headers: kIsWeb ? null : api.streamHeaders,
       tag: tag,
     );
+  }
+
+  /// Change which part of the record is playing, without taking it off: the drums
+  /// alone, the music under them, the whole of it with the voice out, or — with null
+  /// — the record as it was made.
+  ///
+  /// Answers false, having asked the server to make it, when that part does not exist
+  /// yet. Nothing changes in that case: the record carries on, and the booth says a
+  /// part is being made rather than going quiet.
+  ///
+  /// There is a real seam here. One deck is one player and one player holds one file,
+  /// so the swap is a load, and a load is a fraction of a second of nothing. It lands
+  /// where the record would have been, and the mixer re-aligns the phase after it, but
+  /// it is a gap all the same — which is why the moves that use it put it under
+  /// another record rather than in the clear.
+  Future<bool> swapTo(String? part) async {
+    final t = track;
+    if (t == null || part == this.part) return true;
+    if (part != null) {
+      makingPart = true;
+      notifyListeners();
+      try {
+        final ready = await api.stemReady(t, part);
+        makingPart = false;
+        if (!ready) {
+          notifyListeners();
+          return false;
+        }
+      } catch (e) {
+        makingPart = false;
+        trouble = '$e';
+        notifyListeners();
+        return false;
+      }
+    }
+    final was = playing;
+    final at = position;
+    this.part = part;
+    final before = _turn;
+    final mine = Completer<void>();
+    _turn = mine.future;
+    try {
+      await before.timeout(_waitForATurn, onTimeout: () {});
+      claiming?.call();
+      // Where the record will be when the load is done, not where it is now: a load
+      // takes a moment, and a deck that comes back a moment behind is out of time.
+      final began = DateTime.now();
+      await _player.setAudioSource(_sourceFor(t), initialPosition: at);
+      if (tempo != 1.0) await _player.setSpeed(tempo);
+      if (was) {
+        final took = DateTime.now().difference(began);
+        await _player.seek(at + Duration(microseconds: (took.inMicroseconds * tempo).round()));
+        await _player.play();
+      }
+    } catch (e) {
+      trouble = '$e';
+      notifyListeners();
+      return false;
+    } finally {
+      mine.complete();
+    }
+    notifyListeners();
+    return true;
   }
 
   Future<void> play() async {

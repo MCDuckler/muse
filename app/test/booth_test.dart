@@ -5,8 +5,11 @@
 // those are the parts that are hard to hear wrong and easy to prove right.
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:just_audio_platform_interface/just_audio_platform_interface.dart';
 import 'package:muse/src/api/client.dart';
+import 'package:muse/src/api/connection.dart';
 import 'package:muse/src/api/models.dart';
 import 'package:muse/src/state/booth/automix.dart';
 import 'package:muse/src/state/booth/booth.dart';
@@ -136,6 +139,43 @@ void main() {
       expect(mixer.claims, ['A']);
       await booth.load(booth.b, song(2));
       expect(mixer.claims, ['A', 'B']);
+    });
+
+    test('a part goes on the platter in the record\'s place, or says it is being made',
+        () async {
+      // The server makes a part the first time anybody asks and answers 202 until it
+      // has. A deck told to swap to one that is not made yet keeps playing the record
+      // — going quiet would be the worst of the three possible answers.
+      var made = false;
+      useThisClientInstead(MockClient((r) async {
+        if (r.url.path.contains('/stream-key')) {
+          return http.Response(
+              '{"key": "signed", "expires_at": 99999999999}', 200);
+        }
+        if (r.url.path.contains('/stem/')) {
+          return made ? http.Response('x', 206) : http.Response('', 202);
+        }
+        return http.Response('{}', 200);
+      }));
+      addTearDown(() => useThisClientInstead(http.Client()));
+
+      await booth.load(booth.a, song(1));
+      await booth.a.play();
+      expect(await booth.a.swapTo('drums'), isFalse, reason: 'not made yet');
+      expect(booth.a.part, isNull, reason: 'the record is still on');
+      expect(booth.a.playing, isTrue, reason: 'and still playing');
+
+      made = true;
+      expect(await booth.a.swapTo('drums'), isTrue);
+      expect(booth.a.part, 'drums');
+      expect(audio.players.values.expand((p) => p.sources),
+          contains(contains('/tracks/1/stem/drums')));
+      expect(booth.a.playing, isTrue, reason: 'a swap is not a stop');
+
+      // And back to the record it was made from.
+      expect(await booth.a.swapTo(null), isTrue);
+      expect(audio.players.values.expand((p) => p.sources),
+          contains(contains('/tracks/1/stream')));
     });
 
     test('two records going on at once do not claim each other\'s player', () async {
@@ -502,6 +542,56 @@ void autoMixRules() {
     // And a record with no grid is still only ever faded, however bold it is told.
     expect(AutoMix.choose(const TrackTiming(), on, style: MixStyle.bold).kind,
         Transition.fade);
+
+    // With both records in parts, the drums change hands: the boldest thing there
+    // is, and the answer to a clash as well, because drums have no key.
+    expect(AutoMix.choose(on, t(camelot: '9A', drops: [40000]), style: MixStyle.bold, parts: true),
+        (kind: Transition.swap, bars: 16));
+    expect(AutoMix.choose(on, t(camelot: '3B'), parts: true),
+        (kind: Transition.swap, bars: 16));
+    expect(AutoMix.choose(on, t(camelot: '9A'), parts: true).kind, Transition.blend,
+        reason: 'two records that already agree do not need taking apart');
+    expect(AutoMix.choose(on, t(camelot: '3B'), style: MixStyle.easy, parts: true).kind,
+        Transition.fade, reason: 'gentle is gentle, parts or no parts');
+    expect(AutoMix.choose(const TrackTiming(), on, style: MixStyle.bold, parts: true).kind,
+        Transition.fade, reason: 'no grid, no swap: there is nothing to line up');
+  });
+
+  test('the drums change hands once, and never two sets at a time', () {
+    final steps = Booth.plan(Transition.swap, from: 'A', to: 'B');
+    String? partAt(double at, String deck) {
+      String? part;
+      for (final s in steps.where((s) => s.at <= at)) {
+        final want = s.decks[deck]?.part;
+        if (want != null) part = want;
+      }
+      return part;
+    }
+
+    // B arrives on its drums alone, under A whole.
+    expect(partAt(0, 'B'), 'drums');
+    expect(partAt(0, 'A'), isNull, reason: 'the record on is the record on');
+    // A gives its drums up before B becomes whole, so there is one kick throughout.
+    final aLoses = steps.firstWhere((s) => s.decks['A']?.part == 'music').at;
+    final bWhole =
+        steps.firstWhere((s) => s.decks['B']?.part == DeckStep.whole).at;
+    expect(aLoses, lessThan(bWhole));
+    expect(partAt(0.5, 'A'), 'music');
+    expect(partAt(0.5, 'B'), 'drums');
+    expect(partAt(1, 'B'), DeckStep.whole);
+    // And each swap happens with the other record over it, never in the clear.
+    double faderAt(double at) {
+      var x = 0.0;
+      for (final s in steps.where((s) => s.at <= at)) {
+        if (s.crossfader != null) x = s.crossfader!;
+      }
+      return x;
+    }
+
+    for (final at in [aLoses, bWhole]) {
+      expect(faderAt(at), greaterThan(0.2), reason: 'not at the very start');
+      expect(faderAt(at), lessThan(0.95), reason: 'not alone at the end');
+    }
   });
 
   test('the incoming is parked so its drop lands where the fader finishes', () {

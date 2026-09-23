@@ -29,7 +29,7 @@ from . import (
                routes_devices, routes_scrobble, routes_social,
                routes_sources,
                routes_spotify,
-               routes_sync, sleeve,
+               routes_sync, sleeve, stems,
                match, storage, ytm)
 from . import deps
 from .deps import current_user, worker_auth
@@ -367,9 +367,10 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         "f4.bcbits.com",                          # Bandcamp
     )
 
-    @app.get("/art/remote")
-    def remote_art(u: str, k: str | None = None,
-                   authorization: Annotated[str | None, Header()] = None):
+    def _by_token_or_key(authorization: str | None, k: str | None) -> dict:
+        """Who is asking, for the things a browser fetches without being able to set a
+        header — audio elements, <img>. Either the app's bearer token or a stream key
+        signed for this listener."""
         user = None
         if authorization and authorization.lower().startswith("bearer "):
             user = auth.user_for_token(authorization.split(" ", 1)[1].strip())
@@ -377,6 +378,12 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             user = auth.user_for_stream_key(k, cfg.worker_secret)
         if user is None:
             raise HTTPException(401, "missing bearer token or stream key")
+        return user
+
+    @app.get("/art/remote")
+    def remote_art(u: str, k: str | None = None,
+                   authorization: Annotated[str | None, Header()] = None):
+        _by_token_or_key(authorization, k)
 
         parsed = urlparse(u)
         if parsed.scheme != "https" or parsed.hostname not in _REMOTE_ART_HOSTS:
@@ -406,13 +413,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
               authorization: Annotated[str | None, Header()] = None):
         """An <img> cannot send an Authorization header either, so covers accept the
         same signed key as audio."""
-        user = None
-        if authorization and authorization.lower().startswith("bearer "):
-            user = auth.user_for_token(authorization.split(" ", 1)[1].strip())
-        if user is None and k:
-            user = auth.user_for_stream_key(k, cfg.worker_secret)
-        if user is None:
-            raise HTTPException(401, "missing bearer token or stream key")
+        _by_token_or_key(authorization, k)
 
         row = db.one(
             """select c.path, c.sha256, c.color from tracks t join covers c on c.id=t.cover_id
@@ -451,18 +452,37 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     def stream(track_id: int, request: Request, k: str | None = None,
                authorization: Annotated[str | None, Header()] = None):
         # Either a bearer token (app) or a signed stream key (browser audio element).
-        user = None
-        if authorization and authorization.lower().startswith("bearer "):
-            user = auth.user_for_token(authorization.split(" ", 1)[1].strip())
-        if user is None and k:
-            user = auth.user_for_stream_key(k, cfg.worker_secret)
-        if user is None:
-            raise HTTPException(401, "missing bearer token or stream key")
+        _by_token_or_key(authorization, k)
 
         t = catalog.track_row(track_id)
         if not t or not t.get("path"):
             raise HTTPException(404, "not ready" if t else "no such track")
         return _range_response(pathlib.Path(t["path"]), request, etag=t["sha256"])
+
+    @app.get("/tracks/{track_id}/stem/{name}")
+    def stem(track_id: int, name: str, request: Request, k: str | None = None,
+             authorization: Annotated[str | None, Header()] = None):
+        """A part of a record — its drums, the music under them, or the whole of it
+        with the voice taken out — for a deck in the booth to play instead of the
+        record itself. See stems.py for what that does and does not manage.
+
+        Made on first asking and kept, which takes long enough that the asking is
+        answered with "not yet, come back": 202 and a Retry-After, no body."""
+        _by_token_or_key(authorization, k)
+
+        t = catalog.track_row(track_id)
+        if not t or not t.get("path"):
+            raise HTTPException(404, "not ready" if t else "no such track")
+        try:
+            path = stems.for_track(cfg.data_dir, pathlib.Path(t["path"]),
+                                   t["sha256"], name)
+        except ValueError:
+            raise HTTPException(404, f"a record has no {name}")
+        except stems.NotReady:
+            return Response(status_code=202,
+                            headers={"Retry-After": "10", "Cache-Control": "no-store"})
+        return _range_response(path, request,
+                               etag=f"{t['sha256']}-{name}-v{stems.VERSION}")
 
     # ---------------- events ----------------
     @app.get("/events")

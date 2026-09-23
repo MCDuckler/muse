@@ -430,9 +430,48 @@ class _DeckPanelState extends State<DeckPanel> with SingleTickerProviderStateMix
                     },
             ),
         ]),
+        _parts(context),
       ],
     );
   }
+
+  /// Which part of the record is on the platter.
+  ///
+  /// The parts are made by the server the first time anybody asks, which takes about
+  /// a minute — so the first press on a record says so and changes nothing, and the
+  /// same press a minute later swaps. Pressing one here is also how a DJ gets the
+  /// parts made ahead of a mix they want to do by hand.
+  Widget _parts(BuildContext context) {
+    final d = widget.deck;
+    const named = <String, String?>{
+      'Whole': null,
+      'Drums': 'drums',
+      'Music': 'music',
+      'No vox': 'instrumental',
+    };
+    return _group(
+      context,
+      _making == null ? 'parts' : 'parts · making the $_making',
+      [
+        for (final e in named.entries)
+          PressButton(
+            label: e.key,
+            loud: d.part == e.value,
+            onTap: d.track == null || d.makingPart
+                ? null
+                : () async {
+                    feel(Feel.pick);
+                    final done = await d.swapTo(e.value);
+                    if (!mounted) return;
+                    setState(() => _making = done ? null : e.key.toLowerCase());
+                  },
+          ),
+      ],
+    );
+  }
+
+  /// The part that was asked for and is not made yet.
+  String? _making;
 
   /// The pitch fader: per cent, with a hard nought at the middle.
   Widget _pitch(BuildContext context) {

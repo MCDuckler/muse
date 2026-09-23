@@ -49,6 +49,38 @@ class AutoMix extends ChangeNotifier {
     unawaited(_prepareNext());
   }
 
+  // ------------------------------------------------------------------ the parts
+  /// Which records the server has in parts, as far as the booth has been told.
+  final _inParts = <int, bool>{};
+
+  /// How far down the queue the parts are asked for.
+  ///
+  /// This is the whole reason the drums can change hands at all. Taking a record
+  /// apart is the better part of a minute of the server's time — far too long to
+  /// wait for at the moment a mix wants it — but the queue is known for several
+  /// records ahead, so the asking happens while something else is still playing and
+  /// the answer is there when it is needed.
+  static const lookAhead = 3;
+
+  Future<void> _askAhead() async {
+    for (var i = _at; i >= 0 && i < _tracks.length && i <= _at + lookAhead; i++) {
+      final t = _tracks[i];
+      if (_inParts[t.id] == true) continue;
+      try {
+        _inParts[t.id] = await booth.api.stemReady(t, 'drums');
+      } catch (_) {
+        // Not a record the server can take apart, or cannot be reached. Either way
+        // the booth mixes it the ordinary way and says nothing about it.
+        _inParts[t.id] = false;
+      }
+    }
+  }
+
+  /// Whether both of these are in parts, which is what the drums changing hands
+  /// needs: one record's kick and the other's music, never two of either.
+  bool inParts(Track? from, Track? to) =>
+      from != null && to != null && _inParts[from.id] == true && _inParts[to.id] == true;
+
   /// How well [to] would follow [from]: 0 is unmixable, 1 is as good as it gets.
   ///
   /// Tempo first, because a record that cannot be synced can only be faded into;
@@ -165,8 +197,11 @@ class AutoMix extends ChangeNotifier {
   /// what is reached for depends on how hard the booth has been told to mix — and on
   /// the two records, because a clash is worse the longer it lasts and a record with
   /// a drop to land on wants a different exit from one without.
+  ///
+  /// [parts] says both records have been taken apart on the server, which puts the
+  /// boldest move of all on the table: the drums changing hands.
   static ({Transition kind, int bars}) choose(TrackTiming? from, TrackTiming? to,
-      {MixStyle style = MixStyle.normal}) {
+      {MixStyle style = MixStyle.normal, bool parts = false}) {
     if (from == null || to == null || !from.hasBeats || !to.hasBeats) {
       return (kind: Transition.fade, bars: 4);
     }
@@ -182,13 +217,20 @@ class AutoMix extends ChangeNotifier {
         return inKey ? (kind: Transition.blend, bars: 32) : (kind: Transition.fade, bars: 16);
       case MixStyle.normal:
         // A clash goes out through the filter: a high-passed record has hardly any
-        // key left to clash with.
+        // key left to clash with. Or, where the parts exist, it never arrives: a
+        // record coming in on its drums alone has no key to clash with either, and
+        // it sounds like a choice rather than a rescue.
+        if (parts && !inKey) return (kind: Transition.swap, bars: 16);
         return inKey
             ? (kind: Transition.blend, bars: 16)
             : (kind: Transition.sweep, bars: 12);
       case MixStyle.bold:
-        // Something to land on: the old record is caught and tightened while the new
-        // one arrives, or stopped dead under it.
+        // The drums change hands, where there are drums to change: sixteen bars of
+        // one record's music over the other's kick, and nobody can tell you when the
+        // record changed.
+        if (parts) return (kind: Transition.swap, bars: 16);
+        // Failing that, something to land on: the old record is caught and tightened
+        // while the new one arrives, or stopped dead under it.
         if (to.drops.isNotEmpty && inKey) return (kind: Transition.roll, bars: 8);
         if (to.drops.isNotEmpty) return (kind: Transition.sweep, bars: 8);
         if (from.ends == 'cold') return (kind: Transition.brake, bars: 8);
@@ -319,6 +361,9 @@ class AutoMix extends ChangeNotifier {
   /// will come in — and the plan for getting there written down.
   Future<void> _prepareNext() async {
     if (pickBest && !replaying) await _bringTheBestForward();
+    // Ask for the parts of what is coming before choosing how to get there: what the
+    // server has already made is what the booth is allowed to plan around.
+    await _askAhead();
     final coming = next;
     final from = booth.master;
     final to = booth.other(from);
@@ -331,7 +376,8 @@ class AutoMix extends ChangeNotifier {
     final timing = await booth.timing.of(coming);
     final was = from.track == null ? null : _keptFor(from.track!.id, coming.id);
     final chosen = was == null
-        ? choose(from.timing, timing, style: style)
+        ? choose(from.timing, timing,
+            style: style, parts: inParts(from.track, coming))
         : (kind: was.kind, bars: was.bars);
     plan = chosen;
     if (was != null) {
@@ -420,7 +466,9 @@ class AutoMix extends ChangeNotifier {
     if (from.position < go && !ended) return;
     _going = true;
     try {
-      final chosen = plan ?? choose(from.timing, booth.other(from).timing);
+      final chosen = plan ??
+          choose(from.timing, booth.other(from).timing,
+              style: style, parts: inParts(from.track, booth.other(from).track));
       final was = booth.master;
       await booth.go(chosen.kind, bars: chosen.bars);
       if (identical(booth.master, was)) {

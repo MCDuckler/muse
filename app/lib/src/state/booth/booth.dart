@@ -37,11 +37,25 @@ enum Transition {
   /// The outgoing brakes to a stop like a hand on the platter, and the new record is
   /// already running underneath. For a hard change of gear.
   brake,
+
+  /// The drums change hands. The new record comes in as its drums alone, under the
+  /// old one; the old one gives up its own drums half way, so there is never a second
+  /// kick fighting the first; then the new record becomes whole and the old one goes.
+  ///
+  /// The most convincing thing here when it works, and it only works on records the
+  /// server has taken apart — which is why nothing chooses it until it has. See the
+  /// server's stems.py for how good that separation is, and what it costs.
+  swap,
 }
 
 /// What a transition does to one deck at one moment.
 class DeckStep {
-  const DeckStep({this.eq, this.filter, this.loopBars, this.brake = false});
+  const DeckStep({this.eq, this.filter, this.loopBars, this.brake = false, this.part});
+
+  /// The record itself, as a thing a step can ask for: [part] left null means "leave
+  /// whatever is on the platter alone", so putting the whole record back needs a word
+  /// of its own.
+  static const whole = '';
 
   /// The three bands, where this step sets them.
   final EqSet? eq;
@@ -55,6 +69,10 @@ class DeckStep {
 
   /// The record brakes to a stop here.
   final bool brake;
+
+  /// Which part of the record plays from here on — 'drums', 'music', 'instrumental',
+  /// or [whole] for the record as it was made. Null leaves it as it is.
+  final String? part;
 }
 
 /// One instruction in a transition, at a point in it (0 at the start, 1 at the end).
@@ -432,6 +450,19 @@ class Booth extends ChangeNotifier {
           MixStep(0.8, crossfader: 1, decks: {from: const DeckStep(brake: true)}),
           MixStep(1, crossfader: 1, decks: {from: off}),
         ];
+      case Transition.swap:
+        // The drums change hands. Each swap is a load, so each one happens where
+        // there is another record over it: the first under the outgoing at full
+        // level, the second under the outgoing's last bars. Nothing swaps in the
+        // clear, and nothing ever plays two sets of drums at once.
+        return [
+          MixStep(0, crossfader: 0, decks: {to: const DeckStep(part: 'drums', eq: EqSet.flat)}),
+          MixStep(0.4, crossfader: 0.4, decks: {from: const DeckStep(part: 'music')}),
+          MixStep(0.7, crossfader: 0.75, decks: {
+            to: const DeckStep(part: DeckStep.whole, eq: EqSet.flat),
+          }),
+          MixStep(1, crossfader: 1, decks: {from: const DeckStep(eq: EqSet.flat, filter: 0)}),
+        ];
     }
   }
 
@@ -630,6 +661,21 @@ class Booth extends ChangeNotifier {
           deck.loop(bars * 4);
       }
       if (want.brake) unawaited(deck.brake());
+      if (want.part != null) {
+        final wanted = want.part == DeckStep.whole ? null : want.part;
+        if (!deck.playing) {
+          // Parked, so waiting costs nothing — and the right thing has to be on the
+          // platter before the deck is started, not a moment after.
+          await deck.swapTo(wanted);
+        } else {
+          // In the mix. A swap is a load, and a load cannot be waited for here
+          // without the fader stopping with it: it is let go of, and the phase put
+          // right when it lands.
+          unawaited(deck.swapTo(wanted).then((done) {
+            if (done && deck != master) align(deck);
+          }));
+        }
+      }
     }
   }
 
