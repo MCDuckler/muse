@@ -277,6 +277,29 @@ void main() {
       booth.auto.stop();
     });
 
+    test('choosing for itself brings the best of what is left forward', () async {
+      TrackTiming at(double bpm, String camelot) => TrackTiming(
+            durationMs: 60000,
+            bpm: bpm,
+            beats: [for (var i = 0; i < 1200; i++) i * 50],
+            downbeats: [for (var i = 0; i < 1200; i += 4) i * 50],
+            camelot: camelot,
+            cues: const MixCues(
+                firstDownbeatMs: 0, mixInMs: 2000, mixOutMs: 40000, soundEndMs: 59000),
+          );
+      booth.timing.put(1, at(124, '8A'));
+      booth.timing.put(2, at(150, '3B'));      // neither in tempo nor in key
+      booth.timing.put(3, at(125, '9A'));      // both
+      await booth.auto.start([song(1), song(2), song(3)]);
+      expect(booth.auto.next?.id, 2, reason: 'the queue as it stands');
+
+      booth.auto.chooseForYourself(true);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(booth.auto.next?.id, 3, reason: 'the one that follows best');
+      expect(booth.auto.after?.id, 2, reason: 'and nothing is dropped');
+      booth.auto.stop();
+    });
+
     test('a hand can go now, or drop what is coming', () async {
       TrackTiming quick() => TrackTiming(
             durationMs: 60000,
@@ -403,6 +426,40 @@ void autoMixRules() {
     expect(AutoMix.choose(t(beats: false), t(bpm: 128)).kind, Transition.fade,
         reason: 'no grid, no blend');
     expect(AutoMix.choose(null, t(bpm: 128)).kind, Transition.fade);
+  });
+
+  test('a loud record is turned down so the two sit level', () {
+    // The server measures each song against -14 LUFS; the booth takes the loud ones
+    // down so a blend does not duck one under the other. Never up: that is clipping.
+    Track at(double? db) => Track.fromJson({
+          'id': 1, 'title': 'x', 'artists': ['y'], 'state': 'ready',
+          'stream_url': '/s', 'source': 'youtube',
+          if (db != null) 'gain_db': db,
+        });
+    expect(Booth.trimOf(at(null)), 1.0, reason: 'nothing measured, nothing taken off');
+    expect(Booth.trimOf(at(0)), 1.0);
+    expect(Booth.trimOf(at(2)), 1.0, reason: 'a quiet record is not turned up');
+    expect(Booth.trimOf(at(-6)), closeTo(0.501, 0.002));
+    expect(Booth.trimOf(at(-60)), 0.05, reason: 'and never all the way to nothing');
+  });
+
+  test('the booth can pick what follows best rather than what is next', () {
+    TrackTiming t({double? bpm, String? camelot, List<int> energy = const []}) =>
+        TrackTiming(
+          durationMs: 200000,
+          bpm: bpm,
+          beats: [for (var i = 0; i < 400; i++) i * 469],
+          camelot: camelot,
+          energy: energy,
+        );
+    final on = t(bpm: 124, camelot: '8A', energy: [200, 220, 240]);
+    // In key and in tempo beats out of key, which beats unsyncable.
+    final good = AutoMix.howWell(on, t(bpm: 125, camelot: '9A', energy: [210, 230, 240]));
+    final clash = AutoMix.howWell(on, t(bpm: 125, camelot: '3B', energy: [210, 230, 240]));
+    final far = AutoMix.howWell(on, t(bpm: 150, camelot: '8A'));
+    expect(good, greaterThan(clash));
+    expect(clash, greaterThan(far));
+    expect(AutoMix.howWell(on, null), 0, reason: 'nothing known, nothing claimed');
   });
 
   test('the mix is moved to the phrase it is nearest', () {

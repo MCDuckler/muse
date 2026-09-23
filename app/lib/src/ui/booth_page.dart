@@ -304,7 +304,12 @@ class _BoothPageState extends State<BoothPage> {
                 children: [
                   Expanded(
                     child: LayoutBuilder(builder: (context, c) {
-                      final lane = ((c.maxHeight - 24) / 2).clamp(72.0, 230.0);
+                      // Less the meter between them and the line of words each lane
+                      // carries: without those the shapes take the whole height and
+                      // the words are printed over whatever is under them.
+                      const meterAndWords = 24.0 + 2 * _WaveDeck.wordsHigh;
+                      final lane =
+                          ((c.maxHeight - meterAndWords) / 2).clamp(64.0, 220.0);
                       return waves(lane);
                     }),
                   ),
@@ -356,7 +361,12 @@ class _WaveDeck extends StatelessWidget {
   final Booth booth;
   final engine.Deck deck;
   final bool mirrored;
+
+  /// The shape's own height. The line of words above or below it is on top of this.
   final double height;
+
+  /// How tall that line of words is.
+  static const wordsHigh = 20.0;
 
   @override
   Widget build(BuildContext context) {
@@ -409,9 +419,11 @@ class _WaveDeck extends StatelessWidget {
       ],
     );
     final wave = WaveLane(booth: booth, deck: deck, height: height, mirrored: mirrored);
+    final words = SizedBox(height: wordsHigh, child: head);
     return Column(
+      mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: mirrored ? [wave, const SizedBox(height: 2), head] : [head, const SizedBox(height: 2), wave],
+      children: mirrored ? [wave, words] : [words, wave],
     );
   }
 }

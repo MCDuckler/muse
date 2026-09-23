@@ -192,6 +192,8 @@ class Booth extends ChangeNotifier {
   Future<void> load(Deck deck, Track track, {Duration? at}) async {
     final t = await timing.of(track);
     await deck.load(track, timing: t, at: at);
+    // A different record is a different loudness: the levels are worked out again.
+    await _levels();
     notifyListeners();
   }
 
@@ -209,11 +211,25 @@ class Booth extends ChangeNotifier {
     await _levels(over: over);
   }
 
-  /// What each channel is actually sending: its share of the crossfader, at its gain.
+  /// What each channel is actually sending: its share of the crossfader, at its
+  /// gain, with the record's own loudness taken off.
   ({double a, double b}) get levels {
     final l = levelsFor(crossfader);
-    return (a: l.a * gainOf(a), b: l.b * gainOf(b));
+    return (a: l.a * gainOf(a) * trimFor(a), b: l.b * gainOf(b) * trimFor(b));
   }
+
+  /// How much a record is turned down so that it sits at the same level as the other
+  /// one: the server measured each song's loudness, and two records a few decibels
+  /// apart make a blend where one of them ducks the other. Only ever down — turning
+  /// a quiet record up is turning its clipping up with it — which is the same call
+  /// the player makes when it plays one song after another.
+  static double trimOf(Track? track) {
+    final db = track?.gainDb;
+    if (db == null || db >= 0) return 1.0;
+    return math.pow(10, db / 20).toDouble().clamp(0.05, 1.0);
+  }
+
+  double trimFor(Deck deck) => trimOf(deck.track);
 
   Future<void> _levels({Duration over = Duration.zero}) async {
     final l = levels;

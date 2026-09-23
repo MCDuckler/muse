@@ -303,6 +303,29 @@ class _AutoPanel extends StatelessWidget {
               PressButton(label: 'Keep this mix', onTap: () => _keep(context)),
           ],
         ),
+        const SizedBox(height: 4),
+        // Whether it takes the queue as it stands or picks what follows best.
+        Row(
+          children: [
+            _Pick(
+              label: auto.pickBest ? 'ITS OWN ORDER' : 'THE QUEUE\'S ORDER',
+              on: auto.pickBest,
+              onTap: () {
+                feel(Feel.pick);
+                auto.chooseForYourself(!auto.pickBest);
+              },
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                auto.pickBest
+                    ? 'Of what is left, whichever follows best.'
+                    : 'In the order they are queued.',
+                style: Mag.typewriter(10, color: scheme.onSurfaceVariant),
+              ),
+            ),
+          ],
+        ),
         const SizedBox(height: 5),
         if (!auto.running)
           Row(

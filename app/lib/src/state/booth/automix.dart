@@ -25,6 +25,49 @@ class AutoMix extends ChangeNotifier {
   Timer? _watch;
   bool running = false;
 
+  /// Whether the booth chooses what comes next, rather than taking the queue in the
+  /// order it is in: of everything still to play, the record that mixes best into
+  /// the one on now. Off by default — a queue is usually a queue on purpose.
+  bool pickBest = false;
+
+  void chooseForYourself(bool on) {
+    pickBest = on;
+    notifyListeners();
+    unawaited(_prepareNext());
+  }
+
+  /// How well [to] would follow [from]: 0 is unmixable, 1 is as good as it gets.
+  ///
+  /// Tempo first, because a record that cannot be synced can only be faded into;
+  /// then the wheel, because a clash is the thing anybody hears; then how close the
+  /// two are in energy, so a set does not fall off a cliff between one and the next.
+  static double howWell(TrackTiming? from, TrackTiming? to) {
+    if (from == null || to == null) return 0;
+    var score = 0.0;
+    final ratio = from.bpm != null && to.bpm != null
+        ? Booth.syncRatio(to.bpm!, from.bpm!)
+        : null;
+    if (ratio != null) {
+      // The less it has to be pulled, the better.
+      score += 0.5 * (1 - ((ratio - 1).abs() / Booth.maxSync)).clamp(0.0, 1.0);
+      score += 0.1;
+    }
+    if (from.inKeyWith(to)) score += 0.3;
+    final mine = _energy(from), theirs = _energy(to);
+    if (mine != null && theirs != null) {
+      score += 0.1 * (1 - (mine - theirs).abs()).clamp(0.0, 1.0);
+    }
+    return score;
+  }
+
+  /// A record's energy where the mix would happen, 0 to 1: how loud its loud part is
+  /// against its own quietest. Null where the bars were never measured.
+  static double? _energy(TrackTiming t) {
+    if (t.energy.isEmpty) return null;
+    final sorted = [...t.energy]..sort();
+    return sorted[(sorted.length * 0.75).floor()] / 255;
+  }
+
   /// A mix being done again: the moves as they were kept, looked up by the two
   /// records. Where a pair has one, it is followed rather than decided.
   List<MixMove> _kept = const [];
@@ -207,6 +250,7 @@ class AutoMix extends ChangeNotifier {
   /// The record after this one, on the free deck: loaded, synced, parked where it
   /// will come in — and the plan for getting there written down.
   Future<void> _prepareNext() async {
+    if (pickBest && !replaying) await _bringTheBestForward();
     final coming = next;
     final from = booth.master;
     final to = booth.other(from);
@@ -239,6 +283,34 @@ class AutoMix extends ChangeNotifier {
     }
     if (chosen.kind != Transition.fade) await booth.sync(to);
     notifyListeners();
+  }
+
+  /// Of everything still to play, put the one that follows this best next.
+  ///
+  /// Only judged on what is already known: a record whose timing has not arrived yet
+  /// keeps its place in the queue, and is asked about so the next choice is better
+  /// informed. Nothing is dropped — the order changes, the records do not.
+  Future<void> _bringTheBestForward() async {
+    final from = booth.master.timing;
+    if (from == null || _at + 2 > _tracks.length - 1) return;
+    var bestAt = _at + 1;
+    var best = -1.0;
+    for (var i = _at + 1; i < _tracks.length; i++) {
+      final t = booth.timing.peek(_tracks[i].id);
+      if (t == null) {
+        unawaited(booth.timing.of(_tracks[i]));
+        continue;
+      }
+      final score = howWell(from, t);
+      if (score > best) {
+        best = score;
+        bestAt = i;
+      }
+    }
+    if (bestAt == _at + 1 || best <= 0) return;
+    final moved = [..._tracks];
+    moved.insert(_at + 1, moved.removeAt(bestAt));
+    _tracks = moved;
   }
 
   bool _going = false;
