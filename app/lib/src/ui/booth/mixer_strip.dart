@@ -6,9 +6,11 @@ import 'package:provider/provider.dart';
 import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../state/booth/booth.dart';
+import '../dialogs.dart';
 import '../feel.dart';
 import '../mag.dart';
 import '../mag_parts.dart';
+import '../snack.dart';
 
 /// What sits between the decks: the fader, and the one button that mixes for you.
 ///
@@ -229,6 +231,26 @@ class _AutoRow extends StatelessWidget {
     }
     return Row(
       children: [
+        // What this session did, kept: a playlist of the records that carries the
+        // moves, and plays them again.
+        if (booth.taken.isNotEmpty) ...[
+          PressButton(
+            label: 'Keep this mix',
+            onTap: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              final name = await promptForName(context, 'Keep this mix', 'Mix · ${_today()}');
+              if (name == null || name.trim().isEmpty) return;
+              try {
+                final made = await booth.keepMix(name.trim());
+                await app.refreshPlaylists();
+                messenger.say(snack(Text('"${made.name}" is in your library, with its moves')));
+              } catch (e) {
+                messenger.say(problem(e));
+              }
+            },
+          ),
+          const SizedBox(width: 6),
+        ],
         PressButton(
           label: auto.running ? 'Stop mixing' : 'Let the booth mix',
           loud: !auto.running && items.isNotEmpty,
@@ -256,4 +278,11 @@ class _AutoRow extends StatelessWidget {
       ],
     );
   }
+}
+
+
+String _today() {
+  final d = DateTime.now();
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return '${d.day} ${months[d.month - 1]}';
 }

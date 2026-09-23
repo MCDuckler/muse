@@ -1399,6 +1399,12 @@ class ApiClient {
     await _decode(await net.delete(_u('/library/history'), headers: _headers));
   }
 
+  /// Keep what the booth did between this playlist's songs on it — or take it off.
+  Future<Playlist> setPlaylistMix(int id, Map<String, dynamic>? mix) async =>
+      Playlist.fromJson(await _decode(await net.patch(_u('/playlists/$id'),
+              headers: _headers, body: jsonEncode({'mix': mix})))
+          as Map<String, dynamic>);
+
   Future<Playlist> renamePlaylist(int id, String name) async =>
       Playlist.fromJson(await _decode(await net.patch(_u('/playlists/$id'),
               headers: _headers, body: jsonEncode({'name': name})))

@@ -17,6 +17,8 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, Response
 
+from psycopg.types.json import Json
+
 from . import catalog, db, images, jam, jobs, match, playlist_art, removal, stations, ytm
 from .deps import cfg, current_user, user_or_key
 
@@ -781,11 +783,25 @@ def set_open_edit(playlist_id: int, body: dict = Body(default={}),
 @router.patch("/playlists/{playlist_id}")
 def rename_playlist(playlist_id: int, body: dict = Body(...),
                     user: dict = Depends(current_user)):
+    """A new name, or what the booth did between its songs — or both.
+
+    The mix is kept as the booth wrote it and handed back as it was written: the
+    server has no opinion about transitions. Null takes it off, and the playlist is
+    an ordinary playlist again."""
     _editable(playlist_id, user)
-    name = (body.get("name") or "").strip()
-    if not name:
-        raise HTTPException(400, "name required")
-    db.run("update playlists set name=%s where id=%s", (name, playlist_id))
+    if "name" in body:
+        name = (body.get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "name required")
+        db.run("update playlists set name=%s where id=%s", (name, playlist_id))
+    if "mix" in body:
+        mix = body.get("mix")
+        if mix is not None and not isinstance(mix, dict):
+            raise HTTPException(400, "a mix is an object, or null")
+        db.run("update playlists set mix=%s where id=%s",
+               (Json(mix) if mix is not None else None, playlist_id))
+    if "name" not in body and "mix" not in body:
+        raise HTTPException(400, "nothing to change")
     return get_playlist(playlist_id, user)
 
 

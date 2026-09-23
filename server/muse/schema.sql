@@ -228,6 +228,9 @@ alter table tracks add column if not exists fail_code text;
 alter table media add column if not exists role text not null default 'canonical';
 alter table tracks add column if not exists fingerprint text;
 alter table tracks add column if not exists discovered_via text not null default 'user';
+-- A mix: what the booth did between the songs of this playlist, so it can be done
+-- again. Null for an ordinary playlist. See app/lib/src/state/booth/automix.dart.
+alter table playlists add column if not exists mix jsonb;
 alter table jobs add column if not exists next_attempt_at timestamptz not null default now();
 alter table matches add column if not exists remote_title text;
 alter table matches add column if not exists remote_artists text[];

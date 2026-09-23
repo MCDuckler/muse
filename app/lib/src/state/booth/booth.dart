@@ -39,6 +39,58 @@ class MixStep {
   final Map<String, ({bool low, bool mid, bool high})> kills;
 }
 
+/// One thing the booth did between two records, as it is kept and done again.
+class MixMove {
+  const MixMove({
+    required this.from,
+    required this.to,
+    required this.kind,
+    required this.bars,
+    required this.outMs,
+    required this.inMs,
+    this.tempo = 1.0,
+  });
+
+  final int from;
+  final int to;
+  final Transition kind;
+  final int bars;
+
+  /// Where in the outgoing record the move began, and where the incoming was parked.
+  final int outMs;
+  final int inMs;
+
+  /// The rate the incoming was run at.
+  final double tempo;
+
+  Map<String, dynamic> toJson() => {
+        'from': from,
+        'to': to,
+        'kind': kind.name,
+        'bars': bars,
+        'out_ms': outMs,
+        'in_ms': inMs,
+        'tempo': tempo,
+      };
+
+  factory MixMove.fromJson(Map<String, dynamic> j) => MixMove(
+        from: (j['from'] as num).toInt(),
+        to: (j['to'] as num).toInt(),
+        kind: Transition.values.firstWhere((k) => k.name == j['kind'],
+            orElse: () => Transition.fade),
+        bars: (j['bars'] as num?)?.toInt() ?? 8,
+        outMs: (j['out_ms'] as num?)?.toInt() ?? 0,
+        inMs: (j['in_ms'] as num?)?.toInt() ?? 0,
+        tempo: (j['tempo'] as num?)?.toDouble() ?? 1.0,
+      );
+
+  /// The moves a kept playlist carries, or none.
+  static List<MixMove> allIn(Map<String, dynamic>? mix) => [
+        for (final t in (mix?['transitions'] ?? const []) as List)
+          if (t is Map) MixMove.fromJson(t.cast<String, dynamic>()),
+      ];
+}
+
 /// Two records on the deck, and the mixer between them.
 ///
 /// The booth is the player's other life: the same records, played by hand into one
@@ -263,6 +315,33 @@ class Booth extends ChangeNotifier {
   Timer? _running;
   bool get inTransition => _running != null;
 
+  /// What has been done in this session, transition by transition, so it can be kept
+  /// and done again: which record into which, how, over how many bars, from where in
+  /// the one to where in the other, and at what tempo the incoming was run.
+  final List<MixMove> taken = [];
+
+  /// The records the session played, in order, as the log has them.
+  List<int> get takenTrackIds {
+    if (taken.isEmpty) return const [];
+    return [taken.first.from, for (final m in taken) m.to];
+  }
+
+  void forgetTaken() {
+    taken.clear();
+    notifyListeners();
+  }
+
+  /// This session as a mix: a playlist of the records, carrying the moves.
+  Future<Playlist> keepMix(String name) async {
+    final ids = takenTrackIds;
+    var made = await api.createPlaylist(name);
+    if (ids.isNotEmpty) made = await api.addToPlaylist(made.id, ids);
+    return api.setPlaylistMix(made.id, {
+      'version': 1,
+      'transitions': [for (final m in taken) m.toJson()],
+    });
+  }
+
   /// From the master to the other deck, over [bars] of the master's bars, the
   /// incoming starting on the master's next downbeat. When it is done the other deck
   /// is the master.
@@ -270,6 +349,19 @@ class Booth extends ChangeNotifier {
     final from = master, to = other(master);
     if (!to.loaded) return;
     _running?.cancel();
+
+    // Written down as it starts, from where each record is.
+    if (from.track != null && to.track != null) {
+      taken.add(MixMove(
+        from: from.track!.id,
+        to: to.track!.id,
+        kind: kind,
+        bars: bars,
+        outMs: from.position.inMilliseconds,
+        inMs: to.position.inMilliseconds,
+        tempo: to.tempo,
+      ));
+    }
 
     if (kind == Transition.cut) {
       await startOnBeat(to, every: 4);

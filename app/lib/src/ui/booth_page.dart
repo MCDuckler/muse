@@ -227,13 +227,14 @@ class _BoothPageState extends State<BoothPage> {
 
 
 /// Into the booth, and — with [mix] — with the booth mixing [tracks] from [at].
-Future<void> openBooth(BuildContext context, {List<Track>? tracks, int at = 0}) async {
+Future<void> openBooth(BuildContext context,
+    {List<Track>? tracks, int at = 0, Map<String, dynamic>? mix}) async {
   final app = context.read<AppState>();
   final booth = app.booth;
   await app.player?.pause();
   if (tracks != null && tracks.isNotEmpty) {
     await booth.init();
-    unawaited(booth.auto.start(tracks, at: at));
+    unawaited(booth.auto.start(tracks, at: at, kept: MixMove.allIn(mix)));
   }
   if (!context.mounted) return;
   await Navigator.of(context, rootNavigator: true)

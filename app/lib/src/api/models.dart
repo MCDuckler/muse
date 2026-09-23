@@ -597,6 +597,11 @@ class Playlist {
   /// that catches that.
   final int waiting;
 
+  /// What the booth did between these songs, when this playlist is a mix that was
+  /// kept: see AutoMix. Null for an ordinary playlist.
+  final Map<String, dynamic>? mix;
+  bool get isMix => mix != null;
+
   /// Yours, or somebody else's kept in your library.
   final bool mine;
 
@@ -623,6 +628,7 @@ class Playlist {
     this.coverVersion,
     this.downloadMode = 'all',
     this.waiting = 0,
+    this.mix,
     this.mine = true,
     this.saved = false,
     this.openEdit = false,
@@ -647,6 +653,7 @@ class Playlist {
         customCover: (j['custom_cover'] ?? false) as bool,
         downloadMode: (j['download_mode'] ?? 'all') as String,
         waiting: (j['waiting'] ?? 0) as int,
+        mix: j['mix'] is Map ? (j['mix'] as Map).cast<String, dynamic>() : null,
         // A list of your own says nothing about ownership; one of somebody else's
         // says both whose it is and that it is theirs.
         mine: j['mine'] as bool? ?? !(j['saved'] == true),

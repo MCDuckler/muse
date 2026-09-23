@@ -7,6 +7,7 @@ import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/offline.dart';
 import 'artwork.dart';
+import 'booth_page.dart' show openBooth;
 import 'browse_page.dart';
 import 'dialogs.dart';
 import 'mag.dart';
@@ -795,7 +796,7 @@ class _PlaylistHeader extends StatelessWidget {
     final app = context.read<AppState>();
     final scheme = Theme.of(context).colorScheme;
     final kicker = [
-      if (playlist.isFavourites) 'Favourites' else 'Playlist',
+      if (playlist.isFavourites) 'Favourites' else if (playlist.isMix) 'Mix' else 'Playlist',
       if (playlist.saved && playlist.ownerName != null) 'from ${playlist.ownerName}',
       if (playlist.isMirror) 'mirrored',
       if (playlist.openEdit && playlist.mine) 'shared',
@@ -871,6 +872,15 @@ class _PlaylistHeader extends StatelessWidget {
                 label: 'Shuffle',
                 onTap: items.isEmpty ? null : () => app.playNow(items, shuffle: true),
               ),
+              // A kept mix: the booth does again what it did, move for move.
+              if (playlist.isMix && app.boothOn)
+                PressButton(
+                  label: 'Play it mixed',
+                  loud: true,
+                  onTap: items.isEmpty
+                      ? null
+                      : () => openBooth(context, tracks: items, mix: playlist.mix),
+                ),
             ],
           ),
           if (playlist.isMirror)

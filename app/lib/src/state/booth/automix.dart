@@ -25,6 +25,18 @@ class AutoMix extends ChangeNotifier {
   Timer? _watch;
   bool running = false;
 
+  /// A mix being done again: the moves as they were kept, looked up by the two
+  /// records. Where a pair has one, it is followed rather than decided.
+  List<MixMove> _kept = const [];
+  bool get replaying => _kept.isNotEmpty;
+
+  MixMove? _keptFor(int from, int to) {
+    for (final m in _kept) {
+      if (m.from == from && m.to == to) return m;
+    }
+    return null;
+  }
+
   /// What is coming, and how, once it is decided.
   Track? get next => _at + 1 < _tracks.length ? _tracks[_at + 1] : null;
   Track? get current => _at >= 0 && _at < _tracks.length ? _tracks[_at] : null;
@@ -79,10 +91,12 @@ class AutoMix extends ChangeNotifier {
     return at;
   }
 
-  /// Play [tracks] from [at], record into record, until they run out or [stop].
-  Future<void> start(List<Track> tracks, {int at = 0}) async {
+  /// Play [tracks] from [at], record into record, until they run out or [stop] —
+  /// or, given the [kept] moves of a mix, do that mix again.
+  Future<void> start(List<Track> tracks, {int at = 0, List<MixMove> kept = const []}) async {
     _tracks = [for (final t in tracks) if (t.isReady) t];
     if (_tracks.isEmpty) return;
+    _kept = kept;
     _at = at.clamp(0, _tracks.length - 1);
     running = true;
     final deck = booth.master;
@@ -117,8 +131,17 @@ class AutoMix extends ChangeNotifier {
       return;
     }
     final timing = await booth.timing.of(coming);
-    final chosen = choose(from.timing, timing);
+    final was = from.track == null ? null : _keptFor(from.track!.id, coming.id);
+    final chosen = was == null ? choose(from.timing, timing) : (kind: was.kind, bars: was.bars);
     plan = chosen;
+    if (was != null) {
+      // As it was done: the same places, the same rate.
+      goesAt = Duration(milliseconds: was.outMs);
+      await to.load(coming, timing: timing, at: Duration(milliseconds: was.inMs));
+      if (was.tempo != 1.0) await to.setTempo(was.tempo);
+      notifyListeners();
+      return;
+    }
     final length = booth.barsLength(from, chosen.bars);
     goesAt = from.timing == null ? null : outPoint(from.timing!, length: length);
     final at = timing == null ? null : inPoint(timing, bars: chosen.bars);

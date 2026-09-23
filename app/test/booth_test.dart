@@ -234,6 +234,42 @@ void main() {
       expect(booth.auto.running, isFalse);
     });
 
+    test('what the booth does is written down, and a kept mix is done again', () async {
+      await booth.load(booth.a, song(1));
+      await booth.load(booth.b, song(2));
+      await booth.a.play();
+      await booth.b.seek(const Duration(seconds: 5));
+      await booth.go(Transition.cut);
+      expect(booth.taken.length, 1);
+      final move = booth.taken.single;
+      expect((move.from, move.to, move.kind), (1, 2, Transition.cut));
+      expect(move.inMs, 5000, reason: 'where the incoming was parked');
+      expect(booth.takenTrackIds, [1, 2]);
+      // Round trip through what a playlist carries.
+      final again = MixMove.allIn({'version': 1, 'transitions': [move.toJson()]});
+      expect(again.single.toJson(), move.toJson());
+
+      // Done again: the kept move is followed rather than decided.
+      TrackTiming quick() => TrackTiming(
+            durationMs: 60000, bpm: 1200,
+            beats: [for (var i = 0; i < 1200; i++) i * 50],
+            downbeats: [for (var i = 0; i < 1200; i += 4) i * 50],
+            cues: const MixCues(firstDownbeatMs: 0, mixInMs: 2000, mixOutMs: 30000, soundEndMs: 59000),
+          );
+      booth.timing.put(1, quick());
+      booth.timing.put(2, quick());
+      final kept = [
+        const MixMove(from: 1, to: 2, kind: Transition.fade, bars: 4, outMs: 4000, inMs: 7000, tempo: 1.03),
+      ];
+      await booth.auto.start([song(1), song(2)], kept: kept);
+      expect(booth.auto.replaying, isTrue);
+      expect(booth.auto.plan, (kind: Transition.fade, bars: 4), reason: 'as kept, not as the rules say');
+      expect(booth.auto.goesAt, const Duration(seconds: 4));
+      expect(booth.other(booth.master).position, const Duration(seconds: 7));
+      expect(booth.other(booth.master).tempo, closeTo(1.03, 1e-9));
+      booth.auto.stop();
+    });
+
     test('a fade over the bars moves the fader and ends with the other deck', () async {
       await booth.load(booth.a, song(1));
       booth.a.timing = grid(50);           // 1200 bpm: a bar is 200 ms, for a quick test
