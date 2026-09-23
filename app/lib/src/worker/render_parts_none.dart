@@ -1,11 +1,25 @@
 /// A browser has neither ffmpeg nor the cores to spare, so there the parts of a
 /// record come from the server or not at all. Nothing here touches a file: this half
 /// is what the web build compiles, and it cannot.
+///
+/// Every name the other half offers appears here too, the test-only seams included.
+/// The analyser resolves a conditional export to this side, so a name missing here is
+/// a name the build says does not exist — however well it works on a desk.
 const partsVersion = 1;
 const upToSeconds = 12 * 60;
 
 /// What this computer can say about a part of a record. Here, always the same thing.
 enum Here { ready, making, cannot }
+
+typedef Renderer = Future<void> Function(
+    String audio, String name, Map<String, String> into);
+
+Future<void> _never(String audio, String name, Map<String, String> into) async {}
+
+const Renderer defaultRenderer = _never;
+Renderer renderer = defaultRenderer;
+
+set partsDirForTesting(String path) {}
 
 void forgetHere() {}
 
