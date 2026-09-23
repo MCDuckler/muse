@@ -18,7 +18,7 @@ class DesktopMixer extends VolumeMixer {
   @override
   bool get canFilter => true;
 
-  final _kills = <String, ({bool low, bool mid, bool high})>{};
+  final _eq = <String, EqSet>{};
   final _filter = <String, double>{};
 
   Player? _raw(Deck deck) {
@@ -29,11 +29,12 @@ class DesktopMixer extends VolumeMixer {
 
   /// The whole chain for a deck, from what is wanted of it. Empty is no filters,
   /// which is what mpv is told when nothing is wanted.
-  static String chain({required ({bool low, bool mid, bool high}) kills, required double filter}) {
+  static String chain({required EqSet eq, required double filter}) {
+    String db(double v) => v.toStringAsFixed(1);
     final parts = <String>[
-      if (kills.low) 'lowshelf=f=250:g=-40',
-      if (kills.mid) 'equalizer=f=1000:width_type=o:width=2:g=-40',
-      if (kills.high) 'highshelf=f=4000:g=-40',
+      if (eq.low != 0) 'lowshelf=f=250:g=${db(eq.low)}',
+      if (eq.mid != 0) 'equalizer=f=1000:width_type=o:width=2:g=${db(eq.mid)}',
+      if (eq.high != 0) 'highshelf=f=4000:g=${db(eq.high)}',
     ];
     if (filter < 0) {
       // Closing towards 60 Hz on a log scale, like the browser's.
@@ -50,9 +51,7 @@ class DesktopMixer extends VolumeMixer {
     // The platform half of the player is the one that speaks mpv.
     final platform = _raw(deck)?.platform;
     if (platform is! NativePlayer) return;
-    final value = chain(
-        kills: _kills[deck.name] ?? (low: false, mid: false, high: false),
-        filter: _filter[deck.name] ?? 0);
+    final value = chain(eq: _eq[deck.name] ?? EqSet.flat, filter: _filter[deck.name] ?? 0);
     try {
       await platform.setProperty('af', value);
     } catch (_) {
@@ -61,8 +60,8 @@ class DesktopMixer extends VolumeMixer {
   }
 
   @override
-  Future<void> setKills(Deck deck, {bool low = false, bool mid = false, bool high = false}) async {
-    _kills[deck.name] = (low: low, mid: mid, high: high);
+  Future<void> setEq(Deck deck, EqSet eq) async {
+    _eq[deck.name] = eq;
     await _apply(deck);
   }
 

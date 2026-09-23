@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import 'package:provider/provider.dart';
 
 import '../../state/app_state.dart';
@@ -13,66 +12,81 @@ import '../mag_parts.dart';
 import '../record_stage.dart' show Disc, RecordLight, Tonearm;
 import '../snack.dart';
 import '../stage/arm_grip.dart';
+import 'booth_clock.dart';
+import 'meters.dart';
 import 'wave_strip.dart';
 
-/// One deck in the room: the record turning, the arm on it, the song's shape
-/// running under the needle, and the few things done to this record alone.
+/// One deck: the record turning, the arm on it, and what is done to this record
+/// alone.
 ///
 /// The record is the app's own — the same pressing, the same light on it, the same
-/// arm you can pick up — driven by a motor with weight: it comes up to speed over a
-/// third of a second and coasts down over half of one, at the deck's tempo, so a
-/// record pitched up visibly turns faster.
+/// arm you can pick up — turning at the deck's tempo on the room's clock, so a record
+/// pitched up visibly runs faster. On a phone the deck carries its own waveform and
+/// its controls wrap; on a desk the waveforms are laid out together above the room
+/// and the deck is a column, so its controls can be grouped and labelled rather than
+/// a wall of identical boxes.
 class DeckPanel extends StatefulWidget {
   const DeckPanel({
     super.key,
     required this.booth,
     required this.deck,
     required this.onLoad,
-    this.compact = false,
+    this.wide = false,
+    this.showWave = true,
+    this.record = 196,
   });
+
+  /// How big the record is drawn, on a desk: smaller where the wall is shorter.
+  final double record;
 
   final Booth booth;
   final engine.Deck deck;
   final VoidCallback onLoad;
 
-  /// A phone: the record smaller, the strip shorter.
-  final bool compact;
+  /// A desk: the record big, the controls grouped, no waveform of its own.
+  final bool wide;
+  final bool showWave;
 
   @override
   State<DeckPanel> createState() => _DeckPanelState();
 }
 
-class _DeckPanelState extends State<DeckPanel> with TickerProviderStateMixin {
-  late final AnimationController _spin = AnimationController.unbounded(vsync: this);
-  late final Ticker _motor = createTicker(_turn);
+class _DeckPanelState extends State<DeckPanel> with SingleTickerProviderStateMixin {
   late final AnimationController _arm =
       AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
-
-  /// 33⅓: one turn every 1.8 s, the speed the record would really run.
-  static const _fullSpeed = 1 / 1.8;
-  double _speed = 0;
-  Duration? _lastTick;
-
-  final _position = ValueNotifier<Duration>(Duration.zero);
   final _reading = ValueNotifier<ArmReading>(const ArmReading());
+  ValueNotifier<Duration>? _position;
 
   @override
   void initState() {
     super.initState();
-    _motor.start();
     widget.deck.addListener(_changed);
     _changed();
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // The room's clock, and the arm's reading taken from it.
+    final now = BoothClock.of(context).positionOf(widget.deck);
+    if (identical(now, _position)) return;
+    _position?.removeListener(_moved);
+    _position = now..addListener(_moved);
+  }
+
+  @override
   void dispose() {
+    _position?.removeListener(_moved);
     widget.deck.removeListener(_changed);
-    _motor.dispose();
-    _spin.dispose();
     _arm.dispose();
-    _position.dispose();
     _reading.dispose();
     super.dispose();
+  }
+
+  void _moved() {
+    final d = widget.deck;
+    _reading.value =
+        ArmReading(position: _position!.value, length: d.duration, playing: d.playing);
   }
 
   void _changed() {
@@ -91,46 +105,96 @@ class _DeckPanelState extends State<DeckPanel> with TickerProviderStateMixin {
     if (mounted) setState(() {});
   }
 
-  /// Every frame: the motor, and the clocks the strip and the arm read.
-  void _turn(Duration elapsed) {
-    final last = _lastTick;
-    _lastTick = elapsed;
-    if (last == null) return;
-    final dt = (elapsed - last).inMicroseconds / 1e6;
-    final d = widget.deck;
-    final want = d.playing ? _fullSpeed * d.tempo : 0.0;
-    // Up over a third of a second, down over half: a platter has weight.
-    final tau = want > _speed ? 0.33 : 0.5;
-    _speed += (want - _speed) * (1 - _expNeg(dt / tau));
-    if (_speed.abs() > 1e-4) _spin.value = (_spin.value + _speed * dt) % 1024;
-    final at = d.position;
-    if (at != _position.value) {
-      _position.value = at;
-      _reading.value = ArmReading(position: at, length: d.duration, playing: d.playing);
-    }
-  }
-
-  static double _expNeg(double x) => x > 20 ? 0 : 1 / _exp(x);
-  static double _exp(double x) {
-    var sum = 1.0, term = 1.0;
-    for (var i = 1; i < 12; i++) {
-      term *= x / i;
-      sum += term;
-    }
-    return sum;
-  }
-
   @override
   Widget build(BuildContext context) {
-    final app = context.read<AppState>();
     final b = widget.booth;
     final d = widget.deck;
     final scheme = Theme.of(context).colorScheme;
     final t = d.track;
     final isMaster = identical(b.master, d);
-    final kills = b.kills[d] ?? (low: false, mid: false, high: false);
-    final side = widget.compact ? 112.0 : 168.0;
+
+    final body = widget.wide
+        ? Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _facts(context, spread: true),
+              const SizedBox(height: 10),
+              Center(child: _record(context, widget.record)),
+              const SizedBox(height: 12),
+              _pitch(context),
+              const SizedBox(height: 8),
+              _transport(context),
+              const SizedBox(height: 10),
+              _cuesAndLoops(context),
+            ],
+          )
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _record(context, 112),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _facts(context),
+                        const SizedBox(height: 2),
+                        Text(t?.displayTitle ?? 'Nothing on',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Mag.title(15, color: scheme.onSurface)),
+                        if (t != null)
+                          Text(t.artistLine,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Mag.typewriter(11, color: scheme.onSurfaceVariant)),
+                        if (widget.showWave) ...[
+                          const SizedBox(height: 6),
+                          WaveLane(
+                              booth: b,
+                              deck: d,
+                              height: 56,
+                              window: const Duration(seconds: 14)),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              _pitch(context),
+              const SizedBox(height: 6),
+              _transport(context),
+              const SizedBox(height: 8),
+              _cuesAndLoops(context),
+              const SizedBox(height: 8),
+              _bands(context),
+            ],
+          );
+
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(
+            color: isMaster ? scheme.primary : scheme.onSurface.withValues(alpha: 0.35),
+            width: isMaster ? 1.5 : 1),
+        borderRadius: BorderRadius.circular(3),
+      ),
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+      child: body,
+    );
+  }
+
+  // ------------------------------------------------------------------ the record
+  Widget _record(BuildContext context, double side) {
+    final app = context.read<AppState>();
+    final d = widget.deck;
+    final scheme = Theme.of(context).colorScheme;
+    final t = d.track;
     final radius = side * 0.42;
+    final spin = BoothClock.of(context).turnOf(d);
     final hand = t == null
         ? null
         : ArmHand(
@@ -141,8 +205,7 @@ class _DeckPanelState extends State<DeckPanel> with TickerProviderStateMixin {
             },
             onPark: d.pause,
           );
-
-    final record = SizedBox(
+    return SizedBox(
       width: side,
       height: side,
       child: Stack(
@@ -152,7 +215,7 @@ class _DeckPanelState extends State<DeckPanel> with TickerProviderStateMixin {
           if (t != null)
             Disc.spinning(
               url: app.api.discUrl(t) ?? Disc.plain(t),
-              spin: _spin,
+              spin: spin,
               size: radius * 2,
               roll: 0,
               fade: 1,
@@ -164,17 +227,24 @@ class _DeckPanelState extends State<DeckPanel> with TickerProviderStateMixin {
               height: radius * 2,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                border: Border.all(color: scheme.onSurface.withValues(alpha: 0.25), width: 1.5),
+                border:
+                    Border.all(color: scheme.onSurface.withValues(alpha: 0.25), width: 1.5),
               ),
               child: Center(
-                  child: Text(d.name, style: Mag.numerals(radius * 0.9, color: scheme.onSurface.withValues(alpha: 0.25)))),
+                  child: Text(d.name,
+                      style: Mag.numerals(radius * 0.9,
+                          color: scheme.onSurface.withValues(alpha: 0.25)))),
             ),
           if (t != null)
             Positioned.fill(
               child: IgnorePointer(
                 child: CustomPaint(
                   painter: RecordLight(
-                      size: radius * 2, drop: 0, label: app.discLabel, strength: 1, spin: _spin),
+                      size: radius * 2,
+                      drop: 0,
+                      label: app.discLabel,
+                      strength: 1,
+                      spin: spin),
                 ),
               ),
             ),
@@ -195,170 +265,226 @@ class _DeckPanelState extends State<DeckPanel> with TickerProviderStateMixin {
         ],
       ),
     );
+  }
 
-    final facts = <Widget>[
-      Text(d.name, style: Mag.numerals(22, color: isMaster ? scheme.primary : scheme.onSurface)),
-      if (isMaster) Kicker('master'),
+  // ------------------------------------------------------------------ what it is
+  Widget _facts(BuildContext context, {bool spread = false}) {
+    final b = widget.booth;
+    final d = widget.deck;
+    final scheme = Theme.of(context).colorScheme;
+    final t = d.track;
+    final isMaster = identical(b.master, d);
+    final chips = <Widget>[
+      Text(d.name,
+          style: Mag.numerals(22, color: isMaster ? scheme.primary : scheme.onSurface)),
+      if (isMaster) const Kicker('master'),
       if (d.bpm != null)
         Text(d.bpm!.toStringAsFixed(1), style: Mag.numerals(16, color: scheme.onSurface)),
       if (d.bpm != null) Text('BPM', style: Mag.flag(8, color: scheme.onSurfaceVariant)),
       if (d.timing?.camelot != null) _KeyChip(deck: d, against: b.other(d)),
-      if (d.tempo != 1.0)
-        Text('${d.tempo >= 1 ? '+' : ''}${((d.tempo - 1) * 100).toStringAsFixed(1)}%',
-            style: Mag.typewriter(11, color: scheme.primary)),
       if (t != null && !d.hasBeats) Text('NO GRID', style: Mag.flag(8, color: scheme.outline)),
     ];
-
-    return Container(
-      decoration: BoxDecoration(
-        border: Border.all(
-            color: isMaster ? scheme.primary : scheme.onSurface.withValues(alpha: 0.35),
-            width: isMaster ? 1.5 : 1),
-        borderRadius: BorderRadius.circular(3),
-      ),
-      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              record,
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Wrap(spacing: 8, runSpacing: 2, crossAxisAlignment: WrapCrossAlignment.center, children: facts),
-                    const SizedBox(height: 2),
-                    Text(t?.displayTitle ?? 'Nothing on',
-                        maxLines: 1, overflow: TextOverflow.ellipsis, style: Mag.title(15, color: scheme.onSurface)),
-                    if (t != null)
-                      Text(t.artistLine,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Mag.typewriter(11, color: scheme.onSurfaceVariant)),
-                    const SizedBox(height: 6),
-                    WaveStrip(
-                      position: _position,
-                      timing: d.timing,
-                      bands: t == null ? null : b.bands[t.id],
-                      duration: d.duration ?? Duration.zero,
-                      playing: d.playing,
-                      loop: d.loopStart != null && d.loopEnd != null ? (d.loopStart!, d.loopEnd!) : null,
-                      hotCues: d.hotCues,
-                      height: widget.compact ? 56 : 72,
-                      window: Duration(seconds: widget.compact ? 14 : 22),
-                      onScrub: t == null ? null : (to) => unawaited(d.seek(to)),
-                    ),
-                    ValueListenableBuilder<Duration>(
-                      valueListenable: _position,
-                      builder: (context, at, _) => Text(
-                        '${_clock(at)}  /  ${_clock(d.duration ?? Duration.zero)}',
-                        style: Mag.typewriter(10.5, color: scheme.onSurfaceVariant),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          // The filter, where the mixer has one: closed to the left, open in the
-          // middle, closed to the right — the one knob a DJ reaches for mid-blend.
-          if (b.mixer.canFilter && t != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Row(
-                children: [
-                  Text('FILTER', style: Mag.flag(8, color: scheme.onSurfaceVariant)),
-                  Expanded(
-                    child: Slider(
-                      value: b.filters[d] ?? 0,
-                      min: -1,
-                      max: 1,
-                      divisions: 40,
-                      onChanged: (v) => b.setFilter(d, v.abs() < 0.06 ? 0 : v),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          const SizedBox(height: 8),
-          // What is done to this record alone.
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
+    if (!spread) {
+      return Wrap(
+          spacing: 8,
+          runSpacing: 2,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: chips);
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+            spacing: 8,
+            runSpacing: 2,
             crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              PressButton(label: t == null ? 'Load' : 'Change', onTap: widget.onLoad),
-              PressButton(
-                label: d.playing ? 'Stop' : 'Play',
-                loud: !d.playing && t != null,
-                onTap: t == null
-                    ? null
-                    : () {
-                        feel(Feel.commit);
-                        d.playing ? d.pause() : d.play();
-                      },
-              ),
-              PressButton(
-                label: 'On the one',
-                onTap: t == null || d.playing ? null : () => b.startOnBeat(d),
-              ),
-              PressButton(
-                label: 'Sync',
-                onTap: t == null
-                    ? null
-                    : () async {
-                        final ok = await b.sync(d);
-                        if (ok) await b.align(d);
-                        if (!context.mounted) return;
-                        feel(ok ? Feel.edge : Feel.warn);
-                        if (!ok) {
-                          ScaffoldMessenger.of(context)
-                              .say(snack(const Text('Too far apart to sync, or no grid')));
-                        }
-                      },
-              ),
-              _Nudge(deck: d, enabled: t != null),
-              PressButton(
-                label: d.loopStart == null ? 'Loop 4' : 'Unloop',
-                loud: d.loopStart != null,
-                onTap: t == null ? null : () => d.loopStart == null ? d.loop(4) : d.unloop(),
-              ),
-              for (var n = 1; n <= 2; n++)
-                PressButton(
-                  label: d.hotCues.containsKey(n) ? 'Cue $n' : 'Set $n',
-                  onTap: t == null
-                      ? null
-                      : () => d.hotCues.containsKey(n) ? d.jumpCue(n) : d.setCue(n),
-                ),
-              const SizedBox(width: 6),
-              for (final (label, on, set) in [
-                ('Low', kills.low, (bool v) => b.setKills(d, low: v, mid: kills.mid, high: kills.high)),
-                ('Mid', kills.mid, (bool v) => b.setKills(d, low: kills.low, mid: v, high: kills.high)),
-                ('High', kills.high, (bool v) => b.setKills(d, low: kills.low, mid: kills.mid, high: v)),
-              ])
-                PressButton(
-                  label: on ? '$label ✕' : label,
-                  loud: on,
-                  onTap: b.mixer.canKill && t != null
-                      ? () {
-                          feel(Feel.pick);
-                          set(!on);
-                        }
-                      : null,
-                ),
-            ],
-          ),
-        ],
-      ),
+            children: chips),
+        const SizedBox(height: 3),
+        Text(t?.displayTitle ?? 'Nothing on',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Mag.title(16, color: scheme.onSurface)),
+        Text(t?.artistLine ?? 'Load a record from the crate',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Mag.typewriter(11, color: scheme.onSurfaceVariant)),
+      ],
     );
   }
 
-  static String _clock(Duration d) {
-    final m = d.inMinutes, s = d.inSeconds.remainder(60);
-    return '$m:${s.toString().padLeft(2, '0')}';
+  // ------------------------------------------------------------------ the controls
+  Widget _group(BuildContext context, String label, List<Widget> children) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(label, style: Mag.flag(7.5, color: scheme.onSurfaceVariant)),
+        const SizedBox(height: 3),
+        Wrap(
+            spacing: 5,
+            runSpacing: 5,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: children),
+      ],
+    );
+  }
+
+  Widget _transport(BuildContext context) {
+    final b = widget.booth;
+    final d = widget.deck;
+    final t = d.track;
+    return Wrap(
+      spacing: 12,
+      runSpacing: 8,
+      children: [
+        _group(context, 'transport', [
+          PressButton(label: t == null ? 'Load' : 'Change', onTap: widget.onLoad),
+          PressButton(
+            label: d.playing ? 'Stop' : 'Play',
+            loud: !d.playing && t != null,
+            onTap: t == null
+                ? null
+                : () {
+                    feel(Feel.commit);
+                    d.playing ? d.pause() : d.play();
+                  },
+          ),
+          PressButton(
+            label: 'On the one',
+            onTap: t == null || d.playing ? null : () => b.startOnBeat(d),
+          ),
+        ]),
+        _group(context, 'beatmatch', [
+          PressButton(
+            label: 'Sync',
+            onTap: t == null
+                ? null
+                : () async {
+                    final ok = await b.sync(d);
+                    if (ok) await b.align(d);
+                    if (!context.mounted) return;
+                    feel(ok ? Feel.edge : Feel.warn);
+                    if (!ok) {
+                      ScaffoldMessenger.of(context)
+                          .say(snack(const Text('Too far apart to sync, or no grid')));
+                    }
+                  },
+          ),
+          PressButton(
+              label: '‹',
+              onTap: t == null ? null : () => d.nudge(const Duration(milliseconds: -15))),
+          PressButton(
+              label: '›',
+              onTap: t == null ? null : () => d.nudge(const Duration(milliseconds: 15))),
+        ]),
+      ],
+    );
+  }
+
+  Widget _cuesAndLoops(BuildContext context) {
+    final d = widget.deck;
+    final t = d.track;
+    return Wrap(
+      spacing: 12,
+      runSpacing: 8,
+      children: [
+        _group(context, 'cues', [
+          for (var n = 1; n <= 3; n++)
+            PressButton(
+              label: d.hotCues.containsKey(n) ? '$n' : 'Set $n',
+              loud: d.hotCues.containsKey(n),
+              onTap: t == null
+                  ? null
+                  : () {
+                      feel(Feel.pick);
+                      d.hotCues.containsKey(n) ? d.jumpCue(n) : d.setCue(n);
+                    },
+            ),
+        ]),
+        _group(context, 'loop · bars', [
+          for (final bars in const [1, 2, 4, 8])
+            PressButton(
+              label: '$bars',
+              loud: d.loopBars == bars,
+              onTap: t == null
+                  ? null
+                  : () {
+                      feel(Feel.pick);
+                      d.loopBars == bars ? d.unloop() : d.loop(bars * 4);
+                    },
+            ),
+        ]),
+      ],
+    );
+  }
+
+  /// The pitch fader: per cent, with a hard nought at the middle.
+  Widget _pitch(BuildContext context) {
+    final d = widget.deck;
+    final scheme = Theme.of(context).colorScheme;
+    final t = d.track;
+    return Row(
+      children: [
+        Text('PITCH', style: Mag.flag(7.5, color: scheme.onSurfaceVariant)),
+        const SizedBox(width: 8),
+        Expanded(
+          child: CentreSlider(
+            value: d.tempo.clamp(0.92, 1.08),
+            min: 0.92,
+            max: 1.08,
+            detent: 0.022,
+            onChanged: t == null ? null : d.setTempo,
+          ),
+        ),
+        const SizedBox(width: 6),
+        SizedBox(
+          width: 52,
+          child: Text(
+              '${d.tempo >= 1 ? '+' : ''}${((d.tempo - 1) * 100).toStringAsFixed(1)}%',
+              textAlign: TextAlign.right,
+              style: Mag.typewriter(10.5,
+                  color: d.tempo == 1.0 ? scheme.onSurfaceVariant : scheme.primary)),
+        ),
+      ],
+    );
+  }
+
+  /// The three bands, for a phone — on a desk they live in the mixer between the decks.
+  Widget _bands(BuildContext context) {
+    final b = widget.booth;
+    final d = widget.deck;
+    final eq = b.eqOf(d);
+    if (!b.mixer.canKill) {
+      return Text('No kills on this device: the fader alone.',
+          style:
+              Mag.typewriter(10, color: Theme.of(context).colorScheme.onSurfaceVariant));
+    }
+    return _group(context, 'eq', [
+      for (final (i, label, killed) in [
+        (0, 'Low', eq.lowKilled),
+        (1, 'Mid', eq.midKilled),
+        (2, 'High', eq.highKilled),
+      ])
+        PressButton(
+          label: killed ? '$label ✕' : label,
+          loud: killed,
+          onTap: d.track == null
+              ? null
+              : () {
+                  feel(Feel.pick);
+                  b.kill(d, i, !killed);
+                },
+        ),
+      if (b.mixer.canFilter)
+        SizedBox(
+          width: 120,
+          child: CentreSlider(
+            value: b.filters[d] ?? 0,
+            onChanged: d.track == null ? null : (v) => b.setFilter(d, v),
+          ),
+        ),
+    ]);
   }
 }
 
@@ -372,33 +498,66 @@ class _KeyChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final mine = deck.timing, theirs = against.timing;
-    final matched = mine != null && theirs != null && theirs.camelot != null && mine.inKeyWith(theirs);
-    final clashes = mine != null && theirs != null && theirs.camelot != null && !matched;
-    final colour = matched ? scheme.primary : clashes ? scheme.error : scheme.onSurfaceVariant;
+    final matched =
+        mine != null && theirs != null && theirs.camelot != null && mine.inKeyWith(theirs);
+    final clashes =
+        mine != null && theirs != null && theirs.camelot != null && !matched;
+    final colour = matched
+        ? scheme.primary
+        : clashes
+            ? scheme.error
+            : scheme.onSurfaceVariant;
     return Container(
       padding: const EdgeInsets.fromLTRB(5, 1, 5, 0),
-      decoration: BoxDecoration(border: Border.all(color: colour.withValues(alpha: 0.8)), borderRadius: BorderRadius.circular(2)),
+      decoration: BoxDecoration(
+          border: Border.all(color: colour.withValues(alpha: 0.8)),
+          borderRadius: BorderRadius.circular(2)),
       child: Text('${mine?.camelot} · ${mine?.key}${matched ? ' · IN KEY' : ''}',
           style: Mag.typewriter(9.5, color: colour, bold: true)),
     );
   }
 }
 
-/// A nudge either way: the DJ's hand on the platter's edge.
-class _Nudge extends StatelessWidget {
-  const _Nudge({required this.deck, required this.enabled});
+/// One deck's waveform, reading the room's clock.
+class WaveLane extends StatelessWidget {
+  const WaveLane({
+    super.key,
+    required this.booth,
+    required this.deck,
+    this.height = 72,
+    this.window = const Duration(seconds: 22),
+    this.mirrored = false,
+  });
+
+  final Booth booth;
   final engine.Deck deck;
-  final bool enabled;
+  final double height;
+  final Duration window;
+
+  /// Drawn hanging from the top rather than standing on its foot, so two lanes can
+  /// face each other across the phase meter and their beats line up to the eye.
+  final bool mirrored;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        PressButton(label: '‹', onTap: enabled ? () => deck.nudge(const Duration(milliseconds: -20)) : null),
-        const SizedBox(width: 2),
-        PressButton(label: '›', onTap: enabled ? () => deck.nudge(const Duration(milliseconds: 20)) : null),
-      ],
+    final t = deck.track;
+    final auto = booth.auto;
+    return WaveStrip(
+      position: BoothClock.of(context).positionOf(deck),
+      timing: deck.timing,
+      bands: t == null ? null : booth.bands[t.id],
+      duration: deck.duration ?? Duration.zero,
+      playing: deck.playing,
+      loop: deck.loopStart != null && deck.loopEnd != null
+          ? (deck.loopStart!, deck.loopEnd!)
+          : null,
+      hotCues: deck.hotCues,
+      // Where the booth means to mix out of this record, when it is the one playing.
+      markAt: auto.running && identical(booth.master, deck) ? auto.goesAt : null,
+      height: height,
+      window: window,
+      mirrored: mirrored,
+      onScrub: t == null ? null : (to) => unawaited(deck.seek(to)),
     );
   }
 }

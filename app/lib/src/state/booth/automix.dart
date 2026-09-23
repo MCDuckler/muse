@@ -45,6 +45,54 @@ class AutoMix extends ChangeNotifier {
   /// Where in the outgoing record the transition begins, once known.
   Duration? goesAt;
 
+  /// How long until it does, by the wall clock at the master's tempo — or null when
+  /// there is nothing lined up. Negative while the transition is running.
+  Duration? get timeToGo {
+    final at = goesAt;
+    final from = booth.master;
+    if (at == null || !running) return null;
+    final left = at - from.position;
+    return Duration(microseconds: (left.inMicroseconds / from.tempo).round());
+  }
+
+  /// How far the outgoing record is through the stretch before its transition, 0 to
+  /// 1 — what the countdown is drawn from.
+  double get toGo {
+    final at = goesAt;
+    final from = booth.master;
+    if (at == null || !running || at <= Duration.zero) return 0;
+    return (from.position.inMicroseconds / at.inMicroseconds).clamp(0.0, 1.0);
+  }
+
+  /// Go now, wherever the record has got to: the one thing a DJ does that a plan
+  /// cannot know about — the room, or simply having heard enough of it.
+  Future<void> mixNow() async {
+    if (!running || next == null) return;
+    goesAt = Duration.zero;
+    notifyListeners();
+    await _tick();
+  }
+
+  /// Not that one: put [track] next instead, and lay it out ready.
+  Future<void> swapNext(Track track) async {
+    if (_at + 1 < _tracks.length) {
+      _tracks = [..._tracks]..[_at + 1] = track;
+    } else {
+      _tracks = [..._tracks, track];
+    }
+    await _prepareNext();
+  }
+
+  /// Leave the record after this one out altogether.
+  Future<void> dropNext() async {
+    if (_at + 1 >= _tracks.length) return;
+    _tracks = [..._tracks]..removeAt(_at + 1);
+    await _prepareNext();
+  }
+
+  /// What is coming after the one that is coming: the crate's own "and then".
+  Track? get after => _at + 2 < _tracks.length ? _tracks[_at + 2] : null;
+
   /// The rules. A record with no grid, or one that has already faded, or a gap in
   /// tempo sync will not close, gets a fade. Two records that sit together on the
   /// wheel get the long blend; two that do not get a short one — a clash is worse
@@ -60,14 +108,42 @@ class AutoMix extends ChangeNotifier {
     return from.inKeyWith(to) ? (kind: Transition.blend, bars: 16) : (kind: Transition.blend, bars: 8);
   }
 
-  /// Where the outgoing record's transition starts: the start of its outro, or —
-  /// with none read — far enough before the sound ends for the bars to fit.
+  /// Where the outgoing record's transition starts.
+  ///
+  /// The start of its outro, as the analysis read it — but moved to a phrase boundary
+  /// near it, because a mix that starts four bars into a phrase is a mix that lands
+  /// four bars into the next one, and that is the thing an ear notices. Where the
+  /// analysis read no outro, far enough before the sound ends for the bars to fit,
+  /// again on a phrase.
   static Duration outPoint(TrackTiming from, {required Duration length}) {
     final cues = from.cues;
-    if (cues != null) return cues.mixOut;
     final end = from.soundEnds ?? Duration(milliseconds: from.durationMs);
-    final at = end - length;
-    return at < Duration.zero ? Duration.zero : at;
+    var at = cues?.mixOut ?? (end - length);
+    if (at < Duration.zero) at = Duration.zero;
+    // And never so late that the transition would run past the end of the sound.
+    final latest = end - length;
+    if (latest > Duration.zero && at > latest) at = latest;
+    return onPhrase(from, at);
+  }
+
+  /// [at], moved to the nearest phrase boundary within a phrase of it. Unmoved where
+  /// the song has no phrases, or none near enough to be the same moment.
+  static Duration onPhrase(TrackTiming timing, Duration at) {
+    final phrases = timing.phrases;
+    if (phrases.isEmpty) return at;
+    final ms = at.inMilliseconds;
+    var best = phrases.first, gap = (phrases.first - ms).abs();
+    for (final p in phrases) {
+      final d = (p - ms).abs();
+      if (d < gap) {
+        best = p;
+        gap = d;
+      }
+    }
+    // A phrase at this tempo, or eight seconds where there is none to measure.
+    final bpm = timing.bpm;
+    final reach = bpm == null ? 8000 : (16 * 4 * 60000 / bpm / 2).round();
+    return gap <= reach ? Duration(milliseconds: best) : at;
   }
 
   /// Where the incoming record is parked: so many bars before its intro ends, on one
@@ -104,8 +180,14 @@ class AutoMix extends ChangeNotifier {
     _at = at.clamp(0, _tracks.length - 1);
     running = true;
     final deck = booth.master;
-    await booth.load(deck, _tracks[_at], at: from);
-    await deck.play();
+    // The record it is already playing stays where it is: handing the queue to the
+    // booth mid-song should be the booth taking over, not the song starting again.
+    if (deck.track?.id != _tracks[_at].id) {
+      await booth.load(deck, _tracks[_at], at: from);
+    } else if (from != null && (deck.position - from).abs() > const Duration(seconds: 2)) {
+      await deck.seek(from);
+    }
+    if (!deck.playing) await deck.play();
     await booth.setCrossfader(identical(deck, booth.b) ? 1 : 0);
     await _prepareNext();
     _watch?.cancel();
@@ -141,7 +223,9 @@ class AutoMix extends ChangeNotifier {
     if (was != null) {
       // As it was done: the same places, the same rate.
       goesAt = Duration(milliseconds: was.outMs);
-      await to.load(coming, timing: timing, at: Duration(milliseconds: was.inMs));
+      if (to.track?.id != coming.id) {
+        await to.load(coming, timing: timing, at: Duration(milliseconds: was.inMs));
+      }
       if (was.tempo != 1.0) await to.setTempo(was.tempo);
       notifyListeners();
       return;
@@ -149,7 +233,10 @@ class AutoMix extends ChangeNotifier {
     final length = booth.barsLength(from, chosen.bars);
     goesAt = from.timing == null ? null : outPoint(from.timing!, length: length);
     final at = timing == null ? null : inPoint(timing, bars: chosen.bars);
-    await to.load(coming, timing: timing, at: at);
+    // Only if it is not the one already waiting there, parked where it should be.
+    if (to.track?.id != coming.id || to.playing) {
+      await to.load(coming, timing: timing, at: at);
+    }
     if (chosen.kind != Transition.fade) await booth.sync(to);
     notifyListeners();
   }

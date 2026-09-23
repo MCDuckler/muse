@@ -31,7 +31,17 @@ class WaveStrip extends StatelessWidget {
     this.height = 72,
     this.onScrub,
     this.accent,
+    this.markAt,
+    this.mirrored = false,
   });
+
+  /// A moment worth flagging that is not the song's own — where the booth means to
+  /// mix out of it.
+  final Duration? markAt;
+
+  /// Hanging from the top rather than standing on the foot, so two of these can face
+  /// each other and their beats line up to the eye.
+  final bool mirrored;
 
   final ValueListenable<Duration> position;
   final TrackTiming? timing;
@@ -77,6 +87,8 @@ class WaveStrip extends StatelessWidget {
                 window: window,
                 loop: loop,
                 hotCues: hotCues,
+                markAt: markAt,
+                mirrored: mirrored,
                 ink: scheme.onSurface,
                 accent: accent ?? scheme.primary,
                 paper: scheme.surface,
@@ -99,6 +111,8 @@ class _StripPainter extends CustomPainter {
     required this.window,
     required this.loop,
     required this.hotCues,
+    required this.markAt,
+    required this.mirrored,
     required this.ink,
     required this.accent,
     required this.paper,
@@ -112,6 +126,8 @@ class _StripPainter extends CustomPainter {
   final Duration window;
   final (Duration, Duration)? loop;
   final Map<int, Duration> hotCues;
+  final Duration? markAt;
+  final bool mirrored;
   final Color ink, accent, paper, quiet;
 
   /// Where the playhead stands: a third in, so most of the strip is what is coming.
@@ -127,6 +143,12 @@ class _StripPainter extends CustomPainter {
     final w = size.width, h = size.height;
     // Nothing past the strip's edges: a flag near the end was printed on the panel.
     canvas.clipRect(Offset.zero & size);
+    if (mirrored) {
+      // Turned over about its middle: the shape hangs from the top, the grid runs
+      // along the head. Everything below is drawn once, the right way up.
+      canvas.translate(0, h);
+      canvas.scale(1, -1);
+    }
     final perPixel = window.inMicroseconds / w;
     final at = position.value.inMicroseconds.toDouble();
     final left = at - _head * w * perPixel;
@@ -203,6 +225,24 @@ class _StripPainter extends CustomPainter {
     for (final e in hotCues.entries) {
       _flag(canvas, xOf(e.value.inMicroseconds.toDouble()), '${e.key}', h, w, hot: true);
     }
+    // Where the booth means to mix out of this record: a rule with a hatched run up
+    // to it, so how long there is left to it is read off the strip rather than the
+    // countdown alone.
+    final mark = markAt;
+    if (mark != null) {
+      final x = xOf(mark.inMicroseconds.toDouble());
+      if (x > -40 && x < w + 40) {
+        final from = math.max(0.0, xOf(at));
+        if (x > from) {
+          canvas.drawRect(Rect.fromLTRB(from, 0, math.min(w, x), h),
+              Paint()..color = accent.withValues(alpha: 0.07));
+        }
+        canvas.drawLine(Offset(x, 0), Offset(x, h),
+            Paint()..color = accent..strokeWidth = 1.4
+              ..strokeCap = StrokeCap.round);
+        _flag(canvas, x, 'MIX', h, w);
+      }
+    }
 
     // The playhead: a rule in the accent, a notch at its head.
     final x = _head * w;
@@ -224,14 +264,15 @@ class _StripPainter extends CustomPainter {
   void _flag(Canvas canvas, double x, String text, double h, double w, {bool hot = false}) {
     if (x < -30 || x > w + 30) return;
     final c = hot ? ink : accent;
-    canvas.drawLine(Offset(x, 12), Offset(x, h - 12), Paint()..color = c.withValues(alpha: 0.7)..strokeWidth = 1);
+    canvas.drawLine(Offset(x, 12), Offset(x, h - 12),
+        Paint()..color = c.withValues(alpha: 0.7)..strokeWidth = 1);
     final tp = TextPainter(
       text: TextSpan(text: text, style: Mag.flag(7.5, color: paper)),
       textDirection: TextDirection.ltr,
     )..layout();
     final box = Rect.fromLTWH(x, 12, tp.width + 6, tp.height + 3);
     canvas.drawRect(box, Paint()..color = c);
-    tp.paint(canvas, Offset(x + 3, 13.5));
+    _write(canvas, tp, Offset(x + 3, 13.5));
   }
 
   void _type(Canvas canvas, String text, Offset at, Color c, double size) {
@@ -239,7 +280,21 @@ class _StripPainter extends CustomPainter {
       text: TextSpan(text: text, style: Mag.typewriter(size, color: c)),
       textDirection: TextDirection.ltr,
     )..layout();
-    tp.paint(canvas, at);
+    _write(canvas, tp, at);
+  }
+
+  /// Words the right way up, whichever way the strip is drawn: the shape and the
+  /// grid turn over with the lane, the reading matter does not.
+  void _write(Canvas canvas, TextPainter tp, Offset at) {
+    if (!mirrored) {
+      tp.paint(canvas, at);
+      return;
+    }
+    canvas.save();
+    canvas.translate(at.dx, at.dy + tp.height);
+    canvas.scale(1, -1);
+    tp.paint(canvas, Offset.zero);
+    canvas.restore();
   }
 
   void _empty(Canvas canvas, Size size) {
@@ -249,6 +304,8 @@ class _StripPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_StripPainter old) =>
+      old.markAt != markAt ||
+      old.mirrored != mirrored ||
       old.timing != timing ||
       old.bands != bands ||
       old.duration != duration ||

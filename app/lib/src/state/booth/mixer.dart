@@ -18,7 +18,47 @@ import 'mixer_none.dart' if (dart.library.io) 'mixer_desktop.dart' as desk;
 ///    crossfader is done in volume steps and the kills through the bands.
 ///  * Everywhere else, for now, a gain per player: the crossfader works and the kills
 ///    do not, and the booth says so rather than pretending.
+/// What the three bands of one channel are set to, in decibels.
+class EqSet {
+  const EqSet({this.low = 0, this.mid = 0, this.high = 0});
+
+  /// A band turned all the way down. Gone to the ear, and back without a click.
+  static const killed = -40.0;
+
+  /// How far up a band can be turned. A mixer's EQ gives a little and takes a lot.
+  static const most = 6.0;
+
+  final double low, mid, high;
+
+  static const flat = EqSet();
+
+  bool get isFlat => low == 0 && mid == 0 && high == 0;
+  bool get lowKilled => low <= killed;
+  bool get midKilled => mid <= killed;
+  bool get highKilled => high <= killed;
+
+  EqSet withLow(double db) => EqSet(low: db, mid: mid, high: high);
+  EqSet withMid(double db) => EqSet(low: low, mid: db, high: high);
+  EqSet withHigh(double db) => EqSet(low: low, mid: mid, high: db);
+
+  /// The band turned off, or back to where it was — which for a knob that was moved
+  /// is flat, because a kill has no memory a DJ can see.
+  EqSet killing(int band, bool on) => switch (band) {
+        0 => withLow(on ? killed : 0),
+        1 => withMid(on ? killed : 0),
+        _ => withHigh(on ? killed : 0),
+      };
+
+  @override
+  bool operator ==(Object other) =>
+      other is EqSet && other.low == low && other.mid == mid && other.high == high;
+
+  @override
+  int get hashCode => Object.hash(low, mid, high);
+}
+
 abstract class Mixer {
+  /// Whether this device can shape a channel at all — the kills and the knobs.
   bool get canKill;
   bool get canFilter;
 
@@ -32,7 +72,11 @@ abstract class Mixer {
   /// The two levels, as amplitudes 0..1, at once. [over] zero is now.
   Future<void> setLevels(Map<Deck, double> levels, {Duration over = Duration.zero});
 
-  Future<void> setKills(Deck deck, {bool low = false, bool mid = false, bool high = false});
+  /// The three bands, in decibels: 0 is flat, [EqSet.killed] is a kill. One call
+  /// rather than a kill switch and a knob, because they are the same control — a
+  /// kill is a knob turned all the way down, and a mixer that kept them apart would
+  /// have to decide which of the two won.
+  Future<void> setEq(Deck deck, EqSet eq);
 
   /// -1 (low-pass, closed) through 0 (off) to 1 (high-pass, closed).
   Future<void> setFilter(Deck deck, double value);
@@ -90,7 +134,7 @@ class VolumeMixer extends Mixer {
   }
 
   @override
-  Future<void> setKills(Deck deck, {bool low = false, bool mid = false, bool high = false}) async {}
+  Future<void> setEq(Deck deck, EqSet eq) async {}
 
   @override
   Future<void> setFilter(Deck deck, double value) async {}
@@ -115,19 +159,20 @@ class AndroidMixer extends VolumeMixer {
   }
 
   @override
-  Future<void> setKills(Deck deck, {bool low = false, bool mid = false, bool high = false}) async {
+  Future<void> setEq(Deck deck, EqSet want) async {
     final eq = deck.equalizer;
     if (eq == null) return;
     try {
       final p = await eq.parameters;
       for (final band in p.bands) {
         final centre = (band.lowerFrequency + band.upperFrequency) / 2;
-        final killed = centre < 300
-            ? low
+        final db = centre < 300
+            ? want.low
             : centre < 4000
-                ? mid
-                : high;
-        await band.setGain(killed ? p.minDecibels : 0);
+                ? want.mid
+                : want.high;
+        // The phone's own equalizer has a range, and a kill is the bottom of it.
+        await band.setGain(db.clamp(p.minDecibels, p.maxDecibels));
       }
     } catch (_) {
       // A phone with no equalizer in its system: the crossfader still works.

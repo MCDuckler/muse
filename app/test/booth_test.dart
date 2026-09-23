@@ -37,7 +37,7 @@ Track song(int id) => Track.fromJson({
 /// A mixer that only writes down what it was told.
 class NotedMixer extends Mixer {
   final levels = <Map<String, double>>[];
-  final kills = <(String, ({bool low, bool mid, bool high}))>[];
+  final kills = <(String, EqSet)>[];
   @override
   bool get canKill => true;
   @override
@@ -48,8 +48,8 @@ class NotedMixer extends Mixer {
   }
 
   @override
-  Future<void> setKills(Deck deck, {bool low = false, bool mid = false, bool high = false}) async {
-    kills.add((deck.name, (low: low, mid: mid, high: high)));
+  Future<void> setEq(Deck deck, EqSet eq) async {
+    kills.add((deck.name, eq));
   }
 
   @override
@@ -60,15 +60,21 @@ void main() {
   analysisModel();
   autoMixRules();
   test('a desk\'s kills and filter are one mpv chain', () {
-    const off = (low: false, mid: false, high: false);
-    expect(DesktopMixer.chain(kills: off, filter: 0), '', reason: 'nothing wanted: no filters');
-    expect(DesktopMixer.chain(kills: (low: true, mid: false, high: false), filter: 0),
-        'lavfi=[lowshelf=f=250:g=-40]');
-    expect(DesktopMixer.chain(kills: (low: true, mid: true, high: true), filter: 0),
+    const off = EqSet.flat;
+    expect(DesktopMixer.chain(eq: off, filter: 0), '', reason: 'nothing wanted: no filters');
+    expect(DesktopMixer.chain(eq: const EqSet(low: EqSet.killed), filter: 0),
+        'lavfi=[lowshelf=f=250:g=-40.0]');
+    expect(
+        DesktopMixer.chain(
+            eq: const EqSet(low: EqSet.killed, mid: EqSet.killed, high: EqSet.killed),
+            filter: 0),
         contains('equalizer=f=1000'));
-    expect(DesktopMixer.chain(kills: off, filter: -1), 'lavfi=[lowpass=f=60]');
-    expect(DesktopMixer.chain(kills: off, filter: 1), 'lavfi=[highpass=f=8000]');
-    expect(DesktopMixer.chain(kills: off, filter: -0.5), contains('lowpass=f='));
+    expect(DesktopMixer.chain(eq: const EqSet(mid: -6), filter: 0),
+        'lavfi=[equalizer=f=1000:width_type=o:width=2:g=-6.0]',
+        reason: 'a knob turned down a little, not a kill');
+    expect(DesktopMixer.chain(eq: off, filter: -1), 'lavfi=[lowpass=f=60]');
+    expect(DesktopMixer.chain(eq: off, filter: 1), 'lavfi=[highpass=f=8000]');
+    expect(DesktopMixer.chain(eq: off, filter: -0.5), contains('lowpass=f='));
   });
   TestWidgetsFlutterBinding.ensureInitialized();
   TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -179,12 +185,13 @@ void main() {
     test('a blend is written down: bass swapped half way, the fader crossed by the end',
         () {
       final steps = Booth.plan(Transition.blend, from: 'A', to: 'B');
-      expect(steps.first.kills['B']?.low, isTrue, reason: 'the incoming enters without bass');
+      expect(steps.first.kills['B']?.lowKilled, isTrue,
+          reason: 'the incoming enters without bass');
       final half = steps.firstWhere((s) => s.at == 0.5);
-      expect(half.kills['B']?.low, isFalse);
-      expect(half.kills['A']?.low, isTrue, reason: 'the bass swaps at the middle');
+      expect(half.kills['B']?.lowKilled, isFalse);
+      expect(half.kills['A']?.lowKilled, isTrue, reason: 'the bass swaps at the middle');
       expect(steps.last.crossfader, 1);
-      expect(steps.last.kills['A'], (low: false, mid: false, high: false),
+      expect(steps.last.kills['A']?.isFlat, isTrue,
           reason: 'the outgoing is left clean for next time');
     });
 
@@ -267,6 +274,49 @@ void main() {
       expect(booth.auto.goesAt, const Duration(seconds: 4));
       expect(booth.other(booth.master).position, const Duration(seconds: 7));
       expect(booth.other(booth.master).tempo, closeTo(1.03, 1e-9));
+      booth.auto.stop();
+    });
+
+    test('a hand can go now, or drop what is coming', () async {
+      TrackTiming quick() => TrackTiming(
+            durationMs: 60000,
+            bpm: 1200,
+            beats: [for (var i = 0; i < 1200; i++) i * 50],
+            downbeats: [for (var i = 0; i < 1200; i += 4) i * 50],
+            cues: const MixCues(
+                firstDownbeatMs: 0, mixInMs: 2000, mixOutMs: 40000, soundEndMs: 59000),
+          );
+      for (final id in [1, 2, 3]) {
+        booth.timing.put(id, quick());
+      }
+      await booth.auto.start([song(1), song(2), song(3)]);
+      expect(booth.auto.next?.id, 2);
+      expect(booth.auto.after?.id, 3);
+      expect(booth.auto.timeToGo, isNotNull, reason: 'there is a countdown to draw');
+
+      // Not that one: three follows one, and what was next is gone.
+      await booth.auto.dropNext();
+      expect(booth.auto.next?.id, 3);
+      expect(booth.other(booth.master).track?.id, 3, reason: 'and it is on the deck');
+
+      // Now, wherever the record had got to.
+      await booth.auto.mixNow();
+      for (var i = 0; i < 40 && booth.master.track?.id == 1; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(booth.master.track?.id, 3, reason: 'it went without waiting for the outro');
+      booth.auto.stop();
+    });
+
+    test('handing the booth a record it is already playing does not start it again',
+        () async {
+      booth.timing.put(1, grid(500));
+      await booth.load(booth.a, song(1));
+      await booth.a.play();
+      await booth.a.seek(const Duration(seconds: 20));
+      await booth.auto.start([song(1), song(2)], at: 0);
+      expect(booth.master.position.inSeconds, greaterThanOrEqualTo(19),
+          reason: 'the booth took over mid-song rather than starting it again');
       booth.auto.stop();
     });
 
@@ -353,6 +403,23 @@ void autoMixRules() {
     expect(AutoMix.choose(t(beats: false), t(bpm: 128)).kind, Transition.fade,
         reason: 'no grid, no blend');
     expect(AutoMix.choose(null, t(bpm: 128)).kind, Transition.fade);
+  });
+
+  test('the mix is moved to the phrase it is nearest', () {
+    // 128 bpm: a bar is 1875 ms, a phrase 30 s. Phrases at 0, 30, 60, 90 s.
+    final t = TrackTiming(
+      durationMs: 200000,
+      bpm: 128,
+      beats: [for (var i = 0; i < 400; i++) (i * 468.75).round()],
+      phrases: [0, 30000, 60000, 90000],
+    );
+    expect(AutoMix.onPhrase(t, const Duration(seconds: 62)), const Duration(seconds: 60),
+        reason: 'a mix four bars into a phrase lands four bars into the next');
+    expect(AutoMix.onPhrase(t, const Duration(seconds: 88)), const Duration(seconds: 90));
+    // Nowhere near one: left where it was rather than dragged half a minute.
+    expect(AutoMix.onPhrase(t, const Duration(seconds: 120)), const Duration(seconds: 120));
+    expect(AutoMix.onPhrase(const TrackTiming(), const Duration(seconds: 5)),
+        const Duration(seconds: 5), reason: 'no phrases, nothing to move it to');
   });
 
   test('the outgoing goes at its outro; the incoming is parked before its intro ends', () {

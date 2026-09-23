@@ -10,6 +10,7 @@ import 'feel.dart';
 import 'home_page.dart' show openInTab;
 import 'jam_page.dart';
 import 'library_page.dart';
+import 'booth_page.dart' show BoothPage;
 import 'mag.dart';
 import 'mag_parts.dart';
 import 'settings_page.dart';
@@ -180,6 +181,17 @@ class _LibrarySidebarState extends State<LibrarySidebar> {
                   tooltip: 'Settings',
                   onPressed: () => openInTab(app.homeTab, (_) => const SettingsPage()),
                 ),
+                // The booth, where there is a desk to put one on. Switched on in
+                // Settings while it is early; once it is on, it is one press away
+                // rather than three pages deep.
+                if (app.boothOn)
+                  IconButton(
+                    icon: Icon(Icons.album_outlined,
+                        color: app.boothIfOpened?.live ?? false ? scheme.primary : null),
+                    tooltip: 'The booth',
+                    onPressed: () => Navigator.of(context, rootNavigator: true)
+                        .push(MaterialPageRoute(builder: (_) => const BoothPage())),
+                  ),
                 const Spacer(),
                 if (widget.onDock != null)
                   IconButton(

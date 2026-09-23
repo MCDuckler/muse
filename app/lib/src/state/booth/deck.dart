@@ -148,13 +148,18 @@ class Deck extends ChangeNotifier {
   // ------------------------------------------------------------------ loading and transport
   /// Put [track] on, parked at [at] — its first sound, unless told otherwise.
   Future<void> load(Track track, {TrackTiming? timing, Duration? at}) async {
+    // What is already known about this record is not forgotten because the server
+    // could not be asked again: a deck that loses its grid loses its sync, its loop
+    // and its beat light, and the grid had not changed.
+    final knew = this.track?.id == track.id ? this.timing : null;
     this.track = track;
-    this.timing = timing;
+    this.timing = timing ?? knew;
     _ended_ = false;
     hotCues.clear();
     loopStart = loopEnd = null;
     // Parked where a DJ would drop it: on the first downbeat, if there is one.
-    final start = at ?? timing?.cues?.firstDownbeat ?? timing?.lead ?? Duration.zero;
+    final start =
+        at ?? this.timing?.cues?.firstDownbeat ?? this.timing?.lead ?? Duration.zero;
     await _player.setAudioSource(_sourceFor(track), initialPosition: start);
     if (tempo != 1.0) await _player.setSpeed(tempo);
     _anchor(start);
@@ -218,6 +223,9 @@ class Deck extends ChangeNotifier {
   /// Places in the record a button jumps to.
   final Map<int, Duration> hotCues = {};
 
+  /// Said when something outside changed what this deck holds — a cue cleared, say.
+  void changed() => notifyListeners();
+
   void setCue(int n, [Duration? at]) {
     hotCues[n] = at ?? position;
     notifyListeners();
@@ -230,6 +238,10 @@ class Deck extends ChangeNotifier {
 
   Duration? loopStart;
   Duration? loopEnd;
+
+  /// How many bars the loop is, when there is one: what the buttons light by.
+  int? get loopBars => loopStart == null ? null : _loopBars;
+  int? _loopBars;
   Timer? _loop;
 
   /// Go round [beats] beats from the next downbeat (or from here, with no grid).
@@ -238,12 +250,14 @@ class Deck extends ChangeNotifier {
     final len = beat ?? const Duration(milliseconds: 500);
     loopStart = from;
     loopEnd = from + len * beats;
+    _loopBars = beats ~/ 4;
     _watchLoop();
     notifyListeners();
   }
 
   void unloop() {
     loopStart = loopEnd = null;
+    _loopBars = null;
     _loop?.cancel();
     notifyListeners();
   }

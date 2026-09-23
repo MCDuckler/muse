@@ -18,7 +18,7 @@
     try {
       if (String(tag).toLowerCase() === 'audio' && expecting) {
         el.__wetowlBooth = expecting;        // eq.js leaves these alone
-        decks[expecting] = { el: el, chain: null, wanted: { level: 1, low: false, mid: false, high: false, filter: 0 } };
+        decks[expecting] = { el: el, chain: null, wanted: { level: 1, low: 0, mid: 0, high: 0, filter: 0 } };
         expecting = null;
       }
     } catch (e) {}
@@ -48,15 +48,15 @@
     return deck.chain;
   }
 
-  // A kill is -40 dB on a shelf: gone to the ear, and back without a click.
-  var KILL = -40;
+  // The three bands, in decibels as the app sets them: 0 is flat and -40 is a kill,
+  // gone to the ear and back without a click.
   function apply(deck) {
     var c = deck.chain, w = deck.wanted;
     if (!c) return;
     var now = ctx.currentTime;
-    c.low.gain.setTargetAtTime(w.low ? KILL : 0, now, 0.02);
-    c.mid.gain.setTargetAtTime(w.mid ? KILL : 0, now, 0.02);
-    c.high.gain.setTargetAtTime(w.high ? KILL : 0, now, 0.02);
+    c.low.gain.setTargetAtTime(w.low, now, 0.02);
+    c.mid.gain.setTargetAtTime(w.mid, now, 0.02);
+    c.high.gain.setTargetAtTime(w.high, now, 0.02);
     // The filter: one knob, closing a low-pass to the left and a high-pass to the
     // right, on a log scale so the middle of the travel is the middle of the ear.
     var f = w.filter;
@@ -109,9 +109,9 @@
       if (seconds > 0) c.level.gain.linearRampToValueAtTime(level, now + seconds);
       else c.level.gain.setTargetAtTime(level, now, 0.01);
     },
-    kills: function (name, low, mid, high) {
+    eq: function (name, low, mid, high) {
       var d = decks[name]; if (!d) return;
-      d.wanted.low = !!low; d.wanted.mid = !!mid; d.wanted.high = !!high;
+      d.wanted.low = low || 0; d.wanted.mid = mid || 0; d.wanted.high = high || 0;
       if (chainFor(d)) apply(d);
     },
     filter: function (name, value) {

@@ -12,7 +12,7 @@ extension type _PageBooth._(JSObject _) implements JSObject {
   external JSBoolean has(JSString deck);
   external JSString? ready();
   external void levels(JSString deck, JSNumber level, JSNumber seconds);
-  external void kills(JSString deck, JSBoolean low, JSBoolean mid, JSBoolean high);
+  external void eq(JSString deck, JSNumber low, JSNumber mid, JSNumber high);
   external void filter(JSString deck, JSNumber value);
 }
 
@@ -55,8 +55,8 @@ class WebMixer extends Mixer {
   }
 
   @override
-  Future<void> setKills(Deck deck, {bool low = false, bool mid = false, bool high = false}) async {
-    _pageBooth?.kills(deck.name.toJS, low.toJS, mid.toJS, high.toJS);
+  Future<void> setEq(Deck deck, EqSet eq) async {
+    _pageBooth?.eq(deck.name.toJS, eq.low.toJS, eq.mid.toJS, eq.high.toJS);
   }
 
   @override

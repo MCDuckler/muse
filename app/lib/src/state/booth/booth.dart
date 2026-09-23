@@ -35,8 +35,8 @@ class MixStep {
   /// step's place to this one.
   final double? crossfader;
 
-  /// Kills switched at this point, per deck name: {'A': (low: true, ...)}.
-  final Map<String, ({bool low, bool mid, bool high})> kills;
+  /// The bands set at this point, per deck name: {'A': EqSet(low: -40)}.
+  final Map<String, EqSet> kills;
 }
 
 /// One thing the booth did between two records, as it is kept and done again.
@@ -205,17 +205,43 @@ class Booth extends ChangeNotifier {
 
   Future<void> setCrossfader(double x, {Duration over = Duration.zero}) async {
     crossfader = x.clamp(0.0, 1.0);
-    final l = levelsFor(crossfader);
     notifyListeners();
+    await _levels(over: over);
+  }
+
+  /// What each channel is actually sending: its share of the crossfader, at its gain.
+  ({double a, double b}) get levels {
+    final l = levelsFor(crossfader);
+    return (a: l.a * gainOf(a), b: l.b * gainOf(b));
+  }
+
+  Future<void> _levels({Duration over = Duration.zero}) async {
+    final l = levels;
     await mixer.setLevels({a: l.a, b: l.b}, over: over);
   }
 
-  final Map<Deck, ({bool low, bool mid, bool high})> kills = {};
+  /// Each channel's three bands, and its own fader. The crossfader says how the two
+  /// share the output; the gain says how loud this one is in its own right, which is
+  /// what a DJ rides while a blend is happening.
+  final Map<Deck, EqSet> eq = {};
+  final Map<Deck, double> gain = {};
 
-  Future<void> setKills(Deck d, {bool low = false, bool mid = false, bool high = false}) async {
-    kills[d] = (low: low, mid: mid, high: high);
+  EqSet eqOf(Deck d) => eq[d] ?? EqSet.flat;
+  double gainOf(Deck d) => gain[d] ?? 1.0;
+
+  Future<void> setEq(Deck d, EqSet want) async {
+    eq[d] = want;
     notifyListeners();
-    await mixer.setKills(d, low: low, mid: mid, high: high);
+    await mixer.setEq(d, want);
+  }
+
+  /// One band all the way down, or back to flat.
+  Future<void> kill(Deck d, int band, bool on) => setEq(d, eqOf(d).killing(band, on));
+
+  Future<void> setGain(Deck d, double value) async {
+    gain[d] = value.clamp(0.0, 1.0);
+    notifyListeners();
+    await _levels();
   }
 
   final Map<Deck, double> filters = {};
@@ -285,17 +311,15 @@ class Booth extends ChangeNotifier {
   /// What a transition does, as steps. Written down rather than performed straight
   /// away so it can be read, tested, and one day replayed.
   static List<MixStep> plan(Transition kind, {required String from, required String to}) {
-    const off = (low: false, mid: false, high: false);
+    const off = EqSet.flat;
+    const noBass = EqSet(low: EqSet.killed);
     switch (kind) {
       case Transition.blend:
         return [
-          MixStep(0, crossfader: 0, kills: {to: (low: true, mid: false, high: false)}),
-          MixStep(0.5, crossfader: 0.5, kills: {
-            to: off,
-            from: (low: true, mid: false, high: false),
-          }),
+          MixStep(0, crossfader: 0, kills: {to: noBass}),
+          MixStep(0.5, crossfader: 0.5, kills: {to: off, from: noBass}),
           MixStep(0.85, crossfader: 0.85, kills: {
-            from: (low: true, mid: false, high: true),
+            from: const EqSet(low: EqSet.killed, high: EqSet.killed),
           }),
           MixStep(1, crossfader: 1, kills: {from: off}),
         ];
@@ -412,7 +436,7 @@ class Booth extends ChangeNotifier {
         t.cancel();
         _running = null;
         await from.pause();
-        await setKills(from);
+        await setEq(from, EqSet.flat);
         master = to;
         if (!done.isCompleted) done.complete();
       }
@@ -422,8 +446,7 @@ class Booth extends ChangeNotifier {
 
   Future<void> _applyKills(MixStep step) async {
     for (final e in step.kills.entries) {
-      final deck = e.key == a.name ? a : b;
-      await setKills(deck, low: e.value.low, mid: e.value.mid, high: e.value.high);
+      await setEq(e.key == a.name ? a : b, e.value);
     }
   }
 

@@ -12,6 +12,7 @@ import 'package:muse/src/api/models.dart';
 import 'package:muse/src/state/app_state.dart';
 import 'package:muse/src/state/player.dart';
 import 'package:muse/src/state/selection.dart';
+import 'package:muse/src/state/booth/mixer.dart';
 import 'package:muse/src/ui/booth_page.dart';
 import 'package:muse/src/ui/desk_dock.dart';
 import 'package:muse/src/ui/now_playing.dart';
@@ -87,12 +88,25 @@ Future<void> main() async {
       return (low: band(0.55, 0.25), mid: band(0.4, 0.2), high: band(0.25, 0.15));
     }
     final items = app.player!.items;
+    b.timing.put(items[0].id, grid(122, 'C major', '8B'));
+    b.timing.put(items[1].id, grid(124, 'A minor', '8A'));
+    b.timing.put(items[2].id, grid(126, 'E minor', '9A'));
     await b.a.load(items[1], timing: grid(124, 'A minor', '8A'), at: const Duration(seconds: 61));
     await b.b.load(items[2], timing: grid(126, 'E minor', '9A'));
     b.bands[items[1].id] = shape(1);
     b.bands[items[2].id] = shape(2);
     b.master = b.a;
     await b.setCrossfader(0.2);
+    // Enough on the decks that the room shows what it is for: a cue, a loop, a band
+    // pulled down, and the booth lined up to mix.
+    b.a.setCue(1, const Duration(seconds: 30));
+    b.a.setCue(2, const Duration(seconds: 96));
+    b.b.loop(16);
+    await b.setEq(b.b, const EqSet(low: EqSet.killed));
+    await b.setGain(b.b, 0.82);
+    await b.setFilter(b.a, 0.25);
+    await b.a.play();
+    await b.auto.start(items, at: 1);
   }
 
   runApp(MultiProvider(
