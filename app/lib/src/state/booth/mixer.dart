@@ -159,18 +159,18 @@ class AndroidMixer extends VolumeMixer {
   }
 
   @override
-  Future<void> setEq(Deck deck, EqSet want) async {
-    final eq = deck.equalizer;
-    if (eq == null) return;
+  Future<void> setEq(Deck deck, EqSet eq) async {
+    final system = deck.equalizer;
+    if (system == null) return;
     try {
-      final p = await eq.parameters;
+      final p = await system.parameters;
       for (final band in p.bands) {
         final centre = (band.lowerFrequency + band.upperFrequency) / 2;
         final db = centre < 300
-            ? want.low
+            ? eq.low
             : centre < 4000
-                ? want.mid
-                : want.high;
+                ? eq.mid
+                : eq.high;
         // The phone's own equalizer has a range, and a kill is the bottom of it.
         await band.setGain(db.clamp(p.minDecibels, p.maxDecibels));
       }

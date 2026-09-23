@@ -19,14 +19,25 @@ class BoothClock extends StatefulWidget {
   final Booth booth;
   final Widget child;
 
-  static _BoothClockState of(BuildContext context) =>
+  static BoothClockReader of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<_Ticking>()!.state;
 
   @override
   State<BoothClock> createState() => _BoothClockState();
 }
 
-class _BoothClockState extends State<BoothClock> with TickerProviderStateMixin {
+/// What the room's clock offers whatever is drawn from it.
+abstract class BoothClockReader {
+  /// Where a record is now, between the engine's reports.
+  ValueNotifier<Duration> positionOf(Deck deck);
+
+  /// How far round a platter has turned, in turns.
+  AnimationController turnOf(Deck deck);
+}
+
+class _BoothClockState extends State<BoothClock>
+    with TickerProviderStateMixin
+    implements BoothClockReader {
   late final Ticker _ticker = createTicker(_tick);
   final _positions = <String, ValueNotifier<Duration>>{};
   final _turns = <String, AnimationController>{};
@@ -36,12 +47,13 @@ class _BoothClockState extends State<BoothClock> with TickerProviderStateMixin {
   /// 33⅓: one turn every 1.8 s, the speed the record would really run.
   static const _fullSpeed = 1 / 1.8;
 
-  /// Where a record is now, between the engine's reports.
+  @override
   ValueNotifier<Duration> positionOf(Deck deck) =>
       _positions.putIfAbsent(deck.name, () => ValueNotifier(deck.position));
 
-  /// How far round a platter has turned, in turns. An animation rather than a plain
-  /// number because that is what the record is drawn from — see Disc.spinning.
+  /// An animation rather than a plain number, because that is what the record is
+  /// drawn from — see Disc.spinning.
+  @override
   AnimationController turnOf(Deck deck) => _turns.putIfAbsent(
       deck.name, () => AnimationController.unbounded(vsync: this));
 
