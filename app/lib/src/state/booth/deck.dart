@@ -153,7 +153,8 @@ class Deck extends ChangeNotifier {
     _ended_ = false;
     hotCues.clear();
     loopStart = loopEnd = null;
-    final start = at ?? timing?.lead ?? Duration.zero;
+    // Parked where a DJ would drop it: on the first downbeat, if there is one.
+    final start = at ?? timing?.cues?.firstDownbeat ?? timing?.lead ?? Duration.zero;
     await _player.setAudioSource(_sourceFor(track), initialPosition: start);
     if (tempo != 1.0) await _player.setSpeed(tempo);
     _anchor(start);

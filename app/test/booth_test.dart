@@ -55,6 +55,7 @@ class NotedMixer extends Mixer {
 }
 
 void main() {
+  analysisModel();
   TestWidgetsFlutterBinding.ensureInitialized();
   TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
       .setMockMethodCallHandler(const MethodChannel('com.ryanheise.audio_session'), (c) async => null);
@@ -196,5 +197,40 @@ void main() {
       expect(mixer.levels.length, greaterThan(3), reason: 'the fader moved, not jumped');
       expect(booth.a.playing, isFalse);
     });
+  });
+}
+
+/// The second half of the analysis, as the app reads it.
+void analysisModel() {
+  test('a song\'s key, bars, phrases and cues come through', () {
+    final t = TrackTiming.fromJson({
+      'duration_ms': 200000,
+      'bpm': 128.0,
+      'beats': [for (var i = 0; i < 64; i++) i * 469],
+      'bar_starts_on': 1,
+      'key': 'A minor',
+      'camelot': '8A',
+      'key_confidence': 0.7,
+      'downbeats': [469, 2345, 4221],
+      'energy': [40, 200, 255],
+      'phrases': [469, 4221],
+      'cues': {'first_downbeat_ms': 469, 'mix_in_ms': 4221, 'mix_out_ms': 150000, 'sound_end_ms': 198000},
+    });
+    expect(t.key, 'A minor');
+    expect(t.camelot, '8A');
+    expect(t.downbeats.length, 3);
+    expect(t.cues?.mixIn, const Duration(milliseconds: 4221));
+    expect(t.cues?.mixOut, const Duration(milliseconds: 150000));
+  });
+
+  test('records a step apart on the wheel are in key; across it they are not', () {
+    TrackTiming at(String c) => TrackTiming(camelot: c);
+    expect(at('8A').inKeyWith(at('8A')), isTrue);
+    expect(at('8A').inKeyWith(at('9A')), isTrue, reason: 'a fifth up');
+    expect(at('8A').inKeyWith(at('7A')), isTrue, reason: 'a fifth down');
+    expect(at('8A').inKeyWith(at('8B')), isTrue, reason: 'the relative major');
+    expect(at('12A').inKeyWith(at('1A')), isTrue, reason: 'the wheel goes round');
+    expect(at('8A').inKeyWith(at('2A')), isFalse);
+    expect(at('8A').inKeyWith(TrackTiming()), isFalse, reason: 'no key, no claim');
   });
 }

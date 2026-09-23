@@ -34,8 +34,11 @@ import subprocess
 
 import numpy as np
 
+from . import analysis
+
 # Bumped when what is measured changes, so old answers on disk are not served for ever.
-VERSION = 1
+# 2: the key, the bars, each bar's loudness, the phrases and the cues — see analysis.py.
+VERSION = 2
 
 _RATE = 11025
 _FFT = 1024
@@ -357,7 +360,7 @@ def measure(audio: pathlib.Path) -> dict:
     # Below this the envelope does not repeat at any tempo: there is no pulse to find,
     # and beats laid over it anyway would be a metronome that ignores the music.
     if bpm <= 0 or confidence < 0.12:
-        return out
+        return analysis.add(out, x, [], 0, low, _FPS)
     beats = _track(env, bpm)
     beats = _on_the_beat(beats, low, 60.0 * _FPS / bpm)
     # Only where there is music. The tracker walks back from the end of the file to the
@@ -366,7 +369,7 @@ def measure(audio: pathlib.Path) -> dict:
     sounding = (at_ms >= lead - 40) & (at_ms <= duration * 1000 - tail)
     beats, at_ms = beats[sounding], at_ms[sounding]
     if len(beats) < 8:
-        return out
+        return analysis.add(out, x, [], 0, low, _FPS)
     # Whether the beats found are where the onsets are. On a song with a pulse they sit
     # on the peaks of the envelope; laid over something with none, they sit wherever
     # the spacing put them, and the envelope there is no higher than anywhere else.
@@ -374,14 +377,14 @@ def measure(audio: pathlib.Path) -> dict:
     between = float(np.mean(env)) + 1e-9
     out["contrast"] = round(on_beat / between, 2)
     if out["contrast"] < _PULSE_CONTRAST:
-        return out
+        return analysis.add(out, x, [], 0, low, _FPS)
     # The tempo as the beats actually came out — a line through all of them, which is
     # far finer than the spacing of two, counted in frames of 11 ms.
     slope = float(np.polyfit(np.arange(len(at_ms)), at_ms, 1)[0])
     out["bpm"] = round(60000.0 / slope, 1)
     out["beats"] = [int(round(ms)) for ms in at_ms]
     out["bar_starts_on"] = _bar_starts_on(beats, low)
-    return out
+    return analysis.add(out, x, out["beats"], out["bar_starts_on"], low, _FPS)
 
 
 def for_track(data_dir: pathlib.Path, audio: pathlib.Path, sha: str) -> dict:

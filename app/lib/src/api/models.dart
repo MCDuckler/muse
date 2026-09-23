@@ -2074,7 +2074,48 @@ class TrackTiming {
     this.beats = const [],
     this.barStartsOn = 0,
     this.ends = '',
+    this.key,
+    this.camelot,
+    this.keyConfidence = 0,
+    this.downbeats = const [],
+    this.energy = const [],
+    this.phrases = const [],
+    this.cues,
   });
+
+  /// "A minor", "F# major" — or null for something in no key: noise, speech.
+  final String? key;
+
+  /// The same key on the wheel DJs mix by: "8A" is A minor, "8B" C major, and a step
+  /// round the wheel is a fifth away. Two records a step apart mix; two across the
+  /// wheel do not.
+  final String? camelot;
+  final double keyConfidence;
+
+  /// Where each bar starts, in milliseconds. The beats, every fourth from the one.
+  final List<int> downbeats;
+
+  /// How loud each bar is, 0 to 255, loudest at 255: the song's shape bar by bar.
+  final List<int> energy;
+
+  /// Where the phrases begin, in milliseconds — on downbeats, on the four-bar grid.
+  final List<int> phrases;
+
+  /// Where a DJ would come in and go out.
+  final MixCues? cues;
+
+  /// Records a step or less apart on the wheel, or the same place in the other mode.
+  bool inKeyWith(TrackTiming other) {
+    final a = camelot, b = other.camelot;
+    if (a == null || b == null) return false;
+    final na = int.parse(a.substring(0, a.length - 1)), ma = a[a.length - 1];
+    final nb = int.parse(b.substring(0, b.length - 1)), mb = b[b.length - 1];
+    if (ma == mb) {
+      final d = (na - nb).abs();
+      return d <= 1 || d == 11;
+    }
+    return na == nb;
+  }
 
   final int durationMs;
 
@@ -2133,5 +2174,43 @@ class TrackTiming {
         beats: [for (final b in (j['beats'] ?? const []) as List) (b as num).toInt()],
         barStartsOn: (j['bar_starts_on'] ?? 0) as int,
         ends: (j['ends'] ?? '') as String,
+        key: j['key'] as String?,
+        camelot: j['camelot'] as String?,
+        keyConfidence: (j['key_confidence'] as num?)?.toDouble() ?? 0,
+        downbeats: [for (final b in (j['downbeats'] ?? const []) as List) (b as num).toInt()],
+        energy: [for (final b in (j['energy'] ?? const []) as List) (b as num).toInt()],
+        phrases: [for (final b in (j['phrases'] ?? const []) as List) (b as num).toInt()],
+        cues: j['cues'] is Map ? MixCues.fromJson((j['cues'] as Map).cast<String, dynamic>()) : null,
+      );
+}
+
+/// Where a DJ would come in and go out of a song, as the server reads it.
+class MixCues {
+  const MixCues({
+    required this.firstDownbeatMs,
+    required this.mixInMs,
+    required this.mixOutMs,
+    required this.soundEndMs,
+  });
+
+  final int firstDownbeatMs;
+
+  /// Where the intro ends: the song is on from here.
+  final int mixInMs;
+
+  /// Where the outro starts, or thirty-two bars before the sound ends.
+  final int mixOutMs;
+  final int soundEndMs;
+
+  Duration get firstDownbeat => Duration(milliseconds: firstDownbeatMs);
+  Duration get mixIn => Duration(milliseconds: mixInMs);
+  Duration get mixOut => Duration(milliseconds: mixOutMs);
+  Duration get soundEnd => Duration(milliseconds: soundEndMs);
+
+  factory MixCues.fromJson(Map<String, dynamic> j) => MixCues(
+        firstDownbeatMs: (j['first_downbeat_ms'] ?? 0) as int,
+        mixInMs: (j['mix_in_ms'] ?? 0) as int,
+        mixOutMs: (j['mix_out_ms'] ?? 0) as int,
+        soundEndMs: (j['sound_end_ms'] ?? 0) as int,
       );
 }

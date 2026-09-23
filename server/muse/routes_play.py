@@ -23,7 +23,8 @@ UA = "muse/0.1 (personal music server; https://github.com/local/muse)"
 
 
 @router.get("/tracks/{track_id}/peaks")
-def peaks(track_id: int, response: Response, user: dict = Depends(current_user)):
+def peaks(track_id: int, response: Response, slices: int = _peaks.SLICES,
+          bands: bool = False, user: dict = Depends(current_user)):
     """The song's loudness, a slice at a time, for drawing the seek bar as its shape.
 
     Only for a song whose audio is here: the shape of something not downloaded yet is
@@ -35,11 +36,14 @@ def peaks(track_id: int, response: Response, user: dict = Depends(current_user))
     if not audio.exists():
         raise HTTPException(404, "the audio is missing")
     try:
-        shape = _peaks.for_track(cfg().data_dir, audio, t["sha256"])
+        shape = _peaks.for_track(cfg().data_dir, audio, t["sha256"],
+                                 slices=slices, bands=bands)
     except (subprocess.SubprocessError, OSError) as e:
         raise HTTPException(502, "could not read the audio") from e
     # The same file always has the same shape, and the file is named by its hash.
     response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+    if bands:
+        return {"bands": shape, "slices": len(shape["low"])}
     return {"peaks": shape, "slices": len(shape)}
 
 

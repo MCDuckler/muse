@@ -26,8 +26,48 @@ SLICES = 160
 _RATE = 4000
 
 
-def cache_path(data_dir: pathlib.Path, sha: str) -> pathlib.Path:
-    return data_dir / "peaks" / f"{sha}-{SLICES}.json"
+# A deck's waveform is wider than a seek bar and coloured by band, so it may ask for
+# more slices, up to this, and for the low, middle and top of each.
+MOST_SLICES = 4000
+
+
+def cache_path(data_dir: pathlib.Path, sha: str, slices: int = SLICES,
+               bands: bool = False) -> pathlib.Path:
+    tag = f"{sha}-{slices}" + ("-bands" if bands else "")
+    return data_dir / "peaks" / f"{tag}.json"
+
+
+def measure_bands(audio: pathlib.Path, slices: int = SLICES) -> dict[str, list[int]]:
+    """The same shape three times over: the bass, the middle and the top of each slice,
+    each on its own 0–255 scale. Drawn in three inks on a deck, where "the bass drops
+    out here" is the thing worth seeing."""
+    out = {}
+    for name, filt in (("low", "lowpass=f=250"),
+                       ("mid", "highpass=f=250,lowpass=f=4000"),
+                       ("high", "highpass=f=4000")):
+        proc = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", str(audio), "-ac", "1", "-ar", "11025",
+             "-af", filt, "-f", "s16le", "-"],
+            capture_output=True, timeout=120, check=True)
+        samples = array.array("h")
+        samples.frombytes(proc.stdout[: len(proc.stdout) // 2 * 2])
+        out[name] = _levels(samples, slices)
+    return out
+
+
+def _levels(samples, slices: int) -> list[int]:
+    if not samples:
+        return [0] * slices
+    per = max(1, len(samples) // slices)
+    levels = []
+    for i in range(slices):
+        chunk = samples[i * per:(i + 1) * per]
+        if not chunk:
+            levels.append(0.0)
+            continue
+        levels.append(math.sqrt(sum(s * s for s in chunk) / len(chunk)))
+    top = max(levels) or 1.0
+    return [round(255 * (v / top) ** 0.7) for v in levels]
 
 
 def measure(audio: pathlib.Path, slices: int = SLICES) -> list[int]:
@@ -56,14 +96,16 @@ def measure(audio: pathlib.Path, slices: int = SLICES) -> list[int]:
     return [round(255 * (v / top) ** 0.7) for v in levels]
 
 
-def for_track(data_dir: pathlib.Path, audio: pathlib.Path, sha: str) -> list[int]:
+def for_track(data_dir: pathlib.Path, audio: pathlib.Path, sha: str,
+              slices: int = SLICES, bands: bool = False):
     """The song's shape, from disk if it has been measured before."""
-    cached = cache_path(data_dir, sha)
+    slices = max(16, min(MOST_SLICES, int(slices)))
+    cached = cache_path(data_dir, sha, slices, bands)
     try:
         return json.loads(cached.read_text())
     except (OSError, ValueError):
         pass
-    shape = measure(audio)
+    shape = measure_bands(audio, slices) if bands else measure(audio, slices)
     cached.parent.mkdir(parents=True, exist_ok=True)
     tmp = cached.with_suffix(".tmp")
     tmp.write_text(json.dumps(shape))

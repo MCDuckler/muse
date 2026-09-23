@@ -1411,12 +1411,31 @@ class ApiClient {
 
   /// The song's loudness a slice at a time, 0 to 255, for drawing the seek bar as its
   /// shape. Null for a song whose audio is not here yet: its shape is not known.
-  Future<List<int>?> peaks(int trackId) async {
+  Future<List<int>?> peaks(int trackId, {int? slices}) async {
     try {
-      final d = await _decode(
-              await net.get(_u('/tracks/$trackId/peaks'), headers: _headers))
+      final d = await _decode(await net.get(
+              _u('/tracks/$trackId/peaks${slices == null ? '' : '?slices=$slices'}'),
+              headers: _headers))
           as Map<String, dynamic>;
       return [for (final v in (d['peaks'] as List)) (v as num).toInt()];
+    } on ApiException catch (e) {
+      if (e.status == 404) return null;
+      rethrow;
+    }
+  }
+
+  /// The same shape in three bands — bass, middle, top — each 0 to 255, for a deck's
+  /// waveform, where "the bass drops out here" is the thing worth seeing.
+  Future<({List<int> low, List<int> mid, List<int> high})?> peakBands(int trackId,
+      {int slices = 1600}) async {
+    try {
+      final d = await _decode(await net.get(
+              _u('/tracks/$trackId/peaks?slices=$slices&bands=true'),
+              headers: _headers))
+          as Map<String, dynamic>;
+      final b = (d['bands'] as Map).cast<String, dynamic>();
+      List<int> ints(String k) => [for (final v in (b[k] as List)) (v as num).toInt()];
+      return (low: ints('low'), mid: ints('mid'), high: ints('high'));
     } on ApiException catch (e) {
       if (e.status == 404) return null;
       rethrow;
