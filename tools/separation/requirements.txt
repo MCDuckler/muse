@@ -1,0 +1,6 @@
+# The harness itself.
+musdb==0.4.2
+scipy>=1.11
+numpy>=1.26
+# For trying a model. Only needed by the candidates, not by run_current.py.
+onnxruntime>=1.20
