@@ -354,6 +354,10 @@ class AppState extends ChangeNotifier {
   Booth? _booth;
   Booth get booth => _booth ??= Booth(api, offlinePath: offline.pathFor);
 
+  /// The booth if it has been opened this session, without opening it: two players
+  /// are not made for a bar that only wants to know whether they are playing.
+  Booth? get boothIfOpened => _booth;
+
   Future<void> setBoothOn(bool on) async {
     boothOn = on;
     notifyListeners();
@@ -2148,6 +2152,22 @@ class AppState extends ChangeNotifier {
   Future<void> reportDevice({bool force = false}) async {
     if (api.token == null) return;
     final snapshot = player?.last;
+    // While the booth has the sound, what this device is playing is the booth's
+    // master record, and the other screens should say so.
+    final booth = _booth;
+    if (booth != null && booth.live) {
+      final on = booth.master;
+      try {
+        await api.reportDevice(
+          playing: on.playing,
+          trackId: on.track?.id,
+          queueId: activeQueue?.id,
+          positionMs: on.position.inMilliseconds,
+          kind: deviceKind(),
+        );
+      } catch (_) {}
+      return;
+    }
     final playing = snapshot?.playing ?? false;
     final now = DateTime.now();
     if (!force && now.difference(_saidDevice) < const Duration(seconds: 4)) return;

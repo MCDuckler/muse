@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../state/app_state.dart';
 import '../state/player.dart';
 import 'artwork.dart';
+import 'booth_page.dart' show BoothBar;
 import 'devices_sheet.dart';
 import 'feel.dart';
 import 'now_playing.dart';
@@ -33,6 +34,18 @@ class PlayerBar extends StatelessWidget {
     final player = app.player;
     if (player == null) return const SizedBox.shrink();
 
+    // The booth has the sound: the bar is the booth's.
+    final booth = app.boothIfOpened;
+    if (booth != null) {
+      return AnimatedBuilder(
+        animation: booth,
+        builder: (context, _) => booth.live ? BoothBar(booth: booth) : _ordinary(context, app, player),
+      );
+    }
+    return _ordinary(context, app, player);
+  }
+
+  Widget _ordinary(BuildContext context, AppState app, PlayerService player) {
     return StreamBuilder<PlayerSnapshot>(
       // Not every report: the line across the top moves by itself between them.
       stream: player.changes,

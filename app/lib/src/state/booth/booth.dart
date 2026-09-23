@@ -77,6 +77,18 @@ class Booth extends ChangeNotifier {
   late final AutoMix auto = AutoMix(this)..addListener(notifyListeners);
 
   List<Deck> get decks => [a, b];
+
+  /// Whether the booth is the thing making a sound right now: a deck playing, or
+  /// the booth mixing. While it is, the bar at the bottom of the app is the booth's.
+  bool get live => a.playing || b.playing || auto.running;
+
+  /// Everything off: both decks parked, the mix stopped.
+  Future<void> stopAll() async {
+    auto.stop();
+    stopTransition();
+    await a.pause();
+    await b.pause();
+  }
   Deck other(Deck d) => identical(d, a) ? b : a;
 
   /// The record everything lines up to. Whichever is playing; A when neither is.

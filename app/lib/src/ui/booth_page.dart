@@ -14,6 +14,8 @@ import 'booth/mixer_strip.dart';
 import 'feel.dart';
 import 'glass.dart';
 import 'mag.dart';
+import 'artwork.dart';
+import 'mag_parts.dart';
 import 'stage/arm_grip.dart';
 import 'widths.dart';
 
@@ -218,6 +220,75 @@ class _BoothPageState extends State<BoothPage> {
             );
           },
         ),
+      ),
+    );
+  }
+}
+
+
+/// Into the booth, and — with [mix] — with the booth mixing [tracks] from [at].
+Future<void> openBooth(BuildContext context, {List<Track>? tracks, int at = 0}) async {
+  final app = context.read<AppState>();
+  final booth = app.booth;
+  await app.player?.pause();
+  if (tracks != null && tracks.isNotEmpty) {
+    await booth.init();
+    unawaited(booth.auto.start(tracks, at: at));
+  }
+  if (!context.mounted) return;
+  await Navigator.of(context, rootNavigator: true)
+      .push(MaterialPageRoute(builder: (_) => const BoothPage()));
+}
+
+/// The bar at the bottom of the app while the booth has the sound: what is on,
+/// what is coming and when, and a way to stop it. Tapping it goes back into the room.
+class BoothBar extends StatelessWidget {
+  const BoothBar({super.key, required this.booth});
+  final Booth booth;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final on = booth.master.track;
+    final auto = booth.auto;
+    final next = auto.running ? auto.next : booth.other(booth.master).track;
+    final at = auto.goesAt;
+    final left = at == null || !auto.running ? null : at - booth.master.position;
+    final line = [
+      'The booth',
+      if (booth.inTransition)
+        'mixing'
+      else if (next != null)
+        'then ${next.displayTitle}'
+            '${left == null ? '' : left.isNegative ? '' : ' · ${auto.plan?.kind.name ?? 'mix'} in ${left.inSeconds}s'}',
+    ].join(' · ');
+    return ListTile(
+      dense: true,
+      onTap: () => Navigator.of(context, rootNavigator: true)
+          .push(MaterialPageRoute(builder: (_) => const BoothPage())),
+      leading: on == null
+          ? Icon(Icons.album_outlined, color: scheme.primary)
+          : Artwork(track: on, size: 42, radius: 2),
+      title: Text(on?.displayTitle ?? 'The booth',
+          maxLines: 1, overflow: TextOverflow.ellipsis, style: Mag.title(15.5, color: scheme.onSurface)),
+      subtitle: Text(line,
+          maxLines: 1, overflow: TextOverflow.ellipsis, style: Mag.typewriter(11.5, color: scheme.onSurface)),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (!auto.running)
+            IconButton.filled(
+              style: IconButton.styleFrom(
+                backgroundColor: scheme.primary,
+                foregroundColor: scheme.onPrimary,
+                fixedSize: const Size.square(40),
+              ),
+              icon: Icon(booth.master.playing ? Icons.pause : Icons.play_arrow),
+              onPressed: felt(Feel.commit, () => booth.master.playing ? booth.master.pause() : booth.master.play()),
+            ),
+          PressButton(label: 'Stop', onTap: () => unawaited(booth.stopAll())),
+          const SizedBox(width: 6),
+        ],
       ),
     );
   }

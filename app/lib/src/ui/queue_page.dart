@@ -10,6 +10,7 @@ import 'dialogs.dart';
 import 'feel.dart';
 import 'mini_player.dart' show PlayerScaffold;
 import 'song_row.dart';
+import 'booth_page.dart' show openBooth;
 import 'station.dart';
 import 'track_menu.dart';
 import 'swipe.dart';
@@ -333,6 +334,9 @@ class _QueuePageState extends State<QueuePage> {
                       case 'make-station':
                         await startStation(context,
                             seed: app.player?.current, play: false);
+                      case 'mix':
+                        await openBooth(context,
+                            tracks: rows, at: app.player?.index ?? 0);
                       case 'keep-station':
                         await keepStation(context);
                       case 'delete':
@@ -349,6 +353,10 @@ class _QueuePageState extends State<QueuePage> {
                           value: 'forget', child: Text('Stop keeping these here')),
                       PopupMenuDivider(),
                     ],
+                    if (app.boothOn && rows.any((t) => t.isReady))
+                      const PopupMenuItem(
+                          value: 'mix',
+                          child: Text('Let the booth mix from here')),
                     if (app.player?.current != null)
                       const PopupMenuItem(
                           value: 'make-station',
