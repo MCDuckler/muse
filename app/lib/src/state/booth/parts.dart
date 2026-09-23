@@ -18,7 +18,10 @@ import '../../worker/render_parts.dart';
 /// sees is one question with three answers: it is here, it is coming, or it is not
 /// something this record gets.
 class PartsStore {
-  PartsStore(this.api, {this.offlinePath});
+  PartsStore(this.api, {this.offlinePath}) {
+    // The trained separator's files come from the same house as the music.
+    separationHouse = () => api.baseUrl;
+  }
 
   final ApiClient api;
 

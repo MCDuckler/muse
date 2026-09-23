@@ -9,6 +9,7 @@ BSS Eval allows a distortion filter before scoring and so reads a little higher.
 the right measure for comparing two of OUR options with each other, and roughly but
 not exactly comparable with a published figure.
 """
+import os
 import sys
 import time
 
@@ -31,33 +32,43 @@ def sdr(want, got):
     return 10 * np.log10(max((want ** 2).sum(), 1e-12) / max((err ** 2).sum(), 1e-12))
 
 
-def run(name, separate, tracks=HOW_MANY):
+PARTS = ('instrumental', 'drums', 'music')
+
+
+def run(name, separate, tracks=HOW_MANY, subset=None):
     """[separate] takes (samples, 2) at 32 kHz and returns a dict with any of
-    'instrumental' and 'drums'. Missing ones are simply not scored."""
-    db = musdb.DB(download=True)
-    got = {'instrumental': [], 'drums': []}
-    nothing = {'instrumental': [], 'drums': []}
+    'instrumental', 'drums' and 'music'. Missing ones are simply not scored.
+
+    [subset] None is the first [tracks] of the whole sample set, which are all
+    MUSDB18's *training* tracks — the ones every published model learned from, so a
+    model scores higher on them than on music it has not heard. 'test' is the held-out
+    half, and the honest number for a trained model."""
+    db = musdb.DB(download=True, subsets=subset) if subset else musdb.DB(download=True)
+    got = {k: [] for k in PARTS}
+    nothing = {k: [] for k in PARTS}
     seconds = 0.0
     audio = 0.0
     for t in db[:tracks]:
         mix = to32k(t.audio)
         truth = {k: to32k(t.targets[k].audio) for k in ('accompaniment', 'drums')}
+        # "music" is everything but the drums, as the booth has always meant it.
+        truth['music'] = to32k(t.audio - t.targets['drums'].audio)
         began = time.time()
         out = separate(mix)
         seconds += time.time() - began
         audio += len(mix) / RATE
-        if 'instrumental' in out:
-            got['instrumental'].append(sdr(truth['accompaniment'], out['instrumental']))
-            nothing['instrumental'].append(sdr(truth['accompaniment'], mix))
-        if 'drums' in out:
-            d = out['drums']
-            want = truth['drums'] if np.ndim(d) == 2 else truth['drums'].mean(axis=1)
+        truth['instrumental'] = truth.pop('accompaniment')
+        for k in PARTS:
+            if k not in out:
+                continue
+            d = out[k]
+            want = truth[k] if np.ndim(d) == 2 else truth[k].mean(axis=1)
             base = mix if np.ndim(d) == 2 else mix.mean(axis=1)
-            got['drums'].append(sdr(want, d))
-            nothing['drums'].append(sdr(want, base))
+            got[k].append(sdr(want, d))
+            nothing[k].append(sdr(want, base))
 
-    print(f"\n=== {name}")
-    for k in ('instrumental', 'drums'):
+    print(f"\n=== {name}  [{subset or 'train'}]")
+    for k in PARTS:
         if not got[k]:
             continue
         mine, none = np.median(got[k]), np.median(nothing[k])
@@ -66,5 +77,5 @@ def run(name, separate, tracks=HOW_MANY):
               f"(doing nothing {none:6.2f})   {mine - none:+.2f} dB   "
               f"worse than nothing on {worse}/{len(got[k])}")
     print(f"  speed        {audio / max(seconds, 1e-9):6.1f}x realtime "
-          f"({seconds:.1f}s of CPU for {audio:.0f}s of music, on {4} cores)")
+          f"({seconds:.1f}s for {audio:.0f}s of music, on {os.cpu_count()} threads)")
     return got

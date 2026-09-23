@@ -1,0 +1,15 @@
+# For export_scnet.py (make_kit.sh installs torch 2.14.0 CPU first). Exact versions:
+# the pinned hash of the exported network depends on them.
+onnx==1.23.0
+onnxscript==0.7.2
+onnxruntime==1.30.0
+ml_collections==1.1.0
+omegaconf==2.3.1
+einops==0.8.2
+numpy==2.5.3
+# Imported by the checkout's loader (utils/settings.py), not by the network itself.
+soundfile==0.14.0
+PyYAML==6.0.3
+packaging==26.3
+# check_worker.py runs ZFTurbo's own demix, which reports progress with it.
+tqdm==4.70.1

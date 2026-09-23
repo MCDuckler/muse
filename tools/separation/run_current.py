@@ -9,8 +9,8 @@ from evaluate import run                                  # noqa: E402
 
 
 def separate(mix):
-    drums, _ = stems.hits_and_notes(mix.mean(axis=1))
-    return {'instrumental': stems.without_voice(mix), 'drums': drums}
+    drums, music = stems.hits_and_notes(mix.mean(axis=1))
+    return {'instrumental': stems.without_voice(mix), 'drums': drums, 'music': music}
 
 
-run('what we ship today (mid/side + HPSS)', separate)
+run('the arithmetic (mid/side + HPSS)', separate, subset=sys.argv[1] if len(sys.argv) > 1 else None)

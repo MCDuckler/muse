@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploys muse to the box. Run from the repo root: deploy/publish.sh [server|web|apk|ios|all]
+# Deploys muse to the box. Run from the repo root: deploy/publish.sh [server|web|apk|ios|desktop|models|all]
 #
 # Two mistakes this exists to prevent, both made the hard way:
 #   * rsyncing server/muse/ onto /opt/muse/server/ instead of server/ — with --delete
@@ -264,12 +264,27 @@ publish_desktop() {
   rm -rf "$tmp"
 }
 
+# The desktop separator's network and runtime (see app/lib/src/worker/separation_kit.dart),
+# made by tools/separation/make_kit.sh. Only ever added to: a name is never reused for
+# different bytes, because every app that has the old hash would refuse the new file.
+publish_models() {
+  echo "== models"
+  local src=${MUSE_KIT:-tools/separation/kit} f
+  on_box "mkdir -p $DL/models"
+  for f in scnet-small-v1.onnx.gz onnxruntime-1.30.0-linux-x64.so.gz onnxruntime-1.30.0-win-x64.dll.gz; do
+    [ -f "$src/$f" ] || { echo "   ! no $src/$f — run tools/separation/make_kit.sh" >&2; exit 1; }
+    put "$src/$f" $DL/models/$f
+    echo "   $SERVER_URL/models/$f  ($(( $(stat -c%s "$src/$f") / 1024 / 1024 ))MB)"
+  done
+}
+
 case "$what" in
   server) publish_server ;;
   desktop) publish_desktop ;;
+  models) publish_models ;;
   ios)    publish_ios ;;
   web)    publish_web ;;
   apk)    publish_apk ;;
   all)    publish_server; publish_web; publish_apk; publish_ios ;;
-  *) echo "usage: deploy/publish.sh [server|web|apk|ios|desktop|all]" >&2; exit 2 ;;
+  *) echo "usage: deploy/publish.sh [server|web|apk|ios|desktop|models|all]" >&2; exit 2 ;;
 esac

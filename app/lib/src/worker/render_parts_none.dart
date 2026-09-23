@@ -5,8 +5,14 @@
 /// Every name the other half offers appears here too, the test-only seams included.
 /// The analyser resolves a conditional export to this side, so a name missing here is
 /// a name the build says does not exist — however well it works on a desk.
-const partsVersion = 1;
+const partsVersion = 2;
 const upToSeconds = 12 * 60;
+
+String Function()? separationHouse;
+
+set separatorOffForTesting(bool? off) {}
+
+double? progressHere(int trackId) => null;
 
 /// What this computer can say about a part of a record. Here, always the same thing.
 enum Here { ready, making, cannot }

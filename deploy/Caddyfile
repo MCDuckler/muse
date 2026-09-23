@@ -41,6 +41,16 @@
 		root * /dl
 		file_server
 	}
+	# What the desktop app's separator runs — the trained network and ONNX Runtime —
+	# fetched once, the first time a record is taken apart. Gzipped; the app checks each
+	# against a hash it carries, so these never change under a name: a new one is a new
+	# name. See deploy/publish.sh models.
+	handle /models/* {
+		header Content-Type application/gzip
+		header Cache-Control "public, max-age=31536000, immutable"
+		root * /dl
+		file_server
+	}
 	@desktopjson path /wetowl-windows.json /wetowl-linux.json
 	handle @desktopjson {
 		header Content-Type application/json

@@ -54,6 +54,19 @@ jobs:
           cp build/fetcher/bundle/bin/wetowl_fetch.exe \
              build/windows/x64/runner/Release/wetowl-fetch.exe
           ls -l build/windows/x64/runner/Release/wetowl-fetch.exe
+      - name: Build the separator
+        working-directory: app
+        shell: bash
+        run: |
+          # bin/wetowl_separate.dart: takes a record apart with the trained network, in a
+          # process of its own. Beside wetowl.exe, where the app looks for it. The network
+          # and ONNX Runtime are not in the box: the app fetches them from the house the
+          # first time (lib/src/worker/separation_kit.dart).
+          dart build cli --target bin/wetowl_separate.dart -o build/separator
+          cp build/separator/bundle/bin/wetowl_separate.exe \
+             build/windows/x64/runner/Release/wetowl-separate.exe
+          said="$(build/windows/x64/runner/Release/wetowl-separate.exe 2>&1 || true)"
+          echo "$said" | grep -q 'usage: wetowl-separate'
       - name: Zip it
         working-directory: app
         shell: pwsh
@@ -114,6 +127,15 @@ jobs:
           # It has to start and say what it wants, or it is not worth shipping.
           said="$(build/linux/x64/release/bundle/wetowl-fetch 2>&1 || true)"
           echo "$said" | grep -q 'usage: wetowl-fetch'
+      - name: Build the separator
+        working-directory: app
+        run: |
+          # See the same step for Windows.
+          dart build cli --target bin/wetowl_separate.dart -o build/separator
+          cp build/separator/bundle/bin/wetowl_separate build/linux/x64/release/bundle/wetowl-separate
+          chmod +x build/linux/x64/release/bundle/wetowl-separate
+          said="$(build/linux/x64/release/bundle/wetowl-separate 2>&1 || true)"
+          echo "$said" | grep -q 'usage: wetowl-separate'
       - name: Pack it
         working-directory: app
         run: |
@@ -136,6 +158,10 @@ jobs:
           yt-dlp, ffmpeg and nodejs (or deno): all three are ordinary packages.
           ./wetowl-fetch is the part that keeps fetching when the window is shut;
           the app starts it, there is no need to run it yourself.
+
+          ./wetowl-separate takes records apart for the booth (drums, music, no
+          voice). The app starts it too. The first time, it fetches the network it
+          runs (about 50 MB) from your WetOwl server.
           TXT
           mv build/linux/x64/release/bundle build/linux/x64/release/wetowl
           tar -C build/linux/x64/release -czf wetowl-linux.tar.gz wetowl
