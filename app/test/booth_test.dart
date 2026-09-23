@@ -223,13 +223,14 @@ void main() {
     test('a blend is written down: bass swapped half way, the fader crossed by the end',
         () {
       final steps = Booth.plan(Transition.blend, from: 'A', to: 'B');
-      expect(steps.first.kills['B']?.lowKilled, isTrue,
+      expect(steps.first.decks['B']?.eq?.lowKilled, isTrue,
           reason: 'the incoming enters without bass');
       final half = steps.firstWhere((s) => s.at == 0.5);
-      expect(half.kills['B']?.lowKilled, isFalse);
-      expect(half.kills['A']?.lowKilled, isTrue, reason: 'the bass swaps at the middle');
+      expect(half.decks['B']?.eq?.lowKilled, isFalse);
+      expect(half.decks['A']?.eq?.lowKilled, isTrue,
+          reason: 'the bass swaps at the middle');
       expect(steps.last.crossfader, 1);
-      expect(steps.last.kills['A']?.isFlat, isTrue,
+      expect(steps.last.decks['A']?.eq?.isFlat, isTrue,
           reason: 'the outgoing is left clean for next time');
     });
 
@@ -450,11 +451,103 @@ void autoMixRules() {
         cues: const MixCues(firstDownbeatMs: 469, mixInMs: 15000, mixOutMs: 160000, soundEndMs: 198000),
       );
 
+  test('the loud ways out say what they do', () {
+    final sweep = Booth.plan(Transition.sweep, from: 'A', to: 'B');
+    final climb = [for (final s in sweep) s.decks['A']?.filter].whereType<double>();
+    expect(climb.first, 0, reason: 'the filter starts open');
+    expect(climb.last, 0, reason: 'and is left open for next time');
+    expect(climb.reduce((a, b) => a > b ? a : b), greaterThan(0.7),
+        reason: 'and closes right up in between');
+
+    final roll = Booth.plan(Transition.roll, from: 'A', to: 'B');
+    final loops = [for (final s in roll) s.decks['A']?.loopBars].whereType<int>().toList();
+    expect(loops.first, 2, reason: 'caught at two bars');
+    expect(loops.where((b) => b == -1).length, 2, reason: 'halved twice');
+    expect(loops.last, 0, reason: 'and let go at the end');
+
+    final brake = Booth.plan(Transition.brake, from: 'A', to: 'B');
+    expect(brake.any((s) => s.decks['A']?.brake ?? false), isTrue);
+    final stops = brake.firstWhere((s) => s.decks['A']?.brake ?? false);
+    expect(stops.crossfader, 1,
+        reason: 'the new record is already across before the old one is stopped');
+  });
+
+  test('how hard it mixes decides what it reaches for', () {
+    TrackTiming t({double bpm = 124, String? camelot, String ends = '', List<int> drops = const []}) =>
+        TrackTiming(
+          durationMs: 200000,
+          bpm: bpm,
+          beats: [for (var i = 0; i < 400; i++) i * 469],
+          camelot: camelot,
+          ends: ends,
+          drops: drops,
+        );
+    final on = t(camelot: '8A');
+    // Gentle: long where they agree, and never a loop or a brake.
+    expect(AutoMix.choose(on, t(camelot: '9A'), style: MixStyle.easy),
+        (kind: Transition.blend, bars: 32));
+    expect(AutoMix.choose(on, t(camelot: '3B'), style: MixStyle.easy).kind,
+        Transition.fade);
+    // Ordinary: a clash goes out through the filter.
+    expect(AutoMix.choose(on, t(camelot: '3B')).kind, Transition.sweep);
+    expect(AutoMix.choose(on, t(camelot: '9A')).kind, Transition.blend);
+    // Bold: something to land on is caught and tightened.
+    expect(AutoMix.choose(on, t(camelot: '9A', drops: [40000]), style: MixStyle.bold),
+        (kind: Transition.roll, bars: 8));
+    expect(AutoMix.choose(on, t(camelot: '3B', drops: [40000]), style: MixStyle.bold).kind,
+        Transition.sweep);
+    expect(AutoMix.choose(t(camelot: '8A', ends: 'cold'), t(camelot: '3B'),
+            style: MixStyle.bold).kind,
+        Transition.brake);
+    // And a record with no grid is still only ever faded, however bold it is told.
+    expect(AutoMix.choose(const TrackTiming(), on, style: MixStyle.bold).kind,
+        Transition.fade);
+  });
+
+  test('the incoming is parked so its drop lands where the fader finishes', () {
+    // 120 bpm: a bar is 2000 ms. A drop at 60 s, a transition of 8 bars — 16 s — so
+    // the record starts at 44 s and its drop arrives exactly on the last beat of it.
+    final to = TrackTiming(
+      durationMs: 200000,
+      bpm: 120,
+      beats: [for (var i = 0; i < 400; i++) i * 500],
+      downbeats: [for (var i = 0; i < 400; i += 4) i * 500],
+      drops: const [60000],
+      cues: const MixCues(
+          firstDownbeatMs: 0, mixInMs: 20000, mixOutMs: 150000, soundEndMs: 190000),
+    );
+    expect(AutoMix.inPoint(to, bars: 8, onTheDrop: true),
+        const Duration(seconds: 44));
+    // Not aiming at it: the old behaviour, before the intro ends.
+    expect(AutoMix.inPoint(to, bars: 8), const Duration(seconds: 4));
+  });
+
+  test('a transition does not run over the outgoing record\'s own drop', () {
+    final from = TrackTiming(
+      durationMs: 200000,
+      bpm: 120,
+      beats: [for (var i = 0; i < 400; i++) i * 500],
+      drops: const [100000],
+    );
+    // A mix starting at 90 s over 16 s would play the run-up and then the drop
+    // underneath the new record: it starts on the drop instead.
+    expect(
+        AutoMix.clearOfDrops(from, const Duration(seconds: 90),
+            length: const Duration(seconds: 16)),
+        const Duration(seconds: 100));
+    // Nowhere near one: left alone.
+    expect(
+        AutoMix.clearOfDrops(from, const Duration(seconds: 30),
+            length: const Duration(seconds: 16)),
+        const Duration(seconds: 30));
+  });
+
   test('the transition is chosen from what is known about the two records', () {
     expect(AutoMix.choose(t(bpm: 128, camelot: '8A'), t(bpm: 130, camelot: '9A')),
         (kind: Transition.blend, bars: 16), reason: 'in key, in tempo: the long blend');
     expect(AutoMix.choose(t(bpm: 128, camelot: '8A'), t(bpm: 130, camelot: '3B')),
-        (kind: Transition.blend, bars: 8), reason: 'a clash is shorter');
+        (kind: Transition.sweep, bars: 12),
+        reason: 'a clash goes out through the filter, and is shorter');
     expect(AutoMix.choose(t(bpm: 128), t(bpm: 150)).kind, Transition.fade,
         reason: 'too far apart to sync');
     expect(AutoMix.choose(t(bpm: 128, ends: 'fade'), t(bpm: 128)).kind, Transition.fade,

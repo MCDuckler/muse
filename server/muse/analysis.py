@@ -44,6 +44,12 @@ _KERNEL_BARS = 8
 # A bar has to be this much of the song's loudest to count as the song being "on".
 _ON = 0.6
 
+# Bars either side of a drop that are compared, and how much louder the after has to
+# be than the before for it to be one. Eight bars is the shortest breakdown anybody
+# writes; a fifth of the song's range is a step rather than a swell.
+_DROP_SPAN = 8
+_DROP_RISE = 0.2
+
 
 # ------------------------------------------------------------------ key
 def chroma(x: np.ndarray) -> np.ndarray:
@@ -185,6 +191,44 @@ def phrases(rows: np.ndarray) -> list[int]:
     return found
 
 
+def drops(levels: list[int], phrase_bars: list[int]) -> list[int]:
+    """The bars where the song opens up: a breakdown, then everything at once.
+
+    What a DJ is listening for and what makes a mix sound meant rather than merely
+    correct — the incoming record's drop landing where the outgoing's phrase turns
+    over. Found as the moment the next eight bars are a good deal louder than the
+    eight before, which is what a drop is; snapped to the phrase grid, because that
+    is where they are written.
+    """
+    n = len(levels)
+    if n < 2 * _DROP_SPAN:
+        return []
+    lv = np.array(levels, dtype=float) / 255.0
+    found: list[int] = []
+    for b in range(_DROP_SPAN, n - _DROP_SPAN + 1):
+        before = float(lv[b - _DROP_SPAN:b].mean())
+        after = float(lv[b:b + _DROP_SPAN].mean())
+        # Loud after, and a real step up rather than a slow swell.
+        if after < _ON or after - before < _DROP_RISE:
+            continue
+        # The biggest step in its own neighbourhood, so one drop is one bar.
+        rises = [
+            float(lv[i:i + _DROP_SPAN].mean() - lv[i - _DROP_SPAN:i].mean())
+            for i in range(max(_DROP_SPAN, b - 3), min(n - _DROP_SPAN, b + 4))
+        ]
+        if after - before < max(rises) - 1e-9:
+            continue
+        # Onto the phrase it belongs to, where one is within a couple of bars.
+        at = b
+        for p in phrase_bars:
+            if abs(p - b) <= 2:
+                at = p
+                break
+        if not found or at - found[-1] >= _DROP_SPAN:
+            found.append(at)
+    return found
+
+
 def sections(phrase_bars: list[int], levels: list[int], n_bars: int) -> dict:
     """Where the song is 'on': the bar the intro ends on and the bar the outro starts
     on, as bars — None where it cannot be said."""
@@ -229,6 +273,8 @@ def add(out: dict, x: np.ndarray, beats_ms: list[int], bar_starts_on: int,
     out["energy"] = levels
     phrase_bars = phrases(rows)
     out["phrases"] = [int(downbeats[b]) for b in phrase_bars if b < len(downbeats)]
+    out["drops"] = [int(downbeats[b]) for b in drops(levels, phrase_bars)
+                    if b < len(downbeats)]
     where = sections(phrase_bars, levels, len(levels))
     sound_end = out["duration_ms"] - out.get("tail_ms", 0)
     first = int(downbeats[0])

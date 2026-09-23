@@ -2087,6 +2087,7 @@ class TrackTiming {
     this.downbeats = const [],
     this.energy = const [],
     this.phrases = const [],
+    this.drops = const [],
     this.cues,
   });
 
@@ -2107,6 +2108,18 @@ class TrackTiming {
 
   /// Where the phrases begin, in milliseconds — on downbeats, on the four-bar grid.
   final List<int> phrases;
+
+  /// Where the song opens up: a breakdown, then everything at once. What a mix is
+  /// landed on, and what two records must not do over each other by accident.
+  final List<int> drops;
+
+  /// The first drop after [at], or null when the song has none left.
+  Duration? dropAfter(Duration at) {
+    for (final d in drops) {
+      if (d >= at.inMilliseconds) return Duration(milliseconds: d);
+    }
+    return null;
+  }
 
   /// Where a DJ would come in and go out.
   final MixCues? cues;
@@ -2187,6 +2200,7 @@ class TrackTiming {
         downbeats: [for (final b in (j['downbeats'] ?? const []) as List) (b as num).toInt()],
         energy: [for (final b in (j['energy'] ?? const []) as List) (b as num).toInt()],
         phrases: [for (final b in (j['phrases'] ?? const []) as List) (b as num).toInt()],
+        drops: [for (final b in (j['drops'] ?? const []) as List) (b as num).toInt()],
         cues: j['cues'] is Map ? MixCues.fromJson((j['cues'] as Map).cast<String, dynamic>()) : null,
       );
 }

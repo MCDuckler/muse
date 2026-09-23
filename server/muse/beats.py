@@ -37,8 +37,9 @@ import numpy as np
 from . import analysis
 
 # Bumped when what is measured changes, so old answers on disk are not served for ever.
-# 2: the key, the bars, each bar's loudness, the phrases and the cues — see analysis.py.
-VERSION = 2
+# 2: the key, the bars, each bar's loudness, the phrases and the cues.
+# 3: the drops — where the song opens up. See analysis.py.
+VERSION = 3
 
 _RATE = 11025
 _FFT = 1024

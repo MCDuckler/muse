@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../../api/models.dart';
 import '../../state/app_state.dart';
+import '../../state/booth/automix.dart' show MixStyle;
 import '../../state/booth/booth.dart';
 import '../../state/booth/deck.dart' as engine;
 import '../dialogs.dart';
@@ -301,6 +302,26 @@ class _AutoPanel extends StatelessWidget {
             const Spacer(),
             if (booth.taken.isNotEmpty)
               PressButton(label: 'Keep this mix', onTap: () => _keep(context)),
+          ],
+        ),
+        const SizedBox(height: 4),
+        // How hard it mixes.
+        Row(
+          children: [
+            Text('HOW HARD', style: Mag.flag(7.5, color: scheme.onSurfaceVariant)),
+            const SizedBox(width: 8),
+            for (final how in MixStyle.values)
+              Padding(
+                padding: const EdgeInsets.only(right: 5),
+                child: _Pick(
+                  label: how.name.toUpperCase(),
+                  on: auto.style == how,
+                  onTap: () {
+                    feel(Feel.pick);
+                    auto.mixLike(how);
+                  },
+                ),
+              ),
           ],
         ),
         const SizedBox(height: 4),

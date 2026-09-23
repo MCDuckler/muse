@@ -113,3 +113,28 @@ def test_sound_with_no_pulse_has_no_bars(tmp_path):
     assert found["beats"] == []
     assert "downbeats" not in found and "cues" not in found
     assert found["key"] is None, "noise is in no key"
+
+
+def test_a_drop_is_found_where_the_song_opens_up(tmp_path):
+    # Quiet for eight bars, everything at once from bar 8, quiet again at 40: the
+    # drop is bar 8 and there is only one of it.
+    x = _song(128, bars=48, loud_from_bar=8, quiet_from_bar=40)
+    f = tmp_path / "drop.wav"
+    f.write_bytes(_wav(x))
+    found = beats.measure(f)
+    bar = 60.0 / 128 * 4 * 1000
+    assert found["drops"], "a song that opens up has a drop"
+    assert found["drops"][0] == pytest.approx(8 * bar, abs=bar * 1.5)
+    assert len(found["drops"]) == 1, "one drop, not one per bar of it"
+
+
+def test_a_song_that_never_opens_up_has_no_drop():
+    # Flat from end to end: nothing to point at, and none invented.
+    assert analysis.drops([200] * 40, [0, 16, 32]) == []
+    assert analysis.drops([], []) == []
+
+
+def test_a_slow_swell_is_not_a_drop():
+    # Ten bars of creeping upwards is a build, not a drop.
+    rising = [int(255 * (0.4 + 0.5 * i / 32)) for i in range(32)]
+    assert analysis.drops(rising, [0, 16]) == []

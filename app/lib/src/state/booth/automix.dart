@@ -15,6 +15,19 @@ import 'booth.dart';
 /// has no pulse, or has already faded itself, or the tempos are too far apart to
 /// sync), and over how many bars. It watches the master's clock and goes when the
 /// time comes, then loads the record after that on the deck it just freed.
+/// How hard the booth mixes when it is left to itself.
+enum MixStyle {
+  /// Long and level: nothing sudden, nothing clever.
+  easy,
+
+  /// The blend, and the filter where two records do not sit together.
+  normal,
+
+  /// Short, and landed on the drop: loops that tighten, sweeps, a record stopped
+  /// dead. What somebody would do to a room that is already going.
+  bold,
+}
+
 class AutoMix extends ChangeNotifier {
   AutoMix(this.booth);
 
@@ -136,19 +149,53 @@ class AutoMix extends ChangeNotifier {
   /// What is coming after the one that is coming: the crate's own "and then".
   Track? get after => _at + 2 < _tracks.length ? _tracks[_at + 2] : null;
 
-  /// The rules. A record with no grid, or one that has already faded, or a gap in
-  /// tempo sync will not close, gets a fade. Two records that sit together on the
-  /// wheel get the long blend; two that do not get a short one — a clash is worse
-  /// the longer it lasts.
-  static ({Transition kind, int bars}) choose(TrackTiming? from, TrackTiming? to) {
+  /// How hard the booth mixes.
+  MixStyle style = MixStyle.normal;
+
+  void mixLike(MixStyle how) {
+    style = how;
+    notifyListeners();
+    unawaited(_prepareNext());
+  }
+
+  /// The rules.
+  ///
+  /// A record with no grid, one that has already faded, or a tempo gap sync will not
+  /// close: a fade, because there is nothing to hold two records together. Otherwise
+  /// what is reached for depends on how hard the booth has been told to mix — and on
+  /// the two records, because a clash is worse the longer it lasts and a record with
+  /// a drop to land on wants a different exit from one without.
+  static ({Transition kind, int bars}) choose(TrackTiming? from, TrackTiming? to,
+      {MixStyle style = MixStyle.normal}) {
     if (from == null || to == null || !from.hasBeats || !to.hasBeats) {
       return (kind: Transition.fade, bars: 4);
     }
     if (from.ends == 'fade') return (kind: Transition.fade, bars: 8);
-    final ratio = from.bpm != null && to.bpm != null ? Booth.syncRatio(to.bpm!, from.bpm!) : null;
+    final ratio =
+        from.bpm != null && to.bpm != null ? Booth.syncRatio(to.bpm!, from.bpm!) : null;
     if (ratio == null) return (kind: Transition.fade, bars: 8);
-    if (from.ends == 'cold' && from.inKeyWith(to)) return (kind: Transition.cut, bars: 1);
-    return from.inKeyWith(to) ? (kind: Transition.blend, bars: 16) : (kind: Transition.blend, bars: 8);
+    final inKey = from.inKeyWith(to);
+    if (from.ends == 'cold' && inKey) return (kind: Transition.cut, bars: 1);
+    switch (style) {
+      case MixStyle.easy:
+        // Nothing sudden: long where the two agree, short where they do not.
+        return inKey ? (kind: Transition.blend, bars: 32) : (kind: Transition.fade, bars: 16);
+      case MixStyle.normal:
+        // A clash goes out through the filter: a high-passed record has hardly any
+        // key left to clash with.
+        return inKey
+            ? (kind: Transition.blend, bars: 16)
+            : (kind: Transition.sweep, bars: 12);
+      case MixStyle.bold:
+        // Something to land on: the old record is caught and tightened while the new
+        // one arrives, or stopped dead under it.
+        if (to.drops.isNotEmpty && inKey) return (kind: Transition.roll, bars: 8);
+        if (to.drops.isNotEmpty) return (kind: Transition.sweep, bars: 8);
+        if (from.ends == 'cold') return (kind: Transition.brake, bars: 8);
+        return inKey
+            ? (kind: Transition.blend, bars: 8)
+            : (kind: Transition.sweep, bars: 8);
+    }
   }
 
   /// Where the outgoing record's transition starts.
@@ -167,6 +214,22 @@ class AutoMix extends ChangeNotifier {
     final latest = end - length;
     if (latest > Duration.zero && at > latest) at = latest;
     return onPhrase(from, at);
+  }
+
+  /// [at], moved off a drop it would run over.
+  ///
+  /// Two records dropping over each other is either the best thing in the set or a
+  /// mess, and it is not something to do by accident: where the outgoing record
+  /// opens up inside the transition, the transition starts at that drop instead, so
+  /// what plays over the new record is the drop rather than the run-up to it.
+  static Duration clearOfDrops(TrackTiming from, Duration at,
+      {required Duration length}) {
+    final end = at + length;
+    for (final d in from.drops) {
+      final drop = Duration(milliseconds: d);
+      if (drop > at && drop < end) return drop;
+    }
+    return at;
   }
 
   /// [at], moved to the nearest phrase boundary within a phrase of it. Unmoved where
@@ -189,15 +252,20 @@ class AutoMix extends ChangeNotifier {
     return gap <= reach ? Duration(milliseconds: best) : at;
   }
 
-  /// Where the incoming record is parked: so many bars before its intro ends, on one
-  /// of its own downbeats, and never before its first.
-  static Duration inPoint(TrackTiming to, {required int bars}) {
+  /// Where the incoming record is parked.
+  ///
+  /// So many bars before its intro ends, on one of its own downbeats, never before
+  /// its first — or, where it has a drop and the booth is aiming at it, so many bars
+  /// before *that*, so the drop lands on the beat the fader finishes on. Which is
+  /// the difference between a mix that is correct and one that sounds meant.
+  static Duration inPoint(TrackTiming to, {required int bars, bool onTheDrop = false}) {
     final cues = to.cues;
     if (cues == null) return to.lead;
     final bpm = to.bpm;
     if (bpm == null) return cues.firstDownbeat;
     final bar = Duration(microseconds: (4 * 60e6 / bpm).round());
-    var at = cues.mixIn - bar * bars;
+    final drop = onTheDrop ? to.dropAfter(cues.firstDownbeat) : null;
+    var at = (drop ?? cues.mixIn) - bar * bars;
     if (at < cues.firstDownbeat) at = cues.firstDownbeat;
     // Onto its own grid: the nearest downbeat at or before — and never before the
     // first, whatever the grid says about the silence ahead of it.
@@ -262,7 +330,9 @@ class AutoMix extends ChangeNotifier {
     }
     final timing = await booth.timing.of(coming);
     final was = from.track == null ? null : _keptFor(from.track!.id, coming.id);
-    final chosen = was == null ? choose(from.timing, timing) : (kind: was.kind, bars: was.bars);
+    final chosen = was == null
+        ? choose(from.timing, timing, style: style)
+        : (kind: was.kind, bars: was.bars);
     plan = chosen;
     if (was != null) {
       // As it was done: the same places, the same rate.
@@ -280,13 +350,17 @@ class AutoMix extends ChangeNotifier {
     // Its own length, less the transition, is where it goes.
     final timed = from.timing;
     if (timed != null) {
-      goesAt = outPoint(timed, length: length);
+      goesAt = clearOfDrops(timed, outPoint(timed, length: length), length: length);
     } else {
       final total = from.duration ?? Duration.zero;
       final at = total - length;
       goesAt = at > Duration.zero ? at : total;
     }
-    final at = timing == null ? null : inPoint(timing, bars: chosen.bars);
+    // Aimed at the drop where there is one and the style is for landing on it.
+    final onTheDrop = style == MixStyle.bold && (timing?.drops.isNotEmpty ?? false);
+    final at = timing == null
+        ? null
+        : inPoint(timing, bars: chosen.bars, onTheDrop: onTheDrop);
     // Only if it is not the one already waiting there, parked where it should be.
     if (to.track?.id != coming.id || to.playing) {
       await to.load(coming, timing: timing, at: at);

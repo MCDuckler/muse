@@ -12,6 +12,7 @@ import 'package:muse/src/api/models.dart';
 import 'package:muse/src/state/app_state.dart';
 import 'package:muse/src/state/player.dart';
 import 'package:muse/src/state/selection.dart';
+import 'package:muse/src/state/booth/automix.dart' show MixStyle;
 import 'package:muse/src/state/booth/mixer.dart';
 import 'package:muse/src/ui/booth_page.dart';
 import 'package:muse/src/ui/desk_dock.dart';
@@ -76,6 +77,7 @@ Future<void> main() async {
         durationMs: 214000, bpm: bpm, beats: beats, key: key, camelot: camelot, keyConfidence: 0.8,
         downbeats: down, energy: [for (var i = 0; i < down.length; i++) i < 8 || i > 80 ? 90 : 240],
         phrases: [for (var i = 0; i < down.length; i += 16) down[i]],
+        drops: [down[16], if (down.length > 64) down[64]],
         cues: MixCues(firstDownbeatMs: beats[0], mixInMs: down[8], mixOutMs: down[80], soundEndMs: 212000),
       );
     }
@@ -95,6 +97,7 @@ Future<void> main() async {
     await b.b.load(items[2], timing: grid(126, 'E minor', '9A'));
     b.bands[items[1].id] = shape(1);
     b.bands[items[2].id] = shape(2);
+    b.auto.mixLike(MixStyle.bold);
     b.master = b.a;
     await b.setCrossfader(0.2);
     // Enough on the decks that the room shows what it is for: a cue, a loop, a band

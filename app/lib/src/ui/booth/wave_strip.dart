@@ -215,6 +215,15 @@ class _StripPainter extends CustomPainter {
         canvas.drawLine(Offset(x, 4), Offset(x, 10), bracket);
         _type(canvas, '${i + 1}', Offset(x + 3, 5), quiet, 8);
       }
+      // Where the song opens up, drawn the full height of the lane: the thing a mix
+      // is landed on, so it has to be visible from further away than a flag.
+      for (final d in t.drops) {
+        final x = xOf(d * 1000.0);
+        if (x < -2 || x > w + 2) continue;
+        canvas.drawRect(Rect.fromLTWH(x - 1.5, 0, 3, h),
+            Paint()..color = accent.withValues(alpha: 0.35));
+        _type(canvas, 'DROP', Offset(x + 5, h * 0.36), accent, 8);
+      }
       // The cues: IN and OUT flags in the accent, the way a mark is put on a record.
       final cues = t.cues;
       if (cues != null) {

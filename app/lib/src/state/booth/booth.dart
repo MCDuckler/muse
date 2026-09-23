@@ -23,11 +23,43 @@ enum Transition {
   /// Levels only, crossed over the bars. For a record with no pulse, or a tempo gap
   /// too wide to sync.
   fade,
+
+  /// The outgoing climbs out through a high-pass while the incoming comes up under
+  /// it: everything but the top of the old record is gone by the end. What to reach
+  /// for when the two do not sit together harmonically — a filtered record has
+  /// hardly any key left to clash with.
+  sweep,
+
+  /// The outgoing is caught in a loop that halves as it goes — two bars, one, half,
+  /// a quarter — and lets go as the new one lands. The loudest way out there is.
+  roll,
+
+  /// The outgoing brakes to a stop like a hand on the platter, and the new record is
+  /// already running underneath. For a hard change of gear.
+  brake,
+}
+
+/// What a transition does to one deck at one moment.
+class DeckStep {
+  const DeckStep({this.eq, this.filter, this.loopBars, this.brake = false});
+
+  /// The three bands, where this step sets them.
+  final EqSet? eq;
+
+  /// The filter knob, where this step sets it: interpolated to, like the fader, so a
+  /// sweep is a sweep rather than four jumps.
+  final double? filter;
+
+  /// A loop of so many bars, zero to let one go, or -1 to halve the one running.
+  final int? loopBars;
+
+  /// The record brakes to a stop here.
+  final bool brake;
 }
 
 /// One instruction in a transition, at a point in it (0 at the start, 1 at the end).
 class MixStep {
-  const MixStep(this.at, {this.crossfader, this.kills = const {}});
+  const MixStep(this.at, {this.crossfader, this.decks = const {}});
 
   final double at;
 
@@ -35,8 +67,8 @@ class MixStep {
   /// step's place to this one.
   final double? crossfader;
 
-  /// The bands set at this point, per deck name: {'A': EqSet(low: -40)}.
-  final Map<String, EqSet> kills;
+  /// What each deck is doing by then, by deck name.
+  final Map<String, DeckStep> decks;
 }
 
 /// One thing the booth did between two records, as it is kept and done again.
@@ -343,22 +375,63 @@ class Booth extends ChangeNotifier {
   /// What a transition does, as steps. Written down rather than performed straight
   /// away so it can be read, tested, and one day replayed.
   static List<MixStep> plan(Transition kind, {required String from, required String to}) {
-    const off = EqSet.flat;
-    const noBass = EqSet(low: EqSet.killed);
+    const off = DeckStep(eq: EqSet.flat, filter: 0);
+    const noBass = DeckStep(eq: EqSet(low: EqSet.killed));
+    const flat = DeckStep(eq: EqSet.flat);
     switch (kind) {
       case Transition.blend:
         return [
-          MixStep(0, crossfader: 0, kills: {to: noBass}),
-          MixStep(0.5, crossfader: 0.5, kills: {to: off, from: noBass}),
-          MixStep(0.85, crossfader: 0.85, kills: {
-            from: const EqSet(low: EqSet.killed, high: EqSet.killed),
+          MixStep(0, crossfader: 0, decks: {to: noBass}),
+          MixStep(0.5, crossfader: 0.5, decks: {to: flat, from: noBass}),
+          MixStep(0.85, crossfader: 0.85, decks: {
+            from: DeckStep(eq: EqSet(low: EqSet.killed, high: EqSet.killed)),
           }),
-          MixStep(1, crossfader: 1, kills: {from: off}),
+          MixStep(1, crossfader: 1, decks: {from: off}),
         ];
       case Transition.cut:
         return const [MixStep(0, crossfader: 0), MixStep(1, crossfader: 1)];
       case Transition.fade:
         return const [MixStep(0, crossfader: 0), MixStep(1, crossfader: 1)];
+      case Transition.sweep:
+        // The old record climbs out: the high-pass closes under it while the new one
+        // comes up, and by the end there is nothing left of it below the top.
+        return [
+          MixStep(0, crossfader: 0, decks: {
+            from: const DeckStep(filter: 0),
+            to: noBass,
+          }),
+          MixStep(0.45, crossfader: 0.35, decks: {
+            from: const DeckStep(filter: 0.45),
+          }),
+          MixStep(0.75, crossfader: 0.7, decks: {
+            from: const DeckStep(filter: 0.8, eq: EqSet(low: EqSet.killed)),
+            to: flat,
+          }),
+          MixStep(1, crossfader: 1, decks: {from: off}),
+        ];
+      case Transition.roll:
+        // Caught and tightened: two bars, one, half — and let go as the new record
+        // lands. The fader is most of the way across before the roll starts, so what
+        // is being tightened is a tail rather than the whole record.
+        return [
+          MixStep(0, crossfader: 0, decks: {to: noBass}),
+          MixStep(0.45, crossfader: 0.45, decks: {to: flat}),
+          MixStep(0.6, crossfader: 0.6, decks: {from: const DeckStep(loopBars: 2)}),
+          MixStep(0.75, crossfader: 0.75, decks: {from: const DeckStep(loopBars: -1)}),
+          MixStep(0.88, crossfader: 0.9, decks: {from: const DeckStep(loopBars: -1)}),
+          MixStep(1, crossfader: 1, decks: {
+            from: const DeckStep(eq: EqSet.flat, filter: 0, loopBars: 0),
+          }),
+        ];
+      case Transition.brake:
+        // The new record is already running when the old one is stopped dead: the
+        // fader is across first, then the platter is caught.
+        return [
+          MixStep(0, crossfader: 0, decks: {to: flat}),
+          MixStep(0.7, crossfader: 0.85),
+          MixStep(0.8, crossfader: 1, decks: {from: const DeckStep(brake: true)}),
+          MixStep(1, crossfader: 1, decks: {from: off}),
+        ];
     }
   }
 
@@ -430,25 +503,25 @@ class Booth extends ChangeNotifier {
 
     final steps = plan(kind, from: from.name, to: to.name);
     final length = barsLength(from, bars);
-    // The kills the plan opens with, set before the incoming makes a sound.
-    await _applyKills(steps.first);
+    // What the plan opens with, set before the incoming makes a sound.
+    await _applyStep(steps.first);
     // A blend goes in on the master's next phrase, where a DJ would bring one in;
     // a fade on the next beat, which is soon enough for something with no grid.
     if (!to.playing) await startOnBeat(to, every: kind == Transition.fade ? 1 : 16);
     // And if it did not start, nothing is handed over: fading out of a record into
     // a deck that is not playing is fading out into silence.
     if (!_reallyPlaying(to)) {
-      await _applyKills(MixStep(0, kills: {to.name: EqSet.flat}));
+      await _applyStep(MixStep(0, decks: {to.name: const DeckStep(eq: EqSet.flat)}));
       return;
     }
 
     final began = DateTime.now();
     final done = Completer<void>();
     var next = 1;
-    // The fader between steps, from Dart, twenty-five times a second: a mixer that
-    // can ramp on its own clock (the browser) is handed each leg as a ramp instead.
     final direction = identical(to, b) ? 1.0 : -1.0;
-    double faderAt(double k) {
+
+    /// The pair of steps [k] falls between, and how far between them it is.
+    ({MixStep from, MixStep to, double local}) legAt(double k) {
       var prev = steps.first, cur = steps.last;
       for (var i = 1; i < steps.length; i++) {
         if (k <= steps[i].at) {
@@ -458,24 +531,60 @@ class Booth extends ChangeNotifier {
         }
       }
       final span = cur.at - prev.at;
-      final local = span <= 0 ? 1.0 : ((k - prev.at) / span).clamp(0.0, 1.0);
-      final x = (prev.crossfader ?? 0) + ((cur.crossfader ?? 1) - (prev.crossfader ?? 0)) * local;
+      return (
+        from: prev,
+        to: cur,
+        local: span <= 0 ? 1.0 : ((k - prev.at) / span).clamp(0.0, 1.0)
+      );
+    }
+
+    // The fader, moved from Dart twenty-five times a second — and the filter with
+    // it, because a sweep in four jumps is four jumps rather than a sweep.
+    double faderAt(double k) {
+      final leg = legAt(k);
+      final x = (leg.from.crossfader ?? 0) +
+          ((leg.to.crossfader ?? 1) - (leg.from.crossfader ?? 0)) * leg.local;
       return direction > 0 ? x : 1 - x;
+    }
+
+    /// Where a deck's filter should be at [k], or null where the plan says nothing
+    /// about it. Read backwards for the last value set, so a leg that only moves the
+    /// fader leaves the filter where it was.
+    double? filterAt(String deck, double k) {
+      final leg = legAt(k);
+      double? lastBefore(MixStep at) {
+        for (var i = steps.indexOf(at); i >= 0; i--) {
+          final f = steps[i].decks[deck]?.filter;
+          if (f != null) return f;
+        }
+        return null;
+      }
+
+      final a = lastBefore(leg.from);
+      final b = leg.to.decks[deck]?.filter ?? a;
+      if (a == null || b == null) return null;
+      return a + (b - a) * leg.local;
     }
 
     _running = Timer.periodic(const Duration(milliseconds: 40), (t) async {
       final k = (DateTime.now().difference(began).inMicroseconds / length.inMicroseconds)
           .clamp(0.0, 1.0);
       await setCrossfader(faderAt(k));
+      for (final deck in decks) {
+        final want = filterAt(deck.name, k);
+        if (want != null && (filters[deck] ?? 0) != want) await setFilter(deck, want);
+      }
       while (next < steps.length && k >= steps[next].at) {
-        await _applyKills(steps[next]);
+        await _applyStep(steps[next]);
         next++;
       }
       if (k >= 1) {
         t.cancel();
         _running = null;
+        from.unloop();
         await from.pause();
         await setEq(from, EqSet.flat);
+        await setFilter(from, 0);
         master = to;
         if (!done.isCompleted) done.complete();
       }
@@ -502,9 +611,25 @@ class Booth extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _applyKills(MixStep step) async {
-    for (final e in step.kills.entries) {
-      await setEq(e.key == a.name ? a : b, e.value);
+  /// Everything a step says to do at once — the bands, a loop caught or tightened
+  /// or let go, a record braked. The filter is not here: it is travelled to rather
+  /// than set, along with the fader.
+  Future<void> _applyStep(MixStep step) async {
+    for (final e in step.decks.entries) {
+      final deck = e.key == a.name ? a : b;
+      final want = e.value;
+      if (want.eq != null) await setEq(deck, want.eq!);
+      switch (want.loopBars) {
+        case null:
+          break;
+        case 0:
+          deck.unloop();
+        case -1:
+          deck.halveLoop();
+        case final int bars:
+          deck.loop(bars * 4);
+      }
+      if (want.brake) unawaited(deck.brake());
     }
   }
 

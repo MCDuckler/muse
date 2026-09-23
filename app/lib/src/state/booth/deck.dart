@@ -309,6 +309,52 @@ class Deck extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Half the loop, from where it starts: 4 bars, 2, 1, half a bar — the roll that
+  /// tightens as a record goes out. Floors at an eighth of a beat, below which it is
+  /// a tone rather than a rhythm.
+  void halveLoop() {
+    final from = loopStart, to = loopEnd;
+    if (from == null || to == null) return;
+    final now = to - from;
+    final least = (beat ?? const Duration(milliseconds: 500)) ~/ 8;
+    if (now <= least) return;
+    loopEnd = from + now ~/ 2;
+    _loopBars = null;                  // no longer one of the buttons' lengths
+    notifyListeners();
+  }
+
+  /// The record braking to a stop, the way a hand on the platter does it: the rate
+  /// falls away over [over] and the deck is left parked, at the pitch it was set to.
+  ///
+  /// Not a backspin — a browser's audio element will not play backwards, so what is
+  /// offered is the half of it that every engine here can actually do.
+  Future<void> brake({Duration over = const Duration(milliseconds: 900)}) async {
+    if (!playing) return;
+    final was = tempo;
+    const steps = 18;
+    for (var i = 1; i <= steps; i++) {
+      _fix = position;
+      _fixedAt = DateTime.now();
+      tempo = (was * (1 - i / steps)).clamp(_slowest, 2.0);
+      try {
+        await _player.setSpeed(tempo);
+      } catch (_) {
+        break;                          // an engine that will not crawl: stop here
+      }
+      notifyListeners();
+      await Future<void>.delayed(over ~/ steps);
+    }
+    await pause();
+    tempo = was;
+    try {
+      await _player.setSpeed(was);
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  /// The slowest an engine can be asked to run without refusing outright.
+  static const _slowest = 0.12;
+
   void unloop() {
     loopStart = loopEnd = null;
     _loopBars = null;
