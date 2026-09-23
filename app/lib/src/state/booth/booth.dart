@@ -101,6 +101,25 @@ class Booth extends ChangeNotifier {
     await setCrossfader(crossfader);
   }
 
+  // ------------------------------------------------------------------ the shapes
+  /// Each record's shape in three bands, once fetched, by track. Shared by the two
+  /// decks and by whatever else draws a record's strip.
+  final bands = <int, ({List<int> low, List<int> mid, List<int> high})>{};
+  final _fetchingBands = <int>{};
+
+  Future<void> fetchBands(Track track) async {
+    if (bands.containsKey(track.id) || !_fetchingBands.add(track.id)) return;
+    try {
+      final got = await api.peakBands(track.id);
+      if (got != null) bands[track.id] = got;
+    } catch (_) {
+      // No shape: the grid is still drawn, on a quiet line.
+    } finally {
+      _fetchingBands.remove(track.id);
+    }
+    notifyListeners();
+  }
+
   // ------------------------------------------------------------------ loading
   Future<void> load(Deck deck, Track track, {Duration? at}) async {
     final t = await timing.of(track);

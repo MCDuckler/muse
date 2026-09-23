@@ -39,6 +39,7 @@ import 'open_from.dart';
 import 'widths.dart';
 import 'equalizer_page.dart';
 import 'beat_pulse.dart';
+import 'booth_page.dart';
 
 String formatTime(Duration d) {
   final m = d.inMinutes;
@@ -129,6 +130,15 @@ class NowPlayingScreen extends StatelessWidget {
                 onPressed: () => openQueueScreen(context),
               ),
               const WhereItPlays(compact: true),
+              // The booth: the same records, mixed by hand. Only once it is switched
+              // on in Settings, while it is early.
+              if (app.boothOn)
+                IconButton(
+                  icon: const Icon(Icons.album_outlined),
+                  tooltip: 'The booth',
+                  onPressed: () => Navigator.of(context, rootNavigator: true)
+                      .push(MaterialPageRoute(builder: (_) => const BoothPage())),
+                ),
               ...(app.playerLayout == PlayerLayout.topBar && track != null
                 ? [
                     IconButton(
