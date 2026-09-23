@@ -64,3 +64,6 @@ class WebMixer extends Mixer {
     _pageBooth?.filter(deck.name.toJS, value.clamp(-1.0, 1.0).toJS);
   }
 }
+
+/// A browser is not a desk.
+Mixer? desktopMixer() => null;

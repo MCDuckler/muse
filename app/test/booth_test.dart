@@ -12,6 +12,7 @@ import 'package:muse/src/state/booth/automix.dart';
 import 'package:muse/src/state/booth/booth.dart';
 import 'package:muse/src/state/booth/deck.dart';
 import 'package:muse/src/state/booth/mixer.dart';
+import 'package:muse/src/state/booth/mixer_desktop.dart';
 
 import 'fake_audio.dart';
 
@@ -58,6 +59,17 @@ class NotedMixer extends Mixer {
 void main() {
   analysisModel();
   autoMixRules();
+  test('a desk\'s kills and filter are one mpv chain', () {
+    const off = (low: false, mid: false, high: false);
+    expect(DesktopMixer.chain(kills: off, filter: 0), '', reason: 'nothing wanted: no filters');
+    expect(DesktopMixer.chain(kills: (low: true, mid: false, high: false), filter: 0),
+        'lavfi=[lowshelf=f=250:g=-40]');
+    expect(DesktopMixer.chain(kills: (low: true, mid: true, high: true), filter: 0),
+        contains('equalizer=f=1000'));
+    expect(DesktopMixer.chain(kills: off, filter: -1), 'lavfi=[lowpass=f=60]');
+    expect(DesktopMixer.chain(kills: off, filter: 1), 'lavfi=[highpass=f=8000]');
+    expect(DesktopMixer.chain(kills: off, filter: -0.5), contains('lowpass=f='));
+  });
   TestWidgetsFlutterBinding.ensureInitialized();
   TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
       .setMockMethodCallHandler(const MethodChannel('com.ryanheise.audio_session'), (c) async => null);

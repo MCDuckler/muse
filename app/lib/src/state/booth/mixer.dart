@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import 'deck.dart';
 import 'mixer_none.dart' if (dart.library.js_interop) 'mixer_web.dart' as web;
+import 'mixer_none.dart' if (dart.library.io) 'mixer_desktop.dart' as desk;
 
 /// What sits between the two decks and the speaker.
 ///
@@ -40,6 +41,11 @@ abstract class Mixer {
   static Mixer forThisDevice() {
     if (kIsWeb) return web.webMixer() ?? VolumeMixer();
     if (defaultTargetPlatform == TargetPlatform.android) return AndroidMixer();
+    if (defaultTargetPlatform == TargetPlatform.linux ||
+        defaultTargetPlatform == TargetPlatform.windows ||
+        defaultTargetPlatform == TargetPlatform.macOS) {
+      return desk.desktopMixer() ?? VolumeMixer();
+    }
     return VolumeMixer();
   }
 }

@@ -166,6 +166,14 @@ class Booth extends ChangeNotifier {
     await mixer.setKills(d, low: low, mid: mid, high: high);
   }
 
+  final Map<Deck, double> filters = {};
+
+  Future<void> setFilter(Deck d, double value) async {
+    filters[d] = value.clamp(-1.0, 1.0);
+    notifyListeners();
+    await mixer.setFilter(d, filters[d]!);
+  }
+
   // ------------------------------------------------------------------ sync
   /// The rate that makes a record at [from] beats a minute run at [to], or null when
   /// the gap is wider than [maxSync] — the record would be a different record.

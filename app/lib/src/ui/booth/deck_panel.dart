@@ -263,6 +263,26 @@ class _DeckPanelState extends State<DeckPanel> with TickerProviderStateMixin {
               ),
             ],
           ),
+          // The filter, where the mixer has one: closed to the left, open in the
+          // middle, closed to the right — the one knob a DJ reaches for mid-blend.
+          if (b.mixer.canFilter && t != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Row(
+                children: [
+                  Text('FILTER', style: Mag.flag(8, color: scheme.onSurfaceVariant)),
+                  Expanded(
+                    child: Slider(
+                      value: b.filters[d] ?? 0,
+                      min: -1,
+                      max: 1,
+                      divisions: 40,
+                      onChanged: (v) => b.setFilter(d, v.abs() < 0.06 ? 0 : v),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           const SizedBox(height: 8),
           // What is done to this record alone.
           Wrap(

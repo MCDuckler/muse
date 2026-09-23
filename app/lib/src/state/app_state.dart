@@ -352,7 +352,24 @@ class AppState extends ChangeNotifier {
   /// The booth: two records mixed by hand. Early, and behind a switch until it is not.
   bool boothOn = false;
   Booth? _booth;
-  Booth get booth => _booth ??= Booth(api, offlinePath: offline.pathFor);
+  Booth get booth => _booth ??= (Booth(api, offlinePath: offline.pathFor)..addListener(_boothChanged));
+
+  /// While the booth has the sound, the rows and the bars on every list say so about
+  /// its master record — the way they do for a device in the next room.
+  void _boothChanged() {
+    final b = _booth;
+    if (b == null) return;
+    if (b.live) {
+      player?.sayRemote((
+        trackId: b.master.track?.id,
+        itemId: null,
+        playing: b.master.playing,
+        buffering: false,
+      ));
+    } else if (!controllingAnother) {
+      player?.sayRemote(null);
+    }
+  }
 
   /// The booth if it has been opened this session, without opening it: two players
   /// are not made for a bar that only wants to know whether they are playing.

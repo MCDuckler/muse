@@ -56,6 +56,10 @@ JustAudioPlatform get _pluginPlatform {
 /// You must call [stop] or [dispose] to release the resources used by this
 /// player, including any temporary files created to cache assets.
 class AudioPlayer {
+  /// WetOwl: the id this player is known by to the platform plugin, so the booth can
+  /// find the mpv player underneath a deck on a desk. Null before it has one.
+  String? get platformId => _id;
+
   static String _generateId() => _uuid.v4();
   final _lock = Lock(reentrant: true);
   Future<void>? _playbackEventPipe;

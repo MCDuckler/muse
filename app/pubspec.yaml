@@ -31,6 +31,8 @@ dependencies:
   web: ^1.1.0
   path_provider: ^2.1.6
   just_audio_media_kit: ^2.1.0
+  # Named directly for the booth, which sets mpv's own audio filters on a deck.
+  media_kit: ^1.2.0
   media_kit_libs_linux: ^1.2.1
   media_kit_libs_windows_audio: ^1.0.9
   desktop_drop: ^0.8.4
@@ -39,6 +41,10 @@ dependencies:
 dependency_overrides:
   just_audio:
     path: third_party/just_audio
+  # And the desktop engine with two accessors, so the booth can set mpv's own audio
+  # filters on a deck. See third_party/just_audio_media_kit/WETOWL.md.
+  just_audio_media_kit:
+    path: third_party/just_audio_media_kit
 
 dev_dependencies:
   # The fake audio engine in test/ implements this, so the player's own logic can be
