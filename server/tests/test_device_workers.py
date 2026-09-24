@@ -47,29 +47,23 @@ def _queue_a_song(client, hdr, vid="DEVW0000001"):
     return client.post("/tracks/resolve", headers=hdr, json={"video_id": vid}).json()
 
 
-def test_a_device_cannot_fetch_until_an_admin_says_so(client, hdr, sam):
+def test_every_computer_is_in_the_pool_until_an_admin_blocks_it(client, hdr, sam):
     _queue_a_song(client, hdr)
-    refused = client.post("/internal/jobs/lease", headers=sam["hdr"], json={"worker": "x"})
-    assert refused.status_code == 403
-
-    asked = client.post("/devices/ingest/ask", headers=sam["hdr"]).json()
-    assert asked == {"allowed": False, "asked": True, "worker": f"device:{sam['device']}"}
-    assert client.post("/internal/jobs/lease", headers=sam["hdr"],
-                       json={"worker": "x"}).status_code == 403, "asking is not being told yes"
-
-    # Only an admin says yes — and sees who is asking.
-    assert client.post(f"/devices/{sam['device']}/ingest", headers=sam["hdr"],
-                       json={"allowed": True}).status_code == 403
-    listed = client.get("/devices/workers", headers=hdr).json()["devices"]
-    assert [(d["owner"], d["allowed"]) for d in listed] == [("sam", False)]
-    assert client.post(f"/devices/{sam['device']}/ingest", headers=hdr,
-                       json={"allowed": True}).status_code == 200
-
     got = client.post("/internal/jobs/lease", headers=sam["hdr"],
                       json={"worker": "whatever-it-likes"}).json()["jobs"]
-    assert len(got) == 1
+    assert len(got) == 1, "nobody has to ask any more"
     row = db.one("select leased_by from jobs where id=%s", (got[0]["id"],))
     assert row["leased_by"] == f"device:{sam['device']}", "its own name, not the one it gave"
+
+    # Only an admin blocks — and what it held goes back.
+    assert client.post(f"/pool/devices/{sam['device']}/block", headers=sam["hdr"],
+                       json={"blocked": True}).status_code == 403
+    assert client.post(f"/pool/devices/{sam['device']}/block", headers=hdr,
+                       json={"blocked": True}).status_code == 200
+    assert db.one("select state from jobs where id=%s", (got[0]["id"],))["state"] == "pending"
+    assert client.post("/internal/jobs/lease", headers=sam["hdr"], json={}).status_code == 403
+    client.post(f"/pool/devices/{sam['device']}/block", headers=hdr, json={"blocked": False})
+    assert client.post("/internal/jobs/lease", headers=sam["hdr"], json={}).status_code == 200
 
 
 def test_an_admins_own_computer_is_simply_allowed(client, hdr):

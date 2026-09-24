@@ -29,7 +29,7 @@ from . import (
                routes_devices, routes_scrobble, routes_social,
                routes_sources,
                routes_spotify,
-               routes_sync, sleeve, stems,
+               routes_sync, sleeve, pool, routes_pool,
                match, storage, ytm)
 from . import deps
 from .deps import current_user, worker_auth
@@ -103,11 +103,6 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         if listener:
             listener.start()
         if start_workers:
-            # Anything a restart interrupted half way through separating.
-            left = stems.sweep(cfg.data_dir)
-            if left:
-                logging.getLogger("muse.stems").info(
-                    "cleared %d unfinished part%s", left, "" if left == 1 else "s")
             # One outstanding poll job is the scheduler; it re-queues itself when it
             # runs. Asking at boot covers a box that was off when the last one was due.
             try:
@@ -467,30 +462,31 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     @app.get("/tracks/{track_id}/stem/{name}")
     def stem(track_id: int, name: str, request: Request, k: str | None = None,
              authorization: Annotated[str | None, Header()] = None):
-        """A part of a record — its drums, the music under them, or the whole of it
-        with the voice taken out — for a deck in the booth to play instead of the
-        record itself. See stems.py for what that does and does not manage.
+        """A part of a record — its drums, the music without them, the record without
+        its voice, or the voice alone — for a deck in the booth to play instead of the
+        record itself. Made by a computer in the pool (pool.py) and kept here for all.
 
-        Made on first asking and kept, which takes long enough that the asking is
-        answered with "not yet, come back": 202 and a Retry-After, no body."""
-        _by_token_or_key(authorization, k)
+        Not made yet: the record is queued for the pool, and the asking is answered
+        with "not yet, come back" — 202 and a Retry-After, no body."""
+        who = _by_token_or_key(authorization, k)
 
         t = catalog.track_row(track_id)
         if not t or not t.get("path"):
             raise HTTPException(404, "not ready" if t else "no such track")
-        try:
-            path = stems.for_track(cfg.data_dir, pathlib.Path(t["path"]),
-                                   t["sha256"], name, t.get("duration_ms"))
-        except ValueError:
+        if name not in pool.PARTS:
             raise HTTPException(404, f"a record has no {name}")
-        except stems.TooLong:
+        if (t.get("duration_ms") or 0) > pool.UP_TO_S * 1000:
             raise HTTPException(
-                404, f"too long to take apart (over {stems.UP_TO_S // 60} minutes)")
-        except stems.NotReady:
+                404, f"too long to take apart (over {pool.UP_TO_S // 60} minutes)")
+        path = pool.part_here(t["sha256"], name)
+        if path is None:
+            asked_by = who.get("device_id") if isinstance(who, dict) else None
+            if pool.want_split(track_id, asked_by=asked_by) is not None:
+                publish("pool", {})
             return Response(status_code=202,
                             headers={"Retry-After": "10", "Cache-Control": "no-store"})
         return _range_response(path, request,
-                               etag=f"{t['sha256']}-{name}-v{stems.VERSION}")
+                               etag=f"{t['sha256']}-{name}-v{pool.PARTS_VERSION}")
 
     # ---------------- events ----------------
     @app.get("/events")
@@ -556,19 +552,34 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
 
     @app.post("/internal/jobs/lease")
     def lease(body: dict, device: dict | None = Depends(worker_auth)):
-        # A device works under its own name, whatever it says its name is.
-        if device is not None and body.get("kind", "ingest") != "ingest":
-            raise HTTPException(403, "a device fetches music and nothing else")
+        # A device works under its own name, whatever it says its name is, and on the
+        # pool's two kinds of work and no other.
+        kind = body.get("kind", "ingest")
+        if device is not None and kind not in ("ingest", "split"):
+            raise HTTPException(403, "a computer in the pool fetches and splits, no more")
+        strong = True
+        if device is not None:
+            # What it says about itself — its card, its switches — kept for the pool
+            # screen, and the card decides who is handed a split first.
+            if isinstance(body.get("pool"), dict):
+                pool.report(device["id"], body["pool"])
+            strong = pool.strong(device["id"])
         leased = jobs.lease_wait(
             device["worker"] if device else body.get("worker", "anon"),
-            body.get("kind", "ingest"),
+            kind,
             int(body.get("limit", 1)),
             wait_seconds=float(body.get("wait", 0)),
             busy=int(body["busy"]) if body.get("busy") is not None else None,
             max_priority=(int(body["max_priority"])
                           if body.get("max_priority") is not None else None),
+            strong=strong,
+            device_id=device["id"] if device else None,
         )
+        if leased and kind == "split":
+            publish("pool", {})
         for j in leased:
+            if kind != "ingest":
+                continue
             if tid := j["payload"].get("track_id"):
                 publish("track_progress",
                         {"track_id": tid, **progress.update(tid, "queued")})
@@ -579,6 +590,95 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
                           "batch_id": j.get("batch_id"),
                           "batch_label": j.get("batch_label")} for j in leased]}
 
+    @app.post("/internal/jobs/claim")
+    def claim(body: dict, device: dict | None = Depends(worker_auth)):
+        """A computer taking on, now, the song or the split its own person asked for,
+        rather than leaving it to whoever in the pool is free: the song is then on the
+        disk of the one who wanted it the moment it arrives. Queued first where it is
+        not queued yet. Answers the job, or no job where there is nothing to do — it
+        is done, or another computer already has it."""
+        if device is None:
+            raise HTTPException(403, "claiming is for a computer in the pool")
+        kind = body.get("kind")
+        try:
+            track_id = int(body["track_id"])
+        except (KeyError, TypeError, ValueError):
+            raise HTTPException(400, "which track, as a number")
+        t = catalog.track_row(track_id)
+        if not t:
+            raise HTTPException(404, "no such track")
+        if kind == "split":
+            if pool.want_split(track_id, asked_by=device["id"]) is None:
+                return {"job": None, "parts": pool.parts_of(t.get("sha256") or "")}
+        elif kind == "ingest":
+            if t.get("state") == "ready":
+                return {"job": None, "ready": True}
+        else:
+            raise HTTPException(400, "kind is ingest or split")
+        job = jobs.claim(device["worker"], kind, track_id)
+        if job is None:
+            return {"job": None}
+        if kind == "ingest":
+            publish("track_progress",
+                    {"track_id": track_id, **progress.update(track_id, "queued")})
+        publish("pool", {})
+        return {"job": {"id": job["id"], "kind": job["kind"], "payload": job["payload"],
+                        "attempts": job["attempts"], "priority": job["priority"],
+                        "batch_id": job.get("batch_id"),
+                        "batch_label": job.get("batch_label")}}
+
+    @app.post("/internal/jobs/{job_id}/parts")
+    async def parts_in(job_id: int, request: Request,
+                       device: dict | None = Depends(worker_auth)):
+        """A split handed in: every part of the record the computer made, at once. Each
+        has to be a sound as long as the record, near enough; they are kept for every
+        other computer and phone (pool.py)."""
+        _holds(job_id, device)
+        job = db.one("select kind, payload from jobs where id=%s", (job_id,))
+        if not job or job["kind"] != "split":
+            raise HTTPException(404, "no such split")
+        track_id = int(job["payload"]["track_id"])
+        t = catalog.track_row(track_id)
+        if not t or not t.get("sha256"):
+            raise HTTPException(404, "no such track")
+        form = await request.form()
+        try:
+            meta = json.loads(form.get("meta") or "{}")
+        except ValueError:
+            meta = {}
+        kept = []
+        work = cfg.data_dir / "parts" / "incoming"
+        work.mkdir(parents=True, exist_ok=True)
+        for name in pool.PARTS:
+            up = form.get(name)
+            if up is None or not hasattr(up, "file"):
+                continue
+            tmp = work / f"{job_id}-{name}.m4a"
+            size = 0
+            with tmp.open("wb") as out:
+                while chunk := await up.read(1 << 20):
+                    size += len(chunk)
+                    if size > DEVICE_UPLOAD_LIMIT:
+                        out.close()
+                        tmp.unlink(missing_ok=True)
+                        raise HTTPException(413, "too large to be a part")
+                    out.write(chunk)
+            if why := _is_a_song(tmp):
+                tmp.unlink(missing_ok=True)
+                raise HTTPException(400, f"{name} is not a part: {why}")
+            pool.keep_part(cfg.data_dir, t["sha256"], name, tmp,
+                           device["id"] if device else None,
+                           _number(meta, "seconds", float))
+            kept.append(name)
+        if not kept:
+            raise HTTPException(400, "no parts in that")
+        if set(pool.parts_of(t["sha256"])) >= set(pool.PARTS):
+            jobs.finish(job_id)
+        pool.split_done(track_id)
+        publish("parts_ready", {"track_id": track_id, "parts": kept})
+        publish("pool", {})
+        return {"ok": True, "parts": kept}
+
     @app.post("/internal/jobs/{job_id}/release")
     def release_job(job_id: int, body: dict | None = None,
                     device: dict | None = Depends(worker_auth)):
@@ -587,6 +687,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         jobs.release(job_id)
         if body and (tid := body.get("track_id")):
             progress.clear(int(tid))
+            pool.split_done(int(tid))
         return {"released": job_id}
 
     @app.post("/internal/jobs/{job_id}/progress")
@@ -594,6 +695,11 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
                         device: dict | None = Depends(worker_auth)):
         _holds(job_id, device)
         track_id = int(body["track_id"])
+        if body.get("kind") == "split":
+            entry = pool.split_progress(track_id, body.get("stage", "separating"),
+                                        body.get("percent"))
+            publish("split_progress", {"track_id": track_id, **entry})
+            return {"ok": True}
         entry = progress.update(track_id, body.get("stage", "downloading"),
                                 body.get("percent"), body.get("speed"))
         publish("track_progress", {"track_id": track_id, **entry})
@@ -655,6 +761,15 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     def fail(job_id: int, body: dict, device: dict | None = Depends(worker_auth)):
         _holds(job_id, device)
         raw = body.get("reason", "")
+        # A split that failed says nothing about the song: it stays playable, and the
+        # split is tried again by somebody else (or said on the pool screen).
+        split = db.one("select payload from jobs where id=%s and kind='split'", (job_id,))
+        if split:
+            jobs.fail(job_id, raw or "the separator failed",
+                      bool(body.get("retryable", True)))
+            pool.split_done(int(split["payload"]["track_id"]))
+            publish("pool", {})
+            return {"ok": True}
         # Named by where the song actually lives, not by where the worker happens to
         # fetch from — see failures.classify.
         heard_from = db.one("select source from tracks where id=%s",
@@ -761,6 +876,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     app.include_router(routes_accounts.router)
     app.include_router(routes_browse.router)
     app.include_router(routes_devices.router)
+    app.include_router(routes_pool.router)
     app.include_router(routes_downloads.router)
     routes_jam.set_publisher(publish)
     routes_library.set_publisher(publish)

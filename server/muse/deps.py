@@ -54,7 +54,7 @@ def worker_auth(x_worker_secret: Annotated[str | None, Header()] = None,
 
     Two ways in. The secret is the old one — the machine the server's owner runs, which
     is trusted with everything and answers to no name but the one it gives. The other is
-    a signed-in device an admin has allowed to fetch: it proves itself with the token it
+    a signed-in device in the pool (any, unless an admin blocked it): it proves itself with the token it
     already has, so the secret never has to leave the server, and what comes back here
     says which device it is — it works under that name and no other, and may only touch
     the jobs it holds.
@@ -70,10 +70,11 @@ def worker_auth(x_worker_secret: Annotated[str | None, Header()] = None,
     if authorization and authorization.lower().startswith("bearer "):
         who = auth.user_for_token(authorization.split(" ", 1)[1].strip())
         if who:
-            device = db.one("select id, name, can_ingest from devices where id=%s",
+            # Every computer is in the pool unless an admin has blocked it (pool.py).
+            device = db.one("select id, name, pool_blocked from devices where id=%s",
                             (who["device_id"],))
-            if device and device["can_ingest"]:
+            if device and not device["pool_blocked"]:
                 return {"id": device["id"], "name": device["name"],
                         "user_id": who["id"], "worker": f"device:{device['id']}"}
-            raise HTTPException(403, "this device has not been allowed to fetch music")
+            raise HTTPException(403, "an admin has kept this computer out of the pool")
     raise HTTPException(401, "bad worker secret")

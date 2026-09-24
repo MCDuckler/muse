@@ -201,23 +201,26 @@ def promote_run(track_ids: list[int], priority: int = PRIORITY_NOW) -> int:
 # half reads of a three-row table. The answer changes when somebody presses a button,
 # so a second of staleness is a second of a download not starting, and the query is a
 # second of a worker asking a question nobody has changed the answer to.
-_paused: tuple[bool, float] = (False, 0.0)
+_paused: dict[str, tuple[bool, float]] = {}
 PAUSE_TTL = 1.0
 
+# What each kind's pause is kept as. Downloads kept their old key, so a pause pressed
+# before the pool existed is still a pause.
+_PAUSE_KEYS = {"ingest": "downloads_paused", "split": "splits_paused"}
 
-def paused() -> bool:
-    known, at = _paused
+
+def paused(kind: str = "ingest") -> bool:
+    known, at = _paused.get(kind, (False, 0.0))
     if time.monotonic() - at < PAUSE_TTL:
         return known
-    row = db.one("select value from settings where key='downloads_paused'")
+    row = db.one("select value from settings where key=%s", (_PAUSE_KEYS[kind],))
     now = bool(row and row["value"] == "1")
-    _remember_paused(now)
+    _remember_paused(now, kind)
     return now
 
 
-def _remember_paused(value: bool) -> None:
-    global _paused
-    _paused = (value, time.monotonic())
+def _remember_paused(value: bool, kind: str = "ingest") -> None:
+    _paused[kind] = (value, time.monotonic())
 
 
 # How long a finished job is worth keeping.
@@ -272,19 +275,27 @@ def reap() -> int:
     return gone
 
 
-def set_paused(value: bool) -> None:
+def set_paused(value: bool, kind: str = "ingest") -> None:
     # Pressing the button is the one moment the cached answer is certainly wrong.
-    _remember_paused(value)
+    _remember_paused(value, kind)
     db.run(
-        """insert into settings(key, value, set_at) values('downloads_paused',%s,now())
+        """insert into settings(key, value, set_at) values(%s,%s,now())
            on conflict (key) do update set value=excluded.value, set_at=now()""",
-        ("1" if value else "0",),
+        (_PAUSE_KEYS[kind], "1" if value else "0"),
     )
+
+
+# How long a split waits for a computer with a graphics card before any computer may
+# take it. A card does a four-minute record in twenty seconds and a processor in a
+# minute and a half or more; a minute of waiting for the card is still the quicker way,
+# and nobody's laptop fan is spent on work a desktop would have finished first.
+SPLIT_FOR_THE_CARD_SECONDS = 60
 
 
 def lease_wait(worker: str, kind: str = "ingest", limit: int = 1,
                wait_seconds: float = 0.0, poll: float = 0.25,
-               busy: int | None = None, max_priority: int | None = None) -> list[dict]:
+               busy: int | None = None, max_priority: int | None = None,
+               strong: bool = True, device_id: int | None = None) -> list[dict]:
     """Lease, or hold the connection open until work appears.
 
     Polling every few seconds meant a track sat queued for up to that long before
@@ -293,14 +304,16 @@ def lease_wait(worker: str, kind: str = "ingest", limit: int = 1,
     """
     deadline = time.monotonic() + wait_seconds
     while True:
-        got = lease(worker, kind, limit, busy=busy, max_priority=max_priority)
+        got = lease(worker, kind, limit, busy=busy, max_priority=max_priority,
+                    strong=strong, device_id=device_id)
         if got or time.monotonic() >= deadline:
             return got
         time.sleep(poll)
 
 
 def lease(worker: str, kind: str = "ingest", limit: int = 1,
-          busy: int | None = None, max_priority: int | None = None) -> list[dict]:
+          busy: int | None = None, max_priority: int | None = None,
+          strong: bool = True, device_id: int | None = None) -> list[dict]:
     """Hand out up to `limit` jobs.
 
     `busy` is what the worker already has in flight: a worker that downloads three at a
@@ -310,9 +323,14 @@ def lease(worker: str, kind: str = "ingest", limit: int = 1,
     `max_priority` asks for urgent work only. A worker already downloading something
     somebody is waiting for uses it to leave the line free rather than filling every
     slot with a backfill that will hold the connection for the next minute.
+
+    `strong` is false for a computer without a graphics card: it is handed a split
+    only once the split has waited [SPLIT_FOR_THE_CARD_SECONDS] for one. Its own it can
+    take at once, by asking for it by name (claim) — which it does only when there is
+    no better computer about.
     """
     # A pause has to stop work being handed out, not just hide it in the UI.
-    if kind == "ingest" and paused():
+    if kind in _PAUSE_KEYS and paused(kind):
         db.run(
             """insert into workers(name,last_seen,leased) values(%s,now(),%s)
                on conflict (name) do update set last_seen=now(), leased=excluded.leased""",
@@ -330,6 +348,8 @@ def lease(worker: str, kind: str = "ingest", limit: int = 1,
                  and next_attempt_at <= now()
                  and attempts < %s
                  and (%s::int is null or priority <= %s::int)
+                 and (%s or kind <> 'split'
+                      or created_at < now() - (%s || ' seconds')::interval)
                order by priority, created_at
                for update skip locked
                limit %s
@@ -349,7 +369,8 @@ def lease(worker: str, kind: str = "ingest", limit: int = 1,
             -- could be handed the backfill before the song somebody is waiting for.
             select * from taken order by priority, created_at
             """,
-            (kind, MAX_ATTEMPTS, max_priority, max_priority, limit, worker, LEASE_SECONDS),
+            (kind, MAX_ATTEMPTS, max_priority, max_priority, strong,
+             SPLIT_FOR_THE_CARD_SECONDS, limit, worker, LEASE_SECONDS),
         ).fetchall()
         c.execute(
             """insert into workers(name,last_seen,leased) values(%s,now(),%s)
@@ -414,3 +435,27 @@ def fail(job_id: int, reason: str, retryable: bool = True) -> None:
             where id=%s""",
         (retryable, MAX_ATTEMPTS, reason[:2000], BACKOFF_BASE_SECONDS, job_id),
     )
+
+
+def claim(worker: str, kind: str, track_id: int) -> dict | None:
+    """Lease the waiting job of [kind] for one song to [worker], whoever it was queued
+    for: a computer taking on the song its own person asked for, now, rather than
+    waiting its turn in the pool. None where there is no such job waiting — it is done,
+    or somebody else is already working on it."""
+    with db.pool().connection() as c:
+        row = c.execute(
+            """with picked as (
+                 select id from jobs
+                  where kind=%s and (payload->>'track_id')::int=%s
+                    and (state='pending' or (state='leased' and leased_until < now()))
+                    and attempts < %s
+                  order by priority, created_at
+                  for update skip locked limit 1)
+               update jobs j set state='leased', leased_by=%s,
+                      leased_until=now() + (%s || ' seconds')::interval,
+                      attempts=j.attempts+1, updated_at=now(), next_attempt_at=now()
+                 from picked p where j.id=p.id
+               returning j.id, j.kind, j.payload, j.attempts, j.priority,
+                         j.batch_id, j.batch_label""",
+            (kind, track_id, MAX_ATTEMPTS, worker, LEASE_SECONDS)).fetchone()
+    return row

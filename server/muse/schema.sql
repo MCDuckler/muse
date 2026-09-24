@@ -622,3 +622,29 @@ alter table tracks add column if not exists analysed_at timestamptz;
 -- waiting to be told yes.
 alter table devices add column if not exists can_ingest boolean not null default false;
 alter table devices add column if not exists ingest_asked_at timestamptz;
+
+-- The pool. Every desktop app fetches and takes records apart for the whole house,
+-- unless its owner has switched that off (it then leases nothing) or an admin has
+-- blocked it. `can_ingest` and `ingest_asked_at` above are what this replaced: asking
+-- and being told yes is no longer how a computer joins. `pool` is what the device last
+-- said about itself — what it will do, its graphics card, its cores, its version —
+-- read by the pool screen and by the lease (a split goes to the best machine first).
+alter table devices add column if not exists pool_blocked boolean not null default false;
+alter table devices add column if not exists pool jsonb;
+alter table devices add column if not exists pool_at timestamptz;
+
+-- A record's parts, taken apart by a computer in the pool and kept here for every
+-- other one: one file per part, named by the audio's hash so a second copy of the same
+-- song shares them. `version` is the separator's (2: SCNet Small, trained); `device_id`
+-- and `seconds` say who made it and how long it took, for the pool screen.
+create table if not exists track_parts (
+  sha256     text not null,
+  name       text not null,
+  version    int  not null,
+  path       text not null,
+  bytes      bigint,
+  device_id  int references devices(id) on delete set null,
+  seconds    real,
+  created_at timestamptz not null default now(),
+  primary key (sha256, name, version)
+);

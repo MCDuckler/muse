@@ -159,9 +159,9 @@ def _track(track_id) -> dict | None:
 # ------------------------------------------------------------------ fetching music
 #
 # A computer on a home connection can fetch what the server cannot: YouTube answers a
-# house and refuses a datacentre. Any signed-in desktop can *offer* to; only an admin
-# says yes, because a device that fetches is a device that writes audio into everybody's
-# library.
+# house and refuses a datacentre. Every desktop is in the pool unless an admin blocks it
+# (pool.py, routes_pool.py); these are the older questions about it, kept for apps from
+# before the pool.
 
 def _workers() -> dict[str, dict]:
     return {w["name"]: w for w in db.all_(
@@ -173,31 +173,22 @@ def _workers() -> dict[str, dict]:
 @router.get("/ingest")
 def my_ingest(user: dict = Depends(current_user)):
     """Whether this device may fetch music, and whether it has asked to."""
-    d = db.one("select can_ingest, ingest_asked_at from devices where id=%s",
-               (user["device_id"],)) or {}
-    return {"allowed": bool(d.get("can_ingest")),
-            "asked": d.get("ingest_asked_at") is not None,
+    # Every computer is in the pool now unless an admin blocked it (pool.py); there is
+    # nothing to ask for any more, and an app from before the pool reads "allowed".
+    d = db.one("select pool_blocked from devices where id=%s", (user["device_id"],)) or {}
+    return {"allowed": not d.get("pool_blocked"), "asked": True,
             "worker": f"device:{user['device_id']}"}
 
 
 @router.post("/ingest/ask")
 def ask_to_ingest(user: dict = Depends(current_user)):
     """Offer this computer. An admin's own device is simply allowed."""
-    from .routes_accounts import is_admin
-
-    if is_admin(user["id"]):
-        db.run("update devices set can_ingest=true, ingest_asked_at=now() where id=%s",
-               (user["device_id"],))
-    else:
-        db.run("update devices set ingest_asked_at=now() where id=%s", (user["device_id"],))
     return my_ingest(user)
 
 
 @router.delete("/ingest")
 def stop_ingesting(user: dict = Depends(current_user)):
     """Take the offer back. Whatever this device was holding is given back too."""
-    db.run("update devices set can_ingest=false, ingest_asked_at=null where id=%s",
-           (user["device_id"],))
     db.run("""update jobs set state='pending', leased_by=null, leased_until=null
                where state='leased' and leased_by=%s""", (f"device:{user['device_id']}",))
     return my_ingest(user)
@@ -211,11 +202,11 @@ def workers(user: dict = Depends(current_user)):
     _admin(user)
     known = _workers()
     rows = db.all_(
-        """select d.id, d.name, d.platform, d.kind, d.can_ingest, d.ingest_asked_at,
-                  u.name as owner
+        """select d.id, d.name, d.platform, d.kind, not d.pool_blocked as can_ingest,
+                  d.pool_at as ingest_asked_at, u.name as owner
              from devices d join users u on u.id = d.user_id
-            where d.can_ingest or d.ingest_asked_at is not null
-            order by d.can_ingest desc, d.ingest_asked_at desc""")
+            where d.pool_at is not null or d.pool_blocked
+            order by d.pool_blocked, d.pool_at desc nulls last""")
     devices_ = []
     for r in rows:
         w = known.pop(f"device:{r['id']}", None) or {}
@@ -243,9 +234,7 @@ def allow_ingest(device_id: int, body: dict = Body(...),
     if not db.one("select 1 from devices where id=%s", (device_id,)):
         raise HTTPException(404, "no such device")
     allowed = bool(body.get("allowed"))
-    db.run("update devices set can_ingest=%s, ingest_asked_at=case when %s then "
-           "coalesce(ingest_asked_at, now()) else null end where id=%s",
-           (allowed, allowed, device_id))
+    db.run("update devices set pool_blocked=%s where id=%s", (not allowed, device_id))
     if not allowed:
         db.run("""update jobs set state='pending', leased_by=null, leased_until=null
                    where state='leased' and leased_by=%s""", (f"device:{device_id}",))
