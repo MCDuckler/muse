@@ -178,3 +178,27 @@ def test_a_file_that_cannot_be_read_is_not_tried_for_ever(client, hdr, monkeypat
     row = db.one("select bpm, analysed_at from tracks where id=%s", (t["id"],))
     assert row["bpm"] is None and row["analysed_at"] is not None
     assert beats_worker.one(deps.cfg().data_dir) is False
+
+
+@pytest.mark.parametrize("bpm", [155.0, 151.0, 145.3])
+def test_a_long_record_keeps_its_tempo_to_the_hundredth_and_never_slips(tmp_path, bpm):
+    """A record made on a computer is one tempo from end to end, and the tempo is rarely
+    a whole number of 11 ms frames. Read to a frame, 155 came back as 155.4 — and a beat
+    tracker told 155.4 walks a millisecond a beat off the music and slips back by a
+    fraction of a beat whenever it notices, which is a mix falling apart every minute.
+    """
+    audio, hits = drums(bpm, 180, lead=0.5, tail=1.0)
+    f = tmp_path / "long.wav"
+    f.write_bytes(audio)
+    found = beats.measure(f)
+    assert found["bpm"] == pytest.approx(bpm, abs=0.02)
+    assert found.get("grid"), "one exact grid, since the record keeps one tempo"
+    at = np.array(found["beats"]) / 1000.0
+    off = np.array([float(at[np.argmin(np.abs(at - h))] - h) for h in hits[2:-2]])
+    # Where the analysis puts a beat against where a drum starts is the same for every
+    # record — the short test above holds it to a few frames — so what is checked
+    # here is that it stays the same from the first minute to the last.
+    assert abs(float(np.median(off))) < 0.012
+    spread = np.abs(off - np.median(off))
+    assert np.percentile(spread, 95) < 0.004, "on the drums, from the first minute to the last"
+    assert spread.max() < 0.006, "and never a slip"

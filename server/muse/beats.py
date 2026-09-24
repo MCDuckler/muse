@@ -39,7 +39,8 @@ from . import analysis
 # Bumped when what is measured changes, so old answers on disk are not served for ever.
 # 2: the key, the bars, each bar's loudness, the phrases and the cues.
 # 3: the drops — where the song opens up. See analysis.py.
-VERSION = 3
+# 4: the tempo to a hundredth, and a record that keeps one tempo given one exact grid.
+VERSION = 4
 
 _RATE = 11025
 _FFT = 1024
@@ -259,6 +260,168 @@ def _tempo(env: np.ndarray) -> tuple[float, float]:
     return 60.0 * _FPS / lag, confidence
 
 
+def _autocorrelation(sig: np.ndarray) -> np.ndarray:
+    e = sig.astype(np.float64) - float(sig.mean())
+    size = 1 << int(np.ceil(np.log2(2 * len(e))))
+    spectrum = np.fft.rfft(e, size)
+    ac = np.fft.irfft(spectrum * np.conj(spectrum))[: len(e)]
+    return ac / ac[0] if ac[0] > 0 else ac
+
+
+def _level(env: np.ndarray, low: np.ndarray, bpm: float) -> float:
+    """The pulse the kick drum keeps, where the tempo found is one and a half times it
+    or two thirds of it.
+
+    [_tempo] settles half and double time, but not the triplet step between them: a
+    record at 155 with hats on the off-beats repeats every three half-beats as well,
+    and came back at 103.3 — synced by hand to a record at 155 it was slowed by a
+    quarter, and in a mix its every other beat fell between the other's. The kick
+    drum does not play in threes like that: it is on the beat. So where the bass
+    lines up clearly better one beat of the other tempo on, and the whole envelope
+    does not disagree, the other tempo is the one.
+    """
+    if len(low) < int(_FPS * 8):
+        return bpm
+    kick, whole = _autocorrelation(low), _autocorrelation(env)
+
+    def at(ac: np.ndarray, b: float) -> float:
+        lag = 60.0 * _FPS / b
+        i = int(lag)
+        if i + 1 >= len(ac):
+            return 0.0
+        f = lag - i
+        return float((1.0 - f) * ac[i] + f * ac[i + 1])
+
+    best, kept = bpm, at(kick, bpm)
+    for ratio in (1.5, 1 / 1.5):
+        other = bpm * ratio
+        if not 70.0 <= other <= 190.0:
+            continue
+        k = at(kick, other)
+        if k > max(0.1, 2.0 * kept) and at(whole, other) > 0.5 * at(whole, bpm):
+            best, kept = other, k
+    return best
+
+
+def _refine(env: np.ndarray, bpm: float) -> float:
+    """The same tempo, to a hundredth of a beat a minute rather than to a frame.
+
+    [_tempo] reads a lag counted in frames of 11.6 ms and bends it between the two
+    either side, which is as fine as a frame allows and no finer: at 155 a minute a
+    beat is 33.3 frames, and a third of a frame out is a quarter of a per cent. Real
+    records came back at 155.4 for 155 and 151.3 for 151 — and a beat tracker told
+    155.4 walks a millisecond a beat off the music and slips back by a fraction of a
+    beat whenever the onsets drag it, which on the booth's decks is a mix falling apart
+    every minute and a half.
+
+    The pulse lines up four, eight, sixteen and thirty-two beats out just as it does
+    one beat out, and there the same third of a frame is a quarter, an eighth, a
+    sixteenth, a thirty-second of it. So the lag is found again that far out, each time
+    within a fifth of a beat of where the last reading puts it — close enough that the
+    hi-hats between the beats are never mistaken for it.
+    """
+    period = 60.0 * _FPS / bpm
+    e = env.astype(np.float64) - float(env.mean())
+    n = len(e)
+    size = 1 << int(np.ceil(np.log2(2 * n)))
+    spectrum = np.fft.rfft(e, size)
+    ac = np.fft.irfft(spectrum * np.conj(spectrum))[:n]
+    # Per pair of frames that overlap, so a longer lag is not marked down for having
+    # fewer of them.
+    ac = ac / np.maximum(1, n - np.arange(n))
+    for k in (4, 8, 16, 32):
+        lag = k * period
+        if lag > n / 2:
+            break
+        reach = 0.2 * period
+        lo, hi = int(np.floor(lag - reach)), int(np.ceil(lag + reach))
+        if lo < 1 or hi + 1 >= n:
+            break
+        i = lo + int(np.argmax(ac[lo:hi + 1]))
+        if i <= lo or i >= hi:
+            break                       # at the edge: nothing clear this far out
+        a, b, c = ac[i - 1], ac[i], ac[i + 1]
+        bend = a - 2 * b + c
+        if bend >= 0:
+            break
+        period = (i + 0.5 * (a - c) / bend) / k
+    return 60.0 * _FPS / period
+
+
+def _comb(env: np.ndarray, period: float, phases: np.ndarray, k: np.ndarray) -> np.ndarray:
+    """How much onset lands on each of [phases] + [k] beats of [period] frames: the
+    envelope read there between frames, averaged over the beats."""
+    pos = phases[:, None] + k[None, :] * period
+    pos = np.clip(pos, 0, len(env) - 1.001)
+    i0 = np.floor(pos).astype(np.int64)
+    f = pos - i0
+    return ((1.0 - f) * env[i0] + f * env[i0 + 1]).mean(axis=1)
+
+
+def _one_grid(env: np.ndarray, low: np.ndarray, period: float,
+              first: int, last: int) -> np.ndarray | None:
+    """The frames the beats fall on, as one exact grid — where the record keeps one
+    tempo from end to end. None where it does not, and the tracked beats stand.
+
+    A tracker places one beat at a time, each where the onsets pull it, and on a
+    record whose onsets are not all on the beat — a swung hat, a bassline ahead of the
+    kick, the thin last minute of a fade — it wanders and slips. A record made on a
+    computer does not wander: it is a start and a period. So the period ([_refine]) is
+    taken as given, and the start is the one that puts the most onset on the beat
+    across the whole record, read between frames. Then believed only if each stretch
+    of 32 beats on its own agrees where the beat is — a band, or a record that changes
+    tempo, does not, and keeps the beats the tracker found.
+    """
+    if last - first < 32 * period:
+        return None
+    k = np.arange(int(np.ceil(first / period)), int(np.floor(last / period)))
+    phases = np.arange(0.0, period, 0.1)
+    score = _comb(env, period, phases, k)
+    i = int(np.argmax(score))
+    best = float(phases[i])
+    if 0 < i < len(score) - 1:
+        a, b, c = score[i - 1], score[i], score[i + 1]
+        bend = a - 2 * b + c
+        if bend < 0:
+            best += 0.1 * 0.5 * (a - c) / bend
+    # The beat, not the off-beat: where the bass lands, as the tracker decides it.
+    on = float(_comb(low, period, np.array([best]), k)[0])
+    off = float(_comb(low, period, np.array([best + period / 2]), k)[0])
+    if off > 1.6 * on + 1e-9:
+        best = (best + period / 2) % period
+    # Each stretch of 32 beats, every 16, on its own: where would it put the beat? Twice
+    # over — the second time with the period put right by the first. Where the period
+    # is a hair out, the stretches say so by where they put the beat: a little later
+    # each one along, in a straight line whose slope is how much.
+    for attempt in range(2):
+        near = best + np.arange(-period / 4, period / 4, 0.1)
+        agree, asked = 0, 0
+        centres, phases = [], []
+        for w in range(0, len(k) - 32 + 1, 16):
+            kw = k[w:w + 32]
+            sw = _comb(env, period, near, kw)
+            if float(sw.max()) < 1.3 * float(np.mean(sw)) + 1e-9:
+                continue                # nothing clear here: a breakdown, a silence
+            asked += 1
+            found = float(near[int(np.argmax(sw))])
+            if abs(found - best) <= 1.2:
+                agree += 1
+                centres.append(float(kw.mean()))
+                phases.append(found)
+        if asked < 4 or agree < 0.85 * asked:
+            return None
+        if attempt == 1 or len(centres) < 4:
+            break
+        slope, at0 = np.polyfit(np.array(centres), np.array(phases), 1)
+        # Never more than a whisker: this puts right a hundredth of a beat a minute, and
+        # anything bigger is the stretches disagreeing, not the period.
+        if abs(slope) > 0.002 * period:
+            break
+        period += float(slope)
+        best = float(at0)
+    return best + k * period
+
+
 def _track(env: np.ndarray, bpm: float, tightness: float = 100.0) -> np.ndarray:
     """The frames the beats fall on."""
     period = 60.0 * _FPS / bpm
@@ -362,6 +525,7 @@ def measure(audio: pathlib.Path) -> dict:
     # and beats laid over it anyway would be a metronome that ignores the music.
     if bpm <= 0 or confidence < 0.12:
         return analysis.add(out, x, [], 0, low, _FPS)
+    bpm = _refine(env, _level(env, low, bpm))
     beats = _track(env, bpm)
     beats = _on_the_beat(beats, low, 60.0 * _FPS / bpm)
     # Only where there is music. The tracker walks back from the end of the file to the
@@ -379,10 +543,17 @@ def measure(audio: pathlib.Path) -> dict:
     out["contrast"] = round(on_beat / between, 2)
     if out["contrast"] < _PULSE_CONTRAST:
         return analysis.add(out, x, [], 0, low, _FPS)
+    # One exact grid where the record keeps one tempo, which is what the booth holds two
+    # records together by; the beats as tracked where it does not.
+    grid = _one_grid(env, low, 60.0 * _FPS / bpm, int(beats[0]), int(beats[-1]) + 1)
+    if grid is not None:
+        at_ms = (grid * _HOP + _ONSET_AT) * 1000.0 / _RATE
+        beats = np.round(grid).astype(np.int64)
+        out["grid"] = True
     # The tempo as the beats actually came out — a line through all of them, which is
     # far finer than the spacing of two, counted in frames of 11 ms.
     slope = float(np.polyfit(np.arange(len(at_ms)), at_ms, 1)[0])
-    out["bpm"] = round(60000.0 / slope, 1)
+    out["bpm"] = round(60000.0 / slope, 2)
     out["beats"] = [int(round(ms)) for ms in at_ms]
     out["bar_starts_on"] = _bar_starts_on(beats, low)
     return analysis.add(out, x, out["beats"], out["bar_starts_on"], low, _FPS)
