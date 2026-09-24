@@ -699,11 +699,8 @@ class AutoMix extends ChangeNotifier {
         axes: _axes,
         recent: recent,
       );
-      // A hand's choice for this very pair stands; for any other pair it is spent.
-      final steer = _steer;
-      final byHand =
-          steer != null && steer.from == from.track!.id && steer.to == coming.id ? steer.plan : null;
-      if (byHand == null) _steer = null;
+      // A hand's choice for this very pair stands.
+      final byHand = steers[(from.track!.id, coming.id)];
       planned = byHand ?? options.first;
       await _apply(planned, from, to, timing, onTheDrop: onTheDrop, exact: byHand != null);
       chosen = (kind: planned.kind, bars: planned.bars);
@@ -756,12 +753,82 @@ class AutoMix extends ChangeNotifier {
   /// Where each of the two records sings, as the planner saw it.
   VocalMap? fromVoice, toVoice;
 
-  /// A hand's choice, for the pair it was made for: kept across the automix asking
-  /// again (the queue moving, the style changed) until that pair has been mixed.
-  ({int from, int to, MixPlan plan})? _steer;
+  /// A hand's choices, by the pair each was made for: kept across the automix asking
+  /// again (the queue moving, the style changed) until that pair has been mixed —
+  /// for the pair coming, and for any pair further down the set (the set view).
+  final steers = <(int from, int to), MixPlan>{};
 
   /// Whether the move coming is one a hand chose.
-  bool get steered => _steer != null && identical(_steer!.plan, planned);
+  bool get steered {
+    final on = current, nxt = next;
+    return on != null && nxt != null && planned != null && identical(steers[(on.id, nxt.id)], planned);
+  }
+
+  // ------------------------------------------------------------------ the set
+  int get at => _at;
+  List<Track> get tracks => _tracks;
+
+  /// The records still to come after the one on now, in the order they will play.
+  List<Track> get upcoming => _at + 1 < _tracks.length ? _tracks.sublist(_at + 1) : const [];
+
+  /// How well [b] would follow [a], by what is known of both now — for the set view.
+  Fit fitBetween(Track a, Track b) => SetPlanner.fit(booth.timing.peek(a.id), booth.timing.peek(b.id),
+      ta: a, tb: b, fromPitch: identical(a, current) ? masterTargetPitch : 1);
+
+  /// Every move the planner would offer between [a] and [b], best first — what the
+  /// set view shows for a pair further down, and steers by. Asks the house for what
+  /// it does not have yet (the grids, the voices), within reason.
+  Future<List<MixPlan>> optionsFor(Track a, Track b) async {
+    final ta = await booth.timing.of(a).timeout(const Duration(seconds: 15), onTimeout: () => null);
+    final tb = await booth.timing.of(b).timeout(const Duration(seconds: 15), onTimeout: () => null);
+    if (ta == null || tb == null) return const [];
+    final voices = await Future.wait([
+      booth.vocals.of(a).timeout(const Duration(seconds: 6), onTimeout: () => null),
+      booth.vocals.of(b).timeout(const Duration(seconds: 6), onTimeout: () => null),
+    ]);
+    final stems = _inParts[a.id] == true && _inParts[b.id] == true && booth.mixer.canStem;
+    return Planner.options(
+      from: MixSide(timing: ta, vocals: voices[0], stems: stems, fx: booth.mixer.canShift,
+          pitch: identical(a, current) ? masterTargetPitch : 1),
+      to: MixSide(timing: tb, vocals: voices[1], stems: stems, fx: booth.mixer.canShift),
+      style: style,
+      axes: _axes,
+      recent: recent,
+    );
+  }
+
+  /// The move the planner would make between [a] and [b], as far as it has been
+  /// worked out — asked for the first time this is called, and told when it is there.
+  final _previews = <(int, int), MixPlan?>{};
+  MixPlan? previewOf(Track a, Track b) {
+    final key = (a.id, b.id);
+    final byHand = steers[key];
+    if (byHand != null) return byHand;
+    if (_previews.containsKey(key)) return _previews[key];
+    _previews[key] = null;
+    unawaited(() async {
+      final options = await optionsFor(a, b);
+      if (_disposed) return;
+      _previews[key] = options.isEmpty ? null : options.first;
+      notifyListeners();
+    }());
+    return null;
+  }
+
+  /// A hand's choice for a pair further down the set: kept until that pair is mixed.
+  void steerPair(Track a, Track b, MixPlan? p) {
+    final key = (a.id, b.id);
+    if (p == null) {
+      steers.remove(key);
+    } else {
+      steers[key] = p;
+    }
+    if (identical(a, current) && identical(b, next)) {
+      unawaited(p == null ? letThePlannerChoose() : steer(p));
+      return;
+    }
+    notifyListeners();
+  }
 
   /// Whether a hand can steer now: a plan laid out, its record waiting on the other
   /// deck, and nothing already under way.
@@ -834,7 +901,7 @@ class AutoMix extends ChangeNotifier {
   Future<void> steer(MixPlan p) async {
     if (!canSteer) return;
     final from = booth.master, to = booth.other(from);
-    _steer = (from: from.track!.id, to: to.track!.id, plan: p);
+    steers[(from.track!.id, to.track!.id)] = p;
     // A preparation under way would plan over the hand: it starts over, and keeps it.
     _asked++;
     await _apply(p, from, to, to.timing!, exact: true);
@@ -889,8 +956,8 @@ class AutoMix extends ChangeNotifier {
 
   /// The planner's again: what a hand chose is let go of, and the move chosen afresh.
   Future<void> letThePlannerChoose() async {
-    if (_steer == null) return;
-    _steer = null;
+    final on = current, nxt = next;
+    if (on == null || nxt == null || steers.remove((on.id, nxt.id)) == null) return;
     booth.note(BoothEventKind.plan, 'Back to the Auto DJ\'s own choice');
     await _prepareNext();
   }
@@ -979,8 +1046,10 @@ class AutoMix extends ChangeNotifier {
         stop();
         return;
       }
+      final done = (from.track?.id, booth.master.track?.id);
       _at++;
-      _steer = null;
+      steers.remove(done);
+      _previews.remove(done);
       options = const [];
       planned = null;
       // The record now leading was bent to the last one's tempo, and turned down to

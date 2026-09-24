@@ -159,6 +159,41 @@ class _StripPainter extends CustomPainter {
     final base = h * 0.78;
     canvas.drawLine(Offset(0, base), Offset(w, base), Paint()..color = ink.withValues(alpha: 0.12)..strokeWidth = 1);
 
+    // What the record is doing here, where the house has read it off the stems: each
+    // section named at its start, a breakdown shaded, a drop marked.
+    final structure = timing?.structure;
+    if (structure != null && structure.sections.isNotEmpty) {
+      for (final s in structure.sections) {
+        final x0 = xOf(s.startMs * 1000.0), x1 = xOf(s.endMs * 1000.0);
+        if (x1 < 0 || x0 > w) continue;
+        if (s.label == 'breakdown' || s.label == 'build') {
+          canvas.drawRect(Rect.fromLTRB(x0.clamp(0, w), 0, x1.clamp(0, w), h),
+              Paint()..color = quiet.withValues(alpha: s.label == 'build' ? 0.10 : 0.07));
+        }
+        if (x0 >= 0 && x0 <= w) {
+          canvas.drawLine(Offset(x0, 0), Offset(x0, h), Paint()..color = quiet.withValues(alpha: 0.35)..strokeWidth = 1);
+          final tp = TextPainter(
+            text: TextSpan(text: s.label.toUpperCase(), style: TextStyle(fontSize: 7.5, letterSpacing: 0.8, color: quiet, fontWeight: FontWeight.w700)),
+            textDirection: TextDirection.ltr,
+          )..layout();
+          canvas.save();
+          if (mirrored) {
+            canvas.translate(x0 + 3, h - 2);
+            canvas.scale(1, -1);
+            tp.paint(canvas, Offset.zero);
+          } else {
+            tp.paint(canvas, Offset(x0 + 3, 2));
+          }
+          canvas.restore();
+        }
+      }
+      for (final d in structure.dropsMs) {
+        final x = xOf(d * 1000.0);
+        if (x < 0 || x > w) continue;
+        canvas.drawLine(Offset(x, 0), Offset(x, h), Paint()..color = ink.withValues(alpha: 0.6)..strokeWidth = 1.5);
+      }
+    }
+
     // The loop, shaded, first: everything else is printed over it.
     final lp = loop;
     if (lp != null) {

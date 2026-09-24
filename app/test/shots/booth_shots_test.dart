@@ -20,6 +20,7 @@ import 'package:muse/src/state/app_state.dart';
 import 'package:muse/src/state/booth/booth.dart';
 import 'package:muse/src/state/booth/planner.dart';
 import 'package:muse/src/state/player.dart';
+import 'package:muse/src/ui/booth/desk/set_planner_page.dart';
 import 'package:muse/src/ui/booth_page.dart';
 import 'package:muse/src/ui/theme.dart';
 import 'package:muse/src/worker/parts_jobs.dart';
@@ -103,7 +104,7 @@ void main() {
 
   for (final (w, h) in const [(1600.0, 1000.0), (1280.0, 760.0), (1920.0, 1080.0)]) {
   for (final dark in [true]) {
-    for (final state in ['empty', 'playing', if (w == 1600) 'mixing', if (w != 1920) 'parts', if (w != 1280) 'crate', 'plan']) {
+    for (final state in ['empty', 'playing', if (w == 1600) 'mixing', if (w != 1920) 'parts', if (w != 1280) 'crate', 'plan', 'set', 'planner']) {
       testWidgets('the booth at ${w.round()}x${h.round()}, $state', (tester) async {
         JustAudioPlatform.instance = FakeJustAudio();
         useThisClientInstead(MockClient((r) async => r.url.path.contains('stream-key')
@@ -174,6 +175,15 @@ void main() {
               b.note(BoothEventKind.mix, 'A into B · blend, 16 bars', deck: b.b);
               b.mixing = (kind: Transition.blend, from: 'A', to: 'B', bars: 16, k: 0.4);
             }
+            if (state == 'set' || state == 'planner') {
+              // The Auto DJ with the whole queue ahead of it: the set as a strip, and
+              // the planner over the same records.
+              for (final t in app.player!.items) {
+                b.timing.put(t.id, _timing(t.id % 2 == 0 ? 128 : 130, t.id % 3 == 0 ? '8A' : '9A', t.id));
+              }
+              await b.auto.start([one, ...app.player!.items]).timeout(const Duration(seconds: 10));
+              b.auto.setLocked(app.player!.items[2].id, true);
+            }
             if (state == 'plan') {
               // The Auto DJ between the two, both in stems, the words known: its plan
               // laid out as it would lay it out.
@@ -227,7 +237,9 @@ void main() {
           child: MaterialApp(
             debugShowCheckedModeBanner: false,
             theme: dark ? MuseTheme.dark() : MuseTheme.light(),
-            home: RepaintBoundary(key: const ValueKey('shot'), child: const BoothPage()),
+            home: RepaintBoundary(
+                key: const ValueKey('shot'),
+                child: state == 'planner' ? SetPlannerPage(booth: app.booth) : const BoothPage()),
           ),
         ));
         for (var i = 0; i < 6; i++) {

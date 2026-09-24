@@ -6,9 +6,12 @@ import 'package:flutter/material.dart';
 import '../../../api/models.dart';
 import '../../../state/booth/booth.dart';
 import '../../../state/booth/mixer.dart';
+import '../../../state/booth/automix.dart';
+import '../../../state/booth/planner.dart';
 import '../../feel.dart';
 import '../../mag.dart';
 import 'console.dart';
+import 'console_set.dart' show planPair;
 
 /// Asked for from the keyboard (P): the room switches between the waveforms and the
 /// plan each time this counts up.
@@ -52,7 +55,7 @@ class _ConsolePlanState extends State<ConsolePlan> {
   Widget build(BuildContext context) {
     final booth = widget.booth;
     return ListenableBuilder(
-      listenable: Listenable.merge([booth, booth.auto]),
+      listenable: Listenable.merge([booth, booth.auto, planPair]),
       builder: (context, _) => Plate(
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
         child: _body(context),
@@ -66,6 +69,11 @@ class _ConsolePlanState extends State<ConsolePlan> {
     final accent = Theme.of(context).colorScheme.primary;
     final from = booth.master;
     final to = booth.other(from);
+    final pair = planPair.value;
+    // A pair further down the set, asked for from the strip.
+    if (pair != null && (pair.$1 != auto.current?.id || pair.$2 != auto.next?.id)) {
+      return _PairBody(booth: booth, pair: pair, accent: accent);
+    }
     final p = auto.planned;
     final go = auto.goesAt;
 
@@ -234,9 +242,23 @@ class _Options extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final auto = booth.auto;
+    return OptionsList(
+        options: auto.options, chosen: auto.planned, enabled: enabled, onPick: (o) => unawaited(auto.steer(o)));
+  }
+}
+
+/// Every move the planner weighed for a pair, best first; one tapped is the one done.
+class OptionsList extends StatelessWidget {
+  const OptionsList({super.key, required this.options, required this.chosen, required this.enabled, required this.onPick});
+  final List<MixPlan> options;
+  final MixPlan? chosen;
+  final bool enabled;
+  final void Function(MixPlan) onPick;
+
+  @override
+  Widget build(BuildContext context) {
     final accent = Theme.of(context).colorScheme.primary;
-    final options = auto.options;
-    final now = auto.planned;
+    final now = chosen;
     final top = options.map((o) => o.score).fold<double>(0.01, math.max);
     return Container(
       decoration: BoxDecoration(
@@ -249,12 +271,12 @@ class _Options extends StatelessWidget {
         itemCount: options.length,
         itemBuilder: (context, i) {
           final o = options[i];
-          final chosen = now != null && now.kind == o.kind && (identical(now, o) || now.why == o.why);
+          final chosen = now != null && now.kind == o.kind && now.shift == o.shift && (identical(now, o) || now.why == o.why);
           return InkWell(
             onTap: enabled && !chosen
                 ? () {
                     feel(Feel.commit);
-                    unawaited(auto.steer(o));
+                    onPick(o);
                   }
                 : null,
             child: Padding(
@@ -635,4 +657,113 @@ class _PlanPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_PlanPainter old) => true;
+}
+
+
+/// The plan view on a pair further down the set: the move the booth would make
+/// between them (or the one a hand chose), drawn as the next one is, with every other
+/// move it weighed beside it.
+class _PairBody extends StatelessWidget {
+  const _PairBody({required this.booth, required this.pair, required this.accent});
+  final Booth booth;
+  final (int, int) pair;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    final auto = booth.auto;
+    final all = [if (auto.current != null) auto.current!, ...auto.upcoming];
+    Track? find(int id) => all.cast<Track?>().firstWhere((t) => t!.id == id, orElse: () => null);
+    final a = find(pair.$1), b = find(pair.$2);
+    final back = Pad(label: 'NEXT PAIR', height: 24, colour: Console.ink, tooltip: 'Back to the transition coming', onTap: () => planPair.value = null);
+    if (a == null || b == null) {
+      return Row(children: [
+        Expanded(child: Text('That pair is no longer in the set.', style: Mag.typewriter(12, color: Console.quiet))),
+        back,
+      ]);
+    }
+    final ta = booth.timing.peek(a.id), tb = booth.timing.peek(b.id);
+    return FutureBuilder<List<MixPlan>>(
+      future: auto.optionsFor(a, b),
+      builder: (context, snap) {
+        final options = snap.data ?? const <MixPlan>[];
+        final chosen = auto.steers[pair] ?? (options.isEmpty ? null : options.first);
+        final header = Row(children: [
+          Text('PLAN', style: Console.label(9, color: accent)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text('${a.displayTitle}  →  ${b.displayTitle}',
+                maxLines: 1, overflow: TextOverflow.ellipsis, style: Mag.title(13, color: Console.ink)),
+          ),
+          if (chosen != null) ...[
+            Icon(transitionIcon(chosen.kind), size: 16, color: Console.ink),
+            const SizedBox(width: 6),
+            Text('${chosen.kind.label.toUpperCase()} · ${chosen.bars} BARS', style: Console.label(9, color: Console.ink)),
+            const SizedBox(width: 10),
+          ],
+          if (auto.steers.containsKey(pair)) ...[
+            Text('BY HAND', style: Console.label(8.5, color: accent)),
+            const SizedBox(width: 6),
+            Pad(label: 'AUTO', height: 24, colour: Console.ink, onTap: () => auto.steerPair(a, b, null)),
+            const SizedBox(width: 6),
+          ],
+          back,
+        ]);
+        Widget middle;
+        if (ta == null || tb == null || ta.bar == null || tb.bar == null) {
+          middle = Center(child: Text('Nothing known of these two yet.', style: Mag.typewriter(12, color: Console.quiet)));
+        } else if (chosen == null) {
+          middle = Center(child: Text(snap.hasData ? 'These two cannot be put in step.' : 'Working it out…', style: Mag.typewriter(12, color: Console.quiet)));
+        } else {
+          final bar = ta.bar!;
+          final goesAt = chosen.outAt ?? AutoMix.outPoint(ta, length: bar * chosen.bars);
+          final inAt = chosen.inAt ?? AutoMix.inPoint(tb, bars: chosen.bars);
+          final steps = MixStep.onBars(Booth.plan(chosen.kind, from: 'A', to: 'B'), chosen.bars);
+          middle = ClipRect(
+            child: CustomPaint(
+              painter: _PlanPainter(_Picture(
+                from: ta,
+                to: tb,
+                fromDeck: 'A',
+                toDeck: 'B',
+                goesAt: goesAt,
+                inAt: inAt,
+                bars: chosen.bars,
+                steps: steps,
+                fromVoice: booth.vocals.peek(a.id),
+                toVoice: booth.vocals.peek(b.id),
+                playhead: Duration.zero,
+                stems: chosen.kind.needsStems,
+                fromTitle: a.displayTitle,
+                toTitle: b.displayTitle,
+              )),
+            ),
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            header,
+            const SizedBox(height: 6),
+            Expanded(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(child: middle),
+                  if (options.length > 1) ...[
+                    const SizedBox(width: 12),
+                    SizedBox(
+                      width: 250,
+                      child: OptionsList(
+                          options: options, chosen: chosen, enabled: true, onPick: (o) => auto.steerPair(a, b, o)),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
 }

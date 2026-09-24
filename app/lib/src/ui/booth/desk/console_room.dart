@@ -15,12 +15,12 @@ import '../../snack.dart';
 import '../../full_screen.dart';
 import '../../theme.dart';
 import 'console.dart';
-import 'console_auto.dart';
 import 'console_crate.dart';
 import 'console_deck.dart';
 import 'console_log.dart';
 import 'console_mixer.dart';
 import 'console_plan.dart';
+import 'console_set.dart';
 import 'console_waves.dart';
 
 /// The booth on a desk: a console. The records' shapes across the top, a deck either
@@ -68,6 +68,15 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
     unawaited(_remember());
     _app.addListener(_queueMoved);
     planViewToggles.addListener(_togglePlan);
+    planPair.addListener(_pairAsked);
+  }
+
+  /// A pair was tapped in the set strip: the plan view, on that pair.
+  void _pairAsked() {
+    if (planPair.value != null && !_planView) {
+      setState(() => _planView = true);
+      unawaited(_keepLayout());
+    }
   }
 
   Future<void> _remember() async {
@@ -103,6 +112,8 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
     if (fullScreen.value) unawaited(toggleFullScreen());
     _app.removeListener(_queueMoved);
     planViewToggles.removeListener(_togglePlan);
+    planPair.removeListener(_pairAsked);
+    planPair.value = null;
     _tab.dispose();
     super.dispose();
   }
@@ -247,7 +258,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
             const SizedBox(width: 2),
             _Mark(on: _b.live),
             const SizedBox(width: 22),
-            Expanded(child: ConsoleAuto(booth: _b)),
+            Expanded(child: ConsoleSet(booth: _b)),
             const SizedBox(width: 12),
             if (_b.parts.separatesHere)
               _PartsLight(

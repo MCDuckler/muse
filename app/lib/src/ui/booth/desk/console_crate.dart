@@ -13,6 +13,7 @@ import '../../artwork.dart';
 import '../../mag.dart';
 import '../../snack.dart';
 import 'console.dart';
+import 'set_planner_page.dart';
 
 /// The crate's pages.
 enum CrateTab { queue, library, search, parts }
@@ -286,6 +287,7 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
         ),
         const SizedBox(width: 4),
         _Menu(items: [
+          ('Plan a set…', Icons.auto_awesome, () => openSetPlanner(context, widget.booth)),
           ('Clear the queue', Icons.clear_all, () => app.clearQueue(context: context)),
         ]),
       ],
