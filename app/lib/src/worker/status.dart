@@ -48,7 +48,12 @@ class FetchStatus {
     this.pid,
     this.at,
     this.split,
+    this.build,
   });
+
+  /// The build of the program that wrote it (its build-stamp.txt): an app that finds a
+  /// helper from another build replaces it.
+  final String? build;
 
   /// The splitter's side, where this program takes records apart too.
   final SplitStatus? split;
@@ -78,7 +83,9 @@ class FetchStatus {
   bool fresh({Duration within = const Duration(seconds: 20), DateTime? now}) =>
       at != null && (now ?? DateTime.now()).difference(at!) < within;
 
-  factory FetchStatus.of(Downloader d, {int? pid, Splitter? splitter}) => FetchStatus(
+  factory FetchStatus.of(Downloader d, {int? pid, Splitter? splitter, String? build}) =>
+      FetchStatus(
+        build: build,
         split: splitter == null ? null : splitStatusOf(splitter),
         state: d.state,
         problem: d.problem,
@@ -111,6 +118,7 @@ class FetchStatus {
         'log': log,
         'pid': pid,
         'at': at?.toUtc().toIso8601String(),
+        'build': build,
         if (split case final sp?)
           'split': {
             'state': sp.state.name, 'problem': sp.problem, 'gpu': sp.gpu,
@@ -147,6 +155,7 @@ class FetchStatus {
       pid: (j['pid'] as num?)?.toInt(),
       at: when(j['at']),
       split: _splitFrom(j['split']),
+      build: j['build'] as String?,
     );
   }
 

@@ -97,6 +97,29 @@ void main() {
     expect(started.readAsStringSync().trim(), 'new');
   });
 
+  test('a program still running from the old folder does not stop the swap', () async {
+    final installed = await build('app2', 'old');
+    // The background helper: a copy of `sleep` running from the install folder, which
+    // is a busy text file that cannot be copied over.
+    final busy = File('${installed.path}/wetowl-fetch');
+    await File('/bin/sleep').copy(busy.path);
+    await Process.run('chmod', ['+x', busy.path]);
+    final helper = await Process.start(busy.path, ['5']);
+    addTearDown(helper.kill);
+    final fresh = await build('stage2/wetowl', 'new');
+    await File('${fresh.path}/wetowl-fetch').writeAsString('#!/bin/sh\necho new\n');
+
+    final app = await Process.start('sleep', ['0.1']);
+    final script = File('${root.path}/swap2.sh');
+    await script.writeAsString(Updates.swapScript(
+        os: 'linux', pid: app.pid, from: fresh.path, into: installed.path, exe: 'wetowl'));
+    final swap = await Process.run('sh', [script.path]);
+    expect(swap.exitCode, 0, reason: '${swap.stderr}');
+    expect(busy.readAsStringSync(), contains('echo new'),
+        reason: 'renamed into place under the running one');
+    expect(File('${installed.path}/build-stamp.txt').readAsStringSync(), 'new');
+  });
+
   test('the Windows script waits, copies and starts the same way', () {
     final s = Updates.swapScript(
         os: 'windows',

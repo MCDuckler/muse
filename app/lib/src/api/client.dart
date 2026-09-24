@@ -331,6 +331,14 @@ class ApiClient {
   Future<void> unsavePlaylist(int id) async => await _decode(
       await net.delete(_u('/playlists/$id/save'), headers: _headers));
 
+  /// Have the pool take every song in a list apart, now and as songs arrive — or
+  /// stop. Answers how many songs were queued.
+  Future<int> setPlaylistAutoSplit(int id, bool on) async {
+    final d = await _decode(await net.post(_u('/playlists/$id/auto-split'),
+        headers: _headers, body: jsonEncode({'auto_split': on}))) as Map;
+    return (d['queued'] as num?)?.toInt() ?? 0;
+  }
+
   /// Let everybody else add to a list of yours, or stop letting them.
   Future<bool> setPlaylistOpenEdit(int id, bool on) async {
     final d = await _decode(await net.post(_u('/playlists/$id/open-edit'),

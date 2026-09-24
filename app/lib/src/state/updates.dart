@@ -435,7 +435,7 @@ class Updates extends ChangeNotifier {
         ':wait',
         'tasklist /FI "PID eq $pid" 2>NUL | find "$pid" >NUL',
         'if not errorlevel 1 (timeout /t 1 /nobreak >NUL & goto wait)',
-        'robocopy "$from" "$into" /E /R:10 /W:1 >NUL',
+        'robocopy "$from" "$into" /E /R:30 /W:1 >NUL',
         'if errorlevel 8 exit /b 1',
         'start "" "$into\\$exe"',
         '',
@@ -449,7 +449,14 @@ class Updates extends ChangeNotifier {
       'into=${_sh(into)}',
       'exe=${_sh(exe)}',
       'while kill -0 "\$pid" 2>/dev/null; do sleep 0.3; done',
-      'cp -a "\$from/." "\$into/" || exit 1',
+      // File by file, each copied beside itself and renamed into place: a program still
+      // running from the old file (the background helper) keeps the old one open and the
+      // new one lands anyway. Copied straight over, it was "text file busy", and the old
+      // helper stayed on the disk and in the pool.
+      '(cd "\$from" && find . -type d) | while read -r d; do mkdir -p "\$into/\$d"; done',
+      '(cd "\$from" && find . ! -type d) | while read -r f; do '
+          'cp -a "\$from/\$f" "\$into/\$f.new" && mv -f "\$into/\$f.new" "\$into/\$f" || exit 1; done '
+          '|| exit 1',
       'chmod +x "\$into/\$exe" "\$into/wetowl-fetch" 2>/dev/null',
       'cd "\$into" && nohup "./\$exe" >/dev/null 2>&1 &',
       '',
@@ -457,6 +464,9 @@ class Updates extends ChangeNotifier {
   }
 
   static String _sh(String s) => "'${s.replaceAll("'", "'\\''")}'";
+
+  /// Stops the windowless helper before the files are swapped (set by the pool).
+  static Future<void> Function()? stopHelperForUpdate;
 
   /// Close, and come back as the new build.
   Future<void> _applyDesktop() async {
@@ -471,6 +481,9 @@ class Updates extends ChangeNotifier {
             'download the build and unpack it over the old one by hand',
             into.path);
       }
+      // The background helper runs from this folder too: told to stop first, so its
+      // own file can be replaced, and started again as the new build by the new app.
+      await stopHelperForUpdate?.call();
       final scripts = from.parent;
       final script = File(
           '${scripts.path}${Platform.pathSeparator}swap${os == 'windows' ? '.cmd' : '.sh'}');

@@ -613,6 +613,9 @@ class Playlist {
   /// Its owner let everybody add to it.
   final bool openEdit;
 
+  /// Every song in it is taken apart by the pool as it arrives: a crate for the booth.
+  final bool autoSplit;
+
   /// Whose it is, when it is not yours.
   final String? ownerName;
   final int? ownerId;
@@ -634,6 +637,7 @@ class Playlist {
     this.mine = true,
     this.saved = false,
     this.openEdit = false,
+    this.autoSplit = false,
     this.ownerName,
     this.ownerId,
     bool? editable,
@@ -661,6 +665,7 @@ class Playlist {
         mine: j['mine'] as bool? ?? !(j['saved'] == true),
         saved: j['saved'] == true,
         openEdit: j['open_edit'] == true,
+        autoSplit: j['auto_split'] == true,
         ownerName: j['owner_name'] as String? ??
             (j['owner'] is Map ? (j['owner'] as Map)['name'] as String? : null),
         ownerId: j['owner'] is Map ? (j['owner'] as Map)['id'] as int? : null,

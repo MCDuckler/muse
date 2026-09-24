@@ -98,6 +98,7 @@ class LibraryPage extends StatelessWidget {
               // you cannot change is confusing until you can see it is not yours.
               if (p.saved) 'from ${p.ownerName ?? 'somebody'}',
               if (p.openEdit && p.mine) 'shared',
+              if (p.autoSplit) 'taken apart',
               if (p.unmatched > 0) '${p.unmatched} not matched',
             ].join(' · ')),
             trailing: PopupMenuButton<String>(
@@ -343,6 +344,22 @@ class _PlaylistPageState extends State<PlaylistPage> {
   }
 
   /// Letting everybody else add to a list of your own.
+  Future<void> _autoSplit(Playlist list, bool on) async {
+    final api = context.read<AppState>().api;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final queued = await api.setPlaylistAutoSplit(list.id, on);
+      _reload();
+      messenger.say(snack(Text(on
+          ? queued == 0
+              ? 'Songs added to "${list.name}" will be taken apart'
+              : 'Taking $queued ${queued == 1 ? 'song' : 'songs'} apart, and every one added'
+          : 'Songs added to "${list.name}" are left whole')));
+    } catch (e) {
+      messenger.say(snack(Text('$e')));
+    }
+  }
+
   Future<void> _share(Playlist list, bool on) async {
     final api = context.read<AppState>().api;
     final messenger = ScaffoldMessenger.of(context);
@@ -388,6 +405,17 @@ class _PlaylistPageState extends State<PlaylistPage> {
               tooltip:
                   list.saved ? 'In your library' : 'Save to your library',
               onPressed: () => _keep(list),
+            ),
+          // A crate for the booth: every song in it taken apart by the pool as it
+          // arrives, so it is ready to mix in parts on any computer or phone.
+          if (list != null && list.mine)
+            IconButton(
+              icon: Icon(Icons.call_split,
+                  color: list.autoSplit ? Theme.of(context).colorScheme.primary : null),
+              tooltip: list.autoSplit
+                  ? 'Every song is taken apart — tap to stop'
+                  : 'Take every song apart for the booth',
+              onPressed: () => _autoSplit(list, !list.autoSplit),
             ),
           // Sharing is the owner's decision and nobody else's, so only they are
           // offered it — and only for a list made here, since a mirror of somebody
@@ -800,6 +828,7 @@ class _PlaylistHeader extends StatelessWidget {
       if (playlist.saved && playlist.ownerName != null) 'from ${playlist.ownerName}',
       if (playlist.isMirror) 'mirrored',
       if (playlist.openEdit && playlist.mine) 'shared',
+      if (playlist.autoSplit) 'taken apart',
     ].join(' · ');
     final facts = [
       '${items.length} ${items.length == 1 ? 'SONG' : 'SONGS'}',

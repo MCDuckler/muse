@@ -450,6 +450,8 @@ class _Computers extends StatelessWidget {
               '${d['owner']}',
               if (d['blocked'] == true)
                 'kept out'
+              else if (d['older'] == true && d['live'] == true)
+                'an older WetOwl — fetches only; update it to take records apart too'
               else if (d['live'] == true)
                 [
                   if (d['fetch'] == true) 'fetches',

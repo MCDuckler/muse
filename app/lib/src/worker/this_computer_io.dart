@@ -12,6 +12,7 @@ import '../api/client.dart';
 import '../api/connection.dart';
 import '../state/app_state.dart';
 import '../state/booth/parts.dart';
+import '../state/updates.dart';
 import '../ui/mag.dart';
 import '../ui/mag_parts.dart';
 import 'background.dart';
@@ -146,6 +147,11 @@ class PoolHere extends ChangeNotifier {
       findFfmpeg: () async => (await Tools.find(own: files.tools)).ffmpeg,
       pool: said,
     )..addListener(notifyListeners);
+    // An update swaps the files the helper runs from: it is stopped first, and the new
+    // app starts the new helper.
+    Updates.stopHelperForUpdate = () async {
+      if (await background.alive) await _helperGone();
+    };
     // The app's own splits are the pool's too: claimed before, handed in after.
     splitPool = HttpSplitServer(baseUrl: () => api.baseUrl, token: () => api.token, client: net);
     canSplit = await splitter.able();
@@ -186,7 +192,28 @@ class PoolHere extends ChangeNotifier {
   }
 
   /// Whether the helper said something lately: it is running.
-  bool get helperAlive => heard?.fresh() ?? false;
+  bool get helperAlive => (heard?.fresh() ?? false) && heard?.pid != null;
+
+  /// This app's own build, from the stamp beside it: what the helper has to be too.
+  late final String? myBuild = () {
+    try {
+      return File('${File(Platform.resolvedExecutable).parent.path}'
+              '${Platform.pathSeparator}build-stamp.txt')
+          .readAsStringSync()
+          .trim();
+    } catch (_) {
+      return null;
+    }
+  }();
+
+  /// Tell the helper to go, and wait until it has — at most [within].
+  Future<void> _helperGone({Duration within = const Duration(seconds: 12)}) async {
+    await background.stop();
+    final until = DateTime.now().add(within);
+    while (DateTime.now().isBefore(until) && await background.alive) {
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+    }
+  }
 
   /// The downloader's side, whichever program is doing it.
   FetchStatus get fetching {
@@ -208,6 +235,8 @@ class PoolHere extends ChangeNotifier {
     } else {
       await _startHere();
     }
+    // Parts made here before they could be shared: handed in now, in the background.
+    unawaited(splitter.shareWhatIsHere());
   }
 
   Future<bool> _takeTheLock() async {
@@ -265,6 +294,13 @@ class PoolHere extends ChangeNotifier {
     if (!fetchForPool && !splitForPool) {
       await background.stop();
       return;
+    }
+    // A helper from another build — left running across an update, which could not
+    // replace a program that was running — is stopped and started again as this one.
+    await _hear();
+    if (helperAlive && myBuild != null && heard?.build != myBuild) {
+      debugPrint('pool: the helper is build ${heard?.build}, this is $myBuild: replacing it');
+      await _helperGone();
     }
     await background.start(
         server: api.baseUrl,
@@ -537,6 +573,14 @@ class _ThisComputerState extends State<_ThisComputer> {
               value: p.splitForPool && p.canSplit,
               onChanged: _busy || !p.canSplit ? null : (v) => _do(() => p.set(split: v)),
             ),
+            if (p.splitter.sharing > 0)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(
+                    'Sharing records taken apart here before: '
+                    '${p.splitter.shared} of ${p.splitter.sharing}',
+                    style: typed),
+              ),
             if (sp?.state == SplitterState.working && sp?.percent != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 6),

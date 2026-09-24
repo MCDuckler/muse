@@ -40,7 +40,11 @@ class BackgroundFetcher {
 
   /// Alive: it has said something in the last twenty seconds, and it says something
   /// every five.
-  Future<bool> get alive async => (await status())?.fresh() ?? false;
+  Future<bool> get alive async {
+    final s = await status();
+    // Its last word, written as it leaves, carries no process: gone, however fresh.
+    return s != null && s.fresh() && s.pid != null;
+  }
 
   /// Tell it what to do and see that it is running. Safe to call when it already is:
   /// the file is rewritten, which it reads, and a second copy of it finds the lock taken

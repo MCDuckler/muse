@@ -346,6 +346,74 @@ class Splitter extends Told {
     }
   }
 
+  // ------------------------------------------------------------------ sharing
+  /// Records whose parts were made here before they could be shared — by a build from
+  /// before the pool, or while the house could not be reached — and have not been
+  /// handed in yet. Counted while [shareWhatIsHere] runs, for the pool page.
+  int sharing = 0, shared = 0;
+
+  File get _sharedList =>
+      File('${appFolder.path}${Platform.pathSeparator}shared-parts.json');
+
+  /// Hand in every record taken apart on this computer that the house has not got,
+  /// one at a time. Each is claimed from the queue first — the house queues it if it
+  /// has to — so nobody else is taking the same record apart meanwhile; one the house
+  /// already has, or that another computer is doing, is simply left. Remembered, so a
+  /// record is asked about once.
+  Future<void> shareWhatIsHere() async {
+    final done = <int>{};
+    try {
+      final j = await _sharedList.readAsString();
+      done.addAll([for (final x in (j.isEmpty ? const [] : _decodeIds(j))) x]);
+    } catch (_) {}
+    final byTrack = <int, Map<String, File>>{};
+    try {
+      if (!await partsFolder.exists()) return;
+      await for (final f in partsFolder.list()) {
+        if (f is! File) continue;
+        final m = RegExp(r'^(\d+)-([a-z]+)-v(\d+)\.m4a$').firstMatch(f.uri.pathSegments.last);
+        if (m == null || int.parse(m.group(3)!) != splitVersion) continue;
+        final id = int.parse(m.group(1)!);
+        if (done.contains(id) || !splitParts.contains(m.group(2))) continue;
+        (byTrack[id] ??= {})[m.group(2)!] = f;
+      }
+    } catch (_) {
+      return;
+    }
+    if (byTrack.isEmpty) return;
+    sharing = byTrack.length;
+    shared = 0;
+    _say('sharing ${byTrack.length} records taken apart here before');
+    for (final e in byTrack.entries) {
+      try {
+        final job = await server.claim(e.key);
+        if (job != null) {
+          await server.handIn(job, e.value);
+          shared++;
+          notifyListeners();
+        }
+        // Nothing to claim: the house has them, or another computer is on it.
+        done.add(e.key);
+      } on SplitRefused {
+        break;
+      } catch (err) {
+        // Not a record the house knows any more, say: tried again next time.
+        _say('could not share track ${e.key}: $err');
+      }
+      try {
+        await _sharedList.writeAsString('[${done.join(',')}]');
+      } catch (_) {}
+    }
+    _say('shared $shared of ${byTrack.length}');
+    sharing = 0;
+    notifyListeners();
+  }
+
+  static List<int> _decodeIds(String j) => [
+        for (final x in j.replaceAll(RegExp(r'[\[\]\s]'), '').split(','))
+          if (int.tryParse(x) case final n?) n
+      ];
+
   Future<void> _pause(Duration d) async {
     final until = DateTime.now().add(d);
     while (_wanted && DateTime.now().isBefore(until)) {

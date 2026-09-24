@@ -76,8 +76,15 @@ Future<void> main(List<String> args) async {
   // Said at most once a second however fast things change, and at least every five
   // so that whoever reads it can tell a quiet downloader from a dead one.
   Timer? soon;
-  Future<void> say() =>
-      files.writeStatus(FetchStatus.of(downloader, pid: pid, splitter: splitter));
+  String? build;
+  try {
+    build = File('${File(Platform.resolvedExecutable).parent.path}'
+            '${Platform.pathSeparator}build-stamp.txt')
+        .readAsStringSync()
+        .trim();
+  } catch (_) {}
+  Future<void> say() => files.writeStatus(
+      FetchStatus.of(downloader, pid: pid, splitter: splitter, build: build));
   void changed() => soon ??= Timer(const Duration(seconds: 1), () {
         soon = null;
         say();
