@@ -78,9 +78,13 @@ class _ConsolePlanState extends State<ConsolePlan> {
       why = 'A kept mix, done again as it was.';
     } else if (p == null || go == null || from.timing?.bar == null || to.timing?.bar == null) {
       final kind = auto.plan?.kind;
-      why = kind == null
-          ? 'Working out the next transition…'
-          : 'These two cannot be put in step: ${kind.label}, nothing more to plan.';
+      final doing = auto.working;
+      final secs = auto.workingFor?.inSeconds ?? 0;
+      why = doing != null
+          ? 'Working out the next transition: $doing…${secs >= 3 ? ' ($secs s)' : ''}'
+          : kind == null
+              ? 'Working out the next transition…'
+              : 'These two cannot be put in step: ${kind.label}, nothing more to plan.';
     }
     if (why != null) {
       return Center(child: Text(why, style: Mag.typewriter(12, color: Console.quiet)));

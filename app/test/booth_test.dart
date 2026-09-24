@@ -542,6 +542,43 @@ void main() {
       auto.stop();
     });
 
+    test('choosing for itself, a queue that keeps refreshing does not unmake its choice',
+        () async {
+      TrackTiming at(double bpm, String camelot) => TrackTiming(
+            durationMs: 60000,
+            bpm: bpm,
+            beats: [for (var i = 0; i < 1200; i++) i * 50],
+            downbeats: [for (var i = 0; i < 1200; i += 4) i * 50],
+            camelot: camelot,
+            cues: const MixCues(
+                firstDownbeatMs: 0, mixInMs: 2000, mixOutMs: 40000, soundEndMs: 59000),
+          );
+      booth.timing.put(1, at(124, '8A'));
+      booth.timing.put(2, at(150, '3B'));
+      booth.timing.put(3, at(125, '9A'));
+      await booth.auto.start([song(1), song(2), song(3)]);
+      booth.auto.chooseForYourself(true);
+      for (var i = 0; i < 50 && booth.auto.next?.id != 3; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(booth.auto.next?.id, 3);
+      int picks() => booth.events.where((e) => e.text.startsWith('Picked')).length;
+      final picked = picks();
+      // The queue refreshed again and again, in its own order, as the server sends it.
+      for (var i = 0; i < 10; i++) {
+        booth.auto.follow([song(1), song(2), song(3)]);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      for (var i = 0; i < 100 && booth.auto.working != null; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(booth.auto.next?.id, 3, reason: 'still the one it chose');
+      expect(picks(), picked, reason: 'not chosen again — and planned again — every refresh');
+      expect(booth.auto.working, isNull, reason: 'and the plan for it finished');
+      expect(booth.auto.plan, isNotNull);
+      booth.auto.stop();
+    });
+
     test('a hand can go now, or drop what is coming', () async {
       TrackTiming quick() => TrackTiming(
             durationMs: 60000,

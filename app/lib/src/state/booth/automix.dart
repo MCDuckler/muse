@@ -169,6 +169,16 @@ class AutoMix extends ChangeNotifier {
       _tracks = [if (on != null) on, ...ready];
       _at = on == null ? -1 : 0;
     }
+    // Choosing for itself, the record it chose stays chosen while it is still to come:
+    // put back in the queue's order on every refresh of the queue, it was chosen again,
+    // and the plan for it started over — for as long as the queue kept refreshing.
+    if (pickBest && before != null) {
+      final i = _tracks.indexWhere((t) => t.id == before);
+      if (i > _at + 1) {
+        _tracks = [..._tracks]..insert(_at + 1, _tracks[i]);
+        _tracks.removeAt(i + 1);
+      }
+    }
     if (next?.id != before && !booth.busy && !_going) {
       unawaited(_prepareNext());
     } else {
@@ -479,6 +489,10 @@ class AutoMix extends ChangeNotifier {
         }
       } finally {
         _preparing = null;
+        if (working != null) {
+          working = null;
+          notifyListeners();
+        }
       }
     }();
   }
@@ -488,12 +502,16 @@ class AutoMix extends ChangeNotifier {
 
   Future<void> _prepare(bool Function() stale) async {
     why = null;
+    _workingSince = DateTime.now();
     if (pickBest && !replaying) await _bringTheBestForward();
     if (stale()) return;
-    // Ask for the parts of what is coming before choosing how to get there: what the
-    // server has already made is what the booth is allowed to plan around.
-    await _askAhead();
-    if (stale()) return;
+    // The parts of what is coming asked for alongside, not waited for: the plan goes
+    // by what is on the decks (a record in stems plays as stems), and asking — a
+    // question of the house per record, a record fetched to split here — once held
+    // the plan up for half a minute.
+    working = 'looking ahead';
+    notifyListeners();
+    unawaited(_askAhead());
     final coming = next;
     final from = booth.master;
     final to = booth.other(from);
@@ -505,6 +523,8 @@ class AutoMix extends ChangeNotifier {
     }
     // Not waited for for ever: a house that does not answer is a record without a
     // grid, mixed the plain way, not a queue that stops.
+    working = 'reading the beat of ${coming.displayTitle}';
+    notifyListeners();
     final timing = await booth.timing
         .of(coming)
         .timeout(const Duration(seconds: 15), onTimeout: () => null);
@@ -557,6 +577,8 @@ class AutoMix extends ChangeNotifier {
             : (timing.cues?.firstDownbeat ?? timing.lead);
     // Only if it is not the one already waiting there, parked where it should be.
     if (to.track?.id != coming.id || to.playing) {
+      working = 'putting it on deck ${to.name}';
+      notifyListeners();
       await to.load(coming, timing: timing, at: at);
     }
     if (stale()) return;
@@ -566,6 +588,8 @@ class AutoMix extends ChangeNotifier {
     options = const [];
     this.planned = null;
     if (inStep && from.track != null) {
+      working = 'listening for the voices';
+      notifyListeners();
       final voices = await Future.wait([
         booth.vocals.of(from.track!).timeout(const Duration(seconds: 6), onTimeout: () => null),
         booth.vocals.of(coming).timeout(const Duration(seconds: 6), onTimeout: () => null),
@@ -598,6 +622,7 @@ class AutoMix extends ChangeNotifier {
       await to.setTempo(1.0);
     }
     if (stale()) return;
+    working = null;
     booth.note(BoothEventKind.next, 'Next: ${coming.displayTitle}', deck: to);
     final go2 = goesAt;
     booth.note(
@@ -618,6 +643,14 @@ class AutoMix extends ChangeNotifier {
   /// The move in hand for the transition coming — the planner's, or a hand's — with
   /// its places. Null where there is none worth showing (see [options]).
   MixPlan? planned;
+
+  /// What the preparation of the next transition is doing, while it is: for the plan
+  /// view to say rather than only "working it out". Null when it is not.
+  String? working;
+  DateTime? _workingSince;
+  Duration? get workingFor => working == null || _workingSince == null
+      ? null
+      : DateTime.now().difference(_workingSince!);
 
   /// Where in the new record the move starts it: where it is parked.
   Duration? comesInAt;
