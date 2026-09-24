@@ -272,6 +272,10 @@ class Splitter extends Told {
       final toSplit = record;
       await partsFolder.create(recursive: true);
       final into = {for (final p in splitParts) p: partFile(job.trackId, p).path};
+      // Its beats and bars too, by the tracker, where the kit has it: handed in with
+      // the parts, for the house's structure of the record.
+      final beatsAt =
+          '${partsFolder.path}${Platform.pathSeparator}${job.trackId}-beats-v1.json';
       var gpuNow = !_gpuOff;
       // The separator is this computer's to share with the app's own splits: held
       // only while it runs. Held through the fetching and the handing in as well, the
@@ -305,6 +309,7 @@ class Splitter extends Told {
                 audio: toSplit,
                 into: into,
                 upToSeconds: 12 * 60,
+                beats: beatsAt,
                 progress: (f) {
                   flight.percent = f;
                   notifyListeners();
@@ -350,10 +355,11 @@ class Splitter extends Told {
       // Handed in again if the house was not there to take it (a restart, a 502): the
       // parts are on disk, and throwing away a minute of the card for one bad answer
       // is how splits went missing.
+      final handing = {for (final e in into.entries) e.key: File(e.value)};
+      if (await File(beatsAt).exists()) handing['beats'] = File(beatsAt);
       for (var attempt = 1;; attempt++) {
         try {
-          await server.handIn(job, {for (final e in into.entries) e.key: File(e.value)},
-              seconds: seconds);
+          await server.handIn(job, handing, seconds: seconds);
           break;
         } catch (e) {
           if (attempt >= 4 || !_wanted) rethrow;

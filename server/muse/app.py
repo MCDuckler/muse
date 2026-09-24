@@ -685,7 +685,19 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
                            device["id"] if device else None,
                            _number(meta, "seconds", float))
             kept.append(name)
-        if not kept:
+        # The record's beats and bars by the pool's tracker, where the computer had it.
+        beats = form.get("beats")
+        beats_kept = False
+        if beats is not None and hasattr(beats, "file"):
+            raw = await beats.read(pool.BEATS_LIMIT + 1)
+            if len(raw) > pool.BEATS_LIMIT:
+                raise HTTPException(413, "too large to be beats")
+            try:
+                pool.keep_beats(cfg.data_dir, t["sha256"], raw)
+                beats_kept = True
+            except ValueError as e:
+                raise HTTPException(400, f"beats are not beats: {e}") from e
+        if not kept and not beats_kept:
             raise HTTPException(400, "no parts in that")
         if set(pool.parts_of(t["sha256"])) >= set(pool.PARTS):
             jobs.finish(job_id)

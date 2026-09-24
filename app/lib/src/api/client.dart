@@ -204,10 +204,12 @@ class ApiClient {
       await _decode(await net.get(_u('/tracks/$trackId/vocals'), headers: _headers))
           as Map<String, dynamic>);
 
-  /// Where a song's sound starts and ends, its tempo and its beats. See TrackTiming.
-  Future<TrackTiming> timing(int trackId) async => TrackTiming.fromJson(
-      await _decode(await net.get(_u('/tracks/$trackId/analysis'), headers: _headers))
-          as Map<String, dynamic>);
+  /// Where a song's sound starts and ends, its tempo and its beats — and, where the
+  /// house has built it, what the song is made of (TrackTiming.structure): the
+  /// analysis with more on it. An older house answers with the analysis alone.
+  Future<TrackTiming> timing(int trackId) async => TrackTiming.fromJson(await _decode(
+          await net.get(_u('/tracks/$trackId/analysis?structure=1'), headers: _headers))
+      as Map<String, dynamic>);
 
   // ---------------- the pool ----------------
   /// Everything the pool screen shows: the computers, what each is doing, what is

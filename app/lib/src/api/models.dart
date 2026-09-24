@@ -2097,7 +2097,13 @@ class TrackTiming {
     this.drops = const [],
     this.fourBars = const [],
     this.cues,
+    this.structure,
   });
+
+  /// What the record is made of — its sections, its stems bar by bar, where it drops
+  /// and breaks down — where the house has built it (structure.py). Null on the plain
+  /// analysis.
+  final TrackStructure? structure;
 
   /// "A minor", "F# major" — or null for something in no key: noise, speech.
   final String? key;
@@ -2531,6 +2537,150 @@ class TrackTiming {
         drops: [for (final b in (j['drops'] ?? const []) as List) (b as num).toInt()],
         fourBars: [for (final b in (j['four_bars'] ?? const []) as List) (b as num).toInt()],
         cues: j['cues'] is Map ? MixCues.fromJson((j['cues'] as Map).cast<String, dynamic>()) : null,
+        structure: j['structure'] is Map
+            ? TrackStructure.fromJson((j['structure'] as Map).cast<String, dynamic>())
+            : null,
+      );
+}
+
+/// One section of a record, as the house read it off the stems: what it is called the
+/// way a DJ calls it, which bars it spans, whether the drums and the voice are in it,
+/// how hard it hits, and its key where it is long enough to have one.
+class TrackSection {
+  const TrackSection({
+    required this.label,
+    required this.startBar,
+    required this.endBar,
+    required this.startMs,
+    required this.endMs,
+    required this.drums,
+    required this.vocals,
+    required this.energyDb,
+    this.key,
+    this.camelot,
+    this.keyConfidence = 0,
+  });
+
+  /// intro, verse, chorus, inst, breakdown, build, drop, break, outro — or on, where
+  /// only the mix could be read.
+  final String label;
+  final int startBar, endBar;
+  final int startMs, endMs;
+  final bool drums, vocals;
+  final double energyDb;
+  final String? key, camelot;
+  final double keyConfidence;
+
+  Duration get start => Duration(milliseconds: startMs);
+  Duration get end => Duration(milliseconds: endMs);
+  int get bars => endBar - startBar;
+
+  /// Whether a record could come in over this without two of anything: no voice, and
+  /// the drums either in or out on purpose.
+  bool get percussive => !vocals && drums;
+  bool get plays => drums && label != 'intro' && label != 'outro';
+
+  factory TrackSection.fromJson(Map<String, dynamic> j) => TrackSection(
+        label: (j['label'] ?? 'on') as String,
+        startBar: (j['start_bar'] ?? 0) as int,
+        endBar: (j['end_bar'] ?? 0) as int,
+        startMs: (j['start_ms'] ?? 0) as int,
+        endMs: (j['end_ms'] ?? 0) as int,
+        drums: (j['drums'] ?? true) as bool,
+        vocals: (j['vocals'] ?? false) as bool,
+        energyDb: (j['energy_db'] as num?)?.toDouble() ?? 0,
+        key: j['key'] as String?,
+        camelot: j['camelot'] as String?,
+        keyConfidence: (j['key_confidence'] as num?)?.toDouble() ?? 0,
+      );
+}
+
+/// A place a DJ would come into a record or go out of it, and why.
+class CuePoint {
+  const CuePoint({required this.ms, required this.bar, required this.why});
+  final int ms, bar;
+  final String why;
+  Duration get at => Duration(milliseconds: ms);
+
+  factory CuePoint.fromJson(Map<String, dynamic> j) =>
+      CuePoint(ms: (j['ms'] ?? 0) as int, bar: (j['bar'] ?? 0) as int, why: (j['why'] ?? '') as String);
+}
+
+/// What a record is made of (the server's structure.py): how loud the mix and each
+/// stem is in every bar, its sections, its drops and breakdowns, its loudness, and the
+/// places to come in and go out. What the automix plans by, where the house has it.
+class TrackStructure {
+  const TrackStructure({
+    this.sources = const {},
+    this.barsMs = const [],
+    this.mixDb = const [],
+    this.drumsDb,
+    this.restDb,
+    this.vocalsDb,
+    this.lufs,
+    this.sections = const [],
+    this.dropsMs = const [],
+    this.breakdownsMs = const [],
+    this.outs = const [],
+    this.ins = const [],
+  });
+
+  /// What it was built from: beats 'grid' | 'tracked' | 'neural', bar_phase 'house' |
+  /// 'neural', stems true where the stems were read.
+  final Map<String, dynamic> sources;
+
+  /// The bars, and how loud each is in dB below full scale: the mix, and each stem
+  /// where the stems were there (null otherwise).
+  final List<int> barsMs;
+  final List<double> mixDb;
+  final List<double>? drumsDb, restDb, vocalsDb;
+
+  /// The record's integrated loudness, LUFS, as the house measured it on arrival.
+  final double? lufs;
+  final List<TrackSection> sections;
+  final List<int> dropsMs, breakdownsMs;
+  final List<CuePoint> outs, ins;
+
+  bool get fromStems => sources['stems'] == true;
+  bool get barByNeural => sources['bar_phase'] == 'neural';
+
+  /// The section [at] falls in, or null before the first or after the last.
+  TrackSection? sectionAt(Duration at) {
+    final ms = at.inMilliseconds;
+    for (final s in sections) {
+      if (ms >= s.startMs && ms < s.endMs) return s;
+    }
+    return null;
+  }
+
+  /// Of [label], in order.
+  Iterable<TrackSection> of(String label) => sections.where((s) => s.label == label);
+
+  static List<double>? _doubles(Object? v) =>
+      v is List ? [for (final x in v) (x as num).toDouble()] : null;
+
+  factory TrackStructure.fromJson(Map<String, dynamic> j) => TrackStructure(
+        sources: j['sources'] is Map ? (j['sources'] as Map).cast<String, dynamic>() : const {},
+        barsMs: [for (final b in (j['bars_ms'] ?? const []) as List) (b as num).toInt()],
+        mixDb: _doubles(j['mix_db']) ?? const [],
+        drumsDb: _doubles(j['drums_db']),
+        restDb: _doubles(j['rest_db']),
+        vocalsDb: _doubles(j['vocals_db']),
+        lufs: (j['lufs'] as num?)?.toDouble(),
+        sections: [
+          for (final s in (j['sections'] ?? const []) as List)
+            TrackSection.fromJson((s as Map).cast<String, dynamic>()),
+        ],
+        dropsMs: [for (final b in (j['drops_ms'] ?? const []) as List) (b as num).toInt()],
+        breakdownsMs: [for (final b in (j['breakdowns_ms'] ?? const []) as List) (b as num).toInt()],
+        outs: [
+          for (final c in ((j['cues'] as Map?)?['outs'] ?? const []) as List)
+            CuePoint.fromJson((c as Map).cast<String, dynamic>()),
+        ],
+        ins: [
+          for (final c in ((j['cues'] as Map?)?['ins'] ?? const []) as List)
+            CuePoint.fromJson((c as Map).cast<String, dynamic>()),
+        ],
       );
 }
 

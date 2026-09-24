@@ -99,14 +99,15 @@ class OrtError implements Exception {
 /// that stay put for as long as it is open.
 class OrtNetwork {
   OrtNetwork._(this._api, this._env, this._session, this._info, this._input,
-      this._output, this._inName, this._outName, this.input, this.output,
+      this._outputs, this._inName, this._outNames, this.input, this.outputs,
       this.version, this.device, this.gpuProblem);
 
   /// Load [model] with the ONNX Runtime library at [library].
   ///
   /// [inputShape] and [outputShape] are fixed: the memory for both is allocated here,
   /// once, and [input] and [output] are views of it — write the one, [run], read the
-  /// other.
+  /// other. A network with more than one output names the rest in [moreOutputs]
+  /// (name to shape); they are read from [outputs] by name.
   ///
   /// The memory arena is off. With it on, the runtime keeps every buffer it ever
   /// grew, and on SCNet that is gigabytes more at no gain in speed — measured.
@@ -121,6 +122,7 @@ class OrtNetwork {
     required List<int> inputShape,
     required String outputName,
     required List<int> outputShape,
+    Map<String, List<int>> moreOutputs = const {},
     int threads = 4,
     bool cuda = false,
   }) {
@@ -199,10 +201,19 @@ class OrtNetwork {
     });
 
     int count(List<int> shape) => shape.fold(1, (a, b) => a * b);
-    final inCount = count(inputShape), outCount = count(outputShape);
-    final inMem = malloc<Float>(inCount), outMem = malloc<Float>(outCount);
+    final inCount = count(inputShape);
+    final inMem = malloc<Float>(inCount);
     final inValue = t.tensor(info, inMem, inCount, inputShape);
-    final outValue = t.tensor(info, outMem, outCount, outputShape);
+    final outs = <(Pointer<Void>, Pointer<Float>)>[];
+    final views = <String, Float32List>{};
+    final names = <Pointer<Utf8>>[];
+    for (final e in [MapEntry(outputName, outputShape), ...moreOutputs.entries]) {
+      final n = count(e.value);
+      final mem = malloc<Float>(n);
+      outs.add((t.tensor(info, mem, n, e.value), mem));
+      views[e.key] = mem.asTypedList(n);
+      names.add(e.key.toNativeUtf8());
+    }
 
     return OrtNetwork._(
       t,
@@ -210,11 +221,11 @@ class OrtNetwork {
       session,
       info,
       (inValue, inMem),
-      (outValue, outMem),
+      outs,
       inputName.toNativeUtf8(),
-      outputName.toNativeUtf8(),
+      names,
       inMem.asTypedList(inCount),
-      outMem.asTypedList(outCount),
+      views,
       version,
       device,
       gpuProblem,
@@ -257,11 +268,17 @@ class OrtNetwork {
 
   final _Table _api;
   final Pointer<Void> _env, _session, _info;
-  final (Pointer<Void>, Pointer<Float>) _input, _output;
-  final Pointer<Utf8> _inName, _outName;
+  final (Pointer<Void>, Pointer<Float>) _input;
+  final List<(Pointer<Void>, Pointer<Float>)> _outputs;
+  final Pointer<Utf8> _inName;
+  final List<Pointer<Utf8>> _outNames;
 
-  /// Where to write what goes in, and where to read what came out.
-  final Float32List input, output;
+  /// Where to write what goes in.
+  final Float32List input;
+
+  /// Where to read what came out, by output name; [output] is the first.
+  final Map<String, Float32List> outputs;
+  Float32List get output => outputs.values.first;
 
   /// Which ONNX Runtime this is.
   final String version;
@@ -274,7 +291,7 @@ class OrtNetwork {
 
   /// The same two blocks as pointers, for other isolates to see.
   Pointer<Float> get inputPointer => _input.$2;
-  Pointer<Float> get outputPointer => _output.$2;
+  Pointer<Float> get outputPointer => _outputs.first.$2;
 
   bool _closed = false;
 
@@ -289,10 +306,15 @@ class OrtNetwork {
     if (_closed) throw StateError('closed');
     using((a) {
       final inNames = a<Pointer<Utf8>>()..value = _inName;
-      final outNames = a<Pointer<Utf8>>()..value = _outName;
       final ins = a<Pointer<Void>>()..value = _input.$1;
-      final outs = a<Pointer<Void>>()..value = _output.$1;
-      _runFn(_session, nullptr, inNames, ins, 1, outNames, 1, outs);
+      final n = _outputs.length;
+      final outNames = a<Pointer<Utf8>>(n);
+      final outs = a<Pointer<Void>>(n);
+      for (var i = 0; i < n; i++) {
+        outNames[i] = _outNames[i];
+        outs[i] = _outputs[i].$1;
+      }
+      _runFn(_session, nullptr, inNames, ins, 1, outNames, n, outs);
     });
   }
 
@@ -300,11 +322,15 @@ class OrtNetwork {
     if (_closed) return;
     _closed = true;
     _api.release(_releaseValue, _input.$1);
-    _api.release(_releaseValue, _output.$1);
     malloc.free(_input.$2);
-    malloc.free(_output.$2);
+    for (final (value, mem) in _outputs) {
+      _api.release(_releaseValue, value);
+      malloc.free(mem);
+    }
     malloc.free(_inName);
-    malloc.free(_outName);
+    for (final n in _outNames) {
+      malloc.free(n);
+    }
     _api.release(_releaseMemoryInfo, _info);
     _api.release(_releaseSession, _session);
     _api.release(_releaseEnv, _env);

@@ -39,14 +39,18 @@ _lyrics_at = 0.0
 _lyrics_lock = threading.Lock()
 
 
-def cache_path(data_dir: pathlib.Path, sha: str) -> pathlib.Path:
-    return data_dir / "beats" / f"{sha}-vocals-v{VERSION}.json"
+def cache_path(data_dir: pathlib.Path, sha: str, downbeats: list[int] | None = None) -> pathlib.Path:
+    # Per bar grid: the bars the levels are counted on move when the tracker moves them.
+    on = f"-b{downbeats[0]}" if downbeats else ""
+    return data_dir / "beats" / f"{sha}-vocals-v{VERSION}{on}.json"
 
 
-def _mono(path: pathlib.Path) -> np.ndarray:
+def _mono(path: pathlib.Path, pan: str | None = None) -> np.ndarray:
     raw = subprocess.run(
-        ["ffmpeg", "-v", "error", "-i", str(path), "-ac", "1", "-ar", str(_RATE),
-         "-f", "s16le", "-"], capture_output=True, timeout=120, check=True).stdout
+        ["ffmpeg", "-v", "error", "-i", str(path),
+         *(["-af", f"pan=mono|c0={pan}"] if pan else ["-ac", "1"]),
+         "-ar", str(_RATE), "-f", "s16le", "-"],
+        capture_output=True, timeout=120, check=True).stdout
     return np.frombuffer(raw[: len(raw) // 2 * 2], dtype="<i2").astype(np.float32) / 32768.0
 
 
@@ -66,14 +70,15 @@ _SHARE_NONE = -24.0
 _SILENT_DB = -50.0
 
 
-def bar_levels(vocals: pathlib.Path, record: pathlib.Path, downbeats_ms: list[int]) -> list[int]:
+def bar_levels(vocals: pathlib.Path, record: pathlib.Path, downbeats_ms: list[int],
+               pan: str | None = None) -> list[int]:
     """How much of each bar is the voice, 0 to 255: its share of the record's own
     loudness there. Measured against the record rather than against the voice's own
     loudest bar — that made the separator's faint leftovers in an instrumental read
     as singing from start to end."""
     if len(downbeats_ms) < 2:
         return []
-    v, m = _mono(vocals), _mono(record)
+    v, m = _mono(vocals, pan), _mono(record)
     if len(v) == 0 or len(m) == 0:
         return []
     bounds = list(downbeats_ms) + [downbeats_ms[-1] + (downbeats_ms[-1] - downbeats_ms[-2])]
@@ -202,17 +207,20 @@ def lyrics_for(track: dict) -> tuple[str | None, str]:
 def for_track(data_dir: pathlib.Path, track: dict, downbeats: list[int]) -> dict:
     """The voice and the words of [track], kept once the voice has been measured."""
     sha = track["sha256"]
-    cached = cache_path(data_dir, sha)
+    cached = cache_path(data_dir, sha, downbeats)
     bars = None
     try:
         bars = json.loads(cached.read_text())["bars"]
     except (OSError, ValueError, KeyError):
-        vocals = pool.part_here(sha, "vocals")
+        # The voice's own part, or the voice out of the six-channel stems file.
+        vocals, pan = pool.part_here(sha, "vocals"), None
+        if vocals is None:
+            vocals, pan = pool.part_here(sha, "stems"), "0.5*c4+0.5*c5"
         if vocals is not None:
             from . import heavy
             try:
                 with heavy.turn(f"{sha}-vocals"):
-                    bars = bar_levels(vocals, pathlib.Path(track["path"]), downbeats)
+                    bars = bar_levels(vocals, pathlib.Path(track["path"]), downbeats, pan)
                 cached.parent.mkdir(parents=True, exist_ok=True)
                 cached.write_text(json.dumps({"bars": bars}))
             except (subprocess.SubprocessError, OSError) as e:

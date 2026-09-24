@@ -92,6 +92,55 @@ def keep_part(data_dir: pathlib.Path, sha: str, name: str, tmp: pathlib.Path,
     return dest
 
 
+# ------------------------------------------------------------------ beats
+# The record's beats and bars as the pool's tracker heard them (beat_net.dart): a JSON
+# of milliseconds, kept beside the house's own analysis and read by structure.py.
+BEATS_LIMIT = 2 << 20
+BEATS_VERSION = 1
+
+
+def beats_path(data_dir: pathlib.Path, sha: str) -> pathlib.Path:
+    return data_dir / "beats" / f"{sha}-neural-v{BEATS_VERSION}.json"
+
+
+def keep_beats(data_dir: pathlib.Path, sha: str, raw: bytes) -> pathlib.Path:
+    """Keep what a computer said about a record's beats — checked to be that: two
+    rising lists of milliseconds, the bars among the beats."""
+    try:
+        found = json.loads(raw)
+    except ValueError as e:
+        raise ValueError(f"not JSON: {e}") from e
+    if not isinstance(found, dict):
+        raise ValueError("not an object")
+    for key in ("beats_ms", "downbeats_ms"):
+        xs = found.get(key)
+        if not isinstance(xs, list) or not all(isinstance(x, int) and x >= 0 for x in xs):
+            raise ValueError(f"{key} is not a list of milliseconds")
+        if any(b <= a for a, b in zip(xs, xs[1:])):
+            raise ValueError(f"{key} does not rise")
+    if len(found["beats_ms"]) < 8:
+        raise ValueError("too few beats")
+    dest = beats_path(data_dir, sha)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".tmp")
+    tmp.write_text(json.dumps({
+        "version": BEATS_VERSION,
+        "model": str(found.get("model") or ""),
+        "device": str(found.get("device") or ""),
+        "beats_ms": found["beats_ms"],
+        "downbeats_ms": found["downbeats_ms"],
+    }, separators=(",", ":")))
+    tmp.replace(dest)
+    return dest
+
+
+def beats_here(data_dir: pathlib.Path, sha: str) -> dict | None:
+    try:
+        return json.loads(beats_path(data_dir, sha).read_text())
+    except (OSError, ValueError):
+        return None
+
+
 def want_split(track_id: int, *, asked_by: int | None = None,
                priority: int = jobs.PRIORITY_NOW) -> int | None:
     """Queue the record for taking apart, unless it already is, or is done. Answers the

@@ -48,12 +48,18 @@ def peaks(track_id: int, response: Response, slices: int = _peaks.SLICES,
 
 
 @router.get("/tracks/{track_id}/analysis")
-def analysis(track_id: int, response: Response, user: dict = Depends(current_user)):
+def analysis(track_id: int, response: Response, structure: bool = False,
+             user: dict = Depends(current_user)):
     """Where the song really starts and ends, how fast it goes, and where its beats are.
 
     What playing one song straight into the next is done from, and what anything that
     moves with the music keeps time by. Worked out on the first ask — about half a
-    second a song — and kept; see beats.py."""
+    second a song — and kept; see beats.py.
+
+    With ?structure=1, the same with the record's structure on it — its sections,
+    drops and breakdowns, how loud each part is in each bar, its key by section, the
+    places to come in and go out — built from the parts and the beats the pool handed
+    in (structure.py), and the plain analysis where there are none yet."""
     t = catalog.track_row(track_id)
     if not t or not t.get("path"):
         raise HTTPException(404, "not ready" if t else "no such track")
@@ -62,13 +68,18 @@ def analysis(track_id: int, response: Response, user: dict = Depends(current_use
         raise HTTPException(404, "the audio is missing")
     try:
         found = _beats.for_track(cfg().data_dir, audio, t["sha256"])
+        if structure:
+            from . import structure as _structure
+            found = _structure.for_track(cfg().data_dir, t, found)
     except (subprocess.SubprocessError, OSError) as e:
         raise HTTPException(502, "could not read the audio") from e
     if t.get("analysed_at") is None or t.get("bpm") != found.get("bpm"):
         db.run("update tracks set bpm=%s, analysed_at=now() where id=%s",
                (found.get("bpm"), track_id))
-    # The same file always has the same beats, and the file is named by its hash.
-    response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+    # The same file always has the same beats, and the file is named by its hash; the
+    # structure is built again as the parts and the beats arrive.
+    response.headers["Cache-Control"] = (
+        "private, max-age=600" if structure else "private, max-age=31536000, immutable")
     return found
 
 
@@ -78,6 +89,7 @@ def vocals(track_id: int, user: dict = Depends(current_user)):
     trusted to be where the voice is, and the hook. See vocals.py. The bars are null
     until the record has been taken apart; the lyrics say "later" while LRCLIB is
     being given its thirty seconds."""
+    from . import structure as _structure
     from . import vocals as _vocals
 
     t = catalog.track_row(track_id)
@@ -86,6 +98,8 @@ def vocals(track_id: int, user: dict = Depends(current_user)):
     audio = pathlib.Path(t["path"])
     try:
         found = _beats.for_track(cfg().data_dir, audio, t["sha256"])
+        # On the bars as the structure has them: the tracker may have moved the bar.
+        found = _structure.for_track(cfg().data_dir, t, found)
     except (subprocess.SubprocessError, OSError) as e:
         raise HTTPException(502, "could not read the audio") from e
     return _vocals.for_track(cfg().data_dir, t, found.get("downbeats") or [])

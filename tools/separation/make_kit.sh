@@ -82,5 +82,16 @@ check "$WORK/scnet_checkpoint_musdb18.ckpt" $CKPT_SHA "the SCNet checkpoint"
 check "$WORK/scnet-small-v1.onnx" $MODEL_SHA "the exported network"
 gzip -9 -n -c "$WORK/scnet-small-v1.onnx" > "$KIT/scnet-small-v1.onnx.gz"
 
+echo "== Beat This! (beats and bars)"
+# Foscarin, Schlüter, Widmer, ISMIR 2024 (JKU Linz, MIT), checkpoint final0 as exported
+# to ONNX by aaatmy/beat-this-onnx, with the frontend (window, mel filters) beside it.
+BT=https://huggingface.co/aaatmy/beat-this-onnx/resolve/main
+fetch "$BT/beat-this-final0.onnx" "$WORK/beat-this-final0.onnx"
+fetch "$BT/frontend.json" "$WORK/beat-this-frontend.json"
+check "$WORK/beat-this-final0.onnx" e5e37b7d1802895e42559c5a1ced7619b1601d257a5c8e167c9d45de37c1b078 "the beat tracker"
+check "$WORK/beat-this-frontend.json" 7b2ba71db92b79cb33f45feb21854161de329b86a7e6ea686c3fec51ce85eb9f "the beat tracker's frontend"
+gzip -9 -n -c "$WORK/beat-this-final0.onnx" > "$KIT/beat-this-final0.onnx.gz"
+gzip -9 -n -c "$WORK/beat-this-frontend.json" > "$KIT/beat-this-frontend.json.gz"
+
 ls -l "$KIT"/*.gz "$KIT"/*/*.gz
 echo "made. deploy/publish.sh models puts them on the box."

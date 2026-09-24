@@ -272,7 +272,8 @@ publish_models() {
   local src=${MUSE_KIT:-tools/separation/kit} f
   local cl=onnxruntime-1.30.0-cuda13-linux-x64 cw=onnxruntime-1.30.0-cuda13-win-x64
   on_box "mkdir -p $DL/models/$cl $DL/models/$cw"
-  for f in scnet-small-v1.onnx.gz onnxruntime-1.30.0-linux-x64.so.gz onnxruntime-1.30.0-win-x64.dll.gz \
+  for f in scnet-small-v1.onnx.gz beat-this-final0.onnx.gz beat-this-frontend.json.gz \
+      onnxruntime-1.30.0-linux-x64.so.gz onnxruntime-1.30.0-win-x64.dll.gz \
       $cl/libonnxruntime.so.1.30.0.gz $cl/libonnxruntime_providers_shared.so.gz \
       $cl/libonnxruntime_providers_cuda.so.gz \
       $cw/onnxruntime.dll.gz $cw/onnxruntime_providers_shared.dll.gz $cw/onnxruntime_providers_cuda.dll.gz; do

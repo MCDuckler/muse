@@ -39,6 +39,14 @@ class KitFile {
 const modelFile = KitFile('scnet-small-v1.onnx',
     '678fb1f31846e1c0bab6602bdb2a9663dad85ad8adf2e5d9e29374d645c14367', 51352371);
 
+/// The beat tracker: "Beat This!" (JKU Linz, ISMIR 2024, MIT), as exported to ONNX
+/// (aaatmy/beat-this-onnx, checkpoint final0), and its frontend — the window and the
+/// mel filters — beside it. Optional: a computer without them still splits records.
+const beatModelFile = KitFile('beat-this-final0.onnx',
+    'e5e37b7d1802895e42559c5a1ced7619b1601d257a5c8e167c9d45de37c1b078', 82098846);
+const beatFrontendFile = KitFile('beat-this-frontend.json',
+    '7b2ba71db92b79cb33f45feb21854161de329b86a7e6ea686c3fec51ce85eb9f', 298186);
+
 /// ONNX Runtime 1.30.0 as Microsoft releases it (MIT), for the computers the
 /// separator is built for. Anything else goes on with the old arithmetic.
 KitFile? get runtimeFile => switch (Abi.current()) {
@@ -77,7 +85,16 @@ List<KitFile>? get cudaFiles => switch (Abi.current()) {
     };
 
 /// Everything needed to run it, found and in place. [gpu]: on the graphics card.
-typedef Separator = ({String program, String runtime, String model, bool gpu});
+/// [beatModel] and [beatFrontend] are the beat tracker's files, where they could be
+/// had: null, and the parts come without beats.
+typedef Separator = ({
+  String program,
+  String runtime,
+  String model,
+  bool gpu,
+  String? beatModel,
+  String? beatFrontend,
+});
 
 /// The program, where there is one: beside the app, as wetowl-fetch is. A build run
 /// from the source tree has none there, so WETOWL_SEPARATE can name one.
@@ -121,6 +138,16 @@ Future<Separator?> readySeparator(String house,
   final dir = into;
   await dir.create(recursive: true);
   final model = await _have(modelFile, dir, house, fetching);
+  // The beat tracker's files too, where the house has them: not a reason to fail a
+  // split, which stands on its own without them.
+  String? beatModel, beatFrontend;
+  try {
+    beatModel = await _have(beatModelFile, dir, house, fetching);
+    beatFrontend = await _have(beatFrontendFile, dir, house, fetching);
+  } catch (e) {
+    separatorSays('separator: no beat tracker this time: $e');
+    beatModel = beatFrontend = null;
+  }
   final cuda = cudaFiles;
   if (gpu && cuda != null && await cudaHere(program)) {
     try {
@@ -129,13 +156,27 @@ Future<Separator?> readySeparator(String house,
         final path = await _have(f, dir, house, fetching);
         lib ??= path;
       }
-      return (program: program, runtime: lib!, model: model, gpu: true);
+      return (
+        program: program,
+        runtime: lib!,
+        model: model,
+        gpu: true,
+        beatModel: beatModel,
+        beatFrontend: beatFrontend,
+      );
     } catch (e) {
       separatorSays('separator: no CUDA runtime this time, so the processor: $e');
     }
   }
   final lib = await _have(runtime, dir, house, fetching);
-  return (program: program, runtime: lib, model: model, gpu: false);
+  return (
+    program: program,
+    runtime: lib,
+    model: model,
+    gpu: false,
+    beatModel: beatModel,
+    beatFrontend: beatFrontend,
+  );
 }
 
 /// Whether this computer can run the network on an NVIDIA card: the driver is there,
@@ -270,6 +311,7 @@ Future<void> runSeparator(Separator s,
     required String audio,
     required Map<String, String> into,
     required int upToSeconds,
+    String? beats,
     void Function(double)? progress,
     void Function(String device)? device,
     void Function(Process)? started}) async {
@@ -282,6 +324,9 @@ Future<void> runSeparator(Separator s,
     '--threads', '${separatorThreads()}',
     if (s.gpu) ...['--gpu', 'cuda'],
     for (final e in into.entries) ...['--${e.key}', e.value],
+    // Its beats and bars too, where the tracker's files are here and they are wanted.
+    if (beats != null && s.beatModel != null && s.beatFrontend != null)
+      ...['--beats', beats, '--beats-model', s.beatModel!, '--beats-frontend', s.beatFrontend!],
   ];
   String? nice;
   if (!Platform.isWindows) {

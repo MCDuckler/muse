@@ -12,7 +12,14 @@
 //                   [--instrumental <out>] [--drums <out>] [--music <out>]
 //                   [--vocals <out>] [--bass-other <out>] [--stems <out.opus>]
 //                   [--threads N] [--seconds N] [--raw] [--rate N] [--gpu cuda]
+//                   [--beats <out.json> --beats-model <beat-this.onnx>
+//                    --beats-frontend <frontend.json>]
 //   wetowl-separate --check-cuda
+//
+// With --beats it also says where the record's beats and bars are, by a second
+// network (lib/src/separation/beat_net.dart), into a JSON file — on its own, with no
+// parts asked for, or after the parts. Beats are an extra: where they fail the parts
+// still stand, and a "beats failed: why" line says so.
 //
 // With --gpu cuda (and --ort naming ONNX Runtime's CUDA build) the network runs on an
 // NVIDIA card, about twelve times faster than on the processor — or, where the card's
@@ -28,10 +35,12 @@
 // --rate 44100 then gives exactly what the model made, for comparing with the Python).
 // While it works it prints "progress 0.42" lines; at the end, "done".
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:muse/src/separation/beat_net.dart';
 import 'package:muse/src/separation/ort.dart';
 import 'package:muse/src/separation/parallel.dart';
 import 'package:muse/src/separation/scnet.dart';
@@ -39,7 +48,8 @@ import 'package:muse/src/separation/scnet.dart';
 const _usage = 'usage: wetowl-separate --ort <library> --model <model.onnx> '
     '--ffmpeg <ffmpeg> --in <record> [--instrumental <out>] [--drums <out>] '
     '[--music <out>] [--vocals <out>] [--bass-other <out>] [--threads N] '
-    '[--seconds N] [--raw] [--rate N] [--gpu cuda] | --check-cuda';
+    '[--seconds N] [--raw] [--rate N] [--gpu cuda] '
+    '[--beats <out.json> --beats-model <m.onnx> --beats-frontend <f.json>] | --check-cuda';
 
 /// What each part is made of, from the model's four: drums, bass, other, vocals.
 const _recipes = {
@@ -76,8 +86,13 @@ Future<void> main(List<String> args) async {
   // The three parts that add back up to the record, in one six-channel file: what a
   // deck plays to turn any of them up or down with no gap (see _stems).
   final stemsTo = opts['stems'];
-  if (ort == null || model == null || ffmpeg == null || input == null ||
-      (wanted.isEmpty && stemsTo == null)) {
+  final beatsTo = opts['beats'];
+  final separating = wanted.isNotEmpty || stemsTo != null;
+  if (ort == null || ffmpeg == null || input == null || (!separating && beatsTo == null)) {
+    _fail(_usage, 64);
+  }
+  if (separating && model == null) _fail(_usage, 64);
+  if (beatsTo != null && (opts['beats-model'] == null || opts['beats-frontend'] == null)) {
     _fail(_usage, 64);
   }
   final threads = int.tryParse(opts['threads'] ?? '') ?? 4;
@@ -90,116 +105,132 @@ Future<void> main(List<String> args) async {
   if (Platform.isWindows) _politeOnWindows();
   if (Platform.isLinux) _oneHeapOnLinux();
 
-  OrtNetwork load({required bool cuda}) => OrtNetwork.open(
-        library: ort,
-        model: model,
-        inputName: 'spec',
-        inputShape: specInShape,
-        outputName: 'out',
-        outputShape: specOutShape,
-        threads: threads,
-        cuda: cuda,
-      );
-  OrtNetwork net;
-  try {
-    net = load(cuda: opts['gpu'] == 'cuda');
-  } catch (e) {
-    _fail('could not load the model: $e', 3);
-  }
-  if (net.device == 'cuda') {
-    // One piece of silence first. What the card's libraries cannot do — a cuDNN that
-    // will not load, a card too old — shows up at the first run rather than when the
-    // provider is added, and here it can still be the processor instead.
+  if (separating) {
+    OrtNetwork load({required bool cuda}) => OrtNetwork.open(
+          library: ort,
+          model: model!,
+          inputName: 'spec',
+          inputShape: specInShape,
+          outputName: 'out',
+          outputShape: specOutShape,
+          threads: threads,
+          cuda: cuda,
+        );
+    OrtNetwork net;
     try {
-      net.input.fillRange(0, net.input.length, 0);
-      net.run();
-      stdout.writeln('device cuda');
+      net = load(cuda: opts['gpu'] == 'cuda');
+    } catch (e) {
+      _fail('could not load the model: $e', 3);
+    }
+    if (net.device == 'cuda') {
+      // One piece of silence first. What the card's libraries cannot do — a cuDNN that
+      // will not load, a card too old — shows up at the first run rather than when the
+      // provider is added, and here it can still be the processor instead.
+      try {
+        net.input.fillRange(0, net.input.length, 0);
+        net.run();
+        stdout.writeln('device cuda');
+      } catch (e) {
+        net.close();
+        stdout.writeln('device cpu: the card could not run it: $e');
+        try {
+          net = load(cuda: false);
+        } catch (e) {
+          _fail('could not load the model: $e', 3);
+        }
+      }
+    } else {
+      stdout.writeln(net.gpuProblem == null ? 'device cpu' : 'device cpu: ${net.gpuProblem}');
+    }
+
+    final timing = Platform.environment['WETOWL_SEPARATE_TIMING'] != null;
+    final clock = Stopwatch()..start();
+    void mark(String what) {
+      if (timing) stderr.writeln('timing: $what ${clock.elapsedMilliseconds} ms');
+    }
+
+    mark('model loaded');
+
+    final Float32List stereo;
+    try {
+      stereo = await _decode(ffmpeg, input, seconds);
+      mark('decoded');
     } catch (e) {
       net.close();
-      stdout.writeln('device cpu: the card could not run it: $e');
-      try {
-        net = load(cuda: false);
-      } catch (e) {
-        _fail('could not load the model: $e', 3);
+      _fail('$e', 4);
+    }
+    if (stereo.length < 2) {
+      net.close();
+      _fail('there is no sound in that file', 4);
+    }
+
+    final writers = <String, _Writer>{};
+    try {
+      for (final e in wanted.entries) {
+        writers[e.key] = await _Writer.start(ffmpeg, e.value, raw: raw, rate: rate);
       }
+      final stems = stemsTo == null
+          ? null
+          : await _Writer.start(ffmpeg, stemsTo, raw: raw, rate: rate, stems: true);
+      if (stems != null) writers['stems'] = stems;
+      final sound = SharedSound();
+      final piece = await ParallelPiece.start(
+        network: net.run,
+        specIn: net.inputPointer,
+        specOut: net.outputPointer,
+        sound: sound,
+        helpers: threads,
+      );
+      var said = -1;
+      await demix(stereo, piece, left: sound.left, right: sound.right, out: sound.out,
+          (from, n, parts) async {
+        // Every encoder given its piece before any is waited for: waited for one by
+        // one, the encoders took turns and the separator waited on the sum of them —
+        // 35 s a four minute record where the network needs 5.
+        await Future.wait([
+          for (final e in writers.entries)
+            e.value.add(e.key == 'stems' ? _stems(parts, n) : _mixed(parts, _recipes[e.key]!, n)),
+        ]);
+      }, progress: (f) {
+        final pct = (f * 100).floor();
+        if (pct != said) {
+          said = pct;
+          stdout.writeln('progress ${f.toStringAsFixed(3)}');
+        }
+      });
+      mark('separated');
+      if (timing) {
+        stderr.writeln('timing: in ${piece.inWatch.elapsedMilliseconds} ms, network '
+            '${piece.netWatch.elapsedMilliseconds} ms, out ${piece.outWatch.elapsedMilliseconds} ms');
+      }
+      piece.close();
+      sound.free();
+      for (final w in writers.values) {
+        await w.finish();
+      }
+      mark('written');
+    } catch (e) {
+      for (final w in writers.values) {
+        await w.abandon();
+      }
+      net.close();
+      _fail('$e', 5);
     }
-  } else {
-    stdout.writeln(net.gpuProblem == null ? 'device cpu' : 'device cpu: ${net.gpuProblem}');
-  }
-
-  final timing = Platform.environment['WETOWL_SEPARATE_TIMING'] != null;
-  final clock = Stopwatch()..start();
-  void mark(String what) {
-    if (timing) stderr.writeln('timing: $what ${clock.elapsedMilliseconds} ms');
-  }
-  mark('model loaded');
-
-  final Float32List stereo;
-  try {
-    stereo = await _decode(ffmpeg, input, seconds);
-    mark('decoded');
-  } catch (e) {
     net.close();
-    _fail('$e', 4);
   }
-  if (stereo.length < 2) {
-    net.close();
-    _fail('there is no sound in that file', 4);
-  }
-
-  final writers = <String, _Writer>{};
-  try {
-    for (final e in wanted.entries) {
-      writers[e.key] = await _Writer.start(ffmpeg, e.value, raw: raw, rate: rate);
-    }
-    final stems = stemsTo == null
-        ? null
-        : await _Writer.start(ffmpeg, stemsTo, raw: raw, rate: rate, stems: true);
-    if (stems != null) writers['stems'] = stems;
-    final sound = SharedSound();
-    final piece = await ParallelPiece.start(
-      network: net.run,
-      specIn: net.inputPointer,
-      specOut: net.outputPointer,
-      sound: sound,
-      helpers: threads,
+  if (beatsTo != null) {
+    await _beats(
+      ffmpeg: ffmpeg,
+      input: input,
+      seconds: seconds,
+      ort: ort,
+      model: opts['beats-model']!,
+      frontend: opts['beats-frontend']!,
+      into: beatsTo,
+      threads: threads,
+      cuda: opts['gpu'] == 'cuda',
     );
-    var said = -1;
-    await demix(stereo, piece, left: sound.left, right: sound.right, out: sound.out,
-        (from, n, parts) async {
-      // Every encoder given its piece before any is waited for: waited for one by
-      // one, the encoders took turns and the separator waited on the sum of them —
-      // 35 s a four minute record where the network needs 5.
-      await Future.wait([
-        for (final e in writers.entries)
-          e.value.add(e.key == 'stems' ? _stems(parts, n) : _mixed(parts, _recipes[e.key]!, n)),
-      ]);
-    }, progress: (f) {
-      final pct = (f * 100).floor();
-      if (pct != said) {
-        said = pct;
-        stdout.writeln('progress ${f.toStringAsFixed(3)}');
-      }
-    });
-    mark('separated');
-    if (timing) {
-      stderr.writeln('timing: in ${piece.inWatch.elapsedMilliseconds} ms, network '
-          '${piece.netWatch.elapsedMilliseconds} ms, out ${piece.outWatch.elapsedMilliseconds} ms');
-    }
-    piece.close();
-    sound.free();
-    for (final w in writers.values) {
-      await w.finish();
-    }
-    mark('written');
-  } catch (e) {
-    for (final w in writers.values) {
-      await w.abandon();
-    }
-    net.close();
-    _fail('$e', 5);
   }
-  net.close();
   stdout.writeln('done');
   await stdout.flush();
   exit(0);
@@ -211,10 +242,22 @@ Future<void> main(List<String> args) async {
 /// places on the path.
 Never _checkCuda() {
   final names = Platform.isWindows
-      ? ['nvcuda.dll', 'cudart64_13.dll', 'cublas64_13.dll', 'cublasLt64_13.dll',
-          'curand64_10.dll', 'cudnn64_9.dll']
-      : ['libcuda.so.1', 'libcudart.so.13', 'libcublas.so.13', 'libcublasLt.so.13',
-          'libcurand.so.10', 'libcudnn.so.9'];
+      ? [
+          'nvcuda.dll',
+          'cudart64_13.dll',
+          'cublas64_13.dll',
+          'cublasLt64_13.dll',
+          'curand64_10.dll',
+          'cudnn64_9.dll'
+        ]
+      : [
+          'libcuda.so.1',
+          'libcudart.so.13',
+          'libcublas.so.13',
+          'libcublasLt.so.13',
+          'libcurand.so.10',
+          'libcudnn.so.9'
+        ];
   for (final n in names) {
     try {
       DynamicLibrary.open(n);
@@ -236,8 +279,20 @@ Never _fail(String why, int code) {
 /// reading and the resampling, as it does everywhere else in the app.
 Future<Float32List> _decode(String ffmpeg, String input, int seconds) async {
   final p = await Process.start(ffmpeg, [
-    '-v', 'error', '-nostdin', '-t', '$seconds', '-i', input,
-    '-ac', '2', '-ar', '$modelRate', '-f', 'f32le', '-',
+    '-v',
+    'error',
+    '-nostdin',
+    '-t',
+    '$seconds',
+    '-i',
+    input,
+    '-ac',
+    '2',
+    '-ar',
+    '$modelRate',
+    '-f',
+    'f32le',
+    '-',
   ]);
   final got = BytesBuilder(copy: false);
   final said = <int>[];
@@ -252,6 +307,72 @@ Future<Float32List> _decode(String ffmpeg, String input, int seconds) async {
   final bytes = got.takeBytes();
   final whole = bytes.length ~/ 8 * 8;
   return bytes.buffer.asFloat32List(bytes.offsetInBytes, whole ~/ 4);
+}
+
+/// Where the beats and the bars of [input] are, into [into] (JSON, see BeatsFound).
+///
+/// On the card where asked and it works — tried once on silence first — and on the
+/// processor otherwise. Never fatal: says "beats failed: why" and leaves no file.
+Future<void> _beats({
+  required String ffmpeg,
+  required String input,
+  required int seconds,
+  required String ort,
+  required String model,
+  required String frontend,
+  required String into,
+  required int threads,
+  required bool cuda,
+}) async {
+  try {
+    final clock = Stopwatch()..start();
+    final fe = BeatFrontend.fromJson(await File(frontend).readAsString());
+    final p = await Process.start(ffmpeg, [
+      '-v',
+      'error',
+      '-nostdin',
+      '-t',
+      '$seconds',
+      '-i',
+      input,
+      '-ac',
+      '1',
+      '-ar',
+      '$beatRate',
+      '-f',
+      'f32le',
+      '-',
+    ]);
+    final got = BytesBuilder(copy: false);
+    final said = <int>[];
+    await Future.wait([p.stdout.forEach(got.add), p.stderr.forEach(said.addAll)]);
+    if (await p.exitCode != 0) {
+      throw StateError('ffmpeg could not read it: ${String.fromCharCodes(said).trim()}');
+    }
+    final bytes = got.takeBytes();
+    final mono = bytes.buffer.asFloat32List(bytes.offsetInBytes, bytes.length ~/ 4);
+    BeatTracker open(bool onCard) =>
+        BeatTracker.open(library: ort, model: model, frontend: fe, threads: threads, cuda: onCard);
+    var tracker = open(cuda);
+    if (tracker.device == 'cuda') {
+      try {
+        tracker.warmUp();
+      } catch (e) {
+        tracker.close();
+        stdout.writeln('beats: the card could not run it, so the processor: $e');
+        tracker = open(false);
+      }
+    }
+    final found = tracker.track(mono);
+    tracker.close();
+    final tmp = File('$into.tmp');
+    await tmp.writeAsString(jsonEncode(found.toJson()));
+    await tmp.rename(into);
+    stdout.writeln('beats ${found.beatsMs.length} bars ${found.downbeatsMs.length} '
+        'on ${found.device} in ${(clock.elapsedMilliseconds / 1000).toStringAsFixed(1)} s');
+  } catch (e) {
+    stdout.writeln('beats failed: $e');
+  }
 }
 
 /// The stems file's six channels, interleaved: the drums (left, right), the bass and
@@ -305,18 +426,35 @@ class _Writer {
     final dot = into.lastIndexOf('.');
     final slash = into.lastIndexOf(Platform.pathSeparator);
     // Still ending in the real extension: ffmpeg picks the format from it.
-    final tmp = dot > slash
-        ? '${into.substring(0, dot)}.tmp${into.substring(dot)}'
-        : '$into.tmp';
+    final tmp = dot > slash ? '${into.substring(0, dot)}.tmp${into.substring(dot)}' : '$into.tmp';
     final p = await Process.start(ffmpeg, [
-      '-v', 'error', '-nostdin', '-y',
-      '-f', 'f32le', '-ar', '$modelRate', '-ac', stems ? '6' : '2', '-i', 'pipe:0',
+      '-v',
+      'error',
+      '-nostdin',
+      '-y',
+      '-f',
+      'f32le',
+      '-ar',
+      '$modelRate',
+      '-ac',
+      stems ? '6' : '2',
+      '-i',
+      'pipe:0',
       if (stems && !raw)
         // Opus, because its six channels are six channels: mapping family 255 has no
         // idea of a centre or a bass channel to low-pass or fold down. Always 48 kHz.
-        ...['-ar', '48000', '-c:a', 'libopus', '-mapping_family', '255', '-b:a', '288k']
-      else ...[
-        '-ar', '$rate',
+        ...[
+        '-ar',
+        '48000',
+        '-c:a',
+        'libopus',
+        '-mapping_family',
+        '255',
+        '-b:a',
+        '288k'
+      ] else ...[
+        '-ar',
+        '$rate',
         if (raw) ...['-f', 'f32le'] else ...['-c:a', 'aac', '-b:a', '160k'],
       ],
       tmp,
@@ -390,8 +528,9 @@ void _politeOnWindows() {
     final k = DynamicLibrary.open('kernel32.dll');
     final current =
         k.lookupFunction<Pointer<Void> Function(), Pointer<Void> Function()>('GetCurrentProcess');
-    final setPriority = k.lookupFunction<Int32 Function(Pointer<Void>, Uint32),
-        int Function(Pointer<Void>, int)>('SetPriorityClass');
+    final setPriority =
+        k.lookupFunction<Int32 Function(Pointer<Void>, Uint32), int Function(Pointer<Void>, int)>(
+            'SetPriorityClass');
     const belowNormal = 0x00004000;
     setPriority(current(), belowNormal);
   } catch (_) {

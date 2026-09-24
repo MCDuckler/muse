@@ -198,7 +198,7 @@ class HttpSplitServer implements SplitServer {
           ..fields['meta'] = jsonEncode({'seconds': seconds});
     for (final e in parts.entries) {
       request.files.add(await http.MultipartFile.fromPath(e.key, e.value.path,
-          filename: '${e.key}.m4a'));
+          filename: e.key == 'beats' ? 'beats.json' : '${e.key}.m4a'));
     }
     final response = await http.Response.fromStream(
         await _client.send(request).timeout(const Duration(minutes: 5)));

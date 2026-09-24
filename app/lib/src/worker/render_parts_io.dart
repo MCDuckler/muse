@@ -491,6 +491,10 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
       }
     }
     final clock = Stopwatch()..start();
+    // The record's beats and bars by the tracker, beside its parts, for the house.
+    final beatsAt = trackId == null
+        ? null
+        : '${File(into.values.first).parent.path}${Platform.pathSeparator}$trackId-beats-v1.json';
     while (s != null) {
       Process? mine;
       try {
@@ -503,6 +507,7 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
             audio: audio,
             into: into,
             upToSeconds: upToSeconds,
+            beats: beatsAt,
             progress: (f) {
               if (trackId != null && !stopped()) partsJobs.progress(trackId, f);
             },
@@ -518,8 +523,9 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
         if (job != null) {
           unawaited(() async {
             try {
-              await splitPool!.handIn(job, {for (final e in into.entries) e.key: File(e.value)},
-                  seconds: clock.elapsedMilliseconds / 1000);
+              final handing = {for (final e in into.entries) e.key: File(e.value)};
+              if (beatsAt != null && await File(beatsAt).exists()) handing['beats'] = File(beatsAt);
+              await splitPool!.handIn(job, handing, seconds: clock.elapsedMilliseconds / 1000);
             } catch (e) {
               debugPrint('could not hand the parts of ${job.trackId} in: $e');
               try {
