@@ -25,7 +25,6 @@ import 'src/ui/loading.dart';
 import 'src/ui/login_page.dart';
 import 'src/ui/theme.dart';
 import 'src/ui/page_colour.dart';
-import 'src/ui/paper.dart';
 import 'src/ui/widths.dart';
 import 'src/ui/not_connected.dart' show noSoundBecause;
 import 'src/ui/reactions.dart';
@@ -219,8 +218,7 @@ class MuseApp extends StatelessWidget {
               data: Width.of(context) == Width.expanded
                   ? MuseTheme.compact(Theme.of(context))
                   : Theme.of(context),
-              child: PaperGrain(
-                  child: ReactionLayer(child: child ?? const SizedBox())),
+              child: ReactionLayer(child: child ?? const SizedBox()),
             ),
           ),
         ),

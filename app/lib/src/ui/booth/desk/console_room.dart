@@ -221,9 +221,13 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
   }
 
   Widget _room() => LayoutBuilder(builder: (context, c) {
-        final waves = _view == BoothView.waves
-            ? (c.maxHeight * 0.3).clamp(150.0, 320.0)
-            : (c.maxHeight * 0.42).clamp(240.0, 420.0);
+        // Each view its own height: the set is a row of cards and the words above
+        // them, the plan wants the room to draw two records' shapes.
+        final waves = switch (_view) {
+          BoothView.waves => (c.maxHeight * 0.3).clamp(150.0, 320.0),
+          BoothView.set => (c.maxHeight * 0.36).clamp(250.0, 300.0),
+          BoothView.plan => (c.maxHeight * 0.42).clamp(240.0, 420.0),
+        };
         final mixer = (c.maxWidth * 0.2).clamp(230.0, 290.0);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -425,7 +429,7 @@ class _Mark extends StatelessWidget {
               border: Border.all(color: on ? Console.a : Console.faint),
               borderRadius: BorderRadius.circular(3),
             ),
-            child: Text('ON AIR', style: Console.label(7.5, color: on ? Console.a : Console.faint)),
+            child: Text('ON AIR', style: Console.label(8, color: on ? Console.a : Console.faint)),
           ),
         ),
       ],

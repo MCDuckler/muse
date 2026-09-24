@@ -125,7 +125,7 @@ class _ConsoleMixerState extends State<ConsoleMixer> {
                 const Spacer(),
                 Text('$_bars', style: Mag.numerals(13, color: Console.ink)),
                 const SizedBox(width: 4),
-                Text('BARS', style: Console.label(7.5)),
+                Text('BARS', style: Console.label(8)),
                 const SizedBox(width: 6),
                 const Icon(Icons.expand_more, size: 16, color: Console.quiet),
               ],
@@ -289,27 +289,39 @@ class _Channel extends StatelessWidget {
     }
 
     return LayoutBuilder(builder: (context, box) {
-    // On a short screen the knobs give up a little so the fader keeps its throw.
-    final k = box.maxHeight < 420 ? 30.0 : 36.0;
-    final gap = box.maxHeight < 420 ? 3.0 : 6.0;
+    // On a short screen the knobs go two by two, so the fader keeps its throw: in
+    // one column they left it forty pixels, its cap on the filter's name.
+    final short = box.maxHeight < 440;
+    final k = short ? 30.0 : 36.0;
+    final gap = short ? 4.0 : 6.0;
+    final filter = Knob(
+      value: booth.filters[deck] ?? 0,
+      label: short ? 'FLT' : 'FILTER',
+      colour: c,
+      size: k,
+      tooltip: 'Left closes the top, right the bottom · double-click resets',
+      onChanged: on && booth.mixer.canFilter ? (v) => booth.setFilter(deck, v) : null,
+    );
+    final knobs = short
+        ? [
+            Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [band(2, 'HI', eq.high, k), band(1, 'MID', eq.mid, k)]),
+            SizedBox(height: gap),
+            Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [band(0, 'LOW', eq.low, k), filter]),
+          ]
+        : [
+            band(2, 'HI', eq.high, k),
+            SizedBox(height: gap),
+            band(1, 'MID', eq.mid, k),
+            SizedBox(height: gap),
+            band(0, 'LOW', eq.low, k),
+            SizedBox(height: gap + 4),
+            filter,
+          ];
     return Column(
       children: [
         Text(deck.name, style: Mag.numerals(18, color: c)),
         SizedBox(height: gap + 2),
-        band(2, 'HI', eq.high, k),
-        SizedBox(height: gap),
-        band(1, 'MID', eq.mid, k),
-        SizedBox(height: gap),
-        band(0, 'LOW', eq.low, k),
-        SizedBox(height: gap + 4),
-        Knob(
-          value: booth.filters[deck] ?? 0,
-          label: 'FILTER',
-          colour: c,
-          size: k,
-          tooltip: 'Left closes the top, right the bottom · double-click resets',
-          onChanged: on && booth.mixer.canFilter ? (v) => booth.setFilter(deck, v) : null,
-        ),
+        ...knobs,
         const SizedBox(height: 10),
         Expanded(
           child: Row(

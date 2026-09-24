@@ -118,7 +118,8 @@ class _PadState extends State<Pad> {
       height: widget.height,
       width: widget.width,
       alignment: Alignment.center,
-      padding: const EdgeInsets.symmetric(horizontal: 8),
+      // A narrow pad (a bar count) keeps its word: less air either side of it.
+      padding: EdgeInsets.symmetric(horizontal: widget.width != null && widget.width! < 40 ? 4 : 8),
       decoration: BoxDecoration(
         color: fill,
         borderRadius: BorderRadius.circular(6),
@@ -146,7 +147,7 @@ class _PadState extends State<Pad> {
                     child: Text(widget.label!,
                         maxLines: 1,
                         overflow: TextOverflow.clip,
-                        style: Console.label(widget.height * 0.3, color: fg)),
+                        style: Console.label(math.max(8.0, widget.height * 0.3), color: fg)),
                   ),
               ],
             ),
@@ -347,7 +348,7 @@ class _KnobState extends State<Knob> {
             children: [
               knob,
               const SizedBox(height: 3),
-              Text(widget.label!, style: Console.label(7.5)),
+              Text(widget.label!, style: Console.label(8)),
             ],
           );
     return widget.tooltip == null

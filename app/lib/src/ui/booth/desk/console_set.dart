@@ -311,30 +311,38 @@ class _ConsoleSetViewState extends State<ConsoleSetView> {
     if (records.isEmpty) {
       return Center(child: Text('NOTHING QUEUED — ADD FROM LIBRARY OR SEARCH', style: Console.label(9)));
     }
-    return Scrollbar(
-      controller: _scroll,
-      thumbVisibility: true,
-      child: ListView.builder(
+    return LayoutBuilder(builder: (context, c) {
+      // A card is as tall as a card, not as tall as the room: the strip in it wants
+      // sixty pixels, not two hundred of nothing.
+      final height = math.min(c.maxHeight - 10, 176.0);
+      return Scrollbar(
         controller: _scroll,
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.only(bottom: 10),
-        itemCount: records.length * 2 - 1,
-        itemBuilder: (context, i) {
-          if (i.isOdd) {
-            final a = records[i ~/ 2], b = records[i ~/ 2 + 1];
-            return _MoveChip(booth: booth, from: a, to: b, isNext: auto.running && i == 1, accent: accent);
-          }
-          final t = records[i ~/ 2];
-          return _Card(
-            booth: booth,
-            track: t,
-            on: auto.running && i == 0,
-            index: i ~/ 2,
-            accent: accent,
-          );
-        },
-      ),
-    );
+        thumbVisibility: true,
+        child: ListView.builder(
+          controller: _scroll,
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.only(bottom: 10),
+          itemCount: records.length * 2 - 1,
+          itemBuilder: (context, i) {
+            final Widget item;
+            if (i.isOdd) {
+              final a = records[i ~/ 2], b = records[i ~/ 2 + 1];
+              item = _MoveChip(booth: booth, from: a, to: b, isNext: auto.running && i == 1, accent: accent);
+            } else {
+              final t = records[i ~/ 2];
+              item = _Card(
+                booth: booth,
+                track: t,
+                on: auto.running && i == 0,
+                index: i ~/ 2,
+                accent: accent,
+              );
+            }
+            return Align(alignment: Alignment.topCenter, child: SizedBox(height: height, child: item));
+          },
+        ),
+      );
+    });
   }
 }
 
@@ -504,10 +512,11 @@ class _Card extends StatelessWidget {
                   ),
                   if (locked) const Icon(Icons.push_pin, size: 12, color: Console.quiet),
                 ]),
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
                 Expanded(
                   child: _StructureStrip(
                     timing: timing,
+                    bands: booth.bands[track.id],
                     accent: accent,
                     outAt: on ? auto.goesAt : null,
                     inAt: !on && index == 1 && auto.running ? auto.comesInAt : null,
@@ -626,7 +635,7 @@ class _MoveChip extends StatelessWidget {
                 const SizedBox(height: 3),
                 Text(fit.why, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis, style: Mag.typewriter(9, color: Console.faint)),
               ],
-              if (byHand) Text('BY HAND', style: Console.label(7, color: accent)),
+              if (byHand) Text('BY HAND', style: Console.label(8, color: accent)),
             ],
           ),
         ),
@@ -655,10 +664,12 @@ class _StyleDialsState extends State<StyleDials> {
   @override
   Widget build(BuildContext context) {
     final auto = widget.auto;
-    Widget dial(String name, String low, String high, double value, void Function(double) on) => Row(
-          children: [
+    // Each on a line of its own, with room for the thumbs between them.
+    Widget dial(String name, String low, String high, double value, void Function(double) on) => SizedBox(
+          height: 30,
+          child: Row(children: [
             SizedBox(width: 56, child: Text(name, style: Console.label(8.5, color: Console.ink))),
-            SizedBox(width: 62, child: Text(low, style: Console.label(7.5))),
+            SizedBox(width: 74, child: Text(low, maxLines: 1, overflow: TextOverflow.clip, style: Console.label(8))),
             Expanded(
               child: SliderTheme(
                 data: SliderTheme.of(context).copyWith(
@@ -666,8 +677,8 @@ class _StyleDialsState extends State<StyleDials> {
                 child: Slider(value: value, onChanged: on, activeColor: Theme.of(context).colorScheme.primary, inactiveColor: Console.line),
               ),
             ),
-            SizedBox(width: 62, child: Text(high, textAlign: TextAlign.right, style: Console.label(7.5))),
-          ],
+            SizedBox(width: 74, child: Text(high, maxLines: 1, overflow: TextOverflow.clip, textAlign: TextAlign.right, style: Console.label(8))),
+          ]),
         );
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -733,8 +744,12 @@ class _Trouble extends StatelessWidget {
 /// there is room, breakdowns hollow, drops as ticks; where the mix goes out of it or
 /// comes into it; the playhead. Bar loudness as a faint skyline behind.
 class _StructureStrip extends StatelessWidget {
-  const _StructureStrip({required this.timing, required this.accent, this.outAt, this.inAt, this.playhead});
+  const _StructureStrip({required this.timing, required this.accent, this.bands, this.outAt, this.inAt, this.playhead});
   final TrackTiming? timing;
+
+  /// The record's loudness, as the waves' overview has it: the skyline where the
+  /// house has not read the record's bars.
+  final ({List<int> low, List<int> mid, List<int> high})? bands;
   final Color accent;
   final Duration? outAt, inAt, playhead;
 
@@ -763,12 +778,23 @@ class _StructurePainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final t = w.timing;
     final total = (t?.durationMs ?? 0).toDouble();
+    final base = size.height;
+    // The floor: a timeline even before there is anything on it.
+    canvas.drawLine(Offset(0, base - 0.5), Offset(size.width, base - 0.5), Paint()..color = Console.line);
     if (t == null || total <= 0) return;
     double x(int ms) => (ms / total * size.width).clamp(0.0, size.width);
     final s = t.structure;
-    final base = size.height;
-    // The skyline.
-    if (s != null && s.mixDb.isNotEmpty && s.barsMs.isNotEmpty) {
+    final b = w.bands;
+    // The skyline: the house's bars, or the record's own loudness where it has none.
+    if ((s == null || s.mixDb.isEmpty || s.barsMs.isEmpty) && b != null && b.low.isNotEmpty) {
+      final n = b.low.length;
+      for (var px = 0.0; px < size.width; px += 2) {
+        final i = (px / size.width * n).floor().clamp(0, n - 1);
+        final v = math.max(b.low[i], math.max(b.mid[i], b.high[i]));
+        final h = (size.height - 12) * v / 255;
+        canvas.drawRect(Rect.fromLTWH(px, base - h, 1.4, h), Paint()..color = Console.ink.withValues(alpha: 0.10));
+      }
+    } else if (s != null && s.mixDb.isNotEmpty && s.barsMs.isNotEmpty) {
       final heard = [for (final v in s.mixDb) if (v > -90) v];
       final top = heard.isEmpty ? 0.0 : heard.reduce(math.max);
       for (var i = 0; i < s.barsMs.length && i < s.mixDb.length; i++) {
@@ -793,7 +819,7 @@ class _StructurePainter extends CustomPainter {
           ..color = c.withValues(alpha: hollow ? 0.8 : 0.3));
         if (x1 - x0 > 30) {
           final tp = TextPainter(
-            text: TextSpan(text: sec.label.toUpperCase(), style: TextStyle(fontSize: 6.5, letterSpacing: 0.6, color: Console.ink.withValues(alpha: 0.85), fontWeight: FontWeight.w700)),
+            text: TextSpan(text: sec.label.toUpperCase(), style: Console.label(6.5, color: Console.ink.withValues(alpha: 0.85))),
             textDirection: TextDirection.ltr,
             maxLines: 1,
             ellipsis: '',
@@ -805,20 +831,27 @@ class _StructurePainter extends CustomPainter {
         canvas.drawLine(Offset(x(d), 0), Offset(x(d), size.height), Paint()..color = Console.ink.withValues(alpha: 0.7)..strokeWidth = 1.2);
       }
     } else {
-      // Only the cues: where the intro ends and the outro starts.
+      // Only the cues: the intro and the outro hollow, the record between them a band.
       final cues = t.cues;
       if (cues != null) {
-        canvas.drawRect(Rect.fromLTRB(x(cues.mixInMs), 0, x(cues.mixOutMs), 10), Paint()..color = Console.faint.withValues(alpha: 0.5));
+        canvas.drawRect(Rect.fromLTRB(x(cues.mixInMs), 0, x(cues.mixOutMs), 10), Paint()..color = Console.quiet.withValues(alpha: 0.35));
+        canvas.drawRect(Rect.fromLTRB(x(cues.firstDownbeatMs), 0.5, x(cues.soundEndMs), 9.5), Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1
+          ..color = Console.quiet.withValues(alpha: 0.4));
       }
     }
     void mark(Duration at, Color c, String label, {bool left = true}) {
       final px = x(at.inMilliseconds);
       canvas.drawLine(Offset(px, 0), Offset(px, size.height), Paint()..color = c..strokeWidth = 1.5);
       final tp = TextPainter(
-        text: TextSpan(text: label, style: TextStyle(fontSize: 7, letterSpacing: 0.6, color: c, fontWeight: FontWeight.w700)),
+        text: TextSpan(text: label, style: Console.label(7, color: c)),
         textDirection: TextDirection.ltr,
       )..layout();
-      tp.paint(canvas, Offset(left ? px + 3 : px - tp.width - 3, size.height - 10));
+      // Inside the strip whichever side it was asked for, at its edges.
+      var lx = left ? px + 3 : px - tp.width - 3;
+      lx = lx.clamp(0.0, math.max(0.0, size.width - tp.width));
+      tp.paint(canvas, Offset(lx, size.height - 11));
     }
     if (w.outAt != null) mark(w.outAt!, w.accent, 'OUT', left: false);
     if (w.inAt != null) mark(w.inAt!, w.accent, 'IN');

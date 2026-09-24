@@ -186,7 +186,7 @@ class _ConsoleDeckState extends State<ConsoleDeck> with TickerProviderStateMixin
           mainAxisSize: MainAxisSize.min,
           children: [
             if (isMaster) ...[
-              Text('MASTER', style: Console.label(7.5, color: _colour)),
+              Text('MASTER', style: Console.label(8, color: _colour)),
               const SizedBox(width: 6),
             ],
             if (_incoming) ...[
@@ -676,7 +676,7 @@ class _NextBadge extends StatelessWidget {
                 : s == null
                     ? 'NEXT'
                     : 'NEXT ${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}',
-            style: Console.label(7.5, color: Console.ground),
+            style: Console.label(8, color: Console.ground),
           ),
         );
       },
