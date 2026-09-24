@@ -202,3 +202,67 @@ def test_a_long_record_keeps_its_tempo_to_the_hundredth_and_never_slips(tmp_path
     spread = np.abs(off - np.median(off))
     assert np.percentile(spread, 95) < 0.004, "on the drums, from the first minute to the last"
     assert spread.max() < 0.006, "and never a slip"
+
+
+def test_a_fast_record_is_given_the_tempo_a_dj_counts(tmp_path):
+    """A hardtekk record at 163 with its kick on every beat is 163, not the 81.5 a
+    listener might tap: synced as 81.5 against a record at 150 it was treated as a slow
+    one. The kick is on every beat, so the kick decides."""
+    rng = np.random.default_rng(3)
+    bpm, seconds = 163.0, 60
+    x = np.zeros(int(RATE * seconds))
+    t = np.arange(int(RATE * 0.2)) / RATE
+    kick = np.sin(2 * np.pi * (50 + 80 * np.exp(-t * 35)) * t) * np.exp(-t * 18)
+    hat = rng.standard_normal(int(RATE * 0.02)) * np.exp(-np.arange(int(RATE * 0.02)) / (RATE * 0.004)) * 0.2
+    beat = 60.0 / bpm
+    k = 0
+    while k * beat < seconds - 0.3:
+        at = int(k * beat * RATE)
+        x[at:at + len(kick)] += kick[: len(x) - at]
+        off = int((k + 0.5) * beat * RATE)
+        if off + len(hat) < len(x):
+            x[off:off + len(hat)] += hat
+        k += 1
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(RATE)
+        w.writeframes((np.clip(x * 0.6, -1, 1) * 32767).astype("<i2").tobytes())
+    f = tmp_path / "tekk.wav"
+    f.write_bytes(out.getvalue())
+    assert beats.measure(f)["bpm"] == pytest.approx(bpm, abs=0.05)
+
+
+def test_the_bar_starts_where_the_record_changes(tmp_path):
+    """Four-on-the-floor: every beat has the same kick, so the bass cannot say which is
+    the one. The record can: its sections change there. Here a chord changes every
+    four bars, on beat 2 of the kicks — so beat 2 is the one."""
+    bpm, seconds = 128.0, 90
+    x = np.zeros(int(RATE * seconds))
+    beat = 60.0 / bpm
+    t = np.arange(int(RATE * 0.2)) / RATE
+    kick = np.sin(2 * np.pi * (55 + 60 * np.exp(-t * 30)) * t) * np.exp(-t * 14)
+    n = int((seconds - 0.4) / beat)
+    for k in range(n):
+        at = int(k * beat * RATE)
+        x[at:at + len(kick)] += kick[: len(x) - at]
+    chords = [220.0, 293.7, 246.9, 329.6]
+    for start in range(2, n, 16):             # every four bars, from beat 2
+        a, b = int(start * beat * RATE), int(min(n, start + 16) * beat * RATE)
+        tt = np.arange(b - a) / RATE
+        f0 = chords[(start // 16) % len(chords)]
+        x[a:b] += 0.15 * (np.sin(2 * np.pi * f0 * tt) + np.sin(2 * np.pi * f0 * 1.5 * tt))
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(RATE)
+        w.writeframes((np.clip(x * 0.6, -1, 1) * 32767).astype("<i2").tobytes())
+    f = tmp_path / "bars.wav"
+    f.write_bytes(out.getvalue())
+    found = beats.measure(f)
+    first_beat = found["beats"][found["bar_starts_on"]]
+    # The bar's one is on a beat whose number, counted from the first kick, is 2 mod 4.
+    number = round(first_beat / (beat * 1000))
+    assert number % 4 == 2

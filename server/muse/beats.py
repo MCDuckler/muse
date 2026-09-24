@@ -40,7 +40,9 @@ from . import analysis
 # 2: the key, the bars, each bar's loudness, the phrases and the cues.
 # 3: the drops — where the song opens up. See analysis.py.
 # 4: the tempo to a hundredth, and a record that keeps one tempo given one exact grid.
-VERSION = 4
+# 5: the tempo a DJ counts (the kick decides half, double and the triplet step, read
+#    finely), and the bar's one where the record's sections change.
+VERSION = 5
 
 _RATE = 11025
 _FFT = 1024
@@ -268,38 +270,75 @@ def _autocorrelation(sig: np.ndarray) -> np.ndarray:
     return ac / ac[0] if ac[0] > 0 else ac
 
 
-def _level(env: np.ndarray, low: np.ndarray, bpm: float) -> float:
-    """The pulse the kick drum keeps, where the tempo found is one and a half times it
-    or two thirds of it.
+_FINE_HOP = 32                   # 2.9 ms at 11 kHz
 
-    [_tempo] settles half and double time, but not the triplet step between them: a
-    record at 155 with hats on the off-beats repeats every three half-beats as well,
-    and came back at 103.3 — synced by hand to a record at 155 it was slowed by a
-    quarter, and in a mix its every other beat fell between the other's. The kick
-    drum does not play in threes like that: it is on the beat. So where the bass
-    lines up clearly better one beat of the other tempo on, and the whole envelope
-    does not disagree, the other tempo is the one.
+
+def _fine(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The kick drum's onsets and the whole spectrum's, every 2.9 ms: the envelope the
+    tracker uses is a frame every 11.6 ms under a 93 ms window, too smeared to tell a
+    kick on every beat from a kick on every other one — which is the whole question
+    between 83 and 166."""
+    n = len(x)
+    spectrum = np.fft.rfft(x.astype(np.float64))
+    hz = np.fft.rfftfreq(n, 1.0 / _RATE)
+
+    def band(lo: float, hi: float) -> np.ndarray:
+        y = np.fft.irfft(spectrum * ((hz >= lo) & (hz <= hi)), n) ** 2
+        e = y[: len(y) // _FINE_HOP * _FINE_HOP].reshape(-1, _FINE_HOP).mean(axis=1)
+        rise = np.maximum(0.0, np.diff(np.log(e + 1e-9), prepend=np.log(e[0] + 1e-9)))
+        return rise - np.convolve(rise, np.ones(64) / 64, mode="same")
+
+    return band(30.0, 150.0), band(30.0, 5000.0)
+
+
+def _level(x: np.ndarray, bpm: float) -> float:
+    """The pulse a DJ counts: the kick drum's, where the tempo found is half, double or
+    one and a half times it.
+
+    [_tempo] leans towards 80 to 160 a minute, the pulse people tap to — and halves
+    anything faster. For a DJ that is wrong: a hardtekk record at 163 came back at
+    81.5 and was synced to a 150 record as if it were a slow one; and the triplet step
+    was missed altogether — 155 with hats on the off-beats came back at 103.3, 165 at
+    110. On a record made for dancing the kick is on every beat and does not play in
+    threes: so of the tempo found and its neighbours, the one taken is the fastest the
+    kick and the whole spectrum still repeat at nearly as strongly, as long as it is
+    one a DJ would count (70 to 190). A slow record whose kick falls on every other
+    beat of the doubled tempo stays slow.
     """
-    if len(low) < int(_FPS * 8):
+    if len(x) < _RATE * 8:
         return bpm
-    kick, whole = _autocorrelation(low), _autocorrelation(env)
+    kick_env, whole_env = _fine(x)
+    kick, whole = _autocorrelation(kick_env), _autocorrelation(whole_env)
+    per_second = _RATE / _FINE_HOP
 
     def at(ac: np.ndarray, b: float) -> float:
-        lag = 60.0 * _FPS / b
-        i = int(lag)
-        if i + 1 >= len(ac):
+        # The strongest within a whisker of the lag — the tempo it is asked about has
+        # been refined ([_refine]), so its multiples are where they are; any wider and
+        # a record's other repetitions (a swung hat a sample short of the half-beat)
+        # are taken for the one being asked about.
+        lag = 60.0 * per_second / b
+        lo, hi = int(lag * 0.996), int(np.ceil(lag * 1.004)) + 1
+        if hi >= len(ac):
             return 0.0
-        f = lag - i
-        return float((1.0 - f) * ac[i] + f * ac[i + 1])
+        return float(ac[lo:hi].max())
 
-    best, kept = bpm, at(kick, bpm)
+    def score(b: float) -> float:
+        return at(kick, b) + at(whole, b)
+
+    best, kept = bpm, score(bpm)
+    # Double: a record whose kick is on every beat of the faster tempo.
+    if bpm * 2 <= 190.0:
+        s2 = score(bpm * 2)
+        if s2 >= max(0.2, 0.75 * kept):
+            best, kept = bpm * 2, s2
+    # The triplet step, either way: only on clear evidence.
     for ratio in (1.5, 1 / 1.5):
-        other = bpm * ratio
+        other = best * ratio
         if not 70.0 <= other <= 190.0:
             continue
-        k = at(kick, other)
-        if k > max(0.1, 2.0 * kept) and at(whole, other) > 0.5 * at(whole, bpm):
-            best, kept = other, k
+        s3 = score(other)
+        if s3 >= max(0.15, 1.5 * kept) and at(kick, other) > max(0.05, at(kick, best)):
+            best, kept = other, s3
     return best
 
 
@@ -468,6 +507,51 @@ def _on_the_beat(beats: np.ndarray, low: np.ndarray, period: float) -> np.ndarra
     return beats + half if off > 1.6 * on + 1e-6 else beats
 
 
+def _bar_starts_on_by_change(x: np.ndarray, beats_ms: np.ndarray) -> int | None:
+    """Which beat of four the bar starts on, from where the record changes.
+
+    A record is written in bars and its sections start on the one: a breakdown, a
+    drop, the bass coming in, a new chord. So the spectrum of each beat is taken, and
+    wherever the four beats after differ most from the four before, that beat is
+    counted for its place in the bar; the place with the most change is the one.
+    (By the bass alone — the old way — every beat of a four-on-the-floor record looks
+    the same, and a third of the records checked had their bars a beat or three out:
+    their sections changed on the analysis's beat two, three or four.) None where the
+    record does not change clearly enough to say.
+    """
+    n = len(beats_ms)
+    if n < 48:
+        return None
+    edges = np.unique(np.geomspace(2, 2048, 33).astype(int))
+    rows = []
+    for a, b in zip(beats_ms[:-1], beats_ms[1:]):
+        seg = x[int(a * _RATE / 1000):int(b * _RATE / 1000)]
+        if len(seg) < 256:
+            rows.append(np.zeros(len(edges) - 1))
+            continue
+        mag = np.abs(np.fft.rfft(seg * np.hanning(len(seg)), 4096))
+        rows.append(np.log1p(np.array([mag[edges[i]:edges[i + 1]].mean()
+                                       for i in range(len(edges) - 1)])))
+    spec = np.array(rows)
+    k = 4
+    change = np.zeros(len(spec))
+    for i in range(k, len(spec) - k):
+        change[i] = float(np.linalg.norm(spec[i:i + k].mean(axis=0) - spec[i - k:i].mean(axis=0)))
+    peaks = [i for i in range(k, len(spec) - k)
+             if change[i] > 0 and change[i] == change[max(0, i - 4):i + 5].max()]
+    peaks = sorted(peaks, key=lambda i: -change[i])[:16]
+    if len(peaks) < 6:
+        return None
+    weight = np.zeros(4)
+    for i in peaks:
+        weight[i % 4] += change[i]
+    best = int(np.argmax(weight))
+    # Only where the record says so clearly: most of the change on one place.
+    if weight[best] < 0.45 * weight.sum():
+        return None
+    return best
+
+
 def _bar_starts_on(beats: np.ndarray, low: np.ndarray) -> int:
     """Which beat of four the bar most likely starts on: 0 to 3.
 
@@ -525,7 +609,12 @@ def measure(audio: pathlib.Path) -> dict:
     # and beats laid over it anyway would be a metronome that ignores the music.
     if bpm <= 0 or confidence < 0.12:
         return analysis.add(out, x, [], 0, low, _FPS)
-    bpm = _refine(env, _level(env, low, bpm))
+    # Refined first, so the half, the double and the triplet step are asked about at
+    # exactly where they fall; refined again at whichever of them is the one.
+    bpm = _refine(env, bpm)
+    leveled = _level(x, bpm)
+    if abs(leveled - bpm) > 0.01:
+        bpm = _refine(env, leveled)
     beats = _track(env, bpm)
     beats = _on_the_beat(beats, low, 60.0 * _FPS / bpm)
     # Only where there is music. The tracker walks back from the end of the file to the
@@ -555,7 +644,8 @@ def measure(audio: pathlib.Path) -> dict:
     slope = float(np.polyfit(np.arange(len(at_ms)), at_ms, 1)[0])
     out["bpm"] = round(60000.0 / slope, 2)
     out["beats"] = [int(round(ms)) for ms in at_ms]
-    out["bar_starts_on"] = _bar_starts_on(beats, low)
+    by_change = _bar_starts_on_by_change(x, at_ms)
+    out["bar_starts_on"] = by_change if by_change is not None else _bar_starts_on(beats, low)
     return analysis.add(out, x, out["beats"], out["bar_starts_on"], low, _FPS)
 
 
