@@ -138,3 +138,59 @@ def test_a_slow_swell_is_not_a_drop():
     # Ten bars of creeping upwards is a build, not a drop.
     rising = [int(255 * (0.4 + 0.5 * i / 32)) for i in range(32)]
     assert analysis.drops(rising, [0, 16]) == []
+
+
+def test_the_beats_run_from_the_first_sound(tmp_path):
+    # The tracker finds its first beat a few beats in; a record on one grid was on it
+    # from the start, and its first bar is its first bar.
+    x = _song(128, bars=24, loud_from_bar=0, quiet_from_bar=None)
+    f = tmp_path / "song.wav"
+    f.write_bytes(_wav(x))
+    found = beats.measure(f)
+    beat = 60000 / 128
+    assert found["beats"][0] < beat / 2, "the first beat is the first kick"
+    assert found["downbeats"][0] < beat / 2
+
+
+def test_the_four_bar_markers_follow_the_record_not_its_first_bar(tmp_path):
+    # Quiet for ten bars — a two-bar pickup and an eight-bar intro — loud from bar 10,
+    # quiet again from 42: its sections start two bars into a grid counted from the
+    # top, and so do the markers.
+    x = _song(128, bars=52, loud_from_bar=10, quiet_from_bar=42)
+    f = tmp_path / "song.wav"
+    f.write_bytes(_wav(x))
+    found = beats.measure(f)
+    bar = 60.0 / 128 * 4 * 1000
+    marks = found["four_bars"]
+    assert any(abs(m - 10 * bar) < 60 for m in marks), marks
+    assert any(abs(m - 42 * bar) < 60 for m in marks), marks
+    assert all(abs(((m / bar) - 2) / 4 - round(((m / bar) - 2) / 4)) < 0.05 for m in marks), \
+        "every four bars from bar 2"
+
+
+def test_the_grid_moves_where_the_sections_do():
+    # Sections every eight bars from the top, then one of six (from bar 16 to 22), and
+    # every eight bars from there: the markers move with them at bar 22.
+    strength = np.zeros(48)
+    for b in (8, 16, 22, 30, 38):
+        strength[b] = 3.0
+    marks = analysis.four_bars(strength)
+    assert [m for m in marks if m < 22] == [0, 4, 8, 12, 16, 20]
+    assert [m for m in marks if m >= 22] == [22, 26, 30, 34, 38, 42, 46]
+
+
+def test_one_fill_a_bar_early_does_not_move_the_grid():
+    strength = np.zeros(48)
+    for b in (8, 16, 24, 40):
+        strength[b] = 3.0
+    strength[31] = 3.4          # a fill, the loudest change of all, a bar early
+    marks = analysis.four_bars(strength)
+    assert marks == list(range(0, 48, 4))
+
+
+def test_a_grid_that_starts_late_is_found_from_the_start():
+    # A record whose sections all start on bar 3, 11, 19 …: the markers run from bar 3.
+    strength = np.zeros(40)
+    for b in (3, 11, 19, 27, 35):
+        strength[b] = 2.5
+    assert analysis.four_bars(strength)[:3] == [3, 7, 11]

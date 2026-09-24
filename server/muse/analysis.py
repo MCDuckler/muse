@@ -41,6 +41,16 @@ _MINOR = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3
 # Bars either side a phrase boundary is judged by.
 _KERNEL_BARS = 8
 
+# The four-bar grid: each bar's spectrum in this many bands, from frames this long.
+_GRID_BANDS = 40
+_GRID_FFT = 2048
+# What moving the grid costs, against the changes that vote for where it is (see
+# four_bars): more than any one change is worth (a change scores 3.5 at the most), so
+# it takes two clear ones or three middling ones. And how much the grid counted from
+# the top of the record is believed before anything is heard.
+_GRID_SWITCH = 4.5
+_GRID_FROM_TOP = 1.0
+
 # A bar has to be this much of the song's loudest to count as the song being "on".
 _ON = 0.6
 
@@ -161,9 +171,119 @@ def energy_levels(energy_db: np.ndarray) -> list[int]:
     return [int(round(255 * float(v) ** 0.7)) for v in lin]
 
 
-def phrases(rows: np.ndarray) -> list[int]:
-    """The bars phrases begin on: 0, and every bar where what follows differs most
-    from what came before, snapped to the four-bar grid."""
+# ------------------------------------------------------------------ the four-bar grid
+def bar_spectra(x: np.ndarray, downbeats_ms: list[int]) -> np.ndarray:
+    """Each bar's spectrum as the ear groups it — bands a fraction of an octave wide,
+    on a log scale — averaged over the bar: what a new sound, a new part, a new section
+    shows up in. One row per bar between one downbeat and the next."""
+    edges = np.unique(np.geomspace(2, _GRID_FFT // 2, _GRID_BANDS + 1).astype(int))
+    window = np.hanning(_GRID_FFT)
+    n = max(0, len(downbeats_ms) - 1)
+    rows = np.zeros((n, len(edges) - 1))
+    for i in range(n):
+        seg = x[int(downbeats_ms[i] * RATE / 1000):int(downbeats_ms[i + 1] * RATE / 1000)]
+        if len(seg) < _GRID_FFT // 2:
+            continue
+        if len(seg) < _GRID_FFT:
+            seg = np.pad(seg, (0, _GRID_FFT - len(seg)))
+        starts = np.arange(0, len(seg) - _GRID_FFT + 1, _GRID_FFT // 2)
+        frames = seg[starts[:, None] + np.arange(_GRID_FFT)[None, :]] * window
+        mag = np.abs(np.fft.rfft(frames, axis=1)).mean(axis=0)
+        total = np.concatenate([[0.0], np.cumsum(mag)])
+        rows[i] = np.log1p((total[edges[1:]] - total[edges[:-1]]) / (edges[1:] - edges[:-1]))
+    return rows
+
+
+def _change(rows: np.ndarray, k: int, least: int = 2) -> np.ndarray:
+    """How much the [k] bars after each bar differ from the [k] before it — fewer at
+    the ends of the record, down to [least], so a change there is found where it is
+    rather than where a full [k] first fits."""
+    n = len(rows)
+    out = np.zeros(n)
+    if n == 0:
+        return out
+    total = np.vstack([np.zeros(rows.shape[1]), np.cumsum(rows, axis=0)])
+    for i in range(least, n - least + 1):
+        kk = min(k, i, n - i)
+        before = (total[i] - total[i - kk]) / kk
+        after = (total[i + kk] - total[i]) / kk
+        out[i] = float(np.linalg.norm(after - before))
+    return out
+
+
+def changes(spectra: np.ndarray, energy_db: np.ndarray) -> np.ndarray:
+    """How strongly the record changes at the start of each bar: the sound compared
+    over two, four and eight bars either side, and the loudness over four — each
+    scaled to its own biggest, so no one of them decides."""
+    out = np.zeros(len(spectra))
+    # A bar too short to measure reads 0 dB, the loudest there is: not a change.
+    heard = energy_db[energy_db != 0]
+    energy_db = np.where(energy_db == 0, heard.min() if len(heard) else 0.0, energy_db)
+    for k in (2, 4, 8):
+        c = _change(spectra, k)
+        if c.max() > 0:
+            out += c / c.max()
+    c = _change(energy_db[:, None], 4)
+    if c.max() > 0:
+        out += 0.5 * c / c.max()
+    return out
+
+
+def four_bars(strength: np.ndarray) -> list[int]:
+    """The bars the record's four-bar grid is on: the markers a DJ lines two records
+    up by, and what the booth mixes on.
+
+    Music is written in fours and its sections start on them — but not always on a
+    grid counted from the first bar: a pickup, an intro of three or six, a break two
+    bars short, and every section after it is a bar or two off a grid counted from the
+    top. So the grid goes where the record's clear changes are. Each bar is on one of
+    four grids; a grid is voted for by every clear change on it (the bars where the
+    sound changes most, each by how much); moving from one grid to another costs more
+    than any one change is worth, so the grid moves only where the record does — a
+    section of odd length, followed by others that agree — and never for one fill a bar
+    early. It moves on a clear change, which is where the new section starts.
+    With nothing to go by, the grid is counted from the top. The best path through the
+    four is found in one pass (Viterbi), and every bar four on from where its grid
+    starts is a marker.
+    """
+    n = len(strength)
+    if n == 0:
+        return []
+    if n < 8 or strength.max() <= 0:
+        return list(range(0, n, 4))
+    threshold = float(strength.mean() + strength.std())
+    votes = np.zeros(n)
+    # The clear changes, one bar each, and not the first or last two bars: a record's
+    # first sound and its last are changes of their own that say nothing of the grid.
+    for i in range(2, n - 2):
+        if strength[i] >= threshold and strength[i] == strength[max(0, i - 2):i + 3].max():
+            votes[i] = strength[i]
+    score = np.array([_GRID_FROM_TOP, 0.0, 0.0, 0.0])
+    back = np.zeros((n, 4), dtype=np.int64)
+    for i in range(n):
+        new = np.empty(4)
+        for g in range(4):
+            new[g], back[i, g] = score[g], g
+            # A grid is only moved onto on a clear change on one of its own bars: where
+            # the section it starts begins.
+            if (i - g) % 4 == 0 and votes[i] > 0:
+                other = max((q for q in range(4) if q != g), key=lambda q: score[q])
+                if score[other] - _GRID_SWITCH > new[g]:
+                    new[g], back[i, g] = score[other] - _GRID_SWITCH, other
+                new[g] += votes[i]
+        score = new
+    g = int(np.argmax(score))
+    on = np.zeros(n, dtype=np.int64)
+    for i in range(n - 1, -1, -1):
+        on[i] = g
+        g = int(back[i, g])
+    return [i for i in range(n) if (i - on[i]) % 4 == 0]
+
+
+def phrases(rows: np.ndarray, markers: list[int] | None = None) -> list[int]:
+    """The bars phrases begin on: the first marker, and every bar where what follows
+    differs most from what came before, moved onto the nearest four-bar marker within a
+    bar (see four_bars; every fourth bar from the first where there are none)."""
     n = len(rows)
     if n < 2 * _KERNEL_BARS:
         return [0] if n else []
@@ -176,14 +296,15 @@ def phrases(rows: np.ndarray) -> list[int]:
     if novelty.max() <= 0:
         return [0]
     threshold = novelty[k:n - k + 1].mean() + 0.8 * novelty[k:n - k + 1].std()
-    found = [0]
+    grid = markers if markers else list(range(0, n, 4))
+    found = [grid[0]]
     for i in range(k, n - k + 1):
         if novelty[i] < threshold:
             continue
         if novelty[i] < novelty[max(0, i - 4):i + 5].max():
             continue
-        # Onto the grid: the nearest multiple of four bars, within a bar.
-        snapped = int(round(i / 4)) * 4
+        # Onto the grid: the nearest marker, within a bar.
+        snapped = min(grid, key=lambda m: abs(m - i))
         if abs(snapped - i) > 1:
             snapped = i
         if snapped < n and snapped - found[-1] >= 4:
@@ -229,7 +350,8 @@ def drops(levels: list[int], phrase_bars: list[int]) -> list[int]:
     return found
 
 
-def sections(phrase_bars: list[int], levels: list[int], n_bars: int) -> dict:
+def sections(phrase_bars: list[int], levels: list[int], n_bars: int,
+             markers: list[int] | None = None) -> dict:
     """Where the song is 'on': the bar the intro ends on and the bar the outro starts
     on, as bars — None where it cannot be said."""
     if not levels or n_bars < 8:
@@ -247,9 +369,10 @@ def sections(phrase_bars: list[int], levels: list[int], n_bars: int) -> dict:
             intro_end = b
             break
     if intro_end is None:
+        grid = markers if markers else list(range(0, n_bars, 4))
         for i in range(0, n_bars):
             if steady(i):
-                intro_end = int(round(i / 4)) * 4
+                intro_end = min(grid, key=lambda m: abs(m - i))
                 break
     outro_start = None
     for b in reversed(phrase_bars):
@@ -271,11 +394,13 @@ def add(out: dict, x: np.ndarray, beats_ms: list[int], bar_starts_on: int,
     energy_db, rows = bar_features(x, downbeats, low_env, fps)
     levels = energy_levels(energy_db)
     out["energy"] = levels
-    phrase_bars = phrases(rows)
+    markers = four_bars(changes(bar_spectra(x, downbeats), energy_db))
+    out["four_bars"] = [int(downbeats[b]) for b in markers if b < len(downbeats)]
+    phrase_bars = phrases(rows, markers)
     out["phrases"] = [int(downbeats[b]) for b in phrase_bars if b < len(downbeats)]
     out["drops"] = [int(downbeats[b]) for b in drops(levels, phrase_bars)
                     if b < len(downbeats)]
-    where = sections(phrase_bars, levels, len(levels))
+    where = sections(phrase_bars, levels, len(levels), markers)
     sound_end = out["duration_ms"] - out.get("tail_ms", 0)
     first = int(downbeats[0])
     mix_in = int(downbeats[where["intro_end_bar"]]) if where["intro_end_bar"] is not None \

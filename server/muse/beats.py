@@ -42,7 +42,10 @@ from . import analysis
 # 4: the tempo to a hundredth, and a record that keeps one tempo given one exact grid.
 # 5: the tempo a DJ counts (the kick decides half, double and the triplet step, read
 #    finely), and the bar's one where the record's sections change.
-VERSION = 5
+# 6: an exact grid carried on to where the sound starts and ends (the tracker lost the
+#    first two or three beats of nearly every record, and with them its first bar),
+#    and the four-bar markers where the record's sections start (four_bars).
+VERSION = 6
 
 _RATE = 11025
 _FFT = 1024
@@ -461,6 +464,33 @@ def _one_grid(env: np.ndarray, low: np.ndarray, period: float,
     return best + k * period
 
 
+def _to_the_ends(grid: np.ndarray, from_ms: float, to_ms: float) -> np.ndarray:
+    """An exact grid carried on to where the sound starts and where it ends.
+
+    The tracker finds its first beat two or three beats into nearly every record — it
+    has nothing behind it to be pulled into step by — and with those beats went the
+    record's first bar: the bars were counted from the second, and every four-bar
+    phrase came out a bar out. A record on a grid was on it from its first sound, so
+    the grid is simply carried back there, and on to its last. A beat the file's start
+    cuts off by a hair (the encoder's own few milliseconds) is still the first beat,
+    and is put at the start.
+    """
+    if len(grid) < 2:
+        return grid
+    period = float(grid[-1] - grid[0]) / (len(grid) - 1)
+    frame_ms = _HOP * 1000.0 / _RATE
+    beat_ms = period * frame_ms
+
+    def ms(f: float) -> float:
+        return (f * _HOP + _ONSET_AT) * 1000.0 / _RATE
+
+    lowest = max(0.0, from_ms - 40.0) - min(40.0, 0.1 * beat_ms)
+    before = max(0, int(np.floor((ms(float(grid[0])) - lowest) / beat_ms)))
+    after = max(0, int(np.floor((to_ms - ms(float(grid[-1]))) / beat_ms)))
+    k = np.arange(-before, len(grid) + after)
+    return float(grid[0]) + k * period
+
+
 def _track(env: np.ndarray, bpm: float, tightness: float = 100.0) -> np.ndarray:
     """The frames the beats fall on."""
     period = 60.0 * _FPS / bpm
@@ -563,7 +593,7 @@ def _bar_starts_on(beats: np.ndarray, low: np.ndarray) -> int:
     weight = np.zeros(4)
     for phase in range(4):
         at = beats[phase::4]
-        at = at[at < len(low)]
+        at = at[(at >= 0) & (at < len(low))]
         weight[phase] = float(np.mean([low[max(0, b - 2): b + 3].max() for b in at]))
     return int(np.argmax(weight))
 
@@ -636,6 +666,7 @@ def measure(audio: pathlib.Path) -> dict:
     # records together by; the beats as tracked where it does not.
     grid = _one_grid(env, low, 60.0 * _FPS / bpm, int(beats[0]), int(beats[-1]) + 1)
     if grid is not None:
+        grid = _to_the_ends(grid, lead, duration * 1000 - tail)
         at_ms = (grid * _HOP + _ONSET_AT) * 1000.0 / _RATE
         beats = np.round(grid).astype(np.int64)
         out["grid"] = True
@@ -643,6 +674,7 @@ def measure(audio: pathlib.Path) -> dict:
     # far finer than the spacing of two, counted in frames of 11 ms.
     slope = float(np.polyfit(np.arange(len(at_ms)), at_ms, 1)[0])
     out["bpm"] = round(60000.0 / slope, 2)
+    at_ms = np.maximum(at_ms, 0.0)
     out["beats"] = [int(round(ms)) for ms in at_ms]
     by_change = _bar_starts_on_by_change(x, at_ms)
     out["bar_starts_on"] = by_change if by_change is not None else _bar_starts_on(beats, low)
