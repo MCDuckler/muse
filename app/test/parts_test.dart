@@ -5,6 +5,7 @@
 // queues behind the rest of the house — and everything else has to ask. What is
 // checked here is the choosing, the falling back when a desk cannot after all, and
 // that a part made here is played from the disk rather than fetched again.
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -175,5 +176,54 @@ void main() {
     expect(await booth.a.swapTo('drums'), isTrue);
     expect(audio.players.values.expand((p) => p.sources).last, startsWith('file://'),
         reason: 'the part is on this disk; there is nothing to fetch');
+  });
+
+  test('a record asked for ahead of time is left to the pool, asked for as "soon"', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    final kept = File('${dir.path}/song.m4a')..writeAsBytesSync([0]);
+    final parts = PartsStore(api, offlinePath: (id) => kept.path);
+    var made = 0;
+    renderer = (audio, name, into) async => made++;
+    final queries = <String>[];
+    useThisClientInstead(MockClient((r) async {
+      if (r.url.path.contains('/stream-key')) {
+        return http.Response('{"key": "k", "expires_at": 99999999999}', 200);
+      }
+      if (r.url.path.contains('/stem/')) {
+        queries.add(r.url.query);
+        return http.Response('', 202);
+      }
+      return http.Response('{}', 200);
+    }));
+    expect(await parts.want(song(1), 'stems', soon: true), Stem.beingMade);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(made, 0, reason: "not in this computer's line ahead of what it is about to play");
+    expect(partsJobs.of(1)?.stage, PartsStage.pooled);
+    expect(queries.single, contains('soon=true'));
+  });
+
+  test("a deck's old record waiting in line goes back to the pool", () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    final kept = File('${dir.path}/song.m4a')..writeAsBytesSync([0]);
+    final parts = PartsStore(api, offlinePath: (id) => kept.path);
+    final started = <int>[];
+    final hold = Completer<void>();
+    renderer = (audio, name, into) async {
+      started.add(int.parse(into.values.first.split('/').last.split('-').first));
+      await hold.future;
+    };
+    await parts.want(song(1), 'drums'); // in hand
+    await parts.want(song(2), 'drums'); // waiting
+    await parts.want(song(3), 'drums'); // waiting
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    parts.backToPool(song(2));
+    expect(partsJobs.of(2)?.stage, PartsStage.pooled);
+    // And the line is taken in the order the automix says.
+    parts.inOrder([3]);
+    hold.complete();
+    for (var i = 0; i < 100 && started.length < 2; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(started, [1, 3]);
   });
 }

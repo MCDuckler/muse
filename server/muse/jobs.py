@@ -350,7 +350,13 @@ def lease(worker: str, kind: str = "ingest", limit: int = 1,
                  and (%s::int is null or priority <= %s::int)
                  and (%s or kind <> 'split'
                       or created_at < now() - (%s || ' seconds')::interval)
-               order by priority, created_at
+               -- Splits somebody is waiting for this minute: the newest first. An
+               -- urgent split nobody took an hour ago is one nobody is waiting for
+               -- now; the record on the deck is (pool.want_split).
+               order by priority,
+                        case when kind='split' and priority <= %s
+                             then -extract(epoch from created_at)
+                             else extract(epoch from created_at) end
                for update skip locked
                limit %s
             )
@@ -370,7 +376,7 @@ def lease(worker: str, kind: str = "ingest", limit: int = 1,
             select * from taken order by priority, created_at
             """,
             (kind, MAX_ATTEMPTS, max_priority, max_priority, strong,
-             SPLIT_FOR_THE_CARD_SECONDS, limit, worker, LEASE_SECONDS),
+             SPLIT_FOR_THE_CARD_SECONDS, PRIORITY_NOW, limit, worker, LEASE_SECONDS),
         ).fetchall()
         c.execute(
             """insert into workers(name,last_seen,leased) values(%s,now(),%s)

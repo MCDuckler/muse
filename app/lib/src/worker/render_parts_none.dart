@@ -63,6 +63,8 @@ Future<void> giveBack(String path) async {}
 
 Future<int> sweepHere() async => 0;
 
+bool unqueueHere(int trackId) => false;
+
 
 // ignore: avoid_setters_without_getters
 set kitDirForTesting(String? path) {}

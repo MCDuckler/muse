@@ -279,6 +279,20 @@ void cancelHere(int trackId) {
   if (j != null && !j.done) partsJobs.stage(trackId, PartsStage.cancelled);
 }
 
+/// Take [trackId] out of this computer's line while it is still only waiting, to be
+/// left to the pool: nobody here needs it next any more. Not a cancel — asked for
+/// again, it is queued again. Whether it was waiting here.
+bool unqueueHere(int trackId) {
+  if (_now?.trackId == trackId) return false;
+  final waiting = _line.where((r) => r.trackId == trackId).toList();
+  if (waiting.isEmpty) return false;
+  for (final r in waiting) {
+    _line.remove(r);
+    _making.removeAll([for (final p in r.together) '$trackId-$p']);
+  }
+  return true;
+}
+
 /// Put [trackId] first among the waiting: somebody wants it now.
 void promoteHere(int trackId) {
   if (partsJobs.of(trackId)?.stage == PartsStage.waiting) partsJobs.first(trackId);

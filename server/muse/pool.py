@@ -110,8 +110,13 @@ def want_split(track_id: int, *, asked_by: int | None = None,
               and state in ('pending','leased')
             order by id desc limit 1""", (track_id,))
     if open_:
-        # Asked for again, sooner: it moves up, and never down.
-        if priority < open_["priority"]:
+        # Asked for again, sooner: it moves up, and never down. Asked for again *now*,
+        # it is the newest "now" — urgent splits go newest first (jobs.lease): the
+        # record somebody is waiting for this minute, not one asked for an hour ago.
+        if priority <= jobs.PRIORITY_NOW:
+            db.run("""update jobs set priority=%s, created_at=now()
+                        where id=%s and state='pending'""", (priority, open_["id"]))
+        elif priority < open_["priority"]:
             db.run("update jobs set priority=%s where id=%s", (priority, open_["id"]))
         return open_["id"]
     payload = {"track_id": track_id, "sha256": t["sha256"]}

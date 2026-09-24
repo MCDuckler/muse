@@ -461,10 +461,13 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
 
     @app.get("/tracks/{track_id}/stem/{name}")
     def stem(track_id: int, name: str, request: Request, k: str | None = None,
+             soon: bool = False,
              authorization: Annotated[str | None, Header()] = None):
         """A part of a record — its drums, the music without them, the record without
         its voice, or the voice alone — for a deck in the booth to play instead of the
         record itself. Made by a computer in the pool (pool.py) and kept here for all.
+        [soon]: asked ahead of time (the automix looking down its queue), not for a
+        record going on a deck now — queued behind those.
 
         Not made yet: the record is queued for the pool, and the asking is answered
         with "not yet, come back" — 202 and a Retry-After, no body."""
@@ -481,7 +484,9 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         path = pool.part_here(t["sha256"], name)
         if path is None:
             asked_by = who.get("device_id") if isinstance(who, dict) else None
-            if pool.want_split(track_id, asked_by=asked_by) is not None:
+            if pool.want_split(track_id, asked_by=asked_by,
+                               priority=jobs.PRIORITY_QUEUE if soon else jobs.PRIORITY_NOW
+                               ) is not None:
                 publish("pool", {})
             return Response(status_code=202,
                             headers={"Retry-After": "10", "Cache-Control": "no-store"})

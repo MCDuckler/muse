@@ -78,13 +78,19 @@ class AutoMix extends ChangeNotifier {
       final t = _tracks[i];
       if (_inParts[t.id] == true) continue;
       try {
-        _inParts[t.id] = await booth.parts.want(t, 'stems') == Stem.ready;
+        // The record on now is wanted now; those after it only soon — to the pool,
+        // behind what somebody is about to play.
+        _inParts[t.id] = await booth.parts.want(t, 'stems', soon: i > _at) == Stem.ready;
       } catch (_) {
         // Not a record the server can take apart, or cannot be reached. Either way
         // the booth mixes it the ordinary way and says nothing about it.
         _inParts[t.id] = false;
       }
     }
+    // This computer's own line in the order they play: the record on, then the next.
+    booth.parts.inOrder([
+      for (var i = _at; i >= 0 && i < _tracks.length && i <= _at + lookAhead; i++) _tracks[i].id,
+    ]);
   }
 
   /// Whether both of these are in parts, which is what the drums changing hands

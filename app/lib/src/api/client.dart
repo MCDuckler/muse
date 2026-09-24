@@ -434,9 +434,14 @@ class ApiClient {
   /// and the request: ask once, wait, ask again. A record it will not take apart at
   /// all — one longer than a record — answers 404, which is a different answer from
   /// "not yet" and has to stay one.
-  Future<Stem> stemState(Track t, String part) async {
+  ///
+  /// [soon]: asked ahead of time rather than for a deck loading it now, and queued
+  /// behind those.
+  Future<Stem> stemState(Track t, String part, {bool soon = false}) async {
     await ensureStreamKey();
-    final r = await net.get(Uri.parse(stemUrl(t, part)),
+    final url = stemUrl(t, part);
+    final r = await net.get(
+        Uri.parse(soon ? '$url${url.contains('?') ? '&' : '?'}soon=true' : url),
         headers: {...(kIsWeb ? const {} : streamHeaders), 'Range': 'bytes=0-0'});
     if (r.statusCode == 202) return Stem.beingMade;
     if (r.statusCode == 404) return Stem.never;

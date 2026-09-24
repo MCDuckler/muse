@@ -68,7 +68,12 @@ class PartsStore {
   /// about to do it (it has a graphics card) or the pool has had long enough without
   /// anybody taking it; and otherwise the pool — the record is queued there by asking,
   /// and the parts come from the house when a computer has made them.
-  Future<Stem> want(Track t, String name, {bool byHand = false}) async {
+  ///
+  /// [soon] is the automix looking down its queue: the record is not going on a deck
+  /// yet, so it is left to the pool — asked for at less than "now" — rather than put
+  /// in this computer's own line ahead of the one it is about to play.
+  Future<Stem> want(Track t, String name, {bool byHand = false, bool soon = false}) async {
+    if (byHand) _byHand.add(t.id);
     if (_here.containsKey('${t.id}-$name')) return Stem.ready;
     if ((t.durationMs ?? 0) > upToSeconds * 1000) return Stem.never;
 
@@ -94,7 +99,7 @@ class PartsStore {
     // The house: kept there already, or — asking is also queueing — not yet.
     Stem house;
     try {
-      house = await api.stemState(t, name);
+      house = await api.stemState(t, name, soon: soon && !byHand);
     } catch (_) {
       house = Stem.beingMade;
     }
@@ -103,7 +108,7 @@ class PartsStore {
       return Stem.ready;
     }
     if (house == Stem.never || !canSeparateHere) return house;
-    if (await _takeItHere(t, name)) {
+    if (await _takeItHere(t, name, soon: soon && !byHand)) {
       final made = await _makeHere(t, name);
       if (made != null) {
         if (made == Stem.beingMade && byHand) promoteHere(t.id);
@@ -118,9 +123,9 @@ class PartsStore {
   /// Whether this computer should take [t] apart itself: it can at all, and either it
   /// is the best computer about — it has a graphics card — or the record has waited in
   /// the pool long enough that nobody better is coming.
-  Future<bool> _takeItHere(Track t, String name) async {
+  Future<bool> _takeItHere(Track t, String name, {bool soon = false}) async {
     if (!await canMakeHere(t.id, name)) return false;
-    if (bestHere?.call() ?? false) return true;
+    if (!soon && (bestHere?.call() ?? false)) return true;
     final since = _pooled[t.id];
     if (since == null || DateTime.now().difference(since) < _poolPatience) return false;
     try {
@@ -139,6 +144,24 @@ class PartsStore {
   /// Whether this computer is the one to take records apart: it has a graphics card.
   /// Set by the app, which knows (PoolHere).
   static bool Function()? bestHere;
+
+  /// Records somebody asked for by hand: never handed back to the pool unasked.
+  final _byHand = <int>{};
+
+  /// [t] is no longer about to be played here — its deck has taken another record —
+  /// so if it is only waiting in this computer's line it goes back to the pool,
+  /// rather than holding up the record that replaced it.
+  void backToPool(Track t) {
+    if (_byHand.contains(t.id)) return;
+    if (unqueueHere(t.id)) _toThePool(t);
+  }
+
+  /// This computer's own line in the order these are needed: the first first.
+  void inOrder(List<int> ids) {
+    for (final id in ids.reversed) {
+      promoteHere(id);
+    }
+  }
 
   /// Records asked of the pool, and since when.
   final _pooled = <int, DateTime>{};

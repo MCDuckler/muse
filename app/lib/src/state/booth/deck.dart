@@ -302,6 +302,10 @@ class Deck extends ChangeNotifier {
     // house: then every part of it is only levels.
     _stemsFrom = null;
     final store = parts;
+    // What this deck had on is not going to be played here now: if it is still only
+    // waiting to be taken apart on this computer, the pool can have it.
+    final was = this.track;
+    if (store != null && was != null && was.id != track.id) store.backToPool(was);
     if (canStem && store != null) {
       try {
         final got = await store.want(track, 'stems').timeout(const Duration(seconds: 4));

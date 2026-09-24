@@ -205,3 +205,48 @@ def test_a_computer_on_an_older_app_is_still_listed(client, hdr):
     seen = client.get("/pool", headers=hdr).json()["devices"]
     me = next(d for d in seen if d["id"] == old["device"])
     assert me["live"] and me["older"] and me["fetch"]
+
+
+def _another_record(client, hdr, tmp_path, name: str, freq: int) -> dict:
+    f = tmp_path / f"{name}.m4a"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi",
+                    "-i", f"sine=frequency={freq}:duration=3", "-c:a", "aac",
+                    "-metadata", f"title={name}", str(f)], check=True)
+    return client.post("/uploads", headers=hdr,
+                       files={"audio": (f"{name}.m4a", io.BytesIO(f.read_bytes()),
+                                        "audio/mp4")}).json()
+
+
+def test_the_record_asked_for_now_goes_before_older_urgent_ones(client, hdr, a_record, tmp_path):
+    strong = _computer(client, hdr, "lifo")
+    older = a_record
+    newer = _another_record(client, hdr, tmp_path, "Newer", 550)
+    client.get(f"/tracks/{older['id']}/stem/stems", headers=hdr)
+    db.run("update jobs set created_at = now() - interval '1 hour' where kind='split'")
+    client.get(f"/tracks/{newer['id']}/stem/stems", headers=hdr)
+    got = _lease_split(client, strong, gpu=True)
+    assert got[0]["payload"]["track_id"] == newer["id"]
+
+
+def test_asked_again_now_it_is_the_newest(client, hdr, a_record, tmp_path):
+    strong = _computer(client, hdr, "again")
+    other = _another_record(client, hdr, tmp_path, "Other", 660)
+    client.get(f"/tracks/{a_record['id']}/stem/stems", headers=hdr)
+    db.run("update jobs set created_at = now() - interval '1 hour' where kind='split'")
+    client.get(f"/tracks/{other['id']}/stem/stems", headers=hdr)
+    # The first one goes on a deck: asked again, now.
+    client.get(f"/tracks/{a_record['id']}/stem/stems", headers=hdr)
+    got = _lease_split(client, strong, gpu=True)
+    assert got[0]["payload"]["track_id"] == a_record["id"]
+
+
+def test_asked_ahead_of_time_waits_behind_what_is_wanted_now(client, hdr, a_record, tmp_path):
+    strong = _computer(client, hdr, "ahead")
+    later = _another_record(client, hdr, tmp_path, "Later", 770)
+    client.get(f"/tracks/{later['id']}/stem/stems?soon=true", headers=hdr)
+    client.get(f"/tracks/{a_record['id']}/stem/stems", headers=hdr)
+    prios = {r["t"]: r["priority"] for r in db.all_(
+        "select (payload->>'track_id')::int t, priority from jobs where kind='split'")}
+    assert prios == {later["id"]: jobs.PRIORITY_QUEUE, a_record["id"]: jobs.PRIORITY_NOW}
+    got = _lease_split(client, strong, gpu=True)
+    assert got[0]["payload"]["track_id"] == a_record["id"]

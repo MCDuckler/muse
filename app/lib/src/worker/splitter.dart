@@ -47,8 +47,7 @@ abstract class SplitServer {
   Future<void> release(SplitJob job);
 
   /// The record itself, into [into].
-  Future<void> fetchRecord(int trackId, File into,
-      {void Function(int got, int? total)? progress});
+  Future<void> fetchRecord(int trackId, File into, {void Function(int got, int? total)? progress});
 }
 
 enum SplitterState { off, starting, idle, working, noSeparator, refused }
@@ -243,8 +242,7 @@ class Splitter extends Told {
     return _take(job, audio: audio);
   }
 
-  Future<Map<String, String>?> _take(SplitJob job, {String? audio}) =>
-      withSeparatorLock(appFolder, () => _work(job, audio: audio));
+  Future<Map<String, String>?> _take(SplitJob job, {String? audio}) => _work(job, audio: audio);
 
   Future<Map<String, String>?> _work(SplitJob job, {String? audio}) async {
     final flight = now = InSplit(job);
@@ -271,68 +269,77 @@ class Splitter extends Told {
         record = borrowed.path;
       }
 
+      final toSplit = record;
       await partsFolder.create(recursive: true);
       final into = {for (final p in splitParts) p: partFile(job.trackId, p).path};
       var gpuNow = !_gpuOff;
-      while (true) {
-        flight
-          ..stage = 'getting the separator'
-          ..percent = null;
-        notifyListeners();
-        final s = await readySeparator(server.house,
-            into: kitDirIn(appFolder),
-            gpu: gpuNow,
-            program: await _program(), fetching: (f, got, total) {
-          flight.percent = total == null ? null : got / total;
+      // The separator is this computer's to share with the app's own splits: held
+      // only while it runs. Held through the fetching and the handing in as well, the
+      // record somebody was about to play waited a minute and a half for each of the
+      // pool's, and the card sat idle most of it.
+      flight.stage = 'waiting for the card';
+      notifyListeners();
+      await withSeparatorLock(appFolder, () async {
+        while (true) {
+          flight
+            ..stage = 'getting the separator'
+            ..percent = null;
           notifyListeners();
-        });
-        if (s == null) throw StateError('no separator for this computer');
-        flight
-          ..stage = 'separating'
-          ..percent = 0
-          ..device = s.gpu ? 'cuda' : 'cpu';
-        notifyListeners();
-        var lastSaid = DateTime.fromMillisecondsSinceEpoch(0);
-        try {
-          await runSeparator(s,
-              ffmpeg: ffmpeg,
-              audio: record,
-              into: into,
-              upToSeconds: 12 * 60,
-              progress: (f) {
-                flight.percent = f;
-                notifyListeners();
-                final t = DateTime.now();
-                if (t.difference(lastSaid) >= const Duration(seconds: 2)) {
-                  lastSaid = t;
-                  unawaited(_quietly(() => server.progress(job, 'separating', f)));
-                }
-              },
-              device: (d) {
-                flight.device = d.startsWith('cuda') ? 'cuda' : 'cpu';
-                notifyListeners();
-              },
-              started: (p) => _running = p);
-          if (gpuNow && flight.device == 'cuda') _gpuMisses = 0;
-          break;
-        } catch (e) {
-          if (s.gpu && gpuNow) {
-            _gpuMisses++;
-            if (_gpuMisses >= _gpuGivesUp) {
-              _gpuOff = true;
-              _say('the graphics card failed $_gpuMisses times running, so the processor '
-                  'from now on: $e');
-            } else {
-              _say('the graphics card failed on it, so the processor for this one: $e');
+          final s = await readySeparator(server.house,
+              into: kitDirIn(appFolder),
+              gpu: gpuNow,
+              program: await _program(), fetching: (f, got, total) {
+            flight.percent = total == null ? null : got / total;
+            notifyListeners();
+          });
+          if (s == null) throw StateError('no separator for this computer');
+          flight
+            ..stage = 'separating'
+            ..percent = 0
+            ..device = s.gpu ? 'cuda' : 'cpu';
+          notifyListeners();
+          var lastSaid = DateTime.fromMillisecondsSinceEpoch(0);
+          try {
+            await runSeparator(s,
+                ffmpeg: ffmpeg,
+                audio: toSplit,
+                into: into,
+                upToSeconds: 12 * 60,
+                progress: (f) {
+                  flight.percent = f;
+                  notifyListeners();
+                  final t = DateTime.now();
+                  if (t.difference(lastSaid) >= const Duration(seconds: 2)) {
+                    lastSaid = t;
+                    unawaited(_quietly(() => server.progress(job, 'separating', f)));
+                  }
+                },
+                device: (d) {
+                  flight.device = d.startsWith('cuda') ? 'cuda' : 'cpu';
+                  notifyListeners();
+                },
+                started: (p) => _running = p);
+            if (gpuNow && flight.device == 'cuda') _gpuMisses = 0;
+            break;
+          } catch (e) {
+            if (s.gpu && gpuNow) {
+              _gpuMisses++;
+              if (_gpuMisses >= _gpuGivesUp) {
+                _gpuOff = true;
+                _say('the graphics card failed $_gpuMisses times running, so the processor '
+                    'from now on: $e');
+              } else {
+                _say('the graphics card failed on it, so the processor for this one: $e');
+              }
+              gpuNow = false;
+              continue;
             }
-            gpuNow = false;
-            continue;
+            rethrow;
+          } finally {
+            _running = null;
           }
-          rethrow;
-        } finally {
-          _running = null;
         }
-      }
+      });
 
       flight
         ..stage = 'uploading'
@@ -370,8 +377,7 @@ class Splitter extends Told {
   /// handed in yet. Counted while [shareWhatIsHere] runs, for the pool page.
   int sharing = 0, shared = 0;
 
-  File get _sharedList =>
-      File('${appFolder.path}${Platform.pathSeparator}shared-parts.json');
+  File get _sharedList => File('${appFolder.path}${Platform.pathSeparator}shared-parts.json');
 
   /// Hand in every record taken apart on this computer that the house has not got,
   /// one at a time. Each is claimed from the queue first — the house queues it if it
@@ -389,7 +395,8 @@ class Splitter extends Told {
       if (!await partsFolder.exists()) return;
       await for (final f in partsFolder.list()) {
         if (f is! File) continue;
-        final m = RegExp(r'^(\d+)-([a-z]+)-v(\d+)\.(m4a|opus)$').firstMatch(f.uri.pathSegments.last);
+        final m =
+            RegExp(r'^(\d+)-([a-z]+)-v(\d+)\.(m4a|opus)$').firstMatch(f.uri.pathSegments.last);
         if (m == null || int.parse(m.group(3)!) != splitVersion) continue;
         final id = int.parse(m.group(1)!);
         if (done.contains(id) || !splitParts.contains(m.group(2))) continue;
