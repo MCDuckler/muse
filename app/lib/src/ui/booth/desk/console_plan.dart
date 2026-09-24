@@ -663,14 +663,34 @@ class _PlanPainter extends CustomPainter {
 /// The plan view on a pair further down the set: the move the booth would make
 /// between them (or the one a hand chose), drawn as the next one is, with every other
 /// move it weighed beside it.
-class _PairBody extends StatelessWidget {
+class _PairBody extends StatefulWidget {
   const _PairBody({required this.booth, required this.pair, required this.accent});
   final Booth booth;
   final (int, int) pair;
   final Color accent;
 
   @override
+  State<_PairBody> createState() => _PairBodyState();
+}
+
+class _PairBodyState extends State<_PairBody> {
+  // Asked once per pair, not on every tick of the view.
+  (int, int)? _for;
+  Future<List<MixPlan>>? _options;
+
+  Future<List<MixPlan>> _optionsFor(Track a, Track b) {
+    if (_for != widget.pair || _options == null) {
+      _for = widget.pair;
+      _options = widget.booth.auto.optionsFor(a, b);
+    }
+    return _options!;
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final booth = widget.booth;
+    final pair = widget.pair;
+    final accent = widget.accent;
     final auto = booth.auto;
     final all = [if (auto.current != null) auto.current!, ...auto.upcoming];
     Track? find(int id) => all.cast<Track?>().firstWhere((t) => t!.id == id, orElse: () => null);
@@ -684,7 +704,7 @@ class _PairBody extends StatelessWidget {
     }
     final ta = booth.timing.peek(a.id), tb = booth.timing.peek(b.id);
     return FutureBuilder<List<MixPlan>>(
-      future: auto.optionsFor(a, b),
+      future: _optionsFor(a, b),
       builder: (context, snap) {
         final options = snap.data ?? const <MixPlan>[];
         final chosen = auto.steers[pair] ?? (options.isEmpty ? null : options.first);

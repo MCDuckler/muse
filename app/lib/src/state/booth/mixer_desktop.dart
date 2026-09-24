@@ -174,11 +174,24 @@ class DesktopMixer extends VolumeMixer {
       _missed.add(deck.name);
       return false;
     }
-    // A new record: its chain built afresh, with the echo timed to its beat and the
-    // pitch back where it was.
-    _beat[deck.name] = beatMs ?? 500;
-    _installed.remove(deck.name);
-    _shift.remove(deck.name);
+    // The chain stays on the player once built (the echo timed to the first record's
+    // beat on it): setting `af` again on every load is a call into libmpv that waits
+    // on its core, and a booth froze on one. What the last record left on the chain —
+    // a shift, the echo — is put back by command instead.
+    _beat[deck.name] ??= beatMs ?? 500;
+    if ((_shift[deck.name] ?? 0) != 0) {
+      _shift.remove(deck.name);
+      try {
+        await mpv.command(['af-command', 'rb', 'set-pitch', '1.00000']);
+      } catch (_) {}
+    }
+    if (_installed[deck.name] == deck.player.platformId) {
+      for (final (target, value) in const [('volume@es', '0.000'), ('volume@dry', '1.000')]) {
+        try {
+          await mpv.command(['af-command', 'wetowl', 'volume', value, target]);
+        } catch (_) {}
+      }
+    }
     // The record on the same clock as its analysis and its stems: mpv's own reading of
     // an MP4's edit list skips the encoder's first 1024 samples twice, and every
     // YouTube record played 23 ms ahead of the beats found in it — and of its stems,

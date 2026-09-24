@@ -1019,6 +1019,44 @@ void autoMixRules() {
     expect(old.markers.take(3), [0, 8000, 16000]);
   });
 
+  test('a step that says nothing of the fader leaves it on its way', () {
+    // The stem blend holds the fader in the middle until its last step; read as 0
+    // and 1, its stem steps once sent the fader sawing up and down.
+    for (final kind in [Transition.stemBlend, Transition.announce, Transition.acapellaOut, Transition.dropSwap]) {
+      final steps = Booth.plan(kind, from: 'A', to: 'B');
+      final withFader = [for (final s in steps) if (s.crossfader != null) s];
+      // What the booth's own reading gives at every hundredth, against a straight
+      // reading between the steps that set the fader.
+      for (var i = 0; i <= 100; i++) {
+        final k = i / 100;
+        MixStep? before, after;
+        for (final s in withFader) {
+          if (s.at <= k) {
+            before = s;
+          } else {
+            after ??= s;
+          }
+        }
+        final expected = before == null
+            ? after!.crossfader!
+            : after == null
+                ? before.crossfader!
+                : before.crossfader! + (after.crossfader! - before.crossfader!) * ((k - before.at) / (after.at - before.at));
+        expect(Booth.faderOf(steps, k), closeTo(expected, 1e-9), reason: '${kind.name} at $k');
+      }
+    }
+    // And nothing doubled for long: over a stem blend, the two drums are never both
+    // above half for more than a tenth of the move.
+    final steps = Booth.plan(Transition.stemBlend, from: 'A', to: 'B');
+    var both = 0;
+    for (var i = 0; i <= 100; i++) {
+      final k = i / 100;
+      final a = Booth.stemsOf(steps, 'A', k), b = Booth.stemsOf(steps, 'B', k);
+      if (a != null && b != null && a.drums > 0.5 && b.drums > 0.5) both++;
+    }
+    expect(both, lessThanOrEqualTo(10), reason: 'hundredths with both drums up: $both');
+  });
+
   test('a record with a long quiet intro is not parked in the silence', () {
     // 120 bpm, bars of 2 s; the intro ends at bar 32, but its first 24 bars are near
     // silence and only the last 8 are heard.

@@ -71,6 +71,37 @@ void main() {
       await toSink(booth.a, 'wetowl_probe_a');
       await toSink(booth.b, 'wetowl_probe_b');
       await booth.setCrossfader(0.5);
+      if (spec['drop_check'] == true) {
+        // "Not that one" on the real engine: the Auto DJ running, a record parked on
+        // the free deck, then the next dropped — which loads another onto that deck
+        // while the other plays. Timed step by step; a freeze shows as a step that
+        // never returns.
+        final c = track(990103, tb.durationMs);
+        final files2 = {...files, c.id: spec['b']['file'] as String};
+        booth.timing.put(c.id, tb);
+        final more = Booth(ApiClient(baseUrl: 'http://127.0.0.1:9'), offlinePath: (id) => files2[id]);
+        await more.init();
+        more.timing.put(a.id, ta);
+        more.timing.put(b.id, tb);
+        more.timing.put(c.id, tb);
+        final t0 = DateTime.now();
+        void step(String what) => note('drop ${DateTime.now().difference(t0).inMilliseconds} ms: $what');
+        step('start');
+        await more.auto.start([a, b, c]).timeout(const Duration(seconds: 30));
+        step('started, next ${more.auto.next?.id}');
+        await Future<void>.delayed(const Duration(seconds: 3));
+        step('dropping');
+        await more.auto.dropNext().timeout(const Duration(seconds: 30));
+        step('dropped, next ${more.auto.next?.id}, free deck has ${more.other(more.master).track?.id}');
+        await Future<void>.delayed(const Duration(seconds: 3));
+        step('still alive; master playing ${more.master.playing}');
+        more.auto.stop();
+        await more.stopAll();
+        step('done');
+        await log.flush();
+        await log.close();
+        return;
+      }
       if (spec['fx_check'] == true) {
         // The pitch shift and the echo on the real engine: a sine on A, a semitone
         // up and back, then the echo sent and the record itself taken away.

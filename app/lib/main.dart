@@ -13,6 +13,7 @@ import 'package:just_audio_media_kit/just_audio_media_kit.dart';
 import 'package:just_audio_platform_interface/just_audio_platform_interface.dart';
 import 'package:provider/provider.dart';
 
+import 'src/state/app_log.dart';
 import 'src/state/app_state.dart';
 import 'src/state/selection.dart';
 import 'src/state/playback_log.dart';
@@ -50,6 +51,8 @@ bool get onADesk =>
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // What the app says, kept in a file on a desk: see app_log.dart.
+  unawaited(startAppLog());
   await readyTheWindow();
   _fontLicences();
 

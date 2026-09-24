@@ -618,7 +618,45 @@
     }
    },
    {
+    "at": 0.19,
+    "decks": {
+     "B": {
+      "stems": {
+       "drums": 0.0,
+       "rest": 0.0,
+       "vocals": 0.0
+      }
+     },
+     "A": {
+      "stems": {
+       "drums": 1.0,
+       "rest": 1.0,
+       "vocals": 1.0
+      }
+     }
+    }
+   },
+   {
     "at": 0.25,
+    "decks": {
+     "B": {
+      "stems": {
+       "drums": 1.0,
+       "rest": 0.0,
+       "vocals": 0.0
+      }
+     },
+     "A": {
+      "stems": {
+       "drums": 0.0,
+       "rest": 1.0,
+       "vocals": 1.0
+      }
+     }
+    }
+   },
+   {
+    "at": 0.44,
     "decks": {
      "B": {
       "stems": {
@@ -642,14 +680,14 @@
      "B": {
       "stems": {
        "drums": 1.0,
-       "rest": 0.9,
+       "rest": 1.0,
        "vocals": 0.0
       }
      },
      "A": {
       "stems": {
        "drums": 0.0,
-       "rest": 0.1,
+       "rest": 0.0,
        "vocals": 1.0
       }
      }

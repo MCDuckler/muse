@@ -1164,21 +1164,33 @@ class Booth extends ChangeNotifier {
         // One stem at a time, never two of a kind: new drums under the old record; the
         // old drums hand over; the new bass and the rest come up as the old go; the
         // old voice out before the new one comes in.
+        // Each handover is quick — two bars of a thirty-two-bar move — so that two
+        // kicks, or two basslines, are never long together; the voices alone are
+        // faded, the old out before the new comes in.
+        const none = StemLevels(drums: 0, rest: 0, vocals: 0);
         return [
           MixStep(0, crossfader: 0.5, decks: {
-            to: const DeckStep(stems: StemLevels(drums: 0, rest: 0, vocals: 0), eq: EqSet.flat),
+            to: const DeckStep(stems: none, eq: EqSet.flat),
+            from: const DeckStep(stems: StemLevels.all),
+          }),
+          MixStep(0.19, decks: {
+            to: const DeckStep(stems: none),
             from: const DeckStep(stems: StemLevels.all),
           }),
           MixStep(0.25, decks: {
             to: const DeckStep(stems: StemLevels(drums: 1, rest: 0, vocals: 0)),
             from: const DeckStep(stems: StemLevels(drums: 0)),
           }),
+          MixStep(0.44, decks: {
+            to: const DeckStep(stems: StemLevels(drums: 1, rest: 0, vocals: 0)),
+            from: const DeckStep(stems: StemLevels(drums: 0)),
+          }),
           MixStep(0.5, decks: {
-            to: const DeckStep(stems: StemLevels(drums: 1, rest: 0.9, vocals: 0)),
-            from: const DeckStep(stems: StemLevels(drums: 0, rest: 0.1)),
+            to: const DeckStep(stems: StemLevels(drums: 1, rest: 1, vocals: 0)),
+            from: const DeckStep(stems: StemLevels(drums: 0, rest: 0)),
           }),
           MixStep(0.7, decks: {
-            from: const DeckStep(stems: StemLevels(drums: 0, rest: 0, vocals: 0)),
+            from: const DeckStep(stems: none),
           }),
           MixStep(0.9, decks: {to: const DeckStep(stems: StemLevels.all)}),
           MixStep(1, crossfader: 1, decks: {
@@ -1275,6 +1287,48 @@ class Booth extends ChangeNotifier {
           MixStep(1, crossfader: 1, decks: {from: const DeckStep(eq: EqSet.flat, filter: 0)}),
         ];
     }
+  }
+
+  /// Where the fader is at [k] of a plan: travelled evenly between the steps that
+  /// set it; a step that says nothing of it leaves it on its way. Before any, the
+  /// first's; after the last, the last's.
+  static double faderOf(List<MixStep> steps, double k) {
+    MixStep? before, after;
+    for (final s in steps) {
+      if (s.crossfader == null) continue;
+      if (s.at <= k) {
+        before = s;
+      } else {
+        after ??= s;
+      }
+    }
+    if (before == null) return after?.crossfader ?? 0;
+    if (after == null) return before.crossfader!;
+    final span = after.at - before.at;
+    final local = span <= 0 ? 1.0 : ((k - before.at) / span).clamp(0.0, 1.0);
+    return before.crossfader! + (after.crossfader! - before.crossfader!) * local;
+  }
+
+  /// Where a stem deck's levels should be at [k] of a plan, or null where the plan
+  /// says nothing of them: moved evenly from the last step that set them to the next
+  /// that does. The last step puts a deck's stems back for its next record, once the
+  /// fader has taken it out: it is not moved towards, or the outgoing's voice and
+  /// drums would come back up under the last bars of the mix.
+  static StemLevels? stemsOf(List<MixStep> steps, String deck, double k) {
+    MixStep? before, after;
+    for (final st in steps) {
+      if (st.decks[deck]?.stems == null) continue;
+      if (st.at <= k) {
+        before = st;
+      } else {
+        after ??= st;
+      }
+    }
+    if (before == null) return null;
+    final a = before.decks[deck]!.stems!;
+    if (after == null || after.at >= 1) return a;
+    final span = after.at - before.at;
+    return a.lerp(after.decks[deck]!.stems!, span <= 0 ? 1 : ((k - before.at) / span).clamp(0.0, 1.0));
   }
 
   /// How long [bars] bars of the master last, by the wall clock.
@@ -1529,11 +1583,12 @@ class Booth extends ChangeNotifier {
     }
 
     // The fader, moved from Dart twenty-five times a second — and the filter with
-    // it, because a sweep in four jumps is four jumps rather than a sweep.
+    // it, because a sweep in four jumps is four jumps rather than a sweep. Travelled
+    // between the steps that *set* it: a step that only turns a stem or a band says
+    // nothing about the fader, and it stays on its way. (Read as 0 and 1, such steps
+    // sent the fader sawing up and down through every stem move.)
     double faderAt(double k) {
-      final leg = legAt(k);
-      final x = (leg.from.crossfader ?? 0) +
-          ((leg.to.crossfader ?? 1) - (leg.from.crossfader ?? 0)) * leg.local;
+      final x = faderOf(steps, k);
       return direction > 0 ? x : 1 - x;
     }
 
@@ -1556,27 +1611,7 @@ class Booth extends ChangeNotifier {
       return a + (b - a) * leg.local;
     }
 
-    /// Where a stem deck's levels should be at [k], or null where the plan says nothing
-    /// of them: moved evenly from the last step that set them to the next that does.
-    StemLevels? stemsAt(String deck, double k) {
-      MixStep? before, after;
-      for (final st in steps) {
-        if (st.decks[deck]?.stems == null) continue;
-        if (st.at <= k) {
-          before = st;
-        } else {
-          after ??= st;
-        }
-      }
-      if (before == null) return null;
-      final a = before.decks[deck]!.stems!;
-      // The last step puts a deck's stems back for its next record, once the fader has
-      // taken it out: moved towards on the way, the outgoing's voice and drums would
-      // come back up under the last bars of the mix.
-      if (after == null || after.at >= 1) return a;
-      final span = after.at - before.at;
-      return a.lerp(after.decks[deck]!.stems!, span <= 0 ? 1 : ((k - before.at) / span).clamp(0.0, 1.0));
-    }
+    StemLevels? stemsAt(String deck, double k) => stemsOf(steps, deck, k);
 
     // The levels a stem plan opens with, on the incoming before it makes a sound.
     for (final deck in decks) {
