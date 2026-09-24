@@ -27,6 +27,14 @@ MODEL_SHA=678fb1f31846e1c0bab6602bdb2a9663dad85ad8adf2e5d9e29374d645c14367
 ORT=1.30.0
 ORT_LINUX_SHA=245a6f8c38127551057a1cd1ffd59f0a186a227ade4f3492dea2494eb565542e
 ORT_WIN_SHA=7e39e2bdbba836d98071ef28620735ba36a47c554cf794585269aecc50fab0da
+# ONNX Runtime's CUDA 13 build, for NVIDIA cards (see cudaFiles in separation_kit.dart):
+# the runtime and the two libraries it loads from beside itself, by file.
+CUDA_LINUX="libonnxruntime.so.1.30.0:292591ed61befc515112570ae8eb9bb0d47716cd0ed60c38865800de4e829544
+libonnxruntime_providers_shared.so:c6a12593396095f5670160e284c35d1700b7708cf3037b7042e2a5200ccae772
+libonnxruntime_providers_cuda.so:32fb1e28e5eafe8a39d52ca2e1e9c7333f3285968d288b43485cbaa32af6686e"
+CUDA_WIN="onnxruntime.dll:ed0de29f6579482eb2d54674a5e51b77761e195a5e0d70dbadc916ab925a9ec1
+onnxruntime_providers_shared.dll:7ee69db9b57ce7279fd0a3b2c2ecb262de2509faeaf48de65a73415f9a0ca6f9
+onnxruntime_providers_cuda.dll:9b4e3abd26420845561c548d48adb80dde730e8d585b8f9c7a2d14cddc806eaa"
 
 check() { # file sha what
   local got; got=$(sha256sum "$1" | cut -d' ' -f1)
@@ -44,6 +52,21 @@ check "$WORK/onnxruntime-win-x64-$ORT/lib/onnxruntime.dll" $ORT_WIN_SHA "the Win
 gzip -9 -n -c "$WORK/onnxruntime-linux-x64-$ORT/lib/libonnxruntime.so.$ORT" > "$KIT/onnxruntime-$ORT-linux-x64.so.gz"
 gzip -9 -n -c "$WORK/onnxruntime-win-x64-$ORT/lib/onnxruntime.dll" > "$KIT/onnxruntime-$ORT-win-x64.dll.gz"
 
+echo "== ONNX Runtime $ORT for CUDA 13"
+fetch "https://github.com/microsoft/onnxruntime/releases/download/v$ORT/onnxruntime-linux-x64-gpu_cuda13-$ORT.tgz" "$WORK/ort-linux-cuda13.tgz"
+fetch "https://github.com/microsoft/onnxruntime/releases/download/v$ORT/onnxruntime-win-x64-gpu_cuda13-$ORT.zip" "$WORK/ort-win-cuda13.zip"
+tar -xzf "$WORK/ort-linux-cuda13.tgz" -C "$WORK"
+unzip -qo "$WORK/ort-win-cuda13.zip" -d "$WORK"
+cuda_kit() { # from-dir to-name list
+  mkdir -p "$KIT/$2"
+  while IFS=: read -r f sha; do
+    check "$1/$f" "$sha" "$2/$f"
+    gzip -9 -n -c "$1/$f" > "$KIT/$2/$f.gz"
+  done <<< "$3"
+}
+cuda_kit "$WORK/onnxruntime-linux-x64-gpu_cuda13-$ORT/lib" "onnxruntime-$ORT-cuda13-linux-x64" "$CUDA_LINUX"
+cuda_kit "$WORK/onnxruntime-win-x64-gpu_cuda13-$ORT/lib" "onnxruntime-$ORT-cuda13-win-x64" "$CUDA_WIN"
+
 echo "== SCNet Small"
 [ -d "$WORK/msst" ] || git clone -q https://github.com/ZFTurbo/Music-Source-Separation-Training "$WORK/msst"
 git -C "$WORK/msst" checkout -q $MSST_COMMIT
@@ -59,5 +82,5 @@ check "$WORK/scnet_checkpoint_musdb18.ckpt" $CKPT_SHA "the SCNet checkpoint"
 check "$WORK/scnet-small-v1.onnx" $MODEL_SHA "the exported network"
 gzip -9 -n -c "$WORK/scnet-small-v1.onnx" > "$KIT/scnet-small-v1.onnx.gz"
 
-ls -l "$KIT"/*.gz
+ls -l "$KIT"/*.gz "$KIT"/*/*.gz
 echo "made. deploy/publish.sh models puts them on the box."

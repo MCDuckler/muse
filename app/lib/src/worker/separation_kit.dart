@@ -45,8 +45,35 @@ KitFile? get runtimeFile => switch (Abi.current()) {
       _ => null,
     };
 
-/// Everything needed to run it, found and in place.
-typedef Separator = ({String program, String runtime, String model});
+/// ONNX Runtime 1.30.0's CUDA 13 build, for an NVIDIA card: the runtime and the two
+/// libraries it loads from beside itself, kept together in a folder of their own
+/// under their own names — that is where and how it looks for them. About twelve
+/// times the processor's speed on the network (measured: a four-minute record in 19 s
+/// against 96 s, on a laptop RTX 4060), but a download of 150 to 235 MB, and it needs
+/// the card's own libraries — the driver, CUDA 13 and cuDNN 9 — already on the
+/// computer; the app never fetches those. See [cudaHere].
+List<KitFile>? get cudaFiles => switch (Abi.current()) {
+      Abi.linuxX64 => const [
+          KitFile('onnxruntime-1.30.0-cuda13-linux-x64/libonnxruntime.so.1.30.0',
+              '292591ed61befc515112570ae8eb9bb0d47716cd0ed60c38865800de4e829544', 32515904),
+          KitFile('onnxruntime-1.30.0-cuda13-linux-x64/libonnxruntime_providers_shared.so',
+              'c6a12593396095f5670160e284c35d1700b7708cf3037b7042e2a5200ccae772', 14632),
+          KitFile('onnxruntime-1.30.0-cuda13-linux-x64/libonnxruntime_providers_cuda.so',
+              '32fb1e28e5eafe8a39d52ca2e1e9c7333f3285968d288b43485cbaa32af6686e', 272054000),
+        ],
+      Abi.windowsX64 => const [
+          KitFile('onnxruntime-1.30.0-cuda13-win-x64/onnxruntime.dll',
+              'ed0de29f6579482eb2d54674a5e51b77761e195a5e0d70dbadc916ab925a9ec1', 16921400),
+          KitFile('onnxruntime-1.30.0-cuda13-win-x64/onnxruntime_providers_shared.dll',
+              '7ee69db9b57ce7279fd0a3b2c2ecb262de2509faeaf48de65a73415f9a0ca6f9', 21856),
+          KitFile('onnxruntime-1.30.0-cuda13-win-x64/onnxruntime_providers_cuda.dll',
+              '9b4e3abd26420845561c548d48adb80dde730e8d585b8f9c7a2d14cddc806eaa', 186986848),
+        ],
+      _ => null,
+    };
+
+/// Everything needed to run it, found and in place. [gpu]: on the graphics card.
+typedef Separator = ({String program, String runtime, String model, bool gpu});
 
 /// The program, where there is one: beside the app, as wetowl-fetch is. A build run
 /// from the source tree has none there, so WETOWL_SEPARATE can name one.
@@ -84,16 +111,62 @@ Future<Directory> kitDir() async {
 /// in the box, or a processor it is not built for — which is not a failure, just the
 /// old arithmetic. Throws when the files could not be had.
 /// [fetching] hears how a first-time fetch of either file is going.
+///
+/// On the graphics card where there is an NVIDIA card with its libraries on the
+/// computer ([cudaHere]) and [gpu] is not turned off — fetching ONNX Runtime's CUDA
+/// build for it the first time. Where that fetch fails, the processor, as before.
 Future<Separator?> readySeparator(String house,
-    {Directory? into, void Function(KitFile f, int got, int? total)? fetching}) async {
+    {Directory? into,
+    bool gpu = true,
+    void Function(KitFile f, int got, int? total)? fetching}) async {
   final program = await separatorProgram();
   final runtime = runtimeFile;
   if (program == null || runtime == null) return null;
   final dir = into ?? await kitDir();
   final model = await _have(modelFile, dir, house, fetching);
+  final cuda = cudaFiles;
+  if (gpu && cuda != null && await cudaHere(program)) {
+    try {
+      String? lib;
+      for (final f in cuda) {
+        final path = await _have(f, dir, house, fetching);
+        lib ??= path;
+      }
+      return (program: program, runtime: lib!, model: model, gpu: true);
+    } catch (e) {
+      debugPrint('separator: no CUDA runtime this time, so the processor: $e');
+    }
+  }
   final lib = await _have(runtime, dir, house, fetching);
-  return (program: program, runtime: lib, model: model);
+  return (program: program, runtime: lib, model: model, gpu: false);
 }
+
+/// Whether this computer can run the network on an NVIDIA card: the driver is there,
+/// and the separator can load CUDA 13's and cuDNN 9's libraries (`--check-cuda`).
+/// Asked once a run of the app. WETOWL_SEPARATE_GPU=0 says no without asking.
+Future<bool> cudaHere(String program) => _cudaHere ??= () async {
+      if (Platform.environment['WETOWL_SEPARATE_GPU'] == '0') return false;
+      // No driver, no card worth asking about: not even the program is started.
+      final driver = Platform.isWindows
+          ? File('${Platform.environment['SystemRoot'] ?? r'C:\Windows'}\\System32\\nvcuda.dll')
+          : File('/proc/driver/nvidia/version');
+      if (!await driver.exists()) return false;
+      try {
+        final r = await Process.run(program, ['--check-cuda'], environment: _environment)
+            .timeout(const Duration(seconds: 20));
+        final said = '${r.stdout}'.trim();
+        debugPrint('separator: $said');
+        return r.exitCode == 0 && said == 'cuda ok';
+      } catch (e) {
+        debugPrint('separator: could not ask about the graphics card: $e');
+        return false;
+      }
+    }();
+
+Future<bool>? _cudaHere;
+
+@visibleForTesting
+void forgetCudaForTesting() => _cudaHere = null;
 
 /// Whether the separator's files are both here already, so a split starts straight
 /// away rather than with a fetch.
@@ -120,6 +193,7 @@ Future<String> _have(KitFile f, Directory dir, String house,
       // Checked by size every time and by hash when it arrived: hashing fifty
       // megabytes before every record would be a second of nothing.
       if (await file.exists() && await file.length() == f.bytes) return path;
+      await file.parent.create(recursive: true);
       await fetchKitFile(Uri.parse('$house/models/${f.name}.gz'), f, file,
           progress: fetching == null ? null : (got, total) => fetching(f, got, total));
       return path;
@@ -200,6 +274,7 @@ Future<void> runSeparator(Separator s,
     required Map<String, String> into,
     required int upToSeconds,
     void Function(double)? progress,
+    void Function(String device)? device,
     void Function(Process)? started}) async {
   final args = [
     '--ort', s.runtime,
@@ -208,6 +283,7 @@ Future<void> runSeparator(Separator s,
     '--in', audio,
     '--seconds', '$upToSeconds',
     '--threads', '${separatorThreads()}',
+    if (s.gpu) ...['--gpu', 'cuda'],
     for (final e in into.entries) ...['--${e.key}', e.value],
   ];
   String? nice;
@@ -230,6 +306,8 @@ Future<void> runSeparator(Separator s,
       if (line.startsWith('progress ')) {
         final f = double.tryParse(line.substring(9));
         if (f != null) progress?.call(f);
+      } else if (line.startsWith('device ')) {
+        device?.call(line.substring(7));
       }
     }),
     p.stderr.transform(utf8.decoder).forEach(said.write),
@@ -245,5 +323,47 @@ Future<void> runSeparator(Separator s,
 }
 
 /// On Linux, one malloc heap: see _oneHeapOnLinux in the program, which does the
-/// same from inside but can only limit heaps not already made by then.
-final _environment = {if (Platform.isLinux) 'MALLOC_ARENA_MAX': '1'};
+/// same from inside but can only limit heaps not already made by then. And the places
+/// the card's libraries are usually put, on the loader's path: CUDA's own installers
+/// do not put them there, and ONNX Runtime asks for them by name.
+final Map<String, String> _environment = () {
+  final env = Platform.environment;
+  if (Platform.isLinux) {
+    final extra = ['/opt/cuda/lib64', '/usr/local/cuda/lib64', '/usr/lib/x86_64-linux-gnu']
+        .where((d) => Directory(d).existsSync());
+    final had = env['LD_LIBRARY_PATH'];
+    return {
+      'MALLOC_ARENA_MAX': '1',
+      'LD_LIBRARY_PATH': [if (had != null && had.isNotEmpty) had, ...extra].join(':'),
+    };
+  }
+  if (Platform.isWindows) {
+    final dirs = <String>[];
+    void add(String d) {
+      if (Directory(d).existsSync()) dirs.add(d);
+    }
+
+    final cuda = env['CUDA_PATH'];
+    if (cuda != null) {
+      add('$cuda\\bin\\x64');
+      add('$cuda\\bin');
+    }
+    // cuDNN's installer: C:\Program Files\NVIDIA\CUDNN\v9.x\bin\13.x[\x64].
+    final cudnn = Directory('${env['ProgramFiles'] ?? r'C:\Program Files'}\\NVIDIA\\CUDNN');
+    try {
+      for (final v in cudnn.listSync().whereType<Directory>()) {
+        final bin = Directory('${v.path}\\bin');
+        if (!bin.existsSync()) continue;
+        for (final c in bin.listSync().whereType<Directory>()) {
+          if (!c.path.split('\\').last.startsWith('13')) continue;
+          add('${c.path}\\x64');
+          add(c.path);
+        }
+      }
+    } catch (_) {}
+    // The key is spelled however Windows spelled it; replace that one.
+    final key = env.keys.firstWhere((k) => k.toUpperCase() == 'PATH', orElse: () => 'PATH');
+    return {key: [...dirs, env[key] ?? ''].join(';')};
+  }
+  return const <String, String>{};
+}();

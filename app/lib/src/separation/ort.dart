@@ -1,4 +1,6 @@
-// Just enough of ONNX Runtime's C API to run one network on the CPU.
+// Just enough of ONNX Runtime's C API to run one network, on the CPU — or on an
+// NVIDIA card through CUDA, with ONNX Runtime's CUDA build and the card's own
+// libraries (CUDA and cuDNN) already on the computer.
 //
 // There is no maintained Dart binding for desktop, and the Flutter plugin that
 // exists runs the network on the window's own thread — which is a frozen window for
@@ -34,6 +36,10 @@ const _releaseMemoryInfo = 94;
 const _releaseSession = 95;
 const _releaseValue = 96;
 const _releaseSessionOptions = 100;
+const _appendCudaV2 = 204; // SessionOptionsAppendExecutionProvider_CUDA_V2
+const _createCudaOptions = 205;
+const _updateCudaOptions = 206;
+const _releaseCudaOptions = 208;
 
 /// The oldest table that has everything above. Asking for an old version of the
 /// table is always allowed; every newer library still hands it out.
@@ -74,6 +80,11 @@ typedef _TensorN = _Status Function(Pointer<Void>, Pointer<Void>, Size, Pointer<
 typedef _Tensor = _Status Function(Pointer<Void>, Pointer<Void>, int, Pointer<Int64>,
     int, int, Pointer<Pointer<Void>>);
 typedef _MessageN = Pointer<Utf8> Function(Pointer<Void>);
+typedef _UpdateN = _Status Function(
+    Pointer<Void>, Pointer<Pointer<Utf8>>, Pointer<Pointer<Utf8>>, Size);
+typedef _Update = _Status Function(
+    Pointer<Void>, Pointer<Pointer<Utf8>>, Pointer<Pointer<Utf8>>, int);
+typedef _TwoN = _Status Function(Pointer<Void>, Pointer<Void>);
 
 /// Something ONNX Runtime said went wrong, in its own words.
 class OrtError implements Exception {
@@ -89,7 +100,7 @@ class OrtError implements Exception {
 class OrtNetwork {
   OrtNetwork._(this._api, this._env, this._session, this._info, this._input,
       this._output, this._inName, this._outName, this.input, this.output,
-      this.version);
+      this.version, this.device, this.gpuProblem);
 
   /// Load [model] with the ONNX Runtime library at [library].
   ///
@@ -99,6 +110,10 @@ class OrtNetwork {
   ///
   /// The memory arena is off. With it on, the runtime keeps every buffer it ever
   /// grew, and on SCNet that is gigabytes more at no gain in speed — measured.
+  ///
+  /// With [cuda], on the graphics card where the library is ONNX Runtime's CUDA build
+  /// and the card's libraries load; [device] says where it ended up, and
+  /// [gpuProblem] why not the card, when it was asked for and could not be had.
   static OrtNetwork open({
     required String library,
     required String model,
@@ -107,6 +122,7 @@ class OrtNetwork {
     required String outputName,
     required List<int> outputShape,
     int threads = 4,
+    bool cuda = false,
   }) {
     final lib = DynamicLibrary.open(library);
     final base = lib
@@ -137,6 +153,8 @@ class OrtNetwork {
       return out.value;
     });
     Pointer<Void> session;
+    var device = 'cpu';
+    String? gpuProblem;
     try {
       _SetInt setInt(int at) => t.at(at).cast<NativeFunction<_SetIntN>>().asFunction<_SetInt>();
       _Plain plain(int at) => t.at(at).cast<NativeFunction<_PlainN>>().asFunction<_Plain>();
@@ -145,6 +163,14 @@ class OrtNetwork {
       t.check('optimisation', setInt(_setGraphOptimizationLevel)(options, _optimiseAll));
       t.check('arena', plain(_disableCpuMemArena)(options));
       t.check('memory pattern', plain(_disableMemPattern)(options));
+      if (cuda) {
+        try {
+          _appendCuda(t, options);
+          device = 'cuda';
+        } on OrtError catch (e) {
+          gpuProblem = e.message;
+        }
+      }
 
       session = using((a) {
         final out = a<Pointer<Void>>();
@@ -190,7 +216,43 @@ class OrtNetwork {
       inMem.asTypedList(inCount),
       outMem.asTypedList(outCount),
       version,
+      device,
+      gpuProblem,
     );
+  }
+
+  /// The CUDA provider onto [options], ahead of the CPU. The convolution algorithms
+  /// are searched for once, at the first run: every piece is the same shape.
+  static void _appendCuda(_Table t, Pointer<Void> options) {
+    final cudaOptions = using((a) {
+      final out = a<Pointer<Void>>();
+      t.check('the graphics card',
+          t.at(_createCudaOptions).cast<NativeFunction<_OneOutN>>().asFunction<_OneOut>()(out));
+      return out.value;
+    });
+    try {
+      using((a) {
+        const settings = {'device_id': '0', 'cudnn_conv_algo_search': 'EXHAUSTIVE'};
+        final keys = a<Pointer<Utf8>>(settings.length);
+        final values = a<Pointer<Utf8>>(settings.length);
+        var i = 0;
+        for (final e in settings.entries) {
+          keys[i] = e.key.toNativeUtf8(allocator: a);
+          values[i] = e.value.toNativeUtf8(allocator: a);
+          i++;
+        }
+        t.check(
+            'the graphics card',
+            t.at(_updateCudaOptions).cast<NativeFunction<_UpdateN>>().asFunction<_Update>()(
+                cudaOptions, keys, values, settings.length));
+      });
+      t.check(
+          'the graphics card',
+          t.at(_appendCudaV2).cast<NativeFunction<_TwoN>>().asFunction<_TwoN>()(
+              options, cudaOptions));
+    } finally {
+      t.release(_releaseCudaOptions, cudaOptions);
+    }
   }
 
   final _Table _api;
@@ -203,6 +265,12 @@ class OrtNetwork {
 
   /// Which ONNX Runtime this is.
   final String version;
+
+  /// Where the network runs: 'cuda' or 'cpu'.
+  final String device;
+
+  /// Why not the graphics card, where it was asked for and could not be had.
+  final String? gpuProblem;
 
   /// The same two blocks as pointers, for other isolates to see.
   Pointer<Float> get inputPointer => _input.$2;

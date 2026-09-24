@@ -73,6 +73,7 @@ void forgetHere() {
   _cannot.clear();
   _cancelled.clear();
   _separatorOff = null;
+  _gpuOff = false;
   _separatorFailed.clear();
   _line.clear();
   _now = null;
@@ -89,6 +90,9 @@ bool? _separatorOff;
 
 @visibleForTesting
 set separatorOffForTesting(bool? off) => _separatorOff = off;
+
+/// The graphics card tried and failed this run of the app: the processor from then on.
+var _gpuOff = false;
 
 /// Records the separator was run on and could not take apart — made the old way
 /// instead, and not handed to the separator again until the app is next started.
@@ -410,7 +414,7 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
       // The first time, the separator's own files come first: a stage of its own, since
       // it is eighty megabytes nobody asked for by name.
       var fetching = false;
-      s = await _unlessCancelled(readySeparator(house, fetching: (f, got, total) {
+      s = await _unlessCancelled(readySeparator(house, gpu: !_gpuOff, fetching: (f, got, total) {
         if (trackId == null || stopped()) return;
         if (!fetching) {
           fetching = true;
@@ -429,7 +433,9 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
       debugPrint('no separator on this computer this time, so the arithmetic: $e');
       _separatorOff = true;
     }
-    if (s != null) {
+    // Twice at most: on the graphics card, and — where that is what failed — once
+    // more on the processor, which is how it ran before there was a card to use.
+    while (s != null) {
       Process? mine;
       try {
         await runSeparator(s,
@@ -440,6 +446,7 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
             progress: (f) {
               if (trackId != null && !stopped()) partsJobs.progress(trackId, f);
             },
+            device: (d) => debugPrint('separator: running on $d'),
             started: (p) {
               mine = p;
               _running = p;
@@ -448,8 +455,23 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
         return;
       } catch (e) {
         if (stopped()) throw const _Cancelled();
+        if (s.gpu) {
+          debugPrint('the separator failed on the graphics card, so the processor from now on: $e');
+          _gpuOff = true;
+          try {
+            s = await _unlessCancelled<Separator?>(
+                readySeparator(separationHouse?.call() ?? '', gpu: false));
+          } on _Cancelled {
+            rethrow;
+          } catch (e) {
+            debugPrint('no separator on the processor either: $e');
+            s = null;
+          }
+          continue;
+        }
         debugPrint('the separator could not take this one apart, so the arithmetic: $e');
         if (trackId != null) _separatorFailed.add(trackId);
+        s = null;
       } finally {
         if (_running == mine) _running = null;
       }

@@ -268,4 +268,40 @@ void main() {
       skip: ffmpeg == null || program == null || source == null
           ? 'needs WETOWL_SEPARATE, WETOWL_KIT_SOURCE and ffmpeg'
           : null);
+
+  // On a computer with an NVIDIA card and its libraries: the CUDA build is fetched and
+  // the parts are made on the card. Elsewhere the same record is simply made on the
+  // processor, which the test above covers.
+  test('the real separator on the graphics card, where there is one', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    forgetCudaForTesting();
+    if (!await cudaHere(program!)) {
+      markTestSkipped('no NVIDIA card with CUDA 13 and cuDNN 9 here');
+      return;
+    }
+    final served = <String, List<int>>{};
+    for (final f in [modelFile, runtimeFile!, ...cudaFiles!]) {
+      served['/models/${f.name}.gz'] = File('$source/${f.name}.gz').readAsBytesSync();
+    }
+    final (server, base) = await _house(served);
+    addTearDown(server.close);
+    separationHouse = () => base;
+    final song = makeSong('song.m4a', 20);
+    final clock = Stopwatch()..start();
+    expect((await partHere(song.path, 22, 'drums')).$1, Here.making);
+    await waitFor(22, 'drums', seconds: 600);
+    for (final f in cudaFiles!) {
+      expect(File('${dir.path}/${f.name}').lengthSync(), f.bytes, reason: f.name);
+    }
+    expect(File('${dir.path}/${runtimeFile!.name}').existsSync(), isFalse,
+        reason: 'the processor\'s runtime is only fetched when the card cannot be used');
+    for (final p in trainedParts) {
+      expect((await partHere(song.path, 22, p)).$1, Here.ready, reason: p);
+    }
+    debugPrint('twenty seconds taken apart on the card in ${clock.elapsed}, fetch included');
+  },
+      timeout: const Timeout(Duration(minutes: 12)),
+      skip: ffmpeg == null || program == null || source == null
+          ? 'needs WETOWL_SEPARATE, WETOWL_KIT_SOURCE and ffmpeg'
+          : null);
 }

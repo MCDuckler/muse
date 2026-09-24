@@ -130,3 +130,20 @@ pointers, by position. The positions were read out of 1.30's `onnxruntime_c_api.
 by counting the members of `struct OrtApi`; the table only ever grows at the end, so
 they hold for every later version. A function not in the list there needs its
 position read the same way.
+
+## On the graphics card, measured 2026-09-24
+
+Where the computer has an NVIDIA card with CUDA 13 and cuDNN 9 installed, the separator
+runs the network through ONNX Runtime's CUDA build (`--gpu cuda`), fetched from the
+house the first time (150 MB on Windows, 235 MB on Linux; the card's own libraries are
+never fetched). The app asks the program first (`wetowl-separate --check-cuda`) and
+falls back to the processor if anything about the card fails.
+
+Laptop RTX 4060, one eleven-second piece: processor 1.5 s, CUDA 0.12 s. A whole
+four-minute record: 96 s → 19 s (the network 78 s → 6 s; the rest is the spectra and
+the AAC encoders). Parts agree with the processor's to 65–73 dB.
+
+Tried and not worth it: ONNX Runtime's WebGPU plugin (any vendor, 7–13 MB) was slower
+than the processor even on the RTX (2.7 s a piece; 11.6 s on the Intel iGPU) — the
+LSTMs run step by step — and no faster with the LSTMs forced back onto the processor.
+DirectML stopped at ONNX Runtime 1.24.

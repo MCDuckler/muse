@@ -11,7 +11,16 @@
 //                   --ffmpeg <ffmpeg> --in <record>
 //                   [--instrumental <out>] [--drums <out>] [--music <out>]
 //                   [--vocals <out>] [--bass-other <out>]
-//                   [--threads N] [--seconds N] [--raw] [--rate N]
+//                   [--threads N] [--seconds N] [--raw] [--rate N] [--gpu cuda]
+//   wetowl-separate --check-cuda
+//
+// With --gpu cuda (and --ort naming ONNX Runtime's CUDA build) the network runs on an
+// NVIDIA card, about twelve times faster than on the processor — or, where the card's
+// libraries will not load, on the processor as before. It says which on a
+// "device cuda" / "device cpu: why" line. --check-cuda only asks whether the card's
+// libraries (the driver, CUDA 13, cuDNN 9) can be loaded at all: "cuda ok", or
+// "cuda missing <library>" and exit code 6 — so the app knows before it fetches
+// ONNX Runtime's CUDA build, which is a few hundred megabytes.
 //
 // Each output is written beside itself as <name>.tmp.<ext> and renamed when complete,
 // so a file with the real name is always a whole one. Parts come out at 32 kHz, AAC
@@ -30,7 +39,7 @@ import 'package:muse/src/separation/scnet.dart';
 const _usage = 'usage: wetowl-separate --ort <library> --model <model.onnx> '
     '--ffmpeg <ffmpeg> --in <record> [--instrumental <out>] [--drums <out>] '
     '[--music <out>] [--vocals <out>] [--bass-other <out>] [--threads N] '
-    '[--seconds N] [--raw] [--rate N]';
+    '[--seconds N] [--raw] [--rate N] [--gpu cuda] | --check-cuda';
 
 /// What each part is made of, from the model's four: drums, bass, other, vocals.
 const _recipes = {
@@ -47,6 +56,7 @@ const _partRate = 32000;
 Future<void> main(List<String> args) async {
   final opts = <String, String>{};
   var raw = false;
+  if (args.length == 1 && args.single == '--check-cuda') _checkCuda();
   for (var i = 0; i < args.length; i++) {
     final a = args[i];
     if (a == '--raw') {
@@ -76,19 +86,41 @@ Future<void> main(List<String> args) async {
   if (Platform.isWindows) _politeOnWindows();
   if (Platform.isLinux) _oneHeapOnLinux();
 
-  final OrtNetwork net;
+  OrtNetwork load({required bool cuda}) => OrtNetwork.open(
+        library: ort,
+        model: model,
+        inputName: 'spec',
+        inputShape: specInShape,
+        outputName: 'out',
+        outputShape: specOutShape,
+        threads: threads,
+        cuda: cuda,
+      );
+  OrtNetwork net;
   try {
-    net = OrtNetwork.open(
-      library: ort,
-      model: model,
-      inputName: 'spec',
-      inputShape: specInShape,
-      outputName: 'out',
-      outputShape: specOutShape,
-      threads: threads,
-    );
+    net = load(cuda: opts['gpu'] == 'cuda');
   } catch (e) {
     _fail('could not load the model: $e', 3);
+  }
+  if (net.device == 'cuda') {
+    // One piece of silence first. What the card's libraries cannot do — a cuDNN that
+    // will not load, a card too old — shows up at the first run rather than when the
+    // provider is added, and here it can still be the processor instead.
+    try {
+      net.input.fillRange(0, net.input.length, 0);
+      net.run();
+      stdout.writeln('device cuda');
+    } catch (e) {
+      net.close();
+      stdout.writeln('device cpu: the card could not run it: $e');
+      try {
+        net = load(cuda: false);
+      } catch (e) {
+        _fail('could not load the model: $e', 3);
+      }
+    }
+  } else {
+    stdout.writeln(net.gpuProblem == null ? 'device cpu' : 'device cpu: ${net.gpuProblem}');
   }
 
   final timing = Platform.environment['WETOWL_SEPARATE_TIMING'] != null;
@@ -158,6 +190,28 @@ Future<void> main(List<String> args) async {
   net.close();
   stdout.writeln('done');
   await stdout.flush();
+  exit(0);
+}
+
+/// Whether the libraries ONNX Runtime's CUDA build needs will load here: the
+/// driver's, CUDA 13's and cuDNN 9's, by the names that build asks for. Found the way
+/// it will find them — the loader's own search, with the app having put the usual
+/// places on the path.
+Never _checkCuda() {
+  final names = Platform.isWindows
+      ? ['nvcuda.dll', 'cudart64_13.dll', 'cublas64_13.dll', 'cublasLt64_13.dll',
+          'curand64_10.dll', 'cudnn64_9.dll']
+      : ['libcuda.so.1', 'libcudart.so.13', 'libcublas.so.13', 'libcublasLt.so.13',
+          'libcurand.so.10', 'libcudnn.so.9'];
+  for (final n in names) {
+    try {
+      DynamicLibrary.open(n);
+    } catch (_) {
+      stdout.writeln('cuda missing $n');
+      exit(6);
+    }
+  }
+  stdout.writeln('cuda ok');
   exit(0);
 }
 

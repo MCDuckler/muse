@@ -270,8 +270,12 @@ publish_desktop() {
 publish_models() {
   echo "== models"
   local src=${MUSE_KIT:-tools/separation/kit} f
-  on_box "mkdir -p $DL/models"
-  for f in scnet-small-v1.onnx.gz onnxruntime-1.30.0-linux-x64.so.gz onnxruntime-1.30.0-win-x64.dll.gz; do
+  local cl=onnxruntime-1.30.0-cuda13-linux-x64 cw=onnxruntime-1.30.0-cuda13-win-x64
+  on_box "mkdir -p $DL/models/$cl $DL/models/$cw"
+  for f in scnet-small-v1.onnx.gz onnxruntime-1.30.0-linux-x64.so.gz onnxruntime-1.30.0-win-x64.dll.gz \
+      $cl/libonnxruntime.so.1.30.0.gz $cl/libonnxruntime_providers_shared.so.gz \
+      $cl/libonnxruntime_providers_cuda.so.gz \
+      $cw/onnxruntime.dll.gz $cw/onnxruntime_providers_shared.dll.gz $cw/onnxruntime_providers_cuda.dll.gz; do
     [ -f "$src/$f" ] || { echo "   ! no $src/$f — run tools/separation/make_kit.sh" >&2; exit 1; }
     put "$src/$f" $DL/models/$f
     echo "   $SERVER_URL/models/$f  ($(( $(stat -c%s "$src/$f") / 1024 / 1024 ))MB)"
