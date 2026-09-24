@@ -545,4 +545,8 @@ IconData transitionIcon(Transition k) => switch (k) {
       Transition.acapellaOut => Icons.mic_external_on,
       Transition.stemBlend => Icons.layers,
       Transition.dropSwap => Icons.bolt,
+      Transition.echoOut => Icons.graphic_eq,
+      Transition.loopBuild => Icons.all_inclusive,
+      Transition.breakSwap => Icons.call_split,
+      Transition.filterRide => Icons.tune,
     };

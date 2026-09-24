@@ -263,11 +263,22 @@ class AutoMix extends ChangeNotifier {
   /// What is coming after the one that is coming: the crate's own "and then".
   Track? get after => _at + 2 < _tracks.length ? _tracks[_at + 2] : null;
 
-  /// How hard the booth mixes.
+  /// How hard the booth mixes: the three words, or the dials set by hand.
   MixStyle style = MixStyle.normal;
+  StyleAxes? _axes;
+  StyleAxes get axes => _axes ?? StyleAxes.of(style);
+  bool get dialsByHand => _axes != null;
 
   void mixLike(MixStyle how) {
     style = how;
+    _axes = null;
+    notifyListeners();
+    unawaited(_prepareNext());
+  }
+
+  /// The dials turned by hand; null goes back to the word.
+  void setAxes(StyleAxes? dials) {
+    _axes = dials;
     notifyListeners();
     unawaited(_prepareNext());
   }
@@ -510,7 +521,8 @@ class AutoMix extends ChangeNotifier {
     final m = booth.master;
     final fromPitch = m.pitch;
     final fromGain = booth.gainOf(m);
-    if ((fromPitch - 1).abs() < 0.003 && (fromGain - 1).abs() < 0.01) return;
+    final fromShift = booth.pitchShiftOf(m);
+    if ((fromPitch - 1).abs() < 0.003 && (fromGain - 1).abs() < 0.01 && fromShift == 0) return;
     final length = booth.barsLength(m, glideBars);
     if (length <= Duration.zero) return;
     final began = DateTime.now();
@@ -528,10 +540,15 @@ class AutoMix extends ChangeNotifier {
       if ((m.pitch - pitch).abs() > 0.0005) await m.setTempo(pitch);
       final gain = fromGain + (1 - fromGain) * k;
       if ((booth.gainOf(m) - gain).abs() > 0.002) await booth.setGain(m, gain);
+      // A shifted key eased back to the record's own, in steps small enough not to
+      // hear as steps.
+      final shift = fromShift * (1 - k);
+      if ((booth.pitchShiftOf(m) - shift).abs() > 0.04) await booth.setPitchShift(m, shift);
       if (k >= 1) {
         _endGlide();
         if (m.pitch != 1.0) await m.setTempo(1.0);
         if (booth.gainOf(m) != 1.0) await booth.setGain(m, 1.0);
+        if (booth.pitchShiftOf(m) != 0) await booth.setPitchShift(m, 0);
         notifyListeners();
       }
     });
@@ -674,9 +691,12 @@ class AutoMix extends ChangeNotifier {
       fromVoice = voices[0];
       toVoice = voices[1];
       options = Planner.options(
-        from: MixSide(timing: timed, vocals: voices[0], stems: from.stemmed, pitch: fromPitch),
-        to: MixSide(timing: timing, vocals: voices[1], stems: to.stemmed),
+        from: MixSide(
+            timing: timed, vocals: voices[0], stems: from.stemmed, pitch: fromPitch,
+            fx: booth.mixer.canShift, position: from.position),
+        to: MixSide(timing: timing, vocals: voices[1], stems: to.stemmed, fx: booth.mixer.canShift),
         style: style,
+        axes: _axes,
         recent: recent,
       );
       // A hand's choice for this very pair stands; for any other pair it is spent.
@@ -950,7 +970,9 @@ class AutoMix extends ChangeNotifier {
       _asked++;
       _endGlide();
       await booth.go(chosen.kind,
-          bars: chosen.bars, startAt: ended ? null : startFor(from.timing, go, from.position));
+          bars: chosen.bars,
+          startAt: ended ? null : startFor(from.timing, go, from.position),
+          shift: planned?.shift ?? 0);
       if (identical(booth.master, was)) {
         // It refused: the record it was going into would not play. Say so and stop,
         // rather than trying the same thing again every fifth of a second.

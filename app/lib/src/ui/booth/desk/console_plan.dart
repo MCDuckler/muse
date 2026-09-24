@@ -269,7 +269,7 @@ class _Options extends StatelessWidget {
                       children: [
                         Row(
                           children: [
-                            Text('${o.kind.label} · ${o.bars}',
+                            Text('${o.kind.label} · ${o.bars}${o.shift == 0 ? '' : ' · ${o.shift > 0 ? '+' : ''}${o.shift.round()} st'}',
                                 style: Mag.typewriter(11.5, color: chosen ? accent : Console.ink)),
                             const SizedBox(width: 6),
                             Expanded(

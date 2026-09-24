@@ -21,6 +21,7 @@ TrackTiming record({int bars = 120, int intro = 32, int outro = 32, List<int> dr
     beats: beats,
     downbeats: downs,
     camelot: camelot,
+    keyConfidence: 0.8,
     key: 'A minor',
     drops: [for (final d in drops) downs[d]],
     energy: [for (var i = 0; i < bars; i++) 200],
@@ -144,5 +145,106 @@ void main() {
       random: math.Random(1),
     );
     expect(plan.kind, isNot(Transition.announce), reason: plan.toString());
+  });
+
+  test('the desk\'s echo offers an echo-out; without one there is none', () {
+    final with_ = Planner.options(
+      from: MixSide(timing: record(), fx: true),
+      to: MixSide(timing: record(), fx: true),
+      random: math.Random(5),
+    );
+    expect(with_.any((o) => o.kind == Transition.echoOut), isTrue);
+    final without = Planner.options(
+      from: MixSide(timing: record()),
+      to: MixSide(timing: record()),
+      random: math.Random(5),
+    );
+    expect(without.any((o) => o.kind == Transition.echoOut), isFalse);
+  });
+
+  test('two voices at once cost every move, not only the blend', () {
+    final quiet = Planner.options(
+      from: MixSide(timing: record(), vocals: voice(120, (b) => false)),
+      to: MixSide(timing: record(), vocals: voice(120, (b) => false)),
+      random: math.Random(6),
+    );
+    final loud = Planner.options(
+      from: MixSide(timing: record(), vocals: voice(120, (b) => true)),
+      to: MixSide(timing: record(), vocals: voice(120, (b) => true)),
+      style: MixStyle.easy,
+      random: math.Random(6),
+    );
+    MixPlan of(List<MixPlan> l, Transition k) => l.firstWhere((o) => o.kind == k);
+    expect(of(loud, Transition.sweep).score, lessThan(of(quiet, Transition.sweep).score));
+    expect(of(loud, Transition.sweep).why, contains('two voices'));
+  });
+
+  test('keys that clash are mended by a shift where the desk can shift', () {
+    // 8A against 4A clashes; a semitone down puts 4A at 9A, a fifth from 8A.
+    final from = record(camelot: '8A');
+    final to = record(camelot: '4A');
+    final options = Planner.options(
+      from: MixSide(timing: from, fx: true),
+      to: MixSide(timing: to, fx: true),
+      random: math.Random(7),
+    );
+    final mended = options.where((o) => o.shift != 0).toList();
+    expect(mended, isNotEmpty, reason: options.toString());
+    expect(mended.first.shift, -1);
+    expect(mended.first.why, contains('to meet the key'));
+    // Without the desk's shift, no such offer.
+    final plain = Planner.options(
+      from: MixSide(timing: from),
+      to: MixSide(timing: to),
+      random: math.Random(7),
+    );
+    expect(plain.every((o) => o.shift == 0), isTrue);
+  });
+
+  test('a breakdown ahead in the old record becomes the transition into a drop', () {
+    final from = record();
+    final withBreak = TrackTiming(
+      durationMs: from.durationMs,
+      bpm: from.bpm,
+      beats: from.beats,
+      downbeats: from.downbeats,
+      camelot: '8A',
+      keyConfidence: 0.8,
+      energy: from.energy,
+      cues: from.cues,
+      structure: TrackStructure(sections: [
+        TrackSection(label: 'chorus', startBar: 0, endBar: 64, startMs: from.downbeats[0],
+            endMs: from.downbeats[64], drums: true, vocals: false, energyDb: -10),
+        TrackSection(label: 'breakdown', startBar: 64, endBar: 80, startMs: from.downbeats[64],
+            endMs: from.downbeats[80], drums: false, vocals: false, energyDb: -20),
+        TrackSection(label: 'drop', startBar: 80, endBar: 120, startMs: from.downbeats[80],
+            endMs: from.downbeats[119], drums: true, vocals: false, energyDb: -9),
+      ]),
+    );
+    final to = record(drops: const [48]);
+    final options = Planner.options(
+      from: MixSide(timing: withBreak, position: Duration(milliseconds: from.downbeats[20])),
+      to: MixSide(timing: to),
+      style: MixStyle.bold,
+      random: math.Random(8),
+    );
+    final swap = options.firstWhere((o) => o.kind == Transition.breakSwap);
+    expect(swap.bars, 16);
+    expect(swap.outAt, Duration(milliseconds: from.downbeats[64]), reason: 'out where the breakdown starts');
+    expect(swap.inAt, Duration(milliseconds: to.downbeats[48 - 16]), reason: 'the drop lands on the last beat');
+  });
+
+  test('the safe dial keeps the wild moves down', () {
+    final to = record(drops: const [48]);
+    for (var seed = 0; seed < 12; seed++) {
+      final plan = Planner.plan(
+        from: MixSide(timing: record(), fx: true),
+        to: MixSide(timing: to, fx: true),
+        axes: const StyleAxes(length: 0.6, risk: 0.0, vocals: 0.0),
+        random: math.Random(seed),
+      );
+      expect(plan.kind, isNot(anyOf(Transition.loopBuild, Transition.echoOut, Transition.dropSwap)),
+          reason: plan.toString());
+    }
   });
 }

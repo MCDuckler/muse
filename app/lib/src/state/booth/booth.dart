@@ -71,6 +71,25 @@ enum Transition {
   /// in a tightening loop, and on the one the new record drops in its place — parked
   /// so that its drop lands exactly on the transition's last beat.
   dropSwap,
+
+  /// The echo-out: the new record comes in under the old, and the old goes out into
+  /// its echo — the send opened over its last bars, then the record itself taken
+  /// away on the one and the echo's tail left to die under the new record.
+  echoOut,
+
+  /// The loop build: the old record is caught in a loop of four bars, then two, then
+  /// one, climbing through the filter, and the new record drops on the one — a
+  /// longer, wilder drop swap.
+  loopBuild,
+
+  /// The break swap: the old record's own breakdown is the transition — the new
+  /// record comes in over it, and drops where the old one would have dropped. Two
+  /// drops become one.
+  breakSwap,
+
+  /// The filter ride: long, both ways — the old record climbs out through the
+  /// high-pass while the new one opens up through the low-pass.
+  filterRide,
 }
 
 extension TransitionWords on Transition {
@@ -79,8 +98,15 @@ extension TransitionWords on Transition {
         Transition.acapellaOut => 'a cappella out',
         Transition.stemBlend => 'stem blend',
         Transition.dropSwap => 'drop swap',
+        Transition.echoOut => 'echo out',
+        Transition.loopBuild => 'loop build',
+        Transition.breakSwap => 'break swap',
+        Transition.filterRide => 'filter ride',
         _ => name,
       };
+
+  /// Needs the desk's echo (Mixer.canShift): elsewhere it is a blend.
+  bool get needsFx => this == Transition.echoOut;
 
   /// Made of stems: nothing it means can be done on a deck playing the whole record.
   bool get needsStems =>
@@ -90,7 +116,19 @@ extension TransitionWords on Transition {
 /// What a transition does to one deck at one moment.
 class DeckStep {
   const DeckStep(
-      {this.eq, this.filter, this.loopBars, this.brake = false, this.part, this.stems});
+      {this.eq,
+      this.filter,
+      this.loopBars,
+      this.brake = false,
+      this.part,
+      this.stems,
+      this.echo,
+      this.dry});
+
+  /// The echo send, 0 to 1, and how much of the record itself is still heard, where
+  /// this step sets them (Mixer.setEcho). Send shut and dry taken away together is
+  /// the echo-out: the tail rings on.
+  final double? echo, dry;
 
   /// A stem deck's levels by this point: moved to evenly from the last step that set
   /// them, like the fader. Ignored on a deck that is not playing its stems.
@@ -460,11 +498,29 @@ class Booth extends ChangeNotifier {
   Future<void> kill(Deck d, int band, bool on) => setEq(d, eqOf(d).killing(band, on));
 
   /// [d] played [semitones] up or down at the same tempo — a boost mix's semitone.
-  Future<void> setPitchShift(Deck d, double semitones) => mixer.setPitchShift(d, semitones);
+  Future<void> setPitchShift(Deck d, double semitones) async {
+    _shift[d] = semitones;
+    await mixer.setPitchShift(d, semitones);
+    notifyListeners();
+  }
+
+  final Map<Deck, double> _shift = {};
+  double pitchShiftOf(Deck d) => _shift[d] ?? 0;
 
   /// [d]'s echo: the send into it, and how much of the record itself is still heard.
-  Future<void> setEcho(Deck d, {required double send, required double dry}) =>
-      mixer.setEcho(d, send: send, dry: dry);
+  Future<void> setEcho(Deck d, {required double send, required double dry}) async {
+    _echo[d] = (send: send, dry: dry);
+    await mixer.setEcho(d, send: send, dry: dry);
+  }
+
+  final Map<Deck, ({double send, double dry})> _echo = {};
+
+  /// [d] as it was made: no echo, no shift — after a move that used them.
+  Future<void> _plain(Deck d) async {
+    final e = _echo[d];
+    if (e != null && (e.send != 0 || e.dry != 1)) await setEcho(d, send: 0, dry: 1);
+    if ((_shift[d] ?? 0) != 0) await setPitchShift(d, 0);
+  }
 
   Future<void> setGain(Deck d, double value) async {
     gain[d] = value.clamp(0.0, 1.0);
@@ -1146,6 +1202,63 @@ class Booth extends ChangeNotifier {
             from: const DeckStep(eq: EqSet.flat, filter: 0, loopBars: 0),
           }),
         ];
+      case Transition.echoOut:
+        // The new record under the old; the old record's echo opened over its last
+        // bars; on the one the record itself goes and the echo's tail is left under
+        // the new record, the fader finishing over it.
+        return [
+          MixStep(0, crossfader: 0, decks: {to: noBass}),
+          MixStep(0.5, crossfader: 0.5, decks: {to: flat, from: noBass}),
+          MixStep(0.75, crossfader: 0.6, decks: {from: const DeckStep(echo: 0.35, dry: 1)}),
+          MixStep(0.875, crossfader: 0.6, decks: {from: const DeckStep(echo: 0.6, dry: 1)}),
+          MixStep(0.9, crossfader: 0.6, decks: {from: const DeckStep(echo: 0, dry: 0)}),
+          MixStep(1, crossfader: 1, decks: {from: const DeckStep(eq: EqSet.flat, filter: 0, echo: 0, dry: 1)}),
+        ];
+      case Transition.loopBuild:
+        // Four bars, two, one, the filter climbing all the while and the new record
+        // waiting underneath with its bass off — and on the one it drops.
+        return [
+          MixStep(0, crossfader: 0, decks: {
+            to: const DeckStep(eq: EqSet(low: EqSet.killed, mid: -8), filter: -0.3),
+            from: const DeckStep(filter: 0),
+          }),
+          MixStep(0.5, crossfader: 0.3, decks: {from: const DeckStep(filter: 0.25, loopBars: 4)}),
+          MixStep(0.75, crossfader: 0.4, decks: {from: const DeckStep(filter: 0.5, loopBars: -1)}),
+          MixStep(0.875, crossfader: 0.45, decks: {from: const DeckStep(filter: 0.7, loopBars: -1)}),
+          MixStep(0.9375, crossfader: 0.5, decks: {from: const DeckStep(filter: 0.85, loopBars: -1)}),
+          MixStep(1, crossfader: 1, decks: {
+            to: const DeckStep(eq: EqSet.flat, filter: 0),
+            from: const DeckStep(eq: EqSet.flat, filter: 0, loopBars: 0),
+          }),
+        ];
+      case Transition.breakSwap:
+        // The old record's breakdown is the transition: the new record comes in over
+        // it, bass off, and drops on the one where the old would have.
+        return [
+          MixStep(0, crossfader: 0.2, decks: {to: noBass}),
+          MixStep(0.6, crossfader: 0.5, decks: {to: noBass}),
+          MixStep(0.9, crossfader: 0.7, decks: {from: const DeckStep(filter: 0.4)}),
+          MixStep(1, crossfader: 1, decks: {to: flat, from: off}),
+        ];
+      case Transition.filterRide:
+        // Both ways at once, long: the old record climbs out through the high-pass
+        // while the new one opens up through the low-pass, the basses swapped in the
+        // middle.
+        return [
+          MixStep(0, crossfader: 0, decks: {
+            from: const DeckStep(filter: 0),
+            to: const DeckStep(filter: -0.7, eq: EqSet(low: EqSet.killed)),
+          }),
+          MixStep(0.5, crossfader: 0.5, decks: {
+            from: const DeckStep(filter: 0.35, eq: EqSet(low: EqSet.killed)),
+            to: const DeckStep(filter: -0.3, eq: EqSet.flat),
+          }),
+          MixStep(0.85, crossfader: 0.85, decks: {
+            from: const DeckStep(filter: 0.8),
+            to: const DeckStep(filter: 0),
+          }),
+          MixStep(1, crossfader: 1, decks: {from: off}),
+        ];
       case Transition.swap:
         // The drums change hands. Each swap is a load, so each one happens where
         // there is another record over it: the first under the outgoing at full
@@ -1262,10 +1375,19 @@ class Booth extends ChangeNotifier {
   /// this does nothing: pressing MIX three times while it waited for the phrase once
   /// started three mixes at the same moment, each moving the same fader, and a roll
   /// had its loop halved nine times over.
-  Future<void> go(Transition kind, {int bars = 16, Duration? startAt}) async {
+  ///
+  /// [shift] plays the incoming so many semitones up or down at the same tempo, for
+  /// the length of the record (the automix eases it back): a key made to fit.
+  Future<void> go(Transition kind, {int bars = 16, Duration? startAt, double shift = 0}) async {
     if (busy) return;
     final from = master, to = other(master);
     if (!to.loaded) return;
+    // A move made of the desk's echo, on an engine without one: a blend instead.
+    if (kind.needsFx && !mixer.canShift) {
+      note(BoothEventKind.plan, '${kind.label} needs the desk\'s echo: a blend instead');
+      kind = Transition.blend;
+    }
+    if (shift != 0 && mixer.canShift) await setPitchShift(to, shift);
     // A move made of stems, asked of a deck that is playing the whole record: the
     // blend it is a kind of, rather than a plan whose stems nothing can turn.
     if (kind.needsStems && !(from.stemmed && to.stemmed)) {
@@ -1488,6 +1610,7 @@ class Booth extends ChangeNotifier {
         await from.pause();
         await setEq(from, EqSet.flat);
         await setFilter(from, 0);
+        await _plain(from);
         master = to;
         _done = null;
         if (!done.isCompleted) done.complete();
@@ -1534,6 +1657,10 @@ class Booth extends ChangeNotifier {
           deck.loop(bars * 4);
       }
       if (want.brake) unawaited(deck.brake());
+      if (want.echo != null || want.dry != null) {
+        final now = _echo[deck] ?? (send: 0.0, dry: 1.0);
+        await setEcho(deck, send: want.echo ?? now.send, dry: want.dry ?? now.dry);
+      }
       if (want.part != null) {
         final wanted = want.part == DeckStep.whole ? null : want.part;
         if (!deck.playing) {
@@ -1576,6 +1703,7 @@ class Booth extends ChangeNotifier {
         unawaited(setEq(d, EqSet.flat));
         unawaited(setFilter(d, 0));
         d.unloop();
+        unawaited(_plain(d));
         // And the stems a stem move had turned: back to the part on the pads.
         if (d.stemmed) unawaited(d.setStemLevels(StemLevels.of(d.part)));
       }
