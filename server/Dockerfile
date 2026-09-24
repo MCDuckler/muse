@@ -10,5 +10,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY muse ./muse
 ENV MUSE_CONFIG=/config/muse.toml
+# Two malloc arenas, not one per thread: every request thread that read a record kept
+# its own heap of freed memory, and the server grew until it was killed.
+ENV MALLOC_ARENA_MAX=2
 EXPOSE 8770
 CMD ["python", "-m", "uvicorn", "muse.main:app", "--host", "0.0.0.0", "--port", "8770"]

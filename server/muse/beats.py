@@ -681,14 +681,28 @@ def measure(audio: pathlib.Path) -> dict:
     return analysis.add(out, x, out["beats"], out["bar_starts_on"], low, _FPS)
 
 
-def for_track(data_dir: pathlib.Path, audio: pathlib.Path, sha: str) -> dict:
-    """The song's timing, from disk if it has been worked out before."""
+def for_track(data_dir: pathlib.Path, audio: pathlib.Path, sha: str,
+              wait: float | None = 20.0) -> dict:
+    """The song's timing, from disk if it has been worked out before; otherwise worked
+    out in its turn (heavy.py), or heavy.Busy where the turn does not come in [wait]."""
+    from . import heavy
+
     cached = cache_path(data_dir, sha)
     try:
         return json.loads(cached.read_text())
     except (OSError, ValueError):
         pass
-    found = measure(audio)
+    with heavy.turn(sha, wait=wait):
+        # Worked out while this waited — by whoever asked first.
+        try:
+            return json.loads(cached.read_text())
+        except (OSError, ValueError):
+            pass
+        # Kept before the turn is let go of: the next to ask for it reads it from disk.
+        return _keep(cached, measure(audio))
+
+
+def _keep(cached: pathlib.Path, found: dict) -> dict:
     cached.parent.mkdir(parents=True, exist_ok=True)
     tmp = cached.with_suffix(".tmp")
     tmp.write_text(json.dumps(found, separators=(",", ":")))

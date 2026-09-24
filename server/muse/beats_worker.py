@@ -37,7 +37,7 @@ def one(data_dir: pathlib.Path) -> bool:
         return False
     bpm = None
     try:
-        found = beats.for_track(data_dir, pathlib.Path(t["path"]), t["sha256"])
+        found = beats.for_track(data_dir, pathlib.Path(t["path"]), t["sha256"], wait=None)
         bpm = found.get("bpm")
     except Exception as e:                               # noqa: BLE001
         # A file that cannot be read is marked as looked at all the same: it will not

@@ -209,8 +209,10 @@ def for_track(data_dir: pathlib.Path, track: dict, downbeats: list[int]) -> dict
     except (OSError, ValueError, KeyError):
         vocals = pool.part_here(sha, "vocals")
         if vocals is not None:
+            from . import heavy
             try:
-                bars = bar_levels(vocals, pathlib.Path(track["path"]), downbeats)
+                with heavy.turn(f"{sha}-vocals"):
+                    bars = bar_levels(vocals, pathlib.Path(track["path"]), downbeats)
                 cached.parent.mkdir(parents=True, exist_ok=True)
                 cached.write_text(json.dumps({"bars": bars}))
             except (subprocess.SubprocessError, OSError) as e:

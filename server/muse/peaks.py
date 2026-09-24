@@ -98,16 +98,24 @@ def measure(audio: pathlib.Path, slices: int = SLICES) -> list[int]:
 
 def for_track(data_dir: pathlib.Path, audio: pathlib.Path, sha: str,
               slices: int = SLICES, bands: bool = False):
-    """The song's shape, from disk if it has been measured before."""
+    """The song's shape, from disk if it has been measured before; otherwise in its
+    turn (heavy.py)."""
+    from . import heavy
+
     slices = max(16, min(MOST_SLICES, int(slices)))
     cached = cache_path(data_dir, sha, slices, bands)
     try:
         return json.loads(cached.read_text())
     except (OSError, ValueError):
         pass
-    shape = measure_bands(audio, slices) if bands else measure(audio, slices)
-    cached.parent.mkdir(parents=True, exist_ok=True)
-    tmp = cached.with_suffix(".tmp")
-    tmp.write_text(json.dumps(shape))
-    tmp.replace(cached)
-    return shape
+    with heavy.turn(f"{sha}-peaks"):
+        try:
+            return json.loads(cached.read_text())
+        except (OSError, ValueError):
+            pass
+        shape = measure_bands(audio, slices) if bands else measure(audio, slices)
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cached.with_suffix(".tmp")
+        tmp.write_text(json.dumps(shape))
+        tmp.replace(cached)
+        return shape

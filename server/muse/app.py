@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from . import beats_worker
 from . import (
     auth, catalog, config, db, direct_worker, enrich_worker, failures,
-               follows, jobs, progress,
+               follows, heavy, jobs, progress,
                jam, routes_accounts, routes_browse, routes_downloads, routes_files,
                routes_follows, routes_jam, routes_marks,
                routes_library, routes_linked, routes_play, routes_search,
@@ -120,6 +120,13 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         _loop = None
 
     app = FastAPI(title="WetOwl", docs_url="/api-docs", lifespan=lifespan)
+
+    @app.exception_handler(heavy.Busy)
+    async def busy(request: Request, exc: heavy.Busy):
+        # The records being read are all taken (heavy.py): come back shortly, rather
+        # than one more record read into memory at once.
+        return JSONResponse({"detail": "busy: try again shortly"}, status_code=503,
+                            headers={"Retry-After": "10"})
     # Per-app, not per-module: a second app instance (tests, a worker process) gets its own.
     login_limit = auth.RateLimiter(rate=0.2, burst=5)      # 1 login / 5 s, burst 5
     resolve_limit = auth.RateLimiter(rate=2.0, burst=30)   # 2 resolves / s per device
