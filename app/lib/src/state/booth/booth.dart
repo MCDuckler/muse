@@ -209,6 +209,8 @@ class Booth extends ChangeNotifier {
     this.b.parts = parts;
     this.a.engineLoop = (from, to) => this.mixer.setLoop(this.a, from, to);
     this.b.engineLoop = (from, to) => this.mixer.setLoop(this.b, from, to);
+    this.a.seamFinder = this.mixer.quietSeam;
+    this.b.seamFinder = this.mixer.quietSeam;
     this.a.addListener(notifyListeners);
     this.b.addListener(notifyListeners);
     this.a.addListener(_follow);
@@ -819,6 +821,10 @@ class Booth extends ChangeNotifier {
         // back as much as one forward. (Aimed "further" in the jump's own direction, a
         // jump back overshot by twice that.)
         final jump = -err.inMicroseconds + _jumpCarry.inMicroseconds;
+        // Said in the log, always: a jump is the one thing the holding does that can be
+        // heard, and "it twitched" is only something to work with if there is a when.
+        debugPrint('booth: ${follower.name} jumped ${(jump / 1000).toStringAsFixed(0)} ms to the beat '
+            '(${quiet ? snap && share >= 0.25 ? 'SYNC pressed' : 'while quiet' : 'lost the beat by ${ms.toStringAsFixed(0)} ms'})');
         await follower.nudge(Duration(microseconds: (jump * follower.tempo).round()));
         return;
       }
@@ -1057,6 +1063,29 @@ class Booth extends ChangeNotifier {
   /// A mix is waiting for its beat, or running.
   bool get busy => arming != null || _running != null;
 
+  /// Move [to], parked, so it has as many bars left to its next four-bar marker as
+  /// [from] will have at [at] — by whole bars, two at the most either way, and never
+  /// back past its first downbeat.
+  Future<void> _meetThePhrase(Deck from, Duration at, Deck to) async {
+    final ft = from.timing, tt = to.timing;
+    final bar = tt?.bar;
+    if (ft == null || tt == null || bar == null) return;
+    final parked = to.position;
+    final theirs = ft.placeInPhrase(at), mine = tt.placeInPhrase(parked);
+    if (theirs == null || mine == null) return;
+    // Forward by the difference in bars left: then both reach a marker together.
+    var d = (mine.of - mine.bar) - (theirs.of - theirs.bar);
+    if (d == 0) return;
+    if (d > 2) d -= 4;
+    if (d < -2) d += 4;
+    var target = parked + bar * d;
+    final first = tt.cues?.firstDownbeat ?? Duration.zero;
+    if (target < first) target += bar * 4;
+    debugPrint('booth: ${to.name} moved ${d > 0 ? 'on' : 'back'} ${d.abs()} bar${d.abs() == 1 ? '' : 's'} '
+        'to meet ${from.name}\'s phrase (bar ${theirs.bar + 1} of ${theirs.of})');
+    await to.seek(tt.onGrid(target));
+  }
+
   /// From the master to the other deck, over [bars] of the master's bars. When it is
   /// done the other deck is the master.
   ///
@@ -1099,6 +1128,19 @@ class Booth extends ChangeNotifier {
         : (from.untilNextBeat(now, every: every) ?? Duration.zero);
     arming = (kind: kind, from: from.name, to: to.name, startsAt: now.add(wait));
     notifyListeners();
+    // Phrase to phrase: the incoming starts as many bars short of its next four-bar
+    // marker as the outgoing will be of its own, so the two records' phrases turn
+    // over together for the whole of the mix. The automix parks the one on a marker
+    // and goes on the other's, and this moves nothing; a mix by hand, or one that went
+    // late, is put right here, by two bars at the most. Not a cut, which starts the
+    // record where it was cued.
+    if (synced && every == 4 && kind != Transition.cut && !to.playing) {
+      final goes = precise
+          ? startAt
+          : from.position + Duration(microseconds: (wait.inMicroseconds * from.tempo).round());
+      await _meetThePhrase(from, goes, to);
+      if (calledOff()) return;
+    }
 
     final steps = kind == Transition.cut
         ? const <MixStep>[]
@@ -1317,12 +1359,23 @@ class Booth extends ChangeNotifier {
     } else if (_running != null) {
       note(BoothEventKind.skip, 'Mix stopped by hand');
     }
+    final wasRunning = _running != null;
     _asked++;
     arming = null;
     _running?.cancel();
     _running = null;
     mixing = null;
     unawaited(letGo());
+    // What the mix had done to the two channels is undone: stopped halfway, a blend
+    // left the incoming with no bass and a sweep left the outgoing filtered — a knob
+    // showing a kill nobody turned. The fader stays where it is: that is the room.
+    if (wasRunning) {
+      for (final d in decks) {
+        unawaited(setEq(d, EqSet.flat));
+        unawaited(setFilter(d, 0));
+        d.unloop();
+      }
+    }
     final d = _done;
     _done = null;
     if (d != null && !d.isCompleted) d.complete();

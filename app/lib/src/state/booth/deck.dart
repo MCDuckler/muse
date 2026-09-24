@@ -6,7 +6,6 @@ import 'package:just_audio_background/just_audio_background.dart';
 
 import '../../api/client.dart';
 import '../../api/models.dart';
-import '../../worker/render_parts.dart' show quietSeam;
 import 'parts.dart';
 
 /// One of the two records on the deck.
@@ -143,6 +142,12 @@ class Deck extends ChangeNotifier {
     final expected = positionAt(now);
     final off = at - expected;
     if (off.abs() > const Duration(milliseconds: 80)) {
+      // The engine says it is somewhere else, by more than its reports ever wander:
+      // believed, and said in the log — a record the booth did not move, moving, is
+      // what "it twitched" is. (A loop coming round is expected, and not said.)
+      if (loopStart == null) {
+        debugPrint('deck: $name moved ${off.inMilliseconds} ms by itself at ${at.inMilliseconds} ms');
+      }
       _fix = at;
     } else {
       _fix = expected + off * 0.12;
@@ -561,23 +566,30 @@ class Deck extends ChangeNotifier {
         : Duration(microseconds: (60e6 / own).round());
   }
 
-  /// The file playing, where it is on this computer: the kept record, or a part made
-  /// here. Null for one streamed from the house.
-  String? get localFile {
+  /// What is playing, as the engine was handed it: the file or the stream, and what to
+  /// send with it. What a loop's seam is read from.
+  ({String uri, Map<String, String>? headers})? get sourceNow {
     final t = track;
     if (t == null) return null;
     final p = part;
-    return p == null ? offlinePath?.call(t.id) : parts?.pathFor(t.id, p);
+    final local = p == null ? offlinePath?.call(t.id) : parts?.pathFor(t.id, p);
+    if (local != null) return (uri: Uri.file(local).toString(), headers: null);
+    return (
+      uri: p == null ? api.streamUrl(t) : api.stemUrl(t, p),
+      headers: kIsWeb ? null : api.streamHeaders,
+    );
   }
 
-  /// Move the loop's two ends to where its seam will not click (quietSeam), once the
-  /// record has been read there — a third of a second, well before the first time
-  /// round, which is a bar away at least. Nothing moves if the loop has changed in the
-  /// meantime.
+  /// Reads where a loop's seam will not click (the booth's mixer: see seam.dart).
+  Future<(Duration, Duration)?> Function(Deck deck, Duration start, Duration end)? seamFinder;
+
+  /// Move the loop's two ends to where its seam will not click, once the sound there
+  /// has been read — well before the first time round, which is a bar away at least.
+  /// Nothing moves if the loop has changed in the meantime.
   Future<void> _quietSeam() async {
-    final file = localFile, from = loopStart, to = loopEnd;
-    if (file == null || from == null || to == null) return;
-    final quiet = await quietSeam(file, from, to);
+    final finder = seamFinder, from = loopStart, to = loopEnd;
+    if (finder == null || from == null || to == null) return;
+    final quiet = await finder(this, from, to);
     if (quiet == null || loopStart != from || loopEnd != to) return;
     loopStart = quiet.$1;
     loopEnd = quiet.$2;

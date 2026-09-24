@@ -161,10 +161,12 @@ void main() {
     });
   });
 
-  test('the incoming starts on the downbeat nearest the plan, or the next one', () {
-    final t = beatsEvery(500); // a bar every 2 s
+  test('the incoming starts on the four-bar marker nearest the plan, or the next bar', () {
+    final t = beatsEvery(500); // a bar every 2 s, a marker every 8
     expect(AutoMix.startFor(t, const Duration(milliseconds: 30100), const Duration(seconds: 28)),
-        const Duration(seconds: 30));
+        const Duration(seconds: 32), reason: 'the marker, not the downbeat nearer the sums');
+    expect(AutoMix.startFor(t, const Duration(milliseconds: 32100), const Duration(seconds: 20)),
+        const Duration(seconds: 32));
     expect(AutoMix.startFor(t, const Duration(seconds: 28), const Duration(milliseconds: 29000)),
         const Duration(seconds: 30), reason: 'the moment has gone: the next bar');
     expect(AutoMix.startFor(const TrackTiming(), const Duration(seconds: 3), Duration.zero),
@@ -313,6 +315,33 @@ void main() {
       }
       expect(booth.taken, hasLength(1), reason: 'one mix, not five on top of each other');
       expect(booth.master.name, 'B');
+    }, timeout: const Timeout(Duration(seconds: 20)));
+
+    test('a mix goes phrase to phrase: the incoming is moved to meet the outgoing\'s', () async {
+      // Four-bar markers every 8 s on both. A goes at 32 s, on one of its markers; B
+      // is cued a bar into one of its own phrases, so it is moved back the bar.
+      await booth.setCrossfader(0);
+      await booth.b.seek(const Duration(seconds: 42));
+      final going = booth.go(Transition.blend, bars: 4, startAt: const Duration(seconds: 32));
+      for (var i = 0; i < 80 && booth.taken.isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(booth.taken, hasLength(1));
+      expect(booth.taken.single.inMs, 40000, reason: 'on its marker, as A is on its own');
+      booth.stopTransition();
+      await going.timeout(const Duration(seconds: 2));
+    }, timeout: const Timeout(Duration(seconds: 20)));
+
+    test('a mix the automix lined up on two markers is not moved', () async {
+      await booth.setCrossfader(0);
+      await booth.b.seek(const Duration(seconds: 40));
+      final going = booth.go(Transition.blend, bars: 4, startAt: const Duration(seconds: 32));
+      for (var i = 0; i < 80 && booth.taken.isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(booth.taken.single.inMs, 40000);
+      booth.stopTransition();
+      await going.timeout(const Duration(seconds: 2));
     }, timeout: const Timeout(Duration(seconds: 20)));
 
     test('a mix called off while it waits never starts', () async {

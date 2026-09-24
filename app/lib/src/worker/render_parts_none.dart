@@ -63,4 +63,3 @@ Future<void> giveBack(String path) async {}
 
 Future<int> sweepHere() async => 0;
 
-Future<(Duration, Duration)?> quietSeam(String file, Duration start, Duration end) async => null;

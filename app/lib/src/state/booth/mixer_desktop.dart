@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -6,6 +7,7 @@ import 'package:media_kit/media_kit.dart';
 
 import 'deck.dart';
 import 'mixer.dart';
+import 'seam.dart';
 
 /// A desk: the gain as everywhere, and the kills and the filter as mpv's own audio
 /// filter chain on the deck's player — shelves and a low- and high-pass from ffmpeg.
@@ -222,6 +224,66 @@ class DesktopMixer extends VolumeMixer {
 
   @override
   Future<bool> setLoop(Deck deck, Duration? from, Duration? to) => _loop(deck, from, to);
+
+  /// Read where a loop's seam will not click (seam.dart) from what [deck] plays, with
+  /// an mpv of its own writing the samples around each end to a file: the same engine
+  /// the deck plays through, so the same samples at the same places — for a file on
+  /// this computer or a stream from the house alike, and with nothing else installed.
+  @override
+  Future<(Duration, Duration)?> quietSeam(Deck deck, Duration start, Duration end) async {
+    final mpv = _native(deck), source = deck.sourceNow;
+    if (mpv == null || source == null || end <= start) return null;
+    try {
+      final rate = int.tryParse((await mpv.getProperty('audio-params/samplerate')).split('.').first);
+      if (rate == null || rate <= 0) return null;
+      final sa = (start.inMicroseconds * rate / 1e6).round();
+      final sb = (end.inMicroseconds * rate / 1e6).round();
+      const w = seamReach + seamHalf;
+      if (sa - w < 0) return null;
+      final both = await Future.wait([_pcm(source, sa - w, rate), _pcm(source, sb - w, rate)]);
+      final a = both[0], b = both[1];
+      if (a == null || b == null) return null;
+      return seamPoints(sa, sb, bestSplice(a, b), rate);
+    } catch (e) {
+      debugPrint('mixer: could not read the loop seam ($e)');
+      return null;
+    }
+  }
+
+  /// [seamWindow] frames of stereo float from sample [from] of [source], at [rate].
+  Future<Float32List?> _pcm(({String uri, Map<String, String>? headers}) source, int from, int rate) async {
+    final dir = await Directory.systemTemp.createTemp('wetowl-seam');
+    final out = File('${dir.path}${Platform.pathSeparator}pcm.raw');
+    final player = Player();
+    try {
+      final mpv = player.platform as NativePlayer;
+      await mpv.setProperty('vid', 'no');
+      await mpv.setProperty('ao', 'pcm');
+      await mpv.setProperty('ao-pcm-file', out.path);
+      await mpv.setProperty('ao-pcm-waveheader', 'no');
+      await mpv.setProperty('audio-format', 'float');
+      await mpv.setProperty('audio-channels', 'stereo');
+      await mpv.setProperty('audio-samplerate', '$rate');
+      await mpv.setProperty('hr-seek', 'yes');
+      // Half a sample early: the first sample at or after it is the one asked for.
+      await mpv.setProperty('start', ((from - 0.5) / rate).toStringAsFixed(9));
+      await mpv.setProperty('length', ((seamWindow + 512) / rate).toStringAsFixed(6));
+      final done = player.stream.completed.firstWhere((c) => c).timeout(const Duration(seconds: 8));
+      await player.open(Media(source.uri, httpHeaders: source.headers));
+      await done;
+    } finally {
+      await player.dispose();
+    }
+    try {
+      final bytes = await out.readAsBytes();
+      if (bytes.length < seamWindow * 8) return null;
+      return Uint8List.fromList(bytes.sublist(0, seamWindow * 8)).buffer.asFloat32List();
+    } finally {
+      try {
+        await dir.delete(recursive: true);
+      } catch (_) {}
+    }
+  }
 
   /// Loop natively: mpv's own A–B loop jumps back from inside the audio, where a
   /// timer in Dart is twenty milliseconds late at best and sounds it on a roll.

@@ -40,7 +40,7 @@ REC=$!
 cd "$APP"
 flutter test integration_test/booth_manual_sync_test.dart -d linux \
   --dart-define=PROBE_DIR="$W" --dart-define=BOOTH_TRACE=true > "$W/test.out" 2>&1 || { tail -30 "$W/test.out"; exit 1; }
-grep -E '^booth:' "$W/test.out" || true
+grep -E "^(booth|deck):" "$W/test.out" || true
 grep -E '^lock: ' "$W/test.out" | awk 'NR % 20 == 1 {print "   " $0}' || true
 kill -INT $REC; wait $REC 2>/dev/null || true; REC=
 if [ -n "${PROBE_KEEP:-}" ]; then mkdir -p "$PROBE_KEEP"; cp "$W"/rec.wav "$W"/events.txt "$W"/rec_started.txt "$W"/test.out "$PROBE_KEEP"/; fi

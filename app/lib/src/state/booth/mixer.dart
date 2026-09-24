@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
@@ -27,6 +28,26 @@ class EqSet {
 
   /// How far up a band can be turned. A mixer's EQ gives a little and takes a lot.
   static const most = 6.0;
+
+  /// Where on a knob's travel, 0 to 1, a band at [db] sits — as on a DJ mixer: straight
+  /// up (0.5) is flat, the right half the boost to [most], the left half the cut, gentle
+  /// near the middle and falling away to the kill at the stop (an audio taper: nine
+  /// o'clock is -12 dB, seven -24). The knobs were straight lines from -24 to +6, which
+  /// put flat at two o'clock and every knob at rest pointing somewhere it should not.
+  static double knobOf(double db) {
+    if (db <= killed) return 0;
+    if (db >= 0) return 0.5 + 0.5 * (db / most).clamp(0.0, 1.0);
+    return (0.5 * math.pow(10, db / 40)).clamp(0.0, 0.5).toDouble();
+  }
+
+  /// The band a knob at [t] sets: [knobOf] turned round. The last of the travel is the
+  /// kill.
+  static double dbOf(double t) {
+    if (t >= 0.5) return most * ((t - 0.5) / 0.5).clamp(0.0, 1.0);
+    if (t <= 0.02) return killed;
+    final db = 40 * math.log(t / 0.5) / math.ln10;
+    return db <= killed ? killed : db;
+  }
 
   final double low, mid, high;
 
@@ -97,6 +118,10 @@ abstract class Mixer {
   /// Loop [deck] from [from] to [to] inside the engine, or stop with nulls. False where
   /// the engine cannot, and the deck loops by itself.
   Future<bool> setLoop(Deck deck, Duration? from, Duration? to) async => false;
+
+  /// Where to put a loop's ends so its seam does not click (see seam.dart), read from
+  /// the sound [deck] is playing — or null where this engine cannot read it.
+  Future<(Duration, Duration)?> quietSeam(Deck deck, Duration start, Duration end) async => null;
 
   /// Whichever one this device has.
   static Mixer forThisDevice() {

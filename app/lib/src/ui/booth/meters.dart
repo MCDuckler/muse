@@ -246,8 +246,9 @@ class _EqKnobState extends State<EqKnob> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final killed = widget.db <= EqSet.killed;
-    // Where the pointer sits: the bottom of the travel is a kill, the middle flat.
-    final t = killed ? 0.0 : ((widget.db + 12) / (12 + EqSet.most)).clamp(0.0, 1.0);
+    // Where the pointer sits, as on a DJ mixer: straight up flat, the bottom of the
+    // travel a kill (EqSet.knobOf).
+    final t = EqSet.knobOf(widget.db);
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -257,14 +258,14 @@ class _EqKnobState extends State<EqKnob> {
             feel(Feel.pick);
             widget.onChanged(killed ? 0 : EqSet.killed);
           },
-          onVerticalDragStart: (_) => _from = widget.db <= EqSet.killed ? -12 : widget.db,
+          onVerticalDragStart: (_) => _from = EqSet.knobOf(widget.db),
           onVerticalDragUpdate: (d) {
-            // The whole travel in about a hundred pixels of finger.
-            final from = _from ?? 0;
-            final now = (from - d.localPosition.dy.sign * 0).clamp(-12.0, EqSet.most);
-            _from = (from - d.delta.dy * 0.22).clamp(-12.0, EqSet.most);
-            widget.onChanged(_from! <= -11.9 ? EqSet.killed : _from!);
-            if (now != _from) setState(() {});
+            // The whole travel in about a hundred and twenty pixels of finger, on the
+            // knob's own taper; a little either side of straight up is flat.
+            var t = ((_from ?? 0.5) - d.delta.dy / 120).clamp(0.0, 1.0);
+            _from = t;
+            if ((t - 0.5).abs() < 0.025) t = 0.5;
+            widget.onChanged(EqSet.dbOf(t));
           },
           child: SizedBox(
             width: widget.size,

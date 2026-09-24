@@ -10,7 +10,8 @@ import '../mag.dart';
 ///
 /// Three inks: the bass as the heavy one, the middle over it, the top as the finest —
 /// so "the bass drops out here" is visible from across the room, which is the one
-/// thing a DJ reads off a waveform. Beat ticks along the foot, downbeats taller, the
+/// thing a DJ reads off a waveform. Beat ticks along the foot, downbeats taller, a
+/// rule through the lane every four bars where the record's sections start, the
 /// phrases bracketed along the head, the mix-in and mix-out cues flagged, the loop
 /// shaded. The playhead stands a third of the way in and the song runs under it.
 ///
@@ -218,6 +219,21 @@ class _StripPainter extends CustomPainter {
           final isDown = (i - t.barStartsOn) % 4 == 0;
           canvas.drawLine(Offset(x, h), Offset(x, h - (isDown ? 10 : 5)), isDown ? down : tick);
         }
+      }
+      // Every four bars, from where the record's sections start: a rule the height of
+      // the lane and the tallest tick, so two records lined up for a mix show it —
+      // their rules pass the playhead together, strip over strip.
+      final four = Paint()..color = ink.withValues(alpha: 0.3)..strokeWidth = 1;
+      final fourTick = Paint()..color = ink.withValues(alpha: 0.9)..strokeWidth = 2;
+      for (final m in t.markers) {
+        final ms = steady == null
+            ? m.toDouble()
+            : t.onGrid(Duration(milliseconds: m), every: 4).inMicroseconds / 1000;
+        final x = xOf(ms * 1000);
+        if (x < -2) continue;
+        if (x > w + 2) break;
+        canvas.drawLine(Offset(x, 0), Offset(x, h), four);
+        canvas.drawLine(Offset(x, h), Offset(x, h - 18), fourTick);
       }
       // Phrases: a bracket along the head, with the bar count typed at its start.
       final phrases = t.phrases;

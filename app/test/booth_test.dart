@@ -302,6 +302,8 @@ void main() {
             bpm: 1200,
             beats: [for (var i = 0; i < 1200; i++) i * 50],
             downbeats: [for (var i = 0; i < 1200; i += 4) i * 50],
+            // Sections every four bars from the fourth: the outro cue is on one.
+            fourBars: [for (var i = 12; i < 1200; i += 16) i * 50],
             ends: 'fade',
             cues: const MixCues(firstDownbeatMs: 0, mixInMs: 2000, mixOutMs: 3000, soundEndMs: 59000),
           );
@@ -622,19 +624,26 @@ void autoMixRules() {
   test('the incoming is parked so its drop lands where the fader finishes', () {
     // 120 bpm: a bar is 2000 ms. A drop at 60 s, a transition of 8 bars — 16 s — so
     // the record starts at 44 s and its drop arrives exactly on the last beat of it.
-    final to = TrackTiming(
-      durationMs: 200000,
-      bpm: 120,
-      beats: [for (var i = 0; i < 400; i++) i * 500],
-      downbeats: [for (var i = 0; i < 400; i += 4) i * 500],
-      drops: const [60000],
-      cues: const MixCues(
-          firstDownbeatMs: 0, mixInMs: 20000, mixOutMs: 150000, soundEndMs: 190000),
-    );
-    expect(AutoMix.inPoint(to, bars: 8, onTheDrop: true),
+    // Its four-bar markers run from its second bar, where its sections start: 4 s,
+    // 12 s, 20 s … 44 s, 52 s, 60 s.
+    TrackTiming to({bool markers = true}) => TrackTiming(
+          durationMs: 200000,
+          bpm: 120,
+          beats: [for (var i = 0; i < 400; i++) i * 500],
+          downbeats: [for (var i = 0; i < 400; i += 4) i * 500],
+          fourBars: markers ? [for (var i = 8; i < 400; i += 16) i * 500] : const [],
+          drops: const [60000],
+          cues: const MixCues(
+              firstDownbeatMs: 0, mixInMs: 20000, mixOutMs: 150000, soundEndMs: 190000),
+        );
+    expect(AutoMix.inPoint(to(), bars: 8, onTheDrop: true),
         const Duration(seconds: 44));
     // Not aiming at it: the old behaviour, before the intro ends.
-    expect(AutoMix.inPoint(to, bars: 8), const Duration(seconds: 4));
+    expect(AutoMix.inPoint(to(), bars: 8), const Duration(seconds: 4));
+    // A drop off the four-bar grid: parked on the marker before, where a phrase
+    // starts, rather than two bars into one — the drop comes two bars after the fader.
+    expect(AutoMix.inPoint(to(markers: false), bars: 8, onTheDrop: true),
+        const Duration(seconds: 40));
   });
 
   test('a transition does not run over the outgoing record\'s own drop', () {
@@ -642,6 +651,8 @@ void autoMixRules() {
       durationMs: 200000,
       bpm: 120,
       beats: [for (var i = 0; i < 400; i++) i * 500],
+      // Its sections start every four bars from the third: 4 s, 12 s … 84 s, 92 s, 100 s.
+      fourBars: [for (var i = 8; i < 400; i += 16) i * 500],
       drops: const [100000],
     );
     // A mix starting at 90 s over 16 s would play the run-up and then the drop
@@ -714,6 +725,36 @@ void autoMixRules() {
     expect(AutoMix.howWell(on, null), 0, reason: 'nothing known, nothing claimed');
   });
 
+  test('a place in a record is a bar of its four-bar phrase', () {
+    // 120 bpm, a bar every 2 s. Markers at 4, 12 and 20 s, then a section three bars
+    // long — the next at 26 s — and every eight seconds from there.
+    final t = TrackTiming(
+      durationMs: 200000,
+      bpm: 120,
+      beats: [for (var i = 0; i < 400; i++) i * 500],
+      downbeats: [for (var i = 0; i < 400; i += 4) i * 500],
+      fourBars: const [4000, 12000, 20000, 26000, 34000, 42000],
+    );
+    expect(t.placeInPhrase(const Duration(seconds: 2)), isNull, reason: 'before the first');
+    expect(t.placeInPhrase(const Duration(seconds: 4)), (bar: 0, of: 4));
+    expect(t.placeInPhrase(const Duration(seconds: 9)), (bar: 2, of: 4));
+    expect(t.placeInPhrase(const Duration(seconds: 21)), (bar: 0, of: 3));
+    expect(t.placeInPhrase(const Duration(milliseconds: 25000)), (bar: 2, of: 3));
+    expect(t.placeInPhrase(const Duration(milliseconds: 25999)), (bar: 0, of: 4),
+        reason: 'a hair before a marker is that marker');
+    expect(t.placeInPhrase(const Duration(seconds: 50)), (bar: 0, of: 4),
+        reason: 'past the last, on in fours');
+    expect(t.onMarker(const Duration(seconds: 24)).inMilliseconds, 26000);
+    expect(t.markerAtOrBefore(const Duration(seconds: 23))?.inMilliseconds, 20000);
+    // An analysis from before the markers: every fourth downbeat from the first.
+    final old = TrackTiming(
+      durationMs: 200000,
+      bpm: 120,
+      beats: [for (var i = 0; i < 400; i++) i * 500],
+    );
+    expect(old.markers.take(3), [0, 8000, 16000]);
+  });
+
   test('the mix is moved to the phrase it is nearest', () {
     // 128 bpm: a bar is 1875 ms, a phrase 30 s. Phrases at 0, 30, 60, 90 s.
     final t = TrackTiming(
@@ -726,15 +767,19 @@ void autoMixRules() {
     expect(AutoMix.onPhrase(t, const Duration(seconds: 62)).inMilliseconds, 60000,
         reason: 'a mix four bars into a phrase lands four bars into the next');
     expect(AutoMix.onPhrase(t, const Duration(seconds: 88)).inMilliseconds, 90000);
-    // Nowhere near one: left where it was rather than dragged half a minute.
-    expect(AutoMix.onPhrase(t, const Duration(seconds: 120)), const Duration(seconds: 120));
+    // Nowhere near one: not dragged half a minute, but not left in the middle of a
+    // phrase either — onto the nearest four-bar marker (every 7.5 s here).
+    expect(AutoMix.onPhrase(t, const Duration(seconds: 120)).inMilliseconds, 120000);
+    expect(AutoMix.onPhrase(t, const Duration(seconds: 124)).inMilliseconds, 127500);
     expect(AutoMix.onPhrase(const TrackTiming(), const Duration(seconds: 5)),
         const Duration(seconds: 5), reason: 'no phrases, nothing to move it to');
   });
 
   test('the outgoing goes at its outro; the incoming is parked before its intro ends', () {
     final from = t(bpm: 128);
-    expect(AutoMix.outPoint(from, length: const Duration(seconds: 30)), const Duration(milliseconds: 160000));
+    // The outro cue, on the four-bar marker nearest it: every sixteenth beat of 469 ms.
+    expect(AutoMix.outPoint(from, length: const Duration(seconds: 30)),
+        const Duration(milliseconds: 21 * 16 * 469));
     final none = TrackTiming(durationMs: 100000, tailMs: 2000);
     expect(AutoMix.outPoint(none, length: const Duration(seconds: 30)), const Duration(seconds: 68),
         reason: 'no outro read: the bars before the sound ends');

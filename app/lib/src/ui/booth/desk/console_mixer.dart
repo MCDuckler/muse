@@ -257,8 +257,6 @@ class _Channel extends StatelessWidget {
   final Booth booth;
   final engine.Deck deck;
 
-  /// The bottom of an EQ knob's travel, which is a kill.
-  static const _floor = -24.0;
 
   @override
   Widget build(BuildContext context) {
@@ -270,19 +268,21 @@ class _Channel extends StatelessWidget {
 
     Widget band(int i, String label, double db, double size) {
       final killed = db <= EqSet.killed;
+      // On the knob's own travel, as a DJ mixer's: flat straight up (EqSet.knobOf).
       return Knob(
-        value: killed ? _floor : db.clamp(_floor, EqSet.most),
-        min: _floor,
-        max: EqSet.most,
-        rest: 0,
+        value: EqSet.knobOf(db),
+        min: 0,
+        max: 1,
+        rest: 0.5,
         label: killed ? 'KILL' : label,
         colour: killed ? Console.a : c,
         size: size,
-        tooltip: 'Drag · all the way down kills it · double-click resets',
+        tooltip: '${killed ? 'Killed' : db.abs() < 0.05 ? 'Flat' : '${db > 0 ? '+' : ''}${db.toStringAsFixed(1)} dB'}'
+            ' · all the way down kills it · double-click resets',
         onChanged: !on || !canKill
             ? null
-            : (v) {
-                final d = v <= _floor + 0.01 ? EqSet.killed : v;
+            : (t) {
+                final d = EqSet.dbOf(t);
                 booth.setEq(deck, switch (i) { 0 => eq.withLow(d), 1 => eq.withMid(d), _ => eq.withHigh(d) });
               },
       );

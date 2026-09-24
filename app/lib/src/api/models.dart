@@ -2090,6 +2090,7 @@ class TrackTiming {
     this.energy = const [],
     this.phrases = const [],
     this.drops = const [],
+    this.fourBars = const [],
     this.cues,
   });
 
@@ -2110,6 +2111,89 @@ class TrackTiming {
 
   /// Where the phrases begin, in milliseconds — on downbeats, on the four-bar grid.
   final List<int> phrases;
+
+  /// The four-bar markers, in milliseconds: every fourth downbeat, counted from where
+  /// the record's sections start rather than from its first bar — a pickup or an
+  /// intro of three bars puts that one bar or more out, and a section of odd length
+  /// moves them on from there. What two records are lined up by in a mix: each
+  /// record's markers falling together is each record's phrases falling together.
+  final List<int> fourBars;
+
+  /// [fourBars], or for an analysis from before there were any, every fourth
+  /// downbeat from the first.
+  List<int> get markers {
+    if (fourBars.isNotEmpty) return fourBars;
+    final kept = _markersOf[this];
+    if (kept != null) return kept;
+    final downs = downbeats.isNotEmpty
+        ? downbeats
+        : [for (var i = barStartsOn; i >= 0 && i < beats.length; i += 4) beats[i]];
+    return _markersOf[this] = [for (var i = 0; i < downs.length; i += 4) downs[i]];
+  }
+
+  static final _markersOf = Expando<List<int>>('four-bar markers');
+
+  /// The marker nearest [at], on the steady grid where there is one — or [at] itself
+  /// for a record with no bars.
+  Duration onMarker(Duration at) {
+    final m = markers;
+    if (m.isEmpty) return at;
+    final ms = at.inMilliseconds;
+    var best = m.first;
+    for (final x in m) {
+      if ((x - ms).abs() < (best - ms).abs()) best = x;
+    }
+    return onGrid(Duration(milliseconds: best), every: 4);
+  }
+
+  /// The last marker at or before [at] — the first where [at] is before them all —
+  /// on the steady grid, or null for a record with no bars.
+  Duration? markerAtOrBefore(Duration at) {
+    final m = markers;
+    if (m.isEmpty) return null;
+    final ms = at.inMilliseconds;
+    var best = m.first;
+    for (final x in m) {
+      if (x > ms) break;
+      best = x;
+    }
+    return onGrid(Duration(milliseconds: best), every: 4);
+  }
+
+  /// A bar of this record, in its own time: four beats on the steady grid, or at its
+  /// tempo where there is none. Null with no tempo.
+  Duration? get bar {
+    final s = steady;
+    final period = s?.period ?? ((bpm ?? 0) > 0 ? 60000 / bpm! : null);
+    return period == null ? null : Duration(microseconds: (4 * period * 1000).round());
+  }
+
+  /// Which bar of its four-bar phrase [at] falls in, from 0 on the marker, and how many
+  /// bars that phrase has — four, or fewer where a section of odd length cuts it
+  /// short. Null before the first marker, or with no bars.
+  ({int bar, int of})? placeInPhrase(Duration at) {
+    final m = markers;
+    final b = bar;
+    if (m.isEmpty || b == null) return null;
+    final ms = at.inMicroseconds / 1000;
+    final barMs = b.inMicroseconds / 1000;
+    // A hair before a marker is that marker: a place read off a clock a millisecond
+    // early is still the bar it was aimed at.
+    final slack = barMs / 8;
+    var i = -1;
+    for (var k = 0; k < m.length; k++) {
+      if (m[k] <= ms + slack) {
+        i = k;
+      } else {
+        break;
+      }
+    }
+    if (i < 0) return null;
+    final since = ((ms + slack - m[i]) / barMs).floor();
+    if (i + 1 >= m.length) return (bar: since % 4, of: 4);
+    final of = ((m[i + 1] - m[i]) / barMs).round().clamp(1, 4);
+    return (bar: since.clamp(0, of - 1), of: of);
+  }
 
   /// Where the song opens up: a breakdown, then everything at once. What a mix is
   /// landed on, and what two records must not do over each other by accident.
@@ -2440,6 +2524,7 @@ class TrackTiming {
         energy: [for (final b in (j['energy'] ?? const []) as List) (b as num).toInt()],
         phrases: [for (final b in (j['phrases'] ?? const []) as List) (b as num).toInt()],
         drops: [for (final b in (j['drops'] ?? const []) as List) (b as num).toInt()],
+        fourBars: [for (final b in (j['four_bars'] ?? const []) as List) (b as num).toInt()],
         cues: j['cues'] is Map ? MixCues.fromJson((j['cues'] as Map).cast<String, dynamic>()) : null,
       );
 }

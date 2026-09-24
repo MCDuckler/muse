@@ -269,7 +269,7 @@ class AutoMix extends ChangeNotifier {
   /// near it, because a mix that starts four bars into a phrase is a mix that lands
   /// four bars into the next one, and that is the thing an ear notices. Where the
   /// analysis read no outro, far enough before the sound ends for the bars to fit,
-  /// again on a phrase.
+  /// again on a phrase. Always on one of the record's four-bar markers.
   static Duration outPoint(TrackTiming from, {required Duration length}) {
     final cues = from.cues;
     final end = from.soundEnds ?? Duration(milliseconds: from.durationMs);
@@ -278,7 +278,10 @@ class AutoMix extends ChangeNotifier {
     // And never so late that the transition would run past the end of the sound.
     final latest = end - length;
     if (latest > Duration.zero && at > latest) at = latest;
-    return onPhrase(from, at);
+    final on = onPhrase(from, at);
+    // Moved later by the phrase, past that: the marker before instead.
+    if (latest > Duration.zero && on > latest) return from.markerAtOrBefore(latest) ?? on;
+    return on;
   }
 
   /// [at], moved off a drop it would run over.
@@ -296,7 +299,8 @@ class AutoMix extends ChangeNotifier {
     for (final d in from.drops) {
       final drop = Duration(milliseconds: d);
       if (drop > at && drop < end) {
-        final earlier = drop - length;
+        // On the marker at or before, so the mix still starts where a phrase does.
+        final earlier = from.markerAtOrBefore(drop - length) ?? drop - length;
         final first = from.cues?.firstDownbeat ?? Duration.zero;
         return earlier >= first ? earlier : at;
       }
@@ -304,55 +308,57 @@ class AutoMix extends ChangeNotifier {
     return at;
   }
 
-  /// [at], moved to the nearest phrase boundary within a phrase of it. Unmoved where
-  /// the song has no phrases, or none near enough to be the same moment.
+  /// [at], moved to the nearest phrase boundary within a phrase of it — one of the
+  /// sections the analysis found, where it sits on a four-bar marker — or, with none
+  /// that near, to the nearest marker: a mix that starts in the middle of a phrase
+  /// lands in the middle of the next. Unmoved where the song has no bars.
   static Duration onPhrase(TrackTiming timing, Duration at) {
-    final phrases = timing.phrases;
-    if (phrases.isEmpty) return at;
+    final markers = timing.markers;
+    if (markers.isEmpty) return at;
     final ms = at.inMilliseconds;
-    var best = phrases.first, gap = (phrases.first - ms).abs();
-    for (final p in phrases) {
-      final d = (p - ms).abs();
-      if (d < gap) {
-        best = p;
-        gap = d;
-      }
-    }
     // A phrase is eight bars at this tempo either way — or eight seconds where there
     // is no tempo to measure it by.
-    final bpm = timing.gridBpm;
-    final bar = bpm == null || bpm <= 0 ? null : 4 * 60000 / bpm;
-    final reach = bar == null ? 8000.0 : bar * 8;
-    if (gap <= reach) return timing.onGrid(Duration(milliseconds: best));
-    // None near: onto the eight-bar grid from the record's first downbeat, where its
-    // phrases run, rather than wherever the sums came out — a mix that starts in the
-    // middle of a phrase lands in the middle of the next.
-    final first = timing.cues?.firstDownbeatMs ??
-        (timing.downbeats.isNotEmpty ? timing.downbeats.first : null);
-    if (bar == null || first == null) return at;
-    final k = ((ms - first) / (bar * 8)).round();
-    return timing.onGrid(Duration(milliseconds: (first + k * bar * 8).round()));
+    final bar = timing.bar;
+    final reach = bar == null ? 8000 : bar.inMilliseconds * 8;
+    final onMarkers = markers.toSet();
+    int? best;
+    for (final p in timing.phrases) {
+      // A section the grid moved away from is not one to line two records up on.
+      if (!onMarkers.contains(p)) continue;
+      if ((p - ms).abs() > reach) continue;
+      if (best == null || (p - ms).abs() < (best - ms).abs()) best = p;
+    }
+    if (best != null) return timing.onGrid(Duration(milliseconds: best), every: 4);
+    return timing.onMarker(at);
   }
 
   /// Where the incoming record is parked.
   ///
-  /// So many bars before its intro ends, on one of its own downbeats, never before
-  /// its first — or, where it has a drop and the booth is aiming at it, so many bars
-  /// before *that*, so the drop lands on the beat the fader finishes on. Which is
-  /// the difference between a mix that is correct and one that sounds meant.
+  /// So many bars before its intro ends, on one of its own four-bar markers, never
+  /// before its first downbeat — or, where it has a drop and the booth is aiming at
+  /// it, so many bars before *that*, so the drop lands on the beat the fader finishes
+  /// on. Which is the difference between a mix that is correct and one that sounds
+  /// meant. On a marker because the outgoing goes on one: the two records' phrases
+  /// then turn over together for the whole of the mix.
   static Duration inPoint(TrackTiming to, {required int bars, bool onTheDrop = false}) {
     final cues = to.cues;
     if (cues == null) return to.lead;
     final bpm = to.bpm;
     if (bpm == null) return cues.firstDownbeat;
-    final bar = Duration(microseconds: (4 * 60e6 / bpm).round());
+    final bar = to.bar ?? Duration(microseconds: (4 * 60e6 / bpm).round());
     final drop = onTheDrop ? to.dropAfter(cues.firstDownbeat) : null;
     var at = (drop ?? cues.mixIn) - bar * bars;
     if (at < cues.firstDownbeat) at = cues.firstDownbeat;
-    // Onto its own grid: the nearest downbeat at or before — and never before the
-    // first, whatever the grid says about the silence ahead of it.
-    // Then onto the steady grid: the downbeat the analysis gave can be a frame out,
-    // and a record parked a frame out starts a frame out.
+    // Onto its own four-bar grid: the marker at or before, where there is one at or
+    // after the first downbeat. Then onto the steady grid: the downbeat the analysis
+    // gave can be a frame out, and a record parked a frame out starts a frame out.
+    for (final m in to.markers.reversed) {
+      if (m <= at.inMilliseconds && m >= cues.firstDownbeatMs) {
+        return to.onGrid(Duration(milliseconds: m), every: 4);
+      }
+    }
+    // Before the first marker: the nearest downbeat at or before — and never before
+    // the first, whatever the grid says about the silence ahead of it.
     final downs = to.downbeats;
     for (var i = downs.length - 1; i >= 0; i--) {
       if (downs[i] <= at.inMilliseconds && downs[i] >= cues.firstDownbeatMs) {
@@ -441,7 +447,11 @@ class AutoMix extends ChangeNotifier {
     // Its own length, less the transition, is where it goes.
     final timed = from.timing;
     if (timed != null) {
-      goesAt = clearOfDrops(timed, outPoint(timed, length: length), length: length);
+      // Counted in the record's own bars: at a pitch other than its own, the bars on
+      // the clock are not the bars in the file, and a place in the file is wanted.
+      final bar = timed.bar;
+      final inRecord = bar == null ? length : bar * chosen.bars;
+      goesAt = clearOfDrops(timed, outPoint(timed, length: inRecord), length: inRecord);
     } else {
       final total = from.duration ?? Duration.zero;
       final at = total - length;
@@ -573,10 +583,12 @@ class AutoMix extends ChangeNotifier {
   /// How long before the planned moment the booth gets ready to go.
   static const armAhead = Duration(milliseconds: 1500);
 
-  /// The downbeat of the outgoing record the incoming starts on: the one nearest the
-  /// plan's [go], where that is still ahead of [now] — or the next one, where the
-  /// plan's moment has passed (a hand said "now", or the record was late getting
-  /// here). Null with no grid, which is a start straight away.
+  /// The downbeat of the outgoing record the incoming starts on: the four-bar marker
+  /// nearest the plan's [go], where that is still ahead of [now] — or the next
+  /// downbeat, where the plan's moment has passed (a hand said "now", or the record
+  /// was late getting here), and the incoming is moved to the same bar of its own
+  /// phrase as it starts (Booth.go). Null with no grid, which is a start straight
+  /// away.
   static Duration? startFor(TrackTiming? timing, Duration go, Duration now) {
     if (timing == null || !timing.hasBeats) return null;
     final soon = now + const Duration(milliseconds: 250);
@@ -589,7 +601,7 @@ class AutoMix extends ChangeNotifier {
     if (downs.isEmpty) return null;
     int? best;
     if (go > soon) {
-      for (final d in downs) {
+      for (final d in timing.markers.isNotEmpty ? timing.markers : downs) {
         if (d < soon.inMilliseconds) continue;
         if (best == null || (d - go.inMilliseconds).abs() < (best - go.inMilliseconds).abs()) {
           best = d;
