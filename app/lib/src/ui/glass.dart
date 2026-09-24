@@ -1,4 +1,5 @@
 import 'dart:ui';
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -75,30 +76,55 @@ class GlassSurface extends StatelessWidget {
               ),
             ),
           ),
-      _MaybeBlurred(
-        sigma: sigma,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: scheme.surface.withValues(alpha: opacity),
-            borderRadius: radius,
-            border: topBorder
-                ? Border(
-                    top: BorderSide(
-                      color: scheme.onSurface.withValues(alpha: 0.08),
-                    ),
-                  )
-                : Border.all(color: scheme.onSurface.withValues(alpha: 0.08)),
-          ),
-          // ListTile paints its ink and selection on the nearest Material ancestor,
-          // and the DecoratedBox above would hide both. A transparent Material gives
-          // those effects somewhere to land without adding another colour layer.
-          child: Material(
-            type: MaterialType.transparency,
-            child: Padding(padding: padding, child: child),
-          ),
-        ),
-      ),
-          if (sheen) Positioned.fill(child: _Sheen(radius: radius)),
+          if (!sheen)
+            _MaybeBlurred(
+              sigma: sigma,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: scheme.surface.withValues(alpha: opacity),
+                  borderRadius: radius,
+                  border: topBorder
+                      ? Border(
+                          top: BorderSide(
+                            color: scheme.onSurface.withValues(alpha: 0.08),
+                          ),
+                        )
+                      : Border.all(color: scheme.onSurface.withValues(alpha: 0.08)),
+                ),
+                // ListTile paints its ink and selection on the nearest Material
+                // ancestor, and the DecoratedBox above would hide both. A transparent
+                // Material gives those effects somewhere to land without adding
+                // another colour layer.
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: Padding(padding: padding, child: child),
+                ),
+              ),
+            )
+          else ...[
+            // A pane of glass: the room behind it blurred through its body, and bent
+            // through its edge — a band just inside the rim where the backdrop is seen
+            // a little magnified, which is what the thickness of glass does to what
+            // is behind it, and the one thing that says thick glass rather than
+            // frosted film.
+            Positioned.fill(
+              child: _MaybeBlurred(
+                sigma: sigma,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: scheme.surface.withValues(alpha: opacity),
+                    borderRadius: radius,
+                  ),
+                ),
+              ),
+            ),
+            if (sigma > 0) Positioned.fill(child: _LensEdge(radius: radius)),
+            Material(
+              type: MaterialType.transparency,
+              child: Padding(padding: padding, child: child),
+            ),
+            Positioned.fill(child: _Sheen(radius: radius)),
+          ],
         ],
       ),
     );
@@ -117,6 +143,53 @@ class GlassSurface extends StatelessWidget {
       child: pane,
     );
   }
+}
+
+/// The edge of a thick pane: the backdrop seen through it a little magnified and
+/// softened, in a band just inside the rim.
+class _LensEdge extends StatelessWidget {
+  const _LensEdge({required this.radius});
+  final BorderRadius radius;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(builder: (context, c) {
+        final size = Size(c.maxWidth, c.maxHeight);
+        if (size.isEmpty) return const SizedBox.shrink();
+        final band = (size.shortestSide * 0.10).clamp(7.0, 16.0);
+        final cx = size.width / 2, cy = size.height / 2;
+        // Scaled about the middle of the pane, so the edge shows what lies a little
+        // further in — the way a lens at the rim pulls the picture outward.
+        final lens = (Matrix4.identity()
+              ..translateByDouble(cx, cy, 0, 1)
+              ..scaleByDouble(1.09, 1.09, 1, 1)
+              ..translateByDouble(-cx, -cy, 0, 1))
+            .storage;
+        return ClipPath(
+          clipper: _Ring(radius: radius, band: band),
+          child: BackdropFilter(
+            filter: ImageFilter.compose(
+              outer: ImageFilter.blur(sigmaX: 3, sigmaY: 3),
+              inner: ImageFilter.matrix(lens, filterQuality: FilterQuality.medium),
+            ),
+            child: const SizedBox.expand(),
+          ),
+        );
+      });
+}
+
+class _Ring extends CustomClipper<Path> {
+  const _Ring({required this.radius, required this.band});
+  final BorderRadius radius;
+  final double band;
+
+  @override
+  Path getClip(Size size) {
+    final outer = radius.toRRect(Offset.zero & size);
+    return Path.combine(PathOperation.difference, Path()..addRRect(outer), Path()..addRRect(outer.deflate(band)));
+  }
+
+  @override
+  bool shouldReclip(_Ring old) => old.radius != radius || old.band != band;
 }
 
 /// The glass's own look, and the room's light on it. See GlassSurface.sheen.
@@ -186,7 +259,9 @@ class _SheenPainter extends CustomPainter {
     canvas.save();
     canvas.clipRRect(rr);
 
-    // The surface.
+    // The surface: nearly nothing. Glass is what is behind it; a wash of white over
+    // it is frosted film. A breath of light from the top, a breath of shade at the
+    // bottom.
     canvas.drawRect(
         rect,
         Paint()
@@ -194,141 +269,107 @@ class _SheenPainter extends CustomPainter {
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: [
-              Colors.white.withValues(alpha: dark ? 0.10 : 0.55),
-              Colors.white.withValues(alpha: dark ? 0.02 : 0.15),
+              Colors.white.withValues(alpha: dark ? 0.05 : 0.30),
               Colors.white.withValues(alpha: 0.0),
-              Colors.black.withValues(alpha: dark ? 0.12 : 0.05),
+              Colors.black.withValues(alpha: dark ? 0.10 : 0.04),
             ],
-            stops: const [0.0, 0.35, 0.7, 1.0],
-          ).createShader(rect));
-    // One long caustic across it, the way a pane catches the room's light.
-    canvas.drawRect(
-        rect,
-        Paint()
-          ..shader = LinearGradient(
-            begin: const Alignment(-1, -1),
-            end: const Alignment(1, 1),
-            colors: [
-              Colors.white.withValues(alpha: 0.0),
-              Colors.white.withValues(alpha: dark ? 0.06 : 0.22),
-              Colors.white.withValues(alpha: 0.0),
-              Colors.white.withValues(alpha: dark ? 0.03 : 0.10),
-              Colors.white.withValues(alpha: 0.0),
-            ],
-            stops: const [0.15, 0.32, 0.45, 0.72, 0.85],
+            stops: const [0.0, 0.4, 1.0],
           ).createShader(rect));
 
-    // The edge: the thickness of the glass, lit through. A band inside the rim,
-    // brighter towards the top-left where the room's own light comes from.
-    final band = (size.shortestSide * 0.09).clamp(6.0, 14.0);
+    // The rim, twice: a crisp thread of highlight on the outer edge where the pane's
+    // top-left catches the room, and a darker line just inside it where the edge
+    // turns down into the glass — two lines a pixel apart are an edge with thickness.
+    canvas.drawRRect(
+        rr.deflate(0.75),
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.3
+          ..shader = LinearGradient(
+            begin: const Alignment(-0.8, -1),
+            end: const Alignment(0.8, 1),
+            colors: [
+              Colors.white.withValues(alpha: dark ? 0.62 : 0.95),
+              Colors.white.withValues(alpha: dark ? 0.10 : 0.35),
+              Colors.white.withValues(alpha: dark ? 0.28 : 0.65),
+            ],
+          ).createShader(rect));
+    canvas.drawRRect(
+        rr.deflate(2.4),
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1
+          ..color = Colors.black.withValues(alpha: dark ? 0.30 : 0.10));
+    // The lit band along the thickness, top-left, over the lens.
+    final band = (size.shortestSide * 0.10).clamp(7.0, 16.0);
     canvas.drawRRect(
         rr.deflate(band / 2),
         Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = band
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, band * 0.45)
           ..shader = LinearGradient(
             begin: const Alignment(-1, -1),
             end: const Alignment(1, 1),
             colors: [
-              Colors.white.withValues(alpha: dark ? 0.20 : 0.55),
-              Colors.white.withValues(alpha: dark ? 0.04 : 0.15),
-              Colors.white.withValues(alpha: dark ? 0.12 : 0.35),
+              Colors.white.withValues(alpha: dark ? 0.14 : 0.35),
+              Colors.white.withValues(alpha: 0.0),
+              Colors.white.withValues(alpha: dark ? 0.06 : 0.18),
             ],
+            stops: const [0.0, 0.55, 1.0],
           ).createShader(rect));
-    // The thread of highlight along the rim, and the darker turn of the edge inside it.
-    canvas.drawRRect(
-        rr.deflate(0.75),
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.2
-          ..shader = LinearGradient(
-            begin: const Alignment(-0.6, -1),
-            end: const Alignment(0.6, 1),
-            colors: [
-              Colors.white.withValues(alpha: dark ? 0.55 : 0.95),
-              Colors.white.withValues(alpha: dark ? 0.12 : 0.4),
-              Colors.white.withValues(alpha: dark ? 0.30 : 0.7),
-            ],
-          ).createShader(rect));
-    canvas.drawRRect(
-        rr.deflate(2.2),
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1
-          ..color = Colors.black.withValues(alpha: dark ? 0.22 : 0.08));
 
-    // The room's light on the glass.
-    if (r != null && r.life > 0) {
-      final reach = size.longestSide;
+    // The room's light on the glass: each beam's reflection. A pane parallel to the
+    // page shows a lamp's image some way behind it, so the image moves as the lamp
+    // moves but by less — parallax — and a pane's fine polish stretches it across.
+    // Tight and bright, not a wash: what moves is a streak, and the eye follows it.
+    if (r != null && r.life > 0 && b != null) {
       final blend = r.onPaper ? BlendMode.srcOver : BlendMode.plus;
+      final centre = rect.center;
       for (final (i, h) in r.heads.indexed) {
-        final at = b == null ? h.at : b.globalToLocal(h.at);
+        final lamp = b.globalToLocal(h.at);
+        final at = centre + (lamp - centre) * 0.62;
         final colour = r.colours.length > i ? r.colours[i] : Colors.white;
         final a = r.life * h.level;
-        // The beam's reflection: broad and soft, with a hot lamp-shaped heart
-        // stretched the way the beam leans.
-        canvas.drawCircle(
-            at,
-            reach * 0.55,
-            Paint()
-              ..blendMode = blend
-              ..shader = RadialGradient(colors: [
-                Color.lerp(colour, Colors.white, 0.6)!.withValues(alpha: (r.onPaper ? 0.30 : 0.16) * a),
-                colour.withValues(alpha: (r.onPaper ? 0.10 : 0.05) * a),
-                colour.withValues(alpha: 0),
-              ], stops: const [0.0, 0.5, 1.0]).createShader(Rect.fromCircle(center: at, radius: reach * 0.55)));
         canvas.save();
         canvas.translate(at.dx, at.dy);
-        canvas.rotate(h.lean);
-        canvas.scale(1.6, 1);
-        canvas.drawCircle(
-            Offset.zero,
-            reach * 0.05,
+        canvas.rotate(h.lean * 0.6);
+        final long = size.width * 0.34, tall = size.height * 0.26;
+        canvas.drawOval(
+            Rect.fromCenter(center: Offset.zero, width: long, height: tall),
             Paint()
               ..blendMode = blend
-              ..color = Colors.white.withValues(alpha: (r.onPaper ? 0.5 : 0.42) * a)
-              ..maskFilter = MaskFilter.blur(BlurStyle.normal, reach * 0.035));
+              ..shader = ui.Gradient.radial(
+                Offset.zero,
+                long / 2,
+                [
+                  Color.lerp(colour, Colors.white, 0.75)!.withValues(alpha: (r.onPaper ? 0.42 : 0.26) * a),
+                  colour.withValues(alpha: (r.onPaper ? 0.14 : 0.08) * a),
+                  colour.withValues(alpha: 0),
+                ],
+                const [0.0, 0.4, 1.0],
+                TileMode.clamp,
+                (Matrix4.identity()..scaleByDouble(1.0, tall / long, 1.0, 1.0)).storage,
+              )
+              ..maskFilter = MaskFilter.blur(BlurStyle.normal, tall * 0.18));
+        // The lamp itself, in the glass: a small hot streak.
+        canvas.drawOval(
+            Rect.fromCenter(center: Offset.zero, width: long * 0.36, height: tall * 0.16),
+            Paint()
+              ..blendMode = blend
+              ..color = Colors.white.withValues(alpha: (r.onPaper ? 0.55 : 0.40) * a)
+              ..maskFilter = MaskFilter.blur(BlurStyle.normal, tall * 0.08));
         canvas.restore();
-        // The edge nearest the light, lit through its thickness.
+        // The edge nearest the lamp, lit through its thickness.
         canvas.drawRRect(
-            rr.deflate(1.2),
+            rr.deflate(1.0),
             Paint()
               ..style = PaintingStyle.stroke
-              ..strokeWidth = 2.2
+              ..strokeWidth = 2.0
               ..blendMode = blend
-              ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.2)
+              ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.0)
               ..shader = RadialGradient(colors: [
-                Colors.white.withValues(alpha: (r.onPaper ? 0.9 : 0.85) * a),
+                Colors.white.withValues(alpha: (r.onPaper ? 0.9 : 0.8) * a),
                 Colors.white.withValues(alpha: 0),
-              ]).createShader(Rect.fromCircle(center: at, radius: reach * 0.9)));
-      }
-      // The ball's spots on the glass: a pane throws the lamp straight back, so each
-      // is a sharp glint rather than a soft square — small, bright, and gone as it
-      // passes.
-      if (b != null) {
-        final glint = Paint()..blendMode = blend;
-        for (final s in r.spots) {
-          // Not every tile: a pane throws back the few that hit it square.
-          if (s.lamp == 2 || s.tile % 3 == 1) continue;
-          final at = b.globalToLocal(s.at);
-          if (!rect.contains(at)) continue;
-          final a = (0.7 / (s.far * s.far)) * r.life;
-          if (a < 0.04) continue;
-          final colour = r.lamps.length > s.lamp ? r.lamps[s.lamp] : Colors.white;
-          canvas.drawCircle(
-              at,
-              s.wide * 0.55,
-              glint
-                ..color = colour.withValues(alpha: (a * 0.35).clamp(0.0, 1.0))
-                ..maskFilter = MaskFilter.blur(BlurStyle.normal, s.wide * 0.6));
-          canvas.drawCircle(
-              at,
-              s.wide * 0.22,
-              glint
-                ..color = Color.lerp(colour, Colors.white, 0.7)!.withValues(alpha: a.clamp(0.0, 1.0))
-                ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.5));
-        }
+              ]).createShader(Rect.fromCircle(center: lamp, radius: size.longestSide * 0.9)));
       }
     }
     canvas.restore();

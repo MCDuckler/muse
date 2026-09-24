@@ -1564,11 +1564,38 @@ class _CardLightPainter extends CustomPainter {
               _light(colour, 0),
             ], const [0.0, 0.45, 1.0]));
     }
+    // The record's shadow. The disc stands just behind the card, and a beam low in
+    // the room or off to one side throws its edge onto the card: a soft dark crescent
+    // along the record's rim, thrown away from the beam, deepest when the beam is low
+    // and near.
+    final disc = room.disc;
+    if (disc != null) {
+      final centre = b.globalToLocal(disc.center);
+      final radius = (b.globalToLocal(disc.center + Offset(disc.width / 2, 0)) - centre).distance;
+      for (final h in room.heads) {
+        final at = b.globalToLocal(h.at);
+        final away = centre - at;
+        final d = away.distance;
+        if (d < 1) continue;
+        final near = (1 - d / (radius * 3.5)).clamp(0.0, 1.0);
+        // Low: the beam under the record's middle, looking up at it.
+        final low = ((at.dy - centre.dy) / radius).clamp(0.0, 1.0);
+        final weight = h.level * room.life * near * (0.35 + 0.65 * low);
+        if (weight < 0.02) continue;
+        final by = away / d * radius * (0.08 + 0.10 * near);
+        canvas.drawCircle(
+            centre + by,
+            radius * 1.02,
+            Paint()
+              ..color = Colors.black.withValues(alpha: (room.onPaper ? 0.22 : 0.34) * weight)
+              ..maskFilter = MaskFilter.blur(BlurStyle.normal, radius * 0.10));
+      }
+    }
     final spot = Paint()..blendMode = blend;
     for (final s in room.spots) {
       final at = b.globalToLocal(s.at);
       if (!rect.contains(at)) continue;
-      final a = (0.5 / math.pow(s.far, 1.3)) * room.life;
+      final a = (0.32 / math.pow(s.far, 1.3)) * room.life;
       if (a < 0.03) continue;
       final colour = room.lamps.length > s.lamp ? room.lamps[s.lamp] : Colors.white;
       canvas.save();
@@ -1578,7 +1605,7 @@ class _CardLightPainter extends CustomPainter {
           RRect.fromRectAndRadius(Rect.fromCenter(center: Offset.zero, width: s.wide, height: s.tall), const Radius.circular(1.5)),
           spot
             ..color = _light(colour, a)
-            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.6));
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.2));
       canvas.restore();
     }
     canvas.restore();
@@ -2833,7 +2860,9 @@ class RecordLight extends CustomPainter {
       // toLocal takes global to local; the outline goes the other way.
       final origin = -toLocal!(Offset.zero);
       final visible = Rect.fromLTRB(disc.left, disc.top, disc.right, disc.top + size * 0.62).shift(origin);
-      room!.place(placeAs!, RRect.fromRectAndRadius(visible, Radius.circular(r)));
+      final outline = RRect.fromRectAndRadius(visible, Radius.circular(r));
+      room!.place(placeAs!, outline);
+      room!.disc = RRect.fromRectAndRadius(disc.shift(origin), Radius.circular(r));
     }
 
     canvas.save();
@@ -2865,31 +2894,43 @@ class RecordLight extends CustomPainter {
               .storage,
         ),
     );
-    // The ball's spots where they land on the vinyl: a groove is a ring of tiny
-    // mirrors, so a spot on it is not a spot but a short arc round the label, along
-    // the groove — which is the whole difference between light on a record and light
-    // on a picture of one.
+    // Each beam's own gleam on the vinyl: where a lamp's reflection sits on a black
+    // glossy disc, the grooves stretch it into a soft bar along the radius — the
+    // brightest part of the wedge — and as the head crosses the room the bar slides
+    // across the record with it, out to the rim and off. That travelling gleam, and
+    // the wedges turning under it, is what light moving over a record looks like.
     final rm = room;
-    if (rm != null && toLocal != null && rm.life > 0 && rm.spots.isNotEmpty) {
-      final arc = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.round
-        ..blendMode = rm.onPaper ? BlendMode.srcOver : BlendMode.plus;
-      for (final s in rm.spots) {
-        final at = toLocal!(s.at) - middle;
-        final d = at.distance;
-        if (d < inner || d > r * 0.99) continue;
-        if (at.dy > size * 0.12) continue;
-        final a = (0.55 / math.pow(s.far, 1.3)) * rm.life * strength;
-        if (a < 0.03) continue;
-        final colour = rm.lamps.length > s.lamp ? rm.lamps[s.lamp] : Colors.white;
-        final angle = math.atan2(at.dy, at.dx);
-        final along = (s.wide * 2.2 / d).clamp(0.05, 0.5);
-        arc
-          ..strokeWidth = (s.tall * 0.45).clamp(1.0, 3.0)
-          ..color = Color.lerp(colour, Colors.white, 0.3)!.withValues(alpha: a.clamp(0.0, 1.0))
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.8);
-        canvas.drawArc(Rect.fromCircle(center: middle, radius: d), angle - along / 2, along, false, arc);
+    if (rm != null && toLocal != null && rm.life > 0) {
+      for (final (i, h) in rm.heads.indexed) {
+        final p = toLocal!(h.at) - middle;
+        final d = p.distance;
+        if (d < 1 || d > r * 1.7) continue;
+        // On the disc while the beam is over it; off the rim, fading, as it leaves.
+        final on = d <= r ? 1.0 : (1 - (d - r) / (r * 0.7)).clamp(0.0, 1.0);
+        final at = middle + p * (math.min(d, r * 0.97) / d);
+        final a = 0.42 * h.level * rm.life * on * strength;
+        if (a < 0.01) continue;
+        final colour = Color.lerp(rm.colours.length > i ? rm.colours[i] : Colors.white, Colors.white, 0.55)!;
+        final angle = math.atan2(p.dy, p.dx);
+        canvas.save();
+        canvas.translate(at.dx, at.dy);
+        canvas.rotate(angle);
+        // Long along the radius, narrow across it.
+        final long = r * 0.42, narrow = r * 0.11;
+        canvas.drawOval(
+            Rect.fromCenter(center: Offset.zero, width: long, height: narrow),
+            Paint()
+              ..blendMode = rm.onPaper ? BlendMode.srcOver : BlendMode.plus
+              ..shader = ui.Gradient.radial(
+                Offset.zero,
+                long / 2,
+                [colour.withValues(alpha: a), colour.withValues(alpha: a * 0.35), colour.withValues(alpha: 0)],
+                const [0.0, 0.45, 1.0],
+                TileMode.clamp,
+                (Matrix4.identity()..scaleByDouble(1.0, narrow / long, 1.0, 1.0)).storage,
+              )
+              ..maskFilter = MaskFilter.blur(BlurStyle.normal, narrow * 0.35));
+        canvas.restore();
       }
     }
     // The moulded rim catches the lamp as a bright thread along its edge.

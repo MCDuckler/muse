@@ -29,6 +29,10 @@ class RoomLight extends ChangeNotifier {
   /// coordinates. The wall behind gets their shadows, thrown away from each beam.
   final placed = <Object, RRect>{};
 
+  /// The record itself, where one stands in the room: the card in front of it takes
+  /// its shadow.
+  RRect? disc;
+
   void place(Object key, RRect outline) => placed[key] = outline;
   void unplace(Object key) => placed.remove(key);
 
