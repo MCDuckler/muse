@@ -114,6 +114,49 @@ def want_split(track_id: int, *, asked_by: int | None = None,
     return jobs.enqueue("split", payload, priority=priority)
 
 
+# ------------------------------------------------------------------ crates
+# How often the queue is topped up from the playlists marked to be taken apart.
+_AUTO_EVERY = 30.0
+_auto_at = 0.0
+
+
+def auto_split(force: bool = False, limit: int = 50) -> int:
+    """Queue every song in a playlist marked auto_split that is ready, is a record
+    rather than a set, has no parts yet and no split queued, running or failed. Behind
+    everything anybody is waiting for (PRIORITY_BULK). Asked when a list is marked,
+    when songs are added to one, and every half a minute while the pool asks for work —
+    which catches songs that arrive by any other way (a mirror, a sync, a download
+    finishing). Answers how many were queued."""
+    global _auto_at
+    now = time.monotonic()
+    if not force and now - _auto_at < _AUTO_EVERY:
+        return 0
+    _auto_at = now
+    rows = db.all_(
+        """select distinct t.id
+             from playlists p
+             join playlist_items i on i.playlist_id = p.id
+             join tracks t on t.id = i.track_id
+             join media m on m.track_id = t.id and m.role = 'canonical'
+            where p.auto_split and t.state = 'ready'
+              and coalesce(t.duration_ms, 0) <= %s
+              and (select count(distinct name) from track_parts tp
+                    where tp.sha256 = m.sha256 and tp.version = %s) < %s
+              and not exists (select 1 from jobs j
+                               where j.kind = 'split'
+                                 and (j.payload->>'track_id')::int = t.id
+                                 and j.state in ('pending','leased','failed'))
+            limit %s""",
+        (UP_TO_S * 1000, PARTS_VERSION, len(PARTS), limit))
+    n = 0
+    for r in rows:
+        if want_split(r["id"], priority=jobs.PRIORITY_BULK) is not None:
+            n += 1
+    if n:
+        log.info("queued %d song%s from auto-split playlists", n, "" if n == 1 else "s")
+    return n
+
+
 # ------------------------------------------------------------------ progress
 # Live, in memory, like the downloads' (progress.py): what a split is doing right now.
 _split_progress: dict[int, dict] = {}
@@ -167,6 +210,7 @@ def overview(me: int, admin: bool) -> dict:
               join users u on u.id = d.user_id
               left join workers w on w.name = 'device:' || d.id
              where d.pool_at is not null or d.pool_blocked
+                or w.last_seen > now() - interval '{LIVE_SECONDS} seconds'
              order by live desc, d.pool_at desc nulls last""")
     done = {(r["worker"], r["kind"]): r["n"] for r in db.all_(
         """select leased_by as worker, kind, count(*) n from jobs
@@ -227,12 +271,14 @@ def overview(me: int, admin: bool) -> dict:
     def device(r: dict) -> dict:
         said = r["pool"] or {}
         worker = f"device:{r['id']}"
+        # An app from before the pool leases songs and says nothing about itself.
+        older = r["pool"] is None
         return {
-            "id": r["id"], "name": r["name"], "owner": r["owner"],
+            "id": r["id"], "name": r["name"], "owner": r["owner"], "older": older,
             "platform": said.get("platform") or r["platform"], "this": r["id"] == me,
             "live": bool(r["live"]) and not r["pool_blocked"],
             "blocked": bool(r["pool_blocked"]),
-            "fetch": bool(said.get("fetch")), "split": bool(said.get("split")),
+            "fetch": bool(said.get("fetch", older)), "split": bool(said.get("split")),
             "background": bool(said.get("background")),
             "gpu": bool(said.get("gpu")), "gpu_name": said.get("gpu_name"),
             "cores": said.get("cores"), "version": said.get("version"),

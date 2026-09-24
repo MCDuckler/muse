@@ -165,3 +165,43 @@ def test_one_records_split_says_who_has_it(client, hdr, a_record):
     _lease_split(client, strong, gpu=True)
     during = client.get(f"/pool/split/{a_record['id']}", headers=hdr).json()["job"]
     assert during["state"] == "leased" and during["device_id"] == strong["device"]
+
+
+def test_a_playlist_marked_to_be_taken_apart_queues_its_songs(client, hdr, a_record, tmp_path):
+    pl = client.post("/playlists", headers=hdr, json={"name": "Crate"}).json()
+    client.post(f"/playlists/{pl['id']}/items", headers=hdr, json={"track_ids": [a_record["id"]]})
+    assert db.all_("select 1 from jobs where kind='split'") == [], "not marked: nothing"
+    r = client.post(f"/playlists/{pl['id']}/auto-split", headers=hdr, json={"auto_split": True})
+    assert r.json() == {"auto_split": True, "queued": 1}
+    assert client.get(f"/playlists/{pl['id']}", headers=hdr).json()["auto_split"] is True
+    # A song added afterwards is queued as it is added.
+    f = tmp_path / "second.m4a"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi",
+                    "-i", "sine=frequency=330:duration=3", "-c:a", "aac",
+                    "-metadata", "title=Second", str(f)], check=True)
+    second = client.post("/uploads", headers=hdr,
+                         files={"audio": ("s.m4a", io.BytesIO(f.read_bytes()),
+                                          "audio/mp4")}).json()
+    client.post(f"/playlists/{pl['id']}/items", headers=hdr, json={"track_ids": [second["id"]]})
+    queued = {r["t"] for r in db.all_(
+        "select (payload->>'track_id')::int t from jobs where kind='split'")}
+    assert queued == {a_record["id"], second["id"]}
+    assert all(r["priority"] == jobs.PRIORITY_BULK
+               for r in db.all_("select priority from jobs where kind='split'"))
+
+
+def test_somebody_elses_playlist_is_not_theirs_to_mark(client, hdr, a_record):
+    pl = client.post("/playlists", headers=hdr, json={"name": "Mine"}).json()
+    other = _computer(client, hdr, "nosy")
+    client.post(f"/playlists/{pl['id']}/open-edit", headers=hdr, json={"open_edit": True})
+    r = client.post(f"/playlists/{pl['id']}/auto-split", headers=other["hdr"],
+                    json={"auto_split": True})
+    assert r.status_code == 403
+
+
+def test_a_computer_on_an_older_app_is_still_listed(client, hdr):
+    old = _computer(client, hdr, "oldapp")
+    client.post("/internal/jobs/lease", headers=old["hdr"], json={})  # no pool report
+    seen = client.get("/pool", headers=hdr).json()["devices"]
+    me = next(d for d in seen if d["id"] == old["device"])
+    assert me["live"] and me["older"] and me["fetch"]

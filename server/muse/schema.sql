@@ -648,3 +648,7 @@ create table if not exists track_parts (
   created_at timestamptz not null default now(),
   primary key (sha256, name, version)
 );
+
+-- A playlist whose songs are all taken apart by the pool as they arrive — a DJ's crate,
+-- ready to be mixed in parts on any computer, a phone included.
+alter table playlists add column if not exists auto_split boolean not null default false;

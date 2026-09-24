@@ -558,6 +558,9 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         if device is not None and kind not in ("ingest", "split"):
             raise HTTPException(403, "a computer in the pool fetches and splits, no more")
         strong = True
+        if kind == "split":
+            # Songs in the playlists marked to be taken apart, topped up now and then.
+            pool.auto_split()
         if device is not None:
             # What it says about itself — its card, its switches — kept for the pool
             # screen, and the card decides who is handed a split first.
@@ -755,6 +758,10 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         # and they must never hold up playback.
         jobs.enqueue("meta", {"track_id": track_id})
         publish("track_ready", {"track_id": track_id, "bytes": size})
+        # A song in a playlist marked to be taken apart: queued for the pool now.
+        if db.one("""select 1 from playlist_items i join playlists p on p.id=i.playlist_id
+                      where i.track_id=%s and p.auto_split limit 1""", (track_id,)):
+            pool.want_split(track_id, priority=jobs.PRIORITY_BULK)
         return {"ok": True, "sha256": digest, "bytes": size}
 
     @app.post("/internal/jobs/{job_id}/fail")

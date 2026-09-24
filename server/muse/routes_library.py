@@ -127,7 +127,8 @@ def list_playlists(user: dict = Depends(current_user)):
     )
     return [{**with_cover(r), "saved": bool(r["saved"]),
              "owner_name": r["owner_name"],
-             "open_edit": bool(r.get("open_edit"))} for r in rows]
+             "open_edit": bool(r.get("open_edit")),
+             "auto_split": bool(r.get("auto_split"))} for r in rows]
 
 
 @router.get("/playlists/{playlist_id}/export")
@@ -670,6 +671,7 @@ def get_playlist(playlist_id: int, user: dict = Depends(current_user)):
             "mine": p["owner_id"] == user["id"],
             "saved": bool(saved),
             "open_edit": bool(p.get("open_edit")),
+            "auto_split": bool(p.get("auto_split")),
             "owner": {"id": owner.get("id"), "name": owner.get("name"),
                       "avatar_url": (f"/users/{owner['id']}/avatar"
                                      if owner.get("avatar_sig") else None)},
@@ -695,6 +697,10 @@ def add_items(playlist_id: int, body: dict = Body(...), user: dict = Depends(cur
                    on conflict do nothing""",
                 (playlist_id, start + n, tid),
             )
+    if db.one("select auto_split from playlists where id=%s", (playlist_id,))["auto_split"]:
+        from . import pool
+
+        pool.auto_split(force=True)
     return get_playlist(playlist_id, user)
 
 
@@ -762,6 +768,26 @@ def unsave_playlist(playlist_id: int, user: dict = Depends(current_user)):
     db.run("delete from playlist_saves where user_id=%s and playlist_id=%s",
            (user["id"], playlist_id))
     return {"saved": False}
+
+
+@router.post("/playlists/{playlist_id}/auto-split")
+def set_auto_split(playlist_id: int, body: dict = Body(default={}),
+                   user: dict = Depends(current_user)):
+    """Have every song in this list taken apart by the pool as it arrives — and every
+    song already in it, now. The owner's, or an admin's: it spends the pool's time."""
+    from .routes_accounts import is_admin
+
+    row = _readable(playlist_id, user)
+    if row["owner_id"] != user["id"] and not is_admin(user["id"]):
+        raise HTTPException(403, "only the list's owner marks it to be taken apart")
+    on = bool(body.get("auto_split", True))
+    db.run("update playlists set auto_split=%s where id=%s", (on, playlist_id))
+    queued = 0
+    if on:
+        from . import pool
+
+        queued = pool.auto_split(force=True, limit=500)
+    return {"auto_split": on, "queued": queued}
 
 
 @router.post("/playlists/{playlist_id}/open-edit")
