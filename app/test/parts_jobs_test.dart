@@ -209,9 +209,16 @@ void main() {
 
     fail = false;
     partsJobs.onRetry!(4);
-    await settle();
+    // The retry runs on its own; on a slow machine (the iPhone build's runner) the
+    // parts are still being moved into place thirty milliseconds on. Given a moment,
+    // not a deadline: the claim is that it becomes ready, not how fast.
+    var state = Stem.beingMade;
+    for (var i = 0; i < 100 && state != Stem.ready; i++) {
+      await settle();
+      state = await parts.want(song(4), 'drums');
+    }
     expect(partsJobs.of(4)!.stage, PartsStage.ready);
-    expect(await parts.want(song(4), 'drums'), Stem.ready);
+    expect(state, Stem.ready);
   });
 
   test('the voice alone comes only from the separator', () async {
