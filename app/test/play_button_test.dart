@@ -1,8 +1,9 @@
 // The play button.
 //
-// It is one size whatever is happening: the ring that says "the stream is opening" used
-// to make it a bigger box while it showed, and the whole row of controls moved with it
-// on every skip. And it is a button: it says what it does, and does it.
+// It is one size whatever is happening: the arc that runs round the ring while the
+// stream opens is drawn in room the button always keeps, where a spinner wrapped round
+// it used to make it a bigger box and move the whole row of controls on every skip.
+// And it is a button: it says what it does, and does it.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muse/src/ui/now_playing.dart';
@@ -33,14 +34,12 @@ void main() {
 
     await show(tester, busy: true);
     await tester.pump(const Duration(milliseconds: 200));
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
     expect(tester.getSize(find.byType(PlayPauseButton)), size);
     expect(tester.getTopLeft(find.byKey(const Key('before'))), before);
     expect(tester.getTopLeft(find.byKey(const Key('after'))), after);
 
     await show(tester, busy: false);
     await tester.pump(const Duration(milliseconds: 200));
-    expect(find.byType(CircularProgressIndicator), findsNothing);
     expect(tester.getSize(find.byType(PlayPauseButton)), size);
   });
 

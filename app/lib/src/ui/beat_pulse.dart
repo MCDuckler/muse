@@ -61,6 +61,10 @@ class _BeatPulseState extends State<BeatPulse> with SingleTickerProviderStateMix
   TrackTiming? _timing;
   int? _askedFor;
 
+  /// Whether the widget has its dependencies yet: [_run] reads the phone's wish for
+  /// stillness off the MediaQuery, which cannot be read from initState.
+  bool _ready = false;
+
   @override
   void initState() {
     super.initState();
@@ -76,6 +80,7 @@ class _BeatPulseState extends State<BeatPulse> with SingleTickerProviderStateMix
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _ready = true;
     _run();
   }
 
@@ -84,7 +89,7 @@ class _BeatPulseState extends State<BeatPulse> with SingleTickerProviderStateMix
     final store = widget.app.player?.timing;
     _timing = track == null ? null : store?.peek(track.id);
     _askedFor = track?.id;
-    _run();
+    if (_ready) _run();
     if (track == null || store == null || _timing != null) return;
     store.of(track).then((found) {
       if (!mounted || _askedFor != track.id) return;

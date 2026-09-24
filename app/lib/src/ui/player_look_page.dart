@@ -131,9 +131,10 @@ class PlayerLookPage extends StatelessWidget {
           ),
           SwitchListTile(
             secondary: const Icon(Icons.blur_on),
-            title: const Text('Mirror ball'),
-            subtitle: const Text('Spots of light swinging across the player while a '
-                'song plays, flaring on the beat'),
+            title: const Text('The lights'),
+            subtitle: const Text('A mirror ball and two moving heads: spots swinging '
+                'across the player and beams sweeping the room while a song plays, '
+                'pushed on the beat'),
             value: app.discoLights,
             onChanged: app.setDiscoLights,
           ),

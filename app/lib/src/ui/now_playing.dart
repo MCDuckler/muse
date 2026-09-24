@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:provider/provider.dart';
@@ -1112,49 +1113,87 @@ class _KeepButton extends StatelessWidget {
 /// button they just pressed; the same triangle folding into two bars is the button
 /// answering. Material ships the drawing, so this is the animation and the tick that
 /// goes with it.
+///
+/// The button itself is a piece of hardware: a brushed steel disc set into a dark
+/// bezel, with a ring of light round it in the edition's colour — lit while the music
+/// plays, low while it does not, and running round the ring while the stream opens.
 class PlayPauseButton extends StatefulWidget {
   const PlayPauseButton(
       {super.key,
       required this.playing,
       required this.size,
       required this.onPressed,
-      this.busy = false});
+      this.busy = false,
+      this.beat});
   final bool playing;
   final double size;
   final VoidCallback onPressed;
 
-  /// Asked to play and waiting on the network: a thin ring turns around the button,
+  /// Asked to play and waiting on the network: a brighter arc travels round the ring,
   /// so a silent second is visibly the stream opening rather than the button ignored.
   final bool busy;
+
+  /// The song's beat, one on it and falling to nothing: the ring's glow breathes with
+  /// it, a little. Null and it holds steady.
+  final ValueListenable<double>? beat;
 
   @override
   State<PlayPauseButton> createState() => _PlayPauseButtonState();
 }
 
-class _PlayPauseButtonState extends State<PlayPauseButton>
-    with SingleTickerProviderStateMixin {
+class _PlayPauseButtonState extends State<PlayPauseButton> with TickerProviderStateMixin {
   late final AnimationController _shape = AnimationController(
     vsync: this,
     duration: Motion.quick,
     value: widget.playing ? 1 : 0,
   );
 
+  /// How lit the ring is: up in a third of a second when the music starts, down a
+  /// little slower when it stops.
+  late final AnimationController _lit = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 320),
+    reverseDuration: const Duration(milliseconds: 520),
+    value: widget.playing ? 1 : 0,
+  );
+
+  /// The arc running round the ring while the stream opens.
+  late final AnimationController _run = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100));
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.busy) _run.repeat();
+  }
+
   @override
   void didUpdateWidget(PlayPauseButton old) {
     super.didUpdateWidget(old);
+    if (old.busy != widget.busy) {
+      if (widget.busy && !stillness(context)) {
+        _run.repeat();
+      } else {
+        _run.stop();
+        _run.value = 0;
+      }
+    }
     if (old.playing == widget.playing) return;
     // Straight there when the phone has asked for stillness: the icon still has to
     // change, it just does not travel.
     if (stillness(context)) {
       _shape.value = widget.playing ? 1 : 0;
+      _lit.value = widget.playing ? 1 : 0;
     } else {
       widget.playing ? _shape.forward() : _shape.reverse();
+      widget.playing ? _lit.forward() : _lit.reverse();
     }
   }
 
   @override
   void dispose() {
     _shape.dispose();
+    _lit.dispose();
+    _run.dispose();
     super.dispose();
   }
 
@@ -1163,13 +1202,9 @@ class _PlayPauseButtonState extends State<PlayPauseButton>
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    // One footprint, whatever is happening. The ring that says "the stream is opening"
-    // used to be a bigger box wrapped round the button only while it showed, so the
-    // whole row of controls grew by six points at the start of every song and shrank
-    // again a moment later — the controls twitching on every skip. The room for the
-    // ring is always kept now, and the ring is drawn in it.
-    final face = widget.size + 16;
-    final whole = face + 8;
+    // One footprint, whatever is happening: the ring's glow has its room kept whether
+    // it is lit or not, so the row of controls never twitches on a skip.
+    final whole = widget.size + 24;
     final still = stillness(context);
     return Semantics(
       button: true,
@@ -1183,49 +1218,31 @@ class _PlayPauseButtonState extends State<PlayPauseButton>
           onTapCancel: () => setState(() => _down = false),
           onTapUp: (_) => setState(() => _down = false),
           onTap: felt(Feel.commit, widget.onPressed),
-          child: SizedBox(
-            width: whole,
-            height: whole,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                // The ring, in the room kept for it; faded rather than popped.
-                AnimatedOpacity(
-                  opacity: widget.busy ? 1 : 0,
-                  duration: still ? Duration.zero : const Duration(milliseconds: 180),
-                  child: SizedBox(
-                    width: whole - 2,
-                    height: whole - 2,
-                    child: widget.busy
-                        ? CircularProgressIndicator(strokeWidth: 2.5, color: scheme.primary)
-                        : null,
+          child: AnimatedScale(
+            scale: _down ? 0.96 : 1,
+            duration: still ? Duration.zero : const Duration(milliseconds: 90),
+            curve: Curves.easeOut,
+            child: SizedBox.square(
+              dimension: whole,
+              child: CustomPaint(
+                painter: _ButtonFace(
+                  colour: scheme.primary,
+                  pressed: _down,
+                  dark: Theme.of(context).brightness == Brightness.dark,
+                  lit: _lit,
+                  running: _run,
+                  busy: widget.busy,
+                  beat: widget.beat,
+                ),
+                child: Center(
+                  child: AnimatedIcon(
+                    icon: AnimatedIcons.play_pause,
+                    progress: _shape,
+                    size: whole * 0.40,
+                    color: Colors.white,
                   ),
                 ),
-                AnimatedScale(
-                  scale: _down ? 0.955 : 1,
-                  duration: still ? Duration.zero : const Duration(milliseconds: 90),
-                  curve: Curves.easeOut,
-                  child: CustomPaint(
-                    size: Size.square(face),
-                    painter: _ButtonFace(
-                      colour: scheme.primary,
-                      pressed: _down,
-                      dark: Theme.of(context).brightness == Brightness.dark,
-                    ),
-                    child: SizedBox.square(
-                      dimension: face,
-                      child: Center(
-                        child: AnimatedIcon(
-                          icon: AnimatedIcons.play_pause,
-                          progress: _shape,
-                          size: widget.size,
-                          color: scheme.onPrimary,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),
@@ -1234,92 +1251,228 @@ class _PlayPauseButtonState extends State<PlayPauseButton>
   }
 }
 
-/// The play button's face: a moulded button on the front of a hi-fi, lit from above.
+/// The play button's face: a brushed steel disc in a dark bezel, ringed with light.
 ///
-/// A shadow under it that it sinks into when pressed, a body that is lighter at the top
-/// than the bottom, a bright lip round the upper rim where the light catches the edge and
-/// a dark one round the lower, and a soft sheen across the top half. Slight, all of it:
-/// it should read as a thing you can press, not as a picture of a button.
+/// From the outside in: the bezel, a dark moulded ring lit from above; the ring of
+/// light, a neon tube in the edition's colour with its bloom on the bezel either side
+/// of it; the disc, steel brushed in circles, which is why it is bright at two corners
+/// and dark at the other two — a brushed surface throws the lamp back along its
+/// grooves, and the grooves run round; and a hairline of shadow where the disc is set
+/// into the bezel. Held down, the disc sinks and the ring dims; while the stream
+/// opens, a brighter arc runs round the ring; and on the beat the bloom breathes.
 class _ButtonFace extends CustomPainter {
-  const _ButtonFace({required this.colour, required this.pressed, required this.dark});
+  _ButtonFace({
+    required this.colour,
+    required this.pressed,
+    required this.dark,
+    required this.lit,
+    required this.running,
+    required this.busy,
+    this.beat,
+  }) : super(repaint: Listenable.merge([lit, running, if (beat != null) beat]));
 
   final Color colour;
   final bool pressed;
   final bool dark;
+  final Animation<double> lit;
+  final Animation<double> running;
+  final bool busy;
+  final ValueListenable<double>? beat;
 
   @override
   void paint(Canvas canvas, Size size) {
     final c = size.center(Offset.zero);
-    final r = size.shortestSide / 2;
-    final hsl = HSLColor.fromColor(colour);
-    Color shade(double by) =>
-        hsl.withLightness((hsl.lightness + by).clamp(0.0, 1.0)).toColor();
+    final radius = size.shortestSide / 2;
+    // The bezel's outer edge leaves room for the bloom; the ring sits just inside.
+    final bezel = radius * 0.86;
+    final ring = radius * 0.80;
+    final ringWidth = radius * 0.095;
+    final disc = radius * 0.62;
+    final on = lit.value;
+    final pulse = (beat?.value ?? 0.0) * on;
+    final glow = (0.22 + 0.78 * on) * (pressed ? 0.6 : 1.0);
 
-    // What it stands on: a contact shadow close in, and a softer one further out.
-    // Pressed, it is nearly down on the panel and both draw in.
-    final lift = pressed ? 0.35 : 1.0;
+    // What it stands on: a shadow it sinks into when pressed.
+    final lift = pressed ? 0.4 : 1.0;
     canvas.drawCircle(
-        c.translate(0, 3.5 * lift),
-        r * 0.98,
+        c.translate(0, 3 * lift),
+        bezel,
         Paint()
-          ..color = Colors.black.withValues(alpha: (dark ? 0.55 : 0.30) * (0.6 + 0.4 * lift))
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 7 * lift + 1.5));
-    canvas.drawCircle(
-        c.translate(0, 1.2 * lift),
-        r * 0.99,
-        Paint()
-          ..color = Colors.black.withValues(alpha: 0.28)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.6));
+          ..color = Colors.black.withValues(alpha: (dark ? 0.6 : 0.28) * (0.6 + 0.4 * lift))
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 6 * lift + 2));
 
-    // The body: lit from above, and the other way up while it is held down.
-    final body = Rect.fromCircle(center: c, radius: r);
+    // The bezel: dark, lit from above, with a bright lip along its top edge.
+    final body = Rect.fromCircle(center: c, radius: bezel);
     canvas.drawCircle(
         c,
-        r,
+        bezel,
         Paint()
           ..shader = LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: pressed
-                ? [shade(-0.07), shade(-0.01)]
-                : [shade(0.09), shade(0.0), shade(-0.09)],
+            colors: dark
+                ? const [Color(0xFF2E2E32), Color(0xFF17171A), Color(0xFF0E0E10)]
+                : const [Color(0xFFE9E7E3), Color(0xFFC9C6C0), Color(0xFFAAA69F)],
+          ).createShader(body));
+    canvas.drawCircle(
+        c,
+        bezel - 0.6,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2
+          ..shader = LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.white.withValues(alpha: dark ? 0.28 : 0.9),
+              Colors.white.withValues(alpha: 0.0),
+              Colors.black.withValues(alpha: dark ? 0.5 : 0.25),
+            ],
+            stops: const [0.0, 0.45, 1.0],
           ).createShader(body));
 
-    // A sheen across the top half, fading out by the middle.
-    if (!pressed) {
-      canvas.save();
-      canvas.clipPath(Path()..addOval(body));
-      canvas.drawOval(
-          Rect.fromCenter(center: c.translate(0, -r * 0.55), width: r * 1.7, height: r * 1.1),
+    // The ring of light. Its bloom first, on the bezel either side; then the tube,
+    // then the hot thread down its middle. Off, the tube is still there — a neon
+    // tube unlit is glass with a little of its colour in it.
+    final tube = Color.lerp(colour, Colors.white, 0.08)!;
+    final hot = Color.lerp(colour, Colors.white, 0.55)!;
+    final bloom = glow * (0.55 + 0.12 * pulse);
+    canvas.drawCircle(
+        c,
+        ring,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = ringWidth * 3.4
+          ..color = colour.withValues(alpha: 0.8 * bloom)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, radius * 0.17));
+    // The tube's edges: a hair of dark either side, which is what makes it a tube
+    // rather than a line.
+    canvas.drawCircle(
+        c,
+        ring,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = ringWidth + 1.6
+          ..color = Colors.black.withValues(alpha: dark ? 0.55 : 0.25));
+    canvas.drawCircle(
+        c,
+        ring,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = ringWidth
+          ..color = Color.lerp(tube.withValues(alpha: 0.35), tube, glow)!);
+    canvas.drawCircle(
+        c,
+        ring,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = ringWidth * 0.42
+          ..color = hot.withValues(alpha: 0.85 * glow)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, ringWidth * 0.25));
+    // The stream opening: a brighter length of tube running round.
+    if (busy) {
+      final at = running.value * 2 * math.pi;
+      canvas.drawArc(
+          Rect.fromCircle(center: c, radius: ring),
+          at,
+          math.pi * 0.55,
+          false,
           Paint()
-            ..shader = RadialGradient(colors: [
-              Colors.white.withValues(alpha: dark ? 0.15 : 0.22),
-              Colors.white.withValues(alpha: 0.0),
-            ]).createShader(Rect.fromCenter(
-                center: c.translate(0, -r * 0.55), width: r * 1.7, height: r * 1.1)));
-      canvas.restore();
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = ringWidth * 1.1
+            ..strokeCap = StrokeCap.round
+            ..color = Colors.white.withValues(alpha: 0.75)
+            ..maskFilter = MaskFilter.blur(BlurStyle.normal, ringWidth * 0.4));
     }
 
-    // The lip: bright where the light catches the upper edge, dark round the lower.
-    final rim = Paint()
+    // The seat: a hairline of shadow the disc sits down into.
+    canvas.drawCircle(
+        c,
+        disc + 1.5,
+        Paint()
+          ..color = Colors.black.withValues(alpha: dark ? 0.7 : 0.35)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.5));
+
+    // The disc: brushed steel. Circular brushing throws the light back in two lobes
+    // opposite each other — bright top-left and bottom-right under a lamp from the
+    // top-left — with the metal's own grey between.
+    final face = Rect.fromCircle(center: c, radius: disc);
+    final hi = dark ? 0.62 : 0.86, lo = dark ? 0.30 : 0.58;
+    Color grey(double v) => Color.fromRGBO((255 * v).round(), (255 * v).round(), (255 * (v * 0.985)).round(), 1);
+    canvas.drawCircle(
+        c,
+        disc,
+        Paint()
+          ..shader = SweepGradient(
+            center: Alignment.center,
+            startAngle: 0,
+            endAngle: 2 * math.pi,
+            transform: const GradientRotation(-math.pi * 0.25),
+            colors: [grey(hi), grey(lo), grey(hi * 0.92), grey(lo * 1.1), grey(hi)],
+            stops: const [0.0, 0.25, 0.5, 0.75, 1.0],
+          ).createShader(face));
+    // The brushing itself: fine rings, a hair lighter and darker in turn, each a
+    // little off in width — a lathe, not a printer.
+    canvas.save();
+    canvas.clipPath(Path()..addOval(face));
+    final brush = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.4
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [
-          Colors.white.withValues(alpha: pressed ? 0.10 : 0.55),
-          Colors.white.withValues(alpha: 0.0),
-          Colors.black.withValues(alpha: pressed ? 0.18 : 0.32),
-        ],
-        stops: const [0.0, 0.5, 1.0],
-      ).createShader(body);
-    canvas.drawCircle(c, r - 0.7, rim);
+      ..strokeWidth = 0.7;
+    var r = disc * 0.18;
+    var i = 0;
+    while (r < disc) {
+      final h = ((i * 2654435761) & 0xFFFF) / 65535.0;
+      brush.color = (i.isEven ? Colors.white : Colors.black).withValues(alpha: 0.035 + 0.05 * h);
+      canvas.drawCircle(c, r, brush);
+      r += 1.1 + 0.9 * h;
+      i++;
+    }
+    // Pressed, the lamp catches it less; up, a soft sheen at the top.
+    canvas.drawCircle(
+        c,
+        disc,
+        Paint()
+          ..shader = RadialGradient(
+            center: const Alignment(-0.35, -0.5),
+            radius: 0.9,
+            colors: [
+              Colors.white.withValues(alpha: pressed ? 0.04 : (dark ? 0.16 : 0.22)),
+              Colors.white.withValues(alpha: 0.0),
+              Colors.black.withValues(alpha: pressed ? 0.30 : 0.18),
+            ],
+            stops: const [0.0, 0.55, 1.0],
+          ).createShader(face));
+    canvas.restore();
+    // The disc's own turned edge: light above, dark below.
+    canvas.drawCircle(
+        c,
+        disc - 0.6,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2
+          ..shader = LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.white.withValues(alpha: pressed ? 0.15 : 0.5),
+              Colors.white.withValues(alpha: 0.05),
+              Colors.black.withValues(alpha: 0.35),
+            ],
+          ).createShader(face));
+    // The ring's colour, caught faintly on the steel nearest it.
+    canvas.drawCircle(
+        c,
+        disc - 0.5,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = disc * 0.16
+          ..color = colour.withValues(alpha: 0.10 * glow)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, disc * 0.08));
   }
 
   @override
   bool shouldRepaint(_ButtonFace old) =>
-      old.colour != colour || old.pressed != pressed || old.dark != dark;
+      old.colour != colour || old.pressed != pressed || old.dark != dark || old.busy != busy || old.beat != beat;
 }
 
 /// Repeat, wherever it is shown: off, the whole queue, or this one song.
@@ -2266,11 +2419,16 @@ class _Controls extends StatelessWidget {
               icon: const Icon(Icons.skip_previous),
               onPressed: felt(Feel.commit, app.skipPrevious),
             ),
-            PlayPauseButton(
-                playing: playing,
-                size: 56,
-                busy: snapshot?.buffering ?? false,
-                onPressed: app.playPause),
+            BeatPulse(
+              app: app,
+              track: snapshot?.current,
+              builder: (context, beat) => PlayPauseButton(
+                  playing: playing,
+                  size: 56,
+                  busy: snapshot?.buffering ?? false,
+                  beat: beat,
+                  onPressed: app.playPause),
+            ),
             IconButton(
               iconSize: 44,
               icon: const Icon(Icons.skip_next),
@@ -2302,11 +2460,16 @@ class _Controls extends StatelessWidget {
           icon: const Icon(Icons.skip_previous),
           onPressed: felt(Feel.commit, app.skipPrevious),
         ),
-        PlayPauseButton(
-            playing: playing,
-            size: big ? 54 : 42,
-            busy: snapshot?.buffering ?? false,
-            onPressed: app.playPause),
+        BeatPulse(
+          app: app,
+          track: snapshot?.current,
+          builder: (context, beat) => PlayPauseButton(
+              playing: playing,
+              size: big ? 54 : 42,
+              busy: snapshot?.buffering ?? false,
+              beat: beat,
+              onPressed: app.playPause),
+        ),
         IconButton(
           iconSize: big ? 42 : 34,
           icon: const Icon(Icons.skip_next),
