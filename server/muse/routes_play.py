@@ -72,6 +72,25 @@ def analysis(track_id: int, response: Response, user: dict = Depends(current_use
     return found
 
 
+@router.get("/tracks/{track_id}/vocals")
+def vocals(track_id: int, user: dict = Depends(current_user)):
+    """Where the voice is, bar by bar, and what it sings — the lines when they can be
+    trusted to be where the voice is, and the hook. See vocals.py. The bars are null
+    until the record has been taken apart; the lyrics say "later" while LRCLIB is
+    being given its thirty seconds."""
+    from . import vocals as _vocals
+
+    t = catalog.track_row(track_id)
+    if not t or not t.get("path"):
+        raise HTTPException(404, "not ready" if t else "no such track")
+    audio = pathlib.Path(t["path"])
+    try:
+        found = _beats.for_track(cfg().data_dir, audio, t["sha256"])
+    except (subprocess.SubprocessError, OSError) as e:
+        raise HTTPException(502, "could not read the audio") from e
+    return _vocals.for_track(cfg().data_dir, t, found.get("downbeats") or [])
+
+
 @router.get("/tracks/{track_id}/lyrics")
 def lyrics(track_id: int, refresh: bool = False, user: dict = Depends(current_user)):
     t = catalog.track_row(track_id)

@@ -33,8 +33,14 @@ log = logging.getLogger("muse.pool")
 # The separator's version, as the desktops number it: 2 is SCNet Small.
 PARTS_VERSION = 2
 
-# The parts a record comes apart into.
-PARTS = ("drums", "music", "instrumental", "vocals")
+# The parts a record comes apart into. `stems` is the three that add back up to the
+# record — drums, bass and the rest, voice — in one six-channel Opus file, which a desk
+# plays to turn any of them up or down with no gap (the booth's stem decks).
+PARTS = ("drums", "music", "instrumental", "vocals", "stems")
+
+
+def _ext(name: str) -> str:
+    return ".opus" if name == "stems" else ".m4a"
 
 # Longer than this is a DJ set or an album in one file, not a record: the separator's
 # own limit, the same as the desktops'.
@@ -51,7 +57,7 @@ def parts_dir(data_dir: pathlib.Path) -> pathlib.Path:
 
 def part_path(data_dir: pathlib.Path, sha: str, name: str,
               version: int = PARTS_VERSION) -> pathlib.Path:
-    return parts_dir(data_dir) / sha[:2] / f"{sha}-{name}-v{version}.m4a"
+    return parts_dir(data_dir) / sha[:2] / f"{sha}-{name}-v{version}{_ext(name)}"
 
 
 def part_here(sha: str, name: str) -> pathlib.Path | None:

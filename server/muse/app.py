@@ -656,7 +656,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             up = form.get(name)
             if up is None or not hasattr(up, "file"):
                 continue
-            tmp = work / f"{job_id}-{name}.m4a"
+            tmp = work / f"{job_id}-{name}{'.opus' if name == 'stems' else '.m4a'}"
             size = 0
             with tmp.open("wb") as out:
                 while chunk := await up.read(1 << 20):
