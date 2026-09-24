@@ -92,7 +92,7 @@ class Deck extends ChangeNotifier {
   /// Whether the engine here can play stems at all, and the booth's hands on it: ready
   /// it for the next record, turn the stems. Set by the booth (the mixer's).
   bool canStem = false;
-  Future<bool> Function(Deck deck, {required bool stems})? readyEngine;
+  Future<bool> Function(Deck deck, {required bool stems, double? beatMs})? readyEngine;
   Future<void> Function(Deck deck, StemLevels levels)? stemEngine;
   Future<bool> Function(Deck deck)? firstLoadMissed;
 
@@ -372,13 +372,14 @@ class Deck extends ChangeNotifier {
     try {
       claiming?.call();
       final stems = _stemsFrom != null;
-      stemmed = await readyEngine?.call(this, stems: stems) ?? false;
+      final beatMs = timing?.bar == null ? null : timing!.bar!.inMicroseconds / 4000;
+      stemmed = await readyEngine?.call(this, stems: stems, beatMs: beatMs) ?? false;
       stemLevels = StemLevels.all;
       await _player.setAudioSource(_sourceFor(track), initialPosition: start);
       // The engine only exists once something is on it: the first record goes on
       // again, parked, with what could not be set before it (the stems, the clock).
       if (await firstLoadMissed?.call(this) ?? false) {
-        stemmed = await readyEngine?.call(this, stems: stems) ?? false;
+        stemmed = await readyEngine?.call(this, stems: stems, beatMs: beatMs) ?? false;
         await _player.setAudioSource(_sourceFor(track), initialPosition: start);
       }
       if (!stemmed) _stemsFrom = null;

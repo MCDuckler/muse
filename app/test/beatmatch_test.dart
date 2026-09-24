@@ -626,6 +626,20 @@ void main() {
     expect(sd, lessThan(5), reason: 'reports scattered ±20 ms; the clock should not be');
   });
 
+  test('the automix judges tempo as far as it will pull, and half time as another feel', () {
+    TrackTiming at(double bpm) => TrackTiming(
+        durationMs: 60000, bpm: bpm, beats: [for (var i = 0; i < 200; i++) (i * 60000 / bpm).round()]);
+    final same = AutoMix.howWell(at(120), at(121));
+    final twelve = AutoMix.howWell(at(120), at(134));
+    final far = AutoMix.howWell(at(120), at(150));
+    final half = AutoMix.howWell(at(120), at(60));
+    expect(twelve, greaterThan(0.1), reason: 'twelve percent is within the automix\'s reach');
+    expect(twelve, lessThan(same));
+    expect(far, lessThan(twelve), reason: 'out of reach: no tempo points at all');
+    expect(half, lessThan(same), reason: 'half time is in step, but not the same record');
+    expect(half, greaterThan(far));
+  });
+
   test('the automix judges the next record against the tempo on show', () {
     // The master was made at 170.8 and is playing at 150.0. The next is 147: 2 % from
     // what is on show, 16.2 % from what the master was made at.

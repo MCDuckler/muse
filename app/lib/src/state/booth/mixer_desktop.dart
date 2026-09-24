@@ -75,34 +75,84 @@ class DesktopMixer extends VolumeMixer {
   }
 
   /// The bands and passes every deck carries. Named, so each can be spoken to.
-  static const bands = '@wetowl:lavfi=['
-      'lowshelf@low=f=250:g=0,'
+  static const _bandsOnly = 'lowshelf@low=f=250:g=0,'
       'equalizer@mid=f=1000:width_type=o:width=2:g=0,'
       'highshelf@high=f=4000:g=0,'
       'highpass@hp=f=20:m=0,'
-      'lowpass@lp=f=15000:m=0'
-      ']';
+      'lowpass@lp=f=15000:m=0';
 
-  /// The chains tried, best first: the bands, then the stretcher.
-  static const standing = ['$bands,rubberband', '$bands,scaletempo2'];
+  /// The echo every deck carries, ahead of the bands: the record split in two, one
+  /// way through a send (volume@es, shut) into an echo timed to the record's beat —
+  /// a dotted eighth and a dotted quarter, the way a DJ's echo is set — and back
+  /// together with the other, which has a level of its own (volume@dry). Turned up
+  /// and the dry taken away, the echo rings on after the record: an echo-out.
+  static String _echo(double beatMs) {
+    final d1 = (beatMs * 0.75).round(), d2 = (beatMs * 1.5).round();
+    return 'asplit[dry][wet];'
+        '[wet]volume@es=0,aecho=0.7:0.8:$d1|$d2:0.5|0.3[e];'
+        '[dry]volume@dry=1[d0];'
+        '[d0][e]amix=inputs=2:normalize=0';
+  }
+
+  static String bandsFor(double beatMs) => '@wetowl:lavfi=[${_echo(beatMs)},$_bandsOnly]';
+
+  /// As it stands for a record of 120 a minute — the shape of every deck's chain.
+  static final bands = bandsFor(500);
+
+  /// The chains tried, best first: the bands, then the stretcher — Rubber Band
+  /// labelled, so its pitch can be spoken to (setPitchShift).
+  static List<String> standingFor(double beatMs) =>
+      ['${bandsFor(beatMs)},@rb:rubberband', '${bandsFor(beatMs)},scaletempo2'];
+  static final standing = standingFor(500);
 
   /// The same, for a stem deck: the six-channel stems file taken apart into its three
   /// pairs — the drums, the bass and the rest, the voice — each through a level of
   /// its own, mixed back together, and then the bands as on any deck. Each level is
   /// an `af-command` like a band: turned while it plays, with nothing rebuilt.
-  static const stemBands = '@wetowl:lavfi=['
+  static String stemBandsFor(double beatMs) => '@wetowl:lavfi=['
       'channelsplit=channel_layout=6c[c0][c1][c2][c3][c4][c5];'
       '[c0][c1]join=inputs=2:channel_layout=stereo,volume@d=1[d];'
       '[c2][c3]join=inputs=2:channel_layout=stereo,volume@r=1[r];'
       '[c4][c5]join=inputs=2:channel_layout=stereo,volume@v=1[v];'
       '[d][r][v]amix=inputs=3:normalize=0,'
-      'lowshelf@low=f=250:g=0,'
-      'equalizer@mid=f=1000:width_type=o:width=2:g=0,'
-      'highshelf@high=f=4000:g=0,'
-      'highpass@hp=f=20:m=0,'
-      'lowpass@lp=f=15000:m=0'
+      '${_echo(beatMs)},'
+      '$_bandsOnly'
       ']';
-  static const stemStanding = ['$stemBands,rubberband', '$stemBands,scaletempo2'];
+  static final stemBands = stemBandsFor(500);
+  static List<String> stemStandingFor(double beatMs) =>
+      ['${stemBandsFor(beatMs)},@rb:rubberband', '${stemBandsFor(beatMs)},scaletempo2'];
+  static final stemStanding = stemStandingFor(500);
+
+  /// Each deck's record's beat, in milliseconds, for the echo's timing.
+  final _beat = <String, double>{};
+  final _shift = <String, double>{};
+
+  @override
+  bool get canShift => true;
+
+  @override
+  Future<void> setPitchShift(Deck deck, double semitones) async {
+    final mpv = _native(deck);
+    if (mpv == null || _stretcher[deck.name] != 'rubberband') return;
+    if ((_shift[deck.name] ?? 0) == semitones) return;
+    _shift[deck.name] = semitones;
+    try {
+      await mpv.command(['af-command', 'rb', 'set-pitch', math.pow(2, semitones / 12).toStringAsFixed(5)]);
+    } catch (e) {
+      debugPrint('mixer: deck ${deck.name} would not shift pitch ($e)');
+    }
+  }
+
+  @override
+  Future<void> setEcho(Deck deck, {required double send, required double dry}) async {
+    final mpv = _native(deck);
+    if (mpv == null || !await _install(deck, mpv)) return;
+    for (final (target, value) in [('volume@es', send), ('volume@dry', dry)]) {
+      try {
+        await mpv.command(['af-command', 'wetowl', 'volume', value.clamp(0.0, 1.0).toStringAsFixed(3), target]);
+      } catch (_) {}
+    }
+  }
 
   /// Which decks are set up for stems, by name.
   final _stems = <String, bool>{};
@@ -118,12 +168,17 @@ class DesktopMixer extends VolumeMixer {
   Future<bool> firstLoadMissed(Deck deck) async => _missed.remove(deck.name);
 
   @override
-  Future<bool> beforeLoad(Deck deck, {required bool stems}) async {
+  Future<bool> beforeLoad(Deck deck, {required bool stems, double? beatMs}) async {
     final mpv = _native(deck);
     if (mpv == null) {
       _missed.add(deck.name);
       return false;
     }
+    // A new record: its chain built afresh, with the echo timed to its beat and the
+    // pitch back where it was.
+    _beat[deck.name] = beatMs ?? 500;
+    _installed.remove(deck.name);
+    _shift.remove(deck.name);
     // The record on the same clock as its analysis and its stems: mpv's own reading of
     // an MP4's edit list skips the encoder's first 1024 samples twice, and every
     // YouTube record played 23 ms ahead of the beats found in it — and of its stems,
@@ -207,18 +262,20 @@ class DesktopMixer extends VolumeMixer {
     if (_installed[deck.name] == id) return true;
     final stems = _stems[deck.name] ?? false;
     if (_whole.contains(id) && !stems) return false;
-    for (final chain in stems ? stemStanding : standing) {
+    final beat = _beat[deck.name] ?? 500;
+    for (final chain in stems ? stemStandingFor(beat) : standingFor(beat)) {
+      final stretcher = chain.split(',').last.replaceFirst('@rb:', '');
       try {
         await mpv.setProperty('af', chain);
         final got = await mpv.getProperty('af');
-        if (got.contains('wetowl') && got.contains(chain.split(',').last)) {
+        if (got.contains('wetowl') && got.contains(stretcher)) {
           _installed[deck.name] = id;
-          _stretcher[deck.name] = chain.split(',').last;
-          debugPrint('mixer: deck ${deck.name} carries ${chain.split(',').last}');
+          _stretcher[deck.name] = stretcher;
+          debugPrint('mixer: deck ${deck.name} carries $stretcher');
           return true;
         }
       } catch (e) {
-        debugPrint('mixer: ${chain.split(',').last} would not go on ($e)');
+        debugPrint('mixer: $stretcher would not go on ($e)');
       }
     }
     if (!stems) _whole.add(id);

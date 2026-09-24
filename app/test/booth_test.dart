@@ -579,6 +579,79 @@ void main() {
       booth.auto.stop();
     });
 
+    TrackTiming quickAt(double bpm) {
+      final ms = 60000 / bpm;
+      return TrackTiming(
+        durationMs: 60000,
+        bpm: bpm,
+        beats: [for (var i = 0; i < 1000; i++) (i * ms).round()],
+        downbeats: [for (var i = 0; i < 1000; i += 4) (i * ms).round()],
+        cues: const MixCues(firstDownbeatMs: 0, mixInMs: 2000, mixOutMs: 40000, soundEndMs: 59000),
+      );
+    }
+
+    test('after a mix the new master eases back to its own tempo', () async {
+      // Twelve hundred and twelve hundred and sixty a minute: five percent apart, a
+      // bar a fifth of a second. Bold: the glide is eight bars, under two seconds.
+      booth.timing.put(1, quickAt(1200));
+      booth.timing.put(2, quickAt(1260));
+      final auto = booth.auto;
+      auto.mixLike(MixStyle.bold);
+      await auto.start([song(1), song(2)]);
+      final incoming = booth.other(booth.master);
+      expect(incoming.pitch, closeTo(1200 / 1260, 0.002), reason: 'matched to the master');
+      await auto.mixNow();
+      for (var i = 0; i < 100 && booth.master.track?.id != 2; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(booth.master.track?.id, 2);
+      expect(auto.gliding, isTrue, reason: 'on its way back');
+      expect(booth.master.pitch, lessThan(1.0));
+      for (var i = 0; i < 100 && auto.gliding; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(auto.gliding, isFalse);
+      expect(booth.master.pitch, 1.0, reason: 'its own tempo again');
+      auto.stop();
+    });
+
+    test('the next record is matched to where the master will settle, not where it is',
+        () async {
+      booth.timing.put(1, quickAt(1200));
+      booth.timing.put(2, quickAt(1260));
+      booth.timing.put(3, quickAt(1200));
+      final auto = booth.auto;
+      auto.mixLike(MixStyle.easy); // a long glide: the next record is laid out during it
+      await auto.start([song(1), song(2), song(3)]);
+      await auto.mixNow();
+      for (var i = 0; i < 100 && booth.master.track?.id != 2; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(booth.master.track?.id, 2);
+      final free = booth.other(booth.master);
+      for (var i = 0; i < 100 && (free.track?.id != 3 || auto.goesAt == null); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(auto.gliding, isTrue, reason: 'still gliding while the next is laid out');
+      // Record 3 at 1200 must meet record 2's own 1260, so it is pitched up 5 % —
+      // not left at 1.0 to meet the 1200 the master is only passing through.
+      expect(free.pitch, closeTo(1260 / 1200, 0.002));
+      auto.stop();
+    });
+
+    test('the moves made lately are the booth\'s own log, by hand or not', () async {
+      booth.timing.put(1, quickAt(1200));
+      booth.timing.put(2, quickAt(1200));
+      await booth.load(booth.a, song(1));
+      await booth.load(booth.b, song(2));
+      await booth.a.play();
+      await booth.go(Transition.roll, bars: 1);
+      for (var i = 0; i < 60 && booth.master.track?.id != 2; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(booth.auto.recent, [Transition.roll], reason: 'a mix by hand counts');
+    });
+
     test('a hand can go now, or drop what is coming', () async {
       TrackTiming quick() => TrackTiming(
             durationMs: 60000,

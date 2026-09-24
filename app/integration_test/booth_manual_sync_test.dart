@@ -71,6 +71,33 @@ void main() {
       await toSink(booth.a, 'wetowl_probe_a');
       await toSink(booth.b, 'wetowl_probe_b');
       await booth.setCrossfader(0.5);
+      if (spec['fx_check'] == true) {
+        // The pitch shift and the echo on the real engine: a sine on A, a semitone
+        // up and back, then the echo sent and the record itself taken away.
+        await booth.setCrossfader(0);
+        await booth.a.play();
+        note('fx play');
+        await Future<void>.delayed(const Duration(seconds: 3));
+        await booth.setPitchShift(booth.a, 1);
+        note('fx shift +1');
+        await Future<void>.delayed(const Duration(seconds: 3));
+        await booth.setPitchShift(booth.a, 0);
+        note('fx shift 0');
+        await Future<void>.delayed(const Duration(seconds: 2));
+        await booth.setEcho(booth.a, send: 0.7, dry: 1);
+        note('fx echo send');
+        await Future<void>.delayed(const Duration(seconds: 2));
+        // An echo-out: the send shut and the record taken away together, so what
+        // is left is the echo's tail dying away.
+        await booth.setEcho(booth.a, send: 0, dry: 0);
+        note('fx out');
+        await Future<void>.delayed(const Duration(seconds: 4));
+        note('fx done');
+        await booth.a.pause();
+        await log.flush();
+        await log.close();
+        return;
+      }
       if (spec['stems_check'] == true) {
         note('A stemmed=${booth.a.stemmed}');
         final native = JustAudioMediaKit.instanceIfRegistered?.playerFor(booth.a.player.platformId!)?.raw.platform;

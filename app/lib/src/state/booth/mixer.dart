@@ -171,8 +171,21 @@ abstract class Mixer {
   bool get canStem => false;
 
   /// Before [deck] loads a record: ready its engine for [stems] (the six-channel file)
-  /// or for an ordinary record. Says whether it is ready for stems.
-  Future<bool> beforeLoad(Deck deck, {required bool stems}) async => false;
+  /// or for an ordinary record, with the record's beat ([beatMs]) for what keeps time
+  /// with it (the echo). Says whether it is ready for stems.
+  Future<bool> beforeLoad(Deck deck, {required bool stems, double? beatMs}) async => false;
+
+  /// Whether a deck here can be played at another pitch without its tempo moving
+  /// (a semitone up for a boost mix), and carries an echo to go out on.
+  bool get canShift => false;
+
+  /// Play [deck] [semitones] higher (or lower, negative) at the same tempo.
+  Future<void> setPitchShift(Deck deck, double semitones) async {}
+
+  /// [deck]'s echo: how much of it is sent into the echo (0 to 1) and how much of the
+  /// record itself is still heard ([dry], 0 to 1). The echo's tail rings on after the
+  /// dry is taken away: an echo-out.
+  Future<void> setEcho(Deck deck, {required double send, required double dry}) async {}
 
   /// Whether [deck]'s engine only now exists — its first record just went on — and
   /// what [beforeLoad] would have set could not be: the record is loaded again, parked

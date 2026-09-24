@@ -30,10 +30,10 @@ if [ -n "${PROBE_HEAR:-}" ]; then
     MODS+=("$(pactl load-module module-loopback source=$s.monitor latency_msec=60)")
   done
 fi
-pw-link wetowl_probe_a:monitor_FL wetowl_probe_mix:playback_FL
-pw-link wetowl_probe_a:monitor_FR wetowl_probe_mix:playback_FL
-pw-link wetowl_probe_b:monitor_FL wetowl_probe_mix:playback_FR
-pw-link wetowl_probe_b:monitor_FR wetowl_probe_mix:playback_FR
+pw-link wetowl_probe_a:monitor_FL wetowl_probe_mix:playback_FL 2>/dev/null || true
+pw-link wetowl_probe_a:monitor_FR wetowl_probe_mix:playback_FL 2>/dev/null || true
+pw-link wetowl_probe_b:monitor_FL wetowl_probe_mix:playback_FR 2>/dev/null || true
+pw-link wetowl_probe_b:monitor_FR wetowl_probe_mix:playback_FR 2>/dev/null || true
 date +%s.%N > "$W/rec_started.txt"
 pw-record --target wetowl_probe_mix -P '{ stream.capture.sink=true }' --rate 48000 --channels 2 --format f32 "$W/rec.wav" &
 REC=$!
@@ -45,4 +45,8 @@ grep -E '^lock: ' "$W/test.out" | awk 'NR % 20 == 1 {print "   " $0}' || true
 kill -INT $REC; wait $REC 2>/dev/null || true; REC=
 if [ -n "${PROBE_KEEP:-}" ]; then mkdir -p "$PROBE_KEEP"; cp "$W"/rec.wav "$W"/events.txt "$W"/rec_started.txt "$W"/test.out "$PROBE_KEEP"/; fi
 cat "$W/events.txt"
-"$PY" "$HERE/manual_analyse.py" "$W/rec.wav" "$W/rec_started.txt" "$W/events.txt" "${PROBE_MEASURE:-kick}"
+if grep -q '"fx_check"' "$SPEC"; then
+  "$PY" "$HERE/fx_analyse.py" "$W/rec.wav" "$W/rec_started.txt" "$W/events.txt"
+else
+  "$PY" "$HERE/manual_analyse.py" "$W/rec.wav" "$W/rec_started.txt" "$W/events.txt" "${PROBE_MEASURE:-kick}"
+fi

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
@@ -114,12 +115,16 @@ class AutoMix extends ChangeNotifier {
     if (from == null || to == null) return 0;
     var score = 0.0;
     final ratio = from.gridBpm != null && to.gridBpm != null
-        ? Booth.syncRatio(to.gridBpm!, from.gridBpm! * fromPitch)
+        ? Booth.syncRatio(to.gridBpm!, from.gridBpm! * fromPitch, reach: Booth.bridgeReach)
         : null;
     if (ratio != null) {
-      // The less it has to be pulled, the better.
-      score += 0.5 * (1 - ((ratio - 1).abs() / Booth.maxSync)).clamp(0.0, 1.0);
-      score += 0.1;
+      // The less it has to be pulled, the better — as far as the automix will pull,
+      // not as far as a hand's SYNC would.
+      var tempo = 0.5 * (1 - ((ratio - 1).abs() / Booth.bridgeReach)).clamp(0.0, 1.0) + 0.1;
+      // In step only at half or double time: a record of another feel altogether.
+      final raw = to.gridBpm! / (from.gridBpm! * fromPitch);
+      if (raw > math.sqrt2 || raw < 1 / math.sqrt2) tempo *= 0.5;
+      score += tempo;
     }
     // The wheel, graded: the same key or a neighbour mixes anywhere; two steps is an
     // energy move a DJ makes on purpose; further than that clashes.
@@ -132,12 +137,14 @@ class AutoMix extends ChangeNotifier {
     return score;
   }
 
-  /// A record's energy where the mix would happen, 0 to 1: how loud its loud part is
-  /// against its own quietest. Null where the bars were never measured.
+  /// A record's energy, 0 to 1: how loud it is as a record — its integrated loudness
+  /// where the house measured it, from -20 LUFS (soft) to -6 (a wall). Null where
+  /// nothing was measured. (It was the loud part against the record's own quietest,
+  /// which is nearly the same number for every record.)
   static double? _energy(TrackTiming t) {
-    if (t.energy.isEmpty) return null;
-    final sorted = [...t.energy]..sort();
-    return sorted[(sorted.length * 0.75).floor()] / 255;
+    final lufs = t.structure?.lufs;
+    if (lufs != null) return ((lufs + 20) / 14).clamp(0.0, 1.0);
+    return null;
   }
 
   /// A mix being done again: the moves as they were kept, looked up by the two
@@ -186,8 +193,13 @@ class AutoMix extends ChangeNotifier {
     }
   }
 
-  /// The moves made lately, newest last: what the planner steers away from repeating.
-  final recent = <Transition>[];
+  /// The moves made lately, newest last — the booth's own log of them, by hand or by
+  /// the automix, so a set does not begin by repeating what the last one ended on
+  /// and a mix done by hand counts as one made.
+  List<Transition> get recent {
+    final taken = booth.taken;
+    return [for (final m in taken.skip(math.max(0, taken.length - 8))) m.kind];
+  }
 
   /// Why the plan is what it is, in a few words — for the log and the bar.
   String? why;
@@ -462,11 +474,73 @@ class AutoMix extends ChangeNotifier {
     if (running) booth.note(BoothEventKind.auto, 'Auto DJ off');
     running = false;
     _asked++; // and a preparation under way writes no plan after it
+    _endGlide();
     _watch?.cancel();
     _watch = null;
     plan = null;
     goesAt = null;
     notifyListeners();
+  }
+
+  // ------------------------------------------------------------------ the glide
+  /// After a mix the new master is at the old one's tempo and, where it was the
+  /// louder, turned down to its level. Left there, a set is stuck at its first
+  /// record's tempo for good — and a record ten percent from *that* one falls out of
+  /// reach although it is two from the one before it. So over the next bars the
+  /// master eases back to its own tempo and its own level: a set of faster records
+  /// gets faster, and nobody hears it happen.
+  Timer? _glide;
+  bool _gliding = false;
+  bool get gliding => _gliding;
+
+  /// The pitch the master will be at once it has settled: what the next record is
+  /// matched to and judged against — not the pitch it is passing through.
+  double get masterTargetPitch => _gliding ? 1.0 : booth.master.pitch;
+
+  /// How long the glide takes, in the master's bars.
+  int get glideBars => switch (style) {
+        MixStyle.easy => 32,
+        MixStyle.normal => 16,
+        MixStyle.bold => 8,
+      };
+
+  void _startGlide() {
+    _endGlide();
+    final m = booth.master;
+    final fromPitch = m.pitch;
+    final fromGain = booth.gainOf(m);
+    if ((fromPitch - 1).abs() < 0.003 && (fromGain - 1).abs() < 0.01) return;
+    final length = booth.barsLength(m, glideBars);
+    if (length <= Duration.zero) return;
+    final began = DateTime.now();
+    _gliding = true;
+    booth.note(BoothEventKind.sync, '${m.name} eases back to its own tempo over $glideBars bars', deck: m);
+    _glide = Timer.periodic(const Duration(milliseconds: 100), (t) async {
+      // Not once the record is going out, or somebody has taken the booth back.
+      if (!identical(booth.master, m) || booth.busy || !running) {
+        _endGlide();
+        return;
+      }
+      final k = (DateTime.now().difference(began).inMicroseconds / length.inMicroseconds).clamp(0.0, 1.0);
+      // Evenly in ratio, not in beats a minute: a tenth up and a tenth down feel alike.
+      final pitch = fromPitch * math.pow(1 / fromPitch, k);
+      if ((m.pitch - pitch).abs() > 0.0005) await m.setTempo(pitch);
+      final gain = fromGain + (1 - fromGain) * k;
+      if ((booth.gainOf(m) - gain).abs() > 0.002) await booth.setGain(m, gain);
+      if (k >= 1) {
+        _endGlide();
+        if (m.pitch != 1.0) await m.setTempo(1.0);
+        if (booth.gainOf(m) != 1.0) await booth.setGain(m, 1.0);
+        notifyListeners();
+      }
+    });
+    notifyListeners();
+  }
+
+  void _endGlide() {
+    _glide?.cancel();
+    _glide = null;
+    _gliding = false;
   }
 
   /// The record after this one, on the free deck: loaded, synced, parked where it
@@ -530,9 +604,10 @@ class AutoMix extends ChangeNotifier {
         .timeout(const Duration(seconds: 15), onTimeout: () => null);
     if (stale()) return;
     final was = from.track == null ? null : _keptFor(from.track!.id, coming.id);
+    final fromPitch = masterTargetPitch;
     var chosen = was == null
         ? choose(from.timing, timing,
-            style: style, parts: inParts(from.track, coming), fromPitch: from.pitch)
+            style: style, parts: inParts(from.track, coming), fromPitch: fromPitch)
         : (kind: was.kind, bars: was.bars);
     plan = chosen;
     if (was != null) {
@@ -569,7 +644,7 @@ class AutoMix extends ChangeNotifier {
         timing != null &&
         timed.gridBpm != null &&
         timing.gridBpm != null &&
-        Booth.syncRatio(timing.gridBpm!, timed.gridBpm! * from.pitch, reach: Booth.bridgeReach) != null;
+        Booth.syncRatio(timing.gridBpm!, timed.gridBpm! * fromPitch, reach: Booth.bridgeReach) != null;
     final at = timing == null
         ? null
         : inStep
@@ -598,7 +673,7 @@ class AutoMix extends ChangeNotifier {
       fromVoice = voices[0];
       toVoice = voices[1];
       options = Planner.options(
-        from: MixSide(timing: timed, vocals: voices[0], stems: from.stemmed, pitch: from.pitch),
+        from: MixSide(timing: timed, vocals: voices[0], stems: from.stemmed, pitch: fromPitch),
         to: MixSide(timing: timing, vocals: voices[1], stems: to.stemmed),
         style: style,
         recent: recent,
@@ -617,7 +692,9 @@ class AutoMix extends ChangeNotifier {
     // master's never moves. One that cannot be put in step plays at its own speed —
     // not at whatever pitch the deck was last left at.
     if (inStep) {
-      await booth.sync(to, reach: Booth.bridgeReach);
+      // To the master's own tempo — where it will be once it has settled (the glide),
+      // not where it is passing through now.
+      await booth.sync(to, reach: Booth.bridgeReach, target: timed.gridBpm! * fromPitch);
     } else if (to.pitch != 1.0) {
       await to.setTempo(1.0);
     }
@@ -699,7 +776,37 @@ class AutoMix extends ChangeNotifier {
     if (!to.playing && (to.position - inAt).abs() > const Duration(milliseconds: 20)) {
       await to.seek(inAt);
     }
+    // Level-matched over the overlap: the incoming, where it is the louder there,
+    // turned down to the outgoing's level — and eased back up after (the glide).
+    final match = levelMatch(from, to, goesAt ?? Duration.zero, inAt, p.bars);
+    if (match != null) await booth.setGain(to, match);
     notifyListeners();
+  }
+
+  /// The gain that puts [to]'s first [bars] from [inAt] at the level of [from]'s
+  /// [bars] from [outAt], by the bars' loudness as the house measured them (the
+  /// record's own trim already taken off) — 1.0 where [to] is the quieter, which
+  /// cannot be turned up, and null where either was never measured.
+  double? levelMatch(Deck from, Deck to, Duration outAt, Duration inAt, int bars) {
+    final f = from.timing?.structure, t = to.timing?.structure;
+    if (f == null || t == null || f.mixDb.isEmpty || t.mixDb.isEmpty) return null;
+    double? over(TrackStructure s, Duration at, double trim) {
+      var i = 0;
+      while (i + 1 < s.barsMs.length && s.barsMs[i + 1] <= at.inMilliseconds) {
+        i++;
+      }
+      final slice = s.mixDb.sublist(i, math.min(s.mixDb.length, i + bars)).where((d) => d > -90);
+      if (slice.isEmpty) return null;
+      final mean = slice.reduce((a, b) => a + b) / slice.length;
+      return mean + 20 * math.log(trim) / math.ln10;
+    }
+
+    final outDb = over(f, outAt, booth.trimFor(from));
+    final inDb = over(t, inAt, booth.trimFor(to));
+    if (outDb == null || inDb == null) return null;
+    final diff = outDb - inDb;
+    if (diff >= -0.5) return 1.0;
+    return math.pow(10, diff / 20).toDouble().clamp(0.35, 1.0);
   }
 
   /// A hand steering: [p] instead of what the planner chose, for this pair only.
@@ -789,7 +896,7 @@ class AutoMix extends ChangeNotifier {
         unawaited(booth.timing.of(_tracks[i]));
         continue;
       }
-      final score = howWell(from, t, fromPitch: booth.master.pitch);
+      final score = howWell(from, t, fromPitch: masterTargetPitch);
       if (score > best) {
         best = score;
         bestAt = i;
@@ -839,10 +946,10 @@ class AutoMix extends ChangeNotifier {
               fromPitch: from.pitch);
       final was = booth.master;
       // A preparation still under way was for the decks as they were: stopped here,
-      // before it can load the next record over the one going live.
+      // before it can load the next record over the one going live. A glide still on
+      // stops too: the record it was bending is going out.
       _asked++;
-      recent.add(chosen.kind);
-      if (recent.length > 8) recent.removeAt(0);
+      _endGlide();
       await booth.go(chosen.kind,
           bars: chosen.bars, startAt: ended ? null : startFor(from.timing, go, from.position));
       if (identical(booth.master, was)) {
@@ -855,6 +962,9 @@ class AutoMix extends ChangeNotifier {
       _steer = null;
       options = const [];
       planned = null;
+      // The record now leading was bent to the last one's tempo, and turned down to
+      // its level: eased back to its own over the next bars.
+      _startGlide();
       // The plan just carried out is spent: left standing, its moment — long past on
       // the record now leading — would send the booth straight back the other way.
       plan = null;
@@ -919,6 +1029,7 @@ class AutoMix extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _asked++;
+    _endGlide();
     _watch?.cancel();
     _arrivals.cancel();
     super.dispose();

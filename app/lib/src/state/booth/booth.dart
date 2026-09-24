@@ -459,6 +459,13 @@ class Booth extends ChangeNotifier {
   /// One band all the way down, or back to flat.
   Future<void> kill(Deck d, int band, bool on) => setEq(d, eqOf(d).killing(band, on));
 
+  /// [d] played [semitones] up or down at the same tempo — a boost mix's semitone.
+  Future<void> setPitchShift(Deck d, double semitones) => mixer.setPitchShift(d, semitones);
+
+  /// [d]'s echo: the send into it, and how much of the record itself is still heard.
+  Future<void> setEcho(Deck d, {required double send, required double dry}) =>
+      mixer.setEcho(d, send: send, dry: dry);
+
   Future<void> setGain(Deck d, double value) async {
     gain[d] = value.clamp(0.0, 1.0);
     notifyListeners();
@@ -513,10 +520,14 @@ class Booth extends ChangeNotifier {
   /// but left the two numbers on show a few tenths apart, and up to three beats a
   /// minute apart on a record whose intro runs faster than the rest of it. Keeping
   /// the beats together over what is left is the beat-holding's job: see holdOnBeat.)
-  Future<bool> sync(Deck deck, {double reach = handReach, bool quiet = false}) async {
+  ///
+  /// [target] is the tempo to meet where it is not the master's as shown: the automix
+  /// matches the next record to the master's own tempo, which the master is on its
+  /// way back to after a mix (AutoMix glide).
+  Future<bool> sync(Deck deck, {double reach = handReach, bool quiet = false, double? target}) async {
     final m = other(deck);
     final from = deck.timing?.gridBpm;
-    final to = m.bpm;
+    final to = target ?? m.bpm;
     if (from == null || to == null) return false;
     final ratio = syncRatio(from, to, reach: reach);
     if (ratio == null) return false;
