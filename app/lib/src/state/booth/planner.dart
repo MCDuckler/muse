@@ -150,7 +150,19 @@ class Planner {
         base.kind == Transition.cut ||
         !from.timing.hasBeats ||
         !to.timing.hasBeats) {
-      return [MixPlan(base.kind, base.bars, why: 'the only way these two go together')];
+      // Even a fade can come in where the new record is not singing over the old —
+      // and where there is no such place, two records singing throughout, it is a
+      // short one: half the bars of two voices, and never fewer than two.
+      final past = _clearOfVoices(from, to, base.bars);
+      var bars = base.bars;
+      final words = ['the only way these two go together'];
+      if (past != null) {
+        words.add('in past its voice');
+      } else if (base.kind == Transition.fade && _clash(from, to, bars) > bars ~/ 2) {
+        bars = math.max(2, bars ~/ 2);
+        words.add('short: both singing');
+      }
+      return [MixPlan(base.kind, bars, inAt: past, why: words.join(' · '))];
     }
     final key = SetPlanner.keyMove(from.timing, to.timing);
     final inKey = !key.clash;
@@ -177,9 +189,22 @@ class Planner {
       final words = <String>[why];
       // Two voices at once, over this move's overlap — minded as much as the dial says.
       if (!designed) {
-        final clash = _clash(from, to, bars, outAt: outAt, inAt: inAt);
+        var clash = _clash(from, to, bars, outAt: outAt, inAt: inAt);
+        // A move that did not choose its own place in the new record can come in
+        // later, past the voice, where the dial minds voices at all.
+        if (clash > 0 && inAt == null && dials.vocals < 0.7) {
+          final past = _clearOfVoices(from, to, bars, outAt: outAt);
+          if (past != null) {
+            final less = _clash(from, to, bars, outAt: outAt, inAt: past);
+            if (less < clash) {
+              clash = less;
+              inAt = past;
+              words.add('in past its voice');
+            }
+          }
+        }
         if (clash > 0) {
-          score *= 1 - 0.55 * (1 - dials.vocals) * (clash / bars).clamp(0.0, 1.0);
+          score *= 1 - 0.8 * (1 - dials.vocals) * (clash / bars).clamp(0.0, 1.0);
           words.add('$clash bars of two voices');
         }
       }
@@ -389,6 +414,49 @@ class Planner {
       if (fv!.sungAt(f0 + i) && tv!.sungAt(t0 + i)) n++;
     }
     return n;
+  }
+
+  /// A place in the new record to come in, on one of its markers, where the two would
+  /// not sing at once over a [bars]-bar move — the first such from where it would
+  /// come in anyway, within the first thirty-two bars after that. Null where there is
+  /// none, or where nothing is known of the voices, or where the ordinary place has
+  /// no clash to speak of.
+  static Duration? _clearOfVoices(MixSide from, MixSide to, int bars, {Duration? outAt}) {
+    final fv = from.vocals, tv = to.vocals;
+    if (fv?.bars == null || tv?.bars == null) return null;
+    final downs = to.timing.downbeats;
+    if (downs.isEmpty || to.timing.bar == null) return null;
+    final usual = AutoMix.inPoint(to.timing, bars: bars);
+    if (_clash(from, to, bars, outAt: outAt, inAt: usual) == 0) return null;
+    final out = outAt ?? from.timing.cues?.mixOut;
+    if (out == null) return null;
+    final f0 = _barOf(from.timing, out);
+    final start = _barOf(to.timing, usual);
+    for (var t0 = start + 1; t0 <= start + 32 && t0 + bars <= tv!.bars!.length; t0++) {
+      if (t0 >= downs.length) break;
+      var n = 0;
+      for (var i = 0; i < bars; i++) {
+        if (fv!.sungAt(f0 + i) && tv.sungAt(t0 + i)) n++;
+      }
+      if (n > 0) continue;
+      final at = Duration(milliseconds: downs[t0]);
+      // Not into a quiet stretch of it: past the voice into a hole is no better.
+      if (AutoMix.quietBars(to.timing, at, bars)) continue;
+      final marker = to.timing.markerAtOrBefore(at);
+      // On the marker at or after: the one before is back among the voice.
+      if (marker == null) return to.timing.onGrid(at);
+      if (marker == at) return marker;
+      final later = to.timing.markers.where((m) => m >= downs[t0]);
+      if (later.isEmpty) return to.timing.onGrid(at);
+      final m = Duration(milliseconds: later.first);
+      final mb = _barOf(to.timing, m);
+      var again = 0;
+      for (var i = 0; i < bars; i++) {
+        if (fv!.sungAt(f0 + i) && tv.sungAt(mb + i)) again++;
+      }
+      if (again == 0) return to.timing.onGrid(m, every: 4);
+    }
+    return null;
   }
 
   /// Where the new record should come in to announce itself: on the four-bar marker at

@@ -8,6 +8,7 @@ import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Response
 
 from . import catalog, db
+from . import analysis as _analysis
 from . import beats as _beats
 from . import peaks as _peaks
 from . import scrobble
@@ -73,6 +74,8 @@ def analysis(track_id: int, response: Response, structure: bool = False,
             found = _structure.for_track(cfg().data_dir, t, found)
     except (subprocess.SubprocessError, OSError) as e:
         raise HTTPException(502, "could not read the audio") from e
+    if found.get("cues") and found.get("downbeats"):
+        found["cues"] = _analysis.sane_cues(found["cues"], found["downbeats"])
     if t.get("analysed_at") is None or t.get("bpm") != found.get("bpm"):
         db.run("update tracks set bpm=%s, analysed_at=now() where id=%s",
                (found.get("bpm"), track_id))

@@ -411,10 +411,28 @@ def add(out: dict, x: np.ndarray, beats_ms: list[int], bar_starts_on: int,
         # Thirty-two bars before the sound ends, on a downbeat; or the last phrase.
         back = max(0, len(downbeats) - 33)
         mix_out = int(downbeats[back])
-    out["cues"] = {
+    out["cues"] = sane_cues({
         "first_downbeat_ms": first,
         "mix_in_ms": mix_in,
         "mix_out_ms": mix_out,
         "sound_end_ms": int(sound_end),
-    }
+    }, downbeats)
     return out
+
+
+def sane_cues(cues: dict, downbeats) -> dict:
+    """[cues] with an outro that begins before the intro is over — a short record read
+    as all outro (88 s: mix_out at bar 3, mix_in at bar 7) — moved to thirty-two bars
+    before the sound ends, or the last downbeat there is. Also run over what was kept
+    before this rule, on the way out."""
+    if not cues or len(downbeats) < 2:
+        return cues
+    if cues["mix_out_ms"] > cues["mix_in_ms"]:
+        return cues
+    fixed = dict(cues)
+    back = max(0, len(downbeats) - 33)
+    out = int(downbeats[back])
+    if out <= cues["mix_in_ms"]:
+        out = int(downbeats[-1])
+    fixed["mix_out_ms"] = max(out, cues["mix_in_ms"])
+    return fixed

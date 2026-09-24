@@ -247,4 +247,61 @@ void main() {
           reason: plan.toString());
     }
   });
+
+  test('a move that did not choose its place comes in past the new record\'s voice', () {
+    // The old record sings to the end; the new one sings over bars 16..40 (its intro
+    // ends at 32) and is quiet after. A blend parked the ordinary way lays the two
+    // voices over each other; it is moved in to where the new record has stopped.
+    final from = record(outro: 16), to = record();
+    final plans = Planner.options(
+      from: MixSide(timing: from, vocals: voice(120, (b) => b >= 8)),
+      to: MixSide(timing: to, vocals: voice(120, (b) => b >= 16 && b < 40)),
+      style: MixStyle.normal,
+      random: math.Random(1),
+    );
+    final blend = plans.firstWhere((p) => p.kind == Transition.blend);
+    expect(blend.inAt, isNotNull, reason: blend.toString());
+    expect(blend.inAt!, greaterThanOrEqualTo(Duration(milliseconds: to.downbeats[40])));
+    expect(blend.why, contains('in past its voice'));
+    // With voices allowed by the dial, the ordinary place stands.
+    final free = Planner.options(
+      from: MixSide(timing: from, vocals: voice(120, (b) => b >= 8)),
+      to: MixSide(timing: to, vocals: voice(120, (b) => b >= 16 && b < 40)),
+      style: MixStyle.normal,
+      axes: const StyleAxes(length: 0.5, risk: 0.5, vocals: 1),
+      random: math.Random(1),
+    );
+    expect(free.firstWhere((p) => p.kind == Transition.blend).inAt, isNull);
+  });
+
+  test('a fade with both records singing throughout is a short one', () {
+    // A fade — half as long as it would be, with two voices the whole way.
+    final to = record();
+    final from = TrackTiming(
+      durationMs: to.durationMs,
+      bpm: to.bpm,
+      beats: to.beats,
+      downbeats: to.downbeats,
+      cues: to.cues,
+      ends: 'fade',
+    );
+    // Half the tempo: in step an octave down, and the old record fades itself — an
+    // eight-bar fade by the old rules.
+    final slow = TrackTiming(
+      durationMs: to.durationMs,
+      bpm: 64,
+      beats: [for (var i = 0; i < 480; i++) i * 938],
+      downbeats: [for (var i = 0; i < 480; i += 4) i * 938],
+      cues: const MixCues(firstDownbeatMs: 0, mixInMs: 30016, mixOutMs: 240000, soundEndMs: 450000),
+    );
+    final plan = Planner.plan(
+      from: MixSide(timing: from, vocals: voice(120, (b) => true)),
+      to: MixSide(timing: slow, vocals: voice(120, (b) => true)),
+      style: MixStyle.normal,
+      random: math.Random(1),
+    );
+    expect(plan.kind, Transition.fade, reason: plan.toString());
+    expect(plan.bars, lessThan(AutoMix.choose(from, slow, style: MixStyle.normal).bars));
+    expect(plan.why, contains('short'));
+  });
 }

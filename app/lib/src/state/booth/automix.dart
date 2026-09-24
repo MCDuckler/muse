@@ -357,7 +357,10 @@ class AutoMix extends ChangeNotifier {
   static Duration outPoint(TrackTiming from, {required Duration length}) {
     final cues = from.cues;
     final end = from.soundEnds ?? Duration(milliseconds: from.durationMs);
-    var at = cues?.mixOut ?? (end - length);
+    // An outro the analysis put before the intro was over (it has: a short record
+    // read as all outro) is no outro.
+    final mixOut = cues == null || cues.mixOut <= cues.mixIn ? null : cues.mixOut;
+    var at = mixOut ?? (end - length);
     if (at < Duration.zero) at = Duration.zero;
     // And never so late that the transition would run past the end of the sound.
     final latest = end - length;
@@ -449,14 +452,17 @@ class AutoMix extends ChangeNotifier {
     final bar = to.bar ?? Duration(microseconds: (4 * 60e6 / bpm).round());
     final drop = onTheDrop ? to.dropAfter(cues.firstDownbeat) : null;
     var at = (drop ?? cues.mixIn) - bar * bars;
+    if (at < cues.firstDownbeat) at = cues.firstDownbeat;
     // Unless those bars are quiet — a long, thin intro, 8 dB under the record's loud
     // bars by the structure — when the record comes in later: half way through the
     // move, or already on. (A record parked in near-silence made a blend into a hole.)
-    if (drop == null && at >= cues.firstDownbeat && quietBars(to, at, bars)) {
+    // Checked after the record's start has had its say: an intro shorter than the
+    // move, parked at the first downbeat, is as often the quiet kind.
+    if (drop == null && quietBars(to, at, bars)) {
       final half = cues.mixIn - bar * (bars ~/ 2);
       at = quietBars(to, half, math.max(1, bars ~/ 2)) ? cues.mixIn : half;
+      if (at < cues.firstDownbeat) at = cues.firstDownbeat;
     }
-    if (at < cues.firstDownbeat) at = cues.firstDownbeat;
     // Onto its own four-bar grid: the marker at or before, where there is one at or
     // after the first downbeat. Then onto the steady grid: the downbeat the analysis
     // gave can be a frame out, and a record parked a frame out starts a frame out.

@@ -1113,4 +1113,51 @@ void autoMixRules() {
     expect(four.inMilliseconds, lessThanOrEqualTo(7500));
     expect(four.inMilliseconds % 469, 0, reason: 'on a downbeat of its own');
   });
+
+  test('the full law has both records whole at the middle; the stem blend sits there', () {
+    final mid = Booth.levelsFor(0.5, full: true);
+    expect(mid.a, 1.0);
+    expect(mid.b, 1.0);
+    expect(Booth.levelsFor(0.5).a, closeTo(0.707, 0.001), reason: 'equal power: 3 dB down');
+    expect(Booth.levelsFor(0.25, full: true).a, 1.0);
+    expect(Booth.levelsFor(0.25, full: true).b, closeTo(0.707, 0.001));
+    expect(Booth.levelsFor(0.75, full: true).a, closeTo(0.707, 0.001));
+    expect(Booth.levelsFor(1, full: true).a, closeTo(0, 1e-9));
+    expect(Booth.levelsFor(0, full: true).b, 0);
+    for (final kind in [Transition.stemBlend, Transition.announce, Transition.acapellaOut, Transition.swap, Transition.breakSwap]) {
+      expect(kind.full, isTrue, reason: kind.name);
+    }
+    expect(Transition.blend.full, isFalse);
+    // The stem blend's fader does not drift across while the old record has stems to
+    // give: at the middle until 0.7, across by 0.9.
+    final steps = Booth.plan(Transition.stemBlend, from: 'A', to: 'B');
+    for (final k in [0.0, 0.25, 0.5, 0.69]) {
+      expect(Booth.faderOf(steps, k), 0.5, reason: 'at $k');
+    }
+    expect(Booth.faderOf(steps, 0.9), 1.0);
+  });
+
+  test('a short intro is checked for quiet too, and an outro before the intro is no outro', () {
+    // 120 bpm; the intro ends at bar 8 and is near silence: a 16-bar move parks at the
+    // first downbeat — and that is quiet, so the record comes in half way, or on.
+    final beats = [for (var i = 0; i < 480; i++) i * 500];
+    final downs = [for (var i = 0; i < 480; i += 4) beats[i]];
+    TrackTiming timed(List<double> mixDb, {int mixOut = 100}) => TrackTiming(
+          durationMs: 240000,
+          bpm: 120,
+          beats: beats,
+          downbeats: downs,
+          cues: MixCues(firstDownbeatMs: 0, mixInMs: downs[8], mixOutMs: downs[mixOut], soundEndMs: 239000),
+          structure: TrackStructure(barsMs: downs, mixDb: mixDb),
+        );
+    final silent = timed([for (var i = 0; i < 120; i++) i < 8 ? -50.0 : -10.0]);
+    expect(AutoMix.inPoint(silent, bars: 16), Duration(milliseconds: downs[8]), reason: 'already on');
+    final heard = timed([for (var i = 0; i < 120; i++) -10.0]);
+    expect(AutoMix.inPoint(heard, bars: 16), Duration.zero, reason: 'the first downbeat, as before');
+    // An outro cue at bar 3 of a record whose intro ends at bar 8 is nonsense: the
+    // move goes out so many bars before the sound ends instead.
+    final odd = timed([for (var i = 0; i < 120; i++) -10.0], mixOut: 3);
+    final out = AutoMix.outPoint(odd, length: const Duration(seconds: 32));
+    expect(out, greaterThan(Duration(milliseconds: downs[8])));
+  });
 }

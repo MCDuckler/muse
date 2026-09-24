@@ -35,7 +35,7 @@ from . import analysis, beats as _beats, pool
 
 log = logging.getLogger("muse.structure")
 
-VERSION = 1
+VERSION = 2
 _RATE = _beats._RATE
 
 # Below this, relative to the record's loudest bars of the same part, a part is not
@@ -104,8 +104,38 @@ def bar_phase(beats_ms: list[int], neural_downbeats_ms: list[int],
     if votes.sum() < 4:
         return None, 0.0
     best = int(np.argmax(votes))
-    share = float(votes[best] / votes.sum())
-    return (best, share) if share >= 0.6 else (None, share)
+    # Of all the tracker's bars, not only of those that fell on a beat: a grid half a
+    # beat off the record has every bar but the intro's falling on no beat at all,
+    # and the four that did agreed with each other perfectly.
+    share = float(votes[best] / len(neural_downbeats_ms))
+    return (best, share) if share >= 0.5 else (None, share)
+
+
+def _phase_off(house: list[int], neural: list[int]) -> float:
+    """How far the tracker's beats sit from the house's, as a share of a beat: the
+    median of each tracker beat's distance to the nearest house beat. Half a beat is
+    as far as it goes."""
+    h = np.array(house, dtype=float)
+    period = float(np.median(np.diff(h)))
+    if period <= 0:
+        return 0.0
+    nb = np.array(neural, dtype=float)
+    off = [float(np.min(np.abs(h - b))) for b in nb[:: max(1, len(nb) // 200)]]
+    return float(np.median(off)) / period
+
+
+def _neural_line(neural: list[int], from_ms: int, to_ms: int) -> list[int]:
+    """_neural_grid through the tracker's beats where most of them are: a tracker that
+    changed its mind about the phase in an intro is fitted to the record's body, not
+    to a line half way between the two."""
+    nb = np.array(neural, dtype=float)
+    k = np.arange(len(nb))
+    period, at0 = np.polyfit(k, nb, 1)
+    residual = nb - (at0 + period * k)
+    keep = np.abs(residual - np.median(residual)) < 0.25 * period
+    if keep.sum() >= 16 and keep.sum() < len(nb):
+        return _neural_grid([int(round(x)) for x in nb[keep]], from_ms, to_ms)
+    return _neural_grid(neural, from_ms, to_ms)
 
 
 def _same_octave(house: list[int], neural: list[int], sources: dict) -> list[int]:
@@ -146,14 +176,40 @@ def _same_octave(house: list[int], neural: list[int], sources: dict) -> list[int
 def _neural_grid(neural: list[int], from_ms: int, to_ms: int) -> list[int]:
     """One exact grid through the tracker's beats — each is only as fine as a frame of
     twenty milliseconds, and a line through hundreds of them is far finer — from where
-    the sound starts to where it ends."""
+    the sound starts to where it ends. Each beat is fitted at its own count of the
+    period, not its place in the list: a tracker that counted an intro in half time,
+    or missed a beat in a break, has beats two periods apart, and a line fitted as if
+    they were one apart leans over."""
     nb = np.array(neural, dtype=float)
-    k = np.arange(len(nb))
+    if len(nb) < 2:
+        return list(neural)
+    ibi = np.diff(nb)
+    period = float(np.median(ibi))
+    steps = ibi / period
+    # The count where the tracker doubled or halved its count is the same pulse: two
+    # of its beats a period apart, or one in two periods.
+    k = np.concatenate([[0.0], np.cumsum(np.round(steps))])
     period, at0 = np.polyfit(k, nb, 1)
     before = max(0, int(np.floor((at0 - from_ms) / period)))
-    after = max(0, int(np.floor((to_ms - (at0 + period * (len(nb) - 1))) / period)))
-    grid = at0 + period * np.arange(-before, len(nb) + after)
-    return [int(round(x)) for x in grid if x >= 0]
+    after = max(0, int(np.floor((to_ms - (at0 + period * k[-1])) / period)))
+    grid = at0 + period * np.arange(-before, int(k[-1]) + 1 + after)
+    return [int(round(x)) for x in grid if round(x) >= 0]
+
+
+def _neural_line(neural: list[int], from_ms: int, to_ms: int) -> list[int]:
+    """_neural_grid through the tracker's beats where most of them are: a tracker that
+    changed its mind about the phase in an intro is fitted to the record's body, not
+    to a line half way between the two."""
+    nb = np.array(neural, dtype=float)
+    if len(nb) < 16:
+        return _neural_grid(neural, from_ms, to_ms)
+    line = np.array(_neural_grid(neural, from_ms, to_ms), dtype=float)
+    period = float(np.median(np.diff(line)))
+    residual = np.array([nb[i] - line[np.argmin(np.abs(line - nb[i]))] for i in range(len(nb))])
+    keep = np.abs(residual - np.median(residual)) < 0.25 * period
+    if keep.sum() >= 16 and keep.sum() < len(nb):
+        return _neural_grid([int(round(x)) for x in nb[keep]], from_ms, to_ms)
+    return [int(x) for x in line]
 
 
 def _steady(beats_ms: list[int]) -> bool:
@@ -298,7 +354,16 @@ def build(data_dir: pathlib.Path, track: dict, timing: dict,
         if hp is None or not 0.97 < hp / npd < 1.03:
             # The house counted another tempo altogether (or none): the tracker's
             # beats, on one exact line through them, carried to the sound's ends.
-            beats_ms = _neural_grid(neural["beats_ms"], timing.get("lead_ms", 0),
+            beats_ms = _neural_line(neural["beats_ms"], timing.get("lead_ms", 0),
+                                    timing["duration_ms"] - timing.get("tail_ms", 0))
+            sources["beats"] = "neural"
+            sources.pop("octave", None)
+        elif _phase_off(beats_ms, neural["beats_ms"]) > 0.2:
+            # The same count, but the house's beats fall between the tracker's: a grid
+            # locked half a beat off the drums (an intro whose onsets sit on the "and",
+            # and a line that never let go of it). The tracker's line instead.
+            sources["phase_off"] = round(_phase_off(beats_ms, neural["beats_ms"]), 2)
+            beats_ms = _neural_line(neural["beats_ms"], timing.get("lead_ms", 0),
                                     timing["duration_ms"] - timing.get("tail_ms", 0))
             sources["beats"] = "neural"
             sources.pop("octave", None)

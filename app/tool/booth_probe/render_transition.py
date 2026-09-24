@@ -12,14 +12,22 @@ stretch around the move, and the numbers:
 
   vocal_overlap_s   seconds in which both voices are heard at once (over -30 dBFS)
   loudness_range_db how far the level strays from the record before, over the move
-  dip_db            the deepest it sinks below that level
+  dip_db            the deepest the mix sinks under the louder of the two records as
+                    they are (a second at a time): level the move threw away
   phase_error_ms    how far the new record's kicks fall from the old one's, over the
                     overlap — what beat-matching left
   key_clash         chroma disagreement of the two over the overlap, 0 (agree) to 1
+  drums_doubled_s   seconds in which both records' drums are heard at once, neither
+                    with its bass killed — two kicks
+  hole_db           the same over quarter seconds: a short hole
+  start_jump_db     how much the level jumps at the move's first instant (a fader that
+                    opens on a step rather than travels there)
+  end_jump_db       the same at its last (a tail cut, a fader not yet across)
 
   render_transition.py <dir> <idA> <idB> <kind> <bars> [--out ms] [--in ms] [--shift st] [--wav f]
 """
 import argparse
+import math
 import json
 import pathlib
 import subprocess
@@ -200,7 +208,8 @@ def main() -> None:
     n = end_a - start_a
     a_at = lambda i: start_a + i                         # sample of A at output sample i
     b_off = ms_b(in_ms) - ms_a(out_ms)                   # B's sample at output 0 is start_a + b_off
-    steps = move["steps"]
+    # On the bars, as the booth plays them (MixStep.onBars): 0.85 of sixteen is bar 14.
+    steps = [dict(s, at=(math.floor(s["at"] * args.bars + 0.5) / args.bars if args.bars > 1 else s["at"])) for s in move["steps"]]
     def k_of(i): return (a_at(i) - ms_a(out_ms)) / max(1, ms_a(out_ms + length) - ms_a(out_ms))
 
     # Loops: A read back from where a loop was caught.
@@ -246,10 +255,13 @@ def main() -> None:
             total += y * lv[:, None]
         return total
 
+    full = move.get("fader_law") == "full"
     def fader_share(name, k):
         x = lerp_steps(steps, lambda s: s.get("crossfader"), k, 0.0)
         if k < 0: x = 0.0
         if k > 1: x = 1.0
+        if full:   # both whole at the middle (Booth.levelsFor full: true)
+            return (1.0 if x <= 0.5 else np.cos((x - 0.5) * np.pi)) if name == "A" else (1.0 if x >= 0.5 else np.sin(x * np.pi))
         return np.cos(x * np.pi / 2) if name == "A" else np.sin(x * np.pi / 2)
 
     first_a = lambda stem: 1.0
@@ -290,7 +302,19 @@ def main() -> None:
     win = RATE
     levels = [rms_db(mix[i:i + win]) for i in range(i_out, i_end, win) if i + win <= n]
     loudness_range = max(abs(l - before) for l in levels) if levels else 0.0
-    dip = max(0.0, before - min(levels)) if levels else 0.0
+    # The dip: how far the mix sinks under what the records offered at that moment —
+    # the louder of the two as they are, untouched. A record's own quiet stretch is
+    # not the move's fault; a move that takes a record away while the other is still
+    # in its intro is.
+    def full(stems, index_fn):
+        total = np.zeros((n, 2), np.float32)
+        for stem in ("drums", "rest", "vocals"):
+            x = stems[stem]; idx = index_fn(); valid = (idx >= 0) & (idx < len(x))
+            y = np.zeros((n, 2), np.float32); y[valid] = x[idx[valid]]; total += y
+        return total
+    a_full = full(stems_a, lambda: np.arange(n) + start_a); b_full = full(stems_b, lambda: np.arange(n) + start_a + b_off)
+    offered = [max(rms_db(a_full[i:i + win]), rms_db(b_full[i:i + win])) for i in range(i_out, i_end, win) if i + win <= n]
+    dip = max([o - l for o, l in zip(offered, levels)] + [0.0])
     # Voices at once: both vocal stems, as the move leaves them, over -30 dBFS.
     va = a_raw[:, :] * 0
     both = 0.0
@@ -306,6 +330,31 @@ def main() -> None:
         xb = stems_b["vocals"][ib[(ib >= 0) & (ib < len(stems_b["vocals"]))]]
         if len(xa) and len(xb) and rms_db(xa) + 20 * np.log10(max(sa * la, 1e-6)) > -30 and rms_db(xb) + 20 * np.log10(max(sb * lb, 1e-6)) > -30:
             both += 0.25
+    # Two kicks: both drum stems heard, neither deck's low band killed.
+    doubled = 0.0
+    for i in range(i_out, i_end, win // 4):
+        k = k_of(i)
+        sa = fa("A", k); sb = fb("B", k)
+        la = lerp_steps(steps, lambda s: (s["decks"].get("A", {}).get("stems") or {}).get("drums"), k, 1.0, hold_last=True)
+        lb = lerp_steps(steps, lambda s: (s["decks"].get("B", {}).get("stems") or {}).get("drums"), k, 1.0, hold_last=True)
+        ea_ = held(steps, lambda s: s["decks"].get("A", {}).get("eq"), k, {}); eb_ = held(steps, lambda s: s["decks"].get("B", {}).get("eq"), k, {})
+        if ea_.get("low", 0) <= killed or eb_.get("low", 0) <= killed: continue
+        ia = a_index[i:i + win // 4]; ib = np.arange(i, i + win // 4) + start_a + b_off
+        xa = stems_a["drums"][ia[(ia >= 0) & (ia < len(stems_a["drums"]))]]
+        xb = stems_b["drums"][ib[(ib >= 0) & (ib < len(stems_b["drums"]))]]
+        if len(xa) and len(xb) and rms_db(xa) + 20 * np.log10(max(sa * la, 1e-6)) > -30 and rms_db(xb) + 20 * np.log10(max(sb * lb, 1e-6)) > -30:
+            doubled += 0.25
+    # Holes and jumps: quarter seconds, and the instants either side of the move.
+    q = RATE // 4
+    holes = [max(rms_db(a_full[i:i + q]), rms_db(b_full[i:i + q])) - rms_db(mix[i:i + q]) for i in range(i_out, i_end, q) if i + q <= n]
+    hole = max(holes + [0.0])
+    # A jump is the move's doing, not the record's: the mix against the records as
+    # they are, either side of the instant.
+    def jump(at):
+        if at - q < 0 or at + q > n: return 0.0
+        ref = lambda i: max(rms_db(a_full[i:i + q]), rms_db(b_full[i:i + q]))
+        return abs((rms_db(mix[at:at + q]) - ref(at)) - (rms_db(mix[at - q:at]) - ref(at - q)))
+    start_jump = jump(i_out); end_jump = jump(i_end)
     # The beat: the kicks of the two over the overlap.
     ea = onset_env(a_eq[i_out:i_end]); eb = onset_env(b_eq[i_out:i_end])
     m = min(len(ea), len(eb))
@@ -323,6 +372,8 @@ def main() -> None:
         "ratio": round(float(ratio), 4), "vocal_overlap_s": round(float(both), 2),
         "loudness_range_db": round(float(loudness_range), 1), "dip_db": round(float(dip), 1),
         "phase_error_ms": round(float(phase_ms), 1), "key_clash": round(float(key_clash), 3),
+        "drums_doubled_s": round(float(doubled), 2), "hole_db": round(float(hole), 1),
+        "start_jump_db": round(float(start_jump), 1), "end_jump_db": round(float(end_jump), 1),
     }
     print(json.dumps(result))
     if args.json:

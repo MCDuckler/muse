@@ -23,6 +23,36 @@ def test_the_bar_goes_where_the_tracker_heard_it():
     assert structure.bar_phase(beats, [beats[i] for i in (0, 1, 2, 3, 4, 5, 6, 7)])[0] is None
     # Too few to believe.
     assert structure.bar_phase(beats, downs[:3])[0] is None
+    # Bars that fall on no beat at all count against the agreement: four on a beat and
+    # forty between them is no word on the bar.
+    off = [beats[i] + 250 for i in range(2, 64, 4)]
+    assert structure.bar_phase(beats, downs[:4] + off[4:])[0] is None
+
+
+def test_a_grid_half_a_beat_off_the_tracker_is_the_trackers_line():
+    # The house's grid at 160 a minute, and the tracker's beats at the same count but
+    # 180 ms later — on the drums, where the house's intro put its beats between them.
+    house = [200 + i * 375 for i in range(640)]
+    neural = [380 + i * 375 + (10 if i % 2 else -10) for i in range(600)]
+    assert structure._phase_off(house, neural) > 0.4
+    assert structure._phase_off(house, [b + 5 for b in house]) < 0.05
+    line = structure._neural_line(neural, 0, 240000)
+    assert abs(line[0] - 5) < 30 and abs((line[1] - line[0]) - 375) < 0.5
+    assert all(abs((b - 5) % 375) < 30 or abs((b - 5) % 375) > 345 for b in line[:50])
+    # A tracker that counted the intro in half time, on the wrong phase, and the body
+    # right: the line is the body's.
+    mixed = [200 + i * 750 for i in range(40)] + [380 + i * 375 for i in range(80, 600)]
+    line = structure._neural_line(mixed, 0, 240000)
+    assert abs((line[100] - 380) % 375) < 25 or abs((line[100] - 380) % 375) > 350
+
+
+def test_the_neural_grid_is_fitted_at_each_beats_own_count():
+    # Beats a period apart, then a stretch two apart (missed in a break), then one
+    # apart again: the line keeps the period.
+    beats = [i * 500 for i in range(100)] + [50000 + i * 1000 for i in range(1, 20)] + [70000 + i * 500 for i in range(1, 100)]
+    grid = structure._neural_grid(beats, 0, 130000)
+    assert abs((grid[1] - grid[0]) - 500) < 1
+    assert abs(grid[0]) < 5
 
 
 def test_sections_from_the_stems():

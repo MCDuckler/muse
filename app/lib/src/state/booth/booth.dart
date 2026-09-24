@@ -111,6 +111,13 @@ extension TransitionWords on Transition {
   /// Made of stems: nothing it means can be done on a deck playing the whole record.
   bool get needsStems =>
       this == Transition.announce || this == Transition.acapellaOut || this == Transition.stemBlend;
+
+  /// Whether the fader runs the "full" law for this move: both records whole at the
+  /// middle, rather than each at 0.71. The moves that hand the record over a stem or a
+  /// part at a time are one record's worth of sound shared between two decks, and
+  /// the equal-power law took 3 dB off every stem of it for as long as the fader sat
+  /// in the middle — the whole of a stem blend.
+  bool get full => needsStems || this == Transition.swap || this == Transition.breakSwap;
 }
 
 /// What a transition does to one deck at one moment.
@@ -445,10 +452,25 @@ class Booth extends ChangeNotifier {
   // ------------------------------------------------------------------ the fader
   /// Equal power: at the middle both are at 0.71, and the sum of their energy is the
   /// same at every point of the travel. A straight line dips in the middle.
-  static ({double a, double b}) levelsFor(double x) {
-    final k = x.clamp(0.0, 1.0) * math.pi / 2;
+  ///
+  /// [full] is the other law a mixer offers: each record whole until the middle,
+  /// and only then taken down — so a record alone on one side, with the other's
+  /// stems arriving on the other, is not 3 dB down for the fader being there.
+  static ({double a, double b}) levelsFor(double x, {bool full = false}) {
+    final v = x.clamp(0.0, 1.0);
+    if (full) {
+      return (
+        a: v <= 0.5 ? 1.0 : math.cos((v - 0.5) * math.pi),
+        b: v >= 0.5 ? 1.0 : math.sin(v * math.pi),
+      );
+    }
+    final k = v * math.pi / 2;
     return (a: math.cos(k), b: math.sin(k));
   }
+
+  /// Which law the fader runs now: the full one during a move that says so
+  /// (Transition.full), equal power otherwise.
+  bool fullLaw = false;
 
   Future<void> setCrossfader(double x, {Duration over = Duration.zero}) async {
     crossfader = x.clamp(0.0, 1.0);
@@ -459,7 +481,7 @@ class Booth extends ChangeNotifier {
   /// What each channel is actually sending: its share of the crossfader, at its
   /// gain, with the record's own loudness taken off.
   ({double a, double b}) get levels {
-    final l = levelsFor(crossfader);
+    final l = levelsFor(crossfader, full: fullLaw);
     return (a: l.a * gainOf(a) * trimFor(a), b: l.b * gainOf(b) * trimFor(b));
   }
 
@@ -924,7 +946,8 @@ class Booth extends ChangeNotifier {
               'next jump ${_jumpCarry.inMilliseconds} ms further');
         }
       }
-      final share = identical(follower, a) ? levelsFor(crossfader).a : levelsFor(crossfader).b;
+      final l = levelsFor(crossfader, full: fullLaw);
+      final share = identical(follower, a) ? l.a : l.b;
       // Twice at most while it cannot be heard: the first reading after a start is
       // the engine's least reliable, and a jump can land a little short.
       final quiet = (moved < 2 && ms.abs() > 20 && share < 0.25) ||
@@ -1049,6 +1072,8 @@ class Booth extends ChangeNotifier {
   static List<MixStep> plan(Transition kind, {required String from, required String to}) {
     const off = DeckStep(eq: EqSet.flat, filter: 0);
     const noBass = DeckStep(eq: EqSet(low: EqSet.killed));
+    // The bass held down for a build, the kick still there under it.
+    const lessBass = DeckStep(eq: EqSet(low: -18));
     const flat = DeckStep(eq: EqSet.flat);
     switch (kind) {
       case Transition.blend:
@@ -1189,10 +1214,14 @@ class Booth extends ChangeNotifier {
             to: const DeckStep(stems: StemLevels(drums: 1, rest: 1, vocals: 0)),
             from: const DeckStep(stems: StemLevels(drums: 0, rest: 0)),
           }),
-          MixStep(0.7, decks: {
+          // The fader sits in the middle — both whole, by the full law — until the old
+          // record has nothing left; only then does it go across. Travelled from the
+          // first step to the last, it had the old record 8 dB down by half way, with
+          // its bass and voice still to give.
+          MixStep(0.7, crossfader: 0.5, decks: {
             from: const DeckStep(stems: none),
           }),
-          MixStep(0.9, decks: {to: const DeckStep(stems: StemLevels.all)}),
+          MixStep(0.9, crossfader: 1, decks: {to: const DeckStep(stems: StemLevels.all)}),
           MixStep(1, crossfader: 1, decks: {
             from: const DeckStep(eq: EqSet.flat, filter: 0, stems: StemLevels.all),
           }),
@@ -1200,17 +1229,23 @@ class Booth extends ChangeNotifier {
       case Transition.dropSwap:
         // The old record builds and is taken away on the one; the new record is there
         // underneath, bass off, and drops exactly as the old one is gone.
+        // The new record waits with its bass down — down, not off: a full kill took
+        // 10 dB off a bass-heavy record for the whole wait, and with its mid pulled
+        // 12 dB and low-passed at 3 kHz as well, and the old record high-passed to
+        // 4 kHz from half way, the eight bars before the drop were a 20 dB hole. The
+        // thinning is the last quarter's: the old record whole under the new one's
+        // build until then, then caught in a loop and sent up through the filter.
         return [
           MixStep(0, crossfader: 0, decks: {
-            to: const DeckStep(eq: EqSet(low: EqSet.killed, mid: -12), filter: -0.35),
+            to: lessBass,
             from: const DeckStep(filter: 0),
           }),
-          MixStep(0.5, crossfader: 0.25, decks: {from: const DeckStep(filter: 0.2)}),
-          MixStep(0.75, crossfader: 0.35, decks: {
-            from: const DeckStep(filter: 0.55, loopBars: 1),
+          MixStep(0.5, crossfader: 0.5, decks: {from: const DeckStep(filter: 0.15)}),
+          MixStep(0.75, crossfader: 0.65, decks: {
+            from: const DeckStep(filter: 0.4, loopBars: 1),
           }),
-          MixStep(0.875, decks: {from: const DeckStep(filter: 0.75, loopBars: -1)}),
-          MixStep(0.95, crossfader: 0.4, decks: {from: const DeckStep(filter: 0.9, loopBars: -1)}),
+          MixStep(0.875, decks: {from: const DeckStep(filter: 0.55, loopBars: -1)}),
+          MixStep(0.95, crossfader: 0.75, decks: {from: const DeckStep(filter: 0.7, loopBars: -1)}),
           MixStep(1, crossfader: 1, decks: {
             to: const DeckStep(eq: EqSet.flat, filter: 0),
             from: const DeckStep(eq: EqSet.flat, filter: 0, loopBars: 0),
@@ -1223,9 +1258,13 @@ class Booth extends ChangeNotifier {
         return [
           MixStep(0, crossfader: 0, decks: {to: noBass}),
           MixStep(0.5, crossfader: 0.5, decks: {to: flat, from: noBass}),
-          MixStep(0.75, crossfader: 0.6, decks: {from: const DeckStep(echo: 0.35, dry: 1)}),
-          MixStep(0.875, crossfader: 0.6, decks: {from: const DeckStep(echo: 0.6, dry: 1)}),
-          MixStep(0.9, crossfader: 0.6, decks: {from: const DeckStep(echo: 0, dry: 0)}),
+          // The record goes at three quarters, the tail ringing over the last quarter:
+          // gone at 0.9 of eight bars, the deck was stopped under it a bar later with
+          // the echo still going.
+          MixStep(0.625, crossfader: 0.6, decks: {from: const DeckStep(echo: 0.35, dry: 1)}),
+          MixStep(0.75, crossfader: 0.6, decks: {from: const DeckStep(echo: 0.6, dry: 1)}),
+          MixStep(0.78, crossfader: 0.6, decks: {from: const DeckStep(echo: 0, dry: 0)}),
+          MixStep(0.875, crossfader: 0.75),
           MixStep(1, crossfader: 1, decks: {from: const DeckStep(eq: EqSet.flat, filter: 0, echo: 0, dry: 1)}),
         ];
       case Transition.loopBuild:
@@ -1233,13 +1272,13 @@ class Booth extends ChangeNotifier {
         // waiting underneath with its bass off — and on the one it drops.
         return [
           MixStep(0, crossfader: 0, decks: {
-            to: const DeckStep(eq: EqSet(low: EqSet.killed, mid: -8), filter: -0.3),
+            to: lessBass,
             from: const DeckStep(filter: 0),
           }),
-          MixStep(0.5, crossfader: 0.3, decks: {from: const DeckStep(filter: 0.25, loopBars: 4)}),
-          MixStep(0.75, crossfader: 0.4, decks: {from: const DeckStep(filter: 0.5, loopBars: -1)}),
-          MixStep(0.875, crossfader: 0.45, decks: {from: const DeckStep(filter: 0.7, loopBars: -1)}),
-          MixStep(0.9375, crossfader: 0.5, decks: {from: const DeckStep(filter: 0.85, loopBars: -1)}),
+          MixStep(0.5, crossfader: 0.5, decks: {from: const DeckStep(filter: 0.15, loopBars: 4)}),
+          MixStep(0.75, crossfader: 0.65, decks: {from: const DeckStep(filter: 0.4, loopBars: -1)}),
+          MixStep(0.875, crossfader: 0.7, decks: {from: const DeckStep(filter: 0.55, loopBars: -1)}),
+          MixStep(0.9375, crossfader: 0.75, decks: {from: const DeckStep(filter: 0.7, loopBars: -1)}),
           MixStep(1, crossfader: 1, decks: {
             to: const DeckStep(eq: EqSet.flat, filter: 0),
             from: const DeckStep(eq: EqSet.flat, filter: 0, loopBars: 0),
@@ -1247,12 +1286,18 @@ class Booth extends ChangeNotifier {
         ];
       case Transition.breakSwap:
         // The old record's breakdown is the transition: the new record comes in over
-        // it, bass off, and drops on the one where the old would have.
+        // it and drops on the one where the old would have. A breakdown has no drums,
+        // so the new record's build is not fighting a kick: it comes in whole but for
+        // its bass over the first bars, both records whole by the full law (held back
+        // to half the fader and bass off for the whole breakdown, the new record was
+        // 13 dB under what it had to give), takes the bass over at 0.6, and the old
+        // record leaves through the filter as the drop lands.
         return [
-          MixStep(0, crossfader: 0.2, decks: {to: noBass}),
-          MixStep(0.6, crossfader: 0.5, decks: {to: noBass}),
+          MixStep(0, crossfader: 0, decks: {to: noBass}),
+          MixStep(0.3, crossfader: 0.5),
+          MixStep(0.6, crossfader: 0.5, decks: {to: flat, from: noBass}),
           MixStep(0.9, crossfader: 0.7, decks: {from: const DeckStep(filter: 0.4)}),
-          MixStep(1, crossfader: 1, decks: {to: flat, from: off}),
+          MixStep(1, crossfader: 1, decks: {from: off}),
         ];
       case Transition.filterRide:
         // Both ways at once, long: the old record climbs out through the high-pass
@@ -1558,6 +1603,7 @@ class Booth extends ChangeNotifier {
     // Waiting is over and running begins, with nothing awaited in between: there is
     // no moment at which a second MIX finds the booth free.
     arming = null;
+    fullLaw = kind.full;
     final began = DateTime.now();
     final done = Completer<void>();
     _done = done;
@@ -1649,6 +1695,8 @@ class Booth extends ChangeNotifier {
         await setFilter(from, 0);
         await _plain(from);
         master = to;
+        // The fader is across: the same levels under either law.
+        fullLaw = false;
         _done = null;
         if (!done.isCompleted) done.complete();
       }
@@ -1736,6 +1784,8 @@ class Booth extends ChangeNotifier {
     // left the incoming with no bass and a sweep left the outgoing filtered — a knob
     // showing a kill nobody turned. The fader stays where it is: that is the room.
     if (wasRunning) {
+      fullLaw = false;
+      unawaited(_levels());
       for (final d in decks) {
         unawaited(setEq(d, EqSet.flat));
         unawaited(setFilter(d, 0));

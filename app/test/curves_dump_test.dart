@@ -36,6 +36,7 @@ void main() {
         'label': kind.label,
         'needs_stems': kind.needsStems,
         'needs_fx': kind.needsFx,
+        'fader_law': kind.full ? 'full' : 'power',
         'steps': [
           for (final s in steps)
             {

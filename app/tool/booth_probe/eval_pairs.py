@@ -28,7 +28,7 @@ def main():
     drops_b = B["structure"].get("drops_ms") or B.get("drops") or []
     breaks_a = [s for s in A["structure"]["sections"] if s["label"] == "breakdown" and s["start_ms"] > 60000]
     print(f"{a} ({A['bpm']} {A.get('camelot')}) -> {b} ({B['bpm']} {B.get('camelot')}), stretch x{ratio:.3f}")
-    print(f"{'move':12} {'bars':>4} {'voices s':>8} {'range dB':>8} {'dip dB':>6} {'phase ms':>8} {'key':>5}")
+    print(f"{'move':12} {'bars':>4} {'voices s':>8} {'kicks s':>7} {'range dB':>8} {'dip dB':>6} {'hole':>5} {'jump':>9} {'phase ms':>8} {'key':>5}")
     for kind in kinds:
         bars = BARS.get(kind, 16)
         extra = []
@@ -46,7 +46,8 @@ def main():
         if r.returncode != 0:
             print(f"{kind:12} failed: {r.stderr.strip()[-300:]}"); continue
         m = json.loads(r.stdout.strip().splitlines()[-1])
-        print(f"{kind:12} {bars:4} {m['vocal_overlap_s']:8.2f} {m['loudness_range_db']:8.1f} {m['dip_db']:6.1f} {m['phase_error_ms']:8.1f} {m['key_clash']:5.2f}")
+        print(f"{kind:12} {bars:4} {m['vocal_overlap_s']:8.2f} {m['drums_doubled_s']:7.2f} {m['loudness_range_db']:8.1f} {m['dip_db']:6.1f} {m['hole_db']:5.1f} "
+              f"{m['start_jump_db']:4.1f}/{m['end_jump_db']:4.1f} {m['phase_error_ms']:8.1f} {m['key_clash']:5.2f}")
 
 
 if __name__ == "__main__":

@@ -25,6 +25,23 @@ Track _song(int id, double? lufs) => Track.fromJson({
       'loudness_lufs': lufs,
     });
 
+/// The voice bar by bar from the structure's stem levels, as vocals.py reads it off
+/// the stems: its share of the record, -24 dB and under being none, 0 to 255.
+VocalMap? _voice(Map<String, dynamic>? s) {
+  final v = (s?['vocals_db'] as List?)?.cast<num>(), m = (s?['mix_db'] as List?)?.cast<num>();
+  if (v == null || m == null || v.isEmpty) return null;
+  final bars = <int>[];
+  for (var i = 0; i < v.length && i < m.length; i++) {
+    if (v[i] < -50) {
+      bars.add(0);
+      continue;
+    }
+    final share = math.min(0.0, (v[i] - m[i]).toDouble());
+    bars.add((255 * math.max(0.0, 1 - share / -24)).round());
+  }
+  return VocalMap(bars: bars);
+}
+
 void main() {
   test('a set is planned end to end', () {
     final dir = Platform.environment['SET_DIR'];
@@ -32,6 +49,7 @@ void main() {
     final arc = EnergyArc.values.asNameMap()[Platform.environment['SET_ARC'] ?? 'flat'] ?? EnergyArc.flat;
     final style = MixStyle.values.asNameMap()[Platform.environment['SET_STYLE'] ?? 'normal'] ?? MixStyle.normal;
     final timings = <int, TrackTiming>{};
+    final voices = <int, VocalMap?>{};
     final tracks = <Track>[];
     if (dir != null) {
       for (final f in Directory(dir).listSync().whereType<File>()) {
@@ -42,6 +60,7 @@ void main() {
         final j = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
         timings[id] = TrackTiming.fromJson(j);
         tracks.add(_song(id, (j['structure'] as Map?)?['lufs'] as double?));
+        voices[id] = _voice(j['structure'] as Map<String, dynamic>?);
       }
     } else {
       for (var i = 1; i <= 4; i++) {
@@ -72,8 +91,8 @@ void main() {
       final a = ordered[i], b = ordered[i + 1];
       final ta = timings[a.id]!, tb = timings[b.id]!;
       final p = Planner.plan(
-        from: MixSide(timing: ta, stems: true, fx: true),
-        to: MixSide(timing: tb, stems: true, fx: true),
+        from: MixSide(timing: ta, vocals: voices[a.id], stems: true, fx: true),
+        to: MixSide(timing: tb, vocals: voices[b.id], stems: true, fx: true),
         style: style,
         recent: recent,
         random: math.Random(i),
