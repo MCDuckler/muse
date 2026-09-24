@@ -976,6 +976,7 @@ void autoMixRules() {
           bpm: bpm,
           beats: [for (var i = 0; i < 400; i++) i * 469],
           camelot: camelot,
+          keyConfidence: camelot == null ? 0 : 0.8,
           energy: energy,
         );
     final on = t(bpm: 124, camelot: '8A', energy: [200, 220, 240]);

@@ -8,6 +8,7 @@ import '../../api/models.dart';
 import 'booth.dart';
 import 'deck.dart';
 import 'planner.dart';
+import 'set_planner.dart';
 
 /// The booth mixing on its own: the queue played record into record, each
 /// transition chosen from what is known about the two songs and landed on the phrase.
@@ -62,6 +63,39 @@ class AutoMix extends ChangeNotifier {
     unawaited(_prepareNext());
   }
 
+  /// Where the set's energy is meant to head, when the booth orders it itself.
+  EnergyArc arc = EnergyArc.flat;
+
+  void setArc(EnergyArc a) {
+    arc = a;
+    notifyListeners();
+    if (pickBest) unawaited(_prepareNext());
+  }
+
+  /// Records a hand has pinned where they are: the booth orders around them.
+  final locked = <int>{};
+
+  void setLocked(int trackId, bool on) {
+    if (on) {
+      locked.add(trackId);
+    } else {
+      locked.remove(trackId);
+    }
+    notifyListeners();
+    if (pickBest) unawaited(_prepareNext());
+  }
+
+  /// How well [t] would follow the record on now, and why — for the set view.
+  Fit fitOf(Track t) {
+    final on = current;
+    if (on == null) return Fit.nothing;
+    return SetPlanner.fit(booth.timing.peek(on.id), booth.timing.peek(t.id),
+        ta: on, tb: t, fromPitch: masterTargetPitch, before: _before());
+  }
+
+  List<Track> _before() =>
+      [for (var i = math.max(0, _at - 3); i < _at; i++) _tracks[i]];
+
   // ------------------------------------------------------------------ the parts
   /// Which records the server has in parts, as far as the booth has been told.
   final _inParts = <int, bool>{};
@@ -111,41 +145,8 @@ class AutoMix extends ChangeNotifier {
   ///
   /// [fromPitch] is the pitch the record on now is playing at: what [to] has to meet
   /// is the tempo on show, not the one it was made at.
-  static double howWell(TrackTiming? from, TrackTiming? to, {double fromPitch = 1}) {
-    if (from == null || to == null) return 0;
-    var score = 0.0;
-    final ratio = from.gridBpm != null && to.gridBpm != null
-        ? Booth.syncRatio(to.gridBpm!, from.gridBpm! * fromPitch, reach: Booth.bridgeReach)
-        : null;
-    if (ratio != null) {
-      // The less it has to be pulled, the better — as far as the automix will pull,
-      // not as far as a hand's SYNC would.
-      var tempo = 0.5 * (1 - ((ratio - 1).abs() / Booth.bridgeReach)).clamp(0.0, 1.0) + 0.1;
-      // In step only at half or double time: a record of another feel altogether.
-      final raw = to.gridBpm! / (from.gridBpm! * fromPitch);
-      if (raw > math.sqrt2 || raw < 1 / math.sqrt2) tempo *= 0.5;
-      score += tempo;
-    }
-    // The wheel, graded: the same key or a neighbour mixes anywhere; two steps is an
-    // energy move a DJ makes on purpose; further than that clashes.
-    final steps = from.keyStepsTo(to);
-    if (steps != null && steps <= 2) score += const [0.3, 0.25, 0.1][steps];
-    final mine = _energy(from), theirs = _energy(to);
-    if (mine != null && theirs != null) {
-      score += 0.1 * (1 - (mine - theirs).abs()).clamp(0.0, 1.0);
-    }
-    return score;
-  }
-
-  /// A record's energy, 0 to 1: how loud it is as a record — its integrated loudness
-  /// where the house measured it, from -20 LUFS (soft) to -6 (a wall). Null where
-  /// nothing was measured. (It was the loud part against the record's own quietest,
-  /// which is nearly the same number for every record.)
-  static double? _energy(TrackTiming t) {
-    final lufs = t.structure?.lufs;
-    if (lufs != null) return ((lufs + 20) / 14).clamp(0.0, 1.0);
-    return null;
-  }
+  static double howWell(TrackTiming? from, TrackTiming? to, {double fromPitch = 1}) =>
+      SetPlanner.fit(from, to, fromPitch: fromPitch).score;
 
   /// A mix being done again: the moves as they were kept, looked up by the two
   /// records. Where a pair has one, it is followed rather than decided.
@@ -886,27 +887,25 @@ class AutoMix extends ChangeNotifier {
   /// keeps its place in the queue, and is asked about so the next choice is better
   /// informed. Nothing is dropped — the order changes, the records do not.
   Future<void> _bringTheBestForward() async {
-    final from = booth.master.timing;
-    if (from == null || _at + 2 > _tracks.length - 1) return;
-    var bestAt = _at + 1;
-    var best = -1.0;
-    for (var i = _at + 1; i < _tracks.length; i++) {
-      final t = booth.timing.peek(_tracks[i].id);
-      if (t == null) {
-        unawaited(booth.timing.of(_tracks[i]));
-        continue;
-      }
-      final score = howWell(from, t, fromPitch: masterTargetPitch);
-      if (score > best) {
-        best = score;
-        bestAt = i;
-      }
+    final on = current;
+    if (on == null || booth.master.timing == null || _at + 2 > _tracks.length - 1) return;
+    final rest = _tracks.sublist(_at + 1);
+    for (final t in rest) {
+      if (booth.timing.peek(t.id) == null) unawaited(booth.timing.of(t));
     }
-    if (bestAt == _at + 1 || best <= 0) return;
-    booth.note(BoothEventKind.next, 'Picked ${_tracks[bestAt].displayTitle}: it fits best');
-    final moved = [..._tracks];
-    moved.insert(_at + 1, moved.removeAt(bestAt));
-    _tracks = moved;
+    final ordered = SetPlanner.order(rest,
+        from: on,
+        timingOf: booth.timing.peek,
+        arc: arc,
+        locked: locked,
+        before: _before(),
+        fromPitch: masterTargetPitch);
+    if (ordered.first.id != rest.first.id) {
+      final why = fitOf(ordered.first).why;
+      booth.note(BoothEventKind.next,
+          'Picked ${ordered.first.displayTitle}${why.isEmpty ? '' : ': $why'}');
+    }
+    _tracks = [..._tracks.sublist(0, _at + 1), ...ordered];
   }
 
   bool _going = false;

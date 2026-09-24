@@ -36,6 +36,8 @@ TrackTiming beatsEvery(double ms,
     beats: beats,
     downbeats: [for (var i = 0; i < count; i += 4) beats[i]],
     camelot: camelot,
+    // A key the house is sure of: a guess at one says nothing (SetPlanner.keyMove).
+    keyConfidence: camelot == null ? 0 : 0.8,
   );
 }
 

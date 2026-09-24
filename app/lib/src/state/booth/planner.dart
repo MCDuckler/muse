@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import '../../api/models.dart';
 import 'automix.dart';
 import 'booth.dart';
+import 'set_planner.dart';
 
 /// One record's side of a transition, as the planner sees it.
 class MixSide {
@@ -103,7 +104,9 @@ class Planner {
         !to.timing.hasBeats) {
       return [MixPlan(base.kind, base.bars, why: 'the only way these two go together')];
     }
-    final inKey = from.timing.inKeyWith(to.timing);
+    // Two keys clash where the house is sure enough of both; a guess at a key is no
+    // reason to reach for the filter.
+    final inKey = !SetPlanner.keysClash(from.timing, to.timing);
     final stems = from.stems && to.stems;
     final likes = _likes[style]!;
     final candidates = <MixPlan>[];
