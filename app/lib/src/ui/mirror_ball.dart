@@ -7,6 +7,68 @@ import 'package:flutter/material.dart';
 import 'beat_pulse.dart';
 import 'motion.dart';
 
+/// What the room's light is doing this frame, for the things standing in it.
+///
+/// The light layer works out where the moving heads are pointing and how hard the
+/// desk has them, and says so here, in the screen's own coordinates; the record and
+/// the glass panel listen, and turn their highlights to it — the grooves throw the
+/// beam back along the line to the head, the glass catches its reflection and lights
+/// up along the edge nearest it. Nothing here rebuilds a widget: each listener is a
+/// painter, repainting.
+class RoomLight extends ChangeNotifier {
+  /// The heads' beams, in global coordinates, and each one's colour.
+  List<HeadBeam> heads = const [];
+  List<Color> colours = const [];
+
+  /// Where the ball hangs, in global coordinates.
+  Offset? ball;
+
+  /// How lit the room is, 0 to 1; the beat, one on it and falling; the bar's swell.
+  double life = 0;
+  double beat = 0;
+  double swing = 0.5;
+  bool onPaper = false;
+
+  void set({
+    required List<HeadBeam> heads,
+    required List<Color> colours,
+    required Offset ball,
+    required double life,
+    required double beat,
+    required double swing,
+    required bool onPaper,
+  }) {
+    this.heads = heads;
+    this.colours = colours;
+    this.ball = ball;
+    this.life = life;
+    this.beat = beat;
+    this.swing = swing;
+    this.onPaper = onPaper;
+    notifyListeners();
+  }
+
+  /// The room gone dark: what the listeners paint when the lights are off.
+  void out() {
+    if (life == 0 && heads.isEmpty) return;
+    heads = const [];
+    life = 0;
+    beat = 0;
+    notifyListeners();
+  }
+}
+
+/// The room the light layer and the things in it share. Put round a screen; the
+/// light layer inside it publishes, and anything else inside it may listen.
+class RoomLightScope extends InheritedNotifier<RoomLight> {
+  const RoomLightScope({super.key, required RoomLight light, required super.child}) : super(notifier: light);
+
+  /// The room, without a rebuild dependency on it: painters take the notifier as
+  /// their repaint listenable instead, which is the whole point.
+  static RoomLight? maybeOf(BuildContext context) =>
+      context.getInheritedWidgetOfExactType<RoomLightScope>()?.notifier;
+}
+
 /// The light in the room while a record plays.
 ///
 /// The logo is a disco ball, and a room with a disco ball in it is lit in a particular
@@ -53,6 +115,10 @@ class MirrorBallLight extends StatefulWidget {
 }
 
 class _MirrorBallLightState extends State<MirrorBallLight> with TickerProviderStateMixin {
+  /// The layer's own box, for saying where the light is in the screen's coordinates.
+  final _paint = GlobalKey();
+  RoomLight? _room;
+  ValueListenable<double>? _heard;
   // Three turns of the ball in four minutes: a whole number of them, so the loop
   // comes round to exactly where it started and there is no frame where every spot
   // jumps.
@@ -70,21 +136,59 @@ class _MirrorBallLightState extends State<MirrorBallLight> with TickerProviderSt
   void initState() {
     super.initState();
     _life.addStatusListener((s) {
-      if (s == AnimationStatus.dismissed) _clock.stop();
+      if (s == AnimationStatus.dismissed) {
+        _clock.stop();
+        _room?.out();
+      }
     });
+    _clock.addListener(_publish);
+    _life.addListener(_publish);
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _room = RoomLightScope.maybeOf(context);
+    _listen();
     _run();
   }
 
   @override
   void didUpdateWidget(MirrorBallLight old) {
     super.didUpdateWidget(old);
+    _listen();
     if (old.playing != widget.playing) _run();
   }
+
+  void _listen() {
+    if (identical(_heard, widget.pulse)) return;
+    _heard?.removeListener(_publish);
+    _heard = widget.pulse?..addListener(_publish);
+  }
+
+  /// Where the light is this frame, told to the room — the same sums the painter
+  /// does, in the screen's coordinates rather than the layer's.
+  void _publish() {
+    final room = _room;
+    if (room == null || !mounted) return;
+    final box = _paint.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize || box.size.isEmpty) return;
+    final origin = box.localToGlobal(Offset.zero);
+    final frame = _Room.frameOf(_clock.value, widget.pulse);
+    final size = box.size;
+    room.set(
+      heads: [for (final h in headsOnThePage(size, frame.seconds, cue: frame.cue, beat: frame.beat, swing: frame.swing)) h.shifted(origin)],
+      colours: _headColours ?? const [],
+      ball: ballOver(size) + origin,
+      life: _life.value,
+      beat: frame.beat,
+      swing: frame.swing,
+      onPaper: _onPaper,
+    );
+  }
+
+  List<Color>? _headColours;
+  bool _onPaper = false;
 
   void _run() {
     final still = stillness(context);
@@ -107,6 +211,7 @@ class _MirrorBallLightState extends State<MirrorBallLight> with TickerProviderSt
 
   @override
   void dispose() {
+    _heard?.removeListener(_publish);
     _clock.dispose();
     _life.dispose();
     super.dispose();
@@ -116,6 +221,7 @@ class _MirrorBallLightState extends State<MirrorBallLight> with TickerProviderSt
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final onPaper = scheme.brightness == Brightness.light;
+    _onPaper = onPaper;
     final album = widget.tint ?? scheme.primary;
     // The gels. A club points two or three lamps at the ball; here one is left clear
     // (warm, as a lamp is), one is cut from the record's own colour and one is the
@@ -132,10 +238,12 @@ class _MirrorBallLightState extends State<MirrorBallLight> with TickerProviderSt
       _turned(gel, 40, onPaper),
       onPaper ? _turned(gel, -60, onPaper) : const Color(0xFFFFE2B8),
     ];
+    _headColours = heads;
     return IgnorePointer(
       child: ExcludeSemantics(
         child: RepaintBoundary(
           child: CustomPaint(
+            key: _paint,
             size: Size.infinite,
             painter: _Room(
               clock: _clock,
@@ -258,6 +366,9 @@ class HeadBeam {
   const HeadBeam({required this.at, required this.rx, required this.ry, required this.lean, required this.level});
   final Offset at;
   final double rx, ry, lean, level;
+
+  /// The same beam in another frame of reference, [by] along.
+  HeadBeam shifted(Offset by) => HeadBeam(at: at + by, rx: rx, ry: ry, lean: lean, level: level);
 }
 
 /// Where the moving heads are pointing at [seconds] into the set, on a page of [size].
@@ -371,21 +482,27 @@ class _Room extends CustomPainter {
     return _atlas = picture.toImageSync((_cell * (_aspects.length + 1)).round(), _cell.round());
   }
 
+  /// The frame's numbers from the clock and the beat: the seconds into the set, the
+  /// beat, the bar's swell, and how long the desk holds a cue. The desk breathes
+  /// with the bar where it knows one, and slowly on its own where it does not.
+  static ({double seconds, double beat, double swing, double cue}) frameOf(double clock, ValueListenable<double>? pulse) {
+    final seconds = clock * 240;
+    final beat = pulse?.value ?? 0.0;
+    final signal = pulse is BeatSignal ? pulse : null;
+    final beatSeconds = signal?.beatSeconds;
+    final swing = beatSeconds != null ? signal!.swing : 0.5 + 0.5 * math.sin(seconds * 0.6);
+    final cue = beatSeconds != null ? beatSeconds * 32 : 24.0;
+    return (seconds: seconds, beat: beat, swing: swing, cue: cue);
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
     final lit = life.value;
     if (lit <= 0.001) return;
     final turn = clock.value * 3 * 2 * math.pi;
-    final seconds = clock.value * 240;
-    final p = pulse;
-    final beat = p?.value ?? 0.0;
-    final signal = p is BeatSignal ? p : null;
-    final beatSeconds = signal?.beatSeconds;
-    // The desk breathes with the bar where it knows one, and slowly on its own where
-    // it does not.
-    final swing = beatSeconds != null ? signal!.swing : 0.5 + 0.5 * math.sin(seconds * 0.6);
-    final cue = beatSeconds != null ? beatSeconds * 32 : 24.0;
+    final frame = frameOf(clock.value, pulse);
+    final seconds = frame.seconds, beat = frame.beat, swing = frame.swing, cue = frame.cue;
     // Light adds to a dark room; on paper it can only tint, which is a multiply.
     final blend = onPaper ? BlendMode.multiply : BlendMode.plus;
     // Paper takes a tint where a dark room takes light, and needs more of it to show.

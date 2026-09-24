@@ -13,6 +13,7 @@ import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/art_cache.dart';
 import '../state/sleeve_board.dart';
+import 'mirror_ball.dart' show RoomLight, RoomLightScope;
 import 'sleeve_art.dart';
 import 'sleeve_ink.dart';
 import 'stage/arm_geometry.dart';
@@ -1736,6 +1737,8 @@ class _DeckState extends State<Deck> {
                           label: widget.label,
                           strength: placed,
                           spin: widget.spin,
+                          room: RoomLightScope.maybeOf(context),
+                          toLocal: (g) => (context.findRenderObject() as RenderBox?)?.globalToLocal(g) ?? g,
                         ),
                       ),
                     ),
@@ -2570,7 +2573,19 @@ class RecordLight extends CustomPainter {
     required this.label,
     required this.strength,
     this.spin,
-  });
+    this.room,
+    this.toLocal,
+  }) : super(repaint: room);
+
+  /// The room's light, where the record stands in one: the moving heads' beams put
+  /// their own pair of wedges on the grooves, along the line from the label to the
+  /// head, turning as the head sweeps — which is what a record under a moving light
+  /// does, and the one thing that says the light is in the room rather than painted
+  /// on the page. Null, and the two fixed lamps are all there is.
+  final RoomLight? room;
+
+  /// The screen's coordinates into this painter's.
+  final Offset Function(Offset global)? toLocal;
 
   /// How wide the record is.
   final double size;
@@ -2591,19 +2606,55 @@ class RecordLight extends CustomPainter {
   /// says the record is turning. Kept as a parameter so nothing that builds one breaks.
   final Animation<double>? spin;
 
-  /// One lobe of light, as stops round a sweep: nothing, up to a peak, nothing.
-  static void _lobe(List<Color> colours, List<double> stops, double at, double half,
-      double peak) {
-    for (final (where, much) in [
-      (at - half, 0.0),
-      (at - half * 0.35, peak * 0.72),
-      (at, peak),
-      (at + half * 0.35, peak * 0.72),
-      (at + half, 0.0),
-    ]) {
-      stops.add(where.clamp(0.0, 1.0));
-      colours.add(Color.fromRGBO(255, 255, 255, much));
+  /// The sweep round the record as stops: every lobe summed at each of [samples]
+  /// points round the circle, so lobes that overlap, or straddle the seam at zero,
+  /// simply add — a sweep built from each lobe's own stops had an edge wherever two
+  /// met or one was cut at the seam. Each lobe is a bell [half] wide.
+  static void _sweep(List<Color> colours, List<double> stops, List<(double, double, double, Color)> lobes,
+      {int samples = 96}) {
+    for (var i = 0; i <= samples; i++) {
+      final t = i / samples;
+      var sum = 0.0;
+      var r = 0.0, g = 0.0, b = 0.0;
+      for (final (at, half, peak, colour) in lobes) {
+        var d = (t - at).abs();
+        if (d > 0.5) d = 1 - d;
+        if (d >= half) continue;
+        final w = peak * (0.5 + 0.5 * math.cos(math.pi * d / half));
+        sum += w;
+        r += colour.r * w;
+        g += colour.g * w;
+        b += colour.b * w;
+      }
+      stops.add(t);
+      colours.add(sum <= 0
+          ? const Color(0x00FFFFFF)
+          : Color.from(alpha: sum.clamp(0.0, 1.0), red: r / sum, green: g / sum, blue: b / sum));
     }
+  }
+
+  /// The lobes the room's heads put on a record whose middle is at [middle] with
+  /// radius [r], as (where round the sweep from [start], how bright, in what colour):
+  /// one along the line to the head and its twin straight across, brighter the nearer
+  /// the head's beam is to the record. Pure, so it can be checked.
+  static List<(double, double, Color)> headLobes(RoomLight room, Offset middle, double r, double start,
+      Offset Function(Offset) toLocal) {
+    final out = <(double, double, Color)>[];
+    for (final (i, h) in room.heads.indexed) {
+      final v = toLocal(h.at) - middle;
+      final away = v.distance / r;
+      // Within a radius of the rim the beam is on the record; four out, it is not.
+      final near = (1 - (away - 1.0) / 3.0).clamp(0.0, 1.0);
+      if (near <= 0) continue;
+      final angle = math.atan2(v.dy, v.dx);
+      var at = ((angle - start) / (2 * math.pi)) % 1.0;
+      if (at < 0) at += 1;
+      final peak = 0.26 * h.level * near * room.life;
+      final colour = Color.lerp(room.colours.length > i ? room.colours[i] : Colors.white, Colors.white, 0.45)!;
+      out.add((at, peak, colour));
+      out.add(((at + 0.5) % 1.0, peak * 0.8, colour));
+    }
+    return out;
   }
 
   @override
@@ -2625,10 +2676,17 @@ class RecordLight extends CustomPainter {
     // Each has a twin straight across the record, on the half that is behind the
     // covers. Not drawn: they would only show as a wedge cut off along the line the
     // record sinks into the deck at.
-    _lobe(colours, stops, 0.125, 0.105, 0.30 * strength);   // the lamp
-    _lobe(colours, stops, 0.345, 0.070, 0.13 * strength);   // the second lamp
     // The first lobe's centre points up and to the left.
     final start = -2.20 - 0.125 * 2 * math.pi;
+    // With the room lit, its lamps are the ones that count: the fixed pair steps back.
+    final lit = room?.life ?? 0.0;
+    final lobes = <(double, double, double, Color)>[
+      (0.125, 0.105, 0.30 * strength * (1 - 0.5 * lit), Colors.white),   // the lamp
+      (0.345, 0.070, 0.13 * strength * (1 - 0.5 * lit), Colors.white),   // the second lamp
+      if (room != null && toLocal != null && lit > 0)
+        for (final (at, peak, colour) in headLobes(room!, middle, r, start, toLocal!)) (at, 0.14, peak * strength, colour),
+    ];
+    _sweep(colours, stops, lobes);
 
     canvas.save();
     // Only where the record is actually drawn: the light cannot go on past the edge
@@ -2679,7 +2737,8 @@ class RecordLight extends CustomPainter {
       old.size != size ||
       old.drop != drop ||
       old.label != label ||
-      old.strength != strength;
+      old.strength != strength ||
+      old.room != room;
 }
 
 /// A reflection under something, on a surface that is barely there.

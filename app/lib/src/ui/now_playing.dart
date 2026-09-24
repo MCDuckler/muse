@@ -54,8 +54,23 @@ String formatTime(Duration d) {
 /// the log, so a browser that dies with the player open says so.
 bool _openedOnce = false;
 
-class NowPlayingScreen extends StatelessWidget {
+class NowPlayingScreen extends StatefulWidget {
   const NowPlayingScreen({super.key});
+
+  @override
+  State<NowPlayingScreen> createState() => _NowPlayingScreenState();
+}
+
+class _NowPlayingScreenState extends State<NowPlayingScreen> {
+  /// The room's light, shared between the layer that makes it and the record and
+  /// the glass that stand in it.
+  final _room = RoomLight();
+
+  @override
+  void dispose() {
+    _room.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -68,7 +83,7 @@ class NowPlayingScreen extends StatelessWidget {
     if (player == null) return const SizedBox.shrink();
 
     // The whole player is where the arm can be picked up from: see ArmReach.
-    return ArmReach(child: StreamBuilder<PlayerSnapshot>(
+    return RoomLightScope(light: _room, child: ArmReach(child: StreamBuilder<PlayerSnapshot>(
       // Coarse on purpose. The record turning, the disc sliding out and the printed
       // background are animations with their own clocks; rebuilding the screen under
       // them four times a second is what made them stutter. The scrubber keeps its own
@@ -283,8 +298,9 @@ class NowPlayingScreen extends StatelessWidget {
                               GlassSurface(
                                 borderRadius: BorderRadius.circular(20),
                                 topBorder: false,
-                                opacity: 0.55,
-                                blur: 30,
+                                opacity: 0.42,
+                                blur: 36,
+                                sheen: true,
                                 padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
@@ -309,8 +325,9 @@ class NowPlayingScreen extends StatelessWidget {
                               GlassSurface(
                                 borderRadius: BorderRadius.circular(22),
                                 topBorder: false,
-                                opacity: 0.55,
-                                blur: 30,
+                                opacity: 0.42,
+                                blur: 36,
+                                sheen: true,
                                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
@@ -463,7 +480,7 @@ class NowPlayingScreen extends StatelessWidget {
           ),
         );
       },
-    ));
+    )));
   }
 
   /// The spectrum, where it is switched on and the platform can read one.
@@ -1761,7 +1778,7 @@ class _SleeveTools extends StatelessWidget {
 /// layout has no way to offer: there, opening the player means covering everything.
 /// The parts are the same parts — the same artwork, the same words, the same bar and
 /// the same buttons — laid out narrow and tall.
-class DeskNowPlaying extends StatelessWidget {
+class DeskNowPlaying extends StatefulWidget {
   const DeskNowPlaying({super.key, this.onClose});
 
   /// Folding the panel away again.
@@ -1781,6 +1798,21 @@ class DeskNowPlaying extends StatelessWidget {
       forTheHead + _Artwork.boxFor(width - 48) + forTheRest;
 
   @override
+  State<DeskNowPlaying> createState() => _DeskNowPlayingState();
+}
+
+class _DeskNowPlayingState extends State<DeskNowPlaying> {
+  final _room = RoomLight();
+
+  VoidCallback? get onClose => widget.onClose;
+
+  @override
+  void dispose() {
+    _room.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
     final player = app.player;
@@ -1789,7 +1821,7 @@ class DeskNowPlaying extends StatelessWidget {
     final text = Theme.of(context).textTheme;
 
     // The whole player is where the arm can be picked up from: see ArmReach.
-    return ArmReach(child: StreamBuilder<PlayerSnapshot>(
+    return RoomLightScope(light: _room, child: ArmReach(child: StreamBuilder<PlayerSnapshot>(
       stream: player.changes,
       initialData: player.last,
       builder: (context, snap) {
@@ -1842,8 +1874,9 @@ class DeskNowPlaying extends StatelessWidget {
               child: GlassSurface(
                 borderRadius: BorderRadius.circular(22),
                 topBorder: false,
-                opacity: 0.55,
-                blur: 30,
+                opacity: 0.42,
+                blur: 36,
+                sheen: true,
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -1896,7 +1929,7 @@ class DeskNowPlaying extends StatelessWidget {
             // song's own buttons are the panel's job, and a record is not allowed to
             // push them off the bottom. Generous on purpose — being a little smaller
             // than it could be is nothing, and being a little too big is a scrollbar.
-            final side = _Artwork.sideIn(c.maxHeight - forTheHead - forTheRest)
+            final side = _Artwork.sideIn(c.maxHeight - DeskNowPlaying.forTheHead - DeskNowPlaying.forTheRest)
                 .clamp(0.0, c.maxWidth - 48);
             if (side >= 140) {
               return Column(
@@ -1950,7 +1983,7 @@ class DeskNowPlaying extends StatelessWidget {
                 left: 0,
                 right: 0,
                 child: IgnorePointer(
-                  child: _StatusSlip(status: NowPlayingScreen._statusLine(s, track)),
+                  child: _StatusSlip(status: _NowPlayingScreenState._statusLine(s, track)),
                 ),
               ),
               if (app.discoLights)
@@ -1969,7 +2002,7 @@ class DeskNowPlaying extends StatelessWidget {
           ),
         );
       },
-    ));
+    )));
   }
 }
 
