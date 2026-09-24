@@ -20,6 +20,18 @@ class RoomLight extends ChangeNotifier {
   List<HeadBeam> heads = const [];
   List<Color> colours = const [];
 
+  /// The ball's spots, in global coordinates, and the lamps that throw them: a thing
+  /// standing in the room draws the ones that land on it in its own material.
+  List<BallSpot> spots = const [];
+  List<Color> lamps = const [];
+
+  /// What stands in the room, by whoever put it there: its outline in global
+  /// coordinates. The wall behind gets their shadows, thrown away from each beam.
+  final placed = <Object, RRect>{};
+
+  void place(Object key, RRect outline) => placed[key] = outline;
+  void unplace(Object key) => placed.remove(key);
+
   /// Where the ball hangs, in global coordinates.
   Offset? ball;
 
@@ -32,6 +44,8 @@ class RoomLight extends ChangeNotifier {
   void set({
     required List<HeadBeam> heads,
     required List<Color> colours,
+    required List<BallSpot> spots,
+    required List<Color> lamps,
     required Offset ball,
     required double life,
     required double beat,
@@ -40,6 +54,8 @@ class RoomLight extends ChangeNotifier {
   }) {
     this.heads = heads;
     this.colours = colours;
+    this.spots = spots;
+    this.lamps = lamps;
     this.ball = ball;
     this.life = life;
     this.beat = beat;
@@ -52,6 +68,7 @@ class RoomLight extends ChangeNotifier {
   void out() {
     if (life == 0 && heads.isEmpty) return;
     heads = const [];
+    spots = const [];
     life = 0;
     beat = 0;
     notifyListeners();
@@ -176,9 +193,12 @@ class _MirrorBallLightState extends State<MirrorBallLight> with TickerProviderSt
     final origin = box.localToGlobal(Offset.zero);
     final frame = _Room.frameOf(_clock.value, widget.pulse);
     final size = box.size;
+    final turn = _clock.value * 3 * 2 * math.pi;
     room.set(
       heads: [for (final h in headsOnThePage(size, frame.seconds, cue: frame.cue, beat: frame.beat, swing: frame.swing)) h.shifted(origin)],
       colours: _headColours ?? const [],
+      spots: [for (final s in spotsOnThePage(size, turn, lamps: (_lamps ?? const []).length)) s.shifted(origin)],
+      lamps: _lamps ?? const [],
       ball: ballOver(size) + origin,
       life: _life.value,
       beat: frame.beat,
@@ -188,6 +208,7 @@ class _MirrorBallLightState extends State<MirrorBallLight> with TickerProviderSt
   }
 
   List<Color>? _headColours;
+  List<Color>? _lamps;
   bool _onPaper = false;
 
   void _run() {
@@ -239,6 +260,7 @@ class _MirrorBallLightState extends State<MirrorBallLight> with TickerProviderSt
       onPaper ? _turned(gel, -60, onPaper) : const Color(0xFFFFE2B8),
     ];
     _headColours = heads;
+    _lamps = lamps;
     return IgnorePointer(
       child: ExcludeSemantics(
         child: RepaintBoundary(
@@ -252,6 +274,8 @@ class _MirrorBallLightState extends State<MirrorBallLight> with TickerProviderSt
               heads: heads,
               onPaper: onPaper,
               pulse: widget.pulse,
+              room: _room,
+              toLocal: (g) => (_paint.currentContext?.findRenderObject() as RenderBox?)?.globalToLocal(g) ?? g,
             ),
           ),
         ),
@@ -290,6 +314,10 @@ class BallSpot {
   final Offset at;
   final double wide;
   final double tall;
+
+  /// The same spot in another frame of reference, [by] along.
+  BallSpot shifted(Offset by) =>
+      BallSpot(at: at + by, wide: wide, tall: tall, lean: lean, far: far, lamp: lamp, tile: tile);
 
   /// How far it is turned: a spot lies along the arc it is travelling.
   final double lean;
@@ -431,6 +459,8 @@ class _Room extends CustomPainter {
     required this.heads,
     required this.onPaper,
     this.pulse,
+    this.room,
+    this.toLocal,
   }) : super(repaint: Listenable.merge([clock, life, if (pulse != null) pulse]));
 
   final AnimationController clock;
@@ -439,6 +469,11 @@ class _Room extends CustomPainter {
   final List<Color> heads;
   final bool onPaper;
   final ValueListenable<double>? pulse;
+
+  /// What stands in the room, for their shadows on the wall; null where nothing is
+  /// listening.
+  final RoomLight? room;
+  final Offset Function(Offset global)? toLocal;
 
   /// The sprites the spots are stamped from, made once: a soft square of light in
   /// three widths, and a glint — the four-pointed star a mirror throws when it catches
@@ -516,6 +551,39 @@ class _Room extends CustomPainter {
     final spots = spotsOnThePage(size, turn, lamps: lamps.length);
     if (!onPaper) _haze(canvas, size, spots, lit, beat, swing);
     _spots(canvas, size, spots, seconds, beat, lit * strength, blend);
+    _shadows(canvas, beams, lit);
+  }
+
+  /// The shadows of what stands in the room, on the wall behind: each beam throws
+  /// one away from itself, softer and further the nearer the beam; and under
+  /// everything a little darkness where it meets the wall, which is what says it is
+  /// standing there and not printed on it.
+  void _shadows(Canvas canvas, List<HeadBeam> beams, double lit) {
+    final r = room, local = toLocal;
+    if (r == null || local == null || r.placed.isEmpty) return;
+    final ink = onPaper ? 0.5 : 1.0;
+    for (final outline in r.placed.values) {
+      final tl = local(Offset(outline.left, outline.top));
+      final o = outline.shift(tl - Offset(outline.left, outline.top));
+      final centre = o.center;
+      canvas.drawRRect(
+          o.inflate(2),
+          Paint()
+            ..color = Colors.black.withValues(alpha: 0.16 * ink)
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10));
+      for (final b in beams) {
+        final away = centre - b.at;
+        final d = away.distance;
+        if (d < 1) continue;
+        final near = (1 - d / (o.width + o.height)).clamp(0.0, 1.0);
+        final throwBy = away / d * (10 + 22 * near);
+        canvas.drawRRect(
+            o.shift(throwBy).inflate(4 * near),
+            Paint()
+              ..color = Colors.black.withValues(alpha: (0.10 + 0.22 * near) * b.level * lit * ink)
+              ..maskFilter = MaskFilter.blur(BlurStyle.normal, 14 + 14 * near));
+      }
+    }
   }
 
   /// The wall behind the ball, lit by the lamps that point at it: a broad glow at the

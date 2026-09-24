@@ -1451,6 +1451,18 @@ class _Jacket extends StatelessWidget {
   Widget build(BuildContext context) => SizedBox(
         width: size,
         height: size,
+        child: Stack(
+          fit: StackFit.passthrough,
+          children: [
+            _picture(context),
+            const Positioned.fill(child: CardLight()),
+          ],
+        ),
+      );
+
+  Widget _picture(BuildContext context) => SizedBox(
+        width: size,
+        height: size,
         child: url == null
             ? (track == null
                 ? const SizedBox.shrink()
@@ -1471,6 +1483,113 @@ class _Jacket extends StatelessWidget {
                 gaplessPlayback: true,
                 opacity: AlwaysStoppedAnimation(dim)),
       );
+}
+
+/// The room's light on a piece of card. Cardboard is matte: each moving head's cone
+/// lays a soft wash of its colour across it, and the ball's spots land on it as
+/// they land on a wall, a shade softer. Inside the sleeve's own transform, so a
+/// sleeve turned to the side takes its light turned with it — and inside its
+/// reflection, which is why the reflection is lit too. It also tells the room where
+/// the card stands, for the wall's shadow of it.
+class CardLight extends StatefulWidget {
+  const CardLight({super.key});
+
+  @override
+  State<CardLight> createState() => _CardLightState();
+}
+
+class _CardLightState extends State<CardLight> {
+  RoomLight? _room;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _room = RoomLightScope.maybeOf(context);
+  }
+
+  @override
+  void dispose() {
+    _room?.unplace(this);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final room = _room;
+    if (room == null) return const SizedBox.shrink();
+    return IgnorePointer(
+      child: CustomPaint(
+        painter: _CardLightPainter(
+          room: room,
+          placeAs: this,
+          box: () => context.findRenderObject() as RenderBox?,
+        ),
+      ),
+    );
+  }
+}
+
+class _CardLightPainter extends CustomPainter {
+  _CardLightPainter({required this.room, required this.placeAs, required this.box}) : super(repaint: room);
+  final RoomLight room;
+  final Object placeAs;
+  final RenderBox? Function() box;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final b = box();
+    if (b == null || !b.hasSize) return;
+    // Where the card stands, as the screen sees it — through its own perspective.
+    final tl = b.localToGlobal(Offset.zero), br = b.localToGlobal(Offset(size.width, size.height));
+    room.place(placeAs, RRect.fromRectAndRadius(Rect.fromPoints(tl, br), const Radius.circular(2)));
+    if (room.life <= 0) return;
+    final blend = room.onPaper ? BlendMode.multiply : BlendMode.plus;
+    final rect = Offset.zero & size;
+    canvas.save();
+    canvas.clipRect(rect);
+    for (final (i, h) in room.heads.indexed) {
+      final at = b.globalToLocal(h.at);
+      final colour = room.colours.length > i ? room.colours[i] : Colors.white;
+      final reach = h.rx * 1.1;
+      if ((at - rect.center).distance > reach + size.longestSide) continue;
+      final a = (room.onPaper ? 0.5 : 0.30) * h.level * room.life;
+      canvas.drawCircle(
+          at,
+          reach,
+          Paint()
+            ..blendMode = blend
+            ..shader = ui.Gradient.radial(at, reach, [
+              _light(colour, a),
+              _light(colour, a * 0.45),
+              _light(colour, 0),
+            ], const [0.0, 0.45, 1.0]));
+    }
+    final spot = Paint()..blendMode = blend;
+    for (final s in room.spots) {
+      final at = b.globalToLocal(s.at);
+      if (!rect.contains(at)) continue;
+      final a = (0.5 / math.pow(s.far, 1.3)) * room.life;
+      if (a < 0.03) continue;
+      final colour = room.lamps.length > s.lamp ? room.lamps[s.lamp] : Colors.white;
+      canvas.save();
+      canvas.translate(at.dx, at.dy);
+      canvas.rotate(s.lean);
+      canvas.drawRRect(
+          RRect.fromRectAndRadius(Rect.fromCenter(center: Offset.zero, width: s.wide, height: s.tall), const Radius.circular(1.5)),
+          spot
+            ..color = _light(colour, a)
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.6));
+      canvas.restore();
+    }
+    canvas.restore();
+  }
+
+  Color _light(Color c, double a) => room.onPaper
+      ? Color.lerp(Colors.white, c, (a * 1.6).clamp(0.0, 1.0))!
+      : c.withValues(alpha: a.clamp(0.0, 1.0));
+
+  @override
+  bool shouldRepaint(_CardLightPainter old) => old.room != room;
 }
 
 /// A record, as a picture that turns.
@@ -1668,6 +1787,22 @@ class _DeckState extends State<Deck> {
     _shown = widget.url;
   }
 
+  /// The room this deck stands in, remembered: an ancestor cannot be looked up
+  /// from dispose, and the room has to be told the record has gone.
+  RoomLight? _room;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _room = RoomLightScope.maybeOf(context);
+  }
+
+  @override
+  void dispose() {
+    _room?.unplace(this);
+    super.dispose();
+  }
+
   @override
   void didUpdateWidget(Deck old) {
     super.didUpdateWidget(old);
@@ -1739,6 +1874,7 @@ class _DeckState extends State<Deck> {
                           spin: widget.spin,
                           room: RoomLightScope.maybeOf(context),
                           toLocal: (g) => (context.findRenderObject() as RenderBox?)?.globalToLocal(g) ?? g,
+                          placeAs: this,
                         ),
                       ),
                     ),
@@ -2575,7 +2711,12 @@ class RecordLight extends CustomPainter {
     this.spin,
     this.room,
     this.toLocal,
+    this.placeAs,
   }) : super(repaint: room);
+
+  /// Whose outline to hand the room, for its shadow on the wall; null to stand
+  /// nowhere.
+  final Object? placeAs;
 
   /// The room's light, where the record stands in one: the moving heads' beams put
   /// their own pair of wedges on the grooves, along the line from the label to the
@@ -2687,6 +2828,13 @@ class RecordLight extends CustomPainter {
         for (final (at, peak, colour) in headLobes(room!, middle, r, start, toLocal!)) (at, 0.14, peak * strength, colour),
     ];
     _sweep(colours, stops, lobes);
+    // Standing in the room: where the record is, so the wall gets its shadow.
+    if (room != null && toLocal != null && placeAs != null) {
+      // toLocal takes global to local; the outline goes the other way.
+      final origin = -toLocal!(Offset.zero);
+      final visible = Rect.fromLTRB(disc.left, disc.top, disc.right, disc.top + size * 0.62).shift(origin);
+      room!.place(placeAs!, RRect.fromRectAndRadius(visible, Radius.circular(r)));
+    }
 
     canvas.save();
     // Only where the record is actually drawn: the light cannot go on past the edge
@@ -2717,6 +2865,33 @@ class RecordLight extends CustomPainter {
               .storage,
         ),
     );
+    // The ball's spots where they land on the vinyl: a groove is a ring of tiny
+    // mirrors, so a spot on it is not a spot but a short arc round the label, along
+    // the groove — which is the whole difference between light on a record and light
+    // on a picture of one.
+    final rm = room;
+    if (rm != null && toLocal != null && rm.life > 0 && rm.spots.isNotEmpty) {
+      final arc = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..blendMode = rm.onPaper ? BlendMode.srcOver : BlendMode.plus;
+      for (final s in rm.spots) {
+        final at = toLocal!(s.at) - middle;
+        final d = at.distance;
+        if (d < inner || d > r * 0.99) continue;
+        if (at.dy > size * 0.12) continue;
+        final a = (0.55 / math.pow(s.far, 1.3)) * rm.life * strength;
+        if (a < 0.03) continue;
+        final colour = rm.lamps.length > s.lamp ? rm.lamps[s.lamp] : Colors.white;
+        final angle = math.atan2(at.dy, at.dx);
+        final along = (s.wide * 2.2 / d).clamp(0.05, 0.5);
+        arc
+          ..strokeWidth = (s.tall * 0.45).clamp(1.0, 3.0)
+          ..color = Color.lerp(colour, Colors.white, 0.3)!.withValues(alpha: a.clamp(0.0, 1.0))
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.8);
+        canvas.drawArc(Rect.fromCircle(center: middle, radius: d), angle - along / 2, along, false, arc);
+      }
+    }
     // The moulded rim catches the lamp as a bright thread along its edge.
     canvas.drawArc(
       Rect.fromCircle(center: middle, radius: r - 1.2),

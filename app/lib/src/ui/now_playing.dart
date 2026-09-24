@@ -217,6 +217,21 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
               ? const Center(child: Text('Nothing playing'))
               : Stack(
                   children: [
+                    // The room's light, on the wall behind everything: the things
+                    // standing in the room take their own light (the record's
+                    // grooves, the card, the glass) and throw their shadows on it.
+                    if (app.discoLights)
+                      Positioned.fill(
+                        child: BeatPulse(
+                          app: app,
+                          track: track,
+                          builder: (context, pulse) => MirrorBallLight(
+                            playing: app.musicIsPlaying,
+                            tint: parseHexColour(track.coverColor),
+                            pulse: pulse,
+                          ),
+                        ),
+                      ),
                     Positioned.fill(child: SafeArea(
                   child: Builder(builder: (context) {
                     // The record, and everything that is said under it. On a phone
@@ -298,8 +313,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                               GlassSurface(
                                 borderRadius: BorderRadius.circular(20),
                                 topBorder: false,
-                                opacity: 0.42,
-                                blur: 36,
+                                opacity: 0.36,
+                                blur: 42,
                                 sheen: true,
                                 padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
                                 child: Column(
@@ -325,8 +340,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                               GlassSurface(
                                 borderRadius: BorderRadius.circular(22),
                                 topBorder: false,
-                                opacity: 0.42,
-                                blur: 36,
+                                opacity: 0.36,
+                                blur: 42,
                                 sheen: true,
                                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                                 child: Column(
@@ -460,20 +475,6 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                         ),
                       ),
                     ),
-                    // The disco ball's light, over everything and taking nothing:
-                    // spots of it swinging across the page while the song plays.
-                    if (app.discoLights)
-                      Positioned.fill(
-                        child: BeatPulse(
-                          app: app,
-                          track: track,
-                          builder: (context, pulse) => MirrorBallLight(
-                            playing: app.musicIsPlaying,
-                            tint: parseHexColour(track.coverColor),
-                            pulse: pulse,
-                          ),
-                        ),
-                      ),
                   ],
                 ),
           ),
@@ -1874,8 +1875,8 @@ class _DeskNowPlayingState extends State<DeskNowPlaying> {
               child: GlassSurface(
                 borderRadius: BorderRadius.circular(22),
                 topBorder: false,
-                opacity: 0.42,
-                blur: 36,
+                opacity: 0.36,
+                blur: 42,
                 sheen: true,
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                 child: Column(
@@ -1977,15 +1978,6 @@ class _DeskNowPlayingState extends State<DeskNowPlaying> {
               : null,
           child: Stack(
             children: [
-              Positioned.fill(child: laidOut),
-              Positioned(
-                top: DeskNowPlaying.forTheHead - 8,
-                left: 0,
-                right: 0,
-                child: IgnorePointer(
-                  child: _StatusSlip(status: _NowPlayingScreenState._statusLine(s, track)),
-                ),
-              ),
               if (app.discoLights)
                 Positioned.fill(
                   child: BeatPulse(
@@ -1998,6 +1990,15 @@ class _DeskNowPlayingState extends State<DeskNowPlaying> {
                     ),
                   ),
                 ),
+              Positioned.fill(child: laidOut),
+              Positioned(
+                top: DeskNowPlaying.forTheHead - 8,
+                left: 0,
+                right: 0,
+                child: IgnorePointer(
+                  child: _StatusSlip(status: _NowPlayingScreenState._statusLine(s, track)),
+                ),
+              ),
             ],
           ),
         );
