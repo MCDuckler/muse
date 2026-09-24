@@ -115,11 +115,15 @@ publish_apk() {
   build=$(date -u +%Y%m%d%H%M)
   local version
   version=$(sed -n 's/^version: *\([^+]*\).*/\1/p' app/pubspec.yaml | tr -d '[:space:]')
-  (cd app && flutter build apk --release \
+  # One architecture, not three. A fat APK carries the engine and the compiled app
+  # for arm64, 32-bit arm and x86_64 together — seventy megabytes, two thirds of it
+  # for phones nobody here has and emulators. Every phone of the last eight years is
+  # arm64; that build is what is served.
+  (cd app && flutter build apk --release --split-per-abi \
       --dart-define=MUSE_SERVER="$SERVER_URL" \
       --dart-define=MUSE_BUILD="$build")
 
-  local apk=app/build/app/outputs/flutter-apk/app-release.apk
+  local apk=app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
   local bytes
   bytes=$(stat -c%s "$apk")
   put "$apk" $DL/muse.apk
