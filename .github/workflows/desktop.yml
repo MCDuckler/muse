@@ -160,7 +160,7 @@ jobs:
           the app starts it, there is no need to run it yourself.
 
           ./wetowl-separate takes records apart for the booth (drums, music, no
-          voice). The app starts it too. The first time, it fetches the network it
+          voice, the voice alone). The app starts it too. The first time, it fetches the network it
           runs (about 50 MB) from your WetOwl server.
           TXT
           mv build/linux/x64/release/bundle build/linux/x64/release/wetowl

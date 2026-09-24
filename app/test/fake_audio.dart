@@ -108,12 +108,28 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   Duration slowness = Duration.zero;
 
   int index = 0;
+
+  /// Where the engine was at [_since]. While it plays it moves on from there at
+  /// [speed], as a real one does: the position a report carries is where it is now.
   Duration position = Duration.zero;
+  DateTime _since = DateTime.now();
+  double speed = 1.0;
   bool playing = false;
+
+  /// Bring [position] up to now.
+  void _advance() {
+    final now = DateTime.now();
+    if (playing) {
+      position += Duration(
+          microseconds: (now.difference(_since).inMicroseconds * speed).round());
+    }
+    _since = now;
+  }
   ProcessingStateMessage state = ProcessingStateMessage.idle;
 
-  /// Every track is a minute long, which is all the tests need of a duration.
-  static const trackLength = Duration(minutes: 1);
+  /// Every track is a minute long, which is all most tests need of a duration. The
+  /// ones holding real records' grids set it longer.
+  static Duration trackLength = const Duration(minutes: 1);
 
   /// How many times *any* engine has been handed a source. Kept off the instance
   /// because a repair may replace the platform player, and a count that disappears
@@ -135,6 +151,7 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   /// into exactly this — the engine's own state changing with nothing in the app
   /// having asked for it.
   void pressedElsewhere({required bool playing}) {
+    _advance();
     this.playing = playing;
     calls.add(playing ? 'play elsewhere' : 'pause elsewhere');
     _data.add(PlayerDataMessage(playing: playing));
@@ -154,7 +171,7 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
     if (_events.isClosed) return;
     _events.add(PlaybackEventMessage(
       processingState: state,
-      updateTime: DateTime.now(),
+      updateTime: _since,
       updatePosition: position,
       bufferedPosition: position,
       duration: trackLength,
@@ -179,6 +196,7 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
       ..clear()
       ..addAll(_urlsOf(request.audioSourceMessage));
     index = request.initialIndex ?? 0;
+    _advance();
     position = request.initialPosition ?? Duration.zero;
     state = ProcessingStateMessage.ready;
     loadCount++;
@@ -223,6 +241,7 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
 
   @override
   Future<PlayResponse> play(PlayRequest request) async {
+    _advance();
     playing = true;
     calls.add('play');
     _emit();
@@ -231,6 +250,7 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
 
   @override
   Future<PauseResponse> pause(PauseRequest request) async {
+    _advance();
     playing = false;
     calls.add('pause');
     _emit();
@@ -240,6 +260,7 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   @override
   Future<SeekResponse> seek(SeekRequest request) async {
     if (request.index != null) index = request.index!;
+    _advance();
     position = request.position ?? Duration.zero;
     calls.add('seek ${position.inSeconds}s'
         '${request.index == null ? '' : ' index:${request.index}'}');
@@ -248,12 +269,23 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   }
 
   @override
-  Future<SetVolumeResponse> setVolume(SetVolumeRequest request) async =>
-      SetVolumeResponse();
+  Future<SetVolumeResponse> setVolume(SetVolumeRequest request) async {
+    volume = request.volume;
+    return SetVolumeResponse();
+  }
+
+  /// The last volume the engine was told.
+  double volume = 1.0;
 
   @override
-  Future<SetSpeedResponse> setSpeed(SetSpeedRequest request) async =>
-      SetSpeedResponse();
+  Future<SetSpeedResponse> setSpeed(SetSpeedRequest request) async {
+    // A new rate from here on, not for the time already played: a report now, the
+    // way the real engine's next position report is.
+    _advance();
+    speed = request.speed;
+    _emit();
+    return SetSpeedResponse();
+  }
 
   @override
   Future<SetLoopModeResponse> setLoopMode(SetLoopModeRequest request) async =>
@@ -285,6 +317,7 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   /// transition, which is what a queued next source is *for*.
   void advanceByItself() {
     if (index + 1 >= sources.length) return;
+    _advance();
     index += 1;
     position = Duration.zero;
     playing = true;
@@ -296,6 +329,7 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   /// a platform dropping a dead item and moving on. The app used to ignore any move
   /// that was not exactly one along, which left the screen a song behind for good.
   void jumpBy(int steps) {
+    _advance();
     index = (index + steps).clamp(0, sources.length - 1);
     position = Duration.zero;
     playing = true;
@@ -318,6 +352,7 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   /// with no error anybody asked for. From Dart it looks exactly like this — playing
   /// goes false, the state goes idle, and nothing else ever happens.
   void die() {
+    _advance();
     playing = false;
     state = ProcessingStateMessage.idle;
     _emit();
@@ -331,6 +366,7 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
 
   /// The song ended and the engine stopped there, waiting to be told what to do.
   void reachEnd() {
+    _advance();
     position = trackLength;
     state = ProcessingStateMessage.completed;
     _emit();
@@ -339,6 +375,7 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
 
   /// Time passing while a song plays.
   void tick(Duration to) {
+    _advance();
     position = to;
     _emit();
   }

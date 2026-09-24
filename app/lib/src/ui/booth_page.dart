@@ -12,6 +12,7 @@ import 'artwork.dart';
 import 'booth/booth_clock.dart';
 import 'booth/crate.dart';
 import 'booth/deck_panel.dart';
+import 'booth/desk/console_room.dart';
 import 'booth/meters.dart';
 import 'booth/mixer_strip.dart';
 import 'feel.dart';
@@ -40,8 +41,6 @@ class BoothPage extends StatefulWidget {
 
 class _BoothPageState extends State<BoothPage> {
   final _focus = FocusNode();
-  bool _crateOpen = true;
-  engine.Deck? _pickingFor;
 
   @override
   void initState() {
@@ -67,14 +66,6 @@ class _BoothPageState extends State<BoothPage> {
 
   Future<void> _pick(engine.Deck deck) async {
     final b = context.read<AppState>().booth;
-    if (Width.of(context) != Width.compact) {
-      // The crate is on the page: say which deck, and the next tap in it loads there.
-      setState(() {
-        _crateOpen = true;
-        _pickingFor = deck;
-      });
-      return;
-    }
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -93,11 +84,20 @@ class _BoothPageState extends State<BoothPage> {
   }
 
   // ------------------------------------------------------------------ the keys
-  /// What a desk's hands do without reaching for the mouse. Printed at the foot of
-  /// the room, because a shortcut nobody is told about is a shortcut nobody uses.
-  static const keysLegend =
-      'space go · 1 2 play · Q W sync · Z X on the one · ← → fader · shift ← → nudge · '
-      '[ ] loop · F G kill bass · M mix now · N not that one';
+  /// What a desk's hands do without reaching for the mouse, as the console's keys
+  /// button lists them.
+  static const keys = <(String, String)>[
+    ('Space', 'Mix, or stop the mix'),
+    ('1 2', 'Play or pause A, B'),
+    ('Q W', 'SYNC on or off, A or B'),
+    ('Z X', 'Start A, B on the bar'),
+    ('← →', 'Crossfader'),
+    ('⇧ ← →', 'Nudge the master'),
+    ('[ ]', 'Loop A, B'),
+    ('F G', 'Kill the bass on A, B'),
+    ('M', 'Auto DJ: mix now'),
+    ('N', 'Auto DJ: not that one'),
+  ];
 
   KeyEventResult _keys(FocusNode node, KeyEvent e) {
     if (e is! KeyDownEvent) return KeyEventResult.ignored;
@@ -106,7 +106,7 @@ class _BoothPageState extends State<BoothPage> {
     final shift = HardwareKeyboard.instance.isShiftPressed;
     final master = b.master;
 
-    void nudge(engine.Deck d, int ms) => unawaited(d.nudge(Duration(milliseconds: ms)));
+    void nudge(engine.Deck d, int ms) => unawaited(b.nudge(d, Duration(milliseconds: ms)));
     void killBass(engine.Deck d) {
       feel(Feel.pick);
       unawaited(b.kill(d, 0, !b.eqOf(d).lowKilled));
@@ -114,19 +114,19 @@ class _BoothPageState extends State<BoothPage> {
 
     if (k == LogicalKeyboardKey.space) {
       feel(Feel.commit);
-      if (b.inTransition) {
+      if (b.busy) {
         b.stopTransition();
       } else {
         unawaited(b.go(Transition.blend, bars: 16));
       }
     } else if (k == LogicalKeyboardKey.digit1) {
-      unawaited(b.a.playing ? b.a.pause() : b.a.play());
+      unawaited(b.a.playing ? b.a.pause() : b.play(b.a));
     } else if (k == LogicalKeyboardKey.digit2) {
-      unawaited(b.b.playing ? b.b.pause() : b.b.play());
+      unawaited(b.b.playing ? b.b.pause() : b.play(b.b));
     } else if (k == LogicalKeyboardKey.keyQ) {
-      unawaited(b.sync(b.a).then((ok) => ok ? b.align(b.a) : null));
+      unawaited(b.setSync(b.a, !b.a.synced));
     } else if (k == LogicalKeyboardKey.keyW) {
-      unawaited(b.sync(b.b).then((ok) => ok ? b.align(b.b) : null));
+      unawaited(b.setSync(b.b, !b.b.synced));
     } else if (k == LogicalKeyboardKey.keyZ) {
       unawaited(b.startOnBeat(b.a));
     } else if (k == LogicalKeyboardKey.keyX) {
@@ -170,7 +170,9 @@ class _BoothPageState extends State<BoothPage> {
           onKeyEvent: _keys,
           child: AnimatedBuilder(
             animation: b,
-            builder: (context, _) => Scaffold(
+            builder: (context, _) => !compact
+                ? ConsoleRoom(booth: b, keys: keys)
+                : Scaffold(
               appBar: AppBar(
                 title: const Text('The booth'),
                 actions: [
@@ -183,25 +185,15 @@ class _BoothPageState extends State<BoothPage> {
                       ),
                     ),
                   IconButton(
-                    icon: Icon(compact
-                        ? Icons.inventory_2_outlined
-                        : _crateOpen
-                            ? Icons.keyboard_double_arrow_right
-                            : Icons.inventory_2_outlined),
-                    tooltip: compact
-                        ? 'The crate'
-                        : _crateOpen
-                            ? 'Hide the crate'
-                            : 'The crate',
-                    onPressed: compact
-                        ? () => _pick(_free(b))
-                        : () => setState(() => _crateOpen = !_crateOpen),
+                    icon: const Icon(Icons.inventory_2_outlined),
+                    tooltip: 'The crate',
+                    onPressed: () => _pick(_free(b)),
                   ),
                 ],
               ),
               body: AmbientBackdrop(
                 colour: tint,
-                child: compact ? _phone(context, b) : _desk(context, b),
+                child: _phone(context, b),
               ),
             ),
           ),
@@ -224,209 +216,8 @@ class _BoothPageState extends State<BoothPage> {
         ],
       );
 
-  // ------------------------------------------------------------------ a desk
-  /// Below this, the room does not fit standing up and is scrolled instead: the
-  /// waveforms keep a usable height and the decks keep their controls, rather than
-  /// both being squeezed until neither can be read.
-  static const _standingRoom = 840.0;
-
-  Widget _desk(BuildContext context, Booth b) {
-    final scheme = Theme.of(context).colorScheme;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 6, 10, 8),
-            child: LayoutBuilder(builder: (context, room) {
-              final standing = room.maxHeight >= _standingRoom;
-              // The two records' shapes, facing each other across the meter that
-              // says how far apart their beats are: the pair of things a DJ actually
-              // watches, so they are the top of the room. Standing up they take
-              // whatever height is spare, because a taller waveform is more of the
-              // song in front of you and the decks need no more room than their
-              // controls.
-              Widget waves(double lane) => Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _WaveDeck(booth: b, deck: b.a, height: lane),
-                      const PhaseMeter(booth: null, height: 24),
-                      _WaveDeck(booth: b, deck: b.b, mirrored: true, height: lane),
-                    ],
-                  );
-              // And under them the room: a deck either side of the mixer.
-              final decks = Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    flex: 4,
-                    child: DeckPanel(
-                        booth: b,
-                        deck: b.a,
-                        wide: true,
-                        showWave: false,
-                        record: standing ? 196 : 150,
-                        onLoad: () => _pick(b.a)),
-                  ),
-                  const SizedBox(width: 8),
-                  SizedBox(width: 340, child: MixerStrip(booth: b, wide: true)),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    flex: 4,
-                    child: DeckPanel(
-                        booth: b,
-                        deck: b.b,
-                        wide: true,
-                        showWave: false,
-                        record: standing ? 196 : 150,
-                        onLoad: () => _pick(b.b)),
-                  ),
-                ],
-              );
-              final legend = Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(keysLegend,
-                    style: Mag.typewriter(9.5, color: scheme.onSurfaceVariant)),
-              );
-              if (!standing) {
-                // Not enough wall for the whole room: it scrolls, and nothing is
-                // squeezed to fit something else in.
-                return SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [waves(96), const SizedBox(height: 10), decks, legend],
-                  ),
-                );
-              }
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(
-                    child: LayoutBuilder(builder: (context, c) {
-                      // Less the meter between them and the line of words each lane
-                      // carries: without those the shapes take the whole height and
-                      // the words are printed over whatever is under them.
-                      const meterAndWords = 24.0 + 2 * _WaveDeck.wordsHigh;
-                      final lane =
-                          ((c.maxHeight - meterAndWords) / 2).clamp(64.0, 220.0);
-                      return waves(lane);
-                    }),
-                  ),
-                  const SizedBox(height: 10),
-                  decks,
-                  legend,
-                ],
-              );
-            }),
-          ),
-        ),
-        if (_crateOpen)
-          SizedBox(
-            width: 330,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(0, 8, 12, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (_pickingFor != null)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
-                      child: Text('Tap a record for deck ${_pickingFor!.name}',
-                          style: Mag.flag(9, color: scheme.primary)),
-                    ),
-                  Expanded(
-                    child: Crate(
-                      booth: b,
-                      onPick: (t) {
-                        final deck = _pickingFor ?? _free(b);
-                        setState(() => _pickingFor = null);
-                        unawaited(_load(deck, t));
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-      ],
-    );
-  }
 }
 
-/// One deck's shape, with its name and what it is over the top of it.
-class _WaveDeck extends StatelessWidget {
-  const _WaveDeck(
-      {required this.booth, required this.deck, this.mirrored = false, this.height = 86});
-  final Booth booth;
-  final engine.Deck deck;
-  final bool mirrored;
-
-  /// The shape's own height. The line of words above or below it is on top of this.
-  final double height;
-
-  /// How tall that line of words is.
-  static const wordsHigh = 20.0;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final t = deck.track;
-    final isMaster = identical(booth.master, deck);
-    final head = Row(
-      children: [
-        Text(deck.name,
-            style: Mag.numerals(15, color: isMaster ? scheme.primary : scheme.onSurface)),
-        const SizedBox(width: 8),
-        // One row of words that takes the room the numbers do not: two Flexibles
-        // beside a Spacer share the free space between them, which leaves the
-        // numbers stranded in the middle of the lane.
-        Expanded(
-          child: Row(
-            children: [
-              Flexible(
-                child: Text(t?.displayTitle ?? 'Nothing on',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Mag.title(12.5, color: scheme.onSurface)),
-              ),
-              if (t != null) ...[
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text(t.artistLine,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Mag.typewriter(10, color: scheme.onSurfaceVariant)),
-                ),
-              ],
-            ],
-          ),
-        ),
-        const SizedBox(width: 10),
-        if (deck.loopBars != null)
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: Text('LOOP ${deck.loopBars}', style: Mag.flag(8, color: scheme.primary)),
-          ),
-        if (deck.bpm != null)
-          Text(deck.bpm!.toStringAsFixed(1),
-              style: Mag.numerals(13, color: scheme.onSurface)),
-        if (deck.timing?.camelot != null) ...[
-          const SizedBox(width: 8),
-          Text(deck.timing!.camelot!,
-              style: Mag.typewriter(10, color: scheme.onSurfaceVariant, bold: true)),
-        ],
-      ],
-    );
-    final wave = WaveLane(booth: booth, deck: deck, height: height, mirrored: mirrored);
-    final words = SizedBox(height: wordsHigh, child: head);
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: mirrored ? [wave, words] : [words, wave],
-    );
-  }
-}
 /// Into the booth, and — with [mix] — with the booth mixing [tracks] from [at].
 Future<void> openBooth(BuildContext context,
     {List<Track>? tracks, int at = 0, Map<String, dynamic>? mix}) async {

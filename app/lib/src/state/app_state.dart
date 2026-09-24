@@ -352,7 +352,30 @@ class AppState extends ChangeNotifier {
   /// The booth: two records mixed by hand. Early, and behind a switch until it is not.
   bool boothOn = false;
   Booth? _booth;
-  Booth get booth => _booth ??= (Booth(api, offlinePath: offline.pathFor)..addListener(_boothChanged));
+  Booth get booth => _booth ??= _makeBooth();
+
+  static const _kStartLead = 'muse.booth.startLeadUs', _kJumpCarry = 'muse.booth.jumpCarryUs';
+
+  /// The booth, with what it learned about this machine's engine in earlier sessions
+  /// given back to it, and kept whenever it learns more.
+  Booth _makeBooth() {
+    final b = Booth(api, offlinePath: offline.pathFor)..addListener(_boothChanged);
+    unawaited(SharedPreferences.getInstance().then((prefs) {
+      final lead = prefs.getInt(_kStartLead), carry = prefs.getInt(_kJumpCarry);
+      if (lead != null && carry != null) {
+        b.restoreLearned(
+            startLead: Duration(microseconds: lead), jumpCarry: Duration(microseconds: carry));
+      }
+    }));
+    b.onLearned = () {
+      final l = b.learned;
+      unawaited(SharedPreferences.getInstance().then((prefs) async {
+        await prefs.setInt(_kStartLead, l.startLead.inMicroseconds);
+        await prefs.setInt(_kJumpCarry, l.jumpCarry.inMicroseconds);
+      }));
+    };
+    return b;
+  }
 
   /// While the booth has the sound, the rows and the bars on every list say so about
   /// its master record — the way they do for a device in the next room.

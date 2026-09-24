@@ -551,12 +551,12 @@ void autoMixRules() {
     expect(AutoMix.choose(const TrackTiming(), on, style: MixStyle.bold).kind,
         Transition.fade);
 
-    // With both records in parts, the drums change hands: the boldest thing there
-    // is, and the answer to a clash as well, because drums have no key.
+    // With both records in parts, the bold style has the drums change hands: the
+    // boldest thing there is. Not the ordinary one: each change of part is a new file
+    // on a deck, a gap in the sound on a desk, and a clash is what the filter is for.
     expect(AutoMix.choose(on, t(camelot: '9A', drops: [40000]), style: MixStyle.bold, parts: true),
         (kind: Transition.swap, bars: 16));
-    expect(AutoMix.choose(on, t(camelot: '3B'), parts: true),
-        (kind: Transition.swap, bars: 16));
+    expect(AutoMix.choose(on, t(camelot: '3B'), parts: true).kind, Transition.sweep);
     expect(AutoMix.choose(on, t(camelot: '9A'), parts: true).kind, Transition.blend,
         reason: 'two records that already agree do not need taking apart');
     expect(AutoMix.choose(on, t(camelot: '3B'), style: MixStyle.easy, parts: true).kind,
@@ -646,8 +646,13 @@ void autoMixRules() {
     expect(AutoMix.choose(t(bpm: 128, camelot: '8A'), t(bpm: 130, camelot: '3B')),
         (kind: Transition.sweep, bars: 12),
         reason: 'a clash goes out through the filter, and is shorter');
-    expect(AutoMix.choose(t(bpm: 128), t(bpm: 150)).kind, Transition.fade,
-        reason: 'too far apart to sync');
+    expect(AutoMix.choose(t(bpm: 128), t(bpm: 150)).kind, isNot(Transition.fade),
+        reason: 'far, but not past meeting in the middle: mixed in step');
+    expect(AutoMix.choose(t(bpm: 128), t(bpm: 165)),
+        (kind: Transition.fade, bars: 2),
+        reason: 'too far apart to put in step: handed over quickly, not laid on top');
+    expect(AutoMix.choose(t(bpm: 128, ends: 'cold'), t(bpm: 165)).kind, Transition.cut,
+        reason: 'and on the downbeat where the old one stops dead');
     expect(AutoMix.choose(t(bpm: 128, ends: 'fade'), t(bpm: 128)).kind, Transition.fade,
         reason: 'a record that fades itself has made its own exit');
     expect(AutoMix.choose(t(bpm: 128, ends: 'cold', camelot: '8A'), t(bpm: 128, camelot: '8A')).kind,

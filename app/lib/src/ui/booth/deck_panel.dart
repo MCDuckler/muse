@@ -6,6 +6,8 @@ import 'package:provider/provider.dart';
 import '../../state/app_state.dart';
 import '../../state/booth/booth.dart';
 import '../../state/booth/deck.dart' as engine;
+import '../../worker/parts_jobs.dart';
+import '../../worker/render_parts.dart' show upToSeconds;
 import '../feel.dart';
 import '../mag.dart';
 import '../mag_parts.dart';
@@ -202,7 +204,7 @@ class _DeckPanelState extends State<DeckPanel> with SingleTickerProviderStateMix
             reading: _reading,
             onPlace: (at) async {
               await d.seek(at);
-              if (!d.playing) await d.play();
+              if (!d.playing) await widget.booth.play(d, bars: false);
             },
             onPark: d.pause,
           );
@@ -362,7 +364,7 @@ class _DeckPanelState extends State<DeckPanel> with SingleTickerProviderStateMix
                 ? null
                 : () {
                     feel(Feel.commit);
-                    d.playing ? d.pause() : d.play();
+                    d.playing ? d.pause() : b.play(d);
                   },
           ),
           PressButton(
@@ -373,25 +375,29 @@ class _DeckPanelState extends State<DeckPanel> with SingleTickerProviderStateMix
         _group(context, 'beatmatch', [
           PressButton(
             label: 'Sync',
+            loud: d.synced,
             onTap: t == null
                 ? null
                 : () async {
-                    final ok = await b.sync(d);
-                    if (ok) await b.align(d);
+                    if (d.synced) {
+                      await b.setSync(d, false);
+                      return;
+                    }
+                    final why = b.whyNotSync(d);
+                    final ok = why == null && await b.setSync(d, true);
                     if (!context.mounted) return;
                     feel(ok ? Feel.edge : Feel.warn);
                     if (!ok) {
-                      ScaffoldMessenger.of(context)
-                          .say(snack(const Text('Too far apart to sync, or no grid')));
+                      ScaffoldMessenger.of(context).say(snack(Text(why ?? 'Could not sync')));
                     }
                   },
           ),
           PressButton(
               label: '‹',
-              onTap: t == null ? null : () => d.nudge(const Duration(milliseconds: -15))),
+              onTap: t == null ? null : () => b.nudge(d, const Duration(milliseconds: -15))),
           PressButton(
               label: '›',
-              onTap: t == null ? null : () => d.nudge(const Duration(milliseconds: 15))),
+              onTap: t == null ? null : () => b.nudge(d, const Duration(milliseconds: 15))),
         ]),
       ],
     );
@@ -443,35 +449,53 @@ class _DeckPanelState extends State<DeckPanel> with SingleTickerProviderStateMix
   /// parts made ahead of a mix they want to do by hand.
   Widget _parts(BuildContext context) {
     final d = widget.deck;
-    const named = <String, String?>{
+    final named = <String, String?>{
       'Whole': null,
       'Drums': 'drums',
       'Music': 'music',
       'No vox': 'instrumental',
+      // Only a computer with the separator makes the voice on its own.
+      if (widget.booth.parts.separatesHere) 'Vocals': 'vocals',
     };
-    return _group(
-      context,
-      d.noParts
-          ? 'parts · too long to take apart'
-          : _making == null
-              ? 'parts'
-              : 'parts · making the $_making',
-      [
-        for (final e in named.entries)
-          PressButton(
-            label: e.key,
-            loud: d.part == e.value,
-            onTap: d.track == null || d.makingPart
-                ? null
-                : () async {
-                    feel(Feel.pick);
-                    final done = await d.swapTo(e.value);
-                    if (!mounted) return;
-                    setState(() =>
-                        _making = done || d.noParts ? null : e.key.toLowerCase());
-                  },
-          ),
-      ],
+    return ListenableBuilder(
+      listenable: partsJobs,
+      builder: (context, _) {
+        final t = d.track;
+        final job = t == null ? null : partsJobs.of(t.id);
+        final going = job != null && !job.done;
+        final tooLong = t != null && (t.durationMs ?? 0) > upToSeconds * 1000;
+        return _group(
+          context,
+          tooLong
+              ? 'parts · too long to take apart'
+              : going
+                  ? 'parts · ${stageLine(job).toLowerCase()}'
+                  : _making == null
+                      ? 'parts'
+                      : 'parts · making the $_making',
+          [
+            for (final e in named.entries)
+              PressButton(
+                label: e.key,
+                loud: d.part == e.value,
+                onTap: t == null ||
+                        d.makingPart ||
+                        (e.value != null &&
+                            d.neverParts.contains(e.value) &&
+                            job?.stage != PartsStage.cancelled)
+                    ? null
+                    : () async {
+                        feel(Feel.pick);
+                        final done = await d.swapTo(e.value, byHand: true);
+                        if (!mounted) return;
+                        setState(() => _making = done || d.neverParts.contains(e.value)
+                            ? null
+                            : e.key.toLowerCase());
+                      },
+              ),
+          ],
+        );
+      },
     );
   }
 
@@ -489,21 +513,21 @@ class _DeckPanelState extends State<DeckPanel> with SingleTickerProviderStateMix
         const SizedBox(width: 8),
         Expanded(
           child: CentreSlider(
-            value: d.tempo.clamp(0.92, 1.08),
+            value: d.pitch.clamp(0.92, 1.08),
             min: 0.92,
             max: 1.08,
             detent: 0.022,
-            onChanged: t == null ? null : d.setTempo,
+            onChanged: t == null ? null : (v) => widget.booth.pitchByHand(d, v),
           ),
         ),
         const SizedBox(width: 6),
         SizedBox(
           width: 52,
           child: Text(
-              '${d.tempo >= 1 ? '+' : ''}${((d.tempo - 1) * 100).toStringAsFixed(1)}%',
+              '${d.pitch >= 1 ? '+' : ''}${((d.pitch - 1) * 100).toStringAsFixed(1)}%',
               textAlign: TextAlign.right,
               style: Mag.typewriter(10.5,
-                  color: d.tempo == 1.0 ? scheme.onSurfaceVariant : scheme.primary)),
+                  color: d.pitch == 1.0 ? scheme.onSurfaceVariant : scheme.primary)),
         ),
       ],
     );

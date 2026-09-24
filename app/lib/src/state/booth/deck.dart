@@ -85,13 +85,32 @@ class Deck extends ChangeNotifier {
   /// because "in a minute" and "no" are different answers.
   bool makingPart = false;
 
-  /// This record does not get taken apart at all: it is longer than a record, and the
-  /// server will not spend twenty minutes on it. The last answer, kept so the booth
-  /// can say "not this one" rather than "in a minute" for ever.
-  bool noParts = false;
+  /// Parts this record does not get, as last answered: every one of them for a record
+  /// longer than a record, which nobody spends twenty minutes on; the voice on its own
+  /// where the separator cannot run, since nothing else makes that one; any of them
+  /// once its taking apart was cancelled. Kept so the booth can say "not this one"
+  /// rather than "in a minute" for ever.
+  final neverParts = <String>{};
 
-  /// The rate it plays at: 1.0 is the record as recorded.
+  /// Whether this record gets taken apart at all, as far as anybody has said.
+  bool get noParts => neverParts.containsAll(const ['drums', 'music', 'instrumental']);
+
+  /// The rate the engine is playing it at right now: 1.0 is the record as recorded.
+  /// Usually the same as [pitch]; a little either side of it while the booth holds
+  /// this record on another's beat.
   double tempo = 1.0;
+
+  /// The rate the deck is set to: its pitch fader, SYNC.
+  double pitch = 1.0;
+
+  /// SYNC is on: this deck follows the other — its tempo matched to the other's, and
+  /// its beat held on the other's for as long as both play. See Booth.setSync.
+  bool synced = false;
+
+  /// Where, with SYNC on, this deck's beat is held against the other's: ahead by this
+  /// much. Nought unless somebody nudged it there by ear — a grid can be a little off
+  /// for one record, and a nudge that the holding undid again would be no use at all.
+  Duration syncTrim = Duration.zero;
 
   bool get playing => _player.playing && !_ended_;
   bool _ended_ = false;
@@ -103,16 +122,43 @@ class Deck extends ChangeNotifier {
   Duration _fix = Duration.zero;
   DateTime _fixedAt = DateTime.now();
 
+  /// A report from the engine, folded into the deck's clock.
+  ///
+  /// The engine says where it is every few tens of milliseconds, and each report is
+  /// off by as much again (mpv's, measured: ±12 ms about the true line, 25 ms at
+  /// worst). Taken as gospel, every one of them moved the clock — and everything lined
+  /// up to it, the beat-holding most of all, twitched with it. So a report only pulls
+  /// the clock a little way towards itself, and the clock runs on at the deck's rate
+  /// between: steady to a couple of milliseconds. A report far from where the clock
+  /// is — a seek, a start, a stall, a loop jumping back — is believed outright.
   void _anchor(Duration at) {
-    _fix = at;
-    _fixedAt = DateTime.now();
+    final now = DateTime.now();
+    if (!_trusting || !playing) {
+      _fix = at;
+      _fixedAt = now;
+      _trusting = playing;
+      return;
+    }
+    final expected = positionAt(now);
+    final off = at - expected;
+    if (off.abs() > const Duration(milliseconds: 80)) {
+      _fix = at;
+    } else {
+      _fix = expected + off * 0.12;
+    }
+    _fixedAt = now;
   }
+
+  /// Whether the clock is running on reports, and so only nudged by them. False
+  /// after anything that moves the record at once, until the next report.
+  bool _trusting = false;
 
   /// A fix from outside — the tests, mostly.
   @visibleForTesting
   void anchor(Duration at, DateTime when) {
     _fix = at;
     _fixedAt = when;
+    _trusting = false;
   }
 
   /// Where the record is *now*, carried forward from the last fix while it plays.
@@ -127,17 +173,30 @@ class Deck extends ChangeNotifier {
 
   Duration get position => positionAt(DateTime.now());
 
-  /// Beats a minute as it is playing now: the record's own, at the deck's tempo.
+  /// Beats a minute, as the deck says it: the record's own figure at the deck's
+  /// [pitch]. The number SYNC matches, and one that holds still — the small bends the
+  /// booth makes to keep two records on the beat are the engine's, not the deck's,
+  /// and never show here. The record's figure is its steady grid's
+  /// (TrackTiming.gridBpm), which is also what the beat-holding holds: a number on
+  /// show that differed from the grid by a tenth of a per cent was a tenth of a per
+  /// cent the holding had to lean against for the whole mix.
   double? get bpm {
-    final own = timing?.bpm;
-    return own == null ? null : own * tempo;
+    final own = timing?.gridBpm;
+    return own == null ? null : own * pitch;
   }
 
   bool get hasBeats => timing?.hasBeats ?? false;
 
+  /// The platter is being stopped by hand: nothing should be lined up to it.
+  bool braking = false;
+
   // ------------------------------------------------------------------ beats and bars
-  /// Which beat the record is on and how far through it, at [now].
-  ({int index, double phase})? beatAt(DateTime now) => timing?.beatAt(positionAt(now));
+  /// Which beat the record is on and how far through it, at [now]: on the steady grid,
+  /// the one the beat-holding uses.
+  ({int index, double phase})? beatAt(DateTime now) {
+    final b = timing?.smoothBeatAt(positionAt(now));
+    return b == null ? null : (index: b.index, phase: b.phase);
+  }
 
   /// The record's next beat at or after [at], as a place in the file — or, with
   /// [every] beats, the next beat whose index (from the bar's first beat) is a
@@ -145,6 +204,9 @@ class Deck extends ChangeNotifier {
   Duration? nextBeat(Duration at, {int every = 1}) {
     final t = timing;
     if (t == null || !t.hasBeats) return null;
+    // On the steady grid where there is one: a start or a loop timed off a beat the
+    // analysis placed a frame out is a start or a loop that frame out.
+    if (t.steady != null) return t.nextOnGrid(at, every: every);
     final ms = at.inMilliseconds;
     final beats = t.beats;
     var i = 0;
@@ -221,22 +283,35 @@ class Deck extends ChangeNotifier {
     // What is already known about this record is not forgotten because the server
     // could not be asked again: a deck that loses its grid loses its sync, its loop
     // and its beat light, and the grid had not changed.
-    final knew = this.track?.id == track.id ? this.timing : null;
+    final same = this.track?.id == track.id;
+    final knew = same ? this.timing : null;
+    // A different record starts at its own speed: the pitch the last one was left at
+    // is nothing to do with this one, and a deck that showed a record at another
+    // record's pitch showed a BPM that was neither's.
+    if (!same) {
+      pitch = 1.0;
+      tempo = 1.0;
+      syncTrim = Duration.zero;
+    }
     this.track = track;
     this.timing = timing ?? knew;
     _ended_ = false;
     trouble = null;
-    noParts = false;
+    neverParts.clear();
     hotCues.clear();
     loopStart = loopEnd = null;
     _loopBars = null;
-    // Parked where a DJ would drop it: on the first downbeat, if there is one.
-    final start =
-        at ?? this.timing?.cues?.firstDownbeat ?? this.timing?.lead ?? Duration.zero;
+    // Parked where a DJ would drop it: on the first downbeat, if there is one — on the
+    // steady grid, so a start timed off it lands on the beat.
+    final first = this.timing?.cues?.firstDownbeat;
+    final start = at ??
+        (first == null ? null : this.timing!.onGrid(first)) ??
+        this.timing?.lead ??
+        Duration.zero;
     try {
       claiming?.call();
       await _player.setAudioSource(_sourceFor(track), initialPosition: start);
-      if (tempo != 1.0) await _player.setSpeed(tempo);
+      if (_player.speed != tempo) await _player.setSpeed(tempo);
     } catch (e) {
       trouble = '$e';
       notifyListeners();
@@ -272,16 +347,17 @@ class Deck extends ChangeNotifier {
   /// alone, the music under them, the whole of it with the voice out, or — with null
   /// — the record as it was made.
   ///
-  /// Answers false, having asked the server to make it, when that part does not exist
+  /// Answers false, having asked for it to be made, when that part does not exist
   /// yet. Nothing changes in that case: the record carries on, and the booth says a
-  /// part is being made rather than going quiet.
+  /// part is being made rather than going quiet. [byHand] is a person pressing for it
+  /// (see PartsStore.want), not a transition or the automix.
   ///
   /// There is a real seam here. One deck is one player and one player holds one file,
   /// so the swap is a load, and a load is a fraction of a second of nothing. It lands
   /// where the record would have been, and the mixer re-aligns the phase after it, but
   /// it is a gap all the same — which is why the moves that use it put it under
   /// another record rather than in the clear.
-  Future<bool> swapTo(String? part) async {
+  Future<bool> swapTo(String? part, {bool byHand = false}) async {
     final t = track;
     if (t == null || part == this.part) return true;
     if (part != null) {
@@ -291,7 +367,7 @@ class Deck extends ChangeNotifier {
       try {
         final store = parts;
         state = store != null
-            ? await store.want(t, part)
+            ? await store.want(t, part, byHand: byHand)
             : await api.stemState(t, part);
       } catch (_) {
         // The server could not be asked. Not the deck's problem to report: it is
@@ -299,7 +375,22 @@ class Deck extends ChangeNotifier {
         state = Stem.beingMade;
       }
       makingPart = false;
-      noParts = state == Stem.never;
+      // The answer is about the record that was asked about — which may not be the
+      // one on the deck any more.
+      if (track?.id != t.id) return false;
+      // The voice alone is the one part a record can lack on its own: only the
+      // separator makes it. Any other "never" is about the record — too long, or
+      // taken off the list — and any other answer says that no longer holds.
+      const record = ['instrumental', 'drums', 'music'];
+      if (state == Stem.never) {
+        neverParts
+          ..add(part)
+          ..addAll(part == 'vocals' ? const <String>[] : record);
+      } else {
+        neverParts
+          ..remove(part)
+          ..removeAll(record);
+      }
       if (state != Stem.ready) {
         notifyListeners();
         return false;
@@ -319,11 +410,17 @@ class Deck extends ChangeNotifier {
       final began = DateTime.now();
       await _player.setAudioSource(_sourceFor(t), initialPosition: at);
       if (tempo != 1.0) await _player.setSpeed(tempo);
+      var there = at;
       if (was) {
         final took = DateTime.now().difference(began);
-        await _player.seek(at + Duration(microseconds: (took.inMicroseconds * tempo).round()));
-        await _player.play();
+        there = at + Duration(microseconds: (took.inMicroseconds * tempo).round());
+        await _player.seek(there);
       }
+      // The clock starts again from where the new file was put, not from reports
+      // about the old one.
+      _fix = there;
+      _fixedAt = DateTime.now();
+      _trusting = false;
     } catch (e) {
       trouble = '$e';
       notifyListeners();
@@ -331,14 +428,38 @@ class Deck extends ChangeNotifier {
     } finally {
       mine.complete();
     }
+    // Started and let go of, after the turn is handed back: just_audio's own play()
+    // completes when playback stops, and awaited inside the turn it held every other
+    // load — the other deck's next record included — behind this one.
+    if (was) await play();
     notifyListeners();
     return true;
   }
 
+  /// Start the record, and return once it is playing — not once it has stopped.
+  ///
+  /// just_audio's own play() completes when playback *ends*, on the engines that
+  /// keep that promise (a phone's): awaited, a transition starting a record would sit
+  /// there until the record was over. So it is started and let go of, and this waits
+  /// only for the engine to say it is playing.
   Future<void> play() async {
     _ended_ = false;
     _fixedAt = DateTime.now();
-    await _player.play();
+    _trusting = false;
+    unawaited(_player.play().catchError((Object e) {
+      trouble = '$e';
+      notifyListeners();
+    }));
+    if (!_player.playing) {
+      try {
+        await _player.playingStream
+            .firstWhere((p) => p)
+            .timeout(const Duration(seconds: 3));
+      } catch (_) {
+        // Said nothing: the deck reads as not playing, which is what the booth checks.
+      }
+    }
+    _fixedAt = DateTime.now();
     notifyListeners();
   }
 
@@ -346,11 +467,14 @@ class Deck extends ChangeNotifier {
     _fix = position;
     await _player.pause();
     _fixedAt = DateTime.now();
+    _trusting = false;
     notifyListeners();
   }
 
   Future<void> seek(Duration to) async {
-    _anchor(to);
+    _fix = to;
+    _fixedAt = DateTime.now();
+    _trusting = false;
     await _player.seek(to);
     notifyListeners();
   }
@@ -358,7 +482,16 @@ class Deck extends ChangeNotifier {
   /// A little forwards or back, to bring the beats in line: the DJ's nudge.
   Future<void> nudge(Duration by) => seek(position + by);
 
+  /// Set the deck's pitch: what the fader says, what SYNC sets, what the deck's BPM
+  /// is worked out from.
   Future<void> setTempo(double rate) async {
+    pitch = rate.clamp(0.5, 2.0);
+    await bend(pitch);
+  }
+
+  /// Run the engine at [rate] without moving the deck's pitch: the booth holding two
+  /// records on the beat. Put back with `bend(pitch)`.
+  Future<void> bend(double rate) async {
     _fix = position;
     _fixedAt = DateTime.now();
     tempo = rate.clamp(0.5, 2.0);
@@ -392,6 +525,23 @@ class Deck extends ChangeNotifier {
   Duration? loopStart;
   Duration? loopEnd;
 
+  /// The engine's own loop, where it has one (mpv's A–B loop on a desk): set by the
+  /// booth. Says whether the engine took it; where it did not, the deck loops itself.
+  Future<bool> Function(Duration? from, Duration? to)? engineLoop;
+  bool _engineLooping = false;
+
+  Future<void> _loopInEngine() async {
+    final f = engineLoop;
+    if (f == null) return;
+    final took = await f(loopStart, loopEnd);
+    _engineLooping = took && loopStart != null;
+    if (_engineLooping) {
+      _loop?.cancel();
+    } else if (loopStart != null) {
+      _watchLoop();
+    }
+  }
+
   /// How many bars the loop is, when there is one: what the buttons light by.
   int? get loopBars => loopStart == null ? null : _loopBars;
   int? _loopBars;
@@ -405,6 +555,7 @@ class Deck extends ChangeNotifier {
     loopEnd = from + len * beats;
     _loopBars = beats ~/ 4;
     _watchLoop();
+    unawaited(_loopInEngine());
     notifyListeners();
   }
 
@@ -419,6 +570,7 @@ class Deck extends ChangeNotifier {
     if (now <= least) return;
     loopEnd = from + now ~/ 2;
     _loopBars = null;                  // no longer one of the buttons' lengths
+    unawaited(_loopInEngine());
     notifyListeners();
   }
 
@@ -429,6 +581,7 @@ class Deck extends ChangeNotifier {
   /// offered is the half of it that every engine here can actually do.
   Future<void> brake({Duration over = const Duration(milliseconds: 900)}) async {
     if (!playing) return;
+    braking = true;
     final was = tempo;
     const steps = 18;
     for (var i = 1; i <= steps; i++) {
@@ -444,6 +597,7 @@ class Deck extends ChangeNotifier {
       await Future<void>.delayed(over ~/ steps);
     }
     await pause();
+    braking = false;
     tempo = was;
     try {
       await _player.setSpeed(was);
@@ -455,9 +609,12 @@ class Deck extends ChangeNotifier {
   static const _slowest = 0.12;
 
   void unloop() {
+    final was = loopStart != null;
     loopStart = loopEnd = null;
     _loopBars = null;
     _loop?.cancel();
+    if (was || _engineLooping) unawaited(_loopInEngine());
+    _engineLooping = false;
     notifyListeners();
   }
 
@@ -465,7 +622,7 @@ class Deck extends ChangeNotifier {
     _loop?.cancel();
     _loop = Timer.periodic(const Duration(milliseconds: 20), (_) {
       final end = loopEnd, start = loopStart;
-      if (end == null || start == null || !playing) return;
+      if (end == null || start == null || !playing || _engineLooping) return;
       if (position >= end) unawaited(seek(start));
     });
   }

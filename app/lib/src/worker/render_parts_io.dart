@@ -5,6 +5,8 @@ import 'dart:isolate';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../api/models.dart';
+import 'parts_jobs.dart';
 import 'separate.dart';
 import 'separation_kit.dart';
 import 'tools.dart';
@@ -33,6 +35,14 @@ import 'tools.dart';
 const partsVersion = 2;
 const _arithmeticVersion = 1;
 
+/// What the trained separator makes, all in one pass: the record without its voice,
+/// the drums, everything but the drums, and the voice on its own.
+const trainedParts = ['instrumental', 'drums', 'music', 'vocals'];
+
+/// What the house makes, and what the arithmetic here makes. The voice on its own is
+/// not one of them: lifting it out cleanly is exactly what the arithmetic cannot do.
+const serverParts = {'instrumental', 'drums', 'music'};
+
 /// Where the separator's files are fetched from: the house this app talks to. Set by
 /// the booth (PartsStore); until it is, the separator is not tried.
 String Function()? separationHouse;
@@ -58,11 +68,17 @@ typedef Renderer = Future<void> Function(
 /// track number is reused by the next and this is the only state that outlives it.
 @visibleForTesting
 void forgetHere() {
+  _generation++;
   _making.clear();
   _cannot.clear();
+  _cancelled.clear();
   _separatorOff = null;
   _separatorFailed.clear();
-  _progress.clear();
+  _line.clear();
+  _now = null;
+  _running = null;
+  _stop = null;
+  partsJobs.forget();
 }
 
 /// Whether the trained separator is out of the question on this computer, for as long
@@ -77,12 +93,6 @@ set separatorOffForTesting(bool? off) => _separatorOff = off;
 /// Records the separator was run on and could not take apart — made the old way
 /// instead, and not handed to the separator again until the app is next started.
 final _separatorFailed = <int>{};
-
-/// How far through each record being made here is, 0 to 1, by track.
-final _progress = <int, double>{};
-
-/// How far through taking [trackId] apart this computer is, while it is.
-double? progressHere(int trackId) => _progress[trackId];
 
 /// The real one, so a test that swapped it can put it back.
 @visibleForTesting
@@ -139,19 +149,120 @@ final _making = <String>{};
 /// which is the right moment to find out that ffmpeg has been installed since.
 final _cannot = <String>{};
 
-/// One at a time. Separating is every core this machine will give it for a few
-/// seconds; two at once is not twice as fast and does make the booth stutter.
-Future<void> _bench = Future.value();
+/// Records somebody took off the list. Not queued again this session unless a part
+/// of one is asked for by hand: the automix asks three records ahead, and would
+/// otherwise put straight back what was just cancelled.
+final _cancelled = <int>{};
+
+bool cancelledHere(int trackId) => _cancelled.contains(trackId);
+
+/// Forget that [trackId] failed or was cancelled, so that asking again tries again —
+/// the Retry button, or a part asked for by hand.
+void forgiveHere(int trackId) {
+  _cancelled.remove(trackId);
+  _separatorFailed.remove(trackId);
+  _cannot.removeWhere((k) => k.startsWith('$trackId-'));
+  // A separator that could not be set up — a fetch that failed — gets another go as
+  // well. One that is simply not in the box is found not to be again, at no cost.
+  _separatorOff = null;
+}
+
+/// Whether [name] of [trackId] is something this computer could make at all, before
+/// anything is fetched to make it: the voice on its own needs the separator.
+Future<bool> canMakeHere(int trackId, String name) async {
+  if (!canSeparateHere) return false;
+  if (serverParts.contains(name)) return true;
+  return await _separatorPossible() && !_separatorFailed.contains(trackId);
+}
+
+/// A record waiting to be taken apart, and everything needed to do it.
+class _Render {
+  _Render(this.trackId, this.audio, this.name, this.into, this.together, this.trained);
+  final int trackId;
+  final String audio, name;
+
+  /// Part → the file it goes in.
+  final Map<String, String> into;
+  final List<String> together;
+  final bool trained;
+}
+
+/// The line, and the one being taken apart now. One at a time: separating is every
+/// core this machine will give it, and two at once is not twice as fast — it is the
+/// booth stuttering.
+final _line = <_Render>[];
+_Render? _now;
+
+/// Bumped when everything is forgotten, so a run still finishing from before — a test's,
+/// say — does not reach into the line that replaced it.
+int _generation = 0;
+
+/// The separator while it runs, so a cancel can stop it.
+Process? _running;
+
+/// Completed when the one in hand is cancelled.
+Completer<void>? _stop;
+
+class _Cancelled implements Exception {
+  const _Cancelled();
+  @override
+  String toString() => 'cancelled';
+}
+
+/// [work], unless the one in hand is cancelled first — then it is let go of where it
+/// is. What cannot be stopped (the arithmetic's isolate, a fetch shared with others)
+/// finishes in the background and is thrown away.
+Future<T> _unlessCancelled<T>(Future<T> work) {
+  final stop = _stop;
+  if (stop == null) return work;
+  return Future.any([work, stop.future.then<T>((_) => throw const _Cancelled())]);
+}
 
 bool makingHere(int trackId, String name) => _making.contains('$trackId-$name');
+
+/// The file of [name] for [trackId] if it has been made here, without needing the
+/// record at all: what saves fetching eight megabytes to be told it was done last week.
+/// The separator's first; the arithmetic's where the separator is out of the question.
+Future<String?> partReady(int trackId, String name) async {
+  if (!canSeparateHere) return null;
+  final dir = Directory(await partsDir());
+  final want = partFile(dir, trackId, name);
+  if (await want.exists()) return want.path;
+  if (await _separatorPossible() && !_separatorFailed.contains(trackId)) return null;
+  final older = partFile(dir, trackId, name, version: _arithmeticVersion);
+  return await older.exists() ? older.path : null;
+}
+
+/// Take [trackId] off the list, wherever it is: waiting, having its record fetched, or
+/// being taken apart — which is stopped.
+void cancelHere(int trackId) {
+  _cancelled.add(trackId);
+  for (final r in _line.where((r) => r.trackId == trackId).toList()) {
+    _line.remove(r);
+    _making.removeAll([for (final p in r.together) '$trackId-$p']);
+  }
+  if (_now?.trackId == trackId) {
+    final stop = _stop;
+    if (stop != null && !stop.isCompleted) stop.complete();
+    _running?.kill();
+  }
+  final j = partsJobs.of(trackId);
+  if (j != null && !j.done) partsJobs.stage(trackId, PartsStage.cancelled);
+}
+
+/// Put [trackId] first among the waiting: somebody wants it now.
+void promoteHere(int trackId) {
+  if (partsJobs.of(trackId)?.stage == PartsStage.waiting) partsJobs.first(trackId);
+}
 
 /// The part of [audio] called [name], made here if it is not already.
 ///
 /// Says which of the three things is true, and where the file is when there is one.
 /// A [Here.cannot] is the important answer: it is what sends the asking to the
 /// server rather than leaving a deck promising a part that will never arrive.
+/// [track] names the job in the list the booth and the downloads page show.
 Future<(Here, String?)> partHere(String audio, int trackId, String name,
-    {int? durationMs}) async {
+    {int? durationMs, Track? track}) async {
   if (!canSeparateHere) return (Here.cannot, null);
   if (durationMs != null && durationMs > upToSeconds * 1000) return (Here.cannot, null);
   final dir = Directory(await partsDir());
@@ -162,41 +273,111 @@ Future<(Here, String?)> partHere(String audio, int trackId, String name,
   if (!trained) {
     final older = partFile(dir, trackId, name, version: _arithmeticVersion);
     if (await older.exists()) return (Here.ready, older.path);
+    if (!serverParts.contains(name)) return (Here.cannot, null);
   }
-  if (_cannot.contains('$trackId-$name')) return (Here.cannot, null);
+  if (_cannot.contains('$trackId-$name') || _cancelled.contains(trackId)) {
+    return (Here.cannot, null);
+  }
 
-  // Whatever one pass gives, so no part is queued twice: the separator makes all
-  // three at once; the arithmetic makes the voice-less record on its own and the
-  // drums and the music together.
+  // Whatever one pass gives, so no part is queued twice: the separator makes all four
+  // at once — those not made already — and the arithmetic makes the voice-less record
+  // on its own and the drums and the music together.
   final together = trained
-      ? partNames
+      ? [
+          for (final p in trainedParts)
+            if (p == name || !await partFile(dir, trackId, p).exists()) p,
+        ]
       : name == 'instrumental'
           ? ['instrumental']
           : ['drums', 'music'];
   _making.addAll([for (final p in together) '$trackId-$p']);
-
-  final mine = Completer<void>();
-  final before = _bench;
-  _bench = mine.future;
-  unawaited(() async {
-    try {
-      await before;
-      await renderer(audio, name, {
-        for (final p in together)
-          p: partFile(dir, trackId, p,
-                  version: trained ? partsVersion : _arithmeticVersion)
-              .path,
-      });
-    } catch (e) {
-      debugPrint('could not take track $trackId apart here: $e');
-      _cannot.addAll([for (final p in together) '$trackId-$p']);
-    } finally {
-      _making.removeAll([for (final p in together) '$trackId-$p']);
-      _progress.remove(trackId);
-      mine.complete();
-    }
-  }());
+  _line.add(_Render(
+    trackId,
+    audio,
+    name,
+    {
+      for (final p in together)
+        p: partFile(dir, trackId, p, version: trained ? partsVersion : _arithmeticVersion).path,
+    },
+    together,
+    trained,
+  ));
+  partsJobs.add(trackId, track: track, parts: together, trained: trained);
+  // Into the line — unless this record is the one being taken apart right now, and
+  // this is a second pass of the arithmetic's waiting behind it.
+  if (_now?.trackId != trackId) partsJobs.stage(trackId, PartsStage.waiting, trained: trained);
+  unawaited(_pump());
   return (Here.making, null);
+}
+
+/// Work down the line, one at a time, in the order the list shows: somebody may have
+/// put one first.
+Future<void> _pump() async {
+  if (_now != null) return;
+  final gen = _generation;
+  bool live() => gen == _generation;
+  while (_line.isNotEmpty && live()) {
+    final order = [for (final j in partsJobs.waiting) j.trackId];
+    var r = _line.first;
+    var best = order.length;
+    for (final c in _line) {
+      final i = order.indexOf(c.trackId);
+      if (i >= 0 && i < best) {
+        best = i;
+        r = c;
+      }
+    }
+    _line.remove(r);
+    _now = r;
+    final stop = _stop = Completer<void>();
+    final id = r.trackId;
+    try {
+      partsJobs.stage(id, PartsStage.separating, trained: r.trained);
+      await _unlessCancelled(renderer(r.audio, r.name, r.into));
+      if (stop.isCompleted) throw const _Cancelled();
+      if (!live()) return;
+      // The arithmetic can have a second pass of the same record behind this one.
+      partsJobs.stage(
+          id, _line.any((x) => x.trackId == id) ? PartsStage.waiting : PartsStage.ready);
+    } catch (e) {
+      if (!live()) return;
+      if (e is _Cancelled || stop.isCompleted) {
+        await _tidyAfter(r);
+        final j = partsJobs.of(id);
+        if (j != null && !j.done) partsJobs.stage(id, PartsStage.cancelled);
+      } else {
+        debugPrint('could not take track $id apart here: $e');
+        _cannot.addAll([for (final p in r.together) '$id-$p']);
+        partsJobs.stage(id, PartsStage.failed, error: _short(e));
+      }
+    } finally {
+      if (live()) {
+        _making.removeAll([for (final p in r.together) '$id-$p']);
+        _now = null;
+        _stop = null;
+      }
+    }
+  }
+}
+
+/// What a stopped run leaves: its half-written files, once the separator has gone.
+Future<void> _tidyAfter(_Render r) async {
+  try {
+    await _running?.exitCode.timeout(const Duration(seconds: 5));
+  } catch (_) {}
+  for (final f in r.into.values) {
+    final tmp = File(f.replaceFirst(RegExp(r'\.m4a$'), '.tmp.m4a'));
+    try {
+      if (await tmp.exists()) await tmp.delete();
+    } catch (_) {}
+  }
+}
+
+/// A failure in a few words, for a row.
+String _short(Object e) {
+  var s = '$e'.replaceFirst(RegExp(r'^(Bad state|Exception|StateError|HttpException): '), '');
+  s = s.split('\n').first.trim();
+  return s.length > 90 ? '${s.substring(0, 89)}…' : s;
 }
 
 // ------------------------------------------------------------------ the doing of it
@@ -209,10 +390,15 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
   final ffmpeg = tools.ffmpeg;
   if (ffmpeg == null) throw StateError('no ffmpeg on this computer');
 
+  // This run's own stop, held on to: a cancelled run finishing in the background must
+  // not read the next one's.
+  final stop = _stop;
+  bool stopped() => stop?.isCompleted ?? false;
+  final trackId = int.tryParse(
+      into.values.first.split(Platform.pathSeparator).last.split('-').first);
+
   final trained = into.values.every((f) => f.endsWith('-v$partsVersion.m4a'));
   if (trained) {
-    final trackId = int.tryParse(
-        into.values.first.split(Platform.pathSeparator).last.split('-').first);
     // Two ways to fail, and they mean different things. Not being able to set the
     // separator up — no program, no house, a fetch that failed or a file that was not
     // the right one — is true of every record, so it is not tried again until the app
@@ -221,13 +407,30 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
     try {
       final house = separationHouse?.call();
       if (house == null || house.isEmpty) throw StateError('no house to fetch it from');
-      s = await readySeparator(house);
+      // The first time, the separator's own files come first: a stage of its own, since
+      // it is eighty megabytes nobody asked for by name.
+      var fetching = false;
+      s = await _unlessCancelled(readySeparator(house, fetching: (f, got, total) {
+        if (trackId == null || stopped()) return;
+        if (!fetching) {
+          fetching = true;
+          partsJobs.stage(trackId, PartsStage.gettingSeparator);
+        }
+        partsJobs.progress(trackId, total == null ? null : got / total,
+            bytes: got, total: total);
+      }));
+      if (fetching && trackId != null) {
+        partsJobs.stage(trackId, PartsStage.separating, trained: true);
+      }
       if (s == null) throw StateError('no separator for this computer');
+    } on _Cancelled {
+      rethrow;
     } catch (e) {
       debugPrint('no separator on this computer this time, so the arithmetic: $e');
       _separatorOff = true;
     }
     if (s != null) {
+      Process? mine;
       try {
         await runSeparator(s,
             ffmpeg: ffmpeg,
@@ -235,15 +438,28 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
             into: into,
             upToSeconds: upToSeconds,
             progress: (f) {
-              if (trackId != null) _progress[trackId] = f;
+              if (trackId != null && !stopped()) partsJobs.progress(trackId, f);
+            },
+            started: (p) {
+              mine = p;
+              _running = p;
+              if (stopped()) p.kill();
             });
         return;
       } catch (e) {
+        if (stopped()) throw const _Cancelled();
         debugPrint('the separator could not take this one apart, so the arithmetic: $e');
         if (trackId != null) _separatorFailed.add(trackId);
+      } finally {
+        if (_running == mine) _running = null;
       }
     }
-    // The pair that was asked for, the old way.
+    // The pair that was asked for, the old way. The voice on its own is not something
+    // the old way can give.
+    if (!serverParts.contains(name)) {
+      throw StateError('only the separator can lift the voice out on its own');
+    }
+    if (trackId != null) partsJobs.stage(trackId, PartsStage.separating, trained: false);
     final dir = File(into.values.first).parent;
     final together = name == 'instrumental' ? ['instrumental'] : ['drums', 'music'];
     into = {
@@ -254,13 +470,13 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
     if (into.isEmpty) throw StateError('could not tell which record that was');
   }
 
-  final decoded = await Process.run(
+  final decoded = await _unlessCancelled(Process.run(
     ffmpeg,
     ['-v', 'error', '-t', '$upToSeconds', '-i', audio,
       '-ac', '2', '-ar', '$rate', '-f', 'f32le', '-'],
     stdoutEncoding: null,
     stderrEncoding: null,
-  );
+  ));
   if (decoded.exitCode != 0) throw StateError('ffmpeg could not read it');
   final raw = decoded.stdout as List<int>;
   final bytes = Uint8List.fromList(raw.sublist(0, raw.length ~/ 8 * 8));
@@ -273,15 +489,22 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
   // two of. Transferring empties this side's buffer, which is why nothing reads it
   // after this line.
   final moved = TransferableTypedData.fromList([bytes]);
-  final parts = await Isolate.run(
-      () => separate(moved.materialize().asFloat32List(), name));
+  final parts = await _unlessCancelled(_arithmetic(moved, name));
 
   for (final e in parts.sound.entries) {
     final file = into[e.key];
     if (file == null) continue;
+    if (stopped()) throw const _Cancelled();
     await _encode(ffmpeg, e.value, parts.channels, File(file));
   }
 }
+
+/// The arithmetic in an isolate of its own. A function apart from _render because a
+/// closure sends everything its scope has captured — and _render's scope holds the
+/// separator's process, which cannot be sent anywhere.
+Future<({int channels, Map<String, Float32List> sound})> _arithmetic(
+        TransferableTypedData moved, String name) =>
+    Isolate.run(() => separate(moved.materialize().asFloat32List(), name));
 
 Future<void> _encode(
     String ffmpeg, Float32List sound, int channels, File into) async {
@@ -387,13 +610,21 @@ Future<bool> _superseded(Directory dir, String name) async {
 
 /// Fetch a record this computer is not keeping, so it can be taken apart, and say
 /// where it landed. Only once per record, however many of its parts are wanted.
-Future<String?> borrowRecord(
-    Uri from, Map<String, String> headers, int trackId) async {
+/// [progress] hears how much has come, of how much when the house says. Cancelling
+/// [trackId] (cancelHere) stops it at the next chunk, and it throws.
+Future<String?> borrowRecord(Uri from, Map<String, String> headers, int trackId,
+    {void Function(int got, int? total)? progress}) async {
   if (!canSeparateHere) return null;
   final dir = await partsDir();
   final into = File('$dir${Platform.pathSeparator}borrowed-$trackId.audio');
   if (await into.exists()) return into.path;
-  final client = HttpClient();
+  // Written beside itself and renamed when whole, so a record cut off halfway is
+  // never mistaken for one that arrived. (The name still starts "borrowed-", so a
+  // startup sweep clears it up if the app is closed mid-fetch.) This used to reuse
+  // the parts' ".m4a → .tmp.m4a" line, which on a name ending ".audio" changed
+  // nothing — the fetch went straight into the real name.
+  final tmp = File('${into.path}.tmp');
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 30);
   try {
     final request = await client.getUrl(from);
     headers.forEach(request.headers.set);
@@ -401,17 +632,28 @@ Future<String?> borrowRecord(
     if (response.statusCode >= 400) {
       throw StateError('the record could not be fetched (${response.statusCode})');
     }
-    // Written beside itself and renamed when whole, so a record cut off halfway is
-    // never mistaken for one that arrived. (The name still starts "borrowed-", so a
-    // startup sweep clears it up if the app is closed mid-fetch.) This used to reuse
-    // the parts' ".m4a → .tmp.m4a" line, which on a name ending ".audio" changed
-    // nothing — the fetch went straight into the real name.
-    final tmp = File('${into.path}.tmp');
-    await response.pipe(tmp.openWrite());
+    final total = response.contentLength >= 0 ? response.contentLength : null;
+    final sink = tmp.openWrite();
+    var got = 0;
+    try {
+      await for (final chunk in response.timeout(const Duration(seconds: 60))) {
+        if (_cancelled.contains(trackId)) throw const _Cancelled();
+        sink.add(chunk);
+        got += chunk.length;
+        progress?.call(got, total);
+      }
+    } finally {
+      await sink.close();
+    }
     await tmp.rename(into.path);
     return into.path;
+  } catch (_) {
+    try {
+      if (await tmp.exists()) await tmp.delete();
+    } catch (_) {}
+    rethrow;
   } finally {
-    client.close();
+    client.close(force: true);
   }
 }
 

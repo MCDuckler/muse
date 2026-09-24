@@ -83,20 +83,36 @@ Future<Directory> kitDir() async {
 /// here yet. Null where there is no separator for this computer at all — no program
 /// in the box, or a processor it is not built for — which is not a failure, just the
 /// old arithmetic. Throws when the files could not be had.
-Future<Separator?> readySeparator(String house, {Directory? into}) async {
+/// [fetching] hears how a first-time fetch of either file is going.
+Future<Separator?> readySeparator(String house,
+    {Directory? into, void Function(KitFile f, int got, int? total)? fetching}) async {
   final program = await separatorProgram();
   final runtime = runtimeFile;
   if (program == null || runtime == null) return null;
   final dir = into ?? await kitDir();
-  final model = await _have(modelFile, dir, house);
-  final lib = await _have(runtime, dir, house);
+  final model = await _have(modelFile, dir, house, fetching);
+  final lib = await _have(runtime, dir, house, fetching);
   return (program: program, runtime: lib, model: model);
+}
+
+/// Whether the separator's files are both here already, so a split starts straight
+/// away rather than with a fetch.
+Future<bool> separatorFilesHere({Directory? into}) async {
+  final runtime = runtimeFile;
+  if (runtime == null) return false;
+  final dir = into ?? await kitDir();
+  for (final f in [modelFile, runtime]) {
+    final file = File('${dir.path}${Platform.pathSeparator}${f.name}');
+    if (!await file.exists() || await file.length() != f.bytes) return false;
+  }
+  return true;
 }
 
 /// Fetches in flight, so two records asking at once share one download.
 final _fetching = <String, Future<String>>{};
 
-Future<String> _have(KitFile f, Directory dir, String house) {
+Future<String> _have(KitFile f, Directory dir, String house,
+    [void Function(KitFile f, int got, int? total)? fetching]) {
   final path = '${dir.path}${Platform.pathSeparator}${f.name}';
   return _fetching[path] ??= () async {
     try {
@@ -104,7 +120,8 @@ Future<String> _have(KitFile f, Directory dir, String house) {
       // Checked by size every time and by hash when it arrived: hashing fifty
       // megabytes before every record would be a second of nothing.
       if (await file.exists() && await file.length() == f.bytes) return path;
-      await fetchKitFile(Uri.parse('$house/models/${f.name}.gz'), f, file);
+      await fetchKitFile(Uri.parse('$house/models/${f.name}.gz'), f, file,
+          progress: fetching == null ? null : (got, total) => fetching(f, got, total));
       return path;
     } finally {
       _fetching.remove(path);
@@ -116,7 +133,8 @@ Future<String> _have(KitFile f, Directory dir, String house) {
 /// Written beside itself and renamed only once the hash is right, so a file with the
 /// real name is always the real file.
 @visibleForTesting
-Future<void> fetchKitFile(Uri from, KitFile f, File into) async {
+Future<void> fetchKitFile(Uri from, KitFile f, File into,
+    {void Function(int got, int? total)? progress}) async {
   final part = File('${into.path}.part');
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 30);
   try {
@@ -131,9 +149,18 @@ Future<void> fetchKitFile(Uri from, KitFile f, File into) async {
         ChunkedConversionSink<Digest>.withCallback((d) => digest = d.single));
     final sink = part.openWrite();
     var bytes = 0;
+    // What has come over the wire, of what the house said it would send: the
+    // compressed size, which is what a person is waiting for.
+    var wire = 0;
+    final length = response.contentLength >= 0 ? response.contentLength : null;
     try {
       await for (final chunk in response
           .timeout(const Duration(seconds: 60))
+          .map((c) {
+            wire += c.length;
+            progress?.call(wire, length);
+            return c;
+          })
           .transform(gzip.decoder)) {
         bytes += chunk.length;
         if (bytes > f.bytes) throw StateError('${f.name}: longer than it should be');
@@ -170,7 +197,8 @@ Future<void> runSeparator(Separator s,
     required String audio,
     required Map<String, String> into,
     required int upToSeconds,
-    void Function(double)? progress}) async {
+    void Function(double)? progress,
+    void Function(Process)? started}) async {
   final args = [
     '--ort', s.runtime,
     '--model', s.model,
@@ -193,6 +221,7 @@ Future<void> runSeparator(Separator s,
       ? await Process.start(nice, ['-n', '10', s.program, ...args],
           environment: _environment)
       : await Process.start(s.program, args, environment: _environment);
+  started?.call(p);
   final said = StringBuffer();
   final watching = Future.wait([
     p.stdout.transform(utf8.decoder).transform(const LineSplitter()).forEach((line) {

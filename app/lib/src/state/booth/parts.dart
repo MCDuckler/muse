@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../api/client.dart';
 import '../../api/models.dart';
+import '../../worker/parts_jobs.dart';
 import '../../worker/render_parts.dart';
 
 /// Where the parts of a record come from.
@@ -21,6 +22,11 @@ class PartsStore {
   PartsStore(this.api, {this.offlinePath}) {
     // The trained separator's files come from the same house as the music.
     separationHouse = () => api.baseUrl;
+    // What the buttons on the list of jobs do.
+    partsJobs
+      ..onCancel = cancelHere
+      ..onPromote = promoteHere
+      ..onRetry = _retry;
   }
 
   final ApiClient api;
@@ -36,6 +42,9 @@ class PartsStore {
   /// part does not fetch the same record again.
   final _borrowed = <int, String>{};
 
+  /// Fetches in flight, so two parts asked for at once share one.
+  final _borrowing = <int, Future<String?>>{};
+
   /// Whether the work happens on this machine at all. False in a browser and on a
   /// phone, where the server is the only answer.
   bool get separatesHere => canSeparateHere;
@@ -49,15 +58,33 @@ class PartsStore {
   /// Answers [Stem.ready] when it can be played now — [pathFor] says whether that is
   /// from this disk or the server — [Stem.beingMade] while somebody is working on
   /// it, and [Stem.never] for a record that does not get taken apart.
-  Future<Stem> want(Track t, String name) async {
+  ///
+  /// [byHand] is somebody pressing a pad for it, which counts for more than the
+  /// automix asking ahead: it puts a waiting record first, and tries again one that
+  /// failed or was cancelled.
+  Future<Stem> want(Track t, String name, {bool byHand = false}) async {
     if (_here.containsKey('${t.id}-$name')) return Stem.ready;
     if ((t.durationMs ?? 0) > upToSeconds * 1000) return Stem.never;
 
     if (canSeparateHere) {
+      final job = partsJobs.of(t.id);
+      if (byHand &&
+          job != null &&
+          (job.stage == PartsStage.failed || job.stage == PartsStage.cancelled)) {
+        forgiveHere(t.id);
+      }
+      // Taken off the list by somebody: the automix does not put it back.
+      if (cancelledHere(t.id)) return Stem.never;
       final made = await _makeHere(t, name);
-      if (made != null) return made;
+      if (made != null) {
+        if (made == Stem.beingMade && byHand) promoteHere(t.id);
+        return made;
+      }
+      if (cancelledHere(t.id)) return Stem.never;
       // Falling through: this computer could not, so ask the house.
     }
+    // The house makes three parts, and the voice on its own is not one of them.
+    if (!serverParts.contains(name)) return Stem.never;
     try {
       return await api.stemState(t, name);
     } catch (_) {
@@ -65,13 +92,31 @@ class PartsStore {
     }
   }
 
+  /// Try a failed or cancelled job again, as the list's Retry button does.
+  void _retry(int trackId) {
+    final job = partsJobs.of(trackId);
+    final t = job?.track;
+    if (job == null || t == null) return;
+    forgiveHere(trackId);
+    unawaited(want(t, job.parts.isEmpty ? 'drums' : job.parts.first, byHand: true));
+  }
+
   /// Null when this computer cannot do it after all and the server should be asked.
   Future<Stem?> _makeHere(Track t, String name) async {
     try {
+      // Made already — this session or an earlier one — needs no record at all.
+      final ready = await partReady(t.id, name);
+      if (ready != null) {
+        _here['${t.id}-$name'] = ready;
+        return Stem.ready;
+      }
+      if (makingHere(t.id, name)) return Stem.beingMade;
+      // Nothing is fetched for a part this computer could never make.
+      if (!await canMakeHere(t.id, name)) return null;
       final audio = await _recordFor(t);
       if (audio == null) return null;
       final (state, made) = await partHere(audio, t.id, name,
-          durationMs: t.durationMs);
+          durationMs: t.durationMs, track: t);
       switch (state) {
         case Here.ready:
           _here['${t.id}-$name'] = made!;
@@ -101,11 +146,34 @@ class PartsStore {
     if (already != null) return already;
     if (t.streamPath == null) return null;
 
-    await api.ensureStreamKey();
-    final got = await borrowRecord(
-        Uri.parse(api.streamUrl(t)), api.streamHeaders, t.id);
-    if (got != null) _borrowed[t.id] = got;
-    return got;
+    return _borrowing[t.id] ??= () async {
+      // On the list from here: eight megabytes is something to watch arrive.
+      partsJobs.add(t.id, track: t, stage: PartsStage.fetching);
+      try {
+        await api.ensureStreamKey();
+        final got = await borrowRecord(
+          Uri.parse(api.streamUrl(t)),
+          api.streamHeaders,
+          t.id,
+          progress: (got, total) => partsJobs.progress(
+              t.id, total == null ? null : got / total,
+              bytes: got, total: total),
+        );
+        if (got == null) {
+          partsJobs.drop(t.id);
+        } else {
+          _borrowed[t.id] = got;
+        }
+        return got;
+      } catch (e) {
+        if (!cancelledHere(t.id)) {
+          partsJobs.stage(t.id, PartsStage.failed, error: 'could not fetch the record');
+        }
+        rethrow;
+      } finally {
+        unawaited(_borrowing.remove(t.id));
+      }
+    }();
   }
 
   /// Clear up after a run that did not finish. At startup only — see sweepHere.

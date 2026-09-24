@@ -10,6 +10,7 @@
 // No browser and no device: a fake engine stands behind just_audio's platform
 // interface (see fake_audio.dart), so the logic under test is the real one.
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:convert';
 import 'dart:io';
 
@@ -493,6 +494,26 @@ void main() {
     expect(player.current?.id, 2, reason: 'it went on to the next song');
   });
 
+  test('a record\'s loudness match reaches the engine as the decibels it is', () async {
+    // mpv cubes its volume; the match is a number of decibels, and -6 dB told to it as
+    // a gain of 0.5 came out at -18. On a desk the gain goes in as its cube root.
+    final was = PlayerService.gainToVolume;
+    PlayerService.gainToVolume = (g) => g <= 0 ? 0 : math.pow(g, 1 / 3).toDouble();
+    addTearDown(() => PlayerService.gainToVolume = was);
+    await player.loadQueue(Queue.fromJson({
+      'id': 1, 'name': 'test', 'cursor_index': 0, 'position_ms': 0, 'rev': 1,
+      'items': [
+        {'id': 7, 'title': 'Loud', 'artists': ['Someone'], 'duration_ms': 60000,
+         'state': 'ready', 'stream_url': '/tracks/7/stream', 'source': 'youtube',
+         'gain_db': -6.0, 'pos': 0},
+      ],
+    }));
+    await player.playAt(0);
+    await settle();
+    final heard = math.pow(audio.only.volume, 3);
+    expect(20 * math.log(heard) / math.ln10, closeTo(-6.0, 0.01));
+  });
+
   test('an engine that dies in the background is started again', () async {
     // The complaint: leave the app and the music stops after a while. Nothing looked
     // for this. The snapshot is rebuilt from the engine on every state change, so
@@ -516,7 +537,9 @@ void main() {
         reason: 'the source is opened again: ${engine.calls}');
     expect(engine.calls, contains('play'),
         reason: 'and started: ${engine.calls}');
-    expect(engine.position, const Duration(seconds: 40),
+    // The fake engine plays on while time passes, as a real one does, so "where it
+    // had got to" is forty seconds and the moments the test took since.
+    expect((engine.position - const Duration(seconds: 40)).inMilliseconds, inInclusiveRange(0, 500),
         reason: 'from where the song had actually got to');
     expect(player.current?.id, 1, reason: 'the same song, not the next one');
   });

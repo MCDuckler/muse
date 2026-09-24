@@ -1735,12 +1735,20 @@ class PlayerService {
     }
   }
 
+  /// What the engine is told for a gain meant as a multiplier on the sound. The same
+  /// number, unless the engine's volume is not a gain: on a desk it is mpv's, which
+  /// cubes it (see main.dart, and the booth's DesktopMixer). The listener's own slider
+  /// is left on the engine's curve, which is made to feel even; the loudness match is
+  /// not, because it is a number of decibels — told to mpv as it was, a record 6 dB too
+  /// loud was turned down 18, and the one after it sounded twice as loud.
+  static double Function(double gain) gainToVolume = (g) => g;
+
   double _volumeForTrack(Track t) {
     final gain = t.gainDb;
     final normalised = (gain == null || gain >= 0)
         ? 1.0                                     // never boost into clipping
         : math.pow(10, gain / 20).toDouble().clamp(0.05, 1.0);
-    return (normalised * userVolume).clamp(0.0, 1.0);
+    return (gainToVolume(normalised) * userVolume).clamp(0.0, 1.0);
   }
 
   Future<void> setUserVolume(double v) async {

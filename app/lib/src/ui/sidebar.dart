@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
+import '../worker/parts_jobs.dart';
 import 'artwork.dart';
 import 'command_palette.dart';
 import 'downloads_page.dart';
@@ -169,13 +170,27 @@ class _LibrarySidebarState extends State<LibrarySidebar> {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             child: Row(
               children: [
-                if (pending > 0)
-                  IconButton(
-                    icon: Badge(label: Text('$pending'), child: const Icon(Icons.downloading)),
-                    tooltip: 'Downloads',
-                    onPressed: () =>
-                        openInTab(app.homeTab, (_) => const DownloadsPage()),
-                  ),
+                // Downloads, and the booth's records being taken apart on this
+                // computer: both are on the downloads page.
+                ListenableBuilder(
+                  listenable: partsJobs,
+                  builder: (context, _) {
+                    final splitting =
+                        partsJobs.running.length + partsJobs.waiting.length;
+                    final all = pending + splitting;
+                    if (all == 0) return const SizedBox.shrink();
+                    return IconButton(
+                      icon: Badge(label: Text('$all'), child: const Icon(Icons.downloading)),
+                      tooltip: splitting == 0
+                          ? 'Downloads'
+                          : pending == 0
+                              ? 'Taking apart $splitting'
+                              : 'Downloads · taking apart $splitting',
+                      onPressed: () =>
+                          openInTab(app.homeTab, (_) => const DownloadsPage()),
+                    );
+                  },
+                ),
                 IconButton(
                   icon: const Icon(Icons.settings_outlined),
                   tooltip: 'Settings',

@@ -8,6 +8,7 @@ import '../state/app_state.dart';
 import 'artwork.dart';
 import 'dialogs.dart';
 import 'mini_player.dart';
+import 'parts_jobs_section.dart';
 import 'snack.dart';
 import 'skeleton.dart';
 import 'record_refresh.dart';
@@ -134,6 +135,8 @@ class _DownloadsPageState extends State<DownloadsPage> {
                           title: 'Nothing waiting',
                           body: 'Everything you have added is downloaded.',
                         ),
+                      // The booth's records being taken apart on this computer.
+                      const PartsJobsSection(),
                       if (d.batches.isNotEmpty) ...[
                         _Label(d.batchesTotal > d.batches.length
                             ? 'Imports · ${d.batches.length} of ${d.batchesTotal}'

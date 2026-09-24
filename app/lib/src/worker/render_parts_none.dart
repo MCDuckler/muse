@@ -5,14 +5,18 @@
 /// Every name the other half offers appears here too, the test-only seams included.
 /// The analyser resolves a conditional export to this side, so a name missing here is
 /// a name the build says does not exist — however well it works on a desk.
+library;
+
+import '../api/models.dart';
+
 const partsVersion = 2;
+const trainedParts = ['instrumental', 'drums', 'music', 'vocals'];
+const serverParts = {'instrumental', 'drums', 'music'};
 const upToSeconds = 12 * 60;
 
 String Function()? separationHouse;
 
 set separatorOffForTesting(bool? off) {}
-
-double? progressHere(int trackId) => null;
 
 /// What this computer can say about a part of a record. Here, always the same thing.
 enum Here { ready, making, cannot }
@@ -33,14 +37,26 @@ bool get canSeparateHere => false;
 
 bool makingHere(int trackId, String name) => false;
 
+bool cancelledHere(int trackId) => false;
+
+void forgiveHere(int trackId) {}
+
+void cancelHere(int trackId) {}
+
+void promoteHere(int trackId) {}
+
+Future<bool> canMakeHere(int trackId, String name) async => false;
+
+Future<String?> partReady(int trackId, String name) async => null;
+
 Future<(Here, String?)> partHere(String audio, int trackId, String name,
-        {int? durationMs}) async =>
+        {int? durationMs, Track? track}) async =>
     (Here.cannot, null);
 
 Future<String> partsDir() async => '';
 
-Future<String?> borrowRecord(
-        Uri from, Map<String, String> headers, int trackId) async =>
+Future<String?> borrowRecord(Uri from, Map<String, String> headers, int trackId,
+        {void Function(int got, int? total)? progress}) async =>
     null;
 
 Future<void> giveBack(String path) async {}

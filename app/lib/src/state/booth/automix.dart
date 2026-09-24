@@ -87,18 +87,24 @@ class AutoMix extends ChangeNotifier {
   /// Tempo first, because a record that cannot be synced can only be faded into;
   /// then the wheel, because a clash is the thing anybody hears; then how close the
   /// two are in energy, so a set does not fall off a cliff between one and the next.
-  static double howWell(TrackTiming? from, TrackTiming? to) {
+  ///
+  /// [fromPitch] is the pitch the record on now is playing at: what [to] has to meet
+  /// is the tempo on show, not the one it was made at.
+  static double howWell(TrackTiming? from, TrackTiming? to, {double fromPitch = 1}) {
     if (from == null || to == null) return 0;
     var score = 0.0;
-    final ratio = from.bpm != null && to.bpm != null
-        ? Booth.syncRatio(to.bpm!, from.bpm!)
+    final ratio = from.gridBpm != null && to.gridBpm != null
+        ? Booth.syncRatio(to.gridBpm!, from.gridBpm! * fromPitch)
         : null;
     if (ratio != null) {
       // The less it has to be pulled, the better.
       score += 0.5 * (1 - ((ratio - 1).abs() / Booth.maxSync)).clamp(0.0, 1.0);
       score += 0.1;
     }
-    if (from.inKeyWith(to)) score += 0.3;
+    // The wheel, graded: the same key or a neighbour mixes anywhere; two steps is an
+    // energy move a DJ makes on purpose; further than that clashes.
+    final steps = from.keyStepsTo(to);
+    if (steps != null && steps <= 2) score += const [0.3, 0.25, 0.1][steps];
     final mine = _energy(from), theirs = _energy(to);
     if (mine != null && theirs != null) {
       score += 0.1 * (1 - (mine - theirs).abs()).clamp(0.0, 1.0);
@@ -157,6 +163,7 @@ class AutoMix extends ChangeNotifier {
   /// cannot know about — the room, or simply having heard enough of it.
   Future<void> mixNow() async {
     if (!running || next == null) return;
+    booth.note(BoothEventKind.mix, 'Mixing now, by hand');
     goesAt = Duration.zero;
     notifyListeners();
     await _tick();
@@ -175,6 +182,7 @@ class AutoMix extends ChangeNotifier {
   /// Leave the record after this one out altogether.
   Future<void> dropNext() async {
     if (_at + 1 >= _tracks.length) return;
+    booth.note(BoothEventKind.skip, 'Skipped ${_tracks[_at + 1].displayTitle}');
     _tracks = [..._tracks]..removeAt(_at + 1);
     await _prepareNext();
   }
@@ -202,14 +210,27 @@ class AutoMix extends ChangeNotifier {
   /// [parts] says both records have been taken apart on the server, which puts the
   /// boldest move of all on the table: the drums changing hands.
   static ({Transition kind, int bars}) choose(TrackTiming? from, TrackTiming? to,
-      {MixStyle style = MixStyle.normal, bool parts = false}) {
+      {MixStyle style = MixStyle.normal, bool parts = false, double fromPitch = 1}) {
     if (from == null || to == null || !from.hasBeats || !to.hasBeats) {
       return (kind: Transition.fade, bars: 4);
     }
+    // Whether the incoming can be brought to the tempo on show — the record on now at
+    // its pitch ([fromPitch]), which is what SYNC will match, not the tempo it was made
+    // at. Judged by the one, done by the other, the automix once planned a blend it
+    // then could not put in step.
+    final ratio = from.gridBpm != null && to.gridBpm != null
+        ? Booth.syncRatio(to.gridBpm!, from.gridBpm! * fromPitch, reach: Booth.bridgeReach)
+        : null;
+    // Two speeds that cannot be one: handed over, not laid on top of each other. On
+    // the downbeat where the old one stops dead; otherwise a short fade — two bars of
+    // overlap is a moment, eight was thirteen seconds of two drummers disagreeing.
+    if (ratio == null) {
+      return from.ends == 'cold'
+          ? (kind: Transition.cut, bars: 1)
+          : (kind: Transition.fade, bars: 2);
+    }
+    // A record that fades itself goes out as it was made to — but in step.
     if (from.ends == 'fade') return (kind: Transition.fade, bars: 8);
-    final ratio =
-        from.bpm != null && to.bpm != null ? Booth.syncRatio(to.bpm!, from.bpm!) : null;
-    if (ratio == null) return (kind: Transition.fade, bars: 8);
     final inKey = from.inKeyWith(to);
     if (from.ends == 'cold' && inKey) return (kind: Transition.cut, bars: 1);
     switch (style) {
@@ -220,8 +241,9 @@ class AutoMix extends ChangeNotifier {
         // A clash goes out through the filter: a high-passed record has hardly any
         // key left to clash with. Or, where the parts exist, it never arrives: a
         // record coming in on its drums alone has no key to clash with either, and
-        // it sounds like a choice rather than a rescue.
-        if (parts && !inKey) return (kind: Transition.swap, bars: 16);
+        // it sounds like a choice rather than a rescue — in the bold style, below.
+        // (The drums changing hands is the bold style's: each change of part is a new
+        // file on the deck, and on a desk that is a gap in the sound you can hear.)
         return inKey
             ? (kind: Transition.blend, bars: 16)
             : (kind: Transition.sweep, bars: 12);
@@ -312,13 +334,15 @@ class AutoMix extends ChangeNotifier {
     if (at < cues.firstDownbeat) at = cues.firstDownbeat;
     // Onto its own grid: the nearest downbeat at or before — and never before the
     // first, whatever the grid says about the silence ahead of it.
+    // Then onto the steady grid: the downbeat the analysis gave can be a frame out,
+    // and a record parked a frame out starts a frame out.
     final downs = to.downbeats;
     for (var i = downs.length - 1; i >= 0; i--) {
       if (downs[i] <= at.inMilliseconds && downs[i] >= cues.firstDownbeatMs) {
-        return Duration(milliseconds: downs[i]);
+        return to.onGrid(Duration(milliseconds: downs[i]));
       }
     }
-    return at;
+    return to.onGrid(at);
   }
 
   /// Play [tracks] from [at], record into record, until they run out or [stop] —
@@ -333,6 +357,8 @@ class AutoMix extends ChangeNotifier {
     _kept = kept;
     _at = at.clamp(0, _tracks.length - 1);
     running = true;
+    booth.note(BoothEventKind.auto,
+        'Auto DJ on · ${_tracks.length - _at} record${_tracks.length - _at == 1 ? '' : 's'}, ${style.name}');
     final deck = booth.master;
     // The record it is already playing stays where it is: handing the queue to the
     // booth mid-song should be the booth taking over, not the song starting again.
@@ -350,6 +376,7 @@ class AutoMix extends ChangeNotifier {
   }
 
   void stop() {
+    if (running) booth.note(BoothEventKind.auto, 'Auto DJ off');
     running = false;
     _watch?.cancel();
     _watch = null;
@@ -378,7 +405,7 @@ class AutoMix extends ChangeNotifier {
     final was = from.track == null ? null : _keptFor(from.track!.id, coming.id);
     final chosen = was == null
         ? choose(from.timing, timing,
-            style: style, parts: inParts(from.track, coming))
+            style: style, parts: inParts(from.track, coming), fromPitch: from.pitch)
         : (kind: was.kind, bars: was.bars);
     plan = chosen;
     if (was != null) {
@@ -405,15 +432,45 @@ class AutoMix extends ChangeNotifier {
     }
     // Aimed at the drop where there is one and the style is for landing on it.
     final onTheDrop = style == MixStyle.bold && (timing?.drops.isNotEmpty ?? false);
+    // Records that cannot be put in step are handed over, not blended, so the new
+    // one starts where it starts rather than deep in an intro meant for mixing.
+    final inStep = timed != null &&
+        timing != null &&
+        timed.gridBpm != null &&
+        timing.gridBpm != null &&
+        Booth.syncRatio(timing.gridBpm!, timed.gridBpm! * from.pitch, reach: Booth.bridgeReach) != null;
     final at = timing == null
         ? null
-        : inPoint(timing, bars: chosen.bars, onTheDrop: onTheDrop);
+        : inStep
+            ? inPoint(timing, bars: chosen.bars, onTheDrop: onTheDrop)
+            : (timing.cues?.firstDownbeat ?? timing.lead);
     // Only if it is not the one already waiting there, parked where it should be.
     if (to.track?.id != coming.id || to.playing) {
       await to.load(coming, timing: timing, at: at);
     }
-    if (chosen.kind != Transition.fade) await booth.sync(to);
+    // The incoming comes to the master's tempo, as far as the automix reaches; the
+    // master's never moves. One that cannot be put in step plays at its own speed —
+    // not at whatever pitch the deck was last left at.
+    if (inStep) {
+      await booth.sync(to, reach: Booth.bridgeReach);
+    } else if (to.pitch != 1.0) {
+      await to.setTempo(1.0);
+    }
+    final go = goesAt;
+    booth.note(BoothEventKind.next, 'Next: ${coming.displayTitle}', deck: to);
+    booth.note(
+        BoothEventKind.plan,
+        inStep
+            ? '${chosen.kind.name}, ${chosen.bars} bars, from ${go == null ? '…' : clock(go)} · cued at ${clock(at ?? Duration.zero)}'
+            : 'Too far apart to put in step: ${chosen.kind.name}',
+        deck: to);
     notifyListeners();
+  }
+
+  /// A place in a record as a DJ reads it: 3:12.
+  static String clock(Duration d) {
+    final s = d.inSeconds;
+    return '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}';
   }
 
   /// Of everything still to play, put the one that follows this best next.
@@ -432,13 +489,14 @@ class AutoMix extends ChangeNotifier {
         unawaited(booth.timing.of(_tracks[i]));
         continue;
       }
-      final score = howWell(from, t);
+      final score = howWell(from, t, fromPitch: booth.master.pitch);
       if (score > best) {
         best = score;
         bestAt = i;
       }
     }
     if (bestAt == _at + 1 || best <= 0) return;
+    booth.note(BoothEventKind.next, 'Picked ${_tracks[bestAt].displayTitle}: it fits best');
     final moved = [..._tracks];
     moved.insert(_at + 1, moved.removeAt(bestAt));
     _tracks = moved;
@@ -447,7 +505,9 @@ class AutoMix extends ChangeNotifier {
   bool _going = false;
 
   Future<void> _tick() async {
-    if (!running || _going) return;
+    // Nothing while a mix is waiting for its beat or running — the automix's own, or
+    // one somebody started by hand.
+    if (!running || _going || booth.busy) return;
     final from = booth.master;
     final go = goesAt;
     final coming = next;
@@ -464,14 +524,22 @@ class AutoMix extends ChangeNotifier {
         from.duration != null &&
         from.position >= from.duration! - const Duration(milliseconds: 400);
     if (!from.playing && !ended) return;
-    if (from.position < go && !ended) return;
+    // Armed a moment early, so the incoming can be started on the exact beat rather
+    // than on the first tick after it — which was the next phrase, eight seconds and
+    // more too late, with the whole mix landing that much after where it was aimed.
+    final left = Duration(
+        microseconds: ((go - from.position).inMicroseconds / from.tempo).round());
+    if (left > armAhead && !ended) return;
     _going = true;
     try {
       final chosen = plan ??
           choose(from.timing, booth.other(from).timing,
-              style: style, parts: inParts(from.track, booth.other(from).track));
+              style: style,
+              parts: inParts(from.track, booth.other(from).track),
+              fromPitch: from.pitch);
       final was = booth.master;
-      await booth.go(chosen.kind, bars: chosen.bars);
+      await booth.go(chosen.kind,
+          bars: chosen.bars, startAt: ended ? null : startFor(from.timing, go, from.position));
       if (identical(booth.master, was)) {
         // It refused: the record it was going into would not play. Say so and stop,
         // rather than trying the same thing again every fifth of a second.
@@ -483,6 +551,43 @@ class AutoMix extends ChangeNotifier {
     } finally {
       _going = false;
     }
+  }
+
+  /// How long before the planned moment the booth gets ready to go.
+  static const armAhead = Duration(milliseconds: 1500);
+
+  /// The downbeat of the outgoing record the incoming starts on: the one nearest the
+  /// plan's [go], where that is still ahead of [now] — or the next one, where the
+  /// plan's moment has passed (a hand said "now", or the record was late getting
+  /// here). Null with no grid, which is a start straight away.
+  static Duration? startFor(TrackTiming? timing, Duration go, Duration now) {
+    if (timing == null || !timing.hasBeats) return null;
+    final soon = now + const Duration(milliseconds: 250);
+    final downs = timing.downbeats.isNotEmpty
+        ? timing.downbeats
+        : [
+            for (var i = 0; i < timing.beats.length; i++)
+              if ((i - timing.barStartsOn) % 4 == 0) timing.beats[i],
+          ];
+    if (downs.isEmpty) return null;
+    int? best;
+    if (go > soon) {
+      for (final d in downs) {
+        if (d < soon.inMilliseconds) continue;
+        if (best == null || (d - go.inMilliseconds).abs() < (best - go.inMilliseconds).abs()) {
+          best = d;
+        }
+      }
+    } else {
+      for (final d in downs) {
+        if (d >= soon.inMilliseconds) {
+          best = d;
+          break;
+        }
+      }
+    }
+    // On the steady grid, for the same reason the incoming is parked on it.
+    return best == null ? null : timing.onGrid(Duration(milliseconds: best));
   }
 
   @override

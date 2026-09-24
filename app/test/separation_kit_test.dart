@@ -16,7 +16,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muse/src/worker/render_parts.dart';
-import 'package:muse/src/worker/separate.dart' show partNames;
+import 'package:muse/src/worker/parts_jobs.dart';
 import 'package:muse/src/worker/separation_kit.dart';
 
 String? _onPath(String name) {
@@ -95,7 +95,7 @@ void main() {
     });
   });
 
-  test('with the separator, one pass makes all three parts, newer than the old ones',
+  test('with the separator, one pass makes all four parts, newer than the old ones',
       () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.linux;
     separationHouse = () => 'http://example.invalid';
@@ -112,12 +112,12 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 10));
     }
     expect(asked, hasLength(1));
-    expect(asked.single.keys.toSet(), partNames.toSet());
+    expect(asked.single.keys.toSet(), trainedParts.toSet());
     expect(asked.single.values.every((f) => f.endsWith('-v$partsVersion.m4a')), isTrue);
-    for (final p in partNames) {
+    for (final p in trainedParts) {
       expect((await partHere('song.m4a', 5, p)).$1, Here.ready, reason: p);
     }
-    expect(asked, hasLength(1), reason: 'one pass for all three');
+    expect(asked, hasLength(1), reason: 'one pass for all four');
   });
 
   test('an old part is used only where the separator cannot run', () async {
@@ -217,7 +217,7 @@ void main() {
 
   final program = Platform.environment['WETOWL_SEPARATE'];
   final source = Platform.environment['WETOWL_KIT_SOURCE'];
-  test('the real separator: fetched once, three parts out, as long as the record',
+  test('the real separator: fetched once, four parts out, as long as the record',
       () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.linux;
     final served = <String, List<int>>{};
@@ -228,10 +228,26 @@ void main() {
     addTearDown(server.close);
     separationHouse = () => base;
     final song = makeSong('song.m4a', 20);
+    final stages = <PartsStage>[];
+    var sawProgress = false;
+    void heard() {
+      final j = partsJobs.of(21);
+      if (j == null) return;
+      if (stages.isEmpty || stages.last != j.stage) stages.add(j.stage);
+      if (j.stage == PartsStage.separating && (j.progress ?? 0) > 0) sawProgress = true;
+    }
+
+    partsJobs.addListener(heard);
+    addTearDown(() => partsJobs.removeListener(heard));
 
     expect((await partHere(song.path, 21, 'instrumental')).$1, Here.making);
     await waitFor(21, 'instrumental', seconds: 300);
-    for (final p in partNames) {
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    expect(stages, containsAllInOrder(
+        [PartsStage.gettingSeparator, PartsStage.separating, PartsStage.ready]));
+    expect(sawProgress, isTrue, reason: 'the list shows how far through it is');
+    expect(partsJobs.of(21)!.trained, isTrue);
+    for (final p in trainedParts) {
       final (state, path) = await partHere(song.path, 21, p);
       expect(state, Here.ready, reason: p);
       expect(path, endsWith('-v2.m4a'), reason: 'made by the separator');

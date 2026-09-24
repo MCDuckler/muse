@@ -1,6 +1,8 @@
 // Wire models. Everything the server calls a track looks the same here, whether it
 // came from YouTube Music or off your own disk.
 
+import 'dart:math' as math;
+
 class Track {
   final int id;
   final String title;
@@ -2184,6 +2186,243 @@ class TrackTiming {
     }
     final span = beats[hi] - beats[lo];
     return (index: lo, phase: span <= 0 ? 0 : (ms - beats[lo]) / span);
+  }
+
+  /// The beat grid as it runs around [at]: a straight line through the [span] beats
+  /// either side of the nearest one — where the beats are, not where two of them are.
+  ///
+  /// A beat is found to within a frame of the analysis, about 6 ms either way, and a
+  /// phase read off two neighbouring beats wobbles by that much; a tempo read off the
+  /// whole song is wrong for a record that drifts, which a live drummer's does. A line
+  /// through the beats nearby is steady and local. Extrapolated a few beats past
+  /// either end of the grid, so a record parked on its first beat still has one.
+  ({double origin, double period, int first})? gridAround(Duration at, {int span = 8}) {
+    if (!hasBeats) return null;
+    final ms = at.inMilliseconds;
+    var lo = 0, hi = beats.length - 1;
+    while (hi - lo > 1) {
+      final mid = (lo + hi) >> 1;
+      if (beats[mid] <= ms) {
+        lo = mid;
+      } else {
+        hi = mid;
+      }
+    }
+    final near = (ms - beats[lo]).abs() <= (beats[hi] - ms).abs() ? lo : hi;
+    final from = (near - span).clamp(0, beats.length - 1);
+    final to = (near + span).clamp(0, beats.length - 1);
+    final n = to - from + 1;
+    if (n < 4) return null;
+    // Least squares of beat time against beat number, the numbers counted from [from].
+    var sx = 0.0, sy = 0.0, sxx = 0.0, sxy = 0.0;
+    for (var i = from; i <= to; i++) {
+      final x = (i - from).toDouble(), y = beats[i].toDouble();
+      sx += x;
+      sy += y;
+      sxx += x * x;
+      sxy += x * y;
+    }
+    final d = n * sxx - sx * sx;
+    if (d == 0) return null;
+    final period = (n * sxy - sx * sy) / d;
+    if (period <= 0) return null;
+    final origin = (sy - period * sx) / n;
+    // Too far outside the grid to be believed.
+    if (ms < beats.first - 4 * period || ms > beats.last + 4 * period) return null;
+    return (origin: origin, period: period, first: from);
+  }
+
+  /// Beats a minute here, from the beats around [at] — or the song's own figure where
+  /// there are none to read.
+  double? tempoAround(Duration at) {
+    final g = gridAround(at, span: 16);
+    return g == null ? bpm : 60000 / g.period;
+  }
+
+  /// The beats as one steady grid: a first beat and a period, every beat a whole
+  /// number of periods from it. Null where they are not one — a live drummer, a
+  /// tempo change — and the grid is read off the beats nearby instead ([gridAround]).
+  ///
+  /// A record made on a computer runs to a clock, and its beats are exactly that. The
+  /// analysis does not find them exactly: it places each one to within a frame (11.6
+  /// ms), swings between neighbouring frames from beat to beat, and where the music
+  /// thins out it can lose the beat altogether — one record's last eighteen beats sat
+  /// 45 ms late, exactly where a mix out of it happens. A grid read off the beats
+  /// nearby moves with all of that, and whatever is held to it moves too. A line
+  /// through all of them, the stray ones left out, does not.
+  ///
+  /// Numbered so that the analysis's bar start is a bar start here too, so beat
+  /// numbers on this grid and in [beats] agree wherever the tracker missed none.
+  ({double origin, double period})? get steady {
+    final kept = _steadyOf[this];
+    if (kept != null) return identical(kept, _notSteady) ? null : kept as ({double origin, double period});
+    final found = _steady();
+    _steadyOf[this] = found ?? _notSteady;
+    return found;
+  }
+
+  static final _steadyOf = Expando<Object>('steady grid');
+  static const _notSteady = Object();
+
+  ({double origin, double period})? _steady() {
+    final n = beats.length;
+    if (n < 16) return null;
+    // A first period: the figure the analysis read off the same pulse, or the middle
+    // gap where it gave none. Each beat is then numbered by where it falls on that
+    // grid, so one the tracker missed or doubled does not shift every beat after it.
+    var period = (bpm ?? 0) > 0 ? 60000 / bpm! : 0.0;
+    if (period <= 0) {
+      final gaps = [for (var i = 1; i < n; i++) beats[i] - beats[i - 1]]..sort();
+      period = gaps[gaps.length ~/ 2].toDouble();
+      if (period <= 0) return null;
+    }
+    var origin = beats.first.toDouble();
+    final number = List<int>.filled(n, 0);
+    final keep = List<bool>.filled(n, true);
+    final res = List<double>.filled(n, 0);
+    for (var round = 0; round < 6; round++) {
+      for (var i = 0; i < n; i++) {
+        number[i] = ((beats[i] - origin) / period).round();
+      }
+      var m = 0;
+      var sx = 0.0, sy = 0.0, sxx = 0.0, sxy = 0.0;
+      for (var i = 0; i < n; i++) {
+        if (!keep[i]) continue;
+        final x = number[i].toDouble(), y = beats[i].toDouble();
+        m++;
+        sx += x;
+        sy += y;
+        sxx += x * x;
+        sxy += x * y;
+      }
+      final d = m * sxx - sx * sx;
+      if (m < 16 || d == 0) return null;
+      final p = (m * sxy - sx * sy) / d;
+      if (p <= 0) return null;
+      period = p;
+      origin = (sy - period * sx) / m;
+      // The strays: further from the line than the analysis's own wobble explains.
+      for (var i = 0; i < n; i++) {
+        res[i] = beats[i] - (origin + period * number[i]);
+      }
+      final spread = [for (final r in res) r.abs()]..sort();
+      final limit = math.max(15.0, 3 * 1.4826 * spread[n ~/ 2]);
+      var changed = false;
+      for (var i = 0; i < n; i++) {
+        final k = res[i].abs() <= limit;
+        if (k != keep[i]) changed = true;
+        keep[i] = k;
+      }
+      if (!changed) break;
+    }
+    // One grid, or not: most beats on it, and those close to it.
+    var m = 0;
+    var ss = 0.0;
+    for (var i = 0; i < n; i++) {
+      if (!keep[i]) continue;
+      m++;
+      ss += res[i] * res[i];
+    }
+    if (m < n * 0.75 || math.sqrt(ss / m) > period * 0.05) return null;
+    // And no drift: a record whose tempo wanders — a band, not a computer — sits on a
+    // line only on average, above it in the middle and below at the ends. Where the
+    // beats through the middle of the record stray from the line by a steady amount
+    // for bars at a time, it is not one grid. (The ends are left out of this: that is
+    // where the tracker loses the beat, not where a drummer finds another.)
+    const window = 32;
+    final from = (n * 0.1).floor(), to = (n * 0.9).ceil();
+    for (var w = from; w + window <= to; w += window ~/ 2) {
+      var sum = 0.0;
+      var k = 0;
+      for (var i = w; i < w + window; i++) {
+        if (!keep[i]) continue;
+        sum += res[i];
+        k++;
+      }
+      if (k >= window ~/ 2 && (sum / k).abs() > math.max(12.0, period * 0.03)) return null;
+    }
+    final bar = beats[barStartsOn.clamp(0, n - 1)];
+    final nb = ((bar - origin) / period).round();
+    return (origin: origin - (barStartsOn - nb) * period, period: period);
+  }
+
+  /// Beats a minute on the steady grid — the figure a deck shows, SYNC matches and the
+  /// beat-holding holds, so that the three agree — or the analysis's own where the
+  /// beats are not steady.
+  double? get gridBpm {
+    final s = steady;
+    return s == null ? bpm : 60000 / s.period;
+  }
+
+  /// [at], moved onto the nearest beat of the steady grid — or of the bars, with
+  /// [every] 4. Unmoved where the beats are not steady.
+  Duration onGrid(Duration at, {int every = 1}) {
+    final s = steady;
+    if (s == null) return at;
+    final x = (at.inMicroseconds / 1000 - s.origin) / s.period;
+    final k = every <= 1 ? x.round() : barStartsOn + ((x - barStartsOn) / every).round() * every;
+    return Duration(microseconds: ((s.origin + k * s.period) * 1000).round());
+  }
+
+  /// The first beat of the steady grid at or after [at] — with [every] 4, the first
+  /// downbeat — or null where the beats are not steady or the record has run out of
+  /// them.
+  Duration? nextOnGrid(Duration at, {int every = 1}) {
+    final s = steady;
+    if (s == null) return null;
+    final x = (at.inMicroseconds / 1000 - s.origin) / s.period;
+    var k = (x - 1e-6).ceil();
+    if (every > 1) {
+      final r = ((k - barStartsOn) % every + every) % every;
+      if (r != 0) k += every - r;
+    }
+    final t = s.origin + k * s.period;
+    if (t > beats.last + 4 * s.period) return null;
+    return Duration(microseconds: (t * 1000).round());
+  }
+
+  /// Where beat [index] falls, as a place in the file: on the steady grid, or on the
+  /// grid read off the beats [near] it where there is none.
+  Duration? beatTime(int index, {required Duration near}) {
+    final s = steady;
+    if (s != null) return Duration(microseconds: ((s.origin + index * s.period) * 1000).round());
+    final g = gridAround(near);
+    if (g == null) return null;
+    return Duration(microseconds: ((g.origin + (index - g.first) * g.period) * 1000).round());
+  }
+
+  /// Which beat [at] is on and how far through it, read off the fitted grid rather
+  /// than the two beats either side: what two records are held together by. The
+  /// steady grid where there is one; the beats nearby where there is not.
+  ({int index, double phase, double period})? smoothBeatAt(Duration at) {
+    final s = steady;
+    if (s != null) {
+      final ms = at.inMicroseconds / 1000;
+      if (ms < beats.first - 4 * s.period || ms > beats.last + 4 * s.period) return null;
+      final x = (ms - s.origin) / s.period;
+      final whole = x.floor();
+      return (index: whole, phase: x - whole, period: s.period);
+    }
+    final g = gridAround(at);
+    if (g == null) return null;
+    final x = (at.inMicroseconds / 1000 - g.origin) / g.period;
+    final whole = x.floor();
+    return (index: g.first + whole, phase: x - whole, period: g.period);
+  }
+
+  /// How far apart two keys are on the wheel, in the steps a DJ counts: 0 the same
+  /// key, 1 a neighbour or the relative major/minor, 2 two steps or a diagonal, and
+  /// so on. Null where either has no key.
+  int? keyStepsTo(TrackTiming other) {
+    final a = camelot, b = other.camelot;
+    if (a == null || b == null || a.length < 2 || b.length < 2) return null;
+    final na = int.tryParse(a.substring(0, a.length - 1));
+    final nb = int.tryParse(b.substring(0, b.length - 1));
+    if (na == null || nb == null) return null;
+    var around = (na - nb).abs() % 12;
+    if (around > 6) around = 12 - around;
+    final sameLetter = a[a.length - 1] == b[b.length - 1];
+    return around + (sameLetter ? 0 : 1);
   }
 
   factory TrackTiming.fromJson(Map<String, dynamic> j) => TrackTiming(

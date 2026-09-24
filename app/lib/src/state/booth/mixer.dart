@@ -81,6 +81,23 @@ abstract class Mixer {
   /// -1 (low-pass, closed) through 0 (off) to 1 (high-pass, closed).
   Future<void> setFilter(Deck deck, double value);
 
+  /// A record has just gone on [deck]. Where the mixer lives in the player, this is
+  /// when it can first reach it.
+  Future<void> loaded(Deck deck) async {}
+
+  /// How far behind its reported position [deck]'s sound is, per unit of speed away
+  /// from 1.0 — the time-stretcher's own delay, which the engine accounts for as if
+  /// the record were playing at its own speed. Zero where there is nothing to correct.
+  Duration stretchLatency(Deck deck) => Duration.zero;
+
+  /// Find out [deck]'s [stretchLatency] afresh: its record's sample rate, which the
+  /// stretcher's delay is counted in, is only known once it is playing.
+  Future<void> measureLatency(Deck deck) async {}
+
+  /// Loop [deck] from [from] to [to] inside the engine, or stop with nulls. False where
+  /// the engine cannot, and the deck loops by itself.
+  Future<bool> setLoop(Deck deck, Duration? from, Duration? to) async => false;
+
   /// Whichever one this device has.
   static Mixer forThisDevice() {
     if (kIsWeb) return web.webMixer() ?? VolumeMixer();
@@ -103,19 +120,29 @@ class VolumeMixer extends Mixer {
 
   Timer? _ramp;
 
+  /// The volume to tell a player for a [level] — a gain, 0 to 1, as a multiplier on
+  /// the sound. The same number where the player's volume is a gain; see the desk's.
+  @protected
+  double toEngine(double level) => level;
+
+  /// The gain a player's own volume figure makes: [toEngine] undone.
+  @protected
+  double fromEngine(double volume) => volume;
+
   @override
   Future<void> setLevels(Map<Deck, double> levels, {Duration over = Duration.zero}) async {
     _ramp?.cancel();
     if (over <= Duration.zero) {
       for (final e in levels.entries) {
-        await e.key.player.setVolume(e.value.clamp(0.0, 1.0));
+        await e.key.player.setVolume(toEngine(e.value.clamp(0.0, 1.0)));
       }
       return;
     }
     // Thirty milliseconds a step: below what an ear hears as a step, above what a
-    // player wants to be told a volume.
+    // player wants to be told a volume. Ramped in gain, the curve the booth chose, and
+    // only then turned into whatever the player wants to be told.
     const step = Duration(milliseconds: 30);
-    final from = {for (final d in levels.keys) d: d.player.volume};
+    final from = {for (final d in levels.keys) d: fromEngine(d.player.volume)};
     final began = DateTime.now();
     final done = Completer<void>();
     _ramp = Timer.periodic(step, (t) async {
@@ -123,7 +150,7 @@ class VolumeMixer extends Mixer {
           .clamp(0.0, 1.0);
       for (final e in levels.entries) {
         final v = from[e.key]! + (e.value - from[e.key]!) * k;
-        await e.key.player.setVolume(v.clamp(0.0, 1.0));
+        await e.key.player.setVolume(toEngine(v.clamp(0.0, 1.0)));
       }
       if (k >= 1) {
         t.cancel();

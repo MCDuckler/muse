@@ -159,13 +159,13 @@ class _MixerStripState extends State<MixerStrip> {
             Text('BARS', style: Mag.flag(8, color: scheme.onSurfaceVariant)),
             const SizedBox(width: 6),
             PressButton(
-              label: b.inTransition ? 'Stop' : 'Go',
-              loud: !b.inTransition && ready,
+              label: b.busy ? 'Stop' : 'Go',
+              loud: !b.busy && ready,
               onTap: !ready
                   ? null
                   : () {
                       feel(Feel.commit);
-                      if (b.inTransition) {
+                      if (b.busy) {
                         b.stopTransition();
                       } else {
                         unawaited(b.go(_kind, bars: _bars));

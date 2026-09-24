@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart'
     show LicenseEntryWithLineBreaks, LicenseRegistry, TargetPlatform, defaultTargetPlatform, kIsWeb;
@@ -79,6 +80,17 @@ Future<void> main() async {
     // The next song is handed to the engine ahead of time; this is what makes mpv open
     // it ahead of time too, so the step to it is as free as it is on a phone.
     JustAudioMediaKit.prefetchPlaylist = true;
+    // Tempo as mpv's own speed, not media_kit's pitch mode. That mode sets a tempo by
+    // replacing mpv's whole audio filter chain with a stretcher — and the booth's
+    // kills and filter live in that chain. Each wiped the other: a bass kill put a
+    // synced record back to its own tempo half way through a blend (measured: 1.04×
+    // to 1.01×), and every tempo change took the kills away and rebuilt the chain with
+    // a click. Nothing here shifts pitch, so nothing is lost. See DesktopMixer.
+    JustAudioMediaKit.pitch = false;
+    // mpv's volume is (volume / 100) cubed, which suits a slider and nothing else:
+    // a loudness match of -6 dB told to it as a gain of 0.5 came out at -18 dB. So a
+    // gain goes in as its cube root. See PlayerService.gainToVolume.
+    PlayerService.gainToVolume = (g) => g <= 0 ? 0 : math.pow(g, 1 / 3).toDouble();
     try {
       JustAudioMediaKit.ensureInitialized(linux: true, windows: true);
       PlaybackLog.note('desktop audio ready (libmpv)');
