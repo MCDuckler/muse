@@ -499,6 +499,23 @@ void autoMixRules() {
         cues: const MixCues(firstDownbeatMs: 469, mixInMs: 15000, mixOutMs: 160000, soundEndMs: 198000),
       );
 
+  test('every move of every way out lands on a bar', () {
+    for (final kind in Transition.values) {
+      for (final bars in [4, 8, 12, 16, 32]) {
+        final steps = MixStep.onBars(Booth.plan(kind, from: 'A', to: 'B'), bars);
+        for (final s in steps) {
+          final bar = s.at * bars;
+          expect((bar - bar.round()).abs(), lessThan(1e-9),
+              reason: '${kind.name} over $bars bars: a step at bar $bar');
+        }
+        // Still in order, first to last.
+        for (var i = 1; i < steps.length; i++) {
+          expect(steps[i].at, greaterThanOrEqualTo(steps[i - 1].at));
+        }
+      }
+    }
+  });
+
   test('the loud ways out say what they do', () {
     final sweep = Booth.plan(Transition.sweep, from: 'A', to: 'B');
     final climb = [for (final s in sweep) s.decks['A']?.filter].whereType<double>();
@@ -628,11 +645,12 @@ void autoMixRules() {
       drops: const [100000],
     );
     // A mix starting at 90 s over 16 s would play the run-up and then the drop
-    // underneath the new record: it starts on the drop instead.
+    // underneath the new record: it is brought forward to finish on the drop, so the
+    // old record never drops and the new one drops in its place.
     expect(
         AutoMix.clearOfDrops(from, const Duration(seconds: 90),
             length: const Duration(seconds: 16)),
-        const Duration(seconds: 100));
+        const Duration(seconds: 84));
     // Nowhere near one: left alone.
     expect(
         AutoMix.clearOfDrops(from, const Duration(seconds: 30),
@@ -704,9 +722,10 @@ void autoMixRules() {
       beats: [for (var i = 0; i < 400; i++) (i * 468.75).round()],
       phrases: [0, 30000, 60000, 90000],
     );
-    expect(AutoMix.onPhrase(t, const Duration(seconds: 62)), const Duration(seconds: 60),
+    // On the grid, to a millisecond.
+    expect(AutoMix.onPhrase(t, const Duration(seconds: 62)).inMilliseconds, 60000,
         reason: 'a mix four bars into a phrase lands four bars into the next');
-    expect(AutoMix.onPhrase(t, const Duration(seconds: 88)), const Duration(seconds: 90));
+    expect(AutoMix.onPhrase(t, const Duration(seconds: 88)).inMilliseconds, 90000);
     // Nowhere near one: left where it was rather than dragged half a minute.
     expect(AutoMix.onPhrase(t, const Duration(seconds: 120)), const Duration(seconds: 120));
     expect(AutoMix.onPhrase(const TrackTiming(), const Duration(seconds: 5)),

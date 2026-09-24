@@ -196,13 +196,28 @@ class _StripPainter extends CustomPainter {
     if (t != null && t.hasBeats) {
       final tick = Paint()..color = ink.withValues(alpha: 0.35)..strokeWidth = 1;
       final down = Paint()..color = ink.withValues(alpha: 0.7)..strokeWidth = 1.2;
-      final beats = t.beats;
-      for (var i = 0; i < beats.length; i++) {
-        final x = xOf(beats[i] * 1000.0);
-        if (x < -2) continue;
-        if (x > w + 2) break;
-        final isDown = (i - t.barStartsOn) % 4 == 0;
-        canvas.drawLine(Offset(x, h), Offset(x, h - (isDown ? 10 : 5)), isDown ? down : tick);
+      final steady = t.steady;
+      if (steady != null) {
+        // The steady grid, the one SYNC and the beat-holding use: two records held on
+        // the beat show their ticks in one line down both strips.
+        final from = ((left / 1000 - steady.origin) / steady.period).floor();
+        final to = ((left + w * perPixel) / 1000 - steady.origin) / steady.period;
+        for (var k = from; k <= to.ceil(); k++) {
+          final ms = steady.origin + k * steady.period;
+          if (ms < t.beats.first - steady.period || ms > t.beats.last + steady.period) continue;
+          final x = xOf(ms * 1000);
+          final isDown = ((k - t.barStartsOn) % 4 + 4) % 4 == 0;
+          canvas.drawLine(Offset(x, h), Offset(x, h - (isDown ? 10 : 5)), isDown ? down : tick);
+        }
+      } else {
+        final beats = t.beats;
+        for (var i = 0; i < beats.length; i++) {
+          final x = xOf(beats[i] * 1000.0);
+          if (x < -2) continue;
+          if (x > w + 2) break;
+          final isDown = (i - t.barStartsOn) % 4 == 0;
+          canvas.drawLine(Offset(x, h), Offset(x, h - (isDown ? 10 : 5)), isDown ? down : tick);
+        }
       }
       // Phrases: a bracket along the head, with the bar count typed at its start.
       final phrases = t.phrases;

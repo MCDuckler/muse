@@ -284,15 +284,22 @@ class AutoMix extends ChangeNotifier {
   /// [at], moved off a drop it would run over.
   ///
   /// Two records dropping over each other is either the best thing in the set or a
-  /// mess, and it is not something to do by accident: where the outgoing record
-  /// opens up inside the transition, the transition starts at that drop instead, so
-  /// what plays over the new record is the drop rather than the run-up to it.
+  /// mess, and it is not something to do by accident. Where the outgoing record would
+  /// open up inside the transition, the transition is brought forward to finish there
+  /// instead: the old record never drops, and the new one — parked so its own drop
+  /// lands where the transition ends — drops in its place. (It used to start at the
+  /// drop, which laid the whole of the old record's loudest stretch over the new one's
+  /// arrival.) Where that would start before the old record has begun, it is left.
   static Duration clearOfDrops(TrackTiming from, Duration at,
       {required Duration length}) {
     final end = at + length;
     for (final d in from.drops) {
       final drop = Duration(milliseconds: d);
-      if (drop > at && drop < end) return drop;
+      if (drop > at && drop < end) {
+        final earlier = drop - length;
+        final first = from.cues?.firstDownbeat ?? Duration.zero;
+        return earlier >= first ? earlier : at;
+      }
     }
     return at;
   }
@@ -311,10 +318,20 @@ class AutoMix extends ChangeNotifier {
         gap = d;
       }
     }
-    // A phrase at this tempo, or eight seconds where there is none to measure.
-    final bpm = timing.bpm;
-    final reach = bpm == null ? 8000 : (16 * 4 * 60000 / bpm / 2).round();
-    return gap <= reach ? Duration(milliseconds: best) : at;
+    // A phrase is eight bars at this tempo either way — or eight seconds where there
+    // is no tempo to measure it by.
+    final bpm = timing.gridBpm;
+    final bar = bpm == null || bpm <= 0 ? null : 4 * 60000 / bpm;
+    final reach = bar == null ? 8000.0 : bar * 8;
+    if (gap <= reach) return timing.onGrid(Duration(milliseconds: best));
+    // None near: onto the eight-bar grid from the record's first downbeat, where its
+    // phrases run, rather than wherever the sums came out — a mix that starts in the
+    // middle of a phrase lands in the middle of the next.
+    final first = timing.cues?.firstDownbeatMs ??
+        (timing.downbeats.isNotEmpty ? timing.downbeats.first : null);
+    if (bar == null || first == null) return at;
+    final k = ((ms - first) / (bar * 8)).round();
+    return timing.onGrid(Duration(milliseconds: (first + k * bar * 8).round()));
   }
 
   /// Where the incoming record is parked.

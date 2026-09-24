@@ -6,6 +6,7 @@ import 'package:just_audio_background/just_audio_background.dart';
 
 import '../../api/client.dart';
 import '../../api/models.dart';
+import '../../worker/render_parts.dart' show quietSeam;
 import 'parts.dart';
 
 /// One of the two records on the deck.
@@ -547,15 +548,50 @@ class Deck extends ChangeNotifier {
   int? _loopBars;
   Timer? _loop;
 
+  /// One beat as a stretch of the record itself: the length a loop is counted in. Not
+  /// [beat], which is a beat by the wall clock at the deck's pitch — a loop measured in
+  /// that on a deck at 1.07× came round 7 % short of its bars and stumbled off the beat.
+  Duration get beatInRecord {
+    final t = timing;
+    final s = t?.steady;
+    if (s != null) return Duration(microseconds: (s.period * 1000).round());
+    final own = t?.gridBpm;
+    return own == null || own <= 0
+        ? const Duration(milliseconds: 500)
+        : Duration(microseconds: (60e6 / own).round());
+  }
+
+  /// The file playing, where it is on this computer: the kept record, or a part made
+  /// here. Null for one streamed from the house.
+  String? get localFile {
+    final t = track;
+    if (t == null) return null;
+    final p = part;
+    return p == null ? offlinePath?.call(t.id) : parts?.pathFor(t.id, p);
+  }
+
+  /// Move the loop's two ends to where its seam will not click (quietSeam), once the
+  /// record has been read there — a third of a second, well before the first time
+  /// round, which is a bar away at least. Nothing moves if the loop has changed in the
+  /// meantime.
+  Future<void> _quietSeam() async {
+    final file = localFile, from = loopStart, to = loopEnd;
+    if (file == null || from == null || to == null) return;
+    final quiet = await quietSeam(file, from, to);
+    if (quiet == null || loopStart != from || loopEnd != to) return;
+    loopStart = quiet.$1;
+    loopEnd = quiet.$2;
+    await _loopInEngine();
+  }
+
   /// Go round [beats] beats from the next downbeat (or from here, with no grid).
   void loop(int beats) {
     final from = nextBeat(position, every: 4) ?? position;
-    final len = beat ?? const Duration(milliseconds: 500);
     loopStart = from;
-    loopEnd = from + len * beats;
+    loopEnd = from + beatInRecord * beats;
     _loopBars = beats ~/ 4;
     _watchLoop();
-    unawaited(_loopInEngine());
+    unawaited(_loopInEngine().then((_) => _quietSeam()));
     notifyListeners();
   }
 
@@ -566,11 +602,11 @@ class Deck extends ChangeNotifier {
     final from = loopStart, to = loopEnd;
     if (from == null || to == null) return;
     final now = to - from;
-    final least = (beat ?? const Duration(milliseconds: 500)) ~/ 8;
+    final least = beatInRecord ~/ 8;
     if (now <= least) return;
     loopEnd = from + now ~/ 2;
     _loopBars = null;                  // no longer one of the buttons' lengths
-    unawaited(_loopInEngine());
+    unawaited(_loopInEngine().then((_) => _quietSeam()));
     notifyListeners();
   }
 

@@ -98,7 +98,11 @@ class _Lane extends StatelessWidget {
                     hotCues: deck.hotCues,
                     markAt: auto.running && identical(booth.master, deck) ? auto.goesAt : null,
                     height: height,
-                    window: const Duration(seconds: 16),
+                    // Sixteen seconds of the room's time, not the record's: a deck at
+                    // 1.07× shows 17 s of its record in the same width, so both strips
+                    // scroll at one speed and two records in step show their beats in
+                    // one line.
+                    window: Duration(microseconds: (16e6 * deck.pitch).round()),
                     mirrored: mirrored,
                     accent: c,
                     onScrub: (to) => unawaited(deck.seek(to)),

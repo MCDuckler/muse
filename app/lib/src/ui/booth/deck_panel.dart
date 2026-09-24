@@ -638,7 +638,9 @@ class WaveLane extends StatelessWidget {
       // Where the booth means to mix out of this record, when it is the one playing.
       markAt: auto.running && identical(booth.master, deck) ? auto.goesAt : null,
       height: height,
-      window: window,
+      // The room's time, not the record's: at the deck's pitch, so two lanes scroll at
+      // one speed and records in step show their beats in one line.
+      window: Duration(microseconds: (window.inMicroseconds * deck.pitch).round()),
       mirrored: mirrored,
       onScrub: t == null ? null : (to) => unawaited(deck.seek(to)),
     );

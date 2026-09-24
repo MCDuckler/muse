@@ -156,12 +156,18 @@ class DesktopMixer extends VolumeMixer {
       }
       return;
     }
-    try {
-      await mpv.setProperty('af', chain(eq: eq, filter: filter));
-    } catch (_) {
-      // An mpv without lavfi: the fader still works.
+    // The chain would not go on: this mpv lacks what it is made of. The bands and the
+    // filter are left alone rather than set as a whole chain on every turn of a knob —
+    // an mpv that accepts the words and then cannot build the graph drops the sound
+    // altogether, which is what turning a knob did on Windows, whose own libmpv has
+    // none of the shelf or pass filters. The fader still works.
+    if (!_warned.contains(deck.name)) {
+      _warned.add(deck.name);
+      debugPrint('mixer: no filter chain on deck ${deck.name}: EQ and filter do nothing here');
     }
   }
+
+  final _warned = <String>{};
 
   /// Rubber Band's delay is 2048 of the record's own samples — 46 ms at 44.1 kHz,
   /// 64 ms for a part at 32 kHz. mpv counts it as if the deck ran at 1.0, so a deck
@@ -223,7 +229,10 @@ class DesktopMixer extends VolumeMixer {
   Future<bool> _loop(Deck deck, Duration? from, Duration? to) async {
     final mpv = _native(deck);
     if (mpv == null) return false;
-    String at(Duration? d) => d == null ? 'no' : (d.inMicroseconds / 1e6).toStringAsFixed(4);
+    // To the microsecond: the engine splices to the sample, and a loop's ends are put
+    // on exact samples so its seam does not click (quietSeam). Four places was a
+    // tenth of a millisecond — four samples either way of where they were meant.
+    String at(Duration? d) => d == null ? 'no' : (d.inMicroseconds / 1e6).toStringAsFixed(6);
     try {
       await mpv.setProperty('ab-loop-a', at(from));
       await mpv.setProperty('ab-loop-b', at(to));

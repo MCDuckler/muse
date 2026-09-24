@@ -91,6 +91,19 @@ class MixStep {
 
   /// What each deck is doing by then, by deck name.
   final Map<String, DeckStep> decks;
+
+  /// The same step at another point of the transition.
+  MixStep at_(double k) => MixStep(k, crossfader: crossfader, decks: decks);
+
+  /// [steps] moved onto the bars of a transition [bars] long: a bass swap, a kill, a
+  /// loop caught — each on a downbeat, where a DJ does it. The plans are written in
+  /// fractions of the whole, and 0.85 of sixteen bars is bar 13.6: an EQ that changed
+  /// part-way through a bar, which is the thing that made a mix sound wrong without
+  /// anybody being able to say why.
+  static List<MixStep> onBars(List<MixStep> steps, int bars) {
+    if (bars <= 1) return steps;
+    return [for (final s in steps) s.at_((s.at * bars).round() / bars)];
+  }
 }
 
 /// One thing the booth did between two records, as it is kept and done again.
@@ -468,7 +481,8 @@ class Booth extends ChangeNotifier {
     final m = other(deck);
     final now = DateTime.now();
     final mine = deck.beatAt(now), theirs = m.beatAt(now);
-    final beat = deck.beat;
+    // A nudge is a move in the record, so it is counted in the record's own beats.
+    final beat = deck.hasBeats ? deck.beatInRecord : null;
     if (mine == null || theirs == null || beat == null) return;
     // How far ahead of the master's phase this deck is, as a fraction of a beat,
     // taken the short way round.
@@ -1086,7 +1100,9 @@ class Booth extends ChangeNotifier {
     arming = (kind: kind, from: from.name, to: to.name, startsAt: now.add(wait));
     notifyListeners();
 
-    final steps = kind == Transition.cut ? const <MixStep>[] : plan(kind, from: from.name, to: to.name);
+    final steps = kind == Transition.cut
+        ? const <MixStep>[]
+        : MixStep.onBars(plan(kind, from: from.name, to: to.name), bars);
     // What the plan opens with, set before the incoming makes a sound.
     if (steps.isNotEmpty) await _applyStep(steps.first);
     if (!to.playing) {

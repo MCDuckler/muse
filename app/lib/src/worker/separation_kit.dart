@@ -183,14 +183,16 @@ Future<void> fetchKitFile(Uri from, KitFile f, File into,
   }
 }
 
-/// How many threads to give it: half the machine, and never more than eight — past
-/// that it is no faster (measured) and the music playing has less room.
-int separatorThreads() => (Platform.numberOfProcessors ~/ 2).clamp(1, 8);
+/// How many threads to give it: a little under half the machine, and never more than
+/// six. Past eight it is no faster (measured), and with the booth playing, the room it
+/// leaves is the difference between two decks held on the beat and a glitch: on the
+/// real engine, a split running beside a mix at eight threads cost one beat 140 ms.
+int separatorThreads() => (Platform.numberOfProcessors ~/ 2 - 1).clamp(1, 6);
 
 /// Take [audio] apart with [s], writing the parts named in [into] (part → file).
 ///
-/// Behind everything else on the computer: under `nice` where there is one, and the
-/// program lowers itself on Windows. Killed if it has not finished in an hour, which
+/// Behind everything else on the computer: under `nice` at its lowest where there is
+/// one, and the program lowers itself on Windows. Killed if it has not finished in an hour, which
 /// no record under the twelve-minute cap comes near.
 Future<void> runSeparator(Separator s,
     {required String ffmpeg,
@@ -218,7 +220,7 @@ Future<void> runSeparator(Separator s,
     }
   }
   final p = nice != null
-      ? await Process.start(nice, ['-n', '10', s.program, ...args],
+      ? await Process.start(nice, ['-n', '19', s.program, ...args],
           environment: _environment)
       : await Process.start(s.program, args, environment: _environment);
   started?.call(p);

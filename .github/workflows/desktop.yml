@@ -42,6 +42,23 @@ jobs:
             --build-number="$stamp" \
             --dart-define=MUSE_SERVER="$MUSE_SERVER" \
             --dart-define=MUSE_BUILD="$stamp"
+      - name: A whole libmpv
+        working-directory: app
+        shell: bash
+        run: |
+          # media_kit's own Windows libmpv is built small: no lavfi shelf or pass filters,
+          # which the booth's EQ and filter are made of — turning a knob dropped the sound
+          # — and no Rubber Band, so a synced deck ran on mpv's own stretcher, which moves
+          # beats by up to 17 ms and was heard as a stutter. shinchiro's build has both
+          # (a GPL build, as Rubber Band requires). Pinned, and checked, so a build is
+          # the same build next week.
+          url=https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260924/mpv-dev-x86_64-20260924-git-2a4eb8067c.7z
+          curl -fsSL -o mpv-dev.7z "$url"
+          echo "50caf10ddb6644da4c205ce67dfe37e32fc3715b33c82e933d6e1962ff61eac9  mpv-dev.7z" | sha256sum -c -
+          7z x -y -ompv-dev mpv-dev.7z libmpv-2.dll > /dev/null
+          echo "d2d081547efea8a1530f4ba0bf58a0d72069b25c40d8b2a7071cea5aa82381c6  mpv-dev/libmpv-2.dll" | sha256sum -c -
+          cp mpv-dev/libmpv-2.dll build/windows/x64/runner/Release/libmpv-2.dll
+          ls -l build/windows/x64/runner/Release/libmpv-2.dll
       - name: Build the windowless fetcher
         working-directory: app
         shell: bash
