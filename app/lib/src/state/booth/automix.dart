@@ -80,7 +80,10 @@ class AutoMix extends ChangeNotifier {
       try {
         // The record on now is wanted now; those after it only soon — to the pool,
         // behind what somebody is about to play.
-        _inParts[t.id] = await booth.parts.want(t, 'stems', soon: i > _at) == Stem.ready;
+        _inParts[t.id] = await booth.parts
+                .want(t, 'stems', soon: i > _at)
+                .timeout(const Duration(seconds: 8)) ==
+            Stem.ready;
       } catch (_) {
         // Not a record the server can take apart, or cannot be reached. Either way
         // the booth mixes it the ordinary way and says nothing about it.
@@ -447,6 +450,7 @@ class AutoMix extends ChangeNotifier {
   void stop() {
     if (running) booth.note(BoothEventKind.auto, 'Auto DJ off');
     running = false;
+    _asked++; // and a preparation under way writes no plan after it
     _watch?.cancel();
     _watch = null;
     plan = null;
@@ -456,22 +460,30 @@ class AutoMix extends ChangeNotifier {
 
   /// The record after this one, on the free deck: loaded, synced, parked where it
   /// will come in — and the plan for getting there written down.
-  Future<void> _prepareNext() async {
-    // The queue can change while this waits on the house (the parts, the voices — ten
-    // seconds and more): a newer preparation takes over, and this one stops wherever
-    // it has got to rather than writing its plan over the newer one's.
-    final ticket = ++_preparing;
-    bool stale() => ticket != _preparing;
-    _prepping++;
-    try {
-      await _prepare(stale);
-    } finally {
-      _prepping--;
-    }
+  Future<void> _prepareNext() {
+    // One at a time. The queue can change while one waits on the house (the parts,
+    // the voices — ten seconds and more), and each change asks again: run side by
+    // side they loaded the free deck over and over and wrote their plans over each
+    // other. Asked again while one runs, that one stops at its next step and starts
+    // over with what is true now.
+    _asked++;
+    return _preparing ??= () async {
+      try {
+        while (true) {
+          final ticket = _asked;
+          await _prepare(() => ticket != _asked || _disposed);
+          // Asked again meanwhile: again — unless what asked was the automix being
+          // switched off or the booth going.
+          if (ticket == _asked || !running || _disposed) break;
+        }
+      } finally {
+        _preparing = null;
+      }
+    }();
   }
 
-  int _preparing = 0;
-  int _prepping = 0;
+  int _asked = 0;
+  Future<void>? _preparing;
 
   Future<void> _prepare(bool Function() stale) async {
     why = null;
@@ -490,7 +502,11 @@ class AutoMix extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    final timing = await booth.timing.of(coming);
+    // Not waited for for ever: a house that does not answer is a record without a
+    // grid, mixed the plain way, not a queue that stops.
+    final timing = await booth.timing
+        .of(coming)
+        .timeout(const Duration(seconds: 15), onTimeout: () => null);
     if (stale()) return;
     final was = from.track == null ? null : _keptFor(from.track!.id, coming.id);
     var chosen = was == null
@@ -572,6 +588,7 @@ class AutoMix extends ChangeNotifier {
         await to.seek(inAt);
       }
     }
+    if (stale()) return;
     // The incoming comes to the master's tempo, as far as the automix reaches; the
     // master's never moves. One that cannot be put in step plays at its own speed —
     // not at whatever pitch the deck was last left at.
@@ -580,6 +597,7 @@ class AutoMix extends ChangeNotifier {
     } else if (to.pitch != 1.0) {
       await to.setTempo(1.0);
     }
+    if (stale()) return;
     booth.note(BoothEventKind.next, 'Next: ${coming.displayTitle}', deck: to);
     final go2 = goesAt;
     booth.note(
@@ -632,9 +650,7 @@ class AutoMix extends ChangeNotifier {
   Future<void> _tick() async {
     // Nothing while a mix is waiting for its beat or running — the automix's own, or
     // one somebody started by hand.
-    // Nor while the next record is still being planned: the plan half written is not one
-    // to go on.
-    if (!running || _going || booth.busy || _prepping > 0) return;
+    if (!running || _going || booth.busy) return;
     final from = booth.master;
     final go = goesAt;
     final coming = next;
@@ -665,6 +681,9 @@ class AutoMix extends ChangeNotifier {
               parts: inParts(from.track, booth.other(from).track),
               fromPitch: from.pitch);
       final was = booth.master;
+      // A preparation still under way was for the decks as they were: stopped here,
+      // before it can load the next record over the one going live.
+      _asked++;
       recent.add(chosen.kind);
       if (recent.length > 8) recent.removeAt(0);
       await booth.go(chosen.kind,
@@ -676,7 +695,13 @@ class AutoMix extends ChangeNotifier {
         return;
       }
       _at++;
-      await _prepareNext();
+      // The plan just carried out is spent: left standing, its moment — long past on
+      // the record now leading — would send the booth straight back the other way.
+      plan = null;
+      goesAt = null;
+      // Laid out in the background: a house slow to answer holds up the next plan,
+      // never the booth.
+      unawaited(_prepareNext());
     } finally {
       _going = false;
     }
@@ -721,8 +746,19 @@ class AutoMix extends ChangeNotifier {
     return best == null ? null : timing.onGrid(Duration(milliseconds: best));
   }
 
+  // A preparation runs in the background (_prepareNext) and can finish after the
+  // booth is gone: it stops at its next step, and says nothing to nobody.
+  bool _disposed = false;
+
+  @override
+  void notifyListeners() {
+    if (!_disposed) super.notifyListeners();
+  }
+
   @override
   void dispose() {
+    _disposed = true;
+    _asked++;
     _watch?.cancel();
     _arrivals.cancel();
     super.dispose();

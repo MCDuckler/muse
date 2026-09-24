@@ -757,8 +757,18 @@ class Deck extends ChangeNotifier {
     });
   }
 
+  // A load can still be under way when the booth goes (the automix prepares in the
+  // background): it finishes without a word.
+  bool _disposed = false;
+
+  @override
+  void notifyListeners() {
+    if (!_disposed) super.notifyListeners();
+  }
+
   @override
   void dispose() {
+    _disposed = true;
     _loop?.cancel();
     for (final s in _subs) {
       s.cancel();

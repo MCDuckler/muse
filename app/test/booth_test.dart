@@ -1,3 +1,4 @@
+import 'dart:async';
 // Two records on the deck: the sums a mixer does, checked against a fake engine.
 //
 // The screen for this is not here yet; what is here is the engine — the fader's
@@ -387,6 +388,80 @@ void main() {
       expect(booth.auto.next?.id, 3, reason: 'the one that follows best');
       expect(booth.auto.after?.id, 2, reason: 'and nothing is dropped');
       booth.auto.stop();
+    });
+
+    test('a queue changing under the automix loads the free deck once, with the last word',
+        () async {
+      for (final id in [1, 2, 3, 4, 5]) {
+        booth.timing.put(id, grid(500));
+      }
+      // A house slow to answer, as it is when it is busy: every question takes a while.
+      useThisClientInstead(MockClient((r) async {
+        if (r.url.path.contains('/stream-key')) {
+          return http.Response('{"key": "signed", "expires_at": 99999999999}', 200);
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+        if (r.url.path.contains('/stem/')) return http.Response('', 202);
+        return http.Response('{}', 200);
+      }));
+      addTearDown(() => useThisClientInstead(http.Client()));
+      await booth.auto.start([song(1), song(2)]);
+      final free = booth.other(booth.master);
+      final loadsBefore = audio.players.values.expand((p) => p.sources).length;
+      // Records arriving one after another, each a new "next", before any preparation
+      // has had time to finish.
+      final asked = [
+        for (final next in [3, 4, 5]) booth.auto..follow([song(1), song(next), song(2)]),
+      ];
+      expect(asked, hasLength(3));
+      for (var i = 0; i < 200 && free.track?.id != 5; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      expect(booth.auto.next?.id, 5);
+      expect(free.track?.id, 5, reason: 'the last word is what is on the deck');
+      final loads = audio.players.values.expand((p) => p.sources).length - loadsBefore;
+      expect(loads, lessThanOrEqualTo(2),
+          reason: 'not a load for every change: the one in hand, then the last');
+      booth.auto.stop();
+    });
+
+    test('a preparation stuck on the house does not stop the mix going', () async {
+      TrackTiming quick() => TrackTiming(
+            durationMs: 60000,
+            bpm: 1200,
+            beats: [for (var i = 0; i < 1200; i++) i * 50],
+            downbeats: [for (var i = 0; i < 1200; i += 4) i * 50],
+            cues: const MixCues(
+                firstDownbeatMs: 0, mixInMs: 2000, mixOutMs: 40000, soundEndMs: 59000),
+          );
+      for (final id in [1, 2, 3]) {
+        booth.timing.put(id, quick());
+      }
+      var stuck = false;
+      final never = Completer<http.Response>();
+      useThisClientInstead(MockClient((r) async {
+        if (r.url.path.contains('/stream-key')) {
+          return http.Response('{"key": "signed", "expires_at": 99999999999}', 200);
+        }
+        if (stuck && r.url.path.contains('/stem/')) return never.future;
+        if (r.url.path.contains('/stem/')) return http.Response('', 202);
+        return http.Response('{}', 200);
+      }));
+      addTearDown(() => useThisClientInstead(http.Client()));
+      await booth.auto.start([song(1), song(2), song(3)]);
+      expect(booth.auto.next?.id, 2);
+      // The house stops answering, and the queue changes: a preparation that hangs.
+      stuck = true;
+      booth.auto.follow([song(1), song(3), song(2)]);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await booth.auto.mixNow();
+      for (var i = 0; i < 60 && booth.master.track?.id == 1; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(booth.master.track?.id, isNot(1), reason: 'it went all the same');
+      booth.auto.stop();
+      never.complete(http.Response('', 202));
     });
 
     test('a hand can go now, or drop what is coming', () async {
