@@ -1,3 +1,4 @@
+import 'src/ui/full_screen.dart';
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -49,6 +50,7 @@ bool get onADesk =>
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await readyTheWindow();
   _fontLicences();
 
   // How much decoded artwork to keep, in a browser.

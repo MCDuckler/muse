@@ -42,6 +42,7 @@ dependencies:
   # and the model it runs is checked against a pinned hash when it is fetched.
   ffi: ^2.1.0
   crypto: ^3.0.0
+  window_manager: ^0.5.2
 # just_audio with one addition: an equalizer for iOS, which has to be attached where the
 # player item is made — inside the plugin. See third_party/just_audio/WETOWL.md.
 dependency_overrides:

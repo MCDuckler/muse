@@ -12,3 +12,5 @@ Future<void> stopFetching() async {}
 String? fetchedHerePath(int trackId) => null;
 
 Widget thisComputerCard() => const SizedBox.shrink();
+
+Future<void> fetchHereNow(List<int> trackIds) async {}

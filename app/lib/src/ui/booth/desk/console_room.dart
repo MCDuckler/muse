@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../api/models.dart';
 import '../../../state/app_state.dart';
@@ -11,6 +12,7 @@ import '../../../worker/parts_jobs.dart';
 import '../../dialogs.dart';
 import '../../mag.dart';
 import '../../snack.dart';
+import '../../full_screen.dart';
 import '../../theme.dart';
 import 'console.dart';
 import 'console_auto.dart';
@@ -41,12 +43,67 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
   /// The crate's open page, so the bar's parts light can open the list of parts.
   final _tab = ValueNotifier(CrateTab.queue);
 
+  /// How wide the crate is: dragged by its edge, or widened to half the screen and
+  /// back; kept between visits.
+  double _crateWidth = 320;
+  bool _wide = false;
+  bool _logFolded = false;
+
+  static const _kWidth = 'muse.booth.crateWidth';
+  static const _kWide = 'muse.booth.crateWide';
+  static const _kLog = 'muse.booth.logFolded';
+
   Booth get _b => widget.booth;
+  late final AppState _app = context.read<AppState>();
+  List<Track>? _queueSeen;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_remember());
+    _app.addListener(_queueMoved);
+  }
+
+  Future<void> _remember() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _crateWidth = prefs.getDouble(_kWidth) ?? 320;
+      _wide = prefs.getBool(_kWide) ?? false;
+      _logFolded = prefs.getBool(_kLog) ?? false;
+    });
+  }
+
+  Future<void> _keepLayout() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_kWidth, _crateWidth);
+    await prefs.setBool(_kWide, _wide);
+    await prefs.setBool(_kLog, _logFolded);
+  }
+
+  /// The queue changed — in the crate or anywhere else: the automix follows it.
+  void _queueMoved() {
+    final items = _app.player?.items;
+    if (items == null || identical(items, _queueSeen)) return;
+    _queueSeen = items;
+    _b.auto.follow(items);
+  }
 
   @override
   void dispose() {
+    // Out of the booth, out of full screen: the rest of the app has its own chrome.
+    if (fullScreen.value) unawaited(toggleFullScreen());
+    _app.removeListener(_queueMoved);
     _tab.dispose();
     super.dispose();
+  }
+
+  /// The crate's width on this screen: what was dragged or asked for, never so wide
+  /// that the decks and the mixer have too little room.
+  double _widthFor(double screen) {
+    final most = (screen - 980).clamp(280.0, screen * 0.62);
+    final want = _wide ? screen * 0.5 : _crateWidth;
+    return want.clamp(280.0, most);
   }
 
   void _pick(engine.Deck d) => setState(() {
@@ -79,17 +136,39 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
                       children: [
                         Expanded(child: _room()),
                         if (_crate) ...[
-                          const SizedBox(width: 10),
+                          _Edge(
+                            onDrag: (dx) => setState(() {
+                              final screen = MediaQuery.sizeOf(context).width;
+                              _crateWidth = (_widthFor(screen) - dx).clamp(280.0, screen * 0.62);
+                              _wide = false;
+                            }),
+                            onDone: _keepLayout,
+                          ),
                           SizedBox(
-                            width: MediaQuery.sizeOf(context).width < 1440 ? 280 : 320,
+                            width: _widthFor(MediaQuery.sizeOf(context).width),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
                                 Expanded(
                                     flex: 3,
-                                    child: ConsoleCrate(booth: _b, loadInto: _load, forDeck: _for, tab: _tab)),
+                                    child: ConsoleCrate(
+                                      booth: _b,
+                                      loadInto: _load,
+                                      forDeck: _for,
+                                      tab: _tab,
+                                      wide: _wide,
+                                      onWide: () {
+                                        setState(() => _wide = !_wide);
+                                        unawaited(_keepLayout());
+                                      },
+                                    )),
                                 const SizedBox(height: 10),
-                                Expanded(flex: 2, child: ConsoleLog(booth: _b)),
+                                if (_logFolded)
+                                  ConsoleLog(booth: _b, folded: true, onFold: _fold)
+                                else
+                                  Expanded(
+                                      flex: 2,
+                                      child: ConsoleLog(booth: _b, onFold: _fold)),
                               ],
                             ),
                           ),
@@ -104,6 +183,11 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
         ),
       ),
     );
+  }
+
+  void _fold() {
+    setState(() => _logFolded = !_logFolded);
+    unawaited(_keepLayout());
   }
 
   Widget _room() => LayoutBuilder(builder: (context, c) {
@@ -159,6 +243,16 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
                 icon: const Icon(Icons.bookmark_add_outlined, color: Console.quiet),
                 tooltip: 'Keep this mix',
                 onPressed: () => _keep(context),
+              ),
+            if (canGoFullScreen)
+              ValueListenableBuilder<bool>(
+                valueListenable: fullScreen,
+                builder: (context, on, _) => IconButton(
+                  icon: Icon(on ? Icons.fullscreen_exit : Icons.fullscreen,
+                      color: on ? Console.ink : Console.quiet),
+                  tooltip: on ? 'Leave full screen (F11)' : 'Full screen (F11)',
+                  onPressed: () => unawaited(toggleFullScreen()),
+                ),
               ),
             IconButton(
               icon: const Icon(Icons.keyboard_outlined, color: Console.quiet),
@@ -398,4 +492,45 @@ class _PartsLightState extends State<_PartsLight> {
       ),
     );
   }
+}
+
+
+/// The crate's edge: dragged, the crate is wider or narrower.
+class _Edge extends StatefulWidget {
+  const _Edge({required this.onDrag, required this.onDone});
+  final void Function(double dx) onDrag;
+  final Future<void> Function() onDone;
+
+  @override
+  State<_Edge> createState() => _EdgeState();
+}
+
+class _EdgeState extends State<_Edge> {
+  bool _over = false;
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+        cursor: SystemMouseCursors.resizeColumn,
+        onEnter: (_) => setState(() => _over = true),
+        onExit: (_) => setState(() => _over = false),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onHorizontalDragUpdate: (d) => widget.onDrag(d.delta.dx),
+          onHorizontalDragEnd: (_) => unawaited(widget.onDone()),
+          child: SizedBox(
+            width: 10,
+            child: Center(
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 120),
+                width: 2,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: _over ? Console.quiet : Console.line,
+                  borderRadius: BorderRadius.circular(1),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
 }

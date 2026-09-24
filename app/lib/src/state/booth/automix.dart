@@ -141,6 +141,30 @@ class AutoMix extends ChangeNotifier {
     return null;
   }
 
+  /// The queue as it is now, while mixing: what comes after the record on now follows
+  /// it — a record moved up, taken out or added in the crate is what the booth mixes
+  /// into next, rather than whatever the queue was when the automix was switched on.
+  /// The record playing stays where it is. A mix being done again keeps its own order.
+  void follow(List<Track> queue) {
+    if (!running || replaying) return;
+    final ready = [for (final t in queue) if (t.isReady) t];
+    final on = current;
+    final before = next?.id;
+    final at = on == null ? -1 : ready.indexWhere((t) => t.id == on.id);
+    if (at >= 0) {
+      _tracks = ready;
+      _at = at;
+    } else {
+      _tracks = [if (on != null) on, ...ready];
+      _at = on == null ? -1 : 0;
+    }
+    if (next?.id != before && !booth.busy && !_going) {
+      unawaited(_prepareNext());
+    } else {
+      notifyListeners();
+    }
+  }
+
   /// What is coming, and how, once it is decided.
   Track? get next => _at + 1 < _tracks.length ? _tracks[_at + 1] : null;
   Track? get current => _at >= 0 && _at < _tracks.length ? _tracks[_at] : null;

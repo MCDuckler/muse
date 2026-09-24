@@ -6,9 +6,14 @@ import 'console.dart';
 
 /// What the booth has been doing, newest at the top: the automix thinking out loud,
 /// and anything done by hand that it has to work around.
+///
+/// Folded, it is one line — the newest — under its header, and the crate above it
+/// has the height; [onFold] folds and unfolds it.
 class ConsoleLog extends StatelessWidget {
-  const ConsoleLog({super.key, required this.booth});
+  const ConsoleLog({super.key, required this.booth, this.folded = false, this.onFold});
   final Booth booth;
+  final bool folded;
+  final VoidCallback? onFold;
 
   static IconData iconOf(BoothEventKind k) => switch (k) {
         BoothEventKind.auto => Icons.power_settings_new,
@@ -33,15 +38,36 @@ class ConsoleLog extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              Text('LOG', style: Console.label(9, color: Console.ink)),
-              const SizedBox(width: 8),
-              if (booth.auto.running) _Live(colour: accent),
-            ],
+          InkWell(
+            onTap: onFold,
+            borderRadius: BorderRadius.circular(4),
+            child: Row(
+              children: [
+                Text('LOG', style: Console.label(9, color: Console.ink)),
+                const SizedBox(width: 8),
+                if (booth.auto.running) _Live(colour: accent),
+                if (folded && events.isNotEmpty) ...[
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(events.last.text,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Mag.typewriter(10.5, color: Console.quiet)),
+                  ),
+                ] else
+                  const Spacer(),
+                if (onFold != null)
+                  Tooltip(
+                    message: folded ? 'Show the log' : 'Fold the log away',
+                    child: Icon(folded ? Icons.expand_less : Icons.expand_more,
+                        size: 18, color: Console.quiet),
+                  ),
+              ],
+            ),
           ),
-          const SizedBox(height: 6),
-          Expanded(
+          if (!folded) const SizedBox(height: 6),
+          if (!folded)
+            Expanded(
             child: events.isEmpty
                 ? const Center(child: Icon(Icons.notes, size: 22, color: Console.faint))
                 : ListView.builder(

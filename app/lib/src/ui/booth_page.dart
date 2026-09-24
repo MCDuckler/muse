@@ -1,3 +1,4 @@
+import 'full_screen.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -97,10 +98,19 @@ class _BoothPageState extends State<BoothPage> {
     ('F G', 'Kill the bass on A, B'),
     ('M', 'Auto DJ: mix now'),
     ('N', 'Auto DJ: not that one'),
+    ('F11', 'Full screen'),
   ];
 
   KeyEventResult _keys(FocusNode node, KeyEvent e) {
     if (e is! KeyDownEvent) return KeyEventResult.ignored;
+    // Typing in the crate's search is typing, not playing the decks.
+    final typing = FocusManager.instance.primaryFocus?.context
+        ?.findAncestorWidgetOfExactType<EditableText>();
+    if (typing != null) return KeyEventResult.ignored;
+    if (e.logicalKey == LogicalKeyboardKey.f11) {
+      unawaited(toggleFullScreen());
+      return KeyEventResult.handled;
+    }
     final b = context.read<AppState>().booth;
     final k = e.logicalKey;
     final shift = HardwareKeyboard.instance.isShiftPressed;

@@ -23,6 +23,7 @@ import 'package:muse/src/ui/booth_page.dart';
 import 'package:muse/src/ui/theme.dart';
 import 'package:muse/src/worker/parts_jobs.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../fake_audio.dart';
 
@@ -86,6 +87,7 @@ void main() {
   final out = Platform.environment['SHOTS'];
 
   setUpAll(() async {
+    SharedPreferences.setMockInitialValues({});
     const f = 'assets/fonts';
     final flutter = Platform.environment['FLUTTER_ROOT'] ?? '${Platform.environment['HOME']}/.local/flutter';
     final m = '$flutter/bin/cache/artifacts/material_fonts';
@@ -100,13 +102,23 @@ void main() {
 
   for (final (w, h) in const [(1600.0, 1000.0), (1280.0, 760.0), (1920.0, 1080.0)]) {
   for (final dark in [true]) {
-    for (final state in ['empty', 'playing', if (w == 1600) 'mixing', if (w != 1920) 'parts']) {
+    for (final state in ['empty', 'playing', if (w == 1600) 'mixing', if (w != 1920) 'parts', if (w != 1280) 'crate']) {
       testWidgets('the booth at ${w.round()}x${h.round()}, $state', (tester) async {
         JustAudioPlatform.instance = FakeJustAudio();
         useThisClientInstead(MockClient((r) async => r.url.path.contains('stream-key')
             ? http.Response('{"key": "k", "expires_at": 99999999999}', 200)
             : http.Response('{}', 200)));
+        // The crate wide and the log folded, as a DJ leaves them.
+        SharedPreferences.setMockInitialValues(state == 'crate'
+            ? {'muse.booth.crateWide': true, 'muse.booth.logFolded': true}
+            : {});
         final app = AppState()..api = (ApiClient(baseUrl: 'http://example.invalid')..token = 'x');
+        if (state == 'crate') {
+          app.playlists = [
+            for (final (i, n) in ['Favourites', 'Friday warm-up', 'Hardtekk crate', 'Eurodance', 'Peak time'].indexed)
+              Playlist(id: 50 + i, name: n, kind: i == 0 ? 'favourites' : 'local', itemCount: 12 + i * 7, autoSplit: i == 2),
+          ];
+        }
         tester.view.physicalSize = Size(w, h);
         tester.view.devicePixelRatio = 1;
         addTearDown(tester.view.reset);
@@ -198,6 +210,25 @@ void main() {
           }
           expect(find.text('NOW'), findsOneWidget);
           expect(find.text('WAITING · 2'), findsOneWidget);
+        }
+        if (state == 'crate') {
+          // Typing in the search is typing: Q is a letter, not SYNC on deck A.
+          await tester.tap(find.byIcon(Icons.search).first);
+          await tester.pump(const Duration(milliseconds: 100));
+          final syncedBefore = app.booth.a.synced;
+          await tester.tap(find.byType(TextField));
+          await tester.pump();
+          for (final k in [LogicalKeyboardKey.keyQ, LogicalKeyboardKey.space, LogicalKeyboardKey.digit1]) {
+            await tester.sendKeyEvent(k);
+          }
+          await tester.pump(const Duration(milliseconds: 100));
+          expect(app.booth.a.synced, syncedBefore, reason: 'Q typed into the search, not pressed');
+          expect(app.booth.busy, isFalse, reason: 'space typed, not MIX');
+          await tester.tap(find.byIcon(Icons.library_music_outlined));
+          for (var i = 0; i < 3; i++) {
+            await tester.pump(const Duration(milliseconds: 100));
+          }
+          expect(find.text('Hardtekk crate'), findsOneWidget);
         }
         expect(tester.takeException(), isNull);
         if (out != null) {

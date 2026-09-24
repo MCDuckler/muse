@@ -732,3 +732,8 @@ class _Missing extends StatelessWidget {
     );
   }
 }
+
+/// Fetch these songs on this computer now, for the person here (the booth's crate
+/// adding something the house does not have yet). Nothing where there is no desk.
+Future<void> fetchHereNow(List<int> trackIds) async =>
+    PoolHere.instance?.wantHere(trackIds);
