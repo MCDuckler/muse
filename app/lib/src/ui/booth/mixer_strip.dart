@@ -412,7 +412,7 @@ class _AutoPanel extends StatelessWidget {
                     if (next != null)
                       Text(
                         [
-                          '${plan?.kind.name ?? '…'} over ${plan?.bars ?? '…'} bars',
+                          '${plan?.kind.label ?? '…'} over ${plan?.bars ?? '…'} bars',
                           if (auto.replaying) 'as it was kept',
                           if (auto.after != null) 'then ${auto.after!.displayTitle}',
                         ].join(' · '),

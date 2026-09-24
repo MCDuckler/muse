@@ -19,6 +19,52 @@ import 'mixer_none.dart' if (dart.library.io) 'mixer_desktop.dart' as desk;
 ///    crossfader is done in volume steps and the kills through the bands.
 ///  * Everywhere else, for now, a gain per player: the crossfader works and the kills
 ///    do not, and the booth says so rather than pretending.
+/// How loud each of a stem deck's three stems is, 0 to 1: the drums, the bass and
+/// everything else but the voice, and the voice. All three up is the record.
+class StemLevels {
+  const StemLevels({this.drums = 1, this.rest = 1, this.vocals = 1});
+  final double drums, rest, vocals;
+
+  static const all = StemLevels();
+
+  /// What each of the booth's parts is, as levels.
+  static StemLevels of(String? part) => switch (part) {
+        'drums' => const StemLevels(rest: 0, vocals: 0),
+        'music' => const StemLevels(drums: 0),
+        'instrumental' => const StemLevels(vocals: 0),
+        'vocals' => const StemLevels(drums: 0, rest: 0),
+        'bass-other' => const StemLevels(drums: 0, vocals: 0),
+        _ => all,
+      };
+
+  /// The part these levels are, where they are one — for the pads.
+  String? get part {
+    bool on(double v) => v > 0.5;
+    return switch ((on(drums), on(rest), on(vocals))) {
+      (true, true, true) => null,
+      (true, false, false) => 'drums',
+      (false, true, true) => 'music',
+      (true, true, false) => 'instrumental',
+      (false, false, true) => 'vocals',
+      _ => null,
+    };
+  }
+
+  StemLevels lerp(StemLevels to, double t) => StemLevels(
+        drums: drums + (to.drums - drums) * t,
+        rest: rest + (to.rest - rest) * t,
+        vocals: vocals + (to.vocals - vocals) * t,
+      );
+
+  bool closeTo(StemLevels o) =>
+      (drums - o.drums).abs() < 0.005 &&
+      (rest - o.rest).abs() < 0.005 &&
+      (vocals - o.vocals).abs() < 0.005;
+
+  @override
+  String toString() => 'd${drums.toStringAsFixed(2)} r${rest.toStringAsFixed(2)} v${vocals.toStringAsFixed(2)}';
+}
+
 /// What the three bands of one channel are set to, in decibels.
 class EqSet {
   const EqSet({this.low = 0, this.mid = 0, this.high = 0});
@@ -118,6 +164,23 @@ abstract class Mixer {
   /// Loop [deck] from [from] to [to] inside the engine, or stop with nulls. False where
   /// the engine cannot, and the deck loops by itself.
   Future<bool> setLoop(Deck deck, Duration? from, Duration? to) async => false;
+
+  /// Whether a deck here can play a record's stems — the drums, the bass and the
+  /// rest, the voice — as one file with a level each, turned with no gap (a stem
+  /// deck). Only a desk: its engine takes the six channels apart itself.
+  bool get canStem => false;
+
+  /// Before [deck] loads a record: ready its engine for [stems] (the six-channel file)
+  /// or for an ordinary record. Says whether it is ready for stems.
+  Future<bool> beforeLoad(Deck deck, {required bool stems}) async => false;
+
+  /// Whether [deck]'s engine only now exists — its first record just went on — and
+  /// what [beforeLoad] would have set could not be: the record is loaded again, parked
+  /// and silent, with it set. Asked once after each load.
+  Future<bool> firstLoadMissed(Deck deck) async => false;
+
+  /// The levels of a stem deck's three stems, 0 to 1 each.
+  Future<void> setStems(Deck deck, StemLevels levels) async {}
 
   /// Where to put a loop's ends so its seam does not click (see seam.dart), read from
   /// the sound [deck] is playing — or null where this engine cannot read it.

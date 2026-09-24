@@ -50,11 +50,51 @@ enum Transition {
   /// PartsStore for which machine does it, and the server's stems.py for how good
   /// that separation is and what it costs.
   swap,
+
+  /// The new record announces itself: its voice alone — its hook, where the words say
+  /// where that is — sung over the old record's beat for half the transition, the old
+  /// record's own voice taken out under it; then the new record's band arrives under
+  /// its voice and the old one goes. Stem decks only.
+  announce,
+
+  /// The old record goes out singing: its voice alone rides over the new record's
+  /// intro, the new record's own voice held back until the old one has finished.
+  /// Stem decks only.
+  acapellaOut,
+
+  /// The long, modern blend: the stems change hands one at a time — the new drums
+  /// under the old record, then its bass and the rest while the old drums go, the old
+  /// voice out, the new voice in last. Nothing ever doubles. Stem decks only.
+  stemBlend,
+
+  /// The drop swap: the old record builds, climbing out through the filter and caught
+  /// in a tightening loop, and on the one the new record drops in its place — parked
+  /// so that its drop lands exactly on the transition's last beat.
+  dropSwap,
+}
+
+extension TransitionWords on Transition {
+  /// As a person says it.
+  String get label => switch (this) {
+        Transition.acapellaOut => 'a cappella out',
+        Transition.stemBlend => 'stem blend',
+        Transition.dropSwap => 'drop swap',
+        _ => name,
+      };
+
+  /// Made of stems: nothing it means can be done on a deck playing the whole record.
+  bool get needsStems =>
+      this == Transition.announce || this == Transition.acapellaOut || this == Transition.stemBlend;
 }
 
 /// What a transition does to one deck at one moment.
 class DeckStep {
-  const DeckStep({this.eq, this.filter, this.loopBars, this.brake = false, this.part});
+  const DeckStep(
+      {this.eq, this.filter, this.loopBars, this.brake = false, this.part, this.stems});
+
+  /// A stem deck's levels by this point: moved to evenly from the last step that set
+  /// them, like the fader. Ignored on a deck that is not playing its stems.
+  final StemLevels? stems;
 
   /// The record itself, as a thing a step can ask for: [part] left null means "leave
   /// whatever is on the platter alone", so putting the whole record back needs a word
@@ -211,6 +251,13 @@ class Booth extends ChangeNotifier {
     this.b.engineLoop = (from, to) => this.mixer.setLoop(this.b, from, to);
     this.a.seamFinder = this.mixer.quietSeam;
     this.b.seamFinder = this.mixer.quietSeam;
+    for (final d in [this.a, this.b]) {
+      d
+        ..canStem = this.mixer.canStem
+        ..readyEngine = this.mixer.beforeLoad
+        ..stemEngine = this.mixer.setStems
+        ..firstLoadMissed = this.mixer.firstLoadMissed;
+    }
     this.a.addListener(notifyListeners);
     this.b.addListener(notifyListeners);
     this.a.addListener(_follow);
@@ -247,6 +294,10 @@ class Booth extends ChangeNotifier {
   final ApiClient api;
   final Mixer mixer;
   final TimingStore timing;
+
+  /// Where the voice is in each record and what it sings: what the automix plans its
+  /// vocal moves by.
+  late final VocalStore vocals = VocalStore(api);
 
   /// Where the parts of a record come from. See PartsStore.
   final PartsStore parts;
@@ -984,6 +1035,101 @@ class Booth extends ChangeNotifier {
           MixStep(0.8, crossfader: 1, decks: {from: const DeckStep(brake: true)}),
           MixStep(1, crossfader: 1, decks: {from: off}),
         ];
+      case Transition.announce:
+        // Voice first: the new record's alone, over the old record's beat with the old
+        // voice gone — so there is one voice, and it is the new one. Half way the new
+        // band comes up under it, the old bass goes, and the old record leaves.
+        const onlyVoice = StemLevels(drums: 0, rest: 0);
+        const noVoice = StemLevels(vocals: 0);
+        return [
+          MixStep(0, crossfader: 0.5, decks: {
+            to: const DeckStep(stems: onlyVoice, eq: EqSet.flat),
+            from: const DeckStep(stems: StemLevels.all),
+          }),
+          MixStep(0.12, decks: {from: const DeckStep(stems: noVoice)}),
+          MixStep(0.5, crossfader: 0.5, decks: {
+            to: const DeckStep(stems: onlyVoice),
+            from: const DeckStep(stems: noVoice),
+          }),
+          MixStep(0.56, decks: {
+            to: const DeckStep(stems: StemLevels.all),
+            from: const DeckStep(eq: EqSet(low: EqSet.killed)),
+          }),
+          MixStep(0.8, crossfader: 0.75, decks: {
+            from: const DeckStep(filter: 0.5, stems: StemLevels(vocals: 0, drums: 0)),
+          }),
+          MixStep(1, crossfader: 1, decks: {
+            from: const DeckStep(eq: EqSet.flat, filter: 0, stems: StemLevels.all),
+          }),
+        ];
+      case Transition.acapellaOut:
+        // The old record's voice over the new record's intro: the old band goes first,
+        // under the new one arriving, and the new voice waits for the old to finish.
+        const onlyVoice = StemLevels(drums: 0, rest: 0);
+        return [
+          MixStep(0, crossfader: 0, decks: {
+            to: const DeckStep(stems: StemLevels(vocals: 0), eq: EqSet(low: EqSet.killed)),
+          }),
+          MixStep(0.25, crossfader: 0.5, decks: {
+            to: const DeckStep(eq: EqSet.flat),
+            from: const DeckStep(stems: StemLevels(vocals: 1, rest: 0.5, drums: 0)),
+          }),
+          MixStep(0.45, decks: {from: const DeckStep(stems: onlyVoice)}),
+          MixStep(0.8, crossfader: 0.5, decks: {
+            from: const DeckStep(stems: onlyVoice),
+            to: const DeckStep(stems: StemLevels(vocals: 0)),
+          }),
+          MixStep(0.92, crossfader: 1, decks: {
+            to: const DeckStep(stems: StemLevels.all),
+          }),
+          MixStep(1, crossfader: 1, decks: {
+            from: const DeckStep(eq: EqSet.flat, filter: 0, stems: StemLevels.all),
+          }),
+        ];
+      case Transition.stemBlend:
+        // One stem at a time, never two of a kind: new drums under the old record; the
+        // old drums hand over; the new bass and the rest come up as the old go; the
+        // old voice out before the new one comes in.
+        return [
+          MixStep(0, crossfader: 0.5, decks: {
+            to: const DeckStep(stems: StemLevels(drums: 0, rest: 0, vocals: 0), eq: EqSet.flat),
+            from: const DeckStep(stems: StemLevels.all),
+          }),
+          MixStep(0.25, decks: {
+            to: const DeckStep(stems: StemLevels(drums: 1, rest: 0, vocals: 0)),
+            from: const DeckStep(stems: StemLevels(drums: 0)),
+          }),
+          MixStep(0.5, decks: {
+            to: const DeckStep(stems: StemLevels(drums: 1, rest: 0.9, vocals: 0)),
+            from: const DeckStep(stems: StemLevels(drums: 0, rest: 0.1)),
+          }),
+          MixStep(0.7, decks: {
+            from: const DeckStep(stems: StemLevels(drums: 0, rest: 0, vocals: 0)),
+          }),
+          MixStep(0.9, decks: {to: const DeckStep(stems: StemLevels.all)}),
+          MixStep(1, crossfader: 1, decks: {
+            from: const DeckStep(eq: EqSet.flat, filter: 0, stems: StemLevels.all),
+          }),
+        ];
+      case Transition.dropSwap:
+        // The old record builds and is taken away on the one; the new record is there
+        // underneath, bass off, and drops exactly as the old one is gone.
+        return [
+          MixStep(0, crossfader: 0, decks: {
+            to: const DeckStep(eq: EqSet(low: EqSet.killed, mid: -12), filter: -0.35),
+            from: const DeckStep(filter: 0),
+          }),
+          MixStep(0.5, crossfader: 0.25, decks: {from: const DeckStep(filter: 0.2)}),
+          MixStep(0.75, crossfader: 0.35, decks: {
+            from: const DeckStep(filter: 0.55, loopBars: 1),
+          }),
+          MixStep(0.875, decks: {from: const DeckStep(filter: 0.75, loopBars: -1)}),
+          MixStep(0.95, crossfader: 0.4, decks: {from: const DeckStep(filter: 0.9, loopBars: -1)}),
+          MixStep(1, crossfader: 1, decks: {
+            to: const DeckStep(eq: EqSet.flat, filter: 0),
+            from: const DeckStep(eq: EqSet.flat, filter: 0, loopBars: 0),
+          }),
+        ];
       case Transition.swap:
         // The drums change hands. Each swap is a load, so each one happens where
         // there is another record over it: the first under the outgoing at full
@@ -1104,6 +1250,12 @@ class Booth extends ChangeNotifier {
     if (busy) return;
     final from = master, to = other(master);
     if (!to.loaded) return;
+    // A move made of stems, asked of a deck that is playing the whole record: the
+    // blend it is a kind of, rather than a plan whose stems nothing can turn.
+    if (kind.needsStems && !(from.stemmed && to.stemmed)) {
+      note(BoothEventKind.plan, '${kind.label} needs both records in stems: a blend instead');
+      kind = Transition.blend;
+    }
     final ticket = ++_asked;
     bool calledOff() => ticket != _asked;
     // A mix does its own matching and holding, and after it the other record leads:
@@ -1264,6 +1416,31 @@ class Booth extends ChangeNotifier {
       return a + (b - a) * leg.local;
     }
 
+    /// Where a stem deck's levels should be at [k], or null where the plan says nothing
+    /// of them: moved evenly from the last step that set them to the next that does.
+    StemLevels? stemsAt(String deck, double k) {
+      MixStep? before, after;
+      for (final st in steps) {
+        if (st.decks[deck]?.stems == null) continue;
+        if (st.at <= k) {
+          before = st;
+        } else {
+          after ??= st;
+        }
+      }
+      if (before == null) return null;
+      final a = before.decks[deck]!.stems!;
+      if (after == null) return a;
+      final span = after.at - before.at;
+      return a.lerp(after.decks[deck]!.stems!, span <= 0 ? 1 : ((k - before.at) / span).clamp(0.0, 1.0));
+    }
+
+    // The levels a stem plan opens with, on the incoming before it makes a sound.
+    for (final deck in decks) {
+      final open = stemsAt(deck.name, 0);
+      if (open != null && deck.stemmed) await deck.setStemLevels(open, over: Duration.zero);
+    }
+
     _running = Timer.periodic(const Duration(milliseconds: 40), (t) async {
       final k = (DateTime.now().difference(began).inMicroseconds / length.inMicroseconds)
           .clamp(0.0, 1.0);
@@ -1273,6 +1450,10 @@ class Booth extends ChangeNotifier {
       for (final deck in decks) {
         final want = filterAt(deck.name, k);
         if (want != null && (filters[deck] ?? 0) != want) await setFilter(deck, want);
+        final levels = stemsAt(deck.name, k);
+        if (levels != null && deck.stemmed && !levels.closeTo(deck.stemLevels)) {
+          await deck.setStemLevels(levels, over: Duration.zero);
+        }
       }
       while (next < steps.length && k >= steps[next].at) {
         await _applyStep(steps[next]);

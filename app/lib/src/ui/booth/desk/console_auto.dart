@@ -148,7 +148,7 @@ class _Next extends StatelessWidget {
         const SizedBox(width: 12),
         if (plan != null)
           Tooltip(
-            message: '${plan.kind.name} over ${plan.bars} bars${auto.replaying ? ', as it was kept' : ''}',
+            message: '${plan.kind.label} over ${plan.bars} bars${auto.replaying ? ', as it was kept' : auto.why == null ? '' : ' — ${auto.why}'}',
             child: Icon(transitionIcon(plan.kind), size: 18, color: Console.quiet),
           ),
         const SizedBox(width: 10),

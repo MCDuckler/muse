@@ -38,7 +38,7 @@ const _arithmeticVersion = 1;
 
 /// What the trained separator makes, all in one pass: the record without its voice,
 /// the drums, everything but the drums, and the voice on its own.
-const trainedParts = ['instrumental', 'drums', 'music', 'vocals'];
+const trainedParts = ['instrumental', 'drums', 'music', 'vocals', 'stems'];
 
 /// What the house makes, and what the arithmetic here makes. The voice on its own is
 /// not one of them: lifting it out cleanly is exactly what the arithmetic cannot do.
@@ -142,7 +142,7 @@ Future<String> partsDir() async {
 set partsDirForTesting(String path) => _dir = Directory(path);
 
 File partFile(Directory dir, int trackId, String name, {int version = partsVersion}) =>
-    File('${dir.path}${Platform.pathSeparator}$trackId-$name-v$version.m4a');
+    File('${dir.path}${Platform.pathSeparator}$trackId-$name-v$version.${name == 'stems' ? 'opus' : 'm4a'}');
 
 Future<bool> _separatorPossible() async {
   if (_separatorOff != null) return !_separatorOff!;
@@ -391,7 +391,7 @@ Future<void> _tidyAfter(_Render r) async {
     await _running?.exitCode.timeout(const Duration(seconds: 5));
   } catch (_) {}
   for (final f in r.into.values) {
-    final tmp = File(f.replaceFirst(RegExp(r'\.m4a$'), '.tmp.m4a'));
+    final tmp = File(f.replaceFirstMapped(RegExp(r'\.(m4a|opus)$'), (m) => '.tmp.${m[1]}'));
     try {
       if (await tmp.exists()) await tmp.delete();
     } catch (_) {}
@@ -422,7 +422,7 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
   final trackId = int.tryParse(
       into.values.first.split(Platform.pathSeparator).last.split('-').first);
 
-  final trained = into.values.every((f) => f.endsWith('-v$partsVersion.m4a'));
+  final trained = into.values.every((f) => RegExp('-v$partsVersion\\.(m4a|opus)\$').hasMatch(f));
   if (trained) {
     // Two ways to fail, and they mean different things. Not being able to set the
     // separator up — no program, no house, a fetch that failed or a file that was not
@@ -658,6 +658,7 @@ Future<int> sweepHere() async {
     final name = f.path.split(Platform.pathSeparator).last;
     if (f is File &&
         (name.endsWith('.tmp.m4a') ||
+            name.endsWith('.tmp.opus') ||
             name.startsWith('borrowed-') ||
             await _superseded(dir, name))) {
       try {

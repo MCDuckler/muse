@@ -10,7 +10,7 @@
 //   wetowl-separate --ort <onnxruntime library> --model <scnet .onnx>
 //                   --ffmpeg <ffmpeg> --in <record>
 //                   [--instrumental <out>] [--drums <out>] [--music <out>]
-//                   [--vocals <out>] [--bass-other <out>]
+//                   [--vocals <out>] [--bass-other <out>] [--stems <out.opus>]
 //                   [--threads N] [--seconds N] [--raw] [--rate N] [--gpu cuda]
 //   wetowl-separate --check-cuda
 //
@@ -73,7 +73,11 @@ Future<void> main(List<String> args) async {
     for (final p in _recipes.keys)
       if (opts[p] != null) p: opts[p]!,
   };
-  if (ort == null || model == null || ffmpeg == null || input == null || wanted.isEmpty) {
+  // The three parts that add back up to the record, in one six-channel file: what a
+  // deck plays to turn any of them up or down with no gap (see _stems).
+  final stemsTo = opts['stems'];
+  if (ort == null || model == null || ffmpeg == null || input == null ||
+      (wanted.isEmpty && stemsTo == null)) {
     _fail(_usage, 64);
   }
   final threads = int.tryParse(opts['threads'] ?? '') ?? 4;
@@ -148,6 +152,10 @@ Future<void> main(List<String> args) async {
     for (final e in wanted.entries) {
       writers[e.key] = await _Writer.start(ffmpeg, e.value, raw: raw, rate: rate);
     }
+    final stems = stemsTo == null
+        ? null
+        : await _Writer.start(ffmpeg, stemsTo, raw: raw, rate: rate, stems: true);
+    if (stems != null) writers['stems'] = stems;
     final sound = SharedSound();
     final piece = await ParallelPiece.start(
       network: net.run,
@@ -160,7 +168,7 @@ Future<void> main(List<String> args) async {
     await demix(stereo, piece, left: sound.left, right: sound.right, out: sound.out,
         (from, n, parts) async {
       for (final e in writers.entries) {
-        await e.value.add(_mixed(parts, _recipes[e.key]!, n));
+        await e.value.add(e.key == 'stems' ? _stems(parts, n) : _mixed(parts, _recipes[e.key]!, n));
       }
     }, progress: (f) {
       final pct = (f * 100).floor();
@@ -242,6 +250,25 @@ Future<Float32List> _decode(String ffmpeg, String input, int seconds) async {
   return bytes.buffer.asFloat32List(bytes.offsetInBytes, whole ~/ 4);
 }
 
+/// The stems file's six channels, interleaved: the drums (left, right), the bass and
+/// everything else but the voice (left, right), the voice (left, right). Each kept
+/// inside ±1 as a part is.
+Float32List _stems(List<Float32List> parts, int n) {
+  final pairs = [
+    _mixed(parts, _recipes['drums']!, n),
+    _mixed(parts, _recipes['bass-other']!, n),
+    _mixed(parts, _recipes['vocals']!, n),
+  ];
+  final out = Float32List(n * 6);
+  for (var i = 0; i < n; i++) {
+    for (var p = 0; p < 3; p++) {
+      out[i * 6 + p * 2] = pairs[p][i * 2];
+      out[i * 6 + p * 2 + 1] = pairs[p][i * 2 + 1];
+    }
+  }
+  return out;
+}
+
 /// One part, from the model's eight signals, interleaved stereo and kept inside ±1: a
 /// part that clips is a part nobody can use.
 Float32List _mixed(List<Float32List> parts, List<int> sources, int n) {
@@ -270,7 +297,7 @@ class _Writer {
   _Writer._(this._p, this._tmp, this._into, this._said, this._watching);
 
   static Future<_Writer> start(String ffmpeg, String into,
-      {required bool raw, required int rate}) async {
+      {required bool raw, required int rate, bool stems = false}) async {
     final dot = into.lastIndexOf('.');
     final slash = into.lastIndexOf(Platform.pathSeparator);
     // Still ending in the real extension: ffmpeg picks the format from it.
@@ -279,9 +306,15 @@ class _Writer {
         : '$into.tmp';
     final p = await Process.start(ffmpeg, [
       '-v', 'error', '-nostdin', '-y',
-      '-f', 'f32le', '-ar', '$modelRate', '-ac', '2', '-i', 'pipe:0',
-      '-ar', '$rate',
-      if (raw) ...['-f', 'f32le'] else ...['-c:a', 'aac', '-b:a', '160k'],
+      '-f', 'f32le', '-ar', '$modelRate', '-ac', stems ? '6' : '2', '-i', 'pipe:0',
+      if (stems && !raw)
+        // Opus, because its six channels are six channels: mapping family 255 has no
+        // idea of a centre or a bass channel to low-pass or fold down. Always 48 kHz.
+        ...['-ar', '48000', '-c:a', 'libopus', '-mapping_family', '255', '-b:a', '288k']
+      else ...[
+        '-ar', '$rate',
+        if (raw) ...['-f', 'f32le'] else ...['-c:a', 'aac', '-b:a', '160k'],
+      ],
       tmp,
     ]);
     // Both pipes drained while stdin is written: a process whose output nobody reads

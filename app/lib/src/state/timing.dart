@@ -41,3 +41,33 @@ class TimingStore {
     }
   }
 }
+
+/// The voice of each record, asked for once — and again, a minute on, while the house
+/// is still working it out (the record not yet in parts, the words not yet fetched).
+class VocalStore {
+  VocalStore(this._api);
+  final ApiClient _api;
+  final _known = <int, (VocalMap, DateTime)>{};
+  final _asking = <int, Future<VocalMap?>>{};
+
+  VocalMap? peek(int trackId) => _known[trackId]?.$1;
+
+  Future<VocalMap?> of(Track track) {
+    final have = _known[track.id];
+    if (have != null &&
+        (have.$1.complete || DateTime.now().difference(have.$2) < const Duration(minutes: 1))) {
+      return Future.value(have.$1);
+    }
+    return _asking[track.id] ??= () async {
+      try {
+        final v = await _api.vocals(track.id);
+        _known[track.id] = (v, DateTime.now());
+        return v;
+      } catch (_) {
+        return have?.$1;
+      } finally {
+        _asking.remove(track.id);
+      }
+    }();
+  }
+}

@@ -541,4 +541,8 @@ IconData transitionIcon(Transition k) => switch (k) {
       Transition.roll => Icons.loop,
       Transition.brake => Icons.stop_circle_outlined,
       Transition.swap => Icons.swap_horiz,
+      Transition.announce => Icons.record_voice_over,
+      Transition.acapellaOut => Icons.mic_external_on,
+      Transition.stemBlend => Icons.layers,
+      Transition.dropSwap => Icons.bolt,
     };

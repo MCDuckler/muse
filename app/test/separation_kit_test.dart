@@ -113,7 +113,8 @@ void main() {
     }
     expect(asked, hasLength(1));
     expect(asked.single.keys.toSet(), trainedParts.toSet());
-    expect(asked.single.values.every((f) => f.endsWith('-v$partsVersion.m4a')), isTrue);
+    expect(asked.single.values.every((f) => RegExp('-v$partsVersion\\.(m4a|opus)\$').hasMatch(f)), isTrue);
+    expect(asked.single['stems'], endsWith('.opus'), reason: 'the six-channel stems are Opus');
     for (final p in trainedParts) {
       expect((await partHere('song.m4a', 5, p)).$1, Here.ready, reason: p);
     }

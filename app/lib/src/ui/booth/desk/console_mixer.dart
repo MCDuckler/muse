@@ -121,7 +121,7 @@ class _ConsoleMixerState extends State<ConsoleMixer> {
               children: [
                 Icon(transitionIcon(_kind), size: 15, color: Console.ink),
                 const SizedBox(width: 8),
-                Text(_kind.name.toUpperCase(), style: Console.label(9.5, color: Console.ink)),
+                Text(_kind.label.toUpperCase(), style: Console.label(9.5, color: Console.ink)),
                 const Spacer(),
                 Text('$_bars', style: Mag.numerals(13, color: Console.ink)),
                 const SizedBox(width: 4),

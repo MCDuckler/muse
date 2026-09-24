@@ -222,7 +222,7 @@ void main() {
     // With it, one pass makes the voice with the rest.
     expect(await parts.want(song(5), 'vocals'), Stem.beingMade);
     await settle();
-    expect(intos[5]!.keys.toSet(), {'instrumental', 'drums', 'music', 'vocals'});
+    expect(intos[5]!.keys.toSet(), {'instrumental', 'drums', 'music', 'vocals', 'stems'});
     expect(partsJobs.of(5)!.parts, contains('vocals'));
     letGo(5);
     await settle();
@@ -242,7 +242,7 @@ void main() {
     File('${dir.path}/7-music-v$partsVersion.m4a').writeAsBytesSync([1]);
     await partHere('song.m4a', 7, 'vocals', track: song(7));
     await settle();
-    expect(intos[7]!.keys.toSet(), {'instrumental', 'vocals'});
+    expect(intos[7]!.keys.toSet(), {'instrumental', 'vocals', 'stems'});
     letGo(7);
   });
 

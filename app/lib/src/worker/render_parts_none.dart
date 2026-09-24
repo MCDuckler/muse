@@ -10,7 +10,7 @@ library;
 import '../api/models.dart';
 
 const partsVersion = 2;
-const trainedParts = ['instrumental', 'drums', 'music', 'vocals'];
+const trainedParts = ['instrumental', 'drums', 'music', 'vocals', 'stems'];
 const serverParts = {'instrumental', 'drums', 'music'};
 const upToSeconds = 12 * 60;
 

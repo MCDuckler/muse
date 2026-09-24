@@ -17,6 +17,7 @@ import 'package:muse/src/api/client.dart';
 import 'package:muse/src/api/models.dart';
 import 'package:muse/src/state/booth/booth.dart';
 import 'package:muse/src/state/booth/deck.dart';
+import 'package:muse/src/state/booth/mixer.dart' show StemLevels;
 import 'package:muse/src/worker/render_parts.dart';
 
 const probeDir = String.fromEnvironment('PROBE_DIR');
@@ -51,10 +52,16 @@ void main() {
     final tb = TrackTiming.fromJson((spec['b']['analysis'] as Map).cast());
     final a = track(990101, ta.durationMs), b = track(990102, tb.durationMs);
     final files = {a.id: spec['a']['file'] as String, b.id: spec['b']['file'] as String};
-    partsDirForTesting = Directory.systemTemp.createTempSync('probe-parts').path;
+    final partsTmp = Directory.systemTemp.createTempSync('probe-parts').path;
+    partsDirForTesting = partsTmp;
     final booth = Booth(ApiClient(baseUrl: 'http://127.0.0.1:9'), offlinePath: (id) => files[id]);
     final log = File('$probeDir/events.txt').openWrite();
     void note(String s) => log.writeln('${DateTime.now().microsecondsSinceEpoch / 1e6} $s');
+    // A stem deck: A's stems put where this computer keeps parts, so A loads them.
+    if (spec['stems_check'] == true) {
+      File(spec['a_stems'] as String)
+          .copySync('$partsTmp/${a.id}-stems-v$partsVersion.opus');
+    }
     await tester.runAsync(() async {
       await booth.init();
       booth.timing.put(a.id, ta);
@@ -64,6 +71,34 @@ void main() {
       await toSink(booth.a, 'wetowl_probe_a');
       await toSink(booth.b, 'wetowl_probe_b');
       await booth.setCrossfader(0.5);
+      if (spec['stems_check'] == true) {
+        note('A stemmed=${booth.a.stemmed}');
+        final native = JustAudioMediaKit.instanceIfRegistered?.playerFor(booth.a.player.platformId!)?.raw.platform;
+        if (native is NativePlayer) {
+          for (final prop in ['af', 'audio-params', 'audio-out-params', 'ad-lavc-downmix', 'audio-channels', 'path']) {
+            try {
+              note('mpv $prop = ${await native.getProperty(prop)}');
+            } catch (e) {
+              note('mpv $prop ? $e');
+            }
+          }
+        }
+        await booth.setCrossfader(0);
+        await booth.a.play();
+        note('stems all');
+        await Future<void>.delayed(const Duration(seconds: 4));
+        await booth.a.setStemLevels(const StemLevels(drums: 0, rest: 0));
+        note('stems vocals');
+        await Future<void>.delayed(const Duration(seconds: 4));
+        await booth.a.setStemLevels(const StemLevels(rest: 0, vocals: 0));
+        note('stems drums');
+        await Future<void>.delayed(const Duration(seconds: 4));
+        note('stems done at ${booth.a.position.inMilliseconds}');
+        await booth.a.pause();
+        await log.flush();
+        await log.close();
+        return;
+      }
       note('A ${ta.gridBpm?.toStringAsFixed(2)} steady=${ta.steady != null}; B ${tb.gridBpm?.toStringAsFixed(2)} steady=${tb.steady != null}');
       // What the engine reports in the first moments, against the wall clock: the
       // start is where a clock can be wrong.

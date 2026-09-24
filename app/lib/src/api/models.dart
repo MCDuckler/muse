@@ -2564,3 +2564,54 @@ class MixCues {
         soundEndMs: (j['sound_end_ms'] ?? 0) as int,
       );
 }
+
+/// Where the voice is in a record, and what it sings (the server's vocals.py): how
+/// loud the voice is bar by bar, the lyrics' lines — with their times where those can
+/// be trusted to be where the voice is — and the hook, the line sung most.
+class VocalMap {
+  const VocalMap({this.bars, this.lines = const [], this.timed = false, this.hook, this.lyrics});
+
+  /// 0 to 255 a bar, on the analysis's downbeats; null until the record is in parts.
+  final List<int>? bars;
+  final List<({int? ms, String text})> lines;
+  final bool timed;
+  final ({String text, List<int> at})? hook;
+
+  /// Where the words came from, or "later" while they are still to be asked for.
+  final String? lyrics;
+
+  /// A bar is sung where the voice is within 16 dB of its loudest.
+  static const sung = 118;
+
+  bool get complete => bars != null && lyrics != 'later';
+
+  bool sungAt(int bar) {
+    final b = bars;
+    return b != null && bar >= 0 && bar < b.length && b[bar] >= sung;
+  }
+
+  /// How many of [from]..[to) (bars) are sung.
+  int sungIn(int from, int to) {
+    var n = 0;
+    for (var i = from; i < to; i++) {
+      if (sungAt(i)) n++;
+    }
+    return n;
+  }
+
+  factory VocalMap.fromJson(Map<String, dynamic> j) {
+    final h = j['hook'];
+    return VocalMap(
+      bars: (j['bars'] as List?)?.map((e) => (e as num).toInt()).toList(),
+      lines: [
+        for (final l in (j['lines'] as List? ?? const []))
+          if (l is Map) (ms: (l['ms'] as num?)?.toInt(), text: '${l['text'] ?? ''}')
+      ],
+      timed: j['timed'] == true,
+      hook: h is Map
+          ? (text: '${h['text'] ?? ''}', at: [for (final a in (h['at'] as List? ?? const [])) (a as num).toInt()])
+          : null,
+      lyrics: j['lyrics'] as String?,
+    );
+  }
+}

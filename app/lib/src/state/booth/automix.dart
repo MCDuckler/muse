@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../../api/client.dart';
 import '../../api/models.dart';
 import 'booth.dart';
+import 'planner.dart';
 
 /// The booth mixing on its own: the queue played record into record, each
 /// transition chosen from what is known about the two songs and landed on the phrase.
@@ -77,7 +78,7 @@ class AutoMix extends ChangeNotifier {
       final t = _tracks[i];
       if (_inParts[t.id] == true) continue;
       try {
-        _inParts[t.id] = await booth.parts.want(t, 'drums') == Stem.ready;
+        _inParts[t.id] = await booth.parts.want(t, 'stems') == Stem.ready;
       } catch (_) {
         // Not a record the server can take apart, or cannot be reached. Either way
         // the booth mixes it the ordinary way and says nothing about it.
@@ -164,6 +165,12 @@ class AutoMix extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+  /// The moves made lately, newest last: what the planner steers away from repeating.
+  final recent = <Transition>[];
+
+  /// Why the plan is what it is, in a few words — for the log and the bar.
+  String? why;
 
   /// What is coming, and how, once it is decided.
   Track? get next => _at + 1 < _tracks.length ? _tracks[_at + 1] : null;
@@ -459,7 +466,7 @@ class AutoMix extends ChangeNotifier {
     }
     final timing = await booth.timing.of(coming);
     final was = from.track == null ? null : _keptFor(from.track!.id, coming.id);
-    final chosen = was == null
+    var chosen = was == null
         ? choose(from.timing, timing,
             style: style, parts: inParts(from.track, coming), fromPitch: from.pitch)
         : (kind: was.kind, bars: was.bars);
@@ -508,6 +515,34 @@ class AutoMix extends ChangeNotifier {
     if (to.track?.id != coming.id || to.playing) {
       await to.load(coming, timing: timing, at: at);
     }
+    // Now that both are known — which is in stems, where each sings, what each
+    // sings — the move itself, and where it goes out and comes in.
+    MixPlan? planned;
+    if (inStep && from.track != null) {
+      final voices = await Future.wait([
+        booth.vocals.of(from.track!).timeout(const Duration(seconds: 6), onTimeout: () => null),
+        booth.vocals.of(coming).timeout(const Duration(seconds: 6), onTimeout: () => null),
+      ]);
+      planned = Planner.plan(
+        from: MixSide(timing: timed, vocals: voices[0], stems: from.stemmed, pitch: from.pitch),
+        to: MixSide(timing: timing, vocals: voices[1], stems: to.stemmed),
+        style: style,
+        recent: recent,
+      );
+      chosen = (kind: planned.kind, bars: planned.bars);
+      plan = chosen;
+      why = planned.why;
+      final lengthNow = booth.barsLength(from, chosen.bars);
+      final bar = timed.bar;
+      final inRecord = bar == null ? lengthNow : bar * chosen.bars;
+      goesAt = planned.outAt != null
+          ? clearOfDrops(timed, planned.outAt!, length: inRecord)
+          : clearOfDrops(timed, outPoint(timed, length: inRecord), length: inRecord);
+      final inAt = planned.inAt ?? inPoint(timing, bars: chosen.bars, onTheDrop: onTheDrop);
+      if (!to.playing && (to.position - inAt).abs() > const Duration(milliseconds: 20)) {
+        await to.seek(inAt);
+      }
+    }
     // The incoming comes to the master's tempo, as far as the automix reaches; the
     // master's never moves. One that cannot be put in step plays at its own speed —
     // not at whatever pitch the deck was last left at.
@@ -516,13 +551,14 @@ class AutoMix extends ChangeNotifier {
     } else if (to.pitch != 1.0) {
       await to.setTempo(1.0);
     }
-    final go = goesAt;
     booth.note(BoothEventKind.next, 'Next: ${coming.displayTitle}', deck: to);
+    final go2 = goesAt;
     booth.note(
         BoothEventKind.plan,
         inStep
-            ? '${chosen.kind.name}, ${chosen.bars} bars, from ${go == null ? '…' : clock(go)} · cued at ${clock(at ?? Duration.zero)}'
-            : 'Too far apart to put in step: ${chosen.kind.name}',
+            ? '${chosen.kind.label}, ${chosen.bars} bars, from ${go2 == null ? '…' : clock(go2)}'
+                ' · cued at ${clock(to.position)}${planned == null ? '' : ' — ${planned.why}'}'
+            : 'Too far apart to put in step: ${chosen.kind.label}',
         deck: to);
     notifyListeners();
   }
@@ -598,6 +634,8 @@ class AutoMix extends ChangeNotifier {
               parts: inParts(from.track, booth.other(from).track),
               fromPitch: from.pitch);
       final was = booth.master;
+      recent.add(chosen.kind);
+      if (recent.length > 8) recent.removeAt(0);
       await booth.go(chosen.kind,
           bars: chosen.bars, startAt: ended ? null : startFor(from.timing, go, from.position));
       if (identical(booth.master, was)) {

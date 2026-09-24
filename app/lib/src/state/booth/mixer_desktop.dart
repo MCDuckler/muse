@@ -86,6 +86,82 @@ class DesktopMixer extends VolumeMixer {
   /// The chains tried, best first: the bands, then the stretcher.
   static const standing = ['$bands,rubberband', '$bands,scaletempo2'];
 
+  /// The same, for a stem deck: the six-channel stems file taken apart into its three
+  /// pairs — the drums, the bass and the rest, the voice — each through a level of
+  /// its own, mixed back together, and then the bands as on any deck. Each level is
+  /// an `af-command` like a band: turned while it plays, with nothing rebuilt.
+  static const stemBands = '@wetowl:lavfi=['
+      'channelsplit=channel_layout=6c[c0][c1][c2][c3][c4][c5];'
+      '[c0][c1]join=inputs=2:channel_layout=stereo,volume@d=1[d];'
+      '[c2][c3]join=inputs=2:channel_layout=stereo,volume@r=1[r];'
+      '[c4][c5]join=inputs=2:channel_layout=stereo,volume@v=1[v];'
+      '[d][r][v]amix=inputs=3:normalize=0,'
+      'lowshelf@low=f=250:g=0,'
+      'equalizer@mid=f=1000:width_type=o:width=2:g=0,'
+      'highshelf@high=f=4000:g=0,'
+      'highpass@hp=f=20:m=0,'
+      'lowpass@lp=f=15000:m=0'
+      ']';
+  static const stemStanding = ['$stemBands,rubberband', '$stemBands,scaletempo2'];
+
+  /// Which decks are set up for stems, by name.
+  final _stems = <String, bool>{};
+  final _levels = <String, StemLevels>{};
+
+  @override
+  bool get canStem => true;
+
+  /// Decks asked to get ready before their engine existed.
+  final _missed = <String>{};
+
+  @override
+  Future<bool> firstLoadMissed(Deck deck) async => _missed.remove(deck.name);
+
+  @override
+  Future<bool> beforeLoad(Deck deck, {required bool stems}) async {
+    final mpv = _native(deck);
+    if (mpv == null) {
+      _missed.add(deck.name);
+      return false;
+    }
+    // The record on the same clock as its analysis and its stems: mpv's own reading of
+    // an MP4's edit list skips the encoder's first 1024 samples twice, and every
+    // YouTube record played 23 ms ahead of the beats found in it — and of its stems,
+    // which ffmpeg made. (Measured: 0 samples apart with this, 1115 at 48 kHz without.)
+    try {
+      await mpv.setProperty('demuxer-lavf-o', 'advanced_editlist=0');
+      // Six channels into the chain, not the two the speakers take: left to itself the
+      // decoder folds a six-channel file to stereo before any filter sees it, and the
+      // stems arrive as one mix on the first pair and silence on the others.
+      await mpv.setProperty('ad-lavc-downmix', 'no');
+    } catch (_) {}
+    final was = _stems[deck.name] ?? false;
+    _stems[deck.name] = stems;
+    if (was != stems) _installed.remove(deck.name);
+    _levels[deck.name] = StemLevels.all;
+    if (!await _install(deck, mpv)) return false;
+    return stems;
+  }
+
+  @override
+  Future<void> setStems(Deck deck, StemLevels levels) async {
+    if (!(_stems[deck.name] ?? false)) return;
+    final was = _levels[deck.name] ?? StemLevels.all;
+    _levels[deck.name] = levels;
+    final mpv = _native(deck);
+    if (mpv == null) return;
+    for (final (target, now, before) in [
+      ('volume@d', levels.drums, was.drums),
+      ('volume@r', levels.rest, was.rest),
+      ('volume@v', levels.vocals, was.vocals),
+    ]) {
+      if ((now - before).abs() < 0.001) continue;
+      try {
+        await mpv.command(['af-command', 'wetowl', 'volume', now.toStringAsFixed(3), target]);
+      } catch (_) {}
+    }
+  }
+
   /// What to tell the standing chain for [eq] and [filter]: (filter, command, value).
   /// The passes are mixed in only while the knob is off centre.
   static List<(String, String, String)> commands({required EqSet eq, required double filter}) {
@@ -127,8 +203,9 @@ class DesktopMixer extends VolumeMixer {
   Future<bool> _install(Deck deck, NativePlayer mpv) async {
     final id = deck.player.platformId!;
     if (_installed[deck.name] == id) return true;
-    if (_whole.contains(id)) return false;
-    for (final chain in standing) {
+    final stems = _stems[deck.name] ?? false;
+    if (_whole.contains(id) && !stems) return false;
+    for (final chain in stems ? stemStanding : standing) {
       try {
         await mpv.setProperty('af', chain);
         final got = await mpv.getProperty('af');
@@ -142,7 +219,7 @@ class DesktopMixer extends VolumeMixer {
         debugPrint('mixer: ${chain.split(',').last} would not go on ($e)');
       }
     }
-    _whole.add(id);
+    if (!stems) _whole.add(id);
     return false;
   }
 

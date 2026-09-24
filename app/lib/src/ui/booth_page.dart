@@ -272,7 +272,7 @@ class BoothBar extends StatelessWidget {
         'mixing'
       else if (next != null)
         'then ${next.displayTitle}'
-            '${left == null ? '' : left.isNegative ? '' : ' · ${auto.plan?.kind.name ?? 'mix'} in ${left.inSeconds}s'}',
+            '${left == null ? '' : left.isNegative ? '' : ' · ${auto.plan?.kind.label ?? 'mix'} in ${left.inSeconds}s'}',
     ].join(' · ');
     return ListTile(
       dense: true,

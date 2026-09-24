@@ -65,8 +65,13 @@ class InSplit {
   final DateTime started = DateTime.now();
 }
 
-/// The parts, in the order the booth thinks of them. The same four the server keeps.
-const splitParts = ['instrumental', 'drums', 'music', 'vocals'];
+/// The parts, in the order the booth thinks of them. The same the server keeps —
+/// `stems` the three that add back up to the record in one six-channel file, which a
+/// stem deck plays (DesktopMixer).
+const splitParts = ['instrumental', 'drums', 'music', 'vocals', 'stems'];
+
+/// A part's file extension: the stems are Opus, the rest AAC.
+String partExt(String name) => name == 'stems' ? 'opus' : 'm4a';
 
 /// The version the parts are made at: the trained separator's (render_parts_io.dart).
 const splitVersion = 2;
@@ -114,7 +119,7 @@ class Splitter extends Told {
   Directory get partsFolder => Directory('${appFolder.path}${Platform.pathSeparator}stems');
 
   File partFile(int trackId, String name) => File(
-      '${partsFolder.path}${Platform.pathSeparator}$trackId-$name-v$splitVersion.m4a');
+      '${partsFolder.path}${Platform.pathSeparator}$trackId-$name-v$splitVersion.${partExt(name)}');
 
   void _say(String line) {
     final t = DateTime.now();
@@ -371,7 +376,7 @@ class Splitter extends Told {
       if (!await partsFolder.exists()) return;
       await for (final f in partsFolder.list()) {
         if (f is! File) continue;
-        final m = RegExp(r'^(\d+)-([a-z]+)-v(\d+)\.m4a$').firstMatch(f.uri.pathSegments.last);
+        final m = RegExp(r'^(\d+)-([a-z]+)-v(\d+)\.(m4a|opus)$').firstMatch(f.uri.pathSegments.last);
         if (m == null || int.parse(m.group(3)!) != splitVersion) continue;
         final id = int.parse(m.group(1)!);
         if (done.contains(id) || !splitParts.contains(m.group(2))) continue;

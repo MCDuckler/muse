@@ -324,7 +324,7 @@ class _Banner extends StatelessWidget {
               const SizedBox(width: 6),
               Text(m.to, style: Mag.numerals(18, color: Console.deck(m.to))),
               const SizedBox(width: 12),
-              Text(m.kind.name.toUpperCase(), style: Console.label(10, color: Console.ink)),
+              Text(m.kind.label.toUpperCase(), style: Console.label(10, color: Console.ink)),
               const SizedBox(width: 8),
               Text('${m.bars}', style: Mag.numerals(13, color: Console.quiet)),
             ],

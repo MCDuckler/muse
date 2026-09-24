@@ -199,6 +199,11 @@ class ApiClient {
     ];
   }
 
+  /// Where the voice is in a song and what it sings. See VocalMap.
+  Future<VocalMap> vocals(int trackId) async => VocalMap.fromJson(
+      await _decode(await net.get(_u('/tracks/$trackId/vocals'), headers: _headers))
+          as Map<String, dynamic>);
+
   /// Where a song's sound starts and ends, its tempo and its beats. See TrackTiming.
   Future<TrackTiming> timing(int trackId) async => TrackTiming.fromJson(
       await _decode(await net.get(_u('/tracks/$trackId/analysis'), headers: _headers))

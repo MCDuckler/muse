@@ -6,6 +6,7 @@ import 'package:just_audio_background/just_audio_background.dart';
 
 import '../../api/client.dart';
 import '../../api/models.dart';
+import 'mixer.dart' show StemLevels;
 import 'parts.dart';
 
 /// One of the two records on the deck.
@@ -79,6 +80,39 @@ class Deck extends ChangeNotifier {
   /// The parts are made by the server the first time anybody asks for them and kept
   /// after that; see the server's stems.py for what they are and what they are not.
   String? part;
+
+  /// The record is on as its stems — the six-channel file (see PartsStore): every
+  /// part is then just levels ([stemLevels]), turned with no gap, rather than another
+  /// file loaded in the record's place.
+  bool stemmed = false;
+
+  /// How loud each stem is, where [stemmed].
+  StemLevels stemLevels = StemLevels.all;
+
+  /// Whether the engine here can play stems at all, and the booth's hands on it: ready
+  /// it for the next record, turn the stems. Set by the booth (the mixer's).
+  bool canStem = false;
+  Future<bool> Function(Deck deck, {required bool stems})? readyEngine;
+  Future<void> Function(Deck deck, StemLevels levels)? stemEngine;
+  Future<bool> Function(Deck deck)? firstLoadMissed;
+
+  /// Where the stems of the record going on are, for [_load]: a file or the house.
+  String? _stemsFrom;
+
+  /// Turn the stems to [to] — over [over], a step every 20 ms, so a stem coming in or
+  /// going out is a move rather than a click.
+  Future<void> setStemLevels(StemLevels to, {Duration over = const Duration(milliseconds: 120)}) async {
+    if (!stemmed) return;
+    final from = stemLevels;
+    final steps = (over.inMilliseconds / 20).ceil().clamp(1, 200);
+    for (var i = 1; i <= steps; i++) {
+      final l = from.lerp(to, i / steps);
+      stemLevels = l;
+      await stemEngine?.call(this, l);
+      if (i < steps) await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    notifyListeners();
+  }
 
   /// A part has been asked for and is being made. Nothing changes on the deck while
   /// this is true — the record it is holding keeps playing — but the booth says so,
@@ -264,10 +298,27 @@ class Deck extends ChangeNotifier {
   Future<void> load(Track track,
       {TrackTiming? timing, Duration? at, String? part}) async {
     this.part = part;
+    // Its stems where the engine can play them and they are made — here, or at the
+    // house: then every part of it is only levels.
+    _stemsFrom = null;
+    final store = parts;
+    if (canStem && store != null) {
+      try {
+        final got = await store.want(track, 'stems').timeout(const Duration(seconds: 4));
+        if (got == Stem.ready) {
+          _stemsFrom = store.pathFor(track.id, 'stems') ?? api.stemUrl(track, 'stems');
+        }
+        debugPrint('deck $name: stems for ${track.id} — $got${_stemsFrom == null ? '' : ' from $_stemsFrom'}');
+      } catch (e) {
+        debugPrint('deck $name: could not ask for the stems of ${track.id}: $e');
+      }
+    }
     // A stream is signed and the signature ages out, so it is refreshed before a
     // load — but never at the price of the load itself: a deck that cannot reach the
     // server still plays what is kept on the device.
-    if (part != null || offlinePath?.call(track.id) == null) {
+    if (part != null ||
+        offlinePath?.call(track.id) == null ||
+        (_stemsFrom?.startsWith('http') ?? false)) {
       try {
         await api.ensureStreamKey().timeout(const Duration(seconds: 5));
       } catch (_) {
@@ -316,7 +367,21 @@ class Deck extends ChangeNotifier {
         Duration.zero;
     try {
       claiming?.call();
+      final stems = _stemsFrom != null;
+      stemmed = await readyEngine?.call(this, stems: stems) ?? false;
+      stemLevels = StemLevels.all;
       await _player.setAudioSource(_sourceFor(track), initialPosition: start);
+      // The engine only exists once something is on it: the first record goes on
+      // again, parked, with what could not be set before it (the stems, the clock).
+      if (await firstLoadMissed?.call(this) ?? false) {
+        stemmed = await readyEngine?.call(this, stems: stems) ?? false;
+        await _player.setAudioSource(_sourceFor(track), initialPosition: start);
+      }
+      if (!stemmed) _stemsFrom = null;
+      if (stemmed && part != null) {
+        stemLevels = StemLevels.of(part);
+        await stemEngine?.call(this, stemLevels);
+      }
       if (_player.speed != tempo) await _player.setSpeed(tempo);
     } catch (e) {
       trouble = '$e';
@@ -335,6 +400,12 @@ class Deck extends ChangeNotifier {
       artist: track.artistLine,
       duration: track.duration,
     );
+    final stems = stemmed ? _stemsFrom : null;
+    if (stems != null) {
+      return stems.startsWith('http')
+          ? AudioSource.uri(Uri.parse(stems), headers: kIsWeb ? null : api.streamHeaders, tag: tag)
+          : AudioSource.uri(Uri.file(stems), tag: tag);
+    }
     if (part == null) {
       if (local != null) return AudioSource.uri(Uri.file(local), tag: tag);
     } else {
@@ -366,6 +437,13 @@ class Deck extends ChangeNotifier {
   Future<bool> swapTo(String? part, {bool byHand = false}) async {
     final t = track;
     if (t == null || part == this.part) return true;
+    // A stem deck has every part already: it is only the levels, and no gap at all.
+    if (stemmed) {
+      this.part = part;
+      await setStemLevels(StemLevels.of(part));
+      notifyListeners();
+      return true;
+    }
     if (part != null) {
       makingPart = true;
       notifyListeners();
