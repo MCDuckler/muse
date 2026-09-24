@@ -30,7 +30,16 @@ enum MixStyle {
 }
 
 class AutoMix extends ChangeNotifier {
-  AutoMix(this.booth);
+  AutoMix(this.booth) {
+    // A record the pool has just finished taking apart: in parts from now on, and if
+    // it is the one coming next, planned again with that in hand.
+    _arrivals = booth.parts.arrivals.stream.listen((id) {
+      _inParts[id] = true;
+      if (running && next?.id == id && !booth.busy) unawaited(_prepareNext());
+    });
+  }
+
+  late final StreamSubscription<int> _arrivals;
 
   final Booth booth;
 
@@ -622,6 +631,7 @@ class AutoMix extends ChangeNotifier {
   @override
   void dispose() {
     _watch?.cancel();
+    _arrivals.cancel();
     super.dispose();
   }
 }

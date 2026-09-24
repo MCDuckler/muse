@@ -1,4 +1,5 @@
-// wetowl-fetch: this computer fetching music for the house, with no window.
+// wetowl-fetch: this computer working for the pool — fetching music and taking records
+// apart for the whole house — with no window.
 //
 // The app can do the fetching itself, but only while it is open, and a computer that
 // is on all day is not a computer with a music player open all day. This is the same
@@ -19,6 +20,8 @@ import 'dart:io';
 import 'package:muse/src/worker/downloader.dart';
 import 'package:muse/src/worker/helper_files.dart';
 import 'package:muse/src/worker/ingest_http.dart';
+import 'package:muse/src/worker/separation_kit.dart';
+import 'package:muse/src/worker/splitter.dart';
 import 'package:muse/src/worker/status.dart';
 import 'package:muse/src/worker/tools.dart';
 
@@ -45,20 +48,42 @@ Future<void> main(List<String> args) async {
     exit(0);
   }
 
+  late final Splitter splitter;
+  // What this computer says about itself with every request for work (pool.py).
+  Map<String, dynamic> said() => {
+        'fetch': config!.fetch,
+        'split': config!.split && splitter.state != SplitterState.noSeparator,
+        'gpu': splitter.gpu,
+        'cores': Platform.numberOfProcessors,
+        'platform': Platform.operatingSystem,
+        'background': true,
+        'slots': config!.slots,
+      };
   final downloader = Downloader(
-    server: HttpIngestServer(baseUrl: () => config!.server, token: () => config!.token),
+    server: HttpIngestServer(
+        baseUrl: () => config!.server, token: () => config!.token, pool: said),
     findTools: () => Tools.find(own: files.tools),
     maxSlots: config.slots,
+  );
+  separatorSays = (line) => stderr.writeln(line);
+  splitter = Splitter(
+    server: HttpSplitServer(baseUrl: () => config!.server, token: () => config!.token),
+    appFolder: files.dir,
+    findFfmpeg: () async => (await Tools.find(own: files.tools)).ffmpeg,
+    pool: said,
   );
 
   // Said at most once a second however fast things change, and at least every five
   // so that whoever reads it can tell a quiet downloader from a dead one.
   Timer? soon;
-  Future<void> say() => files.writeStatus(FetchStatus.of(downloader, pid: pid));
-  downloader.addListener(() => soon ??= Timer(const Duration(seconds: 1), () {
+  Future<void> say() =>
+      files.writeStatus(FetchStatus.of(downloader, pid: pid, splitter: splitter));
+  void changed() => soon ??= Timer(const Duration(seconds: 1), () {
         soon = null;
         say();
-      }));
+      });
+  downloader.addListener(changed);
+  splitter.addListener(changed);
   final heartbeat = Timer.periodic(const Duration(seconds: 5), (_) => say());
 
   var leaving = false;
@@ -68,6 +93,7 @@ Future<void> main(List<String> args) async {
     heartbeat.cancel();
     soon?.cancel();
     await downloader.stop();
+    await splitter.stop();
     await files.writeStatus(FetchStatus(
       state: DownloaderState.off,
       done: downloader.done,
@@ -85,7 +111,8 @@ Future<void> main(List<String> args) async {
     ProcessSignal.sigterm.watch().listen((_) => leave('stopped — asked to by the system'));
   }
 
-  await downloader.start();
+  if (config.fetch) await downloader.start();
+  if (config.split) await splitter.start();
   await say();
 
   // The file is the switch.
@@ -98,10 +125,17 @@ Future<void> main(List<String> args) async {
         ..slots = next.slots;
     }
     config = next;
+    // Either kind of work switched off or on in the app.
+    if (!next.fetch && downloader.running) await downloader.stop();
+    if (!next.split && splitter.running) await splitter.stop();
+    if (next.split && !splitter.running && splitter.state != SplitterState.noSeparator) {
+      await splitter.start();
+    }
     // Told no, or nothing to fetch with: say so and stay, so that the page can show
     // why — and try again when the file changes, which is what installing the missing
     // program and pressing "Look again" does.
-    if (!downloader.running && next.stamp != _tried) {
+    if (next.fetch && !downloader.running &&
+        (next.stamp != _tried || downloader.state == DownloaderState.off)) {
       _tried = next.stamp;
       await downloader.start();
     }

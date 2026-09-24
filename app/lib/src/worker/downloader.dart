@@ -8,17 +8,25 @@ import 'ytdlp.dart';
 
 /// One job, as the server hands it out.
 class IngestJob {
-  IngestJob({required this.id, required this.trackId, required this.videoId, this.priority = 100});
+  IngestJob(
+      {required this.id,
+      required this.trackId,
+      required this.videoId,
+      this.priority = 100,
+      this.own = false});
 
   final int id;
   final int trackId;
   final String videoId;
   final int priority;
 
+  /// Claimed for the person at this computer, rather than handed out by the pool.
+  final bool own;
+
   /// Somebody is waiting for this one now, as opposed to a backfill.
   bool get urgent => priority <= 90;
 
-  static IngestJob? fromJson(Map<String, dynamic> j) {
+  static IngestJob? fromJson(Map<String, dynamic> j, {bool own = false}) {
     final payload = (j['payload'] ?? const {}) as Map;
     final track = payload['track_id'], video = payload['video_id'];
     if (j['id'] is! int || track is! int || video is! String) return null;
@@ -26,7 +34,8 @@ class IngestJob {
         id: j['id'] as int,
         trackId: track,
         videoId: video,
-        priority: (j['priority'] ?? 100) as int);
+        priority: (j['priority'] ?? 100) as int,
+        own: own);
   }
 }
 
@@ -34,6 +43,10 @@ class IngestJob {
 /// pretend one in the tests.
 abstract class IngestServer {
   Future<List<IngestJob>> lease({required int limit, required int busy, bool urgentOnly, int wait});
+
+  /// The job for one song, taken now for the person at this computer — null when
+  /// there is nothing to take: it is ready, or another computer has it.
+  Future<IngestJob?> claim(int trackId);
   Future<void> progress(IngestJob job, String stage, {double? percent, String? speed});
   Future<void> complete(IngestJob job, File audio, Map<String, dynamic> meta);
   Future<void> fail(IngestJob job, String reason, {required bool retryable});
@@ -104,7 +117,17 @@ class Downloader extends Told {
     this.workDir,
     this.maxSlots = 3,
     this.cooldown = const Duration(minutes: 10),
+    this.keepDir,
+    this.onArrived,
   }) : runner = runner ?? ProcessRunner();
+
+  /// Where a song fetched for the person at this computer is kept, so it plays from
+  /// this disk the moment it is here — before it has even been handed in. Null: kept
+  /// nowhere, which is how the windowless helper fetches.
+  final Directory? keepDir;
+
+  /// Told when such a song is here, with where.
+  final void Function(int trackId, String path)? onArrived;
 
   final IngestServer server;
   final Future<Tools> Function() findTools;
@@ -280,6 +303,36 @@ class Downloader extends Told {
     }
   }
 
+  /// Fetch the song the person at this computer asked for, now: claimed from the pool
+  /// so nobody else fetches it too, ahead of whatever the pool has given this computer,
+  /// whether or not this computer fetches for the pool at all. Answers whether there was
+  /// anything to fetch — false when it is ready already, or another computer has it.
+  Future<bool> fetchNow(int trackId) async {
+    if (inFlight.values.any((f) => f.job.trackId == trackId)) return true;
+    tools ??= await findTools();
+    if (!tools!.ready) return false;
+    IngestJob? job;
+    try {
+      final got = await server.claim(trackId);
+      job = got == null
+          ? null
+          : IngestJob(
+              id: got.id,
+              trackId: got.trackId,
+              videoId: got.videoId,
+              priority: got.priority,
+              own: true);
+    } catch (e) {
+      _say('could not claim track $trackId: $e');
+      return false;
+    }
+    if (job == null) return false;
+    inFlight[job.id] = InFlight(job);
+    notifyListeners();
+    unawaited(_work(job));
+    return true;
+  }
+
   Future<void> _work(IngestJob job) async {
     try {
       await _handle(job);
@@ -289,7 +342,9 @@ class Downloader extends Told {
       await _quietly(() => server.fail(job, '$e', retryable: true));
     } finally {
       inFlight.remove(job.id);
-      if (_wanted) _set(inFlight.isEmpty ? DownloaderState.idle : DownloaderState.working);
+      if (_wanted) {
+        _set(inFlight.isEmpty ? DownloaderState.idle : DownloaderState.working);
+      }
       notifyListeners();
     }
   }
@@ -331,7 +386,8 @@ class Downloader extends Told {
           }
         },
       );
-      if (!_wanted) return;                 // stopped while it ran: already given back
+      // Stopped while it ran: already given back. Not the person's own, which is theirs.
+      if (!_wanted && !job.own) return;
 
       final files = [
         await for (final f in dir.list())
@@ -376,6 +432,19 @@ class Downloader extends Told {
             ['-v', 'error', '-y', '-i', audio.path, '-c:a', 'aac', '-b:a', '160k', to.path]);
         if (r.code != 0) throw StateError('ffmpeg could not convert it: ${r.err}');
         audio = to;
+      }
+
+      // Here for the person who asked, to play from this disk now — the house gets its
+      // copy next, and everybody else theirs from the house.
+      final keep = keepDir;
+      if (job.own && keep != null) {
+        try {
+          await keep.create(recursive: true);
+          final kept = await audio.copy('${keep.path}${Platform.pathSeparator}${job.trackId}.m4a');
+          onArrived?.call(job.trackId, kept.path);
+        } catch (e) {
+          _say('could not keep ${job.trackId} here: $e');
+        }
       }
 
       flight?.stage = 'measuring';

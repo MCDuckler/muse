@@ -47,6 +47,12 @@ class PretendServer implements IngestServer {
 
   @override
   Future<void> release(IngestJob job) async => released.add(job);
+
+  /// The songs a person at this computer asked for, handed out by name.
+  final claimable = <int, IngestJob>{};
+
+  @override
+  Future<IngestJob?> claim(int trackId) async => claimable.remove(trackId);
 }
 
 /// yt-dlp, ffprobe and ffmpeg, played by a function.
@@ -163,6 +169,31 @@ void main() {
       work = await Directory.systemTemp.createTemp('wetowl-test-');
     });
     tearDown(() => work.delete(recursive: true));
+
+    test('the song somebody here asked for is fetched now, kept here and handed in',
+        () async {
+      final mine = job(9, "ownownown42");
+      server.claimable[mine.trackId] = mine;
+      final programs = PretendPrograms((id) =>
+          (lines: const [], code: 0, ext: 'm4a', takes: const Duration(milliseconds: 10)));
+      final keep = Directory('${work.path}/fetched');
+      final arrived = <int, String>{};
+      // Never started: the pool's switch can be off, and this still works.
+      final d = Downloader(
+          server: server,
+          findTools: allThere,
+          runner: programs,
+          workDir: work,
+          keepDir: keep,
+          onArrived: (id, path) => arrived[id] = path);
+      expect(await d.fetchNow(10), isFalse, reason: 'nothing to claim for that one');
+      final trackId = server.claimable.values.single.trackId;
+      expect(await d.fetchNow(trackId), isTrue);
+      await until(() => server.completed.isNotEmpty);
+      expect(server.completed.single.$1.trackId, trackId, reason: 'handed in to the house');
+      expect(arrived.keys, [trackId], reason: 'and here to play before that');
+      expect(File(arrived[trackId]!).existsSync(), isTrue);
+    });
 
     test('a song is fetched, looked at, handed over, and nothing is left here', () async {
       server.waiting.add(job(1, '4D7u5KF7SP8'));

@@ -62,6 +62,12 @@ class PartsStore {
   /// [byHand] is somebody pressing a pad for it, which counts for more than the
   /// automix asking ahead: it puts a waiting record first, and tries again one that
   /// failed or was cancelled.
+  ///
+  /// Where from, in order: this computer's disk; the house, which keeps every record
+  /// any computer in the pool has taken apart; this computer, when it is the best one
+  /// about to do it (it has a graphics card) or the pool has had long enough without
+  /// anybody taking it; and otherwise the pool — the record is queued there by asking,
+  /// and the parts come from the house when a computer has made them.
   Future<Stem> want(Track t, String name, {bool byHand = false}) async {
     if (_here.containsKey('${t.id}-$name')) return Stem.ready;
     if ((t.durationMs ?? 0) > upToSeconds * 1000) return Stem.never;
@@ -75,21 +81,137 @@ class PartsStore {
       }
       // Taken off the list by somebody: the automix does not put it back.
       if (cancelledHere(t.id)) return Stem.never;
+      final ready = await partReady(t.id, name);
+      if (ready != null) {
+        _here['${t.id}-$name'] = ready;
+        return Stem.ready;
+      }
+      if (makingHere(t.id, name)) {
+        if (byHand) promoteHere(t.id);
+        return Stem.beingMade;
+      }
+    }
+    // The house: kept there already, or — asking is also queueing — not yet.
+    Stem house;
+    try {
+      house = await api.stemState(t, name);
+    } catch (_) {
+      house = Stem.beingMade;
+    }
+    if (house == Stem.ready) {
+      _arrived(t.id);
+      return Stem.ready;
+    }
+    if (house == Stem.never || !canSeparateHere) return house;
+    if (await _takeItHere(t, name)) {
       final made = await _makeHere(t, name);
       if (made != null) {
         if (made == Stem.beingMade && byHand) promoteHere(t.id);
+        _pooled.remove(t.id);
         return made;
       }
-      if (cancelledHere(t.id)) return Stem.never;
-      // Falling through: this computer could not, so ask the house.
     }
-    // The house makes three parts, and the voice on its own is not one of them.
-    if (!serverParts.contains(name)) return Stem.never;
+    _toThePool(t);
+    return Stem.beingMade;
+  }
+
+  /// Whether this computer should take [t] apart itself: it can at all, and either it
+  /// is the best computer about — it has a graphics card — or the record has waited in
+  /// the pool long enough that nobody better is coming.
+  Future<bool> _takeItHere(Track t, String name) async {
+    if (!await canMakeHere(t.id, name)) return false;
+    if (bestHere?.call() ?? false) return true;
+    final since = _pooled[t.id];
+    if (since == null || DateTime.now().difference(since) < _poolPatience) return false;
     try {
-      return await api.stemState(t, name);
+      final job = (await api.poolSplitState(t.id))['job'] as Map?;
+      return job == null || job['state'] != 'leased';
     } catch (_) {
-      return Stem.beingMade;
+      return false;
     }
+  }
+
+  /// How long a record waits in the pool for a better computer before this one takes
+  /// it on. A little longer than the house makes a computer without a card wait
+  /// (jobs.SPLIT_FOR_THE_CARD_SECONDS), so any other computer's chance comes first.
+  static const _poolPatience = Duration(seconds: 75);
+
+  /// Whether this computer is the one to take records apart: it has a graphics card.
+  /// Set by the app, which knows (PoolHere).
+  static bool Function()? bestHere;
+
+  /// Records asked of the pool, and since when.
+  final _pooled = <int, DateTime>{};
+  final _pooledTracks = <int, Track>{};
+  Timer? _watching;
+
+  /// Told when a record's parts are ready, here or at the house: the automix plans
+  /// around records that are in parts.
+  final arrivals = StreamController<int>.broadcast();
+
+  void _toThePool(Track t) {
+    _pooled.putIfAbsent(t.id, DateTime.now);
+    _pooledTracks[t.id] = t;
+    final j = partsJobs.of(t.id);
+    if (j == null || j.done || j.stage != PartsStage.pooled) {
+      partsJobs.add(t.id, track: t, parts: trainedParts, stage: PartsStage.pooled);
+    }
+    _watching ??= Timer.periodic(const Duration(seconds: 10), (_) => _lookAtThePool());
+  }
+
+  /// Every little while: which pooled records are done, which a computer has taken,
+  /// and which have waited so long this computer should do them.
+  Future<void> _lookAtThePool() async {
+    if (_pooled.isEmpty) {
+      _watching?.cancel();
+      _watching = null;
+      return;
+    }
+    for (final id in _pooled.keys.toList()) {
+      try {
+        final st = await api.poolSplitState(id);
+        final parts = [for (final p in (st['parts'] as List? ?? const [])) '$p'];
+        if (trainedParts.every(parts.contains)) {
+          _arrived(id);
+          continue;
+        }
+        final job = st['job'] as Map?;
+        final j = partsJobs.of(id);
+        if (j != null && j.stage == PartsStage.pooled) {
+          j.device = job?['state'] == 'leased' ? '${job?['device'] ?? 'another computer'}' : null;
+          partsJobs.progress(id, ((job?['progress'] as Map?)?['percent'] as num?)?.toDouble());
+        }
+        final t = _pooledTracks[id];
+        if (t != null && await _takeItHere(t, 'drums')) {
+          _pooled.remove(id);
+          unawaited(want(t, 'drums'));
+        }
+      } catch (_) {}
+    }
+  }
+
+  /// A record's parts are at the house: said by the event stream, or found by asking.
+  void partsArrived(int trackId) {
+    if (_pooled.containsKey(trackId) || partsJobs.of(trackId)?.stage == PartsStage.pooled) {
+      _arrived(trackId);
+    }
+  }
+
+  /// How far a computer in the pool has got with one of ours.
+  void poolProgress(int trackId, double? percent) {
+    final j = partsJobs.of(trackId);
+    if (j != null && j.stage == PartsStage.pooled) partsJobs.progress(trackId, percent);
+  }
+
+  void _arrived(int trackId) {
+    final was = _pooled.remove(trackId) != null;
+    _pooledTracks.remove(trackId);
+    final j = partsJobs.of(trackId);
+    if (j != null && j.stage == PartsStage.pooled) {
+      j.device = null;
+      partsJobs.stage(trackId, PartsStage.ready);
+    }
+    if (was || j != null) arrivals.add(trackId);
   }
 
   /// Try a failed or cancelled job again, as the list's Retry button does.

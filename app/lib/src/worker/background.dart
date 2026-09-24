@@ -45,13 +45,20 @@ class BackgroundFetcher {
   /// Tell it what to do and see that it is running. Safe to call when it already is:
   /// the file is rewritten, which it reads, and a second copy of it finds the lock taken
   /// and leaves.
-  Future<void> start({required String server, required String token, required int slots}) async {
+  Future<void> start(
+      {required String server,
+      required String token,
+      required int slots,
+      bool fetch = true,
+      bool split = true}) async {
     await files.writeConfig(HelperConfig(
       on: true,
       server: server,
       token: token,
       slots: slots,
       stamp: DateTime.now().millisecondsSinceEpoch,
+      fetch: fetch,
+      split: split,
     ));
     if (await alive) return;
     // Detached: not the app's child, so it outlives it, and on Windows with no console
@@ -76,7 +83,13 @@ class BackgroundFetcher {
     final now = await files.readConfig();
     if (now == null || !now.on) return;
     await files.writeConfig(HelperConfig(
-        on: true, server: now.server, token: now.token, slots: slots, stamp: now.stamp));
+        on: true,
+        server: now.server,
+        token: now.token,
+        slots: slots,
+        stamp: now.stamp,
+        fetch: now.fetch,
+        split: now.split));
   }
 
   // ------------------------------------------------------------ starting at login

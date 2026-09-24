@@ -265,11 +265,11 @@ class _SettingsPageState extends State<SettingsPage> {
           if (canFetchMusicHere)
             ListTile(
               leading: const Icon(Icons.download_for_offline_outlined),
-              title: const Text('This computer'),
-              subtitle: const Text('Fetch music for the house while WetOwl is open'),
+              title: const Text('This computer in the pool'),
+              subtitle: const Text('Fetching and taking records apart for everybody'),
               trailing: const Icon(Icons.chevron_right),
               onTap: () => Navigator.of(context)
-                  .push(MaterialPageRoute(builder: (_) => thisComputerPage())),
+                  .push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
             ),
           ListTile(
             leading: const Icon(Icons.hub_outlined),
@@ -393,7 +393,7 @@ class _StoragePage extends StatelessWidget {
           if (ArtCache.supported) const _ArtCacheRow(),
           ListTile(
             leading: const Icon(Icons.downloading),
-            title: const Text('Download queue'),
+            title: const Text('Pool'),
             subtitle: Text(app.downloadsPending == 0
                 ? 'Nothing waiting'
                 : '${app.downloadsPending} waiting'),

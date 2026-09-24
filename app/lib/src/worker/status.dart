@@ -1,4 +1,32 @@
 import 'downloader.dart';
+import 'splitter.dart';
+
+/// What the splitter is doing, the same way (splitter.dart).
+typedef SplitStatus = ({
+  SplitterState state,
+  String? problem,
+  bool gpu,
+  int? trackId,
+  String? stage,
+  double? percent,
+  String? device,
+  int done,
+  int failed,
+  List<String> log,
+});
+
+SplitStatus splitStatusOf(Splitter s) => (
+      state: s.state,
+      problem: s.problem,
+      gpu: s.gpu,
+      trackId: s.now?.job.trackId,
+      stage: s.now?.stage,
+      percent: s.now?.percent,
+      device: s.now?.device,
+      done: s.done,
+      failed: s.failed,
+      log: s.log.length > 40 ? s.log.sublist(s.log.length - 40) : List.of(s.log),
+    );
 
 /// What the downloader is doing, as something that can be written down.
 ///
@@ -19,7 +47,11 @@ class FetchStatus {
     this.log = const [],
     this.pid,
     this.at,
+    this.split,
   });
+
+  /// The splitter's side, where this program takes records apart too.
+  final SplitStatus? split;
 
   final DownloaderState state;
   final String? problem;
@@ -46,7 +78,8 @@ class FetchStatus {
   bool fresh({Duration within = const Duration(seconds: 20), DateTime? now}) =>
       at != null && (now ?? DateTime.now()).difference(at!) < within;
 
-  factory FetchStatus.of(Downloader d, {int? pid}) => FetchStatus(
+  factory FetchStatus.of(Downloader d, {int? pid, Splitter? splitter}) => FetchStatus(
+        split: splitter == null ? null : splitStatusOf(splitter),
         state: d.state,
         problem: d.problem,
         missing: d.state == DownloaderState.noTools ? (d.tools?.missing ?? const []) : const [],
@@ -78,6 +111,12 @@ class FetchStatus {
         'log': log,
         'pid': pid,
         'at': at?.toUtc().toIso8601String(),
+        if (split case final sp?)
+          'split': {
+            'state': sp.state.name, 'problem': sp.problem, 'gpu': sp.gpu,
+            'track_id': sp.trackId, 'stage': sp.stage, 'percent': sp.percent,
+            'device': sp.device, 'done': sp.done, 'failed': sp.failed, 'log': sp.log,
+          },
       };
 
   /// Null for anything that is not a status: a file half written, or somebody else's.
@@ -107,6 +146,25 @@ class FetchStatus {
       log: [for (final l in (j['log'] as List?) ?? const []) '$l'],
       pid: (j['pid'] as num?)?.toInt(),
       at: when(j['at']),
+      split: _splitFrom(j['split']),
+    );
+  }
+
+  static SplitStatus? _splitFrom(Object? j) {
+    if (j is! Map) return null;
+    final state = SplitterState.values.where((s) => s.name == j['state']).firstOrNull;
+    if (state == null) return null;
+    return (
+      state: state,
+      problem: j['problem'] as String?,
+      gpu: j['gpu'] == true,
+      trackId: (j['track_id'] as num?)?.toInt(),
+      stage: j['stage'] as String?,
+      percent: (j['percent'] as num?)?.toDouble(),
+      device: j['device'] as String?,
+      done: (j['done'] as num?)?.toInt() ?? 0,
+      failed: (j['failed'] as num?)?.toInt() ?? 0,
+      log: [for (final l in (j['log'] as List?) ?? const []) '$l'],
     );
   }
 }

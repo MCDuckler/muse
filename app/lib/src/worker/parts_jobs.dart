@@ -23,6 +23,10 @@ enum PartsStage {
   /// Being taken apart.
   separating,
 
+  /// Asked of the pool: waiting for a computer with a graphics card, or being taken
+  /// apart by one ([PartsJob.device] says which). The parts come from the house.
+  pooled,
+
   ready,
   failed,
   cancelled,
@@ -57,11 +61,17 @@ class PartsJob {
   /// Made by the trained separator, rather than the old arithmetic.
   bool trained = true;
 
+  /// The computer in the pool taking it apart, when that is not this one.
+  String? device;
+
   String get title => track?.displayTitle ?? 'Track $trackId';
   String get artist => track?.artistLine ?? '';
 
   bool get active =>
-      stage == PartsStage.fetching || stage == PartsStage.gettingSeparator || stage == PartsStage.separating;
+      stage == PartsStage.fetching ||
+      stage == PartsStage.gettingSeparator ||
+      stage == PartsStage.separating ||
+      stage == PartsStage.pooled;
   bool get done => stage == PartsStage.ready || stage == PartsStage.failed || stage == PartsStage.cancelled;
 
   /// How long the stage it is at has left, from how fast it has gone so far. Null
@@ -247,6 +257,11 @@ String stageLine(PartsJob j) {
       return p == null
           ? 'Taking apart'
           : 'Taking apart · ${(p * 100).floor()}%${left == null ? '' : ' · ${clock(left)} left'}';
+    case PartsStage.pooled:
+      final p = j.progress;
+      return j.device == null
+          ? 'In the pool · waiting for a computer to take it apart'
+          : 'Being taken apart on ${j.device}${p == null ? '' : ' · ${(p * 100).floor()}%'}';
     case PartsStage.ready:
       final took = j.took;
       final at = j.finished!;

@@ -11,6 +11,8 @@ class HelperConfig {
     required this.token,
     this.slots = 3,
     this.stamp = 0,
+    this.fetch = true,
+    this.split = true,
   });
 
   final bool on;
@@ -18,12 +20,17 @@ class HelperConfig {
   final String token;
   final int slots;
 
+  /// Which of the pool's work it does: fetching songs, taking records apart.
+  final bool fetch;
+  final bool split;
+
   /// Changed whenever the app wants another go made of it — "Look again", after a
   /// missing program has been installed.
   final int stamp;
 
   Map<String, dynamic> toJson() =>
-      {'on': on, 'server': server, 'token': token, 'slots': slots, 'stamp': stamp};
+      {'on': on, 'server': server, 'token': token, 'slots': slots, 'stamp': stamp,
+        'fetch': fetch, 'split': split};
 
   static HelperConfig? fromJson(Object? j) {
     if (j is! Map) return null;
@@ -35,6 +42,9 @@ class HelperConfig {
       token: token,
       slots: ((j['slots'] as num?)?.toInt() ?? 3).clamp(1, 6).toInt(),
       stamp: (j['stamp'] as num?)?.toInt() ?? 0,
+      // A file from before the pool fetched and did nothing else.
+      fetch: j['fetch'] != false,
+      split: j['split'] == true,
     );
   }
 }

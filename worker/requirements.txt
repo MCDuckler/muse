@@ -1,3 +1,0 @@
-# yt-dlp is deliberately UNPINNED: YouTube breaks it, upstream fixes it, we rebuild weekly.
-yt-dlp
-httpx

@@ -17,6 +17,7 @@ import 'package:muse/src/api/connection.dart';
 import 'package:muse/src/api/models.dart';
 import 'package:muse/src/state/booth/booth.dart';
 import 'package:muse/src/state/booth/parts.dart';
+import 'package:muse/src/worker/parts_jobs.dart';
 import 'package:muse/src/worker/render_parts.dart';
 
 import 'fake_audio.dart';
@@ -39,6 +40,8 @@ void main() {
   late List<String> asked;
 
   setUp(() {
+    // A desk with a graphics card: it takes its own records apart (PartsStore).
+    PartsStore.bestHere = () => true;
     forgetHere();
     dir = Directory.systemTemp.createTempSync('muse-parts-');
     partsDirForTesting = dir.path;
@@ -55,6 +58,7 @@ void main() {
   });
 
   tearDown(() {
+    PartsStore.bestHere = null;
     debugDefaultTargetPlatformOverride = null;
     renderer = defaultRenderer;
     useThisClientInstead(http.Client());
@@ -101,8 +105,24 @@ void main() {
     expect(await parts.want(song(1), 'music'), Stem.ready);
     expect(made.length, 1, reason: 'one pass, both halves');
 
-    expect(asked.any((p) => p.contains('/stem/')), isFalse,
-        reason: 'the server was never troubled with any of it');
+    expect(asked.where((p) => p.contains('/stem/')).length, 1,
+        reason: 'the house was asked once whether it had them, and did not');
+  });
+
+  test('a desk without a graphics card leaves it to the pool', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    PartsStore.bestHere = () => false;
+    final kept = File('${dir.path}/song.m4a')..writeAsBytesSync([0]);
+    final parts = PartsStore(api, offlinePath: (id) => kept.path);
+    var made = 0;
+    renderer = (audio, name, into) async => made++;
+    expect(await parts.want(song(1), 'drums'), Stem.beingMade);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(made, 0, reason: 'a computer with a card is asked first');
+    expect(partsJobs.of(1)?.stage, PartsStage.pooled);
+    // Handed in by another computer: ready, from the house.
+    parts.partsArrived(1);
+    expect(partsJobs.of(1)?.stage, PartsStage.ready);
   });
 
   test('a desk that cannot do it after all falls back to the house', () async {

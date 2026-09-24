@@ -30,6 +30,8 @@ dependencies:
   # system paints the strips it draws around an installed app.
   web: ^1.1.0
   path_provider: ^2.1.6
+  # Annotations only, in the code the windowless helpers share with the app.
+  meta: any
   just_audio_media_kit: ^2.1.0
   # Named directly for the booth, which sets mpv's own audio filters on a deck.
   media_kit: ^1.2.0

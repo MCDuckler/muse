@@ -1371,13 +1371,19 @@ class PlayerService {
       }
     }
 
-    final pending = run.where((t) => !t.isReady).map((t) => t.id).toList();
+    final pending = run
+        .where((t) => !t.isReady && offlinePath?.call(t.id) == null)
+        .map((t) => t.id)
+        .toList();
     if (pending.isNotEmpty) {
       try {
         await api.promoteDownloads(pending);
       } catch (_) {
         // Best effort: it will download in its own time either way.
       }
+      // On a desk, fetched here and now: the song is on this disk the moment it
+      // arrives, rather than after the house has it and sent it back.
+      unawaited(wantFetchedHere?.call(pending));
     }
 
     // The songs after this one, into the HTTP cache, so they play even if the
@@ -1404,6 +1410,17 @@ class PlayerService {
   /// Where a track is kept on this device, if it is. Set by the app when the offline
   /// store is ready; null everywhere that has no filesystem.
   String? Function(int trackId)? offlinePath;
+
+  /// Songs coming up that the house does not have yet, for this computer to fetch
+  /// itself (PoolHere.wantHere). Null where it cannot.
+  Future<void> Function(List<int> trackIds)? wantFetchedHere;
+
+  /// A song this device fetched for itself has arrived: if it was what the player was
+  /// waiting on, it plays now, from the disk, before the house has it.
+  Future<void> localArrived(int trackId) async {
+    if (_waitingForTrack != trackId) return;
+    await _resumeIfPossible();
+  }
 
   /// A signed key for the stream, unless the song is on the device.
   ///
@@ -1660,7 +1677,7 @@ class PlayerService {
     _pendingStart = startAt ?? Duration.zero;
     _heardUpTo = _pendingStart;
     unawaited(_lookAhead());
-    if (!track.isReady) {
+    if (!track.isReady && offlinePath?.call(track.id) == null) {
       // Hold here rather than skipping past what the user picked, but remember it so
       // the track_ready event can start it.
       _waitingForTrack = track.id;
@@ -1872,7 +1889,8 @@ class PlayerService {
       _waitingForTrack = null;
       return;
     }
-    if (!_items[_order[waitingPos]].isReady) return;
+    final waiting = _items[_order[waitingPos]];
+    if (!waiting.isReady && offlinePath?.call(waiting.id) == null) return;
     _waitingForTrack = null;
     await _playOrderPos(waitingPos);
   }

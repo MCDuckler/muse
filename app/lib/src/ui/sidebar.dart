@@ -170,22 +170,26 @@ class _LibrarySidebarState extends State<LibrarySidebar> {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             child: Row(
               children: [
-                // Downloads, and the booth's records being taken apart on this
-                // computer: both are on the downloads page.
+                // The pool: downloads, and records being taken apart — this
+                // computer's and everybody's.
                 ListenableBuilder(
                   listenable: partsJobs,
                   builder: (context, _) {
                     final splitting =
                         partsJobs.running.length + partsJobs.waiting.length;
                     final all = pending + splitting;
-                    if (all == 0) return const SizedBox.shrink();
+                    // Always there: the pool is where this computer's part in the
+                    // house's fetching and splitting is watched and switched.
                     return IconButton(
-                      icon: Badge(label: Text('$all'), child: const Icon(Icons.downloading)),
-                      tooltip: splitting == 0
-                          ? 'Downloads'
-                          : pending == 0
-                              ? 'Taking apart $splitting'
-                              : 'Downloads · taking apart $splitting',
+                      icon: Badge(
+                          isLabelVisible: all > 0,
+                          label: Text('$all'),
+                          child: const Icon(Icons.hub_outlined)),
+                      tooltip: all == 0
+                          ? 'Pool'
+                          : splitting == 0
+                              ? 'Pool · $pending to fetch'
+                              : 'Pool · $pending to fetch · taking apart $splitting',
                       onPressed: () =>
                           openInTab(app.homeTab, (_) => const DownloadsPage()),
                     );

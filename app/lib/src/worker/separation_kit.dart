@@ -14,8 +14,12 @@ import 'dart:ffi' show Abi;
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:meta/meta.dart';
+
+/// Where the separator's own asides go: debugPrint in the app, the helper's log in
+/// the windowless program. Nothing here may import Flutter — the windowless helper
+/// (bin/wetowl_fetch.dart) takes records apart too.
+void Function(String line) separatorSays = print;
 
 /// One file the separator needs that does not come in the box.
 @immutable
@@ -92,19 +96,10 @@ Future<String?> separatorProgram() async {
   return await f.exists() ? f.path : null;
 }
 
-Directory? _kitDir;
-
-@visibleForTesting
-set kitDirForTesting(String? path) => _kitDir = path == null ? null : Directory(path);
-
-/// Where the fetched files are kept: beside the app's other workings.
-Future<Directory> kitDir() async {
-  if (_kitDir != null) return _kitDir!;
-  final base = await getApplicationSupportDirectory();
-  final d = Directory('${base.path}${Platform.pathSeparator}separation');
-  await d.create(recursive: true);
-  return d;
-}
+/// Where the fetched files are kept: `separation` in the app's own folder — which
+/// the app and the windowless helper share.
+Directory kitDirIn(Directory appFolder) =>
+    Directory('${appFolder.path}${Platform.pathSeparator}separation');
 
 /// The separator, fetching the network and the runtime from [house] if they are not
 /// here yet. Null where there is no separator for this computer at all — no program
@@ -116,13 +111,15 @@ Future<Directory> kitDir() async {
 /// computer ([cudaHere]) and [gpu] is not turned off — fetching ONNX Runtime's CUDA
 /// build for it the first time. Where that fetch fails, the processor, as before.
 Future<Separator?> readySeparator(String house,
-    {Directory? into,
+    {required Directory into,
     bool gpu = true,
+    String? program,
     void Function(KitFile f, int got, int? total)? fetching}) async {
-  final program = await separatorProgram();
+  program ??= await separatorProgram();
   final runtime = runtimeFile;
   if (program == null || runtime == null) return null;
-  final dir = into ?? await kitDir();
+  final dir = into;
+  await dir.create(recursive: true);
   final model = await _have(modelFile, dir, house, fetching);
   final cuda = cudaFiles;
   if (gpu && cuda != null && await cudaHere(program)) {
@@ -134,7 +131,7 @@ Future<Separator?> readySeparator(String house,
       }
       return (program: program, runtime: lib!, model: model, gpu: true);
     } catch (e) {
-      debugPrint('separator: no CUDA runtime this time, so the processor: $e');
+      separatorSays('separator: no CUDA runtime this time, so the processor: $e');
     }
   }
   final lib = await _have(runtime, dir, house, fetching);
@@ -155,10 +152,10 @@ Future<bool> cudaHere(String program) => _cudaHere ??= () async {
         final r = await Process.run(program, ['--check-cuda'], environment: _environment)
             .timeout(const Duration(seconds: 20));
         final said = '${r.stdout}'.trim();
-        debugPrint('separator: $said');
+        separatorSays('separator: $said');
         return r.exitCode == 0 && said == 'cuda ok';
       } catch (e) {
-        debugPrint('separator: could not ask about the graphics card: $e');
+        separatorSays('separator: could not ask about the graphics card: $e');
         return false;
       }
     }();
@@ -170,10 +167,10 @@ void forgetCudaForTesting() => _cudaHere = null;
 
 /// Whether the separator's files are both here already, so a split starts straight
 /// away rather than with a fetch.
-Future<bool> separatorFilesHere({Directory? into}) async {
+Future<bool> separatorFilesHere({required Directory into}) async {
   final runtime = runtimeFile;
   if (runtime == null) return false;
-  final dir = into ?? await kitDir();
+  final dir = into;
   for (final f in [modelFile, runtime]) {
     final file = File('${dir.path}${Platform.pathSeparator}${f.name}');
     if (!await file.exists() || await file.length() != f.bytes) return false;
@@ -367,3 +364,36 @@ final Map<String, String> _environment = () {
   }
   return const <String, String>{};
 }();
+
+/// One separator at a time on a computer, whoever starts it: the app's own splits, the
+/// pool's, and the windowless helper's. Each wants every core (or the whole card), and
+/// two at once is each at half speed and twice the memory.
+///
+/// A file lock in the app's own folder for the other program, and a chain here for
+/// this one — a file lock is the process's, and would let two in from the same app.
+Future<T> withSeparatorLock<T>(Directory appFolder, Future<T> Function() work) {
+  final before = _separatorTurn;
+  final mine = Completer<void>();
+  _separatorTurn = mine.future;
+  return () async {
+    try {
+      await before;
+      await appFolder.create(recursive: true);
+      final f = await File('${appFolder.path}${Platform.pathSeparator}separating.lock')
+          .open(mode: FileMode.append);
+      try {
+        await f.lock(FileLock.blockingExclusive);
+        return await work();
+      } finally {
+        try {
+          await f.unlock();
+        } catch (_) {}
+        await f.close();
+      }
+    } finally {
+      mine.complete();
+    }
+  }();
+}
+
+Future<void> _separatorTurn = Future.value();

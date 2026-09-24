@@ -16,14 +16,18 @@ yt-dlp binary, same video, same minute:
 | OVH box, IPv6 | `HTTP 429` → `This video is not available` |
 | OVH box, IPv4 | `Sign in to confirm you're not a bot` |
 
-So **the server never downloads.** A worker on a residential connection leases jobs over an
-outbound HTTPS call and uploads the finished audio back. Details in `worker/NOTES.md`.
+So **the server never downloads from YouTube.** Every desktop app is a worker instead —
+the pool (`server/muse/pool.py`, `app/lib/src/worker/`): it fetches the songs its own person
+asks for on the spot (played from its own disk the moment they arrive, then handed to the
+server), fetches for everybody else while it is idle, and takes records apart into parts
+with the trained separator — a computer with a graphics card first — handing those in too,
+so a phone or a weak laptop never has to. The measurements behind this are in
+`docs/youtube-ingest-notes.md`.
 
 ## Layout
 
 ```
 server/   FastAPI + Postgres. Catalog, auth, job queue, blob store, streaming.
-worker/   yt-dlp + ffmpeg. Runs where the IP is residential. Outbound only.
 deploy/   compose + Caddyfile for the OVH box (api + db + caddy; never the worker).
 app/      Flutter client (phase 3, not started).
 ```
@@ -35,7 +39,6 @@ Postgres 17 runs rootless out of `~/.local/pgroot` — no docker, no sudo:
 ```bash
 make db-start      # portable Postgres on :5433
 make api           # http://127.0.0.1:8770
-make worker        # in another shell; picks the secret out of server/muse.toml
 make test          # 17 tests against a throwaway muse_test database
 ```
 

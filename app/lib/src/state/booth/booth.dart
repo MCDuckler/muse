@@ -233,6 +233,8 @@ class Booth extends ChangeNotifier {
         // it is not a second start.
         case PartsStage.separating when was != PartsStage.gettingSeparator:
           note(BoothEventKind.parts, 'Taking apart: ${j.title}', deck: deck);
+        case PartsStage.pooled when was != PartsStage.pooled:
+          note(BoothEventKind.parts, 'Asked the pool to take apart: ${j.title}', deck: deck);
         case PartsStage.ready:
           note(BoothEventKind.parts, 'Parts ready: ${j.title}', deck: deck);
         case PartsStage.failed:

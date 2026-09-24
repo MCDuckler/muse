@@ -9,6 +9,7 @@ import '../api/models.dart';
 import 'parts_jobs.dart';
 import 'separate.dart';
 import 'separation_kit.dart';
+import 'splitter.dart';
 import 'tools.dart';
 
 /// Taking records apart on this computer, for this computer's booth.
@@ -60,6 +61,26 @@ bool get canSeparateHere =>
 
 /// How a record is taken apart here. Swapped out in the tests, which have no ffmpeg
 /// and no wish to wait five seconds for arithmetic that is checked elsewhere.
+/// The pool, as a split made here for this computer's own booth sees it: claimed from
+/// the queue before it starts, so no other computer takes the same record apart, and
+/// the parts handed in after, so no other computer ever has to. Null in the tests and
+/// wherever there is no server to share with.
+SplitServer? splitPool;
+
+/// The app's own folder: the separator's files and the lock live there.
+Future<Directory> appFolder() async => _appFolderForTesting ?? await getApplicationSupportDirectory();
+Directory? _appFolderForTesting;
+
+/// Where the separator's own files are kept.
+Future<Directory> kitDir() async => _kitForTesting ?? kitDirIn(await appFolder());
+Directory? _kitForTesting;
+
+@visibleForTesting
+set kitDirForTesting(String? path) {
+  _kitForTesting = path == null ? null : Directory(path);
+  _appFolderForTesting = path == null ? null : Directory(path).parent;
+}
+
 @visibleForTesting
 typedef Renderer = Future<void> Function(
     String audio, String name, Map<String, String> into);
@@ -414,7 +435,8 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
       // The first time, the separator's own files come first: a stage of its own, since
       // it is eighty megabytes nobody asked for by name.
       var fetching = false;
-      s = await _unlessCancelled(readySeparator(house, gpu: !_gpuOff, fetching: (f, got, total) {
+      s = await _unlessCancelled(readySeparator(house,
+          into: await kitDir(), gpu: !_gpuOff, fetching: (f, got, total) {
         if (trackId == null || stopped()) return;
         if (!fetching) {
           fetching = true;
@@ -435,10 +457,22 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
     }
     // Twice at most: on the graphics card, and — where that is what failed — once
     // more on the processor, which is how it ran before there was a card to use.
+    // Claimed from the pool first, so nobody else takes it apart as well; handed in
+    // after, so nobody else ever has to.
+    SplitJob? pooled;
+    if (s != null && trackId != null && splitPool != null) {
+      try {
+        pooled = await splitPool!.claim(trackId);
+      } catch (e) {
+        debugPrint('could not claim $trackId from the pool, so just for here: $e');
+      }
+    }
+    final clock = Stopwatch()..start();
     while (s != null) {
       Process? mine;
       try {
-        await runSeparator(s,
+        final sep = s;
+        await withSeparatorLock(await appFolder(), () => runSeparator(sep,
             ffmpeg: ffmpeg,
             audio: audio,
             into: into,
@@ -451,16 +485,35 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
               mine = p;
               _running = p;
               if (stopped()) p.kill();
-            });
+            }));
+        final job = pooled;
+        if (job != null) {
+          unawaited(() async {
+            try {
+              await splitPool!.handIn(job, {for (final e in into.entries) e.key: File(e.value)},
+                  seconds: clock.elapsedMilliseconds / 1000);
+            } catch (e) {
+              debugPrint('could not hand the parts of ${job.trackId} in: $e');
+              try {
+                await splitPool!.release(job);
+              } catch (_) {}
+            }
+          }());
+        }
         return;
       } catch (e) {
-        if (stopped()) throw const _Cancelled();
+        if (stopped()) {
+          final job = pooled;
+          if (job != null) unawaited(splitPool!.release(job).catchError((_) {}));
+          throw const _Cancelled();
+        }
         if (s.gpu) {
           debugPrint('the separator failed on the graphics card, so the processor from now on: $e');
           _gpuOff = true;
           try {
             s = await _unlessCancelled<Separator?>(
-                readySeparator(separationHouse?.call() ?? '', gpu: false));
+                readySeparator(separationHouse?.call() ?? '',
+                    into: await kitDir(), gpu: false));
           } on _Cancelled {
             rethrow;
           } catch (e) {
@@ -471,6 +524,10 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
         }
         debugPrint('the separator could not take this one apart, so the arithmetic: $e');
         if (trackId != null) _separatorFailed.add(trackId);
+        final job = pooled;
+        if (job != null) {
+          unawaited(splitPool!.fail(job, '$e', retryable: true).catchError((_) {}));
+        }
         s = null;
       } finally {
         if (_running == mine) _running = null;

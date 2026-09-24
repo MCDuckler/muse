@@ -211,7 +211,7 @@ class _PaletteState extends State<_Palette> {
           also: 'listening stats top',
           run: () => openInTab(Tabs.library, (_) => const ListeningPage())),
       PaletteItem(
-          title: 'Downloads',
+          title: 'Pool — downloads and splits',
           group: 'Go to',
           icon: Icons.download_outlined,
           run: () => openInTab(app.homeTab, (_) => const DownloadsPage())),

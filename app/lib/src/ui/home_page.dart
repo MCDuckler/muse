@@ -468,7 +468,7 @@ class _Rail extends StatelessWidget {
                       label: Text('$pending'),
                       child: const Icon(Icons.downloading),
                     ),
-                    tooltip: 'Downloads',
+                    tooltip: 'Pool',
                     onPressed: () => Navigator.of(context)
                         .push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
                   ),
@@ -624,7 +624,7 @@ class _TabRoot extends StatelessWidget {
                 label: Text('$pending'),
                 child: const Icon(Icons.downloading),
               ),
-              tooltip: 'Downloads',
+              tooltip: 'Pool',
               onPressed: () => Navigator.of(context)
                   .push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
             ),

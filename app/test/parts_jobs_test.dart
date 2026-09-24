@@ -64,6 +64,8 @@ void main() {
   void letGo(int id) => (gates[id] ??= Completer<void>()).complete();
 
   setUp(() {
+    // A desk with a graphics card: it takes its own records apart (PartsStore).
+    PartsStore.bestHere = () => true;
     forgetHere();
     debugDefaultTargetPlatformOverride = TargetPlatform.linux;
     dir = Directory.systemTemp.createTempSync('muse-jobs-');
@@ -89,6 +91,7 @@ void main() {
   });
 
   tearDown(() {
+    PartsStore.bestHere = null;
     forgetHere();
     debugDefaultTargetPlatformOverride = null;
     renderer = defaultRenderer;
@@ -151,6 +154,7 @@ void main() {
     expect(started, [1]);
 
     partsJobs.onCancel!(2);
+    final askedBefore = asked.where((p) => p.contains('/stem/')).length;
     expect(partsJobs.of(2)!.stage, PartsStage.cancelled);
     expect(makingHere(2, 'drums'), isFalse);
     letGo(1);
@@ -159,7 +163,8 @@ void main() {
 
     expect(await parts.want(song(2), 'drums'), Stem.never,
         reason: 'asked for again from ahead, it stays off the list');
-    expect(asked.any((p) => p.contains('/stem/')), isFalse, reason: 'nor is the house asked');
+    expect(asked.where((p) => p.contains('/stem/')).length, askedBefore,
+        reason: 'nor is the house asked');
     expect(await parts.want(song(2), 'drums', byHand: true), Stem.beingMade,
         reason: 'but a hand asking for it puts it back');
     await settle();
@@ -223,12 +228,12 @@ void main() {
     await settle();
     expect(await parts.want(song(5), 'vocals'), Stem.ready);
 
-    // Without it, nobody makes it: not this computer, and not the house either.
+    // Without it here, the pool makes it: the house is asked, and it is on its list.
     forgetHere();
     separatorOffForTesting = true;
-    expect(await parts.want(song(6), 'vocals'), Stem.never);
-    expect(asked.any((p) => p.contains('/stem/vocals')), isFalse);
-    expect(partsJobs.of(6), isNull, reason: 'nothing was fetched or queued for it');
+    expect(await parts.want(song(6), 'vocals'), Stem.beingMade);
+    expect(asked.any((p) => p.contains('/stem/vocals')), isTrue);
+    expect(partsJobs.of(6)?.stage, PartsStage.pooled, reason: 'waiting on the pool');
   });
 
   test('only the parts not made yet go in the one pass', () async {
@@ -339,7 +344,8 @@ void main() {
     ]);
   });
 
-  test('a deck told the voice cannot be had marks that part, not the record', () async {
+  test('a desk that cannot make the voice waits for the pool rather than giving up',
+      () async {
     separatorOffForTesting = true;
     final audio = FakeJustAudio();
     JustAudioPlatform.instance = audio;
@@ -348,9 +354,8 @@ void main() {
     addTearDown(booth.dispose);
     await booth.init();
     await booth.load(booth.a, song(13));
-    expect(await booth.a.swapTo('vocals', byHand: true), isFalse);
-    expect(booth.a.neverParts, {'vocals'});
-    expect(booth.a.noParts, isFalse, reason: 'the drums and the rest are still to be had');
+    expect(await booth.a.swapTo('vocals', byHand: true), isFalse, reason: 'not yet');
+    expect(booth.a.neverParts, isEmpty, reason: 'the pool will make it');
     await booth.load(booth.a, song(14));
     expect(booth.a.neverParts, isEmpty, reason: 'a new record starts with a clean slate');
   });

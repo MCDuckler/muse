@@ -9,4 +9,6 @@ Future<void> resumeFetching(AppState app) async {}
 
 Future<void> stopFetching() async {}
 
-Widget thisComputerPage() => const SizedBox.shrink();
+String? fetchedHerePath(int trackId) => null;
+
+Widget thisComputerCard() => const SizedBox.shrink();

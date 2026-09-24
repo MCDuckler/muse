@@ -204,6 +204,37 @@ class ApiClient {
       await _decode(await net.get(_u('/tracks/$trackId/analysis'), headers: _headers))
           as Map<String, dynamic>);
 
+  // ---------------- the pool ----------------
+  /// Everything the pool screen shows: the computers, what each is doing, what is
+  /// waiting, the pauses. See server/muse/pool.py.
+  Future<Map<String, dynamic>> pool() async =>
+      Map<String, dynamic>.from(await _decode(await net.get(_u('/pool'), headers: _headers)) as Map);
+
+  Future<void> poolPause(String kind, bool paused) async => _decode(await net.post(
+      _u('/pool/pause'),
+      headers: _headers,
+      body: jsonEncode({'kind': kind, 'paused': paused})));
+
+  Future<void> poolBlock(int deviceId, bool blocked) async => _decode(await net.post(
+      _u('/pool/devices/$deviceId/block'),
+      headers: _headers,
+      body: jsonEncode({'blocked': blocked})));
+
+  /// Have the pool take a record apart, now.
+  Future<void> poolSplit(int trackId) async =>
+      _decode(await net.post(_u('/pool/split/$trackId'), headers: _headers));
+
+  /// Where one record is on its way to being in parts: the parts kept, and who has
+  /// the split.
+  Future<Map<String, dynamic>> poolSplitState(int trackId) async => Map<String, dynamic>.from(
+      await _decode(await net.get(_u('/pool/split/$trackId'), headers: _headers)) as Map);
+
+  Future<void> poolCancel(int jobId) async =>
+      _decode(await net.post(_u('/pool/jobs/$jobId/cancel'), headers: _headers));
+
+  Future<void> poolRetry(int jobId) async =>
+      _decode(await net.post(_u('/pool/jobs/$jobId/retry'), headers: _headers));
+
   // ---------------- this computer fetching music ----------------
   /// Whether this device may fetch music for the house, and whether it has asked.
   Future<({bool allowed, bool asked})> ingestStanding() async => _standing(

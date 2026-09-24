@@ -8,7 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/client.dart';
 import '../api/connection.dart';
-import '../worker/this_computer.dart' show stopFetching;
+import '../worker/this_computer.dart' show fetchedHerePath, stopFetching;
 import '../api/models.dart';
 import 'eq_engines.dart';
 import 'equalizer.dart';
@@ -875,7 +875,8 @@ class AppState extends ChangeNotifier {
     await player!.init();
     // The player reaches for a local file before the network — see _sourceFor.
     await offline.init();
-    player!.offlinePath = offline.pathFor;
+    // Kept for the flight, or fetched on this computer a moment ago.
+    player!.offlinePath = (id) => offline.pathFor(id) ?? fetchedHerePath(id);
     // Removed first: signing out and back in runs this again, and a second listener
     // is every change to the kept music announced twice.
     offline
@@ -2795,6 +2796,15 @@ class AppState extends ChangeNotifier {
         if (id != null) {
           player?.applyProgress(id, Map<String, dynamic>.from(e.data));
           _progressed();
+        }
+      } else if (e.event == 'parts_ready') {
+        // A computer in the pool has handed a record's parts in.
+        final id = e.data['track_id'] as int?;
+        if (id != null) _booth?.parts.partsArrived(id);
+      } else if (e.event == 'split_progress') {
+        final id = e.data['track_id'] as int?;
+        if (id != null) {
+          _booth?.parts.poolProgress(id, (e.data['percent'] as num?)?.toDouble());
         }
       } else if (e.event == 'track_updated') {
         // Artwork and metadata arrive after the audio does. Refresh in place so a
