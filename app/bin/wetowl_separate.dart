@@ -167,9 +167,13 @@ Future<void> main(List<String> args) async {
     var said = -1;
     await demix(stereo, piece, left: sound.left, right: sound.right, out: sound.out,
         (from, n, parts) async {
-      for (final e in writers.entries) {
-        await e.value.add(e.key == 'stems' ? _stems(parts, n) : _mixed(parts, _recipes[e.key]!, n));
-      }
+      // Every encoder given its piece before any is waited for: waited for one by
+      // one, the encoders took turns and the separator waited on the sum of them —
+      // 35 s a four minute record where the network needs 5.
+      await Future.wait([
+        for (final e in writers.entries)
+          e.value.add(e.key == 'stems' ? _stems(parts, n) : _mixed(parts, _recipes[e.key]!, n)),
+      ]);
     }, progress: (f) {
       final pct = (f * 100).floor();
       if (pct != said) {
@@ -330,12 +334,19 @@ class _Writer {
   final List<int> _said;
   final Future<void> _watching;
 
+  /// The piece before this one, still going into ffmpeg: one piece of slack, so the
+  /// encoder works on it while the network works on the next — waited for piece by
+  /// piece, the two took turns. (Only one: every piece more is held in memory.)
+  Future<void>? _flushing;
+
   Future<void> add(Float32List samples) async {
+    await _flushing;
     _p.stdin.add(samples.buffer.asUint8List(samples.offsetInBytes, samples.lengthInBytes));
-    await _p.stdin.flush();
+    _flushing = _p.stdin.flush();
   }
 
   Future<void> finish() async {
+    await _flushing;
     await _p.stdin.close();
     final code = await _p.exitCode;
     await _watching;

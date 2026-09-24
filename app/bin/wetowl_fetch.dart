@@ -99,8 +99,13 @@ Future<void> main(List<String> args) async {
     leaving = true;
     heartbeat.cancel();
     soon?.cancel();
-    await downloader.stop();
-    await splitter.stop();
+    // Both at once, and not waited for for ever: stopped one after the other, the
+    // splitter went on taking records while the downloader finished what it had —
+    // and a helper asked to stop by the system is not asking twice.
+    try {
+      await Future.wait([downloader.stop(), splitter.stop()])
+          .timeout(const Duration(seconds: 10));
+    } catch (_) {}
     await files.writeStatus(FetchStatus(
       state: DownloaderState.off,
       done: downloader.done,
