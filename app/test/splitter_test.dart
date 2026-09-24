@@ -29,7 +29,7 @@ class _House implements SplitServer {
   @override
   Future<void> fail(SplitJob job, String reason, {required bool retryable}) async {}
   @override
-  Future<List<SplitJob>> lease({required Map<String, dynamic> pool, int wait = 25}) async => [];
+  Future<List<SplitJob>> lease({required Map<String, dynamic> pool, int wait = 25, String kind = 'split'}) async => [];
   @override
   Future<void> progress(SplitJob job, String stage, double? percent) async {}
   @override

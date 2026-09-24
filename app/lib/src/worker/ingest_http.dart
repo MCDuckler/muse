@@ -153,9 +153,9 @@ class HttpSplitServer implements SplitServer {
   }
 
   @override
-  Future<List<SplitJob>> lease({required Map<String, dynamic> pool, int wait = 25}) async {
+  Future<List<SplitJob>> lease({required Map<String, dynamic> pool, int wait = 25, String kind = 'split'}) async {
     final d = await _post('/internal/jobs/lease',
-        {'kind': 'split', 'limit': 1, 'busy': 0, 'wait': wait, 'pool': pool},
+        {'kind': kind, 'limit': 1, 'busy': 0, 'wait': wait, 'pool': pool},
         timeout: Duration(seconds: wait + 15));
     return [
       for (final j in ((d as Map?)?['jobs'] ?? const []) as List)

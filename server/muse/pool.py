@@ -134,6 +134,63 @@ def keep_beats(data_dir: pathlib.Path, sha: str, raw: bytes) -> pathlib.Path:
     return dest
 
 
+def want_beats(data_dir: pathlib.Path, track_id: int,
+               priority: int = jobs.PRIORITY_BULK) -> int | None:
+    """Queue the record for the tracker alone — a computer in the pool running Beat
+    This! over it and handing the beats in — where it is in parts but has no beats from
+    the tracker yet. None where there is nothing to do."""
+    t = catalog.track_row(track_id)
+    if not t or not t.get("sha256"):
+        return None
+    sha = t["sha256"]
+    if part_here(sha, "stems") is None or beats_path(data_dir, sha).exists():
+        return None
+    open_ = db.one(
+        """select id from jobs
+            where kind='beats' and (payload->>'track_id')::int=%s
+              and state in ('pending','leased','failed')
+            order by id desc limit 1""", (track_id,))
+    if open_:
+        return open_["id"]
+    return jobs.enqueue("beats", {"track_id": track_id, "sha256": sha}, priority=priority)
+
+
+_BEATS_EVERY = 60.0
+_beats_at = 0.0
+
+
+def beats_backfill(data_dir: pathlib.Path, force: bool = False, limit: int = 100) -> int:
+    """The records already in parts before there was a tracker: queued for it, a
+    batch at a time, behind everything anybody is waiting for. Asked every minute
+    while a computer with the tracker asks for that kind of work."""
+    global _beats_at
+    now = time.monotonic()
+    if not force and now - _beats_at < _BEATS_EVERY:
+        return 0
+    _beats_at = now
+    rows = db.all_(
+        """select distinct tp.sha256, m.track_id
+             from track_parts tp
+             join media m on m.sha256 = tp.sha256 and m.role = 'canonical'
+            where tp.name = 'stems' and tp.version = %s
+              and not exists (select 1 from jobs j
+                               where j.kind = 'beats'
+                                 and (j.payload->>'track_id')::int = m.track_id
+                                 and j.state in ('pending','leased','failed'))
+            order by m.track_id desc""", (PARTS_VERSION,))
+    n = 0
+    for r in rows:
+        if beats_path(data_dir, r["sha256"]).exists():
+            continue
+        if want_beats(data_dir, r["track_id"]) is not None:
+            n += 1
+            if n >= limit:
+                break
+    if n:
+        log.info("beats backfill: %d records queued for the tracker", n)
+    return n
+
+
 def beats_here(data_dir: pathlib.Path, sha: str) -> dict | None:
     try:
         return json.loads(beats_path(data_dir, sha).read_text())

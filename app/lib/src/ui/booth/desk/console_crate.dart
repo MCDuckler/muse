@@ -13,6 +13,7 @@ import '../../artwork.dart';
 import '../../mag.dart';
 import '../../snack.dart';
 import 'console.dart';
+import 'data_marks.dart';
 import 'set_planner_page.dart';
 
 /// The crate's pages.
@@ -932,11 +933,13 @@ class _Facts extends StatelessWidget {
         final keyOk = master != null && tm.inKeyWith(master);
         final good = Console.deck(booth.master.name);
         return SizedBox(
-          width: roomy ? 76 : null,
+          width: roomy ? 116 : null,
           child: Row(
             mainAxisSize: MainAxisSize.min,
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
+              DataMarks(booth: booth, track: track, timing: tm, size: 5),
+              const SizedBox(width: 6),
               if (tm.bpm != null)
                 Text(tm.bpm!.toStringAsFixed(0),
                     style: Mag.numerals(14, color: tempoOk ? good : Console.quiet)),

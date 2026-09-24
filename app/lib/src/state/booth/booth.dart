@@ -299,6 +299,8 @@ class Booth extends ChangeNotifier {
     this.a.addListener(notifyListeners);
     this.b.addListener(notifyListeners);
     this.a.addListener(_follow);
+    // A record's parts or beats arriving: what the house says of it is asked again.
+    parts.arrivals.stream.listen(this.timing.forget);
     this.b.addListener(_follow);
     partsJobs.addListener(_partsChanged);
   }

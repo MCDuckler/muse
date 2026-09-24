@@ -9,6 +9,7 @@ the song its own person asked for; and the pool screen says who is doing what.
 from __future__ import annotations
 
 import io
+import json
 import subprocess
 
 import pytest
@@ -250,3 +251,28 @@ def test_asked_ahead_of_time_waits_behind_what_is_wanted_now(client, hdr, a_reco
     assert prios == {later["id"]: jobs.PRIORITY_QUEUE, a_record["id"]: jobs.PRIORITY_NOW}
     got = _lease_split(client, strong, gpu=True)
     assert got[0]["payload"]["track_id"] == a_record["id"]
+
+
+def test_records_in_parts_from_before_the_tracker_are_queued_for_it(client, hdr, a_record, a_part, cfg):
+    strong = _computer(client, hdr, "tracker")
+    # In parts, but no beats from the tracker.
+    client.post(f"/pool/split/{a_record['id']}", headers=hdr)
+    job = _lease_split(client, strong, gpu=True)[0]
+    files = {n: (f"{n}.m4a", io.BytesIO(a_part), "audio/mp4") for n in pool.PARTS}
+    client.post(f"/internal/jobs/{job['id']}/parts", headers=strong["hdr"], files=files)
+    # A computer with the tracker asks for that work: the record is queued, and handed out.
+    got = client.post("/internal/jobs/lease", headers=strong["hdr"],
+                      json={"kind": "beats", "limit": 1, "pool": {"gpu": True}}).json()["jobs"]
+    assert len(got) == 1 and got[0]["kind"] == "beats"
+    assert got[0]["payload"]["track_id"] == a_record["id"]
+    # The beats alone handed in finish the job, and the record is not queued again.
+    beats = json.dumps({"beats_ms": list(range(0, 5000, 500)), "downbeats_ms": [0, 2000, 4000]})
+    r = client.post(f"/internal/jobs/{got[0]['id']}/parts", headers=strong["hdr"],
+                    files={"beats": ("beats.json", io.BytesIO(beats.encode()), "application/json")})
+    assert r.status_code == 200, r.text
+    assert db.one("select state from jobs where id=%s", (got[0]["id"],))["state"] == "done"
+    sha = db.one("select sha256 from media where track_id=%s", (a_record["id"],))["sha256"]
+    assert pool.beats_here(cfg.data_dir, sha)["downbeats_ms"] == [0, 2000, 4000]
+    assert pool.beats_backfill(cfg.data_dir, force=True) == 0
+    assert client.post("/internal/jobs/lease", headers=strong["hdr"],
+                       json={"kind": "beats", "limit": 1}).json()["jobs"] == []

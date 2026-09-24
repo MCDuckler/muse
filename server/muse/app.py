@@ -567,12 +567,15 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         # A device works under its own name, whatever it says its name is, and on the
         # pool's two kinds of work and no other.
         kind = body.get("kind", "ingest")
-        if device is not None and kind not in ("ingest", "split"):
-            raise HTTPException(403, "a computer in the pool fetches and splits, no more")
+        if device is not None and kind not in ("ingest", "split", "beats"):
+            raise HTTPException(403, "a computer in the pool fetches, splits and tracks beats, no more")
         strong = True
         if kind == "split":
             # Songs in the playlists marked to be taken apart, topped up now and then.
             pool.auto_split()
+        elif kind == "beats":
+            # Records in parts from before there was a tracker: for it, a batch at a time.
+            pool.beats_backfill(cfg.data_dir)
         if device is not None:
             # What it says about itself — its card, its switches — kept for the pool
             # screen, and the card decides who is handed a split first.
@@ -650,7 +653,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         other computer and phone (pool.py)."""
         _holds(job_id, device)
         job = db.one("select kind, payload from jobs where id=%s", (job_id,))
-        if not job or job["kind"] != "split":
+        if not job or job["kind"] not in ("split", "beats"):
             raise HTTPException(404, "no such split")
         track_id = int(job["payload"]["track_id"])
         t = catalog.track_row(track_id)
@@ -700,6 +703,8 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         if not kept and not beats_kept:
             raise HTTPException(400, "no parts in that")
         if set(pool.parts_of(t["sha256"])) >= set(pool.PARTS):
+            jobs.finish(job_id)
+        elif job.get("kind") == "beats" and beats_kept:
             jobs.finish(job_id)
         pool.split_done(track_id)
         publish("parts_ready", {"track_id": track_id, "parts": kept})

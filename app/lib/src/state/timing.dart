@@ -21,6 +21,10 @@ class TimingStore {
   /// An answer from elsewhere — a test, a mix that carried its own — kept as if asked.
   void put(int trackId, TrackTiming timing) => _known[trackId] = timing;
 
+  /// Asked again next time: the house has more on this record now (its parts, the
+  /// tracker's beats), and the structure it builds from them.
+  void forget(int trackId) => _known.remove(trackId);
+
   Future<TrackTiming?> of(Track track) {
     if (!track.isReady) return Future.value(null);
     if (_known.containsKey(track.id)) return Future.value(_known[track.id]);

@@ -19,7 +19,7 @@ import 'told.dart';
 
 /// One record to take apart, as the server hands it out.
 class SplitJob {
-  SplitJob({required this.id, required this.trackId, this.own = false});
+  SplitJob({required this.id, required this.trackId, this.own = false, this.kind = 'split'});
 
   final int id;
   final int trackId;
@@ -27,11 +27,16 @@ class SplitJob {
   /// Claimed by this computer for its own person, rather than handed out by the pool.
   final bool own;
 
+  /// 'split' — the parts; or 'beats' — the tracker alone, over a record already in
+  /// parts from before there was one.
+  final String kind;
+  bool get beatsOnly => kind == 'beats';
+
   static SplitJob? fromJson(Map<String, dynamic> j, {bool own = false}) {
     final payload = (j['payload'] ?? const {}) as Map;
     final track = payload['track_id'];
     if (j['id'] is! int || track is! int) return null;
-    return SplitJob(id: j['id'] as int, trackId: track, own: own);
+    return SplitJob(id: j['id'] as int, trackId: track, own: own, kind: (j['kind'] ?? 'split') as String);
   }
 }
 
@@ -39,7 +44,7 @@ class SplitJob {
 abstract class SplitServer {
   /// The house the separator's own files are fetched from.
   String get house;
-  Future<List<SplitJob>> lease({required Map<String, dynamic> pool, int wait = 25});
+  Future<List<SplitJob>> lease({required Map<String, dynamic> pool, int wait = 25, String kind = 'split'});
   Future<SplitJob?> claim(int trackId);
   Future<void> progress(SplitJob job, String stage, double? percent);
   Future<void> handIn(SplitJob job, Map<String, File> parts, {double? seconds});
@@ -221,7 +226,37 @@ class Splitter extends Told {
         }
         await _take(job);
       }
+      // Nothing to split: the tracker over records in parts from before there was
+      // one, as long as there are any, then back to asking for splits.
+      if (jobs.isEmpty && await _hasTracker()) {
+        while (_wanted && now == null) {
+          List<SplitJob> beats;
+          try {
+            beats = await server.lease(pool: pool(), wait: 0, kind: 'beats');
+          } catch (_) {
+            break;
+          }
+          if (beats.isEmpty) break;
+          for (final job in beats) {
+            if (!_wanted) {
+              await _quietly(() => server.release(job));
+              continue;
+            }
+            await _take(job);
+          }
+        }
+      }
     }
+  }
+
+  /// Whether the tracker's files are here (fetched with the separator's).
+  Future<bool> _hasTracker() async {
+    final kit = kitDirIn(appFolder);
+    for (final f in [beatModelFile, beatFrontendFile]) {
+      final file = File('${kit.path}${Platform.pathSeparator}${f.name}');
+      if (!await file.exists() || await file.length() != f.bytes) return false;
+    }
+    return true;
   }
 
   /// Take the record the person at this computer asked for apart now, ahead of the
@@ -250,7 +285,7 @@ class Splitter extends Told {
     final clock = Stopwatch()..start();
     File? borrowed;
     try {
-      _say('track ${job.trackId}${job.own ? ' (asked for here)' : ''}: taking apart');
+      _say('track ${job.trackId}${job.own ? ' (asked for here)' : ''}: ${job.beatsOnly ? 'tracking its beats' : 'taking apart'}');
       final ffmpeg = await findFfmpeg();
       if (ffmpeg == null) throw StateError('no ffmpeg on this computer');
       var record = audio;
@@ -271,7 +306,7 @@ class Splitter extends Told {
 
       final toSplit = record;
       await partsFolder.create(recursive: true);
-      final into = {for (final p in splitParts) p: partFile(job.trackId, p).path};
+      final into = job.beatsOnly ? <String, String>{} : {for (final p in splitParts) p: partFile(job.trackId, p).path};
       // Its beats and bars too, by the tracker, where the kit has it: handed in with
       // the parts, for the house's structure of the record.
       final beatsAt =
@@ -357,6 +392,7 @@ class Splitter extends Told {
       // is how splits went missing.
       final handing = {for (final e in into.entries) e.key: File(e.value)};
       if (await File(beatsAt).exists()) handing['beats'] = File(beatsAt);
+      if (job.beatsOnly && !handing.containsKey('beats')) throw StateError('the tracker made no beats');
       for (var attempt = 1;; attempt++) {
         try {
           await server.handIn(job, handing, seconds: seconds);
@@ -369,7 +405,7 @@ class Splitter extends Told {
         }
       }
       done++;
-      _say('track ${job.trackId}: parts handed in · ${seconds.toStringAsFixed(0)} s '
+      _say('track ${job.trackId}: ${job.beatsOnly ? 'beats' : 'parts'} handed in · ${seconds.toStringAsFixed(0)} s '
           'on the ${flight.device == 'cuda' ? 'card' : 'processor'}');
       return into;
     } catch (e) {

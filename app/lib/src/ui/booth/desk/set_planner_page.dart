@@ -13,6 +13,7 @@ import '../../mag.dart';
 import '../../theme.dart';
 import 'console.dart';
 import 'console_set.dart' show StyleDials;
+import 'data_marks.dart';
 
 /// Into the planner, over the booth.
 Future<void> openSetPlanner(BuildContext context, Booth booth) => Navigator.of(context)
@@ -267,6 +268,8 @@ class _SetPlannerPageState extends State<SetPlannerPage> {
                       ],
                     ),
                   ),
+                  DataMarks(booth: _b, track: t, timing: timing),
+                  const SizedBox(width: 10),
                   SizedBox(
                     width: 42,
                     child: Text(timing?.camelot ?? '', textAlign: TextAlign.center, style: Mag.typewriter(11, color: Console.quiet)),
