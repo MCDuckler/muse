@@ -111,6 +111,12 @@ class Splitter extends Told {
 
   bool _wanted = false;
   bool _gpuOff = false;
+
+  /// Failures on the graphics card in a row. One is no verdict on the card — a file
+  /// pulled from under the separator fails it just the same — so the processor
+  /// takes over for that record only, and for good only after [_gpuGivesUp].
+  int _gpuMisses = 0;
+  static const _gpuGivesUp = 2;
   Future<void>? _loop;
   Process? _running;
 
@@ -307,11 +313,18 @@ class Splitter extends Told {
                 notifyListeners();
               },
               started: (p) => _running = p);
+          if (gpuNow && flight.device == 'cuda') _gpuMisses = 0;
           break;
         } catch (e) {
           if (s.gpu && gpuNow) {
-            _say('the graphics card failed on it, so the processor from now on: $e');
-            _gpuOff = true;
+            _gpuMisses++;
+            if (_gpuMisses >= _gpuGivesUp) {
+              _gpuOff = true;
+              _say('the graphics card failed $_gpuMisses times running, so the processor '
+                  'from now on: $e');
+            } else {
+              _say('the graphics card failed on it, so the processor for this one: $e');
+            }
             gpuNow = false;
             continue;
           }

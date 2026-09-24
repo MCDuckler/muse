@@ -140,8 +140,19 @@ void main() {
     File('${dir.path}/8-drums-v1.m4a').writeAsBytesSync([1]);
     File('${dir.path}/8-drums-v2.m4a').writeAsBytesSync([1]);
     File('${dir.path}/9-drums-v1.m4a').writeAsBytesSync([1]);
-    File('${dir.path}/scnet.onnx.part').writeAsBytesSync([1]);
+    File('${dir.path}/scnet.onnx.part')
+      ..writeAsBytesSync([1])
+      ..setLastModifiedSync(DateTime.now().subtract(const Duration(hours: 2)));
+    // Half-written by a run that died, and by one still running — the pool's helper,
+    // another program, may be taking a record apart right now.
+    File('${dir.path}/10-stems-v2.tmp.opus')
+      ..writeAsBytesSync([1])
+      ..setLastModifiedSync(DateTime.now().subtract(const Duration(hours: 2)));
+    File('${dir.path}/11-vocals-v2.tmp.m4a').writeAsBytesSync([1]);
     await sweepHere();
+    expect(File('${dir.path}/10-stems-v2.tmp.opus').existsSync(), isFalse);
+    expect(File('${dir.path}/11-vocals-v2.tmp.m4a').existsSync(), isTrue,
+        reason: 'being written as the app starts');
     expect(File('${dir.path}/8-drums-v1.m4a').existsSync(), isFalse);
     expect(File('${dir.path}/8-drums-v2.m4a').existsSync(), isTrue);
     expect(File('${dir.path}/9-drums-v1.m4a').existsSync(), isTrue,

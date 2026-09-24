@@ -95,6 +95,7 @@ void forgetHere() {
   _cancelled.clear();
   _separatorOff = null;
   _gpuOff = false;
+  _gpuMisses = 0;
   _separatorFailed.clear();
   _line.clear();
   _now = null;
@@ -112,8 +113,11 @@ bool? _separatorOff;
 @visibleForTesting
 set separatorOffForTesting(bool? off) => _separatorOff = off;
 
-/// The graphics card tried and failed this run of the app: the processor from then on.
+/// The graphics card failed [_gpuGivesUp] times running this run of the app: the
+/// processor from then on. Once is no verdict on the card (see Splitter._gpuMisses).
 var _gpuOff = false;
+var _gpuMisses = 0;
+const _gpuGivesUp = 2;
 
 /// Records the separator was run on and could not take apart — made the old way
 /// instead, and not handed to the separator again until the app is next started.
@@ -457,10 +461,15 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
     }
     // Twice at most: on the graphics card, and — where that is what failed — once
     // more on the processor, which is how it ran before there was a card to use.
-    // Claimed from the pool first, so nobody else takes it apart as well; handed in
-    // after, so nobody else ever has to.
+    // Claimed from the pool, so nobody else takes it apart as well — but only once
+    // this computer's separator is free for it: claimed while waiting in line, a
+    // record is held from every other computer for nothing, and the claim can run out
+    // before it is started. Handed in after, so nobody else ever has to.
     SplitJob? pooled;
-    if (s != null && trackId != null && splitPool != null) {
+    var claimed = false;
+    Future<void> claim() async {
+      if (claimed || trackId == null || splitPool == null) return;
+      claimed = true;
       try {
         pooled = await splitPool!.claim(trackId);
       } catch (e) {
@@ -472,7 +481,10 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
       Process? mine;
       try {
         final sep = s;
-        await withSeparatorLock(await appFolder(), () => runSeparator(sep,
+        await withSeparatorLock(await appFolder(), () async {
+          await claim();
+          clock.reset();
+          return runSeparator(sep,
             ffmpeg: ffmpeg,
             audio: audio,
             into: into,
@@ -485,7 +497,9 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
               mine = p;
               _running = p;
               if (stopped()) p.kill();
-            }));
+            });
+        });
+        if (sep.gpu) _gpuMisses = 0;
         final job = pooled;
         if (job != null) {
           unawaited(() async {
@@ -508,8 +522,9 @@ Future<void> _render(String audio, String name, Map<String, String> into) async 
           throw const _Cancelled();
         }
         if (s.gpu) {
-          debugPrint('the separator failed on the graphics card, so the processor from now on: $e');
-          _gpuOff = true;
+          if (++_gpuMisses >= _gpuGivesUp) _gpuOff = true;
+          debugPrint('the separator failed on the graphics card ($_gpuMisses running), so the '
+              'processor ${_gpuOff ? 'from now on' : 'for this one'}: $e');
           try {
             s = await _unlessCancelled<Separator?>(
                 readySeparator(separationHouse?.call() ?? '',
@@ -647,20 +662,23 @@ Future<Directory?> _toolsDir() async {
 /// render, and any record borrowed only to be taken apart. The server sweeps its own
 /// for the same reason.
 ///
-/// Only safe at startup. Nothing here is in use yet then, which is exactly what makes
-/// a borrowed record safe to delete — a moment later it might be the thing being
-/// separated.
+/// At startup — and even then only what is an hour old: the pool's helper is another
+/// program, which may have been started first and be taking a record apart into
+/// these very files (the app's own sweep once deleted a split's half-written part
+/// under it, and the helper took that for the graphics card failing).
 Future<int> sweepHere() async {
+  final before = DateTime.now().subtract(const Duration(hours: 1));
   if (!canSeparateHere) return 0;
   var gone = 0;
   final dir = Directory(await partsDir());
   await for (final f in dir.list()) {
     final name = f.path.split(Platform.pathSeparator).last;
+    final left = name.endsWith('.tmp.m4a') ||
+        name.endsWith('.tmp.opus') ||
+        name.startsWith('borrowed-');
     if (f is File &&
-        (name.endsWith('.tmp.m4a') ||
-            name.endsWith('.tmp.opus') ||
-            name.startsWith('borrowed-') ||
-            await _superseded(dir, name))) {
+        ((left && (await f.lastModified()).isBefore(before)) ||
+            (!left && await _superseded(dir, name)))) {
       try {
         await f.delete();
         gone++;
@@ -670,7 +688,7 @@ Future<int> sweepHere() async {
   // And any of the separator's files whose fetching was cut short.
   try {
     await for (final f in (await kitDir()).list()) {
-      if (f is File && f.path.endsWith('.part')) {
+      if (f is File && f.path.endsWith('.part') && (await f.lastModified()).isBefore(before)) {
         try {
           await f.delete();
           gone++;
