@@ -321,8 +321,7 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
         child: ReorderableListView.builder(
           buildDefaultDragHandles: false,
           itemCount: items.length,
-          onReorder: (from, to) {
-            if (to > from) to -= 1;
+          onReorderItem: (from, to) {
             if (to != from) unawaited(app.moveInQueue(from, to));
           },
           proxyDecorator: (child, i, a) => Material(color: Colors.transparent, child: child),
