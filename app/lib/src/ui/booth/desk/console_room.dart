@@ -20,6 +20,7 @@ import 'console_crate.dart';
 import 'console_deck.dart';
 import 'console_log.dart';
 import 'console_mixer.dart';
+import 'console_plan.dart';
 import 'console_waves.dart';
 
 /// The booth on a desk: a console. The records' shapes across the top, a deck either
@@ -49,9 +50,13 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
   bool _wide = false;
   bool _logFolded = false;
 
+  /// The Auto DJ's plan drawn out, in the place of the waveforms.
+  bool _planView = false;
+
   static const _kWidth = 'muse.booth.crateWidth';
   static const _kWide = 'muse.booth.crateWide';
   static const _kLog = 'muse.booth.logFolded';
+  static const _kPlan = 'muse.booth.planView';
 
   Booth get _b => widget.booth;
   late final AppState _app = context.read<AppState>();
@@ -62,6 +67,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
     super.initState();
     unawaited(_remember());
     _app.addListener(_queueMoved);
+    planViewToggles.addListener(_togglePlan);
   }
 
   Future<void> _remember() async {
@@ -71,6 +77,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
       _crateWidth = prefs.getDouble(_kWidth) ?? 320;
       _wide = prefs.getBool(_kWide) ?? false;
       _logFolded = prefs.getBool(_kLog) ?? false;
+      _planView = prefs.getBool(_kPlan) ?? false;
     });
   }
 
@@ -79,6 +86,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
     await prefs.setDouble(_kWidth, _crateWidth);
     await prefs.setBool(_kWide, _wide);
     await prefs.setBool(_kLog, _logFolded);
+    await prefs.setBool(_kPlan, _planView);
   }
 
   /// The queue changed — in the crate or anywhere else: the automix follows it.
@@ -94,6 +102,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
     // Out of the booth, out of full screen: the rest of the app has its own chrome.
     if (fullScreen.value) unawaited(toggleFullScreen());
     _app.removeListener(_queueMoved);
+    planViewToggles.removeListener(_togglePlan);
     _tab.dispose();
     super.dispose();
   }
@@ -185,18 +194,27 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
     );
   }
 
+  void _togglePlan() {
+    setState(() => _planView = !_planView);
+    unawaited(_keepLayout());
+  }
+
   void _fold() {
     setState(() => _logFolded = !_logFolded);
     unawaited(_keepLayout());
   }
 
   Widget _room() => LayoutBuilder(builder: (context, c) {
-        final waves = (c.maxHeight * 0.3).clamp(150.0, 320.0);
+        final waves = _planView
+            ? (c.maxHeight * 0.42).clamp(240.0, 420.0)
+            : (c.maxHeight * 0.3).clamp(150.0, 320.0);
         final mixer = (c.maxWidth * 0.2).clamp(230.0, 290.0);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            SizedBox(height: waves, child: ConsoleWaves(booth: _b)),
+            SizedBox(
+                height: waves,
+                child: _planView ? ConsolePlan(booth: _b) : ConsoleWaves(booth: _b)),
             const SizedBox(height: 10),
             Expanded(
               child: Row(
@@ -244,6 +262,11 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
                 tooltip: 'Keep this mix',
                 onPressed: () => _keep(context),
               ),
+            IconButton(
+              icon: Icon(Icons.insights, color: _planView ? Console.ink : Console.quiet),
+              tooltip: _planView ? 'Back to the waveforms (P)' : "The Auto DJ's plan (P)",
+              onPressed: _togglePlan,
+            ),
             if (canGoFullScreen)
               ValueListenableBuilder<bool>(
                 valueListenable: fullScreen,

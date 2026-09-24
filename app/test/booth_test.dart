@@ -464,6 +464,84 @@ void main() {
       never.complete(http.Response('', 202));
     });
 
+    test('a hand steers the plan: another move, longer, later, and back to the Auto DJ',
+        () async {
+      // Two records of four minutes at 128, a phrase grid and a drop in the second.
+      TrackTiming record({List<int> drops = const []}) {
+        const beat = 469;
+        final beats = [for (var i = 0; i < 480; i++) i * beat];
+        final downs = [for (var i = 0; i < beats.length; i += 4) beats[i]];
+        return TrackTiming(
+          durationMs: 240000,
+          bpm: 60000 / beat,
+          beats: beats,
+          downbeats: downs,
+          camelot: '8A',
+          drops: [for (final d in drops) downs[d]],
+          energy: [for (var i = 0; i < 120; i++) 200],
+          cues: MixCues(
+              firstDownbeatMs: 0, mixInMs: downs[32], mixOutMs: downs[88], soundEndMs: downs[119]),
+        );
+      }
+
+      Track long(int id) => Track.fromJson({
+            'id': id,
+            'title': 'Long $id',
+            'artists': ['Someone'],
+            'duration_ms': 240000,
+            'state': 'ready',
+            'stream_url': '/tracks/$id/stream',
+            'source': 'youtube',
+          });
+      final was = FakeAudioPlayer.trackLength;
+      FakeAudioPlayer.trackLength = const Duration(minutes: 4);
+      addTearDown(() => FakeAudioPlayer.trackLength = was);
+      booth.timing.put(1, record());
+      booth.timing.put(2, record(drops: [48]));
+      booth.timing.put(3, record());
+      final auto = booth.auto;
+      await auto.start([long(1), long(2), long(3)]);
+      for (var i = 0; i < 100 && auto.planned == null; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(auto.planned, isNotNull, reason: 'a plan to show');
+      expect(auto.options.length, greaterThan(1), reason: 'and what else it weighed');
+      expect(auto.canSteer, isTrue);
+      expect(auto.steered, isFalse);
+
+      // Another of the moves it weighed.
+      final other = auto.options.firstWhere((o) => o.kind != auto.planned!.kind);
+      await auto.steer(other);
+      expect(auto.plan?.kind, other.kind);
+      expect(auto.steered, isTrue);
+
+      // Longer.
+      await auto.lengthen(32);
+      expect(auto.plan?.bars, 32);
+      expect(auto.planned?.kind, other.kind, reason: 'the same move, longer');
+
+      // A phrase later out of the old record.
+      final out = auto.goesAt!;
+      await auto.nudgeOut(1);
+      final bar = booth.master.timing!.bar!;
+      expect(auto.goesAt! - out, bar * 4);
+
+      // The queue moving does not undo the hand: the same pair, the same choice.
+      auto.follow([long(1), long(2), long(3)]);
+      auto.mixLike(MixStyle.bold);
+      for (var i = 0; i < 50; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(auto.plan?.kind, other.kind);
+      expect(auto.plan?.bars, 32);
+      expect(auto.goesAt! - out, bar * 4);
+
+      // Back to the Auto DJ's own choice.
+      await auto.letThePlannerChoose();
+      expect(auto.steered, isFalse);
+      auto.stop();
+    });
+
     test('a hand can go now, or drop what is coming', () async {
       TrackTiming quick() => TrackTiming(
             durationMs: 60000,

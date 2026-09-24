@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../../api/client.dart';
 import '../../api/models.dart';
 import 'booth.dart';
+import 'deck.dart';
 import 'planner.dart';
 
 /// The booth mixing on its own: the queue played record into record, each
@@ -562,31 +563,30 @@ class AutoMix extends ChangeNotifier {
     // Now that both are known — which is in stems, where each sings, what each
     // sings — the move itself, and where it goes out and comes in.
     MixPlan? planned;
+    options = const [];
+    this.planned = null;
     if (inStep && from.track != null) {
       final voices = await Future.wait([
         booth.vocals.of(from.track!).timeout(const Duration(seconds: 6), onTimeout: () => null),
         booth.vocals.of(coming).timeout(const Duration(seconds: 6), onTimeout: () => null),
       ]);
       if (stale()) return;
-      planned = Planner.plan(
+      fromVoice = voices[0];
+      toVoice = voices[1];
+      options = Planner.options(
         from: MixSide(timing: timed, vocals: voices[0], stems: from.stemmed, pitch: from.pitch),
         to: MixSide(timing: timing, vocals: voices[1], stems: to.stemmed),
         style: style,
         recent: recent,
       );
+      // A hand's choice for this very pair stands; for any other pair it is spent.
+      final steer = _steer;
+      final byHand =
+          steer != null && steer.from == from.track!.id && steer.to == coming.id ? steer.plan : null;
+      if (byHand == null) _steer = null;
+      planned = byHand ?? options.first;
+      await _apply(planned, from, to, timing, onTheDrop: onTheDrop, exact: byHand != null);
       chosen = (kind: planned.kind, bars: planned.bars);
-      plan = chosen;
-      why = planned.why;
-      final lengthNow = booth.barsLength(from, chosen.bars);
-      final bar = timed.bar;
-      final inRecord = bar == null ? lengthNow : bar * chosen.bars;
-      goesAt = planned.outAt != null
-          ? clearOfDrops(timed, planned.outAt!, length: inRecord)
-          : clearOfDrops(timed, outPoint(timed, length: inRecord), length: inRecord);
-      final inAt = planned.inAt ?? inPoint(timing, bars: chosen.bars, onTheDrop: onTheDrop);
-      if (!to.playing && (to.position - inAt).abs() > const Duration(milliseconds: 20)) {
-        await to.seek(inAt);
-      }
     }
     if (stale()) return;
     // The incoming comes to the master's tempo, as far as the automix reaches; the
@@ -608,6 +608,130 @@ class AutoMix extends ChangeNotifier {
             : 'Too far apart to put in step: ${chosen.kind.label}',
         deck: to);
     notifyListeners();
+  }
+
+  /// Every move the planner offered for the transition coming, best first: what the
+  /// plan view shows, and what a hand may choose from instead. Empty where the two
+  /// cannot be put in step (there is only the one way then).
+  List<MixPlan> options = const [];
+
+  /// The move in hand for the transition coming — the planner's, or a hand's — with
+  /// its places. Null where there is none worth showing (see [options]).
+  MixPlan? planned;
+
+  /// Where in the new record the move starts it: where it is parked.
+  Duration? comesInAt;
+
+  /// Where each of the two records sings, as the planner saw it.
+  VocalMap? fromVoice, toVoice;
+
+  /// A hand's choice, for the pair it was made for: kept across the automix asking
+  /// again (the queue moving, the style changed) until that pair has been mixed.
+  ({int from, int to, MixPlan plan})? _steer;
+
+  /// Whether the move coming is one a hand chose.
+  bool get steered => _steer != null && identical(_steer!.plan, planned);
+
+  /// Whether a hand can steer now: a plan laid out, its record waiting on the other
+  /// deck, and nothing already under way.
+  bool get canSteer {
+    final to = booth.other(booth.master);
+    return running &&
+        !replaying &&
+        !booth.inTransition &&
+        !booth.busy &&
+        planned != null &&
+        next != null &&
+        to.track?.id == next!.id &&
+        booth.master.timing != null &&
+        to.timing != null;
+  }
+
+  /// Put [p] in hand: the move, its length, where the old record goes out (a place a
+  /// hand chose is kept as it is; the planner's is moved off a drop it would run
+  /// over) and where the new one is parked to come in.
+  Future<void> _apply(MixPlan p, Deck from, Deck to, TrackTiming timing,
+      {bool onTheDrop = false, bool exact = false}) async {
+    final timed = from.timing!;
+    planned = p;
+    plan = (kind: p.kind, bars: p.bars);
+    why = p.why;
+    final bar = timed.bar;
+    final inRecord = bar == null ? booth.barsLength(from, p.bars) : bar * p.bars;
+    final out = p.outAt;
+    goesAt = out != null && exact
+        ? out
+        : clearOfDrops(timed, out ?? outPoint(timed, length: inRecord), length: inRecord);
+    final inAt = comesInAt = p.inAt ?? inPoint(timing, bars: p.bars, onTheDrop: onTheDrop);
+    if (!to.playing && (to.position - inAt).abs() > const Duration(milliseconds: 20)) {
+      await to.seek(inAt);
+    }
+    notifyListeners();
+  }
+
+  /// A hand steering: [p] instead of what the planner chose, for this pair only.
+  Future<void> steer(MixPlan p) async {
+    if (!canSteer) return;
+    final from = booth.master, to = booth.other(from);
+    _steer = (from: from.track!.id, to: to.track!.id, plan: p);
+    // A preparation under way would plan over the hand: it starts over, and keeps it.
+    _asked++;
+    await _apply(p, from, to, to.timing!, exact: true);
+    booth.note(BoothEventKind.plan,
+        'By hand: ${p.kind.label}, ${p.bars} bars, from ${goesAt == null ? '…' : clock(goesAt!)}',
+        deck: to);
+  }
+
+  /// The move coming, over [bars] instead. One that lands on the new record's drop
+  /// is parked again so that it still does.
+  Future<void> lengthen(int bars) async {
+    final p = planned;
+    final to = booth.other(booth.master);
+    if (p == null || !canSteer) return;
+    final onDrop = p.kind == Transition.dropSwap || p.kind == Transition.roll;
+    await steer(MixPlan(p.kind, bars,
+        outAt: p.outAt ?? goesAt,
+        inAt: onDrop ? inPoint(to.timing!, bars: bars, onTheDrop: true) : p.inAt,
+        why: p.why,
+        score: p.score));
+  }
+
+  /// The old record goes out [phrases] four-bar phrases later (or earlier).
+  Future<void> nudgeOut(int phrases) async {
+    final p = planned;
+    final from = booth.master;
+    final bar = from.timing?.bar;
+    final at = goesAt;
+    if (p == null || bar == null || at == null || !canSteer) return;
+    var out = at + bar * (4 * phrases);
+    final first = from.timing!.cues?.firstDownbeat ?? Duration.zero;
+    final last = (from.duration ?? out) - bar * p.bars;
+    if (out < first) out = first;
+    if (out > last) out = last;
+    if (out <= from.position) return;
+    await steer(p.copyWith(outAt: out));
+  }
+
+  /// The new record comes in [phrases] four-bar phrases further into it (or less).
+  Future<void> nudgeIn(int phrases) async {
+    final p = planned;
+    final to = booth.other(booth.master);
+    final bar = to.timing?.bar;
+    if (p == null || bar == null || to.playing || !canSteer) return;
+    var inAt = to.position + bar * (4 * phrases);
+    final first = to.timing!.cues?.firstDownbeat ?? Duration.zero;
+    if (inAt < first) inAt = first;
+    final end = to.duration;
+    if (end != null && inAt > end - bar * p.bars) return;
+    await steer(p.copyWith(inAt: inAt, outAt: goesAt));
+  }
+
+  /// The planner's again: what a hand chose is let go of, and the move chosen afresh.
+  Future<void> letThePlannerChoose() async {
+    if (_steer == null) return;
+    _steer = null;
+    booth.note(BoothEventKind.plan, 'Back to the Auto DJ\'s own choice');
+    await _prepareNext();
   }
 
   /// A place in a record as a DJ reads it: 3:12.
@@ -695,6 +819,9 @@ class AutoMix extends ChangeNotifier {
         return;
       }
       _at++;
+      _steer = null;
+      options = const [];
+      planned = null;
       // The plan just carried out is spent: left standing, its moment — long past on
       // the record now leading — would send the booth straight back the other way.
       plan = null;

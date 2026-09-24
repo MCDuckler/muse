@@ -25,6 +25,10 @@ class MixPlan {
   final String why;
   final double score;
 
+  /// The same move, told otherwise: by a hand steering the automix.
+  MixPlan copyWith({int? bars, Duration? outAt, Duration? inAt}) => MixPlan(kind, bars ?? this.bars,
+      outAt: outAt ?? this.outAt, inAt: inAt ?? this.inAt, why: why, score: score);
+
   @override
   String toString() => '${kind.label} $bars bars (${score.toStringAsFixed(2)}): $why';
 }
@@ -77,6 +81,17 @@ class Planner {
     MixStyle style = MixStyle.normal,
     List<Transition> recent = const [],
     math.Random? random,
+  }) =>
+      options(from: from, to: to, style: style, recent: recent, random: random).first;
+
+  /// Every move that can be made with these two, best first — what [plan] chooses
+  /// from, and what a hand steering the automix is offered. Never empty.
+  static List<MixPlan> options({
+    required MixSide from,
+    required MixSide to,
+    MixStyle style = MixStyle.normal,
+    List<Transition> recent = const [],
+    math.Random? random,
   }) {
     final rng = random ?? math.Random();
     // What cannot be put in step, or has no grid, or fades itself (it goes out as it was
@@ -86,7 +101,7 @@ class Planner {
         base.kind == Transition.cut ||
         !from.timing.hasBeats ||
         !to.timing.hasBeats) {
-      return MixPlan(base.kind, base.bars, why: 'the only way these two go together');
+      return [MixPlan(base.kind, base.bars, why: 'the only way these two go together')];
     }
     final inKey = from.timing.inKeyWith(to.timing);
     final stems = from.stems && to.stems;
@@ -166,9 +181,9 @@ class Planner {
     if (from.timing.ends == 'cold') consider(Transition.brake, 8, 1, 'stopped dead on a cold ending');
     if (stems) consider(Transition.swap, 16, inKey ? 1 : 0.8, 'the drums change hands');
 
-    if (candidates.isEmpty) return MixPlan(base.kind, base.bars, why: 'the ordinary way');
+    if (candidates.isEmpty) return [MixPlan(base.kind, base.bars, why: 'the ordinary way')];
     candidates.sort((a, b) => b.score.compareTo(a.score));
-    return candidates.first;
+    return candidates;
   }
 
   /// Whether [t] has [bars] bars between its first downbeat and [at].

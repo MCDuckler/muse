@@ -18,6 +18,7 @@ import 'package:muse/src/api/connection.dart';
 import 'package:muse/src/api/models.dart';
 import 'package:muse/src/state/app_state.dart';
 import 'package:muse/src/state/booth/booth.dart';
+import 'package:muse/src/state/booth/planner.dart';
 import 'package:muse/src/state/player.dart';
 import 'package:muse/src/ui/booth_page.dart';
 import 'package:muse/src/ui/theme.dart';
@@ -102,7 +103,7 @@ void main() {
 
   for (final (w, h) in const [(1600.0, 1000.0), (1280.0, 760.0), (1920.0, 1080.0)]) {
   for (final dark in [true]) {
-    for (final state in ['empty', 'playing', if (w == 1600) 'mixing', if (w != 1920) 'parts', if (w != 1280) 'crate']) {
+    for (final state in ['empty', 'playing', if (w == 1600) 'mixing', if (w != 1920) 'parts', if (w != 1280) 'crate', 'plan']) {
       testWidgets('the booth at ${w.round()}x${h.round()}, $state', (tester) async {
         JustAudioPlatform.instance = FakeJustAudio();
         useThisClientInstead(MockClient((r) async => r.url.path.contains('stream-key')
@@ -111,7 +112,9 @@ void main() {
         // The crate wide and the log folded, as a DJ leaves them.
         SharedPreferences.setMockInitialValues(state == 'crate'
             ? {'muse.booth.crateWide': true, 'muse.booth.logFolded': true}
-            : {});
+            : state == 'plan'
+                ? {'muse.booth.planView': true}
+                : {});
         final app = AppState()..api = (ApiClient(baseUrl: 'http://example.invalid')..token = 'x');
         if (state == 'crate') {
           app.playlists = [
@@ -170,6 +173,34 @@ void main() {
               b.note(BoothEventKind.plan, 'blend, 16 bars, from 3:12 · cued at 0:12', deck: b.b);
               b.note(BoothEventKind.mix, 'A into B · blend, 16 bars', deck: b.b);
               b.mixing = (kind: Transition.blend, from: 'A', to: 'B', bars: 16, k: 0.4);
+            }
+            if (state == 'plan') {
+              // The Auto DJ between the two, both in stems, the words known: its plan
+              // laid out as it would lay it out.
+              await b.auto.start([one, two]).timeout(const Duration(seconds: 10));
+              b.a.stemmed = true;
+              b.b.stemmed = true;
+              final from = b.master, to = b.other(from);
+              VocalMap voice(TrackTiming t, bool Function(int) sung, {List<int> hook = const []}) => VocalMap(
+                    bars: [for (var i = 0; i < t.downbeats.length; i++) sung(i) ? 200 : 20],
+                    timed: hook.isNotEmpty,
+                    hook: hook.isEmpty ? null : (text: 'Euro dance, euro dance', at: hook),
+                    lyrics: 'lrclib',
+                  );
+              b.auto.fromVoice = voice(from.timing!, (i) => i > 8 && i < 44 || i > 52 && i < 64);
+              b.auto.toVoice = voice(to.timing!, (i) => i >= 16 && i < 40,
+                  hook: [to.timing!.downbeats[16], to.timing!.downbeats[32]]);
+              b.auto.options = Planner.options(
+                from: MixSide(timing: from.timing!, vocals: b.auto.fromVoice, stems: true),
+                to: MixSide(timing: to.timing!, vocals: b.auto.toVoice, stems: true),
+                random: math.Random(3),
+              );
+              final chosen = b.auto.options.firstWhere((o) => o.kind == Transition.stemBlend,
+                  orElse: () => b.auto.options.first);
+              b.auto.planned = chosen;
+              b.auto.plan = (kind: chosen.kind, bars: chosen.bars);
+              b.auto.goesAt = Duration(milliseconds: from.timing!.downbeats[56]);
+              b.auto.comesInAt = Duration(milliseconds: to.timing!.downbeats[4]);
             }
             if (state == 'parts') {
               // Deck A's record being taken apart, two of the queue waiting behind it,
