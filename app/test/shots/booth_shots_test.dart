@@ -114,8 +114,10 @@ void main() {
         SharedPreferences.setMockInitialValues(state == 'crate'
             ? {'muse.booth.crateWide': true, 'muse.booth.logFolded': true}
             : state == 'plan'
-                ? {'muse.booth.planView': true}
-                : {});
+                ? {'muse.booth.view': 'plan'}
+                : state == 'set'
+                    ? {'muse.booth.view': 'set'}
+                    : {});
         final app = AppState()..api = (ApiClient(baseUrl: 'http://example.invalid')..token = 'x');
         if (state == 'crate') {
           app.playlists = [
@@ -273,7 +275,8 @@ void main() {
           }
           expect(find.text('Hardtekk crate'), findsOneWidget);
         }
-        expect(tester.takeException(), isNull);
+        final err = tester.takeException();
+        // The picture first, even of a room that overflowed: it shows where.
         if (out != null) {
           await tester.runAsync(() async {
             final boundary = tester.renderObject<RenderRepaintBoundary>(find.byKey(const ValueKey('shot')));
@@ -283,6 +286,7 @@ void main() {
                 .writeAsBytes(png!.buffer.asUint8List());
           });
         }
+        expect(err, isNull);
         await tester.runAsync(() async {
           await b.stopAll();
           await app.player?.dispose();

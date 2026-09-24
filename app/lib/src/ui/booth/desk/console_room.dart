@@ -50,13 +50,13 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
   bool _wide = false;
   bool _logFolded = false;
 
-  /// The Auto DJ's plan drawn out, in the place of the waveforms.
-  bool _planView = false;
+  /// What the middle of the booth shows: the waveforms, the set, or the plan.
+  BoothView _view = BoothView.waves;
 
   static const _kWidth = 'muse.booth.crateWidth';
   static const _kWide = 'muse.booth.crateWide';
   static const _kLog = 'muse.booth.logFolded';
-  static const _kPlan = 'muse.booth.planView';
+  static const _kView = 'muse.booth.view';
 
   Booth get _b => widget.booth;
   late final AppState _app = context.read<AppState>();
@@ -71,12 +71,18 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
     planPair.addListener(_pairAsked);
   }
 
-  /// A pair was tapped in the set strip: the plan view, on that pair.
+  /// A pair was tapped in the set: the plan view, on that pair.
   void _pairAsked() {
-    if (planPair.value != null && !_planView) {
-      setState(() => _planView = true);
+    if (planPair.value != null && _view != BoothView.plan) {
+      setState(() => _view = BoothView.plan);
       unawaited(_keepLayout());
     }
+  }
+
+  void _show(BoothView v) {
+    if (_view == v) return;
+    setState(() => _view = v);
+    unawaited(_keepLayout());
   }
 
   Future<void> _remember() async {
@@ -86,7 +92,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
       _crateWidth = prefs.getDouble(_kWidth) ?? 320;
       _wide = prefs.getBool(_kWide) ?? false;
       _logFolded = prefs.getBool(_kLog) ?? false;
-      _planView = prefs.getBool(_kPlan) ?? false;
+      _view = BoothView.values.asNameMap()[prefs.getString(_kView) ?? ''] ?? BoothView.waves;
     });
   }
 
@@ -95,7 +101,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
     await prefs.setDouble(_kWidth, _crateWidth);
     await prefs.setBool(_kWide, _wide);
     await prefs.setBool(_kLog, _logFolded);
-    await prefs.setBool(_kPlan, _planView);
+    await prefs.setString(_kView, _view.name);
   }
 
   /// The queue changed — in the crate or anywhere else: the automix follows it.
@@ -205,10 +211,9 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
     );
   }
 
-  void _togglePlan() {
-    setState(() => _planView = !_planView);
-    unawaited(_keepLayout());
-  }
+  /// P: the next of the three.
+  void _togglePlan() =>
+      _show(BoothView.values[(_view.index + 1) % BoothView.values.length]);
 
   void _fold() {
     setState(() => _logFolded = !_logFolded);
@@ -216,16 +221,30 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
   }
 
   Widget _room() => LayoutBuilder(builder: (context, c) {
-        final waves = _planView
-            ? (c.maxHeight * 0.42).clamp(240.0, 420.0)
-            : (c.maxHeight * 0.3).clamp(150.0, 320.0);
+        final waves = _view == BoothView.waves
+            ? (c.maxHeight * 0.3).clamp(150.0, 320.0)
+            : (c.maxHeight * 0.42).clamp(240.0, 420.0);
         final mixer = (c.maxWidth * 0.2).clamp(230.0, 290.0);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             SizedBox(
-                height: waves,
-                child: _planView ? ConsolePlan(booth: _b) : ConsoleWaves(booth: _b)),
+              height: waves,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _ViewSwitch(view: _view, onPick: _show),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: switch (_view) {
+                      BoothView.waves => ConsoleWaves(booth: _b),
+                      BoothView.set => ConsoleSetView(booth: _b),
+                      BoothView.plan => ConsolePlan(booth: _b),
+                    },
+                  ),
+                ],
+              ),
+            ),
             const SizedBox(height: 10),
             Expanded(
               child: Row(
@@ -258,7 +277,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
             const SizedBox(width: 2),
             _Mark(on: _b.live),
             const SizedBox(width: 22),
-            Expanded(child: ConsoleSet(booth: _b)),
+            Expanded(child: ConsoleAutoBar(booth: _b, onSetView: () => _show(BoothView.set))),
             const SizedBox(width: 12),
             if (_b.parts.separatesHere)
               _PartsLight(
@@ -273,11 +292,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
                 tooltip: 'Keep this mix',
                 onPressed: () => _keep(context),
               ),
-            IconButton(
-              icon: Icon(Icons.insights, color: _planView ? Console.ink : Console.quiet),
-              tooltip: _planView ? 'Back to the waveforms (P)' : "The Auto DJ's plan (P)",
-              onPressed: _togglePlan,
-            ),
+
             if (canGoFullScreen)
               ValueListenableBuilder<bool>(
                 valueListenable: fullScreen,
@@ -566,5 +581,35 @@ class _EdgeState extends State<_Edge> {
             ),
           ),
         ),
+      );
+}
+
+
+/// Three small pads down the left of the middle: the waveforms, the set, the plan.
+class _ViewSwitch extends StatelessWidget {
+  const _ViewSwitch({required this.view, required this.onPick});
+  final BoothView view;
+  final void Function(BoothView) onPick;
+
+  @override
+  Widget build(BuildContext context) => Column(
+        children: [
+          for (final (v, icon, tip) in const [
+            (BoothView.waves, Icons.graphic_eq, 'The waveforms (P cycles)'),
+            (BoothView.set, Icons.view_week_outlined, 'The set: every record to come, and the moves between'),
+            (BoothView.plan, Icons.insights, 'The plan: the next move, drawn out and steerable'),
+          ]) ...[
+            Pad(
+              icon: icon,
+              width: 30,
+              height: 30,
+              lit: view == v,
+              colour: Console.ink,
+              tooltip: tip,
+              onTap: () => onPick(v),
+            ),
+            const SizedBox(height: 4),
+          ],
+        ],
       );
 }

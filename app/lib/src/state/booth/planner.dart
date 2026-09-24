@@ -273,8 +273,10 @@ class Planner {
       if (breakdown != null) {
         final bars = breakdown.bars.clamp(8, 32);
         if (_roomBefore(to.timing, drop, bars)) {
+          // Not a move that minds the voices itself: two records singing over a
+          // breakdown is still two voices.
           consider(Transition.breakSwap, bars, 1.15, 'its breakdown under the next one\'s drop',
-              outAt: breakdown.start, inAt: _inBefore(to.timing, drop, bars), designed: true);
+              outAt: breakdown.start, inAt: _inBefore(to.timing, drop, bars));
         }
       }
     }

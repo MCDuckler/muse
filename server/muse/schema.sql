@@ -652,3 +652,24 @@ create table if not exists track_parts (
 -- A playlist whose songs are all taken apart by the pool as they arrive — a DJ's crate,
 -- ready to be mixed in parts on any computer, a phone included.
 alter table playlists add column if not exists auto_split boolean not null default false;
+
+-- What the booth did between two records and what the person thought of it: every
+-- mix the automix made, every time a hand steered it, and a thumb up or down after —
+-- the ground the planner's weights can one day be fitted on. See routes_booth.py.
+create table if not exists mix_feedback (
+  id          serial primary key,
+  user_id     integer references users(id) on delete set null,
+  device_id   integer references devices(id) on delete set null,
+  at          timestamptz not null default now(),
+  event       text not null,            -- mix | rating | steer | replay
+  from_track  integer,
+  to_track    integer,
+  kind        text,
+  bars        integer,
+  shift       real,
+  out_ms      integer,
+  in_ms       integer,
+  rating      integer,                  -- -1, 0, 1
+  detail      jsonb not null default '{}'
+);
+create index if not exists mix_feedback_pair on mix_feedback(from_track, to_track);

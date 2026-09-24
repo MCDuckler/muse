@@ -227,6 +227,13 @@ class ApiClient {
       headers: _headers,
       body: jsonEncode({'blocked': blocked})));
 
+  /// What the booth did between two records, or what was thought of it (a thumb up
+  /// or down, a hand steering): kept by the house for the planner to learn from.
+  Future<void> boothFeedback(Map<String, dynamic> body) async => _decode(await net.post(
+      _u('/booth/feedback'),
+      headers: {..._headers, 'Content-Type': 'application/json'},
+      body: jsonEncode(body)));
+
   /// Have the pool take a record apart, now.
   Future<void> poolSplit(int trackId) async =>
       _decode(await net.post(_u('/pool/split/$trackId'), headers: _headers));

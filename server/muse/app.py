@@ -29,7 +29,7 @@ from . import (
                routes_devices, routes_scrobble, routes_social,
                routes_sources,
                routes_spotify,
-               routes_sync, sleeve, pool, routes_pool,
+               routes_sync, sleeve, pool, routes_pool, routes_booth,
                match, storage, ytm)
 from . import deps
 from .deps import current_user, worker_auth
@@ -913,6 +913,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     app.include_router(routes_browse.router)
     app.include_router(routes_devices.router)
     app.include_router(routes_pool.router)
+    app.include_router(routes_booth.router)
     app.include_router(routes_downloads.router)
     routes_jam.set_publisher(publish)
     routes_library.set_publisher(publish)

@@ -518,6 +518,82 @@ class AutoMix extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ------------------------------------------------------------------ what was made
+  /// The last mix the automix made: what it went from and into, how, where — and
+  /// what was thought of it, once said. What the rating buttons and REPLAY work on.
+  LastMix? lastMix;
+
+  /// A thumb up (1), down (-1), or neither (0) on [lastMix]: kept by the house.
+  Future<void> rate(int rating) async {
+    final m = lastMix;
+    if (m == null) return;
+    lastMix = m.copyWith(rating: rating);
+    notifyListeners();
+    await _tell('rating', m, {'rating': rating});
+  }
+
+  /// The last mix again: the old record back on the free deck a phrase before it
+  /// went out, the new one parked where it came in, the same move — so a mix can be
+  /// heard twice before it is judged, or heard again after steering.
+  Future<void> replayLast() async {
+    final m = lastMix;
+    if (m == null || !running || booth.busy) return;
+    final now = booth.master;
+    if (now.track?.id != m.to.id || _at < 1 || _tracks[_at].id != m.to.id) return;
+    final old = booth.other(now);
+    _endGlide();
+    booth.note(BoothEventKind.auto, 'Again: ${m.from.displayTitle} into ${m.to.displayTitle}');
+    final bar = now.timing?.bar ?? const Duration(seconds: 2);
+    await now.pause();
+    await now.setTempo(1.0);
+    await booth.setGain(now, 1.0);
+    if (booth.pitchShiftOf(now) != 0) await booth.setPitchShift(now, 0);
+    // The old record back where it was four bars before it went out, and leading.
+    final fromAt = m.outAt - bar * 4;
+    await old.load(m.from, timing: booth.timing.peek(m.from.id), at: fromAt > Duration.zero ? fromAt : Duration.zero);
+    await old.setTempo(1.0);
+    booth.master = old;
+    await booth.setCrossfader(identical(old, booth.b) ? 1 : 0);
+    await old.play();
+    _at--;
+    steers[(m.from.id, m.to.id)] = m.plan;
+    await _tell('replay', m, const {});
+    await _prepareNext();
+  }
+
+  /// Every mix made and every hand on the plan, told to the house — quietly: a house
+  /// that cannot be reached loses a note, not the mix.
+  Future<void> _tell(String event, LastMix m, Map<String, dynamic> more) async {
+    try {
+      await booth.api.boothFeedback({
+        'event': event,
+        'from_track': m.from.id,
+        'to_track': m.to.id,
+        'kind': m.plan.kind.name,
+        'bars': m.plan.bars,
+        'shift': m.plan.shift,
+        'out_ms': m.outAt.inMilliseconds,
+        'in_ms': m.inAt.inMilliseconds,
+        'detail': {
+          'why': m.plan.why,
+          'score': m.plan.score,
+          'steered': m.steered,
+          'style': style.name,
+          'axes': {'length': axes.length, 'risk': axes.risk, 'vocals': axes.vocals},
+          ...more,
+        },
+      }).timeout(const Duration(seconds: 10));
+    } catch (_) {}
+  }
+
+  /// A hand on the plan coming, told to the house as such.
+  void _tellSteer(String how, MixPlan p) {
+    final on = current, nxt = next;
+    if (on == null || nxt == null) return;
+    final m = LastMix(from: on, to: nxt, plan: p, outAt: goesAt ?? Duration.zero, inAt: comesInAt ?? Duration.zero, steered: true, at: DateTime.now());
+    unawaited(_tell('steer', m, {'how': how, 'was': planned?.kind.name, 'wasBars': planned?.bars}));
+  }
+
   // ------------------------------------------------------------------ the glide
   /// After a mix the new master is at the old one's tempo and, where it was the
   /// louder, turned down to its level. Left there, a set is stuck at its first
@@ -924,6 +1000,7 @@ class AutoMix extends ChangeNotifier {
   /// A hand steering: [p] instead of what the planner chose, for this pair only.
   Future<void> steer(MixPlan p) async {
     if (!canSteer) return;
+    _tellSteer('steer', p);
     final from = booth.master, to = booth.other(from);
     steers[(from.track!.id, to.track!.id)] = p;
     // A preparation under way would plan over the hand: it starts over, and keeps it.
@@ -1071,6 +1148,19 @@ class AutoMix extends ChangeNotifier {
         return;
       }
       final done = (from.track?.id, booth.master.track?.id);
+      if (from.track != null && booth.master.track != null) {
+        final made = LastMix(
+          from: from.track!,
+          to: booth.master.track!,
+          plan: planned ?? MixPlan(chosen.kind, chosen.bars),
+          outAt: go,
+          inAt: comesInAt ?? Duration.zero,
+          steered: steered,
+          at: DateTime.now(),
+        );
+        lastMix = made;
+        unawaited(_tell('mix', made, {'byHand': ended}));
+      }
       _at++;
       steers.remove(done);
       _previews.remove(done);
@@ -1148,4 +1238,29 @@ class AutoMix extends ChangeNotifier {
     _arrivals.cancel();
     super.dispose();
   }
+}
+
+
+/// One mix the automix made, as it was made: what it went from and into, the move
+/// and its places, whether a hand chose it — and the thumb, once given.
+class LastMix {
+  const LastMix({
+    required this.from,
+    required this.to,
+    required this.plan,
+    required this.outAt,
+    required this.inAt,
+    required this.steered,
+    required this.at,
+    this.rating,
+  });
+  final Track from, to;
+  final MixPlan plan;
+  final Duration outAt, inAt;
+  final bool steered;
+  final DateTime at;
+  final int? rating;
+
+  LastMix copyWith({int? rating}) => LastMix(
+      from: from, to: to, plan: plan, outAt: outAt, inAt: inAt, steered: steered, at: at, rating: rating ?? this.rating);
 }

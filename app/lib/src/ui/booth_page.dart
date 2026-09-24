@@ -99,7 +99,8 @@ class _BoothPageState extends State<BoothPage> {
     ('F G', 'Kill the bass on A, B'),
     ('M', 'Auto DJ: mix now'),
     ('N', 'Auto DJ: not that one'),
-    ('P', "The Auto DJ's plan, or the waveforms"),
+    ('P', 'Waveforms, the set, the plan'),
+    ('R', 'Auto DJ: hear the last mix again'),
     ('F11', 'Full screen'),
   ];
 
@@ -154,6 +155,8 @@ class _BoothPageState extends State<BoothPage> {
       unawaited(b.auto.dropNext());
     } else if (k == LogicalKeyboardKey.keyP) {
       planViewToggles.value++;
+    } else if (k == LogicalKeyboardKey.keyR) {
+      unawaited(b.auto.replayLast());
     } else if (k == LogicalKeyboardKey.arrowLeft) {
       shift ? nudge(master, -10) : unawaited(b.setCrossfader(b.crossfader - 0.05));
     } else if (k == LogicalKeyboardKey.arrowRight) {
