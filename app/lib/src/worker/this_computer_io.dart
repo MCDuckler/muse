@@ -314,7 +314,36 @@ class PoolHere extends ChangeNotifier {
       await Future<void>.delayed(const Duration(milliseconds: 500));
       await _hear();
     }
+    // Still silent, and the helper that last spoke is still running: one that has
+    // stopped saying anything but holds the lock, so that the one just started found
+    // it taken and left. It is put down and a new one started.
+    if (!helperAlive && await _stuckHelperGone()) {
+      await background.start(
+          server: api.baseUrl, token: token, slots: slots, fetch: fetchForPool, split: splitForPool);
+      for (var i = 0; i < 6 && !helperAlive; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        await _hear();
+      }
+    }
     notifyListeners();
+  }
+
+  /// The process the helper's last status names, where it is still running and is the
+  /// helper: stopped. Whether there was one. Linux only — elsewhere a process cannot be
+  /// told for the helper by its number alone, and a wrong one is not to be killed.
+  Future<bool> _stuckHelperGone() async {
+    final other = heard?.pid;
+    if (other == null || !Platform.isLinux || other == pid) return false;
+    try {
+      final line = await File('/proc/$other/cmdline').readAsString();
+      if (!line.contains('wetowl-fetch')) return false;
+    } catch (_) {
+      return false; // not running
+    }
+    debugPrint('pool: helper $other has gone quiet but holds on: stopping it');
+    Process.killPid(other, ProcessSignal.sigkill);
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    return true;
   }
 
   /// The two switches: fetching for the pool, taking records apart for the pool.

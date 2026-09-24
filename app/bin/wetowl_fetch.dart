@@ -94,7 +94,7 @@ Future<void> main(List<String> args) async {
   final heartbeat = Timer.periodic(const Duration(seconds: 5), (_) => say());
 
   var leaving = false;
-  Future<void> leave(String why) async {
+  Future<void> leave(String why, {Future<void> Function()? then}) async {
     if (leaving) return;
     leaving = true;
     heartbeat.cancel();
@@ -115,6 +115,9 @@ Future<void> main(List<String> args) async {
     ));
     await lock.unlock();
     await lock.close();
+    try {
+      await then?.call();
+    } catch (_) {}
     exit(0);
   }
 
@@ -129,6 +132,25 @@ Future<void> main(List<String> args) async {
 
   // The file is the switch.
   Timer.periodic(const Duration(seconds: 3), (_) async {
+    // Updated underneath: the program on disk is another build. This one goes and the
+    // new one starts in its place — left running, an old helper held the lock that
+    // the new one needed, and every fix in the update passed the pool by.
+    if (build != null && !leaving) {
+      String? onDisk;
+      try {
+        onDisk = File('${File(Platform.resolvedExecutable).parent.path}'
+                '${Platform.pathSeparator}build-stamp.txt')
+            .readAsStringSync()
+            .trim();
+      } catch (_) {}
+      if (onDisk != null && onDisk.isNotEmpty && onDisk != build) {
+        await leave('updated to $onDisk — starting again as it', then: () async {
+          await Process.start(Platform.resolvedExecutable, ['--config', files.config.path],
+              mode: ProcessStartMode.detached);
+        });
+        return;
+      }
+    }
     final next = await files.readConfig();
     if (next == null || !next.on) return leave('stopped — switched off in WetOwl');
     if (next.slots != config!.slots) {

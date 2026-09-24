@@ -347,8 +347,21 @@ class Splitter extends Told {
       notifyListeners();
       await _quietly(() => server.progress(job, 'uploading', null));
       final seconds = clock.elapsedMilliseconds / 1000;
-      await server.handIn(job, {for (final e in into.entries) e.key: File(e.value)},
-          seconds: seconds);
+      // Handed in again if the house was not there to take it (a restart, a 502): the
+      // parts are on disk, and throwing away a minute of the card for one bad answer
+      // is how splits went missing.
+      for (var attempt = 1;; attempt++) {
+        try {
+          await server.handIn(job, {for (final e in into.entries) e.key: File(e.value)},
+              seconds: seconds);
+          break;
+        } catch (e) {
+          if (attempt >= 4 || !_wanted) rethrow;
+          _say('track ${job.trackId}: could not hand it in ($e), again in ${attempt * 10} s');
+          await _pause(Duration(seconds: attempt * 10));
+          if (!_wanted) rethrow;
+        }
+      }
       done++;
       _say('track ${job.trackId}: parts handed in · ${seconds.toStringAsFixed(0)} s '
           'on the ${flight.device == 'cuda' ? 'card' : 'processor'}');
