@@ -53,6 +53,16 @@ def test_a_bar_alone_joins_its_neighbour():
     assert len(got) == 1 and got[0]["label"] == "inst"
 
 
+def test_sections_of_one_name_side_by_side_are_one():
+    # An intro without drums, first sung then not: one intro.
+    mix = [-20.0] * 8 + [-10.0] * 24
+    drums = [-90.0] * 8 + [-12.0] * 24
+    vocals = [-22.0] * 4 + [-90.0] * 28
+    got = structure.label_bars(mix, drums, vocals)
+    assert [(s["label"], s["start_bar"], s["end_bar"]) for s in got][:2] == [("intro", 0, 8), ("inst", 8, 32)]
+    assert got[0]["vocals"] is True
+
+
 def test_without_stems_only_the_mix_speaks():
     mix = [-30.0] * 4 + [-10.0] * 24 + [-30.0] * 4
     got = structure.label_bars(mix, None, None)

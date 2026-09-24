@@ -262,7 +262,21 @@ def label_bars(mix_db: list[float], drums_db: list[float] | None,
                                    "drums": False, "vocals": s["vocals"],
                                    "energy_db": round(float(mix[start:b].mean()), 1)})
                 break
-    return [s for s in out if s["end_bar"] > s["start_bar"]]
+    # Two sections side by side with the same name are one: an intro sung and then
+    # not is still the intro.
+    merged: list[dict] = []
+    for s in out:
+        if s["end_bar"] <= s["start_bar"]:
+            continue
+        if merged and merged[-1]["label"] == s["label"]:
+            last = merged[-1]
+            n_last, n_s = last["end_bar"] - last["start_bar"], s["end_bar"] - s["start_bar"]
+            last["energy_db"] = round((last["energy_db"] * n_last + s["energy_db"] * n_s) / (n_last + n_s), 1)
+            last["vocals"] = last["vocals"] or s["vocals"]
+            last["end_bar"] = s["end_bar"]
+        else:
+            merged.append(dict(s))
+    return merged
 
 
 # ------------------------------------------------------------------ the whole of it

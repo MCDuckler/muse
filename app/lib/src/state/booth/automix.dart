@@ -416,6 +416,23 @@ class AutoMix extends ChangeNotifier {
     return timing.onMarker(at);
   }
 
+  /// Whether the [bars] bars of [t] from [at] are quiet — 8 dB under its loud bars,
+  /// by the house's structure. False where nothing was measured.
+  static bool quietBars(TrackTiming t, Duration at, int bars) {
+    final s = t.structure;
+    if (s == null || s.barsMs.isEmpty || s.mixDb.isEmpty) return false;
+    final heard = [for (final v in s.mixDb) if (v > -90) v]..sort();
+    if (heard.isEmpty) return false;
+    final loud = heard[(heard.length * 0.9).floor().clamp(0, heard.length - 1)];
+    var i = 0;
+    while (i + 1 < s.barsMs.length && s.barsMs[i + 1] <= at.inMilliseconds) {
+      i++;
+    }
+    final span = [for (final v in s.mixDb.sublist(i, math.min(s.mixDb.length, i + bars))) if (v > -90) v];
+    if (span.isEmpty) return false;
+    return span.reduce((a, b) => a + b) / span.length < loud - 8;
+  }
+
   /// Where the incoming record is parked.
   ///
   /// So many bars before its intro ends, on one of its own four-bar markers, never
@@ -432,6 +449,13 @@ class AutoMix extends ChangeNotifier {
     final bar = to.bar ?? Duration(microseconds: (4 * 60e6 / bpm).round());
     final drop = onTheDrop ? to.dropAfter(cues.firstDownbeat) : null;
     var at = (drop ?? cues.mixIn) - bar * bars;
+    // Unless those bars are quiet — a long, thin intro, 8 dB under the record's loud
+    // bars by the structure — when the record comes in later: half way through the
+    // move, or already on. (A record parked in near-silence made a blend into a hole.)
+    if (drop == null && at >= cues.firstDownbeat && quietBars(to, at, bars)) {
+      final half = cues.mixIn - bar * (bars ~/ 2);
+      at = quietBars(to, half, math.max(1, bars ~/ 2)) ? cues.mixIn : half;
+    }
     if (at < cues.firstDownbeat) at = cues.firstDownbeat;
     // Onto its own four-bar grid: the marker at or before, where there is one at or
     // after the first downbeat. Then onto the steady grid: the downbeat the analysis

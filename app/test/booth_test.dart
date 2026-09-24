@@ -1019,6 +1019,27 @@ void autoMixRules() {
     expect(old.markers.take(3), [0, 8000, 16000]);
   });
 
+  test('a record with a long quiet intro is not parked in the silence', () {
+    // 120 bpm, bars of 2 s; the intro ends at bar 32, but its first 24 bars are near
+    // silence and only the last 8 are heard.
+    final beats = [for (var i = 0; i < 480; i++) i * 500];
+    final downs = [for (var i = 0; i < 480; i += 4) beats[i]];
+    TrackTiming timed(List<double> mixDb) => TrackTiming(
+          durationMs: 240000,
+          bpm: 120,
+          beats: beats,
+          downbeats: downs,
+          cues: MixCues(firstDownbeatMs: 0, mixInMs: downs[32], mixOutMs: downs[100], soundEndMs: 239000),
+          structure: TrackStructure(barsMs: downs, mixDb: mixDb),
+        );
+    final thin = timed([for (var i = 0; i < 120; i++) i < 24 ? -45.0 : i < 32 ? -14.0 : -10.0]);
+    final full = timed([for (var i = 0; i < 120; i++) i < 32 ? -12.0 : -10.0]);
+    expect(AutoMix.inPoint(full, bars: 16), Duration(milliseconds: downs[16]), reason: 'the ordinary place');
+    expect(AutoMix.inPoint(thin, bars: 16), Duration(milliseconds: downs[24]), reason: 'half way: where it is heard');
+    final silent = timed([for (var i = 0; i < 120; i++) i < 32 ? -50.0 : -10.0]);
+    expect(AutoMix.inPoint(silent, bars: 16), Duration(milliseconds: downs[32]), reason: 'already on');
+  });
+
   test('the mix is moved to the phrase it is nearest', () {
     // 128 bpm: a bar is 1875 ms, a phrase 30 s. Phrases at 0, 30, 60, 90 s.
     final t = TrackTiming(
