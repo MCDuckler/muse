@@ -1039,14 +1039,18 @@ class Booth extends ChangeNotifier {
         // Voice first: the new record's alone, over the old record's beat with the old
         // voice gone — so there is one voice, and it is the new one. Half way the new
         // band comes up under it, the old bass goes, and the old record leaves.
+        // The two voices hand over, rather than overlap, in the first bars.
         const onlyVoice = StemLevels(drums: 0, rest: 0);
         const noVoice = StemLevels(vocals: 0);
         return [
           MixStep(0, crossfader: 0.5, decks: {
-            to: const DeckStep(stems: onlyVoice, eq: EqSet.flat),
+            to: const DeckStep(stems: StemLevels(drums: 0, rest: 0, vocals: 0), eq: EqSet.flat),
             from: const DeckStep(stems: StemLevels.all),
           }),
-          MixStep(0.12, decks: {from: const DeckStep(stems: noVoice)}),
+          MixStep(0.12, decks: {
+            to: const DeckStep(stems: onlyVoice),
+            from: const DeckStep(stems: noVoice),
+          }),
           MixStep(0.5, crossfader: 0.5, decks: {
             to: const DeckStep(stems: onlyVoice),
             from: const DeckStep(stems: noVoice),
@@ -1069,6 +1073,7 @@ class Booth extends ChangeNotifier {
         return [
           MixStep(0, crossfader: 0, decks: {
             to: const DeckStep(stems: StemLevels(vocals: 0), eq: EqSet(low: EqSet.killed)),
+            from: const DeckStep(stems: StemLevels.all),
           }),
           MixStep(0.25, crossfader: 0.5, decks: {
             to: const DeckStep(eq: EqSet.flat),
@@ -1430,7 +1435,10 @@ class Booth extends ChangeNotifier {
       }
       if (before == null) return null;
       final a = before.decks[deck]!.stems!;
-      if (after == null) return a;
+      // The last step puts a deck's stems back for its next record, once the fader has
+      // taken it out: moved towards on the way, the outgoing's voice and drums would
+      // come back up under the last bars of the mix.
+      if (after == null || after.at >= 1) return a;
       final span = after.at - before.at;
       return a.lerp(after.decks[deck]!.stems!, span <= 0 ? 1 : ((k - before.at) / span).clamp(0.0, 1.0));
     }
@@ -1557,6 +1565,8 @@ class Booth extends ChangeNotifier {
         unawaited(setEq(d, EqSet.flat));
         unawaited(setFilter(d, 0));
         d.unloop();
+        // And the stems a stem move had turned: back to the part on the pads.
+        if (d.stemmed) unawaited(d.setStemLevels(StemLevels.of(d.part)));
       }
     }
     final d = _done;

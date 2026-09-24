@@ -378,7 +378,7 @@ class Deck extends ChangeNotifier {
         await _player.setAudioSource(_sourceFor(track), initialPosition: start);
       }
       if (!stemmed) _stemsFrom = null;
-      if (stemmed && part != null) {
+      if (stemmed) {
         stemLevels = StemLevels.of(part);
         await stemEngine?.call(this, stemLevels);
       }

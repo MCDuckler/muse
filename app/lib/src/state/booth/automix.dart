@@ -451,10 +451,30 @@ class AutoMix extends ChangeNotifier {
   /// The record after this one, on the free deck: loaded, synced, parked where it
   /// will come in — and the plan for getting there written down.
   Future<void> _prepareNext() async {
+    // The queue can change while this waits on the house (the parts, the voices — ten
+    // seconds and more): a newer preparation takes over, and this one stops wherever
+    // it has got to rather than writing its plan over the newer one's.
+    final ticket = ++_preparing;
+    bool stale() => ticket != _preparing;
+    _prepping++;
+    try {
+      await _prepare(stale);
+    } finally {
+      _prepping--;
+    }
+  }
+
+  int _preparing = 0;
+  int _prepping = 0;
+
+  Future<void> _prepare(bool Function() stale) async {
+    why = null;
     if (pickBest && !replaying) await _bringTheBestForward();
+    if (stale()) return;
     // Ask for the parts of what is coming before choosing how to get there: what the
     // server has already made is what the booth is allowed to plan around.
     await _askAhead();
+    if (stale()) return;
     final coming = next;
     final from = booth.master;
     final to = booth.other(from);
@@ -465,6 +485,7 @@ class AutoMix extends ChangeNotifier {
       return;
     }
     final timing = await booth.timing.of(coming);
+    if (stale()) return;
     final was = from.track == null ? null : _keptFor(from.track!.id, coming.id);
     var chosen = was == null
         ? choose(from.timing, timing,
@@ -515,6 +536,7 @@ class AutoMix extends ChangeNotifier {
     if (to.track?.id != coming.id || to.playing) {
       await to.load(coming, timing: timing, at: at);
     }
+    if (stale()) return;
     // Now that both are known — which is in stems, where each sings, what each
     // sings — the move itself, and where it goes out and comes in.
     MixPlan? planned;
@@ -523,6 +545,7 @@ class AutoMix extends ChangeNotifier {
         booth.vocals.of(from.track!).timeout(const Duration(seconds: 6), onTimeout: () => null),
         booth.vocals.of(coming).timeout(const Duration(seconds: 6), onTimeout: () => null),
       ]);
+      if (stale()) return;
       planned = Planner.plan(
         from: MixSide(timing: timed, vocals: voices[0], stems: from.stemmed, pitch: from.pitch),
         to: MixSide(timing: timing, vocals: voices[1], stems: to.stemmed),
@@ -603,7 +626,9 @@ class AutoMix extends ChangeNotifier {
   Future<void> _tick() async {
     // Nothing while a mix is waiting for its beat or running — the automix's own, or
     // one somebody started by hand.
-    if (!running || _going || booth.busy) return;
+    // Nor while the next record is still being planned: the plan half written is not one
+    // to go on.
+    if (!running || _going || booth.busy || _prepping > 0) return;
     final from = booth.master;
     final go = goesAt;
     final coming = next;

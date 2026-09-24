@@ -30,7 +30,7 @@ from . import pool
 
 log = logging.getLogger("muse.vocals")
 
-VERSION = 1
+VERSION = 2
 _RATE = 11025
 
 # LRCLIB answers about one request in thirty seconds; asked faster it stops answering.
@@ -43,25 +43,47 @@ def cache_path(data_dir: pathlib.Path, sha: str) -> pathlib.Path:
     return data_dir / "beats" / f"{sha}-vocals-v{VERSION}.json"
 
 
-def bar_levels(vocals: pathlib.Path, downbeats_ms: list[int]) -> list[int]:
-    """How loud the voice is in each bar, 0 to 255 with the loudest bar at 255."""
+def _mono(path: pathlib.Path) -> np.ndarray:
     raw = subprocess.run(
-        ["ffmpeg", "-v", "error", "-i", str(vocals), "-ac", "1", "-ar", str(_RATE),
+        ["ffmpeg", "-v", "error", "-i", str(path), "-ac", "1", "-ar", str(_RATE),
          "-f", "s16le", "-"], capture_output=True, timeout=120, check=True).stdout
-    x = np.frombuffer(raw[: len(raw) // 2 * 2], dtype="<i2").astype(np.float32) / 32768.0
-    if len(downbeats_ms) < 2 or len(x) == 0:
-        return []
-    bounds = list(downbeats_ms) + [downbeats_ms[-1] + (downbeats_ms[-1] - downbeats_ms[-2])]
-    rms = []
+    return np.frombuffer(raw[: len(raw) // 2 * 2], dtype="<i2").astype(np.float32) / 32768.0
+
+
+def _bar_rms(x: np.ndarray, bounds: list[int]) -> list[float]:
+    out = []
     for a, b in zip(bounds[:-1], bounds[1:]):
         seg = x[int(a * _RATE / 1000):int(b * _RATE / 1000)]
-        rms.append(float(np.sqrt(np.mean(seg * seg))) if len(seg) else 0.0)
-    top = max(rms) or 1.0
-    # On a loudness scale, like the bars' energy: -30 dB under the loudest is nothing.
+        out.append(float(np.sqrt(np.mean(seg * seg))) if len(seg) else 0.0)
+    return out
+
+
+# The voice's share of the record in a bar, in dB, that is 0 and 255: a sung bar is a
+# tenth of the record's loudness and more (-13 dB is the booth's "sung", 118); what a
+# separator leaves of the band in the voice of an instrumental is -25 dB and under.
+_SHARE_NONE = -24.0
+# And quieter than this, whatever its share, it is not a voice anybody hears.
+_SILENT_DB = -50.0
+
+
+def bar_levels(vocals: pathlib.Path, record: pathlib.Path, downbeats_ms: list[int]) -> list[int]:
+    """How much of each bar is the voice, 0 to 255: its share of the record's own
+    loudness there. Measured against the record rather than against the voice's own
+    loudest bar — that made the separator's faint leftovers in an instrumental read
+    as singing from start to end."""
+    if len(downbeats_ms) < 2:
+        return []
+    v, m = _mono(vocals), _mono(record)
+    if len(v) == 0 or len(m) == 0:
+        return []
+    bounds = list(downbeats_ms) + [downbeats_ms[-1] + (downbeats_ms[-1] - downbeats_ms[-2])]
     out = []
-    for r in rms:
-        db = 20 * np.log10(max(r, 1e-6) / top)
-        out.append(int(round(255 * max(0.0, 1 + db / 30))))
+    for rv, rm in zip(_bar_rms(v, bounds), _bar_rms(m, bounds)):
+        if rv <= 0 or 20 * np.log10(rv) < _SILENT_DB:
+            out.append(0)
+            continue
+        share = 20 * np.log10(min(1.0, rv / max(rm, 1e-6)))
+        out.append(int(round(255 * max(0.0, 1 - share / _SHARE_NONE))))
     return out
 
 
@@ -188,7 +210,7 @@ def for_track(data_dir: pathlib.Path, track: dict, downbeats: list[int]) -> dict
         vocals = pool.part_here(sha, "vocals")
         if vocals is not None:
             try:
-                bars = bar_levels(vocals, downbeats)
+                bars = bar_levels(vocals, pathlib.Path(track["path"]), downbeats)
                 cached.parent.mkdir(parents=True, exist_ok=True)
                 cached.write_text(json.dumps({"bars": bars}))
             except (subprocess.SubprocessError, OSError) as e:

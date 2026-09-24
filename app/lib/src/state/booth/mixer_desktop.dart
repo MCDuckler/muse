@@ -138,7 +138,9 @@ class DesktopMixer extends VolumeMixer {
     final was = _stems[deck.name] ?? false;
     _stems[deck.name] = stems;
     if (was != stems) _installed.remove(deck.name);
-    _levels[deck.name] = StemLevels.all;
+    // Not known until they are next set: a new record may or may not have the chain
+    // built afresh, so the next levels go to all three stems either way.
+    _levels.remove(deck.name);
     if (!await _install(deck, mpv)) return false;
     return stems;
   }
@@ -146,16 +148,16 @@ class DesktopMixer extends VolumeMixer {
   @override
   Future<void> setStems(Deck deck, StemLevels levels) async {
     if (!(_stems[deck.name] ?? false)) return;
-    final was = _levels[deck.name] ?? StemLevels.all;
+    final was = _levels[deck.name];
     _levels[deck.name] = levels;
     final mpv = _native(deck);
     if (mpv == null) return;
     for (final (target, now, before) in [
-      ('volume@d', levels.drums, was.drums),
-      ('volume@r', levels.rest, was.rest),
-      ('volume@v', levels.vocals, was.vocals),
+      ('volume@d', levels.drums, was?.drums),
+      ('volume@r', levels.rest, was?.rest),
+      ('volume@v', levels.vocals, was?.vocals),
     ]) {
-      if ((now - before).abs() < 0.001) continue;
+      if (before != null && (now - before).abs() < 0.001) continue;
       try {
         await mpv.command(['af-command', 'wetowl', 'volume', now.toStringAsFixed(3), target]);
       } catch (_) {}

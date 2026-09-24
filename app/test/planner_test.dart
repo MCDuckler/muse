@@ -115,4 +115,34 @@ void main() {
       expect(plan.kind.needsStems, isFalse, reason: plan.toString());
     }
   });
+
+  test('a drop too near the start to land on the last beat is not swapped onto', () {
+    final from = record();
+    for (final (drop, offered) in [(6, false), (40, true)]) {
+      final to = record(drops: [drop]);
+      final kinds = <Transition>{};
+      for (var seed = 0; seed < 40; seed++) {
+        kinds.add(Planner.plan(
+          from: MixSide(timing: from),
+          to: MixSide(timing: to),
+          style: MixStyle.bold,
+          recent: const [Transition.swap],
+          random: math.Random(seed),
+        ).kind);
+      }
+      expect(kinds.contains(Transition.dropSwap), offered, reason: 'drop at bar $drop: $kinds');
+    }
+  });
+
+  test('a hook first sung near the end is no announcement', () {
+    final from = record();
+    final to = record();
+    final plan = Planner.plan(
+      from: MixSide(timing: from, vocals: voice(120, (b) => b > 16 && b < 80), stems: true),
+      to: MixSide(timing: to, vocals: voice(120, (b) => b >= 80, hookAt: [to.downbeats[80]]), stems: true),
+      style: MixStyle.bold,
+      random: math.Random(1),
+    );
+    expect(plan.kind, isNot(Transition.announce), reason: plan.toString());
+  });
 }

@@ -130,9 +130,11 @@ class Planner {
 
     // Announce: the new record's hook over the old record's beat.
     if (stems) {
+      final bars = style == MixStyle.easy ? 32 : 16;
       final hookAt = _announceFrom(to);
-      if (hookAt != null) {
-        final bars = style == MixStyle.easy ? 32 : 16;
+      // Where the new record goes on from its hook, most of it still to come: a hook
+      // first sung late would announce a record that is then nearly over.
+      if (hookAt != null && _roomAfter(to.timing, hookAt, bars + 32)) {
         final hook = to.vocals?.hook;
         consider(Transition.announce, bars, 1.1,
             hook != null && hook.at.isNotEmpty
@@ -150,11 +152,13 @@ class Planner {
 
     // The drop: the new record dropping on the one the old one is taken away.
     final drop = to.timing.dropAfter(to.timing.cues?.firstDownbeat ?? Duration.zero);
-    if (drop != null) {
-      final bars = style == MixStyle.bold ? 8 : 16;
+    final bars = style == MixStyle.bold ? 8 : 16;
+    // Only a drop with the whole move's worth of record before it lands on the move's
+    // last beat: parked any earlier than the record's start, it would come early.
+    if (drop != null && _roomBefore(to.timing, drop, bars)) {
       consider(Transition.dropSwap, bars, 1.1, 'lands on its drop',
           inAt: AutoMix.inPoint(to.timing, bars: bars, onTheDrop: true));
-      if (inKey) {
+      if (inKey && _roomBefore(to.timing, drop, 8)) {
         consider(Transition.roll, 8, 0.9, 'rolled into its drop',
             inAt: AutoMix.inPoint(to.timing, bars: 8, onTheDrop: true));
       }
@@ -165,6 +169,20 @@ class Planner {
     if (candidates.isEmpty) return MixPlan(base.kind, base.bars, why: 'the ordinary way');
     candidates.sort((a, b) => b.score.compareTo(a.score));
     return candidates.first;
+  }
+
+  /// Whether [t] has [bars] bars between its first downbeat and [at].
+  static bool _roomBefore(TrackTiming t, Duration at, int bars) {
+    final bar = t.bar;
+    final first = t.cues?.firstDownbeat ?? Duration.zero;
+    return bar != null && at - bar * bars >= first;
+  }
+
+  /// Whether [t] goes on for [bars] bars after [at] before it starts going out.
+  static bool _roomAfter(TrackTiming t, Duration at, int bars) {
+    final bar = t.bar;
+    final end = t.cues?.mixOut;
+    return bar != null && (end == null || end <= Duration.zero || at + bar * bars <= end);
   }
 
   static String _short(String s) => s.length > 40 ? '${s.substring(0, 38)}…' : s;

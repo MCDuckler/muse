@@ -31,3 +31,23 @@ def test_lyrics_are_moved_onto_the_voice_or_not_believed():
     # Lines spread over the whole record, voice or not: no offset fits.
     everywhere = [(i * 9500, f"line {i}") for i in range(12)]
     assert vocals.align(everywhere, bars, downbeats) is None
+
+
+def test_what_a_separator_leaves_in_an_instrumental_is_no_voice(tmp_path):
+    import subprocess
+
+    def tone(name, filt):
+        f = tmp_path / name
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                        f"sine=frequency=330:duration=8,{filt}", str(f)], check=True)
+        return f
+
+    record = tone("record.wav", "volume=0.5")
+    # A voice a thirtieth of the record's loudness: a separator's leftovers.
+    leftovers = tone("leftovers.wav", "volume=0.016")
+    # The voice half the record, in the second half only.
+    sung = tone("sung.wav", "volume='if(gte(t,4),0.25,0)':eval=frame")
+    downbeats = [i * 2000 for i in range(4)]
+    assert vocals.bar_levels(leftovers, record, downbeats) == [0, 0, 0, 0]
+    got = vocals.bar_levels(sung, record, downbeats)
+    assert got[:2] == [0, 0] and min(got[2:]) >= 118, got
