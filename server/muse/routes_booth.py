@@ -8,7 +8,7 @@ import json
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from . import db
+from . import db, traits
 from .deps import current_user
 
 router = APIRouter(prefix="/booth")
@@ -51,3 +51,18 @@ def feedback_list(limit: int = 200, user: dict = Depends(current_user)):
              from mix_feedback where user_id=%s order by id desc limit %s""",
         (user["id"], max(1, min(2000, limit))))
     return {"feedback": [{**r, "at": r["at"].isoformat()} for r in rows]}
+
+
+@router.get("/partners")
+def partners(from_track: int, exclude: str = "", limit: int = 12, step: float = 0.0,
+             avoid: str = "", user: dict = Depends(current_user)):
+    """The records in this person's library that would follow [from_track] best, by
+    what the house knows of each (track_traits): its tempo, its key, its loudness,
+    how it sounds. Coarse — the app judges the handful sent back finely, with the
+    voices and the moves. [exclude] is what is in the queue already, comma-separated;
+    [step] the step in loudness (0 to 1 scale) the set's arc wants here; [avoid] the
+    artists lately played, comma-separated."""
+    ids = {int(x) for x in exclude.split(",") if x.strip().lstrip("-").isdigit()}
+    return {"partners": traits.partners(
+        user["id"], from_track, ids, limit=limit, wanted_step=step,
+        avoid_artists={s for s in avoid.split(",") if s.strip()})}

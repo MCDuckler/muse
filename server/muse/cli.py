@@ -198,8 +198,52 @@ def covers(apply: bool = False) -> None:
     db.close()
 
 
+def traits_index(measure: bool = False) -> None:
+    """The planner's index of every ready record (track_traits) from the analyses on
+    disk — and with --measure, the analysis of every record that has none yet, which
+    is half a second a record and the whole library's worth of them."""
+    import pathlib
+
+    from . import beats, config, db, traits
+    from . import analysis as _analysis
+
+    cfg = config.load()
+    db.init(cfg.dsn)
+    rows = db.all_(
+        """select t.*, m.path, m.sha256 from tracks t
+             join media m on m.track_id = t.id and m.role = 'canonical'
+            where t.state = 'ready' order by t.id""")
+    kept = missing = 0
+    for t in rows:
+        audio = pathlib.Path(t["path"] or "")
+        cached = beats.cache_path(cfg.data_dir, t["sha256"])
+        if not cached.exists() and not measure:
+            missing += 1
+            continue
+        if not audio.exists():
+            missing += 1
+            continue
+        try:
+            found = beats.for_track(cfg.data_dir, audio, t["sha256"])
+            if found.get("cues") and found.get("downbeats"):
+                found["cues"] = _analysis.sane_cues(found["cues"], found["downbeats"])
+            if "sound" not in found and found.get("downbeats"):
+                found = beats.with_sound(cfg.data_dir, audio, t["sha256"], found)
+            traits.remember(t, found)
+            kept += 1
+        except Exception as e:  # noqa: BLE001
+            print(f"  {t['id']} {t['title']!r}: {e}")
+            missing += 1
+    print(f"{kept} indexed, {missing} without an analysis"
+          + ("" if measure else " (--measure to work them out)"))
+
+
 def main() -> None:
     match sys.argv[1:]:
+        case ["traits"]:
+            traits_index()
+        case ["traits", "--measure"]:
+            traits_index(measure=True)
         case ["adduser", name]:
             adduser(name)
         case ["secret"]:
@@ -228,7 +272,7 @@ def main() -> None:
             sys.exit("usage: python -m muse.cli [adduser <name> | secret "
                      "| splitartists [--apply] | fixsoundcloud [--apply] "
                      "| fixspotifynames [--apply] | markdead [--apply] "
-                     "| covers [--apply]]")
+                     "| covers [--apply] | traits [--measure]]")
 
 
 if __name__ == "__main__":

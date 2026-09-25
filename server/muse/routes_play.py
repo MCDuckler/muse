@@ -7,7 +7,7 @@ import subprocess
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Response
 
-from . import catalog, db
+from . import catalog, db, traits
 from . import analysis as _analysis
 from . import beats as _beats
 from . import peaks as _peaks
@@ -79,6 +79,16 @@ def analysis(track_id: int, response: Response, structure: bool = False,
     if t.get("analysed_at") is None or t.get("bpm") != found.get("bpm"):
         db.run("update tracks set bpm=%s, analysed_at=now() where id=%s",
                (found.get("bpm"), track_id))
+    # A record measured before there was a sound to it: given one now, and kept.
+    if "sound" not in found and found.get("downbeats"):
+        try:
+            found = _beats.with_sound(cfg().data_dir, audio, t["sha256"], found)
+        except (subprocess.SubprocessError, OSError):
+            found["sound"] = None
+    try:
+        traits.remember(t, found)
+    except Exception:  # noqa: BLE001 — the index is a convenience, the analysis is not
+        pass
     # The same file always has the same beats, and the file is named by its hash; the
     # structure is built again as the parts and the beats arrive.
     response.headers["Cache-Control"] = (

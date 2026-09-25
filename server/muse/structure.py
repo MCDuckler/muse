@@ -395,7 +395,7 @@ def build(data_dir: pathlib.Path, track: dict, timing: dict,
             {"duration_ms": timing["duration_ms"], "tail_ms": timing.get("tail_ms", 0)},
             x, beats_ms, bar_on, low, _beats._FPS)
         for key in ("key", "camelot", "key_confidence", "downbeats", "energy", "four_bars",
-                    "phrases", "drops", "cues"):
+                    "phrases", "drops", "cues", "sound"):
             if key in derived:
                 out[key] = derived[key]
     downbeats = list(out.get("downbeats") or [])

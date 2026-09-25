@@ -48,6 +48,7 @@ class _SetPlannerPageState extends State<SetPlannerPage> {
     _order = [for (final t in app.player?.items ?? const <Track>[]) if (t.isReady) t];
     _arc = _b.auto.arc;
     _b.auto.addListener(_changed);
+    unawaited(_b.auto.learnTaste());
     unawaited(_read());
   }
 
@@ -84,8 +85,27 @@ class _SetPlannerPageState extends State<SetPlannerPage> {
       timingOf: _b.timing.peek,
       arc: _arc,
       locked: _locked,
+      moveOf: _b.auto.moveScoreOf,
+      taste: _b.auto.taste,
     );
     setState(() => _order = [start, ...ordered]);
+  }
+
+  /// A record from the library, chosen to follow the last one: into the crate, so the
+  /// set starts with it there, and onto the end of the order.
+  Future<void> _follow(Track t) async {
+    final app = context.read<AppState>();
+    feel(Feel.pick);
+    try {
+      await app.addTrack(t);
+    } catch (_) {
+      // Not in the crate, then — the booth keeps it to itself when the set starts.
+    }
+    if (!mounted) return;
+    setState(() {
+      if (!_order.any((x) => x.id == t.id)) _order = [..._order, t];
+    });
+    unawaited(_b.timing.of(t));
   }
 
   Future<void> _start() async {
@@ -126,7 +146,9 @@ class _SetPlannerPageState extends State<SetPlannerPage> {
             'Drag a record to move it; pin one to keep it where it is when '
             'the rest is planned again. Tap the move between two records to '
             'choose another. The booth eases each record back to its own '
-            'tempo after every mix, so the set may climb.',
+            'tempo after every mix, so the set may climb. Under the list: what '
+            'in the whole library would follow the last record best — tap one to '
+            'add it. KEEP GOING has the booth do that itself when the queue runs out.',
             style: Mag.typewriter(11, color: Console.quiet),
           ),
         ],
@@ -165,6 +187,15 @@ class _SetPlannerPageState extends State<SetPlannerPage> {
       colour: Console.ink,
       tooltip: 'Order the rest again, around what is pinned',
       onTap: _reading ? null : _plan,
+    );
+    final keepGoing = Pad(
+      label: 'KEEP GOING',
+      icon: Icons.all_inclusive,
+      height: 28,
+      colour: Console.ink,
+      lit: _b.auto.fill,
+      tooltip: 'At the end of the queue, the record in the library that follows best — and so on',
+      onTap: () => _b.auto.keepGoing(!_b.auto.fill),
     );
     final start = Pad(
       label: 'START',
@@ -220,7 +251,7 @@ class _SetPlannerPageState extends State<SetPlannerPage> {
                           overflow: TextOverflow.ellipsis,
                           style: Console.label(8.5)),
                     ),
-                    if (!narrow) ...[...arcs, const SizedBox(width: 10), again, const SizedBox(width: 8)],
+                    if (!narrow) ...[...arcs, const SizedBox(width: 10), again, const SizedBox(width: 6), keepGoing, const SizedBox(width: 8)],
                     start,
                   ],
                 ),
@@ -228,7 +259,7 @@ class _SetPlannerPageState extends State<SetPlannerPage> {
                   const SizedBox(height: 6),
                   SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
-                    child: Row(children: [...arcs, const SizedBox(width: 6), again, const SizedBox(width: 6), dials]),
+                    child: Row(children: [...arcs, const SizedBox(width: 6), again, const SizedBox(width: 6), keepGoing, const SizedBox(width: 6), dials]),
                   ),
                 ],
                 const SizedBox(height: 10),
@@ -236,7 +267,24 @@ class _SetPlannerPageState extends State<SetPlannerPage> {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Expanded(child: Plate(padding: const EdgeInsets.all(8), child: _list())),
+                      Expanded(
+                        child: Plate(
+                          padding: const EdgeInsets.all(8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Expanded(child: _list()),
+                              if (_order.isNotEmpty && !_reading)
+                                _Partners(
+                                  key: ValueKey('partners-${_order.last.id}-${_order.length}'),
+                                  booth: _b,
+                                  after: _order.last,
+                                  onPick: _follow,
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
                       if (!narrow) ...[
                         const SizedBox(width: 12),
                         SizedBox(width: 340, child: Plate(child: _how(context))),
@@ -405,5 +453,94 @@ class _MoveRow extends StatelessWidget {
       ],
     );
     if (picked != null || chosen != null) onPick(picked);
+  }
+}
+
+
+/// What in the whole library would follow [after] best: the house's coarse pick,
+/// judged finely by the booth, a handful of them — each a tap from the end of the set.
+class _Partners extends StatefulWidget {
+  const _Partners({super.key, required this.booth, required this.after, required this.onPick});
+  final Booth booth;
+  final Track after;
+  final Future<void> Function(Track) onPick;
+
+  @override
+  State<_Partners> createState() => _PartnersState();
+}
+
+class _PartnersState extends State<_Partners> {
+  List<({Track track, double fit, String why})>? _found;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_look());
+  }
+
+  Future<void> _look() async {
+    try {
+      final found = await widget.booth.auto.partnersFor(widget.after, limit: 5);
+      if (mounted) setState(() => _found = found);
+    } catch (_) {
+      if (mounted) setState(() => _failed = true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final found = _found;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 10, 8, 2),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Text('TO FOLLOW ${widget.after.displayTitle.toUpperCase()}',
+                  maxLines: 1, overflow: TextOverflow.ellipsis, style: Console.label(8.5, color: Console.quiet)),
+              const Spacer(),
+              if (found == null && !_failed)
+                const SizedBox(width: 10, height: 10, child: CircularProgressIndicator(strokeWidth: 1.5, color: Console.faint)),
+            ],
+          ),
+          const SizedBox(height: 4),
+          if (_failed || (found != null && found.isEmpty))
+            Text(_failed ? 'The house could not be asked.' : 'Nothing else in the library the house knows well enough yet.',
+                style: Mag.typewriter(10.5, color: Console.faint)),
+          if (found != null)
+            for (final p in found)
+              InkWell(
+                onTap: () => unawaited(widget.onPick(p.track)),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 3),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.add, size: 14, color: Console.faint),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text.rich(
+                          TextSpan(children: [
+                            TextSpan(text: p.track.displayTitle, style: Mag.title(12.5, color: Console.ink)),
+                            TextSpan(text: '  ${p.track.artistLine}', style: Mag.typewriter(10, color: Console.quiet)),
+                          ]),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(p.why, maxLines: 1, overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.right, style: Mag.typewriter(10, color: Console.faint)),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+        ],
+      ),
+    );
   }
 }

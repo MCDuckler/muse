@@ -673,3 +673,21 @@ create table if not exists mix_feedback (
   detail      jsonb not null default '{}'
 );
 create index if not exists mix_feedback_pair on mix_feedback(from_track, to_track);
+
+-- What the booth's planner reads of a record when it looks for a partner across the
+-- whole library, one row a record, written whenever a record's analysis is served or
+-- by `python -m muse.cli traits`: its tempo, its key on the wheel and how sure, its
+-- loudness, how it sounds (analysis.sound_of), how much of it is sung, and how loud it
+-- is where a mix would go out of it and come into it. See traits.py.
+create table if not exists track_traits (
+  track_id       integer primary key references tracks(id) on delete cascade,
+  bpm            real,
+  camelot        text,
+  key_confidence real not null default 0,
+  lufs           real,
+  sound          jsonb,
+  sung           real,
+  in_db          real,
+  out_db         real,
+  updated_at     timestamptz not null default now()
+);

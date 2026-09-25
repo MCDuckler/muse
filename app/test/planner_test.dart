@@ -7,6 +7,7 @@ import 'package:muse/src/api/models.dart';
 import 'package:muse/src/state/booth/automix.dart';
 import 'package:muse/src/state/booth/booth.dart';
 import 'package:muse/src/state/booth/planner.dart';
+import 'package:muse/src/state/booth/taste.dart';
 
 /// 128 bpm-ish: a beat every 469 ms, a bar every 1876 ms. [intro] bars before the song
 /// is "on", [outro] bars of outro, and [drops] (bars).
@@ -54,6 +55,24 @@ void main() {
     expect(plan.kind, Transition.announce, reason: plan.toString());
     expect(plan.inAt, Duration(milliseconds: to.downbeats[40]), reason: 'on the marker of its hook');
     expect(plan.why, contains('Tell me something'));
+  });
+
+  test('a move this person likes is scored up, and said so', () {
+    final from = record(), to = record();
+    final liked = Taste.fromFeedback([
+      for (var i = 0; i < 6; i++)
+        {'event': 'rating', 'from_track': 1, 'to_track': 9 + i, 'kind': 'filterRide', 'rating': 1},
+    ]);
+    double best(Taste t) => Planner.options(
+          from: MixSide(timing: from),
+          to: MixSide(timing: to),
+          random: math.Random(1),
+          taste: t,
+        ).firstWhere((p) => p.kind == Transition.filterRide).score;
+    expect(best(liked), greaterThan(best(Taste.none) + 0.08));
+    final said = Planner.options(from: MixSide(timing: from), to: MixSide(timing: to), random: math.Random(1), taste: liked)
+        .firstWhere((p) => p.kind == Transition.filterRide);
+    expect(said.why, contains('one you like'));
   });
 
   test('the same move is not made twice running', () {

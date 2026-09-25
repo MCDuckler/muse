@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 // Two records on the deck: the sums a mixer does, checked against a fake engine.
 //
 // The screen for this is not here yet; what is here is the engine — the fader's
@@ -388,6 +389,59 @@ void main() {
       expect(booth.auto.next?.id, 3, reason: 'the one that follows best');
       expect(booth.auto.after?.id, 2, reason: 'and nothing is dropped');
       booth.auto.stop();
+    });
+
+    test('told to keep going, the end of the queue is filled from the library', () async {
+      TrackTiming at(double bpm, String camelot) => TrackTiming(
+            durationMs: 60000,
+            bpm: bpm,
+            beats: [for (var i = 0; i < 1200; i++) i * 50],
+            downbeats: [for (var i = 0; i < 1200; i += 4) i * 50],
+            camelot: camelot,
+            keyConfidence: 0.8,
+            cues: const MixCues(
+                firstDownbeatMs: 0, mixInMs: 2000, mixOutMs: 40000, soundEndMs: 59000),
+          );
+      booth.timing.put(1, at(124, '8A'));
+      booth.timing.put(7, at(150, '3B'));  // the house's first pick: neither in tempo nor in key
+      booth.timing.put(8, at(125, '9A'));  // its second: both — judged finely, the better
+      var asked = 0;
+      Map<String, dynamic> partner(int id) => {
+            'track': {
+              'id': id, 'title': 'Song $id', 'artists': ['Someone $id'], 'duration_ms': 60000,
+              'state': 'ready', 'stream_url': '/tracks/$id/stream', 'source': 'youtube',
+            },
+            'fit': 1.0,
+            'why': 'the house says so',
+          };
+      useThisClientInstead(MockClient((r) async {
+        if (r.url.path.endsWith('/booth/partners')) {
+          asked++;
+          expect(r.url.queryParameters['from_track'], '1');
+          expect(r.url.queryParameters['exclude'], '1');
+          return http.Response(jsonEncode({'partners': [partner(7), partner(8)]}), 200);
+        }
+        if (r.url.path.endsWith('/booth/feedback')) return http.Response('{"feedback": []}', 200);
+        if (r.url.path.contains('/stream-key')) {
+          return http.Response('{"key": "signed", "expires_at": 99999999999}', 200);
+        }
+        if (r.url.path.contains('/stem/')) return http.Response('', 202);
+        return http.Response('{}', 200);
+      }));
+      addTearDown(() => useThisClientInstead(http.Client()));
+      final filled = <int>[];
+      booth.auto.onFill = (t) async => filled.add(t.id);
+      await booth.auto.start([song(1)]);
+      expect(booth.auto.next, isNull, reason: 'the queue ends here');
+      booth.auto.keepGoing(true);
+      for (var i = 0; i < 200 && booth.auto.next == null; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(booth.auto.next?.id, 8, reason: 'the house offered 7 first; judged finely, 8 follows better');
+      expect(filled, [8], reason: 'and it went into the crate');
+      expect(asked, 1);
+      booth.auto.stop();
+      booth.auto.keepGoing(false);
     });
 
     test('a queue changing under the automix loads the free deck once, with the last word',

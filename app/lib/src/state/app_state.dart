@@ -360,6 +360,9 @@ class AppState extends ChangeNotifier {
   /// given back to it, and kept whenever it learns more.
   Booth _makeBooth() {
     final b = Booth(api, offlinePath: offline.pathFor)..addListener(_boothChanged);
+    // A record the booth takes from the library at the end of the queue goes into
+    // the crate, so what it plays is what the queue shows.
+    b.auto.onFill = (t) => addTrack(t);
     unawaited(SharedPreferences.getInstance().then((prefs) {
       final lead = prefs.getInt(_kStartLead), carry = prefs.getInt(_kJumpCarry);
       if (lead != null && carry != null) {

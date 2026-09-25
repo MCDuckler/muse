@@ -708,3 +708,26 @@ def _keep(cached: pathlib.Path, found: dict) -> dict:
     tmp.write_text(json.dumps(found, separators=(",", ":")))
     tmp.replace(cached)
     return found
+
+
+def with_sound(data_dir: pathlib.Path, audio: pathlib.Path, sha: str, found: dict) -> dict:
+    """[found] with its sound (analysis.sound_of) worked out and kept, for a record
+    measured before there was one. The plain analysis, without the structure: what
+    is kept is what was measured."""
+    from . import analysis as _analysis
+
+    cached = cache_path(data_dir, sha)
+    try:
+        plain = json.loads(cached.read_text())
+    except (OSError, ValueError):
+        plain = None
+    # Worked out before (a structure built on the plain from before there was one):
+    # the plain's, without another listen.
+    if plain is not None and "sound" in plain:
+        return {**found, "sound": plain["sound"]}
+    x = _decode(audio)
+    sound = _analysis.sound_for(x, found.get("downbeats") or [], found.get("energy"))
+    if plain is not None:
+        plain["sound"] = sound
+        _keep(cached, plain)
+    return {**found, "sound": sound}

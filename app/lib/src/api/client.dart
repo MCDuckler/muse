@@ -234,6 +234,39 @@ class ApiClient {
       headers: {..._headers, 'Content-Type': 'application/json'},
       body: jsonEncode(body)));
 
+  /// What this person thought of the booth's mixes, newest first — the thumbs, the
+  /// hands on the plan — for the planner to lean the way they lean (Taste).
+  Future<List<Map<String, dynamic>>> boothFeedbackList({int limit = 400}) async {
+    final d = await _decode(await net.get(_u('/booth/feedback', {'limit': limit}), headers: _headers))
+        as Map<String, dynamic>;
+    return [for (final f in (d['feedback'] ?? const []) as List) (f as Map).cast<String, dynamic>()];
+  }
+
+  /// The records in the library that would follow [fromTrack] best, by what the
+  /// house knows of each — coarse, best first, never one of [exclude]. [step] is the
+  /// step in loudness the set's arc wants (0 to 1 scale); [avoid] artists lately
+  /// played. Each with the house's score and its words.
+  Future<List<({Track track, double fit, String why})>> partners(int fromTrack,
+      {Iterable<int> exclude = const [], int limit = 12, double step = 0, Iterable<String> avoid = const []}) async {
+    final d = await _decode(await net.get(
+        _u('/booth/partners', {
+          'from_track': fromTrack,
+          'exclude': exclude.join(','),
+          'limit': limit,
+          'step': step,
+          'avoid': avoid.join(','),
+        }),
+        headers: _headers)) as Map<String, dynamic>;
+    return [
+      for (final p in (d['partners'] ?? const []) as List)
+        (
+          track: Track.fromJson(((p as Map)['track'] as Map).cast<String, dynamic>()),
+          fit: ((p['fit'] as num?) ?? 0).toDouble(),
+          why: (p['why'] ?? '') as String,
+        ),
+    ];
+  }
+
   /// Have the pool take a record apart, now.
   Future<void> poolSplit(int trackId) async =>
       _decode(await net.post(_u('/pool/split/$trackId'), headers: _headers));

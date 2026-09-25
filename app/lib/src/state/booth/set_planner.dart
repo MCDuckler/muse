@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import '../../api/models.dart';
 import 'booth.dart';
+import 'taste.dart';
 
 /// How a set should go, as a whole: where its energy is meant to head.
 enum EnergyArc {
@@ -179,6 +180,64 @@ class SetPlanner {
     return all == 0 ? null : voiced / all;
   }
 
+  /// How loud the record is over the eight bars into (or out of) [at] — the bars a
+  /// mix would come in over, or go out over — in LUFS, as far as it can be told: the
+  /// bar levels the house read (mixDb from the stems, else the analysis's 0 to 255
+  /// against the loudest bar), put against the record's own loudness. Null unknown.
+  static double? edgeLufs(Track? t, TrackTiming? timing, Duration? at, {required bool before}) {
+    if (timing == null || at == null) return null;
+    final lufs = t?.loudnessLufs ?? timing.structure?.lufs;
+    if (lufs == null) return null;
+    final downs = timing.downbeats;
+    if (downs.length < 4) return null;
+    var bar = 0;
+    for (var i = 0; i < downs.length; i++) {
+      if (downs[i] <= at.inMilliseconds) bar = i;
+    }
+    final mix = timing.structure?.mixDb;
+    List<double> rel;
+    if (mix != null && mix.length >= 4) {
+      var top = -200.0;
+      for (final v in mix) {
+        if (v > top) top = v;
+      }
+      rel = [for (final v in mix) v <= -90 ? double.nan : v - top];
+    } else if (timing.energy.length >= 4) {
+      rel = [for (final v in timing.energy) v <= 0 ? double.nan : 20 * _log10(math.pow(v / 255, 1 / 0.7).toDouble())];
+    } else {
+      return null;
+    }
+    var lo = before ? math.max(0, bar - 8) : bar, hi = before ? bar : math.min(rel.length, bar + 8);
+    if (hi <= lo) {
+      lo = math.max(0, bar - 4);
+      hi = math.min(rel.length, bar + 4);
+    }
+    var sum = 0.0;
+    var n = 0;
+    for (var i = lo; i < hi && i < rel.length; i++) {
+      if (rel[i].isNaN) continue;
+      sum += rel[i];
+      n++;
+    }
+    return n == 0 ? null : lufs + sum / n;
+  }
+
+  static double _log10(double x) => math.log(x) / math.ln10;
+
+  /// How alike two records sound, -1 to 1, from their sound rows; null unknown.
+  static double? alike(TrackTiming? a, TrackTiming? b) {
+    final sa = a?.sound, sb = b?.sound;
+    if (sa == null || sb == null || sa.isEmpty || sa.length != sb.length) return null;
+    var dot = 0.0, na = 0.0, nb = 0.0;
+    for (var i = 0; i < sa.length; i++) {
+      dot += sa[i] * sb[i];
+      na += sa[i] * sa[i];
+      nb += sb[i] * sb[i];
+    }
+    if (na == 0 || nb == 0) return null;
+    return dot / (math.sqrt(na) * math.sqrt(nb));
+  }
+
   static String _titleKey(String title) =>
       title.toLowerCase().replaceAll(RegExp(r'[\(\[].*?[\)\]]'), '').replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim();
 
@@ -193,6 +252,8 @@ class SetPlanner {
     double fromPitch = 1,
     List<Track> before = const [],
     double? wantedStep,
+    double? move,
+    Taste taste = Taste.none,
   }) {
     if (a == null || b == null) return Fit.nothing;
     final terms = <String, double>{};
@@ -227,10 +288,40 @@ class SetPlanner {
       if (d / 3 < 4) words.add('made alike');
     }
 
+    // The seam: how loud [a] is where it goes out against how loud [b] is where it
+    // comes in — a whole-record loudness says nothing about a record that ends on a
+    // breakdown and one that starts on its drop.
+    final outOf = edgeLufs(ta, a, a.cues?.mixOut, before: true);
+    final into = edgeLufs(tb, b, b.cues?.mixIn, before: false);
+    if (outOf != null && into != null) {
+      final d = (into - outOf).abs();
+      terms['seam'] = 0.15 * (1 - d / 12).clamp(0.0, 1.0);
+      if (d >= 6) words.add('${d.round()} dB ${into > outOf ? 'up' : 'down'} at the seam');
+    }
+
+    final like = alike(a, b);
+    if (like != null) {
+      terms['sound'] = 0.2 * like.clamp(0.0, 1.0);
+      if (like > 0.7) {
+        words.add('sounds alike');
+      } else if (like < 0.1) {
+        words.add('a different sound');
+      }
+    }
+
     final sa = sung(a), sb = sung(b);
     if (sa != null && sb != null && sa > 0.5 && sb > 0.5) {
       terms['vocals'] = -0.05;
       words.add('both sung throughout');
+    }
+
+    // The move the transition planner would make between these two, where it has
+    // been asked: a pair with a drop to land on or a hook to announce is a better
+    // pair than the numbers alone say, and one whose best move is a plain fade a
+    // worse one.
+    if (move != null) {
+      terms['move'] = 0.25 * (move / 1.2).clamp(0.0, 1.0);
+      if (move < 0.35) words.add('little to mix with');
     }
 
     if (ta != null && tb != null) {
@@ -243,6 +334,11 @@ class SetPlanner {
           before.any((x) => _titleKey(x.title) == _titleKey(tb.title))) {
         terms['title'] = -0.5;
         words.add('the same song again');
+      }
+      final liked = taste.ofPair(ta.id, tb.id);
+      if (liked != 0) {
+        terms['taste'] = liked;
+        words.add(liked > 0 ? 'liked together before' : 'not liked together before');
       }
     }
     final score = terms.values.fold(0.0, (x, y) => x + y);
@@ -275,6 +371,8 @@ class SetPlanner {
     List<Track> before = const [],
     double fromPitch = 1,
     int width = 8,
+    double? Function(Track a, Track b)? moveOf,
+    Taste taste = Taste.none,
   }) {
     if (rest.length <= 1) return rest;
     final n = rest.length;
@@ -285,8 +383,9 @@ class SetPlanner {
       final ta = timingOf(a.id), tb = timingOf(b.id);
       if (ta == null || tb == null) return 0.3;
       // The pair's own fit, once — without the repetition, which depends on the path.
-      final base = cache[(a.id, b.id)] ??=
-          fit(ta, tb, ta: a, tb: b, fromPitch: at == 0 ? fromPitch : 1).score;
+      final base = cache[(a.id, b.id)] ??= fit(ta, tb,
+              ta: a, tb: b, fromPitch: at == 0 ? fromPitch : 1, move: moveOf?.call(a, b), taste: taste)
+          .score;
       // The arc: how far this record is from where the set should be by here.
       final eb = energyOf(b, tb);
       final t = target(arc, at + 1, n + 1, startEnergy);

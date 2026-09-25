@@ -194,6 +194,41 @@ def bar_spectra(x: np.ndarray, downbeats_ms: list[int]) -> np.ndarray:
     return rows
 
 
+def sound_of(spectra: np.ndarray, energy_db: np.ndarray | None = None) -> list[float] | None:
+    """What the record sounds like, as one row: its bar spectra averaged over the bars
+    that play (the quiet ones — an intro of nothing, a tail — left out), with the
+    level taken off so a loud record and a soft one made the same way read the same.
+    Two records whose rows lie close are made of the same kind of sound — the same
+    bass, the same top — which tempo and key say nothing about. Null with no bars."""
+    if spectra is None or len(spectra) == 0:
+        return None
+    rows = spectra
+    if energy_db is not None and len(energy_db) >= len(spectra):
+        heard = energy_db[:len(spectra)]
+        keep = heard >= float(heard.max()) - 20
+        if keep.sum() >= 4:
+            rows = spectra[keep]
+    rows = rows[rows.sum(axis=1) > 0]
+    if len(rows) == 0:
+        return None
+    mean = rows.mean(axis=0)
+    mean = mean - mean.mean()
+    return [round(float(v), 3) for v in mean]
+
+
+def sound_for(x: np.ndarray, downbeats_ms: list[int], energy: list[int] | None = None) -> list[float] | None:
+    """[sound_of] from the sound itself, for a record measured before there was one:
+    the same bars, the same bands."""
+    if len(downbeats_ms) < 2:
+        return None
+    spectra = bar_spectra(x, downbeats_ms)
+    heard = None
+    if energy:
+        lv = np.array(energy[:len(spectra)], dtype=float) / 255.0
+        heard = 20 * np.log10(np.maximum(lv, 1e-4) ** (1 / 0.7))
+    return sound_of(spectra, heard)
+
+
 def _change(rows: np.ndarray, k: int, least: int = 2) -> np.ndarray:
     """How much the [k] bars after each bar differ from the [k] before it — fewer at
     the ends of the record, down to [least], so a change there is found where it is
@@ -394,7 +429,9 @@ def add(out: dict, x: np.ndarray, beats_ms: list[int], bar_starts_on: int,
     energy_db, rows = bar_features(x, downbeats, low_env, fps)
     levels = energy_levels(energy_db)
     out["energy"] = levels
-    markers = four_bars(changes(bar_spectra(x, downbeats), energy_db))
+    spectra = bar_spectra(x, downbeats)
+    out["sound"] = sound_of(spectra, energy_db)
+    markers = four_bars(changes(spectra, energy_db))
     out["four_bars"] = [int(downbeats[b]) for b in markers if b < len(downbeats)]
     phrase_bars = phrases(rows, markers)
     out["phrases"] = [int(downbeats[b]) for b in phrase_bars if b < len(downbeats)]

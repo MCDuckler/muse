@@ -2098,7 +2098,14 @@ class TrackTiming {
     this.fourBars = const [],
     this.cues,
     this.structure,
+    this.sound,
   });
+
+  /// What the record sounds like, as one row: its spectrum averaged over the bars
+  /// that play, level taken off (analysis.sound_of on the house). Two records whose
+  /// rows lie close are made of the same kind of sound — which tempo and key say
+  /// nothing about. Null from an older house, or a record with no bars.
+  final List<double>? sound;
 
   /// What the record is made of — its sections, its stems bar by bar, where it drops
   /// and breaks down — where the house has built it (structure.py). Null on the plain
@@ -2540,6 +2547,7 @@ class TrackTiming {
         structure: j['structure'] is Map
             ? TrackStructure.fromJson((j['structure'] as Map).cast<String, dynamic>())
             : null,
+        sound: j['sound'] is List ? [for (final v in j['sound'] as List) (v as num).toDouble()] : null,
       );
 }
 

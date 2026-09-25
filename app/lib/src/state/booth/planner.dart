@@ -4,6 +4,7 @@ import '../../api/models.dart';
 import 'automix.dart';
 import 'booth.dart';
 import 'set_planner.dart';
+import 'taste.dart';
 
 /// One record's side of a transition, as the planner sees it.
 class MixSide {
@@ -142,10 +143,11 @@ class Planner {
     /// Whether the engine here can chop a deck in time with its beat (Mixer.canGate).
     bool gate = false,
     math.Random? random,
+    Taste taste = Taste.none,
   }) =>
       options(
               from: from, to: to, style: style, axes: axes, recent: recent, sound: sound,
-              gate: gate, random: random)
+              gate: gate, random: random, taste: taste)
           .first;
 
   /// Every move that can be made with these two, best first — what [plan] chooses
@@ -159,6 +161,7 @@ class Planner {
     bool sound = true,
     bool gate = false,
     math.Random? random,
+    Taste taste = Taste.none,
   }) {
     final rng = random ?? math.Random();
     final dials = axes ?? StyleAxes.of(style);
@@ -246,6 +249,12 @@ class Planner {
         score -= 0.2;
       }
       if (key.boost && !designed && kind != Transition.sweep) words.add(key.why!);
+      // What this person has thought of this kind of move before.
+      final leaning = taste.ofKind(kind);
+      if (leaning.abs() >= 0.03) {
+        score += leaning;
+        words.add(leaning > 0 ? 'one you like' : 'one you tend not to');
+      }
       score += rng.nextDouble() * 0.22;
       candidates.add(MixPlan(kind, bars,
           outAt: outAt, inAt: inAt, shift: shift, why: words.join(' · '), score: score));

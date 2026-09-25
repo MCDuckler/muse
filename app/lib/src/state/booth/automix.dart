@@ -9,6 +9,7 @@ import 'booth.dart';
 import 'deck.dart';
 import 'planner.dart';
 import 'set_planner.dart';
+import 'taste.dart';
 
 /// The booth mixing on its own: the queue played record into record, each
 /// transition chosen from what is known about the two songs and landed on the phrase.
@@ -75,6 +76,164 @@ class AutoMix extends ChangeNotifier {
   /// Records a hand has pinned where they are: the booth orders around them.
   final locked = <int>{};
 
+  /// What this person has thought of the booth's mixes, as leanings the planner adds
+  /// to its scores — asked of the house when the automix starts, quietly.
+  Taste taste = Taste.none;
+  DateTime? _tasteAt;
+
+  /// The house's word on this person's taste, once an hour at most.
+  Future<void> learnTaste() async {
+    final at = _tasteAt;
+    if (at != null && DateTime.now().difference(at) < const Duration(hours: 1)) return;
+    _tasteAt = DateTime.now();
+    try {
+      final rows = await booth.api.boothFeedbackList().timeout(const Duration(seconds: 8));
+      taste = Taste.fromFeedback(rows);
+      _moveScores.clear();
+      if (taste.count > 0) {
+        final fav = taste.favourite;
+        booth.note(BoothEventKind.plan,
+            'Read ${taste.count} of your word${taste.count == 1 ? '' : 's'} on its mixes'
+            '${fav == null ? '' : ' · you like a ${Transition.values.byName(fav).label}'}');
+      }
+    } catch (_) {
+      // A house that cannot be reached, or one from before it kept any: the booth
+      // goes by its own judgement.
+    }
+  }
+
+  /// Whether the booth, at the end of the queue, keeps going: the record in the
+  /// whole library that follows the last one best, put on next — and so on until it
+  /// is switched off. Off by default: a queue that ends is a queue that ends.
+  bool fill = false;
+
+  /// Where the fill puts its record: the crate, so what the booth plays is what the
+  /// queue shows. Set by the app; without it the booth keeps the record to itself.
+  Future<void> Function(Track track)? onFill;
+  bool _filling = false;
+  DateTime? _fillTriedAt;
+
+  void keepGoing(bool on) {
+    fill = on;
+    notifyListeners();
+    if (on && running && next == null) unawaited(_fillFromLibrary());
+  }
+
+  /// The end of the queue, and the booth told to keep going: the library's best
+  /// partner for the record on now, judged finely, put on next.
+  Future<void> _fillFromLibrary() async {
+    final on = current;
+    if (_filling || on == null || next != null) return;
+    final tried = _fillTriedAt;
+    if (tried != null && DateTime.now().difference(tried) < const Duration(seconds: 20)) return;
+    _filling = true;
+    _fillTriedAt = DateTime.now();
+    try {
+      final found = await partnersFor(on, limit: 8);
+      if (_disposed || !running || next != null) return;
+      if (found.isEmpty) {
+        booth.note(BoothEventKind.plan, 'Nothing in the library to follow ${on.displayTitle}');
+        return;
+      }
+      final pick = found.first;
+      booth.note(BoothEventKind.next,
+          'From the library: ${pick.track.displayTitle}${pick.why.isEmpty ? '' : ' · ${pick.why}'}');
+      _tracks = [..._tracks, pick.track];
+      final tell = onFill;
+      if (tell != null) {
+        try {
+          await tell(pick.track);
+        } catch (_) {}
+      }
+      if (!_disposed && running) await _prepareNext();
+    } finally {
+      _filling = false;
+    }
+  }
+
+  /// The records in the library that would follow [from] best: the house's coarse
+  /// pick of a few dozen, judged again here with everything the set planner reads —
+  /// the seam, the sound, the move the transition planner would make — best first.
+  Future<List<({Track track, double fit, String why})>> partnersFor(Track from, {int limit = 6}) async {
+    final here = _tracks.indexWhere((t) => t.id == from.id);
+    final before = here < 0 ? _before() : [for (var i = math.max(0, here - 3); i < here; i++) _tracks[i]];
+    final n = _tracks.length;
+    final start = current == null ? null : SetPlanner.energyOf(current, booth.timing.peek(current!.id));
+    final wanted = here < 0 || start == null
+        ? 0.0
+        : (SetPlanner.target(arc, here + 1, n + 1, start) ?? start) - (SetPlanner.energyOf(from, booth.timing.peek(from.id)) ?? start);
+    List<({Track track, double fit, String why})> coarse;
+    try {
+      coarse = await booth.api
+          .partners(from.id,
+              exclude: [for (final t in _tracks) t.id],
+              limit: 24,
+              step: wanted,
+              avoid: {for (final t in [from, ...before]) ...t.artists})
+          .timeout(const Duration(seconds: 12));
+    } catch (_) {
+      return const [];
+    }
+    if (coarse.isEmpty) return const [];
+    final ta = await booth.timing.of(from).timeout(const Duration(seconds: 10), onTimeout: () => null);
+    if (ta == null) return coarse.take(limit).toList();
+    // The fine judging needs each one's timing; asked for together, within reason.
+    await Future.wait([
+      for (final p in coarse) booth.timing.of(p.track).timeout(const Duration(seconds: 10), onTimeout: () => null),
+    ]);
+    final fine = <({Track track, double fit, String why})>[];
+    for (final p in coarse) {
+      final tb = booth.timing.peek(p.track.id);
+      if (tb == null) {
+        fine.add(p);
+        continue;
+      }
+      final f = SetPlanner.fit(ta, tb,
+          ta: from,
+          tb: p.track,
+          fromPitch: identical(from, current) ? masterTargetPitch : 1,
+          before: before,
+          wantedStep: wanted,
+          move: _moveScore(from, p.track),
+          taste: taste);
+      fine.add((track: p.track, fit: f.score, why: f.why));
+    }
+    fine.sort((x, y) => y.fit.compareTo(x.fit));
+    return fine.take(limit).toList();
+  }
+
+  /// How well the transition planner could mix [a] into [b], from what is known
+  /// now — the best move's score — for the set planner to weigh a pair by. Null
+  /// until both timings are here; the voices are asked for so the next asking is
+  /// better informed. Cached per pair; cleared when the taste changes.
+  final _moveScores = <(int, int, bool), double?>{};
+  double? moveScoreOf(Track a, Track b) => _moveScore(a, b);
+  double? _moveScore(Track a, Track b) {
+    final ta = booth.timing.peek(a.id), tb = booth.timing.peek(b.id);
+    if (ta == null || tb == null) return null;
+    final stems = _inParts[a.id] == true && _inParts[b.id] == true && booth.mixer.canStem;
+    final key = (a.id, b.id, stems);
+    if (_moveScores.containsKey(key)) return _moveScores[key];
+    final va = booth.vocals.peek(a.id), vb = booth.vocals.peek(b.id);
+    if (va == null) unawaited(booth.vocals.of(a));
+    if (vb == null) unawaited(booth.vocals.of(b));
+    final best = Planner.options(
+      from: MixSide(timing: ta, vocals: va, stems: stems, fx: booth.mixer.canShift,
+          pitch: identical(a, current) ? masterTargetPitch : 1),
+      to: MixSide(timing: tb, vocals: vb, stems: stems, fx: booth.mixer.canShift),
+      style: style,
+      axes: _axes,
+      sound: booth.fx.can,
+      gate: booth.mixer.canGate,
+      random: math.Random(a.id * 7919 + b.id),
+      taste: taste,
+    ).first.score;
+    // Kept only once both voices are known: until then the score is a guess that
+    // would otherwise stand for the rest of the set.
+    if (va != null && vb != null) _moveScores[key] = best;
+    return best;
+  }
+
   void setLocked(int trackId, bool on) {
     if (on) {
       locked.add(trackId);
@@ -90,7 +249,7 @@ class AutoMix extends ChangeNotifier {
     final on = current;
     if (on == null) return Fit.nothing;
     return SetPlanner.fit(booth.timing.peek(on.id), booth.timing.peek(t.id),
-        ta: on, tb: t, fromPitch: masterTargetPitch, before: _before());
+        ta: on, tb: t, fromPitch: masterTargetPitch, before: _before(), move: _moveScore(on, t), taste: taste);
   }
 
   List<Track> _before() =>
@@ -272,6 +431,7 @@ class AutoMix extends ChangeNotifier {
   void mixLike(MixStyle how) {
     style = how;
     _axes = null;
+    _moveScores.clear();
     notifyListeners();
     unawaited(_prepareNext());
   }
@@ -279,6 +439,7 @@ class AutoMix extends ChangeNotifier {
   /// The dials turned by hand; null goes back to the word.
   void setAxes(StyleAxes? dials) {
     _axes = dials;
+    _moveScores.clear();
     notifyListeners();
     unawaited(_prepareNext());
   }
@@ -496,6 +657,7 @@ class AutoMix extends ChangeNotifier {
     running = true;
     booth.note(BoothEventKind.auto,
         'Auto DJ on · ${_tracks.length - _at} record${_tracks.length - _at == 1 ? '' : 's'}, ${style.name}');
+    unawaited(learnTaste());
     final deck = booth.master;
     // The record it is already playing stays where it is: handing the queue to the
     // booth mid-song should be the booth taking over, not the song starting again.
@@ -806,6 +968,7 @@ class AutoMix extends ChangeNotifier {
         recent: recent,
         sound: booth.fx.can,
         gate: booth.mixer.canGate,
+        taste: taste,
       );
       // A hand's choice for this very pair stands.
       final byHand = steers[(from.track!.id, coming.id)];
@@ -881,7 +1044,7 @@ class AutoMix extends ChangeNotifier {
 
   /// How well [b] would follow [a], by what is known of both now — for the set view.
   Fit fitBetween(Track a, Track b) => SetPlanner.fit(booth.timing.peek(a.id), booth.timing.peek(b.id),
-      ta: a, tb: b, fromPitch: identical(a, current) ? masterTargetPitch : 1);
+      ta: a, tb: b, fromPitch: identical(a, current) ? masterTargetPitch : 1, move: _moveScore(a, b), taste: taste);
 
   /// Every move the planner would offer between [a] and [b], best first — what the
   /// set view shows for a pair further down, and steers by. Asks the house for what
@@ -904,6 +1067,7 @@ class AutoMix extends ChangeNotifier {
       recent: recent,
       sound: booth.fx.can,
       gate: booth.mixer.canGate,
+      taste: taste,
     );
   }
 
@@ -1097,7 +1261,9 @@ class AutoMix extends ChangeNotifier {
         arc: arc,
         locked: locked,
         before: _before(),
-        fromPitch: masterTargetPitch);
+        fromPitch: masterTargetPitch,
+        moveOf: _moveScore,
+        taste: taste);
     if (ordered.first.id != rest.first.id) {
       final why = fitOf(ordered.first).why;
       booth.note(BoothEventKind.next,
@@ -1116,7 +1282,12 @@ class AutoMix extends ChangeNotifier {
     final go = goesAt;
     final coming = next;
     if (coming == null) {
-      // The last record: let it end, then stop.
+      // The last record — unless the booth is to keep going, from the library.
+      if (fill && from.playing) {
+        unawaited(_fillFromLibrary());
+        return;
+      }
+      // Let it end, then stop.
       if (!from.playing) stop();
       return;
     }
