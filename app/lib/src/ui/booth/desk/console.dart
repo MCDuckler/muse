@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../../../state/booth/booth.dart' show Transition;
 import '../../feel.dart';
 import '../../mag.dart';
+import '../../metal_button.dart';
 
 /// The console's colours. The room is dark whatever edition the app is in — a booth
 /// is a place with the lights down — and each deck has a colour of its own, taken
@@ -204,8 +205,10 @@ class _PadState extends State<Pad> {
   }
 }
 
-/// A round button — play, the one thing on a deck that is round on every deck.
-class RoundButton extends StatelessWidget {
+/// A round button — play, the one thing on a deck that is round on every deck: the
+/// same steel-and-light button as the player's, in the deck's colour, its ring lit
+/// while the deck plays.
+class RoundButton extends StatefulWidget {
   const RoundButton({
     super.key,
     required this.icon,
@@ -224,42 +227,79 @@ class RoundButton extends StatelessWidget {
   final String? tooltip;
 
   @override
+  State<RoundButton> createState() => _RoundButtonState();
+}
+
+class _RoundButtonState extends State<RoundButton> with SingleTickerProviderStateMixin {
+  late final AnimationController _lit = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 260),
+    reverseDuration: const Duration(milliseconds: 420),
+    value: widget.lit ? 1 : 0,
+  );
+  bool _down = false;
+
+  @override
+  void didUpdateWidget(RoundButton old) {
+    super.didUpdateWidget(old);
+    if (old.lit != widget.lit) widget.lit ? _lit.forward() : _lit.reverse();
+  }
+
+  @override
+  void dispose() {
+    _lit.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final on = onTap != null;
+    final on = widget.onTap != null;
+    // The bloom wants room outside the button's own circle: drawn a little larger
+    // than the size it takes in the row, and left to spill.
+    final whole = widget.size * 1.3;
     final button = MouseRegion(
       cursor: on ? SystemMouseCursors.click : SystemMouseCursors.basic,
       child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapDown: on ? (_) => setState(() => _down = true) : null,
+        onTapCancel: () => setState(() => _down = false),
+        onTapUp: (_) => setState(() => _down = false),
         onTap: on
             ? () {
                 feel(Feel.commit);
-                onTap!();
+                widget.onTap!();
               }
             : null,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
-          width: size,
-          height: size,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: lit ? colour : Console.raised,
-            border: Border.all(color: on ? colour : Console.line, width: 1.5),
-            boxShadow: lit
-                ? [BoxShadow(color: colour.withValues(alpha: 0.45), blurRadius: 18, spreadRadius: -2)]
-                : null,
+        child: SizedBox.square(
+          dimension: widget.size,
+          child: OverflowBox(
+            maxWidth: whole,
+            maxHeight: whole,
+            child: AnimatedScale(
+              scale: _down ? 0.96 : 1,
+              duration: const Duration(milliseconds: 90),
+              child: CustomPaint(
+                size: Size.square(whole),
+                painter: MetalFace(
+                  colour: on ? widget.colour : Console.faint,
+                  pressed: _down,
+                  dark: true,
+                  lit: _lit,
+                ),
+                child: Center(
+                  child: MetalIcon(
+                    child: Icon(widget.icon, size: whole * 0.34, color: on ? Colors.white : Console.quiet),
+                  ),
+                ),
+              ),
+            ),
           ),
-          child: Icon(icon,
-              size: size * 0.46,
-              color: lit
-                  ? Console.ground
-                  : on
-                      ? colour
-                      : Console.faint),
         ),
       ),
     );
-    return tooltip == null
+    return widget.tooltip == null
         ? button
-        : Tooltip(message: tooltip!, waitDuration: const Duration(milliseconds: 500), child: button);
+        : Tooltip(message: widget.tooltip!, waitDuration: const Duration(milliseconds: 500), child: button);
   }
 }
 

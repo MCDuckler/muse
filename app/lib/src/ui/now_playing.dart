@@ -27,6 +27,7 @@ import 'spectrum.dart';
 import 'lyrics_sheet.dart';
 import 'mag.dart';
 import 'mag_parts.dart';
+import 'metal_button.dart';
 import 'mirror_ball.dart';
 import 'track_menu.dart';
 import 'song_row.dart';
@@ -1243,7 +1244,7 @@ class _PlayPauseButtonState extends State<PlayPauseButton> with TickerProviderSt
             child: SizedBox.square(
               dimension: whole,
               child: CustomPaint(
-                painter: _ButtonFace(
+                painter: MetalFace(
                   colour: scheme.primary,
                   pressed: _down,
                   dark: Theme.of(context).brightness == Brightness.dark,
@@ -1253,11 +1254,13 @@ class _PlayPauseButtonState extends State<PlayPauseButton> with TickerProviderSt
                   beat: widget.beat,
                 ),
                 child: Center(
-                  child: AnimatedIcon(
-                    icon: AnimatedIcons.play_pause,
-                    progress: _shape,
-                    size: whole * 0.40,
-                    color: Colors.white,
+                  child: MetalIcon(
+                    child: AnimatedIcon(
+                      icon: AnimatedIcons.play_pause,
+                      progress: _shape,
+                      size: whole * 0.38,
+                      color: Colors.white,
+                    ),
                   ),
                 ),
               ),
@@ -1267,230 +1270,6 @@ class _PlayPauseButtonState extends State<PlayPauseButton> with TickerProviderSt
       ),
     );
   }
-}
-
-/// The play button's face: a brushed steel disc in a dark bezel, ringed with light.
-///
-/// From the outside in: the bezel, a dark moulded ring lit from above; the ring of
-/// light, a neon tube in the edition's colour with its bloom on the bezel either side
-/// of it; the disc, steel brushed in circles, which is why it is bright at two corners
-/// and dark at the other two — a brushed surface throws the lamp back along its
-/// grooves, and the grooves run round; and a hairline of shadow where the disc is set
-/// into the bezel. Held down, the disc sinks and the ring dims; while the stream
-/// opens, a brighter arc runs round the ring; and on the beat the bloom breathes.
-class _ButtonFace extends CustomPainter {
-  _ButtonFace({
-    required this.colour,
-    required this.pressed,
-    required this.dark,
-    required this.lit,
-    required this.running,
-    required this.busy,
-    this.beat,
-  }) : super(repaint: Listenable.merge([lit, running, if (beat != null) beat]));
-
-  final Color colour;
-  final bool pressed;
-  final bool dark;
-  final Animation<double> lit;
-  final Animation<double> running;
-  final bool busy;
-  final ValueListenable<double>? beat;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final c = size.center(Offset.zero);
-    final radius = size.shortestSide / 2;
-    // The bezel's outer edge leaves room for the bloom; the ring sits just inside.
-    final bezel = radius * 0.86;
-    final ring = radius * 0.80;
-    final ringWidth = radius * 0.095;
-    final disc = radius * 0.62;
-    final on = lit.value;
-    final pulse = (beat?.value ?? 0.0) * on;
-    final glow = (0.22 + 0.78 * on) * (pressed ? 0.6 : 1.0);
-
-    // What it stands on: a shadow it sinks into when pressed.
-    final lift = pressed ? 0.4 : 1.0;
-    canvas.drawCircle(
-        c.translate(0, 3 * lift),
-        bezel,
-        Paint()
-          ..color = Colors.black.withValues(alpha: (dark ? 0.6 : 0.28) * (0.6 + 0.4 * lift))
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 6 * lift + 2));
-
-    // The bezel: dark, lit from above, with a bright lip along its top edge.
-    final body = Rect.fromCircle(center: c, radius: bezel);
-    canvas.drawCircle(
-        c,
-        bezel,
-        Paint()
-          ..shader = LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: dark
-                ? const [Color(0xFF2E2E32), Color(0xFF17171A), Color(0xFF0E0E10)]
-                : const [Color(0xFFE9E7E3), Color(0xFFC9C6C0), Color(0xFFAAA69F)],
-          ).createShader(body));
-    canvas.drawCircle(
-        c,
-        bezel - 0.6,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.2
-          ..shader = LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Colors.white.withValues(alpha: dark ? 0.28 : 0.9),
-              Colors.white.withValues(alpha: 0.0),
-              Colors.black.withValues(alpha: dark ? 0.5 : 0.25),
-            ],
-            stops: const [0.0, 0.45, 1.0],
-          ).createShader(body));
-
-    // The ring of light. Its bloom first, on the bezel either side; then the tube,
-    // then the hot thread down its middle. Off, the tube is still there — a neon
-    // tube unlit is glass with a little of its colour in it.
-    final tube = Color.lerp(colour, Colors.white, 0.08)!;
-    final hot = Color.lerp(colour, Colors.white, 0.55)!;
-    final bloom = glow * (0.55 + 0.12 * pulse);
-    canvas.drawCircle(
-        c,
-        ring,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = ringWidth * 3.4
-          ..color = colour.withValues(alpha: 0.8 * bloom)
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, radius * 0.17));
-    // The tube's edges: a hair of dark either side, which is what makes it a tube
-    // rather than a line.
-    canvas.drawCircle(
-        c,
-        ring,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = ringWidth + 1.6
-          ..color = Colors.black.withValues(alpha: dark ? 0.55 : 0.25));
-    canvas.drawCircle(
-        c,
-        ring,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = ringWidth
-          ..color = Color.lerp(tube.withValues(alpha: 0.35), tube, glow)!);
-    canvas.drawCircle(
-        c,
-        ring,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = ringWidth * 0.42
-          ..color = hot.withValues(alpha: 0.85 * glow)
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, ringWidth * 0.25));
-    // The stream opening: a brighter length of tube running round.
-    if (busy) {
-      final at = running.value * 2 * math.pi;
-      canvas.drawArc(
-          Rect.fromCircle(center: c, radius: ring),
-          at,
-          math.pi * 0.55,
-          false,
-          Paint()
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = ringWidth * 1.1
-            ..strokeCap = StrokeCap.round
-            ..color = Colors.white.withValues(alpha: 0.75)
-            ..maskFilter = MaskFilter.blur(BlurStyle.normal, ringWidth * 0.4));
-    }
-
-    // The seat: a hairline of shadow the disc sits down into.
-    canvas.drawCircle(
-        c,
-        disc + 1.5,
-        Paint()
-          ..color = Colors.black.withValues(alpha: dark ? 0.7 : 0.35)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.5));
-
-    // The disc: brushed steel. Circular brushing throws the light back in two lobes
-    // opposite each other — bright top-left and bottom-right under a lamp from the
-    // top-left — with the metal's own grey between.
-    final face = Rect.fromCircle(center: c, radius: disc);
-    final hi = dark ? 0.62 : 0.86, lo = dark ? 0.30 : 0.58;
-    Color grey(double v) => Color.fromRGBO((255 * v).round(), (255 * v).round(), (255 * (v * 0.985)).round(), 1);
-    canvas.drawCircle(
-        c,
-        disc,
-        Paint()
-          ..shader = SweepGradient(
-            center: Alignment.center,
-            startAngle: 0,
-            endAngle: 2 * math.pi,
-            transform: const GradientRotation(-math.pi * 0.25),
-            colors: [grey(hi), grey(lo), grey(hi * 0.92), grey(lo * 1.1), grey(hi)],
-            stops: const [0.0, 0.25, 0.5, 0.75, 1.0],
-          ).createShader(face));
-    // The brushing itself: fine rings, a hair lighter and darker in turn, each a
-    // little off in width — a lathe, not a printer.
-    canvas.save();
-    canvas.clipPath(Path()..addOval(face));
-    final brush = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.7;
-    var r = disc * 0.18;
-    var i = 0;
-    while (r < disc) {
-      final h = ((i * 2654435761) & 0xFFFF) / 65535.0;
-      brush.color = (i.isEven ? Colors.white : Colors.black).withValues(alpha: 0.035 + 0.05 * h);
-      canvas.drawCircle(c, r, brush);
-      r += 1.1 + 0.9 * h;
-      i++;
-    }
-    // Pressed, the lamp catches it less; up, a soft sheen at the top.
-    canvas.drawCircle(
-        c,
-        disc,
-        Paint()
-          ..shader = RadialGradient(
-            center: const Alignment(-0.35, -0.5),
-            radius: 0.9,
-            colors: [
-              Colors.white.withValues(alpha: pressed ? 0.04 : (dark ? 0.16 : 0.22)),
-              Colors.white.withValues(alpha: 0.0),
-              Colors.black.withValues(alpha: pressed ? 0.30 : 0.18),
-            ],
-            stops: const [0.0, 0.55, 1.0],
-          ).createShader(face));
-    canvas.restore();
-    // The disc's own turned edge: light above, dark below.
-    canvas.drawCircle(
-        c,
-        disc - 0.6,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.2
-          ..shader = LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Colors.white.withValues(alpha: pressed ? 0.15 : 0.5),
-              Colors.white.withValues(alpha: 0.05),
-              Colors.black.withValues(alpha: 0.35),
-            ],
-          ).createShader(face));
-    // The ring's colour, caught faintly on the steel nearest it.
-    canvas.drawCircle(
-        c,
-        disc - 0.5,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = disc * 0.16
-          ..color = colour.withValues(alpha: 0.10 * glow)
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, disc * 0.08));
-  }
-
-  @override
-  bool shouldRepaint(_ButtonFace old) =>
-      old.colour != colour || old.pressed != pressed || old.dark != dark || old.busy != busy || old.beat != beat;
 }
 
 /// Repeat, wherever it is shown: off, the whole queue, or this one song.
