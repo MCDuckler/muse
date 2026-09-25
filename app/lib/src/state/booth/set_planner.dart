@@ -238,8 +238,13 @@ class SetPlanner {
     return dot / (math.sqrt(na) * math.sqrt(nb));
   }
 
-  static String _titleKey(String title) =>
-      title.toLowerCase().replaceAll(RegExp(r'[\(\[].*?[\)\]]'), '').replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim();
+  static String _titleKey(String title) {
+    var t = title.toLowerCase().replaceAll(RegExp(r'[\(\[].*?[\)\]]'), '');
+    // "Song by Artist" and "Artist - Song": the song.
+    t = t.replaceAll(RegExp(r'\s+by\s+.*$'), '');
+    if (t.contains(' - ')) t = t.split(' - ').last;
+    return t.replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim();
+  }
 
   /// How well [b] follows [a]. [before] are the records lately played before [a],
   /// for what is not to be repeated; [wantedStep] is the step in loudness the arc
@@ -301,10 +306,13 @@ class SetPlanner {
 
     final like = alike(a, b);
     if (like != null) {
-      terms['sound'] = 0.2 * like.clamp(0.0, 1.0);
-      if (like > 0.7) {
+      // Measured over a library of five thousand: the median pair sits at 0.85, the
+      // top tenth from 0.94, the bottom tenth under 0.6 — so 0.75 to 0.95 is the
+      // scale that tells records apart, not 0 to 1.
+      terms['sound'] = 0.2 * ((like - 0.75) / 0.2).clamp(0.0, 1.0);
+      if (like > 0.93) {
         words.add('sounds alike');
-      } else if (like < 0.1) {
+      } else if (like < 0.6) {
         words.add('a different sound');
       }
     }

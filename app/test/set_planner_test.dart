@@ -76,6 +76,12 @@ void main() {
       final edit = SetPlanner.fit(a, b,
           ta: song(1, title: 'Blue (Da Ba Dee)'), tb: song(2, title: 'blue (da ba dee) [Radio Edit]'));
       expect(edit.why, contains('same song'));
+      final upload = SetPlanner.fit(a, b,
+          ta: song(1, title: 'Veridis Quo', artists: ['Daft Punk']),
+          tb: song(2, title: 'Veridis Quo by Daft Punk', artists: ['Somebody']));
+      expect(upload.why, contains('same song'), reason: 'a re-upload credited to its uploader');
+      final dash = SetPlanner.fit(a, b, ta: song(1, title: 'Harpie G'), tb: song(2, title: 'Olsvangèr - Harpie G'));
+      expect(dash.why, contains('same song'));
     });
 
     test('loudness follows the step the arc wants', () {

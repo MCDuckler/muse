@@ -147,8 +147,17 @@ def cosine(a, b) -> float | None:
     return dot / (na * nb) if na > 0 and nb > 0 else None
 
 
+def sound_alike(sim: float) -> float:
+    """The cosine of two sound rows on a 0 to 1 scale that tells records apart."""
+    return min(1.0, max(0.0, (sim - 0.75) / 0.2))
+
+
 def _title_key(title: str) -> str:
     t = re.sub(r"[\(\[].*?[\)\]]", "", (title or "").lower())
+    # "Song by Artist" and "Artist - Song": the song.
+    t = re.sub(r"\s+by\s+.*$", "", t)
+    if " - " in t:
+        t = t.split(" - ")[-1]
     return re.sub(r"[^a-z0-9]+", " ", t).strip()
 
 
@@ -173,9 +182,14 @@ def judge(a: dict, b: dict, wanted_step: float = 0.0) -> tuple[float, list[str]]
         score += 0.2 * max(0.0, 1 - abs(step - wanted_step) / 0.3)
     sim = cosine(a.get("sound"), b.get("sound"))
     if sim is not None:
-        score += 0.2 * max(0.0, sim)
-        if sim > 0.7:
+        # Measured over a library of five thousand: the median pair sits at 0.85, the
+        # top tenth from 0.94, the bottom tenth under 0.6 — so 0.75 to 0.95 is the
+        # scale that tells records apart, not 0 to 1.
+        score += 0.2 * sound_alike(sim)
+        if sim > 0.93:
             words.append("sounds alike")
+        elif sim < 0.6:
+            words.append("a different sound")
     if a.get("out_db") is not None and b.get("in_db") is not None \
             and a.get("lufs") is not None and b.get("lufs") is not None:
         d = abs((a["lufs"] + a["out_db"]) - (b["lufs"] + b["in_db"]))

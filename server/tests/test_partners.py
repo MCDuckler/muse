@@ -33,6 +33,9 @@ def test_the_judging_reads_tempo_key_sound_and_who_made_it():
     assert "too far apart in tempo" in w_far and "keys clash" in w_far
     assert "sounds alike" in w_close
     assert s_again < s_close - 0.2 and "the same artist" in w_again
+    assert traits._title_key("Veridis Quo by Daft Punk") == traits._title_key("Veridis Quo")
+    assert traits._title_key("Olsvangèr - Harpie G") == traits._title_key("Harpie G (Original Mix)")
+    assert abs(traits.sound_alike(0.85) - 0.5) < 1e-9 and traits.sound_alike(0.99) == 1.0 and traits.sound_alike(0.5) == 0.0
     assert traits.sync_ratio(128, 64) == 1.0, "half time is the same tempo"
     assert traits.sync_ratio(128, 160) is None
 
