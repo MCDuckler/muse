@@ -245,6 +245,19 @@ class PlayerService {
   Timer? _cursorTimer;
   DateTime _lastEmit = DateTime.fromMillisecondsSinceEpoch(0);
   String? lastError;
+
+  /// Something went wrong and playback is in whatever state it was left in.
+  ///
+  /// Both halves matter. [lastError] is what the player bar shows, and is cleared by
+  /// the next track that loads; the log entry is the one that survives — it goes to
+  /// disk, comes back after a restart, and is handed to the server the next time the
+  /// app comes to the front (AppState, /playback-log). Before this, a caught error
+  /// was only ever a label: a range error on a phone could be read off the screen and
+  /// then never again, which is no way to find where it came from.
+  void _fault(String where, Object e, [StackTrace? stack]) {
+    lastError = '$e';
+    PlaybackLog.noteError(where, e, stack);
+  }
   bool finished = false;         // queue ran out with repeat off
 
   PlayerSnapshot? last;
@@ -358,8 +371,8 @@ class PlayerService {
     // The engine moving through its own playlist, which is what a gapless transition
     // looks like from here.
     _player.currentIndexStream.listen(_onEngineIndex);
-    _player.playbackEventStream.listen((_) {}, onError: (Object e) {
-      lastError = '$e';
+    _player.playbackEventStream.listen((_) {}, onError: (Object e, StackTrace st) {
+      _fault('the engine\'s own event stream', e, st);
       PlaybackLog.note('engine error: $e');
       _emit(force: true);
     });
@@ -691,8 +704,8 @@ class PlayerService {
         _startPlayback();
         _nudges = 0;
       }
-    } catch (e) {
-      lastError = '$e';
+    } catch (e, st) {
+      _fault('reviving a stalled engine', e, st);
     }
     _emit(force: true);
   }
@@ -745,8 +758,8 @@ class PlayerService {
         await _loadCurrent(startAt: at);
         _startPlayback();
       }
-    } catch (e) {
-      lastError = '$e';
+    } catch (e, st) {
+      _fault('putting the music back where it was', e, st);
     }
     _emit(force: true);
   }
@@ -1102,9 +1115,9 @@ class PlayerService {
       // A newer request came in while this one was loading: it owns playback now.
       if (token != _loadToken) return;
       if (_waitingForTrack == null) _startPlayback();
-    } catch (e) {
+    } catch (e, st) {
       // A load that throws must not leave the UI frozen on a half-changed state.
-      lastError = '$e';
+      _fault('moving to another song', e, st);
     } finally {
       if (token == _loadToken) {
         _emit(force: true);
@@ -1141,7 +1154,7 @@ class PlayerService {
         // Ask for the tap rather than reporting a failure — nothing is broken.
         needsGesture = true;
       } else {
-        lastError = '$e';
+        _fault('starting playback', e);
       }
       _emit(force: true);
     }));
@@ -1179,8 +1192,8 @@ class PlayerService {
     try {
       await _player.pause();
       _saveCursor();
-    } catch (e) {
-      lastError = '$e';
+    } catch (e, st) {
+      _fault('pausing', e, st);
     }
     _emit(force: true);
   }
@@ -1193,8 +1206,8 @@ class PlayerService {
     try {
       if (_loadedTrackId == null) await _loadCurrent();
       if (_waitingForTrack == null) _startPlayback();
-    } catch (e) {
-      lastError = '$e';
+    } catch (e, st) {
+      _fault('starting the song that is loaded', e, st);
     }
     _emit(force: true);
   }
@@ -1223,8 +1236,11 @@ class PlayerService {
         // every five seconds until it gave up. onTrackReady starts it when it lands.
         if (_waitingForTrack == null) _startPlayback();
       }
-    } catch (e) {
-      lastError = '$e';
+    } catch (e, st) {
+      // The song ending and the next one starting: the one moment in ordinary
+      // playback where the queue, the play order and the engine all move at once,
+      // and the likeliest place for an index to be out of step with a list.
+      _fault('the song ending', e, st);
     }
     _emit(force: true);
   }
@@ -1742,8 +1758,9 @@ class PlayerService {
       // or a queue update arriving mid-load. That is the intended outcome, not
       // something to put on screen.
       return;
-    } catch (e) {
+    } catch (e, st) {
       _loadedTrackId = null;
+      PlaybackLog.noteError('loading "${track.title}"', e, st);
       lastError = 'Could not load "${track.title}": $e';
       _emit(force: true);
       rethrow;

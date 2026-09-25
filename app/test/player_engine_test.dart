@@ -1187,6 +1187,43 @@ void main() {
         reason: 'the watchdog still works after an interruption: $said');
   });
 
+  test('a fault the player catches is written down, not only shown', () async {
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    await player.playAt(0);
+    await settle();
+
+    PlaybackLog.note('--- marker');
+    audio.only.failLoad = true;          // the next record will not open
+    await player.next();
+    await settle();
+
+    final said = PlaybackLog.lines.skipWhile((l) => !l.endsWith('--- marker')).toList();
+    // Both halves: the label the player bar shows, and the line that survives a
+    // restart and is handed to the server. A caught error never reaches Flutter's own
+    // error handler, so without this it is a label and nothing else — which is how a
+    // range error during ordinary playback on a phone stayed unfindable.
+    expect(player.lastError, isNotNull, reason: 'nothing on screen');
+    expect(said.any((l) => l.contains('PLAYER FAULT')), isTrue,
+        reason: 'nothing written down: $said');
+    // The point of keeping the stack: it names our own file and line, which is the
+    // whole difference between "a range error happened" and somewhere to look.
+    expect(said.any((l) => l.contains('player.dart:')), isTrue,
+        reason: 'no stack, so nothing says where it came from: $said');
+    // And the same fault caught again on its way up does not cost another eight lines.
+    expect(said.where((l) => l.contains('PLAYER FAULT')).length, 2);
+    expect(said.any((l) => l.contains('as above')), isTrue, reason: '$said');
+
+    // But the same fault an hour later is a second occurrence, not an echo of the
+    // first, and gets its own stack: the bug this was built for is intermittent, and
+    // keeping only the first stack would be keeping the one we already have.
+    PlaybackLog.note('--- later');
+    await player.playAt(0);
+    await settle();
+    final again = PlaybackLog.lines.skipWhile((l) => !l.endsWith('--- later')).toList();
+    expect(again.any((l) => l.contains('player.dart:')), isTrue,
+        reason: 'the second occurrence lost its stack: $again');
+  });
+
   test('a phone call is resumed from, an interruption that never ends is not',
       () async {
     await player.loadQueue(queueOf([track(1), track(2)]));

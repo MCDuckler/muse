@@ -48,6 +48,7 @@ class PlaybackLog {
     final now = DateTime.now();
     String two(int v) => v.toString().padLeft(2, '0');
     _lines.add('${two(now.hour)}:${two(now.minute)}:${two(now.second)} $what');
+    _noted++;
     while (_lines.length > _max) {
       _lines.removeAt(0);
     }
@@ -57,6 +58,54 @@ class PlaybackLog {
       _flush = null;
       unawaited(_save());
     });
+  }
+
+  /// Something the player *caught* — and therefore something the log would otherwise
+  /// never hear about.
+  ///
+  /// A caught exception never reaches FlutterError.onError, so nothing writes it down:
+  /// it was put on the screen, cleared by the next track, and gone. Which is how a
+  /// range error during ordinary playback on a phone stayed unfindable — the one place
+  /// it was ever written was a label somebody had to read before it changed.
+  ///
+  /// The top frames of the stack, not the whole of it: what is wanted is the file and
+  /// the line, and the rest is a hundred frames of the framework's own machinery that
+  /// would push everything else out of a log that keeps [_max] lines.
+  /// How many lines have been noted, and what the last fault was and when — so that
+  /// "the same one again" means *immediately* again and nothing else.
+  static int _noted = 0;
+  static String? _lastFault;
+  static int _lastFaultAt = -1;
+
+  static void noteError(String where, Object e, [StackTrace? stack]) {
+    // One fault is often caught twice on its way up — the load reports it, and so does
+    // the move that asked for the load. The same exception again with nothing noted in
+    // between gets a line rather than another eight frames: the log keeps [_max] lines
+    // and the context around a fault is worth more than the stack twice.
+    //
+    // Only with nothing in between. A fault that comes back an hour later is a second
+    // occurrence and gets its own stack — the bug this exists for is intermittent, and
+    // deduplicating on the message alone would have thrown away every stack but the first.
+    final message = '$e';
+    if (message == _lastFault && _noted == _lastFaultAt) {
+      note('PLAYER FAULT in $where: as above');
+      _lastFaultAt = _noted;
+      return;
+    }
+    _lastFault = message;
+    note('PLAYER FAULT in $where: $message');
+    if (stack == null) {
+      _lastFaultAt = _noted;
+      return;
+    }
+    final frames = stack.toString().split('\n')
+        .map((f) => f.trim())
+        .where((f) => f.isNotEmpty)
+        .take(8);
+    for (final f in frames) {
+      note('    $f');
+    }
+    _lastFaultAt = _noted;
   }
 
   static Future<void> _save() async {

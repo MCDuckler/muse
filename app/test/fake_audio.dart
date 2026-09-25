@@ -189,8 +189,16 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
     return ['(other)'];
   }
 
+  /// Refuse to take a record at all, the way an engine with no decoder for it does.
+  /// What the test is after is what the player *writes down* about it.
+  bool failLoad = false;
+
   @override
   Future<LoadResponse> load(LoadRequest request) async {
+    if (failLoad) {
+      calls.add('load refused');
+      throw PlatformException(code: 'nope', message: 'cannot open that');
+    }
     await _slow();
     sources
       ..clear()
