@@ -2,7 +2,6 @@
 // that firing one plays it from its first sample, and that a platform which can put a
 // rendered sound nowhere says so rather than going quiet half way through a mix.
 import 'package:flutter_test/flutter_test.dart';
-import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_platform_interface/just_audio_platform_interface.dart';
 import 'package:muse/src/state/booth/fx_channel.dart';
 import 'package:muse/src/state/booth/fx_sounds.dart';
