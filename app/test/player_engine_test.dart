@@ -1224,6 +1224,24 @@ void main() {
         reason: 'the second occurrence lost its stack: $again');
   });
 
+  test('a build that throws is written down once, not once a frame', () async {
+    PlaybackLog.note('--- frames');
+    // The same error every frame, as a build that throws gives you.
+    for (var i = 0; i < 40; i++) {
+      PlaybackLog.noteFrameworkError(
+          RangeError.range(7, 0, 4, 'index'), StackTrace.current);
+    }
+    var said = PlaybackLog.lines.skipWhile((l) => !l.endsWith('--- frames')).toList();
+    expect(said.where((l) => l.contains('PLAYER FAULT')).length, 1,
+        reason: 'forty frames of one error should be one entry: $said');
+    expect(said.any((l) => l.contains('RangeError')), isTrue, reason: '$said');
+
+    // A *different* one is still worth having, up to the cap.
+    PlaybackLog.noteFrameworkError(StateError('something else'), StackTrace.current);
+    said = PlaybackLog.lines.skipWhile((l) => !l.endsWith('--- frames')).toList();
+    expect(said.any((l) => l.contains('something else')), isTrue, reason: '$said');
+  });
+
   test('a phone call is resumed from, an interruption that never ends is not',
       () async {
     await player.loadQueue(queueOf([track(1), track(2)]));

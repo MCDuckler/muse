@@ -52,6 +52,17 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // What the app says, kept in a file on a desk: see app_log.dart.
   unawaited(startAppLog());
+  // And on a phone, where there is no log file, the same errors into the playback log
+  // — which survives a restart and is handed to the server when the app comes back to
+  // the front. An error Flutter catches during a build never reaches any of the
+  // player's own handlers, so without this the only record of one on an iPhone was
+  // whatever the screen happened to show at the time. See PlaybackLog.noteFrameworkError
+  // for why it is capped.
+  final wasOnError = FlutterError.onError;
+  FlutterError.onError = (details) {
+    PlaybackLog.noteFrameworkError(details.exception, details.stack);
+    wasOnError?.call(details);
+  };
   await readyTheWindow();
   _fontLicences();
 

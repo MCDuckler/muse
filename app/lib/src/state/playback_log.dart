@@ -108,6 +108,25 @@ class PlaybackLog {
     _lastFaultAt = _noted;
   }
 
+  /// Errors Flutter itself caught — a build, a layout, a paint — which on a desk go
+  /// to the log file and on a phone went nowhere at all.
+  ///
+  /// Capped, hard, and by distinct message. A framework error is usually thrown from
+  /// a build, and a build that throws throws again on the very next frame: recording
+  /// each one would be sixty lines a second into a log that keeps [_max] of them, and
+  /// the fault would push out the minute around it that makes it readable. What is
+  /// worth having is each *different* error once, with the frames that name it.
+  static const _mostFrameworkFaults = 6;
+  static final _frameworkSeen = <String>{};
+
+  static void noteFrameworkError(Object e, StackTrace? stack) {
+    final message = '$e'.split('\n').first;
+    if (_frameworkSeen.length >= _mostFrameworkFaults || !_frameworkSeen.add(message)) {
+      return;
+    }
+    noteError('what Flutter was drawing', e, stack);
+  }
+
   static Future<void> _save() async {
     try {
       final prefs = await SharedPreferences.getInstance();
