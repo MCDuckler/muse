@@ -98,6 +98,11 @@ class InFlight {
   String stage = 'downloading';
   double? percent;
   String? speed;
+
+  /// The server has been told how this one ended, or is being told. A stop that
+  /// lands between the telling and the job leaving the list must not give it back:
+  /// a song just reported as not worth retrying would be queued again.
+  bool decided = false;
 }
 
 enum DownloaderState { off, starting, idle, working, coolingDown, noTools, refused }
@@ -202,7 +207,7 @@ class Downloader extends Told {
     _wanted = false;
     final r = runner;
     if (r is ProcessRunner) r.killAll();
-    final holding = inFlight.values.map((f) => f.job).toList();
+    final holding = [for (final f in inFlight.values) if (!f.decided) f.job];
     for (final job in holding) {
       try {
         await server.release(job);
@@ -339,6 +344,7 @@ class Downloader extends Told {
     } catch (e) {
       failed += 1;
       _say('job ${job.id} crashed: $e');
+      inFlight[job.id]?.decided = true;
       await _quietly(() => server.fail(job, '$e', retryable: true));
     } finally {
       inFlight.remove(job.id);
@@ -352,6 +358,7 @@ class Downloader extends Told {
   Future<void> _handle(IngestJob job) async {
     final t = tools!;
     if (!isVideoId(job.videoId)) {
+      inFlight[job.id]?.decided = true;
       await server.fail(job, 'not a YouTube video id', retryable: false);
       return;
     }
@@ -401,10 +408,12 @@ class Downloader extends Told {
         switch (judge(lastError: reason, throttled: throttled)) {
           case Verdict.backOff:
             _backOff(throttled ? 'YouTube is rate-limiting this connection (HTTP 429)' : reason);
+            inFlight[job.id]?.decided = true;
             await server.release(job);
           case Verdict.needsAge:
             failed += 1;
             _say('job ${job.id} needs an age-verified account');
+            inFlight[job.id]?.decided = true;
             await server.fail(
                 job,
                 'YouTube wants an age-verified account for this one — it will not '
@@ -413,10 +422,12 @@ class Downloader extends Told {
           case Verdict.dead:
             failed += 1;
             _say('job ${job.id} FAILED: $reason');
+            inFlight[job.id]?.decided = true;
             await server.fail(job, reason, retryable: false);
           case Verdict.retry:
             failed += 1;
             _say('job ${job.id} failed, will be tried again: $reason');
+            inFlight[job.id]?.decided = true;
             await server.fail(job, reason, retryable: true);
         }
         return;
@@ -465,6 +476,7 @@ class Downloader extends Told {
       flight?.stage = 'uploading';
       notifyListeners();
       await _quietly(() => server.progress(job, 'uploading'));
+      inFlight[job.id]?.decided = true;
       await server.complete(job, audio, {
         'track_id': job.trackId,
         'video_id': job.videoId,
