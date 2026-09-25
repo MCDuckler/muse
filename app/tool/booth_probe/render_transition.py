@@ -23,12 +23,16 @@ stretch around the move, and the numbers:
   start_jump_db     how much the level jumps at the move's first instant (a fader that
                     opens on a step rather than travels there)
   end_jump_db       the same at its last (a tail cut, a fader not yet across)
+  fx_db             how loud the booth's own sound (a riser, a sweep, a gush) is at its
+                    loudest second against the mix under it — how much of what is heard
+                    is the booth rather than the records
 
   render_transition.py <dir> <idA> <idB> <kind> <bars> [--out ms] [--in ms] [--shift st] [--wav f]
 """
 import argparse
 import math
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -71,6 +75,29 @@ def out_point(A: dict, length_ms: int) -> int:
     at = min(A["cues"]["mix_out_ms"], end - length_ms)
     markers = [m for m in (A.get("four_bars") or []) if m <= at]
     return markers[-1] if markers else max(0, at)
+
+
+def fx_sounds(shots: list[dict], cache: pathlib.Path, beat_ms: int) -> dict[tuple, np.ndarray]:
+    """The booth's own sounds, at the exact lengths this move needs them.
+
+    Asked of the app rather than written again here: `flutter test` renders them from
+    lib/src/state/booth/fx_sounds.dart, which is the code the speaker gets. One call
+    for all of a move's shots, and every sound cached by its name, its length and the
+    beat it was made over, so a set of eleven risers renders one.
+    """
+    want = {(s["sound"], s["ms"]): None for s in shots}
+    missing = [(name, ms) for (name, ms) in want if not (cache / f"{name}-{ms}ms-{beat_ms}b.wav").exists()]
+    if missing:
+        cache.mkdir(parents=True, exist_ok=True)
+        spec = ",".join(f"{name}:{ms}:{beat_ms}" for name, ms in missing)
+        app = HERE.parent.parent
+        r = subprocess.run(
+            [os.environ.get("FLUTTER", "flutter"), "test", "test/fx_sounds_test.dart"],
+            cwd=app, capture_output=True,
+            env={**os.environ, "FX_OUT": str(cache.resolve()), "FX_SPEC": spec})
+        if r.returncode != 0:
+            raise SystemExit(f"could not render the booth's sounds:\n{r.stdout.decode()[-2000:]}")
+    return {k: wav(cache / f"{k[0]}-{k[1]}ms-{beat_ms}b.wav") for k in want}
 
 
 def wav(path: pathlib.Path) -> np.ndarray:
@@ -264,10 +291,33 @@ def main() -> None:
             return (1.0 if x <= 0.5 else np.cos((x - 0.5) * np.pi)) if name == "A" else (1.0 if x >= 0.5 else np.sin(x * np.pi))
         return np.cos(x * np.pi / 2) if name == "A" else np.sin(x * np.pi / 2)
 
+    def gate_on(raw, name, index):
+        """The engine's chop on a deck: its level taken up and down in time with its
+        own beat. Counted in the *record's* time — the same axis [index] is in, and the
+        axis the desk's expression is evaluated on — so a loop caught under a chop
+        keeps its phase, as it does in the booth."""
+        if not any(s["decks"].get(name, {}).get("gate") is not None for s in steps):
+            return
+        origin = (A if name == "A" else B)["cues"]["first_downbeat_ms"] / 1000
+        own_beat = 60 / (A if name == "A" else B)["bpm"]
+        for f in range(0, n, FRAME):
+            k = k_of(f)
+            if not 0 <= k <= 1:
+                continue
+            depth = lerp_steps(steps, lambda s: s["decks"].get(name, {}).get("gate"), k, 0.0)
+            if depth <= 0.001:
+                continue
+            div = held(steps, lambda s: s["decks"].get(name, {}).get("gate_div"), k, 2)
+            t = index[f:f + FRAME] / RATE
+            raw[f:f + FRAME] *= (1 - depth * (0.5 - 0.5 * np.cos(
+                2 * np.pi * (t - origin) / (own_beat / div))))[:, None]
+
     first_a = lambda stem: 1.0
     first_b = lambda stem: (steps[0]["decks"].get("B", {}).get("stems") or {}).get(stem, 1.0)
     a_raw = deck_series("A", stems_a, lambda: a_index, first_a)
     b_raw = deck_series("B", stems_b, lambda: np.arange(n) + start_a + b_off, first_b)
+    gate_on(a_raw, "A", a_index)
+    gate_on(b_raw, "B", np.arange(n) + start_a + b_off)
     # The record itself, gone (dry) where the move takes it: the echo's tail is not rendered.
     for name, raw in (("A", a_raw), ("B", b_raw)):
         for f in range(0, n, FRAME):
@@ -288,6 +338,30 @@ def main() -> None:
     for f in range(0, n, FRAME):
         k = k_of(f)
         mix[f:f + FRAME] = a_eq[f:f + FRAME] * fader_share("A", k) + b_eq[f:f + FRAME] * fader_share("B", k)
+
+    # The booth's own sound, laid over the two records: each shot starts on the step
+    # that fires it and runs for its own length, at its own gain. It is *not* touched
+    # by the crossfader or the bands — it is a third voice beside them, which is what
+    # FxChannel is.
+    beat_ms = int(round(bar_a / 4))
+    shots = []
+    for step in steps:
+        f = step.get("fx")
+        if not f:
+            continue
+        ms = int(round(beat_ms * f["beats"] if f.get("beats") else bar_a * args.bars * f.get("span", 0)))
+        if ms > 0:
+            shots.append({"sound": f["sound"], "ms": ms, "gain_db": f["gain_db"], "at": step["at"]})
+    fx = np.zeros((n, 2), np.float32)
+    if shots:
+        sounds = fx_sounds(shots, d / "fx", beat_ms)
+        for shot in shots:
+            x = sounds[(shot["sound"], shot["ms"])] * (10 ** (shot["gain_db"] / 20))
+            i0 = ms_a(out_ms) + int(shot["at"] * (ms_a(out_ms + length) - ms_a(out_ms))) - start_a
+            lo, hi = max(0, i0), min(n, i0 + len(x))
+            if hi > lo:
+                fx[lo:hi] += x[lo - i0:hi - i0]
+        mix += fx
 
     # ---- the numbers
     i_out, i_end = ms_a(out_ms) - start_a, ms_a(out_ms + length) - start_a
@@ -355,6 +429,14 @@ def main() -> None:
         ref = lambda i: max(rms_db(a_full[i:i + q]), rms_db(b_full[i:i + q]))
         return abs((rms_db(mix[at:at + q]) - ref(at)) - (rms_db(mix[at - q:at]) - ref(at - q)))
     start_jump = jump(i_out); end_jump = jump(i_end)
+    # The booth's own sound against the records under it, at the second it is loudest:
+    # a riser that reads +3 is a riser playing the room rather than lifting it.
+    fx_db = 0.0
+    if shots:
+        louds = [(rms_db(fx[i:i + win]), rms_db(mix[i:i + win] - fx[i:i + win]))
+                 for i in range(i_out, i_end, win) if i + win <= n]
+        louds = [(f, m) for f, m in louds if f > -80]
+        fx_db = max((f - m for f, m in louds), default=0.0)
     # The beat: the kicks of the two over the overlap.
     ea = onset_env(a_eq[i_out:i_end]); eb = onset_env(b_eq[i_out:i_end])
     m = min(len(ea), len(eb))
@@ -374,6 +456,7 @@ def main() -> None:
         "phase_error_ms": round(float(phase_ms), 1), "key_clash": round(float(key_clash), 3),
         "drums_doubled_s": round(float(doubled), 2), "hole_db": round(float(hole), 1),
         "start_jump_db": round(float(start_jump), 1), "end_jump_db": round(float(end_jump), 1),
+        "fx_db": round(float(fx_db), 1),
     }
     print(json.dumps(result))
     if args.json:

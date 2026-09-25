@@ -50,12 +50,22 @@
     var lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 22000; lp.Q.value = 0.9;
     var hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 10; hp.Q.value = 0.9;
     var level = ctx.createGain(); level.gain.value = deck.wanted.level;
+    // The chop: a gain the LFO rides, sitting between the passes and the level. The
+    // oscillator runs from the moment the graph is built and is never stopped — only
+    // its depth is moved — because an oscillator started again is an oscillator whose
+    // phase has moved, and a chop whose phase moves is not on the beat any more.
+    var gate = ctx.createGain(); gate.gain.value = 1;
+    var lfo = ctx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = 4;
+    var depth = ctx.createGain(); depth.gain.value = 0;
+    lfo.connect(depth); depth.connect(gate.gain);
+    lfo.start();
     // And the element's own volume is let go of: from here the gain is the level, and
     // a volume left at half from before it was routed would halve it twice.
     try { deck.el.volume = 1; } catch (e) {}
-    [low, mid, high, lp, hp, level].reduce(function (a, b) { a.connect(b); return b; }, source);
+    [low, mid, high, lp, hp, gate, level].reduce(function (a, b) { a.connect(b); return b; }, source);
     level.connect(ctx.destination);
-    deck.chain = { low: low, mid: mid, high: high, lp: lp, hp: hp, level: level };
+    deck.chain = { low: low, mid: mid, high: high, lp: lp, hp: hp, level: level,
+                   gate: gate, lfo: lfo, depth: depth };
     apply(deck);
     return deck.chain;
   }
@@ -130,6 +140,18 @@
       var d = decks[name]; if (!d) return;
       d.wanted.filter = Math.max(-1, Math.min(1, value || 0));
       if (chainFor(d)) apply(d);
+    },
+    // The chop: [deep] of the level taken away at the bottom of each cycle, [hz]
+    // cycles a second. The gain swings between 1 - deep and 1, so a depth of 1 is
+    // silence at the bottom and the record untouched at the top.
+    gate: function (name, deep, hz) {
+      var d = decks[name]; if (!d) return;
+      var c = chainFor(d); if (!c) return;
+      var now = ctx.currentTime;
+      deep = Math.max(0, Math.min(1, deep || 0));
+      c.lfo.frequency.setTargetAtTime(Math.max(0.1, hz || 4), now, 0.01);
+      c.gate.gain.setTargetAtTime(1 - deep / 2, now, 0.02);
+      c.depth.gain.setTargetAtTime(deep / 2, now, 0.02);
     }
   };
 })();

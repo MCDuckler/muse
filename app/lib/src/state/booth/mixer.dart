@@ -136,6 +136,12 @@ abstract class Mixer {
   /// Before either deck plays: the browser claims the decks' elements here.
   Future<void> prepare(List<Deck> decks) async {}
 
+  /// The volume figure a player wants to be told for a gain of [level], where that
+  /// is not the gain itself — mpv's is the cube of it. For a sound played *outside*
+  /// the two decks (FxChannel), which has no channel of its own to be ramped through
+  /// but has to sit where it was asked to sit.
+  double playerVolume(double level) => level;
+
   /// The two levels, as amplitudes 0..1, at once. [over] zero is now.
   Future<void> setLevels(Map<Deck, double> levels, {Duration over = Duration.zero});
 
@@ -178,6 +184,19 @@ abstract class Mixer {
   /// Whether a deck here can be played at another pitch without its tempo moving
   /// (a semitone up for a boost mix), and carries an echo to go out on.
   bool get canShift => false;
+
+  /// Whether a deck here can be *chopped*: its level taken up and down in time with
+  /// its own beat, fast enough that it is heard as one sound rather than a fader
+  /// being moved. Nothing Dart drives at forty milliseconds a tick can do this — a
+  /// sixteenth at 128 a minute is 117 ms, which is three ticks a cycle — so it has to
+  /// happen inside the engine.
+  bool get canGate => false;
+
+  /// [deck]'s gate: [depth] of its level taken away at the bottom of each cycle (0
+  /// off, 1 to silence), a cycle every [period], with the cycles counted from [origin]
+  /// in the record's own time so that the top of each one lands on a beat.
+  Future<void> setGate(Deck deck,
+      {required double depth, required Duration period, required Duration origin}) async {}
 
   /// Play [deck] [semitones] higher (or lower, negative) at the same tempo.
   Future<void> setPitchShift(Deck deck, double semitones) async {}
@@ -229,6 +248,9 @@ class VolumeMixer extends Mixer {
   /// The gain a player's own volume figure makes: [toEngine] undone.
   @protected
   double fromEngine(double volume) => volume;
+
+  @override
+  double playerVolume(double level) => toEngine(level.clamp(0.0, 1.0));
 
   @override
   Future<void> setLevels(Map<Deck, double> levels, {Duration over = Duration.zero}) async {

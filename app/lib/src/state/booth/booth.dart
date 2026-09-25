@@ -9,6 +9,8 @@ import '../../worker/parts_jobs.dart';
 import '../timing.dart';
 import 'automix.dart';
 import 'deck.dart';
+import 'fx_channel.dart';
+import 'fx_sounds.dart';
 import 'mixer.dart';
 import 'parts.dart';
 
@@ -90,6 +92,42 @@ enum Transition {
   /// The filter ride: long, both ways — the old record climbs out through the
   /// high-pass while the new one opens up through the low-pass.
   filterRide,
+
+  /// The riser: an uplifter the booth makes itself climbs under the whole move, the
+  /// old record held whole until it leaves through the filter over the last bars, and
+  /// on the one the new record takes the room with a hit under it.
+  ///
+  /// Almost nothing is done to either record here, which is the point: the sound the
+  /// booth *brings* is the transition. So it is the one move that works on two records
+  /// that agree about nothing — no shared key, no stems, no drop to aim at — and the
+  /// only one whose timing is exact to the sample, because a riser that peaks a beat
+  /// after the drop is worse than no riser. See fx_sounds.dart.
+  riser,
+
+  /// The sweep: a short blend with a noise sweep rising into the change and another
+  /// falling away behind it. The whoosh, and what most people mean by one.
+  noiseSweep,
+
+  /// The gush: both records' tops are pulled under a resonant wash of noise that
+  /// arches over the change and is gone by the end of it, so the join happens inside
+  /// the noise where there is nothing to hear it against.
+  hydrant,
+
+  /// The dissolve: the old record evaporates rather than ends. The echo is opened
+  /// under it over the whole move and its own sound taken away a little at a time
+  /// through a closing low-pass, until what is left is a tail in the dark. For a
+  /// record with no ending of its own to lean on. Needs the desk's echo.
+  dissolve,
+
+  /// The lunar echo: the same, falling. The old record is pulled five semitones down
+  /// as it goes into its echo — slow, like a hand easing a platter — and the tail
+  /// rings on under the new record. Needs the desk's echo and its pitch shift.
+  lunarEcho,
+
+  /// The tremolo: the old record is chopped in time with its own beat, deeper and
+  /// then faster as the new one comes up under it, until there is more gap than
+  /// record and it is gone. Needs an engine that can chop (Mixer.canGate).
+  tremolo,
 }
 
 extension TransitionWords on Transition {
@@ -102,11 +140,32 @@ extension TransitionWords on Transition {
         Transition.loopBuild => 'loop build',
         Transition.breakSwap => 'break swap',
         Transition.filterRide => 'filter ride',
+        Transition.noiseSweep => 'noise sweep',
+        Transition.tremolo => 'tremolo',
+        Transition.lunarEcho => 'lunar echo',
         _ => name,
       };
 
-  /// Needs the desk's echo (Mixer.canShift): elsewhere it is a blend.
-  bool get needsFx => this == Transition.echoOut;
+  /// Needs the desk's echo (Mixer.canShift): elsewhere it is [plainly].
+  bool get needsFx =>
+      this == Transition.echoOut || this == Transition.dissolve || this == Transition.lunarEcho;
+
+  /// Made of a sound the booth plays itself (FxChannel). Where a rendered sound can
+  /// be put nowhere a player will take it, these are [plainly] too — and the booth
+  /// says which, rather than playing the move with its middle missing.
+  bool get needsSound =>
+      this == Transition.riser || this == Transition.noiseSweep || this == Transition.hydrant;
+
+  /// Made of the engine's chop (Mixer.canGate): elsewhere it is [plainly].
+  bool get needsGate => this == Transition.tremolo;
+
+  /// What this move becomes on an engine that cannot do it. Near enough to be the
+  /// same idea, and never itself needing something else the engine has not got.
+  Transition get plainly => switch (this) {
+        Transition.riser => Transition.loopBuild,
+        Transition.hydrant => Transition.sweep,
+        _ => Transition.blend,
+      };
 
   /// Made of stems: nothing it means can be done on a deck playing the whole record.
   bool get needsStems =>
@@ -130,7 +189,28 @@ class DeckStep {
       this.part,
       this.stems,
       this.echo,
-      this.dry});
+      this.dry,
+      this.shift,
+      this.gate,
+      this.gateDiv});
+
+  /// How deep this deck's chop is by this point, 0 (off) to 1 (to silence) —
+  /// travelled to like the filter, so a gate arrives rather than appears. Only where
+  /// the engine can chop (Mixer.canGate).
+  final double? gate;
+
+  /// How many chops to a beat: 2 is eighths, 4 sixteenths. Held, like a band, rather
+  /// than travelled — a rate between two rates is not a rate anybody plays.
+  final int? gateDiv;
+
+  /// Where this deck's pitch shift is by this point, in semitones, on an engine that
+  /// has one (Mixer.canShift) — travelled to like the filter rather than jumped to,
+  /// because a record pulled five semitones down in one step is a record that has
+  /// been switched off, and one eased down is a record being let go of.
+  ///
+  /// The incoming's key shift is set once before a move begins and is not this; this
+  /// is the *outgoing* falling out of the mix (the lunar echo).
+  final double? shift;
 
   /// The echo send, 0 to 1, and how much of the record itself is still heard, where
   /// this step sets them (Mixer.setEcho). Send shut and dry taken away together is
@@ -166,9 +246,12 @@ class DeckStep {
 
 /// One instruction in a transition, at a point in it (0 at the start, 1 at the end).
 class MixStep {
-  const MixStep(this.at, {this.crossfader, this.decks = const {}});
+  const MixStep(this.at, {this.crossfader, this.decks = const {}, this.fx});
 
   final double at;
+
+  /// A sound of the booth's own, fired as this step is reached. See FxShot.
+  final FxShot? fx;
 
   /// Where the crossfader is by this point; the fader moves evenly from the previous
   /// step's place to this one.
@@ -178,7 +261,7 @@ class MixStep {
   final Map<String, DeckStep> decks;
 
   /// The same step at another point of the transition.
-  MixStep at_(double k) => MixStep(k, crossfader: crossfader, decks: decks);
+  MixStep at_(double k) => MixStep(k, crossfader: crossfader, decks: decks, fx: fx);
 
   /// [steps] moved onto the bars of a transition [bars] long: a bass swap, a kill, a
   /// loop caught — each on a downbeat, where a DJ does it. The plans are written in
@@ -271,9 +354,11 @@ class Booth extends ChangeNotifier {
     String? Function(int trackId)? offlinePath,
     Mixer? mixer,
     TimingStore? timing,
+    FxChannel? fx,
     Deck? a,
     Deck? b,
   })  : mixer = mixer ?? Mixer.forThisDevice(),
+        fx = fx ?? FxChannel(),
         timing = timing ?? TimingStore(api),
         parts = PartsStore(api, offlinePath: offlinePath) {
     // Each deck says which it is at the moment its player is handed a record, which
@@ -340,6 +425,10 @@ class Booth extends ChangeNotifier {
 
   final ApiClient api;
   final Mixer mixer;
+
+  /// The third voice: the sounds the booth plays that are neither record — the riser
+  /// under a build, the whoosh over a change, the hit on the one. See fx_channel.dart.
+  final FxChannel fx;
   final TimingStore timing;
 
   /// Where the voice is in each record and what it sings: what the automix plans its
@@ -1318,6 +1407,141 @@ class Booth extends ChangeNotifier {
           }),
           MixStep(1, crossfader: 1, decks: {from: off}),
         ];
+      case Transition.riser:
+        // The sound does the work, so the records are left alone: the old one whole
+        // under the climb until the last bars, when it leaves through the filter; the
+        // new one held *right* back — bass killed, barely on the fader — until the
+        // one, when it takes the room and the hit lands on it. The riser has just
+        // stopped dead, and the silence it leaves is what the drop falls into.
+        //
+        // Held back that far on purpose. A riser is not a blend with a noise over it:
+        // the incoming waiting at a third of the fader with its bass merely *down* put
+        // two kicks against each other for seven and a half seconds of a sixteen-bar
+        // move (the probe's drums_doubled_s), which is the one thing a build must not
+        // do — the whole point of a build is that there is one beat under it.
+        return [
+          MixStep(0, crossfader: 0, decks: {
+            to: noBass,
+            from: const DeckStep(filter: 0),
+          }, fx: const FxShot(FxSound.riser, span: 1, gainDb: -13)),
+          MixStep(0.75, crossfader: 0.12, decks: {from: const DeckStep(filter: 0.2)}),
+          MixStep(0.94, crossfader: 0.3, decks: {from: const DeckStep(filter: 0.55)}),
+          MixStep(1, crossfader: 1, decks: {
+            to: const DeckStep(eq: EqSet.flat, filter: 0),
+            from: const DeckStep(eq: EqSet.flat, filter: 0),
+          }, fx: const FxShot(FxSound.impact, beats: 8, gainDb: -15)),
+        ];
+      case Transition.noiseSweep:
+        // A blend with a whoosh over its middle: the sweep rises into the bass swap
+        // half way — the moment of a blend anybody can hear — and the second falls
+        // away behind it over the rest.
+        return [
+          MixStep(0, crossfader: 0, decks: {to: noBass},
+              fx: const FxShot(FxSound.sweepUp, span: 0.5, gainDb: -14)),
+          MixStep(0.5, crossfader: 0.5, decks: {to: flat, from: noBass},
+              fx: const FxShot(FxSound.sweepDown, span: 0.5, gainDb: -16)),
+          MixStep(0.85, crossfader: 0.85, decks: {
+            from: const DeckStep(eq: EqSet(low: EqSet.killed, high: EqSet.killed)),
+          }),
+          MixStep(1, crossfader: 1, decks: {from: off}),
+        ];
+      case Transition.hydrant:
+        // The wash arches over the whole move, and the records are thinned at the top
+        // underneath it while it is loudest — the noise stands where their highs were,
+        // so the swap happens in a band of the spectrum that is already full.
+        //
+        // Its gain is set by what it is *for*. A sound that has to cover a join has to
+        // be heard against the records: the probe's fx_db reads how far under them the
+        // booth's own sound sits at its loudest, and this wants to be within about
+        // eight decibels. A sound that only decorates one — the sweeps — can sit
+        // twelve or fifteen under and still be the thing everybody notices.
+        return [
+          MixStep(0, crossfader: 0, decks: {to: noBass},
+              fx: const FxShot(FxSound.hydrant, span: 1, gainDb: -11)),
+          MixStep(0.3, crossfader: 0.3, decks: {from: const DeckStep(eq: EqSet(high: -9))}),
+          MixStep(0.5, crossfader: 0.5, decks: {
+            to: flat,
+            from: const DeckStep(eq: EqSet(low: EqSet.killed, high: -12)),
+          }),
+          MixStep(0.8, crossfader: 0.85, decks: {
+            from: const DeckStep(eq: EqSet(low: EqSet.killed, high: EqSet.killed)),
+          }),
+          MixStep(1, crossfader: 1, decks: {from: off}),
+        ];
+      case Transition.dissolve:
+        // Not an ending: a disappearance. The send is opened over the whole move and
+        // the record's own sound given up a fifth at a time through a low-pass that
+        // closes with it, so that what is being faded is less and less of a record and
+        // more and more of its echo. The dry goes at 0.93 and the tail does the rest.
+        return [
+          MixStep(0, crossfader: 0, decks: {
+            to: noBass,
+            from: const DeckStep(echo: 0.15, dry: 1, filter: 0),
+          }),
+          // Its bottom goes first, with the send: a record that is evaporating has no
+          // business still putting a kick against the one coming in (three and a half
+          // seconds of two kicks, before it did).
+          MixStep(0.4, crossfader: 0.4, decks: {
+            from: const DeckStep(echo: 0.45, dry: 0.85, filter: -0.25, eq: EqSet(low: EqSet.killed)),
+          }),
+          MixStep(0.65, crossfader: 0.6, decks: {
+            to: flat,
+            from: const DeckStep(echo: 0.7, dry: 0.5, filter: -0.5),
+          }),
+          MixStep(0.85, crossfader: 0.8, decks: {
+            from: const DeckStep(echo: 0.8, dry: 0.15, filter: -0.7),
+          }),
+          MixStep(0.93, crossfader: 0.9, decks: {from: const DeckStep(echo: 0, dry: 0)}),
+          MixStep(1, crossfader: 1, decks: {
+            from: const DeckStep(eq: EqSet.flat, filter: 0, echo: 0, dry: 1),
+          }),
+        ];
+      case Transition.lunarEcho:
+        // The old record falls out of the mix. Its bass goes half way, the send opens,
+        // and over the last quarter it is pulled five semitones down — eased, not
+        // dropped — while the low-pass closes over it. At 0.88 the record itself is
+        // gone and its echo, pitched where it was left, rings under the new one.
+        return [
+          MixStep(0, crossfader: 0, decks: {
+            to: noBass,
+            from: const DeckStep(echo: 0.2, dry: 1, shift: 0, filter: 0),
+          }),
+          MixStep(0.5, crossfader: 0.5, decks: {
+            to: flat,
+            from: const DeckStep(echo: 0.45, dry: 1, shift: 0, eq: EqSet(low: EqSet.killed)),
+          }),
+          MixStep(0.75, crossfader: 0.65, decks: {
+            from: const DeckStep(echo: 0.75, dry: 1, shift: -2, filter: -0.2),
+          }),
+          MixStep(0.88, crossfader: 0.75, decks: {
+            from: const DeckStep(echo: 0.85, dry: 0, shift: -5, filter: -0.45),
+          }),
+          MixStep(1, crossfader: 1, decks: {
+            from: const DeckStep(eq: EqSet.flat, filter: 0, echo: 0, dry: 1, shift: 0),
+          }),
+        ];
+      case Transition.tremolo:
+        // The old record is chopped away rather than faded away. The gate opens on
+        // eighths a quarter of the way in and deepens; at three quarters it doubles to
+        // sixteenths, by which point there is more gap than record and the new one is
+        // filling every one of them. Its bass goes half way, as in any blend, so that
+        // what is being chopped is not a kick.
+        return [
+          MixStep(0, crossfader: 0, decks: {
+            to: noBass,
+            from: const DeckStep(gate: 0, gateDiv: 2),
+          }),
+          MixStep(0.25, crossfader: 0.25, decks: {from: const DeckStep(gate: 0.5)}),
+          MixStep(0.5, crossfader: 0.5, decks: {
+            to: flat,
+            from: const DeckStep(gate: 0.8, eq: EqSet(low: EqSet.killed)),
+          }),
+          MixStep(0.75, crossfader: 0.7, decks: {from: const DeckStep(gate: 0.95, gateDiv: 4)}),
+          MixStep(0.9, crossfader: 0.88, decks: {from: const DeckStep(filter: 0.35)}),
+          MixStep(1, crossfader: 1, decks: {
+            from: const DeckStep(eq: EqSet.flat, filter: 0, gate: 0, gateDiv: 2),
+          }),
+        ];
       case Transition.swap:
         // The drums change hands. Each swap is a load, so each one happens where
         // there is another record over it: the first under the outgoing at full
@@ -1374,6 +1598,22 @@ class Booth extends ChangeNotifier {
     if (after == null || after.at >= 1) return a;
     final span = after.at - before.at;
     return a.lerp(after.decks[deck]!.stems!, span <= 0 ? 1 : ((k - before.at) / span).clamp(0.0, 1.0));
+  }
+
+  /// The clock a gate on [deck] runs on: how long one chop lasts and where the chops
+  /// are counted from, both in the *record's* own time rather than the room's.
+  ///
+  /// The gate happens inside the engine, ahead of the stretcher, so it sees the record
+  /// at the speed it was made — a record held 4% slow still has its own beat there.
+  /// [Deck.beat] is the beat as it is heard, which is that one divided by the pitch.
+  ({Duration period, Duration origin})? gateClock(Deck deck, int div) {
+    final heard = deck.beat;
+    if (heard == null || div <= 0) return null;
+    final own = Duration(microseconds: (heard.inMicroseconds * deck.pitch).round());
+    return (
+      period: Duration(microseconds: own.inMicroseconds ~/ div),
+      origin: deck.timing?.cues?.firstDownbeat ?? Duration.zero,
+    );
   }
 
   /// How long [bars] bars of the master last, by the wall clock.
@@ -1483,10 +1723,20 @@ class Booth extends ChangeNotifier {
     if (busy) return;
     final from = master, to = other(master);
     if (!to.loaded) return;
-    // A move made of the desk's echo, on an engine without one: a blend instead.
+    // A move made of the desk's echo, on an engine without one: the plain one instead.
     if (kind.needsFx && !mixer.canShift) {
-      note(BoothEventKind.plan, '${kind.label} needs the desk\'s echo: a blend instead');
-      kind = Transition.blend;
+      note(BoothEventKind.plan, '${kind.label} needs the desk\'s echo: ${kind.plainly.label} instead');
+      kind = kind.plainly;
+    }
+    // And one made of the engine's chop, on an engine that cannot chop.
+    if (kind.needsGate && !mixer.canGate) {
+      note(BoothEventKind.plan, '${kind.label} needs the engine\'s chop: ${kind.plainly.label} instead');
+      kind = kind.plainly;
+    }
+    // And one made of a sound the booth plays itself, where it can put one nowhere.
+    if (kind.needsSound && !fx.can) {
+      note(BoothEventKind.plan, '${kind.label} needs a sound of its own: ${kind.plainly.label} instead');
+      kind = kind.plainly;
     }
     if (shift != 0 && mixer.canShift) await setPitchShift(to, shift);
     // A move made of stems, asked of a deck that is playing the whole record: the
@@ -1538,6 +1788,25 @@ class Booth extends ChangeNotifier {
     final steps = kind == Transition.cut
         ? const <MixStep>[]
         : MixStep.onBars(plan(kind, from: from.name, to: to.name), bars);
+    // The booth's own sounds, rendered and loaded *now*, while there is still a bar
+    // to wait: a sixteen-second riser is a second or two of arithmetic and a file to
+    // hand an engine, and a riser that arrives a beat late is worse than none.
+    // [fxSlot] is which loaded sound each step fires, by step.
+    final fxSlot = <int, int>{};
+    if (steps.any((s) => s.fx != null)) {
+      final move = barsLength(from, bars);
+      final beat = from.beat ?? const Duration(milliseconds: 500);
+      final wanted = <({FxShot shot, double seconds})>[];
+      for (var i = 0; i < steps.length; i++) {
+        final shot = steps[i].fx;
+        if (shot == null) continue;
+        fxSlot[i] = wanted.length;
+        wanted.add((shot: shot, seconds: shot.lengthIn(move, beat).inMicroseconds / 1e6));
+      }
+      final loaded = await fx.load(wanted, beat: beat.inMicroseconds / 1e6,
+          volume: mixer.playerVolume);
+      fxSlot.removeWhere((_, slot) => slot >= loaded);
+    }
     // What the plan opens with, set before the incoming makes a sound.
     if (steps.isNotEmpty) await _applyStep(steps.first);
     if (!to.playing) {
@@ -1554,6 +1823,7 @@ class Booth extends ChangeNotifier {
     if (calledOff()) {
       // Called off while it waited: the incoming is left as it was, flat and parked.
       if (steps.isNotEmpty) await _applyStep(MixStep(0, decks: {to.name: const DeckStep(eq: EqSet.flat)}));
+      await fx.silence();
       return;
     }
     final parkedAt = to.position;
@@ -1563,6 +1833,7 @@ class Booth extends ChangeNotifier {
     if (!_reallyPlaying(to)) {
       arming = null;
       if (steps.isNotEmpty) await _applyStep(MixStep(0, decks: {to.name: const DeckStep(eq: EqSet.flat)}));
+      await fx.silence();
       notifyListeners();
       return;
     }
@@ -1657,6 +1928,51 @@ class Booth extends ChangeNotifier {
       return a + (b - a) * leg.local;
     }
 
+    /// And the pitch shift, the same way: read backwards for the last value set, so a
+    /// leg that says nothing of it leaves it where it was.
+    double? shiftAt(String deck, double k) {
+      final leg = legAt(k);
+      double? lastBefore(MixStep at) {
+        for (var i = steps.indexOf(at); i >= 0; i--) {
+          final v = steps[i].decks[deck]?.shift;
+          if (v != null) return v;
+        }
+        return null;
+      }
+
+      final a = lastBefore(leg.from);
+      final b = leg.to.decks[deck]?.shift ?? a;
+      if (a == null || b == null) return null;
+      return a + (b - a) * leg.local;
+    }
+
+    /// The gate's depth, travelled like the filter; its rate is held, like a band.
+    double? gateAt(String deck, double k) {
+      final leg = legAt(k);
+      double? lastBefore(MixStep at) {
+        for (var i = steps.indexOf(at); i >= 0; i--) {
+          final v = steps[i].decks[deck]?.gate;
+          if (v != null) return v;
+        }
+        return null;
+      }
+
+      final a = lastBefore(leg.from);
+      final b = leg.to.decks[deck]?.gate ?? a;
+      if (a == null || b == null) return null;
+      return a + (b - a) * leg.local;
+    }
+
+    int gateDivAt(String deck, double k) {
+      var div = 2;
+      for (final st in steps) {
+        if (st.at > k) break;
+        final v = st.decks[deck]?.gateDiv;
+        if (v != null) div = v;
+      }
+      return div;
+    }
+
     StemLevels? stemsAt(String deck, double k) => stemsOf(steps, deck, k);
 
     // The levels a stem plan opens with, on the incoming before it makes a sound.
@@ -1664,6 +1980,10 @@ class Booth extends ChangeNotifier {
       final open = stemsAt(deck.name, 0);
       if (open != null && deck.stemmed) await deck.setStemLevels(open, over: Duration.zero);
     }
+
+    // A sound hung on the step at 0 goes now: that step was applied before the
+    // incoming was even started, which is a bar too early to make a noise.
+    if (fxSlot.containsKey(0)) unawaited(fx.fire(fxSlot[0]!));
 
     _running = Timer.periodic(const Duration(milliseconds: 40), (t) async {
       final k = (DateTime.now().difference(began).inMicroseconds / length.inMicroseconds)
@@ -1674,12 +1994,24 @@ class Booth extends ChangeNotifier {
       for (final deck in decks) {
         final want = filterAt(deck.name, k);
         if (want != null && (filters[deck] ?? 0) != want) await setFilter(deck, want);
+        final semis = shiftAt(deck.name, k);
+        if (semis != null && mixer.canShift && ((_shift[deck] ?? 0) - semis).abs() > 0.02) {
+          await setPitchShift(deck, semis);
+        }
+        final depth = gateAt(deck.name, k);
+        if (depth != null && mixer.canGate) {
+          final clock = gateClock(deck, gateDivAt(deck.name, k));
+          if (clock != null) {
+            await mixer.setGate(deck, depth: depth, period: clock.period, origin: clock.origin);
+          }
+        }
         final levels = stemsAt(deck.name, k);
         if (levels != null && deck.stemmed && !levels.closeTo(deck.stemLevels)) {
           await deck.setStemLevels(levels, over: Duration.zero);
         }
       }
       while (next < steps.length && k >= steps[next].at) {
+        if (fxSlot.containsKey(next)) unawaited(fx.fire(fxSlot[next]!));
         await _applyStep(steps[next]);
         next++;
       }
@@ -1693,6 +2025,10 @@ class Booth extends ChangeNotifier {
         await from.pause();
         await setEq(from, EqSet.flat);
         await setFilter(from, 0);
+        if (mixer.canGate) {
+          await mixer.setGate(from,
+              depth: 0, period: const Duration(milliseconds: 250), origin: Duration.zero);
+        }
         await _plain(from);
         master = to;
         // The fader is across: the same levels under either law.
@@ -1806,6 +2142,7 @@ class Booth extends ChangeNotifier {
     partsJobs.removeListener(_partsChanged);
     _running?.cancel();
     _lock?.cancel();
+    unawaited(fx.dispose());
     auto.dispose();
     a.dispose();
     b.dispose();

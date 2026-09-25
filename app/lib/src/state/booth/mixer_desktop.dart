@@ -79,7 +79,14 @@ class DesktopMixer extends VolumeMixer {
       'equalizer@mid=f=1000:width_type=o:width=2:g=0,'
       'highshelf@high=f=4000:g=0,'
       'highpass@hp=f=20:m=0,'
-      'lowpass@lp=f=15000:m=0';
+      'lowpass@lp=f=15000:m=0,'
+      // The gate, off. Its level is an *expression* evaluated every frame rather than
+      // a number, which is the whole trick: the chop runs inside ffmpeg off the
+      // frame's own timestamp — the record's position, ahead of the stretcher — so it
+      // keeps the record's beat at any tempo, and Dart only has to say how deep it is
+      // every so often. Told a number 25 times a second instead, a sixteenth-note
+      // chop would have had three steps to a cycle.
+      'volume@gate=volume=1:eval=frame';
 
   /// The echo every deck carries, ahead of the bands: the record split in two, one
   /// way through a send (volume@es, shut) into an echo timed to the record's beat —
@@ -129,6 +136,34 @@ class DesktopMixer extends VolumeMixer {
 
   @override
   bool get canShift => true;
+
+  @override
+  bool get canGate => true;
+
+  /// What each deck's gate was last told, so an unchanged one is not re-sent.
+  final _gate = <String, String>{};
+
+  @override
+  Future<void> setGate(Deck deck,
+      {required double depth, required Duration period, required Duration origin}) async {
+    final mpv = _native(deck);
+    if (mpv == null) return;
+    final d = depth.clamp(0.0, 1.0);
+    final p = period.inMicroseconds / 1e6;
+    // A cosine, not a square: a square gate on a record is a click every edge, and a
+    // cosine down to nothing is what a chop sounds like anyway.
+    final expr = d <= 0.001 || p <= 0.001
+        ? '1'
+        : '1-${d.toStringAsFixed(3)}*(0.5-0.5*cos(2*PI*(t-${(origin.inMicroseconds / 1e6).toStringAsFixed(4)})'
+            '/${p.toStringAsFixed(5)}))';
+    if (_gate[deck.name] == expr) return;
+    _gate[deck.name] = expr;
+    try {
+      await mpv.command(['af-command', 'gate', 'volume', expr]);
+    } catch (_) {
+      // An mpv whose chain would not go on: the move runs without its chop.
+    }
+  }
 
   @override
   Future<void> setPitchShift(Deck deck, double semitones) async {

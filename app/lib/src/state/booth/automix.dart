@@ -804,6 +804,8 @@ class AutoMix extends ChangeNotifier {
         style: style,
         axes: _axes,
         recent: recent,
+        sound: booth.fx.can,
+        gate: booth.mixer.canGate,
       );
       // A hand's choice for this very pair stands.
       final byHand = steers[(from.track!.id, coming.id)];
@@ -900,6 +902,8 @@ class AutoMix extends ChangeNotifier {
       style: style,
       axes: _axes,
       recent: recent,
+      sound: booth.fx.can,
+      gate: booth.mixer.canGate,
     );
   }
 

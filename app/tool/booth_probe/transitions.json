@@ -3,6 +3,9 @@
   "label": "blend",
   "needs_stems": false,
   "needs_fx": false,
+  "needs_sound": false,
+  "needs_gate": false,
+  "plainly": "blend",
   "fader_law": "power",
   "steps": [
    {
@@ -71,6 +74,9 @@
   "label": "cut",
   "needs_stems": false,
   "needs_fx": false,
+  "needs_sound": false,
+  "needs_gate": false,
+  "plainly": "blend",
   "fader_law": "power",
   "steps": [
    {
@@ -89,6 +95,9 @@
   "label": "fade",
   "needs_stems": false,
   "needs_fx": false,
+  "needs_sound": false,
+  "needs_gate": false,
+  "plainly": "blend",
   "fader_law": "power",
   "steps": [
    {
@@ -107,6 +116,9 @@
   "label": "sweep",
   "needs_stems": false,
   "needs_fx": false,
+  "needs_sound": false,
+  "needs_gate": false,
+  "plainly": "blend",
   "fader_law": "power",
   "steps": [
    {
@@ -175,6 +187,9 @@
   "label": "roll",
   "needs_stems": false,
   "needs_fx": false,
+  "needs_sound": false,
+  "needs_gate": false,
+  "plainly": "blend",
   "fader_law": "power",
   "steps": [
    {
@@ -251,6 +266,9 @@
   "label": "brake",
   "needs_stems": false,
   "needs_fx": false,
+  "needs_sound": false,
+  "needs_gate": false,
+  "plainly": "blend",
   "fader_law": "power",
   "steps": [
    {
@@ -300,6 +318,9 @@
   "label": "swap",
   "needs_stems": false,
   "needs_fx": false,
+  "needs_sound": false,
+  "needs_gate": false,
+  "plainly": "blend",
   "fader_law": "full",
   "steps": [
    {
@@ -359,6 +380,9 @@
   "label": "announce",
   "needs_stems": true,
   "needs_fx": false,
+  "needs_sound": false,
+  "needs_gate": false,
+  "plainly": "blend",
   "fader_law": "full",
   "steps": [
    {
@@ -483,6 +507,9 @@
   "label": "a cappella out",
   "needs_stems": true,
   "needs_fx": false,
+  "needs_sound": false,
+  "needs_gate": false,
+  "plainly": "blend",
   "fader_law": "full",
   "steps": [
    {
@@ -600,6 +627,9 @@
   "label": "stem blend",
   "needs_stems": true,
   "needs_fx": false,
+  "needs_sound": false,
+  "needs_gate": false,
+  "plainly": "blend",
   "fader_law": "full",
   "steps": [
    {
@@ -754,6 +784,9 @@
   "label": "drop swap",
   "needs_stems": false,
   "needs_fx": false,
+  "needs_sound": false,
+  "needs_gate": false,
+  "plainly": "blend",
   "fader_law": "power",
   "steps": [
    {
@@ -839,6 +872,9 @@
   "label": "echo out",
   "needs_stems": false,
   "needs_fx": true,
+  "needs_sound": false,
+  "needs_gate": false,
+  "plainly": "blend",
   "fader_law": "power",
   "steps": [
    {
@@ -931,6 +967,9 @@
   "label": "loop build",
   "needs_stems": false,
   "needs_fx": false,
+  "needs_sound": false,
+  "needs_gate": false,
+  "plainly": "blend",
   "fader_law": "power",
   "steps": [
    {
@@ -1018,6 +1057,9 @@
   "label": "break swap",
   "needs_stems": false,
   "needs_fx": false,
+  "needs_sound": false,
+  "needs_gate": false,
+  "plainly": "blend",
   "fader_law": "full",
   "steps": [
    {
@@ -1087,6 +1129,9 @@
   "label": "filter ride",
   "needs_stems": false,
   "needs_fx": false,
+  "needs_sound": false,
+  "needs_gate": false,
+  "plainly": "blend",
   "fader_law": "power",
   "steps": [
    {
@@ -1151,6 +1196,540 @@
        "high": 0.0
       },
       "filter": 0.0
+     }
+    }
+   }
+  ]
+ },
+ "riser": {
+  "label": "riser",
+  "needs_stems": false,
+  "needs_fx": false,
+  "needs_sound": true,
+  "needs_gate": false,
+  "plainly": "loopBuild",
+  "fader_law": "power",
+  "steps": [
+   {
+    "at": 0.0,
+    "crossfader": 0.0,
+    "fx": {
+     "sound": "riser",
+     "span": 1.0,
+     "gain_db": -13.0
+    },
+    "decks": {
+     "B": {
+      "eq": {
+       "low": -40.0,
+       "mid": 0.0,
+       "high": 0.0
+      }
+     },
+     "A": {
+      "filter": 0.0
+     }
+    }
+   },
+   {
+    "at": 0.75,
+    "crossfader": 0.12,
+    "decks": {
+     "A": {
+      "filter": 0.2
+     }
+    }
+   },
+   {
+    "at": 0.94,
+    "crossfader": 0.3,
+    "decks": {
+     "A": {
+      "filter": 0.55
+     }
+    }
+   },
+   {
+    "at": 1.0,
+    "crossfader": 1.0,
+    "fx": {
+     "sound": "impact",
+     "beats": 8,
+     "gain_db": -15.0
+    },
+    "decks": {
+     "B": {
+      "eq": {
+       "low": 0.0,
+       "mid": 0.0,
+       "high": 0.0
+      },
+      "filter": 0.0
+     },
+     "A": {
+      "eq": {
+       "low": 0.0,
+       "mid": 0.0,
+       "high": 0.0
+      },
+      "filter": 0.0
+     }
+    }
+   }
+  ]
+ },
+ "noiseSweep": {
+  "label": "noise sweep",
+  "needs_stems": false,
+  "needs_fx": false,
+  "needs_sound": true,
+  "needs_gate": false,
+  "plainly": "blend",
+  "fader_law": "power",
+  "steps": [
+   {
+    "at": 0.0,
+    "crossfader": 0.0,
+    "fx": {
+     "sound": "sweepUp",
+     "span": 0.5,
+     "gain_db": -14.0
+    },
+    "decks": {
+     "B": {
+      "eq": {
+       "low": -40.0,
+       "mid": 0.0,
+       "high": 0.0
+      }
+     }
+    }
+   },
+   {
+    "at": 0.5,
+    "crossfader": 0.5,
+    "fx": {
+     "sound": "sweepDown",
+     "span": 0.5,
+     "gain_db": -16.0
+    },
+    "decks": {
+     "B": {
+      "eq": {
+       "low": 0.0,
+       "mid": 0.0,
+       "high": 0.0
+      }
+     },
+     "A": {
+      "eq": {
+       "low": -40.0,
+       "mid": 0.0,
+       "high": 0.0
+      }
+     }
+    }
+   },
+   {
+    "at": 0.85,
+    "crossfader": 0.85,
+    "decks": {
+     "A": {
+      "eq": {
+       "low": -40.0,
+       "mid": 0.0,
+       "high": -40.0
+      }
+     }
+    }
+   },
+   {
+    "at": 1.0,
+    "crossfader": 1.0,
+    "decks": {
+     "A": {
+      "eq": {
+       "low": 0.0,
+       "mid": 0.0,
+       "high": 0.0
+      },
+      "filter": 0.0
+     }
+    }
+   }
+  ]
+ },
+ "hydrant": {
+  "label": "hydrant",
+  "needs_stems": false,
+  "needs_fx": false,
+  "needs_sound": true,
+  "needs_gate": false,
+  "plainly": "sweep",
+  "fader_law": "power",
+  "steps": [
+   {
+    "at": 0.0,
+    "crossfader": 0.0,
+    "fx": {
+     "sound": "hydrant",
+     "span": 1.0,
+     "gain_db": -11.0
+    },
+    "decks": {
+     "B": {
+      "eq": {
+       "low": -40.0,
+       "mid": 0.0,
+       "high": 0.0
+      }
+     }
+    }
+   },
+   {
+    "at": 0.3,
+    "crossfader": 0.3,
+    "decks": {
+     "A": {
+      "eq": {
+       "low": 0.0,
+       "mid": 0.0,
+       "high": -9.0
+      }
+     }
+    }
+   },
+   {
+    "at": 0.5,
+    "crossfader": 0.5,
+    "decks": {
+     "B": {
+      "eq": {
+       "low": 0.0,
+       "mid": 0.0,
+       "high": 0.0
+      }
+     },
+     "A": {
+      "eq": {
+       "low": -40.0,
+       "mid": 0.0,
+       "high": -12.0
+      }
+     }
+    }
+   },
+   {
+    "at": 0.8,
+    "crossfader": 0.85,
+    "decks": {
+     "A": {
+      "eq": {
+       "low": -40.0,
+       "mid": 0.0,
+       "high": -40.0
+      }
+     }
+    }
+   },
+   {
+    "at": 1.0,
+    "crossfader": 1.0,
+    "decks": {
+     "A": {
+      "eq": {
+       "low": 0.0,
+       "mid": 0.0,
+       "high": 0.0
+      },
+      "filter": 0.0
+     }
+    }
+   }
+  ]
+ },
+ "dissolve": {
+  "label": "dissolve",
+  "needs_stems": false,
+  "needs_fx": true,
+  "needs_sound": false,
+  "needs_gate": false,
+  "plainly": "blend",
+  "fader_law": "power",
+  "steps": [
+   {
+    "at": 0.0,
+    "crossfader": 0.0,
+    "decks": {
+     "B": {
+      "eq": {
+       "low": -40.0,
+       "mid": 0.0,
+       "high": 0.0
+      }
+     },
+     "A": {
+      "filter": 0.0,
+      "echo": 0.15,
+      "dry": 1.0
+     }
+    }
+   },
+   {
+    "at": 0.4,
+    "crossfader": 0.4,
+    "decks": {
+     "A": {
+      "eq": {
+       "low": -40.0,
+       "mid": 0.0,
+       "high": 0.0
+      },
+      "filter": -0.25,
+      "echo": 0.45,
+      "dry": 0.85
+     }
+    }
+   },
+   {
+    "at": 0.65,
+    "crossfader": 0.6,
+    "decks": {
+     "B": {
+      "eq": {
+       "low": 0.0,
+       "mid": 0.0,
+       "high": 0.0
+      }
+     },
+     "A": {
+      "filter": -0.5,
+      "echo": 0.7,
+      "dry": 0.5
+     }
+    }
+   },
+   {
+    "at": 0.85,
+    "crossfader": 0.8,
+    "decks": {
+     "A": {
+      "filter": -0.7,
+      "echo": 0.8,
+      "dry": 0.15
+     }
+    }
+   },
+   {
+    "at": 0.93,
+    "crossfader": 0.9,
+    "decks": {
+     "A": {
+      "echo": 0.0,
+      "dry": 0.0
+     }
+    }
+   },
+   {
+    "at": 1.0,
+    "crossfader": 1.0,
+    "decks": {
+     "A": {
+      "eq": {
+       "low": 0.0,
+       "mid": 0.0,
+       "high": 0.0
+      },
+      "filter": 0.0,
+      "echo": 0.0,
+      "dry": 1.0
+     }
+    }
+   }
+  ]
+ },
+ "lunarEcho": {
+  "label": "lunar echo",
+  "needs_stems": false,
+  "needs_fx": true,
+  "needs_sound": false,
+  "needs_gate": false,
+  "plainly": "blend",
+  "fader_law": "power",
+  "steps": [
+   {
+    "at": 0.0,
+    "crossfader": 0.0,
+    "decks": {
+     "B": {
+      "eq": {
+       "low": -40.0,
+       "mid": 0.0,
+       "high": 0.0
+      }
+     },
+     "A": {
+      "filter": 0.0,
+      "echo": 0.2,
+      "dry": 1.0,
+      "shift": 0.0
+     }
+    }
+   },
+   {
+    "at": 0.5,
+    "crossfader": 0.5,
+    "decks": {
+     "B": {
+      "eq": {
+       "low": 0.0,
+       "mid": 0.0,
+       "high": 0.0
+      }
+     },
+     "A": {
+      "eq": {
+       "low": -40.0,
+       "mid": 0.0,
+       "high": 0.0
+      },
+      "echo": 0.45,
+      "dry": 1.0,
+      "shift": 0.0
+     }
+    }
+   },
+   {
+    "at": 0.75,
+    "crossfader": 0.65,
+    "decks": {
+     "A": {
+      "filter": -0.2,
+      "echo": 0.75,
+      "dry": 1.0,
+      "shift": -2.0
+     }
+    }
+   },
+   {
+    "at": 0.88,
+    "crossfader": 0.75,
+    "decks": {
+     "A": {
+      "filter": -0.45,
+      "echo": 0.85,
+      "dry": 0.0,
+      "shift": -5.0
+     }
+    }
+   },
+   {
+    "at": 1.0,
+    "crossfader": 1.0,
+    "decks": {
+     "A": {
+      "eq": {
+       "low": 0.0,
+       "mid": 0.0,
+       "high": 0.0
+      },
+      "filter": 0.0,
+      "echo": 0.0,
+      "dry": 1.0,
+      "shift": 0.0
+     }
+    }
+   }
+  ]
+ },
+ "tremolo": {
+  "label": "tremolo",
+  "needs_stems": false,
+  "needs_fx": false,
+  "needs_sound": false,
+  "needs_gate": true,
+  "plainly": "blend",
+  "fader_law": "power",
+  "steps": [
+   {
+    "at": 0.0,
+    "crossfader": 0.0,
+    "decks": {
+     "B": {
+      "eq": {
+       "low": -40.0,
+       "mid": 0.0,
+       "high": 0.0
+      }
+     },
+     "A": {
+      "gate": 0.0,
+      "gate_div": 2
+     }
+    }
+   },
+   {
+    "at": 0.25,
+    "crossfader": 0.25,
+    "decks": {
+     "A": {
+      "gate": 0.5
+     }
+    }
+   },
+   {
+    "at": 0.5,
+    "crossfader": 0.5,
+    "decks": {
+     "B": {
+      "eq": {
+       "low": 0.0,
+       "mid": 0.0,
+       "high": 0.0
+      }
+     },
+     "A": {
+      "eq": {
+       "low": -40.0,
+       "mid": 0.0,
+       "high": 0.0
+      },
+      "gate": 0.8
+     }
+    }
+   },
+   {
+    "at": 0.75,
+    "crossfader": 0.7,
+    "decks": {
+     "A": {
+      "gate": 0.95,
+      "gate_div": 4
+     }
+    }
+   },
+   {
+    "at": 0.9,
+    "crossfader": 0.88,
+    "decks": {
+     "A": {
+      "filter": 0.35
+     }
+    }
+   },
+   {
+    "at": 1.0,
+    "crossfader": 1.0,
+    "decks": {
+     "A": {
+      "eq": {
+       "low": 0.0,
+       "mid": 0.0,
+       "high": 0.0
+      },
+      "filter": 0.0,
+      "gate": 0.0,
+      "gate_div": 2
      }
     }
    }

@@ -98,7 +98,7 @@ class _PhoneMixerState extends State<PhoneMixer> {
               child: Row(children: [
                 Icon(transitionIcon(k), size: 15, color: k == _kind ? accent : Console.quiet),
                 const SizedBox(width: 10),
-                Text(k.name.toUpperCase(), style: Console.label(10, color: k == _kind ? accent : Console.ink)),
+                Text(k.label.toUpperCase(), style: Console.label(10, color: k == _kind ? accent : Console.ink)),
               ]),
             ),
           const PopupMenuDivider(),

@@ -7,6 +7,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muse/src/state/booth/booth.dart';
+import 'package:muse/src/state/booth/fx_sounds.dart';
 import 'package:muse/src/state/booth/mixer.dart';
 
 Map<String, dynamic> _deck(DeckStep d) => {
@@ -18,6 +19,18 @@ Map<String, dynamic> _deck(DeckStep d) => {
       if (d.stems != null) 'stems': {'drums': d.stems!.drums, 'rest': d.stems!.rest, 'vocals': d.stems!.vocals},
       if (d.echo != null) 'echo': d.echo,
       if (d.dry != null) 'dry': d.dry,
+      if (d.shift != null) 'shift': d.shift,
+      if (d.gate != null) 'gate': d.gate,
+      if (d.gateDiv != null) 'gate_div': d.gateDiv,
+    };
+
+/// A sound of the booth's own, as the probe renders it: which one, how long (as a
+/// share of the move, or in the master's beats) and at what gain. See fx_sounds.dart.
+Map<String, dynamic> _fx(FxShot f) => {
+      'sound': f.sound.name,
+      if (f.span > 0) 'span': f.span,
+      if (f.beats > 0) 'beats': f.beats,
+      'gain_db': f.gainDb,
     };
 
 void main() {
@@ -32,16 +45,34 @@ void main() {
           expect(steps[i].at, greaterThanOrEqualTo(steps[i - 1].at), reason: '${kind.name} step $i');
         }
       }
+      // A sound has a length, and a sound measured as a share of the move ends within
+      // it: a riser that runs past the last beat is a riser still climbing after the
+      // drop has landed.
+      for (final step in steps) {
+        final shot = step.fx;
+        if (shot == null) continue;
+        expect(shot.span > 0 || shot.beats > 0, isTrue, reason: '${kind.name}: a sound of no length');
+        if (shot.span > 0) {
+          expect(step.at + shot.span, lessThanOrEqualTo(1.0001),
+              reason: '${kind.name}: ${shot.sound.name} runs past the move');
+        }
+      }
+      // And a move that plays one says so, so the booth knows to render it.
+      expect(steps.any((s) => s.fx != null), kind.needsSound, reason: kind.name);
       all[kind.name] = {
         'label': kind.label,
         'needs_stems': kind.needsStems,
         'needs_fx': kind.needsFx,
+        'needs_sound': kind.needsSound,
+        'needs_gate': kind.needsGate,
+        'plainly': kind.plainly.name,
         'fader_law': kind.full ? 'full' : 'power',
         'steps': [
           for (final s in steps)
             {
               'at': s.at,
               if (s.crossfader != null) 'crossfader': s.crossfader,
+              if (s.fx != null) 'fx': _fx(s.fx!),
               'decks': {for (final e in s.decks.entries) e.key: _deck(e.value)},
             },
         ],

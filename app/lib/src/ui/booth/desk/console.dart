@@ -590,4 +590,10 @@ IconData transitionIcon(Transition k) => switch (k) {
       Transition.loopBuild => Icons.all_inclusive,
       Transition.breakSwap => Icons.call_split,
       Transition.filterRide => Icons.tune,
+      Transition.riser => Icons.trending_up,
+      Transition.noiseSweep => Icons.air,
+      Transition.hydrant => Icons.water_drop,
+      Transition.dissolve => Icons.blur_on,
+      Transition.lunarEcho => Icons.nightlight_round,
+      Transition.tremolo => Icons.vibration,
     };

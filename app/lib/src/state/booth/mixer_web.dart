@@ -14,6 +14,7 @@ extension type _PageBooth._(JSObject _) implements JSObject {
   external void levels(JSString deck, JSNumber level, JSNumber seconds);
   external void eq(JSString deck, JSNumber low, JSNumber mid, JSNumber high);
   external void filter(JSString deck, JSNumber value);
+  external void gate(JSString deck, JSNumber depth, JSNumber hz);
 }
 
 Mixer? webMixer() => _pageBooth == null ? null : WebMixer();
@@ -62,6 +63,22 @@ class WebMixer extends Mixer {
   @override
   Future<void> setFilter(Deck deck, double value) async {
     _pageBooth?.filter(deck.name.toJS, value.clamp(-1.0, 1.0).toJS);
+  }
+
+  @override
+  bool get canGate => true;
+
+  /// A browser's chop is an oscillator on a gain, which keeps its own phase from the
+  /// moment the graph was built — so [origin] cannot be honoured here as it is on a
+  /// desk, where the expression is evaluated against the record's own timestamp. What
+  /// it gets instead is the rate and the depth; the steps that turn it on land on bars
+  /// (MixStep.onBars), so it comes in on a downbeat even if its cycles are not
+  /// counted from one.
+  @override
+  Future<void> setGate(Deck deck,
+      {required double depth, required Duration period, required Duration origin}) async {
+    final hz = period.inMicroseconds <= 0 ? 4.0 : 1e6 / period.inMicroseconds;
+    _pageBooth?.gate(deck.name.toJS, depth.clamp(0.0, 1.0).toJS, hz.toJS);
   }
 }
 

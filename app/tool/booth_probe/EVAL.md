@@ -31,6 +31,7 @@ The numbers:
 | hole | the dip over quarter seconds: a short hole |
 | jump | how much the move itself steps the level at its first and last instant (the records' own steps taken out) |
 | phase ms | how far the new record's kicks fall from the old one's over the overlap; near ±half a beat it is unreliable (few kicks on one side) |
+| fx dB | how loud the booth's own sound (a riser, a sweep, a gush) is at its loudest second against the records under it |
 | key | chroma disagreement of the two over the overlap, 0 to 1 |
 
 The tables are played on the bars as the booth plays them (`MixStep.onBars`), and the
@@ -38,7 +39,14 @@ fader by the law the move runs (`Transition.full`: both records whole at the mid
 for the stem moves, the swap and the break swap; equal power otherwise).
 
 What the renderer does not do: the echo's tail (the send is rendered dry), the
-brake, and any tempo glide after the move. The bands and the filter are block gains in
+brake, a deck's pitch shift as it falls out of the mix (the lunar echo's last bars),
+and any tempo glide after the move.
+
+The moves that play a sound of the booth's own (`riser`, `noiseSweep`, `hydrant`) are
+rendered with it: the renderer asks the app for each shot at the exact length the move
+needs — `flutter test test/fx_sounds_test.dart` with `FX_OUT` and `FX_SPEC` — and
+caches it under `<dir>/fx`. So the probe measures the samples the speaker gets, and
+`lib/src/state/booth/fx_sounds.dart` is the only place the synthesis is written. The bands and the filter are block gains in
 the frequency domain, not the chain's IIR filters — close enough to hear a kill.
 
 ## What it found so far (2026-09-24, 1039 ↔ 2028)
@@ -87,6 +95,59 @@ the frequency domain, not the chain's IIR filters — close enough to hear a kil
 Left as is: sub-bar steps of an 8-bar loop build or drop swap round onto the same
 bar (the half-bar loop is skipped) — harmless; the renderer's phase figure on
 octave pairs (its lag search is half a beat of the old record's).
+
+## Third pass (2026-09-25): the moves that make a sound
+
+The booth can now play something that is neither record — a riser, a sweep, a gush, a
+hit (`lib/src/state/booth/fx_sounds.dart`, `fx_channel.dart`) — and six moves were
+added on top of it: `riser`, `noiseSweep`, `hydrant`, `dissolve`, `lunarEcho`,
+`tremolo`. Measured on a synthetic pair (two 120 bpm records with a kick on every beat,
+a chord, a voice, a quiet intro and outro, and a drop at bar 16 in the second), sixteen
+bars, against the moves already here:
+
+| kind | range dB | dip dB | hole dB | kicks s | jump dB | fx dB |
+|---|---|---|---|---|---|---|
+| blend | 1.7 | 1.5 | 2.8 | 0 | 0.0 | — |
+| sweep | 6.9 | 6.7 | 8.6 | 0 | 0.0 | — |
+| echo out | 1.9 | 1.7 | 2.8 | 0 | 0.0 | — |
+| **riser** | 6.5 | 6.3 | 8.0 | 0 | 0.7 | −5.3 |
+| **noise sweep** | 1.6 | 1.4 | 2.7 | 0 | 0.0 | −10.5 |
+| **hydrant** | 1.0 | 0.8 | 2.0 | 0 | 0.0 | −7.6 |
+| **dissolve** | 6.2 | 6.0 | 7.0 | 0 | 0.0 | — |
+| **lunar echo** | 1.7 | 1.5 | 2.8 | 0 | 0.0 | — |
+| **tremolo** | 6.0 | 5.8 | 6.8 | 0 | 1.3 | — |
+
+What it found:
+
+- **The riser's build had two kicks in it for seven and a half seconds.** Written first
+  as a blend with a noise over it — the incoming waiting at a third of the fader with
+  its bass merely down — it put both records' drums against each other for half the
+  move, which is the one thing a build must not do. The incoming is now held right
+  back, bass killed and barely on the fader, until the one. That took `drums_doubled_s`
+  to zero at the cost of the dip: 4.3 → 6.3 dB, which is a build doing what a build is
+  for, and still less than the `sweep` already in the set (6.7).
+- **The dissolve kept its kick while it evaporated** (3.5 s of two kicks). Its low goes
+  with the send now, at 0.4 of the move: a record that is disappearing has no business
+  still putting a kick against the one coming in.
+- **The gains are set by what a sound is for.** `fx_db` is how far under the records
+  the booth's own sound sits at its loudest second. A sound that has to *cover* a join
+  wants to be within about 8 dB of them (the hydrant, raised −14 → −11 dB, now −7.6;
+  the louder wash also took its own dip from 1.1 to 0.8, because it fills what the
+  thinned tops left); one that only decorates a change can sit 10 or 12 under and still
+  be the thing everybody notices (the sweeps).
+- **A swept band decides the colour, not the level.** The riser's amplitude law asked
+  for a 26 dB swell and the render measured 60, with its first third under −60 dBFS —
+  inaudible, and then a sound out of nowhere. A band-pass passes far less noise at
+  220 Hz than at 9 kHz. The band is flattened by a follower now (`_Level`), slow enough
+  that the gate's roll survives it, and the written swell is the swell that comes out.
+- **One band-pass is not a band.** At 6 dB an octave either side, a "band" swept
+  200 Hz → 9 kHz moved the weight of the spectrum only 3976 → 5060 Hz: it was still
+  mostly broadband hiss. Two in series (`_Band`) gave 1162 → 4892 Hz over the same
+  sweep — a sound that changes colour rather than one that merely gets louder.
+
+Not measured, because the renderer does not render them: the echo's tail (the dissolve
+and the lunar echo are rendered dry, so their last fifth is missing), and the lunar
+echo's pitch fall. Both wait on real records with stems on this box.
 
 ## Not done
 

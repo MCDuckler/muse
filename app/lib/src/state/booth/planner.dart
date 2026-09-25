@@ -119,6 +119,12 @@ class Planner {
     Transition.roll: (0.5, false),
     Transition.swap: (0.6, false),
     Transition.brake: (0.4, false),
+    Transition.riser: (0.85, false),
+    Transition.noiseSweep: (0.7, true),
+    Transition.hydrant: (0.7, false),
+    Transition.dissolve: (0.6, true),
+    Transition.lunarEcho: (0.65, false),
+    Transition.tremolo: (0.7, false),
   };
 
   static MixPlan plan({
@@ -127,9 +133,20 @@ class Planner {
     MixStyle style = MixStyle.normal,
     StyleAxes? axes,
     List<Transition> recent = const [],
+
+    /// Whether the booth can play a sound of its own here (FxChannel.can): where it
+    /// cannot, the moves made of one are not offered at all rather than offered and
+    /// then quietly turned into something else.
+    bool sound = true,
+
+    /// Whether the engine here can chop a deck in time with its beat (Mixer.canGate).
+    bool gate = false,
     math.Random? random,
   }) =>
-      options(from: from, to: to, style: style, axes: axes, recent: recent, random: random).first;
+      options(
+              from: from, to: to, style: style, axes: axes, recent: recent, sound: sound,
+              gate: gate, random: random)
+          .first;
 
   /// Every move that can be made with these two, best first — what [plan] chooses
   /// from, and what a hand steering the automix is offered. Never empty.
@@ -139,6 +156,8 @@ class Planner {
     MixStyle style = MixStyle.normal,
     StyleAxes? axes,
     List<Transition> recent = const [],
+    bool sound = true,
+    bool gate = false,
     math.Random? random,
   }) {
     final rng = random ?? math.Random();
@@ -221,7 +240,9 @@ class Planner {
       } else if (!inKey &&
           kind != Transition.sweep &&
           kind != Transition.filterRide &&
-          kind != Transition.dropSwap) {
+          kind != Transition.dropSwap &&
+          kind != Transition.hydrant &&
+          kind != Transition.lunarEcho) {
         score -= 0.2;
       }
       if (key.boost && !designed && kind != Transition.sweep) words.add(key.why!);
@@ -253,7 +274,17 @@ class Planner {
       consider(Transition.filterRide, longest(const [16, 32], math.min(intro, outro)),
           inKey ? 0.85 : 1.0, 'a long ride through the filters, both ways');
     }
-    if (from.fx) considerMended(Transition.echoOut, dials.short, 0.9, 'goes out on its echo');
+    if (from.fx) {
+      considerMended(Transition.echoOut, dials.short, 0.9, 'goes out on its echo');
+      // The two slow ways out of a record that has no ending of its own: evaporate,
+      // or be let go of falling. Both want room, so both take the longer count.
+      consider(Transition.dissolve, longest(const [16, 32], math.min(intro, outro)), 0.85,
+          'the old record evaporates into its echo');
+      consider(Transition.lunarEcho, dials.short, inKey ? 0.8 : 1.05,
+          inKey
+              ? 'let go of, falling, into its echo'
+              : 'keys clash: pulled down out of the way and left ringing');
+    }
 
     // Announce: the new record's hook over the old record's beat.
     if (stems) {
@@ -305,6 +336,31 @@ class Planner {
         }
       }
     }
+    // The booth's own sounds. The riser is the only move here that asks nothing of
+    // either record — no shared key, no stems, no drop — so it is always on offer and
+    // worth more when there *is* a drop for it to end on. The other two are short
+    // ones over the change.
+    if (sound) {
+      final landing = drop != null && _roomBefore(to.timing, drop, dials.length >= 0.4 ? 16 : 8)
+          ? _inBefore(to.timing, drop, dials.length >= 0.4 ? 16 : 8)
+          : null;
+      consider(
+          Transition.riser,
+          dials.length >= 0.4 ? 16 : 8,
+          landing != null ? 1.2 : 0.9,
+          landing != null ? 'built up into its drop' : 'built up, and the sound does the work',
+          inAt: landing);
+      consider(Transition.noiseSweep, dials.short, 0.95, 'a whoosh over the change');
+      consider(Transition.hydrant, dials.short, inKey ? 0.85 : 1.1,
+          inKey
+              ? 'the join made inside the noise'
+              : 'keys clash: the join made inside the noise');
+    }
+
+    if (gate) {
+      consider(Transition.tremolo, dials.short, 0.9, 'chopped away in time with itself');
+    }
+
     if (from.timing.ends == 'cold') {
       consider(Transition.brake, 8, 1, 'stopped dead on a cold ending');
     }
