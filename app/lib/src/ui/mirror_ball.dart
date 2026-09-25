@@ -198,9 +198,10 @@ class _MirrorBallLightState extends State<MirrorBallLight> with TickerProviderSt
     final frame = _Room.frameOf(_clock.value, widget.pulse);
     final size = box.size;
     final turn = _clock.value * 3 * 2 * math.pi;
+    final beams = headsOnThePage(size, frame.seconds, cue: frame.cue, beat: frame.beat, swing: frame.swing);
     room.set(
-      heads: [for (final h in headsOnThePage(size, frame.seconds, cue: frame.cue, beat: frame.beat, swing: frame.swing)) h.shifted(origin)],
-      colours: _headColours ?? const [],
+      heads: [for (final h in beams) h.shifted(origin)],
+      colours: [for (final (i, h) in beams.indexed) _Room.headColour(_headColours ?? const [Colors.white, Colors.white], h, i)],
       spots: [for (final s in spotsOnThePage(size, turn, lamps: (_lamps ?? const []).length)) s.shifted(origin)],
       lamps: _lamps ?? const [],
       ball: ballOver(size) + origin,
@@ -395,12 +396,30 @@ List<BallSpot> spotsOnThePage(Size size, double turn, {int lamps = 3}) {
 /// A moving head's beam on the wall: where it is, how big, which way it leans, and
 /// how bright the desk has it.
 class HeadBeam {
-  const HeadBeam({required this.at, required this.rx, required this.ry, required this.lean, required this.level});
-  final Offset at;
+  const HeadBeam({
+    required this.at,
+    required this.from,
+    required this.rx,
+    required this.ry,
+    required this.lean,
+    required this.level,
+    required this.cue,
+    required this.blend,
+  });
+
+  /// Where the beam lands, and where the fixture is that throws it — on the truss
+  /// above the top corners of the page.
+  final Offset at, from;
   final double rx, ry, lean, level;
 
+  /// Which cue the desk is on, and how far into it the beam has eased (0 to 1): the
+  /// gel changes with the cue, and the colour crosses over as the beam does.
+  final int cue;
+  final double blend;
+
   /// The same beam in another frame of reference, [by] along.
-  HeadBeam shifted(Offset by) => HeadBeam(at: at + by, rx: rx, ry: ry, lean: lean, level: level);
+  HeadBeam shifted(Offset by) =>
+      HeadBeam(at: at + by, from: from + by, rx: rx, ry: ry, lean: lean, level: level, cue: cue, blend: blend);
 }
 
 /// Where the moving heads are pointing at [seconds] into the set, on a page of [size].
@@ -438,7 +457,9 @@ List<HeadBeam> headsOnThePage(Size size, double seconds, {required double cue, d
     final ry = s * 0.27;
     // On the downbeat the desk pushes the level up; between, it breathes with the bar.
     final level = 0.62 + 0.14 * swing + 0.30 * beat * (head == 0 ? 1.0 : 0.6);
-    heads.add(HeadBeam(at: at, rx: rx, ry: ry, lean: off * 0.35, level: level.clamp(0.0, 1.0)));
+    final from = Offset(size.width * (head.isEven ? 0.12 : 0.88), -size.height * 0.04);
+    heads.add(HeadBeam(
+        at: at, from: from, rx: rx, ry: ry, lean: off * 0.35, level: level.clamp(0.0, 1.0), cue: cueIndex, blend: ease));
   }
   return heads;
 }
@@ -487,26 +508,32 @@ class _Room extends CustomPainter {
   static const _cell = 64.0;
   static const _aspects = [1.0, 1.6, 2.4];
 
+  /// Two rows of tiles in the atlas: crisp, for light that has not come far, and soft,
+  /// for spots off at the edges that the haze has spread; then the glint.
+  static const _soft = 3;
+
   static ui.Image _sprites() {
     final made = _atlas;
     if (made != null) return made;
     final rec = ui.PictureRecorder();
     final c = Canvas(rec);
-    for (var i = 0; i < _aspects.length; i++) {
-      final a = _aspects[i];
-      final centre = Offset(_cell * (i + 0.5), _cell / 2);
-      // Most of the cell, so the halo has room; the core is a rounded tile.
-      final w = _cell * 0.62, h = w / a;
-      final tile = RRect.fromRectAndRadius(Rect.fromCenter(center: centre, width: w, height: h), const Radius.circular(4));
-      c.drawRRect(tile.inflate(_cell * 0.08), Paint()
-        ..color = Colors.white.withValues(alpha: 0.22)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7));
-      c.drawRRect(tile, Paint()
-        ..color = Colors.white
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.1));
+    for (var soft = 0; soft < 2; soft++) {
+      for (var i = 0; i < _aspects.length; i++) {
+        final a = _aspects[i];
+        final centre = Offset(_cell * (soft * _soft + i + 0.5), _cell / 2);
+        // Most of the cell, so the halo has room; the core is a rounded tile.
+        final w = _cell * 0.62, h = w / a;
+        final tile = RRect.fromRectAndRadius(Rect.fromCenter(center: centre, width: w, height: h), const Radius.circular(4));
+        c.drawRRect(tile.inflate(_cell * (soft == 0 ? 0.08 : 0.12)), Paint()
+          ..color = Colors.white.withValues(alpha: soft == 0 ? 0.22 : 0.30)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, soft == 0 ? 7 : 10));
+        c.drawRRect(tile, Paint()
+          ..color = Colors.white.withValues(alpha: soft == 0 ? 1 : 0.85)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, soft == 0 ? 1.1 : 3.2));
+      }
     }
     // The glint: two soft spikes and a bright heart.
-    final g = Offset(_cell * (_aspects.length + 0.5), _cell / 2);
+    final g = Offset(_cell * (2 * _soft + 0.5), _cell / 2);
     for (final (dx, dy) in const [(1.0, 0.0), (0.0, 1.0)]) {
       c.drawLine(g - Offset(dx, dy) * _cell * 0.44, g + Offset(dx, dy) * _cell * 0.44, Paint()
         ..color = Colors.white.withValues(alpha: 0.85)
@@ -518,7 +545,25 @@ class _Room extends CustomPainter {
       ..color = Colors.white
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
     final picture = rec.endRecording();
-    return _atlas = picture.toImageSync((_cell * (_aspects.length + 1)).round(), _cell.round());
+    return _atlas = picture.toImageSync((_cell * (2 * _soft + 1)).round(), _cell.round());
+  }
+
+  /// The gel a head wears on this beam: the desk turns the colour wheel a little
+  /// further on every cue — the first head round the wheel from the record's own
+  /// colour, the second between its clear lamp and the far side of the wheel — and
+  /// the colour crosses over as the beam eases into the cue.
+  static Color headColour(List<Color> base, HeadBeam b, int head) {
+    Color on(int cue) {
+      if (head.isEven) return _turn(base[0], cue * 47.0);
+      return cue.isEven ? base[1 % base.length] : _turn(base[0], cue * 47.0 + 150);
+    }
+
+    return Color.lerp(on(b.cue - 1), on(b.cue), b.blend)!;
+  }
+
+  static Color _turn(Color c, double degrees) {
+    final hsl = HSLColor.fromColor(c);
+    return hsl.withHue((hsl.hue + degrees) % 360).toColor();
   }
 
   /// The frame's numbers from the clock and the beat: the seconds into the set, the
@@ -550,7 +595,7 @@ class _Room extends CustomPainter {
     _wash(canvas, size, lit * strength, swing, blend);
     final beams = headsOnThePage(size, seconds, cue: cue, beat: beat, swing: swing);
     for (final (i, b) in beams.indexed) {
-      _head(canvas, b, heads[i % heads.length], lit * strength, blend);
+      _head(canvas, b, headColour(heads, b, i), lit * strength, blend);
     }
     final spots = spotsOnThePage(size, turn, lamps: lamps.length);
     if (!onPaper) _haze(canvas, size, spots, lit, beat, swing);
@@ -613,6 +658,44 @@ class _Room extends CustomPainter {
   /// One moving head's cone on the wall: a soft ellipse, brighter at its heart.
   void _head(Canvas canvas, HeadBeam b, Color colour, double lit, BlendMode blend) {
     final a = (onPaper ? 0.34 : 0.36) * lit * b.level;
+    // The beam itself, through the haze: a cone from the fixture's lens on the truss
+    // down to the pool, brightest near the lens and thinning as it goes, soft-edged.
+    // Only where there is haze to see it in — not on paper.
+    if (!onPaper) {
+      final dir = b.at - b.from;
+      final len = dir.distance;
+      if (len > 1) {
+        final n = Offset(-dir.dy, dir.dx) / len;
+        final wide = (b.rx + b.ry) / 2 * 0.8;
+        final cone = Path()
+          ..moveTo(b.from.dx - n.dx * 4, b.from.dy - n.dy * 4)
+          ..lineTo(b.from.dx + n.dx * 4, b.from.dy + n.dy * 4)
+          ..lineTo(b.at.dx + n.dx * wide, b.at.dy + n.dy * wide)
+          ..lineTo(b.at.dx - n.dx * wide, b.at.dy - n.dy * wide)
+          ..close();
+        final haze = 0.11 * lit * b.level;
+        canvas.drawPath(
+            cone,
+            Paint()
+              ..blendMode = BlendMode.plus
+              ..maskFilter = MaskFilter.blur(BlurStyle.normal, wide * 0.22)
+              ..shader = ui.Gradient.linear(b.from, b.at, [
+                colour.withValues(alpha: haze),
+                colour.withValues(alpha: haze * 0.55),
+                colour.withValues(alpha: haze * 0.3),
+              ], const [0.0, 0.5, 1.0]));
+        // The lens, hot.
+        canvas.drawCircle(
+            b.from,
+            6,
+            Paint()
+              ..blendMode = BlendMode.plus
+              ..color = Color.lerp(colour, Colors.white, 0.5)!.withValues(alpha: 0.7 * lit * b.level)
+              ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6));
+      }
+    }
+    // The pool on the wall: bright across its middle, an edge you can see — a beam
+    // is a shape, not a glow — and a soft fall past it.
     canvas.save();
     canvas.translate(b.at.dx, b.at.dy);
     canvas.rotate(b.lean);
@@ -625,8 +708,14 @@ class _Room extends CustomPainter {
         ..shader = ui.Gradient.radial(
           Offset.zero,
           b.rx,
-          [_lightColour(colour, a), _lightColour(colour, a * 0.55), _lightColour(colour, a * 0.12), _lightColour(colour, 0)],
-          const [0.0, 0.3, 0.7, 1.0],
+          [
+            _lightColour(Color.lerp(colour, Colors.white, 0.18)!, a),
+            _lightColour(colour, a * 0.8),
+            _lightColour(colour, a * 0.3),
+            _lightColour(colour, a * 0.06),
+            _lightColour(colour, 0),
+          ],
+          const [0.0, 0.55, 0.78, 0.9, 1.0],
         ),
     );
     canvas.restore();
@@ -642,6 +731,7 @@ class _Room extends CustomPainter {
     final top = 0.11 * lit * (0.5 + 0.5 * beat);
     for (final s in spots) {
       if (s.lamp == 2 || s.tile % 4 != s.lamp) continue;
+      final shimmer = 0.6 + 0.4 * (0.5 + 0.5 * math.sin(swing * 0 + s.tile * 1.7 + s.at.dx * 0.01));
       final dir = s.at - ball;
       final len = dir.distance;
       if (len < 1) continue;
@@ -653,9 +743,9 @@ class _Room extends CustomPainter {
         ..add(s.at + n * half)
         ..add(s.at - n * half);
       colours
-        ..add(_lightColour(colour, top))
-        ..add(_lightColour(colour, top * 0.22))
-        ..add(_lightColour(colour, top * 0.22));
+        ..add(_lightColour(colour, top * shimmer))
+        ..add(_lightColour(colour, top * 0.22 * shimmer))
+        ..add(_lightColour(colour, top * 0.22 * shimmer));
     }
     if (positions.isEmpty) return;
     canvas.drawVertices(
@@ -675,7 +765,7 @@ class _Room extends CustomPainter {
     final glints = <ui.RSTransform>[];
     final glintRects = <Rect>[];
     final glintColours = <Color>[];
-    const glintRect = Rect.fromLTWH(_cell * 3, 0, _cell, _cell);
+    const glintRect = Rect.fromLTWH(_cell * 2 * _soft, 0, _cell, _cell);
     for (final s in spots) {
       // A tile catches its lamp a little more and a little less as the ball swings;
       // on the beat the desk pushes every lamp up, and some tiles make more of it than
@@ -692,8 +782,12 @@ class _Room extends CustomPainter {
       for (var i = 1; i < _aspects.length; i++) {
         if ((ratio - _aspects[i]).abs() < (ratio - _aspects[which]).abs()) which = i;
       }
+      // Light that has come further lands bigger and softer: the spot spreads, and
+      // the haze between spreads it more.
+      final spread = 0.85 + 0.45 * (s.far - 1).clamp(0.0, 1.5);
+      if (s.far > 1.35) which += _soft;
       // The sprite's core is 0.62 of a cell wide: scaled so that core is the spot.
-      final scale = s.wide * swell / (_cell * 0.62);
+      final scale = s.wide * swell * spread / (_cell * 0.62);
       transforms.add(ui.RSTransform.fromComponents(
         rotation: s.lean,
         scale: scale,
