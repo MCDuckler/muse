@@ -102,9 +102,12 @@ void main() {
     await _font('Roboto', ['$m/Roboto-Regular.ttf']);
   });
 
-  for (final (w, h) in const [(1600.0, 1000.0), (1280.0, 760.0), (1920.0, 1080.0)]) {
+  for (final (w, h) in const [(1600.0, 1000.0), (1280.0, 760.0), (1920.0, 1080.0), (390.0, 844.0)]) {
   for (final dark in [true]) {
-    for (final state in ['empty', 'playing', if (w == 1600) 'mixing', if (w != 1920) 'parts', if (w != 1280) 'crate', 'plan', 'set', 'planner']) {
+    final phone = w < 700;
+    for (final state in phone
+        ? ['empty', 'playing', 'set', 'plan', 'planner', 'crate']
+        : ['empty', 'playing', if (w == 1600) 'mixing', if (w != 1920) 'parts', if (w != 1280) 'crate', 'plan', 'set', 'planner']) {
       testWidgets('the booth at ${w.round()}x${h.round()}, $state', (tester) async {
         JustAudioPlatform.instance = FakeJustAudio();
         useThisClientInstead(MockClient((r) async => r.url.path.contains('stream-key')
@@ -239,9 +242,8 @@ void main() {
           child: MaterialApp(
             debugShowCheckedModeBanner: false,
             theme: dark ? MuseTheme.dark() : MuseTheme.light(),
-            home: RepaintBoundary(
-                key: const ValueKey('shot'),
-                child: state == 'planner' ? SetPlannerPage(booth: app.booth) : const BoothPage()),
+            builder: (context, child) => RepaintBoundary(key: const ValueKey('shot'), child: child ?? const SizedBox()),
+            home: state == 'planner' ? SetPlannerPage(booth: app.booth) : const BoothPage(),
           ),
         ));
         for (var i = 0; i < 6; i++) {
@@ -256,7 +258,13 @@ void main() {
           expect(find.text('NOW'), findsOneWidget);
           expect(find.text('WAITING · 2'), findsOneWidget);
         }
-        if (state == 'crate') {
+        if (state == 'crate' && phone) {
+          // The crate opens over the room on a phone.
+          await tester.tap(find.byIcon(Icons.inventory_2_outlined));
+          for (var i = 0; i < 6; i++) {
+            await tester.pump(const Duration(milliseconds: 100));
+          }
+        } else if (state == 'crate') {
           // Typing in the search is typing: Q is a letter, not SYNC on deck A.
           await tester.tap(find.byIcon(Icons.search).first);
           await tester.pump(const Duration(milliseconds: 100));
@@ -274,6 +282,17 @@ void main() {
             await tester.pump(const Duration(milliseconds: 100));
           }
           expect(find.text('Hardtekk crate'), findsOneWidget);
+        }
+        if ((state == 'set' || state == 'plan') && phone) {
+          // The set and the plan open over the room on a phone, from the Auto DJ's
+          // card, which is down the page.
+          final pad = find.text(state == 'set' ? 'SET' : 'PLAN').first;
+          await tester.ensureVisible(pad);
+          await tester.pump(const Duration(milliseconds: 100));
+          await tester.tap(pad);
+          for (var i = 0; i < 6; i++) {
+            await tester.pump(const Duration(milliseconds: 100));
+          }
         }
         final err = tester.takeException();
         // The picture first, even of a room that overflowed: it shows where.

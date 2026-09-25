@@ -11,14 +11,10 @@ import '../state/booth/booth.dart';
 import '../state/booth/deck.dart' as engine;
 import 'artwork.dart';
 import 'booth/booth_clock.dart';
-import 'booth/crate.dart';
-import 'booth/deck_panel.dart';
 import 'booth/desk/console_plan.dart';
 import 'booth/desk/console_room.dart';
-import 'booth/meters.dart';
-import 'booth/mixer_strip.dart';
+import 'booth/phone/phone_room.dart';
 import 'feel.dart';
-import 'glass.dart';
 import 'mag.dart';
 import 'mag_parts.dart';
 import 'stage/arm_grip.dart';
@@ -57,32 +53,6 @@ class _BoothPageState extends State<BoothPage> {
   void dispose() {
     _focus.dispose();
     super.dispose();
-  }
-
-  Future<void> _load(engine.Deck deck, Track track) async {
-    await context.read<AppState>().booth.load(deck, track);
-  }
-
-  /// Which deck a record from the crate goes on: whichever is not the master.
-  engine.Deck _free(Booth b) => b.other(b.master);
-
-  Future<void> _pick(engine.Deck deck) async {
-    final b = context.read<AppState>().booth;
-    await showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (sheet) => SizedBox(
-        height: MediaQuery.sizeOf(sheet).height * 0.7,
-        child: Crate(
-          booth: b,
-          onPick: (t) {
-            Navigator.of(sheet).pop();
-            unawaited(_load(deck, t));
-          },
-        ),
-      ),
-    );
   }
 
   // ------------------------------------------------------------------ the keys
@@ -176,7 +146,6 @@ class _BoothPageState extends State<BoothPage> {
     final app = context.watch<AppState>();
     final b = app.booth;
     final compact = Width.of(context) == Width.compact;
-    final tint = parseHexColour(b.master.track?.coverColor);
 
     return ArmReach(
       child: BoothClock(
@@ -187,52 +156,12 @@ class _BoothPageState extends State<BoothPage> {
           onKeyEvent: _keys,
           child: AnimatedBuilder(
             animation: b,
-            builder: (context, _) => !compact
-                ? ConsoleRoom(booth: b, keys: keys)
-                : Scaffold(
-              appBar: AppBar(
-                title: const Text('The booth'),
-                actions: [
-                  if (b.live)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 4),
-                      child: Center(
-                        child: Text('ON AIR',
-                            style: Mag.flag(9, color: Theme.of(context).colorScheme.primary)),
-                      ),
-                    ),
-                  IconButton(
-                    icon: const Icon(Icons.inventory_2_outlined),
-                    tooltip: 'The crate',
-                    onPressed: () => _pick(_free(b)),
-                  ),
-                ],
-              ),
-              body: AmbientBackdrop(
-                colour: tint,
-                child: _phone(context, b),
-              ),
-            ),
+            builder: (context, _) => compact ? PhoneRoom(booth: b) : ConsoleRoom(booth: b, keys: keys),
           ),
         ),
       ),
     );
   }
-
-  // ------------------------------------------------------------------ a phone
-  Widget _phone(BuildContext context, Booth b) => ListView(
-        padding: const EdgeInsets.fromLTRB(10, 4, 10, 40),
-        children: [
-          DeckPanel(booth: b, deck: b.a, onLoad: () => _pick(b.a)),
-          const SizedBox(height: 8),
-          PhaseMeter(booth: b),
-          const SizedBox(height: 8),
-          MixerStrip(booth: b),
-          const SizedBox(height: 8),
-          DeckPanel(booth: b, deck: b.b, onLoad: () => _pick(b.b)),
-        ],
-      );
-
 }
 
 /// Into the booth, and — with [mix] — with the booth mixing [tracks] from [at].

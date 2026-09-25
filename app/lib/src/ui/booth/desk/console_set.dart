@@ -426,34 +426,41 @@ class _Controls extends StatelessWidget {
         ),
       ),
     ];
+    final count = Text(
+        auto.running
+            ? '${auto.upcoming.length} TO COME · ${clockOf(Duration(milliseconds: total))}'
+            : '${items.length} QUEUED · ${clockOf(Duration(milliseconds: total))}',
+        style: Console.label(8.5));
+    final planner = Pad(
+      label: 'PLAN A SET',
+      icon: Icons.auto_awesome,
+      height: 26,
+      colour: Console.ink,
+      tooltip: 'Lay the whole set out and start it',
+      onTap: items.length < 2 ? null : () => openSetPlanner(context, booth),
+    );
+    // On a phone the rows are longer than the screen: they scroll sideways, and
+    // nothing in them asks for the room a Spacer would.
+    final narrow = MediaQuery.sizeOf(context).width < 700;
+    Widget row(List<Widget> children) => narrow
+        ? SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: children))
+        : Row(children: children);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(children: [
+        row([
           Text('SET', style: Console.label(9, color: Theme.of(context).colorScheme.primary)),
           const SizedBox(width: 12),
-          Text(
-              auto.running
-                  ? '${auto.upcoming.length} TO COME · ${clockOf(Duration(milliseconds: total))}'
-                  : '${items.length} QUEUED · ${clockOf(Duration(milliseconds: total))}',
-              style: Console.label(8.5)),
+          count,
           const SizedBox(width: 18),
           ...order,
-          const Spacer(),
-          Pad(
-            label: 'PLAN A SET',
-            icon: Icons.auto_awesome,
-            height: 26,
-            colour: Console.ink,
-            tooltip: 'Lay the whole set out and start it',
-            onTap: items.length < 2 ? null : () => openSetPlanner(context, booth),
-          ),
+          if (narrow) ...[const SizedBox(width: 12), planner] else ...[const Spacer(), planner],
         ]),
         const SizedBox(height: 6),
-        Row(children: [
+        row([
           ...style,
           const SizedBox(width: 18),
-          Expanded(child: Align(alignment: Alignment.centerRight, child: Verdict(booth: booth))),
+          if (narrow) Verdict(booth: booth) else Expanded(child: Align(alignment: Alignment.centerRight, child: Verdict(booth: booth))),
         ]),
       ],
     );

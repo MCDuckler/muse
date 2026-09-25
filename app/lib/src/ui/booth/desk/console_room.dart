@@ -279,7 +279,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
               onPressed: () => Navigator.of(context).maybePop(),
             ),
             const SizedBox(width: 2),
-            _Mark(on: _b.live),
+            BoothMark(on: _b.live),
             const SizedBox(width: 22),
             Expanded(child: ConsoleAutoBar(booth: _b, onSetView: () => _show(BoothView.set))),
             const SizedBox(width: 12),
@@ -395,8 +395,8 @@ class _Cap extends StatelessWidget {
 }
 
 /// WET◉WL, small, with BOOTH beside it — and ON AIR lit while the booth has the sound.
-class _Mark extends StatelessWidget {
-  const _Mark({required this.on});
+class BoothMark extends StatelessWidget {
+  const BoothMark({super.key, required this.on});
   final bool on;
 
   @override

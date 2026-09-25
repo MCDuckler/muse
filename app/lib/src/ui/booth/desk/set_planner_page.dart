@@ -112,10 +112,86 @@ class _SetPlannerPageState extends State<SetPlannerPage> {
     unawaited(auto.start(_order, at: at));
   }
 
+  /// The dials and the words about the set, beside the list on a desk and in a
+  /// dialog on a phone.
+  Widget _how(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          StyleDials(auto: _b.auto),
+          const SizedBox(height: 18),
+          Text('THE SET', style: Console.label(10, color: Console.ink)),
+          const SizedBox(height: 8),
+          Text(
+            'Drag a record to move it; pin one to keep it where it is when '
+            'the rest is planned again. Tap the move between two records to '
+            'choose another. The booth eases each record back to its own '
+            'tempo after every mix, so the set may climb.',
+            style: Mag.typewriter(11, color: Console.quiet),
+          ),
+        ],
+      );
+
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
     final total = _order.fold<int>(0, (a, t) => a + (t.durationMs ?? 0));
+    final narrow = MediaQuery.sizeOf(context).width < 700;
+    final arcs = [
+      for (final arc in EnergyArc.values) ...[
+        Pad(
+          label: arc.label.toUpperCase(),
+          lit: _arc == arc,
+          colour: Console.ink,
+          height: 26,
+          tooltip: switch (arc) {
+            EnergyArc.flat => 'Each record about as loud as the last',
+            EnergyArc.build => 'Up all the way',
+            EnergyArc.peakLate => 'Up to a peak three quarters through, then easing off',
+            EnergyArc.coolDown => 'Down: an ending',
+          },
+          onTap: () {
+            _arc = arc;
+            _plan();
+          },
+        ),
+        const SizedBox(width: 4),
+      ],
+    ];
+    final again = Pad(
+      label: 'PLAN AGAIN',
+      icon: Icons.auto_awesome,
+      height: 28,
+      colour: Console.ink,
+      tooltip: 'Order the rest again, around what is pinned',
+      onTap: _reading ? null : _plan,
+    );
+    final start = Pad(
+      label: 'START',
+      icon: Icons.play_arrow,
+      height: 30,
+      colour: Theme.of(context).colorScheme.primary,
+      lit: true,
+      onTap: _order.length < 2 ? null : () => unawaited(_start()),
+    );
+    final dials = Pad(
+      icon: Icons.tune,
+      label: 'DIALS',
+      height: 28,
+      colour: Console.ink,
+      tooltip: 'How it mixes',
+      onTap: () => showDialog<void>(
+        context: context,
+        builder: (context) => Dialog(
+          backgroundColor: Console.panel,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: Console.line)),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+            child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 380), child: _how(context)),
+          ),
+        ),
+      ),
+    );
     return Theme(
       data: MuseTheme.dark(app.palette),
       child: Scaffold(
@@ -136,78 +212,35 @@ class _SetPlannerPageState extends State<SetPlannerPage> {
                     const SizedBox(width: 6),
                     Text('PLAN A SET', style: Console.label(11, color: Console.ink)),
                     const SizedBox(width: 14),
-                    Text(
-                        '${_order.length} RECORDS · ${_clock(total)}'
-                        '${_reading ? ' · READING $_known OF ${_order.length}' : ''}',
-                        style: Console.label(8.5)),
-                    const Spacer(),
-                    for (final arc in EnergyArc.values) ...[
-                      Pad(
-                        label: arc.label.toUpperCase(),
-                        lit: _arc == arc,
-                        colour: Console.ink,
-                        height: 26,
-                        tooltip: switch (arc) {
-                          EnergyArc.flat => 'Each record about as loud as the last',
-                          EnergyArc.build => 'Up all the way',
-                          EnergyArc.peakLate => 'Up to a peak three quarters through, then easing off',
-                          EnergyArc.coolDown => 'Down: an ending',
-                        },
-                        onTap: () {
-                          _arc = arc;
-                          _plan();
-                        },
-                      ),
-                      const SizedBox(width: 4),
-                    ],
-                    const SizedBox(width: 10),
-                    Pad(
-                      label: 'PLAN AGAIN',
-                      icon: Icons.auto_awesome,
-                      height: 28,
-                      colour: Console.ink,
-                      tooltip: 'Order the rest again, around what is pinned',
-                      onTap: _reading ? null : _plan,
+                    Expanded(
+                      child: Text(
+                          '${_order.length} RECORDS · ${_clock(total)}'
+                          '${_reading ? ' · READING $_known OF ${_order.length}' : ''}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Console.label(8.5)),
                     ),
-                    const SizedBox(width: 8),
-                    Pad(
-                      label: 'START',
-                      icon: Icons.play_arrow,
-                      height: 30,
-                      colour: Theme.of(context).colorScheme.primary,
-                      lit: true,
-                      onTap: _order.length < 2 ? null : () => unawaited(_start()),
-                    ),
+                    if (!narrow) ...[...arcs, const SizedBox(width: 10), again, const SizedBox(width: 8)],
+                    start,
                   ],
                 ),
+                if (narrow) ...[
+                  const SizedBox(height: 6),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(children: [...arcs, const SizedBox(width: 6), again, const SizedBox(width: 6), dials]),
+                  ),
+                ],
                 const SizedBox(height: 10),
                 Expanded(
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Expanded(child: Plate(padding: const EdgeInsets.all(8), child: _list())),
-                      const SizedBox(width: 12),
-                      SizedBox(
-                        width: 340,
-                        child: Plate(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              StyleDials(auto: _b.auto),
-                              const SizedBox(height: 18),
-                              Text('THE SET', style: Console.label(10, color: Console.ink)),
-                              const SizedBox(height: 8),
-                              Text(
-                                'Drag a record to move it; pin one to keep it where it is when '
-                                'the rest is planned again. Tap the move between two records to '
-                                'choose another. The booth eases each record back to its own '
-                                'tempo after every mix, so the set may climb.',
-                                style: Mag.typewriter(11, color: Console.quiet),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
+                      if (!narrow) ...[
+                        const SizedBox(width: 12),
+                        SizedBox(width: 340, child: Plate(child: _how(context))),
+                      ],
                     ],
                   ),
                 ),
@@ -268,8 +301,10 @@ class _SetPlannerPageState extends State<SetPlannerPage> {
                       ],
                     ),
                   ),
-                  DataMarks(booth: _b, track: t, timing: timing),
-                  const SizedBox(width: 10),
+                  if (MediaQuery.sizeOf(context).width >= 700) ...[
+                    DataMarks(booth: _b, track: t, timing: timing),
+                    const SizedBox(width: 10),
+                  ],
                   SizedBox(
                     width: 42,
                     child: Text(timing?.camelot ?? '', textAlign: TextAlign.center, style: Mag.typewriter(11, color: Console.quiet)),

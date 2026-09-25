@@ -198,40 +198,53 @@ class _ConsolePlanState extends State<ConsolePlan> {
       toTitle: to.track?.displayTitle ?? '',
     );
 
+    final drawing = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(
+          child: ClipRect(
+            child: CustomPaint(painter: _PlanPainter(picture)),
+          ),
+        ),
+        const SizedBox(height: 6),
+        controls,
+      ],
+    );
+    final options = auto.options.length > 1 ? _Options(booth: booth, enabled: canSteer) : null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         header,
         const SizedBox(height: 6),
-        Expanded(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Expanded(
-                      child: ClipRect(
-                        child: CustomPaint(painter: _PlanPainter(picture)),
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    controls,
-                  ],
-                ),
-              ),
-              if (auto.options.length > 1) ...[
-                const SizedBox(width: 12),
-                SizedBox(width: 250, child: _Options(booth: booth, enabled: canSteer)),
-              ],
-            ],
-          ),
-        ),
+        Expanded(child: _beside(drawing, options)),
       ],
     );
   }
 }
+
+/// The drawing with the options beside it where there is room, under it where there
+/// is not: a phone.
+Widget _beside(Widget drawing, Widget? options) => LayoutBuilder(builder: (context, c) {
+      if (options == null) return drawing;
+      if (c.maxWidth >= 560) {
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(child: drawing),
+            const SizedBox(width: 12),
+            SizedBox(width: 250, child: options),
+          ],
+        );
+      }
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(flex: 5, child: drawing),
+          const SizedBox(height: 8),
+          Expanded(flex: 4, child: options),
+        ],
+      );
+    });
 
 /// Every move the planner weighed, best first; one tapped is the one done.
 class _Options extends StatelessWidget {
@@ -766,19 +779,11 @@ class _PairBodyState extends State<_PairBody> {
             header,
             const SizedBox(height: 6),
             Expanded(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(child: middle),
-                  if (options.length > 1) ...[
-                    const SizedBox(width: 12),
-                    SizedBox(
-                      width: 250,
-                      child: OptionsList(
-                          options: options, chosen: chosen, enabled: true, onPick: (o) => auto.steerPair(a, b, o)),
-                    ),
-                  ],
-                ],
+              child: _beside(
+                middle,
+                options.length > 1
+                    ? OptionsList(options: options, chosen: chosen, enabled: true, onPick: (o) => auto.steerPair(a, b, o))
+                    : null,
               ),
             ),
           ],

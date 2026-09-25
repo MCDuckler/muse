@@ -44,7 +44,7 @@ class _ConsoleMixerState extends State<ConsoleMixer> {
             ),
           ),
           const SizedBox(height: 12),
-          _Crossfader(booth: _b),
+          Crossfader(booth: _b),
           const SizedBox(height: 14),
           _mix(),
         ],
@@ -60,7 +60,7 @@ class _ConsoleMixerState extends State<ConsoleMixer> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _MixButton(
+        MixButton(
           going: going,
           arming: _b.arming?.startsAt,
           ready: ready,
@@ -137,8 +137,9 @@ class _ConsoleMixerState extends State<ConsoleMixer> {
   }
 }
 
-class _MixButton extends StatefulWidget {
-  const _MixButton({
+class MixButton extends StatefulWidget {
+  const MixButton({
+    super.key,
     required this.going,
     required this.arming,
     required this.ready,
@@ -156,15 +157,15 @@ class _MixButton extends StatefulWidget {
   final VoidCallback onTap;
 
   @override
-  State<_MixButton> createState() => _MixButtonState();
+  State<MixButton> createState() => _MixButtonState();
 }
 
-class _MixButtonState extends State<_MixButton> with SingleTickerProviderStateMixin {
+class _MixButtonState extends State<MixButton> with SingleTickerProviderStateMixin {
   late final AnimationController _pulse =
       AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
 
   @override
-  void didUpdateWidget(_MixButton old) {
+  void didUpdateWidget(MixButton old) {
     super.didUpdateWidget(old);
     widget.going || widget.arming != null ? _pulse.repeat(reverse: true) : _pulse.stop();
   }
@@ -353,8 +354,8 @@ class _Channel extends StatelessWidget {
   }
 }
 
-class _Crossfader extends StatelessWidget {
-  const _Crossfader({required this.booth});
+class Crossfader extends StatelessWidget {
+  const Crossfader({super.key, required this.booth});
   final Booth booth;
 
   @override
