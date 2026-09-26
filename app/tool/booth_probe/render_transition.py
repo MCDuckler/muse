@@ -119,7 +119,7 @@ def stretched(path: pathlib.Path, ratio: float, shift_st: float) -> np.ndarray:
     raise SystemExit("ffmpeg could not stretch the record")
 
 
-def lerp_steps(steps: list[dict], key, k: float, default: float, hold_last: bool = False):
+def lerp_steps(steps: list[dict], key, k: float, default: float, hold_last: bool = False, power: bool = False):
     """A value travelled to evenly between the steps that set it (the fader, the
     filter, the stems); [hold_last]: the last step's value is not travelled to, as the
     booth holds a stem move's levels to the end."""
@@ -138,7 +138,40 @@ def lerp_steps(steps: list[dict], key, k: float, default: float, hold_last: bool
         return before[1]
     span = after[0] - before[0]
     t = 1.0 if span <= 0 else (k - before[0]) / span
+    if power:
+        a, b = before[1], after[1]
+        return float(np.sqrt(max(0.0, a * a + (b * b - a * a) * t)))
     return before[1] + (after[1] - before[1]) * t
+
+
+def eq_at(steps: list[dict], name: str, k: float, beat_k: float, began: dict | None = None) -> dict:
+    """The bands as the booth travels them: a step's EQ reached over the beat before
+    the step (Booth.go eqAt), held between. [began] is what the deck had before the move."""
+    prev, coming = None, None
+    for s in steps:
+        e = s["decks"].get(name, {}).get("eq")
+        if e is None:
+            continue
+        if s["at"] <= k:
+            prev = e
+        else:
+            coming = s
+            break
+    base = prev if prev is not None else (began or {})
+    if coming is None:
+        return base
+    start = coming["at"] - beat_k
+    if k < start:
+        return base
+    t = min(1.0, max(0.0, (k - start) / beat_k))
+    target = coming["decks"][name]["eq"]
+    def one(a, b):
+        # Equal power in amplitude, as EqSet.lerp: a swap keeps the bass in the room.
+        if a == b:
+            return a
+        ga, gb = 10 ** (a / 20), 10 ** (b / 20)
+        return float(20 * np.log10(np.sqrt(max(0.0, ga * ga + (gb * gb - ga * ga) * t)) + 1e-6))
+    return {band: one(base.get(band, 0.0), target.get(band, 0.0)) for band in ("low", "mid", "high")}
 
 
 def held(steps: list[dict], key, k: float, default):
@@ -276,7 +309,8 @@ def main() -> None:
                 elif k > 1:
                     v = 1.0 if name == "B" else 0.0
                 else:
-                    st = lerp_steps(steps, lambda s: (s["decks"].get(name, {}).get("stems") or {}).get(stem), k, 1.0, hold_last=True)
+                    # Equal power, as Booth.stemsOf travels them: the energy moves evenly.
+                    st = lerp_steps(steps, lambda s: (s["decks"].get(name, {}).get("stems") or {}).get(stem), k, 1.0, hold_last=True, power=True)
                     v = st
                 lv[f:f + FRAME] = v
             total += y * lv[:, None]
@@ -328,7 +362,7 @@ def main() -> None:
     def control_for(name):
         def control(start):
             k = k_of(start)
-            eq = held(steps, lambda s: s["decks"].get(name, {}).get("eq"), k, {}) if 0 <= k <= 1 else {}
+            eq = eq_at(steps, name, k, 1 / (args.bars * 4)) if 0 <= k <= 1 else {}
             filt = lerp_steps(steps, lambda s: s["decks"].get(name, {}).get("filter"), k, 0.0) if 0 <= k <= 1 else 0.0
             return eq, filt
         return control

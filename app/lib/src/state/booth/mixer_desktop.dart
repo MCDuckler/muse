@@ -213,7 +213,20 @@ class DesktopMixer extends VolumeMixer {
     // beat on it): setting `af` again on every load is a call into libmpv that waits
     // on its core, and a booth froze on one. What the last record left on the chain —
     // a shift, the echo — is put back by command instead.
-    _beat[deck.name] ??= beatMs ?? 500;
+    // The echo's delays are written into the chain, so a record at another tempo
+    // needs the chain built again — now, while the deck is parked, which is when the
+    // booth loads. (The chain used to be built once and the echo kept the beat of the
+    // first record the deck ever played: every later record's echo-out was out of
+    // time.) Within two per cent is the same beat to an echo.
+    final want = beatMs ?? _beat[deck.name] ?? 500;
+    final had = _beat[deck.name];
+    if (had == null) {
+      _beat[deck.name] = want;
+    } else if ((want - had).abs() / had > 0.02) {
+      _beat[deck.name] = want;
+      _installed.remove(deck.name);
+      _gate.remove(deck.name);
+    }
     if ((_shift[deck.name] ?? 0) != 0) {
       _shift.remove(deck.name);
       try {

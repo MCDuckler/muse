@@ -818,14 +818,16 @@ void autoMixRules() {
         cues: const MixCues(firstDownbeatMs: 469, mixInMs: 15000, mixOutMs: 160000, soundEndMs: 198000),
       );
 
-  test('every move of every way out lands on a bar', () {
+  test('every move of every way out lands on a bar, and a loop halved on a beat', () {
     for (final kind in Transition.values) {
       for (final bars in [4, 8, 12, 16, 32]) {
         final steps = MixStep.onBars(Booth.plan(kind, from: 'A', to: 'B'), bars);
         for (final s in steps) {
-          final bar = s.at * bars;
-          expect((bar - bar.round()).abs(), lessThan(1e-9),
-              reason: '${kind.name} over $bars bars: a step at bar $bar');
+          // A roll's rungs are shorter than a bar: those steps sit on beats.
+          final halving = s.decks.values.any((d) => d.loopBars == -1);
+          final at = s.at * bars * (halving ? 4 : 1);
+          expect((at - at.round()).abs(), lessThan(1e-9),
+              reason: '${kind.name} over $bars bars: a step at ${halving ? 'beat' : 'bar'} $at');
         }
         // Still in order, first to last.
         for (var i = 1; i < steps.length; i++) {
@@ -846,7 +848,7 @@ void autoMixRules() {
     final roll = Booth.plan(Transition.roll, from: 'A', to: 'B');
     final loops = [for (final s in roll) s.decks['A']?.loopBars].whereType<int>().toList();
     expect(loops.first, 2, reason: 'caught at two bars');
-    expect(loops.where((b) => b == -1).length, 2, reason: 'halved twice');
+    expect(loops.where((b) => b == -1).length, 4, reason: 'halved down to an eighth of a bar');
     expect(loops.last, 0, reason: 'and let go at the end');
 
     final brake = Booth.plan(Transition.brake, from: 'A', to: 'B');

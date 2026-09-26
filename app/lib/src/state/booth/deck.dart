@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
@@ -681,7 +682,14 @@ class Deck extends ChangeNotifier {
 
   /// Go round [beats] beats from the next downbeat (or from here, with no grid).
   void loop(int beats) {
-    final from = nextBeat(position, every: 4) ?? position;
+    // From this bar's one where the deck has just passed it — within a beat — rather
+    // than the next one: a transition's steps land on downbeats, and a loop caught on
+    // the step was starting a bar after it, which put every rung of a roll a bar late
+    // and the last one past the end of the move.
+    final next = nextBeat(position, every: 4) ?? position;
+    final bar = beatInRecord * 4;
+    final prev = next - bar;
+    final from = next - position > beatInRecord * 3 && prev >= Duration.zero ? prev : next;
     loopStart = from;
     loopEnd = from + beatInRecord * beats;
     _loopBars = beats ~/ 4;
@@ -710,10 +718,22 @@ class Deck extends ChangeNotifier {
   ///
   /// Not a backspin — a browser's audio element will not play backwards, so what is
   /// offered is the half of it that every engine here can actually do.
-  Future<void> brake({Duration over = const Duration(milliseconds: 900)}) async {
+  ///
+  /// The pitch falls with the rate. The engines here stretch — Rubber Band, or mpv's
+  /// own — and a stretcher's whole job is to keep the pitch while the rate moves, so
+  /// a rate run down to nothing through one is a record getting slower at the same
+  /// pitch: a stutter, not a platter. Where the desk can shift pitch ([pitchEngine]),
+  /// it is shifted down by the same ratio at every step, which is what a platter does.
+  ///
+  /// [over] defaults to two of the record's beats, so a brake is the same musical
+  /// length at any tempo.
+  Future<void> brake({Duration? over}) async {
     if (!playing) return;
     braking = true;
     final was = tempo;
+    final length = over ??
+        Duration(microseconds: ((beat ?? const Duration(milliseconds: 450)).inMicroseconds * 2)
+            .clamp(600000, 1400000));
     const steps = 18;
     for (var i = 1; i <= steps; i++) {
       _fix = position;
@@ -721,20 +741,27 @@ class Deck extends ChangeNotifier {
       tempo = (was * (1 - i / steps)).clamp(_slowest, 2.0);
       try {
         await _player.setSpeed(tempo);
+        // The pitch, down by the same ratio: semitones = 12·log2(rate / rate before).
+        await pitchEngine?.call(this, 12 * math.log(tempo / was) / math.ln2);
       } catch (_) {
         break;                          // an engine that will not crawl: stop here
       }
       notifyListeners();
-      await Future<void>.delayed(over ~/ steps);
+      await Future<void>.delayed(length ~/ steps);
     }
     await pause();
     braking = false;
     tempo = was;
     try {
       await _player.setSpeed(was);
+      await pitchEngine?.call(this, 0);
     } catch (_) {}
     notifyListeners();
   }
+
+  /// The desk's pitch shift for this deck, in semitones, where it has one: what the
+  /// brake falls through. Set by the booth.
+  Future<void> Function(Deck deck, double semitones)? pitchEngine;
 
   /// The slowest an engine can be asked to run without refusing outright.
   static const _slowest = 0.12;

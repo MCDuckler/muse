@@ -157,3 +157,58 @@ echo's pitch fall. Both wait on real records with stems on this box.
 - CUE-DETR as a scorer needs PyTorch and a 160 MB DETR checkpoint; without ground
   truth on our records its agreement with our cues would be the only number. Left
   until a set of hand-placed cues on our own records exists.
+
+## Fourth pass (2026-09-26): the moves reviewed against practice, and fixed
+
+A read of every move against what DJs do, what Mixxx/djay/rekordbox-class automix
+does, and the DJ-mix papers (Kim et al. 2020, Chen et al. 2022, Vande Veire & De Bie
+2018) found three bugs and five rough edges in the moves themselves. Measured on a
+made-up pair this time written down — `make_pair.py` (two 64-bar records at 120, kick
+on every beat, sub bass, a chord, a sung vowel, a quiet intro and outro, a drop at bar
+16; A minor into E minor). It is far bassier than a record, so its dips are bigger than
+the third pass's; the *differences* are the point.
+
+| move | kicks s before → after | dip dB | hole dB | note |
+|---|---|---|---|---|
+| blend | 0 → 0 | 3.3 → 3.0 | 4.3 → 6.2 | EQ travelled over the beat before each step at equal power (it was one command, 40 dB in a frame; travelled in dB it was an 11 dB hole) |
+| sweep | 0 → 0 | 18.8 → 16.6 | 24.4 → 21.8 | now on the full fader law |
+| filterRide | 0 → 6.0 | 11.3 → 5.7 | 12.5 → 6.2 | the incoming was *silent* for half the move (low-pass at 350 Hz and bass killed); now low-pass from 1.2 kHz, bass off until 0.4 then −12 dB, released at the swap |
+| announce | 0.75 → 0.5 | 17.6 → 17.6 | 26.5 → 23.5 | the outgoing's drums go with its bass at 0.56, handed over from 0.5 (they stayed to 0.8; the probe read no doubled kicks only because the bass was off) |
+| stemBlend | 1.25 → 1.25 | 2.5 → 2.0 | 6.0 → 4.8 | stem handovers at equal power (`StemLevels.lerpPower`): the linear ones met at 0.5 each, 3 dB down |
+| roll | 3.25 → 4.0 | 7.7 → 7.6 | 8.5 → 8.4 | a real ladder now: 2, 1, ½, ¼, ⅛ bars, the halvings on beats (`onBars`), and loops start from the bar the step is on rather than the next (`Deck.loop`) |
+
+Not measurable here, fixed by reading: the **brake kept its pitch** (Rubber Band's whole
+job; `Deck.brake` now shifts the pitch down by the rate at every step through
+`pitchEngine`, and lasts two beats rather than 900 ms), and the **echo was timed to the
+first record a deck ever played** (its delays are in the chain; `beforeLoad` now builds
+the chain again while the deck is parked when the beat has moved more than 2 %).
+
+The renderer mirrors the new laws (`lerp_steps(power=True)` for stems, `eq_at` for the
+bands) so these numbers are the booth's, not the old renderer's.
+
+### The booth's own sounds, made better
+
+Old against new, the same shots (`fx_sounds_test.dart` with FX_OUT), by numbers a
+speaker would notice:
+
+| sound | rms dB | crest dB | width (S/M) | centroid start → end |
+|---|---|---|---|---|
+| riser 8 s | −23.3 → −20.0 | 20.2 → 16.3 | 0.81 → 0.95 | 1251 → 3830 was; 1313 → 5904 now |
+| sweep up 2 s | −24.3 → −21.2 | 18.9 → 16.2 | 1.33 → 1.27 | 1219 → 6251; 933 → 6666 |
+| sweep down 2 s | −33.2 → −24.0 | 27.9 → 18.6 | 1.32 → 1.33 | 2642 → 880; 2798 → 457 |
+| hydrant 4 s | −20.2 → −20.6 | 16.2 → 16.7 | 1.01 → 1.00 | 3109; 5354 flat both |
+| impact 2 s | −18.8 → −18.1 | 17.8 → 17.0 | 0.15 → 0.15 | sub, as before |
+
+What changed and why: pink noise under every sweep and the riser's start, white only
+as they climb (hiss alone has no body); a soft saturator on the riser and the sweeps
+(denser, a crest 4 dB lower, the swell heard as one thing); a short Schroeder room on
+the sweep down, the hydrant and the hit (they fall away instead of stopping); the
+riser's roll has a snare-like tick on every cycle, a resonant scream over its last
+third and a three-voice detuned lead with a deepening vibrato instead of one sine; the
+hydrant is sprayed (its level flickers at 8–14 Hz on a slow random walk) — and *not*
+saturated: driven, its resonant bursts came out as odd harmonics two octaves up
+(centroid 3.1 → 5.5 kHz, crest 16 → 9 dB), so that one stays linear; the hit has a
+click on its first sample and only a little drive on the sub (driven hard it was a
+buzz). Spectrograms of old against new are in the session that did this; the test
+file's assertions (swell, brightness, opposite sweeps, arch, decay, rest at the ends)
+all still hold.

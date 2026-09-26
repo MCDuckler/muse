@@ -176,7 +176,17 @@ extension TransitionWords on Transition {
   /// part at a time are one record's worth of sound shared between two decks, and
   /// the equal-power law took 3 dB off every stem of it for as long as the fader sat
   /// in the middle — the whole of a stem blend.
-  bool get full => needsStems || this == Transition.swap || this == Transition.breakSwap;
+  ///
+  /// The filter moves run it too: the outgoing loses most of its energy to the
+  /// high-pass anyway, and under the equal-power law the sweep was a 7 dB hole with an
+  /// 8.6 dB quarter-second in it (the probe, 2026-09-25) — the room going quiet in the
+  /// middle of a change.
+  bool get full =>
+      needsStems ||
+      this == Transition.swap ||
+      this == Transition.breakSwap ||
+      this == Transition.sweep ||
+      this == Transition.filterRide;
 }
 
 /// What a transition does to one deck at one moment.
@@ -268,9 +278,18 @@ class MixStep {
   /// fractions of the whole, and 0.85 of sixteen bars is bar 13.6: an EQ that changed
   /// part-way through a bar, which is the thing that made a mix sound wrong without
   /// anybody being able to say why.
+  ///
+  /// A loop *halved* is the one thing that belongs between bars: a roll goes two
+  /// bars, one, a half, a quarter, and the last rungs are shorter than a bar by
+  /// definition. Those steps land on beats.
   static List<MixStep> onBars(List<MixStep> steps, int bars) {
     if (bars <= 1) return steps;
-    return [for (final s in steps) s.at_((s.at * bars).round() / bars)];
+    return [
+      for (final s in steps)
+        s.at_(s.decks.values.any((d) => d.loopBars == -1)
+            ? (s.at * bars * 4).round() / (bars * 4)
+            : (s.at * bars).round() / bars),
+    ];
   }
 }
 
@@ -383,6 +402,7 @@ class Booth extends ChangeNotifier {
     this.b.seamFinder = this.mixer.quietSeam;
     for (final d in [this.a, this.b]) {
       d
+        ..pitchEngine = ((deck, semis) => this.mixer.setPitchShift(deck, semis))
         ..canStem = this.mixer.canStem
         ..readyEngine = this.mixer.beforeLoad
         ..stemEngine = this.mixer.setStems
@@ -1199,12 +1219,16 @@ class Booth extends ChangeNotifier {
         // Caught and tightened: two bars, one, half — and let go as the new record
         // lands. The fader is most of the way across before the roll starts, so what
         // is being tightened is a tail rather than the whole record.
+        // Two bars, one, a half, a quarter, an eighth: each rung once round and then
+        // halved, the last two shorter than a bar (onBars puts those on beats).
         return [
           MixStep(0, crossfader: 0, decks: {to: noBass}),
           MixStep(0.45, crossfader: 0.45, decks: {to: flat}),
-          MixStep(0.6, crossfader: 0.6, decks: {from: const DeckStep(loopBars: 2)}),
-          MixStep(0.75, crossfader: 0.75, decks: {from: const DeckStep(loopBars: -1)}),
-          MixStep(0.88, crossfader: 0.9, decks: {from: const DeckStep(loopBars: -1)}),
+          MixStep(0.5, crossfader: 0.5, decks: {from: const DeckStep(loopBars: 2)}),
+          MixStep(0.75, crossfader: 0.7, decks: {from: const DeckStep(loopBars: -1)}),
+          MixStep(0.875, crossfader: 0.8, decks: {from: const DeckStep(loopBars: -1)}),
+          MixStep(0.9375, crossfader: 0.88, decks: {from: const DeckStep(loopBars: -1)}),
+          MixStep(0.96875, crossfader: 0.94, decks: {from: const DeckStep(loopBars: -1)}),
           MixStep(1, crossfader: 1, decks: {
             from: const DeckStep(eq: EqSet.flat, filter: 0, loopBars: 0),
           }),
@@ -1238,9 +1262,13 @@ class Booth extends ChangeNotifier {
             to: const DeckStep(stems: onlyVoice),
             from: const DeckStep(stems: noVoice),
           }),
+          // The new band arrives with its drums, so the old drums go — handed over
+          // from the step before, two bars of a thirty-two-bar move, with the old bass
+          // killed alongside. (Left to 0.8, two drum stems played for a quarter of
+          // the move; the probe read no doubled kicks only because the bass was off.)
           MixStep(0.56, decks: {
             to: const DeckStep(stems: StemLevels.all),
-            from: const DeckStep(eq: EqSet(low: EqSet.killed)),
+            from: const DeckStep(eq: EqSet(low: EqSet.killed), stems: StemLevels(vocals: 0, drums: 0)),
           }),
           MixStep(0.8, crossfader: 0.75, decks: {
             from: const DeckStep(filter: 0.5, stems: StemLevels(vocals: 0, drums: 0)),
@@ -1392,10 +1420,20 @@ class Booth extends ChangeNotifier {
         // Both ways at once, long: the old record climbs out through the high-pass
         // while the new one opens up through the low-pass, the basses swapped in the
         // middle.
+        // The incoming has to be heard arriving: under a low-pass closed to 350 Hz
+        // with its bass killed as well it was silent for half the move. So the
+        // low-pass starts a little more open (about 1.2 kHz: the record muffled, as a
+        // filter-in sounds) with the bass off, and the bass is let back over the last
+        // bars before the swap as the low-pass opens — not before, or two kicks share
+        // the room for a quarter of the move.
         return [
           MixStep(0, crossfader: 0, decks: {
             from: const DeckStep(filter: 0),
-            to: const DeckStep(filter: -0.7, eq: EqSet(low: EqSet.killed)),
+            to: const DeckStep(filter: -0.5, eq: EqSet(low: EqSet.killed)),
+          }),
+          MixStep(0.4, crossfader: 0.4, decks: {
+            from: const DeckStep(filter: 0.25),
+            to: const DeckStep(filter: -0.4, eq: EqSet(low: -12)),
           }),
           MixStep(0.5, crossfader: 0.5, decks: {
             from: const DeckStep(filter: 0.35, eq: EqSet(low: EqSet.killed)),
@@ -1597,7 +1635,7 @@ class Booth extends ChangeNotifier {
     final a = before.decks[deck]!.stems!;
     if (after == null || after.at >= 1) return a;
     final span = after.at - before.at;
-    return a.lerp(after.decks[deck]!.stems!, span <= 0 ? 1 : ((k - before.at) / span).clamp(0.0, 1.0));
+    return a.lerpPower(after.decks[deck]!.stems!, span <= 0 ? 1 : ((k - before.at) / span).clamp(0.0, 1.0));
   }
 
   /// The clock a gate on [deck] runs on: how long one chop lasts and where the chops
@@ -1975,6 +2013,33 @@ class Booth extends ChangeNotifier {
 
     StemLevels? stemsAt(String deck, double k) => stemsOf(steps, deck, k);
 
+    /// The bands, travelled: a step's EQ is reached over the beat *before* the step
+    /// rather than set on it. A kill was one command — forty decibels in a frame —
+    /// and a bass swap two of them in the same tick; a knob is turned, over about a
+    /// beat, and real mixes' EQ curves are gradual (Chen et al. 2022 learned them
+    /// from DJ mixes and got ramps, not steps). Null where no step is coming.
+    final beatK = 1 / (bars * 4);
+    final eqWhenBegan = {for (final d in decks) d.name: eqOf(d)};
+    EqSet? eqAt(String deck, double k) {
+      EqSet? prev;
+      MixStep? coming;
+      for (final st in steps) {
+        final e = st.decks[deck]?.eq;
+        if (e == null) continue;
+        if (st.at <= k) {
+          prev = e;
+        } else {
+          coming = st;
+          break;
+        }
+      }
+      if (coming == null) return null;
+      final start = coming.at - beatK;
+      if (k < start) return null;
+      return (prev ?? eqWhenBegan[deck] ?? EqSet.flat)
+          .lerp(coming.decks[deck]!.eq!, (k - start) / beatK);
+    }
+
     // The levels a stem plan opens with, on the incoming before it makes a sound.
     for (final deck in decks) {
       final open = stemsAt(deck.name, 0);
@@ -1994,6 +2059,8 @@ class Booth extends ChangeNotifier {
       for (final deck in decks) {
         final want = filterAt(deck.name, k);
         if (want != null && (filters[deck] ?? 0) != want) await setFilter(deck, want);
+        final bands = eqAt(deck.name, k);
+        if (bands != null && !bands.closeTo(eqOf(deck))) await setEq(deck, bands);
         final semis = shiftAt(deck.name, k);
         if (semis != null && mixer.canShift && ((_shift[deck] ?? 0) - semis).abs() > 0.02) {
           await setPitchShift(deck, semis);

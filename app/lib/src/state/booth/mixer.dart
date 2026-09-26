@@ -56,6 +56,15 @@ class StemLevels {
         vocals: vocals + (to.vocals - vocals) * t,
       );
 
+  /// The same travel at equal power: each stem's *energy* moves evenly, so two
+  /// records' drums handing over meet at 0.71 each and the room stays as loud as one
+  /// of them. Moved evenly in level they met at 0.5 each — three decibels down for
+  /// the middle of every handover, the dip the fader's full law was written to avoid.
+  StemLevels lerpPower(StemLevels to, double t) {
+    double one(double a, double b) => math.sqrt(a * a + (b * b - a * a) * t.clamp(0.0, 1.0));
+    return StemLevels(drums: one(drums, to.drums), rest: one(rest, to.rest), vocals: one(vocals, to.vocals));
+  }
+
   bool closeTo(StemLevels o) =>
       (drums - o.drums).abs() < 0.005 &&
       (rest - o.rest).abs() < 0.005 &&
@@ -96,6 +105,24 @@ class EqSet {
   }
 
   final double low, mid, high;
+
+  /// Between this and [to], at equal power: each band's *energy* moves evenly, so a
+  /// bass swap — one record's low going out as the other's comes in over the same
+  /// beat — keeps the bass in the room. Travelled evenly in decibels both sat at
+  /// −20 dB half way and the swap was an eleven-decibel hole for a quarter second.
+  EqSet lerp(EqSet to, double t) {
+    final k = t.clamp(0.0, 1.0);
+    double one(double a, double b) {
+      if (a == b) return a;
+      final ga = math.pow(10, a / 20), gb = math.pow(10, b / 20);
+      final g = math.sqrt(ga * ga + (gb * gb - ga * ga) * k);
+      return (20 * math.log(g + 1e-6) / math.ln10).clamp(killed, most);
+    }
+
+    return EqSet(low: one(low, to.low), mid: one(mid, to.mid), high: one(high, to.high));
+  }
+
+  bool closeTo(EqSet o) => (low - o.low).abs() < 0.05 && (mid - o.mid).abs() < 0.05 && (high - o.high).abs() < 0.05;
 
   static const flat = EqSet();
 
