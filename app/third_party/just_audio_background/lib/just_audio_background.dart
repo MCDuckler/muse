@@ -590,16 +590,29 @@ class _PlayerAudioHandler extends BaseAudioHandler
 
   void _updateShuffleIndices() {
     _shuffleIndices = _source?.shuffleIndices ?? [];
-    _effectiveIndices = _shuffleMode != AudioServiceShuffleMode.none
-        ? _shuffleIndices
-        : List.generate(sequence.length, (i) => i);
+    // WetOwl: a shuffle order that does not describe this sequence is no order at all.
+    //
+    // The loop below sizes _shuffleIndicesInv to _effectiveIndices.length and then
+    // writes at _effectiveIndices[i], so it assumes the order is a permutation of
+    // 0..length-1. When it is not, that write is out of range — and on a phone it came
+    // out as "RangeError (length): Invalid value: Only valid value is 0: 1" thrown out
+    // of a track *load*, which left the player dead until the app was restarted.
+    //
+    // It is not a permutation here because this build has more than one player (see
+    // WETOWL.md): every player that becomes active re-applies its shuffle mode to the
+    // one shared handler, and the handler's _source is whichever player last set it.
+    // A deck's one-item source with the main player's order over it is exactly the
+    // length-1 list holding the value 1 that was measured.
+    final n = sequence.length;
+    final usable = _shuffleMode != AudioServiceShuffleMode.none &&
+        _shuffleIndices.length == n &&
+        _shuffleIndices.every((i) => i >= 0 && i < n);
+    _effectiveIndices = usable ? _shuffleIndices : List.generate(n, (i) => i);
     _shuffleIndicesInv = List.filled(_effectiveIndices.length, 0);
     for (var i = 0; i < _effectiveIndices.length; i++) {
       _shuffleIndicesInv[_effectiveIndices[i]] = i;
     }
-    _effectiveIndicesInv = _shuffleMode != AudioServiceShuffleMode.none
-        ? _shuffleIndicesInv
-        : List.generate(sequence.length, (i) => i);
+    _effectiveIndicesInv = usable ? _shuffleIndicesInv : List.generate(n, (i) => i);
   }
 
   List<IndexedAudioSourceMessage> get sequence => _source?.sequence ?? [];
