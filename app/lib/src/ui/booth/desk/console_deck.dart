@@ -364,7 +364,7 @@ class _ConsoleDeckState extends State<ConsoleDeck> with TickerProviderStateMixin
     final small = [
       Pad(
         icon: Icons.start,
-        tooltip: 'Start on the master\'s next bar',
+        tooltip: 'Start on the master\'s next bar, with the four-bar rules lined up',
         onTap: on && !_d.playing && _b.other(_d).playing ? () => _b.startOnBeat(_d) : null,
         width: 42,
         height: 34,
@@ -417,9 +417,7 @@ class _ConsoleDeckState extends State<ConsoleDeck> with TickerProviderStateMixin
       height: 40,
       tooltip: _d.synced
           ? 'Following ${other.name}: tempo and beat · press to let go'
-          : _d.playing
-              ? 'Follow ${other.name}: its tempo and its beat'
-              : 'Follow ${other.name}: its tempo, its beat, and its bars lined up',
+          : 'Follow ${other.name}: its tempo and its beat',
       onTap: _d.track == null || !other.loaded
           ? null
           : () async {

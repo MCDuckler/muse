@@ -775,6 +775,33 @@ class Deck extends ChangeNotifier {
   /// Move the loop's two ends to where its seam will not click, once the sound there
   /// has been read — well before the first time round, which is a bar away at least.
   /// Nothing moves if the loop has changed in the meantime.
+  /// Whether a loop's splice is worth going and reading the record for.
+  ///
+  /// False while the booth is mixing. Reading a seam means two more mpv instances,
+  /// each opening the record — over the network, for a record the house is streaming —
+  /// seeking, decoding and writing a file. That is a lot to ask of a machine that is
+  /// playing two records, and a *roll* asks for it four times over: it catches a loop
+  /// and halves it three times, so eight of them go up in a couple of seconds in the
+  /// middle of a transition. The stutter that cost is worth far more than the click it
+  /// was spent avoiding — and a roll is the loudest thing the booth does, where a
+  /// splice is the last thing anybody can hear.
+  bool findSeams = true;
+
+  Timer? _seamSoon;
+  int _seamTicket = 0;
+
+  /// The splice read once the loop has stopped moving. A hand going down the loop
+  /// buttons moves it several times a second; only where it settles is worth reading.
+  void _seamLater() {
+    _seamSoon?.cancel();
+    if (!findSeams) return;
+    final ticket = ++_seamTicket;
+    _seamSoon = Timer(const Duration(milliseconds: 600), () {
+      if (ticket != _seamTicket || !findSeams) return;
+      unawaited(_quietSeam());
+    });
+  }
+
   Future<void> _quietSeam() async {
     final finder = seamFinder, from = loopStart, to = loopEnd;
     if (finder == null || from == null || to == null) return;
@@ -799,7 +826,8 @@ class Deck extends ChangeNotifier {
     loopEnd = from + beatInRecord * beats;
     _loopBars = beats ~/ 4;
     _watchLoop();
-    unawaited(_loopInEngine().then((_) => _quietSeam()));
+    unawaited(_loopInEngine());
+    _seamLater();
     notifyListeners();
   }
 
@@ -814,7 +842,8 @@ class Deck extends ChangeNotifier {
     if (now <= least) return;
     loopEnd = from + now ~/ 2;
     _loopBars = null;                  // no longer one of the buttons' lengths
-    unawaited(_loopInEngine().then((_) => _quietSeam()));
+    unawaited(_loopInEngine());
+    _seamLater();
     notifyListeners();
   }
 
@@ -872,6 +901,7 @@ class Deck extends ChangeNotifier {
   static const _slowest = 0.12;
 
   void unloop() {
+    _seamSoon?.cancel();
     final was = loopStart != null;
     loopStart = loopEnd = null;
     _loopBars = null;
@@ -938,6 +968,7 @@ class Deck extends ChangeNotifier {
 
   @override
   void dispose() {
+    _seamSoon?.cancel();
     _disposed = true;
     _loop?.cancel();
     for (final s in _subs) {

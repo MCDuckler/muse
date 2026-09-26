@@ -816,9 +816,6 @@ class Booth extends ChangeNotifier {
     // bent there. Not when the follower is parked: it is started on the beat instead
     // ([play]), and a jump then would only take it off it again — a jump lands late.
     _snapNext = deck.playing && m.playing;
-    // And the bars lined up, where the deck is parked: tempo and beat put it in time,
-    // this puts it in the right *place* in the phrase. Silent — it is not playing.
-    if (!deck.playing) await meetThePhrase(deck);
     note(BoothEventKind.sync, '${deck.name} follows ${m.name}', deck: deck);
     _follow();
     notifyListeners();
@@ -890,9 +887,18 @@ class Booth extends ChangeNotifier {
     final soon = m.positionAt(now) + Duration(microseconds: (250000 * m.tempo).round());
     final land = m.nextBeat(soon);
     final mb = land == null || mt == null ? null : mt.smoothBeatAt(land + const Duration(milliseconds: 1));
+    if (ft == null || mt == null || land == null || mb == null) {
+      await deck.play();
+      return;
+    }
+    // The phrase first, where bars are wanted: moved by whole bars so that the tall
+    // four-bar rules down the two strips pass the playhead together. Matching the beat
+    // alone — which is all the rest of this does — puts the record in time and says
+    // nothing about *where* in the phrase it joined. Silent: the deck is parked.
+    if (bars) await _meetThePhrase(m, land, deck);
     final parked = deck.position;
-    final fb = ft?.smoothBeatAt(parked);
-    if (ft == null || mt == null || land == null || mb == null || fb == null) {
+    final fb = ft.smoothBeatAt(parked);
+    if (fb == null) {
       await deck.play();
       return;
     }
@@ -1787,29 +1793,6 @@ class Booth extends ChangeNotifier {
   /// A mix is waiting for its beat, or running.
   bool get busy => arming != null || _running != null;
 
-  /// Line a parked deck's bars up with the master's — the tall rules on the strip.
-  ///
-  /// Matching tempo and beat leaves the two records on the same *beat* and says
-  /// nothing about which beat: a record joined a bar and a half into the master's
-  /// phrase is in time and in the wrong place, and every four-bar rule down the two
-  /// strips passes the playhead at a different moment. This moves the parked one by
-  /// whole bars, two at the most either way, so the rules line up.
-  ///
-  /// Only a parked deck. On one that is playing this is a seek, and a seek is a hole
-  /// in the sound — the beat-holding eases a playing deck into place instead.
-  Future<bool> meetThePhrase(Deck follower) async {
-    final m = other(follower);
-    if (follower.playing || !follower.loaded) return false;
-    final was = follower.position;
-    await _meetThePhrase(m, m.position, follower);
-    final moved = follower.position != was;
-    if (moved) {
-      note(BoothEventKind.cue, '${follower.name} moved to meet ${m.name}\'s bars',
-          deck: follower);
-    }
-    return moved;
-  }
-
   /// Move [to], parked, so it has as many bars left to its next four-bar marker as
   /// [from] will have at [at] — by whole bars, two at the most either way, and never
   /// back past its first downbeat.
@@ -1996,6 +1979,12 @@ class Booth extends ChangeNotifier {
       await mixer.measureLatency(from);
       await mixer.measureLatency(to);
       holdOnBeat(to);
+    }
+    // No seam reading while this runs: the moves that catch a loop halve it three
+    // times over, and each halving would send two more mpv instances off to read the
+    // record. See Deck.findSeams.
+    for (final d in decks) {
+      d.findSeams = false;
     }
     note(BoothEventKind.mix, '${from.name} into ${to.name} · ${kind.name}, $bars bars', deck: to);
     mixing = (kind: kind, from: from.name, to: to.name, bars: bars, k: 0.0);
@@ -2189,6 +2178,9 @@ class Booth extends ChangeNotifier {
         }
         await _plain(from);
         master = to;
+        for (final d in decks) {
+          d.findSeams = true;
+        }
         // The fader is across: the same levels under either law.
         fullLaw = false;
         _done = null;
@@ -2273,6 +2265,11 @@ class Booth extends ChangeNotifier {
     _running?.cancel();
     _running = null;
     mixing = null;
+    // Whatever else a called-off mix leaves behind, it does not leave the decks with
+    // their seam reading switched off for good.
+    for (final d in decks) {
+      d.findSeams = true;
+    }
     unawaited(letGo());
     // What the mix had done to the two channels is undone: stopped halfway, a blend
     // left the incoming with no bass and a sweep left the outgoing filtered — a knob

@@ -250,6 +250,19 @@ class DesktopMixer extends VolumeMixer {
       // decoder folds a six-channel file to stereo before any filter sees it, and the
       // stems arrive as one mix on the first pair and silence on the others.
       await mpv.setProperty('ad-lavc-downmix', 'no');
+      // Every seek to the sample it asked for, not to the packet before it.
+      //
+      // mpv's default weighs exactness against how long a seek takes, and a loop is
+      // nothing but a seek backwards, made over and over: left to that default an
+      // ab-loop lands wherever the decoder can restart cheaply, so the loop comes
+      // round a little differently each time and the record walks off its own grid.
+      // The booth puts a loop's ends on exact samples (quietSeam) and it is worth
+      // nothing if the engine rounds them off again. It is what a hand seek and a
+      // nudge want too — those are small seeks, which is the cheap case anyway.
+      await mpv.setProperty('hr-seek', 'yes');
+      // And the frames either side of the splice kept, so the seek does not have to
+      // go back to the file for them.
+      await mpv.setProperty('demuxer-seekable-cache', 'yes');
     } catch (_) {}
     final was = _stems[deck.name] ?? false;
     _stems[deck.name] = stems;
