@@ -238,7 +238,15 @@ class Planner {
       // Two keys that clash are better out of the way quickly, through the filter, or
       // over drums alone — or mended by a shift, which costs a little of the sound.
       if (shift != 0) {
-        score *= 0.9;
+        // A shift is a last resort, not the standing second option.
+        //
+        // Taken apart, 24,202 tracks across 1,557 real mixes: only 2.5% were
+        // transposed at all, and 94.3% of those by a single semitone (Kim et al.,
+        // ISMIR 2020 — see docs/auto-dj-when.md). DJs solve a key clash by *choosing*
+        // a record that fits, which the set planner already does; they do not pitch
+        // the record on the deck. At a tenth off this beat the unshifted option's own
+        // clash penalty almost every time, which is the opposite way round.
+        score *= 0.55;
         words.add('${shift > 0 ? '+' : ''}${shift.round()} semitone${shift.abs() == 1 ? '' : 's'} to meet the key');
       } else if (!inKey &&
           kind != Transition.sweep &&
@@ -388,8 +396,10 @@ class Planner {
     final n = int.tryParse(c.substring(0, c.length - 1));
     if (n == null) return null;
     final letter = c[c.length - 1];
-    // A semitone up is seven steps round the wheel; a tone up is two.
-    for (final (semitones, steps) in const [(1, 7), (-1, 5), (2, 2), (-2, 10)]) {
+    // A semitone up is seven steps round the wheel. One either way and no further:
+    // of the real transitions that transpose at all, 94.3% move by one semitone, and
+    // a tone is enough to be heard on a voice.
+    for (final (semitones, steps) in const [(1, 7), (-1, 5)]) {
       final shifted = TrackTiming(
           camelot: '${(n - 1 + steps) % 12 + 1}$letter', keyConfidence: to.keyConfidence);
       final m = SetPlanner.keyMove(from, shifted);

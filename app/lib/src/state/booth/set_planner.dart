@@ -73,7 +73,17 @@ class SetPlanner {
     if (fa == null || fb == null) return (0.25, null);
     final ratio = Booth.syncRatio(fb, fa * fromPitch, reach: Booth.bridgeReach);
     if (ratio == null) return (0, 'too far apart in tempo');
-    var t = 0.5 * (1 - ((ratio - 1).abs() / Booth.bridgeReach)).clamp(0.0, 1.0) + 0.1;
+    // How unusual this stretch is, rather than how far along the reach it sits.
+    //
+    // It was a straight line across the whole ±16%, which made 8% cost half of what
+    // 16% costs and treated it as ordinary. It is not: of 20,765 real transitions,
+    // 86.1% stretch under 5%, 94.5% under 10%, 98.6% under 20% — piled at zero and
+    // falling away fast (Kim et al., ISMIR 2020; docs/auto-dj-when.md). Five percent
+    // is where the unusual fifth of them begins, so that is what the curve is scaled
+    // to. The reach itself still says what is *possible*; this says what is normal.
+    const comfortable = 0.05;
+    final off = (ratio - 1).abs() / comfortable;
+    var t = 0.5 * math.exp(-off * off) + 0.1;
     final raw = fb / (fa * fromPitch);
     final octave = raw > math.sqrt2 || raw < 1 / math.sqrt2;
     if (octave) t *= 0.5;

@@ -116,6 +116,7 @@ produce 1, 2, 4 and 12.
 ## 5. Where we differ
 
 Ranked by how much the evidence supports acting, and honest about which are guesses.
+The first two have since been acted on; the rest have not.
 
 **1. We transpose far more than DJs do.** `_shiftToFit` offers ±1 *and* ±2 semitones,
 and `considerMended` puts a shifted variant of the blend, the stem blend and the echo
@@ -126,11 +127,21 @@ single semitone. The move that matches practice is to pick a record that fits �
 not as the standing second option on every clash. *Strongest evidence of
 anything here.*
 
+> **Done.** `_shiftToFit` now offers one semitone either way and no more, and the
+> penalty on a shifted candidate went from ×0.9 to ×0.55 — enough that the unshifted
+> option's own clash penalty beats it in the ordinary case, which is the way round the
+> measurement says it should be.
+
 **2. The tempo penalty is the wrong shape.** `bridgeReach` is ±16%, and `SetPlanner.tempo`
 scores linearly across it: 8% costs half of what 16% costs. The real distribution is
 double-exponential — 86% under 5%, and everything past 10% is the last 5% of transitions.
 A linear penalty treats an 8% stretch as ordinary when it is already unusual. The reach
 itself is defensible as a hard limit; the curve inside it is not.
+
+> **Done.** The term is now a Gaussian falling away from a 5% "comfortable" figure —
+> where the unusual fifth of real transitions begins — instead of a straight line
+> across the reach. A 5% stretch now scores what 10% used to (0.284 against 0.287);
+> 16% is unchanged at the floor. The reach still says what is possible.
 
 **3. Two bar counts are not phrase multiples.** `AutoMix.choose` returns `bars: 12` for a
 sweep and `bars: 2`/`bars: 4` for fades. The measured histogram peaks every 32 beats —
