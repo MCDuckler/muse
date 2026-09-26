@@ -417,7 +417,9 @@ class _ConsoleDeckState extends State<ConsoleDeck> with TickerProviderStateMixin
       height: 40,
       tooltip: _d.synced
           ? 'Following ${other.name}: tempo and beat · press to let go'
-          : 'Follow ${other.name}: its tempo and its beat',
+          : _d.playing
+              ? 'Follow ${other.name}: its tempo and its beat'
+              : 'Follow ${other.name}: its tempo, its beat, and its bars lined up',
       onTap: _d.track == null || !other.loaded
           ? null
           : () async {

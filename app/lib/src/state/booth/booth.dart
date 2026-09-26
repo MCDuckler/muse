@@ -816,6 +816,9 @@ class Booth extends ChangeNotifier {
     // bent there. Not when the follower is parked: it is started on the beat instead
     // ([play]), and a jump then would only take it off it again — a jump lands late.
     _snapNext = deck.playing && m.playing;
+    // And the bars lined up, where the deck is parked: tempo and beat put it in time,
+    // this puts it in the right *place* in the phrase. Silent — it is not playing.
+    if (!deck.playing) await meetThePhrase(deck);
     note(BoothEventKind.sync, '${deck.name} follows ${m.name}', deck: deck);
     _follow();
     notifyListeners();
@@ -1783,6 +1786,29 @@ class Booth extends ChangeNotifier {
 
   /// A mix is waiting for its beat, or running.
   bool get busy => arming != null || _running != null;
+
+  /// Line a parked deck's bars up with the master's — the tall rules on the strip.
+  ///
+  /// Matching tempo and beat leaves the two records on the same *beat* and says
+  /// nothing about which beat: a record joined a bar and a half into the master's
+  /// phrase is in time and in the wrong place, and every four-bar rule down the two
+  /// strips passes the playhead at a different moment. This moves the parked one by
+  /// whole bars, two at the most either way, so the rules line up.
+  ///
+  /// Only a parked deck. On one that is playing this is a seek, and a seek is a hole
+  /// in the sound — the beat-holding eases a playing deck into place instead.
+  Future<bool> meetThePhrase(Deck follower) async {
+    final m = other(follower);
+    if (follower.playing || !follower.loaded) return false;
+    final was = follower.position;
+    await _meetThePhrase(m, m.position, follower);
+    final moved = follower.position != was;
+    if (moved) {
+      note(BoothEventKind.cue, '${follower.name} moved to meet ${m.name}\'s bars',
+          deck: follower);
+    }
+    return moved;
+  }
 
   /// Move [to], parked, so it has as many bars left to its next four-bar marker as
   /// [from] will have at [at] — by whole bars, two at the most either way, and never

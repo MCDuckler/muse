@@ -881,13 +881,50 @@ class Deck extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The loop, where the engine will not hold one itself (everything but a desk).
+  ///
+  /// It was a twenty-millisecond poll asking "are we past the end yet", so the loop
+  /// came round up to twenty milliseconds late — and by a *different* amount each
+  /// time, since where the poll fell against the end wandered. At a hundred and
+  /// twenty a minute that is up to a sixteenth of a beat of slop, arriving early or
+  /// late at random, which is exactly what a loop that will not sit still sounds like.
+  ///
+  /// Two changes. The end is *waited for* rather than polled — slept most of the way
+  /// and then measured again, the way the booth waits for a beat (Booth._until) — so
+  /// the timer fires within a millisecond or so of it. And whatever it is late by is
+  /// carried over: the seek goes to the start plus the overshoot, so the loop keeps
+  /// the record's grid instead of walking off it a little more every time round.
   void _watchLoop() {
     _loop?.cancel();
-    _loop = Timer.periodic(const Duration(milliseconds: 20), (_) {
+    late void Function() again;
+    again = () {
       final end = loopEnd, start = loopStart;
-      if (end == null || start == null || !playing || _engineLooping) return;
-      if (position >= end) unawaited(seek(start));
-    });
+      // Let go of, or the engine took it: unloop cancels the timer, so just stop.
+      if (end == null || start == null || _engineLooping || end <= start) return;
+      if (!playing) {
+        _loop = Timer(const Duration(milliseconds: 20), again);
+        return;
+      }
+      final rate = tempo <= 0 ? 1.0 : tempo;
+      final left = end - position;
+      final wall = Duration(microseconds: (left.inMicroseconds / rate).round());
+      if (wall <= const Duration(milliseconds: 1)) {
+        // However far past the end this landed, the loop starts that far in: the
+        // length stays right and the grid is kept.
+        final over = position - end;
+        final span = end - start;
+        final to = over > Duration.zero && over < span ? start + over : start;
+        unawaited(seek(to));
+        _loop = Timer(const Duration(milliseconds: 4), again);
+        return;
+      }
+      _loop = Timer(
+          wall > const Duration(milliseconds: 24)
+              ? wall - const Duration(milliseconds: 12)
+              : const Duration(milliseconds: 1),
+          again);
+    };
+    again();
   }
 
   // A load can still be under way when the booth goes (the automix prepares in the
