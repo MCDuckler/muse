@@ -268,16 +268,21 @@ class DesktopMixer extends VolumeMixer {
     _levels[deck.name] = levels;
     final mpv = _native(deck);
     if (mpv == null) return;
-    for (final (target, now, before) in [
-      ('volume@d', levels.drums, was?.drums),
-      ('volume@r', levels.rest, was?.rest),
-      ('volume@v', levels.vocals, was?.vocals),
-    ]) {
-      if (before != null && (now - before).abs() < 0.001) continue;
-      try {
-        await mpv.command(['af-command', 'wetowl', 'volume', now.toStringAsFixed(3), target]);
-      } catch (_) {}
-    }
+    // All three at once, not one after another. Each is a round trip to mpv, and a
+    // stem move is these three sent twenty times a second: awaited in turn, the three
+    // trips stacked up and a part change by hand took a third of a second to be heard.
+    // Nothing here depends on the order they land in.
+    await Future.wait([
+      for (final (target, now, before) in [
+        ('volume@d', levels.drums, was?.drums),
+        ('volume@r', levels.rest, was?.rest),
+        ('volume@v', levels.vocals, was?.vocals),
+      ])
+        if (before == null || (now - before).abs() >= 0.001)
+          mpv
+              .command(['af-command', 'wetowl', 'volume', now.toStringAsFixed(3), target])
+              .catchError((Object _) {}),
+    ]);
   }
 
   /// What to tell the standing chain for [eq] and [filter]: (filter, command, value).

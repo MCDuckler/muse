@@ -102,15 +102,37 @@ class Deck extends ChangeNotifier {
 
   /// Turn the stems to [to] — over [over], a step every 20 ms, so a stem coming in or
   /// going out is a move rather than a click.
+  /// The stems moved to [to] over [over] — by the clock on the wall, not by counting
+  /// steps.
+  ///
+  /// It used to be a fixed number of twenty-millisecond steps with the engine awaited
+  /// inside each one, so the true length was the ramp *plus* every round trip it took:
+  /// six steps of three mpv commands each, and a part changed by hand took a third of
+  /// a second to be heard rather than the tenth it asked for. Now the shape is read
+  /// off the elapsed time, so a slow engine takes fewer, larger steps and the move
+  /// still lasts [over]. (The same way VolumeMixer ramps the crossfader.)
   Future<void> setStemLevels(StemLevels to, {Duration over = const Duration(milliseconds: 120)}) async {
     if (!stemmed) return;
     final from = stemLevels;
-    final steps = (over.inMilliseconds / 20).ceil().clamp(1, 200);
-    for (var i = 1; i <= steps; i++) {
-      final l = from.lerp(to, i / steps);
-      stemLevels = l;
-      await stemEngine?.call(this, l);
-      if (i < steps) await Future<void>.delayed(const Duration(milliseconds: 20));
+    if (over <= Duration.zero) {
+      stemLevels = to;
+      await stemEngine?.call(this, to);
+      notifyListeners();
+      return;
+    }
+    const step = Duration(milliseconds: 20);
+    final began = DateTime.now();
+    var slot = step;
+    while (true) {
+      final k =
+          (DateTime.now().difference(began).inMicroseconds / over.inMicroseconds)
+              .clamp(0.0, 1.0);
+      stemLevels = k >= 1 ? to : from.lerp(to, k);
+      await stemEngine?.call(this, stemLevels);
+      if (k >= 1) break;
+      final wait = slot - DateTime.now().difference(began);
+      if (wait > Duration.zero) await Future<void>.delayed(wait);
+      slot += step;
     }
     notifyListeners();
   }

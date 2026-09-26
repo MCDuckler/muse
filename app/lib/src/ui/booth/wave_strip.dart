@@ -18,7 +18,7 @@ import '../mag.dart';
 /// Dragging scrubs: the song moves under the finger, and where it stops is where it
 /// plays from. Drawn from a position notifier so the strip repaints on its own
 /// clock and nothing else does.
-class WaveStrip extends StatelessWidget {
+class WaveStrip extends StatefulWidget {
   const WaveStrip({
     super.key,
     required this.position,
@@ -59,39 +59,71 @@ class WaveStrip extends StatelessWidget {
   final Color? accent;
 
   @override
+  State<WaveStrip> createState() => _WaveStripState();
+}
+
+class _WaveStripState extends State<WaveStrip> {
+  /// Where the record was when the finger went down, and how far it has travelled
+  /// since — in pixels, added up.
+  ///
+  /// Every update used to be read off `position.value`, the *live* playhead, and have
+  /// that update's delta taken off it. Two things move that number while a finger is
+  /// on it: the record is playing, and the seek asked for on the last frame has not
+  /// landed yet — the engine reports where it still is for a few frames after being
+  /// told to move. So each frame subtracted its delta from a base that was somewhere
+  /// else, and the strip stuttered, jumped back, or stuck. Anchored once and measured
+  /// from there, a drag of n pixels is n pixels of record, whatever the engine is
+  /// saying meanwhile. (The same way the EQ knobs take their start; see meters.dart.)
+  Duration? _from;
+  double _by = 0;
+
+  @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final position = widget.position;
+    final window = widget.window;
+    final duration = widget.duration;
+    final onScrub = widget.onScrub;
     return LayoutBuilder(builder: (context, c) {
       final width = c.maxWidth;
       return GestureDetector(
         behavior: HitTestBehavior.opaque,
+        onHorizontalDragStart: onScrub == null
+            ? null
+            : (_) {
+                _from = position.value;
+                _by = 0;
+              },
+        onHorizontalDragEnd: onScrub == null ? null : (_) => _from = null,
+        onHorizontalDragCancel: onScrub == null ? null : () => _from = null,
         onHorizontalDragUpdate: onScrub == null
             ? null
             : (d) {
+                final from = _from ??= position.value;
+                _by += d.delta.dx;
                 final perPixel = window.inMicroseconds / width;
-                final at = position.value -
-                    Duration(microseconds: (d.delta.dx * perPixel).round());
-                onScrub!(Duration(
+                final at = from - Duration(microseconds: (_by * perPixel).round());
+                onScrub(Duration(
                     microseconds: at.inMicroseconds.clamp(0, duration.inMicroseconds)));
               },
         child: SizedBox(
           // As wide as it is given: a painter with no child is as wide as nothing.
           width: width,
-          height: height,
+          height: widget.height,
           child: RepaintBoundary(
             child: CustomPaint(
               painter: _StripPainter(
                 position: position,
-                timing: timing,
-                bands: bands,
+                timing: widget.timing,
+                bands: widget.bands,
                 duration: duration,
                 window: window,
-                loop: loop,
-                hotCues: hotCues,
-                markAt: markAt,
-                mirrored: mirrored,
+                loop: widget.loop,
+                hotCues: widget.hotCues,
+                markAt: widget.markAt,
+                mirrored: widget.mirrored,
                 ink: scheme.onSurface,
-                accent: accent ?? scheme.primary,
+                accent: widget.accent ?? scheme.primary,
                 paper: scheme.surface,
                 quiet: scheme.onSurfaceVariant,
               ),

@@ -979,6 +979,7 @@ class Booth extends ChangeNotifier {
     // after a jump, how far short the jump landed. Both are learned for next time.
     var firstReading = true;
     var afterJump = false;
+    var saidLost = false;
     _lock = Timer.periodic(const Duration(milliseconds: 50), (t) async {
       if (!follower.playing || !m.playing || !identical(other(follower), m)) {
         t.cancel();
@@ -1057,11 +1058,37 @@ class Booth extends ChangeNotifier {
       }
       final l = levelsFor(crossfader, full: fullLaw);
       final share = identical(follower, a) ? l.a : l.b;
+      final heardNow = share >= 0.25;
       // Twice at most while it cannot be heard: the first reading after a start is
       // the engine's least reliable, and a jump can land a little short.
-      final quiet = (moved < 2 && ms.abs() > 20 && share < 0.25) ||
+      final quiet = (moved < 2 && ms.abs() > 20 && !heardNow) ||
           (snap && moved == 0 && ms.abs() > 40);
-      final lost = ms.abs() > 150 && now.difference(lastMove) > const Duration(seconds: 1);
+      // Lost the beat entirely — but *only* while nothing can hear it.
+      //
+      // This used to fire whatever the fader was doing, and it is the stutter. A jump
+      // is a seek, and a seek is a hole in the sound. An error the bend cannot clear
+      // inside a second — anything past about 40 ms, where the bend saturates at 6% —
+      // met this rule a second later, jumped, landed short (a jump always does, which
+      // is what _jumpCarry is for), and met it again a second after that. A record
+      // that would not settle was therefore seeked once a second, out loud, for as
+      // long as it played.
+      //
+      // The bend alone clears 60 ms a second at its 6% limit, so even half a beat is
+      // gone in four seconds without a sound. That is slower than a jump and worth it:
+      // nobody hears four seconds of a beat easing into place, and everybody hears one
+      // seek.
+      final lost = ms.abs() > 150 &&
+          !heardNow &&
+          now.difference(lastMove) > const Duration(seconds: 1);
+      // Said once, so a record that will not settle while it is playing is something
+      // the log knows about rather than something only the bend quietly fights.
+      if (!saidLost && heardNow && ms.abs() > 150 &&
+          now.difference(began) > const Duration(seconds: 6)) {
+        saidLost = true;
+        note(BoothEventKind.trouble,
+            '${follower.name} is ${ms.round()} ms off and being bent back, not jumped',
+            deck: follower);
+      }
       if (quiet || lost) {
         // Too far to bend in time: moved, once, while it is still quiet — or
         // whenever it is so far out that it is two records rather than one.

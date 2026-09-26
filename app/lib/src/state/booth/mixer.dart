@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
@@ -84,23 +83,53 @@ class EqSet {
   /// How far up a band can be turned. A mixer's EQ gives a little and takes a lot.
   static const most = 6.0;
 
-  /// Where on a knob's travel, 0 to 1, a band at [db] sits — as on a DJ mixer: straight
-  /// up (0.5) is flat, the right half the boost to [most], the left half the cut, gentle
-  /// near the middle and falling away to the kill at the stop (an audio taper: nine
-  /// o'clock is -12 dB, seven -24). The knobs were straight lines from -24 to +6, which
-  /// put flat at two o'clock and every knob at rest pointing somewhere it should not.
+  /// Where on a knob's travel, 0 to 1, a band at [db] sits — as on a DJ mixer:
+  /// straight up (0.5) is flat, the right half the boost to [most], the left half the
+  /// cut, and the kill at the stop.
+  ///
+  /// The cut is in three pieces, and the first of them is the one that matters. Over
+  /// the first half of the travel down it gives 6 dB — twice the rate of the boost
+  /// side, which is about how a mixer feels — then falls away to -20 dB by nine tenths
+  /// and to the kill at the stop.
+  ///
+  /// It was a log taper before (`40·log10(t/2)`), and it took far too much far too
+  /// soon: a tenth of the travel below centre was already -1.8 dB where a tenth above
+  /// was +0.6, and a fifth below was -3.9 against +1.2 above. Three and a quarter times
+  /// as much for the same movement of the hand, right where a hand makes its small
+  /// adjustments. A quarter of the travel down was -12 dB. Now a tenth down is -1.2
+  /// against +0.6 up, and the band is still gone by the stop.
+  static const _cutHalf = -6.0;    // half way down
+  static const _cutLate = -20.0;   // nine tenths down
+  static const _lateAt = 0.9;
+
+  /// The cut, in decibels, [f] of the way from flat (0) to the stop (1).
+  static double _cut(double f) {
+    if (f <= 0.5) return _cutHalf * (f / 0.5);
+    if (f <= _lateAt) return _cutHalf + (_cutLate - _cutHalf) * (f - 0.5) / (_lateAt - 0.5);
+    return _cutLate + (killed - _cutLate) * (f - _lateAt) / (1 - _lateAt);
+  }
+
+  /// [_cut] turned round: how far down the travel a cut of [db] sits.
+  static double _cutAt(double db) {
+    if (db >= 0) return 0;
+    if (db <= killed) return 1;
+    if (db >= _cutHalf) return 0.5 * (db / _cutHalf);
+    if (db >= _cutLate) return 0.5 + (_lateAt - 0.5) * (db - _cutHalf) / (_cutLate - _cutHalf);
+    return _lateAt + (1 - _lateAt) * (db - _cutLate) / (killed - _cutLate);
+  }
+
   static double knobOf(double db) {
     if (db <= killed) return 0;
     if (db >= 0) return 0.5 + 0.5 * (db / most).clamp(0.0, 1.0);
-    return (0.5 * math.pow(10, db / 40)).clamp(0.0, 0.5).toDouble();
+    return (0.5 - 0.5 * _cutAt(db)).clamp(0.0, 0.5);
   }
 
   /// The band a knob at [t] sets: [knobOf] turned round. The last of the travel is the
   /// kill.
   static double dbOf(double t) {
     if (t >= 0.5) return most * ((t - 0.5) / 0.5).clamp(0.0, 1.0);
-    if (t <= 0.02) return killed;
-    final db = 40 * math.log(t / 0.5) / math.ln10;
+    if (t <= 0) return killed;
+    final db = _cut(((0.5 - t) / 0.5).clamp(0.0, 1.0));
     return db <= killed ? killed : db;
   }
 
