@@ -887,7 +887,7 @@ class Booth extends ChangeNotifier {
       const most = Duration(milliseconds: 150);
       deck.syncTrim = trimmed > most ? most : trimmed < -most ? -most : trimmed;
     }
-    await deck.nudge(by);
+    await deck.nudgeByHand(by);
   }
 
   /// The pitch fader, by hand. Moving a synced deck's fader is taking it back, so its

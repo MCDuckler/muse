@@ -190,6 +190,25 @@ class Deck extends ChangeNotifier {
   /// is — a seek, a start, a stall, a loop jumping back — is believed outright.
   void _anchor(Duration at) {
     final now = DateTime.now();
+    // A seek asked for and not yet arrived: the engine goes on reporting where it
+    // still is for a few frames, and those frames are a lie about where the record is.
+    //
+    // Taken at face value they were the worst of the jitter: every report during a
+    // drag fell into the `!_trusting` branch below and put the playhead *back* where
+    // the engine had not yet left, so the record fought the finger all the way across.
+    // Reports are ignored until one lands near where the seek was aimed — or until it
+    // is plain the seek is not going to be answered.
+    final settling = _settling;
+    if (settling != null) {
+      if ((at - settling).abs() <= const Duration(milliseconds: 120)) {
+        _settling = null;
+      } else if (now.difference(_settlingAt) < const Duration(milliseconds: 1500)) {
+        return;
+      } else {
+        // The engine never got there. Believe it again rather than freeze the screen.
+        _settling = null;
+      }
+    }
     if (!_trusting || !playing) {
       _fix = at;
       _fixedAt = now;
@@ -509,7 +528,6 @@ class Deck extends ChangeNotifier {
       }
     }
     final was = playing;
-    final at = position;
     this.part = part;
     final before = _turn;
     final mine = Completer<void>();
@@ -520,6 +538,12 @@ class Deck extends ChangeNotifier {
       // Where the record will be when the load is done, not where it is now: a load
       // takes a moment, and a deck that comes back a moment behind is out of time.
       final began = DateTime.now();
+      // Read *here*, not before the wait above. That wait is the other deck's turn at
+      // the engine and lasts as long as its load — up to [_waitForATurn] — and the
+      // record plays on through all of it. Taken beforehand, the part came back that
+      // whole wait behind the beat, and only when the other deck happened to be
+      // loading: which is what "changing the stems misaligns it, sometimes" was.
+      final at = position;
       await _player.setAudioSource(_sourceFor(t), initialPosition: at);
       if (tempo != 1.0) await _player.setSpeed(tempo);
       var there = at;
@@ -583,13 +607,72 @@ class Deck extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Where a seek was aimed and when, until the engine reports having got there.
+  Duration? _settling;
+  DateTime _settlingAt = DateTime.now();
+
   Future<void> seek(Duration to) async {
     _fix = to;
     _fixedAt = DateTime.now();
     _trusting = false;
+    _settling = to;
+    _settlingAt = _fixedAt;
     await _player.seek(to);
     notifyListeners();
   }
+
+  /// Where a hand has asked this record to be, kept until the engine has caught up.
+  ///
+  /// Not the same as [position]: the engine goes on reporting where it still is for a
+  /// few frames after being told to move, and a second nudge read off *that* is a
+  /// nudge measured from the wrong place.
+  Duration? _aim;
+  bool _seeking = false;
+  bool _seekAgain = false;
+
+  /// Where the record is headed — what a hand has asked for if it has asked for
+  /// anything, and where it actually is otherwise.
+  Duration get aimedAt => _aim ?? position;
+
+  /// Move the record by hand: dragged on the waveform, or nudged with a button.
+  ///
+  /// One seek in flight at a time, and the newest target wins. Dragging fired a seek
+  /// on every pointer frame — a hundred and twenty a second on a fast screen — with
+  /// nothing awaiting them, so they queued in the engine and were worked through long
+  /// after the finger had stopped: the record lurched about catching up with where the
+  /// hand had been. Now the screen follows at once (the fix is set before anything is
+  /// awaited) and the engine is told again only once it has answered.
+  Future<void> seekByHand(Duration to) async {
+    final at = to < Duration.zero ? Duration.zero : to;
+    _aim = at;
+    _fix = at;
+    _fixedAt = DateTime.now();
+    _trusting = false;
+    _settling = at;
+    _settlingAt = _fixedAt;
+    notifyListeners();
+    if (_seeking) {
+      _seekAgain = true;
+      return;
+    }
+    _seeking = true;
+    try {
+      do {
+        _seekAgain = false;
+        await _player.seek(_aim ?? at);
+      } while (_seekAgain);
+    } finally {
+      _seeking = false;
+      _aim = null;
+      notifyListeners();
+    }
+  }
+
+  /// Nudge by [by] — from where the hand has already asked for, not from where the
+  /// engine says the record is. Read off the engine, a second press within the few
+  /// frames a seek takes to land measured from the old place and threw the first
+  /// nudge away, which is what made the arrows feel like they were missing presses.
+  Future<void> nudgeByHand(Duration by) => seekByHand(aimedAt + by);
 
   /// A little forwards or back, to bring the beats in line: the DJ's nudge.
   Future<void> nudge(Duration by) => seek(position + by);

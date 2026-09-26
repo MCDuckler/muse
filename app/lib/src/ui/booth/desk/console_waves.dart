@@ -105,7 +105,7 @@ class _Lane extends StatelessWidget {
                     window: Duration(microseconds: (16e6 * deck.pitch).round()),
                     mirrored: mirrored,
                     accent: c,
-                    onScrub: (to) => unawaited(deck.seek(to)),
+                    onScrub: (to) => unawaited(deck.seekByHand(to)),
                   ),
           ),
           SizedBox(width: 62, child: _Left(deck: deck)),
