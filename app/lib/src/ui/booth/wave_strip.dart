@@ -135,6 +135,29 @@ class _WaveStripState extends State<WaveStrip> {
   }
 }
 
+/// Words already measured, kept between frames.
+///
+/// Laying a TextSpan out is shaping it — choosing glyphs, measuring them, breaking
+/// the line — and the strip was doing that from scratch on every frame for every
+/// section name, every phrase number, every DROP and every flag, on two lanes at
+/// sixty frames a second. None of those strings change. They are measured once here
+/// and drawn from then on, which is the difference between the strip costing a
+/// dozen text layouts a frame and none.
+final _laidOut = <(String, TextStyle), TextPainter>{};
+
+TextPainter _measured(String text, TextStyle style) {
+  final key = (text, style);
+  final had = _laidOut[key];
+  if (had != null) return had;
+  // A record's bar numbers are the only unbounded part of this, and a long one has a
+  // few hundred: cleared rather than grown without end.
+  if (_laidOut.length > 400) _laidOut.clear();
+  final tp = TextPainter(text: TextSpan(text: text, style: style), textDirection: TextDirection.ltr)
+    ..layout();
+  _laidOut[key] = tp;
+  return tp;
+}
+
 class _StripPainter extends CustomPainter {
   _StripPainter({
     required this.position,
@@ -204,10 +227,8 @@ class _StripPainter extends CustomPainter {
         }
         if (x0 >= 0 && x0 <= w) {
           canvas.drawLine(Offset(x0, 0), Offset(x0, h), Paint()..color = quiet.withValues(alpha: 0.35)..strokeWidth = 1);
-          final tp = TextPainter(
-            text: TextSpan(text: s.label.toUpperCase(), style: TextStyle(fontSize: 7.5, letterSpacing: 0.8, color: quiet, fontWeight: FontWeight.w700)),
-            textDirection: TextDirection.ltr,
-          )..layout();
+          final tp = _measured(s.label.toUpperCase(),
+              TextStyle(fontSize: 7.5, letterSpacing: 0.8, color: quiet, fontWeight: FontWeight.w700));
           canvas.save();
           if (mirrored) {
             canvas.translate(x0 + 3, h - 2);
@@ -304,11 +325,12 @@ class _StripPainter extends CustomPainter {
       }
       // Phrases: a bracket along the head, with the bar count typed at its start.
       final phrases = t.phrases;
+      // Hoisted: a Paint built inside the loop is one allocation per phrase per frame.
+      final bracket = Paint()..color = ink.withValues(alpha: 0.55)..strokeWidth = 1;
       for (var i = 0; i < phrases.length; i++) {
         final x = xOf(phrases[i] * 1000.0);
         final end = i + 1 < phrases.length ? xOf(phrases[i + 1] * 1000.0) : w + 20;
         if (end < 0 || x > w) continue;
-        final bracket = Paint()..color = ink.withValues(alpha: 0.55)..strokeWidth = 1;
         canvas.drawLine(Offset(math.max(0, x), 4), Offset(math.min(w, end - 3), 4), bracket);
         canvas.drawLine(Offset(x, 4), Offset(x, 10), bracket);
         _type(canvas, '${i + 1}', Offset(x + 3, 5), quiet, 8);
@@ -373,21 +395,14 @@ class _StripPainter extends CustomPainter {
     final c = hot ? ink : accent;
     canvas.drawLine(Offset(x, 12), Offset(x, h - 12),
         Paint()..color = c.withValues(alpha: 0.7)..strokeWidth = 1);
-    final tp = TextPainter(
-      text: TextSpan(text: text, style: Mag.flag(7.5, color: paper)),
-      textDirection: TextDirection.ltr,
-    )..layout();
+    final tp = _measured(text, Mag.flag(7.5, color: paper));
     final box = Rect.fromLTWH(x, 12, tp.width + 6, tp.height + 3);
     canvas.drawRect(box, Paint()..color = c);
     _write(canvas, tp, Offset(x + 3, 13.5));
   }
 
   void _type(Canvas canvas, String text, Offset at, Color c, double size) {
-    final tp = TextPainter(
-      text: TextSpan(text: text, style: Mag.typewriter(size, color: c)),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    _write(canvas, tp, at);
+    _write(canvas, _measured(text, Mag.typewriter(size, color: c)), at);
   }
 
   /// Words the right way up, whichever way the strip is drawn: the shape and the

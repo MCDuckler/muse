@@ -259,57 +259,108 @@ class _MixButtonState extends State<MixButton> with SingleTickerProviderStateMix
 /// of these does the pair on one press, on one beat. Lit only when the band is
 /// lopsided (Booth.bandLopsided): with both decks' lows up, swapping them is a
 /// shuffle, not a move.
+///
+/// Laid out by *mirroring* the channel beside it rather than by centring: the knobs
+/// are a name, a gap and then one knob per band — or two rows of two on a short screen
+/// — and a column of three buttons centred in the whole strip sat against the faders,
+/// nowhere near the bands they belong to. The spacers here are the channel's spacers,
+/// and each button is centred in a box the height of a knob's dial with the same
+/// invisible label under it, so the two columns keep step whatever the text measures.
 class _BandSwaps extends StatelessWidget {
   const _BandSwaps({required this.booth});
   final Booth booth;
 
   @override
   Widget build(BuildContext context) {
-    Widget one(int band, String label) {
+    Widget button(int band, String label, double dial) {
       final on = booth.mixer.canKill && booth.bandLopsided(band);
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3),
-        child: Tooltip(
-          message: on
-              ? 'Hand the $label over: what A has, B gets'
-              : 'Take one deck\'s $label down to hand it over',
-          child: Semantics(
-            button: true,
-            enabled: on,
-            label: 'Swap the $label between the decks',
-            child: InkWell(
-              onTap: on
-                  ? () {
-                      feel(Feel.pick);
-                      unawaited(booth.swapBand(band));
-                    }
-                  : null,
-              borderRadius: BorderRadius.circular(4),
-              child: Container(
-                width: 26,
-                height: 22,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: on ? Console.raised : null,
-                  borderRadius: BorderRadius.circular(4),
-                  border: Border.all(color: on ? Console.ink : Console.line),
-                ),
-                child: Text(label,
-                    style: Console.label(8, color: on ? Console.ink : Console.quiet)),
+      return Tooltip(
+        message: on
+            ? 'Hand the $label over: what A has, B gets'
+            : 'Take one deck\'s $label down to hand it over',
+        child: Semantics(
+          button: true,
+          enabled: on,
+          label: 'Swap the $label between the decks',
+          child: InkWell(
+            onTap: on
+                ? () {
+                    feel(Feel.pick);
+                    unawaited(booth.swapBand(band));
+                  }
+                : null,
+            borderRadius: BorderRadius.circular(4),
+            child: Container(
+              width: 32,
+              height: dial.clamp(16.0, 22.0),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: on ? Console.raised : null,
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: on ? Console.ink : Console.line),
               ),
+              // One line, always: "LOW" in a narrow box wrapped to "LO / W".
+              child: Text(label,
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.visible,
+                  style: Console.label(8, color: on ? Console.ink : Console.quiet)),
             ),
           ),
         ),
       );
     }
 
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 6),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [one(2, 'HI'), one(1, 'MID'), one(0, 'LOW')],
-      ),
-    );
+    /// One knob's worth of height: the dial, the three points under it and the label,
+    /// with [inside] centred on the dial. The label is there and invisible so this
+    /// column measures exactly what the channel's does.
+    Widget slot(double dial, Widget inside) => Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(height: dial, child: Center(child: inside)),
+            const SizedBox(height: 3),
+            Opacity(opacity: 0, child: Text('X', style: Console.label(8))),
+          ],
+        );
+
+    return LayoutBuilder(builder: (context, box) {
+      // The same question the channel asks itself, from the same constraint.
+      final short = box.maxHeight < 440;
+      final k = short ? 30.0 : 36.0;
+      final gap = short ? 4.0 : 6.0;
+      final rows = short
+          ? [
+              // Two rows of two knobs: HI and MID share the first, LOW has the second.
+              slot(
+                  k,
+                  Row(mainAxisSize: MainAxisSize.min, children: [
+                    button(2, 'HI', k),
+                    const SizedBox(width: 3),
+                    button(1, 'MID', k),
+                  ])),
+              SizedBox(height: gap),
+              slot(k, button(0, 'LOW', k)),
+            ]
+          : [
+              slot(k, button(2, 'HI', k)),
+              SizedBox(height: gap),
+              slot(k, button(1, 'MID', k)),
+              SizedBox(height: gap),
+              slot(k, button(0, 'LOW', k)),
+            ];
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // The deck's name above the knobs, taking its height and showing nothing.
+            Opacity(opacity: 0, child: Text('A', style: Mag.numerals(18))),
+            SizedBox(height: gap + 2),
+            ...rows,
+          ],
+        ),
+      );
+    });
   }
 }
 
