@@ -132,6 +132,36 @@ void main() {
 
     tearDown(() => booth.dispose());
 
+    test('a band is handed across, and only offered when that is a move', () async {
+      // Both flat: swapping them would be a shuffle, so nothing is offered.
+      expect(booth.bandLopsided(0), isFalse);
+
+      // A's low killed, B's up — the shape a bass swap happens in.
+      await booth.setEq(booth.a, const EqSet(low: EqSet.killed));
+      expect(booth.bandLopsided(0), isTrue);
+      expect(booth.bandLopsided(1), isFalse, reason: 'only the band that is lopsided');
+
+      await booth.swapBand(0);
+      expect(booth.eqOf(booth.a).low, 0, reason: 'A gets what B had');
+      expect(booth.eqOf(booth.b).low, EqSet.killed, reason: 'B gets what A had');
+      // And the other bands are left alone.
+      expect(booth.eqOf(booth.a).mid, 0);
+      expect(booth.eqOf(booth.b).high, 0);
+      // Swapped back, it is the same the other way.
+      await booth.swapBand(0);
+      expect(booth.eqOf(booth.a).low, EqSet.killed);
+      expect(booth.eqOf(booth.b).low, 0);
+    });
+
+    test('nearly down counts as down for a hand-over', () async {
+      // Not killed, but far enough down that the swap is the move being made.
+      await booth.setEq(booth.b, const EqSet(low: -18));
+      expect(booth.bandLopsided(0), isTrue);
+      await booth.swapBand(0);
+      expect(booth.eqOf(booth.a).low, -18);
+      expect(booth.eqOf(booth.b).low, 0);
+    });
+
     test('each deck says which it is as its record goes on, never before', () async {
       // A browser makes the thing that plays a record when the record is handed to
       // it, so a claim made any earlier is a claim for an element that does not

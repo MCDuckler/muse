@@ -38,7 +38,7 @@ class _ConsoleMixerState extends State<ConsoleMixer> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Expanded(child: _Channel(booth: _b, deck: _b.a)),
-                Container(width: 1, color: Console.line, margin: const EdgeInsets.symmetric(horizontal: 8)),
+                _BandSwaps(booth: _b),
                 Expanded(child: _Channel(booth: _b, deck: _b.b)),
               ],
             ),
@@ -250,6 +250,67 @@ class _MixButtonState extends State<MixButton> with SingleTickerProviderStateMix
           );
         },
       );
+}
+
+/// The three hand-overs, down the line between the two channels.
+///
+/// A bass swap is two hands at once — one record's bottom out as the other's comes up
+/// — and doing it with two knobs means it happens over however long that takes. Each
+/// of these does the pair on one press, on one beat. Lit only when the band is
+/// lopsided (Booth.bandLopsided): with both decks' lows up, swapping them is a
+/// shuffle, not a move.
+class _BandSwaps extends StatelessWidget {
+  const _BandSwaps({required this.booth});
+  final Booth booth;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget one(int band, String label) {
+      final on = booth.mixer.canKill && booth.bandLopsided(band);
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Tooltip(
+          message: on
+              ? 'Hand the $label over: what A has, B gets'
+              : 'Take one deck\'s $label down to hand it over',
+          child: Semantics(
+            button: true,
+            enabled: on,
+            label: 'Swap the $label between the decks',
+            child: InkWell(
+              onTap: on
+                  ? () {
+                      feel(Feel.pick);
+                      unawaited(booth.swapBand(band));
+                    }
+                  : null,
+              borderRadius: BorderRadius.circular(4),
+              child: Container(
+                width: 26,
+                height: 22,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: on ? Console.raised : null,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: on ? Console.ink : Console.line),
+                ),
+                child: Text(label,
+                    style: Console.label(8, color: on ? Console.ink : Console.quiet)),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 6),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [one(2, 'HI'), one(1, 'MID'), one(0, 'LOW')],
+      ),
+    );
+  }
 }
 
 /// One channel: its three bands, its filter, its fader and its level.

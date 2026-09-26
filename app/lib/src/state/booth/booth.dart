@@ -627,6 +627,44 @@ class Booth extends ChangeNotifier {
     await mixer.setEq(d, want);
   }
 
+  /// Whether [band] (0 low, 1 mid, 2 high) is lopsided across the two decks: one of
+  /// them has it killed or nearly down and the other has not.
+  ///
+  /// This is the shape a bass swap is *about* to happen in — one record's bottom taken
+  /// out under the other's — and the only shape where swapping the two is a move
+  /// rather than a shuffle.
+  static const _lowEnough = -11.0;
+
+  double _bandOf(Deck d, int band) => switch (band) {
+        0 => eqOf(d).low,
+        1 => eqOf(d).mid,
+        _ => eqOf(d).high,
+      };
+
+  bool bandLopsided(int band) {
+    final x = _bandOf(a, band), y = _bandOf(b, band);
+    return (x <= _lowEnough) != (y <= _lowEnough);
+  }
+
+  /// [band] handed across: what A had, B gets, and the other way round.
+  ///
+  /// The move every DJ makes with two hands at once — the new record's bass up as the
+  /// old one's goes — done on one button so the two happen on the same beat instead of
+  /// however fast two knobs can be turned.
+  Future<void> swapBand(int band) async {
+    final x = _bandOf(a, band), y = _bandOf(b, band);
+    if (x == y) return;
+    EqSet put(EqSet on, double db) => switch (band) {
+          0 => on.withLow(db),
+          1 => on.withMid(db),
+          _ => on.withHigh(db),
+        };
+    await setEq(a, put(eqOf(a), y));
+    await setEq(b, put(eqOf(b), x));
+    note(BoothEventKind.cue,
+        '${switch (band) { 0 => 'Low', 1 => 'Mid', _ => 'High' }} swapped between the decks');
+  }
+
   /// One band all the way down, or back to flat.
   Future<void> kill(Deck d, int band, bool on) => setEq(d, eqOf(d).killing(band, on));
 
