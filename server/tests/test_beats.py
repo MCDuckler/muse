@@ -234,6 +234,81 @@ def test_a_fast_record_is_given_the_tempo_a_dj_counts(tmp_path):
     assert beats.measure(f)["bpm"] == pytest.approx(bpm, abs=0.05)
 
 
+def test_a_break_is_counted_at_the_tempo_it_is_mixed_at(tmp_path):
+    """Liquid drum & bass at 174 came back at 87, and twelve of one artist's records in
+    the library were sitting there.
+
+    A break has its kick on the one and its snare on the three exactly as a rap record
+    at 87 does, so it repeats best at 87 and the kick says nothing against that. The
+    two were told apart by how busy the record is: at the tempo a DJ counts, a record
+    does one or two things a beat, and three or more means the beat being counted is
+    two beats. Measured on four of each from the library, the classes do not overlap.
+    """
+    rng = np.random.default_rng(11)
+    bpm, seconds = 174.0, 60
+    n = int(RATE * seconds)
+    x = np.zeros(n)
+    t = np.arange(int(RATE * 0.22)) / RATE
+    kick = np.sin(2 * np.pi * (48 + 70 * np.exp(-t * 32)) * t) * np.exp(-t * 16)
+    sn = rng.standard_normal(int(RATE * 0.12)) * np.exp(-np.arange(int(RATE * 0.12)) / (RATE * 0.035)) * 0.55
+    hat = rng.standard_normal(int(RATE * 0.025)) * np.exp(-np.arange(int(RATE * 0.025)) / (RATE * 0.005)) * 0.22
+    beat = 60.0 / bpm
+    k = 0
+    while k * beat < seconds - 0.4:
+        at = int(k * beat * RATE)
+        # The kick on one and three of the bar, the snare on two and four — the shape
+        # that reads as 87 to everything that only looks for a pulse.
+        if k % 4 in (0, 2):
+            x[at:at + len(kick)] += kick[: n - at]
+        if k % 4 in (1, 3):
+            x[at:at + len(sn)] += sn[: n - at]
+        for e in (0.0, 0.5):
+            o = int((k + e) * beat * RATE)
+            if o + len(hat) < n:
+                x[o:o + len(hat)] += hat
+        k += 1
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(RATE)
+        w.writeframes((np.clip(x * 0.6, -1, 1) * 32767).astype("<i2").tobytes())
+    f = tmp_path / "break.wav"
+    f.write_bytes(out.getvalue())
+    assert beats.measure(f)["bpm"] == pytest.approx(bpm, abs=0.6)
+
+
+def test_a_slow_record_is_not_hurried_by_being_sparse(tmp_path):
+    """The other half of the same rule, and the one that keeps it honest: a rap record
+    at 88 has its kick on the one and its snare on the three too, and must stay at 88.
+    What it does not have is the break's traffic between the beats."""
+    rng = np.random.default_rng(12)
+    bpm, seconds = 88.0, 60
+    n = int(RATE * seconds)
+    x = np.zeros(n)
+    t = np.arange(int(RATE * 0.3)) / RATE
+    kick = np.sin(2 * np.pi * (46 + 60 * np.exp(-t * 26)) * t) * np.exp(-t * 11)
+    sn = rng.standard_normal(int(RATE * 0.14)) * np.exp(-np.arange(int(RATE * 0.14)) / (RATE * 0.04)) * 0.5
+    beat = 60.0 / bpm
+    k = 0
+    while k * beat < seconds - 0.5:
+        at = int(k * beat * RATE)
+        if k % 4 in (0, 2):
+            x[at:at + len(kick)] += kick[: n - at]
+        if k % 4 in (1, 3):
+            x[at:at + len(sn)] += sn[: n - at]
+        k += 1
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(RATE)
+        w.writeframes((np.clip(x * 0.6, -1, 1) * 32767).astype("<i2").tobytes())
+    f = tmp_path / "slow.wav"
+    f.write_bytes(out.getvalue())
+    assert beats.measure(f)["bpm"] == pytest.approx(bpm, abs=0.6)
+
+
 def test_the_bar_starts_where_the_record_changes(tmp_path):
     """Four-on-the-floor: every beat has the same kick, so the bass cannot say which is
     the one. The record can: its sections change there. Here a chord changes every

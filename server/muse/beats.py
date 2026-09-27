@@ -45,7 +45,7 @@ from . import analysis
 # 6: an exact grid carried on to where the sound starts and ends (the tracker lost the
 #    first two or three beats of nearly every record, and with them its first bar),
 #    and the four-bar markers where the record's sections start (four_bars).
-VERSION = 8  # 7: the outro found by change, not only by quiet; 8: a change the record gets louder over is no way out, and the marker rule for the intro only where the phrase rule is late
+VERSION = 9  # 8: a change the record gets louder over is no way out; 9: a record too busy for the tempo found is counted at the double (drum & bass came back at half)
 
 _RATE = 11025
 _FFT = 1024
@@ -294,7 +294,61 @@ def _fine(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return band(30.0, 150.0), band(30.0, 5000.0)
 
 
-def _level(x: np.ndarray, bpm: float) -> float:
+def _busy(env: np.ndarray, bpm: float) -> float:
+    """How many things happen in the record per beat of [bpm].
+
+    The tempo a DJ counts is not only a matter of where the pulse is — half and double
+    are both pulses — but of how much the record does between one beat and the next.
+    At the counted tempo a dance record does one or two things a beat: the kick, and
+    something on the off-beat. Three or more, and the beat being counted is two beats.
+
+    That is the difference between a drum & bass record and a rap record, which is
+    where this was losing: both have their kick on the one and their snare on the
+    three, both autocorrelate best at eighty-seven, and one of them is a hundred and
+    seventy-four. What tells them apart is that the break is busy and the rap is not.
+
+    Measured on eight records of the library it was getting wrong and right — four
+    liquid drum & bass, four German rap — the two do not overlap and are not close:
+    2.76 to 3.12 against 1.86 to 2.26. Peaks in the onset envelope that clear its own
+    spread, per beat.
+    """
+    if len(env) < 16 or bpm <= 0:
+        return 0.0
+    e = env - env.mean()
+    spread = float(e.std())
+    if spread <= 0:
+        return 0.0
+    inner = e[1:-1]
+    peaks = int(((inner > e[:-2]) & (inner >= e[2:]) & (inner > spread)).sum())
+    seconds = len(env) / _FPS
+    return peaks / seconds / (bpm / 60.0) if seconds > 0 else 0.0
+
+
+# Onsets a beat past which the tempo found may be half the one it would be counted at.
+#
+# On the two classes this was drawn from — four liquid drum & bass records and four
+# German rap records — they sat either side of this with room to spare. On twenty taken
+# at random from the same band of the library they do not: a synth-pop record at 91 is
+# as busy as a break at 174, and eleven of the twenty doubled, which is not fine tuning,
+# it is re-tempoing the library. So this is not enough on its own.
+_BUSY_IS_HALVED = 2.5
+
+# ...and the double has to land where records like that are actually counted.
+#
+# A blunt rule, and named as one: it is the tempo range drum & bass is mixed at. The
+# case this exists for is a break whose kick and snare sit exactly where a slow
+# record's do, and the only other thing true of every one of them is that it is
+# somewhere near 174. Outside this the busy-ness is left alone, because outside this
+# the evidence was a coin toss: of the twenty, the ones it would have doubled to 180
+# and 187 are a coldwave record and an IDM record that belong where they are.
+#
+# The kick route below is not narrowed by this. A record with its kick on every beat of
+# the faster tempo is doubled wherever it lands, which is what carries hardstyle and
+# hardtekk.
+_BREAK_TEMPO = (165.0, 178.0)
+
+
+def _level(x: np.ndarray, bpm: float, env: np.ndarray | None = None) -> float:
     """The pulse a DJ counts: the kick drum's, where the tempo found is half, double or
     one and a half times it.
 
@@ -329,11 +383,33 @@ def _level(x: np.ndarray, bpm: float) -> float:
         return at(kick, b) + at(whole, b)
 
     best, kept = bpm, score(bpm)
-    # Double: a record whose kick is on every beat of the faster tempo.
+    # Double, by either of two signs.
+    #
+    # The first is the kick: a record whose kick is on every beat of the faster tempo.
+    #
+    # The second is how busy the record is ([_busy]), and it is here because the first
+    # could not see a break. A drum & bass record has its kick on the one and its snare
+    # on the three exactly as a rap record does, so it repeats best at half what a DJ
+    # counts and its kick says nothing against that — and the floor of 0.2 on a
+    # quantity whose scale runs from 0.03 to 0.25 between records shut the door on the
+    # quiet ones for good. Twelve of one artist's records in the library sat at
+    # eighty-five to eighty-seven for it, every one of them a hundred and seventy-four.
+    #
+    # The two signs are deliberately not one test. Loosening the first was measured on
+    # the same eight records and made it worse: the rap record with the strongest
+    # double of the lot is genuinely ninety-two.
     if bpm * 2 <= 190.0:
         s2 = score(bpm * 2)
         if s2 >= max(0.2, 0.75 * kept):
             best, kept = bpm * 2, s2
+        elif (env is not None
+                and _BREAK_TEMPO[0] <= bpm * 2 <= _BREAK_TEMPO[1]
+                and _busy(env, bpm) >= _BUSY_IS_HALVED):
+            # The score it is *held* at is the better of the two, not the double's
+            # own. The double taken this way is one the score did not like, and
+            # handing that small number on as what has to be beaten made the triplet
+            # step below trivial to pass — a break at 174 came out at 116.
+            best, kept = bpm * 2, max(s2, kept)
     # The triplet step, either way: only on clear evidence.
     for ratio in (1.5, 1 / 1.5):
         other = best * ratio
@@ -642,7 +718,7 @@ def measure(audio: pathlib.Path) -> dict:
     # Refined first, so the half, the double and the triplet step are asked about at
     # exactly where they fall; refined again at whichever of them is the one.
     bpm = _refine(env, bpm)
-    leveled = _level(x, bpm)
+    leveled = _level(x, bpm, env)
     if abs(leveled - bpm) > 0.01:
         bpm = _refine(env, leveled)
     beats = _track(env, bpm)
