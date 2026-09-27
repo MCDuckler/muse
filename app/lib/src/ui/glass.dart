@@ -71,7 +71,15 @@ class GlassSurface extends StatelessWidget {
           Positioned.fill(
             child: DecoratedBox(
               decoration: BoxDecoration(
-                color: scheme.surface.withValues(alpha: opacity),
+                // Under a sheened pane this is insurance and not the look: enough that
+                // a dropped backdrop sample shows the surface instead of a flash, and
+                // no more. It used to carry the pane's whole colour, and since a
+                // BackdropFilter blurs everything already painted behind it — this
+                // included — the glass was blurring a flat wash of near-black and then
+                // another coat went over the top. What came out was a dark plate with
+                // a lit rim, which is what it looked like.
+                color: scheme.surface
+                    .withValues(alpha: sheen ? opacity * 0.42 : opacity),
                 borderRadius: radius,
               ),
             ),
@@ -127,12 +135,23 @@ class GlassSurface extends StatelessWidget {
                 child: DecoratedBox(
                   decoration: BoxDecoration(
                     borderRadius: radius,
+                    // Light, not dark. Frosted glass scatters what passes through it,
+                    // so it reads a little brighter than what is behind it and never
+                    // as a shade over it. Piling more of the surface colour on here is
+                    // what made the middle of the pane the darkest thing on the
+                    // screen.
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
+                      // White, in either look. This is light being scattered in the
+                      // body of the pane, so it is light — onSurface was used here at
+                      // first and that is ink, which flips to near-black with the
+                      // lights up and had the scatter fighting the sheen.
                       colors: [
-                        scheme.surface.withValues(alpha: opacity * 0.34),
-                        scheme.surface.withValues(alpha: opacity * 0.14),
+                        Colors.white.withValues(
+                            alpha: scheme.brightness == Brightness.dark ? 0.10 : 0.05),
+                        Colors.white.withValues(
+                            alpha: scheme.brightness == Brightness.dark ? 0.03 : 0.0),
                       ],
                     ),
                   ),
@@ -151,19 +170,57 @@ class GlassSurface extends StatelessWidget {
     );
     if (!sheen) return pane;
     // A pane standing in front of the page has a shadow under it: soft and low, so
-    // it reads as a few millimetres off the wall rather than floating.
+    // it reads as a few millimetres off the wall rather than floating. Around it,
+    // though, and never under it.
+    //
+    // A BoxShadow is a filled shape behind the box, so its middle lies across the
+    // whole of the pane — and the pane's own backdrop filter then reads that black as
+    // part of the room and blurs it in. Two shadows at 0.32 and 0.20 compose to
+    // nearly half a coat of black over everything the glass was meant to show.
+    // Measured against the same scene with no pane in it, that one mistake was the
+    // whole of it: the glass came out 34% darker than what stood behind it, and no
+    // amount of lightening the tints was ever going to fix a shade the glass was
+    // being handed to blur. Clipped to outside the pane it is 3%.
     final dark = scheme.brightness == Brightness.dark;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: radius,
-        boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: dark ? 0.32 : 0.14), blurRadius: 26, offset: const Offset(0, 12)),
-          BoxShadow(color: Colors.black.withValues(alpha: dark ? 0.20 : 0.08), blurRadius: 5, offset: const Offset(0, 2)),
-        ],
-      ),
+    return CustomPaint(
+      painter: _Standing(radius: radius, dark: dark),
       child: pane,
     );
   }
+}
+
+/// The shadow a standing pane casts, drawn everywhere but under the pane.
+class _Standing extends CustomPainter {
+  const _Standing({required this.radius, required this.dark});
+  final BorderRadius radius;
+  final bool dark;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rr = radius.toRRect(Offset.zero & size);
+    canvas.save();
+    // Everything except the pane itself, so what the glass reads behind it is the
+    // room and not this. Room enough around it for the blur to fall into.
+    canvas.clipPath(Path.combine(
+      PathOperation.difference,
+      Path()..addRect(Rect.fromLTRB(-80, -80, size.width + 80, size.height + 80)),
+      Path()..addRRect(rr),
+    ));
+    for (final (alpha, blur, dy) in [
+      (dark ? 0.32 : 0.14, 26.0, 12.0),
+      (dark ? 0.20 : 0.08, 5.0, 2.0),
+    ]) {
+      canvas.drawRRect(
+          rr.shift(Offset(0, dy)),
+          Paint()
+            ..color = Colors.black.withValues(alpha: alpha)
+            ..maskFilter = MaskFilter.blur(BlurStyle.normal, blur / 2));
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_Standing old) => old.radius != radius || old.dark != dark;
 }
 
 /// The edge of a thick pane: the backdrop seen through it a little magnified and
