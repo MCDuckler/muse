@@ -1100,7 +1100,19 @@ class Booth extends ChangeNotifier {
       // other deck's tempo moves.
       final base = follower.pitch;
       final ft = follower.timing, mt = m.timing;
-      if (ft == null || mt == null || m.braking || m.loopStart != null) return;
+      // Braking is a tempo that is deliberately running away, and nothing is lined up
+      // to that. A loop is not: a record going round four bars is still on the beat,
+      // and the follower still has to be held on it. It used to be lumped in with
+      // braking and the hold simply stopped for as long as the master was looping —
+      // which is most of what "the beat match is worst when one deck is looping" was,
+      // the follower free-running at whatever rate it happened to have.
+      if (ft == null || mt == null || m.braking) return;
+      // What a loop does break is the phrase. A bar-long loop puts the record back
+      // four beats every bar, so its place in the sixteen cycles on purpose — and a
+      // measure that counts through the phrase reads that as a fault and moves the
+      // record to "fix" it, over and over. So while either deck is round a loop, what
+      // is held is the beat and nothing else.
+      final looping = follower.loopStart != null || m.loopStart != null;
       // The engines' first reports after a start, or a jump, are the least reliable
       // they give — so the first stretch of a hold is sat out. Not when the deck was
       // already running, though: SYNC pressed on a playing record has no start to
@@ -1126,7 +1138,7 @@ class Booth extends ChangeNotifier {
       // saturating at the limit of what a wrapped phase can say. See outOfStep. Where
       // a record has no phrase to count through, the wrapped reading is all there is.
       final beatWall = follower.beatInRecord.inMicroseconds / follower.tempo;
-      final beatsOff = beatWall <= 0
+      final beatsOff = beatWall <= 0 || looping
           ? null
           : outOfStep(follower, m, now, fine.inMicroseconds / beatWall);
       final e = beatsOff == null

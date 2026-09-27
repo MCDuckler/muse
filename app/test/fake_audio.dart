@@ -289,6 +289,9 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
     if (request.index != null) index = request.index!;
     _advance();
     position = request.position ?? Duration.zero;
+    // The stop: the clock is started from a moment in the future, so the wall time
+    // the seek took is time the record did not play.
+    if (seekCost > Duration.zero) _since = _since.add(seekCost);
     calls.add('seek ${position.inSeconds}s'
         '${request.index == null ? '' : ' index:${request.index}'}');
     _emit();
@@ -309,6 +312,14 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   /// default, because most tests do not care; a phone's is a couple of hundred
   /// milliseconds, and that delay is what makes a beat-holding loop hunt.
   Duration speedLag = Duration.zero;
+
+  /// What a seek costs this engine: the sound stops for this long while the decoder
+  /// restarts and the buffer refills, and the record picks up where it was sent.
+  ///
+  /// Zero by default, which is no engine anywhere. A phone's is tens of milliseconds,
+  /// and it is the whole of why a loop is heard: the record comes round musically in
+  /// the right place and a fraction of a second late, every single time.
+  Duration seekCost = Duration.zero;
 
   /// How often this engine says where it is while it plays, unasked.
   ///

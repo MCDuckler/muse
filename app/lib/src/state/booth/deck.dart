@@ -621,10 +621,15 @@ class Deck extends ChangeNotifier {
   /// long the loop is worth. The difference is what the wrap costs.
   void _watchTheWrap(Duration at, DateTime now) {
     final start = loopStart, end = loopEnd;
-    if (!_engineLooping || start == null || end == null || !playing || end <= start) {
+    if (start == null || end == null || !playing || end <= start) {
       _wrappedAt = null;
       return;
     }
+    // The deck's own loop times its wraps itself (see _learnTheWrap); this is only
+    // for the engine's. Returning rather than clearing matters: this runs on every
+    // report the engine sends, and clearing here wiped the other one's last wrap
+    // before it could ever measure against it.
+    if (!_engineLooping) return;
     // Come round: the engine says it is back near the loop's start when the reckoning
     // had it near the end.
     final span = end - start;
@@ -654,6 +659,30 @@ class Deck extends ChangeNotifier {
           'end pulled ${loopLate.inMilliseconds} ms early');
       unawaited(_loopInEngine());
     }
+  }
+
+  /// The wrap, timed on the deck's own loop — the one every phone and every browser
+  /// actually uses.
+  ///
+  /// [_watchTheWrap] does this for a loop the engine runs, and only for that: on
+  /// anything without one, nothing ever measured what a time round really cost, so
+  /// nothing ever corrected for it. Two wraps are [span] apart at this rate plus
+  /// whatever the seek between them stopped the sound for, so the difference is the
+  /// cost, and it is eased into exactly as the engine's is.
+  void _learnTheWrap(Duration span, double rate) {
+    final now = DateTime.now();
+    final was = _wrappedAt;
+    _wrappedAt = now;
+    if (was == null) return;
+    final want = Duration(microseconds: (span.inMicroseconds / rate).round());
+    final late = now.difference(was) - want;
+    if (late.abs() > _mostLate * 2) return;
+    final want2 = loopLate + Duration(microseconds: (late.inMicroseconds * 0.25).round());
+    loopLate = want2 < Duration.zero
+        ? Duration.zero
+        : want2 > _mostLate
+            ? _mostLate
+            : want2;
   }
 
   /// What the engine was last told to pull the end back by.
@@ -1017,14 +1046,22 @@ class Deck extends ChangeNotifier {
         return;
       }
       final rate = tempo <= 0 ? 1.0 : tempo;
-      final left = end - position;
+      // Sent round early by what the wrap is measured to cost, the same way the
+      // engine's own loop is given a pulled-back end. Without it every time round is
+      // long by however long the seek takes — the sound stops while the decoder
+      // restarts — and a loop that stumbles by the same twenty milliseconds every bar
+      // is the thing you hear rather than the loop.
+      final pull = Duration(microseconds: (loopLate.inMicroseconds * rate).round());
+      final aim = end - pull > start + beatInRecord ~/ 4 ? end - pull : end;
+      final left = aim - position;
       final wall = Duration(microseconds: (left.inMicroseconds / rate).round());
       if (wall <= const Duration(milliseconds: 1)) {
-        // However far past the end this landed, the loop starts that far in: the
+        // However far past the aim this landed, the loop starts that far in: the
         // length stays right and the grid is kept.
-        final over = position - end;
+        final over = position - aim;
         final span = end - start;
         final to = over > Duration.zero && over < span ? start + over : start;
+        _learnTheWrap(span, rate);
         unawaited(seek(to));
         _loop = Timer(const Duration(milliseconds: 4), again);
         return;

@@ -374,6 +374,112 @@ void main() {
       await booth.letGo();
     }, timeout: const Timeout(Duration(seconds: 30)));
 
+    test('a loop on an engine with no loop of its own learns what its wrap costs', () async {
+      // "Looping still audible." Every phone and every browser loops this way: a timer
+      // watches the record reach the end and seeks it back. The seek stops the sound
+      // while the decoder restarts, so each time round is long by whatever that costs
+      // — the same twenty or thirty milliseconds, every bar, for as long as the loop
+      // is on. Only the engine's own loop ever measured that; this path never did, and
+      // so never corrected for it.
+      //
+      // What is checked is the learning rather than the clock. Timing wraps against
+      // the wall to the millisecond is a test that fails when the machine is busy,
+      // which on a box running the rest of this suite it always is. What cannot be
+      // hand-waved is whether anything measured the cost at all: on the old path this
+      // stays at nought for ever.
+      Deck.loopLate = Duration.zero;
+      addTearDown(() => Deck.loopLate = Duration.zero);
+      final engine = (JustAudioPlatform.instance as FakeJustAudio)
+          .players[booth.b.player.platformId!]!;
+      const cost = Duration(milliseconds: 30);
+      engine.seekCost = cost;
+      engine.reportEvery = const Duration(milliseconds: 100);
+      await booth.b.seek(const Duration(seconds: 10));
+      await booth.b.play();
+      booth.b.loop(4); // one bar, two seconds at this tempo
+      addTearDown(booth.b.unloop);
+
+      final began = DateTime.now();
+      var wraps = 0;
+      var last = booth.b.position;
+      final span = booth.b.loopEnd! - booth.b.loopStart!;
+      while (DateTime.now().difference(began) < const Duration(seconds: 9)) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        final p = booth.b.position;
+        if (p < last - span ~/ 2) wraps++;
+        last = p;
+      }
+      expect(wraps, greaterThan(2), reason: 'it barely looped: $wraps times round');
+      // Eased into a quarter at a time, so a handful of wraps gets most of the way
+      // there rather than all of it. Nought is the fault.
+      expect(Deck.loopLate.inMilliseconds, greaterThan(8),
+          reason: 'nothing measured what the wrap cost over $wraps times round');
+      expect(Deck.loopLate, lessThanOrEqualTo(cost + const Duration(milliseconds: 15)),
+          reason: 'it learned more than the wrap can possibly cost: ${Deck.loopLate}');
+    }, timeout: const Timeout(Duration(seconds: 40)));
+
+    test('a master going round a loop is still something to be held to', () async {
+      // "Beat match still needs work, especially when looping one track." The hold
+      // used to stop dead for as long as the master had a loop on — a loop was lumped
+      // in with braking, where the tempo really is running away — so the follower
+      // free-ran at whatever rate it happened to have for the whole of it. A record
+      // going round four bars is still perfectly on the beat and is exactly the thing
+      // a follower has to be held to.
+      await booth.setCrossfader(0.5);
+      await booth.b.seek(Duration(milliseconds: booth.a.position.inMilliseconds + 40));
+      await booth.b.play();
+      booth.holdOnBeat(booth.b);
+      await Future<void>.delayed(const Duration(seconds: 3));
+      final held = apart().inMilliseconds.abs();
+      expect(held, lessThan(15), reason: 'not settled before the loop: $held ms');
+
+      // Four bars, from the master's next downbeat.
+      booth.a.loop(16);
+      addTearDown(booth.a.unloop);
+      // Knocked off the beat while the loop runs. Before, nothing would have pulled
+      // it back for as long as the loop was on.
+      await booth.b.nudge(const Duration(milliseconds: 55));
+      final worst = <int>[];
+      for (var i = 0; i < 80; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        if (i > 40) worst.add(apart().inMilliseconds.abs());
+      }
+      worst.sort();
+      expect(worst.last, lessThan(20),
+          reason: 'left adrift while the master looped: worst ${worst.last} ms');
+      await booth.letGo();
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
+    test('a short loop does not have its phrase corrected out from under it', () async {
+      // The other half of the same rule, and a fault of this booth's own making: a
+      // one-bar loop puts the record back four beats every bar, so where it sits in
+      // the sixteen cycles by design. Measured through the phrase that reads as four
+      // beats out and the hold moves the record to "fix" it — every bar, for as long
+      // as the loop is on. While either deck is looping, the beat is held and the
+      // phrase is left alone.
+      await booth.setCrossfader(0);
+      await booth.b.seek(booth.a.position);
+      await booth.b.play();
+      booth.holdOnBeat(booth.b);
+      await Future<void>.delayed(const Duration(seconds: 2));
+      booth.b.loop(4); // one bar
+      addTearDown(booth.b.unloop);
+      final was = booth.b.loopStart;
+      var moved = 0;
+      for (var i = 0; i < 60; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        // The loop's own bounds must not wander, and the record must stay inside them.
+        if (booth.b.loopStart != was) moved++;
+      }
+      expect(moved, 0, reason: 'the loop was moved under the record $moved times');
+      final p = booth.b.position;
+      expect(p >= booth.b.loopStart! - const Duration(milliseconds: 60), isTrue,
+          reason: 'the record was pushed out of its own loop');
+      expect(p <= booth.b.loopEnd! + const Duration(milliseconds: 60), isTrue,
+          reason: 'the record was pushed out of its own loop');
+      await booth.letGo();
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
     test('a record already on the phrase is left where it is', () async {
       await booth.setCrossfader(0);
       await booth.b.seek(booth.a.position);
