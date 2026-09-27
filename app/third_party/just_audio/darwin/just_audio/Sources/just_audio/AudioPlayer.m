@@ -297,6 +297,22 @@
     [self broadcastPlaybackEvent];
 }
 
+// WetOwl: one tick of the observer above — where the player is, sent on.
+//
+// Skipped while a seek is in flight or the item has ended, as checkForDiscontinuity is:
+// the position then is either a lie about where the record is going or the end of it.
+- (void)tellThePosition {
+    if (!_playing || CMTIME_IS_VALID(_seekPos) || _processingState == psCompleted) return;
+    if (@available(macOS 10.12, iOS 10.0, *)) {
+        // timeControlStatus notices the stalls here; this only tells the time.
+        if (_processingState == psBuffering) return;
+        [self updatePosition];
+        [self broadcastPlaybackEvent];
+    } else {
+        [self checkForDiscontinuity];
+    }
+}
+
 - (void)checkForDiscontinuity {
     if (!_playing || CMTIME_IS_VALID(_seekPos) || _processingState == psCompleted) return;
     int position = [self getCurrentPosition];
@@ -687,15 +703,28 @@
         //__weak __typeof__(self) weakSelf = self;
         //typeof(self) __weak weakSelf = self;
         __unsafe_unretained typeof(self) weakSelf = self;
-        if (@available(macOS 10.12, iOS 10.0, *)) {}
-        else {
-            _timeObserver = [_player addPeriodicTimeObserverForInterval:CMTimeMake(200, 1000)
-                                                                  queue:nil
-                                                             usingBlock:^(CMTime time) {
-                                                                 [weakSelf checkForDiscontinuity];
-                                                             }
-            ];
-        }
+        // WetOwl: where the record is, regularly, while it plays.
+        //
+        // Upstream installs this observer only on systems too old for
+        // timeControlStatus, and even then only to notice a stall: on anything modern
+        // the position is sent to Dart when something happens to it and at no other
+        // time, and Dart carries it forward itself at the playback rate in between.
+        // For a seek bar that is plenty. For two records held on one beat it is not —
+        // nothing is measured for minutes at a time, and whatever the audio clock and
+        // the wall clock have quietly done to each other arrives all at once as a step
+        // the next time any event fires. That step is what the booth hears as a record
+        // snapping somewhere wrong.
+        //
+        // So the observer goes on always, ten times a second, and each tick sends
+        // where the player actually is. AVPlayer only fires it while the rate is not
+        // zero, which is exactly when it is wanted. The old stall check is kept where
+        // it is the only one there is.
+        _timeObserver = [_player addPeriodicTimeObserverForInterval:CMTimeMake(100, 1000)
+                                                              queue:nil
+                                                         usingBlock:^(CMTime time) {
+                                                             [weakSelf tellThePosition];
+                                                         }
+        ];
     }
     // Initialise the AVQueuePlayer with items.
     [self enqueueFrom:_index];

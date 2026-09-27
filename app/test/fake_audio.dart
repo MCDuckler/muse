@@ -116,6 +116,22 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   double speed = 1.0;
   bool playing = false;
 
+  /// Where the engine really is now — what a room would hear — as against what the
+  /// app believes from its own reckoning.
+  ///
+  /// The difference between the two is the whole of what [reportEvery] exists to
+  /// close, and it is invisible to the app: a test that asks the *deck* how far apart
+  /// two records are is asking the app to check its own arithmetic, and it will
+  /// always say they are perfect. Anything about holding a beat has to be measured
+  /// from here.
+  Duration get truePosition {
+    if (!playing) return position;
+    return position +
+        Duration(
+            microseconds:
+                (DateTime.now().difference(_since).inMicroseconds * speed).round());
+  }
+
   /// Bring [position] up to now.
   void _advance() {
     final now = DateTime.now();
@@ -159,6 +175,7 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   }
 
   void close() {
+    _reporter?.cancel();
     _events.close();
     _data.close();
   }
@@ -253,6 +270,7 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
     playing = true;
     calls.add('play');
     _emit();
+    _keepReporting();
     return PlayResponse();
   }
 
@@ -262,6 +280,7 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
     playing = false;
     calls.add('pause');
     _emit();
+    _keepReporting();
     return PauseResponse();
   }
 
@@ -291,6 +310,35 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   /// milliseconds, and that delay is what makes a beat-holding loop hunt.
   Duration speedLag = Duration.zero;
 
+  /// How often this engine says where it is while it plays, unasked.
+  ///
+  /// Zero is a phone as just_audio shipped it: the position goes to Dart when
+  /// something *happens* to it — a state change, a seek, the buffer growing — and for
+  /// a local file that is fully buffered, nothing happens for minutes at a time. Dart
+  /// carries the position forward itself at the speed it asked for in between, so
+  /// what the app believes about a playing record contains nothing the engine said,
+  /// and whatever the two clocks have quietly done to each other is invisible until
+  /// some event finally lands it as a step.
+  ///
+  /// A tenth of a second is the same engine with WetOwl's addition to it: see the
+  /// positionWatcher in the Android plugin and tellThePosition in the iOS one.
+  Duration reportEvery = Duration.zero;
+  Timer? _reporter;
+
+  void _keepReporting() {
+    _reporter?.cancel();
+    _reporter = null;
+    if (reportEvery <= Duration.zero || !playing) return;
+    _reporter = Timer.periodic(reportEvery, (t) {
+      if (_events.isClosed || !playing) {
+        t.cancel();
+        return;
+      }
+      _advance();
+      _emit();
+    });
+  }
+
   @override
   Future<SetSpeedResponse> setSpeed(SetSpeedRequest request) async {
     // A new rate from here on, not for the time already played: a report now, the
@@ -303,11 +351,14 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
       return SetSpeedResponse();
     }
     // Told now, heard later: what is already buffered plays at the rate it was
-    // buffered at.
+    // buffered at. A report now — the engine answers the request — carrying the
+    // position it is still at, and then nothing more about it: the rate taking hold
+    // is not an event, so an engine that only speaks when spoken to never mentions
+    // it. That silence is the whole difference, and it is why [reportEvery] exists.
+    _emit();
     unawaited(Future<void>.delayed(speedLag, () {
       _advance();
       speed = to;
-      _emit();
     }));
     return SetSpeedResponse();
   }

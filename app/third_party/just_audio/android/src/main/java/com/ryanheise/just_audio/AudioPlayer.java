@@ -214,6 +214,42 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         handler.post(bufferWatcher);
     }
 
+    // WetOwl: where the record is, regularly, while it plays.
+    //
+    // Upstream tells Dart the position only when something happens to it — a state
+    // change, a seek, the buffer growing — and Dart carries it forward itself at the
+    // playback speed in between. For a seek bar that is plenty. For two records held
+    // on one beat it is not: a local file that is fully buffered stops producing
+    // events altogether, so nothing is measured for minutes at a time, whatever the
+    // audio clock and the wall clock have quietly done to each other goes unseen, and
+    // the truth lands all at once as a step the next time any event fires. That step
+    // is what the booth hears as a record snapping somewhere wrong.
+    //
+    // So while it is actually playing, the position goes up ten times a second. It is
+    // one local call to ExoPlayer — the same one the seek bar already makes — and a
+    // map over a channel that was already carrying these events.
+    private static final long POSITION_TICK_MS = 100;
+    private static final long POSITION_IDLE_MS = 500;
+    private final Runnable positionWatcher = new Runnable() {
+        @Override
+        public void run() {
+            // Released: the chain ends here rather than holding a dead player.
+            if (player == null) return;
+            if (player.getPlayWhenReady() && processingState == ProcessingState.ready) {
+                updatePosition();
+                broadcastImmediatePlaybackEvent();
+                handler.postDelayed(this, POSITION_TICK_MS);
+            } else {
+                handler.postDelayed(this, POSITION_IDLE_MS);
+            }
+        }
+    };
+
+    private void startWatchingPosition() {
+        handler.removeCallbacks(positionWatcher);
+        handler.post(positionWatcher);
+    }
+
     private void setAudioSessionId(int audioSessionId) {
         if (audioSessionId == C.AUDIO_SESSION_ID_UNSET) {
             this.audioSessionId = null;
@@ -343,6 +379,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             if (player.getPlayWhenReady())
                 updatePosition();
             processingState = ProcessingState.ready;
+            startWatchingPosition(); // WetOwl: see positionWatcher.
             errorCode = null;
             errorMessage = null;
             broadcastImmediatePlaybackEvent();
@@ -979,6 +1016,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         playResult = result;
         player.setPlayWhenReady(true);
         updatePosition();
+        startWatchingPosition(); // WetOwl: see positionWatcher.
         if (processingState == ProcessingState.completed && playResult != null) {
             playResult.success(new HashMap<String, Object>());
             playResult = null;
@@ -1056,6 +1094,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         }
         mediaSources.clear();
         clearAudioEffects();
+        handler.removeCallbacks(positionWatcher); // WetOwl: see positionWatcher.
         if (player != null) {
             player.release();
             player = null;

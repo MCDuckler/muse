@@ -1085,7 +1085,9 @@ class Booth extends ChangeNotifier {
       if (DateTime.now().difference(began) < settle) return;
       if (DateTime.now().isBefore(settleUntil)) return;
       final now = DateTime.now();
-      final e = beatError(
+      // The phase inside the beat, off the two fitted grids: fine, steady, and blind
+      // to which beat of the phrase either record is on.
+      final fine = beatError(
         follower: ft,
         followerAt: follower.positionAt(now),
         followerRate: follower.tempo,
@@ -1093,7 +1095,18 @@ class Booth extends ChangeNotifier {
         masterAt: m.positionAt(now),
         masterRate: m.tempo,
       );
-      if (e == null) return;
+      if (fine == null) return;
+      // And then the whole of it, phrase and all, as one continuous number — so a
+      // record half a beat out reads half a beat out with a sign rather than
+      // saturating at the limit of what a wrapped phase can say. See outOfStep. Where
+      // a record has no phrase to count through, the wrapped reading is all there is.
+      final beatWall = follower.beatInRecord.inMicroseconds / follower.tempo;
+      final beatsOff = beatWall <= 0
+          ? null
+          : outOfStep(follower, m, now, fine.inMicroseconds / beatWall);
+      final e = beatsOff == null
+          ? fine
+          : Duration(microseconds: (beatsOff * beatWall).round());
       // What is heard rather than what is reported: each deck's stretcher delay,
       // which the engine counts as if it ran at 1.0, puts its sound that delay times
       // (1 - speed) *ahead* of where it says it is. Measured on the real engine (the
@@ -1156,17 +1169,15 @@ class Booth extends ChangeNotifier {
       // its start being worth a hundred milliseconds or two and never the same twice
       // — lands on the wrong beat, and the beat error then reads zero about it for
       // ever. Worth a jump on its own, even with the beat already perfect.
-      final outOfPhrase = beatsOutOfPhrase(follower, m);
-      // Acted on only while nothing can hear it: two bars is a long way to move a
-      // record somebody is listening to. Said either way — a record that reached the
-      // room on the wrong bar is worth knowing about even when it is too late to
-      // move it.
-      // Acted on once the reading has held still. It is taken off two records that
-      // are both moving, and one taken across a boundary is a beat out on its own —
-      // jumping on that is the glitch it was supposed to cure.
+      // Whole beats out of the phrase, read off the one error rather than measured
+      // again: the two used to be taken separately and could contradict each other,
+      // which is the fault outOfStep exists to end. Only reported now — the move
+      // itself is the error, all of it, in one go.
+      final outOfPhrase = beatsOff?.round() ?? 0;
+      // Said once it has held still across two readings: a reading taken as a marker
+      // goes by is a beat out on its own, and shouting about that is noise.
       final steadyPhrase = outOfPhrase == lastPhrase;
       lastPhrase = outOfPhrase;
-      final beatsOut = heardNow || !steadyPhrase || _phraseFixes > 0 ? 0 : outOfPhrase;
       if (!saidPhrase && heardNow && outOfPhrase != 0 && steadyPhrase) {
         saidPhrase = true;
         note(BoothEventKind.trouble,
@@ -1186,7 +1197,7 @@ class Booth extends ChangeNotifier {
       //
       // So: SYNC places, at once, for anything worth more than the small gap a seek
       // itself costs. Twelve milliseconds is about that.
-      final quiet = (moved < 2 && (ms.abs() > 20 || beatsOut != 0) && !heardNow) ||
+      final quiet = (moved < 2 && ms.abs() > 20 && !heardNow) ||
           (snap && moved < 2 && ms.abs() > 12);
       // Lost the beat by more than the bend can pull back in reasonable time.
       //
@@ -1233,26 +1244,23 @@ class Booth extends ChangeNotifier {
         // a moment while the other record plays on, so it always lands late — a jump
         // back as much as one forward. (Aimed "further" in the jump's own direction, a
         // jump back overshot by twice that.)
+        // One move, for the whole of it. The error already carries the beats of the
+        // phrase as well as the phase inside the beat, so there is no second term to
+        // add and no chance of the two disagreeing about which way to go.
         final jump = -err.inMicroseconds + _jumpCarry.inMicroseconds;
-        // The beat, and then the whole beats of the phrase: the first puts it on a
-        // beat, the second puts it on the right one of the sixteen. In the record's
-        // own time, which the fine error has to be turned into first.
-        // Negative: beatsOut is how far *into* the phrase the follower is, so the
-        // move is back by that much — the same way the fine error is negated above.
-        final whole = -beatsOut * follower.beatInRecord.inMicroseconds;
         // Said in the log, always: a jump is the one thing the holding does that can be
         // heard, and "it twitched" is only something to work with if there is a when.
-        debugPrint('booth: ${follower.name} jumped ${(jump / 1000).toStringAsFixed(0)} ms to the beat'
-            '${beatsOut == 0 ? '' : ' and $beatsOut beat${beatsOut.abs() == 1 ? '' : 's'} to the phrase'} '
+        debugPrint('booth: ${follower.name} jumped ${(jump / 1000).toStringAsFixed(0)} ms'
+            '${outOfPhrase == 0 ? ' to the beat' : ' — $outOfPhrase beat${outOfPhrase.abs() == 1 ? '' : 's'} of it the phrase'} '
             '(${quiet ? snap && share >= 0.25 ? 'SYNC pressed' : 'while quiet' : 'lost the beat by ${ms.toStringAsFixed(0)} ms'})');
-        if (beatsOut != 0) {
+        if (outOfPhrase != 0) {
           note(BoothEventKind.cue,
-              '${follower.name} was $beatsOut beat${beatsOut.abs() == 1 ? '' : 's'} out of the phrase',
+              '${follower.name} was $outOfPhrase beat${outOfPhrase.abs() == 1 ? '' : 's'} out of the phrase',
               deck: follower);
           _phraseFixes++;
         }
         await follower.nudge(
-            Duration(microseconds: (jump * follower.tempo).round() + whole));
+            Duration(microseconds: (jump * follower.tempo).round()));
         return;
       }
       // No learning of the rate: the grids give it to a few hundredths of a percent,
@@ -1813,13 +1821,13 @@ class Booth extends ChangeNotifier {
   /// the way the automix counts them when it parks a record to meet a phrase.
   /// How far into its own four-bar phrase [d] is, in beats, counted continuously
   /// from the marker before it. Null where the record has no phrase to speak of.
-  static double? _phraseBeats(Deck d) {
+  static double? _phraseBeats(Deck d, [Duration? at]) {
     final t = d.timing;
     if (t == null) return null;
     final beat = d.beatInRecord.inMicroseconds / 1000.0;
     final marks = t.markers;
     if (beat <= 0 || marks.isEmpty) return null;
-    final ms = d.position.inMicroseconds / 1000.0;
+    final ms = (at ?? d.position).inMicroseconds / 1000.0;
     // The marker at or before, with half a beat of grace so a reading taken a hair
     // early belongs to the marker it was aimed at.
     var i = -1;
@@ -1842,6 +1850,54 @@ class Booth extends ChangeNotifier {
     var d = f - m;
     d -= (d / 16).roundToDouble() * 16;
     return d.round();
+  }
+
+  /// How far [follower] is from where it would have to be to be in step with
+  /// [master] — signed, in beats, and wrapped at eight rather than at a half.
+  ///
+  /// This is the foundation the holding stands on, and the old one was two
+  /// measurements that could not agree. [beatError] reads the phase to the nearest
+  /// beat and wraps at half of one; [beatsOutOfPhrase] reads whole beats and rounds.
+  /// A record half a beat out therefore had the first saturated at its own limit,
+  /// where which way to go is a coin toss, and the second reading a confident zero.
+  /// Nothing was ever wrong enough to fix, and the bend leaned first one way and then
+  /// the other for the whole mix. The phone puts records there constantly — its engine
+  /// takes a hundred-odd milliseconds to make a sound and never the same twice — and
+  /// that, in the logs, is nearly every hold that would not settle: the error sitting
+  /// at a flat two hundred milliseconds, the bend at its stop, swings either side.
+  ///
+  /// So it is one number instead, counted continuously through the four-bar phrase
+  /// from the marker before each record's playhead. Half a beat out reads half a beat
+  /// out, with a sign; three beats out reads three beats out. One move puts it right,
+  /// and the move knows which way to go.
+  ///
+  /// Null where either record has no phrase to count through — then there is only
+  /// [beatError], and the old ambiguity with it.
+  /// [fineBeats] is the phase inside the beat, from [beatError], as a fraction of one
+  /// of the follower's beats.
+  static double? outOfStep(
+      Deck follower, Deck master, DateTime now, double fineBeats) {
+    final f = _phraseBeats(follower, follower.positionAt(now));
+    final m = _phraseBeats(master, master.positionAt(now));
+    if (f == null || m == null) return null;
+    var coarse = f - m;
+    // Through sixteen beats, so two bars either way is as far as anything is asked to
+    // move. Eight beats of room where there was half of one.
+    coarse -= (coarse / 16).roundToDouble() * 16;
+    // Which beat, from the markers; where in the beat, from the fitted grid.
+    //
+    // Not simply the markers' own figure. They are read off the analysis's downbeats,
+    // which wander — the tracker loses them in a fade, and the last bars of a record,
+    // where a mix out of it happens, are the worst of it. Using them for the fine
+    // phase drags the incoming record onto a wandering line, which is a fault this
+    // booth has had once already. The fitted grid does not wander, but it can only
+    // say where in the beat. So the markers are asked the one thing they are reliable
+    // about — which of the sixteen — and that is a whole number, so half a beat of
+    // wander cannot change it.
+    final whole = (coarse - fineBeats).roundToDouble();
+    var d = whole + fineBeats;
+    d -= (d / 16).roundToDouble() * 16;
+    return d;
   }
 
   /// Where the fader is at [k] of a plan: travelled evenly between the steps that

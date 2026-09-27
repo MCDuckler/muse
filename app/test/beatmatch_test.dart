@@ -314,6 +314,66 @@ void main() {
       await booth.letGo();
     });
 
+    test('a record half a beat out is put right, and stays', () async {
+      // Where a phone leaves records: its engine takes a hundred-odd milliseconds to
+      // make a sound and never the same twice, so a record started on the beat sounds
+      // somewhere between the beats. Right at the boundary of what a wrapped phase
+      // can say, which is where the reading is worth least.
+      //
+      // (This one passes on the old measurements too — a clean engine gives a steady
+      // sign and one jump settles it. It is here to hold the ground, not to prove
+      // anything; the case the old pair could not do is the next test down.)
+      await booth.setCrossfader(0.5); // heard, so this cannot be a quiet shuffle
+      await booth.b.seek(Duration(milliseconds: booth.a.position.inMilliseconds + 240));
+      await booth.b.play();
+      expect(apart().inMilliseconds.abs(), greaterThan(200),
+          reason: 'at the boundary, where the wrapped reading gives out');
+      expect(Booth.beatsOutOfPhrase(booth.b, booth.a), 0,
+          reason: 'and where whole beats say there is nothing to fix');
+
+      booth.holdOnBeat(booth.b);
+      await Future<void>.delayed(const Duration(seconds: 6));
+      // Put right, and then left alone: sampled over two seconds, because a record
+      // that crosses zero and comes back is the fault, not the cure.
+      final worst = <int>[];
+      for (var i = 0; i < 40; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        worst.add(apart().inMilliseconds.abs());
+      }
+      worst.sort();
+      expect(worst.last, lessThan(15), reason: 'worst of forty readings: ${worst.last} ms');
+      await booth.letGo();
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
+    test('a record out by more than half a beat, in the room, is put right', () async {
+      // The one that sounds like "it snaps to the wrong thing", and the reason the
+      // two old measurements were replaced by one.
+      //
+      // A beat and a half out, and audible. The wrapped phase reads half a beat of
+      // that — it cannot say more, being wrapped — so the loop moves it half a beat
+      // and stops, satisfied: the phase now reads nil and the record is beautifully
+      // in time on the wrong beat. The whole-beat count can see the beat that is
+      // left, but it is only ever acted on while nothing can hear it, so in the room
+      // it is never acted on at all. The hold then reports itself as excellent while
+      // bar one of the one plays against bar two of the other.
+      //
+      // Read as one continuous number it is a beat and a half, with a sign, and one
+      // move is the whole of it.
+      await booth.setCrossfader(0.5); // heard: the quiet shuffle is not available
+      await booth.b.seek(Duration(milliseconds: booth.a.position.inMilliseconds + 750));
+      await booth.b.play();
+      expect(Booth.beatsOutOfPhrase(booth.b, booth.a), isNot(0),
+          reason: 'a beat and a half out to start with');
+
+      booth.holdOnBeat(booth.b);
+      await Future<void>.delayed(const Duration(seconds: 6));
+      expect(Booth.beatsOutOfPhrase(booth.b, booth.a), 0,
+          reason: 'in time on the wrong beat: the fault, not the cure');
+      expect(apart().inMilliseconds.abs(), lessThan(15),
+          reason: 'and on the beat as well as on the right one');
+      await booth.letGo();
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
     test('a record already on the phrase is left where it is', () async {
       await booth.setCrossfader(0);
       await booth.b.seek(booth.a.position);
@@ -327,6 +387,72 @@ void main() {
       expect(moved, lessThan(1400), reason: 'moved $moved ms');
       await booth.letGo();
     });
+
+    // What the phone actually gave the booth to work with, and what it gives it now.
+    //
+    // just_audio tells Dart where a record is when something happens to it and at no
+    // other time; between those, Dart carries the position forward itself at the speed
+    // it asked for. For a seek bar that is plenty. For holding two records on one beat
+    // it means the loop is measuring its own arithmetic: the engine takes a couple of
+    // hundred milliseconds to actually play at a rate it has been told, the deck
+    // believes the new rate at once, and nothing ever arrives to say otherwise. Every
+    // bend therefore lands as a lie the loop cannot catch, and they add up.
+    //
+    // These two are the same fault and the same loop, with the engine speaking and
+    // not speaking. The fix is not in this file: it is the positionWatcher in the
+    // Android plugin and tellThePosition in the iOS one, which is what reportEvery
+    // stands for here.
+    Future<({int worst, int crossings})> holdWith(
+        {required Duration reportEvery}) async {
+      final engine = (JustAudioPlatform.instance as FakeJustAudio)
+          .players[booth.b.player.platformId!]!;
+      engine.speedLag = const Duration(milliseconds: 250);
+      engine.reportEvery = reportEvery;
+      await booth.setCrossfader(0.5); // heard, so only the bend may act
+      await booth.b.seek(Duration(milliseconds: booth.a.position.inMilliseconds + 45));
+      await booth.b.play();
+      booth.holdOnBeat(booth.b);
+      final other = (JustAudioPlatform.instance as FakeJustAudio)
+          .players[booth.a.player.platformId!]!;
+      // Measured off the two engines, not off the two decks: see truePosition.
+      double heard() => Booth.beatError(
+            follower: booth.b.timing!,
+            followerAt: engine.truePosition,
+            followerRate: booth.b.tempo,
+            master: booth.a.timing!,
+            masterAt: other.truePosition,
+            masterRate: booth.a.tempo,
+          )!.inMicroseconds / 1000;
+      var crossings = 0, last = 0, worst = 0;
+      for (var i = 0; i < 160; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        final ms = heard().round();
+        final side = ms > 4 ? 1 : (ms < -4 ? -1 : 0);
+        if (side != 0) {
+          if (last != 0 && side != last) crossings++;
+          last = side;
+        }
+        if (i > 100 && ms.abs() > worst) worst = ms.abs();
+      }
+      await booth.letGo();
+      return (worst: worst, crossings: crossings);
+    }
+
+    // Said plainly, because the next person to read this will want to know: an engine
+    // that says nothing also passes, in this model. Everything the fake gets wrong
+    // between reports — the rate taking hold late — it gets wrong for a fraction of a
+    // second and then stops, and a loop can ride that out blind. What a real engine
+    // also does, and this does not, is run on a clock that is not the system's at all.
+    // So the plugin change is not justified by this test and is not claimed to be: it
+    // is justified by the loop having had no measurement to work from, which is not a
+    // thing a loop can be asked to do. This test holds the other end — that the engine
+    // speaking does not upset anything.
+    test('an engine that says where it is, is held', () async {
+      final r = await holdWith(reportEvery: const Duration(milliseconds: 100));
+      expect(r.worst, lessThan(20),
+          reason: 'never settled: still ${r.worst} ms out after four seconds');
+      expect(r.crossings, lessThan(6), reason: 'it hunted: ${r.crossings} swings either side');
+    }, timeout: const Timeout(Duration(seconds: 40)));
 
     test('an engine that is slow to take a rate does not make it hunt', () async {
       // The fault: "sync drifts heavily, might be overcompensating, never stays at
