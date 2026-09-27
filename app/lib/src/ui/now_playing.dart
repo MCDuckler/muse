@@ -7,6 +7,7 @@ import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:provider/provider.dart';
 
 import '../api/models.dart';
+import '../state/frame_watch.dart';
 import '../state/app_state.dart';
 import '../state/keepalive.dart';
 import '../state/offline.dart';
@@ -69,6 +70,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
 
   @override
   void dispose() {
+    FrameWatch.where = 'app';
     _room.dispose();
     super.dispose();
   }
@@ -1182,6 +1184,8 @@ class _PlayPauseButtonState extends State<PlayPauseButton> with TickerProviderSt
   @override
   void initState() {
     super.initState();
+    // So a slow stretch in the log says which screen was open for it.
+    FrameWatch.where = 'now playing';
     if (widget.busy) _run.repeat();
   }
 

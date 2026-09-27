@@ -1867,20 +1867,13 @@ class _DeckState extends State<Deck> {
             alignment: Alignment.center,
             clipBehavior: Clip.none,
             children: [
-              // The classic arm's plinth, which the record's edge lies over.
-              if (placed > 0 && widget.armStyle == ArmStyle.classic)
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: CustomPaint(
-                      painter: ClassicPlinthPainter(
-                        radius: widget.size / 2,
-                        drop: widget.drop,
-                        label: widget.label,
-                        dim: placed,
-                      ),
-                    ),
-                  ),
-                ),
+              // No plinth. The classic arm used to come with the slab a real one is
+              // bolted to, drawn under the record's edge — which is honest about a
+              // turntable and wrong about this screen, where there is no deck for a
+              // slab to be part of and it reads as a black plate lying on the artwork.
+              // The booth's decks never had one; this is the record and the arm, the
+              // same way. (ClassicPlinthPainter still draws the cue lever that stood
+              // on it, and is kept for a deck that wants the whole thing back.)
               if (arriving > 0) _record(url, arriving),
               // The light on it, which does not turn with it.
               //

@@ -21,7 +21,6 @@ class Mag {
   const Mag._();
 
   static const _display = 'Archivo';
-  static const _serif = 'BodoniModa';
   static const _typewriter = 'CourierPrime';
   static const _marker = 'PermanentMarker';
 
@@ -83,13 +82,20 @@ class Mag {
       );
 
   /// A pull quote.
+  ///
+  /// Also the display face now, and the Didone is gone from the app with it. Bodoni
+  /// is a beautiful thing on paper and a poor one on a lit screen: the strokes run
+  /// from very thick to a hairline, and a hairline is a grey line a pixel wide that
+  /// thins out, shimmers as it scrolls and disappears at small sizes and low
+  /// brightness. Set light and open instead, which is how a magazine sets a pull
+  /// quote when it cannot count on the paper.
   static TextStyle quote(double size, {Color? color}) => TextStyle(
-        fontFamily: _serif,
+        fontFamily: _display,
         fontSize: size,
-        fontStyle: FontStyle.italic,
-        fontWeight: FontWeight.w500,
-        fontVariations: const [FontVariation('wght', 500)],
-        height: 1.15,
+        fontWeight: FontWeight.w300,
+        fontVariations: const [FontVariation('wght', 300), FontVariation('wdth', 100)],
+        letterSpacing: -size * 0.012,
+        height: 1.28,
         color: color,
       );
 

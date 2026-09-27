@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../api/models.dart';
+import '../state/frame_watch.dart';
 import '../state/app_state.dart';
 import '../state/booth/booth.dart';
 import '../state/booth/deck.dart' as engine;
@@ -44,6 +45,8 @@ class _BoothPageState extends State<BoothPage> {
   @override
   void initState() {
     super.initState();
+    // So a slow stretch in the log says which screen was open for it.
+    FrameWatch.where = 'booth';
     final app = context.read<AppState>();
     unawaited(app.booth.init());
     // The booth makes the sound now; the ordinary player keeps quiet.
@@ -52,6 +55,7 @@ class _BoothPageState extends State<BoothPage> {
 
   @override
   void dispose() {
+    FrameWatch.where = 'app';
     _focus.dispose();
     super.dispose();
   }

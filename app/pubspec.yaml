@@ -86,11 +86,6 @@ flutter:
     - family: Archivo
       fonts:
         - asset: assets/fonts/Archivo.ttf
-    - family: BodoniModa
-      fonts:
-        - asset: assets/fonts/BodoniModa.ttf
-        - asset: assets/fonts/BodoniModa-Italic.ttf
-          style: italic
     - family: CourierPrime
       fonts:
         - asset: assets/fonts/CourierPrime-Regular.ttf

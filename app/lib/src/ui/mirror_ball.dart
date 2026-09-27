@@ -162,8 +162,34 @@ class _MirrorBallLightState extends State<MirrorBallLight> with TickerProviderSt
         _room?.out();
       }
     });
-    _clock.addListener(_publish);
-    _life.addListener(_publish);
+    _clock.addListener(_onFrame);
+    _life.addListener(_onFrame);
+  }
+
+  /// The light's own frame rate, which is not the screen's.
+  ///
+  /// Everything downstream of this clock is expensive and none of it is quick: the
+  /// room painter stamps its spots and then softens the beams, the ball, the glints
+  /// with mask blurs, each of which is an offscreen pass; and [_publish] hands the
+  /// frame to the room, which repaints the light on the record with it. All of that
+  /// ran sixty times a second for a set of lamps that take four minutes to go round.
+  ///
+  /// At a thirtieth of a second it is the same picture — a beam that sweeps a wall in
+  /// several seconds does not move a pixel in sixteen milliseconds — for half the
+  /// work. The tick is what the painter repaints on, so the two cannot drift apart.
+  static const _frame = Duration(milliseconds: 32);
+  final ValueNotifier<int> _tick = ValueNotifier<int>(0);
+  DateTime? _ticked;
+
+  void _onFrame() {
+    final now = DateTime.now();
+    final last = _ticked;
+    // The first after anything starts goes at once: a light that waits a frame to
+    // come on is a light that flickers on.
+    if (last != null && now.difference(last) < _frame) return;
+    _ticked = now;
+    _publish();
+    _tick.value++;
   }
 
   @override
@@ -183,8 +209,8 @@ class _MirrorBallLightState extends State<MirrorBallLight> with TickerProviderSt
 
   void _listen() {
     if (identical(_heard, widget.pulse)) return;
-    _heard?.removeListener(_publish);
-    _heard = widget.pulse?..addListener(_publish);
+    _heard?.removeListener(_onFrame);
+    _heard = widget.pulse?..addListener(_onFrame);
   }
 
   /// Where the light is this frame, told to the room — the same sums the painter
@@ -237,7 +263,8 @@ class _MirrorBallLightState extends State<MirrorBallLight> with TickerProviderSt
 
   @override
   void dispose() {
-    _heard?.removeListener(_publish);
+    _heard?.removeListener(_onFrame);
+    _tick.dispose();
     _clock.dispose();
     _life.dispose();
     super.dispose();
@@ -273,6 +300,7 @@ class _MirrorBallLightState extends State<MirrorBallLight> with TickerProviderSt
             key: _paint,
             size: Size.infinite,
             painter: _Room(
+              tick: _tick,
               clock: _clock,
               life: _life,
               lamps: lamps,
@@ -478,6 +506,7 @@ const _cues = <(double, double, double, double)>[
 
 class _Room extends CustomPainter {
   _Room({
+    required this.tick,
     required this.clock,
     required this.life,
     required this.lamps,
@@ -486,7 +515,12 @@ class _Room extends CustomPainter {
     this.pulse,
     this.room,
     this.toLocal,
-  }) : super(repaint: Listenable.merge([clock, life, if (pulse != null) pulse]));
+  }) : super(repaint: tick);
+
+  /// What it repaints on: the light's own frame rate rather than the screen's. See
+  /// _MirrorBallLightState._onFrame. The clock and the fade are still read for where
+  /// everything is; they are simply not what wakes the painter.
+  final ValueListenable<int> tick;
 
   final AnimationController clock;
   final Animation<double> life;

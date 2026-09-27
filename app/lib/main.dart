@@ -16,6 +16,7 @@ import 'package:provider/provider.dart';
 import 'src/state/app_log.dart';
 import 'src/state/app_state.dart';
 import 'src/state/selection.dart';
+import 'src/state/frame_watch.dart';
 import 'src/state/playback_log.dart';
 import 'src/state/player.dart';
 import 'src/ui/search_page.dart' show searchWanted;
@@ -50,6 +51,10 @@ bool get onADesk =>
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // How long the frames are taking, on the machine they are slow on: see
+  // frame_watch.dart. Receiving them costs nothing and it is the only way anything
+  // here finds out whether a slow phone is slow in Dart or on the GPU.
+  FrameWatch.watch();
   // What the app says, kept in a file on a desk: see app_log.dart.
   unawaited(startAppLog());
   // And on a phone, where there is no log file, the same errors into the playback log
@@ -455,7 +460,6 @@ void _fontLicences() {
   LicenseRegistry.addLicense(() async* {
     for (final (names, file) in const [
       (['Archivo'], 'OFL-Archivo.txt'),
-      (['Bodoni Moda'], 'OFL-BodoniModa.txt'),
       (['Courier Prime'], 'OFL-CourierPrime.txt'),
       (['Manrope'], 'OFL-Manrope.txt'),
       (['Permanent Marker'], 'LICENSE-PermanentMarker.txt'),
