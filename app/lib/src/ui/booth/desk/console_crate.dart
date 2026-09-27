@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -877,10 +878,13 @@ class _RowState extends State<_Row> {
       ),
     );
     if (!ready) return row;
-    return Draggable<Track>(
-      data: t,
-      dragAnchorStrategy: pointerDragAnchorStrategy,
-      feedback: Material(
+    // A record is dragged onto a deck — with a mouse. On a touch screen a plain
+    // Draggable takes the gesture the moment a finger moves at all, whichever way it
+    // moved, so it beat the list to every swipe and the crate could not be scrolled:
+    // every attempt picked a record up instead. A finger has no scroll wheel to fall
+    // back on, so there it has to be asked for — held, then dragged, the way a phone
+    // asks for anything it is going to pick up.
+    final feedback = Material(
         color: Colors.transparent,
         child: Container(
           padding: const EdgeInsets.all(6),
@@ -905,12 +909,34 @@ class _RowState extends State<_Row> {
             ],
           ),
         ),
-      ),
-      childWhenDragging: Opacity(opacity: 0.4, child: row),
-      child: row,
     );
+    final faded = Opacity(opacity: 0.4, child: row);
+    return _touchPointer
+        ? LongPressDraggable<Track>(
+            data: t,
+            dragAnchorStrategy: pointerDragAnchorStrategy,
+            feedback: feedback,
+            childWhenDragging: faded,
+            child: row,
+          )
+        : Draggable<Track>(
+            data: t,
+            dragAnchorStrategy: pointerDragAnchorStrategy,
+            feedback: feedback,
+            childWhenDragging: faded,
+            child: row,
+          );
   }
+
 }
+
+/// Whether a finger is doing the pointing, in which case the list needs the plain
+/// vertical drag for scrolling and anything that picks a record up has to be held
+/// first. With a mouse there is a wheel to scroll with, so a drag can mean a drag.
+bool get _touchPointer =>
+    !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS);
 
 /// Tempo and key, lit where they sit with the master.
 class _Facts extends StatelessWidget {
@@ -1218,22 +1244,32 @@ class _JobRowState extends State<_JobRow> {
       ),
     );
     if (t == null) return row;
-    return Draggable<Track>(
-      data: t,
-      dragAnchorStrategy: pointerDragAnchorStrategy,
-      feedback: Material(
-        color: Colors.transparent,
-        child: Container(
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            color: Console.raised,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Console.line),
-          ),
-          child: Artwork(track: t, size: 34, radius: 3),
+    // Held before it is picked up, where a finger is doing the pointing: the list
+    // needs the plain vertical drag for scrolling. See _Row.
+    final feedback = Material(
+      color: Colors.transparent,
+      child: Container(
+        padding: const EdgeInsets.all(6),
+        decoration: BoxDecoration(
+          color: Console.raised,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Console.line),
         ),
+        child: Artwork(track: t, size: 34, radius: 3),
       ),
-      child: row,
     );
+    return _touchPointer
+        ? LongPressDraggable<Track>(
+            data: t,
+            dragAnchorStrategy: pointerDragAnchorStrategy,
+            feedback: feedback,
+            child: row,
+          )
+        : Draggable<Track>(
+            data: t,
+            dragAnchorStrategy: pointerDragAnchorStrategy,
+            feedback: feedback,
+            child: row,
+          );
   }
 }
