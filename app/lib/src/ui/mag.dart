@@ -60,13 +60,24 @@ class Mag {
       );
 
   /// A number to be looked at: a chart position, a count, a time.
-  static TextStyle numerals(double size, {Color? color, bool italic = false}) => TextStyle(
-        fontFamily: _serif,
+  ///
+  /// Set in the display face, not the serif. Bodoni is a Didone — the thick strokes
+  /// are very thick and the thin ones are hairlines — and a hairline on the booth's
+  /// near-black panel is a grey line a pixel wide that the eye loses. A 147.0 that has
+  /// to be read off a deck in a moment is not a page number. Archivo's strokes are one
+  /// weight all the way round, so the number holds at any size and on any colour.
+  ///
+  /// Tabular figures because these numbers change while they are being looked at: a
+  /// BPM counting up should not shuffle sideways every time a 1 turns into an 8.
+  static TextStyle numerals(double size, {Color? color}) => TextStyle(
+        fontFamily: _display,
         fontSize: size,
-        fontStyle: italic ? FontStyle.italic : FontStyle.normal,
         fontWeight: FontWeight.w800,
         fontVariations: const [FontVariation('wght', 800)],
-        fontFeatures: const [FontFeature.liningFigures()],
+        fontFeatures: const [
+          FontFeature.liningFigures(),
+          FontFeature.tabularFigures(),
+        ],
         height: 1.0,
         color: color,
       );

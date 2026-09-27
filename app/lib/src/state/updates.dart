@@ -217,13 +217,23 @@ class Updates extends ChangeNotifier {
     state = Updating.checking;
     notifyListeners();
     final os = desktop;
+    String? left;
     if (os != null) {
       if (!Release.knows(running)) running = await stampBeside() ?? running;
+      // A swap that could not replace everything leaves a note in the folder it ran
+      // from, because by then there is no app left to tell. This is the app that came
+      // back: it is the one that can say it.
+      left = await swapTrouble();
       release = await publishedDesktop(baseUrl, os) ?? release;
     } else {
       release = await published(baseUrl) ?? release;
     }
-    state = available ? Updating.ready : Updating.idle;
+    if (left != null) {
+      trouble = left;
+      state = Updating.failed;
+    } else {
+      state = available ? Updating.ready : Updating.idle;
+    }
     notifyListeners();
   }
 
@@ -238,8 +248,7 @@ class Updates extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final dir = Directory(
-          '${(await getApplicationSupportDirectory()).path}/updates');
+      final dir = await updatesDir();
       await dir.create(recursive: true);
       // One file, replaced each time. Keeping every version ever fetched would quietly
       // fill the phone with sixty-megabyte copies of the same app.
@@ -291,7 +300,8 @@ class Updates extends ChangeNotifier {
       if (desktop != null) {
         // Unpacked now, while the app is still here to say what went wrong. The
         // swap itself waits for a word: it closes the window.
-        _staged = await stageDesktop(into, Directory('${dir.path}/stage'));
+        _staged = await stageDesktop(
+            into, Directory('${dir.path}${Platform.pathSeparator}stage'));
       }
       state = Updating.waiting;
       notifyListeners();
@@ -384,17 +394,35 @@ class Updates extends ChangeNotifier {
     if (await stage.exists()) await stage.delete(recursive: true);
     await stage.create(recursive: true);
     final zip = archive.path.endsWith('.zip');
-    var r = await Process.run(
-        'tar', [zip ? '-xf' : '-xzf', archive.path, '-C', stage.path]);
-    if (r.exitCode != 0 && zip && Platform.isWindows) {
-      r = await Process.run('powershell', [
-        '-NoProfile',
-        '-Command',
-        'Expand-Archive -Force -LiteralPath "${archive.path}" -DestinationPath "${stage.path}"',
-      ]);
+    String? went;
+    try {
+      final r = await Process.run(
+          'tar', [zip ? '-xf' : '-xzf', archive.path, '-C', stage.path]);
+      if (r.exitCode != 0) went = '${r.stderr}'.trim();
+    } on ProcessException catch (e) {
+      // Windows before 1803 has no tar at all, and then this throws rather than
+      // answering — which is not a bad download, it is a machine missing a program,
+      // and the machine has another one. Caught, or the fallback below is never
+      // reached on the very machines it is for.
+      went = e.message;
     }
-    if (r.exitCode != 0) {
-      throw FormatException('it could not be unpacked: ${r.stderr}'.trim());
+    if (went != null && zip && Platform.isWindows) {
+      try {
+        final r = await Process.run(windowsShell, [
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-Command',
+          'Expand-Archive -Force -LiteralPath "${archive.path}" -DestinationPath "${stage.path}"',
+        ]);
+        went = r.exitCode == 0 ? null : '${r.stderr}'.trim();
+      } on ProcessException catch (e) {
+        went = e.message;
+      }
+    }
+    if (went != null) {
+      throw FormatException('it could not be unpacked: $went'.trim());
     }
     final root = sourceRootIn(stage, exeName);
     if (root == null) throw FormatException('there is no $exeName in what arrived');
@@ -414,6 +442,9 @@ class Updates extends ChangeNotifier {
     return null;
   }
 
+  /// The name the report of a swap that could not finish is left under.
+  static const swapTroubleFile = 'swap-failed.txt';
+
   /// The few lines that do the swap once the app is gone.
   ///
   /// Given the app's process id, the unpacked build, the folder to put it in and the
@@ -421,26 +452,19 @@ class Updates extends ChangeNotifier {
   /// old — over, not instead of: a file the new build no longer ships is left, which
   /// is harmless, where deleting the folder first and then failing to copy would be
   /// no app at all — and start the program again from where it is.
+  ///
+  /// [beside] is where the script itself lives, and where it leaves a word about what
+  /// happened; on Windows it is also where a failed swap leaves [swapTroubleFile], for
+  /// the next run of the app to read and say out loud.
   static String swapScript({
     required String os,
     required int pid,
     required String from,
     required String into,
     required String exe,
+    String? beside,
   }) {
-    if (os == 'windows') {
-      return [
-        '@echo off',
-        'rem Written by WetOwl to bring in a new build of itself. Safe to delete.',
-        ':wait',
-        'tasklist /FI "PID eq $pid" 2>NUL | find "$pid" >NUL',
-        'if not errorlevel 1 (timeout /t 1 /nobreak >NUL & goto wait)',
-        'robocopy "$from" "$into" /E /R:30 /W:1 >NUL',
-        'if errorlevel 8 exit /b 1',
-        'start "" "$into\\$exe"',
-        '',
-      ].join('\r\n');
-    }
+    if (os == 'windows') return _windowsSwap(pid, from, into, exe, beside ?? into);
     return [
       '#!/bin/sh',
       '# Written by WetOwl to bring in a new build of itself. Safe to delete.',
@@ -465,6 +489,131 @@ class Updates extends ChangeNotifier {
 
   static String _sh(String s) => "'${s.replaceAll("'", "'\\''")}'";
 
+  /// The same job in PowerShell, because on Windows it is a different job.
+  ///
+  /// The old shape was a .cmd around robocopy, and robocopy cannot do the one thing
+  /// this needs. Windows will not let a file that something has open be written to —
+  /// and something usually does: the windowless fetcher runs from this very folder,
+  /// the separator may still be finishing a record, and a DLL the app mapped is not
+  /// always given back the instant the window shuts. Robocopy meets that with thirty
+  /// retries and then gives up, which is half a minute of waiting followed by a
+  /// half-written install and no app started.
+  ///
+  /// What Windows does allow is renaming a file that is open — the loader keeps the
+  /// handle, the name is free — so that is what this does: copy over it, and when
+  /// that is refused, move the old one aside and copy the new one into the name it
+  /// left. The old one goes at the start of the next update, when nothing holds it.
+  /// It is the same trick as the Linux branch's copy-and-rename, told the way this
+  /// system tells it.
+  ///
+  /// Whatever happens, it starts the app again. A swap that went wrong and left the
+  /// person looking at a closed window is worse than one that went wrong and said so.
+  static String _windowsSwap(
+      int pid, String from, String into, String exe, String beside) {
+    String q(String s) => "'${s.replaceAll("'", "''")}'";
+    return [
+      '# Written by WetOwl to bring in a new build of itself. Safe to delete.',
+      '\$app  = $pid',
+      '\$from = ${q(from)}',
+      '\$into = ${q(into)}',
+      '\$exe  = ${q(exe)}',
+      '\$log  = Join-Path ${q(beside)} \'swap-log.txt\'',
+      '\$bad  = Join-Path ${q(beside)} \'$swapTroubleFile\'',
+      'function Say(\$m) {',
+      '  try { Add-Content -LiteralPath \$log -Value ((Get-Date -Format \'HH:mm:ss\') + \'  \' + \$m) } catch {}',
+      '}',
+      'try { Remove-Item -LiteralPath \$bad -Force -ErrorAction SilentlyContinue } catch {}',
+      'Say ("waiting for " + \$app)',
+      '# Gone, or gone on too long: two minutes is far past anything but a hung app,',
+      '# and going ahead is better than never coming back.',
+      '\$waited = 0',
+      'while (\$waited -lt 120000) {',
+      '  if (-not (Get-Process -Id \$app -ErrorAction SilentlyContinue)) { break }',
+      '  Start-Sleep -Milliseconds 250',
+      '  \$waited += 250',
+      '}',
+      'Start-Sleep -Milliseconds 400',
+      '# Last update\'s cast-offs, now that nothing has them open.',
+      'try {',
+      '  Get-ChildItem -LiteralPath \$into -Recurse -Force -Filter \'*.wetowl-old\' -ErrorAction SilentlyContinue |',
+      '    ForEach-Object { try { Remove-Item -LiteralPath \$_.FullName -Force } catch {} }',
+      '} catch {}',
+      '\$stuck = @()',
+      '# As the system spells it, with no separator on the end: what is left of each',
+      '# name once this is cut off the front is where it goes in the install.',
+      '\$root = \$from',
+      'try { \$root = (Resolve-Path -LiteralPath \$from).Path } catch {}',
+      '\$root = \$root.TrimEnd(\'\\\').TrimEnd(\'/\')',
+      'foreach (\$f in Get-ChildItem -LiteralPath \$root -Recurse -File -Force) {',
+      '  \$rel = \$f.FullName.Substring(\$root.Length + 1)',
+      '  \$dst = Join-Path \$into \$rel',
+      '  \$dir = Split-Path -Parent \$dst',
+      '  if (-not (Test-Path -LiteralPath \$dir)) {',
+      '    try { New-Item -ItemType Directory -Path \$dir -Force | Out-Null } catch {}',
+      '  }',
+      '  try {',
+      '    Copy-Item -LiteralPath \$f.FullName -Destination \$dst -Force -ErrorAction Stop',
+      '  } catch {',
+      '    try {',
+      '      \$aside = \$dst + \'.wetowl-old\'',
+      '      Remove-Item -LiteralPath \$aside -Force -ErrorAction SilentlyContinue',
+      '      Move-Item -LiteralPath \$dst -Destination \$aside -Force -ErrorAction Stop',
+      '      Copy-Item -LiteralPath \$f.FullName -Destination \$dst -Force -ErrorAction Stop',
+      '      Say ("moved aside: " + \$rel)',
+      '    } catch {',
+      '      \$stuck += \$rel',
+      '      Say ("could not replace " + \$rel + ": " + \$_.Exception.Message)',
+      '    }',
+      '  }',
+      '}',
+      'if (\$stuck.Count -gt 0) {',
+      '  try {',
+      '    Set-Content -LiteralPath \$bad -Value ((\'the new build could not replace these files:\', \'\') + \$stuck)',
+      '  } catch {}',
+      '}',
+      'Say ("done, " + \$stuck.Count + " left behind")',
+      '\$run = Join-Path \$into \$exe',
+      'try { Start-Process -FilePath \$run -WorkingDirectory \$into } catch { Say ("could not start: " + \$_.Exception.Message) }',
+      '',
+    ].join('\r\n');
+  }
+
+  /// Where the download, the swap script and the swap's own word about itself live.
+  static Future<Directory> updatesDir() async =>
+      Directory('${(await getApplicationSupportDirectory()).path}/updates');
+
+  /// Windows PowerShell, by its full name.
+  ///
+  /// It is on the path on every Windows this app runs on, but the path is somebody
+  /// else's to change and a swap that cannot start is an app that does not come back,
+  /// so it is asked for where Windows keeps it and only looked up by name if it is
+  /// somehow not there.
+  static String get windowsShell {
+    final root = Platform.environment['SystemRoot'] ?? r'C:\Windows';
+    const under = r'\System32\WindowsPowerShell\v1.0\powershell.exe';
+    final full = '$root$under';
+    return File(full).existsSync() ? full : 'powershell.exe';
+  }
+
+  /// What the last swap could not do, if it could not do something.
+  ///
+  /// Read once and then forgotten: the point is to say it to the person who is sitting
+  /// in front of a build that is half the one they asked for, not to keep saying it.
+  static Future<String?> swapTrouble() async {
+    try {
+      final f = File('${(await updatesDir()).path}'
+          '${Platform.pathSeparator}$swapTroubleFile');
+      if (!await f.exists()) return null;
+      final said = (await f.readAsString()).trim();
+      try {
+        await f.delete();
+      } catch (_) {}
+      return said.isEmpty ? null : said;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Stops the windowless helper before the files are swapped (set by the pool).
   static Future<void> Function()? stopHelperForUpdate;
 
@@ -484,14 +633,33 @@ class Updates extends ChangeNotifier {
       // The background helper runs from this folder too: told to stop first, so its
       // own file can be replaced, and started again as the new build by the new app.
       await stopHelperForUpdate?.call();
-      final scripts = from.parent;
+      // Beside the download rather than inside the unpacked build: the next update
+      // empties this folder but deletes the stage outright, and what the swap has to
+      // say about itself has to outlive the swap.
+      final scripts = await updatesDir();
       final script = File(
-          '${scripts.path}${Platform.pathSeparator}swap${os == 'windows' ? '.cmd' : '.sh'}');
+          '${scripts.path}${Platform.pathSeparator}swap${os == 'windows' ? '.ps1' : '.sh'}');
       await script.writeAsString(swapScript(
-          os: os, pid: pid, from: from.path, into: into.path, exe: exeName));
+          os: os,
+          pid: pid,
+          from: from.path,
+          into: into.path,
+          exe: exeName,
+          beside: scripts.path));
       // Detached: not this app's child, so it is still there after this app is not.
       if (os == 'windows') {
-        await Process.start('cmd.exe', ['/c', script.path],
+        await Process.start(
+            windowsShell,
+            [
+              '-NoProfile',
+              '-NonInteractive',
+              '-ExecutionPolicy',
+              'Bypass',
+              '-WindowStyle',
+              'Hidden',
+              '-File',
+              script.path,
+            ],
             mode: ProcessStartMode.detached);
       } else {
         await Process.start('sh', [script.path], mode: ProcessStartMode.detached);
