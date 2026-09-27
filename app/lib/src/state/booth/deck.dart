@@ -7,6 +7,7 @@ import 'package:just_audio_background/just_audio_background.dart';
 
 import '../../api/client.dart';
 import '../../api/models.dart';
+import '../playback_log.dart';
 import 'mixer.dart' show StemLevels;
 import 'parts.dart';
 
@@ -190,6 +191,7 @@ class Deck extends ChangeNotifier {
   /// is — a seek, a start, a stall, a loop jumping back — is believed outright.
   void _anchor(Duration at) {
     final now = DateTime.now();
+    _watchTheWrap(at, now);
     // A seek asked for and not yet arrived: the engine goes on reporting where it
     // still is for a few frames, and those frames are a lie about where the record is.
     //
@@ -615,6 +617,48 @@ class Deck extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The engine's loop coming round, timed: how long it actually took against how
+  /// long the loop is worth. The difference is what the wrap costs.
+  void _watchTheWrap(Duration at, DateTime now) {
+    final start = loopStart, end = loopEnd;
+    if (!_engineLooping || start == null || end == null || !playing || end <= start) {
+      _wrappedAt = null;
+      return;
+    }
+    // Come round: the engine says it is back near the loop's start when the reckoning
+    // had it near the end.
+    final span = end - start;
+    if (at > start + span ~/ 2 || positionAt(now) < end - span ~/ 2) return;
+    final was = _wrappedAt;
+    _wrappedAt = now;
+    if (was == null) return;
+    final wall = now.difference(was);
+    final want = Duration(microseconds: (span.inMicroseconds / (tempo <= 0 ? 1 : tempo)).round());
+    final late = wall - want;
+    // One wrap's reading is noisy — a report can arrive a frame either way — so it is
+    // eased into, and anything wilder than the clamp is the wrong thing entirely.
+    if (late.abs() > _mostLate * 2) return;
+    final want2 = loopLate + Duration(microseconds: (late.inMicroseconds * 0.25).round());
+    loopLate = want2 < Duration.zero
+        ? Duration.zero
+        : want2 > _mostLate
+            ? _mostLate
+            : want2;
+    // Told to the engine while the loop is still running, once it is worth telling:
+    // a loop somebody is sitting on should come good under them, not on the next one.
+    if ((loopLate - _appliedLate).abs() > const Duration(milliseconds: 6)) {
+      _appliedLate = loopLate;
+      debugPrint('deck: $name loop wraps ${late.inMilliseconds} ms late; '
+          'the end is pulled ${loopLate.inMilliseconds} ms early');
+      PlaybackLog.note('BOOTH loop wrap ${late.inMilliseconds} ms late, '
+          'end pulled ${loopLate.inMilliseconds} ms early');
+      unawaited(_loopInEngine());
+    }
+  }
+
+  /// What the engine was last told to pull the end back by.
+  Duration _appliedLate = Duration.zero;
+
   /// Where a seek was aimed and when, until the engine reports having got there.
   Duration? _settling;
   DateTime _settlingAt = DateTime.now();
@@ -733,10 +777,39 @@ class Deck extends ChangeNotifier {
   Future<bool> Function(Duration? from, Duration? to)? engineLoop;
   bool _engineLooping = false;
 
+  /// How late the engine's own loop comes round, learned while one runs.
+  ///
+  /// A desk loops inside mpv, which wraps an ab-loop by *seeking* — and a seek costs
+  /// time: the decoder restarts, the chain is flushed, the output buffer refills. So
+  /// the loop is musically long by whatever that costs, every single time round, and
+  /// a loop that is a few milliseconds long every bar is heard as a stumble rather
+  /// than a loop. It is the same fault the Dart fallback carries its overshoot for;
+  /// the engine's own loop has nowhere to carry it, so the end is simply pulled
+  /// earlier by what the wrap is measured to cost.
+  ///
+  /// Learned rather than guessed: it is a different number on every machine, every
+  /// container and every buffer size. Clamped hard, because a bad reading here
+  /// shortens a musical loop, which is worse than the delay it is curing.
+  static Duration loopLate = Duration.zero;
+  static const _mostLate = Duration(milliseconds: 120);
+  DateTime? _wrappedAt;
+
+  /// The end the engine is given: the musical one, less what the wrap costs.
+  Duration? get _engineLoopEnd {
+    final end = loopEnd, start = loopStart;
+    if (end == null || start == null) return end;
+    // In the record's own time, which is what a loop's ends are in.
+    final pull = Duration(microseconds: (loopLate.inMicroseconds * tempo).round());
+    final back = end - pull;
+    return back > start + beatInRecord ~/ 4 ? back : end;
+  }
+
   Future<void> _loopInEngine() async {
     final f = engineLoop;
     if (f == null) return;
-    final took = await f(loopStart, loopEnd);
+    _wrappedAt = null;
+    _appliedLate = loopLate;
+    final took = await f(loopStart, _engineLoopEnd);
     _engineLooping = took && loopStart != null;
     if (_engineLooping) {
       _loop?.cancel();
