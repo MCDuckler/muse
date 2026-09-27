@@ -72,16 +72,15 @@ void main() {
   test('a desk\'s kills and filter are one mpv chain', () {
     const off = EqSet.flat;
     expect(DesktopMixer.chain(eq: off, filter: 0), '', reason: 'nothing wanted: no filters');
-    expect(DesktopMixer.chain(eq: const EqSet(low: EqSet.killed), filter: 0),
-        'lavfi=[lowshelf=f=250:g=-40.0]');
-    expect(
-        DesktopMixer.chain(
-            eq: const EqSet(low: EqSet.killed, mid: EqSet.killed, high: EqSet.killed),
-            filter: 0),
-        contains('equalizer=f=1000'));
-    expect(DesktopMixer.chain(eq: const EqSet(mid: -6), filter: 0),
-        'lavfi=[equalizer=f=1000:width_type=o:width=2:g=-6.0]',
-        reason: 'a knob turned down a little, not a kill');
+    // The bands are a three-way split now, not three tone controls: whatever any one
+    // of them is set to, all three are in the chain, each with a level of its own.
+    final killed = DesktopMixer.chain(eq: const EqSet(low: EqSet.killed), filter: 0);
+    expect(killed, contains('volume=-40.0dB'), reason: 'the low band, off');
+    expect('volume=0.0dB'.allMatches(killed).length, 2, reason: 'the other two, untouched');
+    expect(killed, contains('amix=inputs=3:normalize=0'));
+    final down = DesktopMixer.chain(eq: const EqSet(mid: -6), filter: 0);
+    expect(down, contains('volume=-6.0dB'), reason: 'a knob turned down a little');
+    expect('volume=0.0dB'.allMatches(down).length, 2);
     expect(DesktopMixer.chain(eq: off, filter: -1), 'lavfi=[lowpass=f=60]');
     expect(DesktopMixer.chain(eq: off, filter: 1), 'lavfi=[highpass=f=8000]');
     expect(DesktopMixer.chain(eq: off, filter: -0.5), contains('lowpass=f='));

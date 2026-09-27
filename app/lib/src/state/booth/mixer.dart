@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
 import 'deck.dart';
 import 'mixer_none.dart' if (dart.library.js_interop) 'mixer_web.dart' as web;
@@ -365,8 +366,42 @@ class AndroidMixer extends VolumeMixer {
     }
   }
 
+  /// Whether this phone has DynamicsProcessing, asked once. See Bands.kt.
+  static const _bands = MethodChannel('muse/bands');
+  bool? _canSplit;
+
+  Future<bool> _splitReady() async {
+    final known = _canSplit;
+    if (known != null) return known;
+    try {
+      return _canSplit = await _bands.invokeMethod<bool>('usable') ?? false;
+    } catch (_) {
+      return _canSplit = false;
+    }
+  }
+
   @override
   Future<void> setEq(Deck deck, EqSet eq) async {
+    // The three bands split where a mixer splits them, where the phone can: the
+    // system's graphic equalizer is the maker's bands at the maker's range — often
+    // fifteen decibels either way — so a kill arrived as a lean. See Bands.kt.
+    if (await _splitReady()) {
+      final session = deck.player.androidAudioSessionId;
+      if (session != null && session != 0) {
+        try {
+          final done = await _bands.invokeMethod<bool>('set', {
+            'session': session,
+            'low': eq.low,
+            'mid': eq.mid,
+            'high': eq.high,
+          });
+          if (done ?? false) return;
+        } catch (_) {
+          // Fall through to the phone's own equalizer.
+        }
+        _canSplit = false;
+      }
+    }
     final system = deck.equalizer;
     if (system == null) return;
     try {

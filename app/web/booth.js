@@ -44,9 +44,27 @@
     if (deck.chain) return deck.chain;
     if (!ctx || ctx.state !== 'running' || fromHere(deck.el) !== true) return null;
     var source = ctx.createMediaElementSource(deck.el);
-    var low = ctx.createBiquadFilter(); low.type = 'lowshelf'; low.frequency.value = 250; low.gain.value = 0;
-    var mid = ctx.createBiquadFilter(); mid.type = 'peaking'; mid.frequency.value = 1000; mid.Q.value = 0.7; mid.gain.value = 0;
-    var high = ctx.createBiquadFilter(); high.type = 'highshelf'; high.frequency.value = 4000; high.gain.value = 0;
+    // The record split three ways, each band with a level of its own, added back —
+    // a mixer's EQ, not a tone control. A shelf/bell/shelf stack was measured
+    // killing LOW at the cost of 7 dB at 700 Hz, and all three down left -33 dB of
+    // signal where three knobs at the bottom should be silence.
+    //
+    // Fourth-order Linkwitz-Riley either side of each crossover — two cascaded
+    // Butterworth biquads, which is what a pair has to be to sum flat.
+    var LOW_X = 300, HIGH_X = 3000;
+    function pass(kind, hz) {
+      var f = ctx.createBiquadFilter();
+      f.type = kind; f.frequency.value = hz; f.Q.value = Math.SQRT1_2;
+      return f;
+    }
+    var lowA = pass('lowpass', LOW_X), lowB = pass('lowpass', LOW_X);
+    var midA = pass('highpass', LOW_X), midB = pass('highpass', LOW_X);
+    var midC = pass('lowpass', HIGH_X), midD = pass('lowpass', HIGH_X);
+    var highA = pass('highpass', HIGH_X), highB = pass('highpass', HIGH_X);
+    var low = ctx.createGain(); low.gain.value = 1;
+    var mid = ctx.createGain(); mid.gain.value = 1;
+    var high = ctx.createGain(); high.gain.value = 1;
+    var sum = ctx.createGain(); sum.gain.value = 1;
     var lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 22000; lp.Q.value = 0.9;
     var hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 10; hp.Q.value = 0.9;
     var level = ctx.createGain(); level.gain.value = deck.wanted.level;
@@ -62,7 +80,11 @@
     // And the element's own volume is let go of: from here the gain is the level, and
     // a volume left at half from before it was routed would halve it twice.
     try { deck.el.volume = 1; } catch (e) {}
-    [low, mid, high, lp, hp, gate, level].reduce(function (a, b) { a.connect(b); return b; }, source);
+    source.connect(lowA); lowA.connect(lowB); lowB.connect(low); low.connect(sum);
+    source.connect(midA); midA.connect(midB); midB.connect(midC); midC.connect(midD);
+    midD.connect(mid); mid.connect(sum);
+    source.connect(highA); highA.connect(highB); highB.connect(high); high.connect(sum);
+    [lp, hp, gate, level].reduce(function (a, b) { a.connect(b); return b; }, sum);
     level.connect(ctx.destination);
     deck.chain = { low: low, mid: mid, high: high, lp: lp, hp: hp, level: level,
                    gate: gate, lfo: lfo, depth: depth };
@@ -71,14 +93,17 @@
   }
 
   // The three bands, in decibels as the app sets them: 0 is flat and -40 is a kill,
-  // gone to the ear and back without a click.
+  // gone to the ear and back without a click. A band's *level* now, not a filter's
+  // gain, so the decibels have to be turned into one.
+  function gainOf(db) { return db <= -40 ? 0 : Math.pow(10, db / 20); }
+
   function apply(deck) {
     var c = deck.chain, w = deck.wanted;
     if (!c) return;
     var now = ctx.currentTime;
-    c.low.gain.setTargetAtTime(w.low, now, 0.02);
-    c.mid.gain.setTargetAtTime(w.mid, now, 0.02);
-    c.high.gain.setTargetAtTime(w.high, now, 0.02);
+    c.low.gain.setTargetAtTime(gainOf(w.low), now, 0.02);
+    c.mid.gain.setTargetAtTime(gainOf(w.mid), now, 0.02);
+    c.high.gain.setTargetAtTime(gainOf(w.high), now, 0.02);
     // The filter: one knob, closing a low-pass to the left and a high-pass to the
     // right, on a log scale so the middle of the travel is the middle of the ear.
     var f = w.filter;

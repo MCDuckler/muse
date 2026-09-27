@@ -96,6 +96,26 @@ class MainActivity : AudioServiceActivity() {
             }
         // See Keepalive: the radio has to stay up for a stream to keep arriving once
         // the screen is off.
+        // The booth's three bands, split where a mixer splits them. See Bands.
+        MethodChannel(engine.dartExecutor.binaryMessenger, "muse/bands")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "usable" -> result.success(Bands.usable)
+                    "set" -> result.success(
+                        Bands.set(
+                            (call.argument<Int>("session")) ?: 0,
+                            (call.argument<Double>("low"))?.toFloat() ?: 0f,
+                            (call.argument<Double>("mid"))?.toFloat() ?: 0f,
+                            (call.argument<Double>("high"))?.toFloat() ?: 0f,
+                        )
+                    )
+                    "drop" -> {
+                        Bands.drop((call.argument<Int>("session")) ?: 0)
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         // Fetching a new version and asking to install it. See Installer.
         MethodChannel(engine.dartExecutor.binaryMessenger, "muse/install")
             .setMethodCallHandler { call, result ->

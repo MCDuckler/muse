@@ -75,9 +75,34 @@ class DesktopMixer extends VolumeMixer {
   }
 
   /// The bands and passes every deck carries. Named, so each can be spoken to.
-  static const _bandsOnly = 'lowshelf@low=f=250:g=0,'
-      'equalizer@mid=f=1000:width_type=o:width=2:g=0,'
-      'highshelf@high=f=4000:g=0,'
+  /// Where the three bands are divided. A DJ mixer's are about here.
+  static const lowCross = 300, highCross = 3000;
+
+  /// The bands every deck carries: the record split three ways and each part given a
+  /// level of its own, not three tone controls laid over one another.
+  ///
+  /// It was a low shelf, a bell and a high shelf — which is a tone control, and does
+  /// not do what a mixer's EQ does. Measured on noise, against flat:
+  ///
+  ///   * killing LOW took 7 dB out of 700 Hz and 4 dB out of 1 kHz, so a bass swap
+  ///     hollowed the voice of the record it was swapping under;
+  ///   * killing HI took 4 dB out of 1 kHz;
+  ///   * all three killed left −33 dB, plainly audible, where three knobs fully down
+  ///     should be silence;
+  ///   * all three at +6 gave anything from +2.6 to +6.5, with a hole at 250–400 Hz
+  ///     in the gap between the shelf and the bell.
+  ///
+  /// Split at 300 Hz and 3 kHz with fourth-order Linkwitz-Riley crossovers — two
+  /// cascaded Butterworths a side, which is what sums flat — each band through its own
+  /// volume, and added back. The same measurements then read: kills that leave the
+  /// other bands inside half a decibel, silence with all three down, and +6 across the
+  /// band within a decibel and a half.
+  static const _bandsOnly = 'asplit=3[b1][b2][b3];'
+      '[b1]lowpass=f=$lowCross:p=2,lowpass=f=$lowCross:p=2,volume@low=1[lo];'
+      '[b2]highpass=f=$lowCross:p=2,highpass=f=$lowCross:p=2,'
+      'lowpass=f=$highCross:p=2,lowpass=f=$highCross:p=2,volume@mid=1[mi];'
+      '[b3]highpass=f=$highCross:p=2,highpass=f=$highCross:p=2,volume@high=1[hi];'
+      '[lo][mi][hi]amix=inputs=3:normalize=0,'
       'highpass@hp=f=20:m=0,'
       'lowpass@lp=f=15000:m=0,'
       // The gate, off. Its level is an *expression* evaluated every frame rather than
@@ -306,10 +331,12 @@ class DesktopMixer extends VolumeMixer {
     // Closing towards 60 Hz on a log scale, like the browser's; never above what a
     // 32 kHz part can carry, which ffmpeg would refuse.
     final lp = filter < 0 ? math.min(15000.0, 22000 * math.pow(60 / 22000, -filter)) : 15000.0;
+    // A band's level, not a shelf's gain: '-40dB' is what ffmpeg's volume wants, and
+    // a kill is then a band that is gone rather than one that is leaning.
     return [
-      ('lowshelf@low', 'g', db(eq.low)),
-      ('equalizer@mid', 'g', db(eq.mid)),
-      ('highshelf@high', 'g', db(eq.high)),
+      ('volume@low', 'volume', '${db(eq.low)}dB'),
+      ('volume@mid', 'volume', '${db(eq.mid)}dB'),
+      ('volume@high', 'volume', '${db(eq.high)}dB'),
       ('highpass@hp', 'f', '${hp.round()}'),
       ('highpass@hp', 'm', filter > 0 ? '1' : '0'),
       ('lowpass@lp', 'f', '${lp.round()}'),
@@ -321,9 +348,13 @@ class DesktopMixer extends VolumeMixer {
   static String chain({required EqSet eq, required double filter}) {
     String db(double v) => v.toStringAsFixed(1);
     final parts = <String>[
-      if (eq.low != 0) 'lowshelf=f=250:g=${db(eq.low)}',
-      if (eq.mid != 0) 'equalizer=f=1000:width_type=o:width=2:g=${db(eq.mid)}',
-      if (eq.high != 0) 'highshelf=f=4000:g=${db(eq.high)}',
+      if (!eq.isFlat)
+        'asplit=3[b1][b2][b3];'
+            '[b1]lowpass=f=$lowCross:p=2,lowpass=f=$lowCross:p=2,volume=${db(eq.low)}dB[lo];'
+            '[b2]highpass=f=$lowCross:p=2,highpass=f=$lowCross:p=2,'
+            'lowpass=f=$highCross:p=2,lowpass=f=$highCross:p=2,volume=${db(eq.mid)}dB[mi];'
+            '[b3]highpass=f=$highCross:p=2,highpass=f=$highCross:p=2,volume=${db(eq.high)}dB[hi];'
+            '[lo][mi][hi]amix=inputs=3:normalize=0',
     ];
     if (filter < 0) {
       final hz = 22000 * math.pow(60 / 22000, -filter);

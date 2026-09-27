@@ -704,12 +704,28 @@ void main() {
             '$target $command': value,
         };
 
-    test('a kill is a gain on the one band', () {
+    test('a kill is the one band turned off, not a shelf leaned on', () {
+      // The bands are split and each has a level of its own now, so a kill is that
+      // band's level and nothing else's — where a shelf's gain took the neighbouring
+      // bands down with it (measured: killing LOW cost 7 dB at 700 Hz).
       final c = said(const EqSet(low: EqSet.killed), 0);
-      expect(c['lowshelf@low g'], '-40.0');
-      expect(c['equalizer@mid g'], '0.0');
+      expect(c['volume@low volume'], '-40.0dB');
+      expect(c['volume@mid volume'], '0.0dB');
+      expect(c['volume@high volume'], '0.0dB');
       expect(c['highpass@hp m'], '0', reason: 'the passes are out of the sound');
       expect(c['lowpass@lp m'], '0');
+    });
+
+    test('the split is a Linkwitz-Riley pair, which is what sums flat', () {
+      // Two cascaded Butterworths a side at each crossover: one alone leaves a dip
+      // where the bands meet, and the bands have to add back up to the record.
+      final chain = DesktopMixer.bands;
+      expect('lowpass=f=${DesktopMixer.lowCross}:p=2'.allMatches(chain).length, 2);
+      expect('highpass=f=${DesktopMixer.lowCross}:p=2'.allMatches(chain).length, 2);
+      expect('lowpass=f=${DesktopMixer.highCross}:p=2'.allMatches(chain).length, 2);
+      expect('highpass=f=${DesktopMixer.highCross}:p=2'.allMatches(chain).length, 2);
+      expect(chain, contains('amix=inputs=3:normalize=0'),
+          reason: 'added back at unity, not averaged');
     });
 
     test('the filter knob mixes one pass in and moves it', () {
