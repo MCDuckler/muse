@@ -143,6 +143,18 @@ itself is defensible as a hard limit; the curve inside it is not.
 > across the reach. A 5% stretch now scores what 10% used to (0.284 against 0.287);
 > 16% is unchanged at the floor. The reach still says what is possible.
 
+> **Done (2026-09-27, 065cda0 and after).** Items 3, 4 and 6 below, and the half of 5
+> that the plain analysis can carry: the sweep is 8 bars and the unsynced fade 4; a
+> chorus or a drop is left at its end where the sections are known, and the server's
+> outro finder marks down a change the record gets louder over; a hand's nudge is
+> kept as the record's cue (`track_cues`) and comes first. What is still not done is
+> salience proper — "is there something worth landing on here" — and the benchmark
+> that would let any of these be tuned by a number rather than by reading: over
+> 5,243 records the fallback out point went from 68 % to 5 %, in points past bar 32
+> from 14 % to 3 %, out points inside a drop or chorus from 41 % to about 27 %, and
+> the last figure did not move under five weightings of the finder, which is the
+> sign that the next step is fifty hand-placed cues, not a sixth weighting.
+
 **3. Two bar counts are not phrase multiples.** `AutoMix.choose` returns `bars: 12` for a
 sweep and `bars: 2`/`bars: 4` for fades. The measured histogram peaks every 32 beats —
 8 bars. Twelve bars is three four-bar periods, so it is not *wrong* by Rule 2, but it is

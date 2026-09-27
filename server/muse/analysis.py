@@ -16,6 +16,8 @@ ends where the song first gets loud and stays loud, the outro starts where it la
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 # The same decode as the beats: mono at this rate.
@@ -53,6 +55,18 @@ _GRID_FROM_TOP = 1.0
 
 # A bar has to be this much of the song's loudest to count as the song being "on".
 _ON = 0.6
+
+# An intro's end past this many bars, by the phrase rule, is checked against the
+# first steady marker (analysis.sections).
+_INTRO_LATE_BARS = 16
+
+# The outro finder's weights (analysis.outro_start), in order: loudness fall, bass
+# onset fall, change of sound, on an 8-bar count from the end, room for a move,
+# lateness, still-on penalty, the start of the candidate window as a share of the
+# record, and the penalty for a change the record gets *louder* over (the start of a
+# drop or a chorus is the clearest change in most records, and the one place not to
+# leave). Overridable from MUSE_OUTRO_W for the experiments that set them.
+_OUTRO_W = tuple(float(v) for v in (os.environ.get("MUSE_OUTRO_W") or "1,0.6,0.8,0.5,0.4,0.3,0.6,0.5,1.0").split(","))
 
 # Bars either side of a drop that are compared, and how much louder the after has to
 # be than the before for it to be one. Eight bars is the shortest breakdown anybody
@@ -408,11 +422,17 @@ def sections(phrase_bars: list[int], levels: list[int], n_bars: int,
         if b > 0 and steady(b):
             intro_end = b
             break
-    grid = markers if markers else list(range(0, n_bars, 4))
-    for m in grid:
-        if m > 0 and steady(m):
-            intro_end = m if intro_end is None else min(intro_end, m)
-            break
+    # The phrase bar is the better answer where it is within a couple of phrases — a
+    # clear change of sound is where a section starts; the marker rule (any steady
+    # marker) only steps in where the phrase rule would park the record late. Taken
+    # everywhere, it put the median in point at bar 4 on records that are loud from
+    # the top: a four-bar marker is not where a DJ counts a record in from.
+    if intro_end is None or intro_end > _INTRO_LATE_BARS:
+        grid = markers if markers else list(range(0, n_bars, 4))
+        for m in grid:
+            if m > 0 and steady(m):
+                intro_end = m if intro_end is None else min(intro_end, m)
+                break
     if intro_end is None:
         for i in range(0, n_bars):
             if steady(i):
@@ -462,7 +482,9 @@ def outro_start(energy_db: np.ndarray, drums: np.ndarray, novelty: np.ndarray,
     d = np.asarray(drums[:n], dtype=float) if drums is not None and len(drums) >= n else np.zeros(n)
     nv = np.asarray(novelty[:n], dtype=float) if novelty is not None and len(novelty) >= n else np.zeros(n)
     nv_top = float(nv.max()) if nv.size and nv.max() > 0 else 1.0
-    grid = [m for m in (markers or list(range(0, n, 4))) if n // 2 <= m <= n - 8]
+    w_fall, w_drum, w_change, w_on8, w_room, w_late, w_still, window, w_rise = (tuple(_OUTRO_W) + (1.0,))[:9]
+    start = int(n * window)
+    grid = [m for m in (markers or list(range(0, n, 4))) if start <= m <= n - 8]
     best, best_score, best_change = None, -1e9, 0.0
     for m in grid:
         before = e[max(0, m - 8):m]
@@ -475,9 +497,12 @@ def outro_start(energy_db: np.ndarray, drums: np.ndarray, novelty: np.ndarray,
         change = float(nv[m] / nv_top) if m < len(nv) else 0.0
         on8 = 1.0 if (n - m) % 8 == 0 else 0.5 if (n - m) % 4 == 0 else 0.0
         room = float(np.clip((n - m - 8) / 8.0, 0.0, 1.0))
-        late = (m - n / 2) / (n / 2)
+        late = (m - start) / max(1, n - 8 - start)
         still_on = 1.0 if after.mean() >= p90 - 2.0 else 0.0
-        score = fall + 0.6 * drum_fall + 0.8 * change + 0.5 * on8 + 0.4 * room + 0.3 * late - 0.6 * still_on
+        # Louder after than before: the way into a drop, not out of a record.
+        rise = float(np.clip((after.mean() - before.mean()) / 3.0, 0.0, 1.0))
+        score = (w_fall * fall + w_drum * drum_fall + w_change * change + w_on8 * on8 + w_room * room
+                 + w_late * late - w_still * still_on - w_rise * rise)
         if score > best_score:
             best, best_score, best_change = m, score, fall + drum_fall + change
     if best is not None and best_change >= 0.5:

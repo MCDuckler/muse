@@ -45,7 +45,7 @@ from . import analysis
 # 6: an exact grid carried on to where the sound starts and ends (the tracker lost the
 #    first two or three beats of nearly every record, and with them its first bar),
 #    and the four-bar markers where the record's sections start (four_bars).
-VERSION = 7  # 7: the outro found by change, not only by quiet; the intro's end at the earliest steady marker
+VERSION = 8  # 7: the outro found by change, not only by quiet; 8: a change the record gets louder over is no way out, and the marker rule for the intro only where the phrase rule is late
 
 _RATE = 11025
 _FFT = 1024
