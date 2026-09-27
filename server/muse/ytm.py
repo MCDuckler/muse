@@ -211,7 +211,7 @@ def watch_playlist(video_id: str, limit: int = 25) -> list[dict]:
             "artists": [a["name"] for a in (t.get("artists") or []) if a.get("name")],
             "album": (t.get("album") or {}).get("name") if isinstance(t.get("album"), dict) else None,
             "duration_ms": ms,
-            "raw": {"radio_seed": video_id},
+            "raw": {"radio_seed": video_id, "thumbnails": t.get("thumbnail") or []},
         })
     return out
 

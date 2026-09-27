@@ -267,6 +267,16 @@ class ApiClient {
     ];
   }
 
+  /// Songs that are not in the library yet and belong beside [tracks]: YouTube
+  /// Music's radio tail for a few of them, the ones already held left out. Nothing is
+  /// fetched by asking; a hit is fetched when it is added ([resolve]).
+  Future<List<RemoteHit>> similar(List<int> tracks, {int limit = 12}) async {
+    if (tracks.isEmpty) return const [];
+    final d = await _decode(await net.get(
+        _u('/search/similar', {'tracks': tracks.join(','), 'limit': limit}), headers: _headers)) as Map<String, dynamic>;
+    return [for (final h in (d['similar'] ?? const []) as List) RemoteHit.fromJson((h as Map).cast<String, dynamic>())];
+  }
+
   /// Keep where a hand said a record leaves ([outMs]) or comes in ([inMs]): only the
   /// ones given are changed; the house serves them back with the analysis.
   Future<void> setCues(int trackId, {int? outMs, int? inMs, bool clearOut = false, bool clearIn = false}) async =>

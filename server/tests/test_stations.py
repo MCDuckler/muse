@@ -106,3 +106,29 @@ def test_an_ordinary_queue_says_it_is_not_a_station(client, hdr):
     q = client.post("/queues", headers=hdr, json={"name": "Mine"}).json()
     assert client.get(f"/queues/{q['id']}", headers=hdr).json()["station"] is None
     assert db.one("select count(*) n from stations")["n"] == 0
+
+
+def test_similar_offers_what_the_library_has_not_got(client, hdr, tracks, monkeypatch):
+    """Beside a few songs: the radio tail, minus what is held, minus the seed itself,
+    each once — and nothing fetched for looking."""
+    seed = tracks[0]
+    held = tracks[1]
+    from muse import catalog, ytm
+    held_vid = catalog.track_row(held["id"])["provider_id"]
+    tail = [
+        {"video_id": held_vid, "title": "Already here", "artists": ["X"], "duration_ms": 200000, "raw": {}},
+        {"video_id": "NEWONE0001", "title": "New one", "artists": ["Y"], "duration_ms": 210000, "raw": {}},
+        {"video_id": "NEWONE0001", "title": "New one", "artists": ["Y"], "duration_ms": 210000, "raw": {}},
+        {"video_id": "NEWTWO0002", "title": "New two", "artists": ["Z"], "duration_ms": 190000, "raw": {}},
+    ]
+    monkeypatch.setattr(ytm, "watch_playlist", lambda vid, limit=25: tail)
+    before = client.get("/library/tracks", headers=hdr).json()
+    r = client.get("/search/similar", headers=hdr, params={"tracks": f"{seed['id']},{held['id']}", "limit": 10})
+    assert r.status_code == 200, r.text
+    got = r.json()
+    assert [h["video_id"] for h in got["similar"]] == ["NEWONE0001", "NEWTWO0002"]
+    assert got["similar"][0]["seed"]["id"] == seed["id"] and got["similar"][0]["known"] is False
+    assert len(got["seeds"]) == 2
+    after = client.get("/library/tracks", headers=hdr).json()
+    assert before == after, "looking fetched nothing"
+    assert client.get("/search/similar", headers=hdr, params={"tracks": "x"}).status_code == 400

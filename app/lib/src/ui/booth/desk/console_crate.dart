@@ -18,7 +18,7 @@ import 'data_marks.dart';
 import 'set_planner_page.dart';
 
 /// The crate's pages.
-enum CrateTab { queue, library, search, parts }
+enum CrateTab { queue, library, search, similar, parts }
 
 /// The crate: everything a set is made of, without leaving the booth.
 ///
@@ -175,6 +175,7 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
                   (CrateTab.queue, 'QUEUE', Icons.queue_music),
                   (CrateTab.library, 'LIBRARY', Icons.library_music_outlined),
                   (CrateTab.search, 'SEARCH', Icons.search),
+                  (CrateTab.similar, 'SIMILAR', Icons.auto_awesome_outlined),
                   if (partsHere) (CrateTab.parts, 'PARTS', Icons.call_split),
                 ]) ...[
                   Expanded(
@@ -240,6 +241,7 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
                 CrateTab.queue => _queue(roomy),
                 CrateTab.library => _library(roomy),
                 CrateTab.search => _searchPage(roomy),
+                CrateTab.similar => _SimilarList(booth: widget.booth),
                 CrateTab.parts => _PartsList(
                     booth: widget.booth, loadInto: widget.loadInto, forDeck: widget.forDeck),
               },
@@ -527,7 +529,7 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
 /// A song on YouTube that is not in the library: added to the queue, it is fetched on
 /// this computer at once and shared with the house.
 class _Elsewhere extends StatefulWidget {
-  const _Elsewhere({required this.hit});
+  const _Elsewhere({super.key, required this.hit});
   final RemoteHit hit;
 
   @override
@@ -544,7 +546,10 @@ class _ElsewhereState extends State<_Elsewhere> {
     setState(() => _adding = true);
     try {
       final t = await app.api.resolve(videoId: widget.hit.videoId);
-      await app.addTrack(t, mode: mode);
+      // 'library': fetched and kept, and nothing queued — a record for later.
+      if (mode != 'library') {
+        await app.addTrack(t, mode: mode);
+      }
       unawaited(fetchHereNow([t.id]));
       if (mounted) setState(() => _added = true);
       messenger.say(snack(Text('${t.displayTitle} — fetching it here')));
@@ -599,8 +604,126 @@ class _ElsewhereState extends State<_Elsewhere> {
               height: 26,
               tooltip: 'Add as the next in the queue',
               onTap: () => _add('next')),
+          const SizedBox(width: 4),
+          Pad(
+              icon: Icons.download_outlined,
+              width: 30,
+              height: 26,
+              tooltip: 'Fetch it into the library, nothing queued',
+              onTap: () => _add('library')),
         ],
       ]),
+    );
+  }
+}
+
+/// Songs that are not in the library yet and belong beside what is on: YouTube
+/// Music's radio tail for the records on the decks and the next few in the queue —
+/// the way a station is seeded. Each is a tap from the queue, or from the library.
+class _SimilarList extends StatefulWidget {
+  const _SimilarList({required this.booth});
+  final Booth booth;
+
+  @override
+  State<_SimilarList> createState() => _SimilarListState();
+}
+
+class _SimilarListState extends State<_SimilarList> {
+  List<RemoteHit>? _found;
+  List<Track> _seeds = const [];
+  bool _asking = false;
+  String? _trouble;
+
+  @override
+  void initState() {
+    super.initState();
+    _ask();
+  }
+
+  List<Track> _seedsNow() {
+    final app = context.read<AppState>();
+    final b = widget.booth;
+    final out = <Track>[];
+    for (final t in [b.master.track, b.other(b.master).track]) {
+      if (t != null && !out.any((x) => x.id == t.id)) out.add(t);
+    }
+    for (final t in app.player?.items ?? const <Track>[]) {
+      if (out.length >= 4) break;
+      if (t.isReady && !out.any((x) => x.id == t.id)) out.add(t);
+    }
+    return out;
+  }
+
+  Future<void> _ask() async {
+    final seeds = _seedsNow();
+    setState(() {
+      _seeds = seeds;
+      _asking = true;
+      _trouble = null;
+    });
+    if (seeds.isEmpty) {
+      setState(() {
+        _found = const [];
+        _asking = false;
+      });
+      return;
+    }
+    try {
+      final got = await context.read<AppState>().api.similar([for (final t in seeds) t.id], limit: 16);
+      if (mounted) setState(() => _found = got);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _found = const [];
+          _trouble = '$e';
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _asking = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final found = _found;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(6, 2, 2, 4),
+          child: Row(children: [
+            Expanded(
+              child: Text(
+                _seeds.isEmpty
+                    ? 'LIKE WHAT IS ON: nothing on the decks or in the queue yet'
+                    : 'LIKE ${_seeds.map((t) => t.displayTitle.toUpperCase()).take(2).join(' · ')}${_seeds.length > 2 ? ' · …' : ''}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Console.label(8.5),
+              ),
+            ),
+            Pad(icon: Icons.refresh, width: 30, height: 24, tooltip: 'Ask again, for what is on now', onTap: _asking ? null : _ask),
+          ]),
+        ),
+        Expanded(
+          child: found == null || _asking
+              ? const Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)))
+              : found.isEmpty
+                  ? Center(
+                      child: Text(
+                          _trouble != null
+                              ? 'The house could not ask YouTube Music.'
+                              : _seeds.isEmpty
+                                  ? 'Put a record on, or something in the queue.'
+                                  : 'Nothing new beside these — the library has it all.',
+                          textAlign: TextAlign.center,
+                          style: Mag.typewriter(11, color: Console.quiet)))
+                  : ListView(
+                      padding: EdgeInsets.zero,
+                      children: [for (final h in found) _Elsewhere(key: ValueKey('sim-${h.videoId}'), hit: h)],
+                    ),
+        ),
+      ],
     );
   }
 }

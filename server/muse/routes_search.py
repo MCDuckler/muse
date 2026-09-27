@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from . import catalog, match, search, spotify, ytm
+from . import catalog, db, match, search, spotify, ytm
 from .deps import cfg, current_user
 
 router = APIRouter(prefix="/search")
@@ -193,3 +193,59 @@ def _take(user: dict, video_id: str, meta: dict | None):
     created = catalog.create_from_ytm(meta, discovered_via=catalog.VIA_USER)
     catalog.remember(user["id"], created["id"])
     return catalog.public(created)
+
+
+@router.get("/similar")
+def similar(tracks: str, limit: int = 12, user: dict = Depends(current_user)):
+    """Songs not in the library that belong beside [tracks]: YouTube Music's radio tail
+    for up to four of them, taken a few from each in turn the way a station is seeded,
+    with what the library already holds, near-copies of a seed, and the same song twice
+    left out. Nothing is fetched by asking — a hit is fetched when it is added
+    (POST /tracks/resolve). The shape of a hit is a search's remote hit, with
+    `seed` naming the song it came from."""
+    ids = [int(x) for x in tracks.split(",") if x.strip().lstrip("-").isdigit()][:12]
+    if not ids:
+        raise HTTPException(400, "tracks: a few track ids, comma-separated")
+    rows = db.all_(
+        """select t.*, s.provider_id from tracks t
+             join track_sources s on s.track_id = t.id and s.provider = 'ytmusic'
+            where t.id = any(%s)""", (ids,))
+    by_id = {r["id"]: r for r in rows}
+    seeds = [by_id[i] for i in ids if i in by_id][:4]
+    if not seeds:
+        return {"similar": [], "seeds": []}
+    have = {r["provider_id"] for r in db.all_(
+        "select provider_id from track_sources where provider = 'ytmusic'")}
+    wells = []
+    for seed in seeds:
+        try:
+            wells.append(ytm.watch_playlist(seed["provider_id"], limit=max(10, limit * 2)))
+        except ytm.Unavailable as e:
+            if not wells:
+                raise HTTPException(502, str(e))
+            wells.append([])
+    out, seen = [], set()
+    depth = 0
+    limit = max(1, min(limit, 40))
+    while len(out) < limit and any(depth < len(w) for w in wells):
+        for well, seed in zip(wells, seeds):
+            if len(out) >= limit or depth >= len(well):
+                continue
+            cand = well[depth]
+            video = cand.get("video_id")
+            if not video or video in seen or video in have:
+                continue
+            seen.add(video)
+            conf, _ = match.score(
+                {"title": seed["title"], "artists": seed["artists"], "duration_ms": seed["duration_ms"]}, cand)
+            if conf >= match.AUTO_ACCEPT:
+                continue
+            out.append({
+                "video_id": video, "title": cand.get("title") or video,
+                "artists": cand.get("artists") or [], "album": cand.get("album"),
+                "duration_ms": cand.get("duration_ms"), "known": False,
+                "cover_url": search._art(ytm.thumbnail_url(cand.get("raw") or {})),
+                "seed": {"id": seed["id"], "title": seed["title"]},
+            })
+        depth += 1
+    return {"similar": out, "seeds": [{"id": s["id"], "title": s["title"]} for s in seeds]}
