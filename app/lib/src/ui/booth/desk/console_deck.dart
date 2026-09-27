@@ -592,11 +592,11 @@ class _ConsoleDeckState extends State<ConsoleDeck> with TickerProviderStateMixin
         ),
       );
     } else if (job.stage == PartsStage.waiting) {
-      mark = const Icon(Icons.hourglass_empty, size: 14, color: Console.quiet);
+      mark = Icon(Icons.hourglass_empty, size: 14, color: Console.quiet);
     } else if (job.stage == PartsStage.ready) {
       mark = Icon(Icons.check, size: 15, color: _colour);
     } else {
-      mark = const Icon(Icons.error_outline, size: 15, color: Console.a);
+      mark = Icon(Icons.error_outline, size: 15, color: Console.a);
     }
     return Tooltip(
       message: stageLine(job),

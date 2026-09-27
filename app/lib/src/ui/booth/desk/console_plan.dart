@@ -371,7 +371,7 @@ abstract final class PlanColours {
   static const rest = Color(0xFF7ED67A);
   static const vocals = Color(0xFFFF7AC6);
   static const sung = Color(0xFFB98CFF);
-  static const drop = Color(0xFFFFFFFF);
+  static Color get drop => Console.ink;
   static const kill = Color(0xFFFF4A3D);
   static const filter = Color(0xFF9D8CFF);
 }

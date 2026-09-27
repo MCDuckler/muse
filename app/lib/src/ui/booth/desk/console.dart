@@ -9,28 +9,91 @@ import '../../feel.dart';
 import '../../mag.dart';
 import '../../metal_button.dart';
 
-/// The console's colours. The room is dark whatever edition the app is in — a booth
-/// is a place with the lights down — and each deck has a colour of its own, taken
-/// from the magazine: the masthead red for A, the highlighter yellow for B. The
-/// edition's accent is kept for the loud things: the mix, and the booth mixing.
+/// One set of the console's colours: the room with the lights down, or up.
+///
+/// Each deck has a colour of its own. With the lights down they are the magazine's:
+/// the masthead red for A, the highlighter yellow for B. With the lights up the
+/// yellow would vanish into the paper, so the pair is green and pink instead — as
+/// far apart as red and yellow, and each dark enough to be read on white.
+class ConsoleTones {
+  const ConsoleTones({
+    required this.ground,
+    required this.panel,
+    required this.raised,
+    required this.hover,
+    required this.line,
+    required this.ink,
+    required this.quiet,
+    required this.faint,
+    required this.a,
+    required this.b,
+    required this.light,
+  });
+
+  final Color ground, panel, raised, hover, line, ink, quiet, faint, a, b;
+
+  /// Whether this is the lights-up set.
+  final bool light;
+
+  static const dark = ConsoleTones(
+    ground: Color(0xFF0B0B0D),
+    panel: Color(0xFF131316),
+    raised: Color(0xFF1D1D21),
+    hover: Color(0xFF26262B),
+    line: Color(0x1FFFFFFF),
+    ink: Color(0xFFEDE9E1),
+    quiet: Color(0xFF8E8A82),
+    faint: Color(0xFF55524C),
+    a: Color(0xFFFF4A3D),
+    b: Color(0xFFFFE14D),
+    light: false,
+  );
+
+  /// Paper, not white: the magazine's page, with the plates a shade whiter than it.
+  static const lit = ConsoleTones(
+    ground: Color(0xFFF1EFEA),
+    panel: Color(0xFFFBFAF7),
+    raised: Color(0xFFE7E4DD),
+    hover: Color(0xFFDEDAD2),
+    line: Color(0x1F000000),
+    ink: Color(0xFF15130F),
+    quiet: Color(0xFF6B675F),
+    faint: Color(0xFFB0ABA1),
+    a: Color(0xFF12945A),
+    b: Color(0xFFE23C8A),
+    light: true,
+  );
+}
+
+/// The console's colours, as they are now. The booth is one room at a time, so the
+/// set in use is a single thing (BoothLook sets it as the room is built); every part
+/// of the console reads its colours from here at build time, so a change of look is
+/// a rebuild and nothing more. The edition's accent is kept for the loud things: the
+/// mix, and the booth mixing.
 class Console {
-  const Console._();
+  Console._();
 
-  static const ground = Color(0xFF0B0B0D);
-  static const panel = Color(0xFF131316);
-  static const raised = Color(0xFF1D1D21);
-  static const line = Color(0x1FFFFFFF);
-  static const ink = Color(0xFFEDE9E1);
-  static const quiet = Color(0xFF8E8A82);
-  static const faint = Color(0xFF55524C);
+  static ConsoleTones tones = ConsoleTones.dark;
 
-  static const a = Color(0xFFFF4A3D);
-  static const b = Color(0xFFFFE14D);
+  static Color get ground => tones.ground;
+  static Color get panel => tones.panel;
+  static Color get raised => tones.raised;
+  static Color get hover => tones.hover;
+  static Color get line => tones.line;
+  static Color get ink => tones.ink;
+  static Color get quiet => tones.quiet;
+  static Color get faint => tones.faint;
+
+  static Color get a => tones.a;
+  static Color get b => tones.b;
+
+  /// Whether the lights are up.
+  static bool get light => tones.light;
 
   static Color deck(String name) => name == 'A' ? a : b;
 
   /// Small capitals for the few words a control needs.
-  static TextStyle label(double size, {Color color = quiet}) => Mag.flag(size, color: color);
+  static TextStyle label(double size, {Color? color}) => Mag.flag(size, color: color ?? quiet);
 }
 
 /// A panel of the console: a slightly raised plate with a hairline edge.
@@ -63,7 +126,7 @@ class Pad extends StatefulWidget {
     required this.onTap,
     this.onLongPress,
     this.lit = false,
-    this.colour = Console.ink,
+    this.colour,
     this.tooltip,
     this.height = 34,
     this.width,
@@ -76,7 +139,7 @@ class Pad extends StatefulWidget {
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
   final bool lit;
-  final Color colour;
+  final Color? colour;
   final String? tooltip;
   final double height;
   final double? width;
@@ -99,13 +162,13 @@ class _PadState extends State<Pad> {
   @override
   Widget build(BuildContext context) {
     final on = widget.onTap != null;
-    final c = widget.colour;
+    final c = widget.colour ?? Console.ink;
     final fill = widget.lit
         ? c.withValues(alpha: _down ? 0.7 : 0.9)
         : _down
             ? Console.raised.withValues(alpha: 0.6)
             : _over && on
-                ? const Color(0xFF26262B)
+                ? Console.hover
                 : Console.raised;
     final fg = widget.lit
         ? Console.ground
@@ -214,7 +277,7 @@ class RoundButton extends StatefulWidget {
     required this.icon,
     required this.onTap,
     this.size = 54,
-    this.colour = Console.ink,
+    this.colour,
     this.lit = false,
     this.tooltip,
   });
@@ -222,7 +285,7 @@ class RoundButton extends StatefulWidget {
   final IconData icon;
   final VoidCallback? onTap;
   final double size;
-  final Color colour;
+  final Color? colour;
   final bool lit;
   final String? tooltip;
 
@@ -281,7 +344,7 @@ class _RoundButtonState extends State<RoundButton> with SingleTickerProviderStat
               child: CustomPaint(
                 size: Size.square(whole),
                 painter: MetalFace(
-                  colour: on ? widget.colour : Console.faint,
+                  colour: on ? (widget.colour ?? Console.ink) : Console.faint,
                   pressed: _down,
                   dark: true,
                   lit: _lit,
@@ -314,7 +377,7 @@ class Knob extends StatefulWidget {
     this.max = 1,
     this.rest = 0,
     this.label,
-    this.colour = Console.ink,
+    this.colour,
     this.size = 38,
     this.bipolar = true,
     this.tooltip,
@@ -323,7 +386,7 @@ class Knob extends StatefulWidget {
   final double value, min, max, rest;
   final ValueChanged<double>? onChanged;
   final String? label;
-  final Color colour;
+  final Color? colour;
   final double size;
 
   /// Lit from the middle out (an EQ, a filter) rather than from the bottom.
@@ -374,7 +437,7 @@ class _KnobState extends State<Knob> {
             painter: _KnobPainter(
               t: _t,
               restT: ((widget.rest - widget.min) / (widget.max - widget.min)).clamp(0.0, 1.0),
-              colour: on ? widget.colour : Console.faint,
+              colour: on ? (widget.colour ?? Console.ink) : Console.faint,
               bipolar: widget.bipolar,
             ),
           ),
@@ -461,7 +524,7 @@ class VFader extends StatelessWidget {
     this.min = 0,
     this.max = 1,
     this.centre,
-    this.colour = Console.ink,
+    this.colour,
     this.width = 30,
     this.inverted = false,
     this.onDoubleTap,
@@ -472,7 +535,7 @@ class VFader extends StatelessWidget {
   /// A detent in the middle (a pitch fader's zero). Null for none.
   final double? centre;
   final ValueChanged<double>? onChanged;
-  final Color colour;
+  final Color? colour;
   final double width;
 
   /// Up is less: how a pitch fader reads (plus at the bottom, as on the hardware).
@@ -513,7 +576,7 @@ class VFader extends StatelessWidget {
               painter: _VFaderPainter(
                 t: ((value - min) / (max - min)).clamp(0.0, 1.0),
                 centreT: centre == null ? null : ((centre! - min) / (max - min)),
-                colour: onChanged == null ? Console.faint : colour,
+                colour: onChanged == null ? Console.faint : (colour ?? Console.ink),
                 inverted: inverted,
               ),
             ),
@@ -564,7 +627,7 @@ class _VFaderPainter extends CustomPainter {
     final y = yOf(t);
     final cap = RRect.fromRectAndRadius(Rect.fromCenter(center: Offset(x, y), width: size.width - 4, height: 18),
         const Radius.circular(4));
-    canvas.drawRRect(cap, Paint()..color = const Color(0xFF2A2A30));
+    canvas.drawRRect(cap, Paint()..color = Console.light ? Console.raised : Color(0xFF2A2A30));
     canvas.drawRRect(cap, Paint()..style = PaintingStyle.stroke..color = Console.line);
     canvas.drawLine(Offset(x - size.width / 2 + 5, y), Offset(x + size.width / 2 - 5, y), Paint()..color = Console.ink..strokeWidth = 2);
   }

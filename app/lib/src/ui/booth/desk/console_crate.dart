@@ -333,7 +333,7 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
               queuePos: i,
               handle: ReorderableDragStartListener(
                 index: i,
-                child: const MouseRegion(
+                child: MouseRegion(
                   cursor: SystemMouseCursors.resizeUpDown,
                   child: Padding(
                     padding: EdgeInsets.fromLTRB(0, 8, 6, 8),
@@ -371,7 +371,7 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
                         style: Mag.title(13, color: Console.ink)),
                   ),
                   if (p.autoSplit)
-                    const Padding(
+                    Padding(
                       padding: EdgeInsets.only(left: 6),
                       child: Tooltip(
                           message: 'Every song is taken apart',
@@ -397,7 +397,7 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
             if (!roomy)
               IconButton(
                 visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.arrow_back, size: 18, color: Console.quiet),
+                icon: Icon(Icons.arrow_back, size: 18, color: Console.quiet),
                 tooltip: 'All playlists',
                 onPressed: () => setState(() => _list = null),
               ),
@@ -464,7 +464,7 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           SizedBox(width: 200, child: listOfLists()),
-          const VerticalDivider(width: 14, color: Console.line),
+          VerticalDivider(width: 14, color: Console.line),
           Expanded(child: songs()),
         ],
       );
@@ -497,7 +497,7 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
                     child: SizedBox(
                         width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 1.5)),
                   )
-                : const Icon(Icons.search, size: 18, color: Console.quiet),
+                : Icon(Icons.search, size: 18, color: Console.quiet),
             border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(6), borderSide: BorderSide.none),
           ),
@@ -561,7 +561,7 @@ class _ElsewhereState extends State<_Elsewhere> {
     final d = h.durationMs;
     return _Hover(
       child: Row(children: [
-        const SizedBox(
+        SizedBox(
             width: 36, height: 36, child: Icon(Icons.cloud_download_outlined, color: Console.faint)),
         const SizedBox(width: 10),
         Expanded(
@@ -584,7 +584,7 @@ class _ElsewhereState extends State<_Elsewhere> {
         if (_adding)
           const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 1.5))
         else if (_added)
-          const Icon(Icons.check, size: 16, color: Console.ink)
+          Icon(Icons.check, size: 16, color: Console.ink)
         else ...[
           Pad(
               icon: Icons.playlist_add,
@@ -689,7 +689,7 @@ class _Menu extends StatelessWidget {
         tooltip: 'More',
         padding: EdgeInsets.zero,
         iconSize: 18,
-        icon: const Icon(Icons.more_horiz, color: Console.quiet),
+        icon: Icon(Icons.more_horiz, color: Console.quiet),
         color: Console.raised,
         onSelected: (i) => unawaited(items[i].$3()),
         itemBuilder: (context) => [
@@ -1003,11 +1003,11 @@ class _PartsGlyph extends StatelessWidget {
           final accent = Theme.of(context).colorScheme.primary;
           final Widget mark = switch (j.stage) {
             PartsStage.waiting =>
-              const Icon(Icons.hourglass_empty, size: 12, color: Console.faint),
+              Icon(Icons.hourglass_empty, size: 12, color: Console.faint),
             PartsStage.ready =>
-              const Icon(Icons.call_split, size: 13, color: Console.ink),
+              Icon(Icons.call_split, size: 13, color: Console.ink),
             PartsStage.failed =>
-              const Icon(Icons.error_outline, size: 13, color: Console.a),
+              Icon(Icons.error_outline, size: 13, color: Console.a),
             _ => SizedBox(
                 width: 11,
                 height: 11,
@@ -1053,7 +1053,7 @@ class _PartsList extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.call_split, size: 28, color: Console.faint),
+                  Icon(Icons.call_split, size: 28, color: Console.faint),
                   const SizedBox(height: 8),
                   Text('NOTHING BEING TAKEN APART',
                       style: Console.label(8.5, color: Console.faint)),
@@ -1189,7 +1189,7 @@ class _JobRowState extends State<_JobRow> {
           child: Row(
             children: [
               t == null
-                  ? const SizedBox(
+                  ? SizedBox(
                       width: 36,
                       height: 36,
                       child: Icon(Icons.album, color: Console.faint))

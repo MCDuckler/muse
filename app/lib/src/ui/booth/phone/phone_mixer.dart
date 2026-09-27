@@ -149,7 +149,7 @@ class _PhoneMixerState extends State<PhoneMixer> {
                   ],
                 ),
               ),
-              const Icon(Icons.expand_more, size: 14, color: Console.quiet),
+              Icon(Icons.expand_more, size: 14, color: Console.quiet),
             ],
           ),
         ),

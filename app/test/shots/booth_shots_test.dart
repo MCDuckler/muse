@@ -106,8 +106,8 @@ void main() {
   for (final dark in [true]) {
     final phone = w < 700;
     for (final state in phone
-        ? ['empty', 'playing', 'set', 'plan', 'planner', 'crate']
-        : ['empty', 'playing', if (w == 1600) 'mixing', if (w != 1920) 'parts', if (w != 1280) 'crate', 'plan', 'set', 'planner']) {
+        ? ['empty', 'playing', 'set', 'plan', 'planner', 'crate', 'light']
+        : ['empty', 'playing', if (w == 1600) 'mixing', if (w != 1920) 'parts', if (w != 1280) 'crate', 'plan', 'set', 'planner', if (w == 1600) 'light']) {
       testWidgets('the booth at ${w.round()}x${h.round()}, $state', (tester) async {
         JustAudioPlatform.instance = FakeJustAudio();
         useThisClientInstead(MockClient((r) async => r.url.path.contains('stream-key')
@@ -120,7 +120,9 @@ void main() {
                 ? {'muse.booth.view': 'plan'}
                 : state == 'set'
                     ? {'muse.booth.view': 'set'}
-                    : {});
+                    : state == 'light'
+                        ? {'muse.booth.look': 'light', 'muse.booth.view': 'plan'}
+                        : {});
         final app = AppState()..api = (ApiClient(baseUrl: 'http://example.invalid')..token = 'x');
         if (state == 'crate') {
           app.playlists = [

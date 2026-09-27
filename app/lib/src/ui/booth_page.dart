@@ -19,6 +19,7 @@ import 'mag.dart';
 import 'mag_parts.dart';
 import 'stage/arm_grip.dart';
 import 'widths.dart';
+import 'booth/look.dart';
 
 /// The booth: two records on the deck, the mixer between them, the crate beside.
 ///
@@ -169,6 +170,8 @@ Future<void> openBooth(BuildContext context,
     {List<Track>? tracks, int at = 0, Map<String, dynamic>? mix}) async {
   final app = context.read<AppState>();
   final booth = app.booth;
+  // The lights as they were left, before the room is built.
+  await boothLook.load();
   // Where the ordinary player had got to, if the record it was on is the one the
   // booth starts with: the music carries on from there.
   final was = app.player?.last;

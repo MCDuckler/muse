@@ -215,7 +215,7 @@ class _SetPlannerPageState extends State<SetPlannerPage> {
         context: context,
         builder: (context) => Dialog(
           backgroundColor: Console.panel,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: Console.line)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: Console.line)),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
             child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 380), child: _how(context)),
@@ -224,7 +224,7 @@ class _SetPlannerPageState extends State<SetPlannerPage> {
       ),
     );
     return Theme(
-      data: MuseTheme.dark(app.palette),
+      data: Console.light ? MuseTheme.light(app.palette) : MuseTheme.dark(app.palette),
       child: Scaffold(
         backgroundColor: Console.ground,
         body: SafeArea(
@@ -236,7 +236,7 @@ class _SetPlannerPageState extends State<SetPlannerPage> {
                 Row(
                   children: [
                     IconButton(
-                      icon: const Icon(Icons.arrow_back, color: Console.quiet),
+                      icon: Icon(Icons.arrow_back, color: Console.quiet),
                       tooltip: 'Back',
                       onPressed: () => Navigator.of(context).maybePop(),
                     ),
@@ -332,7 +332,7 @@ class _SetPlannerPageState extends State<SetPlannerPage> {
                 children: [
                   ReorderableDragStartListener(
                     index: i,
-                    child: const Padding(
+                    child: Padding(
                       padding: EdgeInsets.symmetric(horizontal: 6),
                       child: Icon(Icons.drag_indicator, size: 16, color: Console.faint),
                     ),
@@ -503,7 +503,7 @@ class _PartnersState extends State<_Partners> {
                   maxLines: 1, overflow: TextOverflow.ellipsis, style: Console.label(8.5, color: Console.quiet)),
               const Spacer(),
               if (found == null && !_failed)
-                const SizedBox(width: 10, height: 10, child: CircularProgressIndicator(strokeWidth: 1.5, color: Console.faint)),
+                SizedBox(width: 10, height: 10, child: CircularProgressIndicator(strokeWidth: 1.5, color: Console.faint)),
             ],
           ),
           const SizedBox(height: 4),
@@ -518,7 +518,7 @@ class _PartnersState extends State<_Partners> {
                   padding: const EdgeInsets.symmetric(vertical: 3),
                   child: Row(
                     children: [
-                      const Icon(Icons.add, size: 14, color: Console.faint),
+                      Icon(Icons.add, size: 14, color: Console.faint),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text.rich(

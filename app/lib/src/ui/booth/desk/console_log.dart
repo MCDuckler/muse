@@ -69,7 +69,7 @@ class ConsoleLog extends StatelessWidget {
           if (!folded)
             Expanded(
             child: events.isEmpty
-                ? const Center(child: Icon(Icons.notes, size: 22, color: Console.faint))
+                ? Center(child: Icon(Icons.notes, size: 22, color: Console.faint))
                 : ListView.builder(
                     itemCount: events.length,
                     itemBuilder: (context, i) {

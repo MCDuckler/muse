@@ -417,7 +417,7 @@ class _Controls extends StatelessWidget {
           context: context,
           builder: (context) => Dialog(
             backgroundColor: Console.panel,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: Console.line)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: Console.line)),
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
               child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 380), child: StyleDials(auto: auto)),
@@ -517,7 +517,7 @@ class _Card extends StatelessWidget {
                       Text(track.artistLine, maxLines: 1, overflow: TextOverflow.ellipsis, style: Mag.typewriter(10, color: Console.quiet)),
                     ]),
                   ),
-                  if (locked) const Icon(Icons.push_pin, size: 12, color: Console.quiet),
+                  if (locked) Icon(Icons.push_pin, size: 12, color: Console.quiet),
                 ]),
                 const SizedBox(height: 10),
                 Expanded(
@@ -732,13 +732,13 @@ class _Trouble extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Row(
         children: [
-          const Icon(Icons.error_outline, size: 16, color: Console.a),
+          Icon(Icons.error_outline, size: 16, color: Console.a),
           const SizedBox(width: 8),
           Expanded(
             child: Text(text, maxLines: 1, overflow: TextOverflow.ellipsis, style: Mag.typewriter(11, color: Console.a)),
           ),
           IconButton(
-            icon: const Icon(Icons.close, size: 16, color: Console.quiet),
+            icon: Icon(Icons.close, size: 16, color: Console.quiet),
             tooltip: 'Dismiss',
             onPressed: onDismiss,
           ),
@@ -768,16 +768,16 @@ class _StructurePainter extends CustomPainter {
   _StructurePainter(this.w);
   final _StructureStrip w;
 
-  static const _colours = {
-    'intro': Color(0xFF55524C),
-    'outro': Color(0xFF55524C),
+  static final _colours = <String, Color>{
+    'intro': Console.faint,
+    'outro': Console.faint,
     'verse': Color(0xFF6E8CA8),
     'chorus': Color(0xFFB98CFF),
     'inst': Color(0xFF7A8A7A),
     'drop': Color(0xFFFF7AC6),
     'build': Color(0xFFD9A441),
-    'breakdown': Color(0xFF2A2A30),
-    'break': Color(0xFF2A2A30),
+    'breakdown': Console.raised,
+    'break': Console.raised,
     'on': Color(0xFF7A8A7A),
   };
 

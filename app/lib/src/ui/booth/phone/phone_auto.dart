@@ -100,7 +100,7 @@ class PhoneAutoCard extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Row(children: [
-                const Icon(Icons.error_outline, size: 14, color: Console.a),
+                Icon(Icons.error_outline, size: 14, color: Console.a),
                 const SizedBox(width: 6),
                 Expanded(child: Text(trouble, maxLines: 2, overflow: TextOverflow.ellipsis, style: Mag.typewriter(10, color: Console.a))),
                 Pad(label: 'OK', height: 24, onTap: booth.forgetTrouble),

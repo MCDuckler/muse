@@ -150,7 +150,7 @@ class _PhoneDeckState extends State<PhoneDeck> with TickerProviderStateMixin {
           children: [
             Text(bpm == null ? '—' : bpm.toStringAsFixed(1), style: Mag.numerals(17, color: bpm == null ? Console.faint : Console.ink)),
             const SizedBox(width: 6),
-            if (isMaster) ...[Text('MASTER', style: Console.label(7.5, color: _colour)), const SizedBox(width: 5)],
+            if (isMaster) ...[Text('MASTER', style: Console.label(7.5, color: _colour)), SizedBox(width: 5)],
             if (_incoming) ...[_NextBadge(booth: _b, colour: _colour), const SizedBox(width: 5)],
             if (_d.timing?.camelot != null) _KeyTag(deck: _d, against: _b.other(_d)),
           ],

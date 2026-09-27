@@ -20,6 +20,7 @@ import '../desk/console_waves.dart';
 import 'phone_auto.dart';
 import 'phone_deck.dart';
 import 'phone_mixer.dart';
+import '../look.dart';
 
 /// The booth on a phone: the same console as the desk's, folded to one column. The
 /// two records' shapes across the top, the decks side by side under them, the mixer
@@ -44,6 +45,7 @@ class _PhoneRoomState extends State<PhoneRoom> {
   @override
   void initState() {
     super.initState();
+    unawaited(boothLook.load());
     _app.addListener(_queueMoved);
     planPair.addListener(_pairAsked);
   }
@@ -78,7 +80,7 @@ class _PhoneRoomState extends State<PhoneRoom> {
       backgroundColor: Console.panel,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(14))),
       builder: (sheet) => Theme(
-        data: MuseTheme.dark(app.palette),
+        data: Console.light ? MuseTheme.light(app.palette) : MuseTheme.dark(app.palette),
         child: SizedBox(
           height: MediaQuery.sizeOf(sheet).height * height,
           child: Padding(padding: const EdgeInsets.fromLTRB(8, 10, 8, 8), child: child),
@@ -109,8 +111,12 @@ class _PhoneRoomState extends State<PhoneRoom> {
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
-    return Theme(
-      data: MuseTheme.dark(app.palette),
+    return AnimatedBuilder(
+      animation: boothLook,
+      builder: (context, _) {
+        final light = boothLook.apply(context);
+        return Theme(
+      data: light ? MuseTheme.light(app.palette) : MuseTheme.dark(app.palette),
       child: Builder(
         builder: (context) => Scaffold(
           backgroundColor: Console.ground,
@@ -147,6 +153,8 @@ class _PhoneRoomState extends State<PhoneRoom> {
         ),
       ),
     );
+      },
+    );
   }
 
   Widget _bar(BuildContext context) => SizedBox(
@@ -154,7 +162,7 @@ class _PhoneRoomState extends State<PhoneRoom> {
         child: Row(
           children: [
             IconButton(
-              icon: const Icon(Icons.arrow_back, color: Console.quiet),
+              icon: Icon(Icons.arrow_back, color: Console.quiet),
               tooltip: 'Back',
               onPressed: () => Navigator.of(context).maybePop(),
             ),
@@ -162,12 +170,13 @@ class _PhoneRoomState extends State<PhoneRoom> {
             const Spacer(),
             if (_b.taken.isNotEmpty)
               IconButton(
-                icon: const Icon(Icons.bookmark_add_outlined, color: Console.quiet),
+                icon: Icon(Icons.bookmark_add_outlined, color: Console.quiet),
                 tooltip: 'Keep this mix',
                 onPressed: () => _keep(context),
               ),
+            const LookButton(),
             IconButton(
-              icon: const Icon(Icons.inventory_2_outlined, color: Console.ink),
+              icon: Icon(Icons.inventory_2_outlined, color: Console.ink),
               tooltip: 'The crate',
               onPressed: () => _openCrate(),
             ),

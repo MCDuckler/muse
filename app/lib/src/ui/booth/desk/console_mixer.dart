@@ -128,7 +128,7 @@ class _ConsoleMixerState extends State<ConsoleMixer> {
                 const SizedBox(width: 4),
                 Text('BARS', style: Console.label(8)),
                 const SizedBox(width: 6),
-                const Icon(Icons.expand_more, size: 16, color: Console.quiet),
+                Icon(Icons.expand_more, size: 16, color: Console.quiet),
               ],
             ),
           ),
@@ -486,7 +486,7 @@ class _XPainter extends CustomPainter {
     canvas.drawLine(Offset(l, y), Offset(x, y), Paint()..color = Console.a.withValues(alpha: 0.35 + 0.5 * (1 - t))..strokeWidth = 3);
     canvas.drawLine(Offset(x, y), Offset(r, y), Paint()..color = Console.b.withValues(alpha: 0.35 + 0.5 * t)..strokeWidth = 3);
     final cap = RRect.fromRectAndRadius(Rect.fromCenter(center: Offset(x, y), width: 22, height: 28), const Radius.circular(4));
-    canvas.drawRRect(cap, Paint()..color = const Color(0xFF2A2A30));
+    canvas.drawRRect(cap, Paint()..color = Console.light ? Console.raised : const Color(0xFF2A2A30));
     canvas.drawRRect(cap, Paint()..style = PaintingStyle.stroke..color = Console.line);
     canvas.drawLine(Offset(x, y - 10), Offset(x, y + 10), Paint()..color = Console.ink..strokeWidth = 2);
   }

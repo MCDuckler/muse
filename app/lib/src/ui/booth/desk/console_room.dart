@@ -22,6 +22,7 @@ import 'console_mixer.dart';
 import 'console_plan.dart';
 import 'console_set.dart';
 import 'console_waves.dart';
+import '../look.dart';
 
 /// The booth on a desk: a console. The records' shapes across the top, a deck either
 /// side of the mixer under them, the crate down the right, and the booth's own mixing
@@ -65,6 +66,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
   @override
   void initState() {
     super.initState();
+    unawaited(boothLook.load());
     unawaited(_remember());
     _app.addListener(_queueMoved);
     planViewToggles.addListener(_togglePlan);
@@ -145,8 +147,12 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
-    return Theme(
-      data: MuseTheme.dark(app.palette),
+    return AnimatedBuilder(
+      animation: boothLook,
+      builder: (context, _) {
+        final light = boothLook.apply(context);
+        return Theme(
+      data: light ? MuseTheme.light(app.palette) : MuseTheme.dark(app.palette),
       child: Builder(
         builder: (context) => Scaffold(
           backgroundColor: Console.ground,
@@ -208,6 +214,8 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
           ),
         ),
       ),
+    );
+      },
     );
   }
 
@@ -274,7 +282,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
         child: Row(
           children: [
             IconButton(
-              icon: const Icon(Icons.arrow_back, color: Console.quiet),
+              icon: Icon(Icons.arrow_back, color: Console.quiet),
               tooltip: 'Back',
               onPressed: () => Navigator.of(context).maybePop(),
             ),
@@ -292,7 +300,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
               ),
             if (_b.taken.isNotEmpty)
               IconButton(
-                icon: const Icon(Icons.bookmark_add_outlined, color: Console.quiet),
+                icon: Icon(Icons.bookmark_add_outlined, color: Console.quiet),
                 tooltip: 'Keep this mix',
                 onPressed: () => _keep(context),
               ),
@@ -307,8 +315,9 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
                   onPressed: () => unawaited(toggleFullScreen()),
                 ),
               ),
+            const LookButton(),
             IconButton(
-              icon: const Icon(Icons.keyboard_outlined, color: Console.quiet),
+              icon: Icon(Icons.keyboard_outlined, color: Console.quiet),
               tooltip: 'Keys',
               onPressed: () => _showKeys(context),
             ),
@@ -345,7 +354,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
       context: context,
       builder: (context) => Dialog(
         backgroundColor: Console.panel,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: Console.line)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: Console.line)),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(22, 20, 22, 18),
           child: ConstrainedBox(
@@ -401,7 +410,7 @@ class BoothMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final style = Mag.headline(19, color: Colors.white, width: 125).copyWith(height: 1.0);
+    final style = Mag.headline(19, color: Console.ink, width: 125).copyWith(height: 1.0);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
