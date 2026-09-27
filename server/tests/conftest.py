@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import pathlib
 import sys
 
@@ -14,7 +15,12 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from muse import app as app_mod          # noqa: E402
 from muse import auth, config, db, ytm   # noqa: E402
 
-BASE_DSN = "host=127.0.0.1 port=5433 user=muse dbname=postgres"
+# Where the throwaway test database lives. The default is the muse-testdb container as
+# it is published on a development machine; MUSE_TEST_DSN points it somewhere else — at
+# that same container from inside Docker, say, which is the only way to run these on a
+# box whose virtualenv has come apart. It must never be a database with anything in it:
+# _fresh_db drops and recreates TEST_DB every session.
+BASE_DSN = os.environ.get("MUSE_TEST_DSN", "host=127.0.0.1 port=5433 user=muse dbname=postgres")
 TEST_DB = "muse_test"
 TEST_DSN = BASE_DSN.replace("dbname=postgres", f"dbname={TEST_DB}")
 
