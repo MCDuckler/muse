@@ -234,6 +234,36 @@ void main() {
       await booth.letGo();
     });
 
+    test('an audible record far out of step is put back, not crawled back', () async {
+      // The regression this pins: forbidding a jump while the deck could be heard
+      // left the bend as the only way back, and the bend clears 60 ms a second at
+      // its 6% stop. A record 220 ms out took four seconds of crawling — on a phone,
+      // where the engines are looser, it often never arrived at all. Two jumps are
+      // allowed out loud now; after that the bend is left to it.
+      await booth.setCrossfader(0.5); // B is heard
+      await booth.b.seek(Duration(milliseconds: booth.a.position.inMilliseconds + 220));
+      await booth.b.play();
+      expect(apart().inMilliseconds.abs(), greaterThan(150));
+      booth.holdOnBeat(booth.b);
+      await Future<void>.delayed(const Duration(milliseconds: 2600));
+      expect(apart().inMilliseconds.abs(), lessThan(25),
+          reason: 'still ${apart().inMilliseconds} ms out');
+      await booth.letGo();
+    });
+
+    test('SYNC on a running record does not sit out the start it never had', () async {
+      await booth.setCrossfader(0.5);
+      await booth.b.seek(Duration(milliseconds: booth.a.position.inMilliseconds + 60));
+      await booth.b.play();
+      booth.holdOnBeat(booth.b, snap: true);
+      // Six hundred milliseconds of the hold used to go on waiting for a start that
+      // had already happened, before the first reading was even taken.
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+      expect(apart().inMilliseconds.abs(), lessThan(25),
+          reason: 'still ${apart().inMilliseconds} ms out after 700 ms');
+      await booth.letGo();
+    });
+
     test('a tempo that does not quite match is held anyway', () async {
       await booth.setCrossfader(0.5);
       await booth.b.seek(booth.a.position);

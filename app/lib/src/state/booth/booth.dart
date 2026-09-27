@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../../api/client.dart';
 import '../../api/models.dart';
 import '../../worker/parts_jobs.dart';
+import '../playback_log.dart';
 import '../timing.dart';
 import 'automix.dart';
 import 'deck.dart';
@@ -1013,8 +1014,15 @@ class Booth extends ChangeNotifier {
   /// With [snap], the first correction is a jump even while it can be heard: SYNC
   /// pressed with both records playing puts them in step at once, as it does on any
   /// deck, rather than bending them there over several seconds.
+  /// Jumps spent in the hold running now, and whether the bend ever ran out of room:
+  /// the difference between a record that would not settle and one that drifted.
+  int _heldJumps = 0;
+  bool _bendMaxed = false;
+
   void holdOnBeat(Deck follower, {bool snap = false}) {
     _lock?.cancel();
+    _heldJumps = 0;
+    _bendMaxed = false;
     final m = other(follower);
     final seen = <int>[];
     final began = DateTime.now();
@@ -1027,6 +1035,8 @@ class Booth extends ChangeNotifier {
     var firstReading = true;
     var afterJump = false;
     var saidLost = false;
+    // How many jumps have been spent where the room could hear them.
+    var loudMoves = 0;
     _lock = Timer.periodic(const Duration(milliseconds: 50), (t) async {
       if (!follower.playing || !m.playing || !identical(other(follower), m)) {
         t.cancel();
@@ -1041,8 +1051,12 @@ class Booth extends ChangeNotifier {
       final ft = follower.timing, mt = m.timing;
       if (ft == null || mt == null || m.braking || m.loopStart != null) return;
       // The engines' first reports after a start, or a jump, are the least reliable
-      // they give.
-      if (DateTime.now().difference(began) < const Duration(milliseconds: 600)) return;
+      // they give — so the first stretch of a hold is sat out. Not when the deck was
+      // already running, though: SYNC pressed on a playing record has no start to
+      // wait out, and six hundred milliseconds of nothing before the first correction
+      // is most of what "it takes too long to match" is.
+      final settle = snap ? const Duration(milliseconds: 150) : const Duration(milliseconds: 600);
+      if (DateTime.now().difference(began) < settle) return;
       if (DateTime.now().isBefore(settleUntil)) return;
       final now = DateTime.now();
       final e = beatError(
@@ -1110,23 +1124,28 @@ class Booth extends ChangeNotifier {
       // the engine's least reliable, and a jump can land a little short.
       final quiet = (moved < 2 && ms.abs() > 20 && !heardNow) ||
           (snap && moved == 0 && ms.abs() > 40);
-      // Lost the beat entirely — but *only* while nothing can hear it.
+      // Lost the beat by more than the bend can pull back in reasonable time.
       //
-      // This used to fire whatever the fader was doing, and it is the stutter. A jump
-      // is a seek, and a seek is a hole in the sound. An error the bend cannot clear
-      // inside a second — anything past about 40 ms, where the bend saturates at 6% —
-      // met this rule a second later, jumped, landed short (a jump always does, which
-      // is what _jumpCarry is for), and met it again a second after that. A record
-      // that would not settle was therefore seeked once a second, out loud, for as
-      // long as it played.
+      // A jump is a seek and a seek is a hole in the sound, so out loud it is spent
+      // sparingly: twice per hold at the most, two seconds apart. It used to be
+      // spent freely — any error over 150 ms, once a second, for as long as the
+      // record played — and a record that would not settle was therefore seeked once
+      // a second for ever, which is the stutter.
       //
-      // The bend alone clears 60 ms a second at its 6% limit, so even half a beat is
-      // gone in four seconds without a sound. That is slower than a jump and worth it:
-      // nobody hears four seconds of a beat easing into place, and everybody hears one
-      // seek.
+      // But *never* was wrong too, and wrong in the other direction. The bend
+      // saturates at 6%, which clears 60 ms a second: half a beat takes four seconds
+      // of crawling, and an error the bend cannot reach at all is never cleared.
+      // Two jumps put a lost record back at once; after that the bend is left to it
+      // and the log says so.
+      final since = now.difference(lastMove);
+      // The first one goes as soon as there is a reading to go on. The cooldown is
+      // there to stop a record being seeked over and over, not to make the first
+      // correction wait: counted from the start of the hold, it put two seconds of
+      // being audibly out of time in front of every match.
       final lost = ms.abs() > 150 &&
-          !heardNow &&
-          now.difference(lastMove) > const Duration(seconds: 1);
+          (heardNow
+              ? loudMoves < 2 && (loudMoves == 0 || since > const Duration(seconds: 2))
+              : since > const Duration(seconds: 1));
       // Said once, so a record that will not settle while it is playing is something
       // the log knows about rather than something only the bend quietly fights.
       if (!saidLost && heardNow && ms.abs() > 150 &&
@@ -1140,6 +1159,8 @@ class Booth extends ChangeNotifier {
         // Too far to bend in time: moved, once, while it is still quiet — or
         // whenever it is so far out that it is two records rather than one.
         moved++;
+        _heldJumps++;
+        if (heardNow) loudMoves++;
         lastMove = now;
         settleUntil = now.add(const Duration(seconds: 1));
         seen.clear();
@@ -1164,6 +1185,9 @@ class Booth extends ChangeNotifier {
       // Inside a few milliseconds is in step: the engines' own clocks are no finer,
       // and chasing their noise would be the rate twitching for nothing.
       final want = ms.abs() < 3 ? base : (base * bendFor(err)).clamp(0.5, 2.0);
+      // The bend at its stop: the error is further out than the rate can pull back,
+      // which is a different fault from a record that merely wanders.
+      if ((want / base - 1).abs() > 0.0599) _bendMaxed = true;
       // At most five changes of rate a second: each is a message to the engine, and
       // a rate that changes every twentieth of a second is a rate that warbles.
       if ((want - follower.tempo).abs() > 0.0008 &&
@@ -1220,10 +1244,18 @@ class Booth extends ChangeNotifier {
       note(BoothEventKind.held,
           'Beats held within ${sorted[(sorted.length * 0.9).floor()].toStringAsFixed(0)} ms',
           deck: _lockFollower);
-      debugPrint('booth: held in step — half the time within '
+      final said = 'held in step over ${sorted.length} readings — half within '
           '${sorted[sorted.length ~/ 2].toStringAsFixed(1)} ms, nine tenths within '
           '${sorted[(sorted.length * 0.9).floor()].toStringAsFixed(1)} ms, worst '
-          '${sorted.last.toStringAsFixed(1)} ms; settled at ${_lockBase?.toStringAsFixed(4)}×');
+          '${sorted.last.toStringAsFixed(1)} ms; settled at ${_lockBase?.toStringAsFixed(4)}×'
+          ', $_heldJumps jump${_heldJumps == 1 ? '' : 's'}'
+          '${_bendMaxed ? ', the bend at its stop' : ''}';
+      debugPrint('booth: $said');
+      // Written down as well as printed. On a desk debugPrint reaches the log file;
+      // on a phone it reaches nothing, and how well the booth held its beat there was
+      // the one number nobody could get at. This goes to the playback log, which
+      // survives a restart and is handed to the server when the app comes forward.
+      PlaybackLog.note('BOOTH $said');
       _held.clear();
     }
     final f = _lockFollower, base = _lockBase;
