@@ -8,6 +8,7 @@ import '../../../state/booth/mixer.dart';
 import '../../feel.dart';
 import '../../mag.dart';
 import '../meters.dart' show LevelMeter;
+import '../band_swap.dart';
 import 'console.dart';
 
 /// The mixer between the decks: each channel's bands, filter and level; the
@@ -272,44 +273,8 @@ class _BandSwaps extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Widget button(int band, String label, double dial) {
-      final on = booth.mixer.canKill && booth.bandLopsided(band);
-      return Tooltip(
-        message: on
-            ? 'Hand the $label over: what A has, B gets'
-            : 'Take one deck\'s $label down to hand it over',
-        child: Semantics(
-          button: true,
-          enabled: on,
-          label: 'Swap the $label between the decks',
-          child: InkWell(
-            onTap: on
-                ? () {
-                    feel(Feel.pick);
-                    unawaited(booth.swapBand(band));
-                  }
-                : null,
-            borderRadius: BorderRadius.circular(4),
-            child: Container(
-              width: 32,
-              height: dial.clamp(16.0, 22.0),
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: on ? Console.raised : null,
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(color: on ? Console.ink : Console.line),
-              ),
-              // One line, always: "LOW" in a narrow box wrapped to "LO / W".
-              child: Text(label,
-                  maxLines: 1,
-                  softWrap: false,
-                  overflow: TextOverflow.visible,
-                  style: Console.label(8, color: on ? Console.ink : Console.quiet)),
-            ),
-          ),
-        ),
-      );
-    }
+    Widget button(int band, String label, double dial) =>
+        BandSwapButton(booth: booth, band: band, label: label, height: dial.clamp(16.0, 22.0));
 
     /// One knob's worth of height: the dial, the three points under it and the label,
     /// with [inside] centred on the dial. The label is there and invisible so this

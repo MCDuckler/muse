@@ -157,7 +157,8 @@ class _Overview extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(left: 26, right: 62),
       child: LayoutBuilder(builder: (context, box) {
-        void at(double dx) => unawaited(deck.seek(total * (dx / box.maxWidth).clamp(0.0, 1.0)));
+        void at(double dx) =>
+            unawaited(deck.seekByHand(total * (dx / box.maxWidth).clamp(0.0, 1.0)));
         return MouseRegion(
           cursor: SystemMouseCursors.click,
           child: GestureDetector(
@@ -173,6 +174,14 @@ class _Overview extends StatelessWidget {
                   colour: c,
                   cues: [for (final d in deck.hotCues.values) d.inMicroseconds / total.inMicroseconds],
                   mark: mark == null ? null : mark.inMicroseconds / total.inMicroseconds,
+                  // Every four bars, down the whole record: the same rules the lane
+                  // draws tall, so the shape of the song can be read as phrases
+                  // rather than as a lump — where its eights fall, and where one runs
+                  // short.
+                  phrases: [
+                    for (final m in deck.timing?.markers ?? const <int>[])
+                      if (m * 1000 <= total.inMicroseconds) m * 1000 / total.inMicroseconds,
+                  ],
                 ),
               ),
             ),
@@ -184,18 +193,30 @@ class _Overview extends StatelessWidget {
 }
 
 class _OverviewPainter extends CustomPainter {
-  _OverviewPainter({required this.t, required this.bands, required this.colour, required this.cues, required this.mark});
+  _OverviewPainter(
+      {required this.t,
+      required this.bands,
+      required this.colour,
+      required this.cues,
+      required this.mark,
+      required this.phrases});
   final double t;
   final ({List<int> low, List<int> mid, List<int> high})? bands;
   final Color colour;
   final List<double> cues;
   final double? mark;
+  final List<double> phrases;
 
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.width, h = size.height;
     final b = bands;
     final played = w * t.clamp(0.0, 1.0);
+    // A strip along the foot for the four-bar rules, and the shape stands on it.
+    // Drawn *through* the shape they were a grid over the record; drawn under it they
+    // are a ruler beside it, which is what they are for.
+    const foot = 5.0;
+    final wh = h - foot;
     if (b != null && b.low.isNotEmpty) {
       final n = b.low.length;
       final step = math.max(1, (n / w).floor());
@@ -205,13 +226,33 @@ class _OverviewPainter extends CustomPainter {
         for (var k = i; k < math.min(n, i + step); k++) {
           v = math.max(v, math.max(b.low[k], math.max(b.mid[k], b.high[k])));
         }
-        final bar = h * (0.15 + 0.85 * v / 255);
-        canvas.drawRect(Rect.fromLTWH(x, (h - bar) / 2, 1.4, bar),
+        final bar = wh * (0.15 + 0.85 * v / 255);
+        canvas.drawRect(Rect.fromLTWH(x, (wh - bar) / 2, 1.4, bar),
             Paint()..color = x < played ? colour.withValues(alpha: 0.45) : Console.quiet.withValues(alpha: 0.55));
       }
     } else {
-      canvas.drawRect(Rect.fromLTWH(0, h / 2 - 1, w, 2), Paint()..color = Console.line);
-      canvas.drawRect(Rect.fromLTWH(0, h / 2 - 1, played, 2), Paint()..color = colour.withValues(alpha: 0.6));
+      canvas.drawRect(Rect.fromLTWH(0, wh / 2 - 1, w, 2), Paint()..color = Console.line);
+      canvas.drawRect(Rect.fromLTWH(0, wh / 2 - 1, played, 2), Paint()..color = colour.withValues(alpha: 0.6));
+    }
+    // The four-bar rules, along the foot. Only where there is room to tell them
+    // apart: on a long record they fall every few pixels at this width, and a rule
+    // every few pixels is a grey wash rather than a ruler.
+    if (phrases.length > 1) {
+      final apart = w * (phrases[1] - phrases[0]);
+      if (apart >= 5) {
+        canvas.drawRect(Rect.fromLTWH(0, h - 1, w, 1),
+            Paint()..color = Console.ink.withValues(alpha: 0.10));
+        final rule = Paint()..color = Console.ink.withValues(alpha: 0.45);
+        // Every fourth — sixteen bars — stands the full depth of the strip, so the
+        // eights are countable without counting.
+        final eight = Paint()..color = Console.ink.withValues(alpha: 0.75);
+        for (var i = 0; i < phrases.length; i++) {
+          final x = w * phrases[i];
+          final tall = i % 4 == 0 && apart >= 12;
+          final up = tall ? foot : foot * 0.6;
+          canvas.drawRect(Rect.fromLTWH(x, h - up, 1, up), tall ? eight : rule);
+        }
+      }
     }
     for (final c in cues) {
       canvas.drawRect(Rect.fromLTWH(w * c - 1, 0, 2, h), Paint()..color = colour);
@@ -225,7 +266,11 @@ class _OverviewPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_OverviewPainter old) =>
-      old.t != t || old.bands != bands || old.mark != mark || old.cues.length != cues.length;
+      old.t != t ||
+      old.bands != bands ||
+      old.mark != mark ||
+      old.cues.length != cues.length ||
+      old.phrases.length != phrases.length;
 }
 
 /// How far apart the beats are: a needle about the middle, and a number only when

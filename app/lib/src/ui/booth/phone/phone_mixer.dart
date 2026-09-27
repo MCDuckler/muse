@@ -9,6 +9,7 @@ import '../../feel.dart';
 import '../../mag.dart';
 import '../desk/console.dart';
 import '../desk/console_mixer.dart' show Crossfader, MixButton;
+import '../band_swap.dart';
 import '../meters.dart' show LevelMeter;
 
 /// The mixer on a phone: both channels across one strip — each its four knobs and a
@@ -42,7 +43,23 @@ class _PhoneMixerState extends State<PhoneMixer> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(child: _Channel(booth: _b, deck: _b.a)),
-              Container(width: 1, height: 84, color: Console.line, margin: const EdgeInsets.symmetric(horizontal: 8)),
+              // The hand-overs, down the line between the channels. The knobs run
+              // across on a phone rather than down, so these cannot sit beside the
+              // band they belong to the way the desk's do — they are named instead,
+              // and given a finger's worth of room.
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final (band, label) in const [(2, 'HI'), (1, 'MID'), (0, 'LOW')]) ...[
+                      if (band != 2) const SizedBox(height: 4),
+                      BandSwapButton(
+                          booth: _b, band: band, label: label, width: 38, height: 26),
+                    ],
+                  ],
+                ),
+              ),
               Expanded(child: _Channel(booth: _b, deck: _b.b, mirrored: true)),
             ],
           ),

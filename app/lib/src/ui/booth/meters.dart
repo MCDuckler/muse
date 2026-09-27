@@ -242,6 +242,16 @@ class EqKnob extends StatefulWidget {
 class _EqKnobState extends State<EqKnob> {
   double? _from;
 
+  /// The knob turned by [by] pixels of finger: the whole travel in about a hundred
+  /// and twenty of them, on the knob's own taper, with a little either side of
+  /// straight up reading as flat.
+  void _turn(double by) {
+    var t = ((_from ?? 0.5) + by / 120).clamp(0.0, 1.0);
+    _from = t;
+    if ((t - 0.5).abs() < 0.025) t = 0.5;
+    widget.onChanged(EqSet.dbOf(t));
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -258,15 +268,15 @@ class _EqKnobState extends State<EqKnob> {
             feel(Feel.pick);
             widget.onChanged(killed ? 0 : EqSet.killed);
           },
+          // Either way, and for a reason: on a phone the booth is a list, and a list
+          // wants the vertical drag. Up and down alone meant every turn of a knob was
+          // a tug-of-war with the page — sometimes the knob moved, sometimes the page
+          // did. Sideways is the booth's alone, so a finger always gets what it asked
+          // for, and a mouse keeps the up-and-down it has always had.
           onVerticalDragStart: (_) => _from = EqSet.knobOf(widget.db),
-          onVerticalDragUpdate: (d) {
-            // The whole travel in about a hundred and twenty pixels of finger, on the
-            // knob's own taper; a little either side of straight up is flat.
-            var t = ((_from ?? 0.5) - d.delta.dy / 120).clamp(0.0, 1.0);
-            _from = t;
-            if ((t - 0.5).abs() < 0.025) t = 0.5;
-            widget.onChanged(EqSet.dbOf(t));
-          },
+          onVerticalDragUpdate: (d) => _turn(-d.delta.dy),
+          onHorizontalDragStart: (_) => _from = EqSet.knobOf(widget.db),
+          onHorizontalDragUpdate: (d) => _turn(d.delta.dx),
           child: SizedBox(
             width: widget.size,
             height: widget.size,
