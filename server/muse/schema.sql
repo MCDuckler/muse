@@ -703,3 +703,4 @@ create table if not exists track_cues (
   set_by     integer references users(id) on delete set null,
   updated_at timestamptz not null default now()
 );
+alter table tracks add column if not exists beats_version int;

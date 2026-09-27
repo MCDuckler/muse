@@ -76,9 +76,11 @@ def analysis(track_id: int, response: Response, structure: bool = False,
         raise HTTPException(502, "could not read the audio") from e
     if found.get("cues") and found.get("downbeats"):
         found["cues"] = _analysis.sane_cues(found["cues"], found["downbeats"])
-    if t.get("analysed_at") is None or t.get("bpm") != found.get("bpm"):
-        db.run("update tracks set bpm=%s, analysed_at=now() where id=%s",
-               (found.get("bpm"), track_id))
+    if (t.get("analysed_at") is None
+            or t.get("bpm") != found.get("bpm")
+            or t.get("beats_version") != _beats.VERSION):
+        db.run("update tracks set bpm=%s, analysed_at=now(), beats_version=%s where id=%s",
+               (found.get("bpm"), _beats.VERSION, track_id))
     # A record measured before there was a sound to it: given one now, and kept.
     if "sound" not in found and found.get("downbeats"):
         try:

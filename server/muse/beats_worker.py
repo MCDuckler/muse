@@ -27,12 +27,25 @@ IDLE = 120.0
 
 def one(data_dir: pathlib.Path) -> bool:
     """Analyse the next song that has not been, if there is one. True if there was."""
+    # Never looked at, or looked at by an older reading than the one running now.
+    #
+    # The second half is what makes a change to [beats] reach a library rather than
+    # only the songs somebody happens to play afterwards. The measurement is cached
+    # under its version ([beats.cache_path]), so a bump already means the next reading
+    # is a fresh one — but nothing was asking for it: this query only ever looked at
+    # songs with no reading at all, and every song in the library has one. A whole
+    # library would have kept the tempo an older version gave it for ever.
+    #
+    # Never-analysed first, so a song somebody just added is not queued behind five
+    # thousand re-readings.
     t = db.one(
         """select t.id, m.path, m.sha256
              from tracks t
              join media m on m.track_id = t.id and m.role = 'canonical'
-            where t.state = 'ready' and t.analysed_at is null and m.sha256 is not null
-            order by t.id desc limit 1""")
+            where t.state = 'ready' and m.sha256 is not null
+              and (t.analysed_at is null or t.beats_version is distinct from %s)
+            order by t.analysed_at is not null, t.id desc limit 1""",
+        (beats.VERSION,))
     if not t:
         return False
     bpm = None
@@ -43,7 +56,8 @@ def one(data_dir: pathlib.Path) -> bool:
         # A file that cannot be read is marked as looked at all the same: it will not
         # be readable next time either, and it must not be the only song ever tried.
         log.warning("could not analyse track %s: %s", t["id"], e)
-    db.run("update tracks set bpm = %s, analysed_at = now() where id = %s", (bpm, t["id"]))
+    db.run("update tracks set bpm = %s, analysed_at = now(), beats_version = %s where id = %s",
+           (bpm, beats.VERSION, t["id"]))
     return True
 
 
