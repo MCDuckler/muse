@@ -274,6 +274,24 @@ void main() {
       await booth.letGo();
     });
 
+    test('a record one beat into the phrase is put on the one', () async {
+      // The case both measurements were blind to: a beat late is *on* a beat, so the
+      // beat error reads nil, and it is the same bar, so a phrase counted in bars
+      // read nil too. The record then played its one against the master's two.
+      await booth.setCrossfader(0);
+      await booth.b.seek(Duration(milliseconds: booth.a.position.inMilliseconds + 500));
+      await booth.b.play();
+      expect(apart().inMilliseconds.abs(), lessThan(20),
+          reason: 'the beat error is blind to it: a beat late is still on a beat');
+      expect(Booth.beatsOutOfPhrase(booth.b, booth.a), 1, reason: 'one beat in');
+
+      booth.holdOnBeat(booth.b);
+      await Future<void>.delayed(const Duration(milliseconds: 1800));
+      expect(Booth.beatsOutOfPhrase(booth.b, booth.a), 0, reason: 'still off the one');
+      expect(apart().inMilliseconds.abs(), lessThan(12));
+      await booth.letGo();
+    });
+
     test('a record on the wrong bar of the phrase is put on the right one', () async {
       // The fault this is for: beatError wraps at half a beat, so two records a whole
       // two bars apart read as perfectly in step. Held by it they stay that way —
@@ -284,12 +302,12 @@ void main() {
       await booth.b.play();
       expect(apart().inMilliseconds.abs(), lessThan(5),
           reason: 'the beat error cannot see this at all');
-      expect(Booth.barsOutOfPhrase(booth.b, booth.a), isNot(0),
+      expect(Booth.beatsOutOfPhrase(booth.b, booth.a), isNot(0),
           reason: 'but the phrase can');
 
       booth.holdOnBeat(booth.b);
       await Future<void>.delayed(const Duration(milliseconds: 1600));
-      expect(Booth.barsOutOfPhrase(booth.b, booth.a), 0,
+      expect(Booth.beatsOutOfPhrase(booth.b, booth.a), 0,
           reason: 'still out of the phrase');
       expect(apart().inMilliseconds.abs(), lessThan(12),
           reason: 'and the beat is still held');
@@ -303,7 +321,7 @@ void main() {
       final was = booth.b.position;
       booth.holdOnBeat(booth.b);
       await Future<void>.delayed(const Duration(milliseconds: 1200));
-      expect(Booth.barsOutOfPhrase(booth.b, booth.a), 0);
+      expect(Booth.beatsOutOfPhrase(booth.b, booth.a), 0);
       // Not shoved a phrase sideways for nothing: whatever it moved is small.
       final moved = (booth.b.position - was).inMilliseconds.abs();
       expect(moved, lessThan(1400), reason: 'moved $moved ms');

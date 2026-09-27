@@ -1059,6 +1059,7 @@ class Booth extends ChangeNotifier {
     var afterJump = false;
     var saidLost = false;
     var saidPhrase = false;
+    var lastPhrase = 0;
     var lastSide = 0;
     // How many jumps have been spent where the room could hear them.
     var loudMoves = 0;
@@ -1155,16 +1156,21 @@ class Booth extends ChangeNotifier {
       // its start being worth a hundred milliseconds or two and never the same twice
       // — lands on the wrong beat, and the beat error then reads zero about it for
       // ever. Worth a jump on its own, even with the beat already perfect.
-      final outOfPhrase = barsOutOfPhrase(follower, m);
+      final outOfPhrase = beatsOutOfPhrase(follower, m);
       // Acted on only while nothing can hear it: two bars is a long way to move a
       // record somebody is listening to. Said either way — a record that reached the
       // room on the wrong bar is worth knowing about even when it is too late to
       // move it.
-      final barsOut = heardNow ? 0 : outOfPhrase;
-      if (!saidPhrase && heardNow && outOfPhrase != 0) {
+      // Acted on once the reading has held still. It is taken off two records that
+      // are both moving, and one taken across a boundary is a beat out on its own —
+      // jumping on that is the glitch it was supposed to cure.
+      final steadyPhrase = outOfPhrase == lastPhrase;
+      lastPhrase = outOfPhrase;
+      final beatsOut = heardNow || !steadyPhrase || _phraseFixes > 0 ? 0 : outOfPhrase;
+      if (!saidPhrase && heardNow && outOfPhrase != 0 && steadyPhrase) {
         saidPhrase = true;
         note(BoothEventKind.trouble,
-            '${follower.name} is $outOfPhrase bar${outOfPhrase.abs() == 1 ? '' : 's'} '
+            '${follower.name} is $outOfPhrase beat${outOfPhrase.abs() == 1 ? '' : 's'} '
             'out of the phrase and already in the room',
             deck: follower);
       }
@@ -1180,7 +1186,7 @@ class Booth extends ChangeNotifier {
       //
       // So: SYNC places, at once, for anything worth more than the small gap a seek
       // itself costs. Twelve milliseconds is about that.
-      final quiet = (moved < 2 && (ms.abs() > 20 || barsOut != 0) && !heardNow) ||
+      final quiet = (moved < 2 && (ms.abs() > 20 || beatsOut != 0) && !heardNow) ||
           (snap && moved < 2 && ms.abs() > 12);
       // Lost the beat by more than the bend can pull back in reasonable time.
       //
@@ -1228,23 +1234,25 @@ class Booth extends ChangeNotifier {
         // back as much as one forward. (Aimed "further" in the jump's own direction, a
         // jump back overshot by twice that.)
         final jump = -err.inMicroseconds + _jumpCarry.inMicroseconds;
-        // The beat, and then the bars: the first puts it on a beat, the second puts
-        // it on the right one. In the record's own time, which the beat has to be
-        // turned into first.
-        final bars = barsOut * follower.beatInRecord.inMicroseconds * 4;
+        // The beat, and then the whole beats of the phrase: the first puts it on a
+        // beat, the second puts it on the right one of the sixteen. In the record's
+        // own time, which the fine error has to be turned into first.
+        // Negative: beatsOut is how far *into* the phrase the follower is, so the
+        // move is back by that much — the same way the fine error is negated above.
+        final whole = -beatsOut * follower.beatInRecord.inMicroseconds;
         // Said in the log, always: a jump is the one thing the holding does that can be
         // heard, and "it twitched" is only something to work with if there is a when.
         debugPrint('booth: ${follower.name} jumped ${(jump / 1000).toStringAsFixed(0)} ms to the beat'
-            '${barsOut == 0 ? '' : ' and $barsOut bar${barsOut.abs() == 1 ? '' : 's'} to the phrase'} '
+            '${beatsOut == 0 ? '' : ' and $beatsOut beat${beatsOut.abs() == 1 ? '' : 's'} to the phrase'} '
             '(${quiet ? snap && share >= 0.25 ? 'SYNC pressed' : 'while quiet' : 'lost the beat by ${ms.toStringAsFixed(0)} ms'})');
-        if (barsOut != 0) {
+        if (beatsOut != 0) {
           note(BoothEventKind.cue,
-              '${follower.name} was $barsOut bar${barsOut.abs() == 1 ? '' : 's'} out of the phrase',
+              '${follower.name} was $beatsOut beat${beatsOut.abs() == 1 ? '' : 's'} out of the phrase',
               deck: follower);
           _phraseFixes++;
         }
         await follower.nudge(
-            Duration(microseconds: (jump * follower.tempo).round() + bars));
+            Duration(microseconds: (jump * follower.tempo).round() + whole));
         return;
       }
       // No learning of the rate: the grids give it to a few hundredths of a percent,
@@ -1803,16 +1811,37 @@ class Booth extends ChangeNotifier {
   ///
   /// This is the part it cannot see: the four-bar rules on the two strips, counted
   /// the way the automix counts them when it parks a record to meet a phrase.
-  static int barsOutOfPhrase(Deck follower, Deck master) {
-    final ft = follower.timing, mt = master.timing;
-    if (ft == null || mt == null) return 0;
-    final theirs = mt.placeInPhrase(master.position);
-    final mine = ft.placeInPhrase(follower.position);
-    if (theirs == null || mine == null) return 0;
-    var d = (mine.of - mine.bar) - (theirs.of - theirs.bar);
-    if (d > 2) d -= 4;
-    if (d < -2) d += 4;
-    return d;
+  /// How far into its own four-bar phrase [d] is, in beats, counted continuously
+  /// from the marker before it. Null where the record has no phrase to speak of.
+  static double? _phraseBeats(Deck d) {
+    final t = d.timing;
+    if (t == null) return null;
+    final beat = d.beatInRecord.inMicroseconds / 1000.0;
+    final marks = t.markers;
+    if (beat <= 0 || marks.isEmpty) return null;
+    final ms = d.position.inMicroseconds / 1000.0;
+    // The marker at or before, with half a beat of grace so a reading taken a hair
+    // early belongs to the marker it was aimed at.
+    var i = -1;
+    for (var k = 0; k < marks.length; k++) {
+      if (marks[k] <= ms + beat / 2) {
+        i = k;
+      } else {
+        break;
+      }
+    }
+    if (i < 0) return null;
+    return (ms - marks[i]) / beat;
+  }
+
+  static int beatsOutOfPhrase(Deck follower, Deck master) {
+    final f = _phraseBeats(follower), m = _phraseBeats(master);
+    if (f == null || m == null) return 0;
+    // Both counted in beats through a sixteen-beat phrase, so the difference wraps at
+    // eight: two bars either way is as far as anything needs to move.
+    var d = f - m;
+    d -= (d / 16).roundToDouble() * 16;
+    return d.round();
   }
 
   /// Where the fader is at [k] of a plan: travelled evenly between the steps that
