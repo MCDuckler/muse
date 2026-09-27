@@ -154,12 +154,22 @@ void main() {
     test('a bend closes the gap, and never by more than it should', () {
       expect(Booth.bendFor(const Duration(milliseconds: 20)), lessThan(1));
       expect(Booth.bendFor(const Duration(milliseconds: -20)), greaterThan(1));
-      // A flam that can be heard is bent out quickly, but never by more than 6 %;
-      // inside 8 ms, gently — over four seconds, and never by more than 3 %.
-      expect(Booth.bendFor(const Duration(seconds: 5)), 0.94);
-      expect(Booth.bendFor(const Duration(milliseconds: 21)), closeTo(0.97, 1e-9));
+      // A flam that can be heard is pulled out over about 1.8 s and never by more
+      // than 3 %; inside 8 ms, gently — over four seconds.
+      //
+      // The pull used to be 700 ms and 6 %, which is more gain than a loop with half
+      // a second of delay in it can carry: it overshot, turned round, overshot the
+      // other way, and never settled. Gross errors are a jump's job now, so the bend
+      // only has to hold a record that is already close.
+      expect(Booth.bendFor(const Duration(seconds: 5)), closeTo(0.97, 1e-9),
+          reason: 'the stop');
+      expect(Booth.bendFor(const Duration(milliseconds: 21)), closeTo(1 - 21 / 1800, 1e-9));
       expect(Booth.bendFor(const Duration(milliseconds: 6)), closeTo(1 - 6 / 4000, 1e-9));
       expect(Booth.bendFor(Duration.zero), 1);
+      // Gentler than it was, everywhere it is not at the stop: that is the point.
+      expect(Booth.bendFor(const Duration(milliseconds: 30)),
+          greaterThan(Booth.bendFor(const Duration(milliseconds: 30), quick: const Duration(milliseconds: 700))),
+          reason: 'a 30 ms flam is pulled less hard than the old loop pulled it');
     });
   });
 
@@ -297,6 +307,60 @@ void main() {
       // Not shoved a phrase sideways for nothing: whatever it moved is small.
       final moved = (booth.b.position - was).inMilliseconds.abs();
       expect(moved, lessThan(1400), reason: 'moved $moved ms');
+      await booth.letGo();
+    });
+
+    test('an engine that is slow to take a rate does not make it hunt', () async {
+      // The fault: "sync drifts heavily, might be overcompensating, never stays at
+      // the optimal point". A phone's engine plays what it has already buffered at
+      // the old rate for a couple of hundred milliseconds after being told a new one,
+      // while the deck has already started reckoning its position at the new one. So
+      // the error looks like it is closing before any of it has happened, the pull is
+      // eased off, the real correction lands late, and it sails past — over and over.
+      final engine = (JustAudioPlatform.instance as FakeJustAudio)
+          .players[booth.b.player.platformId!]!;
+      engine.speedLag = const Duration(milliseconds: 250);
+
+      await booth.setCrossfader(0.5); // heard, so only the bend may act
+      await booth.b.seek(Duration(milliseconds: booth.a.position.inMilliseconds + 45));
+      await booth.b.play();
+      booth.holdOnBeat(booth.b);
+
+      // Watched for long enough that a hunting loop would have shown it.
+      var crossings = 0, last = 0, worstAfterSettling = 0;
+      for (var i = 0; i < 160; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        final ms = apart().inMilliseconds;
+        final side = ms > 4 ? 1 : (ms < -4 ? -1 : 0);
+        if (side != 0) {
+          if (last != 0 && side != last) crossings++;
+          last = side;
+        }
+        // After five seconds it should be settled and staying settled. The error is
+        // put inside the proportional band on purpose — above it the pull is at its
+        // stop and what is being measured is how fast it closes, not whether it
+        // hunts, and hunting is the fault here.
+        if (i > 100 && ms.abs() > worstAfterSettling) worstAfterSettling = ms.abs();
+      }
+      expect(worstAfterSettling, lessThan(20),
+          reason: 'never settled: still $worstAfterSettling ms out after 4 s');
+      expect(crossings, lessThan(6), reason: 'it hunted: $crossings swings either side');
+      await booth.letGo();
+    }, timeout: const Timeout(Duration(seconds: 40)));
+
+    test('SYNC places the record at once, the way a DJ deck does', () async {
+      // A deck's SYNC is instant: it works out the offset from the two grids and
+      // *puts* the record there, then holds the rate ratio. It does not ease the
+      // record into place over seconds, and neither should this.
+      await booth.setCrossfader(0.5); // audible, as a hand pressing SYNC usually is
+      await booth.b.seek(Duration(milliseconds: booth.a.position.inMilliseconds + 200));
+      await booth.b.play();
+      expect(apart().inMilliseconds.abs(), greaterThan(150));
+
+      booth.holdOnBeat(booth.b, snap: true);
+      await Future<void>.delayed(const Duration(milliseconds: 450));
+      expect(apart().inMilliseconds.abs(), lessThan(15),
+          reason: 'still ${apart().inMilliseconds} ms out after 450 ms');
       await booth.letGo();
     });
 

@@ -985,11 +985,30 @@ class Booth extends ChangeNotifier {
   /// does not chase the engines' own jitter. Further out, where the flam can be heard,
   /// over well under a second and up to six per cent: a sixty-millisecond flam bent out
   /// over four seconds was ten seconds of two records audibly apart.
+  /// The rate to hold [error] at: a proportional pull, gentle enough to settle.
+  ///
+  /// The phase error is the *integral* of the difference in rate, so this is a
+  /// proportional controller on an integrator and [quick] is its closed-loop time
+  /// constant. That only settles if the loop's delay is well inside it, and the delay
+  /// here is not small: the median of five readings is worth about 125 ms of group
+  /// delay, the rate is changed at most every 200 ms, and — the one that matters —
+  /// the engine goes on playing already-buffered audio at the *old* rate for a couple
+  /// of hundred milliseconds after being told the new one, while [Deck.bend] has
+  /// already started reckoning the position at the new one. So the error looks like
+  /// it is closing before any of it has happened, the pull is eased off, the real
+  /// correction lands late, and the deck sails past. That is the drift: not a record
+  /// that will not be caught, but one caught too hard, over and over.
+  ///
+  /// It was 700 ms against roughly half a second of delay, which is no margin at all.
+  /// 1.8 s is about three times the delay, which is the usual asking price for a loop
+  /// that settles rather than hunts. The stop came down with it: six percent is a
+  /// bang-bang correction that overshoots by whatever the delay is worth, and gross
+  /// errors are a jump's job now, not the bend's.
   static double bendFor(Duration error,
       {Duration over = const Duration(seconds: 4),
-      Duration quick = const Duration(milliseconds: 700),
+      Duration quick = const Duration(milliseconds: 1800),
       Duration near = const Duration(milliseconds: 8),
-      double most = 0.06}) {
+      double most = 0.03}) {
     final far = error.abs() > near;
     final b = -error.inMicroseconds / (far ? quick : over).inMicroseconds;
     return 1 + b.clamp(-most, far ? most : 0.03);
@@ -1019,12 +1038,14 @@ class Booth extends ChangeNotifier {
   int _heldJumps = 0;
   bool _bendMaxed = false;
   int _phraseFixes = 0;
+  int _heldSwings = 0;
 
   void holdOnBeat(Deck follower, {bool snap = false}) {
     _lock?.cancel();
     _heldJumps = 0;
     _bendMaxed = false;
     _phraseFixes = 0;
+    _heldSwings = 0;
     final m = other(follower);
     final seen = <int>[];
     final began = DateTime.now();
@@ -1038,6 +1059,7 @@ class Booth extends ChangeNotifier {
     var afterJump = false;
     var saidLost = false;
     var saidPhrase = false;
+    var lastSide = 0;
     // How many jumps have been spent where the room could hear them.
     var loudMoves = 0;
     _lock = Timer.periodic(const Duration(milliseconds: 50), (t) async {
@@ -1083,7 +1105,10 @@ class Booth extends ChangeNotifier {
           follower.syncTrim.inMicroseconds;
       seen.add(heard);
       if (seen.length > 5) seen.removeAt(0);
-      if (seen.length < 3) return;
+      // Three readings is a median worth trusting; two will do for the placement SYNC
+      // is waiting on, where being 200 ms out for another tenth of a second is worse
+      // than a median of two.
+      if (seen.length < (snap && moved == 0 ? 2 : 3)) return;
       final sorted = [...seen]..sort();
       final err = Duration(microseconds: sorted[sorted.length ~/ 2]);
       final ms = err.inMicroseconds / 1000;
@@ -1143,8 +1168,20 @@ class Booth extends ChangeNotifier {
             'out of the phrase and already in the room',
             deck: follower);
       }
+      // What actually puts a record in step is *placing* it, and the rate ratio off
+      // the two grids then keeps it there: both decks run on one sound card, so two
+      // grids advancing at the right ratio do not come apart. That is how a DJ deck
+      // has always done it, and it is why its SYNC is instant.
+      //
+      // The bend is not for placing. It is for the tenths of a percent the grids are
+      // out by, and for nothing else — used to close a phase it pulls against its own
+      // last correction and against the noise in every reading, which is a record
+      // that never settles.
+      //
+      // So: SYNC places, at once, for anything worth more than the small gap a seek
+      // itself costs. Twelve milliseconds is about that.
       final quiet = (moved < 2 && (ms.abs() > 20 || barsOut != 0) && !heardNow) ||
-          (snap && moved == 0 && ms.abs() > 40);
+          (snap && moved < 2 && ms.abs() > 12);
       // Lost the beat by more than the bend can pull back in reasonable time.
       //
       // A jump is a seek and a seek is a hole in the sound, so out loud it is spent
@@ -1217,16 +1254,35 @@ class Booth extends ChangeNotifier {
       // to a couple of milliseconds.
       // Inside a few milliseconds is in step: the engines' own clocks are no finer,
       // and chasing their noise would be the rate twitching for nothing.
-      final want = ms.abs() < 3 ? base : (base * bendFor(err)).clamp(0.5, 2.0);
+      // Inside the noise, the rate is left alone. A reading is worth a few
+      // milliseconds either way at best, and a loop that answers that noise turns it
+      // into real drift: half a percent of rate, in a random direction, several times
+      // a second. The deadband was three milliseconds, which is finer than any engine
+      // here reports — so the rate was being steered by measurement noise for most of
+      // every hold. It is the same eight milliseconds the gentle band starts at now.
+      final want = ms.abs() < 8 ? base : (base * bendFor(err)).clamp(0.5, 2.0);
       // The bend at its stop: the error is further out than the rate can pull back,
       // which is a different fault from a record that merely wanders.
-      if ((want / base - 1).abs() > 0.0599) _bendMaxed = true;
+      if ((want / base - 1).abs() > 0.0299) _bendMaxed = true;
+      // Which way it is out, and how often that changes: a loop that is hunting
+      // crosses zero over and over, and says so here rather than in somebody's ear.
+      final side = ms > 4 ? 1 : (ms < -4 ? -1 : 0);
+      if (side != 0) {
+        if (lastSide != 0 && side != lastSide) _heldSwings++;
+        lastSide = side;
+      }
       // At most five changes of rate a second: each is a message to the engine, and
       // a rate that changes every twentieth of a second is a rate that warbles.
       if ((want - follower.tempo).abs() > 0.0008 &&
           now.difference(lastBend) >= const Duration(milliseconds: 200)) {
         lastBend = now;
         await follower.bend(want);
+        // Everything read while the engine is still taking the new rate up is a
+        // mixture of the old one and the new, and putting that in the median is
+        // feeding the loop its own transient. Thrown away, and a moment left for the
+        // change to reach the sound.
+        seen.clear();
+        settleUntil = now.add(const Duration(milliseconds: 120));
       }
       _lockBase = base;
     });
@@ -1283,6 +1339,7 @@ class Booth extends ChangeNotifier {
           '${sorted.last.toStringAsFixed(1)} ms; settled at ${_lockBase?.toStringAsFixed(4)}×'
           ', $_heldJumps jump${_heldJumps == 1 ? '' : 's'}'
           '${_phraseFixes == 0 ? '' : ', $_phraseFixes put back on the phrase'}'
+          '${_heldSwings < 3 ? '' : ', $_heldSwings swings either side'}'
           '${_bendMaxed ? ', the bend at its stop' : ''}';
       debugPrint('booth: $said');
       // Written down as well as printed. On a desk debugPrint reaches the log file;

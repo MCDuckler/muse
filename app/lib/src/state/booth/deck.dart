@@ -226,6 +226,14 @@ class Deck extends ChangeNotifier {
       }
       _fix = at;
     } else {
+      // A twelfth of the difference each report, which keeps the clock from twitching
+      // with every one — and, it turns out, is most of what keeps the beat-holding
+      // stable. The reckoning runs *ahead* of the engine's reports by whatever the
+      // engine is slow by, which makes it a predictor; the loop reading it therefore
+      // sees less delay than the engine really has. Trusting the reports harder just
+      // after a rate change was tried, on the reasoning that the reckoning is wrong
+      // then — and it measured worse (34 ms still out after four seconds against
+      // under 20), because it hands that delay straight back to the loop.
       _fix = expected + off * 0.12;
     }
     _fixedAt = now;

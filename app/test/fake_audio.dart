@@ -285,13 +285,30 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   /// The last volume the engine was told.
   double volume = 1.0;
 
+  /// How long this engine takes to *play* at a rate it has been told, as a real one
+  /// does: audio already in the buffer goes out at the old rate first. Zero here by
+  /// default, because most tests do not care; a phone's is a couple of hundred
+  /// milliseconds, and that delay is what makes a beat-holding loop hunt.
+  Duration speedLag = Duration.zero;
+
   @override
   Future<SetSpeedResponse> setSpeed(SetSpeedRequest request) async {
     // A new rate from here on, not for the time already played: a report now, the
     // way the real engine's next position report is.
     _advance();
-    speed = request.speed;
-    _emit();
+    final to = request.speed;
+    if (speedLag <= Duration.zero) {
+      speed = to;
+      _emit();
+      return SetSpeedResponse();
+    }
+    // Told now, heard later: what is already buffered plays at the rate it was
+    // buffered at.
+    unawaited(Future<void>.delayed(speedLag, () {
+      _advance();
+      speed = to;
+      _emit();
+    }));
     return SetSpeedResponse();
   }
 
