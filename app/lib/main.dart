@@ -1,3 +1,4 @@
+import 'src/ui/booth_page.dart' show ResumeBooth;
 import 'src/ui/full_screen.dart';
 import 'dart:async';
 import 'dart:math' as math;
@@ -459,7 +460,7 @@ class _Root extends StatelessWidget {
     if (!app.ready) {
       return const Scaffold(body: LoadingField());
     }
-    return app.user == null ? const LoginPage() : const HomePage();
+    return app.user == null ? const LoginPage() : const ResumeBooth(child: HomePage());
   }
 }
 

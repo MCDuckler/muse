@@ -14,6 +14,7 @@ import 'fx_channel.dart';
 import 'fx_sounds.dart';
 import 'mixer.dart';
 import 'parts.dart';
+import 'session.dart';
 
 /// How one record gives way to the next.
 enum Transition {
@@ -476,6 +477,9 @@ class Booth extends ChangeNotifier {
     stopTransition();
     await a.pause();
     await b.pause();
+    // Meant to end: nothing to come back to.
+    _wasLive = false;
+    unawaited(BoothSession.clear());
   }
   Deck other(Deck d) => identical(d, a) ? b : a;
 
@@ -508,10 +512,31 @@ class Booth extends ChangeNotifier {
   /// deck already pitched meant refusing two tempos a few tenths apart on screen.)
   static const handReach = 0.5;
 
+  /// The session kept while the booth is live — on the booth's own changes, no more
+  /// than every few seconds — and marked ended when it stops being, so a restart of
+  /// the app comes back to the mix. No timer of its own: the decks report their
+  /// position several times a second while anything plays, and that is enough.
+  bool _wasLive = false;
+  DateTime? _lastKept;
+  void _maybeKeep() {
+    if (live) {
+      _wasLive = true;
+      final now = DateTime.now();
+      if (_lastKept == null || now.difference(_lastKept!) >= BoothSession.every) {
+        _lastKept = now;
+        unawaited(BoothSession.save(this));
+      }
+    } else if (_wasLive) {
+      _wasLive = false;
+      unawaited(BoothSession.clear());
+    }
+  }
+
   bool _prepared = false;
   Future<void> init() async {
     if (_prepared) return;
     _prepared = true;
+    addListener(_maybeKeep);
     // Speaking to each player once makes its element / session, in order.
     await a.player.setVolume(1);
     await b.player.setVolume(1);
@@ -2524,6 +2549,7 @@ class Booth extends ChangeNotifier {
 
   @override
   void dispose() {
+    removeListener(_maybeKeep);
     partsJobs.removeListener(_partsChanged);
     _running?.cancel();
     _lock?.cancel();

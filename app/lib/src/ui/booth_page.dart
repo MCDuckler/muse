@@ -21,6 +21,8 @@ import 'mag_parts.dart';
 import 'stage/arm_grip.dart';
 import 'widths.dart';
 import 'booth/look.dart';
+import 'snack.dart';
+import '../state/booth/session.dart';
 
 /// The booth: two records on the deck, the mixer between them, the crate beside.
 ///
@@ -247,4 +249,61 @@ class BoothBar extends StatelessWidget {
       ),
     );
   }
+}
+
+
+/// The booth as it was left when the app last ran, put back and set going — once,
+/// on the home page's first frame, when a live session under eight hours old was
+/// kept. The bar at the bottom says so, with a way to stop it.
+class ResumeBooth extends StatefulWidget {
+  const ResumeBooth({super.key, required this.child});
+  final Widget child;
+
+  @override
+  State<ResumeBooth> createState() => _ResumeBoothState();
+}
+
+class _ResumeBoothState extends State<ResumeBooth> {
+  static bool _tried = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_tried) return;
+    _tried = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_resume()));
+  }
+
+  Future<void> _resume() async {
+    final snap = await BoothSession.load();
+    if (snap == null || !mounted) return;
+    final app = context.read<AppState>();
+    final ids = BoothSession.trackIds(snap);
+    if (ids.isEmpty) return;
+    final tracks = <int, Track>{};
+    await Future.wait([
+      for (final id in ids.take(60))
+        () async {
+          try {
+            tracks[id] = await app.api.track(id);
+          } catch (_) {
+            // A record the house no longer has: the session comes back without it.
+          }
+        }(),
+    ]);
+    if (!mounted || tracks.isEmpty) return;
+    await boothLook.load();
+    await app.player?.pause();
+    final booth = app.booth;
+    final came = await BoothSession.resume(booth, snap, tracks);
+    if (!came || !mounted) return;
+    final on = booth.master.track?.displayTitle;
+    ScaffoldMessenger.of(context).say(snack(
+      Text(on == null ? 'The booth is back where it was' : 'Back in the booth: $on'),
+      action: SnackBarAction(label: 'STOP', onPressed: () => unawaited(booth.stopAll())),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
