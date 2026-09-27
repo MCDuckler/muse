@@ -398,13 +398,22 @@ def sections(phrase_bars: list[int], levels: list[int], n_bars: int,
         seg = on[i:i + length]
         return len(seg) >= min(length, n_bars - i) and bool(seg.mean() >= 0.75)
 
+    # The first phrase bar the record is steadily on from — and the first *marker* it
+    # is, whichever comes first. Phrase bars are sparse (a clear change of sound),
+    # so on a record that is on from bar 8 and first changes at bar 40 the phrase rule
+    # alone put the intro's end at 40: 627 records of 5,243 had their in point past
+    # bar 32 with the record long since on, and were parked past their first section.
     intro_end = None
     for b in phrase_bars:
         if b > 0 and steady(b):
             intro_end = b
             break
+    grid = markers if markers else list(range(0, n_bars, 4))
+    for m in grid:
+        if m > 0 and steady(m):
+            intro_end = m if intro_end is None else min(intro_end, m)
+            break
     if intro_end is None:
-        grid = markers if markers else list(range(0, n_bars, 4))
         for i in range(0, n_bars):
             if steady(i):
                 intro_end = min(grid, key=lambda m: abs(m - i))
@@ -415,6 +424,70 @@ def sections(phrase_bars: list[int], levels: list[int], n_bars: int,
             outro_start = b
             break
     return {"intro_end_bar": intro_end, "outro_start_bar": outro_start}
+
+
+def outro_start(energy_db: np.ndarray, drums: np.ndarray, novelty: np.ndarray,
+                markers: list[int], n_bars: int, quiet_outro: int | None) -> tuple[int | None, str]:
+    """The bar a DJ would leave from, as (bar, why) — or (None, why) for a record with
+    no room.
+
+    The old rule ([sections]) asked for the record to go quiet: the last phrase bar
+    after which fewer than half the bars are within six decibels of the loudest. Most
+    records never do that — over the library, the median record is that loud for 86 %
+    of its bars — so two records in three got no outro and left "33 bars before the
+    end", which is inside the last drop or chorus about half the time. Where the old
+    rule finds a real quiet outro in the second half, it is kept.
+
+    Otherwise every four-bar marker in the second half with at least eight bars after
+    it is a candidate, scored by what the plain analysis knows of each bar: how much
+    quieter the eight bars after it are than the eight before (in dB), how much less
+    bass-onset there is (the drums going), how clear a change of sound it is (the
+    novelty the phrase grid is voted from), whether it sits on an eight-bar count back
+    from the last downbeat (real cue-outs cluster there — Kim et al. 2020), whether
+    there are sixteen bars after it for a move, and a little for being later rather
+    than earlier, since a DJ leaves late. A candidate inside a stretch that is still
+    at full loudness eight bars on is marked down. The best is taken where something
+    actually changes there; otherwise the last eight-bar boundary that leaves sixteen
+    bars, so the fallback is at least on the grid the mix is counted in."""
+    n = n_bars
+    if n < 16 or len(energy_db) < n:
+        return quiet_outro, "quiet"
+    if quiet_outro is not None and quiet_outro >= n // 2:
+        return quiet_outro, "quiet"
+    e = np.asarray(energy_db[:n], dtype=float)
+    heard = e[e > -90]
+    if len(heard) == 0:
+        return quiet_outro, "quiet"
+    p90 = float(np.percentile(heard, 90))
+    d = np.asarray(drums[:n], dtype=float) if drums is not None and len(drums) >= n else np.zeros(n)
+    nv = np.asarray(novelty[:n], dtype=float) if novelty is not None and len(novelty) >= n else np.zeros(n)
+    nv_top = float(nv.max()) if nv.size and nv.max() > 0 else 1.0
+    grid = [m for m in (markers or list(range(0, n, 4))) if n // 2 <= m <= n - 8]
+    best, best_score, best_change = None, -1e9, 0.0
+    for m in grid:
+        before = e[max(0, m - 8):m]
+        after = e[m:min(n, m + 8)]
+        if len(before) < 4 or len(after) < 4:
+            continue
+        fall = float(np.clip((before.mean() - after.mean()) / 6.0, 0.0, 1.0))
+        db_before, db_after = d[max(0, m - 8):m], d[m:min(n, m + 8)]
+        drum_fall = float(np.clip((db_before.mean() - db_after.mean()) / 0.3, 0.0, 1.0)) if db_before.size and db_after.size else 0.0
+        change = float(nv[m] / nv_top) if m < len(nv) else 0.0
+        on8 = 1.0 if (n - m) % 8 == 0 else 0.5 if (n - m) % 4 == 0 else 0.0
+        room = float(np.clip((n - m - 8) / 8.0, 0.0, 1.0))
+        late = (m - n / 2) / (n / 2)
+        still_on = 1.0 if after.mean() >= p90 - 2.0 else 0.0
+        score = fall + 0.6 * drum_fall + 0.8 * change + 0.5 * on8 + 0.4 * room + 0.3 * late - 0.6 * still_on
+        if score > best_score:
+            best, best_score, best_change = m, score, fall + drum_fall + change
+    if best is not None and best_change >= 0.5:
+        return best, "change"
+    # Nothing changes anywhere in the second half: the last eight-bar count back from
+    # the end that leaves sixteen bars.
+    for m in reversed(grid):
+        if (n - m) % 8 == 0 and n - m >= 16:
+            return m, "grid"
+    return (grid[-1] if grid else quiet_outro), "grid"
 
 
 # ------------------------------------------------------------------ the whole of it
@@ -431,23 +504,28 @@ def add(out: dict, x: np.ndarray, beats_ms: list[int], bar_starts_on: int,
     out["energy"] = levels
     spectra = bar_spectra(x, downbeats)
     out["sound"] = sound_of(spectra, energy_db)
-    markers = four_bars(changes(spectra, energy_db))
+    novelty = changes(spectra, energy_db)
+    markers = four_bars(novelty)
     out["four_bars"] = [int(downbeats[b]) for b in markers if b < len(downbeats)]
     phrase_bars = phrases(rows, markers)
     out["phrases"] = [int(downbeats[b]) for b in phrase_bars if b < len(downbeats)]
     out["drops"] = [int(downbeats[b]) for b in drops(levels, phrase_bars)
                     if b < len(downbeats)]
     where = sections(phrase_bars, levels, len(levels), markers)
+    outro, out["mix_out_why"] = outro_start(
+        energy_db, rows[:, 12] if rows.size else np.zeros(0), novelty, markers, len(levels),
+        where["outro_start_bar"])
     sound_end = out["duration_ms"] - out.get("tail_ms", 0)
     first = int(downbeats[0])
     mix_in = int(downbeats[where["intro_end_bar"]]) if where["intro_end_bar"] is not None \
         and where["intro_end_bar"] < len(downbeats) else first
-    if where["outro_start_bar"] is not None and where["outro_start_bar"] < len(downbeats):
-        mix_out = int(downbeats[where["outro_start_bar"]])
+    if outro is not None and outro < len(downbeats):
+        mix_out = int(downbeats[outro])
     else:
         # Thirty-two bars before the sound ends, on a downbeat; or the last phrase.
         back = max(0, len(downbeats) - 33)
         mix_out = int(downbeats[back])
+        out["mix_out_why"] = "end"
     out["cues"] = sane_cues({
         "first_downbeat_ms": first,
         "mix_in_ms": mix_in,

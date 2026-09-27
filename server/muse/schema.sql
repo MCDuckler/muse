@@ -691,3 +691,15 @@ create table if not exists track_traits (
   out_db         real,
   updated_at     timestamptz not null default now()
 );
+
+-- Where a hand said a record should leave and come in, kept for good: the booth's
+-- automix goes by these before anything the analysis says (AutoMix.outPoint /
+-- inPoint), because a cue point is a property of the record, not of the night —
+-- different DJs agree within sixteen bars 86 % of the time (Kim et al. 2020).
+create table if not exists track_cues (
+  track_id   integer primary key references tracks(id) on delete cascade,
+  out_ms     integer,
+  in_ms      integer,
+  set_by     integer references users(id) on delete set null,
+  updated_at timestamptz not null default now()
+);

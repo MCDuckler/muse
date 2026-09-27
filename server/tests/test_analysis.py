@@ -194,3 +194,58 @@ def test_a_grid_that_starts_late_is_found_from_the_start():
     for b in (3, 11, 19, 27, 35):
         strength[b] = 2.5
     assert analysis.four_bars(strength)[:3] == [3, 7, 11]
+
+
+def _song_drums_stop(bpm: float, bars: int, stop_from_bar: int) -> np.ndarray:
+    """Loud to the very end — a pad holds the level — but the kick stops at
+    [stop_from_bar]: the kind of record whose outro the level rule never saw."""
+    rng = np.random.default_rng(11)
+    beat = 60.0 / bpm
+    n = int(RATE * beat * 4 * bars) + RATE
+    x = np.zeros(n)
+    t = np.arange(int(RATE * 0.25)) / RATE
+    kick = np.sin(2 * np.pi * (55 + 60 * np.exp(-t * 30)) * t) * np.exp(-t * 14)
+    snare = rng.standard_normal(int(RATE * 0.1)) * np.exp(-np.arange(int(RATE * 0.1)) / (RATE * 0.03)) * 0.5
+    tt = np.arange(n) / RATE
+    pad = 0.35 * (np.sin(2 * np.pi * 220 * tt) + 0.5 * np.sin(2 * np.pi * 330 * tt))
+    for k in range(bars * 4):
+        bar = k // 4
+        at = int(k * beat * RATE)
+        if bar < stop_from_bar:
+            x[at:at + len(kick)] += kick[: n - at]
+            if k % 2:
+                x[at:at + len(snare)] += snare[: n - at]
+        else:
+            # The pad a little louder so the level does not fall: the drums are what go.
+            pass
+    x += pad * np.where(tt >= stop_from_bar * 4 * beat, 1.6, 1.0)
+    return x * 0.5
+
+
+def test_an_outro_is_found_where_the_drums_go_even_at_full_level(tmp_path):
+    x = _song_drums_stop(128, bars=64, stop_from_bar=48)
+    f = tmp_path / "held.wav"
+    f.write_bytes(_wav(x))
+    found = beats.measure(f)
+    bar = 60.0 / 128 * 4 * 1000
+    assert found["cues"]["mix_out_ms"] == pytest.approx(48 * bar, abs=bar * 4.5), found.get("mix_out_why")
+    assert found["mix_out_why"] == "change"
+
+
+def test_a_record_that_never_changes_leaves_on_the_grid_not_at_33_bars():
+    n = 100
+    e = np.full(n, -12.0)
+    d = np.full(n, 0.8)
+    nv = np.zeros(n)
+    markers = list(range(0, n, 4))
+    bar, why = analysis.outro_start(e, d, nv, markers, n, None)
+    assert why == "grid"
+    assert (n - bar) % 8 == 0 and n - bar >= 16, bar
+    # And a real quiet outro in the second half is kept as it was.
+    assert analysis.outro_start(e, d, nv, markers, n, 72) == (72, "quiet")
+
+
+def test_the_intro_ends_at_the_first_steady_marker_not_the_first_phrase():
+    levels = [40] * 8 + [240] * 56
+    where = analysis.sections([0, 40], levels, len(levels), list(range(0, 64, 4)))
+    assert where["intro_end_bar"] == 8

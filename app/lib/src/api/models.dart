@@ -2099,7 +2099,14 @@ class TrackTiming {
     this.cues,
     this.structure,
     this.sound,
+    this.handCues,
   });
+
+  /// Where a hand said this record leaves and comes in, kept by the house
+  /// (PUT /tracks/{id}/cues): what the automix goes by before anything else.
+  final ({int? outMs, int? inMs})? handCues;
+  Duration? get handOut => handCues?.outMs == null ? null : Duration(milliseconds: handCues!.outMs!);
+  Duration? get handIn => handCues?.inMs == null ? null : Duration(milliseconds: handCues!.inMs!);
 
   /// What the record sounds like, as one row: its spectrum averaged over the bars
   /// that play, level taken off (analysis.sound_of on the house). Two records whose
@@ -2548,6 +2555,9 @@ class TrackTiming {
             ? TrackStructure.fromJson((j['structure'] as Map).cast<String, dynamic>())
             : null,
         sound: j['sound'] is List ? [for (final v in j['sound'] as List) (v as num).toDouble()] : null,
+        handCues: j['hand_cues'] is Map
+            ? (outMs: (j['hand_cues']['out_ms'] as num?)?.toInt(), inMs: (j['hand_cues']['in_ms'] as num?)?.toInt())
+            : null,
       );
 }
 

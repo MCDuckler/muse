@@ -710,7 +710,7 @@ void main() {
         reason: 'a fade out of a record that fades itself is still in step');
     expect(Booth.syncRatio(solo.bpm!, euro.bpm!, reach: Booth.bridgeReach), isNotNull,
         reason: '154 into 169 meets in the middle');
-    expect(AutoMix.choose(solo, baron), (kind: Transition.fade, bars: 2),
+    expect(AutoMix.choose(solo, baron), (kind: Transition.fade, bars: 4),
         reason: '84.5 against 103.5 cannot be one tempo: a quick handover');
     expect(AutoMix.choose(baron, whatcha).kind, Transition.cut,
         reason: 'a cold ending into a different speed: on the downbeat');
@@ -828,7 +828,7 @@ void main() {
     const pitch = 150.0 / 170.8;
     expect(AutoMix.choose(master, next, fromPitch: pitch).kind, isNot(Transition.fade),
         reason: 'in step: blended, not handed over');
-    expect(AutoMix.choose(master, next), (kind: Transition.fade, bars: 2),
+    expect(AutoMix.choose(master, next), (kind: Transition.fade, bars: 4),
         reason: 'judged by the made tempo it would have been a handover');
     expect(AutoMix.howWell(master, next, fromPitch: pitch),
         greaterThan(AutoMix.howWell(master, next)));

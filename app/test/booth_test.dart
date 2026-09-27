@@ -1021,12 +1021,12 @@ void autoMixRules() {
     expect(AutoMix.choose(t(bpm: 128, camelot: '8A'), t(bpm: 130, camelot: '9A')),
         (kind: Transition.blend, bars: 16), reason: 'in key, in tempo: the long blend');
     expect(AutoMix.choose(t(bpm: 128, camelot: '8A'), t(bpm: 130, camelot: '3B')),
-        (kind: Transition.sweep, bars: 12),
+        (kind: Transition.sweep, bars: 8),
         reason: 'a clash goes out through the filter, and is shorter');
     expect(AutoMix.choose(t(bpm: 128), t(bpm: 150)).kind, isNot(Transition.fade),
         reason: 'far, but not past meeting in the middle: mixed in step');
     expect(AutoMix.choose(t(bpm: 128), t(bpm: 165)),
-        (kind: Transition.fade, bars: 2),
+        (kind: Transition.fade, bars: 4),
         reason: 'too far apart to put in step: handed over quickly, not laid on top');
     expect(AutoMix.choose(t(bpm: 128, ends: 'cold'), t(bpm: 165)).kind, Transition.cut,
         reason: 'and on the downbeat where the old one stops dead');

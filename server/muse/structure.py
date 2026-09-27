@@ -35,7 +35,7 @@ from . import analysis, beats as _beats, pool
 
 log = logging.getLogger("muse.structure")
 
-VERSION = 2
+VERSION = 3  # 3: cues after a chorus or a drop; the plain cues on the new rule
 _RATE = _beats._RATE
 
 # Below this, relative to the record's loudest bars of the same part, a part is not
@@ -454,6 +454,9 @@ def build(data_dir: pathlib.Path, track: dict, timing: dict,
         if nxt is not None and nxt["label"] in ("breakdown", "outro") and s["label"] not in ("intro", "break"):
             outs.append({"ms": nxt["start_ms"], "bar": nxt["start_bar"],
                          "why": f"before its {nxt['label']}"})
+        elif nxt is not None and s["label"] in ("drop", "chorus"):
+            # The payoff has been had: a place to leave that is not in the middle of it.
+            outs.append({"ms": s["end_ms"], "bar": s["end_bar"], "why": f"after its {s['label']}"})
         if s["label"] == "outro":
             outs.append({"ms": s["start_ms"], "bar": s["start_bar"], "why": "its outro"})
     structure["cues"] = {"outs": outs, "ins": ins}

@@ -89,11 +89,44 @@ def analysis(track_id: int, response: Response, structure: bool = False,
         traits.remember(t, found)
     except Exception:  # noqa: BLE001 — the index is a convenience, the analysis is not
         pass
+    hand = db.one("select out_ms, in_ms from track_cues where track_id=%s", (track_id,))
+    if hand and (hand["out_ms"] is not None or hand["in_ms"] is not None):
+        found = {**found, "hand_cues": {"out_ms": hand["out_ms"], "in_ms": hand["in_ms"]}}
     # The same file always has the same beats, and the file is named by its hash; the
     # structure is built again as the parts and the beats arrive.
     response.headers["Cache-Control"] = (
         "private, max-age=600" if structure else "private, max-age=31536000, immutable")
     return found
+
+
+@router.get("/tracks/{track_id}/cues")
+def cues(track_id: int, user: dict = Depends(current_user)):
+    """Where a hand said this record leaves and comes in, if anybody has."""
+    row = db.one("select out_ms, in_ms, updated_at from track_cues where track_id=%s", (track_id,))
+    return {"track_id": track_id, "out_ms": row["out_ms"] if row else None,
+            "in_ms": row["in_ms"] if row else None,
+            "updated_at": row["updated_at"].isoformat() if row else None}
+
+
+@router.put("/tracks/{track_id}/cues")
+def set_cues(track_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
+    """Keep a hand's cue: either or both of out_ms and in_ms; null clears one. The
+    other is left as it was."""
+    if not catalog.track_row(track_id):
+        raise HTTPException(404, "no such track")
+    have = db.one("select out_ms, in_ms from track_cues where track_id=%s", (track_id,)) or {}
+    out_ms = body["out_ms"] if "out_ms" in body else have.get("out_ms")
+    in_ms = body["in_ms"] if "in_ms" in body else have.get("in_ms")
+    for v in (out_ms, in_ms):
+        if v is not None and (not isinstance(v, int) or v < 0):
+            raise HTTPException(400, "a cue is milliseconds, or null")
+    db.run(
+        """insert into track_cues(track_id, out_ms, in_ms, set_by, updated_at)
+           values(%s,%s,%s,%s,now())
+           on conflict (track_id) do update set out_ms=excluded.out_ms, in_ms=excluded.in_ms,
+             set_by=excluded.set_by, updated_at=now()""",
+        (track_id, out_ms, in_ms, user["id"]))
+    return {"track_id": track_id, "out_ms": out_ms, "in_ms": in_ms}
 
 
 @router.get("/tracks/{track_id}/vocals")

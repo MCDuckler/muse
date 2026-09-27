@@ -267,6 +267,16 @@ class ApiClient {
     ];
   }
 
+  /// Keep where a hand said a record leaves ([outMs]) or comes in ([inMs]): only the
+  /// ones given are changed; the house serves them back with the analysis.
+  Future<void> setCues(int trackId, {int? outMs, int? inMs, bool clearOut = false, bool clearIn = false}) async =>
+      _decode(await net.put(_u('/tracks/$trackId/cues'),
+          headers: {..._headers, 'Content-Type': 'application/json'},
+          body: jsonEncode({
+            if (outMs != null || clearOut) 'out_ms': outMs,
+            if (inMs != null || clearIn) 'in_ms': inMs,
+          })));
+
   /// Have the pool take a record apart, now.
   Future<void> poolSplit(int trackId) async =>
       _decode(await net.post(_u('/pool/split/$trackId'), headers: _headers));

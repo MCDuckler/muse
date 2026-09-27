@@ -470,9 +470,12 @@ class AutoMix extends ChangeNotifier {
     // the downbeat where the old one stops dead; otherwise a short fade — two bars of
     // overlap is a moment, eight was thirteen seconds of two drummers disagreeing.
     if (ratio == null) {
+      // Four bars: a phrase's half, which is the shortest thing that is still counted
+      // (real transitions cluster on 32-beat multiples — Kim et al. 2020); two was a
+      // moment, and a moment that landed the new record's phrase a half-phrase off.
       return from.ends == 'cold'
           ? (kind: Transition.cut, bars: 1)
-          : (kind: Transition.fade, bars: 2);
+          : (kind: Transition.fade, bars: 4);
     }
     // A record that fades itself goes out as it was made to — but in step.
     if (from.ends == 'fade') return (kind: Transition.fade, bars: 8);
@@ -489,9 +492,11 @@ class AutoMix extends ChangeNotifier {
         // it sounds like a choice rather than a rescue — in the bold style, below.
         // (The drums changing hands is the bold style's: each change of part is a new
         // file on the deck, and on a desk that is a gap in the sound you can hear.)
+        // Eight, not twelve: twelve bars is three four-bar periods and lands the
+        // incoming's phrase turn a half-phrase off the outgoing's.
         return inKey
             ? (kind: Transition.blend, bars: 16)
-            : (kind: Transition.sweep, bars: 12);
+            : (kind: Transition.sweep, bars: 8);
       case MixStyle.bold:
         // The drums change hands, where there are drums to change: sixteen bars of
         // one record's music over the other's kick, and nobody can tell you when the
@@ -515,21 +520,83 @@ class AutoMix extends ChangeNotifier {
   /// four bars into the next one, and that is the thing an ear notices. Where the
   /// analysis read no outro, far enough before the sound ends for the bars to fit,
   /// again on a phrase. Always on one of the record's four-bar markers.
+  ///
+  /// In order: where a hand said it leaves (TrackTiming.handCues); the structure's
+  /// own places to leave (its outro, after its last chorus or drop, before its
+  /// breakdown — the best of those with room for the move and sixteen bars of record
+  /// before them); and only then the plain analysis's cue. Whatever is chosen is
+  /// moved off the middle of a chorus or a drop where the sections are known, to its
+  /// end — the room gets the payoff before the record leaves — or, with no room after,
+  /// to its start.
   static Duration outPoint(TrackTiming from, {required Duration length}) {
     final cues = from.cues;
     final end = from.soundEnds ?? Duration(milliseconds: from.durationMs);
+    // And never so late that the transition would run past the end of the sound.
+    final latest = end - length;
+    final bar = from.bar;
+    final first = cues?.firstDownbeat ?? Duration.zero;
+    // A hand's word stands, moved only onto the grid and off the end.
+    final hand = from.handOut;
+    if (hand != null) {
+      var at = hand;
+      if (latest > Duration.zero && at > latest) at = from.markerAtOrBefore(latest) ?? latest;
+      return from.onGrid(at, every: 4);
+    }
     // An outro the analysis put before the intro was over (it has: a short record
     // read as all outro) is no outro.
     final mixOut = cues == null || cues.mixOut <= cues.mixIn ? null : cues.mixOut;
-    var at = mixOut ?? (end - length);
+    final s = from.structure;
+    Duration? chosen;
+    if (s != null && bar != null && s.outs.isNotEmpty) {
+      final earliest = (cues?.mixIn ?? first) + bar * 16;
+      int rank(CuePoint c) => c.why.contains('outro') ? 3 : c.why.startsWith('after') ? 2 : 1;
+      CuePoint? pick;
+      for (final c in s.outs) {
+        if (latest > Duration.zero && c.at > latest) continue;
+        if (c.at < earliest) continue;
+        if (pick == null || rank(c) > rank(pick) || (rank(c) == rank(pick) && c.at > pick.at)) pick = c;
+      }
+      chosen = pick?.at;
+    }
+    var at = chosen ?? mixOut ?? (end - length);
     if (at < Duration.zero) at = Duration.zero;
-    // And never so late that the transition would run past the end of the sound.
-    final latest = end - length;
     if (latest > Duration.zero && at > latest) at = latest;
-    final on = onPhrase(from, at);
+    // Not in the middle of the payoff.
+    if (s != null && bar != null) {
+      final sec = s.sectionAt(at);
+      if (sec != null && (sec.label == 'chorus' || sec.label == 'drop') && at > sec.start + bar) {
+        if (latest <= Duration.zero || sec.end <= latest) {
+          at = sec.end;
+        } else if (sec.start >= first + bar * 16) {
+          at = sec.start;
+        }
+      }
+    }
+    // A place the structure chose is already a section's edge: onto the grid only.
+    // The plain cue is moved to the phrase boundary near it.
+    final on = chosen != null ? from.onGrid(at, every: 4) : onPhrase(from, at);
     // Moved later by the phrase, past that: the marker before instead.
     if (latest > Duration.zero && on > latest) return from.markerAtOrBefore(latest) ?? on;
     return on;
+  }
+
+  /// Each bar's loudness, in dB, with where each bar starts: the structure's mix
+  /// where there is one (absolute, dBFS), else the plain analysis's shape (0 to 255
+  /// against the loudest bar, on a 0.7 power) turned back into dB and, with [lufs],
+  /// put against the record's own loudness so two records can be compared. Null where
+  /// the record has no bars.
+  static ({List<int> barsMs, List<double> db})? barsDbOf(TrackTiming t, {double? lufs}) {
+    final s = t.structure;
+    if (s != null && s.barsMs.isNotEmpty && s.mixDb.isNotEmpty) return (barsMs: s.barsMs, db: s.mixDb);
+    if (t.energy.isEmpty || t.downbeats.isEmpty) return null;
+    final base = lufs ?? 0;
+    return (
+      barsMs: t.downbeats,
+      db: [
+        for (final v in t.energy)
+          v <= 0 ? -100.0 : base + 20 * math.log(math.pow(v / 255, 1 / 0.7).toDouble()) / math.ln10,
+      ],
+    );
   }
 
   /// [at], moved off a drop it would run over.
@@ -582,17 +649,20 @@ class AutoMix extends ChangeNotifier {
 
   /// Whether the [bars] bars of [t] from [at] are quiet — 8 dB under its loud bars,
   /// by the house's structure. False where nothing was measured.
+  ///
+  /// By the structure's bars where there is one, else by the plain analysis's — which
+  /// four records in five have and only that.
   static bool quietBars(TrackTiming t, Duration at, int bars) {
-    final s = t.structure;
-    if (s == null || s.barsMs.isEmpty || s.mixDb.isEmpty) return false;
-    final heard = [for (final v in s.mixDb) if (v > -90) v]..sort();
+    final s = barsDbOf(t);
+    if (s == null) return false;
+    final heard = [for (final v in s.db) if (v > -90) v]..sort();
     if (heard.isEmpty) return false;
     final loud = heard[(heard.length * 0.9).floor().clamp(0, heard.length - 1)];
     var i = 0;
     while (i + 1 < s.barsMs.length && s.barsMs[i + 1] <= at.inMilliseconds) {
       i++;
     }
-    final span = [for (final v in s.mixDb.sublist(i, math.min(s.mixDb.length, i + bars))) if (v > -90) v];
+    final span = [for (final v in s.db.sublist(i, math.min(s.db.length, i + bars))) if (v > -90) v];
     if (span.isEmpty) return false;
     return span.reduce((a, b) => a + b) / span.length < loud - 8;
   }
@@ -611,8 +681,21 @@ class AutoMix extends ChangeNotifier {
     final bpm = to.bpm;
     if (bpm == null) return cues.firstDownbeat;
     final bar = to.bar ?? Duration(microseconds: (4 * 60e6 / bpm).round());
+    // A hand's word stands: parked there, on the grid.
+    final hand = to.handIn;
+    if (hand != null) return to.onGrid(hand >= cues.firstDownbeat ? hand : cues.firstDownbeat);
     final drop = onTheDrop ? to.dropAfter(cues.firstDownbeat) : null;
-    var at = (drop ?? cues.mixIn) - bar * bars;
+    // The end of the intro as the structure read it off the record's sections, where
+    // there is one; the plain analysis's cue otherwise.
+    Duration? introEnd;
+    for (final c in to.structure?.ins ?? const <CuePoint>[]) {
+      if (c.why.contains('intro')) {
+        introEnd = c.at;
+        break;
+      }
+    }
+    final target = drop ?? introEnd ?? cues.mixIn;
+    var at = target - bar * bars;
     if (at < cues.firstDownbeat) at = cues.firstDownbeat;
     // Unless those bars are quiet — a long, thin intro, 8 dB under the record's loud
     // bars by the structure — when the record comes in later: half way through the
@@ -620,8 +703,8 @@ class AutoMix extends ChangeNotifier {
     // Checked after the record's start has had its say: an intro shorter than the
     // move, parked at the first downbeat, is as often the quiet kind.
     if (drop == null && quietBars(to, at, bars)) {
-      final half = cues.mixIn - bar * (bars ~/ 2);
-      at = quietBars(to, half, math.max(1, bars ~/ 2)) ? cues.mixIn : half;
+      final half = target - bar * (bars ~/ 2);
+      at = quietBars(to, half, math.max(1, bars ~/ 2)) ? target : half;
       if (at < cues.firstDownbeat) at = cues.firstDownbeat;
     }
     // Onto its own four-bar grid: the marker at or before, where there is one at or
@@ -1150,14 +1233,20 @@ class AutoMix extends ChangeNotifier {
   /// record's own trim already taken off) — 1.0 where [to] is the quieter, which
   /// cannot be turned up, and null where either was never measured.
   double? levelMatch(Deck from, Deck to, Duration outAt, Duration inAt, int bars) {
-    final f = from.timing?.structure, t = to.timing?.structure;
-    if (f == null || t == null || f.mixDb.isEmpty || t.mixDb.isEmpty) return null;
-    double? over(TrackStructure s, Duration at, double trim) {
+    final ft = from.timing, tt = to.timing;
+    if (ft == null || tt == null) return null;
+    // Absolute where the structure gives dBFS; otherwise the plain shape against
+    // each record's own loudness, which needs both to have been measured.
+    final fl = from.track?.loudnessLufs, tl = to.track?.loudnessLufs;
+    if ((ft.structure == null || tt.structure == null) && (fl == null || tl == null)) return null;
+    final f = barsDbOf(ft, lufs: fl), t = barsDbOf(tt, lufs: tl);
+    if (f == null || t == null) return null;
+    double? over(({List<int> barsMs, List<double> db}) s, Duration at, double trim) {
       var i = 0;
       while (i + 1 < s.barsMs.length && s.barsMs[i + 1] <= at.inMilliseconds) {
         i++;
       }
-      final slice = s.mixDb.sublist(i, math.min(s.mixDb.length, i + bars)).where((d) => d > -90);
+      final slice = s.db.sublist(i, math.min(s.db.length, i + bars)).where((d) => d > -90);
       if (slice.isEmpty) return null;
       final mean = slice.reduce((a, b) => a + b) / slice.length;
       return mean + 20 * math.log(trim) / math.ln10;
@@ -1213,6 +1302,17 @@ class AutoMix extends ChangeNotifier {
     if (out > last) out = last;
     if (out <= from.position) return;
     await steer(p.copyWith(outAt: out));
+    // A hand's cue is the record's from now on.
+    final id = from.track?.id;
+    if (id != null) unawaited(_keepCue(id, outMs: out.inMilliseconds));
+  }
+
+  /// Told to the house quietly: a house that cannot be reached loses a cue, not a mix.
+  Future<void> _keepCue(int trackId, {int? outMs, int? inMs}) async {
+    try {
+      await booth.api.setCues(trackId, outMs: outMs, inMs: inMs).timeout(const Duration(seconds: 8));
+      booth.timing.forget(trackId);
+    } catch (_) {}
   }
 
   /// The new record comes in [phrases] four-bar phrases further into it (or less).
@@ -1227,6 +1327,8 @@ class AutoMix extends ChangeNotifier {
     final end = to.duration;
     if (end != null && inAt > end - bar * p.bars) return;
     await steer(p.copyWith(inAt: inAt, outAt: goesAt));
+    final id = to.track?.id;
+    if (id != null) unawaited(_keepCue(id, inMs: inAt.inMilliseconds));
   }
 
   /// The planner's again: what a hand chose is let go of, and the move chosen afresh.
