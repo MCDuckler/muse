@@ -102,18 +102,39 @@ class GlassSurface extends StatelessWidget {
               ),
             )
           else ...[
-            // A pane of glass: the room behind it blurred through its body, and bent
-            // through its edge — a band just inside the rim where the backdrop is seen
-            // a little magnified, which is what the thickness of glass does to what
-            // is behind it, and the one thing that says thick glass rather than
-            // frosted film.
+            // A pane of glass: the room behind it bent and softened through the whole
+            // of its body, and bent harder through its edge.
+            //
+            // It used to be blurred through the body and bent only in a band at the
+            // rim, and what that looked like was glass around the outside of a flat
+            // panel — the one part of it that said "glass" was the one part that was
+            // doing what glass does. Two things were in the way. The pane's colour was
+            // painted twice, once as the ground that keeps a dropped backdrop from
+            // flashing white and again over the blur, so 0.36 of surface was really
+            // 0.59 of it; and the blur was wound up so far (42) that what came through
+            // was an even field with no picture left in it to bend.
+            //
+            // So: the magnification runs across the whole pane, gently, and harder in
+            // the band at the rim where a real pane's thickness turns away. The body
+            // is left as the ground plus a thin fall of light rather than a second
+            // coat of the surface colour, and the blur is softer, so there is still
+            // something recognisable behind the glass to be moved by it.
             Positioned.fill(
-              child: _MaybeBlurred(
-                sigma: sigma,
+              child: _MaybeLensed(
+                sigma: sigma * _bodyBlur,
+                scale: 1.02,
+                radius: radius,
                 child: DecoratedBox(
                   decoration: BoxDecoration(
-                    color: scheme.surface.withValues(alpha: opacity),
                     borderRadius: radius,
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        scheme.surface.withValues(alpha: opacity * 0.34),
+                        scheme.surface.withValues(alpha: opacity * 0.14),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -380,6 +401,50 @@ class _SheenPainter extends CustomPainter {
 }
 
 /// A blur, or nothing at all where one cannot be afforded.
+/// How much of the asked-for blur the body of a sheened pane actually uses.
+///
+/// The panes ask for a lot of it (42 at the controls), which was right when the body
+/// was meant to read as frosted film. A pane you are meant to see *through* wants
+/// enough to soften what is behind it and not so much that there is nothing left to
+/// recognise, and a third of what was asked for is about that.
+const double _bodyBlur = 0.34;
+
+/// The backdrop, softened and magnified a little, across the whole of a pane.
+///
+/// The same thing [_LensEdge] does in its band, done gently everywhere: one filter,
+/// so it is one backdrop read rather than two.
+class _MaybeLensed extends StatelessWidget {
+  const _MaybeLensed(
+      {required this.sigma, required this.scale, required this.radius, required this.child});
+  final double sigma;
+  final double scale;
+  final BorderRadius radius;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (sigma <= 0) return child;
+    return LayoutBuilder(builder: (context, c) {
+      final cx = c.maxWidth / 2, cy = c.maxHeight / 2;
+      final lens = (Matrix4.identity()
+            ..translateByDouble(cx, cy, 0, 1)
+            ..scaleByDouble(scale, scale, 1, 1)
+            ..translateByDouble(-cx, -cy, 0, 1))
+          .storage;
+      return ClipRRect(
+        borderRadius: radius,
+        child: BackdropFilter(
+          filter: ImageFilter.compose(
+            outer: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+            inner: ImageFilter.matrix(lens, filterQuality: FilterQuality.medium),
+          ),
+          child: child,
+        ),
+      );
+    });
+  }
+}
+
 class _MaybeBlurred extends StatelessWidget {
   const _MaybeBlurred({required this.sigma, required this.child});
   final double sigma;

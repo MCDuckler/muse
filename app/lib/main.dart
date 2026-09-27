@@ -65,7 +65,19 @@ Future<void> main() async {
   // for why it is capped.
   final wasOnError = FlutterError.onError;
   FlutterError.onError = (details) {
-    PlaybackLog.noteFrameworkError(details.exception, details.stack);
+    // A picture that would not arrive is not a fault in the app.
+    //
+    // Fetching a cover fails whenever the phone's connection does, and the loader has
+    // to throw when it does — an image provider that completes with nothing leaves the
+    // widget waiting for ever. Flutter reports that throw here like any other, and it
+    // filled the log with "no artwork at ..." for two covers that were perfectly fine
+    // on the server. It is still written down, quietly, because a cover that never
+    // arrives at all is worth knowing about; it is not called a fault.
+    if (details.library == 'image resource service') {
+      PlaybackLog.note('artwork did not arrive: ${'${details.exception}'.split('\n').first}');
+    } else {
+      PlaybackLog.noteFrameworkError(details.exception, details.stack);
+    }
     wasOnError?.call(details);
   };
   await readyTheWindow();

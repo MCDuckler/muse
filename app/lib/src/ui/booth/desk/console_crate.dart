@@ -18,7 +18,7 @@ import 'data_marks.dart';
 import 'set_planner_page.dart';
 
 /// The crate's pages.
-enum CrateTab { queue, library, search, similar, parts }
+enum CrateTab { queue, fits, library, search, similar, parts }
 
 /// The crate: everything a set is made of, without leaving the booth.
 ///
@@ -77,13 +77,85 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
   Playlist? _list;
   List<Track>? _listTracks;
 
+  /// FITS: what goes with the record on the deck, out of the whole library.
+  List<({Track track, double fit, String why})>? _fits;
+
+  /// The record they were found for, so they are not fetched again for the same one,
+  /// and are thrown away when the deck changes.
+  int? _fitsFor;
+  bool _fitsBusy = false;
+  String? _fitsTrouble;
+
   @override
   void initState() {
     super.initState();
     _tab.addListener(_retab);
+    // The deck's record changing is what FITS is about, so it is listened to rather
+    // than waited for: the list is for whatever is on now.
+    widget.booth.addListener(_deckChanged);
   }
 
-  void _retab() => setState(() {});
+  void _retab() {
+    setState(() {});
+    if (_tab.value == CrateTab.fits) unawaited(_loadFits());
+  }
+
+  void _deckChanged() {
+    if (!mounted) return;
+    if (_tab.value == CrateTab.fits && _fitsSource?.id != _fitsFor) {
+      unawaited(_loadFits());
+    }
+  }
+
+  /// The record the fits are judged against: the deck that leads, or whichever has
+  /// one. Null with both decks empty, and then there is nothing to be like.
+  Track? get _fitsSource {
+    final b = widget.booth;
+    for (final d in [b.master, b.a, b.b]) {
+      final t = d.track;
+      if (t != null) return t;
+    }
+    return null;
+  }
+
+  Future<void> _loadFits() async {
+    final from = _fitsSource;
+    if (from == null) {
+      setState(() {
+        _fits = null;
+        _fitsFor = null;
+        _fitsTrouble = null;
+      });
+      return;
+    }
+    if (_fitsBusy && _fitsFor == from.id) return;
+    setState(() {
+      _fitsBusy = true;
+      _fitsFor = from.id;
+      _fitsTrouble = null;
+      _fits = null;
+    });
+    try {
+      // What is already in the queue is not a suggestion — it is already coming.
+      final queued = context.read<AppState>().player?.items ?? const <Track>[];
+      final found = await widget.booth.api
+          .partners(from.id,
+              exclude: [from.id, for (final t in queued) t.id],
+              limit: 40)
+          .timeout(const Duration(seconds: 15));
+      if (!mounted || _fitsFor != from.id) return;
+      setState(() {
+        _fits = found;
+        _fitsBusy = false;
+      });
+    } catch (e) {
+      if (!mounted || _fitsFor != from.id) return;
+      setState(() {
+        _fitsBusy = false;
+        _fitsTrouble = '$e';
+      });
+    }
+  }
 
   void _open(CrateTab t) {
     _tab.value = t;
@@ -93,6 +165,7 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
   @override
   void dispose() {
     _tab.removeListener(_retab);
+    widget.booth.removeListener(_deckChanged);
     if (widget.tab == null) _tab.dispose();
     _debounce?.cancel();
     _query.dispose();
@@ -173,6 +246,7 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
               children: [
                 for (final (t, label, icon) in [
                   (CrateTab.queue, 'QUEUE', Icons.queue_music),
+                  (CrateTab.fits, 'FITS', Icons.compare_arrows),
                   (CrateTab.library, 'LIBRARY', Icons.library_music_outlined),
                   (CrateTab.search, 'SEARCH', Icons.search),
                   (CrateTab.similar, 'SIMILAR', Icons.auto_awesome_outlined),
@@ -239,6 +313,7 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
             Expanded(
               child: switch (tab) {
                 CrateTab.queue => _queue(roomy),
+                CrateTab.fits => _fitsPage(roomy),
                 CrateTab.library => _library(roomy),
                 CrateTab.search => _searchPage(roomy),
                 CrateTab.similar => _SimilarList(booth: widget.booth),
@@ -262,6 +337,90 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
         queuePos: queuePos,
         handle: handle,
       );
+
+  // ------------------------------------------------------------------ FITS
+  /// Everything in the library that would go with the record on the deck, best first.
+  ///
+  /// The same judgement the automix makes when it picks what follows — tempo, key,
+  /// how loud and how sung, and what a pair of them sounds like — asked of the whole
+  /// library at once instead of the next slot in a queue. What it is for is the moment
+  /// a DJ has a record playing and wants to know what they have that goes with it,
+  /// which up to now meant scrolling a playlist and remembering.
+  ///
+  /// Only records the house has listened to can be judged, so this is a list of the
+  /// scanned ones: the server's side joins on track_traits and the rest simply are not
+  /// in it. Anything already in the queue is left out — it is not a suggestion, it is
+  /// already coming.
+  Widget _fitsPage(bool roomy) {
+    final from = _fitsSource;
+    if (from == null) {
+      return const _Empty(icon: Icons.album_outlined, line: 'PUT A RECORD ON A DECK');
+    }
+    final found = _fits;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(children: [
+          Icon(Icons.compare_arrows, size: 13, color: Console.quiet),
+          const SizedBox(width: 5),
+          Expanded(
+            child: Text('WHAT GOES WITH ${from.displayTitle.toUpperCase()}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Console.label(8.5, color: Console.quiet)),
+          ),
+          if (_fitsBusy)
+            const SizedBox(
+                width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.5))
+          else
+            _Toggle(
+              label: 'AGAIN',
+              tooltip: 'Look through the library again',
+              onTap: () {
+                _fitsFor = null;
+                unawaited(_loadFits());
+              },
+            ),
+        ]),
+        const SizedBox(height: 4),
+        Expanded(
+          child: _fitsTrouble != null
+              ? _Empty(icon: Icons.cloud_off, line: 'COULD NOT LOOK')
+              : found == null
+                  ? const Center(
+                      child: SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 1.5)))
+                  : found.isEmpty
+                      ? const _Empty(
+                          icon: Icons.music_off, line: 'NOTHING SCANNED THAT FITS')
+                      : Builder(builder: (context) {
+                          // Against the best one found, not against a perfect score.
+                          // The judging adds up terms to about 1.85 at its most, and a
+                          // record that scores 1.2 is not "65% of a match" — there is
+                          // no such thing. What can honestly be shown is how this one
+                          // compares to the best the library had, which is the
+                          // question somebody scrolling the list is asking.
+                          final best = found.first.fit;
+                          return ListView.builder(
+                            itemCount: found.length,
+                            itemBuilder: (context, i) => _Row(
+                              key: ValueKey('fit-${found[i].track.id}'),
+                              track: found[i].track,
+                              booth: widget.booth,
+                              loadInto: widget.loadInto,
+                              forDeck: widget.forDeck,
+                              roomy: roomy,
+                              note: found[i].why,
+                              fit: best > 0 ? (found[i].fit / best).clamp(0.0, 1.0) : null,
+                            ),
+                          );
+                        }),
+        ),
+      ],
+    );
+  }
 
   // ------------------------------------------------------------------ QUEUE
   Widget _queue(bool roomy) {
@@ -842,7 +1001,9 @@ class _Row extends StatefulWidget {
       required this.forDeck,
       this.roomy = false,
       this.queuePos,
-      this.handle});
+      this.handle,
+      this.note,
+      this.fit});
   final Track track;
   final Booth booth;
   final void Function(engine.Deck deck, Track track) loadInto;
@@ -852,6 +1013,13 @@ class _Row extends StatefulWidget {
   /// Where it is in the queue, when this is the queue.
   final int? queuePos;
   final Widget? handle;
+
+  /// Why this one was put here, said in the row's second line in place of the artist:
+  /// the words the judging came back with. Null everywhere but FITS.
+  final String? note;
+
+  /// How well it goes with what is on, 0 to 1.
+  final double? fit;
 
   @override
   State<_Row> createState() => _RowState();
@@ -950,7 +1118,15 @@ class _RowState extends State<_Row> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: Mag.title(13.5, color: ready ? Console.ink : Console.quiet)),
-                    Text(ready ? t.artistLine : t.statusLine,
+                    // In FITS the second line is why it is here rather than who it is
+                    // by: the artist is the one thing you can already see on the
+                    // sleeve, and what you cannot see is what it has in common with
+                    // what is playing.
+                    Text(!ready
+                        ? t.statusLine
+                        : widget.note != null && widget.note!.isNotEmpty
+                            ? widget.note!
+                            : t.artistLine,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: Mag.typewriter(10.5,
@@ -964,6 +1140,30 @@ class _RowState extends State<_Row> {
                   ],
                 ),
               ),
+              // How well it goes, against the best the library had: a list sorted by
+              // something invisible is a list you have to take on trust. A bar rather
+              // than a figure, because the thing being shown is a comparison and a
+              // figure would read as a measurement.
+              if (widget.fit != null && !_over)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: SizedBox(
+                    width: 26,
+                    height: 4,
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: FractionallySizedBox(
+                        widthFactor: widget.fit!.clamp(0.06, 1.0),
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: widget.fit! >= 0.9 ? Console.ink : Console.quiet,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               if (onDeck != null && !_over)
                 Padding(
                   padding: const EdgeInsets.only(right: 6),

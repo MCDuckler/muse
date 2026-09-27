@@ -3064,7 +3064,16 @@ class AppState extends ChangeNotifier {
     final cache = PaintingBinding.instance.imageCache;
     final held = cache.currentSizeBytes ~/ (1024 * 1024);
     cache.clear();
-    cache.clearLiveImages();
+    // Not clearLiveImages(). It disposes the images the cache is tracking as live —
+    // and an image is live precisely because something else is still holding it, which
+    // here means a widget that is still on screen behind the home screen. Coming back
+    // to the app then painted them and threw "Cannot clone a disposed image", twelve
+    // times in the reports this was found in. Flutter's own note on it says what it is
+    // for and what it is not: it is for evicting stale assets after a hot reload, and
+    // "calling this method does not relieve memory pressure, since the live image
+    // caching only tracks image instances that are also being held by at least one
+    // other object". So it was freeing nothing and breaking the screen to do it.
+    // clear() gives back the images nothing is holding, which is the whole point here.
     if (held > 0) PlaybackLog.note('gave back ${held}MB of artwork');
   }
 
