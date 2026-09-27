@@ -1018,11 +1018,13 @@ class Booth extends ChangeNotifier {
   /// the difference between a record that would not settle and one that drifted.
   int _heldJumps = 0;
   bool _bendMaxed = false;
+  int _phraseFixes = 0;
 
   void holdOnBeat(Deck follower, {bool snap = false}) {
     _lock?.cancel();
     _heldJumps = 0;
     _bendMaxed = false;
+    _phraseFixes = 0;
     final m = other(follower);
     final seen = <int>[];
     final began = DateTime.now();
@@ -1035,6 +1037,7 @@ class Booth extends ChangeNotifier {
     var firstReading = true;
     var afterJump = false;
     var saidLost = false;
+    var saidPhrase = false;
     // How many jumps have been spent where the room could hear them.
     var loudMoves = 0;
     _lock = Timer.periodic(const Duration(milliseconds: 50), (t) async {
@@ -1122,7 +1125,25 @@ class Booth extends ChangeNotifier {
       final heardNow = share >= 0.25;
       // Twice at most while it cannot be heard: the first reading after a start is
       // the engine's least reliable, and a jump can land a little short.
-      final quiet = (moved < 2 && ms.abs() > 20 && !heardNow) ||
+      // Which bar of the phrase it is on, where that can still be put right silently.
+      // A record started a beat late — which is most of what a phone's engine does,
+      // its start being worth a hundred milliseconds or two and never the same twice
+      // — lands on the wrong beat, and the beat error then reads zero about it for
+      // ever. Worth a jump on its own, even with the beat already perfect.
+      final outOfPhrase = barsOutOfPhrase(follower, m);
+      // Acted on only while nothing can hear it: two bars is a long way to move a
+      // record somebody is listening to. Said either way — a record that reached the
+      // room on the wrong bar is worth knowing about even when it is too late to
+      // move it.
+      final barsOut = heardNow ? 0 : outOfPhrase;
+      if (!saidPhrase && heardNow && outOfPhrase != 0) {
+        saidPhrase = true;
+        note(BoothEventKind.trouble,
+            '${follower.name} is $outOfPhrase bar${outOfPhrase.abs() == 1 ? '' : 's'} '
+            'out of the phrase and already in the room',
+            deck: follower);
+      }
+      final quiet = (moved < 2 && (ms.abs() > 20 || barsOut != 0) && !heardNow) ||
           (snap && moved == 0 && ms.abs() > 40);
       // Lost the beat by more than the bend can pull back in reasonable time.
       //
@@ -1170,11 +1191,23 @@ class Booth extends ChangeNotifier {
         // back as much as one forward. (Aimed "further" in the jump's own direction, a
         // jump back overshot by twice that.)
         final jump = -err.inMicroseconds + _jumpCarry.inMicroseconds;
+        // The beat, and then the bars: the first puts it on a beat, the second puts
+        // it on the right one. In the record's own time, which the beat has to be
+        // turned into first.
+        final bars = barsOut * follower.beatInRecord.inMicroseconds * 4;
         // Said in the log, always: a jump is the one thing the holding does that can be
         // heard, and "it twitched" is only something to work with if there is a when.
-        debugPrint('booth: ${follower.name} jumped ${(jump / 1000).toStringAsFixed(0)} ms to the beat '
+        debugPrint('booth: ${follower.name} jumped ${(jump / 1000).toStringAsFixed(0)} ms to the beat'
+            '${barsOut == 0 ? '' : ' and $barsOut bar${barsOut.abs() == 1 ? '' : 's'} to the phrase'} '
             '(${quiet ? snap && share >= 0.25 ? 'SYNC pressed' : 'while quiet' : 'lost the beat by ${ms.toStringAsFixed(0)} ms'})');
-        await follower.nudge(Duration(microseconds: (jump * follower.tempo).round()));
+        if (barsOut != 0) {
+          note(BoothEventKind.cue,
+              '${follower.name} was $barsOut bar${barsOut.abs() == 1 ? '' : 's'} out of the phrase',
+              deck: follower);
+          _phraseFixes++;
+        }
+        await follower.nudge(
+            Duration(microseconds: (jump * follower.tempo).round() + bars));
         return;
       }
       // No learning of the rate: the grids give it to a few hundredths of a percent,
@@ -1249,6 +1282,7 @@ class Booth extends ChangeNotifier {
           '${sorted[(sorted.length * 0.9).floor()].toStringAsFixed(1)} ms, worst '
           '${sorted.last.toStringAsFixed(1)} ms; settled at ${_lockBase?.toStringAsFixed(4)}×'
           ', $_heldJumps jump${_heldJumps == 1 ? '' : 's'}'
+          '${_phraseFixes == 0 ? '' : ', $_phraseFixes put back on the phrase'}'
           '${_bendMaxed ? ', the bend at its stop' : ''}';
       debugPrint('booth: $said');
       // Written down as well as printed. On a desk debugPrint reaches the log file;
@@ -1700,6 +1734,28 @@ class Booth extends ChangeNotifier {
           MixStep(1, crossfader: 1, decks: {from: const DeckStep(eq: EqSet.flat, filter: 0)}),
         ];
     }
+  }
+
+  /// How many whole bars the follower is out of the master's four-bar phrase, -2 to 2.
+  ///
+  /// [beatError] measures to the nearest *beat* and wraps at half of one, so it can
+  /// never tell that two records are a beat, a bar or two bars apart: it reads zero
+  /// for all of them. Everything held by it is therefore in time and possibly in the
+  /// wrong place — the kick lands on the kick while bar one of the one plays against
+  /// bar three of the other. Stable, and wrong.
+  ///
+  /// This is the part it cannot see: the four-bar rules on the two strips, counted
+  /// the way the automix counts them when it parks a record to meet a phrase.
+  static int barsOutOfPhrase(Deck follower, Deck master) {
+    final ft = follower.timing, mt = master.timing;
+    if (ft == null || mt == null) return 0;
+    final theirs = mt.placeInPhrase(master.position);
+    final mine = ft.placeInPhrase(follower.position);
+    if (theirs == null || mine == null) return 0;
+    var d = (mine.of - mine.bar) - (theirs.of - theirs.bar);
+    if (d > 2) d -= 4;
+    if (d < -2) d += 4;
+    return d;
   }
 
   /// Where the fader is at [k] of a plan: travelled evenly between the steps that

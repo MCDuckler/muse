@@ -264,6 +264,42 @@ void main() {
       await booth.letGo();
     });
 
+    test('a record on the wrong bar of the phrase is put on the right one', () async {
+      // The fault this is for: beatError wraps at half a beat, so two records a whole
+      // two bars apart read as perfectly in step. Held by it they stay that way —
+      // stable, in time, and with bar one of the one against bar three of the other.
+      await booth.setCrossfader(0); // B silent, so it can be moved
+      // Two bars on, exactly: a whole number of beats, so the beat error is nil.
+      await booth.b.seek(Duration(milliseconds: booth.a.position.inMilliseconds + 4000));
+      await booth.b.play();
+      expect(apart().inMilliseconds.abs(), lessThan(5),
+          reason: 'the beat error cannot see this at all');
+      expect(Booth.barsOutOfPhrase(booth.b, booth.a), isNot(0),
+          reason: 'but the phrase can');
+
+      booth.holdOnBeat(booth.b);
+      await Future<void>.delayed(const Duration(milliseconds: 1600));
+      expect(Booth.barsOutOfPhrase(booth.b, booth.a), 0,
+          reason: 'still out of the phrase');
+      expect(apart().inMilliseconds.abs(), lessThan(12),
+          reason: 'and the beat is still held');
+      await booth.letGo();
+    });
+
+    test('a record already on the phrase is left where it is', () async {
+      await booth.setCrossfader(0);
+      await booth.b.seek(booth.a.position);
+      await booth.b.play();
+      final was = booth.b.position;
+      booth.holdOnBeat(booth.b);
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
+      expect(Booth.barsOutOfPhrase(booth.b, booth.a), 0);
+      // Not shoved a phrase sideways for nothing: whatever it moved is small.
+      final moved = (booth.b.position - was).inMilliseconds.abs();
+      expect(moved, lessThan(1400), reason: 'moved $moved ms');
+      await booth.letGo();
+    });
+
     test('a tempo that does not quite match is held anyway', () async {
       await booth.setCrossfader(0.5);
       await booth.b.seek(booth.a.position);
