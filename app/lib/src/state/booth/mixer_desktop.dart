@@ -131,10 +131,36 @@ class DesktopMixer extends VolumeMixer {
   /// As it stands for a record of 120 a minute — the shape of every deck's chain.
   static final bands = bandsFor(500);
 
+  /// How Rubber Band is asked to work, best first.
+  ///
+  /// It was asked for nothing at all — `@rb:rubberband`, every default — and two of
+  /// those defaults are wrong for music.
+  ///
+  ///   * `channels=apart` stretches the left and right independently, so they drift
+  ///     against each other and the stereo image swims. On a record, where both sides
+  ///     carry the same kick and the same voice, that is the watery, phasey sound a
+  ///     pitched deck had. `together` keeps them locked to one another.
+  ///   * `pitch=quality` is about the *pitch shift*, which the booth uses for a key
+  ///     made to fit and for the lunar echo. The default there is `speed`.
+  ///
+  /// And `engine=finer` is Rubber Band 3's R3 engine, which is a different class of
+  /// thing again — where the library is new enough to have it.
+  ///
+  /// Tried in order, because an mpv that does not know one of these words rejects the
+  /// whole chain: the best it will take, and plain rubberband before scaletempo2,
+  /// which is the one that moves the beat about (see the note above).
+  static const _stretchers = [
+    '@rb:rubberband=engine=finer:channels=together:pitch=quality',
+    '@rb:rubberband=channels=together:pitch=quality',
+    '@rb:rubberband=channels=together',
+    '@rb:rubberband',
+    'scaletempo2',
+  ];
+
   /// The chains tried, best first: the bands, then the stretcher — Rubber Band
   /// labelled, so its pitch can be spoken to (setPitchShift).
   static List<String> standingFor(double beatMs) =>
-      ['${bandsFor(beatMs)},@rb:rubberband', '${bandsFor(beatMs)},scaletempo2'];
+      [for (final st in _stretchers) '${bandsFor(beatMs)},$st'];
   static final standing = standingFor(500);
 
   /// The same, for a stem deck: the six-channel stems file taken apart into its three
@@ -152,7 +178,7 @@ class DesktopMixer extends VolumeMixer {
       ']';
   static final stemBands = stemBandsFor(500);
   static List<String> stemStandingFor(double beatMs) =>
-      ['${stemBandsFor(beatMs)},@rb:rubberband', '${stemBandsFor(beatMs)},scaletempo2'];
+      [for (final st in _stretchers) '${stemBandsFor(beatMs)},$st'];
   static final stemStanding = stemStandingFor(500);
 
   /// Each deck's record's beat, in milliseconds, for the echo's timing.
@@ -374,18 +400,22 @@ class DesktopMixer extends VolumeMixer {
     if (_whole.contains(id) && !stems) return false;
     final beat = _beat[deck.name] ?? 500;
     for (final chain in stems ? stemStandingFor(beat) : standingFor(beat)) {
-      final stretcher = chain.split(',').last.replaceFirst('@rb:', '');
+      // The stretcher's *name*, without its label or the options asked of it: the
+      // rest of this only ever needs to know whether it is Rubber Band, and the
+      // options are what the chain tiers differ by.
+      final asked = chain.split(',').last.replaceFirst('@rb:', '');
+      final stretcher = asked.split('=').first;
       try {
         await mpv.setProperty('af', chain);
         final got = await mpv.getProperty('af');
         if (got.contains('wetowl') && got.contains(stretcher)) {
           _installed[deck.name] = id;
           _stretcher[deck.name] = stretcher;
-          debugPrint('mixer: deck ${deck.name} carries $stretcher');
+          debugPrint('mixer: deck ${deck.name} carries $asked');
           return true;
         }
       } catch (e) {
-        debugPrint('mixer: $stretcher would not go on ($e)');
+        debugPrint('mixer: $asked would not go on ($e)');
       }
     }
     if (!stems) _whole.add(id);

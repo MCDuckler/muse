@@ -743,10 +743,24 @@ void main() {
       for (final (target, _, _) in DesktopMixer.commands(eq: EqSet.flat, filter: 0)) {
         expect(DesktopMixer.bands, contains(target));
       }
-      expect(DesktopMixer.standing.first, endsWith('rubberband'),
+      // Rubber Band first and asked for the most, scaletempo2 last — with the
+      // plainer asks in between, so an mpv that does not know one of the words falls
+      // to a lesser Rubber Band rather than all the way to the one that moves the
+      // beat about.
+      expect(DesktopMixer.standing.first, contains('rubberband'),
           reason: 'the stretcher that keeps beats where they belong, first');
+      expect(DesktopMixer.standing.first, contains('channels=together'),
+          reason: 'the two sides stretched as one, or the stereo swims');
       expect(DesktopMixer.standing.last, endsWith('scaletempo2'),
           reason: 'and a stretcher always there, so a tempo change never changes the chain');
+      expect(DesktopMixer.standing.any((c) => c.endsWith('@rb:rubberband')), isTrue,
+          reason: 'plain Rubber Band is tried before scaletempo2');
+      // Every tier carries the bands, and every Rubber Band tier is labelled so its
+      // pitch can still be spoken to.
+      for (final c in DesktopMixer.standing) {
+        expect(c, contains('@wetowl:lavfi=['));
+        if (c.contains('rubberband')) expect(c, contains('@rb:rubberband'));
+      }
     });
   });
 
