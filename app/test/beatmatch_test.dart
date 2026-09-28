@@ -380,6 +380,37 @@ void main() {
       await booth.letGo();
     }, timeout: const Timeout(Duration(seconds: 30)));
 
+    test('a record far out of the phrase, in the room, is put on the beat and left there',
+        () async {
+      // The other side of the one above, and reported as "tracks start some kind of
+      // looping randomly or just jump around".
+      //
+      // A beat and a half is worth 450 ms of hole in the sound and a snare put back
+      // where it belongs. Five beats is worth 1.9 seconds, and there is nothing in a
+      // room that hears a record thrown back two seconds and calls it a correction —
+      // twice over it sounds like the record has started looping. So past a beat, in
+      // the room, unasked for: the beat is closed and the phrase is left alone, to be
+      // met where meeting it costs nothing.
+      await booth.setCrossfader(0.5); // heard
+      final beat = booth.b.beatInRecord;
+      await booth.b.seek(booth.a.position + beat * 5);
+      await booth.b.play();
+      final wasOut = Booth.beatsOutOfPhrase(booth.b, booth.a);
+      expect(wasOut, isNot(0), reason: 'five beats out to start with');
+      final startedAt = booth.b.position;
+
+      booth.holdOnBeat(booth.b);
+      await Future<void>.delayed(const Duration(seconds: 9));
+      expect(apart().inMilliseconds.abs(), lessThan(15),
+          reason: 'on the beat: that part is not given up');
+      // Where it went, taking out what the record played in those nine seconds.
+      final travelled = booth.b.position - startedAt;
+      final moved = travelled - const Duration(seconds: 9);
+      expect(moved.inMilliseconds.abs(), lessThan(beat.inMilliseconds),
+          reason: 'it was not thrown a phrase back while people were listening');
+      await booth.letGo();
+    }, timeout: const Timeout(Duration(seconds: 40)));
+
     test('a loop on an engine with no loop of its own learns what its wrap costs', () async {
       // "Looping still audible." Every phone and every browser loops this way: a timer
       // watches the record reach the end and seeks it back. The seek stops the sound

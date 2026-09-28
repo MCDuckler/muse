@@ -1256,7 +1256,50 @@ class Booth extends ChangeNotifier {
       // than a median of two.
       if (seen.length < (snap && moved == 0 ? 2 : 3)) return;
       final sorted = [...seen]..sort();
-      final err = Duration(microseconds: sorted[sorted.length ~/ 2]);
+      final errAll = Duration(microseconds: sorted[sorted.length ~/ 2]);
+      final l = levelsFor(crossfader, full: fullLaw);
+      final share = identical(follower, a) ? l.a : l.b;
+      final heardNow = share >= 0.25;
+      // Twice at most while it cannot be heard: the first reading after a start is
+      // the engine's least reliable, and a jump can land a little short.
+      // Which bar of the phrase it is on, where that can still be put right silently.
+      // A record started a beat late — which is most of what a phone's engine does,
+      // its start being worth a hundred milliseconds or two and never the same twice
+      // — lands on the wrong beat, and the beat error then reads zero about it for
+      // ever. Worth a jump on its own, even with the beat already perfect.
+      // Whole beats out of the phrase, read off the one error rather than measured
+      // again: the two used to be taken separately and could contradict each other,
+      // which is the fault outOfStep exists to end. Only reported now — the move
+      // itself is the error, all of it, in one go.
+      final outOfPhrase = beatsOff?.round() ?? 0;
+      // Said once it has held still across two readings: a reading taken as a marker
+      // goes by is a beat out on its own, and shouting about that is noise.
+      final steadyPhrase = outOfPhrase == lastPhrase;
+      lastPhrase = outOfPhrase;
+      if (!saidPhrase && heardNow && outOfPhrase != 0 && steadyPhrase) {
+        saidPhrase = true;
+        note(BoothEventKind.trouble,
+            '${follower.name} is $outOfPhrase beat${outOfPhrase.abs() == 1 ? '' : 's'} '
+            'out of the phrase and already in the room',
+            deck: follower);
+      }
+      // Past a beat out of the phrase, in the room, and unasked for: those beats come
+      // out of the error here, at the top, rather than only out of the jump below.
+      //
+      // Leaving them in and merely declining to jump them is worse than doing nothing.
+      // The same number drives the *bend*, and the bend saturates at six percent — so
+      // it would spend itself for ever pulling at beats it is never allowed to move,
+      // sit at its stop, and walk the record away from the beat it did have. Which is
+      // the other half of what was reported: it drifts and does not catch itself.
+      //
+      // Taken out here, everything downstream agrees: the jump closes the beat, the
+      // bend holds the beat, and the statistics say how well the *beat* was held,
+      // which is the thing that was actually being held.
+      final leaveThePhrase = heardNow && !snap && outOfPhrase.abs() > 1;
+      final err = leaveThePhrase
+          ? Duration(
+              microseconds: errAll.inMicroseconds - (outOfPhrase * beatWall).round())
+          : errAll;
       final ms = err.inMicroseconds / 1000;
       _held.add(ms.abs());
       if (_trace) {
@@ -1290,32 +1333,6 @@ class Booth extends ChangeNotifier {
           debugPrint('lock: after the jump ${ms.toStringAsFixed(1)} ms; '
               'next jump ${_jumpCarry.inMilliseconds} ms further');
         }
-      }
-      final l = levelsFor(crossfader, full: fullLaw);
-      final share = identical(follower, a) ? l.a : l.b;
-      final heardNow = share >= 0.25;
-      // Twice at most while it cannot be heard: the first reading after a start is
-      // the engine's least reliable, and a jump can land a little short.
-      // Which bar of the phrase it is on, where that can still be put right silently.
-      // A record started a beat late — which is most of what a phone's engine does,
-      // its start being worth a hundred milliseconds or two and never the same twice
-      // — lands on the wrong beat, and the beat error then reads zero about it for
-      // ever. Worth a jump on its own, even with the beat already perfect.
-      // Whole beats out of the phrase, read off the one error rather than measured
-      // again: the two used to be taken separately and could contradict each other,
-      // which is the fault outOfStep exists to end. Only reported now — the move
-      // itself is the error, all of it, in one go.
-      final outOfPhrase = beatsOff?.round() ?? 0;
-      // Said once it has held still across two readings: a reading taken as a marker
-      // goes by is a beat out on its own, and shouting about that is noise.
-      final steadyPhrase = outOfPhrase == lastPhrase;
-      lastPhrase = outOfPhrase;
-      if (!saidPhrase && heardNow && outOfPhrase != 0 && steadyPhrase) {
-        saidPhrase = true;
-        note(BoothEventKind.trouble,
-            '${follower.name} is $outOfPhrase beat${outOfPhrase.abs() == 1 ? '' : 's'} '
-            'out of the phrase and already in the room',
-            deck: follower);
       }
       // What actually puts a record in step is *placing* it, and the rate ratio off
       // the two grids then keeps it there: both decks run on one sound card, so two
@@ -1381,12 +1398,24 @@ class Booth extends ChangeNotifier {
         // phrase as well as the phase inside the beat, so there is no second term to
         // add and no chance of the two disagreeing about which way to go.
         final jump = -err.inMicroseconds + _jumpCarry.inMicroseconds;
+        // The phrase is already out of [err] where it is being left alone
+        // (leaveThePhrase), so this is the beat and nothing else in that case.
+        //
+        // Why it is left alone: outOfStep reads up to eight beats out, and at 128
+        // eight beats is three and a half seconds. A beat either way is a correction —
+        // a snare on the wrong beat has to be put right and 450 ms is the price. Three
+        // and a half seconds is not a correction to anyone listening; it is the record
+        // jumping, and a record put back that way more than once sounds like it has
+        // started looping, which is how it was reported. In time and in the wrong bar
+        // is the lesser of the two: the records stay locked, and the phrase is met
+        // where meeting it costs nothing — parked before the record comes in
+        // (_meetThePhrase), on SYNC pressed, or by the hand that is mixing.
         // Said in the log, always: a jump is the one thing the holding does that can be
         // heard, and "it twitched" is only something to work with if there is a when.
         debugPrint('booth: ${follower.name} jumped ${(jump / 1000).toStringAsFixed(0)} ms'
-            '${outOfPhrase == 0 ? ' to the beat' : ' — $outOfPhrase beat${outOfPhrase.abs() == 1 ? '' : 's'} of it the phrase'} '
+            '${outOfPhrase == 0 ? ' to the beat' : leaveThePhrase ? ' to the beat — $outOfPhrase beats of phrase left out, it is in the room' : ' — $outOfPhrase beat${outOfPhrase.abs() == 1 ? '' : 's'} of it the phrase'} '
             '(${quiet ? snap && share >= 0.25 ? 'SYNC pressed' : 'while quiet' : 'lost the beat by ${ms.toStringAsFixed(0)} ms'})');
-        if (outOfPhrase != 0) {
+        if (outOfPhrase != 0 && !leaveThePhrase) {
           note(BoothEventKind.cue,
               '${follower.name} was $outOfPhrase beat${outOfPhrase.abs() == 1 ? '' : 's'} out of the phrase',
               deck: follower);
