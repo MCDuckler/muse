@@ -262,6 +262,45 @@ void main() {
           reason: 'one file in the way does not stop the rest');
     });
 
+    test('a swap that copies nothing says so instead of looking like it worked',
+        () async {
+      if (!haveShell()) {
+        markTestSkipped('no PowerShell here to read the script');
+        return;
+      }
+      final installed = await build('win4', 'old');
+      // The stage is not there. On the machine this was found on the window went
+      // away, came back, and was the same build as before — because a walk that finds
+      // no files leaves nothing stuck, reports itself done, and starts the app again.
+      // A success and a silent failure looked identical.
+      final script = File('${root.path}/swap4.ps1');
+      final app = await Process.start('sleep', ['0.1']);
+      await script.writeAsString(Updates.swapScript(
+          os: 'windows',
+          pid: app.pid,
+          from: '${root.path}/no-such-stage',
+          into: installed.path,
+          exe: 'wetowl',
+          beside: root.path));
+      final r = await Process.run(
+          shell, ['-NoProfile', '-NonInteractive', '-File', script.path]);
+      expect(r.exitCode, 0, reason: '${r.stdout}\n${r.stderr}');
+
+      final said = File('${root.path}/${Updates.swapTroubleFile}');
+      expect(said.existsSync(), isTrue,
+          reason: 'it copied nothing and said nothing');
+      final words = said.readAsStringSync();
+      expect(words, contains('never copied'));
+      expect(words, contains('no-such-stage'), reason: 'and where it looked');
+      // And the app is still started: a swap that did nothing must not also take the
+      // person's app away.
+      final started = File('${root.path}/started.txt');
+      for (var i = 0; i < 50 && !started.existsSync(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+      }
+      expect(started.existsSync(), isTrue);
+    });
+
     test('what it truly could not replace is left in writing, and it starts anyway',
         () async {
       if (!haveShell()) {

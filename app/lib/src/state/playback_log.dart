@@ -127,6 +127,17 @@ class PlaybackLog {
     noteError('what Flutter was drawing', e, stack);
   }
 
+  /// Written to the disk now rather than in three seconds' time.
+  ///
+  /// The batching is right everywhere but one place: an app that is about to call
+  /// exit(0) so a new build can replace it has no three seconds, and what it was
+  /// writing down is exactly the thing somebody will want afterwards.
+  static Future<void> flushNow() async {
+    _flush?.cancel();
+    _flush = null;
+    await _save();
+  }
+
   static Future<void> _save() async {
     try {
       final prefs = await SharedPreferences.getInstance();

@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
 import '../api/connection.dart';
+import 'playback_log.dart';
 
 /// What is on the server, and whether it is newer than what is running.
 class Release {
@@ -224,6 +225,7 @@ class Updates extends ChangeNotifier {
       // from, because by then there is no app left to tell. This is the app that came
       // back: it is the one that can say it.
       left = await swapTrouble();
+      await sayWhatTheSwapDid();
       release = await publishedDesktop(baseUrl, os) ?? release;
     } else {
       release = await published(baseUrl) ?? release;
@@ -539,11 +541,25 @@ class Updates extends ChangeNotifier {
       '    ForEach-Object { try { Remove-Item -LiteralPath \$_.FullName -Force } catch {} }',
       '} catch {}',
       '\$stuck = @()',
+      '\$did = 0',
       '# As the system spells it, with no separator on the end: what is left of each',
       '# name once this is cut off the front is where it goes in the install.',
       '\$root = \$from',
-      'try { \$root = (Resolve-Path -LiteralPath \$from).Path } catch {}',
-      '\$root = \$root.TrimEnd(\'\\\').TrimEnd(\'/\')',
+      '# -ErrorAction Stop, or this does not throw and the catch never runs.',
+      '#',
+      '# Resolve-Path writes an error and returns *nothing* when it cannot resolve a',
+      '# path, so .Path was \$null, the catch was never entered, \$root was left null,',
+      '# and Get-ChildItem over a null path found no files — whereupon the script',
+      '# reported itself done, started the app again, and the person watched their',
+      '# window go away and come back as the same build it had been. A silent no-op',
+      '# that looked exactly like a success. Guarded twice now: the error is caught,',
+      '# and nothing is allowed to leave \$root empty.',
+      'try {',
+      '  \$found = (Resolve-Path -LiteralPath \$from -ErrorAction Stop).Path',
+      '  if (\$found) { \$root = \$found }',
+      '} catch { Say ("could not resolve " + \$from + ": " + \$_.Exception.Message) }',
+      'if (-not \$root) { \$root = \$from }',
+      '\$root = ([string]\$root).TrimEnd(\'\\\').TrimEnd(\'/\')',
       'foreach (\$f in Get-ChildItem -LiteralPath \$root -Recurse -File -Force) {',
       '  \$rel = \$f.FullName.Substring(\$root.Length + 1)',
       '  \$dst = Join-Path \$into \$rel',
@@ -553,12 +569,14 @@ class Updates extends ChangeNotifier {
       '  }',
       '  try {',
       '    Copy-Item -LiteralPath \$f.FullName -Destination \$dst -Force -ErrorAction Stop',
+      '    \$did++',
       '  } catch {',
       '    try {',
       '      \$aside = \$dst + \'.wetowl-old\'',
       '      Remove-Item -LiteralPath \$aside -Force -ErrorAction SilentlyContinue',
       '      Move-Item -LiteralPath \$dst -Destination \$aside -Force -ErrorAction Stop',
       '      Copy-Item -LiteralPath \$f.FullName -Destination \$dst -Force -ErrorAction Stop',
+      '      \$did++',
       '      Say ("moved aside: " + \$rel)',
       '    } catch {',
       '      \$stuck += \$rel',
@@ -566,12 +584,24 @@ class Updates extends ChangeNotifier {
       '    }',
       '  }',
       '}',
-      'if (\$stuck.Count -gt 0) {',
+      '# Nothing copied at all is a failure, and it is the one that used to look like a',
+      '# success: the app went away, came back, and was the same build as before, with',
+      '# nothing anywhere saying why. If the walk found no files the place it looked in',
+      '# is what to say.',
+      'if (\$did -eq 0) {',
+      '  try {',
+      '    Set-Content -LiteralPath \$bad -Value @(',
+      '      \'the new build was never copied: nothing was found to copy.\',',
+      '      (\'looked in: \' + \$root),',
+      '      (\'that folder exists: \' + (Test-Path -LiteralPath \$root)),',
+      '      (\'into: \' + \$into))',
+      '  } catch {}',
+      '} elseif (\$stuck.Count -gt 0) {',
       '  try {',
       '    Set-Content -LiteralPath \$bad -Value ((\'the new build could not replace these files:\', \'\') + \$stuck)',
       '  } catch {}',
       '}',
-      'Say ("done, " + \$stuck.Count + " left behind")',
+      'Say ("done, " + \$did + " copied, " + \$stuck.Count + " left behind")',
       '\$run = Join-Path \$into \$exe',
       'try { Start-Process -FilePath \$run -WorkingDirectory \$into } catch { Say ("could not start: " + \$_.Exception.Message) }',
       '',
@@ -612,6 +642,31 @@ class Updates extends ChangeNotifier {
     } catch (_) {
       return null;
     }
+  }
+
+  /// What the swap wrote down about itself last time, into the log that comes back
+  /// here — because the one machine this has to work on is not one anybody here can
+  /// stand in front of.
+  ///
+  /// An update that quietly does nothing and starts the old build again leaves no
+  /// mark anywhere: the window goes, the window comes back, and it is the same
+  /// version. The script says what it did at every step; this is how any of that
+  /// reaches the person who can read it. Read once and then deleted, so a machine
+  /// where updating works says nothing at all.
+  static Future<void> sayWhatTheSwapDid() async {
+    try {
+      final f = File('${(await updatesDir()).path}'
+          '${Platform.pathSeparator}swap-log.txt');
+      if (!await f.exists()) return;
+      final lines = (await f.readAsString()).trim();
+      try {
+        await f.delete();
+      } catch (_) {}
+      if (lines.isEmpty) return;
+      for (final l in lines.split('\n').take(24)) {
+        PlaybackLog.note('SWAP ${l.trim()}');
+      }
+    } catch (_) {}
   }
 
   /// Stops the windowless helper before the files are swapped (set by the pool).
@@ -664,6 +719,11 @@ class Updates extends ChangeNotifier {
       } else {
         await Process.start('sh', [script.path], mode: ProcessStartMode.detached);
       }
+      // Said before going: if the log has this and nothing after it, the script was
+      // started and never wrote a line, which is a different fault from one that ran
+      // and could not copy.
+      PlaybackLog.note('SWAP starting $os swap: ${from.path} -> ${into.path}');
+      await PlaybackLog.flushNow();
       // A moment for the shell to be up, then out of its way.
       await Future<void>.delayed(const Duration(milliseconds: 300));
       exit(0);
