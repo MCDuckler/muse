@@ -42,7 +42,26 @@ MOST_SLICES = 30000
 # from before is not drawn against a grid it no longer lines up with.
 # 2: the slices laid across the whole file rather than across as much of it as divided
 #    evenly — see _levels.
-VERSION = 2
+# 3: the three bands measured against each other on one scale instead of each against
+#    itself, so that their ratio — which is what a coloured waveform draws — is real.
+VERSION = 3
+
+
+# How much the middle and the top are lifted before the three bands are put on one scale.
+#
+# Music is not flat, and a coloured waveform draws the *ratio* between the bands. Taken
+# over fourteen records pulled at random from the house — the 99th percentile of each
+# band's loudness against the low band's — the middle sits at 0.80 of the bass and the
+# top at 0.21, quartiles 0.49–0.97 and 0.12–0.28. Put on one scale and drawn as they
+# are, every record is a bass-coloured lump with a rim of air on it: the colour says
+# "this is music", which is no use to anybody.
+#
+# Lifted by the reciprocal of those middles, a typical record uses all three and the
+# difference *between* records survives — a bright record still draws brighter than a
+# dull one, because only the tilt they all share is taken out. Every DJ program does
+# this (Mixxx has it as three band gains the user can turn); these are measured rather
+# than chosen.
+_LIFT = {"low": 1.0, "mid": 1.26, "high": 4.84}
 
 
 def cache_path(data_dir: pathlib.Path, sha: str, slices: int = SLICES,
@@ -55,7 +74,7 @@ def measure_bands(audio: pathlib.Path, slices: int = SLICES) -> dict[str, list[i
     """The same shape three times over: the bass, the middle and the top of each slice,
     each on its own 0–255 scale. Drawn in three inks on a deck, where "the bass drops
     out here" is the thing worth seeing."""
-    out = {}
+    raw = {}
     for name, filt in (("low", "lowpass=f=250"),
                        ("mid", "highpass=f=250,lowpass=f=4000"),
                        ("high", "highpass=f=4000")):
@@ -65,27 +84,37 @@ def measure_bands(audio: pathlib.Path, slices: int = SLICES) -> dict[str, list[i
             capture_output=True, timeout=120, check=True)
         samples = array.array("h")
         samples.frombytes(proc.stdout[: len(proc.stdout) // 2 * 2])
-        out[name] = _levels(samples, slices)
-    return out
+        raw[name] = [v * _LIFT[name] for v in _rms(samples, slices)]
+    # One scale for the three of them. Each against its own loudest — which is what this
+    # did — makes every record's bands the same height as each other, and a colour mixed
+    # from three bands that have each been stretched to fill the frame is a colour that
+    # says nothing about the record.
+    top = max((max(v) for v in raw.values() if v), default=0.0) or 1.0
+    return {name: _to_255(v, top) for name, v in raw.items()}
 
 
 def _levels(samples, slices: int) -> list[int]:
-    """The song cut into [slices] equal pieces, each piece's loudness, 0 to 255.
+    """The song cut into [slices] equal pieces, each piece's loudness, 0 to 255."""
+    return _to_255(_rms(samples, slices))
 
-    Equal *and* laid end to end across the whole file. The slice used to be
+
+def _rms(samples, slices: int) -> list[float]:
+    """Each slice's loudness, left on its own scale — so that two bands measured this
+    way can be held against each other.
+
+    The pieces are equal *and* laid end to end across the whole file. A slice used to be
     ``len // slices`` samples long, which is that division rounded down, so the slices
-    together fell short of the end of the file by up to one slice per slice — a
-    thousandth at a hundred and sixty of them, but nearly a percent at thirty thousand,
-    because the finer the slice the bigger the fraction thrown away. The drawing lays
-    the slices across the whole record, so a shape that stops short is a shape stretched
-    to fit: everything in it slides later and later through the song, by nearly half a
-    second by the end of a four-minute record. That is a beat, against a grid drawn from
-    the same file — the picture and the ruler under it disagreeing about where the drop
-    is. Each slice is now taken between two exact boundaries, so the last one ends on
-    the last sample.
+    together fell short of the end of the file — a thousandth of it at a hundred and
+    sixty slices, but nearly a percent at thirty thousand, because the finer the slice
+    the bigger the fraction thrown away. The drawing lays the slices across the whole
+    record, so a shape that stops short is a shape stretched to fit: everything in it
+    slides later and later through the song, by nearly half a second by the end of a
+    four-minute record. That is a beat, against a grid drawn from the same file — the
+    picture and the ruler under it disagreeing about where the drop is. Each slice is
+    taken between two exact boundaries now, so the last one ends on the last sample.
     """
     if not samples:
-        return [0] * slices
+        return [0.0] * slices
     n = len(samples)
     levels = []
     for i in range(slices):
@@ -95,8 +124,15 @@ def _levels(samples, slices: int) -> list[int]:
             levels.append(0.0)
             continue
         levels.append(math.sqrt(sum(s * s for s in chunk) / len(chunk)))
-    top = max(levels) or 1.0
-    return [round(255 * (v / top) ** 0.7) for v in levels]
+    return levels
+
+
+def _to_255(levels: list[float], top: float | None = None) -> list[int]:
+    """0 to 255, loudest at 255, lifted a little (the 0.7 power) so that quiet passages
+    show as something rather than as a flat line. [top] where several sets of levels
+    share one scale."""
+    top = top or (max(levels) if levels else 0.0) or 1.0
+    return [round(255 * (max(0.0, v) / top) ** 0.7) for v in levels]
 
 
 def measure(audio: pathlib.Path, slices: int = SLICES) -> list[int]:

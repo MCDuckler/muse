@@ -569,13 +569,62 @@ class Booth extends ChangeNotifier {
       final ms = track.durationMs ?? 0;
       final got = await api.peakBands(track.id,
           slices: ms <= 0 ? 1600 : (ms / 10).round().clamp(1600, 30000));
-      if (got != null) bands[track.id] = got;
+      if (got != null) {
+        bands[track.id] = got;
+        unawaited(timing.of(track).then((t) => _sayWhereTheShapeSaysTheDropIs(track, got, t)));
+      }
     } catch (_) {
       // No shape: the grid is still drawn, on a quiet line.
     } finally {
       _fetchingBands.remove(track.id);
     }
     notifyListeners();
+  }
+
+  /// Where the *picture* says the record opens up, against where the rules are drawn.
+  ///
+  /// This is the one number a report about a beatgrid actually turns on, and it cannot
+  /// be had from here: measured against the house's own copy of both, the shape and the
+  /// rules land within a tenth of a beat of each other, and yet the rule is reported as
+  /// sitting a couple of beats off the drop on the machine it is looked at on. So the
+  /// two are measured where they are drawn, out of the very arrays the strip is about
+  /// to draw from, and the answer comes home in the log rather than being argued about
+  /// from a photograph of a screen.
+  void _sayWhereTheShapeSaysTheDropIs(
+      Track track, ({List<int> low, List<int> mid, List<int> high}) got, TrackTiming? t) {
+    if (t == null || t.drops.isEmpty || got.low.isEmpty) return;
+    final n = got.low.length;
+    final perSlice = (t.durationMs > 0 ? t.durationMs : track.durationMs ?? 0) / n;
+    if (perSlice <= 0) return;
+    final beat = t.bar == null ? 0.0 : t.bar!.inMilliseconds / 4;
+    final said = <String>[];
+    for (final drop in t.drops.take(3)) {
+      // A second either side, and the loudest step up in it: the same thing an eye
+      // does when it says "the drop is there".
+      final look = (1000 / perSlice).round().clamp(4, n);
+      final centre = (drop / perSlice).round();
+      var best = centre, most = 0.0;
+      for (var i = centre - look; i < centre + look; i++) {
+        if (i - look < 0 || i + look >= n) continue;
+        var before = 0.0, after = 0.0;
+        for (var k = 1; k <= look; k++) {
+          before += got.low[i - k] + got.mid[i - k];
+          after += got.low[i + k] + got.mid[i + k];
+        }
+        if (after - before > most) {
+          most = after - before;
+          best = i;
+        }
+      }
+      final shown = best * perSlice;
+      final off = shown - drop;
+      said.add('${(drop / 1000).toStringAsFixed(2)}s: the shape lifts '
+          '${off >= 0 ? '+' : ''}${off.round()} ms from it'
+          '${beat > 0 ? ' (${(off / beat).toStringAsFixed(2)} beats)' : ''}');
+    }
+    if (said.isEmpty) return;
+    PlaybackLog.note('SHAPE ${track.displayTitle}: $n slices, '
+        '${perSlice.toStringAsFixed(2)} ms each — ${said.join('; ')}');
   }
 
   // ------------------------------------------------------------------ loading

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../../state/booth/booth.dart';
 import '../../../state/booth/deck.dart' as engine;
+import '../../../state/booth/mixer.dart' show EqSet;
 import '../../mag.dart';
 import '../booth_clock.dart';
 import '../meters.dart' show PhaseMeter;
@@ -109,6 +110,13 @@ class _Lane extends StatelessWidget {
                     // scroll at one speed and two records in step show their beats in
                     // one line.
                     window: Duration(microseconds: (16e6 * deck.pitch).round()),
+                    inks: WaveInks.press,
+                    // The record as the room hears it: kill the bass on the mixer and
+                    // the bass goes out of the picture too. Serato has done this for
+                    // years and it is the thing people miss when it is not there — with
+                    // a bass swapped out mid-mix you can see which record is carrying
+                    // the bottom without having to remember which knob you turned.
+                    gains: _heard(booth.eqOf(deck)),
                     mirrored: mirrored,
                     accent: c,
                     onScrub: (to) => unawaited(deck.seekByHand(to)),
@@ -210,6 +218,7 @@ class _Overview extends StatelessWidget {
                               // `total` is the engine's idea of the record.
                               span: slicesSpan(deck.timing, total.inMicroseconds.toDouble()) /
                                   total.inMicroseconds,
+                              inks: WaveInks.press,
                               colour: c,
                               cues: [
                                 for (final d in deck.hotCues.values)
@@ -250,11 +259,23 @@ class _Overview extends StatelessWidget {
   }
 }
 
+/// A mixer's three knobs as plain factors for the drawing: 1 at noon, 0 killed.
+///
+/// Decibels are turned into what they are worth to the ear, and a boost is let through
+/// only a little way — the picture is there to say what is in the record, and a shape
+/// that grows when a knob is turned up would be saying something about the knob.
+({double low, double mid, double high}) _heard(EqSet eq) {
+  double one(double db) =>
+      db <= EqSet.killed ? 0.0 : math.pow(10, db / 20).toDouble().clamp(0.0, 1.4);
+  return (low: one(eq.low), mid: one(eq.mid), high: one(eq.high));
+}
+
 class _OverviewShape extends CustomPainter {
   _OverviewShape(
       {required this.playedCol,
       required this.bands,
       required this.span,
+      required this.inks,
       required this.colour,
       required this.cues,
       required this.mark,
@@ -265,6 +286,11 @@ class _OverviewShape extends CustomPainter {
   /// What fraction of the record the slices cover — 1.0 where the file and the engine
   /// agree how long it is, which is nearly always.
   final double span;
+
+  /// The three inks the record's shape is printed in. See WaveInks.
+  final WaveInks inks;
+
+  /// The deck's own colour, for its cues and its mark.
   final Color colour;
   final List<double> cues;
   final double? mark;
@@ -285,17 +311,26 @@ class _OverviewShape extends CustomPainter {
       final step = math.max(1, (n / w).floor());
       for (var x = 0.0; x < w; x += 2) {
         final i = (x / w / span * n).floor().clamp(0, n - 1);
-        var v = 0;
+        var lo = 0, md = 0, hi = 0;
         for (var k = i; k < math.min(n, i + step); k++) {
-          v = math.max(v, math.max(b.low[k], math.max(b.mid[k], b.high[k])));
+          if (b.low[k] > lo) lo = b.low[k];
+          if (b.mid[k] > md) md = b.mid[k];
+          if (b.high[k] > hi) hi = b.high[k];
         }
+        final v = math.max(lo, math.max(md, hi));
         final bar = wh * (0.15 + 0.85 * v / 255);
+        // The same three inks as the lane, so the whole record and the bit under the
+        // needle are the same picture at two scales: the breakdown that is a cyan band
+        // an inch wide up here is the cyan the lane is showing down there.
+        //
+        // Behind the needle it is dimmed rather than recoloured. It used to be the
+        // other way about — the played part in the deck's colour, the rest in grey —
+        // which spent the only colour the strip had on saying something the needle
+        // already says, and left the record's own shape with none.
+        final ink = Color(waveInk(inks, lo / 255, md / 255, hi / 255));
         canvas.drawRect(
             Rect.fromLTWH(x, (wh - bar) / 2, 1.4, bar),
-            Paint()
-              ..color = x < played
-                  ? colour.withValues(alpha: 0.45)
-                  : Console.quiet.withValues(alpha: 0.55));
+            Paint()..color = x < played ? ink.withValues(alpha: 0.30) : ink);
       }
     } else {
       canvas.drawRect(Rect.fromLTWH(0, wh / 2 - 1, w, 2), Paint()..color = Console.line);
@@ -334,6 +369,7 @@ class _OverviewShape extends CustomPainter {
       old.playedCol != playedCol ||
       old.bands != bands ||
       old.span != span ||
+      old.inks != inks ||
       old.mark != mark ||
       old.cues.length != cues.length ||
       old.phrases.length != phrases.length;

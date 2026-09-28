@@ -1,10 +1,121 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../api/models.dart';
 import '../mag.dart';
+
+/// The three inks a record's shape is printed in: one for the bass, one for the middle,
+/// one for the top.
+///
+/// Every DJ program does this and they nearly all agree on the idea, if not the hues:
+/// Serato and rekordbox's RGB mode put the bass in red, the middle in green and the top
+/// in blue; rekordbox's 3Band and the Denon players use blue, orange and white; Traktor
+/// ships four palettes over the same three numbers. What a DJ reads off it is where the
+/// bass goes out, where the vocal comes in, where the hats are — none of which a grey
+/// shape can say, however finely it is drawn.
+///
+/// The colour is mixed from the three bands and then *normalised so the brightest of
+/// the three channels is full*, which is the part that makes these waveforms work: hue
+/// then carries the balance of the record and nothing else, so a bass passage reads as
+/// bass whether it is loud or quiet, and a breakdown at a whisper is as legible as a
+/// drop. How loud it is is the height. The two say different things and neither is
+/// spent saying the other's.
+class WaveInks {
+  const WaveInks(this.low, this.mid, this.high,
+      {required this.name, this.stacked = false});
+
+  /// Drawn as three layers standing on each other rather than as one colour mixed from
+  /// the three.
+  ///
+  /// The two are not a matter of taste, they are what each palette can carry. A mixed
+  /// colour can only be read back if each ink owns a channel of its own, so a palette
+  /// whose inks share one — rekordbox's 3Band and the Denon players', where the top is
+  /// white and the middle orange, both of them mostly red — has to be stacked instead:
+  /// each band gets its own slice of the column's height and keeps its own ink. It
+  /// says less per column, because the *shape* now carries the balance rather than the
+  /// colour, and a great many DJs prefer it anyway.
+  final bool stacked;
+
+  /// What each band is worth in the mix, as red, green and blue from 0 to 1.
+  final Color low, mid, high;
+
+  /// For settings, and for saying which is which in a test's name.
+  final String name;
+
+  /// The house's own red for the bass, a green for the middle, a blue for the top: the
+  /// convention a DJ arriving from Serato or rekordbox already knows how to read, in
+  /// this room's red rather than a signal red.
+  ///
+  /// The hues are not free, and it took two goes to believe it. A colour mixed from
+  /// three bands can only be read back if each ink owns a channel of its own — which is
+  /// the real reason Serato and rekordbox settled on red, green and blue rather than on
+  /// anything prettier. Magenta and orange were tried first, being the inks of the
+  /// decade this room is dressed in, and both are mostly red: the middle of a record
+  /// vanished into its bass and every song printed pink. Then red, lime and cyan, which
+  /// is warmer and looks like the room — and lime and cyan both own green, so the top
+  /// of a record vanished into its middle and a breakdown printed lime instead of
+  /// cyan. One ink per channel is not a style; it is the condition of the picture
+  /// meaning anything.
+  static const press = WaveInks(
+      Color(0xFFFF4A3D), Color(0xFF3FD86A), Color(0xFF4A7BFF),
+      name: 'press');
+
+  /// rekordbox's 3Band, and the CDJs': bass blue, middle orange, top white. Stacked,
+  /// because white and orange cannot be told apart in a mixture.
+  static const threeBand = WaveInks(
+      Color(0xFF2E6BFF), Color(0xFFFF8A2B), Color(0xFFF3F0E8),
+      name: 'three-band', stacked: true);
+
+  /// No colour at all, for a deck that would rather read the shape. Traktor calls its
+  /// version X-Ray and there are DJs who will use nothing else.
+  static const xray = WaveInks(
+      Color(0xFFEDE9E1), Color(0xFFEDE9E1), Color(0xFFEDE9E1),
+      name: 'x-ray');
+
+  static const all = [press, threeBand, xray];
+}
+
+/// The colour one column of a record is printed in, from how much of it is bass, middle
+/// and top — each 0 to 1 — as a plain ARGB word.
+///
+/// Mixed from the three inks, de-greyed, then taken up so the brightest channel is
+/// full. See the comments inside for why each of those three steps is there; between
+/// them they are the whole of what makes a coloured waveform readable, and leaving any
+/// one out gives a picture that looks coloured and says nothing.
+int waveInk(WaveInks inks, double l, double m, double t) {
+  var r = l * inks.low.r + m * inks.mid.r + t * inks.high.r;
+  var g = l * inks.low.g + m * inks.mid.g + t * inks.high.g;
+  var b = l * inks.low.b + m * inks.mid.b + t * inks.high.b;
+  // The grey out. Serato and rekordbox add their bands straight into red, green and
+  // blue and are done — they can, because their three inks *are* red, green and blue,
+  // so each band lands in a channel of its own and the mixture is a readout. Three inks
+  // chosen for a house rather than for a colour wheel all carry some of every channel,
+  // so every mixture drifts towards white and the record comes out a pale pink lump,
+  // which is what the first drawing of this was. What makes a colour pale is the part
+  // all three channels share, so most of it goes.
+  final dull = math.min(r, math.min(g, b)) * 0.75;
+  r -= dull;
+  g -= dull;
+  b -= dull;
+  // And up to full. This is the step that matters most: after it, hue carries the
+  // balance of the record and nothing else, so a bass passage reads as bass whether it
+  // is loud or quiet and a breakdown at a whisper is as legible as a drop. How loud it
+  // is, the height says. Neither is spent saying the other's part.
+  final bright = math.max(r, math.max(g, b));
+  if (bright > 0) {
+    final f = 1 / bright;
+    r *= f;
+    g *= f;
+    b *= f;
+  }
+  return 0xFF000000 |
+      ((r * 255).round().clamp(0, 255) << 16) |
+      ((g * 255).round().clamp(0, 255) << 8) |
+      (b * 255).round().clamp(0, 255);
+}
 
 /// How much of the record the shape's slices cover, in microseconds.
 ///
@@ -47,7 +158,19 @@ class WaveStrip extends StatefulWidget {
     this.accent,
     this.markAt,
     this.mirrored = false,
+    this.inks = WaveInks.press,
+    this.gains,
   });
+
+  /// Which three inks the shape is printed in.
+  final WaveInks inks;
+
+  /// What the mixer is doing to each band, as a plain factor — 1 for a knob at noon, 0
+  /// for one killed. Given, the shape is drawn as the room *hears* the record rather
+  /// than as it was recorded: kill the bass and the bass goes out of the picture too.
+  /// Serato has done this for years and it is the thing people miss most when it is
+  /// not there. Null to draw the record as it is.
+  final ({double low, double mid, double high})? gains;
 
   /// A moment worth flagging that is not the song's own — where the booth means to
   /// mix out of it.
@@ -135,6 +258,8 @@ class _WaveStripState extends State<WaveStrip> {
                 hotCues: widget.hotCues,
                 markAt: widget.markAt,
                 mirrored: widget.mirrored,
+                inks: widget.inks,
+                gains: widget.gains,
                 ink: scheme.onSurface,
                 accent: widget.accent ?? scheme.primary,
                 paper: scheme.surface,
@@ -182,6 +307,8 @@ class _StripPainter extends CustomPainter {
     required this.hotCues,
     required this.markAt,
     required this.mirrored,
+    required this.inks,
+    required this.gains,
     required this.ink,
     required this.accent,
     required this.paper,
@@ -197,6 +324,8 @@ class _StripPainter extends CustomPainter {
   final Map<int, Duration> hotCues;
   final Duration? markAt;
   final bool mirrored;
+  final WaveInks inks;
+  final ({double low, double mid, double high})? gains;
   final Color ink, accent, paper, quiet;
 
   /// Where the playhead stands: a third in, so most of the strip is what is coming.
@@ -223,9 +352,12 @@ class _StripPainter extends CustomPainter {
     final left = at - _head * w * perPixel;
     double xOf(double us) => (us - left) / perPixel;
 
-    // The song's ground: a hairline along the middle where the shape stands.
-    final base = h * 0.78;
-    canvas.drawLine(Offset(0, base), Offset(w, base), Paint()..color = ink.withValues(alpha: 0.12)..strokeWidth = 1);
+    // The line the shape stands about, and how far either side of it it may reach.
+    // Room left under it for the beat ticks and over it for the phrase brackets.
+    final axis = h * 0.46;
+    final half = h * 0.36;
+    canvas.drawLine(Offset(0, axis), Offset(w, axis),
+        Paint()..color = ink.withValues(alpha: 0.12)..strokeWidth = 1);
 
     // What the record is doing here, where the house has read it off the stems: each
     // section named at its start, a breakdown shaded, a drop marked.
@@ -268,29 +400,93 @@ class _StripPainter extends CustomPainter {
           Paint()..color = accent.withValues(alpha: 0.10));
     }
 
-    // The shape, three inks, each band from the foot up.
+    // The shape: a column a pixel wide for each pixel across, standing about the
+    // middle line rather than on the floor.
+    //
+    // Three filled outlines drawn over each other was what this was, and it could not
+    // work. Each band was a polygon from the foot up in its own ink at its own alpha,
+    // so the loudest band painted over the other two and the picture was one colour
+    // with a wash on it — a record's bass and its hats were the same shape in the same
+    // red. Worse, every band was normalised against *itself* on the house, so the three
+    // heights had no relation to each other at all (see peaks.py).
+    //
+    // A column takes the loudest slice under it, mixes the three bands into one colour,
+    // normalises that colour so its brightest channel is full, and stands it about the
+    // middle at the height of the loudest band. Hue is the balance of the record;
+    // height is how loud it is. Both sides of the middle, because that is what every DJ
+    // has looked at for twenty years and because a shape about a line is read faster
+    // than a skyline — the eye follows one edge and gets the other for nothing.
+    //
+    // Drawn as one call: a triangle pair per column into one Vertices, rather than a
+    // rectangle each. At sixteen hundred columns a lane and two lanes on a screen, that
+    // is the difference between two draw calls a frame and six thousand.
     final b = bands;
     if (b != null && b.low.isNotEmpty) {
       final n = b.low.length;
       final usPerSlice = slicesSpan(timing, total) / n;
-      final first = math.max(0, (left / usPerSlice).floor());
-      final last = math.min(n - 1, ((left + w * perPixel) / usPerSlice).ceil());
-      void band(List<int> v, Color c, double scale) {
-        final path = Path()..moveTo(xOf(first * usPerSlice), base);
-        for (var i = first; i <= last; i++) {
-          final x = xOf(i * usPerSlice);
-          path.lineTo(x, base - (v[i] / 255) * (h * 0.62) * scale);
+      final gain = gains;
+      final gl = gain?.low ?? 1.0, gm = gain?.mid ?? 1.0, gh = gain?.high ?? 1.0;
+      final cols = w.ceil();
+      final layers = inks.stacked ? 3 : 1;
+      final xy = Float32List(cols * 12 * layers);
+      final tint = Int32List(cols * 6 * layers);
+      var v = 0, c = 0;
+      for (var px = 0; px < cols; px++) {
+        var i0 = ((left + px * perPixel) / usPerSlice).floor();
+        var i1 = ((left + (px + 1) * perPixel) / usPerSlice).ceil();
+        if (i1 <= 0 || i0 >= n) continue;
+        if (i0 < 0) i0 = 0;
+        if (i1 > n) i1 = n;
+        if (i1 <= i0) i1 = i0 + 1;
+        var lo = 0, md = 0, hi = 0;
+        for (var i = i0; i < i1; i++) {
+          if (b.low[i] > lo) lo = b.low[i];
+          if (b.mid[i] > md) md = b.mid[i];
+          if (b.high[i] > hi) hi = b.high[i];
         }
-        path.lineTo(xOf((last + 1) * usPerSlice), base);
-        path.close();
-        canvas.drawPath(path, Paint()..color = c);
+        final l = lo * gl / 255, m = md * gm / 255, t = hi * gh / 255;
+        final peak = math.max(l, math.max(m, t));
+        if (peak <= 0.004) continue;
+        final x0 = px.toDouble(), x1 = x0 + 1;
+        void quad(double from, double to, int argb) {
+          xy[v++] = x0; xy[v++] = axis - to;
+          xy[v++] = x1; xy[v++] = axis - to;
+          xy[v++] = x1; xy[v++] = axis + to;
+          xy[v++] = x0; xy[v++] = axis - to;
+          xy[v++] = x1; xy[v++] = axis + to;
+          xy[v++] = x0; xy[v++] = axis + to;
+          for (var q = 0; q < 6; q++) {
+            tint[c++] = argb;
+          }
+        }
+        // A floor under it so a quiet passage is a thin line rather than a gap: a
+        // record with nothing in it still has to show where it is.
+        final tall = half * (0.03 + 0.97 * peak);
+        if (inks.stacked) {
+          // Outermost first, each layer painted over the one under it: the top of the
+          // record stands on the middle, which stands on the bass. The column is as
+          // tall as the loudest band either way, so the two kinds of palette draw a
+          // record at the same size and only differ in what fills it.
+          final sum = l + m + t;
+          if (sum <= 0) continue;
+          quad(0, tall, inks.high.toARGB32());
+          quad(0, tall * (l + m) / sum, inks.mid.toARGB32());
+          quad(0, tall * l / sum, inks.low.toARGB32());
+        } else {
+          quad(0, tall, waveInk(inks, l, m, t));
+        }
       }
-      band(b.low, accent.withValues(alpha: 0.85), 1.0);
-      band(b.mid, ink.withValues(alpha: 0.45), 0.8);
-      band(b.high, ink.withValues(alpha: 0.28), 0.55);
+      if (v > 0) {
+        canvas.drawVertices(
+            ui.Vertices.raw(ui.VertexMode.triangles, Float32List.sublistView(xy, 0, v),
+                colors: Int32List.sublistView(tint, 0, c)),
+            BlendMode.dst,
+            Paint());
+      }
     } else {
       // No shape yet: a quiet line, so the grid still has something to stand on.
-      canvas.drawRect(Rect.fromLTWH(0, base - 3, w, 3), Paint()..color = ink.withValues(alpha: 0.10));
+      canvas.drawRect(
+          Rect.fromLTWH(0, axis - 1.5, w, 3), Paint()..color = ink.withValues(alpha: 0.10));
     }
 
     // The grid: ticks along the foot, downbeats taller and darker.
@@ -392,8 +588,12 @@ class _StripPainter extends CustomPainter {
       }
     }
 
-    // The playhead: a rule in the accent, a notch at its head.
+    // The playhead: a rule in the accent, a notch at its head — on a dark backing, so
+    // that it is still a line where the record under it happens to be the same colour.
+    // A red needle over a red kick was invisible exactly when it mattered.
     final x = _head * w;
+    canvas.drawRect(Rect.fromLTRB(x - 2.2, 0, x + 2.2, h),
+        Paint()..color = paper.withValues(alpha: 0.85));
     canvas.drawLine(Offset(x, 0), Offset(x, h), Paint()..color = accent..strokeWidth = 1.6);
     canvas.drawPath(
         Path()..moveTo(x - 5, 0)..lineTo(x + 5, 0)..lineTo(x, 6)..close(), Paint()..color = accent);
@@ -447,6 +647,8 @@ class _StripPainter extends CustomPainter {
   bool shouldRepaint(_StripPainter old) =>
       old.markAt != markAt ||
       old.mirrored != mirrored ||
+      old.inks != inks ||
+      old.gains != gains ||
       old.timing != timing ||
       old.bands != bands ||
       old.duration != duration ||

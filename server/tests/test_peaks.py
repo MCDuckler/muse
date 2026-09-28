@@ -54,6 +54,26 @@ def test_every_slice_is_asked_about():
         assert min(levels) > 0, f"a slice came out empty for {n} samples"
 
 
+def test_the_three_bands_are_measured_against_each_other():
+    # What a coloured waveform draws is the *ratio* between the bands, and the ratio is
+    # the first thing lost by scaling each band to its own loudest: a record with a
+    # whisper of air and a wall of bass came back with both at full, and printed white.
+    quiet, loud = [10.0] * 50 + [20.0] * 50, [100.0] * 50 + [200.0] * 50
+    top = max(max(quiet), max(loud))
+    a, b = peaks._to_255(quiet, top), peaks._to_255(loud, top)
+    assert max(a) < max(b) / 2, "the quieter band has to come back quieter"
+    # And each on its own, which is what it used to do, says they are the same:
+    assert max(peaks._to_255(quiet)) == max(peaks._to_255(loud)) == 255
+
+
+def test_the_lift_is_the_measured_one():
+    # Not a knob to be turned by eye. See the comment on _LIFT: the numbers come from
+    # the 99th percentile of each band over fourteen records of the house.
+    assert peaks._LIFT["low"] == 1.0
+    assert 1.1 < peaks._LIFT["mid"] < 1.5
+    assert 4.0 < peaks._LIFT["high"] < 6.0
+
+
 def test_the_cache_path_says_which_shape_it_is():
     # Otherwise a shape measured the old way is served for ever against a new grid.
     import pathlib
