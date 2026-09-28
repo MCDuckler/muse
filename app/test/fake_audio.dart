@@ -128,16 +128,28 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
     if (!playing) return position;
     return position +
         Duration(
-            microseconds:
-                (DateTime.now().difference(_since).inMicroseconds * speed).round());
+            microseconds: (DateTime.now().difference(_since).inMicroseconds *
+                    speed *
+                    (1 + clockSkew))
+                .round());
   }
+
+  /// How far this engine's idea of a second is from the wall's, as a fraction.
+  ///
+  /// The thing every beat-matcher is really fighting. Two records are held together by
+  /// running one at a ratio of the other's tempo, and that ratio comes off two grids
+  /// each fitted to a few hundredths of a percent — so it is always slightly wrong,
+  /// and slightly wrong compounds: a hundredth of a percent is 6 ms a minute, which is
+  /// a flam by the end of a mix. 0.0002 here is two hundredths of a percent.
+  double clockSkew = 0.0;
 
   /// Bring [position] up to now.
   void _advance() {
     final now = DateTime.now();
     if (playing) {
       position += Duration(
-          microseconds: (now.difference(_since).inMicroseconds * speed).round());
+          microseconds:
+              (now.difference(_since).inMicroseconds * speed * (1 + clockSkew)).round());
     }
     _since = now;
   }

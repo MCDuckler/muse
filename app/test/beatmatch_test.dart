@@ -418,6 +418,59 @@ void main() {
           reason: 'it learned more than the wrap can possibly cost: ${Deck.loopLate}');
     }, timeout: const Timeout(Duration(seconds: 40)));
 
+    test('once it is matched the rate stops moving, and the beat stays put', () async {
+      // "The timing should be kept the same without any fluctuations or correction
+      // loops. As precise and reliable as a normal DJ program."
+      //
+      // What a DJ deck does is not chase the phase. Two records on one sound card
+      // advance on one clock, so if the follower runs at exactly the right ratio of
+      // the master's tempo the gap between them never changes — place it once and it
+      // is held, with the rate never touched again. The only reason this booth bent
+      // anything is that the ratio comes off two fitted grids, through a stretcher
+      // that does not run at precisely the speed it is asked for, into two resamplers
+      // on one card. A tenth of a percent out is 6 ms every ten seconds.
+      //
+      // So the rate is learned from the drift and then left alone, and that is what
+      // this asks: that the engine stops being told new speeds, that it settled on the
+      // *right* one, and that the beat holds while nothing is being sent.
+      final engine = (JustAudioPlatform.instance as FakeJustAudio)
+          .players[booth.b.player.platformId!]!;
+      engine.reportEvery = const Duration(milliseconds: 100);
+      engine.clockSkew = 0.001;
+      await booth.setCrossfader(0.5);
+      await booth.b.seek(booth.a.position);
+      await booth.b.play();
+      booth.holdOnBeat(booth.b, snap: true);
+
+      await Future<void>.delayed(const Duration(seconds: 20));
+      final rates = <double>{};
+      final seenFor = <double, int>{};
+      final worst = <int>[];
+      for (var i = 0; i < 200; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        rates.add(engine.speed);
+        seenFor[engine.speed] = (seenFor[engine.speed] ?? 0) + 1;
+        worst.add(apart().inMilliseconds.abs());
+      }
+      worst.sort();
+      // The rate it is *at*, which is the one it spends its time at: a one-shot lean
+      // closing a standing offset is a speed too, and reading the engine in the middle
+      // of one says less than the truth.
+      final settledAt =
+          seenFor.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
+
+      expect(rates.length, lessThan(4),
+          reason: 'the rate was still moving: ${rates.length} different speeds in ten '
+              'seconds, and it sits at $settledAt');
+      expect(worst.last, lessThan(14),
+          reason: 'and it did not hold: worst ${worst.last} ms');
+      // On the *right* rate, not merely a quiet one: an engine running a tenth of a
+      // percent fast has to be asked for a tenth less.
+      expect(settledAt, closeTo(1 / 1.001, 0.0004),
+          reason: 'it stopped moving without ever learning the drift: $settledAt');
+      await booth.letGo();
+    }, timeout: const Timeout(Duration(seconds: 60)));
+
     test('a master going round a loop is still something to be held to', () async {
       // "Beat match still needs work, especially when looping one track." The hold
       // used to stop dead for as long as the master had a loop on — a loop was lumped
@@ -429,9 +482,30 @@ void main() {
       await booth.b.seek(Duration(milliseconds: booth.a.position.inMilliseconds + 40));
       await booth.b.play();
       booth.holdOnBeat(booth.b);
-      await Future<void>.delayed(const Duration(seconds: 3));
-      final held = apart().inMilliseconds.abs();
-      expect(held, lessThan(15), reason: 'not settled before the loop: $held ms');
+
+      /// Waited for rather than timed, and it has to *stay* settled: six readings
+      /// running inside twelve milliseconds.
+      ///
+      /// One reading is not enough. A master coming round its loop moves by a whole
+      /// phrase, and a reading taken across that jump jumps with it — asking for a
+      /// single dip near nought made this test pass against the very fault it was
+      /// written for. A fixed deadline is no good either: settling is no longer a
+      /// chase, it is a measured lean over a couple of seconds, and on a busy machine
+      /// the timers behind that are late by however busy it is.
+      Future<int> settles() async {
+        var best = 999, running = 0;
+        for (var i = 0; i < 260; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+          final ms = apart().inMilliseconds.abs();
+          running = ms < 12 ? running + 1 : 0;
+          if (running >= 6) return ms;
+          if (i > 20 && ms < best) best = ms;
+        }
+        return best;
+      }
+
+      final held = await settles();
+      expect(held, lessThan(15), reason: 'never settled before the loop: $held ms');
 
       // Four bars, from the master's next downbeat.
       booth.a.loop(16);
@@ -439,14 +513,19 @@ void main() {
       // Knocked off the beat while the loop runs. Before, nothing would have pulled
       // it back for as long as the loop was on.
       await booth.b.nudge(const Duration(milliseconds: 55));
+      // Where it ends up, not how fast it gets there. Before, nothing pulled it back
+      // at all for as long as the loop was on: it simply stayed 55 ms out.
+      final after = await settles();
+      expect(after, lessThan(20),
+          reason: 'left adrift while the master looped: $after ms');
       final worst = <int>[];
-      for (var i = 0; i < 80; i++) {
+      for (var i = 0; i < 30; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 50));
-        if (i > 40) worst.add(apart().inMilliseconds.abs());
+        worst.add(apart().inMilliseconds.abs());
       }
       worst.sort();
-      expect(worst.last, lessThan(20),
-          reason: 'left adrift while the master looped: worst ${worst.last} ms');
+      expect(worst.last, lessThan(26),
+          reason: 'it went through rather than settling: worst ${worst.last} ms');
       await booth.letGo();
     }, timeout: const Timeout(Duration(seconds: 30)));
 

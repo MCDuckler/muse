@@ -1061,23 +1061,59 @@ class Booth extends ChangeNotifier {
   /// Jumps spent in the hold running now, and whether the bend ever ran out of room:
   /// the difference between a record that would not settle and one that drifted.
   int _heldJumps = 0;
-  bool _bendMaxed = false;
   int _phraseFixes = 0;
-  int _heldSwings = 0;
+
+  /// How many times the engine was told a new speed while holding, and how many of
+  /// those were the rate itself being corrected rather than a lean being put on or
+  /// taken off. A DJ deck's answer to the first is "once or twice a mix"; the
+  /// proportional bend this replaced answered it five times a second.
+  int _rateMoves = 0;
+  int _rateTrims = 0;
+
+  /// Drift worth taking off the rate, in milliseconds of error gained per second —
+  /// six hundredths is 0.006 %, which is under 4 ms a minute and beneath anything an
+  /// engine here reports reliably enough to act on.
+  static const _driftWorthFixing = 0.06;
+
+  /// A standing offset worth closing once the rate is locked, in milliseconds.
+  static const _offsetWorthClosing = 5.0;
+
+  /// How long the one-shot lean takes to swallow a standing offset, in seconds, and
+  /// the most rate it is allowed to use doing it.
+  ///
+  /// Two per cent is what a hand on a platter does and half of what the bend this
+  /// replaced would reach — but where the bend sat at its stop for as long as it
+  /// liked, this is a measured amount for a measured time and then gone. It closes
+  /// twenty milliseconds a second, so a flam anybody could hear is seen off inside
+  /// two and a half.
+  static const _closeOver = 2.5;
+  static const _leanAtMost = 0.02;
+
+  /// Past this many milliseconds it is not a question of measurement any more.
+  static const _plainlyOut = 18.0;
 
   void holdOnBeat(Deck follower, {bool snap = false}) {
     _lock?.cancel();
     _heldJumps = 0;
-    _bendMaxed = false;
     _phraseFixes = 0;
-    _heldSwings = 0;
+    _rateMoves = 0;
+    _rateTrims = 0;
     final m = other(follower);
     final seen = <int>[];
     final began = DateTime.now();
     var moved = 0;
     var lastMove = began;
-    var lastBend = began;
     var settleUntil = began;
+    // The rate that holds, once it has been learned, and the readings it is learned
+    // from: seconds since this hold began against milliseconds out at that moment.
+    double? lockAt;
+    var lastBase = double.nan;
+    final drift = <(double, double)>[];
+    // While a one-shot lean is running, and when it ends.
+    DateTime? leanUntil;
+    // Since when the deck has been left alone. Readings before this are the engine
+    // catching up, not the record drifting.
+    var steadyFrom = began;
     // The first settled reading tells how late the engine was to start; the first
     // after a jump, how far short the jump landed. Both are learned for next time.
     var firstReading = true;
@@ -1085,7 +1121,6 @@ class Booth extends ChangeNotifier {
     var saidLost = false;
     var saidPhrase = false;
     var lastPhrase = 0;
-    var lastSide = 0;
     // How many jumps have been spent where the room could hear them.
     var loudMoves = 0;
     _lock = Timer.periodic(const Duration(milliseconds: 50), (t) async {
@@ -1100,6 +1135,27 @@ class Booth extends ChangeNotifier {
       // other deck's tempo moves.
       final base = follower.pitch;
       final ft = follower.timing, mt = m.timing;
+      // A one-shot lean that is due comes off first, before anything at all can turn
+      // this tick back.
+      //
+      // It used to be taken off further down, past the guard below — so a master that
+      // started braking, or a record whose grid went away, left the follower leaning
+      // at 1.6 % for as long as it played. Found by putting the old loop-guard back to
+      // check that a test still failed without the fix, and watching it pass: what had
+      // closed the gap was not the holding, it was a deck stranded in a lean that
+      // happened to point the right way.
+      final leaning = leanUntil;
+      if (leaning != null) {
+        if (DateTime.now().isBefore(leaning)) return;
+        leanUntil = null;
+        await follower.bend(lockAt ?? follower.pitch);
+        _rateMoves++;
+        seen.clear();
+        drift.clear();
+        settleUntil = DateTime.now().add(const Duration(milliseconds: 400));
+        steadyFrom = settleUntil;
+        return;
+      }
       // Braking is a tempo that is deliberately running away, and nothing is lined up
       // to that. A loop is not: a record going round four bars is still on the beat,
       // and the follower still has to be held on it. It used to be lumped in with
@@ -1275,6 +1331,7 @@ class Booth extends ChangeNotifier {
         if (heardNow) loudMoves++;
         lastMove = now;
         settleUntil = now.add(const Duration(seconds: 1));
+        steadyFrom = now.add(const Duration(seconds: 1));
         seen.clear();
         afterJump = true;
         // Aimed that much further on, whichever way it goes: a seek stops the sound for
@@ -1300,44 +1357,138 @@ class Booth extends ChangeNotifier {
             Duration(microseconds: (jump * follower.tempo).round()));
         return;
       }
-      // No learning of the rate: the grids give it to a few hundredths of a percent,
-      // and every way of learning it on the real engine learned something wrong —
-      // from the catch-up after a start, a rate 0.12 % off that walked the two 16 ms
-      // apart over twenty seconds. The bend alone holds a grid that is slightly out
-      // to a couple of milliseconds.
-      // Inside a few milliseconds is in step: the engines' own clocks are no finer,
-      // and chasing their noise would be the rate twitching for nothing.
-      // Inside the noise, the rate is left alone. A reading is worth a few
-      // milliseconds either way at best, and a loop that answers that noise turns it
-      // into real drift: half a percent of rate, in a random direction, several times
-      // a second. The deadband was three milliseconds, which is finer than any engine
-      // here reports — so the rate was being steered by measurement noise for most of
-      // every hold. It is the same eight milliseconds the gentle band starts at now.
-      final want = ms.abs() < 8 ? base : (base * bendFor(err)).clamp(0.5, 2.0);
-      // The bend at its stop: the error is further out than the rate can pull back,
-      // which is a different fault from a record that merely wanders.
-      if ((want / base - 1).abs() > 0.0299) _bendMaxed = true;
-      // Which way it is out, and how often that changes: a loop that is hunting
-      // crosses zero over and over, and says so here rather than in somebody's ear.
-      final side = ms > 4 ? 1 : (ms < -4 ? -1 : 0);
-      if (side != 0) {
-        if (lastSide != 0 && side != lastSide) _heldSwings++;
-        lastSide = side;
+      // ---------------------------------------------------------------- the rate
+      //
+      // What a DJ deck does, and what this did not.
+      //
+      // Two records playing out of one sound card advance on one clock. Run the
+      // follower at exactly the right ratio of the master's tempo and the gap between
+      // them never changes: place it once and it is held for as long as both play,
+      // with the rate never touched again. That is why a deck's SYNC is instant and
+      // why it does not wander afterwards.
+      //
+      // The only reason anything has to be corrected is that the ratio is not exactly
+      // right. It comes off two grids each fitted to a hundredth of a percent, through
+      // a stretcher that does not run at precisely the speed it is asked for, into two
+      // resamplers on one card. A tenth of a percent out is 6 ms every ten seconds.
+      //
+      // Chasing that with a proportional bend was the mistake. A bend answers *phase*,
+      // and phase is what the engines report worst — so the loop spent its life
+      // answering measurement noise, changing the rate five times a second, and the
+      // rate never settled anywhere because the thing it was correcting was never the
+      // thing that was wrong.
+      //
+      // So: the rate is learned from the *drift* and then left alone. How far out the
+      // two are does not matter; how fast that is growing is the whole of it, and it
+      // is a slope, which averages the noise out instead of amplifying it. Correct
+      // the rate by the slope and the drift goes to nothing — and then nothing is sent
+      // to the engine at all, which is the thing that was asked for.
+      if (lockAt == null || (base - lastBase).abs() > 1e-9) {
+        // A hand on the pitch fader, or SYNC matching a new tempo: start again from
+        // what it now says.
+        lockAt = base;
+        lastBase = base;
+        drift.clear();
       }
-      // At most five changes of rate a second: each is a message to the engine, and
-      // a rate that changes every twentieth of a second is a rate that warbles.
-      if ((want - follower.tempo).abs() > 0.0008 &&
-          now.difference(lastBend) >= const Duration(milliseconds: 200)) {
-        lastBend = now;
-        await follower.bend(want);
-        // Everything read while the engine is still taking the new rate up is a
-        // mixture of the old one and the new, and putting that in the median is
-        // feeding the loop its own transient. Thrown away, and a moment left for the
-        // change to reach the sound.
-        seen.clear();
-        settleUntil = now.add(const Duration(milliseconds: 120));
+      // Only what was read once the deck had stopped being moved about.
+      //
+      // The slope is the whole measurement, and a slope is ruined by its ends. The
+      // first readings after a seek or a change of rate are the median filter walking
+      // up to the new truth, and over a short window that walk reads as a third of a
+      // millisecond a second of drift that is not there — enough to look like real
+      // drift and block the very correction it is standing in front of. Waiting out
+      // the settle before writing any of it down costs a second and makes the number
+      // mean what it says.
+      if (now.difference(steadyFrom) >= const Duration(milliseconds: 800)) {
+        drift.add((now.difference(began).inMicroseconds / 1e6, ms));
+        while (drift.length > 2 && drift.last.$1 - drift.first.$1 > 16) {
+          drift.removeAt(0);
+        }
       }
-      _lockBase = base;
+      final span = drift.length < 8 ? 0.0 : drift.last.$1 - drift.first.$1;
+      // How long to watch before acting depends on how far out it is. A reading is
+      // worth a few milliseconds either way, so telling two milliseconds from nothing
+      // takes seconds of it — but forty milliseconds is not noise at any length, and
+      // making somebody listen to a flam for four seconds to be sure of what is
+      // already obvious is its own fault. The rate itself always wants the long look:
+      // a slope read off a short baseline is mostly the noise at either end of it.
+      final enough = ms.abs() > _plainlyOut ? 1.5 : 4.0;
+      if (span >= enough) {
+        // Milliseconds of error gained per second of wall clock, by least squares.
+        var sx = 0.0, sy = 0.0, sxx = 0.0, sxy = 0.0;
+        for (final (x, y) in drift) {
+          sx += x;
+          sy += y;
+          sxx += x * x;
+          sxy += x * y;
+        }
+        final n = drift.length;
+        final bottom = n * sxx - sx * sx;
+        final slope = bottom.abs() < 1e-9 ? 0.0 : (n * sxy - sx * sy) / bottom;
+        final mean = sy / n;
+        if (span >= 9 && slope.abs() >= _driftWorthFixing) {
+          // Running fast by slope parts per thousand: take exactly that off.
+          lockAt = (lockAt! * (1 - slope / 1000)).clamp(0.5, 2.0);
+          _rateTrims++;
+          // And close what the drift has already built up, in the same breath. The
+          // trim stops it growing; it does not undo what has been gained, and the fit
+          // that gave the slope also says where the line is *now* — so there is no
+          // reason to watch for another four seconds to find out what is already
+          // known. Doing those one after the other was the whole of why a record 0.2 %
+          // fast took thirteen seconds to come good.
+          final atNow = mean + slope * (drift.last.$1 - sx / n);
+          final lean = atNow.abs() > _offsetWorthClosing
+              ? (-atNow / (_closeOver * 1000)).clamp(-_leanAtMost, _leanAtMost)
+              : 0.0;
+          await follower.bend((lockAt! * (1 + lean)).clamp(0.5, 2.0));
+          _rateMoves++;
+          if (lean != 0) {
+            leanUntil = now.add(Duration(
+                milliseconds: (-atNow / (lean * 1000) * 1000).round().clamp(150, 8000)));
+          }
+          if (_trace) {
+            debugPrint('lock: drifting ${slope.toStringAsFixed(2)} ms/s and '
+                '${atNow.toStringAsFixed(1)} ms out — rate now '
+                '${lockAt!.toStringAsFixed(5)}'
+                '${lean == 0 ? '' : ', leaning ${(lean * 100).toStringAsFixed(2)}%'}');
+          }
+          seen.clear();
+          drift.clear();
+          settleUntil = now.add(const Duration(milliseconds: 400));
+          steadyFrom = settleUntil;
+          return;
+        }
+        // What is left over is a standing offset, and it is closed once, on purpose:
+        // a lean of the rate for exactly as long as it takes to swallow it, and then
+        // back. Deterministic — nothing about it is read back while it runs — so it
+        // cannot hunt, which is the whole difference between this and a bend.
+        //
+        // Over a fixed stretch rather than at a fixed rate, so that a flam anybody
+        // can hear is gone in a couple of seconds and a millisecond or two is taken
+        // off gently. Capped either way: a percent is not heard, and much more than
+        // that is a record audibly speeding up.
+        // Where the fitted line is now, not the average of the window — the average
+        // is where it was in the middle of it.
+        final atNow = mean + slope * (drift.last.$1 - sx / n);
+        // Not while it is still drifting: a lean closes what is there now, and if the
+        // rate is wrong the same gap is back in a few seconds and closed again, which
+        // is a correction loop with a longer period and no more use than the last
+        // one. Drift is the rate's business, and the rate is corrected below.
+        if (atNow.abs() > _offsetWorthClosing && slope.abs() < _driftWorthFixing * 3) {
+          final lean = (-atNow / (_closeOver * 1000)).clamp(-_leanAtMost, _leanAtMost);
+          final takes = (-atNow / (lean * 1000) * 1000).round();
+          await follower.bend((lockAt! * (1 + lean)).clamp(0.5, 2.0));
+          _rateMoves++;
+          leanUntil = now.add(Duration(milliseconds: takes.clamp(150, 8000)));
+          if (_trace) {
+            debugPrint('lock: ${atNow.toStringAsFixed(1)} ms out and steady — '
+                'leaning ${(lean * 100).toStringAsFixed(2)}% for $takes ms');
+          }
+          return;
+        }
+        if (span >= 9) drift.clear();
+      }
+      _lockBase = lockAt;
     });
     _lockBase = follower.pitch;
     _lockFollower = follower;
@@ -1392,8 +1543,8 @@ class Booth extends ChangeNotifier {
           '${sorted.last.toStringAsFixed(1)} ms; settled at ${_lockBase?.toStringAsFixed(4)}×'
           ', $_heldJumps jump${_heldJumps == 1 ? '' : 's'}'
           '${_phraseFixes == 0 ? '' : ', $_phraseFixes put back on the phrase'}'
-          '${_heldSwings < 3 ? '' : ', $_heldSwings swings either side'}'
-          '${_bendMaxed ? ', the bend at its stop' : ''}';
+          '${_rateTrims == 0 ? '' : ', rate trimmed $_rateTrims time${_rateTrims == 1 ? '' : 's'}'}'
+          ', $_rateMoves speed${_rateMoves == 1 ? '' : 's'} sent to the engine';
       debugPrint('booth: $said');
       // Written down as well as printed. On a desk debugPrint reaches the log file;
       // on a phone it reaches nothing, and how well the booth held its beat there was
