@@ -462,6 +462,15 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 300));
       expect(mixer.loadedAgain, isEmpty,
           reason: 'it put them back again for a record that never went anywhere');
+
+      // And after a seek, which is how a loop comes round: mpv flushes the filter
+      // graph on one, so the bands and the stems go with it. "EQ and stems reset when
+      // looping at loop start" is this, once a bar.
+      mixer.loadedAgain.clear();
+      await booth.b.seek(const Duration(seconds: 40));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(mixer.loadedAgain, contains('B'),
+          reason: 'nothing put the bands back after the record was moved');
     }, timeout: const Timeout(Duration(seconds: 30)));
 
     test('once it is matched the rate stops moving, and the beat stays put', () async {

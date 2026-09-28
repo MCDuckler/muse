@@ -314,10 +314,16 @@ class _StripPainter extends CustomPainter {
       final four = Paint()..color = ink.withValues(alpha: 0.3)..strokeWidth = 1;
       final fourTick = Paint()..color = ink.withValues(alpha: 0.9)..strokeWidth = 2;
       for (final m in t.markers) {
-        final ms = steady == null
-            ? m.toDouble()
-            : t.onGrid(Duration(milliseconds: m), every: 4).inMicroseconds / 1000;
-        final x = xOf(ms * 1000);
+        // Where the house put them, not where this would put them.
+        //
+        // They used to be snapped to the grid fitted here, four beats at a time,
+        // anchored on the bar phase. Where the two agree that does nothing; where
+        // they do not — the marks on one in forty records are not all on the same
+        // beat of the bar — it moved each rule on its own by as much as two beats,
+        // which is a phrase grid that is neither the house's nor evenly spaced. The
+        // marks are every fourth downbeat and already on the beat; re-deciding that
+        // from a second fit can only be a way to be wrong.
+        final x = xOf(m * 1000.0);
         if (x < -2) continue;
         if (x > w + 2) break;
         canvas.drawLine(Offset(x, 0), Offset(x, h), four);

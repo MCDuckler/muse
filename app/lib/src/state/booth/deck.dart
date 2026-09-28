@@ -609,11 +609,11 @@ class Deck extends ChangeNotifier {
       }
     }
     _fixedAt = DateTime.now();
-    // The first sound out of a record that has just gone on: see [onFreshStart].
+    // The first sound out of a record that has just gone on: see [refreshFilters].
     // Out here rather than inside the wait, because an engine that was already playing
     // when it was asked to does not go through it — and that is exactly the case where
     // a record was swapped under a deck that never stopped.
-    if (fresh) unawaited(Future<void>.sync(() => onFreshStart?.call()));
+    if (fresh) unawaited(Future<void>.sync(() => refreshFilters?.call()));
     notifyListeners();
   }
 
@@ -667,6 +667,12 @@ class Deck extends ChangeNotifier {
       _wrapsSince = 0;
       return;
     }
+    // The engine came round without this deck asking it to, so nothing above counted
+    // it as a placing and nothing put the filters back. Both matter: the record moved,
+    // which is a step in whatever is measuring how the two decks drift, and the graph
+    // was flushed, which is the equalizer and the stems gone.
+    placed++;
+    unawaited(Future<void>.sync(() => refreshFilters?.call()));
     _wrapsSince++;
     if (_wrapsSince < _wrapsToJudge) return;
     final want = Duration(
@@ -714,6 +720,8 @@ class Deck extends ChangeNotifier {
     if (was == null) {
       _wrappedAt = now;
       _wrapsSince = 0;
+      placed++;
+      unawaited(Future<void>.sync(() => refreshFilters?.call()));
       return;
     }
     _wrapsSince++;
@@ -757,6 +765,10 @@ class Deck extends ChangeNotifier {
     _settling = to;
     _settlingAt = _fixedAt;
     await _player.seek(to);
+    // A seek flushes what the engine was holding, the filter graph with it: see
+    // [refreshFilters]. This is the path a loop comes round by, and a hot cue, and
+    // the booth's own placing of a record.
+    unawaited(Future<void>.sync(() => refreshFilters?.call()));
     notifyListeners();
   }
 
@@ -862,17 +874,18 @@ class Deck extends ChangeNotifier {
   /// Whether the record on this deck has yet made a sound since it went on.
   bool _freshlyLoaded = false;
 
-  /// Told the first time a freshly loaded record actually plays (set by the booth).
+  /// Told whenever the engine's filter graph may have been thrown away under this
+  /// deck (set by the booth), so that whatever was on it can be put back.
   ///
-  /// A desk's equalizer lives in the engine's filter graph, and mpv builds that graph
-  /// afresh for every file — at whatever moment it feels like, which is not the moment
-  /// setAudioSource returns. The bands were put on then, so on a good day they landed
-  /// on a graph that was about to be thrown away and on a bad one on no graph at all;
-  /// either way the new record played flat while the knobs sat where they were left,
-  /// and moving one by hand was the only thing that ever put them back — that being
-  /// the one path which does not go through the mixer's "nothing changed" check.
-  /// Told again here, when there is certainly a graph to tell.
-  void Function()? onFreshStart;
+  /// A desk's equalizer and its stems live in that graph, and mpv builds it afresh
+  /// for every file and flushes it on every seek. So they went the moment a record
+  /// changed — the bands were put on when setAudioSource returned, which is not when
+  /// the graph exists — and again every time a loop came round, because a loop comes
+  /// round by seeking. The knobs sat where they were left while the sound played
+  /// flat, and moving one by hand was the only thing that ever put it back, that
+  /// being the one path which does not go through the mixer's "nothing changed"
+  /// check.
+  void Function()? refreshFilters;
 
   /// The engine's own loop, where it has one (mpv's A–B loop on a desk): set by the
   /// booth. Says whether the engine took it; where it did not, the deck loops itself.

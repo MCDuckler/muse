@@ -567,6 +567,26 @@ class DesktopMixer extends VolumeMixer {
   Future<bool> _loop(Deck deck, Duration? from, Duration? to) async {
     final mpv = _native(deck);
     if (mpv == null) return false;
+    // The loop is entered a stretcher's worth early.
+    //
+    // mpv comes round an A–B loop by seeking, and a seek empties the filter chain —
+    // so Rubber Band begins the new time round with nothing in it, and its first two
+    // thousand samples of output are it filling up rather than the record. At 44.1 kHz
+    // that is forty-six milliseconds of the top of the loop that never arrives, which
+    // is "the timing is right but the start is cut off".
+    //
+    // Sent in that much before the loop's own start, the filling up happens on the
+    // bar before and the record is at full voice by the time the loop point comes. The
+    // extra length is paid for by what the wrap costs (Deck.loopLate), which is
+    // measured rather than assumed and so takes this in without being told.
+    //
+    // Only where there is a stretcher to fill: [stretchLatency] is zero otherwise and
+    // this does nothing at all.
+    final prime = stretchLatency(deck);
+    if (from != null && prime > Duration.zero) {
+      final early = from - prime;
+      from = early < Duration.zero ? Duration.zero : early;
+    }
     // To the microsecond: the engine splices to the sample, and a loop's ends are put
     // on exact samples so its seam does not click (quietSeam). Four places was a
     // tenth of a millisecond — four samples either way of where they were meant.

@@ -196,11 +196,11 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
                                     )),
                                 const SizedBox(height: 10),
                                 if (_logFolded)
-                                  ConsoleLog(booth: _b, folded: true, onFold: _fold)
+                                  RepaintBoundary(child: ConsoleLog(booth: _b, folded: true, onFold: _fold))
                                 else
                                   Expanded(
                                       flex: 2,
-                                      child: ConsoleLog(booth: _b, onFold: _fold)),
+                                      child: RepaintBoundary(child: ConsoleLog(booth: _b, onFold: _fold))),
                               ],
                             ),
                           ),
@@ -249,9 +249,9 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
                   const SizedBox(width: 6),
                   Expanded(
                     child: switch (_view) {
-                      BoothView.waves => ConsoleWaves(booth: _b),
-                      BoothView.set => ConsoleSetView(booth: _b),
-                      BoothView.plan => ConsolePlan(booth: _b),
+                      BoothView.waves => RepaintBoundary(child: ConsoleWaves(booth: _b)),
+                      BoothView.set => RepaintBoundary(child: ConsoleSetView(booth: _b)),
+                      BoothView.plan => RepaintBoundary(child: ConsolePlan(booth: _b)),
                     },
                   ),
                 ],
@@ -262,11 +262,17 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Expanded(child: ConsoleDeck(booth: _b, deck: _b.a, onLoad: () => _pick(_b.a))),
+                  Expanded(
+                      child: RepaintBoundary(
+                          child: ConsoleDeck(booth: _b, deck: _b.a, onLoad: () => _pick(_b.a)))),
                   const SizedBox(width: 10),
-                  SizedBox(width: mixer, child: ConsoleMixer(booth: _b)),
+                  SizedBox(
+                      width: mixer,
+                      child: RepaintBoundary(child: ConsoleMixer(booth: _b))),
                   const SizedBox(width: 10),
-                  Expanded(child: ConsoleDeck(booth: _b, deck: _b.b, onLoad: () => _pick(_b.b))),
+                  Expanded(
+                      child: RepaintBoundary(
+                          child: ConsoleDeck(booth: _b, deck: _b.b, onLoad: () => _pick(_b.b)))),
                 ],
               ),
             ),

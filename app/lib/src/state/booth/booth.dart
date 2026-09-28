@@ -400,10 +400,11 @@ class Booth extends ChangeNotifier {
     this.b.parts = parts;
     this.a.engineLoop = (from, to) => this.mixer.setLoop(this.a, from, to);
     this.b.engineLoop = (from, to) => this.mixer.setLoop(this.b, from, to);
-    // The bands and the filter, put on again the moment a freshly loaded record
-    // actually makes a sound: see Deck.onFreshStart.
-    this.a.onFreshStart = () => unawaited(this.mixer.loaded(this.a));
-    this.b.onFreshStart = () => unawaited(this.mixer.loaded(this.b));
+    // The bands, the filter and the stems, put back whenever the engine may have
+    // dropped them: a record going on, a loop coming round, any seek at all. See
+    // Deck.refreshFilters.
+    this.a.refreshFilters = () => unawaited(this.mixer.loaded(this.a));
+    this.b.refreshFilters = () => unawaited(this.mixer.loaded(this.b));
     this.a.seamFinder = this.mixer.quietSeam;
     this.b.seamFinder = this.mixer.quietSeam;
     for (final d in [this.a, this.b]) {
@@ -560,7 +561,14 @@ class Booth extends ChangeNotifier {
   Future<void> fetchBands(Track track) async {
     if (bands.containsKey(track.id) || !_fetchingBands.add(track.id)) return;
     try {
-      final got = await api.peakBands(track.id);
+      // A hundredth of a second a slice, which is about two pixels of a deck's strip
+      // at the zoom it is usually read at. Asked for by the record's own length rather
+      // than as a flat number: a fixed sixteen hundred made a three-minute record
+      // twice as detailed as a six-minute one, and neither of them detailed enough.
+      // The house keeps the answer beside the song, so the asking costs nothing twice.
+      final ms = track.durationMs ?? 0;
+      final got = await api.peakBands(track.id,
+          slices: ms <= 0 ? 1600 : (ms / 10).round().clamp(1600, 30000));
       if (got != null) bands[track.id] = got;
     } catch (_) {
       // No shape: the grid is still drawn, on a quiet line.

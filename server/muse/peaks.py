@@ -28,7 +28,15 @@ _RATE = 4000
 
 # A deck's waveform is wider than a seek bar and coloured by band, so it may ask for
 # more slices, up to this, and for the low, middle and top of each.
-MOST_SLICES = 4000
+#
+# Thirty thousand is a hundredth of a second on a five-minute record. That is what a
+# deck's strip wants: at sixteen hundred a four-second view of a four-minute record had
+# twenty-seven points in it, which is a third of a beat each, and a kick drum was not a
+# kick drum but a bump. The cost of asking for it is nothing — the work is decoding the
+# record, which is the same whatever it is sliced into, and it was measured at three
+# seconds either way — and the answer is kept on the disk beside the song, so it is
+# paid once per record for ever.
+MOST_SLICES = 30000
 
 
 def cache_path(data_dir: pathlib.Path, sha: str, slices: int = SLICES,

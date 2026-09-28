@@ -48,7 +48,8 @@ class ConsoleWaves extends StatelessWidget {
                   duration: const Duration(milliseconds: 250),
                   transitionBuilder: (child, a) => FadeTransition(
                     opacity: a,
-                    child: ScaleTransition(scale: Tween(begin: 0.92, end: 1.0).animate(a), child: child),
+                    child: ScaleTransition(
+                        scale: Tween(begin: 0.92, end: 1.0).animate(a), child: child),
                   ),
                   child: booth.mixing != null
                       ? _Banner(booth: booth)
@@ -66,7 +67,8 @@ class ConsoleWaves extends StatelessWidget {
 }
 
 class _Lane extends StatelessWidget {
-  const _Lane({required this.booth, required this.deck, required this.height, this.mirrored = false});
+  const _Lane(
+      {required this.booth, required this.deck, required this.height, this.mirrored = false});
   final Booth booth;
   final engine.Deck deck;
   final double height;
@@ -83,7 +85,9 @@ class _Lane extends StatelessWidget {
         children: [
           SizedBox(
             width: 26,
-            child: Text(deck.name, textAlign: TextAlign.center, style: Mag.numerals(18, color: t == null ? Console.faint : c)),
+            child: Text(deck.name,
+                textAlign: TextAlign.center,
+                style: Mag.numerals(18, color: t == null ? Console.faint : c)),
           ),
           Expanded(
             child: t == null
@@ -94,7 +98,9 @@ class _Lane extends StatelessWidget {
                     bands: booth.bands[t.id],
                     duration: deck.duration ?? Duration.zero,
                     playing: deck.playing,
-                    loop: deck.loopStart != null && deck.loopEnd != null ? (deck.loopStart!, deck.loopEnd!) : null,
+                    loop: deck.loopStart != null && deck.loopEnd != null
+                        ? (deck.loopStart!, deck.loopEnd!)
+                        : null,
                     hotCues: deck.hotCues,
                     markAt: auto.running && identical(booth.master, deck) ? auto.goesAt : null,
                     height: height,
@@ -132,7 +138,8 @@ class _Left extends StatelessWidget {
         final soon = deck.playing && s < 30;
         return Text('-${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}',
             textAlign: TextAlign.right,
-            style: Mag.typewriter(13, color: soon ? Console.deck(deck.name) : Console.quiet, bold: true));
+            style: Mag.typewriter(13,
+                color: soon ? Console.deck(deck.name) : Console.quiet, bold: true));
       },
     );
   }
@@ -164,27 +171,73 @@ class _Overview extends StatelessWidget {
           child: GestureDetector(
             onTapDown: (d) => at(d.localPosition.dx),
             onHorizontalDragUpdate: (d) => at(d.localPosition.dx),
-            child: ListenableBuilder(
-              listenable: BoothClock.of(context).positionOf(deck),
-              builder: (context, _) => CustomPaint(
-                size: Size(box.maxWidth, height),
-                painter: _OverviewPainter(
-                  t: deck.position.inMicroseconds / total.inMicroseconds,
-                  bands: bands,
-                  colour: c,
-                  cues: [for (final d in deck.hotCues.values) d.inMicroseconds / total.inMicroseconds],
-                  mark: mark == null ? null : mark.inMicroseconds / total.inMicroseconds,
-                  // Every four bars, down the whole record: the same rules the lane
-                  // draws tall, so the shape of the song can be read as phrases
-                  // rather than as a lump — where its eights fall, and where one runs
-                  // short.
-                  phrases: [
-                    for (final m in deck.timing?.markers ?? const <int>[])
-                      if (m * 1000 <= total.inMicroseconds) m * 1000 / total.inMicroseconds,
+            // The record's shape and the needle over it are two layers, not one.
+            //
+            // The shape does not change while a record plays; the needle changes
+            // sixty times a second. Painted together, every one of those frames
+            // redrew the whole of a four-minute record — and once the shape was asked
+            // for at a hundredth of a second a slice, that is walking twenty-four
+            // thousand of them to move a line two pixels. Behind a RepaintBoundary
+            // the shape is rasterised once and kept, and the needle is a rectangle.
+            // Sized, because a Stack takes its bounds from its parent and this one's
+            // parent gives it none.
+            child: SizedBox(
+                width: box.maxWidth,
+                height: height,
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: RepaintBoundary(
+                        child: ListenableBuilder(
+                          listenable: BoothClock.of(context).positionOf(deck),
+                          builder: (context, _) => CustomPaint(
+                            size: Size(box.maxWidth, height),
+                            painter: _OverviewShape(
+                              // Which column the record has reached, not where it is: the
+                              // bars are drawn every two pixels and coloured by whether
+                              // they are behind the needle, so the shape has nothing new to
+                              // say until the needle crosses into the next one. On a
+                              // four-minute record that is a repaint a second or two
+                              // instead of sixty.
+                              playedCol: (deck.position.inMicroseconds /
+                                      total.inMicroseconds *
+                                      box.maxWidth /
+                                      2)
+                                  .floor(),
+                              bands: bands,
+                              colour: c,
+                              cues: [
+                                for (final d in deck.hotCues.values)
+                                  d.inMicroseconds / total.inMicroseconds
+                              ],
+                              mark:
+                                  mark == null ? null : mark.inMicroseconds / total.inMicroseconds,
+                              // Every four bars, down the whole record: the same rules the
+                              // lane draws tall, so the shape of the song can be read as
+                              // phrases rather than as a lump — where its eights fall, and
+                              // where one runs short.
+                              phrases: [
+                                for (final m in deck.timing?.markers ?? const <int>[])
+                                  if (m * 1000 <= total.inMicroseconds)
+                                    m * 1000 / total.inMicroseconds,
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned.fill(
+                      child: ListenableBuilder(
+                        listenable: BoothClock.of(context).positionOf(deck),
+                        builder: (context, _) => CustomPaint(
+                          size: Size(box.maxWidth, height),
+                          painter:
+                              _OverviewHead(t: deck.position.inMicroseconds / total.inMicroseconds),
+                        ),
+                      ),
+                    ),
                   ],
-                ),
-              ),
-            ),
+                )),
           ),
         );
       }),
@@ -192,15 +245,15 @@ class _Overview extends StatelessWidget {
   }
 }
 
-class _OverviewPainter extends CustomPainter {
-  _OverviewPainter(
-      {required this.t,
+class _OverviewShape extends CustomPainter {
+  _OverviewShape(
+      {required this.playedCol,
       required this.bands,
       required this.colour,
       required this.cues,
       required this.mark,
       required this.phrases});
-  final double t;
+  final int playedCol;
   final ({List<int> low, List<int> mid, List<int> high})? bands;
   final Color colour;
   final List<double> cues;
@@ -211,7 +264,7 @@ class _OverviewPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final w = size.width, h = size.height;
     final b = bands;
-    final played = w * t.clamp(0.0, 1.0);
+    final played = playedCol * 2.0;
     // A strip along the foot for the four-bar rules, and the shape stands on it.
     // Drawn *through* the shape they were a grid over the record; drawn under it they
     // are a ruler beside it, which is what they are for.
@@ -227,12 +280,15 @@ class _OverviewPainter extends CustomPainter {
           v = math.max(v, math.max(b.low[k], math.max(b.mid[k], b.high[k])));
         }
         final bar = wh * (0.15 + 0.85 * v / 255);
-        canvas.drawRect(Rect.fromLTWH(x, (wh - bar) / 2, 1.4, bar),
-            Paint()..color = x < played ? colour.withValues(alpha: 0.45) : Console.quiet.withValues(alpha: 0.55));
+        canvas.drawRect(
+            Rect.fromLTWH(x, (wh - bar) / 2, 1.4, bar),
+            Paint()
+              ..color = x < played
+                  ? colour.withValues(alpha: 0.45)
+                  : Console.quiet.withValues(alpha: 0.55));
       }
     } else {
       canvas.drawRect(Rect.fromLTWH(0, wh / 2 - 1, w, 2), Paint()..color = Console.line);
-      canvas.drawRect(Rect.fromLTWH(0, wh / 2 - 1, played, 2), Paint()..color = colour.withValues(alpha: 0.6));
     }
     // The four-bar rules, along the foot. Only where there is room to tell them
     // apart: on a long record they fall every few pixels at this width, and a rule
@@ -240,8 +296,8 @@ class _OverviewPainter extends CustomPainter {
     if (phrases.length > 1) {
       final apart = w * (phrases[1] - phrases[0]);
       if (apart >= 5) {
-        canvas.drawRect(Rect.fromLTWH(0, h - 1, w, 1),
-            Paint()..color = Console.ink.withValues(alpha: 0.10));
+        canvas.drawRect(
+            Rect.fromLTWH(0, h - 1, w, 1), Paint()..color = Console.ink.withValues(alpha: 0.10));
         final rule = Paint()..color = Console.ink.withValues(alpha: 0.45);
         // Every fourth — sixteen bars — stands the full depth of the strip, so the
         // eights are countable without counting.
@@ -261,16 +317,30 @@ class _OverviewPainter extends CustomPainter {
     if (m != null) {
       canvas.drawRect(Rect.fromLTWH(w * m - 1, 0, 2, h), Paint()..color = Console.ink);
     }
-    canvas.drawRect(Rect.fromLTWH(played - 1, -1, 2, h + 2), Paint()..color = Console.ink);
   }
 
   @override
-  bool shouldRepaint(_OverviewPainter old) =>
-      old.t != t ||
+  bool shouldRepaint(_OverviewShape old) =>
+      old.playedCol != playedCol ||
       old.bands != bands ||
       old.mark != mark ||
       old.cues.length != cues.length ||
       old.phrases.length != phrases.length;
+}
+
+/// The needle, and nothing else: what actually moves while a record plays.
+class _OverviewHead extends CustomPainter {
+  const _OverviewHead({required this.t});
+  final double t;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final x = size.width * t.clamp(0.0, 1.0);
+    canvas.drawRect(Rect.fromLTWH(x - 1, -1, 2, size.height + 2), Paint()..color = Console.ink);
+  }
+
+  @override
+  bool shouldRepaint(_OverviewHead old) => old.t != t;
 }
 
 /// How far apart the beats are: a needle about the middle, and a number only when
@@ -303,9 +373,15 @@ class _Phase extends StatelessWidget {
               SizedBox(
                 width: 62,
                 child: Text(
-                  ms == null ? '' : locked ? 'IN' : '${ms > 0 ? '+' : ''}$ms',
+                  ms == null
+                      ? ''
+                      : locked
+                          ? 'IN'
+                          : '${ms > 0 ? '+' : ''}$ms',
                   textAlign: TextAlign.right,
-                  style: locked ? Console.label(9, color: Console.ink) : Mag.numerals(13, color: Console.quiet),
+                  style: locked
+                      ? Console.label(9, color: Console.ink)
+                      : Mag.numerals(13, color: Console.quiet),
                 ),
               ),
             ],
@@ -325,13 +401,20 @@ class _PhasePainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final y = size.height / 2, w = size.width;
     canvas.drawLine(Offset(0, y), Offset(w, y), Paint()..color = Console.line);
-    canvas.drawLine(Offset(w / 2, y - 6), Offset(w / 2, y + 6), Paint()..color = Console.quiet..strokeWidth = 1.5);
+    canvas.drawLine(
+        Offset(w / 2, y - 6),
+        Offset(w / 2, y + 6),
+        Paint()
+          ..color = Console.quiet
+          ..strokeWidth = 1.5);
     final d = drift;
     if (d == null) return;
     final x = w * (0.5 + d.clamp(-0.5, 0.5));
     final c = locked ? Console.ink : Console.a;
-    canvas.drawRect(Rect.fromLTRB(math.min(w / 2, x), y - 2, math.max(w / 2, x), y + 2), Paint()..color = c.withValues(alpha: 0.35));
-    canvas.drawRect(Rect.fromCenter(center: Offset(x, y), width: 3, height: size.height * 0.75), Paint()..color = c);
+    canvas.drawRect(Rect.fromLTRB(math.min(w / 2, x), y - 2, math.max(w / 2, x), y + 2),
+        Paint()..color = c.withValues(alpha: 0.35));
+    canvas.drawRect(Rect.fromCenter(center: Offset(x, y), width: 3, height: size.height * 0.75),
+        Paint()..color = c);
   }
 
   @override
@@ -423,7 +506,9 @@ class _Arming extends StatelessWidget {
               const SizedBox(width: 12),
               Text('ON THE ONE', style: Console.label(9, color: Console.quiet)),
               const SizedBox(width: 10),
-              SizedBox(width: 34, child: Text(s.toStringAsFixed(1), style: Mag.numerals(15, color: accent))),
+              SizedBox(
+                  width: 34,
+                  child: Text(s.toStringAsFixed(1), style: Mag.numerals(15, color: accent))),
             ],
           );
         },

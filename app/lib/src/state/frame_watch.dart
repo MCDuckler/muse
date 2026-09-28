@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/widgets.dart';
 
 import 'playback_log.dart';
 
@@ -65,10 +66,17 @@ class FrameWatch {
     final smooth = late_ * 100 / n < 1.0;
     if (!smooth) {
       String ms(int us) => (us / 1000).toStringAsFixed(1);
+      // And how big the picture is. A frame that takes twenty milliseconds to draw is
+      // either doing too much or covering too many pixels, and those want opposite
+      // answers: the first is fewer layers and less overdraw, the second is a smaller
+      // buffer. Without the size there is no telling them apart from here.
+      final v = WidgetsBinding.instance.platformDispatcher.views.firstOrNull;
+      final px = v == null ? '' : ', ${v.physicalSize.width.round()}x'
+          '${v.physicalSize.height.round()} at ${v.devicePixelRatio.toStringAsFixed(2)}x';
       PlaybackLog.note('FRAMES $where — $n frames, '
           '${_lateBuild * 100 ~/ n}% slow to build, ${_lateRaster * 100 ~/ n}% slow to draw; '
           'build ${ms(_totalBuild ~/ n)} ms typical, ${ms(_worstBuild)} worst; '
-          'draw ${ms(_totalRaster ~/ n)} ms typical, ${ms(_worstRaster)} worst');
+          'draw ${ms(_totalRaster ~/ n)} ms typical, ${ms(_worstRaster)} worst$px');
     }
     _frames = _lateBuild = _lateRaster = 0;
     _worstBuild = _worstRaster = _totalBuild = _totalRaster = 0;
