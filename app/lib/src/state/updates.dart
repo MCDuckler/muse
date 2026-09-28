@@ -447,6 +447,11 @@ class Updates extends ChangeNotifier {
   /// The name the report of a swap that could not finish is left under.
   static const swapTroubleFile = 'swap-failed.txt';
 
+  /// The program that puts the new build in, as it is named beside the exe. Built by
+  /// .github/workflows/desktop.yml from bin/wetowl_update.dart.
+  static String get updaterName =>
+      Platform.isWindows ? 'wetowl-update.exe' : 'wetowl-update';
+
   /// The few lines that do the swap once the app is gone.
   ///
   /// Given the app's process id, the unpacked build, the folder to put it in and the
@@ -692,37 +697,74 @@ class Updates extends ChangeNotifier {
       // empties this folder but deletes the stage outright, and what the swap has to
       // say about itself has to outlive the swap.
       final scripts = await updatesDir();
-      final script = File(
-          '${scripts.path}${Platform.pathSeparator}swap${os == 'windows' ? '.ps1' : '.sh'}');
-      await script.writeAsString(swapScript(
-          os: os,
-          pid: pid,
-          from: from.path,
-          into: into.path,
-          exe: exeName,
-          beside: scripts.path));
-      // Detached: not this app's child, so it is still there after this app is not.
-      if (os == 'windows') {
-        await Process.start(
-            windowsShell,
-            [
-              '-NoProfile',
-              '-NonInteractive',
-              '-ExecutionPolicy',
-              'Bypass',
-              '-WindowStyle',
-              'Hidden',
-              '-File',
-              script.path,
-            ],
-            mode: ProcessStartMode.detached);
+      // The swap is a program now, and it ships in the build being put in:
+      // wetowl-update, beside the exe in the folder just unpacked. Started from
+      // *there* rather than from the install, so the thing doing the replacing is
+      // never one of the files it has to replace.
+      //
+      // It follows two scripts the app wrote out and left behind, a .cmd and then a
+      // .ps1, neither of which worked on Windows — the second failing *silently*: the
+      // window went, came back, and was the same build, with nothing anywhere saying
+      // why. A script written into AppData and started detached is also the shape of
+      // thing script policy and antivirus stop without a word, and then there is
+      // nothing to read because nothing ever ran. A binary beside the exe is neither.
+      // And the part that decided it after three goes: a program in the same language
+      // as the app can be run, and gone wrong, on the machine it is written on —
+      // test/update_helper_test.dart does the whole swap for real.
+      final helper = File('${from.path}${Platform.pathSeparator}$updaterName');
+      final tellIt = [
+        '--pid', '$pid',
+        '--from', from.path,
+        '--into', into.path,
+        '--exe', exeName,
+        '--say', scripts.path,
+      ];
+      final byHelper = await helper.exists();
+      if (byHelper) {
+        // A tarball keeps the bit; a zip has none to keep.
+        if (os != 'windows') {
+          try {
+            await Process.run('chmod', ['+x', helper.path]);
+          } catch (_) {}
+        }
+        // Detached: not this app's child, so it is still there after this app is not.
+        await Process.start(helper.path, tellIt, mode: ProcessStartMode.detached);
       } else {
-        await Process.start('sh', [script.path], mode: ProcessStartMode.detached);
+        // An older build being updated *from* has no helper in what it unpacked only
+        // if the new build does not ship one; kept so that a build from before this
+        // still has a way through.
+        final script = File(
+            '${scripts.path}${Platform.pathSeparator}swap${os == 'windows' ? '.ps1' : '.sh'}');
+        await script.writeAsString(swapScript(
+            os: os,
+            pid: pid,
+            from: from.path,
+            into: into.path,
+            exe: exeName,
+            beside: scripts.path));
+        if (os == 'windows') {
+          await Process.start(
+              windowsShell,
+              [
+                '-NoProfile',
+                '-NonInteractive',
+                '-ExecutionPolicy',
+                'Bypass',
+                '-WindowStyle',
+                'Hidden',
+                '-File',
+                script.path,
+              ],
+              mode: ProcessStartMode.detached);
+        } else {
+          await Process.start('sh', [script.path], mode: ProcessStartMode.detached);
+        }
       }
-      // Said before going: if the log has this and nothing after it, the script was
+      // Said before going: if the log has this and nothing after it, the swap was
       // started and never wrote a line, which is a different fault from one that ran
       // and could not copy.
-      PlaybackLog.note('SWAP starting $os swap: ${from.path} -> ${into.path}');
+      PlaybackLog.note('SWAP starting $os swap by ${byHelper ? 'the helper' : 'a script'}: '
+          '${from.path} -> ${into.path}');
       await PlaybackLog.flushNow();
       // A moment for the shell to be up, then out of its way.
       await Future<void>.delayed(const Duration(milliseconds: 300));

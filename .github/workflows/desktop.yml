@@ -84,6 +84,24 @@ jobs:
              build/windows/x64/runner/Release/wetowl-separate.exe
           said="$(build/windows/x64/runner/Release/wetowl-separate.exe 2>&1 || true)"
           echo "$said" | grep -q 'usage: wetowl-separate'
+      - name: Build the updater
+        working-directory: app
+        shell: bash
+        run: |
+          # bin/wetowl_update.dart: puts a new build where the old one is, once the old
+          # one has shut. It ships beside wetowl.exe and is run out of the *unpacked new
+          # build*, never out of the install, so it is never replacing itself.
+          #
+          # This used to be a script the app wrote into AppData and started detached: a
+          # .cmd, then a .ps1. Neither worked on Windows and the second failed silently
+          # — the window went, came back, and was the same build. A program can be run
+          # and tested where it is written; app/test/update_helper_test.dart does the
+          # whole swap for real, which is why this one is trusted.
+          dart build cli --target bin/wetowl_update.dart -o build/updater
+          cp build/updater/bundle/bin/wetowl_update.exe \
+             build/windows/x64/runner/Release/wetowl-update.exe
+          said="$(build/windows/x64/runner/Release/wetowl-update.exe 2>&1 || true)"
+          echo "$said" | grep -q 'usage: wetowl-update'
       - name: Zip it
         working-directory: app
         shell: pwsh
@@ -153,6 +171,15 @@ jobs:
           chmod +x build/linux/x64/release/bundle/wetowl-separate
           said="$(build/linux/x64/release/bundle/wetowl-separate 2>&1 || true)"
           echo "$said" | grep -q 'usage: wetowl-separate'
+      - name: Build the updater
+        working-directory: app
+        run: |
+          # See the same step for Windows. Beside ./wetowl, where the app looks for it.
+          dart build cli --target bin/wetowl_update.dart -o build/updater
+          cp build/updater/bundle/bin/wetowl_update build/linux/x64/release/bundle/wetowl-update
+          chmod +x build/linux/x64/release/bundle/wetowl-update
+          said="$(build/linux/x64/release/bundle/wetowl-update 2>&1 || true)"
+          echo "$said" | grep -q 'usage: wetowl-update'
       - name: Pack it
         working-directory: app
         run: |
@@ -174,7 +201,8 @@ jobs:
           Fetching music for the house (Settings > This computer) also wants
           yt-dlp, ffmpeg and nodejs (or deno): all three are ordinary packages.
           ./wetowl-fetch is the part that keeps fetching when the window is shut;
-          the app starts it, there is no need to run it yourself.
+          the app starts it, there is no need to run it yourself. ./wetowl-update
+          is the part that puts a new build in once you have shut this one; likewise.
 
           ./wetowl-separate takes records apart for the booth (drums, music, no
           voice, the voice alone). The app starts it too. The first time, it fetches the network it
