@@ -38,10 +38,16 @@ _RATE = 4000
 # paid once per record for ever.
 MOST_SLICES = 30000
 
+# Bumped when the shape measured for the same song changes, so that what is on the disk
+# from before is not drawn against a grid it no longer lines up with.
+# 2: the slices laid across the whole file rather than across as much of it as divided
+#    evenly — see _levels.
+VERSION = 2
+
 
 def cache_path(data_dir: pathlib.Path, sha: str, slices: int = SLICES,
                bands: bool = False) -> pathlib.Path:
-    tag = f"{sha}-{slices}" + ("-bands" if bands else "")
+    tag = f"{sha}-{slices}-v{VERSION}" + ("-bands" if bands else "")
     return data_dir / "peaks" / f"{tag}.json"
 
 
@@ -64,12 +70,27 @@ def measure_bands(audio: pathlib.Path, slices: int = SLICES) -> dict[str, list[i
 
 
 def _levels(samples, slices: int) -> list[int]:
+    """The song cut into [slices] equal pieces, each piece's loudness, 0 to 255.
+
+    Equal *and* laid end to end across the whole file. The slice used to be
+    ``len // slices`` samples long, which is that division rounded down, so the slices
+    together fell short of the end of the file by up to one slice per slice — a
+    thousandth at a hundred and sixty of them, but nearly a percent at thirty thousand,
+    because the finer the slice the bigger the fraction thrown away. The drawing lays
+    the slices across the whole record, so a shape that stops short is a shape stretched
+    to fit: everything in it slides later and later through the song, by nearly half a
+    second by the end of a four-minute record. That is a beat, against a grid drawn from
+    the same file — the picture and the ruler under it disagreeing about where the drop
+    is. Each slice is now taken between two exact boundaries, so the last one ends on
+    the last sample.
+    """
     if not samples:
         return [0] * slices
-    per = max(1, len(samples) // slices)
+    n = len(samples)
     levels = []
     for i in range(slices):
-        chunk = samples[i * per:(i + 1) * per]
+        a, b = i * n // slices, (i + 1) * n // slices
+        chunk = samples[a:b] if b > a else samples[a:a + 1]
         if not chunk:
             levels.append(0.0)
             continue
@@ -90,18 +111,7 @@ def measure(audio: pathlib.Path, slices: int = SLICES) -> list[int]:
         capture_output=True, timeout=90, check=True)
     samples = array.array("h")
     samples.frombytes(proc.stdout[: len(proc.stdout) // 2 * 2])
-    if not samples:
-        return [0] * slices
-    per = max(1, len(samples) // slices)
-    levels = []
-    for i in range(slices):
-        chunk = samples[i * per:(i + 1) * per]
-        if not chunk:
-            levels.append(0.0)
-            continue
-        levels.append(math.sqrt(sum(s * s for s in chunk) / len(chunk)))
-    top = max(levels) or 1.0
-    return [round(255 * (v / top) ** 0.7) for v in levels]
+    return _levels(samples, slices)
 
 
 def for_track(data_dir: pathlib.Path, audio: pathlib.Path, sha: str,

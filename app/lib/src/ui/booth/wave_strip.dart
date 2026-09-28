@@ -6,6 +6,19 @@ import 'package:flutter/material.dart';
 import '../../api/models.dart';
 import '../mag.dart';
 
+/// How much of the record the shape's slices cover, in microseconds.
+///
+/// The file's length as the analysis measured it, where there is one. The slices were
+/// taken across the file from end to end, so they have to be laid out across the file
+/// — not across whatever the engine says the record is. Those are two different
+/// measurements of the same thing: normally the same to the millisecond, and on some
+/// containers a second apart. Where they differ, laying the slices over the engine's
+/// number slides the shape against the grid drawn on the same strip, further the
+/// further through the record you are — and a second of a four-minute record is two
+/// beats, which is a picture arguing with its own ruler about where the drop is.
+double slicesSpan(TrackTiming? timing, double engineUs) =>
+    (timing?.durationMs ?? 0) > 0 ? timing!.durationMs * 1000.0 : engineUs;
+
 /// A song's shape printed as a strip, with the grid on it.
 ///
 /// Three inks: the bass as the heavy one, the middle over it, the top as the finest —
@@ -259,7 +272,7 @@ class _StripPainter extends CustomPainter {
     final b = bands;
     if (b != null && b.low.isNotEmpty) {
       final n = b.low.length;
-      final usPerSlice = total / n;
+      final usPerSlice = slicesSpan(timing, total) / n;
       final first = math.max(0, (left / usPerSlice).floor());
       final last = math.min(n - 1, ((left + w * perPixel) / usPerSlice).ceil());
       void band(List<int> v, Color c, double scale) {

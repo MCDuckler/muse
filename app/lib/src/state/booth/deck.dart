@@ -447,7 +447,61 @@ class Deck extends ChangeNotifier {
       rethrow;
     }
     _anchor(start);
+    _sayIfTheLengthsDisagree();
+    _sayIfTheGridsDisagree();
     notifyListeners();
+  }
+
+  /// Notes it when the engine and the analysis disagree about how long the record is.
+  ///
+  /// They are two different measurements of the same file and they are normally the
+  /// same to the millisecond. When they are not, everything drawn from one slides
+  /// against everything drawn from the other — the waveform against the grid over it,
+  /// worse the further through the record you are — and that is invisible from here
+  /// and obvious on the machine it happens on. So it is written down rather than
+  /// guessed at: a tenth of a percent of a four-minute record is a quarter of a beat,
+  /// and a percent is two.
+  void _sayIfTheLengthsDisagree() {
+    final said = timing?.durationMs ?? 0;
+    final engine = _player.duration?.inMilliseconds ?? 0;
+    if (said <= 0 || engine <= 0) return;
+    final off = engine - said;
+    if (off.abs() < said * 0.001) return;
+    PlaybackLog.note('DECK $name ${track?.displayTitle}: engine says $engine ms, '
+        'the analysis says $said ms — ${off > 0 ? '+' : ''}$off ms '
+        '(${(off / said * 100).toStringAsFixed(2)}%)');
+  }
+
+  /// Notes it when the four-bar rules do not sit on the grid drawn under them.
+  ///
+  /// The rules are the house's milliseconds, printed where they were given. The beat
+  /// ticks beside them — and SYNC, and the beat-holding — come from the straight line
+  /// fitted to those same beats here. Where the two agree, which is nearly always, a
+  /// rule passes through a tick. Where they do not, the rules stand between the ticks,
+  /// a phrase looks like it starts off the beat, and the drop that starts it looks a
+  /// beat or two from its own marker — which is what it was reported as. Invisible
+  /// from here; plain on the machine it happens on, so it is written down.
+  void _sayIfTheGridsDisagree() {
+    final t = timing;
+    final s = t?.steady;
+    if (t == null || s == null) return;
+    final marks = t.markers;
+    if (marks.isEmpty) return;
+    var worst = 0.0;
+    var at = 0;
+    for (final m in marks) {
+      final k = (m - s.origin) / s.period;
+      final off = ((k - k.roundToDouble()).abs() * s.period);
+      if (off > worst) {
+        worst = off;
+        at = m;
+      }
+    }
+    // A millisecond or two is rounding. Half a beat is a different grid.
+    if (worst < 12) return;
+    PlaybackLog.note('DECK $name ${track?.displayTitle}: a four-bar rule sits '
+        '${worst.round()} ms off the beat grid drawn under it (at $at ms, '
+        'period ${s.period.toStringAsFixed(2)} ms, ${marks.length} rules)');
   }
 
   AudioSource _sourceFor(Track track) {

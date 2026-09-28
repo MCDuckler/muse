@@ -205,6 +205,11 @@ class _Overview extends StatelessWidget {
                                       2)
                                   .floor(),
                               bands: bands,
+                              // How much of the record the slices cover. See
+                              // slicesSpan: they were measured across the file, and
+                              // `total` is the engine's idea of the record.
+                              span: slicesSpan(deck.timing, total.inMicroseconds.toDouble()) /
+                                  total.inMicroseconds,
                               colour: c,
                               cues: [
                                 for (final d in deck.hotCues.values)
@@ -249,12 +254,17 @@ class _OverviewShape extends CustomPainter {
   _OverviewShape(
       {required this.playedCol,
       required this.bands,
+      required this.span,
       required this.colour,
       required this.cues,
       required this.mark,
       required this.phrases});
   final int playedCol;
   final ({List<int> low, List<int> mid, List<int> high})? bands;
+
+  /// What fraction of the record the slices cover — 1.0 where the file and the engine
+  /// agree how long it is, which is nearly always.
+  final double span;
   final Color colour;
   final List<double> cues;
   final double? mark;
@@ -274,7 +284,7 @@ class _OverviewShape extends CustomPainter {
       final n = b.low.length;
       final step = math.max(1, (n / w).floor());
       for (var x = 0.0; x < w; x += 2) {
-        final i = (x / w * n).floor().clamp(0, n - 1);
+        final i = (x / w / span * n).floor().clamp(0, n - 1);
         var v = 0;
         for (var k = i; k < math.min(n, i + step); k++) {
           v = math.max(v, math.max(b.low[k], math.max(b.mid[k], b.high[k])));
@@ -323,6 +333,7 @@ class _OverviewShape extends CustomPainter {
   bool shouldRepaint(_OverviewShape old) =>
       old.playedCol != playedCol ||
       old.bands != bands ||
+      old.span != span ||
       old.mark != mark ||
       old.cues.length != cues.length ||
       old.phrases.length != phrases.length;
