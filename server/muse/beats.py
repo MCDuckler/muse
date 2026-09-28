@@ -45,7 +45,7 @@ from . import analysis
 # 6: an exact grid carried on to where the sound starts and ends (the tracker lost the
 #    first two or three beats of nearly every record, and with them its first bar),
 #    and the four-bar markers where the record's sections start (four_bars).
-VERSION = 9  # 8: a change the record gets louder over is no way out; 9: a record too busy for the tempo found is counted at the double (drum & bass came back at half)
+VERSION = 10  # 9: a record too busy for the tempo found is counted at the double; 10: and one read in threes is stepped up into the break it is (116 was two thirds of 174)
 
 _RATE = 11025
 _FFT = 1024
@@ -347,6 +347,11 @@ _BUSY_IS_HALVED = 2.5
 # hardtekk.
 _BREAK_TEMPO = (165.0, 178.0)
 
+# Things a beat, past which a record read in threes is really a break read two thirds
+# slow. Lower than _BUSY_IS_HALVED because two thirds of a tempo is a smaller lie than
+# half of one, so the same record looks less busy at it.
+_BUSY_IN_THREES = 2.0
+
 
 def _level(x: np.ndarray, bpm: float, env: np.ndarray | None = None) -> float:
     """The pulse a DJ counts: the kick drum's, where the tempo found is half, double or
@@ -383,6 +388,9 @@ def _level(x: np.ndarray, bpm: float, env: np.ndarray | None = None) -> float:
         return at(kick, b) + at(whole, b)
 
     best, kept = bpm, score(bpm)
+    # Whether the double was taken because the record is a busy break. It settles an
+    # argument below.
+    a_break = False
     # Double, by either of two signs.
     #
     # The first is the kick: a record whose kick is on every beat of the faster tempo.
@@ -405,17 +413,45 @@ def _level(x: np.ndarray, bpm: float, env: np.ndarray | None = None) -> float:
         elif (env is not None
                 and _BREAK_TEMPO[0] <= bpm * 2 <= _BREAK_TEMPO[1]
                 and _busy(env, bpm) >= _BUSY_IS_HALVED):
+            a_break = True
             # The score it is *held* at is the better of the two, not the double's
             # own. The double taken this way is one the score did not like, and
             # handing that small number on as what has to be beaten made the triplet
             # step below trivial to pass — a break at 174 came out at 116.
             best, kept = bpm * 2, max(s2, kept)
-    # The triplet step, either way: only on clear evidence.
+    # The triplet step, either way: only on clear evidence, and never out of a break.
+    #
+    # Two thirds of a hundred and seventy-four is a hundred and sixteen, and that is
+    # where half of one artist's records went once the doubling above started working:
+    # judged a busy break at 174, then stepped straight back down to 116 by this, one
+    # line later. Two rules contradicting each other.
+    #
+    # But not by refusing the step — that was tried and cost as much as it saved. The
+    # same artist has records the step *rescues*, where the pulse comes out at 116 and
+    # a third on top of it is the 174 it should have been all along. What is refused
+    # is the step that takes a record judged to be a break *out* of where breaks are.
+    # The rule is about where it lands, not about whether to look.
     for ratio in (1.5, 1 / 1.5):
         other = best * ratio
         if not 70.0 <= other <= 190.0:
             continue
+        if a_break and not (_BREAK_TEMPO[0] <= other <= _BREAK_TEMPO[1]):
+            continue
         s3 = score(other)
+        # A third on top, for a record too busy for the pulse it was given.
+        #
+        # The doubling above cannot reach these: a break read at 116 doubles to 232,
+        # which is nobody's tempo, so the range test throws it out before busy-ness is
+        # ever asked. But 116 is two thirds of 174 — the tracker locked onto the
+        # three-against-two the break is full of — and a record doing better than two
+        # things a beat at 116 is doing one and a half at 174, which is what a counted
+        # tempo looks like. Only upward, only into the window breaks live in, and only
+        # where the record is busy enough to say so.
+        if (ratio > 1 and env is not None
+                and _BREAK_TEMPO[0] <= other <= _BREAK_TEMPO[1]
+                and _busy(env, best) >= _BUSY_IN_THREES):
+            best, kept = other, max(s3, kept)
+            continue
         if s3 >= max(0.15, 1.5 * kept) and at(kick, other) > max(0.05, at(kick, best)):
             best, kept = other, s3
     return best
