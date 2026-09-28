@@ -350,6 +350,7 @@ class Deck extends ChangeNotifier {
   Future<void> load(Track track,
       {TrackTiming? timing, Duration? at, String? part}) async {
     this.part = part;
+    _freshlyLoaded = true;
     // Its stems where the engine can play them and they are made — here, or at the
     // house: then every part of it is only levels.
     _stemsFrom = null;
@@ -592,6 +593,8 @@ class Deck extends ChangeNotifier {
     _ended_ = false;
     _fixedAt = DateTime.now();
     _trusting = false;
+    final fresh = _freshlyLoaded;
+    _freshlyLoaded = false;
     unawaited(_player.play().catchError((Object e) {
       trouble = '$e';
       notifyListeners();
@@ -606,6 +609,11 @@ class Deck extends ChangeNotifier {
       }
     }
     _fixedAt = DateTime.now();
+    // The first sound out of a record that has just gone on: see [onFreshStart].
+    // Out here rather than inside the wait, because an engine that was already playing
+    // when it was asked to does not go through it — and that is exactly the case where
+    // a record was swapped under a deck that never stopped.
+    if (fresh) unawaited(Future<void>.sync(() => onFreshStart?.call()));
     notifyListeners();
   }
 
@@ -635,15 +643,42 @@ class Deck extends ChangeNotifier {
     final span = end - start;
     if (at > start + span ~/ 2 || positionAt(now) < end - span ~/ 2) return;
     final was = _wrappedAt;
+    // Twice for one time round: two reports running can both land in the first half
+    // of the loop while the reckoning is still in the second, and counting that as
+    // two wraps says the loop is a fraction of its length.
+    if (was != null && now.difference(was) < span ~/ 3) return;
+    // Many times round, not one.
+    //
+    // This used to answer every wrap on its own, and what it was answering was almost
+    // entirely noise. The moment a wrap is seen is the moment a *position report*
+    // shows it, and those come a couple of hundred milliseconds apart — so a thirty
+    // millisecond effect was being read off a measurement quantised five times
+    // coarser than itself. The log says exactly that: +29, -11, +13, -1, +78, -25,
+    // -23, +97, -33 ms, and an end pulled 7, 0, 7, 0, 19, 13, 1, 24, 15 ms early
+    // after them. It never settled, and a loop end that moves by twenty milliseconds
+    // is a loop that is musically short by twenty milliseconds — which at two seconds
+    // a time is twelve milliseconds a second of drift against the other deck. The
+    // timing being off and the two records colliding were the same fault.
+    //
+    // Counted over several times round instead, the coarseness falls on the two ends
+    // of the run rather than on every reading, so six wraps divide it by five.
+    if (was == null) {
+      _wrappedAt = now;
+      _wrapsSince = 0;
+      return;
+    }
+    _wrapsSince++;
+    if (_wrapsSince < _wrapsToJudge) return;
+    final want = Duration(
+        microseconds:
+            (span.inMicroseconds * _wrapsSince / (tempo <= 0 ? 1 : tempo)).round());
+    final late = Duration(
+        microseconds: (now.difference(was) - want).inMicroseconds ~/ _wrapsSince);
     _wrappedAt = now;
-    if (was == null) return;
-    final wall = now.difference(was);
-    final want = Duration(microseconds: (span.inMicroseconds / (tempo <= 0 ? 1 : tempo)).round());
-    final late = wall - want;
-    // One wrap's reading is noisy — a report can arrive a frame either way — so it is
-    // eased into, and anything wilder than the clamp is the wrong thing entirely.
+    _wrapsSince = 0;
+    // Anything wilder than the clamp is the wrong thing entirely.
     if (late.abs() > _mostLate * 2) return;
-    final want2 = loopLate + Duration(microseconds: (late.inMicroseconds * 0.25).round());
+    final want2 = loopLate + Duration(microseconds: (late.inMicroseconds * 0.5).round());
     loopLate = want2 < Duration.zero
         ? Duration.zero
         : want2 > _mostLate
@@ -672,12 +707,25 @@ class Deck extends ChangeNotifier {
   void _learnTheWrap(Duration span, double rate) {
     final now = DateTime.now();
     final was = _wrappedAt;
+    // Over several times round, for the reason in [_watchTheWrap]: one is noise.
+    // Less so here — this one knows the moment it asked for the seek rather than
+    // hearing about it from a report — but a seek's cost varies by more than it is,
+    // and averaging costs nothing.
+    if (was == null) {
+      _wrappedAt = now;
+      _wrapsSince = 0;
+      return;
+    }
+    _wrapsSince++;
+    if (_wrapsSince < _wrapsToJudge) return;
+    final want =
+        Duration(microseconds: (span.inMicroseconds * _wrapsSince / rate).round());
+    final late = Duration(
+        microseconds: (now.difference(was) - want).inMicroseconds ~/ _wrapsSince);
     _wrappedAt = now;
-    if (was == null) return;
-    final want = Duration(microseconds: (span.inMicroseconds / rate).round());
-    final late = now.difference(was) - want;
+    _wrapsSince = 0;
     if (late.abs() > _mostLate * 2) return;
-    final want2 = loopLate + Duration(microseconds: (late.inMicroseconds * 0.25).round());
+    final want2 = loopLate + Duration(microseconds: (late.inMicroseconds * 0.5).round());
     loopLate = want2 < Duration.zero
         ? Duration.zero
         : want2 > _mostLate
@@ -692,7 +740,17 @@ class Deck extends ChangeNotifier {
   Duration? _settling;
   DateTime _settlingAt = DateTime.now();
 
+  /// How many times this record has been *put* somewhere rather than played there.
+  ///
+  /// A hand on it, a scrub, a loop coming round, the booth placing it: anything that
+  /// moves the record without the rate having done it. Whoever is measuring how fast
+  /// the two decks are coming apart has to know when that happened, because a step in
+  /// the line is not a drift and fitting a rate through one invents a drift that was
+  /// never there. Counted rather than timed, so nothing can be missed between looks.
+  int placed = 0;
+
   Future<void> seek(Duration to) async {
+    placed++;
     _fix = to;
     _fixedAt = DateTime.now();
     _trusting = false;
@@ -801,6 +859,21 @@ class Deck extends ChangeNotifier {
   Duration? loopStart;
   Duration? loopEnd;
 
+  /// Whether the record on this deck has yet made a sound since it went on.
+  bool _freshlyLoaded = false;
+
+  /// Told the first time a freshly loaded record actually plays (set by the booth).
+  ///
+  /// A desk's equalizer lives in the engine's filter graph, and mpv builds that graph
+  /// afresh for every file — at whatever moment it feels like, which is not the moment
+  /// setAudioSource returns. The bands were put on then, so on a good day they landed
+  /// on a graph that was about to be thrown away and on a bad one on no graph at all;
+  /// either way the new record played flat while the knobs sat where they were left,
+  /// and moving one by hand was the only thing that ever put them back — that being
+  /// the one path which does not go through the mixer's "nothing changed" check.
+  /// Told again here, when there is certainly a graph to tell.
+  void Function()? onFreshStart;
+
   /// The engine's own loop, where it has one (mpv's A–B loop on a desk): set by the
   /// booth. Says whether the engine took it; where it did not, the deck loops itself.
   Future<bool> Function(Duration? from, Duration? to)? engineLoop;
@@ -821,7 +894,12 @@ class Deck extends ChangeNotifier {
   /// shortens a musical loop, which is worse than the delay it is curing.
   static Duration loopLate = Duration.zero;
   static const _mostLate = Duration(milliseconds: 120);
+
+  /// How many times round before what the wrap costs is judged. See _watchTheWrap for
+  /// why one is not enough.
+  static const _wrapsToJudge = 6;
   DateTime? _wrappedAt;
+  int _wrapsSince = 0;
 
   /// The end the engine is given: the musical one, less what the wrap costs.
   Duration? get _engineLoopEnd {

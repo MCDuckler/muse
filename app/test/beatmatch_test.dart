@@ -52,6 +52,12 @@ Track song(int id) => Track.fromJson({
     });
 
 class QuietMixer extends Mixer {
+  /// Every time a record going on this deck made the mixer put its bands back.
+  final loadedAgain = <String>[];
+
+  @override
+  Future<void> loaded(Deck deck) async => loadedAgain.add(deck.name);
+
   @override
   bool get canKill => true;
   @override
@@ -396,20 +402,22 @@ void main() {
       engine.reportEvery = const Duration(milliseconds: 100);
       await booth.b.seek(const Duration(seconds: 10));
       await booth.b.play();
-      booth.b.loop(4); // one bar, two seconds at this tempo
+      booth.b.loop(2); // half a bar, a second at this tempo — several times round
       addTearDown(booth.b.unloop);
 
       final began = DateTime.now();
       var wraps = 0;
       var last = booth.b.position;
       final span = booth.b.loopEnd! - booth.b.loopStart!;
-      while (DateTime.now().difference(began) < const Duration(seconds: 9)) {
+      while (DateTime.now().difference(began) < const Duration(seconds: 13)) {
         await Future<void>.delayed(const Duration(milliseconds: 20));
         final p = booth.b.position;
         if (p < last - span ~/ 2) wraps++;
         last = p;
       }
-      expect(wraps, greaterThan(2), reason: 'it barely looped: $wraps times round');
+      // Enough times round for it to have something worth averaging: the cost is
+      // judged over several, not one (see Deck._watchTheWrap).
+      expect(wraps, greaterThan(7), reason: 'it barely looped: $wraps times round');
       // Eased into a quarter at a time, so a handful of wraps gets most of the way
       // there rather than all of it. Nought is the fault.
       expect(Deck.loopLate.inMilliseconds, greaterThan(8),
@@ -417,6 +425,44 @@ void main() {
       expect(Deck.loopLate, lessThanOrEqualTo(cost + const Duration(milliseconds: 15)),
           reason: 'it learned more than the wrap can possibly cost: ${Deck.loopLate}');
     }, timeout: const Timeout(Duration(seconds: 40)));
+
+    test('a record that has just gone on gets its bands put back on it', () async {
+      // "EQ knobs don't work when the song has changed and need to be reset manually
+      // every time."
+      //
+      // A desk's equalizer lives in the engine's filter graph, and mpv builds that
+      // graph afresh for every file, at a moment of its own choosing which is not the
+      // moment setAudioSource returns. The bands were put on then and only then — so
+      // they landed on a graph about to be thrown away, or on no graph at all, and the
+      // new record played flat with the knobs still sitting where they were left.
+      // Moving one by hand was the only thing that ever put them back, because that is
+      // the one path that does not go through the mixer's "nothing changed" check.
+      final mixer = booth.mixer as QuietMixer;
+      await booth.setEq(booth.b, EqSet.flat.killing(0, true));
+      expect(booth.eqOf(booth.b).low, lessThan(-20), reason: 'the low is killed');
+
+      mixer.loadedAgain.clear();
+      await booth.load(booth.b, song(7));
+      // On load, as before — and that is the one that can be too early.
+      expect(mixer.loadedAgain, contains('B'));
+
+      mixer.loadedAgain.clear();
+      await booth.b.play();
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(mixer.loadedAgain, contains('B'),
+          reason: 'nothing put the bands back when the record actually started');
+      // And the booth still thinks the low is killed, so what goes back on is right.
+      expect(booth.eqOf(booth.b).low, lessThan(-20));
+
+      // Only for a record that has just gone on: playing again after a pause must not
+      // keep re-sending a whole chain of commands for nothing.
+      await booth.b.pause();
+      mixer.loadedAgain.clear();
+      await booth.b.play();
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(mixer.loadedAgain, isEmpty,
+          reason: 'it put them back again for a record that never went anywhere');
+    }, timeout: const Timeout(Duration(seconds: 30)));
 
     test('once it is matched the rate stops moving, and the beat stays put', () async {
       // "The timing should be kept the same without any fluctuations or correction
@@ -470,6 +516,91 @@ void main() {
           reason: 'it stopped moving without ever learning the drift: $settledAt');
       await booth.letGo();
     }, timeout: const Timeout(Duration(seconds: 60)));
+
+    test('what the wrap costs settles instead of swinging about', () async {
+      // Straight off the desk it went wrong on: +29, -11, +13, -1, +78, -25, -23,
+      // +97, -33 ms, and an end pulled 7, 0, 7, 0, 19, 13, 1, 24, 15 ms early after
+      // them. Never settling — and a loop end that moves by twenty milliseconds is a
+      // loop musically short by twenty milliseconds, which at a couple of seconds a
+      // time is ten milliseconds a second of drift against the other deck. "Timing
+      // off" and "collides phase wise" were one fault.
+      //
+      // The cause was reading a thirty-millisecond effect off the clock of the
+      // position reports, which arrive a couple of hundred milliseconds apart.
+      //
+      // Said plainly: this cannot reproduce that. The noisy path is the engine's own
+      // loop — mpv's ab-loop, seen only through position reports — and on this fake
+      // the engine has no loop, so the deck's own watcher runs and times its wraps
+      // from the moment it asks for the seek, which is exact. What this pins is that
+      // the averaging works and that the answer stops moving; the evidence that it
+      // needed to is the log from the desk it went wrong on, quoted above.
+      Deck.loopLate = Duration.zero;
+      addTearDown(() => Deck.loopLate = Duration.zero);
+      final engine = (JustAudioPlatform.instance as FakeJustAudio)
+          .players[booth.b.player.platformId!]!;
+      engine.seekCost = const Duration(milliseconds: 25);
+      engine.reportEvery = const Duration(milliseconds: 200);
+      await booth.b.seek(const Duration(seconds: 10));
+      await booth.b.play();
+      booth.b.loop(2);
+      addTearDown(booth.b.unloop);
+
+      // Watched over a long run: what is asked is that the answer stops moving.
+      final seenAt = <int>[];
+      final began = DateTime.now();
+      while (DateTime.now().difference(began) < const Duration(seconds: 24)) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        final ms = Deck.loopLate.inMilliseconds;
+        if (seenAt.isEmpty || seenAt.last != ms) seenAt.add(ms);
+      }
+      expect(seenAt.length, greaterThan(1),
+          reason: 'it never measured anything at all: $seenAt');
+      // The swings are what this is about: once it has a figure it must not keep
+      // throwing it away. Every answer after the first two is close to the last.
+      var lurches = 0;
+      for (var i = 2; i < seenAt.length; i++) {
+        if ((seenAt[i] - seenAt[i - 1]).abs() > 12) lurches++;
+      }
+      expect(lurches, lessThan(2),
+          reason: 'it swung about instead of settling: $seenAt');
+    }, timeout: const Timeout(Duration(seconds: 60)));
+
+    test('a slow drift is caught, not leaned against for ever', () async {
+      // "Sync sometimes drifts over time and doesn't catch itself." Not loops — this
+      // is a record whose rate is only slightly wrong.
+      //
+      // Two hundredths of a percent: 0.2 ms a second, 12 ms a minute. Nothing over ten
+      // seconds; a flam by the end of a record. What is asked is that it is found and
+      // taken off the rate rather than leaned against again and again.
+      //
+      // Said plainly: this passes against the code it was written for as well. The
+      // fault it was aimed at — a lean throwing away the window the slope is fitted
+      // over, so the rate is never trimmed — needs the lean to fire before the window
+      // is long enough to trim, and with drift alone the trim always wins that race.
+      // It is kept because a drift this slow being caught at all is worth pinning, and
+      // the change it went with (keeping the window across a lean, and fitting over
+      // three quarters of a minute rather than sixteen seconds) stands on its own:
+      // evidence should not be thrown away to close an offset.
+      final engine = (JustAudioPlatform.instance as FakeJustAudio)
+          .players[booth.b.player.platformId!]!;
+      engine.reportEvery = const Duration(milliseconds: 100);
+      engine.clockSkew = 0.0002;
+      await booth.setCrossfader(0.5);
+      await booth.b.seek(booth.a.position);
+      await booth.b.play();
+      booth.holdOnBeat(booth.b, snap: true);
+
+      // Long enough for a slope that slow to be worth reading.
+      await Future<void>.delayed(const Duration(seconds: 55));
+      final settled = engine.speed;
+      // It found the drift and took it off the rate, rather than sitting at the rate
+      // it started with and leaning against the same gap over and over.
+      expect((settled - 1.0).abs(), greaterThan(0.00008),
+          reason: 'the rate was never trimmed at all: $settled');
+      expect(settled, closeTo(1 / 1.0002, 0.00025),
+          reason: 'it trimmed, but not to the drift it actually had: $settled');
+      await booth.letGo();
+    }, timeout: const Timeout(Duration(seconds: 90)));
 
     test('a master going round a loop is still something to be held to', () async {
       // "Beat match still needs work, especially when looping one track." The hold

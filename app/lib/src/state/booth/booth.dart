@@ -400,6 +400,10 @@ class Booth extends ChangeNotifier {
     this.b.parts = parts;
     this.a.engineLoop = (from, to) => this.mixer.setLoop(this.a, from, to);
     this.b.engineLoop = (from, to) => this.mixer.setLoop(this.b, from, to);
+    // The bands and the filter, put on again the moment a freshly loaded record
+    // actually makes a sound: see Deck.onFreshStart.
+    this.a.onFreshStart = () => unawaited(this.mixer.loaded(this.a));
+    this.b.onFreshStart = () => unawaited(this.mixer.loaded(this.b));
     this.a.seamFinder = this.mixer.quietSeam;
     this.b.seamFinder = this.mixer.quietSeam;
     for (final d in [this.a, this.b]) {
@@ -1070,6 +1074,12 @@ class Booth extends ChangeNotifier {
   int _rateMoves = 0;
   int _rateTrims = 0;
 
+  /// How far back the drift is fitted over, in seconds. Long, because the drift that
+  /// matters over a mix is the one too slow to see over a few seconds: a fifteenth of
+  /// a millisecond a second is nothing for ten seconds and four milliseconds a minute,
+  /// which is a flam by the end of a long record.
+  static const _lookBack = 45.0;
+
   /// Drift worth taking off the rate, in milliseconds of error gained per second —
   /// six hundredths is 0.006 %, which is under 4 ms a minute and beneath anything an
   /// engine here reports reliably enough to act on.
@@ -1111,6 +1121,26 @@ class Booth extends ChangeNotifier {
     final drift = <(double, double)>[];
     // While a one-shot lean is running, and when it ends.
     DateTime? leanUntil;
+    // Milliseconds of phase this hold has deliberately taken out, and what the lean
+    // running now is going to take out when it finishes.
+    //
+    // Without this the drift could never be measured at all on a record whose rate is
+    // only slightly wrong. A lean closes the standing offset and the window was thrown
+    // away with it — so the window never reached the length a slope needs, the rate
+    // was never trimmed, the drift went on, and a few seconds later there was another
+    // offset to lean on. Small and forever: exactly "it drifts over time and does not
+    // catch itself", and nothing to do with loops.
+    //
+    // A lean is known to the millisecond, being a chosen rate for a chosen time. So
+    // what it removed is added back here, and the fit sees the line the error *would*
+    // have followed had nothing interfered — which is the line whose slope is the
+    // rate error. The window then runs for as long as it likes.
+    var shifted = 0.0;
+    var leanFor = 0.0;
+    // What the follower's [Deck.placed] said last time round, so a record that was
+    // put somewhere — by a hand, by a loop, by this loop's own jump — starts the
+    // measuring again rather than being fitted through.
+    var placed = follower.placed;
     // Since when the deck has been left alone. Readings before this are the engine
     // catching up, not the record drifting.
     var steadyFrom = began;
@@ -1150,8 +1180,9 @@ class Booth extends ChangeNotifier {
         leanUntil = null;
         await follower.bend(lockAt ?? follower.pitch);
         _rateMoves++;
+        shifted += leanFor;
+        leanFor = 0;
         seen.clear();
-        drift.clear();
         settleUntil = DateTime.now().add(const Duration(milliseconds: 400));
         steadyFrom = settleUntil;
         return;
@@ -1390,6 +1421,17 @@ class Booth extends ChangeNotifier {
         lastBase = base;
         drift.clear();
       }
+      // The record was put somewhere: everything measured before that was about a
+      // different arrangement of the two. A step in the line is not a drift, and
+      // fitting a rate through one invents a drift that was never there — a hand
+      // nudge of 55 ms came out as 7.7 ms a second and had the rate trimmed by nearly
+      // a percent for it.
+      if (follower.placed != placed) {
+        placed = follower.placed;
+        drift.clear();
+        shifted = 0;
+        steadyFrom = now.add(const Duration(milliseconds: 400));
+      }
       // Only what was read once the deck had stopped being moved about.
       //
       // The slope is the whole measurement, and a slope is ruined by its ends. The
@@ -1400,8 +1442,8 @@ class Booth extends ChangeNotifier {
       // the settle before writing any of it down costs a second and makes the number
       // mean what it says.
       if (now.difference(steadyFrom) >= const Duration(milliseconds: 800)) {
-        drift.add((now.difference(began).inMicroseconds / 1e6, ms));
-        while (drift.length > 2 && drift.last.$1 - drift.first.$1 > 16) {
+        drift.add((now.difference(began).inMicroseconds / 1e6, ms + shifted));
+        while (drift.length > 2 && drift.last.$1 - drift.first.$1 > _lookBack) {
           drift.removeAt(0);
         }
       }
@@ -1436,13 +1478,17 @@ class Booth extends ChangeNotifier {
           // reason to watch for another four seconds to find out what is already
           // known. Doing those one after the other was the whole of why a record 0.2 %
           // fast took thirteen seconds to come good.
-          final atNow = mean + slope * (drift.last.$1 - sx / n);
+          // Less what has been deliberately taken out, which the recorded line has
+          // added back in so the slope can be read off it. The line is where the
+          // error *would* be; where it actually is, is that less the shifting.
+          final atNow = mean + slope * (drift.last.$1 - sx / n) - shifted;
           final lean = atNow.abs() > _offsetWorthClosing
               ? (-atNow / (_closeOver * 1000)).clamp(-_leanAtMost, _leanAtMost)
               : 0.0;
           await follower.bend((lockAt! * (1 + lean)).clamp(0.5, 2.0));
           _rateMoves++;
           if (lean != 0) {
+            leanFor = atNow;
             leanUntil = now.add(Duration(
                 milliseconds: (-atNow / (lean * 1000) * 1000).round().clamp(150, 8000)));
           }
@@ -1469,7 +1515,8 @@ class Booth extends ChangeNotifier {
         // that is a record audibly speeding up.
         // Where the fitted line is now, not the average of the window — the average
         // is where it was in the middle of it.
-        final atNow = mean + slope * (drift.last.$1 - sx / n);
+        // Less what has been deliberately taken out: see the other one of these.
+        final atNow = mean + slope * (drift.last.$1 - sx / n) - shifted;
         // Not while it is still drifting: a lean closes what is there now, and if the
         // rate is wrong the same gap is back in a few seconds and closed again, which
         // is a correction loop with a longer period and no more use than the last
@@ -1479,6 +1526,7 @@ class Booth extends ChangeNotifier {
           final takes = (-atNow / (lean * 1000) * 1000).round();
           await follower.bend((lockAt! * (1 + lean)).clamp(0.5, 2.0));
           _rateMoves++;
+          leanFor = atNow;
           leanUntil = now.add(Duration(milliseconds: takes.clamp(150, 8000)));
           if (_trace) {
             debugPrint('lock: ${atNow.toStringAsFixed(1)} ms out and steady — '
@@ -1486,7 +1534,10 @@ class Booth extends ChangeNotifier {
           }
           return;
         }
-        if (span >= 9) drift.clear();
+        // Nothing thrown away here. A window that is holding steady is the evidence
+        // that it *is* holding steady, and clearing it every nine seconds meant the
+        // slowest drifts — the ones that only show over half a minute — could never
+        // be seen at all. It slides instead, on the prune above.
       }
       _lockBase = lockAt;
     });
