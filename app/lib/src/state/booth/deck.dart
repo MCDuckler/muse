@@ -1026,8 +1026,28 @@ class Deck extends ChangeNotifier {
     if (left <= Duration.zero || left > span) left = span;
     final wall = Duration(
         microseconds: (left.inMicroseconds / (tempo <= 0 ? 1 : tempo)).round());
-    _wrapSoon = Timer(wall + const Duration(milliseconds: 6), () {
+    _wrapSoon = Timer(wall, () {
       if (!_engineLooping || !playing) return;
+      // The record teleports; the needle has to teleport with it.
+      //
+      // The engine comes round the instant the loop ends, but this deck's clock only
+      // learns of it from a position report, and those arrive a fifth of a second
+      // apart. So the needle sailed on past the loop's end for up to that long and then
+      // jumped back — which on screen is not a loop coming round, it is a needle
+      // travelling, which is what it was reported as. The wrap is known to the
+      // millisecond here, so the clock is put on the loop's start at the moment the
+      // engine reaches it, and the reports that follow only confirm it.
+      //
+      // Only when the reckoning has actually reached the end: a timer that fires early
+      // must not drag the record backwards out from under the sound.
+      final at = position, end = _engineLoopEnd, start = loopStart;
+      if (start != null && end != null && at >= end - const Duration(milliseconds: 20)) {
+        _fix = start;
+        _fixedAt = DateTime.now();
+        _trusting = false;
+        placed++;
+        notifyListeners();
+      }
       unawaited(Future<void>.sync(() => refreshFilters?.call()));
       _meetTheWrap();
     });

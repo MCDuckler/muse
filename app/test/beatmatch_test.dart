@@ -1208,12 +1208,34 @@ void main() {
       // The bands are split and each has a level of its own now, so a kill is that
       // band's level and nothing else's — where a shelf's gain took the neighbouring
       // bands down with it (measured: killing LOW cost 7 dB at 700 Hz).
+      //
+      // Plain numbers rather than decibel figures: the three band volumes are read as
+      // expressions every frame, so a level can be slid rather than stepped, and an
+      // expression has no `dB` in its vocabulary.
       final c = said(const EqSet(low: EqSet.killed), 0);
-      expect(c['volume@low volume'], '-40.0dB');
-      expect(c['volume@mid volume'], '0.0dB');
-      expect(c['volume@high volume'], '0.0dB');
+      expect(c['volume@low volume'], '0', reason: 'gone, not leaning');
+      expect(c['volume@mid volume'], '1.00000');
+      expect(c['volume@high volume'], '1.00000');
       expect(c['highpass@hp m'], '0', reason: 'the passes are out of the sound');
       expect(c['lowpass@lp m'], '0');
+    });
+
+    test('a band slid from one level to another walks there, and does not jump', () {
+      // The zipper. A new number is a step in the waveform and a step is a tick; at the
+      // rate a knob reports itself, a tick a report is a crackle. What the filter is
+      // handed now is an expression that walks from where the band was to where it is
+      // going, and the filter reads it afresh every frame.
+      final walk = DesktopMixer.slide(0, -12, const Duration(seconds: 30));
+      expect(walk, contains('between(t,30.0000,30.0600)'),
+          reason: 'anchored where the record is, and over sixty milliseconds');
+      expect(walk, contains('1.00000+('), reason: 'from where it was');
+      // Outside the window — *before* it as well as after — it is simply the new level.
+      // A loop carries the record's clock back behind the anchor several times a
+      // minute, and a slide that read as the old level there would undo the knob every
+      // time round.
+      expect(walk.endsWith(',${DesktopMixer.level(-12)})'), isTrue, reason: walk);
+      // Nothing to walk to is nothing to say.
+      expect(DesktopMixer.slide(-6, -6, Duration.zero), DesktopMixer.level(-6));
     });
 
     test('the split is a Linkwitz-Riley pair, which is what sums flat', () {

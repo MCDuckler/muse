@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:just_audio_media_kit/just_audio_media_kit.dart';
 import 'package:media_kit/media_kit.dart';
 
+import '../playback_log.dart';
 import 'deck.dart';
 import 'mixer.dart';
 import 'seam.dart';
@@ -98,10 +99,10 @@ class DesktopMixer extends VolumeMixer {
   /// other bands inside half a decibel, silence with all three down, and +6 across the
   /// band within a decibel and a half.
   static const _bandsOnly = 'asplit=3[b1][b2][b3];'
-      '[b1]lowpass=f=$lowCross:p=2,lowpass=f=$lowCross:p=2,volume@low=1[lo];'
+      '[b1]lowpass=f=$lowCross:p=2,lowpass=f=$lowCross:p=2,volume@low=1:eval=frame[lo];'
       '[b2]highpass=f=$lowCross:p=2,highpass=f=$lowCross:p=2,'
-      'lowpass=f=$highCross:p=2,lowpass=f=$highCross:p=2,volume@mid=1[mi];'
-      '[b3]highpass=f=$highCross:p=2,highpass=f=$highCross:p=2,volume@high=1[hi];'
+      'lowpass=f=$highCross:p=2,lowpass=f=$highCross:p=2,volume@mid=1:eval=frame[mi];'
+      '[b3]highpass=f=$highCross:p=2,highpass=f=$highCross:p=2,volume@high=1:eval=frame[hi];'
       '[lo][mi][hi]amix=inputs=3:normalize=0,'
       'highpass@hp=f=20:m=0,'
       'lowpass@lp=f=15000:m=0,'
@@ -142,6 +143,15 @@ class DesktopMixer extends VolumeMixer {
   static const ceiling =
       'alimiter@out=limit=0.891:attack=5:release=50:level=disabled';
 
+  /// The same, for an ffmpeg too old to know `level` — and then a plain trim, which
+  /// every build has. A deck four decibels quieter than the rest of the machine is a
+  /// poor trade, but it is a better one than a deck that crackles.
+  static const _ceilings = [
+    ceiling,
+    'alimiter@out=limit=0.891:attack=5:release=50',
+    'volume@out=-4dB',
+  ];
+
   /// The echo every deck carries, ahead of the bands: the record split in two, one
   /// way through a send (volume@es, shut) into an echo timed to the record's beat —
   /// a dotted eighth and a dotted quarter, the way a DJ's echo is set — and back
@@ -155,8 +165,8 @@ class DesktopMixer extends VolumeMixer {
         '[d0][e]amix=inputs=2:normalize=0';
   }
 
-  static String bandsFor(double beatMs, {bool capped = true}) =>
-      '@wetowl:lavfi=[${_echo(beatMs)},$_bandsOnly${capped ? ',$ceiling' : ''}]';
+  static String bandsFor(double beatMs, {String? cap}) =>
+      '@wetowl:lavfi=[${_echo(beatMs)},$_bandsOnly${cap == null ? '' : ',$cap'}]';
 
   /// As it stands for a record of 120 a minute — the shape of every deck's chain.
   static final bands = bandsFor(500);
@@ -190,8 +200,8 @@ class DesktopMixer extends VolumeMixer {
   /// The chains tried, best first: the bands, then the stretcher — Rubber Band
   /// labelled, so its pitch can be spoken to (setPitchShift).
   static List<String> standingFor(double beatMs) => [
-        for (final capped in const [true, false])
-          for (final st in _stretchers) '${bandsFor(beatMs, capped: capped)},$st',
+        for (final cap in [..._ceilings, null])
+          for (final st in _stretchers) '${bandsFor(beatMs, cap: cap)},$st',
       ];
   static final standing = standingFor(500);
 
@@ -199,7 +209,7 @@ class DesktopMixer extends VolumeMixer {
   /// pairs — the drums, the bass and the rest, the voice — each through a level of
   /// its own, mixed back together, and then the bands as on any deck. Each level is
   /// an `af-command` like a band: turned while it plays, with nothing rebuilt.
-  static String stemBandsFor(double beatMs, {bool capped = true}) => '@wetowl:lavfi=['
+  static String stemBandsFor(double beatMs, {String? cap}) => '@wetowl:lavfi=['
       'channelsplit=channel_layout=6c[c0][c1][c2][c3][c4][c5];'
       '[c0][c1]join=inputs=2:channel_layout=stereo,volume@d=1[d];'
       '[c2][c3]join=inputs=2:channel_layout=stereo,volume@r=1[r];'
@@ -207,12 +217,12 @@ class DesktopMixer extends VolumeMixer {
       '[d][r][v]amix=inputs=3:normalize=0,'
       '${_echo(beatMs)},'
       '$_bandsOnly'
-      '${capped ? ',$ceiling' : ''}'
+      '${cap == null ? '' : ',$cap'}'
       ']';
   static final stemBands = stemBandsFor(500);
   static List<String> stemStandingFor(double beatMs) => [
-        for (final capped in const [true, false])
-          for (final st in _stretchers) '${stemBandsFor(beatMs, capped: capped)},$st',
+        for (final cap in [..._ceilings, null])
+          for (final st in _stretchers) '${stemBandsFor(beatMs, cap: cap)},$st',
       ];
   static final stemStanding = stemStandingFor(500);
 
@@ -386,18 +396,54 @@ class DesktopMixer extends VolumeMixer {
 
   /// What to tell the standing chain for [eq] and [filter]: (filter, command, value).
   /// The passes are mixed in only while the knob is off centre.
+  /// A band's level as a plain number rather than a decibel figure.
+  ///
+  /// The three band volumes are evaluated every frame now, so that a level can be given
+  /// as an *expression* and slid rather than stepped (see [slide]); and what a frame
+  /// evaluates is an expression, where `-6.0dB` is not a term. Linear both ways, so
+  /// there is one language on that filter and not two.
+  static String level(double db) =>
+      db <= EqSet.killed ? '0' : math.pow(10, db / 20).toStringAsFixed(5);
+
+  /// A level that walks from [was] to [now] over [_slide], starting at [at] seconds
+  /// into the record — and that is simply [now] anywhere outside that window.
+  ///
+  /// Turning a knob used to hand the filter a new number, and a new number is a step in
+  /// the waveform: a tick, once per report the knob sends, which at sixty a second is a
+  /// crackle rather than a tick. This is the zipper every mixer has to deal with, and
+  /// what every mixer does about it is slide the gain instead of setting it.
+  ///
+  /// The filter can only take a new value once per audio frame, which is about twenty
+  /// milliseconds, so a slide over sixty gives three steps where there was one and each
+  /// is a third the size; turned continuously, the slides overlap and what is left is a
+  /// gain that walks rather than jumps.
+  ///
+  /// Outside the window it is [now] — *before* the window as well as after. That is not
+  /// tidiness: a loop carries the record's clock back behind the anchor several times a
+  /// minute, and a slide that read as the old value there would undo the knob every
+  /// time round.
+  static String slide(double was, double now, Duration at) {
+    final a = level(was), b = level(now);
+    if (a == b) return b;
+    final t0 = at.inMicroseconds / 1e6;
+    final t1 = t0 + _slide;
+    return 'if(between(t,${t0.toStringAsFixed(4)},${t1.toStringAsFixed(4)}),'
+        '$a+($b-$a)*(t-${t0.toStringAsFixed(4)})/$_slide,$b)';
+  }
+
+  static const _slide = 0.06;
+
   static List<(String, String, String)> commands({required EqSet eq, required double filter}) {
-    String db(double v) => v.toStringAsFixed(1);
     final hp = filter > 0 ? 10 * math.pow(8000 / 10, filter) : 20.0;
     // Closing towards 60 Hz on a log scale, like the browser's; never above what a
     // 32 kHz part can carry, which ffmpeg would refuse.
     final lp = filter < 0 ? math.min(15000.0, 22000 * math.pow(60 / 22000, -filter)) : 15000.0;
-    // A band's level, not a shelf's gain: '-40dB' is what ffmpeg's volume wants, and
-    // a kill is then a band that is gone rather than one that is leaning.
+    // A band's level, not a shelf's gain: a kill is a band that is gone rather than one
+    // that is leaning.
     return [
-      ('volume@low', 'volume', '${db(eq.low)}dB'),
-      ('volume@mid', 'volume', '${db(eq.mid)}dB'),
-      ('volume@high', 'volume', '${db(eq.high)}dB'),
+      ('volume@low', 'volume', level(eq.low)),
+      ('volume@mid', 'volume', level(eq.mid)),
+      ('volume@high', 'volume', level(eq.high)),
       ('highpass@hp', 'f', '${hp.round()}'),
       ('highpass@hp', 'm', filter > 0 ? '1' : '0'),
       ('lowpass@lp', 'f', '${lp.round()}'),
@@ -446,7 +492,14 @@ class DesktopMixer extends VolumeMixer {
         if (got.contains('wetowl') && got.contains(stretcher)) {
           _installed[deck.name] = id;
           _stretcher[deck.name] = stretcher;
-          debugPrint('mixer: deck ${deck.name} carries $asked');
+          // Said out loud, not to the console: which chain a machine took is the one
+          // thing that cannot be worked out from here, and the ceiling is the half of
+          // it that matters most — an mpv whose ffmpeg has no alimiter falls through to
+          // a chain with nothing holding its peaks down, and then a deck clips and
+          // crackles exactly as it did before there was a limiter, with no way of
+          // telling from this end which of the two is on.
+          PlaybackLog.note('MIXER deck ${deck.name} carries $asked, '
+              '${chain.contains('alimiter') ? 'with a ceiling' : 'WITH NO CEILING'}');
           return true;
         }
       } catch (e) {
@@ -518,12 +571,16 @@ class DesktopMixer extends VolumeMixer {
   Future<void> setEq(Deck deck, EqSet eq) async {
     final was = _eq[deck.name] ?? EqSet.flat;
     _eq[deck.name] = eq;
-    final all = commands(eq: eq, filter: _filter[deck.name] ?? 0);
-    final before = commands(eq: was, filter: _filter[deck.name] ?? 0);
+    // Slid from where the band was to where it is going, from where the record is now.
     // Only the bands that changed: a kill is one command, not seven.
+    final at = deck.position;
     await _apply(deck, only: [
-      for (var i = 0; i < 3; i++)
-        if (all[i] != before[i]) all[i],
+      for (final (name, from, to) in [
+        ('volume@low', was.low, eq.low),
+        ('volume@mid', was.mid, eq.mid),
+        ('volume@high', was.high, eq.high),
+      ])
+        if (level(from) != level(to)) (name, 'volume', slide(from, to, at)),
     ]);
   }
 
@@ -599,6 +656,10 @@ class DesktopMixer extends VolumeMixer {
   /// Loop natively: mpv's own A–B loop jumps back from inside the audio, where a
   /// timer in Dart is twenty milliseconds late at best and sounds it on a roll.
   /// Says whether it could.
+  /// How long the band splitter needs to hear before its output is right again. See
+  /// _loop, where it is measured.
+  static const _settling = Duration(milliseconds: 15);
+
   Future<bool> _loop(Deck deck, Duration? from, Duration? to) async {
     final mpv = _native(deck);
     if (mpv == null) return false;
@@ -617,7 +678,31 @@ class DesktopMixer extends VolumeMixer {
     //
     // Only where there is a stretcher to fill: [stretchLatency] is zero otherwise and
     // this does nothing at all.
-    final prime = stretchLatency(deck);
+    // Sent in before the loop's own start by two things added together.
+    //
+    // The stretcher's fill, as before — Rubber Band begins a new time round with
+    // nothing in it and its first couple of thousand samples are it filling up rather
+    // than the record.
+    //
+    // And the *filters'* settling, which was missing and is the other half of it. A
+    // seek empties the whole chain, so the crossover starts with no state and its first
+    // milliseconds of output are wrong — measured through this very chain against the
+    // same audio run warm: 5.7 dB below the signal over the first 2 ms, 20 dB over
+    // 2–5 ms, 43 dB over 5–10 ms, and gone by 15. Wrong output from a band splitter is
+    // heard as the EQ not being applied, which is what "there is a brief moment at the
+    // start of the loop where the eq settings are ignored" is — and no amount of
+    // sending the settings again can help, because the settings were never lost. What
+    // was lost was the filters' memory, and the only way to give it back is to let them
+    // hear a little music before the loop point arrives.
+    //
+    // Fifteen milliseconds is a thirtieth of a beat, and it is the record's own audio
+    // from just before the loop's start, landing on a splice chosen for not clicking.
+    // The extra length is paid for by what the wrap costs (Deck.loopLate), which is
+    // measured rather than assumed.
+    //
+    // Added rather than maxed: the stretcher is at the end of the chain and the
+    // crossover at the front, so one does not cover the other.
+    final prime = stretchLatency(deck) + _settling;
     if (from != null && prime > Duration.zero) {
       final early = from - prime;
       from = early < Duration.zero ? Duration.zero : early;
