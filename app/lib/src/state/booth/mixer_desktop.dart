@@ -113,6 +113,35 @@ class DesktopMixer extends VolumeMixer {
       // chop would have had three steps to a cycle.
       'volume@gate=volume=1:eval=frame';
 
+  // A ceiling, appended last of all to every chain, at a decibel under full.
+  //
+  // Measured on a real record through this very chain: the source peaks at +0.6 dB
+  // on the left and +1.1 on the right — modern masters are cut over full scale —
+  // and the chain hands back +4.2 and +3.8 *with every knob at noon*. Three bands
+  // split by cascaded Butterworths sum flat in magnitude, which is what they were
+  // chosen for, but not in time: their phase shifts stack, and a transient that
+  // went in at full comes out half as loud again. With the bass up six it is +6.9.
+  //
+  // Everything over full scale is cut off flat at the sound card, which is a
+  // crackle, and it is heard on whichever side of the record is louder — which is
+  // why it was "a slight crackling on the right ear" and why it was never there on
+  // the plain player, whose chain is nothing at all.
+  //
+  // A limiter rather than a trim: pulling the whole chain down four decibels to
+  // make room for a peak that happens twice a minute would make the booth quieter
+  // than everything else on the machine. This is what the master of a DJ mixer has
+  // for exactly this reason. Five milliseconds of lookahead, on both decks alike,
+  // so nothing moves relative to anything else.
+  //
+  // Appended rather than written in, and the chain is offered again without it, so
+  // that an mpv whose ffmpeg has no alimiter still gets its bands: a chain with one
+  // word it does not know is refused whole, and a booth with no EQ would be a
+  // worse trade than a booth that clips.
+
+  /// The last thing in every chain: nothing leaves a deck over -1 dBFS.
+  static const ceiling =
+      'alimiter@out=limit=0.891:attack=5:release=50:level=disabled';
+
   /// The echo every deck carries, ahead of the bands: the record split in two, one
   /// way through a send (volume@es, shut) into an echo timed to the record's beat —
   /// a dotted eighth and a dotted quarter, the way a DJ's echo is set — and back
@@ -126,7 +155,8 @@ class DesktopMixer extends VolumeMixer {
         '[d0][e]amix=inputs=2:normalize=0';
   }
 
-  static String bandsFor(double beatMs) => '@wetowl:lavfi=[${_echo(beatMs)},$_bandsOnly]';
+  static String bandsFor(double beatMs, {bool capped = true}) =>
+      '@wetowl:lavfi=[${_echo(beatMs)},$_bandsOnly${capped ? ',$ceiling' : ''}]';
 
   /// As it stands for a record of 120 a minute — the shape of every deck's chain.
   static final bands = bandsFor(500);
@@ -159,15 +189,17 @@ class DesktopMixer extends VolumeMixer {
 
   /// The chains tried, best first: the bands, then the stretcher — Rubber Band
   /// labelled, so its pitch can be spoken to (setPitchShift).
-  static List<String> standingFor(double beatMs) =>
-      [for (final st in _stretchers) '${bandsFor(beatMs)},$st'];
+  static List<String> standingFor(double beatMs) => [
+        for (final capped in const [true, false])
+          for (final st in _stretchers) '${bandsFor(beatMs, capped: capped)},$st',
+      ];
   static final standing = standingFor(500);
 
   /// The same, for a stem deck: the six-channel stems file taken apart into its three
   /// pairs — the drums, the bass and the rest, the voice — each through a level of
   /// its own, mixed back together, and then the bands as on any deck. Each level is
   /// an `af-command` like a band: turned while it plays, with nothing rebuilt.
-  static String stemBandsFor(double beatMs) => '@wetowl:lavfi=['
+  static String stemBandsFor(double beatMs, {bool capped = true}) => '@wetowl:lavfi=['
       'channelsplit=channel_layout=6c[c0][c1][c2][c3][c4][c5];'
       '[c0][c1]join=inputs=2:channel_layout=stereo,volume@d=1[d];'
       '[c2][c3]join=inputs=2:channel_layout=stereo,volume@r=1[r];'
@@ -175,10 +207,13 @@ class DesktopMixer extends VolumeMixer {
       '[d][r][v]amix=inputs=3:normalize=0,'
       '${_echo(beatMs)},'
       '$_bandsOnly'
+      '${capped ? ',$ceiling' : ''}'
       ']';
   static final stemBands = stemBandsFor(500);
-  static List<String> stemStandingFor(double beatMs) =>
-      [for (final st in _stretchers) '${stemBandsFor(beatMs)},$st'];
+  static List<String> stemStandingFor(double beatMs) => [
+        for (final capped in const [true, false])
+          for (final st in _stretchers) '${stemBandsFor(beatMs, capped: capped)},$st',
+      ];
   static final stemStanding = stemStandingFor(500);
 
   /// Each deck's record's beat, in milliseconds, for the echo's timing.

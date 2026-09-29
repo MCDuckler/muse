@@ -649,6 +649,9 @@ class Deck extends ChangeNotifier {
     _trusting = false;
     final fresh = _freshlyLoaded;
     _freshlyLoaded = false;
+    // A loop already on: its next wrap is aimed at from here, not from wherever it was
+    // when the record was stopped.
+    if (_engineLooping) _meetTheWrap();
     unawaited(_player.play().catchError((Object e) {
       trouble = '$e';
       notifyListeners();
@@ -673,6 +676,7 @@ class Deck extends ChangeNotifier {
 
   Future<void> pause() async {
     _fix = position;
+    _wrapSoon?.cancel();
     await _player.pause();
     _fixedAt = DateTime.now();
     _trusting = false;
@@ -902,6 +906,7 @@ class Deck extends ChangeNotifier {
   void _ended() {
     _ended_ = true;
     _loop?.cancel();
+    _wrapSoon?.cancel();
     notifyListeners();
   }
 
@@ -987,10 +992,48 @@ class Deck extends ChangeNotifier {
     _engineLooping = took && loopStart != null;
     if (_engineLooping) {
       _loop?.cancel();
+      _meetTheWrap();
     } else if (loopStart != null) {
       _watchLoop();
     }
   }
+
+  /// Puts the mixer's settings back the instant the engine comes round, rather than
+  /// once something has noticed that it did.
+  ///
+  /// The engine loops by *seeking*, and a seek empties its filter chain: the equalizer
+  /// and the stems come back at nothing until they are set again. They were being set
+  /// again by _watchTheWrap, which runs on position reports — and those arrive a couple
+  /// of hundred milliseconds apart, so every time round the loop began with a fifth of
+  /// a second of the record at flat EQ and full stems. That is "there is a small
+  /// timeframe at the start of the loop where the eq settings are still ignored", and
+  /// no amount of noticing faster fixes it, because the report is the wrong clock to
+  /// hang it on.
+  ///
+  /// The wrap is not a surprise: the deck knows both ends of its own loop and how fast
+  /// it is going, so it knows when the engine will come round to within a millisecond
+  /// or two. Aimed at that, with the settings going out a hair after the splice, and
+  /// re-armed a loop's length at a time for as long as the loop is on.
+  void _meetTheWrap() {
+    _wrapSoon?.cancel();
+    final start = loopStart, end = _engineLoopEnd;
+    if (!_engineLooping || start == null || end == null || !playing) return;
+    final span = end - start;
+    if (span <= Duration.zero) return;
+    final at = position;
+    // Where it is in the loop now, in the record's own time; then in the room's.
+    var left = end - at;
+    if (left <= Duration.zero || left > span) left = span;
+    final wall = Duration(
+        microseconds: (left.inMicroseconds / (tempo <= 0 ? 1 : tempo)).round());
+    _wrapSoon = Timer(wall + const Duration(milliseconds: 6), () {
+      if (!_engineLooping || !playing) return;
+      unawaited(Future<void>.sync(() => refreshFilters?.call()));
+      _meetTheWrap();
+    });
+  }
+
+  Timer? _wrapSoon;
 
   /// How many bars the loop is, when there is one: what the buttons light by.
   int? get loopBars => loopStart == null ? null : _loopBars;
@@ -1060,10 +1103,24 @@ class Deck extends ChangeNotifier {
   Future<void> _quietSeam() async {
     final finder = seamFinder, from = loopStart, to = loopEnd;
     if (finder == null || from == null || to == null) return;
-    final quiet = await finder(this, from, to);
+    // The end the *engine* is given, not the musical one.
+    //
+    // These two are not the same: the engine's end is pulled early by what the wrap
+    // costs (see _engineLoopEnd), which is learned and can be a tenth of a second. So
+    // the seam was being chosen around one sample and the splice made at another a
+    // hundred milliseconds away — an arbitrary one, in the middle of a waveform,
+    // which is a click. All the care taken to land the loop where it would not click
+    // was being spent on a place the engine never cut.
+    //
+    // Searched around where the cut will actually be made, and the offset put back
+    // afterwards, so the loop keeps the length the timing wants and the cut lands
+    // somewhere quiet. This is what "the timing is right and there is still a click"
+    // was.
+    final pull = to - (_engineLoopEnd ?? to);
+    final quiet = await finder(this, from, to - pull);
     if (quiet == null || loopStart != from || loopEnd != to) return;
     loopStart = quiet.$1;
-    loopEnd = quiet.$2;
+    loopEnd = quiet.$2 + pull;
     await _loopInEngine();
   }
 
@@ -1161,6 +1218,7 @@ class Deck extends ChangeNotifier {
     loopStart = loopEnd = null;
     _loopBars = null;
     _loop?.cancel();
+    _wrapSoon?.cancel();
     if (was || _engineLooping) unawaited(_loopInEngine());
     _engineLooping = false;
     notifyListeners();
@@ -1234,6 +1292,7 @@ class Deck extends ChangeNotifier {
     _seamSoon?.cancel();
     _disposed = true;
     _loop?.cancel();
+    _wrapSoon?.cancel();
     for (final s in _subs) {
       s.cancel();
     }
