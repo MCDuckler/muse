@@ -1,3 +1,4 @@
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart' show AudioPlayer;
 import 'package:just_audio_media_kit/just_audio_media_kit.dart';
@@ -38,6 +39,24 @@ class DeckRouter extends JustAudioPlatform {
 
   /// Which players went to libmpv, so their disposal goes there too.
   final _onMpv = <String>{};
+
+  /// Make sure iOS is letting sound out before a deck plays.
+  ///
+  /// libmpv's output on iOS is an AudioUnit, and an AudioUnit only runs while the
+  /// app's audio session is active. just_audio activates it for its own players as
+  /// they play; nothing did for a deck on libmpv, so with the app's player stopped the
+  /// session stayed inactive and a deck "played" without sound or a moving position
+  /// (the first engine check on an iPad: 0.0× at every speed). Cheap to call again.
+  static Future<void> wake() async {
+    if (!active) return;
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration.music());
+      await session.setActive(true);
+    } catch (e) {
+      debugPrint('DeckRouter: the audio session would not start: $e');
+    }
+  }
 
   /// Where somebody can say "not libmpv" and have the decks back on AVPlayer, from the
   /// next start — the way out if it will not play on some device.

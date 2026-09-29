@@ -181,8 +181,14 @@ class EngineCheck {
       }
       say('mpv ${await _prop(mpv, 'mpv-version')} · ffmpeg ${await _prop(mpv, 'ffmpeg-version')}');
       say('audio out ${await _prop(mpv, 'current-ao')}');
+      await DeckRouter.wake();
       await player.play();
       await Future<void>.delayed(const Duration(milliseconds: 600));
+      // Moving at all, before any chain goes on?
+      final p0 = player.position, t0 = await _prop(mpv, 'time-pos');
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      say('bare, 1.5 s: position ${p0.inMilliseconds}→${player.position.inMilliseconds} ms · '
+          'mpv time-pos $t0→${await _prop(mpv, 'time-pos')} · ${await _state(mpv)}');
 
       // The chains, in the order the desk tries them.
       String? took;
@@ -235,16 +241,23 @@ class EngineCheck {
       }
 
       // How true the tempo is, pulled down as a record synced to a slower one is.
+      say('mpv state: ${await _state(mpv)} · just_audio ${player.processingState.name}, '
+          '${player.playing ? 'playing' : 'not playing'} at ${player.position.inMilliseconds} ms');
       for (final speed in const [0.976, 1.04]) {
         await player.setSpeed(speed);
         await Future<void>.delayed(const Duration(milliseconds: 400));
         final from = player.position;
+        final mpvFrom = double.tryParse(await _prop(mpv, 'time-pos'));
         final clock = Stopwatch()..start();
         await Future<void>.delayed(const Duration(seconds: 6));
+        final seconds = clock.elapsedMicroseconds / 1e6;
         final moved = (player.position - from).inMicroseconds / 1e6;
-        final ratio = moved / (clock.elapsedMicroseconds / 1e6);
-        say('speed ${speed.toStringAsFixed(3)}: played ${ratio.toStringAsFixed(4)}× '
-            '(${((ratio / speed - 1) * 1000).toStringAsFixed(2)} ‰ off)');
+        final mpvTo = double.tryParse(await _prop(mpv, 'time-pos'));
+        final ratio = moved / seconds;
+        final mpvRatio = mpvFrom == null || mpvTo == null ? null : (mpvTo - mpvFrom) / seconds;
+        say('speed ${speed.toStringAsFixed(3)}: position ${ratio.toStringAsFixed(4)}× '
+            '(${((ratio / speed - 1) * 1000).toStringAsFixed(2)} ‰ off) · mpv clock '
+            '${mpvRatio?.toStringAsFixed(4) ?? '?'}× · ${await _state(mpv)}');
       }
       await player.setSpeed(1);
       await player.stop();
@@ -307,6 +320,13 @@ class EngineCheck {
     final platform = raw?.platform;
     return platform is NativePlayer ? platform : null;
   }
+
+  /// What mpv says it is doing: paused, idle for want of data or of an output.
+  Future<String> _state(NativePlayer mpv) async => [
+        for (final p in const ['pause', 'core-idle', 'paused-for-cache', 'eof-reached',
+          'audio-device', 'speed', 'time-pos'])
+          '$p=${await _prop(mpv, p)}'
+      ].join(' ');
 
   Future<String> _prop(NativePlayer mpv, String name) async {
     try {

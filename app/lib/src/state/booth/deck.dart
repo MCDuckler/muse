@@ -367,6 +367,9 @@ class Deck extends ChangeNotifier {
       {TrackTiming? timing, Duration? at, String? part}) async {
     this.part = part;
     _freshlyLoaded = true;
+    // On an iPhone or an iPad, the sound let out before there is any to let out: a
+    // deck on libmpv has no player of just_audio's own to do it. See DeckRouter.wake.
+    unawaited(DeckRouter.wake());
     // Its stems where the engine can play them and they are made — here, or at the
     // house: then every part of it is only levels.
     _stemsFrom = null;
