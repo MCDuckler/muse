@@ -179,6 +179,10 @@ class EngineCheck {
         say('FAIL the check player is not on libmpv');
         return;
       }
+      // What mpv complains of while this runs, said at the end.
+      final raw = JustAudioMediaKit.instanceIfRegistered?.playerFor(player.platformId!)?.raw;
+      final complaints = <String>[];
+      final heard = raw?.stream.error.listen(complaints.add);
       say('mpv ${await _prop(mpv, 'mpv-version')} · ffmpeg ${await _prop(mpv, 'ffmpeg-version')}');
       say('audio out ${await _prop(mpv, 'current-ao')}');
       await DeckRouter.wake();
@@ -260,6 +264,9 @@ class EngineCheck {
             '${mpvRatio?.toStringAsFixed(4) ?? '?'}× · ${await _state(mpv)}');
       }
       await player.setSpeed(1);
+      await heard?.cancel();
+      say('mpv said ${complaints.length} error${complaints.length == 1 ? '' : 's'}'
+          '${complaints.isEmpty ? '' : ', first: ${complaints.take(3).join(' | ')}'}');
       await player.stop();
 
       // Stems: six channels, if a record here has them.

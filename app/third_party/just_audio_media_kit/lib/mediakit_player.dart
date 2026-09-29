@@ -30,7 +30,20 @@ class MediaKitPlayer extends AudioPlayerPlatform {
 
   ProcessingStateMessage _processingState = ProcessingStateMessage.idle;
   Duration _bufferedPosition = Duration.zero;
-  Duration _position = Duration.zero;
+  // WetOwl: the position is kept with the moment it was true. just_audio carries
+  // a position forward from an event's updateTime, and every event here (a cache
+  // or buffering update, a playlist change) used to go out stamped "now" with
+  // the position mpv last reported — stale by up to a report interval. The
+  // player's clock then jumped back 100–200 ms at each one and forward again at
+  // the next time-pos: the booth's beat-holding chased those jumps.
+  Duration _positionValue = Duration.zero;
+  DateTime _positionAt = DateTime.now();
+  Duration get _position => _positionValue;
+  set _position(Duration value) {
+    _positionValue = value;
+    _positionAt = DateTime.now();
+  }
+
   Duration? _duration;
   bool _playing = false;
   bool _mediaOpened = false;
@@ -147,7 +160,14 @@ class MediaKitPlayer extends AudioPlayerPlatform {
       }),
       _player.stream.error.listen((error) {
         final errorUri = RegExp(r'Failed to open (.*)\.').firstMatch(error)?[1];
-        if (errorUri == null || errorUri == _currentMedia?.uri) {
+        // WetOwl: only a record that will not open is the end of the player. Upstream
+        // took *any* error mpv said without a file in it as fatal — and mpv says one
+        // for every audio filter it cannot build. The booth tries its best chain
+        // first (with Rubber Band) and falls back; on an mpv without Rubber Band the
+        // first tries were logged as errors, the player was reported idle, and
+        // just_audio disposed it under the deck (the second engine check on an iPad:
+        // "[Player] has been disposed" straight after the chain went on). See WETOWL.md.
+        if (errorUri != null && errorUri == _currentMedia?.uri) {
           _processingState = ProcessingStateMessage.idle;
           _errorCode = kErrorCode;
           _errorMessage = error;
@@ -216,7 +236,8 @@ class MediaKitPlayer extends AudioPlayerPlatform {
   void _updatePlaybackEvent() {
     _eventController.add(PlaybackEventMessage(
       processingState: _processingState,
-      updateTime: DateTime.now(),
+      // WetOwl: see _positionAt. While paused the time is unused.
+      updateTime: _playing ? _positionAt : DateTime.now(),
       updatePosition: _position,
       bufferedPosition: _bufferedPosition,
       duration: _duration,
@@ -270,6 +291,8 @@ class MediaKitPlayer extends AudioPlayerPlatform {
   @override
   Future<PlayResponse> play(PlayRequest request) async {
     _playing = true;
+    // WetOwl: the position was last read while paused; it holds from now on.
+    _positionAt = DateTime.now();
     if (_mediaOpened) {
       await _player.play();
     }
