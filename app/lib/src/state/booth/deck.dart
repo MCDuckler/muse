@@ -8,6 +8,7 @@ import 'package:just_audio_background/just_audio_background.dart';
 import '../../api/client.dart';
 import '../../api/models.dart';
 import '../playback_log.dart';
+import 'deck_router.dart';
 import 'mixer.dart' show StemLevels;
 import 'parts.dart';
 
@@ -36,6 +37,8 @@ class Deck extends ChangeNotifier {
                 : null) {
     _player = player ??
         AudioPlayer(
+          // libmpv where this device sends decks there (an iPhone's, an iPad's).
+          engine: DeckRouter.active ? DeckRouter.mpv : null,
           audioPipeline: this.equalizer == null
               ? null
               : AudioPipeline(androidAudioEffects: [this.equalizer!]),

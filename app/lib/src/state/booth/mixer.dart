@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'deck.dart';
+import 'deck_router.dart';
 import 'mixer_none.dart' if (dart.library.js_interop) 'mixer_web.dart' as web;
 import 'mixer_none.dart' if (dart.library.io) 'mixer_desktop.dart' as desk;
 
@@ -299,6 +300,10 @@ abstract class Mixer {
   static Mixer forThisDevice() {
     if (kIsWeb) return web.webMixer() ?? VolumeMixer();
     if (defaultTargetPlatform == TargetPlatform.android) return AndroidMixer();
+    // An iPhone's or an iPad's decks on libmpv: the desk's own chain. See deck_router.dart.
+    if (defaultTargetPlatform == TargetPlatform.iOS && DeckRouter.active) {
+      return desk.desktopMixer() ?? VolumeMixer();
+    }
     if (defaultTargetPlatform == TargetPlatform.linux ||
         defaultTargetPlatform == TargetPlatform.windows ||
         defaultTargetPlatform == TargetPlatform.macOS) {

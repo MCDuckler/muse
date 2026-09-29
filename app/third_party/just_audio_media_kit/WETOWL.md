@@ -7,7 +7,7 @@ kills and the filter a deck has on a desk. Nothing else is changed.
 | File | Change |
 |---|---|
 | `lib/mediakit_player.dart` | `MediaKitPlayer.raw`: the media_kit `Player`. |
-| `lib/just_audio_media_kit.dart` | `playerFor(id)` and `instanceIfRegistered`. |
+| `lib/just_audio_media_kit.dart` | `playerFor(id)` and `instanceIfRegistered`; `routed`, the instance a router sends players to when this is not the registered platform (the booth's decks on iOS, `app/lib/src/state/booth/deck_router.dart`). |
 
 Every change is marked with a `WetOwl:` comment. The other half is
 `AudioPlayer.platformId` in `third_party/just_audio`, which is how a deck names its

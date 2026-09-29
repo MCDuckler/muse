@@ -43,6 +43,8 @@ dependencies:
   ffi: ^2.1.0
   crypto: ^3.0.0
   window_manager: ^0.5.2
+  # The booth's decks on an iPhone and an iPad: see dependency_overrides.
+  media_kit_libs_ios_audio: ^1.1.4
 # just_audio with one addition: an equalizer for iOS, which has to be attached where the
 # player item is made — inside the plugin. See third_party/just_audio/WETOWL.md.
 dependency_overrides:
@@ -56,6 +58,10 @@ dependency_overrides:
   # See third_party/just_audio_background/WETOWL.md.
   just_audio_background:
     path: third_party/just_audio_background
+  # The iOS libmpv with the filters a booth deck is made of, rather than the two the
+  # default one has. See third_party/media_kit_libs_ios_audio/WETOWL.md.
+  media_kit_libs_ios_audio:
+    path: third_party/media_kit_libs_ios_audio
 
 dev_dependencies:
   # The fake audio engine in test/ implements this, so the player's own logic can be

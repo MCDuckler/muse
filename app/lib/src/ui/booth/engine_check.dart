@@ -1,0 +1,360 @@
+import 'dart:async';
+import 'dart:io';
+import 'dart:math' as math;
+import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:just_audio_media_kit/just_audio_media_kit.dart';
+import 'package:media_kit/media_kit.dart' show NativePlayer;
+import 'package:path_provider/path_provider.dart';
+import 'package:provider/provider.dart';
+
+import '../../api/client.dart' show platformName;
+import '../../api/models.dart';
+import '../../state/app_state.dart';
+import '../../state/booth/deck_router.dart';
+import '../../state/booth/mixer_desktop.dart';
+import '../settings_page.dart' show appBuild;
+import 'desk/console.dart';
+
+/// Booth → engine check: what this device's deck engine can actually do, asked of it
+/// rather than assumed, and sent to the house so it can be read there.
+///
+/// Every question is one the desk's chain depends on: whether libmpv started at all,
+/// which of the desk's filter chains it takes (the kills, the filter, the echo, the
+/// ceiling, and which stretcher), whether a band can be turned while it plays, how
+/// true its tempo is when a record is pulled to another one's, and whether the stems —
+/// six channels of Opus — open as six. Made for the iPhone and the iPad, where the
+/// answers were not known; it asks a desk the same.
+Future<void> openEngineCheck(BuildContext context) => Navigator.of(context).push(
+    MaterialPageRoute(builder: (_) => const EngineCheckPage(), fullscreenDialog: true));
+
+class EngineCheckPage extends StatefulWidget {
+  const EngineCheckPage({super.key});
+
+  @override
+  State<EngineCheckPage> createState() => _EngineCheckPageState();
+}
+
+class _EngineCheckPageState extends State<EngineCheckPage> {
+  final _lines = <String>[];
+  bool _running = false;
+  String? _sent;
+
+  void _say(String line) {
+    debugPrint('ENGINE $line');
+    if (mounted) setState(() => _lines.add(line));
+  }
+
+  Future<void> _run() async {
+    setState(() {
+      _running = true;
+      _lines.clear();
+      _sent = null;
+    });
+    final app = context.read<AppState>();
+    try {
+      await EngineCheck(app, _say).run();
+    } catch (e, st) {
+      _say('STOPPED: $e');
+      debugPrint('$st');
+    }
+    try {
+      await app.api.sendPlaybackLog(['ENGINE CHECK', ..._lines],
+          device: 'engine-check ${platformName()}', build: appBuild);
+      if (mounted) setState(() => _sent = 'Sent to the house.');
+    } catch (e) {
+      if (mounted) setState(() => _sent = 'Could not send it: $e');
+    }
+    if (mounted) setState(() => _running = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Console.ground,
+      appBar: AppBar(
+        backgroundColor: Console.panel,
+        foregroundColor: Console.ink,
+        title: Text('ENGINE CHECK', style: Console.label(12, color: Console.ink)),
+      ),
+      body: SafeArea(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              'Plays a click track and a record from your library quietly for about half a '
+              'minute, tries the desk\'s filter chains on this device\'s deck engine, and '
+              'sends what it found to the house. Leave the booth\'s decks stopped.',
+              style: TextStyle(color: Console.quiet, fontSize: 13),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: FilledButton.icon(
+              onPressed: _running ? null : _run,
+              icon: _running
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.play_arrow),
+              label: Text(_running ? 'Checking…' : 'Check this device'),
+            ),
+          ),
+          if (_sent != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Text(_sent!, style: TextStyle(color: Console.quiet, fontSize: 12)),
+            ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                for (final l in _lines)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: SelectableText(l,
+                        style: TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 12,
+                            color: l.contains('FAIL') || l.contains('NO ') ? Console.b : Console.ink)),
+                  ),
+              ],
+            ),
+          ),
+          if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS)
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: TextButton(
+                onPressed: () async {
+                  final messenger = ScaffoldMessenger.of(context);
+                  final wasOn = DeckRouter.active;
+                  await DeckRouter.setWanted(!wasOn);
+                  messenger.showSnackBar(SnackBar(
+                      content: Text(wasOn
+                          ? 'Decks go back to AVPlayer from the next start.'
+                          : 'Decks go to libmpv from the next start.')));
+                },
+                child: Text(DeckRouter.active
+                    ? 'Put the decks back on AVPlayer (from the next start)'
+                    : 'Put the decks on libmpv (from the next start)'),
+              ),
+            ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// The questions, in order. Kept apart from the page so it can be read as a list.
+class EngineCheck {
+  EngineCheck(this.app, this.say);
+
+  final AppState app;
+  final void Function(String) say;
+
+  Future<void> run() async {
+    say('device ${platformName()} · build ${appBuild.isEmpty ? 'dev' : appBuild}');
+    say('decks routed to libmpv: ${DeckRouter.active ? 'yes' : 'no'}'
+        '${DeckRouter.failed == null ? '' : ' (libmpv failed: ${DeckRouter.failed})'}');
+    final m = app.booth.mixer;
+    say('mixer ${m.runtimeType}: kill=${m.canKill} filter=${m.canFilter} '
+        'stem=${m.canStem} shift=${m.canShift} gate=${m.canGate}');
+    if (JustAudioMediaKit.instanceIfRegistered == null) {
+      say('FAIL no libmpv here: nothing more to check');
+      return;
+    }
+
+    final dir = await getTemporaryDirectory();
+    final wav = File('${dir.path}/engine-check-clicks.wav');
+    await wav.writeAsBytes(_clicks(seconds: 30, bpm: 120));
+
+    final player = AudioPlayer(engine: DeckRouter.active ? DeckRouter.mpv : null);
+    try {
+      await player.setVolume(0.25);
+      await player.setFilePath(wav.path);
+      final mpv = _native(player);
+      if (mpv == null) {
+        say('FAIL the check player is not on libmpv');
+        return;
+      }
+      say('mpv ${await _prop(mpv, 'mpv-version')} · ffmpeg ${await _prop(mpv, 'ffmpeg-version')}');
+      say('audio out ${await _prop(mpv, 'current-ao')}');
+      await player.play();
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+
+      // The chains, in the order the desk tries them.
+      String? took;
+      var tried = 0;
+      for (final chain in DesktopMixer.standingFor(500)) {
+        tried++;
+        try {
+          await mpv.setProperty('af', chain);
+          final got = await mpv.getProperty('af');
+          if (got.contains('wetowl')) {
+            took = chain;
+            break;
+          }
+        } catch (_) {}
+      }
+      if (took == null) {
+        say('FAIL none of the desk\'s $tried chains went on');
+        // Which filters are missing, one at a time.
+        for (final f in const ['asplit', 'lowpass=f=300', 'highpass=f=300', 'volume=1', 'amix=inputs=1',
+          'aecho=0.7:0.8:300:0.5', 'alimiter', 'aloop=loop=0:size=1', 'scaletempo2', 'rubberband']) {
+          try {
+            await mpv.setProperty('af', f == 'scaletempo2' || f == 'rubberband' ? f : 'lavfi=[$f]');
+            say('  filter ${f.split('=').first}: ${(await mpv.getProperty('af')).isEmpty ? 'NO' : 'yes'}');
+          } catch (e) {
+            say('  filter ${f.split('=').first}: NO ($e)');
+          }
+        }
+      } else {
+        final stretcher = took.split(',').last;
+        say('chain ${tried == 1 ? 'first' : 'number $tried'} of the desk\'s went on: '
+            '${took.contains('alimiter') ? 'with a ceiling' : 'NO ceiling'}, stretcher $stretcher');
+        // Turned while it plays, as the kills are.
+        var turned = 0;
+        for (final (target, value) in const [('volume@low', '0.01'), ('volume@low', '1'),
+          ('volume@es', '0.5'), ('volume@es', '0')]) {
+          try {
+            await mpv.command(['af-command', 'wetowl', 'volume', value, target]);
+            turned++;
+          } catch (e) {
+            say('FAIL af-command $target: $e');
+          }
+        }
+        try {
+          await mpv.command(['af-command', 'wetowl', 'f', '400', 'highpass@hp']);
+          turned++;
+        } catch (e) {
+          say('FAIL af-command highpass@hp: $e');
+        }
+        say('bands turned while playing: $turned of 5');
+      }
+
+      // How true the tempo is, pulled down as a record synced to a slower one is.
+      for (final speed in const [0.976, 1.04]) {
+        await player.setSpeed(speed);
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+        final from = player.position;
+        final clock = Stopwatch()..start();
+        await Future<void>.delayed(const Duration(seconds: 6));
+        final moved = (player.position - from).inMicroseconds / 1e6;
+        final ratio = moved / (clock.elapsedMicroseconds / 1e6);
+        say('speed ${speed.toStringAsFixed(3)}: played ${ratio.toStringAsFixed(4)}× '
+            '(${((ratio / speed - 1) * 1000).toStringAsFixed(2)} ‰ off)');
+      }
+      await player.setSpeed(1);
+      await player.stop();
+
+      // Stems: six channels, if a record here has them.
+      final stems = await _aRecordWithStems();
+      if (stems == null) {
+        say('stems: no record in the last 40 added has stems yet — not checked');
+      } else {
+        await player.setAudioSource(AudioSource.uri(Uri.parse(app.api.stemUrl(stems, 'stems')),
+            headers: app.api.streamHeaders));
+        final mpv2 = _native(player);
+        if (mpv2 != null) {
+          await mpv2.setProperty('ad-lavc-downmix', 'no');
+          await player.play();
+          await Future<void>.delayed(const Duration(seconds: 2));
+          final channels = await _prop(mpv2, 'audio-params/channel-count');
+          say('stems of "${stems.displayTitle}": ${channels == '6' ? '6 channels' : 'FAIL $channels channels'}'
+              ' · codec ${await _prop(mpv2, 'audio-codec-name')}');
+          var went = false;
+          for (final chain in DesktopMixer.stemStandingFor(500)) {
+            try {
+              await mpv2.setProperty('af', chain);
+              if ((await mpv2.getProperty('af')).contains('wetowl')) {
+                went = true;
+                break;
+              }
+            } catch (_) {}
+          }
+          say('stem chain: ${went ? 'went on' : 'FAIL none went on'}');
+          if (went) {
+            try {
+              await mpv2.command(['af-command', 'wetowl', 'volume', '0', 'volume@v']);
+              say('voice taken out while playing: yes');
+            } catch (e) {
+              say('FAIL voice out: $e');
+            }
+          }
+          await player.stop();
+        }
+      }
+
+      if (!kIsWeb) {
+        say('memory ${(ProcessInfo.currentRss / 1e6).round()} MB now');
+      }
+      final main = app.player?.raw;
+      if (main != null) {
+        say('the app\'s own player: ${main.processingState.name}, '
+            '${main.playing ? 'playing' : 'not playing'}');
+      }
+      say('done');
+    } finally {
+      await player.dispose();
+    }
+  }
+
+  NativePlayer? _native(AudioPlayer p) {
+    final id = p.platformId;
+    final raw = id == null ? null : JustAudioMediaKit.instanceIfRegistered?.playerFor(id)?.raw;
+    final platform = raw?.platform;
+    return platform is NativePlayer ? platform : null;
+  }
+
+  Future<String> _prop(NativePlayer mpv, String name) async {
+    try {
+      return await mpv.getProperty(name);
+    } catch (e) {
+      return '? ($e)';
+    }
+  }
+
+  Future<Track?> _aRecordWithStems() async {
+    final recent = (await app.api.libraryTracks(sort: 'added', limit: 40, readyOnly: true)).items;
+    for (final t in recent) {
+      try {
+        if ((await app.api.partsHere(t.id)).contains('stems')) return t;
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  /// A click track: a short 1 kHz burst on every beat, 44.1 kHz mono 16-bit.
+  static Uint8List _clicks({required int seconds, required int bpm}) {
+    const rate = 44100;
+    final n = rate * seconds;
+    final pcm = Int16List(n);
+    final every = (rate * 60 / bpm).round();
+    for (var i = 0; i < n; i++) {
+      final at = i % every;
+      if (at < 220) {
+        pcm[i] = (math.sin(2 * math.pi * 1000 * at / rate) * 20000 * (1 - at / 220)).round();
+      }
+    }
+    final data = pcm.buffer.asUint8List();
+    final b = BytesBuilder();
+    void u32(int v) => b.add(Uint8List(4)..buffer.asByteData().setUint32(0, v, Endian.little));
+    void u16(int v) => b.add(Uint8List(2)..buffer.asByteData().setUint16(0, v, Endian.little));
+    b.add('RIFF'.codeUnits);
+    u32(36 + data.length);
+    b.add('WAVEfmt '.codeUnits);
+    u32(16);
+    u16(1);
+    u16(1);
+    u32(rate);
+    u32(rate * 2);
+    u16(2);
+    u16(16);
+    b.add('data'.codeUnits);
+    u32(data.length);
+    b.add(data);
+    return b.toBytes();
+  }
+}

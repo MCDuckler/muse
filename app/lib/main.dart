@@ -16,6 +16,7 @@ import 'package:provider/provider.dart';
 
 import 'src/state/app_log.dart';
 import 'src/state/app_state.dart';
+import 'src/state/booth/deck_router.dart';
 import 'src/state/selection.dart';
 import 'src/state/frame_watch.dart';
 import 'src/state/playback_log.dart';
@@ -138,6 +139,18 @@ Future<void> main() async {
           : 'No sound: the audio engine did not start ($e).';
       PlaybackLog.note('desktop audio NOT ready: $e');
     }
+  }
+  // An iPhone's or an iPad's booth: its two decks on libmpv, for the filter chain a desk
+  // has, while the app's own player stays on AVPlayer. Before the background wrapper,
+  // which wraps whatever it finds. See deck_router.dart.
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS && await DeckRouter.wanted()) {
+    // As on a desk, and for the same reason: media_kit's pitch mode replaces the whole
+    // filter chain to set a tempo, and the booth's kills live in that chain.
+    JustAudioMediaKit.pitch = false;
+    DeckRouter.install();
+    PlaybackLog.note(DeckRouter.active
+        ? 'booth decks on libmpv'
+        : 'booth decks on AVPlayer: libmpv did not start (${DeckRouter.failed})');
   }
   if (!kIsWeb && !onADesk) {
     try {

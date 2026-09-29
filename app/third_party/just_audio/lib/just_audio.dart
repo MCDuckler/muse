@@ -61,6 +61,23 @@ class AudioPlayer {
   String? get platformId => _id;
 
   static String _generateId() => _uuid.v4();
+
+  /// WetOwl: which engine a player asked to be played by, by the id it is known by to
+  /// the platform — for a platform that sends different players to different engines
+  /// (the booth's decks to libmpv on an iPhone, everything else to AVPlayer). The ids
+  /// are made afresh each time a player is set up on the platform, so this is kept as
+  /// they are made. See WETOWL.md.
+  static final engines = <String, String>{};
+
+  /// WetOwl: see [engines].
+  final String? _engine;
+
+  String _newId() {
+    final id = _generateId();
+    if (_engine != null) engines[id] = _engine;
+    return id;
+  }
+
   final _lock = Lock(reentrant: true);
   Future<void>? _playbackEventPipe;
 
@@ -254,7 +271,9 @@ class AudioPlayer {
     bool useLazyPreparation = true,
     ShuffleOrder? shuffleOrder,
     int maxSkipsOnError = 0,
+    String? engine,
   })  : _id = _generateId(),
+        _engine = engine,
         _userAgent = userAgent,
         _androidApplyAudioAttributes =
             androidApplyAudioAttributes && _isAndroid(),
@@ -1638,7 +1657,7 @@ class AudioPlayer {
         // _platform is updated again during initialisation.
         final platform = active && !_disposed
             ? await (_nativePlatform = _pluginPlatform.init(InitRequest(
-                id: _id = _generateId(),
+                id: _id = _newId(),
                 audioLoadConfiguration: _audioLoadConfiguration?._toMessage(),
                 androidAudioEffects: (_isAndroid() || _isUnitTest())
                     ? _audioPipeline.androidAudioEffects
@@ -1657,7 +1676,7 @@ class AudioPlayer {
                 useLazyPreparation: _playlist.useLazyPreparation,
               )))
             : (_idlePlatform = _IdleAudioPlayer(
-                id: _id = _generateId(),
+                id: _id = _newId(),
                 sequenceStream: sequenceStream,
                 errorCode: playbackEvent.errorCode,
                 errorMessage: playbackEvent.errorMessage,

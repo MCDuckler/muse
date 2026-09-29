@@ -1,3 +1,4 @@
+import '../engine_check.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -168,13 +169,28 @@ class _PhoneRoomState extends State<PhoneRoom> {
             ),
             BoothMark(on: _b.live),
             const Spacer(),
-            if (_b.taken.isNotEmpty)
-              IconButton(
-                icon: Icon(Icons.bookmark_add_outlined, color: Console.quiet),
-                tooltip: 'Keep this mix',
-                onPressed: () => _keep(context),
-              ),
-            const LookButton(),
+            // The rarer things, behind one button: a phone's bar has room for four.
+            PopupMenuButton<String>(
+              icon: Icon(Icons.more_vert, color: Console.quiet),
+              tooltip: 'More',
+              onSelected: (v) => switch (v) {
+                'keep' => _keep(context),
+                'look' => boothLook.cycle(),
+                _ => openEngineCheck(context),
+              },
+              itemBuilder: (_) => [
+                PopupMenuItem(
+                    value: 'look',
+                    child: Row(children: [
+                      Icon(boothLook.look.next.icon, size: 18),
+                      const SizedBox(width: 10),
+                      Text('${boothLook.look.next.label} look'),
+                    ])),
+                if (_b.taken.isNotEmpty)
+                  const PopupMenuItem(value: 'keep', child: Text('Keep this mix')),
+                const PopupMenuItem(value: 'engine', child: Text('Engine check')),
+              ],
+            ),
             IconButton(
               icon: Icon(Icons.inventory_2_outlined, color: Console.ink),
               tooltip: 'The crate',

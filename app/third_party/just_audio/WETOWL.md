@@ -57,3 +57,14 @@ re-apply the small edits above — the four for the equalizer and the two for th
 No tap is attached to anything until the equalizer has been switched on at least once,
 and a tap that is switched off passes samples through untouched — so somebody who never
 uses the equalizer is playing music exactly as upstream does.
+
+## And a third: which engine
+
+On an iPhone the booth's two decks are played by libmpv, for its filters, while the
+player the app is built around stays on AVPlayer, for the lock screen and the headset
+buttons. A platform that routes between the two has to know, when a player is set up,
+which it is — and all it is given is a freshly made id.
+
+| File | Change |
+|---|---|
+| `lib/just_audio.dart` | **New.** `AudioPlayer(engine: …)`, and the static `AudioPlayer.engines` (id → engine), written as each platform id is made (`_newId`). The router is `app/lib/src/state/booth/deck_router.dart`. |

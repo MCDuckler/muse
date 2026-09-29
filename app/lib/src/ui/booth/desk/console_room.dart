@@ -1,3 +1,4 @@
+import '../engine_check.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -322,6 +323,11 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
                 ),
               ),
             const LookButton(),
+            IconButton(
+              icon: Icon(Icons.memory_outlined, color: Console.quiet),
+              tooltip: 'Engine check',
+              onPressed: () => openEngineCheck(context),
+            ),
             IconButton(
               icon: Icon(Icons.keyboard_outlined, color: Console.quiet),
               tooltip: 'Keys',

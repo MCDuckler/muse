@@ -523,6 +523,12 @@ class ApiClient {
         : '$baseUrl${t.streamPath}?k=${Uri.encodeQueryComponent(key)}';
   }
 
+  /// Which parts of a record are kept on the server, without asking for any.
+  Future<List<String>> partsHere(int trackId) async {
+    final d = await _decode(await net.get(_u('/pool/parts/$trackId'), headers: _headers)) as Map<String, dynamic>;
+    return ((d['parts'] ?? const []) as List).cast<String>();
+  }
+
   /// Where a part of a record is: its drums, the music under them, or the whole of
   /// it with the voice taken out. Signed the same way the record itself is.
   String stemUrl(Track t, String part) {

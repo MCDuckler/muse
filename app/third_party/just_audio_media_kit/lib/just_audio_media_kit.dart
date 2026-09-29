@@ -54,11 +54,16 @@ class JustAudioMediaKit extends JustAudioPlatform {
   /// WetOwl: the player made for this id, if it is one of ours. See WETOWL.md.
   MediaKitPlayer? playerFor(String id) => _players[id];
 
-  /// WetOwl: this plugin, when it is the one registered.
+  /// WetOwl: this plugin, when it is the one registered — or the one a router
+  /// sends some players to ([routed]).
   static JustAudioMediaKit? get instanceIfRegistered {
     final p = JustAudioPlatform.instance;
-    return p is JustAudioMediaKit ? p : null;
+    return p is JustAudioMediaKit ? p : routed;
   }
+
+  /// WetOwl: this plugin where it is not the registered platform but a router's —
+  /// on an iPhone, for the booth's decks only. See WETOWL.md.
+  static JustAudioMediaKit? routed;
 
   /// Players that are disposing (player id -> future that completes when the player is disposed)
   final _disposingPlayers = HashMap<String, Future<void>>();
