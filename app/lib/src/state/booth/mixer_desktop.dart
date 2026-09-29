@@ -141,15 +141,15 @@ class DesktopMixer extends VolumeMixer {
 
   /// The last thing in every chain: nothing leaves a deck over -1 dBFS.
   static const ceiling =
-      'alimiter@out=limit=0.891:attack=5:release=50:level=disabled';
+      'alimiter@out=limit=0.989:attack=10:release=200:level=disabled';
 
   /// The same, for an ffmpeg too old to know `level` — and then a plain trim, which
   /// every build has. A deck four decibels quieter than the rest of the machine is a
   /// poor trade, but it is a better one than a deck that crackles.
   static const _ceilings = [
     ceiling,
-    'alimiter@out=limit=0.891:attack=5:release=50',
-    'volume@out=-4dB',
+    'alimiter@out=limit=0.989:attack=10:release=200',
+    'volume@out=-1dB',
   ];
 
   /// The echo every deck carries, ahead of the bands: the record split in two, one
@@ -165,8 +165,33 @@ class DesktopMixer extends VolumeMixer {
         '[d0][e]amix=inputs=2:normalize=0';
   }
 
+  /// The headroom every deck's chain is given before anything is done to it.
+  ///
+  /// Three bands split by cascaded Butterworths sum flat in *magnitude* — that is what
+  /// they are chosen for, and the kills measured here depend on it — but not in time:
+  /// their phase shifts stack, and a transient that went in at full comes out half as
+  /// loud again. Measured on a real record through this very chain: a source peaking at
+  /// +1.1 dBFS comes back at +4.2, with every knob at noon. So a deck was four decibels
+  /// over full scale *doing nothing*, and everything over full scale is cut off flat at
+  /// the sound card. That is the crackle, it was there whatever the EQ was set to, and
+  /// it was never there on the plain player because the plain player has no chain.
+  ///
+  /// A limiter was tried first and made it worse in a different way: asked to claw back
+  /// four to seven decibels on every kick, it is not a safety net but a compressor, and
+  /// measured against a clean trim its own error was 12 dB below the signal — audible
+  /// as pumping and grit, which is a crackle by another name.
+  ///
+  /// Given the room instead, the flat case lands at -0.27 dBFS and the ceiling above
+  /// never engages at all — measured, the peak is identical with it and without. It
+  /// only has work to do when a band is boosted past full scale, which is a thing no
+  /// system can grant and every mixer limits.
+  ///
+  /// The cost is that a deck is four and a half decibels quieter than it was. That is
+  /// not a loss; it is where it should have been.
+  static const headroom = 'volume=-4.5dB';
+
   static String bandsFor(double beatMs, {String? cap}) =>
-      '@wetowl:lavfi=[${_echo(beatMs)},$_bandsOnly${cap == null ? '' : ',$cap'}]';
+      '@wetowl:lavfi=[$headroom,${_echo(beatMs)},$_bandsOnly${cap == null ? '' : ',$cap'}]';
 
   /// As it stands for a record of 120 a minute — the shape of every deck's chain.
   static final bands = bandsFor(500);
@@ -215,6 +240,7 @@ class DesktopMixer extends VolumeMixer {
       '[c2][c3]join=inputs=2:channel_layout=stereo,volume@r=1[r];'
       '[c4][c5]join=inputs=2:channel_layout=stereo,volume@v=1[v];'
       '[d][r][v]amix=inputs=3:normalize=0,'
+      '$headroom,'
       '${_echo(beatMs)},'
       '$_bandsOnly'
       '${cap == null ? '' : ',$cap'}'

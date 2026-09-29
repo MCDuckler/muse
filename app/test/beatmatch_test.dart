@@ -1238,6 +1238,39 @@ void main() {
       expect(DesktopMixer.slide(-6, -6, Duration.zero), DesktopMixer.level(-6));
     });
 
+    test('the chain is given room before it splits the record', () {
+      // Three bands split by cascaded Butterworths sum flat in magnitude but not in
+      // time, so a transient comes out half as loud again: measured on a real record
+      // through this chain, a source peaking at +1.1 dBFS came back at +4.2 with every
+      // knob at noon. Four decibels over full scale doing nothing, cut off flat at the
+      // sound card — which is what the crackle was, and why the plain player, which has
+      // no chain, never did it.
+      //
+      // With the room given, the flat case lands at -0.27 dBFS and the ceiling below
+      // never engages: measured, the peak is identical with it and without.
+      expect(DesktopMixer.bands, startsWith('@wetowl:lavfi=[${DesktopMixer.headroom},'),
+          reason: 'the room comes before anything is done to the record');
+      expect(DesktopMixer.stemBands, contains(DesktopMixer.headroom));
+      for (final chain in DesktopMixer.standingFor(500).take(5)) {
+        expect(chain, contains(DesktopMixer.headroom));
+      }
+    });
+
+    test('a ceiling stands last in the chain, and is a net rather than a fist', () {
+      // A limiter asked to claw back seven decibels on every kick is a compressor, and
+      // measured against a clean trim its own error was 12 dB below the signal —
+      // pumping and grit, which is a crackle by another name. It is there for the case
+      // a band is boosted past full scale, which no system can grant.
+      final best = DesktopMixer.standingFor(500).first;
+      expect(best, contains(DesktopMixer.ceiling));
+      expect(DesktopMixer.ceiling, contains('limit=0.989'), reason: 'just under full');
+      expect(DesktopMixer.ceiling, contains('attack=10'), reason: 'not a fast fist');
+      // And offered without one at all, since a chain with a word this mpv does not
+      // know is refused whole, and a booth with no EQ is a worse trade than one that
+      // clips.
+      expect(DesktopMixer.standingFor(500).any((c) => !c.contains('alimiter')), isTrue);
+    });
+
     test('the split is a Linkwitz-Riley pair, which is what sums flat', () {
       // Two cascaded Butterworths a side at each crossover: one alone leaves a dip
       // where the bands meet, and the bands have to add back up to the record.
