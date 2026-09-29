@@ -8,7 +8,6 @@ import 'package:url_launcher/url_launcher.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/offline.dart';
-import '../worker/this_computer.dart' show fetchHereNow;
 import 'artwork.dart';
 import 'booth_page.dart' show openBooth;
 import 'browse_page.dart';
@@ -20,6 +19,7 @@ import 'kept_page.dart';
 import 'listening_page.dart';
 import 'mini_player.dart';
 import 'pane.dart';
+import 'picks.dart';
 import 'selection_bar.dart';
 import 'spotify_page.dart' show UnmatchedPage;
 import 'song_row.dart';
@@ -491,20 +491,23 @@ class _PlaylistPageState extends State<PlaylistPage> {
                 ? Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      _WouldSitWell(
-                        playlistId: widget.playlistId,
-                        songs: items.length,
-                        onAdded: () async {
-                          await app.refreshPlaylists();
-                          _reload();
-                        },
-                      ),
-                      _MoreLikeThis(
-                        playlistId: widget.playlistId,
-                        seeds: [for (final t in items) t.id],
-                        onAdded: () async {
-                          await app.refreshPlaylists();
-                          _reload();
+                      PicksSection(
+                        title: 'Would sit well here',
+                        blurb: 'What goes with this list — from your library, the house and beyond. '
+                            'A tap plays it; + puts it in.',
+                        refreshKey: items.length,
+                        ask: (fresh, round) => app.api.recommend(
+                            playlist: widget.playlistId, fresh: fresh, limit: 10 + 5 * round),
+                        addTooltip: 'Add to this playlist',
+                        onAdd: (pick, t) async {
+                          await app.api.addToPlaylist(widget.playlistId, [t.id]);
+                          // In; the page catching up is not part of whether it worked.
+                          unawaited(() async {
+                            try {
+                              await app.refreshPlaylists();
+                            } catch (_) {}
+                            if (mounted) _reload();
+                          }());
                         },
                       ),
                     ],
@@ -716,108 +719,6 @@ class _SourceTag extends StatelessWidget {
 
 /// The head of a playlist's page, set like a compilation's sleeve notes: the cover cut
 /// out and taped down, the name as big as it goes, and a typed line of what is in it.
-/// Under a playlist: what else you have that would sit well in it.
-///
-/// A playlist is usually half-finished — three songs by somebody put in one evening,
-/// and the other nine of theirs in the library never thought of again. This is those
-/// nine: from your own library, by the artists already in the list, one tap to add and
-/// a tap on the row to hear it first. Nothing is shown when there is nothing to offer.
-class _WouldSitWell extends StatefulWidget {
-  const _WouldSitWell(
-      {required this.playlistId, required this.songs, required this.onAdded});
-
-  final int playlistId;
-
-  /// How many songs the list has: when that changes, what suits it has changed too.
-  final int songs;
-  final Future<void> Function() onAdded;
-
-  @override
-  State<_WouldSitWell> createState() => _WouldSitWellState();
-}
-
-class _WouldSitWellState extends State<_WouldSitWell> {
-  List<Track> _offered = const [];
-  final _adding = <int>{};
-
-  @override
-  void initState() {
-    super.initState();
-    _ask();
-  }
-
-  @override
-  void didUpdateWidget(_WouldSitWell old) {
-    super.didUpdateWidget(old);
-    if (old.songs != widget.songs || old.playlistId != widget.playlistId) _ask();
-  }
-
-  Future<void> _ask() async {
-    try {
-      final got = await context.read<AppState>().api.suggestedFor(widget.playlistId);
-      if (mounted) setState(() => _offered = got);
-    } catch (_) {
-      // A server from before this, or no connection: the playlist is still a playlist.
-    }
-  }
-
-  Future<void> _add(Track t) async {
-    final app = context.read<AppState>();
-    final messenger = ScaffoldMessenger.of(context);
-    setState(() => _adding.add(t.id));
-    try {
-      await app.api.addToPlaylist(widget.playlistId, [t.id]);
-      if (mounted) setState(() => _offered = [for (final o in _offered) if (o.id != t.id) o]);
-      await widget.onAdded();
-    } catch (e) {
-      messenger.say(problem(e));
-    } finally {
-      if (mounted) setState(() => _adding.remove(t.id));
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_offered.isEmpty) return const SizedBox.shrink();
-    final app = context.read<AppState>();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(8, 28, 8, 2),
-          child: SectionFlag('Would sit well here'),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(8, 2, 8, 6),
-          child: Text('From your own library, by who is already in the list.',
-              style: Mag.typewriter(11,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant)),
-        ),
-        for (final t in _offered)
-          SongRow(
-            key: ValueKey('suits-${t.id}'),
-            track: t,
-            showDuration: false,
-            onTap: () => app.playTrackNow(t),
-            trailing: _adding.contains(t.id)
-                ? const Padding(
-                    padding: EdgeInsets.all(12),
-                    child: SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2)),
-                  )
-                : IconButton(
-                    icon: const Icon(Icons.add_circle_outline),
-                    tooltip: 'Add to this playlist',
-                    onPressed: () => _add(t),
-                  ),
-          ),
-      ],
-    );
-  }
-}
-
 class _PlaylistHeader extends StatelessWidget {
   const _PlaylistHeader(
       {required this.items, required this.playlist, required this.onChanged});
@@ -1386,116 +1287,3 @@ class _SmartListPageState extends State<SmartListPage> {
 }
 
 
-/// Songs that are not in the library yet and belong beside what the list already
-/// holds: YouTube Music's radio tail for a few of its songs, as a station is seeded.
-/// A tap adds one — it is fetched on this computer at once and put in the list —
-/// and MORE asks again from other seeds. Nothing is fetched by looking.
-class _MoreLikeThis extends StatefulWidget {
-  const _MoreLikeThis({required this.playlistId, required this.seeds, required this.onAdded});
-  final int playlistId;
-  final List<int> seeds;
-  final Future<void> Function() onAdded;
-
-  @override
-  State<_MoreLikeThis> createState() => _MoreLikeThisState();
-}
-
-class _MoreLikeThisState extends State<_MoreLikeThis> {
-  List<RemoteHit>? _offered;
-  final _adding = <String>{};
-  bool _asking = false;
-  int _round = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _ask();
-  }
-
-  Future<void> _ask() async {
-    if (widget.seeds.isEmpty) return;
-    setState(() => _asking = true);
-    try {
-      // A different handful of seeds each time MORE is pressed.
-      final seeds = [...widget.seeds];
-      final start = (_round * 4) % seeds.length;
-      final picked = [...seeds.sublist(start), ...seeds.sublist(0, start)].take(4).toList();
-      final got = await context.read<AppState>().api.similar(picked, limit: 10);
-      if (mounted) setState(() => _offered = got);
-    } catch (_) {
-      if (mounted) setState(() => _offered = const []);
-    } finally {
-      if (mounted) setState(() => _asking = false);
-    }
-  }
-
-  Future<void> _add(RemoteHit h) async {
-    final app = context.read<AppState>();
-    final messenger = ScaffoldMessenger.of(context);
-    setState(() => _adding.add(h.videoId));
-    try {
-      final t = await app.api.resolve(videoId: h.videoId);
-      await app.api.addToPlaylist(widget.playlistId, [t.id]);
-      unawaited(fetchHereNow([t.id]));
-      if (mounted) setState(() => _offered = [for (final o in _offered ?? const <RemoteHit>[]) if (o.videoId != h.videoId) o]);
-      messenger.say(snack(Text('${t.displayTitle} — in the list, fetching it here')));
-      await widget.onAdded();
-    } catch (e) {
-      messenger.say(problem(e));
-    } finally {
-      if (mounted) setState(() => _adding.remove(h.videoId));
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final offered = _offered;
-    if (widget.seeds.isEmpty || (offered != null && offered.isEmpty && !_asking)) return const SizedBox.shrink();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(8, 28, 8, 2),
-          child: Row(children: [
-            const Expanded(child: SectionFlag('More like this')),
-            TextButton.icon(
-              onPressed: _asking ? null : () {
-                _round++;
-                _ask();
-              },
-              icon: _asking
-                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.refresh, size: 16),
-              label: const Text('More'),
-            ),
-          ]),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(8, 2, 8, 6),
-          child: Text('Not in your library yet: what YouTube Music plays after these. A tap fetches one into the list.',
-              style: Mag.typewriter(11, color: Theme.of(context).colorScheme.onSurfaceVariant)),
-        ),
-        if (offered == null)
-          const Padding(padding: EdgeInsets.all(16), child: Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))))
-        else
-          for (final h in offered)
-            SongRow(
-              key: ValueKey('like-${h.videoId}'),
-              track: h.asPreview(),
-              showDuration: true,
-              onTap: _adding.contains(h.videoId) ? null : () => _add(h),
-              trailing: _adding.contains(h.videoId)
-                  ? const Padding(
-                      padding: EdgeInsets.all(12),
-                      child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
-                    )
-                  : IconButton(
-                      icon: const Icon(Icons.download_outlined),
-                      tooltip: 'Fetch it and add it to this playlist',
-                      onPressed: () => _add(h),
-                    ),
-            ),
-      ],
-    );
-  }
-}

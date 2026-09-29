@@ -339,6 +339,12 @@ class _QueuePageState extends State<QueuePage> {
                             tracks: rows, at: app.player?.index ?? 0);
                       case 'keep-station':
                         await keepStation(context);
+                      case 'reach-0':
+                        await app.tuneStation(0);
+                      case 'reach-0.5':
+                        await app.tuneStation(0.5);
+                      case 'reach-1':
+                        await app.tuneStation(1);
                       case 'delete':
                         if (app.activeQueue != null) {
                           await _deleteQueue(context, app.activeQueue!);
@@ -361,10 +367,22 @@ class _QueuePageState extends State<QueuePage> {
                       const PopupMenuItem(
                           value: 'make-station',
                           child: Text('Make a station from this song, without playing it')),
-                    if (active.isStation)
+                    if (active.isStation) ...[
                       const PopupMenuItem(
                           value: 'keep-station',
                           child: Text('Keep this station')),
+                      // How far it reaches past the library from its next top-up on.
+                      for (final (v, label) in const [
+                        (0.0, 'Only songs I have'),
+                        (0.5, 'Mine and new'),
+                        (1.0, 'Mostly new to me'),
+                      ])
+                        CheckedPopupMenuItem(
+                            value: 'reach-${v == 0.5 ? '0.5' : v.toInt()}',
+                            checked: ((active.stationFresh ?? 0.5) - v).abs() < 0.01,
+                            child: Text('Station: $label')),
+                      const PopupMenuDivider(),
+                    ],
                     const PopupMenuItem(value: 'rename', child: Text('Rename…')),
                     const PopupMenuItem(
                         value: 'save', child: Text('Save as playlist')),

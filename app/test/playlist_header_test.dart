@@ -41,10 +41,14 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     useThisClientInstead(MockClient((request) async {
       asked.add(request);
-      if (request.url.path == '/playlists/5/suggested') {
+      if (request.url.path == '/recommend' && request.url.queryParameters['playlist'] == '5') {
         return http.Response(
             jsonEncode({
-              'items': [track(9, 'Breakwater', 302000)],
+              // The house leaves out what is in the list already.
+              'items': [
+                if (!held.any((t) => t['id'] == 9))
+                {'where': 'library', 'score': 1.0, 'why': 'on lists with Harbour', 'track': track(9, 'Breakwater', 302000)}
+              ],
             }),
             200,
             headers: {'content-type': 'application/json'});
@@ -116,6 +120,7 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.text('WOULD SIT WELL HERE'), findsOneWidget);
     expect(find.text('Breakwater'), findsOneWidget);
+    expect(find.text('on lists with Harbour'), findsOneWidget, reason: 'it says why');
 
     await tester.tap(find.byTooltip('Add to this playlist'));
     await tester.pump();
@@ -131,7 +136,7 @@ void main() {
   testWidgets("somebody else's list is offered nothing", (tester) async {
     await show(tester, size: const Size(420, 1600));
     expect(find.text('WOULD SIT WELL HERE'), findsNothing);
-    expect(asked.any((r) => r.url.path.endsWith('/suggested')), isFalse);
+    expect(asked.any((r) => r.url.path == '/recommend'), isFalse);
   });
 
   for (final scale in [1.6, 2.0]) {

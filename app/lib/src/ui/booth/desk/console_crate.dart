@@ -316,7 +316,17 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
                 CrateTab.fits => _fitsPage(roomy),
                 CrateTab.library => _library(roomy),
                 CrateTab.search => _searchPage(roomy),
-                CrateTab.similar => _SimilarList(booth: widget.booth),
+                CrateTab.similar => _SimilarList(
+                    booth: widget.booth,
+                    row: (t, note) => _Row(
+                      key: ValueKey('sim-${t.id}'),
+                      track: t,
+                      booth: widget.booth,
+                      loadInto: widget.loadInto,
+                      forDeck: widget.forDeck,
+                      roomy: roomy,
+                      note: note,
+                    )),
                 CrateTab.parts => _PartsList(
                     booth: widget.booth, loadInto: widget.loadInto, forDeck: widget.forDeck),
               },
@@ -688,8 +698,11 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
 /// A song on YouTube that is not in the library: added to the queue, it is fetched on
 /// this computer at once and shared with the house.
 class _Elsewhere extends StatefulWidget {
-  const _Elsewhere({super.key, required this.hit});
+  const _Elsewhere({super.key, required this.hit, this.track});
   final RemoteHit hit;
+
+  /// The song itself, when the house knows it but has never fetched it.
+  final Track? track;
 
   @override
   State<_Elsewhere> createState() => _ElsewhereState();
@@ -704,7 +717,7 @@ class _ElsewhereState extends State<_Elsewhere> {
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _adding = true);
     try {
-      final t = await app.api.resolve(videoId: widget.hit.videoId);
+      final t = widget.track ?? await app.api.resolve(videoId: widget.hit.videoId);
       // 'library': fetched and kept, and nothing queued — a record for later.
       if (mode != 'library') {
         await app.addTrack(t, mode: mode);
@@ -776,22 +789,26 @@ class _ElsewhereState extends State<_Elsewhere> {
   }
 }
 
-/// Songs that are not in the library yet and belong beside what is on: YouTube
-/// Music's radio tail for the records on the decks and the next few in the queue —
-/// the way a station is seeded. Each is a tap from the queue, or from the library.
+/// What goes with what is on: the records on the decks and the next few in the
+/// queue, asked of the house (recommend.py) — its lists, what was played around them,
+/// how they sound, YouTube Music's radio. What is here is a crate row like any other,
+/// ready for a deck; what is not is a tap from the queue, or from the library. The dial
+/// says how far past the library to look.
 class _SimilarList extends StatefulWidget {
-  const _SimilarList({required this.booth});
+  const _SimilarList({required this.booth, required this.row});
   final Booth booth;
+  final Widget Function(Track track, String note) row;
 
   @override
   State<_SimilarList> createState() => _SimilarListState();
 }
 
 class _SimilarListState extends State<_SimilarList> {
-  List<RemoteHit>? _found;
+  List<Pick>? _found;
   List<Track> _seeds = const [];
   bool _asking = false;
   String? _trouble;
+  double _fresh = 0.5;
 
   @override
   void initState() {
@@ -827,8 +844,13 @@ class _SimilarListState extends State<_SimilarList> {
       });
       return;
     }
+    final app = context.read<AppState>();
     try {
-      final got = await context.read<AppState>().api.similar([for (final t in seeds) t.id], limit: 16);
+      final got = await app.api.recommend(
+          seeds: [for (final t in seeds) t.id],
+          exclude: [for (final t in app.player?.items ?? const <Track>[]) t.id],
+          fresh: _fresh,
+          limit: 20);
       if (mounted) setState(() => _found = got);
     } catch (e) {
       if (mounted) {
@@ -840,6 +862,13 @@ class _SimilarListState extends State<_SimilarList> {
     } finally {
       if (mounted) setState(() => _asking = false);
     }
+  }
+
+  Future<void> _dismiss(Pick p) async {
+    setState(() => _found = [for (final o in _found ?? const <Pick>[]) if (o.key != p.key) o]);
+    try {
+      await context.read<AppState>().api.dismissPick(p);
+    } catch (_) {}
   }
 
   @override
@@ -861,6 +890,18 @@ class _SimilarListState extends State<_SimilarList> {
                 style: Console.label(8.5),
               ),
             ),
+            for (final (v, label) in const [(0.0, 'MINE'), (0.5, 'MIX'), (1.0, 'NEW')]) ...[
+              _Toggle(
+                  label: label,
+                  on: (_fresh - v).abs() < 0.01,
+                  onTap: _asking
+                      ? null
+                      : () {
+                          setState(() => _fresh = v);
+                          _ask();
+                        }),
+              const SizedBox(width: 3),
+            ],
             Pad(icon: Icons.refresh, width: 30, height: 24, tooltip: 'Ask again, for what is on now', onTap: _asking ? null : _ask),
           ]),
         ),
@@ -871,15 +912,43 @@ class _SimilarListState extends State<_SimilarList> {
                   ? Center(
                       child: Text(
                           _trouble != null
-                              ? 'The house could not ask YouTube Music.'
+                              ? 'The house could not answer.'
                               : _seeds.isEmpty
                                   ? 'Put a record on, or something in the queue.'
-                                  : 'Nothing new beside these — the library has it all.',
+                                  : _fresh >= 0.99
+                                      ? 'Nothing new beside these — the library has it all.'
+                                      : 'Nothing else here goes with these yet.',
                           textAlign: TextAlign.center,
                           style: Mag.typewriter(11, color: Console.quiet)))
                   : ListView(
                       padding: EdgeInsets.zero,
-                      children: [for (final h in found) _Elsewhere(key: ValueKey('sim-${h.videoId}'), hit: h)],
+                      children: [
+                        for (final p in found)
+                          GestureDetector(
+                            key: ValueKey('sim-${p.key}'),
+                            onLongPress: () => _dismiss(p),
+                            child: Tooltip(
+                              message: '${p.why.isEmpty ? '' : '${p.why}\n'}Hold to wave it away',
+                              waitDuration: const Duration(milliseconds: 700),
+                              child: p.track != null && p.track!.isReady
+                                  ? widget.row(p.track!, [
+                                      if (p.where == 'house') 'the house has it',
+                                      if (p.why.isNotEmpty) p.why,
+                                    ].join(' · '))
+                                  : _Elsewhere(
+                                      key: ValueKey('else-${p.key}'),
+                                      hit: p.hit ??
+                                          RemoteHit(
+                                            videoId: p.track!.providerId ?? '',
+                                            title: p.track!.title,
+                                            artists: p.track!.artists,
+                                            album: p.track!.album,
+                                            durationMs: p.track!.durationMs,
+                                          ),
+                                      track: p.track),
+                            ),
+                          ),
+                      ],
                     ),
         ),
       ],
@@ -938,10 +1007,13 @@ class _Empty extends StatelessWidget {
 
 /// A small switch in words, the way the console labels things.
 class _Toggle extends StatelessWidget {
-  const _Toggle({required this.label, required this.onTap, this.tooltip});
+  const _Toggle({required this.label, required this.onTap, this.tooltip, this.on = false});
   final String label;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final String? tooltip;
+
+  /// Lit: the one of a set that is chosen.
+  final bool on;
 
   @override
   Widget build(BuildContext context) => Tooltip(
@@ -952,10 +1024,11 @@ class _Toggle extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.fromLTRB(7, 4, 7, 3),
             decoration: BoxDecoration(
-              border: Border.all(color: Console.line),
+              color: on ? Console.ink : null,
+              border: Border.all(color: on ? Console.ink : Console.line),
               borderRadius: BorderRadius.circular(4),
             ),
-            child: Text(label, style: Console.label(8, color: Console.ink)),
+            child: Text(label, style: Console.label(8, color: on ? Console.panel : Console.ink)),
           ),
         ),
       );

@@ -272,6 +272,58 @@ class RemoteHit {
   String get artistLine => artists.isEmpty ? 'Unknown artist' : artists.join(', ');
 }
 
+/// A song offered as going with something — by the house's lists, what was played
+/// around it, how it sounds, YouTube Music's radio — and where it is: `library` (yours
+/// and here), `waiting` (yours, never fetched), `house` (somebody else fetched it) or
+/// `new` (not here at all). Exactly one of [track] and [hit] is set.
+class Pick {
+  final String where;
+  final double score;
+  final String why;
+  final Track? track;
+  final RemoteHit? hit;
+  final int? seed;
+
+  const Pick({required this.where, this.score = 0, this.why = '', this.track, this.hit, this.seed});
+
+  factory Pick.fromJson(Map<String, dynamic> j) => Pick(
+        where: (j['where'] ?? 'library') as String,
+        score: ((j['score'] as num?) ?? 0).toDouble(),
+        why: (j['why'] ?? '') as String,
+        track: j['track'] is Map ? Track.fromJson((j['track'] as Map).cast<String, dynamic>()) : null,
+        hit: j['hit'] is Map ? RemoteHit.fromJson((j['hit'] as Map).cast<String, dynamic>()) : null,
+        seed: j['seed'] as int?,
+      );
+
+  /// Something a row can draw, whether or not it is here yet.
+  Track get row => track ?? hit!.asPreview();
+
+  /// Yours, and here: a tap plays it.
+  bool get isHere => where == 'library' || where == 'house';
+
+  /// Not in your library yet.
+  bool get isNewToYou => where == 'house' || where == 'new';
+
+  String get key => track != null ? 't:${track!.id}' : 'v:${hit!.videoId}';
+}
+
+/// A page of picks for the cover.
+class PickSection {
+  final String id;
+  final String name;
+  final String blurb;
+  final List<Pick> items;
+
+  const PickSection({required this.id, required this.name, required this.blurb, required this.items});
+
+  factory PickSection.fromJson(Map<String, dynamic> j) => PickSection(
+        id: j['id'] as String,
+        name: (j['name'] ?? '') as String,
+        blurb: (j['blurb'] ?? '') as String,
+        items: [for (final i in (j['items'] ?? const []) as List) Pick.fromJson((i as Map).cast<String, dynamic>())],
+      );
+}
+
 /// A queue is an object, not "the" queue: it has a name, its own order, its own
 /// cursor and its own shuffle/repeat, and switching to it resumes where it was.
 class Queue {
@@ -311,6 +363,9 @@ class Queue {
   /// asked for more of the same when it runs down.
   final String? stationKind;
 
+  /// How far a station reaches past the library, 0 (only yours) to 1 (only new).
+  final double? stationFresh;
+
   const Queue({
     required this.id,
     required this.name,
@@ -322,6 +377,7 @@ class Queue {
     this.items = const [],
     this.sharedFrom,
     this.stationKind,
+    this.stationFresh,
     this.windowFrom = 0,
     int? total,
     int? itemCount,
@@ -347,6 +403,9 @@ class Queue {
         sharedFrom: j['shared_from'] as String?,
         stationKind: j['station'] is Map
             ? ((j['station'] as Map)['kind'] as String?)
+            : null,
+        stationFresh: j['station'] is Map
+            ? ((j['station'] as Map)['fresh'] as num?)?.toDouble()
             : null,
       );
 

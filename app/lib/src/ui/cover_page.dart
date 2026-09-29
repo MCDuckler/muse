@@ -13,6 +13,7 @@ import 'feel.dart';
 import 'mag.dart';
 import 'mag_parts.dart';
 import 'pane.dart';
+import 'picks.dart';
 import 'queue_page.dart' show openQueueScreen;
 import 'mini_player.dart' show bottomForPlayer;
 import 'skeleton.dart';
@@ -46,6 +47,7 @@ class _Issue {
   List<Person> playing = const [];
   int you = 0;
   List<Track> added = const [];
+  List<PickSection> picks = const [];
 }
 
 class _CoverPageState extends State<CoverPage> {
@@ -105,6 +107,7 @@ class _CoverPageState extends State<CoverPage> {
       }),
       quietly(() async =>
           issue.added = (await api.libraryTracks(sort: 'added', limit: 10)).items),
+      quietly(() async => issue.picks = await api.homePicks()),
     ]);
     _printing = false;
     if (!mounted) return;
@@ -197,6 +200,8 @@ class _CoverPageState extends State<CoverPage> {
                 ],
               );
             }),
+            for (final section in issue.picks)
+              if (section.items.isNotEmpty) _PickShelf(section: section),
             if (issue.added.isNotEmpty) _JustIn(tracks: issue.added),
             _Folio(issue: issue, number: issueNumber(now)),
           ],
@@ -615,6 +620,140 @@ class _JustIn extends StatelessWidget {
                               overflow: TextOverflow.ellipsis,
                               style: Theme.of(context).textTheme.labelLarge),
                         ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A shelf of picks made for this reader: out of what they have played lately, or
+/// what they loved and then left. Pasted in a row like JUST IN; a tap on one plays
+/// the shelf from there — what is not here yet is fetched as it comes up — and a hold
+/// waves one away for good.
+class _PickShelf extends StatefulWidget {
+  const _PickShelf({required this.section});
+
+  final PickSection section;
+
+  @override
+  State<_PickShelf> createState() => _PickShelfState();
+}
+
+class _PickShelfState extends State<_PickShelf> {
+  late List<Pick> _items = widget.section.items;
+  bool _starting = false;
+
+  @override
+  void didUpdateWidget(_PickShelf old) {
+    super.didUpdateWidget(old);
+    if (old.section != widget.section) _items = widget.section.items;
+  }
+
+  Future<void> _play(int from) async {
+    if (_starting) return;
+    final app = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _starting = true);
+    try {
+      final tracks = await Future.wait([for (final p in _items) bringIn(app, p)]);
+      feel(Feel.commit);
+      await app.playNow(tracks, startAt: from, named: widget.section.name);
+    } catch (e) {
+      messenger.say(problem(e));
+    } finally {
+      if (mounted) setState(() => _starting = false);
+    }
+  }
+
+  Future<void> _dismiss(Pick p) async {
+    final app = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _items = [for (final o in _items) if (o.key != p.key) o]);
+    try {
+      await app.api.dismissPick(p);
+      messenger.say(snack(Text('Not offered again: ${p.row.displayTitle}')));
+    } catch (e) {
+      messenger.say(problem(e));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (_items.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 22),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Row(children: [
+              Expanded(child: SectionFlag(widget.section.name)),
+              TextButton.icon(
+                onPressed: _starting ? null : () => _play(0),
+                icon: _starting
+                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.play_arrow, size: 18),
+                label: const Text('Play'),
+              ),
+            ]),
+          ),
+          if (widget.section.blurb.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 2, 14, 0),
+              child: Text(widget.section.blurb, style: Mag.typewriter(11, color: scheme.onSurfaceVariant)),
+            ),
+          SizedBox(
+            height: 196,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.fromLTRB(18, 18, 18, 8),
+              itemCount: _items.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 16),
+              itemBuilder: (context, i) {
+                final p = _items[i];
+                final t = p.row;
+                return Semantics(
+                  button: true,
+                  label: 'Play ${t.displayTitle} by ${t.artistLine}',
+                  child: Tooltip(
+                    message: [if (p.why.isNotEmpty) p.why, 'Hold to wave it away'].join('\n'),
+                    waitDuration: const Duration(milliseconds: 700),
+                    child: GestureDetector(
+                      onTap: () => _play(i),
+                      onLongPress: () => _dismiss(p),
+                      child: SizedBox(
+                        width: 104,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Stack(clipBehavior: Clip.none, children: [
+                              CutOut(
+                                turn: (i.isEven ? 1 : -1) * (0.02 + (i % 3) * 0.012),
+                                child: Artwork(track: t, size: 92, radius: 0, small: true),
+                              ),
+                              if (p.where != 'library')
+                                Positioned(right: -4, top: -6, child: WhereTag(p)),
+                            ]),
+                            const SizedBox(height: 8),
+                            Text(t.displayTitle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.labelLarge),
+                            Text(t.artistLine,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Mag.typewriter(10, color: scheme.onSurfaceVariant)),
+                          ],
+                        ),
                       ),
                     ),
                   ),

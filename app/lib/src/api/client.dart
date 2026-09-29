@@ -277,6 +277,47 @@ class ApiClient {
     return [for (final h in (d['similar'] ?? const []) as List) RemoteHit.fromJson((h as Map).cast<String, dynamic>())];
   }
 
+  /// What goes with some songs, a playlist or a queue (what is on and the next few),
+  /// out of everything the house knows and what this person plays and skips. [fresh]
+  /// 0 to 1 is how much of it is not already theirs and here; [only] `library` or
+  /// `new` narrows it. Nothing is fetched by asking.
+  Future<List<Pick>> recommend(
+      {Iterable<int> seeds = const [],
+      int? playlist,
+      int? queue,
+      double fresh = 0.5,
+      String? only,
+      Iterable<int> exclude = const [],
+      int limit = 12}) async {
+    final d = await _decode(await net.get(
+        _u('/recommend', {
+          if (seeds.isNotEmpty) 'seeds': seeds.join(','),
+          if (playlist != null) 'playlist': playlist,
+          if (queue != null) 'queue': queue,
+          'fresh': fresh,
+          if (only != null) 'only': only,
+          if (exclude.isNotEmpty) 'exclude': exclude.join(','),
+          'limit': limit,
+        }),
+        headers: _headers)) as Map<String, dynamic>;
+    return [for (final p in (d['items'] ?? const []) as List) Pick.fromJson((p as Map).cast<String, dynamic>())];
+  }
+
+  /// The cover's pages of picks: a mix out of what has been played lately, and songs
+  /// loved and then left.
+  Future<List<PickSection>> homePicks() async {
+    final d = await _decode(await net.get(_u('/recommend/home'), headers: _headers)) as Map<String, dynamic>;
+    return [for (final s in (d['sections'] ?? const []) as List) PickSection.fromJson((s as Map).cast<String, dynamic>())];
+  }
+
+  /// Not for me: never offered again.
+  Future<void> dismissPick(Pick p) async => _decode(await net.post(_u('/recommend/dismiss'),
+      headers: {..._headers, 'Content-Type': 'application/json'},
+      body: jsonEncode({
+        if (p.track != null) 'track_id': p.track!.id,
+        if (p.hit != null) 'video_id': p.hit!.videoId,
+      })));
+
   /// Keep where a hand said a record leaves ([outMs]) or comes in ([inMs]): only the
   /// ones given are changed; the house serves them back with the analysis.
   Future<void> setCues(int trackId, {int? outMs, int? inMs, bool clearOut = false, bool clearIn = false}) async =>
@@ -1088,7 +1129,7 @@ class ApiClient {
   /// the list of queues, so everything a queue can do it can do — reorder, remove,
   /// keep on the device, save to the library.
   Future<Queue> startStation(
-      {String kind = 'track', int? trackId, String? album, String? artist}) async =>
+      {String kind = 'track', int? trackId, String? album, String? artist, double? fresh}) async =>
       Queue.fromJson(await _decode(await net.post(_u('/stations'),
               headers: _headers,
               body: jsonEncode({
@@ -1096,7 +1137,14 @@ class ApiClient {
                 if (trackId != null) 'track_id': trackId,
                 if (album != null) 'album': album,
                 if (artist != null) 'artist': artist,
+                if (fresh != null) 'fresh': fresh,
               }))) as Map<String, dynamic>);
+
+  /// How far a station reaches past the library from here on.
+  Future<Queue> tuneStation(int queueId, double fresh) async =>
+      Queue.fromJson(await _decode(await net.patch(_u('/stations/$queueId'),
+              headers: {..._headers, 'Content-Type': 'application/json'},
+              body: jsonEncode({'fresh': fresh}))) as Map<String, dynamic>);
 
   /// More of the same, asked for as it runs down.
   Future<Queue> extendStation(int queueId, {int count = 8}) async =>

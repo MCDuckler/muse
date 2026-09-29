@@ -1742,6 +1742,14 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// How far the station on now reaches past the library, from its next top-up on.
+  Future<void> tuneStation(double fresh) async {
+    final q = activeQueue;
+    if (q == null || !q.isStation) return;
+    activeQueue = await api.tuneStation(q.id, fresh);
+    notifyListeners();
+  }
+
   int _eventBackoff = 1;
 
   /// Another device changed a queue: a guest in the jam added a song, or the same
