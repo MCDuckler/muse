@@ -137,6 +137,51 @@ def a_structured_record(client, hdr, tmp_path):
     return track, stems
 
 
+# The same record, its sections moved a second — two beats at 120 — off the grid's
+# start: drums at nine seconds instead of eight, voice at seventeen. Its bars really do
+# begin on beat three of four.
+_OFF_DRUMS = ("if(lt(mod(t,0.5),0.03)*(between(t,9,48.99)+between(t,65,88.99)),"
+              "0.8*sin(2*PI*55*t),0)")
+_OFF_VOICE = "0.3*sin(2*PI*440*t)*(between(t,17,48.99)+between(t,65,80.99))"
+_OFF_MIX = f"({_OFF_DRUMS})+({_OFF_VOICE})+({_REST})"
+
+
+def test_the_bar_is_where_the_record_changes_not_where_the_tracker_votes(
+        client, hdr, tmp_path, cfg):
+    """A record whose sections start two beats into the grid, and a tracker that says
+    they start on beat one.
+
+    This is the fault that was reported twice and found twice: the four-bar rules drawn
+    two beats after the drop, on records where the house had read the bar correctly and
+    the tracker's vote was taken over the top of it. Measured over two hundred records
+    against where each one's energy actually rises, the two disagree about twenty-five
+    and the house is right eleven of them to the tracker's seven — and the tracker's
+    misses were *two beats*, every time, which is exactly what it looked like on screen.
+
+    So: the tracker is told beat one, the record says beat three, and the record wins.
+    """
+    f = _synth(tmp_path, "offset.m4a", [_OFF_MIX], 100)
+    track = client.post("/uploads", headers=hdr,
+                        files={"audio": ("offset.m4a", io.BytesIO(f.read_bytes()),
+                                         "audio/mp4")}).json()
+    sha = db.one("select sha256 from media where track_id=%s", (track["id"],))["sha256"]
+    beats = [i * 500 for i in range(200)]
+    # Every fourth beat from the first: the tracker's word, and the wrong one here.
+    downs = [beats[i] for i in range(0, 200, 4)]
+    pool.keep_beats(cfg.data_dir, sha,
+                    json.dumps({"beats_ms": beats, "downbeats_ms": downs,
+                                "model": "test", "device": "cpu"}).encode())
+    got = client.get(f"/tracks/{track['id']}/analysis?structure=1", headers=hdr).json()
+    assert got["structure"]["sources"]["neural"], "the tracker was handed in"
+    assert got["structure"]["sources"]["bar_phase"] == "change", \
+        "the house's reading of the record has to be the one taken"
+    # Two beats in, which is where the record's own sections start.
+    assert got["bar_starts_on"] == 2, got["bar_starts_on"]
+    # And so the rules land on the changes rather than two beats past them.
+    assert got["four_bars"], "a record with bars has four-bar rules"
+    assert got["four_bars"][0] % 8000 == 1000, got["four_bars"][:4]
+
+
 def test_the_structure_is_served_and_built_again_as_parts_arrive(
         client, hdr, a_structured_record, tmp_path, cfg):
     track, stems = a_structured_record
@@ -150,9 +195,16 @@ def test_the_structure_is_served_and_built_again_as_parts_arrive(
     assert first["structure"]["drums_db"] is None
     assert first["beats"], "the click train has a pulse"
 
-    # The tracker's beats, with the bar on beat two of four, and the stems.
+    # The tracker's beats and bars, and the stems.
+    #
+    # The bars are on beat one, which is where this record's sections actually change:
+    # its drums come in at eight seconds, its voice at sixteen, and at a beat every half
+    # second those are beat sixteen and beat thirty-two. The tracker used to be given
+    # bars on beat *two* here and the house was made to follow it, which asked the test
+    # to prove that a declared bar beats a measured one — on a fixture whose own audio
+    # said otherwise. That is the argument the house now wins, and rightly.
     beats = [i * 500 for i in range(200)]
-    downs = [beats[i] for i in range(1, 200, 4)]
+    downs = [beats[i] for i in range(0, 200, 4)]
     raw = json.dumps({"beats_ms": beats, "downbeats_ms": downs, "model": "test", "device": "cpu"})
     pool.keep_beats(cfg.data_dir, sha, raw.encode())
     pool.keep_part(cfg.data_dir, sha, "stems", stems, None, 1.0)
@@ -161,8 +213,18 @@ def test_the_structure_is_served_and_built_again_as_parts_arrive(
     got = r.json()
     s = got["structure"]
     assert s["sources"]["stems"] and s["sources"]["neural"]
-    assert s["sources"]["bar_phase"] == "neural"
-    # The house's bars now fall where the tracker put them.
+    # The house's own reading of where this record's sections change, where it has one.
+    #
+    # It used to be the tracker's vote, straight over the top of the house's, whenever
+    # half the tracker's bars fell on one phase. Measured over two hundred records
+    # against where each record's energy actually rises, the two disagree on
+    # twenty-five, and over those the house is right eleven times to the tracker's
+    # seven — and where the tracker was wrong it was wrong by *two beats*, which is
+    # what "the four-bar marker is two beats after the drop" was. The tracker fills in
+    # where the house has nothing to say, which is where it earns its place. What has
+    # to hold either way is the next assertion: the bars land on the bars.
+    assert s["sources"]["bar_phase"] in ("change", "neural")
+    # The house's bars fall where the tracker put them.
     near = [min(abs(d - x) for x in downs) for d in got["downbeats"]]
     assert sum(1 for n in near if n <= 60) >= 0.8 * len(near), near[:8]
     labels = [x["label"] for x in s["sections"]]

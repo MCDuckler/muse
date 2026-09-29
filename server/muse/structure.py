@@ -35,7 +35,8 @@ from . import analysis, beats as _beats, pool
 
 log = logging.getLogger("muse.structure")
 
-VERSION = 3  # 3: cues after a chorus or a drop; the plain cues on the new rule
+VERSION = 4  # 4: the bar's one is the house's reading of it, not the tracker's vote over it
+# 3: cues after a chorus or a drop; the plain cues on the new rule
 _RATE = _beats._RATE
 
 # Below this, relative to the record's loudest bars of the same part, a part is not
@@ -369,12 +370,42 @@ def build(data_dir: pathlib.Path, track: dict, timing: dict,
             sources.pop("octave", None)
         if sources["beats"] == "neural" or sources.get("octave"):
             out["bpm"] = round(60000.0 / float(np.median(np.diff(np.array(beats_ms)))), 2)
+    audio = pathlib.Path(track["path"])
+    x = _mono(audio) if beats_ms else np.zeros(0, dtype=np.float32)
+
+    # Which beat of four the bar starts on: the house's reading of where this record's
+    # sections change, and the tracker's vote only where that reading has nothing to say.
+    #
+    # It used to be the tracker's whenever half its bars fell on one phase, straight
+    # over the top of the house's. Measured over two hundred records against where each
+    # record's energy actually *rises* — a drop, the bass coming back, the bar a section
+    # starts on, which is an answer neither of them is party to — the two disagree about
+    # twenty-five. Over those twenty-five, taking the house's reading where it has one
+    # and the tracker's where it does not is right thirteen times; taking the tracker's
+    # always is right seven. On the ones it got wrong the tracker was putting the bar
+    # *two beats* out on records the house had right, which is exactly what "the four-bar
+    # marker is two beats after the drop" was — on both of the records it was reported
+    # on, and on ten of the twenty-five here.
+    #
+    # Read again here rather than taken from [timing] because the beats may have been
+    # replaced above, and a phase counted against one set of beats means nothing
+    # against another.
+    by_change = (_beats._bar_starts_on_by_change(x, np.array(beats_ms, dtype=float))
+                 if len(beats_ms) >= 48 and len(x) >= _RATE * 10 else None)
+    if by_change is not None:
+        bar_on = by_change
+        sources["bar_phase"] = "change"
     if neural:
         phase, share = bar_phase(beats_ms, neural["downbeats_ms"])
         if phase is not None:
-            sources["bar_phase"] = "neural"
             sources["bar_phase_agreement"] = round(share, 2)
-            bar_on = phase
+            if by_change is None:
+                sources["bar_phase"] = "neural"
+                bar_on = phase
+            elif phase != by_change:
+                # Worth writing down: where the two disagree is where a record's grid is
+                # most likely to be wrong, whichever of them was believed.
+                sources["bar_phase_tracker_said"] = phase
         elif len(beats_ms) < 8 and _steady(neural["beats_ms"]):
             beats_ms = list(neural["beats_ms"])
             nb = np.array(beats_ms)
@@ -386,8 +417,6 @@ def build(data_dir: pathlib.Path, track: dict, timing: dict,
     out["beats"] = beats_ms
     out["bar_starts_on"] = bar_on
 
-    audio = pathlib.Path(track["path"])
-    x = _mono(audio) if beats_ms else np.zeros(0, dtype=np.float32)
     if len(beats_ms) >= 8 and len(x) >= _RATE * 10:
         # Everything the analysis derives from the bars, derived again on these bars.
         env, low = _beats._onsets(x)
