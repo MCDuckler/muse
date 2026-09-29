@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from muse import app as app_mod          # noqa: E402
-from muse import auth, config, db, ytm   # noqa: E402
+from muse import auth, config, db, recommend, ytm   # noqa: E402
 
 # Where the throwaway test database lives. The default is the muse-testdb container as
 # it is published on a development machine; MUSE_TEST_DSN points it somewhere else — at
@@ -53,7 +53,7 @@ def client(cfg, monkeypatch):
         "album": "Test Album", "duration_ms": 123_000, "raw": {"stub": True},
     }])
     monkeypatch.setattr(ytm, "watch_playlist", lambda vid, limit=25: [
-        {"video_id": f"RADIO{n}", "title": f"Radio Track {n}", "artists": ["Someone"],
+        {"video_id": f"RADIO{n}", "title": f"Radio Track {n}", "artists": [f"Radio Artist {n}"],
          "album": None, "duration_ms": 180_000 + n, "raw": {"radio_seed": vid}}
         for n in range(12)
     ])
@@ -70,8 +70,9 @@ def client(cfg, monkeypatch):
         for t in ("queue_items", "queues", "playlist_items", "playlist_unmatched",
                   "playlists", "listens", "media", "track_sources", "tracks", "jobs",
                   "devices", "workers", "invites", "provider_accounts", "settings",
-                  "users"):
+                  "users", "radio_edges"):
             c.execute(f"truncate {t} restart identity cascade")
+    recommend.forget_sound()
     for u in cfg.users:                       # re-seed what muse.toml declares
         # Admin, for the same reason create_app does it: whoever the server's own
         # config names owns the server. The truncate above wipes the row create_app

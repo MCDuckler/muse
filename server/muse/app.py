@@ -25,7 +25,7 @@ from . import (
                follows, heavy, jobs, progress,
                jam, routes_accounts, routes_browse, routes_downloads, routes_files,
                routes_follows, routes_jam, routes_marks,
-               routes_library, routes_linked, routes_play, routes_search,
+               routes_library, routes_linked, routes_play, routes_recommend, routes_search,
                routes_devices, routes_scrobble, routes_social,
                routes_sources,
                routes_spotify,
@@ -920,6 +920,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     app.include_router(routes_jam.router)
     app.include_router(routes_sources.router)
     app.include_router(routes_search.router)
+    app.include_router(routes_recommend.router)
     app.include_router(routes_scrobble.router)
     app.include_router(routes_social.router)
     app.include_router(routes_linked.router)

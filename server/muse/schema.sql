@@ -704,3 +704,41 @@ create table if not exists track_cues (
   updated_at timestamptz not null default now()
 );
 alter table tracks add column if not exists beats_version int;
+
+-- What YouTube Music plays after a song, kept: every watch playlist the house asks
+-- for is written down here, one row a song it offered, so the next question about the
+-- same seed is answered from the disk and the answers pile up into a map of what goes
+-- with what. `meta` is enough of the offered song to show it before it is fetched.
+-- See recommend.py.
+create table if not exists radio_edges (
+  seed_video text not null,
+  video      text not null,
+  rank       int not null,
+  meta       jsonb not null default '{}',
+  seen_at    timestamptz not null default now(),
+  primary key (seed_video, video)
+);
+create index if not exists radio_edges_video on radio_edges(video);
+
+-- The radio songs fetched before there was such a table still say which seed they came
+-- from; they are the first of it. Rank unknown, so put at the back.
+insert into radio_edges(seed_video, video, rank, seen_at)
+select s.raw->>'radio_seed', s.provider_id, 40, s.fetched_at
+  from track_sources s
+ where s.provider = 'ytmusic' and s.raw ? 'radio_seed'
+   and s.raw->>'radio_seed' <> s.provider_id
+on conflict do nothing;
+
+-- "Not for me": a song somebody waved away from what was offered to them, never
+-- offered to them again. `key` is `t:<track id>` or `v:<YouTube Music id>` — what
+-- was offered is not always in the catalog yet.
+create table if not exists rec_dismissals (
+  user_id int not null references users(id) on delete cascade,
+  key     text not null,
+  at      timestamptz not null default now(),
+  primary key (user_id, key)
+);
+
+-- How far a station reaches past what is already here: 0 is only the library, 1 is
+-- only songs new to it. See recommend.py.
+alter table stations add column if not exists fresh real not null default 0.5;

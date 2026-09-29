@@ -7,14 +7,18 @@ becomes what is playing, for as long as you leave it on. It is a queue of its ow
 everything a queue can do it can do: reorder it, take songs out, keep it on the device,
 save it to the library as a playlist.
 
-Where the songs come from: YouTube Music's watch playlist for a seed, which is the same
-well the old radio drew from. What is new is that a station has *several* seeds — a
-record is its own tracks, an artist is what of theirs is already here — and that it is
-asked for more as it runs down rather than once at the start.
+Where the songs come from: recommend.py — the house's lists and sittings, how records
+sound, and YouTube Music's watch playlist for the seeds, which was once the only well.
+A station has *several* seeds — a record is its own tracks, an artist is what of
+theirs is already here — and it is asked for more as it runs down rather than once at
+the start. Each time it is asked it has heard how it went: a song listened through on
+it joins the seeds, a song skipped in the first half minute steers it away from its
+neighbours. And it reaches past the library as far as `fresh` says — 0 only what is
+yours and here, 1 only what is new — so it no longer has to be fifty downloads.
 """
 from __future__ import annotations
 
-from . import catalog, db, match, ytm
+from . import catalog, db, jobs, recommend
 
 # How many to put in a fresh station, and how many to add each time it runs low.
 #
@@ -37,12 +41,11 @@ def seed_tracks(kind: str, *, user_id: int, track_id: int | None,
     """The songs a station is built out of.
 
     One for a song; the record itself for an album; whatever of an artist is already
-    in the library for an artist. Only songs with a YouTube Music id are any use —
-    that id is what the watch playlist is asked for.
+    in the library for an artist.
     """
     if kind == "track":
         row = catalog.track_row(track_id) if track_id else None
-        return [row] if row and row.get("provider_id") else []
+        return [row] if row else []
 
     if kind == "album":
         rows = db.all_(
@@ -73,7 +76,9 @@ def seed_tracks(kind: str, *, user_id: int, track_id: int | None,
     else:
         raise ValueError(f"a station cannot be made from {kind!r}")
 
-    with_ids = [r for r in rows if r.get("provider_id")]
+    # The ones YouTube Music knows first, as they can be asked about there too; but a
+    # record it does not know still has the house's own lists and its sound to go on.
+    with_ids = [r for r in rows if r.get("provider_id")] or rows
     if len(with_ids) <= SEEDS:
         return with_ids
     # Spread across the record rather than the first four tracks of it.
@@ -93,46 +98,77 @@ def name_for(kind: str, seeds: list[dict], *, album: str | None,
     return "Radio"
 
 
-def gather(seeds: list[dict], *, wanted: int, avoid_tracks: set[int],
-           avoid_videos: set[str]) -> list[int]:
+def gather(seeds: list[dict], *, user_id: int, wanted: int, fresh: float = 0.5,
+           queue_id: int | None = None, since=None,
+           avoid_tracks: set[int] = frozenset()) -> list[int]:
     """Find songs for a station, and put them in the catalog.
 
-    Taken a few from each seed in turn rather than all of one and then all of the
-    next: a station seeded from a whole record should sound like the record, not like
-    its first track.
+    Songs that are here play at once and songs that are not have to be fetched first,
+    so the answer is laid out with the ones that are here in front and the others
+    between them — a new song is never the very next one while it is still coming.
     """
     wanted = max(1, min(wanted, MOST))
-    added: list[int] = []
-    wells = [ytm.watch_playlist(s["provider_id"], limit=wanted * 3) for s in seeds]
-
-    depth = 0
-    while len(added) < wanted and any(depth < len(w) for w in wells):
-        for well, seed in zip(wells, seeds):
-            if len(added) >= wanted or depth >= len(well):
-                continue
-            cand = well[depth]
-            video = cand.get("video_id")
-            if not video or video in avoid_videos:
-                continue
-            known = catalog.find_by_video_id(video)
-            if known and known["id"] in avoid_tracks:
-                avoid_videos.add(video)
-                continue
-            # A near-copy of the seed is not a station, it is the same song again.
-            conf, _ = match.score(
-                {"title": seed["title"], "artists": seed["artists"],
-                 "duration_ms": seed["duration_ms"]},
-                cand)
-            if conf >= match.AUTO_ACCEPT:
-                avoid_videos.add(video)
-                continue
+    weights = {s["id"]: 1.0 for s in seeds}
+    avoid: dict[int, float] = {}
+    if queue_id is not None:
+        heard = db.all_(
+            """select l.track_id, bool_or(l.completed) as done, max(l.ms_played) as ms,
+                      max(l.started_at) as at
+                 from listens l
+                where l.user_id = %s
+                  and l.track_id in (select track_id from queue_items where queue_id = %s)
+                  and (%s::timestamptz is null or l.started_at >= %s)
+                group by 1 order by at desc""",
+            (user_id, queue_id, since, since))
+        for n, r in enumerate(heard):
+            if r["done"]:
+                if len([w for w in weights.values() if w < 1]) < 8:
+                    weights.setdefault(r["track_id"], max(0.3, 0.7 - 0.05 * n))
+            elif (r["ms"] or 0) < recommend.SKIP_MS:
+                avoid[r["track_id"]] = 1.0
+    picks = recommend.recommend(user_id, weights, limit=wanted, fresh=fresh,
+                                exclude=set(avoid_tracks), avoid=avoid)
+    if len(picks) < wanted and queue_id is not None:
+        # Run dry around the seeds: walk on from the station's own latest songs, the
+        # way a radio drifts — never from one that was skipped.
+        latest = db.all_(
+            """select track_id from queue_items where queue_id = %s
+                order by pos desc limit 6""", (queue_id,))
+        walk = {r["track_id"]: 0.5 for r in latest
+                if r["track_id"] not in avoid and r["track_id"] not in weights}
+        if walk:
+            taken = {p.key for p in picks if isinstance(p.key, int)}
+            more = recommend.recommend(
+                user_id, walk, limit=wanted - len(picks), fresh=fresh,
+                exclude=set(avoid_tracks) | taken | set(weights), avoid=avoid)
+            have = {p.key for p in picks}
+            picks += [p for p in more if p.key not in have]
+    here, coming = [], []
+    for p in picks:
+        if isinstance(p.key, int):
+            if p.where not in ("library", "house"):
+                jobs.promote(p.key, priority=jobs.PRIORITY_QUEUE)
+                coming.append(p.key)
+            else:
+                here.append(p.key)
+        else:
+            meta = p.row
+            known = catalog.find_by_video_id(meta["video_id"])
             track = known or catalog.create_from_ytm(
-                cand, discovered_via=catalog.VIA_RADIO)
-            added.append(track["id"])
-            avoid_tracks.add(track["id"])
-            avoid_videos.add(video)
-        depth += 1
-    return added
+                {"video_id": meta["video_id"], "title": meta.get("title") or meta["video_id"],
+                 "artists": meta.get("artists") or [], "album": meta.get("album"),
+                 "duration_ms": meta.get("duration_ms"),
+                 "raw": {"thumbnails": meta.get("thumbnails") or []}},
+                discovered_via=catalog.VIA_RADIO, priority=jobs.PRIORITY_QUEUE)
+            coming.append(track["id"])
+    # Two that are here, then one that is coming, and so on.
+    out: list[int] = []
+    while here or coming:
+        out.extend(here[:2])
+        here = here[2:]
+        if coming:
+            out.append(coming.pop(0))
+    return out
 
 
 def already_in(queue_id: int) -> tuple[set[int], set[str]]:
@@ -148,6 +184,6 @@ def already_in(queue_id: int) -> tuple[set[int], set[str]]:
 
 def describe(queue_id: int) -> dict | None:
     """What station this queue is, if it is one."""
-    row = db.one("select kind, name, seed_track, seed_text from stations "
-                 "where queue_id=%s", (queue_id,))
+    row = db.one("select kind, name, seed_track, seed_text, fresh, created_at "
+                 "from stations where queue_id=%s", (queue_id,))
     return dict(row) if row else None

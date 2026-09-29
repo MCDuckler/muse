@@ -19,7 +19,8 @@ from fastapi.responses import FileResponse, Response
 
 from psycopg.types.json import Json
 
-from . import catalog, db, images, jam, jobs, match, playlist_art, removal, stations, ytm
+from . import (catalog, db, images, jam, jobs, match, playlist_art, recommend, removal,
+               stations, ytm)
 from .deps import cfg, current_user, user_or_key
 
 router = APIRouter()
@@ -593,49 +594,15 @@ def _editable(playlist_id: int, user: dict) -> dict:
 
 @router.get("/playlists/{playlist_id}/suggested")
 def suggested_for(playlist_id: int, limit: int = 8, user: dict = Depends(current_user)):
-    """Songs from your own library that would sit well in this list.
-
-    Nothing clever and nothing fetched from anywhere: the artists already in the list,
-    weighted by how often they are, and what else of theirs you hold that is not in it
-    yet. No more than two from any one artist, so a list with a lot of one act does not
-    get a page of nothing else; and the order turns over each day, so going back to the
-    list tomorrow offers something other than the same eight that were passed over.
-    Only songs that can play now.
+    """Songs from your own library that would sit well in this list — what an app from
+    before /recommend asks. Answered by it now, from your library only: songs the
+    house's lists, sittings and radio put beside these, not only more by the same acts.
     """
     _readable(playlist_id, user)
-    rows = db.all_(
-        """
-        with listed as (
-            select track_id from playlist_items where playlist_id = %s
-        ), acts as (
-            select lower(a) as k, count(*) as n
-              from listed join tracks t on t.id = listed.track_id, unnest(t.artists) a
-             group by 1
-        ), scored as (
-            select t.id, sum(acts.n) as score,
-                   row_number() over (
-                       partition by lower(coalesce(t.artists[1], ''))
-                       order by sum(acts.n) desc,
-                                md5(t.id::text || current_date::text)) as nth
-              from tracks t
-              join library_items li on li.track_id = t.id and li.user_id = %s
-              cross join lateral unnest(t.artists) a
-              join acts on acts.k = lower(a)
-             where t.state = 'ready'
-               and t.id not in (select track_id from listed)
-             group by t.id
-        )
-        select t.*, m.path, m.bytes, m.sha256, c.color as cover_color,
-               c.sha256 as cover_sha
-          from scored s
-          join tracks t on t.id = s.id
-          left join media m on m.track_id = t.id and m.role = 'canonical'
-          left join covers c on c.id = t.cover_id
-         where s.nth <= 2
-         order by s.score desc, md5(t.id::text || current_date::text)
-         limit %s""",
-        (playlist_id, user["id"], max(1, min(limit, 24))))
-    return {"items": [catalog.public(t) for t in rows]}
+    seeds, every = recommend.seeds_of_playlist(playlist_id)
+    picks = recommend.recommend(user["id"], seeds, limit=max(1, min(limit, 24)),
+                                only="library", exclude=every, network=False)
+    return {"items": [catalog.public(p.row) for p in picks]}
 
 
 @router.get("/playlists/{playlist_id}")
@@ -1388,6 +1355,13 @@ def save_as_playlist(queue_id: int, body: dict = Body(...), user: dict = Depends
 
 
 # ------------------------------------------------------------------ stations
+def _fresh(value, default: float) -> float:
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return default
+
+
 @router.post("/stations", status_code=201)
 def start_station(body: dict = Body(...), user: dict = Depends(current_user)):
     """Point at a song, a record or an artist and play what belongs next to it.
@@ -1403,14 +1377,14 @@ def start_station(body: dict = Body(...), user: dict = Depends(current_user)):
     album = (body.get("album") or "").strip() or None
     artist = (body.get("artist") or "").strip() or None
     track_id = body.get("track_id")
+    fresh = _fresh(body.get("fresh"), 0.5)
 
     seeds = stations.seed_tracks(kind, user_id=user["id"], track_id=track_id,
                                  album=album, artist=artist)
     if not seeds:
         raise HTTPException(
             400,
-            "Nothing here to build a station from — the songs it would be seeded "
-            "with have no YouTube Music source.")
+            "Nothing here to build a station from — none of it is in your library.")
 
     name = stations.name_for(kind, seeds, album=album, artist=artist)
     queue = db.one(
@@ -1421,18 +1395,18 @@ def start_station(body: dict = Body(...), user: dict = Depends(current_user)):
     opening = [s["id"] for s in seeds][: stations.SEEDS]
     queue_add(queue["id"], {"track_ids": opening, "mode": "end", "origin": "user"}, user)
 
-    avoid_tracks, avoid_videos = stations.already_in(queue["id"])
-    found = stations.gather(seeds, wanted=stations.FIRST,
-                            avoid_tracks=avoid_tracks, avoid_videos=avoid_videos)
+    avoid_tracks, _ = stations.already_in(queue["id"])
+    found = stations.gather(seeds, user_id=user["id"], wanted=stations.FIRST, fresh=fresh,
+                            avoid_tracks=avoid_tracks)
     if found:
         queue_add(queue["id"], {"track_ids": found, "mode": "end", "origin": "radio"},
                   user)
 
     db.run(
-        """insert into stations(queue_id, owner_id, kind, seed_track, seed_text, name)
-           values(%s,%s,%s,%s,%s,%s)""",
+        """insert into stations(queue_id, owner_id, kind, seed_track, seed_text, name, fresh)
+           values(%s,%s,%s,%s,%s,%s,%s)""",
         (queue["id"], user["id"], kind, seeds[0]["id"],
-         album if kind == "album" else artist, name),
+         album if kind == "album" else artist, name, fresh),
     )
     return {**_queue_state(queue["id"]), "added": len(found)}
 
@@ -1459,14 +1433,27 @@ def extend_station(queue_id: int, body: dict = Body(default={}),
     if not seeds:
         # The record it was made from has been taken out of the library since.
         seed = catalog.track_row(station["seed_track"]) if station["seed_track"] else None
-        seeds = [seed] if seed and seed.get("provider_id") else []
+        seeds = [seed] if seed else []
     if not seeds:
         return {**_queue_state(queue_id), "added": 0}
 
-    avoid_tracks, avoid_videos = stations.already_in(queue_id)
+    avoid_tracks, _ = stations.already_in(queue_id)
     wanted = int(body.get("count") or stations.MORE)
-    found = stations.gather(seeds, wanted=wanted, avoid_tracks=avoid_tracks,
-                            avoid_videos=avoid_videos)
+    found = stations.gather(seeds, user_id=user["id"], wanted=wanted,
+                            fresh=station["fresh"], queue_id=queue_id,
+                            since=station["created_at"], avoid_tracks=avoid_tracks)
     if found:
         queue_add(queue_id, {"track_ids": found, "mode": "end", "origin": "radio"}, user)
     return {**_queue_state(queue_id), "added": len(found)}
+
+
+@router.patch("/stations/{queue_id}")
+def tune_station(queue_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
+    """How far the station reaches past the library from here on: `fresh` 0 is only
+    what is yours and here, 1 only what is new. What is already queued stays."""
+    _own_queue(queue_id, user)
+    if not stations.describe(queue_id):
+        raise HTTPException(404, "that queue is not a station")
+    db.run("update stations set fresh=%s where queue_id=%s",
+           (_fresh(body.get("fresh"), 0.5), queue_id))
+    return _queue_state(queue_id)

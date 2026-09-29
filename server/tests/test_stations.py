@@ -43,7 +43,7 @@ def test_it_is_asked_for_more_as_it_runs_down(client, hdr, tracks, monkeypatch):
 
     # A well that does not run dry, the way the real one does not.
     round_two = [
-        {"video_id": f"LATER{n}", "title": f"Later {n}", "artists": ["Someone"],
+        {"video_id": f"LATER{n}", "title": f"Later {n}", "artists": [f"Someone {n}"],
          "album": None, "duration_ms": 200_000 + n, "raw": {}}
         for n in range(20)
     ]
