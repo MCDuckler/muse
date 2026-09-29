@@ -269,6 +269,8 @@ class EngineCheck {
           '${complaints.isEmpty ? '' : ', first: ${complaints.take(3).join(' | ')}'}');
       await player.stop();
 
+      await _twoDecks(wav);
+
       // Stems: six channels, if a record here has them.
       final stems = await _aRecordWithStems();
       if (stems == null) {
@@ -318,6 +320,85 @@ class EngineCheck {
       say('done');
     } finally {
       await player.dispose();
+    }
+  }
+
+  /// Two decks on the same click track, started together, read as the booth reads
+  /// them: every 20 ms for 8 s, each deck's position. Two things come out of it.
+  /// How smooth each deck's clock is — its readings against a straight line through
+  /// them, which is what the booth's sync steers by: steps the size of an audio
+  /// buffer make it chase noise. And how far apart the two read, which on the same
+  /// record started together should be only the start-up difference, holding still.
+  Future<void> _twoDecks(File wav) async {
+    final a = AudioPlayer(engine: DeckRouter.active ? DeckRouter.mpv : null);
+    final b = AudioPlayer(engine: DeckRouter.active ? DeckRouter.mpv : null);
+    try {
+      await a.setVolume(0.15);
+      await b.setVolume(0.15);
+      await a.setFilePath(wav.path);
+      await b.setFilePath(wav.path);
+      for (final p in [a, b]) {
+        final mpv = _native(p);
+        if (mpv != null) {
+          for (final chain in DesktopMixer.standingFor(500)) {
+            try {
+              await mpv.setProperty('af', chain);
+              if ((await mpv.getProperty('af')).contains('wetowl')) break;
+            } catch (_) {}
+          }
+        }
+      }
+      unawaited(a.play());
+      unawaited(b.play());
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+      final clock = Stopwatch()..start();
+      final t = <double>[], pa = <double>[], pb = <double>[];
+      var stepsA = 0, stepsB = 0;
+      double? lastA, lastB;
+      while (clock.elapsedMilliseconds < 8000) {
+        final x = clock.elapsedMicroseconds / 1000;
+        final ya = a.position.inMicroseconds / 1000, yb = b.position.inMicroseconds / 1000;
+        if (lastA != null && ya == lastA) stepsA++;
+        if (lastB != null && yb == lastB) stepsB++;
+        lastA = ya;
+        lastB = yb;
+        t.add(x);
+        pa.add(ya);
+        pb.add(yb);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      String fit(List<double> y) {
+        final n = t.length;
+        final mx = t.reduce((p, q) => p + q) / n, my = y.reduce((p, q) => p + q) / n;
+        var sxy = 0.0, sxx = 0.0;
+        for (var i = 0; i < n; i++) {
+          sxy += (t[i] - mx) * (y[i] - my);
+          sxx += (t[i] - mx) * (t[i] - mx);
+        }
+        final slope = sxy / sxx;
+        final res = [for (var i = 0; i < n; i++) (y[i] - (my + slope * (t[i] - mx))).abs()]..sort();
+        return 'rate ${slope.toStringAsFixed(4)}×, off the line: half within '
+            '${res[n ~/ 2].toStringAsFixed(1)} ms, worst ${res.last.toStringAsFixed(1)} ms';
+      }
+      final gaps = [for (var i = 0; i < t.length; i++) pa[i] - pb[i]];
+      final g = [...gaps]..sort();
+      final spread = [for (final x in gaps) (x - g[g.length ~/ 2]).abs()]..sort();
+      say('two decks, ${t.length} readings: A ${fit(pa)} ($stepsA unchanged readings)');
+      say('  B ${fit(pb)} ($stepsB unchanged readings)');
+      say('  A−B: ${g[g.length ~/ 2].toStringAsFixed(1)} ms typical, moving by half within '
+          '${spread[spread.length ~/ 2].toStringAsFixed(1)} ms, nine tenths within '
+          '${spread[(spread.length * 0.9).floor()].toStringAsFixed(1)} ms, worst ${spread.last.toStringAsFixed(1)} ms');
+      final ma = _native(a);
+      if (ma != null) {
+        say('  mpv buffer: audio-buffer=${await _prop(ma, 'audio-buffer')} '
+            'ao-delay?=${await _prop(ma, 'audio-delay')} '
+            'avsync=${await _prop(ma, 'avsync')}');
+      }
+    } catch (e) {
+      say('FAIL two decks: $e');
+    } finally {
+      await a.dispose();
+      await b.dispose();
     }
   }
 
