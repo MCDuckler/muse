@@ -130,7 +130,25 @@ class GlassSurface extends StatelessWidget {
             Positioned.fill(
               child: _MaybeLensed(
                 sigma: sigma * _bodyBlur,
-                scale: 1.02,
+                // One magnification, across the whole pane.
+                //
+                // There used to be a second one in a band at the rim, bent harder
+                // (1.09 against 1.02) to stand for the thickness a real pane turns the
+                // room away with. It cannot be done that way. A matrix scales about one
+                // point by one amount, so a band with its own scale meets the body at a
+                // step — sixteen pixels in, the room jumps twenty-odd pixels sideways
+                // — and on a screen that reads as a plate sitting inside the glass.
+                // Measured on the player: twenty luminance steps in one pixel. Matching
+                // the two blurs did not touch it, because the blur was never what made
+                // it; it was the geometry.
+                //
+                // Ramping the scale across a band would need a shader, or a stack of
+                // rings each with its own backdrop filter — and a backdrop filter is
+                // the most expensive thing on the screen. So the pane is bent once,
+                // evenly, and its rim is told by light instead: the border, the sheen
+                // down it, and the shadow it stands in. That is one fewer backdrop
+                // filter on every glass surface in the app.
+                scale: 1.05,
                 radius: radius,
                 child: DecoratedBox(
                   decoration: BoxDecoration(
@@ -158,7 +176,6 @@ class GlassSurface extends StatelessWidget {
                 ),
               ),
             ),
-            if (sigma > 0) Positioned.fill(child: _LensEdge(radius: radius)),
             Material(
               type: MaterialType.transparency,
               child: Padding(padding: padding, child: child),
@@ -225,51 +242,8 @@ class _Standing extends CustomPainter {
 
 /// The edge of a thick pane: the backdrop seen through it a little magnified and
 /// softened, in a band just inside the rim.
-class _LensEdge extends StatelessWidget {
-  const _LensEdge({required this.radius});
-  final BorderRadius radius;
-
-  @override
-  Widget build(BuildContext context) => LayoutBuilder(builder: (context, c) {
-        final size = Size(c.maxWidth, c.maxHeight);
-        if (size.isEmpty) return const SizedBox.shrink();
-        final band = (size.shortestSide * 0.10).clamp(7.0, 16.0);
-        final cx = size.width / 2, cy = size.height / 2;
-        // Scaled about the middle of the pane, so the edge shows what lies a little
-        // further in — the way a lens at the rim pulls the picture outward.
-        final lens = (Matrix4.identity()
-              ..translateByDouble(cx, cy, 0, 1)
-              ..scaleByDouble(1.09, 1.09, 1, 1)
-              ..translateByDouble(-cx, -cy, 0, 1))
-            .storage;
-        return ClipPath(
-          clipper: _Ring(radius: radius, band: band),
-          child: BackdropFilter(
-            filter: ImageFilter.compose(
-              outer: ImageFilter.blur(sigmaX: 3, sigmaY: 3),
-              inner: ImageFilter.matrix(lens, filterQuality: FilterQuality.medium),
-            ),
-            child: const SizedBox.expand(),
-          ),
-        );
-      });
-}
-
-class _Ring extends CustomClipper<Path> {
-  const _Ring({required this.radius, required this.band});
-  final BorderRadius radius;
-  final double band;
-
-  @override
-  Path getClip(Size size) {
-    final outer = radius.toRRect(Offset.zero & size);
-    return Path.combine(PathOperation.difference, Path()..addRRect(outer), Path()..addRRect(outer.deflate(band)));
-  }
-
-  @override
-  bool shouldReclip(_Ring old) => old.radius != radius || old.band != band;
-}
-
+/// The band at the pane's rim, where its thickness turns the room away.
+///
 /// The glass's own look, and the room's light on it. See GlassSurface.sheen.
 class _Sheen extends StatefulWidget {
   const _Sheen({required this.radius});
@@ -377,23 +351,47 @@ class _SheenPainter extends CustomPainter {
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1
           ..color = Colors.black.withValues(alpha: dark ? 0.30 : 0.10));
-    // The lit band along the thickness, top-left, over the lens.
+    // The lit band along the thickness, top-left, dying away inwards.
+    //
+    // This was one stroke as wide as the band, and that is what "the control panel
+    // still has a visible inner panel" was — for three goes at it, while the blame went
+    // to the shadow, then to the blur, then to the lens at the rim. A stroke has the
+    // same colour all the way across its width and then stops, and its gradient here
+    // runs corner to corner, *along* the rim rather than across it. So sixteen pixels
+    // in from the edge the light ended in one pixel: measured on the player's own
+    // panel, twenty luminance steps at x=756 on every line through it. A rim of light
+    // around a plate, which is precisely what a pane of glass must not look like.
+    //
+    // Laid down in bands instead, each thinner and fainter than the last, so the light
+    // falls off the way it does through a real edge and there is no line where it
+    // stops. Strokes, not another backdrop filter: this costs a few draw calls.
     final band = (size.shortestSide * 0.10).clamp(7.0, 16.0);
-    canvas.drawRRect(
-        rr.deflate(band / 2),
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = band
-          ..shader = LinearGradient(
-            begin: const Alignment(-1, -1),
-            end: const Alignment(1, 1),
-            colors: [
-              Colors.white.withValues(alpha: dark ? 0.14 : 0.35),
-              Colors.white.withValues(alpha: 0.0),
-              Colors.white.withValues(alpha: dark ? 0.06 : 0.18),
-            ],
-            stops: const [0.0, 0.55, 1.0],
-          ).createShader(rect));
+    // One a pixel: the finest a stack of strokes can be, and fine enough that the
+    // steps between them are under a luminance level. Eight of them left a seven-level
+    // step, which a test caught and an eye would have too.
+    final steps = band.round();
+    for (var i = 0; i < steps; i++) {
+      final wide = band / steps;
+      // 0 at the rim, 1 at the inner edge of the band; squared, so most of the light
+      // stays out at the edge where the thickness is.
+      final t = (i + 0.5) / steps;
+      final fade = (1 - t) * (1 - t);
+      canvas.drawRRect(
+          rr.deflate(wide * (i + 0.5)),
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = wide
+            ..shader = LinearGradient(
+              begin: const Alignment(-1, -1),
+              end: const Alignment(1, 1),
+              colors: [
+                Colors.white.withValues(alpha: (dark ? 0.30 : 0.70) * fade),
+                Colors.white.withValues(alpha: 0.0),
+                Colors.white.withValues(alpha: (dark ? 0.13 : 0.38) * fade),
+              ],
+              stops: const [0.0, 0.55, 1.0],
+            ).createShader(rect));
+    }
 
     // The room's light on the glass: each beam's reflection. A pane parallel to the
     // page shows a lamp's image some way behind it, so the image moves as the lamp
