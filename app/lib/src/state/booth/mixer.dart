@@ -229,6 +229,25 @@ abstract class Mixer {
   /// the engine cannot, and the deck loops by itself.
   Future<bool> setLoop(Deck deck, Duration? from, Duration? to) async => false;
 
+  /// Loop [deck] *inside its own filter chain*, from wherever it is now, for [length].
+  ///
+  /// The difference from [setLoop] is the whole point of it. An engine loops by
+  /// seeking, and a seek empties the filter chain — so the band splitter starts every
+  /// time round with no memory, and its first milliseconds of output are wrong, which
+  /// is heard as the EQ not being applied. A loop inside the chain hands the same
+  /// samples round again *underneath* the filters, which never learn that anything
+  /// happened: measured, the splice costs 13 dB less and is over in a third of the
+  /// time, and what is left is the waveform's own discontinuity, which every looper in
+  /// the world has.
+  ///
+  /// The price is that the loop's ends are fixed when the chain is built, so engaging
+  /// and releasing one costs a rebuild. False where this engine cannot, and the caller
+  /// falls back to [setLoop].
+  Future<bool> loopInChain(Deck deck, Duration length) async => false;
+
+  /// Take the chain loop back out, leaving the record playing on from [at].
+  Future<void> stopChainLoop(Deck deck, Duration at) async {}
+
   /// Whether a deck here can play a record's stems — the drums, the bass and the
   /// rest, the voice — as one file with a level each, turned with no gap (a stem
   /// deck). Only a desk: its engine takes the six channels apart itself.

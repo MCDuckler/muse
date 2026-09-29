@@ -258,7 +258,20 @@ class Deck extends ChangeNotifier {
     if (!playing) return _fix;
     final since = now.difference(_fixedAt);
     final moved = Duration(microseconds: (since.inMicroseconds * tempo).round());
-    final at = _fix + moved;
+    var at = _fix + moved;
+    // A loop carried in the filter chain hands the same samples round again without
+    // the engine knowing, so the engine's own clock walks straight on past the loop's
+    // end for ever. What is *heard* is the loop, so what is reported is folded into it.
+    // Everything else on this deck reads the record through here, so folding once here
+    // is folding everywhere — and the needle comes round with no report to wait for,
+    // which is a loop that teleports rather than one that travels.
+    if (_chainLooping) {
+      final s = loopStart, e = loopEnd;
+      if (s != null && e != null && e > s && at >= e) {
+        final len = (e - s).inMicroseconds;
+        at = s + Duration(microseconds: (at - s).inMicroseconds % len);
+      }
+    }
     final end = duration;
     return end != null && end > Duration.zero && at > end ? end : at;
   }
@@ -687,6 +700,8 @@ class Deck extends ChangeNotifier {
   /// long the loop is worth. The difference is what the wrap costs.
   void _watchTheWrap(Duration at, DateTime now) {
     final start = loopStart, end = loopEnd;
+    // Nothing wraps when the chain carries the loop: the engine plays straight on.
+    if (_chainLooping) return;
     if (start == null || end == null || !playing || end <= start) {
       _wrappedAt = null;
       return;
@@ -852,6 +867,10 @@ class Deck extends ChangeNotifier {
   /// hand had been. Now the screen follows at once (the fix is set before anything is
   /// awaited) and the engine is told again only once it has answered.
   Future<void> seekByHand(Duration to) async {
+    // A hand anywhere on the record ends a chain loop: the chain's loop is fixed to
+    // the samples it was built around, and a seek would set it going from somewhere
+    // else entirely.
+    if (_chainLooping) unawaited(_outOfTheChain());
     final at = to < Duration.zero ? Duration.zero : to;
     _aim = at;
     _fix = at;
@@ -946,6 +965,18 @@ class Deck extends ChangeNotifier {
   /// check.
   void Function()? refreshFilters;
 
+  /// Loop inside the filter chain rather than by seeking. See Mixer.loopInChain.
+  Future<bool> Function(Duration length)? chainLoop;
+
+  /// Take that loop back out, leaving the record playing on from where it is heard.
+  Future<void> Function(Duration at)? stopChainLoop;
+
+  /// Whether the chain is carrying this deck's loop. While it is, the engine never
+  /// wraps and never seeks, so there is nothing for [_watchTheWrap] to time and
+  /// nothing to put the filters back after.
+  bool get chainLooping => _chainLooping;
+  bool _chainLooping = false;
+
   /// The engine's own loop, where it has one (mpv's A–B loop on a desk): set by the
   /// booth. Says whether the engine took it; where it did not, the deck loops itself.
   Future<bool> Function(Duration? from, Duration? to)? engineLoop;
@@ -983,11 +1014,30 @@ class Deck extends ChangeNotifier {
     return back > start + beatInRecord ~/ 4 ? back : end;
   }
 
+  /// A loop long enough to be worth carrying in the chain: a bar.
+  ///
+  /// Under that it is a chop or a roll, and those are pressed and let go constantly —
+  /// the rebuild a chain loop costs at each end would be felt far more than the
+  /// milliseconds it saves each time round. Over it, the loop is left running and the
+  /// arithmetic goes the other way: a four-bar loop at 130 comes round every seven
+  /// seconds, and every one of those used to start with the filters empty.
+  Duration get _worthCarrying => beatInRecord * 4;
+
   Future<void> _loopInEngine() async {
     final f = engineLoop;
     if (f == null) return;
     _wrappedAt = null;
     _appliedLate = loopLate;
+    final start = loopStart, end = loopEnd;
+    if (start != null &&
+        end != null &&
+        end - start >= _worthCarrying &&
+        chainLoop != null &&
+        playing &&
+        await _intoTheChain(start, end)) {
+      return;
+    }
+    await _outOfTheChain();
     final took = await f(loopStart, _engineLoopEnd);
     _engineLooping = took && loopStart != null;
     if (_engineLooping) {
@@ -996,6 +1046,54 @@ class Deck extends ChangeNotifier {
     } else if (loopStart != null) {
       _watchLoop();
     }
+  }
+
+  /// Sets the loop the way pressing a loop button does, for a test that has put the
+  /// ends on by hand.
+  @visibleForTesting
+  Future<void> setLoopForTest() => _loopInEngine();
+
+  /// Puts this deck's clock where the *engine* would have it — which, when the chain
+  /// is carrying the loop, walks straight on past the loop's end. What [positionAt]
+  /// makes of that is the thing under test.
+  @visibleForTesting
+  void putClockAtForTest(Duration at) {
+    _fix = at;
+    _fixedAt = DateTime.now();
+  }
+
+  /// Hands the loop to the filter chain, and the record to the loop's start.
+  ///
+  /// In that order, and it matters: the chain's loop begins at the first sample the
+  /// filter is given, and the first sample it is given is the first after a seek. Put
+  /// the chain on and then send the deck to the loop's start, and zero is exactly
+  /// there.
+  Future<bool> _intoTheChain(Duration start, Duration end) async {
+    if (_chainLooping) return true;
+    if (!(await chainLoop!(end - start))) return false;
+    await engineLoop?.call(null, null);
+    await _player.seek(start);
+    _fix = start;
+    _fixedAt = DateTime.now();
+    _trusting = false;
+    _chainLooping = true;
+    _engineLooping = false;
+    _loop?.cancel();
+    _wrapSoon?.cancel();
+    notifyListeners();
+    return true;
+  }
+
+  /// Takes it back out, and leaves the record where the room last heard it.
+  Future<void> _outOfTheChain() async {
+    if (!_chainLooping) return;
+    final at = position;
+    _chainLooping = false;
+    await stopChainLoop?.call(at);
+    await _player.seek(at);
+    _fix = at;
+    _fixedAt = DateTime.now();
+    _trusting = false;
   }
 
   /// Puts the mixer's settings back the instant the engine comes round, rather than
@@ -1239,7 +1337,7 @@ class Deck extends ChangeNotifier {
     _loopBars = null;
     _loop?.cancel();
     _wrapSoon?.cancel();
-    if (was || _engineLooping) unawaited(_loopInEngine());
+    if (was || _engineLooping || _chainLooping) unawaited(_loopInEngine());
     _engineLooping = false;
     notifyListeners();
   }

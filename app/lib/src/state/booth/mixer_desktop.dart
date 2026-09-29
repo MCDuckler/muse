@@ -190,8 +190,19 @@ class DesktopMixer extends VolumeMixer {
   /// not a loss; it is where it should have been.
   static const headroom = 'volume=-4.5dB';
 
-  static String bandsFor(double beatMs, {String? cap}) =>
-      '@wetowl:lavfi=[$headroom,${_echo(beatMs)},$_bandsOnly${cap == null ? '' : ',$cap'}]';
+  /// The loop, ahead of everything: the same samples handed round again underneath the
+  /// filters, so that they never learn a loop happened.
+  ///
+  /// `start` is counted in samples from the first one the filter sees, and the first
+  /// one it sees is the first after a seek — so the chain is put on and *then* the deck
+  /// is sent to the loop's start, and zero means exactly there. `time` looks like it
+  /// would say this more directly and does not work: asked to begin at two seconds it
+  /// looped the first second of the record instead.
+  static String loopAhead(int samples) =>
+      'aloop=loop=-1:size=$samples:start=0';
+
+  static String bandsFor(double beatMs, {String? cap, int? loop}) =>
+      '@wetowl:lavfi=[${loop == null ? '' : '${loopAhead(loop)},'}$headroom,${_echo(beatMs)},$_bandsOnly${cap == null ? '' : ',$cap'}]';
 
   /// As it stands for a record of 120 a minute — the shape of every deck's chain.
   static final bands = bandsFor(500);
@@ -224,17 +235,31 @@ class DesktopMixer extends VolumeMixer {
 
   /// The chains tried, best first: the bands, then the stretcher — Rubber Band
   /// labelled, so its pitch can be spoken to (setPitchShift).
-  static List<String> standingFor(double beatMs) => [
-        for (final cap in [..._ceilings, null])
-          for (final st in _stretchers) '${bandsFor(beatMs, cap: cap)},$st',
-      ];
+  /// Every shape of chain, best first: a ceiling and a stretcher each.
+  static final _shapes = <(int, int)>[
+    for (var c = 0; c <= _ceilings.length; c++)
+      for (var st = 0; st < _stretchers.length; st++) (c, st),
+  ];
+
+  static String chainOf(double beatMs, (int, int) shape, {int? loop, bool stems = false}) {
+    final (c, st) = shape;
+    final cap = c < _ceilings.length ? _ceilings[c] : null;
+    final bands = stems
+        ? stemBandsFor(beatMs, cap: cap, loop: loop)
+        : bandsFor(beatMs, cap: cap, loop: loop);
+    return '$bands,${_stretchers[st]}';
+  }
+
+  static List<String> standingFor(double beatMs, {int? loop}) =>
+      [for (final shape in _shapes) chainOf(beatMs, shape, loop: loop)];
   static final standing = standingFor(500);
 
   /// The same, for a stem deck: the six-channel stems file taken apart into its three
   /// pairs — the drums, the bass and the rest, the voice — each through a level of
   /// its own, mixed back together, and then the bands as on any deck. Each level is
   /// an `af-command` like a band: turned while it plays, with nothing rebuilt.
-  static String stemBandsFor(double beatMs, {String? cap}) => '@wetowl:lavfi=['
+  static String stemBandsFor(double beatMs, {String? cap, int? loop}) => '@wetowl:lavfi=['
+      '${loop == null ? '' : '${loopAhead(loop)},'}'
       'channelsplit=channel_layout=6c[c0][c1][c2][c3][c4][c5];'
       '[c0][c1]join=inputs=2:channel_layout=stereo,volume@d=1[d];'
       '[c2][c3]join=inputs=2:channel_layout=stereo,volume@r=1[r];'
@@ -246,10 +271,8 @@ class DesktopMixer extends VolumeMixer {
       '${cap == null ? '' : ',$cap'}'
       ']';
   static final stemBands = stemBandsFor(500);
-  static List<String> stemStandingFor(double beatMs) => [
-        for (final cap in [..._ceilings, null])
-          for (final st in _stretchers) '${stemBandsFor(beatMs, cap: cap)},$st',
-      ];
+  static List<String> stemStandingFor(double beatMs, {int? loop}) =>
+      [for (final shape in _shapes) chainOf(beatMs, shape, loop: loop, stems: true)];
   static final stemStanding = stemStandingFor(500);
 
   /// Each deck's record's beat, in milliseconds, for the echo's timing.
@@ -500,13 +523,85 @@ class DesktopMixer extends VolumeMixer {
   }
 
   /// Put the standing chain on [deck]'s player, once per player. Says whether it is on.
+  /// How long a loop each deck's chain is carrying, where it carries one.
+  final _inChain = <String, int>{};
+
+  /// Which shape of chain this deck's engine took, so a rebuild need not ask again.
+  final _shape = <String, (int, int)>{};
+
+  /// The rate each deck's engine is running at, asked once.
+  final _rate = <String, int>{};
+
+  @override
+  Future<bool> loopInChain(Deck deck, Duration length) async {
+    final mpv = _native(deck);
+    if (mpv == null || length <= Duration.zero) return false;
+    var rate = _rate[deck.name];
+    if (rate == null) {
+      rate = int.tryParse(
+          (await mpv.getProperty('audio-params/samplerate')).split('.').first);
+      if (rate == null || rate <= 0) return false;
+      _rate[deck.name] = rate;
+    }
+    final samples = (length.inMicroseconds * rate / 1e6).round();
+    if (samples <= 0) return false;
+    final was = _inChain[deck.name];
+    _inChain[deck.name] = samples;
+    // The chain is built afresh to carry it, so it has to be forgotten first.
+    _installed.remove(deck.name);
+    if (!await _install(deck, mpv)) {
+      if (was == null) {
+        _inChain.remove(deck.name);
+      } else {
+        _inChain[deck.name] = was;
+      }
+      _installed.remove(deck.name);
+      await _install(deck, mpv);
+      return false;
+    }
+    // A fresh chain is a chain that has never been told anything: the bands, the
+    // filter and the stems all go on again before a note of it is heard.
+    await _sayItAllAgain(deck);
+    return true;
+  }
+
+  @override
+  Future<void> stopChainLoop(Deck deck, Duration at) async {
+    if (!_inChain.containsKey(deck.name)) return;
+    final mpv = _native(deck);
+    _inChain.remove(deck.name);
+    if (mpv == null) return;
+    _installed.remove(deck.name);
+    await _install(deck, mpv);
+    await _sayItAllAgain(deck);
+  }
+
+  /// Everything a chain is told, told again — for a chain that has just been rebuilt.
+  Future<void> _sayItAllAgain(Deck deck) async {
+    final levels = _levels[deck.name];
+    _levels.remove(deck.name);
+    await _apply(deck);
+    if (levels != null) await setStems(deck, levels);
+  }
+
   Future<bool> _install(Deck deck, NativePlayer mpv) async {
     final id = deck.player.platformId!;
     if (_installed[deck.name] == id) return true;
     final stems = _stems[deck.name] ?? false;
     if (_whole.contains(id) && !stems) return false;
     final beat = _beat[deck.name] ?? 500;
-    for (final chain in stems ? stemStandingFor(beat) : standingFor(beat)) {
+    final loop = _inChain[deck.name];
+    // What went on last time, first. Every shape that is refused is a round trip to
+    // mpv and back, and there are fifteen of them: a chain rebuilt to pick a loop up
+    // would have walked the whole ladder again while the record played on. Remembered,
+    // it is one call.
+    final known = _shape[deck.name];
+    final order = [
+      if (known != null) known,
+      for (final shape in _shapes) if (shape != known) shape,
+    ];
+    for (final shape in order) {
+      final chain = chainOf(beat, shape, loop: loop, stems: stems);
       // The stretcher's *name*, without its label or the options asked of it: the
       // rest of this only ever needs to know whether it is Rubber Band, and the
       // options are what the chain tiers differ by.
@@ -518,6 +613,7 @@ class DesktopMixer extends VolumeMixer {
         if (got.contains('wetowl') && got.contains(stretcher)) {
           _installed[deck.name] = id;
           _stretcher[deck.name] = stretcher;
+          _shape[deck.name] = shape;
           // Said out loud, not to the console: which chain a machine took is the one
           // thing that cannot be worked out from here, and the ceiling is the half of
           // it that matters most — an mpv whose ffmpeg has no alimiter falls through to
@@ -532,7 +628,9 @@ class DesktopMixer extends VolumeMixer {
         debugPrint('mixer: $asked would not go on ($e)');
       }
     }
-    if (!stems) _whole.add(id);
+    // Only a *plain* chain that will not go on says this engine cannot have one; a
+    // looping chain that is refused says only that, and the plain one goes back.
+    if (!stems && _inChain[deck.name] == null) _whole.add(id);
     return false;
   }
 

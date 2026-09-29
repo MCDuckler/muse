@@ -400,6 +400,10 @@ class Booth extends ChangeNotifier {
     this.b.parts = parts;
     this.a.engineLoop = (from, to) => this.mixer.setLoop(this.a, from, to);
     this.b.engineLoop = (from, to) => this.mixer.setLoop(this.b, from, to);
+    this.a.chainLoop = (len) => this.mixer.loopInChain(this.a, len);
+    this.b.chainLoop = (len) => this.mixer.loopInChain(this.b, len);
+    this.a.stopChainLoop = (at) => this.mixer.stopChainLoop(this.a, at);
+    this.b.stopChainLoop = (at) => this.mixer.stopChainLoop(this.b, at);
     // The bands, the filter and the stems, put back whenever the engine may have
     // dropped them: a record going on, a loop coming round, any seek at all. See
     // Deck.refreshFilters.

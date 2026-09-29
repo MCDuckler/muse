@@ -55,6 +55,20 @@ class QuietMixer extends Mixer {
   /// Every time a record going on this deck made the mixer put its bands back.
   final loadedAgain = <String>[];
 
+  /// Whether this mixer will carry a loop in its chain, and what it was asked for.
+  bool carriesLoops = false;
+  final carried = <String, Duration>{};
+
+  @override
+  Future<bool> loopInChain(Deck deck, Duration length) async {
+    if (!carriesLoops) return false;
+    carried[deck.name] = length;
+    return true;
+  }
+
+  @override
+  Future<void> stopChainLoop(Deck deck, Duration at) async => carried.remove(deck.name);
+
   @override
   Future<void> loaded(Deck deck) async => loadedAgain.add(deck.name);
 
@@ -193,11 +207,13 @@ void main() {
 
   group('on the fake engine', () {
     late Booth booth;
+    late QuietMixer mixer;
 
     setUp(() async {
       JustAudioPlatform.instance = FakeJustAudio();
+      mixer = QuietMixer();
       booth = Booth(ApiClient(baseUrl: 'http://example.invalid')..token = 'x',
-          mixer: QuietMixer());
+          mixer: mixer);
       await booth.init();
       await booth.load(booth.a, song(1));
       await booth.load(booth.b, song(2));
@@ -410,6 +426,63 @@ void main() {
           reason: 'it was not thrown a phrase back while people were listening');
       await booth.letGo();
     }, timeout: const Timeout(Duration(seconds: 40)));
+
+    test('a long loop is carried in the chain, and the needle comes round with it',
+        () async {
+      // An engine loops by seeking and a seek empties the filter chain, so the band
+      // splitter begins every time round with no memory and its first milliseconds are
+      // wrong — which is heard as the EQ not being applied, every time round, for as
+      // long as the loop runs. Carried in the chain instead, the same samples go round
+      // underneath the filters and they never learn it happened.
+      //
+      // The engine's own clock walks straight on past the loop's end when it does,
+      // because as far as it knows nothing looped. What is heard is the loop, so what
+      // this deck reports is folded into it — and it folds with no report to wait for,
+      // which is a needle that comes round rather than one that travels.
+      mixer.carriesLoops = true;
+      final d = booth.b;
+      await d.play();
+      final beat = d.beatInRecord;
+      final start = d.position + beat;
+      d.loopStart = start;
+      d.loopEnd = start + beat * 8; // two bars: worth carrying
+      await d.setLoopForTest();
+      expect(d.chainLooping, isTrue, reason: 'two bars is worth carrying');
+      expect(mixer.carried['B'], beat * 8);
+
+      // Wherever the engine's clock has got to, the deck reports somewhere in the loop.
+      for (final on in [0, 1, 3, 8, 8.5, 17, 100]) {
+        d.putClockAtForTest(start + beat * on);
+        final said = d.position;
+        expect(said >= start && said < d.loopEnd!, isTrue,
+            reason: '$on beats past the start reported as $said, '
+                'outside ${d.loopStart}..${d.loopEnd}');
+      }
+      // And it is the *same place in the loop* each time round, not a drifting one.
+      d.putClockAtForTest(start + beat * 3);
+      final first = d.position;
+      d.putClockAtForTest(start + beat * 11);
+      expect((d.position - first).inMilliseconds.abs(), lessThan(4),
+          reason: 'one loop later is the same place in the loop');
+      await d.pause();
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
+    test('a short loop is left to the engine, where pressing it costs nothing',
+        () async {
+      // A chop or a roll is pressed and let go constantly, and carrying one in the
+      // chain costs a rebuild at each end — far more than the milliseconds it would
+      // save each time round.
+      mixer.carriesLoops = true;
+      final d = booth.a;
+      await d.play();
+      final beat = d.beatInRecord;
+      d.loopStart = d.position + beat;
+      d.loopEnd = d.loopStart! + beat * 2; // half a bar
+      await d.setLoopForTest();
+      expect(d.chainLooping, isFalse);
+      expect(mixer.carried.containsKey('A'), isFalse);
+      await d.pause();
+    }, timeout: const Timeout(Duration(seconds: 30)));
 
     test('a loop on an engine with no loop of its own learns what its wrap costs', () async {
       // "Looping still audible." Every phone and every browser loops this way: a timer
