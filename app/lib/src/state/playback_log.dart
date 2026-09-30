@@ -42,6 +42,21 @@ class PlaybackLog {
     }
   }
 
+  /// What the booth says about itself: printed everywhere, and written down here on a
+  /// phone or a tablet, where nothing else keeps what is printed. A desk has its log
+  /// file (app_log.dart) and would only have it twice. On an iPad a mix that went
+  /// silent or jumped left nothing behind but the summary line at its end — the jumps,
+  /// the decks that stopped, the records that would not start were all printed to a
+  /// console nobody was reading.
+  static void booth(String what) {
+    debugPrint(what);
+    if (!kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.iOS ||
+            defaultTargetPlatform == TargetPlatform.android)) {
+      note(what);
+    }
+  }
+
   /// One thing that happened. Timestamped here rather than by the reader, because the
   /// gaps between entries are most of what the log is for.
   static void note(String what) {

@@ -483,8 +483,8 @@ class PlayerService {
   /// "Becoming noisy" means the sound is about to come out of the speaker because
   /// what it was coming out of has gone. If a headset or a Bluetooth speaker is still
   /// there, nothing has gone anywhere and the broadcast was the audio routing
-  /// settling, which this phone does about twice a minute.
-  @visibleForTesting
+  /// settling, which this phone does about twice a minute. The booth's decks ask the
+  /// same question (Deck._noisy).
   static String? somewhereElseToPlay(Iterable<AudioDevice> devices) {
     for (final d in devices) {
       if (!d.isOutput) continue;

@@ -1574,7 +1574,7 @@ class Booth extends ChangeNotifier {
         // (_meetThePhrase), on SYNC pressed, or by the hand that is mixing.
         // Said in the log, always: a jump is the one thing the holding does that can be
         // heard, and "it twitched" is only something to work with if there is a when.
-        debugPrint('booth: ${follower.name} jumped ${(jump / 1000).toStringAsFixed(0)} ms'
+        PlaybackLog.booth('booth: ${follower.name} jumped ${(jump / 1000).toStringAsFixed(0)} ms'
             '${outOfPhrase == 0 ? ' to the beat' : leaveThePhrase ? ' to the beat — $outOfPhrase beats of phrase left out, it is in the room' : ' — $outOfPhrase beat${outOfPhrase.abs() == 1 ? '' : 's'} of it the phrase'} '
             '(${quiet ? snap && share >= 0.25 ? 'SYNC pressed' : 'while quiet' : 'lost the beat by ${ms.toStringAsFixed(0)} ms'})');
         if (outOfPhrase != 0 && !leaveThePhrase) {
@@ -2572,7 +2572,7 @@ class Booth extends ChangeNotifier {
     final first = tt.cues?.firstDownbeat ?? Duration.zero;
     if (target < first) target += bar * 4;
     final shown = d == d.roundToDouble() ? '${d.abs().round()}' : d.abs().toStringAsFixed(1);
-    debugPrint('booth: ${to.name} moved ${d > 0 ? 'on' : 'back'} $shown bar${d.abs() == 1 ? '' : 's'} '
+    PlaybackLog.booth('booth: ${to.name} moved ${d > 0 ? 'on' : 'back'} $shown bar${d.abs() == 1 ? '' : 's'} '
         'to meet ${from.name}\'s phrase (bar ${theirs.bar + 1} of ${theirs.of})');
     await to.seek(tt.onGrid(target));
   }
@@ -2750,7 +2750,7 @@ class Booth extends ChangeNotifier {
     }
 
     final length = barsLength(from, bars);
-    debugPrint('booth: ${kind.name} over $bars bars into "${to.track?.title}" — '
+    PlaybackLog.booth('booth: ${kind.name} over $bars bars into "${to.track?.title}" — '
         '${synced ? 'in step: ${to.bpm?.toStringAsFixed(2)} against ${from.bpm?.toStringAsFixed(2)} bpm' : 'not in step'}');
     if (synced) {
       await mixer.measureLatency(from);
@@ -2973,6 +2973,7 @@ class Booth extends ChangeNotifier {
   bool _reallyPlaying(Deck deck) {
     if (deck.playing) return true;
     _wouldNotPlay = deck.trouble ?? 'Deck ${deck.name} did not start';
+    PlaybackLog.booth('booth: ${deck.name} would not start for the mix: $_wouldNotPlay');
     note(BoothEventKind.trouble, 'Deck ${deck.name} would not start', deck: deck);
     return false;
   }

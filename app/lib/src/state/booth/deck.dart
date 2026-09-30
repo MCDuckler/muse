@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
@@ -8,6 +9,7 @@ import 'package:just_audio_background/just_audio_background.dart';
 import '../../api/client.dart';
 import '../../api/models.dart';
 import '../playback_log.dart';
+import '../player.dart' show PlayerService;
 import 'deck_router.dart';
 import 'mixer.dart' show StemLevels;
 import 'parts.dart';
@@ -39,6 +41,14 @@ class Deck extends ChangeNotifier {
         AudioPlayer(
           // libmpv where this device sends decks there (an iPhone's, an iPad's).
           engine: DeckRouter.active ? DeckRouter.mpv : null,
+          // The audio session's interruptions and its "becoming noisy" are the deck's
+          // to answer (see _listenToTheSession), not just_audio's. just_audio pauses on
+          // every "becoming noisy" — and an iPhone or an iPad sends that when a
+          // Bluetooth route merely settles, about twice a minute with nothing
+          // unplugged (the app's own player learned this, see PlayerService). A deck
+          // paused that way mid-mix was silence with nobody having touched anything,
+          // and the Auto DJ then waited for a record that was never coming back.
+          handleInterruptions: false,
           audioPipeline: this.equalizer == null
               ? null
               : AudioPipeline(androidAudioEffects: [this.equalizer!]),
@@ -47,8 +57,94 @@ class Deck extends ChangeNotifier {
     _subs.add(_player.playerStateStream.listen((s) {
       if (s.processingState == ProcessingState.completed) _ended();
       _stallIf(s.playing && s.processingState == ProcessingState.buffering);
+      _watchForAStop(s);
       notifyListeners();
     }));
+    if (!kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.iOS ||
+            defaultTargetPlatform == TargetPlatform.android)) {
+      unawaited(_listenToTheSession());
+    }
+  }
+
+  // ------------------------------------------------------------------ the session
+  /// Something else wanted the sound — a call, Siri, an alarm — or the output went.
+  Future<void> _listenToTheSession() async {
+    try {
+      final session = await AudioSession.instance;
+      _subs.add(session.interruptionEventStream
+          .listen((e) => unawaited(_interrupted(e.begin, e.type))));
+      _subs.add(session.becomingNoisyEventStream.listen((_) => unawaited(_noisy(session))));
+    } catch (_) {
+      // A platform with no session to speak of: nothing interrupts it.
+    }
+  }
+
+  /// Paused for an interruption, and to be played again when it is over — unless
+  /// anything else has stopped or moved the deck since (a mix that ended while the
+  /// call went on, a record put on it).
+  bool _pausedForInterruption = false;
+
+  Future<void> _interrupted(bool begin, AudioInterruptionType type) async {
+    // Another app's moment of sound over this one: the deck plays on under it.
+    if (type == AudioInterruptionType.duck) return;
+    if (begin) {
+      if (!playing) return;
+      PlaybackLog.booth('deck $name: interrupted (${type.name}) at ${position.inMilliseconds} ms — paused');
+      await pause();
+      _pausedForInterruption = true;
+      return;
+    }
+    final again = _pausedForInterruption && type == AudioInterruptionType.pause;
+    _pausedForInterruption = false;
+    if (!again || !loaded || playing) return;
+    PlaybackLog.booth('deck $name: the interruption is over — playing again');
+    await DeckRouter.wake();
+    await play();
+  }
+
+  /// An interruption, as the session would say it — for a test, which has no session.
+  @visibleForTesting
+  Future<void> interruptForTest(bool begin, AudioInterruptionType type) =>
+      _interrupted(begin, type);
+
+  /// "Becoming noisy": the output is said to have gone. Believed only if it has — a
+  /// headset or a Bluetooth speaker still there means the route was only settling.
+  Future<void> _noisy(AudioSession session) async {
+    if (!playing) return;
+    String? still;
+    try {
+      still = PlayerService.somewhereElseToPlay(await session.getDevices(includeInputs: false));
+    } catch (_) {
+      // A platform that will not say: taken at its word.
+    }
+    if (still != null) {
+      PlaybackLog.booth('deck $name: audio route settled (still on $still) — kept playing');
+      return;
+    }
+    PlaybackLog.booth('deck $name: the audio route went away — paused');
+    await pause();
+  }
+
+  /// Whether this deck has asked its engine to stop since it last played: what tells
+  /// a stop it made from one made behind its back.
+  bool _stopping = false;
+  bool _wasPlaying = false;
+
+  /// A deck that stops without this deck having stopped it — the system, the engine
+  /// giving up — is said, with where: on an iPad that was a mix going silent with
+  /// nothing in the log to say why.
+  void _watchForAStop(PlayerState s) {
+    // Stopped, or meant to be playing with nothing left to play: an engine that gave up
+    // goes idle and just_audio goes on calling it playing.
+    final now = s.playing && s.processingState != ProcessingState.idle;
+    if (_wasPlaying && !now && !_stopping && !_swapping &&
+        s.processingState != ProcessingState.completed) {
+      PlaybackLog.booth('deck $name: stopped, and nothing in the booth stopped it '
+          '(${s.processingState.name}) at ${position.inMilliseconds} ms');
+    }
+    if (now) _stopping = false;
+    _wasPlaying = now;
   }
 
   /// 'A' or 'B'.
@@ -277,7 +373,7 @@ class Deck extends ChangeNotifier {
           }
           return;
         }
-        debugPrint('deck: $name moved ${off.inMilliseconds} ms by itself at ${at.inMilliseconds} ms');
+        PlaybackLog.booth('deck: $name moved ${off.inMilliseconds} ms by itself at ${at.inMilliseconds} ms');
       }
       _suspect = null;
       _fix = at;
@@ -318,6 +414,9 @@ class Deck extends ChangeNotifier {
   void _stallIf(bool now) {
     if (now == _stalled) return;
     final at = DateTime.now();
+    PlaybackLog.booth(now
+        ? 'deck $name: waiting for sound at ${_unfolded(at).inMilliseconds} ms'
+        : 'deck $name: sound again');
     if (now) {
       _fix = _unfolded(at);
     } else {
@@ -471,7 +570,7 @@ class Deck extends ChangeNotifier {
         }
         debugPrint('deck $name: stems for ${track.id} — $got${_stemsFrom == null ? '' : ' from $_stemsFrom'}');
       } catch (e) {
-        debugPrint('deck $name: could not ask for the stems of ${track.id}: $e');
+        PlaybackLog.booth('deck $name: could not ask for the stems of ${track.id}: $e');
       }
     }
     // A stream is signed and the signature ages out, so it is refreshed before a
@@ -505,7 +604,9 @@ class Deck extends ChangeNotifier {
     // unasked, with the booth holding the other deck to it. That was the record in the
     // room thrown seconds the instant another was dropped on the deck that had run
     // out. Whoever wants it playing starts it (Booth.load does, in step).
+    _pausedForInterruption = false;
     if (_player.playing) {
+      _stopping = true;
       try {
         await _player.pause();
       } catch (_) {}
@@ -749,6 +850,7 @@ class Deck extends ChangeNotifier {
       // the wrong bar in the middle of a mix.
       _swapping = was;
       if (was) {
+        _stopping = true;
         try {
           await _player.pause();
         } catch (_) {}
@@ -833,6 +935,8 @@ class Deck extends ChangeNotifier {
   Future<void> pause() async {
     _fix = _unfolded(DateTime.now());
     _wrapSoon?.cancel();
+    _stopping = true;
+    _pausedForInterruption = false;
     await _player.pause();
     _fixedAt = DateTime.now();
     _trusting = false;

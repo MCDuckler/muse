@@ -8,6 +8,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio_platform_interface/just_audio_platform_interface.dart';
@@ -19,6 +20,7 @@ import 'package:muse/src/state/booth/mixer.dart';
 import 'package:muse/src/state/booth/mixer_desktop.dart';
 import 'package:muse/src/state/booth/parts.dart';
 import 'package:muse/src/state/booth/deck.dart';
+import 'package:muse/src/state/playback_log.dart';
 
 import 'fake_audio.dart';
 
@@ -1386,6 +1388,54 @@ void main() {
       expect(heardApart().abs(), lessThan(5),
           reason: 'the part came back ${heardApart().toStringAsFixed(1)} ms off the beat');
       await booth.letGo();
+    });
+
+    test('a call pauses a deck and it plays again after; a mix that stopped it meanwhile wins',
+        () async {
+      // The decks answer the session themselves now (just_audio's own answer to
+      // "becoming noisy" was to pause, and an iPad sends that when a Bluetooth route
+      // settles). A call is still a pause, and still comes back.
+      await booth.b.play();
+      expect(booth.b.playing, isTrue);
+      await booth.b.interruptForTest(true, AudioInterruptionType.pause);
+      expect(booth.b.playing, isFalse, reason: 'paused for the call');
+      await booth.b.interruptForTest(false, AudioInterruptionType.pause);
+      expect(booth.b.playing, isTrue, reason: 'and playing again after it');
+
+      // Paused for a call, and then stopped by a mix ending while it rang: it stays
+      // stopped — the old record coming back after the mix is the worse fault.
+      await booth.b.interruptForTest(true, AudioInterruptionType.pause);
+      await booth.b.pause();
+      await booth.b.interruptForTest(false, AudioInterruptionType.pause);
+      expect(booth.b.playing, isFalse);
+
+      // Another app's moment of sound over this one: nothing.
+      await booth.a.interruptForTest(true, AudioInterruptionType.duck);
+      expect(booth.a.playing, isTrue);
+    });
+
+    test('a deck stopped behind the booth\'s back is written down', () async {
+      final audio = JustAudioPlatform.instance as FakeJustAudio;
+      final before = PlaybackLog.lines.length;
+      // The booth's own stop: said nothing.
+      await booth.a.pause();
+      await booth.a.play();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(PlaybackLog.lines.skip(before).where((l) => l.contains('nothing in the booth stopped it')),
+          isEmpty);
+      // Stopped from outside — the system, a media button — with nobody in the booth
+      // asking.
+      audio.players[booth.a.player.platformId]!.pressedElsewhere(playing: false);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(PlaybackLog.lines.skip(before).where((l) => l.contains('deck A: stopped, and nothing in the booth stopped it')),
+          hasLength(1));
+      // And the engine giving up: idle, and still meant to be playing.
+      await booth.b.play();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      audio.players[booth.b.player.platformId]!.die();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(PlaybackLog.lines.skip(before).where((l) => l.contains('deck B: stopped, and nothing in the booth stopped it (idle)')),
+          hasLength(1));
     });
 
     test('a new record starts at its own speed; the same one keeps its pitch', () async {
