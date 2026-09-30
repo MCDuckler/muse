@@ -50,14 +50,32 @@ void main() {
   /// What the fake house answers for a path, where a test wants to choose.
   final answers = <String, Map<String, dynamic>>{};
 
+  /// Every request it was asked, so a test can say what the app did rather than guess.
+  final asked = <String>[];
+
+  /// Where a test wants the fake house to do the real one's arithmetic.
+  Map<String, dynamic> Function(int from, int to)? moves;
+
   setUp(() async {
     answers.clear();
+    asked.clear();
+    moves = null;
     SharedPreferences.setMockInitialValues({});
     HttpOverrides.global = null;
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     unawaited(() async {
       await for (final request in server) {
+        asked.add('${request.method} ${request.uri.path}');
         request.response.headers.contentType = ContentType.json;
+        final mover = moves;
+        if (mover != null && request.uri.path == '/queues/1/move') {
+          final body = jsonDecode(await utf8.decodeStream(request)) as Map<String, dynamic>;
+          asked[asked.length - 1] = 'MOVE ${body['from']} -> ${body['to']}';
+          request.response.write(jsonEncode(mover(
+              (body['from'] as num).toInt(), (body['to'] as num).toInt())));
+          await request.response.close();
+          continue;
+        }
         request.response.write(jsonEncode(answers[request.uri.path] ??
             (request.uri.path == '/auth/stream-key'
                 ? {
@@ -197,6 +215,55 @@ void main() {
     expect(find.byType(SongRow), findsWidgets);
     expect(find.text('Song 1'), findsOneWidget);
     expect(find.text('Song 3'), findsOneWidget);
+  });
+
+  testWidgets('dragging a row by its grip actually moves it', (tester) async {
+    // The thing that was reported, done the way a finger does it: take the grip, drag
+    // the row, let go, and see where it is. Everything before this tested the state
+    // underneath — which was fine — and never the drag itself.
+    answers['/queues/1/move'] = queueOf(2, [3, 1, 2]);
+    await tester.pumpWidget(MultiProvider(
+      providers: [
+        ChangeNotifierProvider<AppState>.value(value: app),
+        ChangeNotifierProvider(create: (_) => Selection()),
+      ],
+      child: const MaterialApp(home: Scaffold(body: QueuePage())),
+    ));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    final grips = find.byIcon(Icons.drag_indicator);
+    expect(grips, findsWidgets, reason: 'every row has a grip to take it by');
+    final third = tester.getCenter(grips.at(2));
+    final first = tester.getCenter(grips.at(0));
+
+    // Up, past the first row, and let go.
+    final drag = await tester.startGesture(third);
+    await tester.pump(const Duration(milliseconds: 40));
+    // Moved a little at a time, the way a finger does: the recogniser wants to see the
+    // pointer travel, not teleport.
+    final travel = first.dy - 24 - third.dy;
+    for (var step = 0; step < 10; step++) {
+      await drag.moveBy(Offset(0, travel / 10));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await drag.up();
+    await tester.pumpAndSettle();
+
+    expect(app.player!.items.map((t) => t.id).toList(), [3, 1, 2],
+        reason: 'the third row was dragged to the top and has to stay there. '
+            'What the app asked for: $asked');
+    // And what is *drawn*, which is the thing that was reported. A reorderable list
+    // decides what moved from the keys it was given, so a key that carries the row's
+    // position rather than its name tells it nothing moved — the list is free to put
+    // the row back where its key says it belongs, however the data underneath reads.
+    final drawn = tester
+        .widgetList<Text>(find.byType(Text))
+        .map((t) => t.data)
+        .where((d) => d != null && d.startsWith('Song '))
+        .toList();
+    expect(drawn.take(3).toList(), ['Song 3', 'Song 1', 'Song 2'],
+        reason: 'the rows on screen are in the order they were dragged into');
   });
 
   testWidgets('the list does not scroll away from you when the song changes',

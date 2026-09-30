@@ -1346,9 +1346,9 @@ class AppState extends ChangeNotifier {
     return true;
   }
 
-  Future<void> _applyQueue(Queue updated) async {
+  Future<bool> _applyQueue(Queue updated) async {
     final changed = activeQueue?.id != updated.id;
-    if (!_takeQueue(updated)) return;
+    if (!_takeQueue(updated)) return false;
     await player?.loadQueue(updated);
     notifyListeners();
     unawaited(_keepTheseCovers(updated));
@@ -1360,6 +1360,7 @@ class AppState extends ChangeNotifier {
       _prioritised = updated.id;
       unawaited(api.prioritiseQueue(updated.id).catchError((_) => 0));
     }
+    return true;
   }
 
   /// Put the covers of a list somebody just opened on the device, quietly.
@@ -1467,13 +1468,47 @@ class AppState extends ChangeNotifier {
     // agrees with it; if it does not — somebody else changed the queue underneath —
     // what it says is what the list goes back to.
     final offset = player?.windowFrom ?? 0;
+    final was = _fewOf(player?.items);
     player?.moveLocally(from, to);
+    final moved = _fewOf(player?.items);
     notifyListeners();
     try {
-      await _applyQueue(await api.moveQueueItem(q.id, offset + from, offset + to));
-    } catch (_) {
+      final said = await api.moveQueueItem(q.id, offset + from, offset + to);
+      final took = await _applyQueue(said);
+      _sayWhatTheDragDid(
+          from: from, to: to, offset: offset, was: was, moved: moved,
+          said: said, took: took);
+    } catch (e) {
+      PlaybackLog.note('DRAG $from->$to (+$offset) on queue ${q.id} FAILED: $e');
       await _resyncQueue();
     }
+  }
+
+  /// A few ids off the front of the list, for saying what a drag did.
+  static String _fewOf(List<Track>? items) =>
+      items == null ? '-' : items.take(6).map((t) => t.id).join(',');
+
+  /// What a drag asked for, what it did on screen, and what came back.
+  ///
+  /// Reordering the queue was reported as always snapping back, and every part of it
+  /// measures right from here: the house moves the row and keeps it, the state under
+  /// the screen moves, and a test that drags a row by its grip on the real page finds
+  /// the right order both in the list and in what is drawn. So what is left is on the
+  /// machine it happens on, and this is the only way to see it.
+  void _sayWhatTheDragDid({
+    required int from,
+    required int to,
+    required int offset,
+    required String was,
+    required String moved,
+    required Queue said,
+    required bool took,
+  }) {
+    PlaybackLog.note(
+        'DRAG $from->$to (+$offset): was $was, moved to $moved, '
+        'the house says rev ${said.rev} ${_fewOf(said.items)}'
+        '${took ? '' : ' — REFUSED as older than rev $_queueRev'}, '
+        'and the list now reads ${_fewOf(player?.items)}');
   }
 
   /// Move a whole selection to one place, as one edit.
