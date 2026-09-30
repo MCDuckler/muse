@@ -27,6 +27,8 @@ MODEL_SHA=678fb1f31846e1c0bab6602bdb2a9663dad85ad8adf2e5d9e29374d645c14367
 ORT=1.30.0
 ORT_LINUX_SHA=245a6f8c38127551057a1cd1ffd59f0a186a227ade4f3492dea2494eb565542e
 ORT_WIN_SHA=7e39e2bdbba836d98071ef28620735ba36a47c554cf794585269aecc50fab0da
+# Apple silicon only: 1.30.0 has no Intel Mac build.
+ORT_MAC_SHA=bcc9110f9d638a119de2db7afb3ba9a1da8085f0cb3401e1c48ae1caf450b6fa
 # ONNX Runtime's CUDA 13 build, for NVIDIA cards (see cudaFiles in separation_kit.dart):
 # the runtime and the two libraries it loads from beside itself, by file.
 CUDA_LINUX="libonnxruntime.so.1.30.0:292591ed61befc515112570ae8eb9bb0d47716cd0ed60c38865800de4e829544
@@ -51,6 +53,10 @@ check "$WORK/onnxruntime-linux-x64-$ORT/lib/libonnxruntime.so.$ORT" $ORT_LINUX_S
 check "$WORK/onnxruntime-win-x64-$ORT/lib/onnxruntime.dll" $ORT_WIN_SHA "the Windows runtime"
 gzip -9 -n -c "$WORK/onnxruntime-linux-x64-$ORT/lib/libonnxruntime.so.$ORT" > "$KIT/onnxruntime-$ORT-linux-x64.so.gz"
 gzip -9 -n -c "$WORK/onnxruntime-win-x64-$ORT/lib/onnxruntime.dll" > "$KIT/onnxruntime-$ORT-win-x64.dll.gz"
+fetch "https://github.com/microsoft/onnxruntime/releases/download/v$ORT/onnxruntime-osx-arm64-$ORT.tgz" "$WORK/ort-mac.tgz"
+tar -xzf "$WORK/ort-mac.tgz" -C "$WORK" "./onnxruntime-osx-arm64-$ORT/lib/libonnxruntime.$ORT.dylib"
+check "$WORK/onnxruntime-osx-arm64-$ORT/lib/libonnxruntime.$ORT.dylib" $ORT_MAC_SHA "the Mac runtime"
+gzip -9 -n -c "$WORK/onnxruntime-osx-arm64-$ORT/lib/libonnxruntime.$ORT.dylib" > "$KIT/onnxruntime-$ORT-macos-arm64.dylib.gz"
 
 echo "== ONNX Runtime $ORT for CUDA 13"
 fetch "https://github.com/microsoft/onnxruntime/releases/download/v$ORT/onnxruntime-linux-x64-gpu_cuda13-$ORT.tgz" "$WORK/ort-linux-cuda13.tgz"

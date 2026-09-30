@@ -17,6 +17,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:muse/src/worker/build_stamp.dart';
 import 'package:muse/src/worker/downloader.dart';
 import 'package:muse/src/worker/helper_files.dart';
 import 'package:muse/src/worker/ingest_http.dart';
@@ -76,13 +77,7 @@ Future<void> main(List<String> args) async {
   // Said at most once a second however fast things change, and at least every five
   // so that whoever reads it can tell a quiet downloader from a dead one.
   Timer? soon;
-  String? build;
-  try {
-    build = File('${File(Platform.resolvedExecutable).parent.path}'
-            '${Platform.pathSeparator}build-stamp.txt')
-        .readAsStringSync()
-        .trim();
-  } catch (_) {}
+  final build = readBuildStamp();
   Future<void> say() => files.writeStatus(
       FetchStatus.of(downloader, pid: pid, splitter: splitter, build: build));
   void changed() => soon ??= Timer(const Duration(seconds: 1), () {
@@ -136,14 +131,8 @@ Future<void> main(List<String> args) async {
     // new one starts in its place — left running, an old helper held the lock that
     // the new one needed, and every fix in the update passed the pool by.
     if (build != null && !leaving) {
-      String? onDisk;
-      try {
-        onDisk = File('${File(Platform.resolvedExecutable).parent.path}'
-                '${Platform.pathSeparator}build-stamp.txt')
-            .readAsStringSync()
-            .trim();
-      } catch (_) {}
-      if (onDisk != null && onDisk.isNotEmpty && onDisk != build) {
+      final onDisk = readBuildStamp();
+      if (onDisk != null && onDisk != build) {
         await leave('updated to $onDisk — starting again as it', then: () async {
           await Process.start(Platform.resolvedExecutable, ['--config', files.config.path],
               mode: ProcessStartMode.detached);

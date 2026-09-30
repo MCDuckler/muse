@@ -97,23 +97,36 @@ void main() {
   group('starting at login', () {
     test('on Linux, a desktop entry with the paths quoted', () async {
       final bg = fetcher();
-      final entry = bg.autostartEntry(windows: false);
+      final entry = bg.autostartEntry(windows: false, mac: false);
       expect(entry, startsWith('[Desktop Entry]\n'));
       expect(entry, contains('Exec="/opt/wet owl/wetowl-fetch" --config "${files.config.path}"\n'));
       expect(entry, contains('Terminal=false'));
     });
 
     test('a path with a dollar or a quote in it cannot become a command', () {
-      final entry = fetcher(exe: r'/opt/a"b$c`d/wetowl-fetch').autostartEntry(windows: false);
+      final entry =
+          fetcher(exe: r'/opt/a"b$c`d/wetowl-fetch').autostartEntry(windows: false, mac: false);
       expect(entry, contains(r'Exec="/opt/a\"b\$c\`d/wetowl-fetch"'));
     });
 
     test('on Windows, a script that starts it with no window', () {
       final entry = fetcher(exe: r'C:\Program Files\WetOwl\wetowl-fetch.exe')
-          .autostartEntry(windows: true);
+          .autostartEntry(windows: true, mac: false);
       expect(entry,
           contains(r'.Run """C:\Program Files\WetOwl\wetowl-fetch.exe"" --config ""'));
       expect(entry.trimRight(), endsWith(', 0, False'), reason: '0 is "hidden"');
+    });
+
+    test('on a Mac, a LaunchAgent that runs it once at login', () {
+      final entry = fetcher(exe: '/Applications/Wet & Owl.app/Contents/MacOS/wetowl-fetch')
+          .autostartEntry(mac: true);
+      expect(entry, contains('<key>Label</key>\n\t<string>io.wetowl.fetch</string>'));
+      expect(entry,
+          contains('<string>/Applications/Wet &amp; Owl.app/Contents/MacOS/wetowl-fetch</string>'));
+      expect(entry, contains('<string>--config</string>\n\t\t<string>${files.config.path}</string>'));
+      expect(entry, contains('<key>RunAtLoad</key>\n\t<true/>'));
+      expect(entry, isNot(contains('KeepAlive')),
+          reason: 'switched off, it leaves, and launchd must not bring it back');
     });
 
     test('it is written, found, and taken away again', () async {
@@ -135,7 +148,8 @@ void main() {
 
   group('where to get what is missing', () {
     test('one link for each thing, ffmpeg and ffprobe together', () {
-      final links = Tools.linksFor(['yt-dlp', 'ffmpeg', 'ffprobe', 'node or deno'], windows: true);
+      final links =
+          Tools.linksFor(['yt-dlp', 'ffmpeg', 'ffprobe', 'node or deno'], windows: true, mac: false);
       expect(links.map((l) => l.name), ['yt-dlp', 'ffmpeg and ffprobe', 'Deno (or Node.js)']);
       expect(links.first.url, endsWith('/yt-dlp.exe'));
     });
@@ -143,12 +157,34 @@ void main() {
     test('nothing for what is there, and only the projects\' own pages', () {
       expect(Tools.linksFor(const []), isEmpty);
       for (final windows in [true, false]) {
-        for (final l in Tools.linksFor(['yt-dlp', 'ffprobe', 'node or deno'], windows: windows)) {
+        for (final l
+            in Tools.linksFor(['yt-dlp', 'ffprobe', 'node or deno'], windows: windows, mac: false)) {
           final host = Uri.parse(l.url).host;
           expect(l.url, startsWith('https://'));
           expect(['github.com', 'www.gyan.dev', 'ffmpeg.org', 'deno.com'], contains(host));
         }
       }
+    });
+  });
+
+  group('on a Mac', () {
+    test('Homebrew, once, for everything that is missing', () {
+      final links = Tools.linksFor(['yt-dlp', 'ffmpeg', 'ffprobe', 'node or deno'], mac: true);
+      expect(links.map((l) => l.url), ['https://brew.sh/']);
+      expect(Tools.linksFor(const [], mac: true), isEmpty);
+    });
+
+    test('Homebrew\'s folders are searched though an app from the Finder has none', () {
+      final dirs = Tools.searchPath(
+          environment: const {'PATH': '/usr/bin:/bin', 'HOME': '/Users/owl'}, mac: true);
+      expect(dirs, ['/usr/bin', '/bin', '/opt/homebrew/bin', '/usr/local/bin', '/opt/local/bin',
+        '/Users/owl/.deno/bin']);
+      expect(
+          Tools.searchPath(environment: const {'PATH': '/opt/homebrew/bin:/usr/bin'}, mac: true)
+              .where((d) => d == '/opt/homebrew/bin'),
+          hasLength(1),
+          reason: 'not twice');
+      expect(Tools.searchPath(environment: const {'PATH': '/usr/bin'}, mac: false), ['/usr/bin']);
     });
   });
 

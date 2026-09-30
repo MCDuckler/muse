@@ -78,7 +78,7 @@ class _BoothPageState extends State<BoothPage> {
     ('N', 'Auto DJ: not that one'),
     ('P', 'Waveforms, the set, the plan'),
     ('R', 'Auto DJ: hear the last mix again'),
-    ('F11', 'Full screen'),
+    ('F11 · ⌃⌘F', 'Full screen'),
   ];
 
   KeyEventResult _keys(FocusNode node, KeyEvent e) {
@@ -87,7 +87,11 @@ class _BoothPageState extends State<BoothPage> {
     final typing = FocusManager.instance.primaryFocus?.context
         ?.findAncestorWidgetOfExactType<EditableText>();
     if (typing != null) return KeyEventResult.ignored;
-    if (e.logicalKey == LogicalKeyboardKey.f11) {
+    // And a Mac's own, where F11 is the system's.
+    final macFull = e.logicalKey == LogicalKeyboardKey.keyF &&
+        HardwareKeyboard.instance.isMetaPressed &&
+        HardwareKeyboard.instance.isControlPressed;
+    if (e.logicalKey == LogicalKeyboardKey.f11 || macFull) {
       unawaited(toggleFullScreen());
       return KeyEventResult.handled;
     }

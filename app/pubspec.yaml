@@ -37,6 +37,8 @@ dependencies:
   media_kit: ^1.2.0
   media_kit_libs_linux: ^1.2.1
   media_kit_libs_windows_audio: ^1.0.9
+  # A Mac's libmpv, with the booth's filters: see dependency_overrides.
+  media_kit_libs_macos_audio: ^1.1.4
   desktop_drop: ^0.8.4
   # The separator (bin/wetowl_separate.dart) talks to ONNX Runtime's C API directly,
   # and the model it runs is checked against a pinned hash when it is fetched.
@@ -62,6 +64,9 @@ dependency_overrides:
   # default one has. See third_party/media_kit_libs_ios_audio/WETOWL.md.
   media_kit_libs_ios_audio:
     path: third_party/media_kit_libs_ios_audio
+  # The same for a Mac. See third_party/media_kit_libs_macos_audio/WETOWL.md.
+  media_kit_libs_macos_audio:
+    path: third_party/media_kit_libs_macos_audio
 
 dev_dependencies:
   # The fake audio engine in test/ implements this, so the player's own logic can be

@@ -33,8 +33,10 @@
 		file_server
 	}
 
-	# The desktop builds: a zip for Windows, a tarball for Linux, and what each one is.
-	@desktop path /wetowl-windows.zip /wetowl-linux.tar.gz
+	# The desktop builds: a zip for Windows, a tarball for Linux, a zip of the app bundle
+	# for a Mac (what the app updates itself from) and a disk image of it (what a person
+	# downloads), and what each one is.
+	@desktop path /wetowl-windows.zip /wetowl-linux.tar.gz /wetowl-macos.zip /wetowl-macos.dmg
 	handle @desktop {
 		header Content-Type application/octet-stream
 		header Content-Disposition attachment
@@ -51,7 +53,7 @@
 		root * /dl
 		file_server
 	}
-	@desktopjson path /wetowl-windows.json /wetowl-linux.json
+	@desktopjson path /wetowl-windows.json /wetowl-linux.json /wetowl-macos.json
 	handle @desktopjson {
 		header Content-Type application/json
 		header Cache-Control "no-cache"
