@@ -248,13 +248,21 @@ class SetPlanner {
     return dot / (math.sqrt(na) * math.sqrt(nb));
   }
 
-  static String _titleKey(String title) {
-    var t = title.toLowerCase().replaceAll(RegExp(r'[\(\[].*?[\)\]]'), '');
-    // "Song by Artist" and "Artist - Song": the song.
-    t = t.replaceAll(RegExp(r'\s+by\s+.*$'), '');
-    if (t.contains(' - ')) t = t.split(' - ').last;
-    return t.replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim();
-  }
+  // Kept, and the patterns built once: order() asks for a title's key a few million
+  // times over a long queue, and building three RegExps each time froze the booth for
+  // a quarter of a minute at every change of record.
+  static final _titleKeys = <String, String>{};
+  static final _bracketed = RegExp(r'[\(\[].*?[\)\]]');
+  static final _byArtist = RegExp(r'\s+by\s+.*$');
+  static final _notWord = RegExp(r'[^a-z0-9]+');
+
+  static String _titleKey(String title) => _titleKeys[title] ??= () {
+        var t = title.toLowerCase().replaceAll(_bracketed, '');
+        // "Song by Artist" and "Artist - Song": the song.
+        t = t.replaceAll(_byArtist, '');
+        if (t.contains(' - ')) t = t.split(' - ').last;
+        return t.replaceAll(_notWord, ' ').trim();
+      }();
 
   /// How well [b] follows [a]. [before] are the records lately played before [a],
   /// for what is not to be repeated; [wantedStep] is the step in loudness the arc
@@ -396,7 +404,16 @@ class SetPlanner {
     final n = rest.length;
     final startEnergy = from == null ? null : energyOf(from, timingOf(from.id));
     final cache = <(int, int), double>{};
-    double fitOf(Track? a, Track b, List<Track> played, int at) {
+    // What a path has played, as the two things a candidate is checked against: read
+    // once per path per step, not once per candidate — per candidate it was every
+    // artist and every title of the set so far, 135 records deep, 146 000 times.
+    ({Set<String> names, Set<String> titles}) heard(Track? a, List<Track> played) => (
+          names: {
+            for (final x in [if (a != null) a, ...played]) ...x.artists.map((s) => s.toLowerCase())
+          },
+          titles: {for (final x in played) _titleKey(x.title)},
+        );
+    double fitOf(Track? a, Track b, ({Set<String> names, Set<String> titles}) seen, int at) {
       if (a == null) return 0.3;
       final ta = timingOf(a.id), tb = timingOf(b.id);
       if (ta == null || tb == null) return 0.3;
@@ -409,9 +426,8 @@ class SetPlanner {
       final t = target(arc, at + 1, n + 1, startEnergy);
       final arcTerm = eb != null && t != null ? -0.4 * (eb - t).abs() : 0.0;
       var again = 0.0;
-      final names = {for (final x in [a, ...played]) ...x.artists.map((s) => s.toLowerCase())};
-      if (b.artists.any((s) => names.contains(s.toLowerCase()))) again -= 0.3;
-      if (played.any((x) => _titleKey(x.title) == _titleKey(b.title))) again -= 0.5;
+      if (b.artists.any((s) => seen.names.contains(s.toLowerCase()))) again -= 0.3;
+      if (seen.titles.contains(_titleKey(b.title))) again -= 0.5;
       return base + arcTerm + again;
     }
 
@@ -423,12 +439,12 @@ class SetPlanner {
       for (final (path, score) in beam) {
         final used = {for (final t in path) t.id};
         final last = path.isEmpty ? from : path.last;
-        final played = [...before, ...path];
+        final seen = heard(last, [...before, ...path]);
         final candidates = lockedAt.containsKey(at)
             ? [lockedAt[at]!]
             : [for (final t in rest) if (!used.contains(t.id) && !locked.contains(t.id)) t];
         for (final c in candidates) {
-          next.add(([...path, c], score + fitOf(last, c, played, at)));
+          next.add(([...path, c], score + fitOf(last, c, seen, at)));
         }
       }
       next.sort((x, y) => y.$2.compareTo(x.$2));
