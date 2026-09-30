@@ -489,8 +489,7 @@ class Updates extends ChangeNotifier {
 
   /// The program that puts the new build in, as it is named beside the exe. Built by
   /// .github/workflows/desktop.yml from bin/wetowl_update.dart.
-  static String get updaterName =>
-      Platform.isWindows ? 'wetowl-update.exe' : 'wetowl-update';
+  static String get updaterName => programFile('wetowl-update');
 
   /// The few lines that do the swap once the app is gone.
   ///
