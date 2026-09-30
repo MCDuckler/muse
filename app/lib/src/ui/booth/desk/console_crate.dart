@@ -8,6 +8,8 @@ import '../../../api/models.dart';
 import '../../../state/app_state.dart';
 import '../../../state/booth/booth.dart';
 import '../../../state/booth/deck.dart' as engine;
+import '../../../state/booth/dj_set.dart';
+import '../../../state/booth/set_planner.dart';
 import '../../../worker/parts_jobs.dart';
 import '../../../worker/this_computer.dart' show fetchHereNow;
 import '../../artwork.dart';
@@ -138,11 +140,11 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
     try {
       // What is already in the queue is not a suggestion — it is already coming.
       final queued = context.read<AppState>().player?.items ?? const <Track>[];
-      final found = await widget.booth.api
-          .partners(from.id,
-              exclude: [from.id, for (final t in queued) t.id],
-              limit: 40)
-          .timeout(const Duration(seconds: 15));
+      // The same judging the Auto DJ picks by: the house's pick from the whole
+      // library, judged again here with the moves, the seam and the taste.
+      final found = await widget.booth.auto
+          .partnersFor(from, limit: 16, source: SetSource.wholeLibrary, exclude: [from.id, for (final t in queued) t.id])
+          .timeout(const Duration(seconds: 40));
       if (!mounted || _fitsFor != from.id) return;
       setState(() {
         _fits = found;
@@ -199,18 +201,13 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
     });
   }
 
-  int _score(Track t) {
-    final tm = widget.booth.timing.peek(t.id);
-    final master = widget.booth.master.timing;
-    final shown = widget.booth.master.bpm;
-    if (tm == null || master == null) return 2;
-    final tempoOk = tm.bpm != null && shown != null && Booth.syncRatio(tm.bpm!, shown) != null;
-    final keyOk = tm.inKeyWith(master);
-    return tempoOk && keyOk
-        ? 0
-        : tempoOk || keyOk
-            ? 1
-            : 3;
+  /// How well [t] follows the record in the room — the set planner's own fit, the
+  /// one the Auto DJ and the set go by — as a sort key: lower first.
+  double _score(Track t) {
+    final m = widget.booth.master;
+    final fit = SetPlanner.fit(m.timing, widget.booth.timing.peek(t.id),
+        ta: m.track, tb: t, fromPitch: m.pitch, move: m.track == null ? null : widget.booth.auto.moveScoreOf(m.track!, t));
+    return fit == Fit.nothing ? 0 : -fit.score;
   }
 
   Future<void> _openList(Playlist p) async {
@@ -1106,6 +1103,8 @@ class _RowState extends State<_Row> {
     final pos = widget.queuePos;
     final liked = app.isFavourite(t.id);
     return [
+      if (widget.booth.auto.running && t.isReady && widget.booth.auto.next?.id != t.id)
+        ('Mix in next', Icons.queue_play_next, () => widget.booth.auto.swapNext(t)),
       if (pos == null) ...[
         ('Add to the queue', Icons.playlist_add, () => app.addTrack(t)),
         ('Add as the next', Icons.playlist_play, () => app.addTrack(t, mode: 'next')),

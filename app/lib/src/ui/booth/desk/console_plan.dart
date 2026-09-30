@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../../../api/models.dart';
+import '../../../state/app_state.dart';
 import '../../../state/booth/booth.dart';
 import '../../../state/booth/mixer.dart';
 import '../../../state/booth/automix.dart';
@@ -11,7 +13,7 @@ import '../../../state/booth/planner.dart';
 import '../../feel.dart';
 import '../../mag.dart';
 import 'console.dart';
-import 'console_set.dart' show planPair;
+import 'console_set.dart' show planPair, startAuto;
 
 /// Asked for from the keyboard (P): the room switches between the waveforms and the
 /// plan each time this counts up.
@@ -95,7 +97,22 @@ class _ConsolePlanState extends State<ConsolePlan> {
               : 'These two cannot be put in step: ${kind.label}, nothing more to plan.';
     }
     if (why != null) {
-      return Center(child: Text(why, style: Mag.typewriter(12, color: Console.quiet)));
+      final items = context.watch<AppState>().player?.items ?? const <Track>[];
+      return Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text(why, textAlign: TextAlign.center, style: Mag.typewriter(12, color: Console.quiet)),
+          if (!auto.running && items.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Pad(
+              label: 'START THE AUTO DJ',
+              icon: Icons.play_arrow,
+              height: 30,
+              colour: accent,
+              onTap: () => startAuto(booth, items),
+            ),
+          ],
+        ]),
+      );
     }
 
     final steps = MixStep.onBars(Booth.plan(p!.kind, from: from.name, to: to.name), p.bars);
@@ -705,7 +722,9 @@ class _PairBodyState extends State<_PairBody> {
     final pair = widget.pair;
     final accent = widget.accent;
     final auto = booth.auto;
-    final all = [if (auto.current != null) auto.current!, ...auto.upcoming];
+    final all = auto.running
+        ? [if (auto.current != null) auto.current!, ...auto.upcoming]
+        : context.watch<AppState>().player?.items ?? const <Track>[];
     Track? find(int id) => all.cast<Track?>().firstWhere((t) => t!.id == id, orElse: () => null);
     final a = find(pair.$1), b = find(pair.$2);
     final back = Pad(label: 'NEXT PAIR', height: 24, colour: Console.ink, tooltip: 'Back to the transition coming', onTap: () => planPair.value = null);
@@ -773,10 +792,29 @@ class _PairBodyState extends State<_PairBody> {
             ),
           );
         }
+        // Its length, for a pair further down as for the one coming.
+        final lengths = chosen == null
+            ? null
+            : Row(children: [
+                Text('LENGTH', style: Console.label(8)),
+                const SizedBox(width: 6),
+                for (final n in const [4, 8, 16, 32, 64]) ...[
+                  Pad(
+                    label: '$n',
+                    height: 24,
+                    width: 34,
+                    lit: chosen.bars == n,
+                    colour: accent,
+                    onTap: () => auto.steerPair(a, b, chosen.copyWith(bars: n)),
+                  ),
+                  const SizedBox(width: 3),
+                ],
+              ]);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             header,
+            if (lengths != null) ...[const SizedBox(height: 6), lengths],
             const SizedBox(height: 6),
             Expanded(
               child: _beside(

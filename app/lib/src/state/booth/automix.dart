@@ -315,6 +315,105 @@ class AutoMix extends ChangeNotifier {
     unawaited(_reroute());
   }
 
+  /// The set's curve (or, ordering a queue, its arc) changed to [p]: what is left of
+  /// the set is laid again to it.
+  void setPreset(EnergyPreset p) {
+    _remember('the curve: ${p.label}');
+    arc = p.arc;
+    final s = set;
+    if (s != null) set = s.copyWith(shape: s.shape.copyWith(preset: p));
+    notifyListeners();
+    if (mode == SetMode.set) {
+      _rerouteLater(p.label);
+    } else if (mode == SetMode.bestOrder) {
+      unawaited(_prepareNext());
+    }
+  }
+
+  /// [old], still to come, swapped for [with_] in the same place — the one it
+  /// replaces goes to the end of the queue, not out of it.
+  Future<void> replaceUpcoming(Track old, Track with_) async {
+    final i = _tracks.indexWhere((t) => t.id == old.id, _at + 1);
+    if (i < 0 || !running) return;
+    _remember('${with_.displayTitle} for ${old.displayTitle}');
+    final before = _tracks[i - 1];
+    final rest = [for (final t in _tracks.sublist(i + 1)) if (t.id != with_.id) t];
+    _tracks = [..._tracks.sublist(0, i), with_, ...rest, old];
+    if (i == _at + 1) _heldNext = with_.id;
+    final s = set;
+    if (s != null) {
+      set = s.copyWith(slots: [
+        for (final x in s.slots)
+          if (x.track.id == old.id) SetSlot(track: with_, pinned: x.pinned) else if (x.track.id != with_.id) x,
+      ]).retimed();
+    }
+    if (locked.remove(old.id)) locked.add(with_.id);
+    booth.note(BoothEventKind.plan, '${with_.displayTitle} instead of ${old.displayTitle}');
+    notifyListeners();
+    unawaited(_arrange(before, [with_]));
+    unawaited(_arrange(rest.isEmpty ? with_ : rest.last, [old]));
+    if (i == _at + 1) await _prepareNext();
+  }
+
+  /// [track], still to come, moved [by] places (earlier where negative) and pinned
+  /// there: a hand put it where it wants it. Never before the next when the next is
+  /// already on the deck.
+  Future<void> moveUpcoming(Track track, int by) async {
+    final i = _tracks.indexWhere((t) => t.id == track.id, _at + 1);
+    if (i < 0 || by == 0 || !running) return;
+    final first = isReady || _heldNext != null ? _at + 2 : _at + 1;
+    final to = (i + by).clamp(first, _tracks.length - 1);
+    if (to == i) return;
+    _remember('${track.displayTitle} moved');
+    final list = [..._tracks]..removeAt(i);
+    list.insert(to, track);
+    _tracks = list;
+    locked.add(track.id);
+    final s = set;
+    if (s != null) {
+      final order = [for (final t in list.sublist(_at + 1)) t.id];
+      final slots = [...s.slots]..sort((a, b) {
+          final x = order.indexOf(a.track.id), y = order.indexOf(b.track.id);
+          if (x < 0 || y < 0) return 0;
+          return x.compareTo(y);
+        });
+      set = s.copyWith(slots: [for (final x in slots) x.track.id == track.id ? x.copyWith(pinned: true) : x]).retimed();
+    }
+    notifyListeners();
+    unawaited(_arrange(list[to - 1], [track]));
+    if (to == _at + 1 || i == _at + 1) await _prepareNext();
+  }
+
+  /// Where the booth means the set's loudness to be at each of [records] (the one on
+  /// now first), 0 to 1 — what the energy lane draws its line from. Null where it has
+  /// no wish: a queue played as it is.
+  List<double?> targetsFor(List<Track> records) {
+    if (records.isEmpty || mode == SetMode.asQueued) return [for (final _ in records) null];
+    final s = set;
+    if (mode == SetMode.set && s != null && s.curve.isNotEmpty) {
+      // Read off the set's own slots where they are in it, else off the curve by place.
+      final n = s.slots.length;
+      return [
+        for (var i = 0; i < records.length; i++)
+          () {
+            final j = s.slots.indexWhere((x) => x.track.id == records[i].id);
+            final k = j >= 0 ? j / math.max(1, n - 1) : (setAt + i / math.max(1, n)).clamp(0.0, 1.0);
+            final c = s.curve;
+            final t = c[(k * (c.length - 1)).round().clamp(0, c.length - 1)];
+            return (t + energyOffset).clamp(0.0, 1.0);
+          }(),
+      ];
+    }
+    final start = SetPlanner.energyOf(records.first, booth.timing.peek(records.first.id));
+    return [
+      for (var i = 0; i < records.length; i++)
+        () {
+          final t = SetPlanner.target(arc, i, records.length, start);
+          return t == null ? null : (t + energyOffset).clamp(0.0, 1.0);
+        }(),
+    ];
+  }
+
   // ------------------------------------------------------------------ the room's word
   /// Where the room has asked for more energy (or less) than the plan: added to the
   /// set's curve, or to the arc the booth orders the queue by.
@@ -500,7 +599,7 @@ class AutoMix extends ChangeNotifier {
   /// planner reads — the seam, the sound, the move the transition planner would make
   /// — best first.
   Future<List<({Track track, double fit, String why})>> partnersFor(Track from,
-      {int limit = 6, SetSource? source}) async {
+      {int limit = 6, SetSource? source, Iterable<int> exclude = const []}) async {
     final here = _tracks.indexWhere((t) => t.id == from.id);
     final before = here < 0 ? _before() : [for (var i = math.max(0, here - 3); i < here; i++) _tracks[i]];
     final n = _tracks.length;
@@ -522,7 +621,7 @@ class AutoMix extends ChangeNotifier {
             shape: shape,
             prev: from,
             k: 0,
-            exclude: [for (final t in _tracks) t.id, ...before.map((t) => t.id)],
+            exclude: [for (final t in _tracks) t.id, ...before.map((t) => t.id), ...exclude],
             limit: 16,
           )
           .timeout(const Duration(seconds: 12));
@@ -534,7 +633,7 @@ class AutoMix extends ChangeNotifier {
       try {
         coarse = await booth.api
             .partners(from.id,
-                exclude: [for (final t in _tracks) t.id],
+                exclude: [for (final t in _tracks) t.id, ...exclude],
                 limit: 24,
                 step: wanted,
                 avoid: {for (final t in [from, ...before]) ...t.artists})

@@ -14,6 +14,8 @@ import 'artwork.dart';
 import 'booth/booth_clock.dart';
 import 'booth/desk/console_plan.dart';
 import 'booth/desk/console_room.dart';
+import 'booth/desk/console_set.dart' show startAuto;
+import 'booth/desk/set_planner_page.dart' show openSetPlanner;
 import 'booth/phone/phone_room.dart';
 import 'feel.dart';
 import 'mag.dart';
@@ -74,8 +76,14 @@ class _BoothPageState extends State<BoothPage> {
     ('⇧ ← →', 'Nudge the master'),
     ('[ ]', 'Loop A, B'),
     ('F G', 'Kill the bass on A, B'),
-    ('M', 'Auto DJ: mix now'),
-    ('N', 'Auto DJ: not that one'),
+    ('A', 'Auto DJ on or off'),
+    ('S', 'Auto DJ: skip — into the next at the next bar'),
+    ('M', 'Auto DJ: mix now, the planned way'),
+    ('N', 'Auto DJ: not now — the next to the end of the queue'),
+    ('E D', 'Auto DJ: eight bars longer, sooner'),
+    ('⌥ ↑ ↓', 'Auto DJ: more energy, less'),
+    ('U', 'Auto DJ: undo what it just changed'),
+    ('L', 'Plan a set'),
     ('P', 'Waveforms, the set, the plan'),
     ('R', 'Auto DJ: hear the last mix again'),
     ('F11 · ⌃⌘F', 'Full screen'),
@@ -134,6 +142,27 @@ class _BoothPageState extends State<BoothPage> {
       killBass(b.a);
     } else if (k == LogicalKeyboardKey.keyG) {
       killBass(b.b);
+    } else if (k == LogicalKeyboardKey.keyA) {
+      feel(Feel.commit);
+      if (b.auto.running) {
+        b.auto.stop();
+      } else {
+        startAuto(b, context.read<AppState>().player?.items ?? const []);
+      }
+    } else if (k == LogicalKeyboardKey.keyS) {
+      feel(Feel.commit);
+      unawaited(b.auto.skip());
+    } else if (k == LogicalKeyboardKey.keyE) {
+      b.auto.extend(2);
+    } else if (k == LogicalKeyboardKey.keyD) {
+      b.auto.extend(-2);
+    } else if (k == LogicalKeyboardKey.keyU) {
+      unawaited(b.auto.undoLast());
+    } else if (k == LogicalKeyboardKey.keyL) {
+      unawaited(openSetPlanner(context, b));
+    } else if (HardwareKeyboard.instance.isAltPressed &&
+        (k == LogicalKeyboardKey.arrowUp || k == LogicalKeyboardKey.arrowDown)) {
+      b.auto.nudgeEnergy(k == LogicalKeyboardKey.arrowUp ? 1 : -1);
     } else if (k == LogicalKeyboardKey.keyM) {
       feel(Feel.commit);
       unawaited(b.auto.mixNow());
@@ -251,6 +280,13 @@ class BoothBar extends StatelessWidget {
               ),
               icon: Icon(booth.master.playing ? Icons.pause : Icons.play_arrow),
               onPressed: felt(Feel.commit, () => booth.master.playing ? booth.master.pause() : booth.master.play()),
+            )
+          else
+            // Skip, the Auto DJ's way: into the next record at the next bar.
+            IconButton(
+              tooltip: 'Skip: into ${next?.displayTitle ?? 'the next record'}',
+              icon: Icon(Icons.skip_next, color: scheme.onSurface),
+              onPressed: next == null || booth.inTransition ? null : felt(Feel.commit, () => booth.auto.skip()),
             ),
           PressButton(label: 'Stop', onTap: () => unawaited(booth.stopAll())),
           const SizedBox(width: 6),
