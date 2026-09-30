@@ -1,0 +1,26 @@
+WetOwl for Mac
+
+Drag WetOwl onto Applications, then open it from there.
+
+The first time, macOS says it cannot check WetOwl for malicious software and
+will not open it: this build is not signed by a paid Apple developer account.
+To allow it, once:
+
+  Open WetOwl (it is refused), then System Settings > Privacy & Security,
+  scroll down to "WetOwl was blocked", click Open Anyway, then Open, and
+  give your password.
+
+Or, in Terminal:   xattr -dr com.apple.quarantine /Applications/WetOwl.app
+
+After that it opens like any other app, and updates itself (Settings > About).
+Keep it in Applications: opened from the disk image or from Downloads, macOS
+runs it from a read-only copy and it cannot update itself.
+
+Fetching music for the house and taking records apart for the booth
+(Settings > This computer) want yt-dlp, ffmpeg and deno. With Homebrew
+(https://brew.sh), in Terminal:
+
+  brew install yt-dlp ffmpeg deno
+
+WetOwl finds them there by itself. Taking records apart runs on Apple silicon;
+an Intel Mac leaves that to the other computers in the house.

@@ -102,9 +102,18 @@ class BackgroundFetcher {
   // the autostart folder every Linux desktop reads, and on Windows a three-line script
   // in the Startup folder — a script rather than a shortcut or a registry entry because
   // it is the one way to start a console program at login without a black window
-  // flashing up, and because anybody can see it there and delete it.
+  // flashing up, and because anybody can see it there and delete it. On a Mac, a
+  // LaunchAgent: a small plist in ~/Library/LaunchAgents that launchd reads at login,
+  // which System Settings lists under Login Items as well.
+
+  /// The LaunchAgent's name on a Mac.
+  static const macLabel = 'io.wetowl.fetch';
 
   File get autostartFile {
+    if (Platform.isMacOS) {
+      final dir = _autostartDir?.path ?? '${_env['HOME']}/Library/LaunchAgents';
+      return File('$dir/$macLabel.plist');
+    }
     if (Platform.isWindows) {
       final dir = _autostartDir?.path ??
           '${_env['APPDATA']}\\Microsoft\\Windows\\Start Menu\\Programs\\Startup';
@@ -118,8 +127,34 @@ class BackgroundFetcher {
 
   /// What goes in the file. Out here so it can be read in a test without being written
   /// to somebody's real Startup folder.
-  String autostartEntry({bool? windows}) {
+  String autostartEntry({bool? windows, bool? mac}) {
     final exe = helper.path, config = files.config.path;
+    if (mac ?? Platform.isMacOS) {
+      String x(String s) =>
+          s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+      // No KeepAlive: switched off, it leaves, and launchd is not to bring it back.
+      return '<?xml version="1.0" encoding="UTF-8"?>\n'
+          '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+          '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+          '<!-- WetOwl: keeps fetching music for the house when the app is shut.\n'
+          '     Made by WetOwl\'s "This computer" page; switch it off there, or delete this file. -->\n'
+          '<plist version="1.0">\n'
+          '<dict>\n'
+          '\t<key>Label</key>\n'
+          '\t<string>$macLabel</string>\n'
+          '\t<key>ProgramArguments</key>\n'
+          '\t<array>\n'
+          '\t\t<string>${x(exe)}</string>\n'
+          '\t\t<string>--config</string>\n'
+          '\t\t<string>${x(config)}</string>\n'
+          '\t</array>\n'
+          '\t<key>RunAtLoad</key>\n'
+          '\t<true/>\n'
+          '\t<key>ProcessType</key>\n'
+          '\t<string>Background</string>\n'
+          '</dict>\n'
+          '</plist>\n';
+    }
     if (windows ?? Platform.isWindows) {
       String q(String s) => '""${s.replaceAll('"', '')}""';
       return "' WetOwl: keeps fetching music for the house when the app is shut.\r\n"

@@ -1,4 +1,4 @@
-# Build the desktop app: Windows and Linux.
+# Build the desktop app: Windows, Linux and macOS.
 #
 # A Windows binary can only be produced on Windows — Flutter's build shells out to
 # Visual Studio's compiler — and there is no Windows machine in this project, so it is a
@@ -7,7 +7,14 @@
 # distribution, and a binary linked against this month's glibc does not start on
 # anybody's Ubuntu LTS. Built on the oldest supported Ubuntu, it starts everywhere newer.
 #
-# On demand only, like the iPhone build, and for the same reason.
+# A Mac binary likewise needs a Mac — Xcode — and gets a rented one. It is built
+# universal (Apple silicon and Intel) where Flutter can, which is the app; the three
+# windowless programs beside it are plain Dart, which builds only for the machine it
+# runs on, so an Intel Mac builds those and they are joined to the Apple silicon ones.
+#
+# On demand only, like the iPhone build, and for the same reason. `platforms` builds
+# only some of them (a comma list: windows,linux,macos) while one is being worked on;
+# a release is only made of all three.
 name: Desktop app
 
 on:
@@ -16,9 +23,13 @@ on:
       server:
         description: 'muse server the build points at'
         default: 'https://89-58-49-140.nip.io'
+      platforms:
+        description: 'which to build: all, or a comma list of windows,linux,macos'
+        default: 'all'
 
 jobs:
   windows:
+    if: inputs.platforms == 'all' || inputs.platforms == '' || contains(inputs.platforms, 'windows')
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -119,6 +130,7 @@ jobs:
           retention-days: 30
 
   linux:
+    if: inputs.platforms == 'all' || inputs.platforms == '' || contains(inputs.platforms, 'linux')
     # The oldest Ubuntu GitHub still runs: see the note at the top.
     runs-on: ubuntu-22.04
     timeout-minutes: 30
@@ -226,16 +238,186 @@ jobs:
           path: app/wetowl-linux.tar.gz
           retention-days: 30
 
+  macos-intel-helpers:
+    if: inputs.platforms == 'all' || inputs.platforms == '' || contains(inputs.platforms, 'macos')
+    # wetowl-fetch, wetowl-separate and wetowl-update for an Intel Mac: see the note at
+    # the top. Joined to the Apple silicon ones in the macos job.
+    runs-on: macos-15-intel
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Fetch packages
+        working-directory: app
+        run: flutter pub get
+      - name: Build them
+        working-directory: app
+        run: |
+          mkdir -p ../intel
+          for p in fetch separate update; do
+            dart build cli --target bin/wetowl_$p.dart -o build/$p
+            cp build/$p/bundle/bin/wetowl_$p ../intel/wetowl-$p
+            lipo -archs ../intel/wetowl-$p
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: intel-helpers
+          path: intel/
+          retention-days: 3
+
+  macos:
+    if: inputs.platforms == 'all' || inputs.platforms == '' || contains(inputs.platforms, 'macos')
+    needs: macos-intel-helpers
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      APP: app/build/macos/Build/Products/Release/WetOwl.app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Fetch packages
+        working-directory: app
+        run: flutter pub get
+      - name: Build
+        working-directory: app
+        env:
+          MUSE_SERVER: ${{ inputs.server || 'https://89-58-49-140.nip.io' }}
+        run: |
+          stamp="$(date -u +%Y%m%d%H%M)"
+          echo "$stamp" > build-stamp.txt
+          flutter build macos --release \
+            --build-number="$stamp" \
+            --dart-define=MUSE_SERVER="$MUSE_SERVER" \
+            --dart-define=MUSE_BUILD="$stamp"
+          # In Resources, not beside the program: see lib/src/worker/build_stamp.dart.
+          cp build-stamp.txt "../$APP/Contents/Resources/build-stamp.txt"
+          lipo -archs "../$APP/Contents/MacOS/WetOwl"
+      - uses: actions/download-artifact@v4
+        with:
+          name: intel-helpers
+          path: intel
+      - name: The three programs beside it
+        working-directory: app
+        run: |
+          # Apple silicon here, Intel from the other job, one universal file each —
+          # where the app looks for them, in Contents/MacOS beside itself. And each has
+          # to start and say what it wants, or it is not worth shipping.
+          for p in fetch separate update; do
+            dart build cli --target bin/wetowl_$p.dart -o build/$p
+            lipo -create build/$p/bundle/bin/wetowl_$p ../intel/wetowl-$p \
+              -output "../$APP/Contents/MacOS/wetowl-$p"
+            chmod +x "../$APP/Contents/MacOS/wetowl-$p"
+            lipo -archs "../$APP/Contents/MacOS/wetowl-$p"
+            said="$("../$APP/Contents/MacOS/wetowl-$p" 2>&1 || true)"
+            echo "$said" | grep -q "usage: wetowl-$p"
+          done
+      - name: Sign it
+        run: |
+          # Signed ad hoc — by no one, which is what a build without a paid Apple
+          # developer account can be. Apple silicon runs nothing unsigned at all, and a
+          # bundle whose seal does not match its contents is one macOS calls damaged:
+          # the programs added after Xcode signed it are signed first, then the bundle
+          # around them. The first open of a download is still refused until it is
+          # allowed (see the disk image's note); after that it opens like any app.
+          for p in fetch separate update; do
+            codesign --force --sign - --identifier io.wetowl.$p "$APP/Contents/MacOS/wetowl-$p"
+          done
+          codesign --force --sign - --entitlements app/macos/Runner/Release.entitlements "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dv "$APP" 2>&1 | head -8
+      - name: What a Mac needs, to check it
+        run: |
+          # ffmpeg for the separator's check below — from Homebrew, as the app tells
+          # people to get it.
+          brew install ffmpeg
+      - name: It opens
+        run: |
+          # Opened the way a person opens it, left for half a minute, and looked at: a
+          # window, the engine loaded, nothing fallen over.
+          open "$APP"
+          sleep 30
+          pgrep -x WetOwl
+          screencapture -x wetowl-macos-open.png || true
+          log="$HOME/Library/Application Support/io.wetowl.muse/wetowl.log"
+          cat "$log" || true
+          grep -q 'desktop audio ready (libmpv)' "$log"
+          osascript -e 'quit app "WetOwl"' || pkill -x WetOwl || true
+      - name: It takes a record apart
+        env:
+          HOUSE: ${{ inputs.server || 'https://89-58-49-140.nip.io' }}
+        run: |
+          # The separator with what the app fetches for it the first time — the network
+          # and ONNX Runtime from the house, checked against the hashes the app carries
+          # — on twenty seconds of noise and a hum.
+          mkdir -p kit
+          kit=app/lib/src/worker/separation_kit.dart
+          sha() { grep -A1 "'$1'" $kit | grep -o "'[0-9a-f]\{64\}'" | tr -d "'"; }
+          want() {
+            curl -fsSL "$HOUSE/models/$1.gz" | gunzip > "kit/$1"
+            echo "$(sha "$1")  kit/$1" | shasum -a 256 -c -
+          }
+          want scnet-small-v1.onnx
+          want onnxruntime-1.30.0-macos-arm64.dylib
+          ffmpeg -loglevel error -f lavfi -i "anoisesrc=d=20:a=0.2" -f lavfi -i "sine=f=60:d=20" \
+            -filter_complex amix=inputs=2 -ac 2 -ar 44100 test.wav
+          time "$APP/Contents/MacOS/wetowl-separate" \
+            --ort kit/onnxruntime-1.30.0-macos-arm64.dylib --model kit/scnet-small-v1.onnx \
+            --ffmpeg "$(command -v ffmpeg)" --in test.wav --threads 3 \
+            --drums drums.m4a --music music.m4a --instrumental instrumental.m4a
+          for f in drums music instrumental; do
+            ffprobe -v error -show_entries format=duration -of csv=p=0 $f.m4a
+          done
+      - name: The engine takes the booth's chains
+        working-directory: app
+        run: flutter test integration_test/desk_engine_test.dart -d macos
+      - name: The Mac's own tests
+        working-directory: app
+        run: flutter test test/update_bundle_test.dart test/background_fetcher_test.dart
+      - name: Pack it
+        run: |
+          # A zip of the bundle, which the app updates itself from — made by ditto, which
+          # keeps the links inside the frameworks and the signatures as they are — and a
+          # disk image of it with a shortcut to Applications, which is what a person
+          # downloads.
+          ditto -c -k --sequesterRsrc --keepParent "$APP" wetowl-macos.zip
+          mkdir -p dmg
+          ditto "$APP" dmg/WetOwl.app
+          ln -s /Applications dmg/Applications
+          cp app/macos/READ-ME-FIRST.txt "dmg/Read me first.txt"
+          hdiutil create -volname WetOwl -srcfolder dmg -ov -format UDZO wetowl-macos.dmg
+          ls -lh wetowl-macos.zip wetowl-macos.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wetowl-macos
+          path: |
+            wetowl-macos.zip
+            wetowl-macos.dmg
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-checks
+          path: wetowl-macos-open.png
+          retention-days: 7
+          if-no-files-found: ignore
+
   release:
-    needs: [windows, linux]
+    needs: [windows, linux, macos]
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+    if: (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') && (inputs.platforms == 'all' || inputs.platforms == '')
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: out
+          pattern: wetowl-*
           merge-multiple: true
       - name: Publish them as a release
         env:
@@ -244,5 +426,6 @@ jobs:
         run: |
           tag="desktop-$(date +%Y%m%d-%H%M)"
           gh release create "$tag" out/wetowl-windows.zip out/wetowl-linux.tar.gz \
-            --title "WetOwl for Windows and Linux · $tag" \
-            --notes "Build of ${{ github.sha }}. Windows: unzip and run wetowl.exe. Linux: unpack and run ./wetowl (needs libmpv — see README-linux.txt)."
+            out/wetowl-macos.dmg out/wetowl-macos.zip \
+            --title "WetOwl for Windows, Linux and Mac · $tag" \
+            --notes "Build of ${{ github.sha }}. Windows: unzip and run wetowl.exe. Linux: unpack and run ./wetowl (needs libmpv — see README-linux.txt). Mac: open wetowl-macos.dmg and drag WetOwl to Applications; the first open has to be allowed in System Settings › Privacy & Security (see its Read me first). The zip is what the Mac app updates itself from."

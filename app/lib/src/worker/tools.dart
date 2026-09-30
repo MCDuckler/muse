@@ -6,7 +6,7 @@ import 'dart:io';
 /// and a JavaScript runtime because yt-dlp needs one to read YouTube's player. Looked
 /// for first in the app's own tools folder, then on the PATH — on Linux they are nearly
 /// always a package away and the distribution's copy is the one that gets security
-/// fixes. What is missing is named, with what to do about it.
+/// fixes, and on a Mac, Homebrew's. What is missing is named, with what to do about it.
 class Tools {
   Tools({required this.ytdlp, required this.ffmpeg, required this.ffprobe, required this.js});
 
@@ -39,14 +39,23 @@ class Tools {
           if (m.startsWith('ff')) 'Gyan.FFmpeg' else if (m == 'yt-dlp') 'yt-dlp.yt-dlp' else 'DenoLand.Deno'
       }.join(' ')}';
     }
+    if (Platform.isMacOS) {
+      // Homebrew's names, and deno rather than node: one small program, where Homebrew's
+      // node brings a compiler's worth of libraries with it.
+      return 'brew install ${{
+        for (final m in missing)
+          if (m.startsWith('ff')) 'ffmpeg' else if (m == 'yt-dlp') 'yt-dlp' else 'deno'
+      }.join(' ')}';
+    }
     return 'pacman -S $wanted   ·   apt install $wanted   ·   dnf install $wanted';
   }
 
   /// Where to get each of them, for whoever would rather click than type: the
   /// project's own page every time, never a mirror. The direct file where a project
   /// publishes one that simply runs; its download page where there is a choice to make.
-  static List<ToolLink> linksFor(List<String> missing, {bool? windows}) {
+  static List<ToolLink> linksFor(List<String> missing, {bool? windows, bool? mac}) {
     final win = windows ?? Platform.isWindows;
+    if (mac ?? Platform.isMacOS) return _macLinks(missing);
     return [
       if (missing.contains('yt-dlp'))
         ToolLink(
@@ -83,6 +92,47 @@ class Tools {
     ];
   }
 
+  /// On a Mac, Homebrew is the plain way to have all three, and nobody is expected to
+  /// fetch them by hand: a program downloaded in a browser is quarantined, and macOS
+  /// then refuses to run it without a word to the app that tried.
+  static List<ToolLink> _macLinks(List<String> missing) => [
+        if (missing.isNotEmpty)
+          ToolLink(
+            'Homebrew',
+            'installs all of them in one line',
+            'https://brew.sh/',
+            'Install Homebrew (one line, from its page, in Terminal), then: '
+                '${howToInstall(missing)}. WetOwl finds them there by itself.',
+          ),
+      ];
+
+  /// Where programs are put on a Mac, which an app opened from the Finder does not
+  /// have on its PATH: it gets /usr/bin:/bin:/usr/sbin:/sbin and nothing else, so a
+  /// perfectly good Homebrew was invisible to it. Homebrew on Apple silicon, then on
+  /// Intel, then MacPorts, then deno's own installer.
+  static List<String> macPlaces(Map<String, String> env) => [
+        '/opt/homebrew/bin',
+        '/usr/local/bin',
+        '/opt/local/bin',
+        if (env['HOME'] != null) '${env['HOME']}/.deno/bin',
+      ];
+
+  /// The PATH to search: the one this program was given, and on a Mac the places
+  /// above after it.
+  static List<String> searchPath({Map<String, String>? environment, bool? mac}) {
+    final env = environment ?? Platform.environment;
+    final dirs = (env['PATH'] ?? '')
+        .split(Platform.isWindows ? ';' : ':')
+        .where((d) => d.isNotEmpty)
+        .toList();
+    if (mac ?? Platform.isMacOS) {
+      for (final d in macPlaces(env)) {
+        if (!dirs.contains(d)) dirs.add(d);
+      }
+    }
+    return dirs;
+  }
+
   static Future<Tools> find({Directory? own}) async {
     Future<String?> where(String name) async {
       final exe = Platform.isWindows ? '$name.exe' : name;
@@ -90,10 +140,7 @@ class Tools {
         final mine = File('${own.path}${Platform.pathSeparator}$exe');
         if (await mine.exists()) return mine.path;
       }
-      final dirs = (Platform.environment['PATH'] ?? '')
-          .split(Platform.isWindows ? ';' : ':')
-          .where((d) => d.isNotEmpty);
-      for (final d in dirs) {
+      for (final d in searchPath()) {
         final f = File('$d${Platform.pathSeparator}$exe');
         if (await f.exists()) return f.path;
       }

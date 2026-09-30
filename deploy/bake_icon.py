@@ -18,7 +18,7 @@ import pathlib
 import sys
 import urllib.request
 
-from PIL import Image, ImageChops, ImageStat
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageStat
 
 ARGS = sys.argv[1:]
 LOCAL = ARGS[ARGS.index("--from") + 1] if "--from" in ARGS else None
@@ -148,6 +148,8 @@ def main() -> int:
                 icons / name, optimize=True)
         print(f"   iphone icons: {len(done)} sizes")
 
+    mac(master)
+
     # The little white one in the status bar.
     #
     # Android draws a notification's small icon as a stencil: it keeps the alpha and
@@ -229,6 +231,44 @@ def tray_ico(master: Image.Image) -> None:
     out.mkdir(parents=True, exist_ok=True)
     master.convert("RGBA").save(out / "tray.ico",
                                 sizes=[(s, s) for s in (16, 20, 24, 32, 40, 48, 64)])
+
+
+def mac(master: Image.Image) -> None:
+    """A Mac's icon: the picture as a rounded square with a little shadow under it,
+    on a transparent 1024 canvas, the way every other icon in the Dock is drawn.
+
+    Handed a full-bleed square, macOS shows exactly that — a square, and a size bigger
+    than everything around it — because since Big Sur the shape is part of the
+    picture, not something the system puts on it. Apple's grid: an 824-point body with
+    rounded corners, centred, a shadow falling a little below."""
+    icons = ROOT / "macos/Runner/Assets.xcassets/AppIcon.appiconset"
+    manifest = icons / "Contents.json"
+    if not manifest.exists():
+        return
+    big, body, radius = 1024 * 4, 824 * 4, 185 * 4       # drawn large, then scaled down
+    inset = (big - body) // 2
+    mask = Image.new("L", (big, big), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        (inset, inset, inset + body, inset + body), radius=radius, fill=255)
+    shadow = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    shadow.putalpha(mask.point(lambda v: v * 70 // 255))
+    shadow = shadow.transform(shadow.size, Image.AFFINE, (1, 0, 0, 0, 1, -40)) \
+        .filter(ImageFilter.GaussianBlur(60))
+    face = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    face.paste(master.convert("RGB").resize((body, body), Image.LANCZOS), (inset, inset))
+    face.putalpha(mask)
+    icon = Image.alpha_composite(shadow, face).resize((1024, 1024), Image.LANCZOS)
+    done: set[str] = set()
+    for entry in json.loads(manifest.read_text()).get("images", []):
+        name = entry.get("filename")
+        if not name or name in done:
+            continue
+        done.add(name)
+        points = float(entry["size"].split("x")[0])
+        scale = float(entry.get("scale", "1x").rstrip("x"))
+        px = max(1, round(points * scale))
+        icon.resize((px, px), Image.LANCZOS).save(icons / name, optimize=True)
+    print(f"   mac icons: {len(done)} sizes")
 
 
 def maskable(master: Image.Image) -> None:

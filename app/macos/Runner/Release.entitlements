@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Not sandboxed: the app starts programs of its own (wetowl-fetch, wetowl-separate,
+	     wetowl-update, beside it in Contents/MacOS) and the ones it finds on the computer
+	     (yt-dlp, ffmpeg, node or deno), keeps a LaunchAgent for the fetcher, and swaps its
+	     own bundle when it updates. None of that is allowed inside the sandbox, and this
+	     build is not for the App Store. -->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+</dict>
+</plist>

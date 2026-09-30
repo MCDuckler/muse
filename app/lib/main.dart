@@ -50,7 +50,8 @@ String debugEngineState() {
 bool get onADesk =>
     !kIsWeb &&
     (defaultTargetPlatform == TargetPlatform.linux ||
-        defaultTargetPlatform == TargetPlatform.windows);
+        defaultTargetPlatform == TargetPlatform.windows ||
+        defaultTargetPlatform == TargetPlatform.macOS);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -106,8 +107,10 @@ Future<void> main() async {
   // keeps the first file it was ever given, so skipping moved the screen on while the
   // same song kept playing. Proved by hooking HTMLMediaElement: one src assignment for
   // the whole session, then nothing but repeated play() calls on it.
-  // On a desk — Linux, Windows — the engine is libmpv (just_audio has none of its own
-  // there), and there is no lockscreen or foreground service to keep alive: the
+  // On a desk — Linux, Windows, a Mac — the engine is libmpv (just_audio has none of
+  // its own on the first two; on a Mac it has AVPlayer, which the booth's filter chain
+  // cannot be put on, so a Mac is a desk like the others), and there is no lockscreen
+  // or foreground service to keep alive: the
   // background wrapper is a phone's, and its one rule — a single player, a MediaItem on
   // every source — buys nothing on a machine that does not suspend the app.
   if (onADesk) {
@@ -127,11 +130,14 @@ Future<void> main() async {
     // gain goes in as its cube root. See PlayerService.gainToVolume.
     PlayerService.gainToVolume = (g) => g <= 0 ? 0 : math.pow(g, 1 / 3).toDouble();
     try {
-      JustAudioMediaKit.ensureInitialized(linux: true, windows: true);
+      JustAudioMediaKit.ensureInitialized(linux: true, windows: true, macOS: true);
       PlaybackLog.note('desktop audio ready (libmpv)');
+      // And in the desk's own log file (app_log.dart), where a build machine's smoke
+      // test reads it: the one line that says the engine is in the box and loads.
+      debugPrint('desktop audio ready (libmpv)');
     } catch (e) {
-      // libmpv is not on this machine. On Windows it comes in the box; on Linux it is
-      // the system's, and a system without it is a player that opens, shows the whole
+      // libmpv is not on this machine. On Windows and a Mac it comes in the box; on
+      // Linux it is the system's, and a system without it is a player that opens, shows the whole
       // library, and makes no sound — which has to be said, in the window, with what to
       // do about it, rather than being a crash before the first frame.
       noSoundBecause.value = defaultTargetPlatform == TargetPlatform.linux
@@ -139,6 +145,7 @@ Future<void> main() async {
               "package manager (pacman -S mpv, apt install libmpv2), then start WetOwl again."
           : 'No sound: the audio engine did not start ($e).';
       PlaybackLog.note('desktop audio NOT ready: $e');
+      debugPrint('desktop audio NOT ready: $e');
     }
   }
   // An iPhone's or an iPad's booth: its two decks on libmpv, for the filter chain a desk

@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
 import '../api/connection.dart';
+import '../worker/build_stamp.dart';
 import 'playback_log.dart';
 
 /// What is on the server, and whether it is newer than what is running.
@@ -123,8 +124,9 @@ class Updates extends ChangeNotifier {
 
   // ---------------- the desktop builds ----------------
   //
-  // A zip for Windows and a tarball for Linux, beside the others. Nothing installs
-  // itself here either: the app says a newer one is there and opens the download.
+  // A zip for Windows, a tarball for Linux and a zip of the app bundle for a Mac,
+  // beside the others. The desktop app brings these in itself (see below); in a
+  // browser the row only offers the download.
 
   /// Which desktop build this is running as, or null when it is not one.
   static String? get desktop => kIsWeb
@@ -132,11 +134,22 @@ class Updates extends ChangeNotifier {
       : switch (defaultTargetPlatform) {
           TargetPlatform.windows => 'windows',
           TargetPlatform.linux => 'linux',
+          TargetPlatform.macOS => 'macos',
           _ => null,
         };
 
-  static String desktopUrl(String baseUrl, String os) =>
-      os == 'windows' ? '$baseUrl/wetowl-windows.zip' : '$baseUrl/wetowl-linux.tar.gz';
+  /// The archive the app updates itself from.
+  static String desktopUrl(String baseUrl, String os) => switch (os) {
+        'windows' => '$baseUrl/wetowl-windows.zip',
+        'macos' => '$baseUrl/wetowl-macos.zip',
+        _ => '$baseUrl/wetowl-linux.tar.gz',
+      };
+
+  /// What a person downloads in a browser: the same archive — except on a Mac, where
+  /// it is a disk image with the app and a shortcut to Applications to drag it onto,
+  /// which is how a Mac expects to be handed an app.
+  static String downloadUrl(String baseUrl, String os) =>
+      os == 'macos' ? '$baseUrl/wetowl-macos.dmg' : desktopUrl(baseUrl, os);
 
   static Future<Release?> publishedDesktop(String baseUrl, String os) async {
     try {
@@ -262,7 +275,7 @@ class Updates extends ChangeNotifier {
       final os = desktop;
       final into = File(os == null
           ? '${dir.path}/muse-${want.build}.apk'
-          : '${dir.path}/wetowl-$os-${want.build}${os == 'windows' ? '.zip' : '.tar.gz'}');
+          : '${dir.path}/wetowl-$os-${want.build}${os == 'linux' ? '.tar.gz' : '.zip'}');
 
       final request = http.Request(
           'GET', Uri.parse(os == null ? '$baseUrl/muse.apk' : desktopUrl(baseUrl, os)));
@@ -352,32 +365,50 @@ class Updates extends ChangeNotifier {
   // swapped out from under itself. So it does everything it can while running —
   // fetch, check, unpack — then writes a few lines of shell that wait for it to be
   // gone, copy the new build over the old, and start it again; starts them; and quits.
+  //
+  // On a Mac the build is the app bundle, WetOwl.app, and it is swapped whole rather
+  // than file by file: a signed program overwritten where it lies is one the system
+  // kills the next time it starts, because what it remembers of the file's signature
+  // no longer matches. The new bundle is moved into the old one's place instead.
 
   Directory? _staged;
 
-  /// Where this program is: the folder the build is.
-  static Directory get installDir => File(Platform.resolvedExecutable).parent;
+  /// Where this program is: the folder the build is. On a Mac, the app bundle.
+  static Directory get installDir {
+    final dir = File(Platform.resolvedExecutable).parent;
+    return macBundleOf(dir) ?? dir;
+  }
+
+  /// The .app a program in [dir] (…/WetOwl.app/Contents/MacOS) is part of, if it is.
+  static Directory? macBundleOf(Directory dir) {
+    if (!Platform.isMacOS) return null;
+    final bundle = dir.parent.parent;
+    return dir.path.endsWith('/Contents/MacOS') && bundle.path.endsWith('.app') ? bundle : null;
+  }
 
   /// The program's own file name in that folder.
-  static String get exeName => Platform.isWindows ? 'wetowl.exe' : 'wetowl';
+  static String get exeName => Platform.isWindows
+      ? 'wetowl.exe'
+      : Platform.isMacOS
+          ? 'WetOwl'
+          : 'wetowl';
 
   /// The build stamp the build put beside the program, if it did.
   static Future<String?> stampBeside() async {
-    try {
-      final f = File('${installDir.path}${Platform.pathSeparator}build-stamp.txt');
-      if (!await f.exists()) return null;
-      final s = (await f.readAsString()).trim();
-      return Release.knows(s) ? s : null;
-    } catch (_) {
-      return null;
-    }
+    final s = readBuildStamp();
+    return s != null && Release.knows(s) ? s : null;
   }
 
   /// Whether the folder the program is in can be written to. A build unpacked into
   /// somebody's home can be; one an administrator put under /opt or Program Files
   /// cannot, and then the honest answer is the download.
+  ///
+  /// On a Mac the bundle is replaced whole, so it is the folder the bundle is in that
+  /// has to be writable — /Applications is, for anybody who could drag the app there.
   static Future<bool> canWriteInstallDir([Directory? dir]) async {
-    final probe = File('${(dir ?? installDir).path}${Platform.pathSeparator}.wetowl-write-test');
+    final d = dir ?? installDir;
+    final where = d.path.endsWith('.app') ? d.parent : d;
+    final probe = File('${where.path}${Platform.pathSeparator}.wetowl-write-test');
     try {
       await probe.writeAsString('', flush: true);
       await probe.delete();
@@ -398,8 +429,11 @@ class Updates extends ChangeNotifier {
     final zip = archive.path.endsWith('.zip');
     String? went;
     try {
-      final r = await Process.run(
-          'tar', [zip ? '-xf' : '-xzf', archive.path, '-C', stage.path]);
+      // On a Mac, ditto: the tool the zip was made with, which puts an app bundle back
+      // exactly — its links inside the frameworks and all.
+      final r = Platform.isMacOS && zip
+          ? await Process.run('/usr/bin/ditto', ['-x', '-k', archive.path, stage.path])
+          : await Process.run('tar', [zip ? '-xf' : '-xzf', archive.path, '-C', stage.path]);
       if (r.exitCode != 0) went = '${r.stderr}'.trim();
     } on ProcessException catch (e) {
       // Windows before 1803 has no tar at all, and then this throws rather than
@@ -433,8 +467,14 @@ class Updates extends ChangeNotifier {
 
   /// The folder holding [exe], inside what was unpacked: the stage itself when the
   /// archive was flat (the Windows zip), or the one folder in it (the Linux tarball,
-  /// which carries a `wetowl/` folder at its top).
+  /// which carries a `wetowl/` folder at its top) — or, on a Mac, the app bundle whose
+  /// Contents/MacOS holds it.
   static Directory? sourceRootIn(Directory stage, String exe) {
+    for (final d in stage.listSync().whereType<Directory>()) {
+      if (d.path.endsWith('.app') && File('${d.path}/Contents/MacOS/$exe').existsSync()) {
+        return d;
+      }
+    }
     if (File('${stage.path}${Platform.pathSeparator}$exe').existsSync()) return stage;
     final dirs = stage.listSync().whereType<Directory>().toList();
     if (dirs.length == 1 &&
@@ -472,6 +512,25 @@ class Updates extends ChangeNotifier {
     String? beside,
   }) {
     if (os == 'windows') return _windowsSwap(pid, from, into, exe, beside ?? into);
+    if (os == 'macos') {
+      // The bundle whole, as wetowl-update does it (see there): the old one aside, the
+      // new one into its name, the old one back if that fails, and opened again.
+      return [
+        '#!/bin/sh',
+        '# Written by WetOwl to bring in a new build of itself. Safe to delete.',
+        'pid=$pid',
+        'from=${_sh(from)}',
+        'into=${_sh(into)}',
+        'while kill -0 "\$pid" 2>/dev/null; do sleep 0.3; done',
+        'rm -rf "\$into.wetowl-old"',
+        'if mv "\$into" "\$into.wetowl-old"; then',
+        '  if mv "\$from" "\$into" || ditto "\$from" "\$into"; then rm -rf "\$into.wetowl-old"',
+        '  else rm -rf "\$into"; mv "\$into.wetowl-old" "\$into"; fi',
+        'fi',
+        'open "\$into"',
+        '',
+      ].join('\n');
+    }
     return [
       '#!/bin/sh',
       '# Written by WetOwl to bring in a new build of itself. Safe to delete.',
@@ -711,7 +770,9 @@ class Updates extends ChangeNotifier {
       // And the part that decided it after three goes: a program in the same language
       // as the app can be run, and gone wrong, on the machine it is written on —
       // test/update_helper_test.dart does the whole swap for real.
-      final helper = File('${from.path}${Platform.pathSeparator}$updaterName');
+      final helper = File(from.path.endsWith('.app')
+          ? '${from.path}/Contents/MacOS/$updaterName'
+          : '${from.path}${Platform.pathSeparator}$updaterName');
       final tellIt = [
         '--pid', '$pid',
         '--from', from.path,
