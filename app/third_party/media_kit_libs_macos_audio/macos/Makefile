@@ -1,14 +1,15 @@
-# WetOwl: the audio-encodersgpl flavour, for its ffmpeg filters. See ../WETOWL.md.
+# WetOwl: the audio-encodersgpl flavour, for its ffmpeg filters, built by this repository
+# with af-command's target (see ../WETOWL.md and .github/workflows/libmpv-darwin.yml).
 all: Frameworks/*.xcframework Frameworks/.symlinks
 
-MPV_XCFRAMEWORKS_VERSION=v0.6.0
-MPV_XCFRAMEWORKS_SHA256SUM=56b83f14b795a9c7557f5469ea1903e53c94380bd8631180c47de33134397731
+MPV_XCFRAMEWORKS_VERSION=v0.7.3-wetowl1
+MPV_XCFRAMEWORKS_SHA256SUM=a340329f6412b52c5793d17ee0ba10082ac3122faf8d4a5f7ee4eba8497c4a8f
 
 .cache/xcframeworks/libmpv-xcframeworks-${MPV_XCFRAMEWORKS_VERSION}-macos-universal.tar.gz:
 	mkdir -p .cache/xcframeworks
 	rm -f .cache/xcframeworks/*.tmp .cache/xcframeworks/*-macos-universal.tar.gz
 	curl -L \
-		https://github.com/media-kit/libmpv-darwin-build/releases/download/${MPV_XCFRAMEWORKS_VERSION}/libmpv-xcframeworks_${MPV_XCFRAMEWORKS_VERSION}_macos-universal-audio-encodersgpl.tar.gz \
+		https://github.com/MCDuckler/muse/releases/download/libmpv-darwin-${MPV_XCFRAMEWORKS_VERSION}/libmpv-xcframeworks_${MPV_XCFRAMEWORKS_VERSION}_macos-universal-audio-encodersgpl.tar.gz \
 		-o .cache/xcframeworks/libmpv.tar.gz.tmp
 	shasum -a 256 -c <<< '${MPV_XCFRAMEWORKS_SHA256SUM}  .cache/xcframeworks/libmpv.tar.gz.tmp'
 	mv .cache/xcframeworks/libmpv.tar.gz.tmp .cache/xcframeworks/libmpv-xcframeworks-${MPV_XCFRAMEWORKS_VERSION}-macos-universal.tar.gz
