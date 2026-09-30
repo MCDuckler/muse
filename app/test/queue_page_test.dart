@@ -96,12 +96,16 @@ void main() {
     await server.close(force: true);
   });
 
-  Map<String, dynamic> queueOf(int rev, List<int> ids) => {
+  /// [total] past the number of rows makes it a *windowed* queue, which is the one
+  /// that tops itself up as playback nears the edge of what was loaded.
+  Map<String, dynamic> queueOf(int rev, List<int> ids, {int? total}) => {
         'id': 1,
         'name': 'Mine',
         'cursor_index': 0,
         'position_ms': 0,
         'rev': rev,
+        'total': total ?? ids.length,
+        'window_from': 0,
         'items': [for (final (i, id) in ids.indexed) song(id, i)],
       };
 
@@ -129,6 +133,24 @@ void main() {
     answers['/queues/1'] = queueOf(3, [2, 3, 1]);
     expect(await app.reloadQueueForTest(), isTrue);
     expect(app.player!.items.map((t) => t.id).toList(), [2, 3, 1]);
+  });
+
+  test('topping the window up cannot put a reorder back either', () async {
+    // The same race with no room involved at all. keepUpWithTheQueue re-reads the
+    // queue whenever playback nears the edge of what was loaded — which on a long
+    // queue is constantly — and it used to hand whatever came back to the player. A
+    // drag across one of those had the row put back exactly as a jam did, which is why
+    // this was reported again with no jam running.
+    answers['/queues/1/move'] = queueOf(2, [3, 1, 2], total: 900);
+    await app.moveInQueue(2, 0);
+    expect(app.player!.items.map((t) => t.id).toList(), [3, 1, 2]);
+    expect(app.activeQueue!.windowed, isTrue, reason: 'this is the topping-up kind');
+
+    // A window read that set off before the drag.
+    answers['/queues/1'] = queueOf(1, [1, 2, 3], total: 900);
+    await app.keepUpWithTheQueue();
+    expect(app.player!.items.map((t) => t.id).toList(), [3, 1, 2],
+        reason: 'the row stayed where it was put');
   });
 
   test('the same revision twice is still taken, and a different queue always is',

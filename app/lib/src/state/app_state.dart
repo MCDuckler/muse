@@ -761,7 +761,7 @@ class AppState extends ChangeNotifier {
       rev: 1,
       items: kept,
     );
-    activeQueue = local;
+    _setQueue(local);
     await player?.loadQueue(local, autoplay: false);
     // The song that was tapped if it is here, the top of the list if it is not.
     final at = shuffle ? 0 : kept.indexWhere((t) => t.id == first.id);
@@ -974,7 +974,7 @@ class AppState extends ChangeNotifier {
     score = 0;
     avatarVersion = null;
     queues = const [];
-    activeQueue = null;
+    _setQueue(null);
     playlists = const [];
     favourites = <int>{};
     favouritesPlaylistId = null;
@@ -1024,7 +1024,7 @@ class AppState extends ChangeNotifier {
   Future<void> openQueue(int id, {bool? autoplay}) async {
     final wasPlaying = player?.last?.playing ?? false;
     final switching = activeQueue?.id != id;
-    activeQueue = await api.queue(id);
+    _setQueue(await api.queue(id));
     if (activeQueue?.sharedFrom == null) _rememberQueue(id);
     await player?.loadQueue(activeQueue!,
         autoplay: autoplay ?? (switching && wasPlaying));
@@ -1094,10 +1094,10 @@ class AppState extends ChangeNotifier {
     if (tracks.isEmpty) return;
     // Queued again is wanted again: it is back in the library, so back in the lists.
     _removedTracks.removeAll([for (final t in tracks) t.id]);
-    if (_queueIsLocal) activeQueue = null;
-    activeQueue ??= await ensureQueue('Now');
-    activeQueue = await api.addToQueue(
-        activeQueue!.id, [for (final t in tracks) t.id], mode: mode);
+    if (_queueIsLocal) _setQueue(null);
+    if (activeQueue == null) _setQueue(await ensureQueue('Now'));
+    _setQueue(await api.addToQueue(
+        activeQueue!.id, [for (final t in tracks) t.id], mode: mode));
     queues = await api.queues();      // a queue created just now must show in the chips
     await player?.loadQueue(activeQueue!);
     _rememberQueue(activeQueue!.id);
@@ -1309,8 +1309,21 @@ class AppState extends ChangeNotifier {
   /// The queue that has been selected, so its songs are not asked for twice.
   int? _prioritised;
 
-  /// The newest revision of the active queue this device has taken.
+  /// The newest revision of the active queue this device has taken, and which queue
+  /// that revision belongs to.
   int _queueRev = -1;
+  int _revFor = 0;
+
+  /// Put [q] on as the active queue, and remember where it had got to.
+  ///
+  /// Every write of the active queue goes through here. It used to be seventeen plain
+  /// assignments, which is seventeen chances for one of them to leave the revision
+  /// behind — and a revision left behind is a guard that refuses the truth.
+  void _setQueue(Queue? q) {
+    activeQueue = q;
+    _queueRev = q?.rev ?? -1;
+    _revFor = q?.id ?? 0;
+  }
 
   /// Take [q] as the state of the active queue — unless it is older than what is
   /// already on screen, in which case it is thrown away.
@@ -1328,9 +1341,8 @@ class AppState extends ChangeNotifier {
   /// an older one is news from the past. Held here rather than read off [activeQueue]
   /// because a refused answer must not move it.
   bool _takeQueue(Queue q) {
-    if (activeQueue?.id == q.id && q.rev < _queueRev) return false;
-    activeQueue = q;
-    _queueRev = q.rev;
+    if (_revFor == q.id && activeQueue?.id == q.id && q.rev < _queueRev) return false;
+    _setQueue(q);
     return true;
   }
 
@@ -1518,7 +1530,7 @@ class AppState extends ChangeNotifier {
     final wasActive = activeQueue?.id == id;
     queues = await api.queues();
     if (wasActive) {
-      activeQueue = null;
+      _setQueue(null);
       // Land somewhere rather than on an empty screen with no queue selected.
       final next = queues.where((q) => q.sharedFrom == null).firstOrNull;
       if (next != null) {
@@ -1636,7 +1648,7 @@ class AppState extends ChangeNotifier {
       return _playFromTheDevice(tracks, startAt: startAt, shuffle: shuffle, named: named);
     }
     // A queue made offline is this device's own; the server gets a real one.
-    if (_queueIsLocal) activeQueue = null;
+    if (_queueIsLocal) _setQueue(null);
     final target = named == null
         ? (activeQueue ?? await ensureQueue('Now'))
         : await ensureQueue(named, fresh: true);
@@ -1649,7 +1661,7 @@ class AppState extends ChangeNotifier {
     final ids = [for (final t in ordered) t.id];
     final live = await api.queue(target.id);
     final filled = await api.replaceQueue(target.id, live.rev, ids);
-    activeQueue = filled;
+    _setQueue(filled);
     queues = await api.queues();
     _rememberQueue(filled.id);
     await player?.loadQueue(filled);
@@ -1681,7 +1693,7 @@ class AppState extends ChangeNotifier {
       notifyListeners();
       return made;
     }
-    activeQueue = made;
+    _setQueue(made);
     _rememberQueue(made.id);
     await player?.loadQueue(made, autoplay: false);
     if (made.items.isNotEmpty) {
@@ -1719,10 +1731,14 @@ class AppState extends ChangeNotifier {
     _recentring = true;
     _recentred = now;
     try {
+      // Guarded like every other re-read: this one runs off playback reaching the edge
+      // of the window, which is to say constantly and with no room involved at all —
+      // so a drag racing it is how the queue snapped back outside a jam too.
       final slice = await api.queue(q.id, around: player.whereInQueue);
-      activeQueue = slice;
-      await player.loadQueue(slice);
-      notifyListeners();
+      if (_takeQueue(slice)) {
+        await player.loadQueue(slice);
+        notifyListeners();
+      }
     } catch (_) {
       // No signal: the queue stays as it is, which is still several hundred songs.
     } finally {
@@ -1757,9 +1773,10 @@ class AppState extends ChangeNotifier {
     _toppedUp = now;
     try {
       final grown = await api.extendStation(q.id);
-      activeQueue = grown;
-      await player.loadQueue(grown);
-      notifyListeners();
+      if (_takeQueue(grown)) {
+        await player.loadQueue(grown);
+        notifyListeners();
+      }
     } catch (_) {
       // No signal, or nothing left to find. The station simply ends where it is.
     } finally {
@@ -1771,7 +1788,7 @@ class AppState extends ChangeNotifier {
   Future<void> tuneStation(double fresh) async {
     final q = activeQueue;
     if (q == null || !q.isStation) return;
-    activeQueue = await api.tuneStation(q.id, fresh);
+    _setQueue(await api.tuneStation(q.id, fresh));
     notifyListeners();
   }
 
@@ -2205,7 +2222,7 @@ class AppState extends ChangeNotifier {
     try {
       final queueId = there.queueId;
       if (queueId != null && queueId != activeQueue?.id) {
-        activeQueue = await api.queue(queueId);
+        _setQueue(await api.queue(queueId));
         await p.loadQueue(activeQueue!);
       }
       final song = there.track;
@@ -2707,7 +2724,7 @@ class AppState extends ChangeNotifier {
       return _takeQueue(await api.queue(q.id));
     } on ApiException catch (e) {
       if (e.status != 404) rethrow;
-      activeQueue = null;
+      _setQueue(null);
       _queueRev = -1;
       jam = null;
       await refresh();
@@ -2754,7 +2771,7 @@ class AppState extends ChangeNotifier {
     if (current == null) return;
     if (activeQueue?.id != current.queueId) {
       try {
-        activeQueue = await api.queue(current.queueId);
+        _setQueue(await api.queue(current.queueId));
         await player?.loadQueue(activeQueue!);
         notifyListeners();
       } catch (_) {
@@ -2813,7 +2830,7 @@ class AppState extends ChangeNotifier {
       final next = mine.isEmpty
           ? await ensureQueue('Now')
           : await api.queue(mine.first.id);
-      activeQueue = next;
+      _setQueue(next);
       await player?.loadQueue(next);
     }
     notifyListeners();
