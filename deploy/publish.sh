@@ -233,10 +233,12 @@ JSON
 }
 
 # The desktop builds: whatever the last "Desktop app" run on GitHub released. See
-# .github/workflows/desktop.yml for why neither is built here, and deploy/desktop.sh for
-# asking for a build and publishing it in one go.
+# .github/workflows/desktop.yml for why none is built here, and deploy/desktop.sh for
+# asking for a build and publishing it in one go. `deploy/publish.sh desktop macos` (or
+# windows, linux) puts up only that one, leaving the others as they are.
 publish_desktop() {
-  echo "== desktop"
+  local only=${1:-}
+  echo "== desktop${only:+ ($only only)}"
   command -v gh >/dev/null || { echo "   (no gh — skipping the desktop builds)"; return; }
   local tmp tag
   tmp=$(mktemp -d)
@@ -248,6 +250,7 @@ publish_desktop() {
   version=$(sed -n 's/^version: *\([^+]*\).*/\1/p' app/pubspec.yaml | tr -d '[:space:]')
   local f name bytes
   for f in wetowl-windows.zip wetowl-linux.tar.gz wetowl-macos.zip wetowl-macos.dmg; do
+    [ -z "$only" ] || [[ "$f" == wetowl-$only.* ]] || continue
     [ -f "$tmp/$f" ] || { echo "   ! $tag has no $f"; continue; }
     bytes=$(stat -c%s "$tmp/$f")
     name=${f%%.*}
@@ -300,11 +303,11 @@ publish_models() {
 
 case "$what" in
   server) publish_server ;;
-  desktop) publish_desktop ;;
+  desktop) publish_desktop "${2:-}" ;;
   models) publish_models ;;
   ios)    publish_ios ;;
   web)    publish_web ;;
   apk)    publish_apk ;;
   all)    publish_server; publish_web; publish_apk; publish_ios ;;
-  *) echo "usage: deploy/publish.sh [server|web|apk|ios|desktop|models|all]" >&2; exit 2 ;;
+  *) echo "usage: deploy/publish.sh [server|web|apk|ios|desktop [windows|linux|macos]|models|all]" >&2; exit 2 ;;
 esac

@@ -1,0 +1,32 @@
+FFmpeg 6.0: a filter written `volume@low` is named `volume@low` again, not `low`.
+
+FFmpeg's own fix, 2fd86d9afa ("avfilter/graphparser: fix filter instance name when
+an id is provided", ticket #10226), in 6.0.1 and every release since. 6.0 — the one
+libmpv-darwin-build pins — named the instance by its id alone, so the booth's
+`af-command … volume@low` found nothing to turn, where Linux's and Windows's ffmpeg
+find it. Applied by .github/workflows/libmpv-darwin.yml.
+
+--- a/libavfilter/graphparser.c
++++ b/libavfilter/graphparser.c
+@@ -532,8 +532,7 @@ int avfilter_graph_segment_create_filters(AVFilterGraphSegment *seg, int flags)
+         for (size_t j = 0; j < ch->nb_filters; j++) {
+             AVFilterParams *p = ch->filters[j];
+             const AVFilter *f = avfilter_get_by_name(p->filter_name);
+-            char inst_name[30], *name = p->instance_name ? p->instance_name :
+-                                                           inst_name;
++            char name[64];
+ 
+             // skip already processed filters
+             if (p->filter || !p->filter_name)
+@@ -546,7 +545,9 @@ int avfilter_graph_segment_create_filters(AVFilterGraphSegment *seg, int flags)
+             }
+ 
+             if (!p->instance_name)
+-                snprintf(inst_name, sizeof(inst_name), "Parsed_%s_%zu", f->name, idx);
++                snprintf(name, sizeof(name), "Parsed_%s_%zu", f->name, idx);
++            else
++                snprintf(name, sizeof(name), "%s@%s", f->name, p->instance_name);
+ 
+             p->filter = avfilter_graph_alloc_filter(seg->graph, f, name);
+             if (!p->filter)
+

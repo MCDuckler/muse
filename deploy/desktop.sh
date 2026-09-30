@@ -6,7 +6,8 @@
 # there, so what is on this machine has to have been pushed before a build is asked for,
 # or the download on the box is fresh-looking old code.
 #
-#   deploy/desktop.sh
+#   deploy/desktop.sh            all three
+#   deploy/desktop.sh macos      all three built and released, only the Mac's put up
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -54,4 +55,4 @@ done
   exit 1
 }
 
-deploy/publish.sh desktop
+deploy/publish.sh desktop "${1:-}"
