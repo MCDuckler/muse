@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'build_stamp.dart';
 import 'helper_files.dart';
 import 'status.dart';
 
@@ -29,7 +30,7 @@ class BackgroundFetcher {
 
   static File _beside() {
     final dir = File(Platform.resolvedExecutable).parent.path;
-    return File('$dir${Platform.pathSeparator}${Platform.isWindows ? 'wetowl-fetch.exe' : 'wetowl-fetch'}');
+    return File('$dir${Platform.pathSeparator}${programFile('wetowl-fetch')}');
   }
 
   /// A copy of the app run out of a build folder has no helper beside it, and then

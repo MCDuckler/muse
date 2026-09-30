@@ -16,6 +16,8 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:meta/meta.dart';
 
+import 'build_stamp.dart';
+
 /// Where the separator's own asides go: debugPrint in the app, the helper's log in
 /// the windowless program. Nothing here may import Flutter — the windowless helper
 /// (bin/wetowl_fetch.dart) takes records apart too.
@@ -112,8 +114,7 @@ Future<String?> separatorProgram() async {
   final named = Platform.environment['WETOWL_SEPARATE'];
   if (named != null && named.isNotEmpty && await File(named).exists()) return named;
   final dir = File(Platform.resolvedExecutable).parent.path;
-  final f = File('$dir${Platform.pathSeparator}'
-      '${Platform.isWindows ? 'wetowl-separate.exe' : 'wetowl-separate'}');
+  final f = File('$dir${Platform.pathSeparator}${programFile('wetowl-separate')}');
   return await f.exists() ? f.path : null;
 }
 
