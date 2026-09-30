@@ -224,7 +224,13 @@ class EngineCheck {
         final stretcher = took.split(',').last;
         say('chain ${tried == 1 ? 'first' : 'number $tried'} of the desk\'s went on: '
             '${took.contains('alimiter') ? 'with a ceiling' : 'NO ceiling'}, stretcher $stretcher');
-        // Turned while it plays, as the kills are.
+        // Turned while it plays, as the kills are. What mpv refuses is said in its log
+        // rather than thrown — mpv 0.36, the Apple builds' own, refused every one of
+        // these while this counted them as taken — so the log is what is counted.
+        final refused = <String>[];
+        final refusing = raw?.stream.log.listen((l) {
+          if (l.level == 'error' && l.text.contains('af-command')) refused.add(l.text);
+        });
         var turned = 0;
         for (final (target, value) in const [('volume@low', '0.01'), ('volume@low', '1'),
           ('volume@es', '0.5'), ('volume@es', '0')]) {
@@ -241,7 +247,11 @@ class EngineCheck {
         } catch (e) {
           say('FAIL af-command highpass@hp: $e');
         }
-        say('bands turned while playing: $turned of 5');
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        await refusing?.cancel();
+        turned -= refused.length;
+        say('bands turned while playing: $turned of 5'
+            '${refused.isEmpty ? '' : ' — FAIL mpv refused: ${refused.first}'}');
       }
 
       // How true the tempo is, pulled down as a record synced to a slower one is.
