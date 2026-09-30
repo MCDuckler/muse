@@ -16,6 +16,7 @@ import 'package:muse/src/api/models.dart';
 import 'package:muse/src/state/booth/automix.dart';
 import 'package:muse/src/state/booth/booth.dart';
 import 'package:muse/src/state/booth/deck.dart';
+import 'package:muse/src/state/booth/dj_set.dart';
 import 'package:muse/src/state/booth/mixer.dart';
 import 'package:muse/src/state/booth/mixer_desktop.dart';
 
@@ -420,7 +421,7 @@ void main() {
       booth.auto.stop();
     });
 
-    test('told to keep going, the end of the queue is filled from the library', () async {
+    test('told to keep going, the end of the queue is filled from the library (a house before sets)', () async {
       TrackTiming at(double bpm, String camelot) => TrackTiming(
             durationMs: 60000,
             bpm: bpm,
@@ -434,7 +435,7 @@ void main() {
       booth.timing.put(1, at(124, '8A'));
       booth.timing.put(7, at(150, '3B'));  // the house's first pick: neither in tempo nor in key
       booth.timing.put(8, at(125, '9A'));  // its second: both — judged finely, the better
-      var asked = 0;
+      final asked = <Map<String, String>>[];
       Map<String, dynamic> partner(int id) => {
             'track': {
               'id': id, 'title': 'Song $id', 'artists': ['Someone $id'], 'duration_ms': 60000,
@@ -444,11 +445,12 @@ void main() {
             'why': 'the house says so',
           };
       useThisClientInstead(MockClient((r) async {
+        // A house from before sets were built there: no /booth/slot.
+        if (r.url.path.endsWith('/booth/slot')) return http.Response('{"detail": "Not Found"}', 404);
         if (r.url.path.endsWith('/booth/partners')) {
-          asked++;
-          expect(r.url.queryParameters['from_track'], '1');
-          expect(r.url.queryParameters['exclude'], '1');
-          return http.Response(jsonEncode({'partners': [partner(7), partner(8)]}), 200);
+          asked.add(r.url.queryParameters);
+          final from = r.url.queryParameters['from_track'];
+          return http.Response(jsonEncode({'partners': from == '1' ? [partner(7), partner(8)] : []}), 200);
         }
         if (r.url.path.endsWith('/booth/feedback')) return http.Response('{"feedback": []}', 200);
         if (r.url.path.contains('/stream-key')) {
@@ -467,8 +469,9 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 20));
       }
       expect(booth.auto.next?.id, 8, reason: 'the house offered 7 first; judged finely, 8 follows better');
-      expect(filled, [8], reason: 'and it went into the crate');
-      expect(asked, 1);
+      expect(filled.first, 8, reason: 'and it went into the crate');
+      expect(asked.first['from_track'], '1');
+      expect(asked.first['exclude'], '1');
       booth.auto.stop();
       booth.auto.keepGoing(false);
     });
@@ -975,6 +978,168 @@ void main() {
         expect(booth.master.loopStart, isNotNull, reason: 'its last bars go round');
         await until(() => booth.master.track?.id == 3, ms: 10000);
         expect(booth.master.track?.id, 3, reason: 'and it goes once the next is ready');
+        auto.stop();
+      });
+    });
+
+    group('a set from a pool', () {
+      Map<String, dynamic> songJson(int id) => {
+            'id': id,
+            'title': 'Song $id',
+            'artists': ['Artist $id'],
+            'duration_ms': 60000,
+            'state': 'ready',
+            'stream_url': '/tracks/$id/stream',
+            'source': 'youtube',
+          };
+      late List<Map<String, dynamic>> asked;
+
+      /// A house that builds sets and slots out of [pool], in order, leaving out what
+      /// it is told to and putting pins where they are asked for.
+      void house(List<int> pool) {
+        asked = [];
+        useThisClientInstead(MockClient((r) async {
+          if (r.url.path.contains('/stream-key')) {
+            return http.Response('{"key": "signed", "expires_at": 99999999999}', 200);
+          }
+          if (r.url.path.endsWith('/booth/set')) {
+            final b = (jsonDecode(r.body) as Map).cast<String, dynamic>();
+            asked.add({'path': 'set', ...b});
+            final ex = <int>{
+              for (final x in (b['exclude'] ?? const []) as List) x as int,
+              if (b['start'] != null) (b['start'] as Map)['track_id'] as int,
+            };
+            final n = ((b['length'] as Map?)?['tracks'] ?? 4) as int;
+            final pins = {for (final p in (b['pins'] ?? const []) as List) (p as Map)['slot'] as int: p['id'] as int};
+            final free = [for (final i in pool) if (!ex.contains(i) && !pins.values.contains(i)) i];
+            final out = <int>[];
+            var f = 0;
+            for (var s = 0; s < n; s++) {
+              final p = pins[s];
+              if (p != null) {
+                out.add(p);
+              } else if (f < free.length) {
+                out.add(free[f++]);
+              }
+            }
+            return http.Response(
+                jsonEncode({
+                  'slots': [
+                    for (final i in out)
+                      {'track': songJson(i), 'fit': 1.0, 'why': 'fits', 'at_ms': 0, 'pinned': pins.containsValue(i)},
+                  ],
+                  'stats': {},
+                  'curve': [],
+                }),
+                200);
+          }
+          if (r.url.path.endsWith('/booth/slot')) {
+            final b = (jsonDecode(r.body) as Map).cast<String, dynamic>();
+            asked.add({'path': 'slot', ...b});
+            final ex = <int>{for (final x in (b['exclude'] ?? const []) as List) x as int, if (b['prev'] != null) b['prev'] as int};
+            final got = [for (final i in pool) if (!ex.contains(i)) i].take((b['limit'] ?? 6) as int);
+            return http.Response(
+                jsonEncode({
+                  'choices': [for (final i in got) {'track': songJson(i), 'fit_in': 1.0, 'why': 'fits'}],
+                }),
+                200);
+          }
+          return http.Response('{}', 200);
+        }));
+        addTearDown(() => useThisClientInstead(http.Client()));
+      }
+
+      Track pooled(int id) => Track.fromJson(songJson(id));
+
+      test('laid out while playing, it goes after the record on now; a hand\'s next re-routes the rest',
+          () async {
+        final pool = [for (var i = 10; i < 30; i++) i];
+        for (final id in [1, 2, 3, ...pool]) {
+          booth.timing.put(id, minute());
+        }
+        house(pool);
+        final auto = booth.auto;
+        final told = <List<int>>[];
+        auto.onArrange = (after, order) async => told.add([after?.id ?? -1, for (final t in order) t.id]);
+        await auto.start([song(1), song(2), song(3)]);
+        await until(() => auto.isReady);
+        await auto.playSet(DjSet(
+          source: SetSource.wholeLibrary,
+          shape: const SetShape(tracks: 4),
+          slots: [
+            SetSlot(track: pooled(10)),
+            SetSlot(track: pooled(11)),
+            SetSlot(track: pooled(12), pinned: true),
+            SetSlot(track: pooled(13)),
+          ],
+        ));
+        expect(auto.mode, SetMode.set);
+        expect(auto.next?.id, 10);
+        expect(told.last, [1, 10, 11, 12, 13], reason: 'into the queue straight after the record on');
+        await until(() => auto.isReady);
+        // A hand puts another record on the free deck: it is next, and the rest of the
+        // set is laid again after it — with the pinned record kept.
+        await booth.load(booth.other(booth.master), pooled(25));
+        expect(auto.next?.id, 25);
+        await until(() => asked.any((a) => a['path'] == 'set'), ms: 4000);
+        final ask = asked.lastWhere((a) => a['path'] == 'set');
+        expect((ask['start'] as Map)['track_id'], 25, reason: 'the rest follows the hand\'s record');
+        expect((ask['exclude'] as List), containsAll([1, 25]));
+        expect([for (final p in ask['pins'] as List) (p as Map)['id']], [12]);
+        await until(() => auto.after?.id != 10);
+        expect(auto.next?.id, 25, reason: 'the hand\'s record stays next');
+        expect(auto.set!.slots.any((x) => x.track.id == 12 && x.pinned), isTrue);
+        expect(auto.upcoming.map((t) => t.id), contains(12));
+        auto.stop();
+      });
+
+      test('keep going keeps two records lined up, from the set\'s pool', () async {
+        final pool = [for (var i = 40; i < 50; i++) i];
+        for (final id in [1, ...pool]) {
+          booth.timing.put(id, minute());
+        }
+        house(pool);
+        final auto = booth.auto;
+        await auto.start([song(1)]);
+        auto.keepGoing(true);
+        await until(() => auto.upcoming.length >= 2, ms: 4000);
+        expect(auto.upcoming.length, AutoMix.fillAhead);
+        final slots = asked.where((a) => a['path'] == 'slot').toList();
+        expect(slots, isNotEmpty);
+        expect(slots.first['source'], {'library': true});
+        expect(auto.next, isNotNull);
+        auto.stop();
+      });
+
+      test('the room asks for more energy: a queue is ordered for it, a set re-routed', () async {
+        final pool = [for (var i = 60; i < 70; i++) i];
+        for (final id in [1, 2, 3, ...pool]) {
+          booth.timing.put(id, minute());
+        }
+        house(pool);
+        final auto = booth.auto;
+        await auto.start([song(1), song(2), song(3)]);
+        expect(auto.mode, SetMode.asQueued);
+        auto.nudgeEnergy(1);
+        expect(auto.mode, SetMode.bestOrder, reason: 'the booth orders the queue for it');
+        expect(auto.energyOffset, closeTo(0.12, 1e-9));
+        await auto.undoLast();
+        expect(auto.energyOffset, 0);
+        expect(auto.mode, SetMode.asQueued, reason: 'undone, the queue is played as it is again');
+        await auto.playSet(DjSet(
+          source: SetSource.wholeLibrary,
+          shape: const SetShape(tracks: 3),
+          slots: [SetSlot(track: pooled(60)), SetSlot(track: pooled(61)), SetSlot(track: pooled(62))],
+        ));
+        await until(() => auto.isReady);
+        asked.clear();
+        auto.nudgeEnergy(1);
+        await until(() => asked.any((a) => a['path'] == 'set'), ms: 4000);
+        final ask = asked.lastWhere((a) => a['path'] == 'set');
+        expect((ask['shape'] as Map)['offset'], closeTo(0.12, 1e-9), reason: 'the undone nudge is gone');
+        auto.moreLikeThis();
+        await until(() => asked.where((a) => a['path'] == 'set').length >= 2, ms: 4000);
+        expect((asked.lastWhere((a) => a['path'] == 'set')['shape'] as Map)['anchor'], auto.current?.id);
         auto.stop();
       });
     });

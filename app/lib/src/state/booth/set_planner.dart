@@ -399,11 +399,14 @@ class SetPlanner {
     int width = 8,
     double? Function(Track a, Track b)? moveOf,
     Taste taste = Taste.none,
+    double energyShift = 0,
+    TrackTiming? like,
+    bool contrast = false,
   }) {
     if (rest.length <= 1) return rest;
     final n = rest.length;
     final startEnergy = from == null ? null : energyOf(from, timingOf(from.id));
-    final cache = <(int, int), double>{};
+    final cache = <(int, int), Fit>{};
     // What a path has played, as the two things a candidate is checked against: read
     // once per path per step, not once per candidate — per candidate it was every
     // artist and every title of the set so far, 135 records deep, 146 000 times.
@@ -418,12 +421,20 @@ class SetPlanner {
       final ta = timingOf(a.id), tb = timingOf(b.id);
       if (ta == null || tb == null) return 0.3;
       // The pair's own fit, once — without the repetition, which depends on the path.
-      final base = cache[(a.id, b.id)] ??= fit(ta, tb,
-              ta: a, tb: b, fromPitch: at == 0 ? fromPitch : 1, move: moveOf?.call(a, b), taste: taste)
-          .score;
-      // The arc: how far this record is from where the set should be by here.
+      final pair = cache[(a.id, b.id)] ??= fit(ta, tb,
+          ta: a, tb: b, fromPitch: at == 0 ? fromPitch : 1, move: moveOf?.call(a, b), taste: taste);
+      var base = pair.score;
+      // "Something different": the sound term turned round — unlike scores, alike not.
+      final sound = pair.terms['sound'];
+      if (contrast && sound != null) base += 0.2 - 2 * sound;
+      // "More like this": towards that record's sound.
+      final l = like == null ? null : alike(like, tb);
+      if (l != null) base += 0.3 * ((l - 0.75) / 0.2).clamp(0.0, 1.0);
+      // The arc: how far this record is from where the set should be by here — and the
+      // room's word on top of it.
       final eb = energyOf(b, tb);
-      final t = target(arc, at + 1, n + 1, startEnergy);
+      final t0 = target(arc, at + 1, n + 1, startEnergy);
+      final t = t0 == null ? null : (t0 + energyShift).clamp(0.0, 1.0);
       final arcTerm = eb != null && t != null ? -0.4 * (eb - t).abs() : 0.0;
       var again = 0.0;
       if (b.artists.any((s) => seen.names.contains(s.toLowerCase()))) again -= 0.3;

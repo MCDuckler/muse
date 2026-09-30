@@ -15,7 +15,9 @@ import 'package:path_provider/path_provider.dart';
 import '../../api/models.dart';
 import 'booth.dart';
 import 'set_planner.dart' show EnergyArc;
-import 'automix.dart' show MixStyle;
+import 'automix.dart' show MixStyle, SetMode;
+import 'dj_set.dart';
+import 'planner.dart' show StyleAxes;
 
 class BoothSession {
   const BoothSession._();
@@ -49,9 +51,19 @@ class BoothSession {
           'at': b.auto.at,
           'tracks': [for (final t in b.auto.tracks) t.id],
           'pick_best': b.auto.pickBest,
+          'mode': b.auto.mode.name,
           'arc': b.auto.arc.name,
           'style': b.auto.style.name,
+          if (b.auto.dialsByHand)
+            'axes': {'length': b.auto.axes.length, 'risk': b.auto.axes.risk, 'vocals': b.auto.axes.vocals},
           'fill': b.auto.fill,
+          if (b.auto.fillFrom != null) 'fill_from': b.auto.fillFrom!.toKeep(),
+          'energy': b.auto.energyOffset,
+          if (b.auto.likeThis != null) 'like': b.auto.likeThis!.id,
+          'different': b.auto.different,
+          'locked': [...b.auto.locked],
+          if (b.auto.set != null) 'set': b.auto.set!.toKeep(),
+          'set_played': [...b.auto.setPlayedIds],
         },
       };
 
@@ -93,6 +105,11 @@ class BoothSession {
     for (final id in ((snap['auto'] as Map?)?['tracks'] ?? const []) as List) {
       ids.add((id as num).toInt());
     }
+    // The set's records too, those not in the automix's list (still to be laid).
+    for (final s in (((snap['auto'] as Map?)?['set'] as Map?)?['slots'] ?? const []) as List) {
+      final id = ((s as Map)['id'] as num?)?.toInt();
+      if (id != null && !ids.contains(id)) ids.add(id);
+    }
     for (final d in (snap['decks'] ?? const []) as List) {
       final id = ((d as Map)['track_id'] as num).toInt();
       if (!ids.contains(id)) ids.add(id);
@@ -115,6 +132,23 @@ class BoothSession {
     a.fill = auto['fill'] == true;
     a.arc = EnergyArc.values.asNameMap()[auto['arc']] ?? a.arc;
     a.style = MixStyle.values.asNameMap()[auto['style']] ?? a.style;
+    final axes = auto['axes'];
+    if (axes is Map) {
+      double d(Object? v) => v is num ? v.toDouble() : 0.5;
+      a.setAxes(StyleAxes(length: d(axes['length']), risk: d(axes['risk']), vocals: d(axes['vocals'])));
+    }
+    a.set = DjSet.fromKeep((auto['set'] as Map?)?.cast<String, dynamic>(), tracks);
+    a.mode = SetMode.values.asNameMap()[auto['mode']] ?? a.mode;
+    if (a.mode == SetMode.set && a.set == null) a.mode = SetMode.bestOrder;
+    final from = auto['fill_from'];
+    a.fillFrom = from is Map ? SetSource.fromKeep(from.cast<String, dynamic>()) : null;
+    a.energyOffset = ((auto['energy'] as num?) ?? 0).toDouble();
+    a.likeThis = tracks[(auto['like'] as num?)?.toInt()];
+    a.different = auto['different'] == true;
+    a.locked
+      ..clear()
+      ..addAll([for (final id in (auto['locked'] ?? const []) as List) (id as num).toInt()]);
+    a.restorePlayed([for (final id in (auto['set_played'] ?? const []) as List) (id as num).toInt()]);
     if (auto['running'] == true) {
       final order = [for (final id in (auto['tracks'] ?? const []) as List) tracks[(id as num).toInt()]].whereType<Track>().toList();
       if (order.isEmpty) return false;

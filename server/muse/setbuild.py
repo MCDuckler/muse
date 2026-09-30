@@ -57,6 +57,13 @@ class Shape:
     fresh: float = 0.5
     stems: bool = False
     offset: float = 0.0
+    # The curve read against this pool's own spread of loudness (0 its softest record,
+    # 1 its loudest) rather than against -20..-6 LUFS: a pool of techno is loud from
+    # end to end, and "a warm-up" in it is its softer records, not silence.
+    relative: bool = True
+    # "More like this": a record whose sound the next records lean towards (a pool
+    # index, set by whoever resolved the track id).
+    anchor: int | None = None
 
     @classmethod
     def of(cls, d: dict | None) -> "Shape":
@@ -95,6 +102,7 @@ class Shape:
                 except (TypeError, ValueError):
                     pass
         s.stems = bool(d.get("stems", False))
+        s.relative = bool(d.get("relative", True))
         try:
             s.offset = min(0.5, max(-0.5, float(d.get("offset", 0.0))))
         except (TypeError, ValueError):
@@ -143,6 +151,7 @@ class Pool:
     artists: list[frozenset[str]]
     by_artist: dict[str, np.ndarray]
     same: np.ndarray
+    energy_q: np.ndarray = field(default_factory=lambda: np.linspace(0, 1, 101))
 
     @property
     def n(self) -> int:
@@ -274,6 +283,9 @@ def assemble(rows: list[dict], heard: dict[int, tuple[int, float]], hearts: set[
              by_artist={k: np.array(v, dtype=np.int64) for k, v in by_artist.items()},
              same=np.arange(n))
     p.same = _twins(p)
+    known = energy[np.isfinite(energy)]
+    if len(known) >= 5:
+        p.energy_q = np.percentile(known, np.arange(101))
     return p
 
 
@@ -304,21 +316,24 @@ def _twins(p: Pool) -> np.ndarray:
             join(by_title[k], i)
         else:
             by_title[k] = i
-    # Sound twins, looked for only among records a hair apart in tempo.
+    # Sound twins, looked for only among records a hair apart in tempo — and against
+    # the first of each group, not every member: "alike" is not transitive, and chained
+    # it made one song of a whole crate of records that each sound like the next.
     known = np.where(p.has_sound & np.isfinite(p.bpm))[0]
     if len(known) > 1:
         order = known[np.argsort(p.bpm[known])]
-        tempos = p.bpm[order]
-        start = 0
-        for i in range(len(order)):
-            while tempos[i] - tempos[start] > 0.5:
-                start += 1
-            if i == start:
-                continue
-            near = order[start:i]
-            sims = p.sound[near] @ p.sound[order[i]]
-            for j in near[sims >= 0.985]:
-                join(int(j), int(order[i]))
+        firsts: list[int] = []
+        for i in order:
+            i = int(i)
+            while firsts and p.bpm[i] - p.bpm[firsts[0]] > 0.5:
+                firsts.pop(0)
+            if firsts:
+                sims = p.sound[firsts] @ p.sound[i]
+                best = int(np.argmax(sims))
+                if sims[best] >= 0.985:
+                    join(firsts[best], i)
+                    continue
+            firsts.append(i)
     return np.array([find(i) for i in range(p.n)])
 
 
@@ -458,11 +473,28 @@ def _solo(p: Pool, shape: Shape) -> np.ndarray:
     return s
 
 
+def target(p: Pool, shape: Shape, k: float) -> float:
+    """The loudness (0 to 1, -20..-6 LUFS) the shape wants [k] of the way in: its curve,
+    read against the pool's own spread where it is relative."""
+    e = shape.energy_at(k)
+    if not shape.relative:
+        return e
+    return float(np.interp(e * 100, np.arange(101), p.energy_q))
+
+
+def curve(p: Pool, shape: Shape, points: int = 21) -> list[float]:
+    """The target over the whole set, for drawing."""
+    return [round(target(p, shape, i / (points - 1)), 3) for i in range(points)]
+
+
 def _aim(p: Pool, shape: Shape, k: float) -> np.ndarray:
     """How far each record is from where the shape wants the set [k] of the way in:
     its loudness against the curve, its tempo against the tempo path."""
-    target = shape.energy_at(k)
-    s = np.where(np.isfinite(p.energy), -0.4 * np.abs(p.energy - target), -0.1)
+    want = target(p, shape, k)
+    s = np.where(np.isfinite(p.energy), -0.4 * np.abs(p.energy - want), -0.1)
+    if shape.anchor is not None and p.has_sound[shape.anchor]:
+        sims = p.sound @ p.sound[shape.anchor]
+        s = s + np.where(p.has_sound, 0.3 * np.clip((sims - 0.75) / 0.2, 0, 1), 0.0)
     t = shape.tempo_at(k)
     if t is not None:
         folded = _fold(p.bpm, np.full(p.n, t))
@@ -562,7 +594,7 @@ def build(p: Pool, shape: Shape, *, start: int | None = None, before: list[int] 
                 continue
             k = (s + 0.5) * typical / total
             e = p.energy[m]
-            c = abs((e if np.isfinite(e) else 0.5) - shape.energy_at(k))
+            c = abs((e if np.isfinite(e) else 0.5) - target(p, shape, k))
             t = shape.tempo_at(k)
             if t is not None and np.isfinite(p.bpm[m]):
                 c += abs(float(_fold(np.array([p.bpm[m]]), np.array([t]))[0]) / t - 1) * 3
@@ -608,7 +640,7 @@ def build(p: Pool, shape: Shape, *, start: int | None = None, before: list[int] 
                 vec = 0.3 + aim + solo
             else:
                 ea = p.energy[last]
-                wanted = shape.energy_at(k) - ea if np.isfinite(ea) else None
+                wanted = target(p, shape, k) - ea if np.isfinite(ea) else None
                 vec = _pair_from(p, last, shape, pitch=pitch if not path.picks else 1.0,
                                  wanted=wanted) + aim + solo
             mask = blocked.copy()
@@ -690,7 +722,7 @@ def _describe(p: Pool, shape: Shape, picks: list[int], *, start: int | None,
             "fit": None if fit is None else round(fit, 3),
             "why": why,
             "energy": None if not np.isfinite(e) else round(float(e), 3),
-            "target": round(shape.energy_at(k), 3),
+            "target": round(target(p, shape, k), 3),
             "tempo_target": None if shape.tempo_at(k) is None else round(shape.tempo_at(k), 1),
             "bpm": None if not np.isfinite(p.bpm[i]) else round(float(p.bpm[i]), 2),
             "camelot": p.rows[i].get("camelot"),
@@ -712,7 +744,7 @@ def alternatives(p: Pool, shape: Shape, *, prev: int | None, nxt: int | None, k:
     vec = _aim(p, shape, k) + _solo(p, shape)
     if prev is not None:
         ea = p.energy[prev]
-        wanted = shape.energy_at(k) - ea if np.isfinite(ea) else None
+        wanted = target(p, shape, k) - ea if np.isfinite(ea) else None
         vec = vec + _pair_from(p, prev, shape, wanted=wanted)
     else:
         vec = vec + 0.3

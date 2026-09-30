@@ -7,6 +7,7 @@ import '../../api/client.dart';
 import '../../api/models.dart';
 import 'booth.dart';
 import 'deck.dart';
+import 'dj_set.dart';
 import 'planner.dart';
 import 'set_planner.dart';
 import 'taste.dart';
@@ -32,6 +33,27 @@ enum MixStyle {
   /// Short, and landed on the drop: loops that tighten, sweeps, a record stopped
   /// dead. What somebody would do to a room that is already going.
   bold,
+}
+
+/// How the booth orders what it plays.
+enum SetMode {
+  /// The queue, in the order it is in. Changes a hand makes are followed; nothing is
+  /// reordered.
+  asQueued,
+
+  /// What is queued, in the order that mixes best and follows the arc.
+  bestOrder,
+
+  /// A set built from a pool (PLAN A SET), re-routed from the pool as things change.
+  set,
+}
+
+extension SetModeWords on SetMode {
+  String get label => switch (this) {
+        SetMode.asQueued => 'as queued',
+        SetMode.bestOrder => 'best order',
+        SetMode.set => 'the set',
+      };
 }
 
 /// What the automix is doing, in one word — what the bars on the desk and the phone
@@ -79,13 +101,21 @@ class AutoMix extends ChangeNotifier {
   Timer? _watch;
   bool running = false;
 
+  /// How the booth orders what it plays: the queue as it is, what is queued in the
+  /// order that mixes best, or a set built from a pool and re-routed as it goes.
+  SetMode mode = SetMode.asQueued;
+
   /// Whether the booth chooses what comes next, rather than taking the queue in the
   /// order it is in: of everything still to play, the record that mixes best into
   /// the one on now. Off by default — a queue is usually a queue on purpose.
-  bool pickBest = false;
+  bool get pickBest => mode == SetMode.bestOrder;
+  set pickBest(bool on) => mode = on ? SetMode.bestOrder : (mode == SetMode.set ? SetMode.set : SetMode.asQueued);
 
-  void chooseForYourself(bool on) {
-    pickBest = on;
+  void chooseForYourself(bool on) => setMode(on ? SetMode.bestOrder : SetMode.asQueued);
+
+  void setMode(SetMode m) {
+    if (m == SetMode.set && set == null) m = SetMode.bestOrder;
+    mode = m;
     notifyListeners();
     unawaited(_prepareNext());
   }
@@ -97,6 +127,270 @@ class AutoMix extends ChangeNotifier {
     arc = a;
     notifyListeners();
     if (pickBest) unawaited(_prepareNext());
+  }
+
+  // ------------------------------------------------------------------ the set
+  /// The set being played, where one was laid out (PLAN A SET): its pool, its shape,
+  /// its records. In [SetMode.set] the booth re-routes the rest of it whenever
+  /// something changes, and keeps going from its pool.
+  DjSet? set;
+
+  SetHouse get house => SetHouse(booth.api);
+
+  /// Play [s]: its records laid into the queue straight after the record on now —
+  /// or from the top where nothing plays — and the booth following it, re-routing
+  /// it as it goes. [now]: into its first record at once (a skip), rather than when
+  /// the one playing ends.
+  Future<void> playSet(DjSet s, {bool now = false}) async {
+    set = s;
+    mode = SetMode.set;
+    _setPlayed.clear();
+    locked
+      ..clear()
+      ..addAll([for (final x in s.slots) if (x.pinned) x.track.id]);
+    arc = s.shape.preset.arc;
+    final order = s.tracks;
+    if (order.isEmpty) return;
+    if (running) {
+      _remember('the set laid out');
+      final on = current;
+      final ids = {for (final t in order) t.id};
+      _heldNext = null;
+      _tracks = [
+        ..._tracks.sublist(0, _at + 1),
+        ...order,
+        for (final t in _tracks.sublist(_at + 1)) if (!ids.contains(t.id)) t,
+      ];
+      booth.note(BoothEventKind.plan,
+          'The set: ${order.length} records from ${s.source.label.toLowerCase()}, ${s.shape.preset.label}');
+      notifyListeners();
+      unawaited(_arrange(on, order));
+      await _prepareNext();
+      if (now) await skip();
+      return;
+    }
+    // Not running: from the record in the room where one plays, else the set's first.
+    final m = booth.master;
+    final playing = m.playing && m.track != null && !order.any((t) => t.id == m.track!.id);
+    final list = [if (playing) m.track!, ...order];
+    unawaited(_arrange(playing ? m.track : null, order));
+    await start(list, at: 0);
+  }
+
+  /// The records of the set played so far, by id.
+  final _setPlayed = <int>{};
+  Iterable<int> get setPlayedIds => _setPlayed;
+  void restorePlayed(Iterable<int> ids) => _setPlayed
+    ..clear()
+    ..addAll(ids);
+
+  /// How far through the set the booth is, 0 to 1, by records played.
+  double get setAt {
+    final s = set;
+    if (s == null || s.slots.isEmpty) return 0;
+    return (_setPlayed.length / s.slots.length).clamp(0.0, 1.0);
+  }
+
+  Timer? _rerouteSoon;
+  String? _rerouteWhy;
+
+  /// The rest of the set laid again, in a moment: something changed (a record put on
+  /// by hand, one sent away, the room asked for more), and what was planned after it
+  /// was planned for a set that is no longer the one playing.
+  void _rerouteLater(String why) {
+    if (mode != SetMode.set || set == null || !running) return;
+    _rerouteWhy = why;
+    _rerouteSoon?.cancel();
+    _rerouteSoon = Timer(const Duration(milliseconds: 1500), () => unawaited(_reroute()));
+  }
+
+  int _rerouted = 0;
+
+  Future<void> _reroute() async {
+    final s = set;
+    final on = current;
+    if (s == null || on == null || !running || mode != SetMode.set) return;
+    if (booth.busy || _going) {
+      _rerouteLater(_rerouteWhy ?? 'again');
+      return;
+    }
+    final ticket = ++_rerouted;
+    // The next stays where it is ready or a hand chose it: re-routed is what comes
+    // after it.
+    final nxt = next;
+    final keep = nxt != null && (isReady || _heldNext == nxt.id || booth.other(booth.master).track?.id == nxt.id)
+        ? nxt
+        : null;
+    final from = keep ?? on;
+    final played = _tracks.sublist(0, _at + 1);
+    final coming = {for (final t in s.tracks) t.id}..removeAll(_setPlayed);
+    final left = math.max(2, coming.length - (keep == null ? 0 : 1));
+    // The pins still to come, at their places among what is left.
+    final upcomingSet = [for (final t in s.tracks) if (coming.contains(t.id) && t.id != keep?.id) t];
+    final pins = <({int id, int slot})>[
+      for (var i = 0; i < upcomingSet.length; i++)
+        if (locked.contains(upcomingSet[i].id)) (id: upcomingSet[i].id, slot: i),
+    ];
+    final k = setAt + (keep == null ? 0 : 1 / math.max(1, s.slots.length));
+    try {
+      final built = await house
+          .build(
+            source: s.source,
+            shape: s.shape.from(k),
+            start: from,
+            before: played.sublist(math.max(0, played.length - 4)),
+            pins: pins,
+            exclude: {for (final t in played) t.id, if (keep != null) keep.id},
+            pitch: keep == null ? masterTargetPitch : 1,
+            tracks: left,
+          )
+          .timeout(const Duration(seconds: 15));
+      if (ticket != _rerouted || !running || current?.id != on.id || set != s) return;
+      if (built.slots.isEmpty) return;
+      final order = [if (keep != null) keep, ...built.tracks];
+      _remember('the set re-routed: ${_rerouteWhy ?? 'something changed'}');
+      final ids = {for (final t in order) t.id};
+      _tracks = [
+        ..._tracks.sublist(0, _at + 1),
+        ...order,
+        for (final t in _tracks.sublist(_at + 1)) if (!ids.contains(t.id)) t,
+      ];
+      // The set itself: what was played of it, the kept next, the new rest.
+      final kept = [
+        for (final x in s.slots) if (_setPlayed.contains(x.track.id) || x.track.id == on.id) x,
+        if (keep != null) s.slots.firstWhere((x) => x.track.id == keep.id, orElse: () => SetSlot.of(keep)),
+      ];
+      set = s.copyWith(slots: [...kept, ...built.slots]).retimed();
+      booth.note(BoothEventKind.plan,
+          'The set re-routed (${_rerouteWhy ?? 'something changed'}): ${built.slots.first.track.displayTitle}'
+          '${keep == null ? ' next' : ' after ${keep.displayTitle}'}');
+      notifyListeners();
+      unawaited(_arrange(on, order));
+      if (keep == null) await _prepareNext();
+    } catch (e) {
+      booth.note(BoothEventKind.trouble, 'Could not re-route the set: the house did not answer');
+    }
+  }
+
+  /// [s] judged again here, record by record: the house's coarse fit and words
+  /// replaced by the set planner's own wherever both records' timings can be had —
+  /// the first [first] of them, asked for four at a time — with the move the
+  /// transition planner would make and this person's taste. [from] is the record
+  /// the set follows, where it follows one.
+  Future<DjSet> judgeSet(DjSet s, {Track? from, int first = 12}) async {
+    final ask = [if (from != null) from, ...s.tracks.take(first)];
+    for (var i = 0; i < ask.length; i += 4) {
+      await Future.wait([
+        for (final t in ask.skip(i).take(4))
+          booth.timing.of(t).timeout(const Duration(seconds: 10), onTimeout: () => null),
+      ]);
+      if (_disposed) return s;
+    }
+    final out = <SetSlot>[];
+    for (var i = 0; i < s.slots.length; i++) {
+      final slot = s.slots[i];
+      final prev = i == 0 ? from : s.slots[i - 1].track;
+      final ta = prev == null ? null : booth.timing.peek(prev.id);
+      final tb = booth.timing.peek(slot.track.id);
+      if (i >= first || prev == null || ta == null || tb == null) {
+        out.add(slot);
+        continue;
+      }
+      final f = SetPlanner.fit(ta, tb,
+          ta: prev,
+          tb: slot.track,
+          fromPitch: identical(prev, current) ? masterTargetPitch : 1,
+          before: [for (var j = math.max(0, i - 4); j < i - 1; j++) s.slots[j].track],
+          move: _moveScore(prev, slot.track),
+          taste: taste);
+      out.add(slot.copyWith(fit: f.score, why: f.why));
+    }
+    return s.copyWith(slots: out);
+  }
+
+  /// Rebuild the rest of the set from now, by hand.
+  void rerouteNow() {
+    if (mode != SetMode.set || set == null) return;
+    _rerouteWhy = 'by hand';
+    unawaited(_reroute());
+  }
+
+  // ------------------------------------------------------------------ the room's word
+  /// Where the room has asked for more energy (or less) than the plan: added to the
+  /// set's curve, or to the arc the booth orders the queue by.
+  double energyOffset = 0;
+
+  /// "More like this": the record the next ones lean towards, by sound.
+  Track? likeThis;
+
+  /// "Something different": the next records lean away from the one before, by sound.
+  bool different = false;
+
+  /// More energy (1) or less (-1) from here on.
+  void nudgeEnergy(int dir) {
+    final to = (energyOffset + 0.12 * dir).clamp(-0.36, 0.36);
+    if (to == energyOffset) return;
+    _remember(dir > 0 ? 'more energy' : 'less energy');
+    energyOffset = to;
+    booth.note(BoothEventKind.plan,
+        '${dir > 0 ? 'More' : 'Less'} energy from here: ${energyOffset > 0 ? '+' : ''}${(energyOffset * 100).round()} %');
+    _steered(dir > 0 ? 'more energy' : 'less energy');
+  }
+
+  /// The next records lean towards the sound of the one on now.
+  void moreLikeThis() {
+    final on = current;
+    if (on == null) return;
+    _remember('more like ${on.displayTitle}');
+    likeThis = on;
+    different = false;
+    booth.note(BoothEventKind.plan, 'More like ${on.displayTitle} from here');
+    _steered('more like this');
+  }
+
+  /// The next records lean away from the sound of the one before them.
+  void somethingDifferent() {
+    _remember('something different');
+    likeThis = null;
+    different = true;
+    booth.note(BoothEventKind.plan, 'Something different from here');
+    _steered('something different');
+  }
+
+  /// The room's word taken back: the plan's own curve and sound again.
+  void steerNeutral() {
+    if (energyOffset == 0 && likeThis == null && !different) return;
+    _remember('the room\'s word taken back');
+    energyOffset = 0;
+    likeThis = null;
+    different = false;
+    _steered('as planned');
+  }
+
+  void _steered(String why) {
+    notifyListeners();
+    switch (mode) {
+      case SetMode.set:
+        final s = set;
+        if (s != null) {
+          set = s.copyWith(
+              shape: s.shape.copyWith(
+            offset: energyOffset,
+            anchor: likeThis?.id,
+            noAnchor: likeThis == null,
+            smooth: likeThis != null ? 0.85 : different ? 0.1 : 0.5,
+          ));
+        }
+        _rerouteLater(why);
+      case SetMode.bestOrder:
+        unawaited(_prepareNext());
+      case SetMode.asQueued:
+        // Asked of a queue played as it is: the booth orders what is queued now, the
+        // way the room asked — said, and undoable like any other change.
+        mode = SetMode.bestOrder;
+        booth.note(BoothEventKind.plan, 'The booth orders what is queued from now on ($why)');
+        unawaited(_prepareNext());
+    }
   }
 
   /// Records a hand has pinned where they are: the booth orders around them.
@@ -142,63 +436,112 @@ class AutoMix extends ChangeNotifier {
   void keepGoing(bool on) {
     fill = on;
     notifyListeners();
-    if (on && running && next == null) unawaited(_fillFromLibrary());
+    if (on && running) unawaited(_fillAhead());
   }
 
-  /// The end of the queue, and the booth told to keep going: the library's best
-  /// partner for the record on now, judged finely, put on next.
-  Future<void> _fillFromLibrary() async {
-    final on = current;
-    if (_filling || on == null || next != null) return;
+  /// Where KEEP GOING takes its records from: the set's own pool while a set plays,
+  /// the whole library otherwise — or what was chosen for it by hand.
+  SetSource? fillFrom;
+  SetSource get fillSource => fillFrom ?? (mode == SetMode.set ? set?.source : null) ?? SetSource.wholeLibrary;
+
+  void fillFromSource(SetSource? s) {
+    fillFrom = s;
+    notifyListeners();
+  }
+
+  /// How many records KEEP GOING keeps lined up after the one on now: two, so the
+  /// next is always chosen well before its moment, not in the last seconds.
+  static const fillAhead = 2;
+
+  /// Told to keep going and running short: the best follower of the last record lined
+  /// up, from [fillSource], judged finely — until [fillAhead] are lined up.
+  Future<void> _fillAhead() async {
+    if (_filling || !fill || !running) return;
     final tried = _fillTriedAt;
     if (tried != null && DateTime.now().difference(tried) < const Duration(seconds: 20)) return;
     _filling = true;
-    _fillTriedAt = DateTime.now();
     try {
-      final found = await partnersFor(on, limit: 8);
-      if (_disposed || !running || next != null) return;
-      if (found.isEmpty) {
-        booth.note(BoothEventKind.plan, 'Nothing in the library to follow ${on.displayTitle}');
-        return;
+      while (fill && running && !_disposed && upcoming.length < fillAhead) {
+        final last = _tracks.isEmpty ? null : _tracks.last;
+        if (last == null) return;
+        _fillTriedAt = DateTime.now();
+        final found = await partnersFor(last, limit: 8);
+        if (_disposed || !running || !fill) return;
+        if (found.isEmpty) {
+          booth.note(BoothEventKind.plan,
+              'Nothing in ${fillSource.label.toLowerCase()} to follow ${last.displayTitle}');
+          return;
+        }
+        final pick = found.first;
+        booth.note(BoothEventKind.next,
+            'Keep going: ${pick.track.displayTitle}${pick.why.isEmpty ? '' : ' · ${pick.why}'}');
+        final hadNext = next;
+        _tracks = [..._tracks, pick.track];
+        final s = set;
+        if (mode == SetMode.set && s != null) {
+          set = s.copyWith(slots: [...s.slots, SetSlot(track: pick.track, fit: pick.fit, why: pick.why)]).retimed();
+        }
+        final tell = onFill;
+        if (tell != null) {
+          try {
+            await tell(pick.track);
+          } catch (_) {}
+        }
+        if (hadNext == null && !_disposed && running) unawaited(_prepareNext());
+        notifyListeners();
       }
-      final pick = found.first;
-      booth.note(BoothEventKind.next,
-          'From the library: ${pick.track.displayTitle}${pick.why.isEmpty ? '' : ' · ${pick.why}'}');
-      _tracks = [..._tracks, pick.track];
-      final tell = onFill;
-      if (tell != null) {
-        try {
-          await tell(pick.track);
-        } catch (_) {}
-      }
-      if (!_disposed && running) await _prepareNext();
     } finally {
       _filling = false;
     }
   }
 
-  /// The records in the library that would follow [from] best: the house's coarse
-  /// pick of a few dozen, judged again here with everything the set planner reads —
-  /// the seam, the sound, the move the transition planner would make — best first.
-  Future<List<({Track track, double fit, String why})>> partnersFor(Track from, {int limit = 6}) async {
+  /// The records that would follow [from] best, from [fillSource] (or [source]): the
+  /// house's coarse pick of a few dozen, judged again here with everything the set
+  /// planner reads — the seam, the sound, the move the transition planner would make
+  /// — best first.
+  Future<List<({Track track, double fit, String why})>> partnersFor(Track from,
+      {int limit = 6, SetSource? source}) async {
     final here = _tracks.indexWhere((t) => t.id == from.id);
     final before = here < 0 ? _before() : [for (var i = math.max(0, here - 3); i < here; i++) _tracks[i]];
     final n = _tracks.length;
     final start = current == null ? null : SetPlanner.energyOf(current, booth.timing.peek(current!.id));
     final wanted = here < 0 || start == null
         ? 0.0
-        : (SetPlanner.target(arc, here + 1, n + 1, start) ?? start) - (SetPlanner.energyOf(from, booth.timing.peek(from.id)) ?? start);
+        : (SetPlanner.target(arc, here + 1, n + 1, start) ?? start) + energyOffset - (SetPlanner.energyOf(from, booth.timing.peek(from.id)) ?? start);
     List<({Track track, double fit, String why})> coarse;
+    final pool = source ?? fillSource;
+    final s = set;
     try {
-      coarse = await booth.api
-          .partners(from.id,
-              exclude: [for (final t in _tracks) t.id],
-              limit: 24,
-              step: wanted,
-              avoid: {for (final t in [from, ...before]) ...t.artists})
+      // The set builder's one-slot answer: from any pool, to the set's shape.
+      final shape = (mode == SetMode.set && s != null ? s.shape.from(setAt) : SetShape(preset: EnergyPreset.plateau))
+          .copyWith(offset: energyOffset, anchor: likeThis?.id, noAnchor: likeThis == null,
+              smooth: likeThis != null ? 0.85 : different ? 0.1 : null);
+      final choices = await house
+          .choices(
+            source: pool,
+            shape: shape,
+            prev: from,
+            k: 0,
+            exclude: [for (final t in _tracks) t.id, ...before.map((t) => t.id)],
+            limit: 16,
+          )
           .timeout(const Duration(seconds: 12));
+      coarse = [for (final c in choices) (track: c.track, fit: c.fitIn ?? 0, why: c.why)];
+      if (coarse.isEmpty) throw StateError('nothing from the set builder');
     } catch (_) {
-      return const [];
+      // A house from before sets were built there: the library-wide partners.
+      if (!pool.library && pool != SetSource.wholeLibrary) return const [];
+      try {
+        coarse = await booth.api
+            .partners(from.id,
+                exclude: [for (final t in _tracks) t.id],
+                limit: 24,
+                step: wanted,
+                avoid: {for (final t in [from, ...before]) ...t.artists})
+            .timeout(const Duration(seconds: 12));
+      } catch (_) {
+        return const [];
+      }
     }
     if (coarse.isEmpty) return const [];
     final ta = await booth.timing.of(from).timeout(const Duration(seconds: 10), onTimeout: () => null);
@@ -486,6 +829,7 @@ class AutoMix extends ChangeNotifier {
     _putNext(track);
     booth.note(BoothEventKind.next, 'Next: ${track.displayTitle} — by hand');
     unawaited(_arrange(current, [track]));
+    _rerouteLater('${track.displayTitle} next, by hand');
     await _prepareNext();
   }
 
@@ -514,13 +858,28 @@ class AutoMix extends ChangeNotifier {
       _tracks = [..._tracks, gone];
       unawaited(_arrange(last, [gone]));
     }
+    final s = set;
+    if (mode == SetMode.set && s != null) {
+      set = s.copyWith(slots: [for (final x in s.slots) if (x.track.id != gone.id) x]).retimed();
+      _rerouteLater('not ${gone.displayTitle}');
+    }
     await _prepareNext();
   }
 
   // ------------------------------------------------------------------ undoing
   /// The last few things the booth did to the order by itself or on a hand's word —
   /// each the order of what was to come before it, and in a few words what it was.
-  final _undo = <({String what, int? next, List<Track> upcoming, DateTime at})>[];
+  final _undo = <({
+    String what,
+    int? next,
+    List<Track> upcoming,
+    DateTime at,
+    SetMode mode,
+    double energy,
+    Track? like,
+    bool different,
+    DjSet? set,
+  })>[];
 
   /// The newest of those while it is fresh: what the UNDO chip offers.
   ({String what, DateTime at})? get change {
@@ -531,7 +890,17 @@ class AutoMix extends ChangeNotifier {
   }
 
   void _remember(String what) {
-    _undo.add((what: what, next: _heldNext, upcoming: upcoming, at: DateTime.now()));
+    _undo.add((
+      what: what,
+      next: _heldNext,
+      upcoming: upcoming,
+      at: DateTime.now(),
+      mode: mode,
+      energy: energyOffset,
+      like: likeThis,
+      different: different,
+      set: set,
+    ));
     if (_undo.length > 5) _undo.removeAt(0);
   }
 
@@ -540,6 +909,13 @@ class AutoMix extends ChangeNotifier {
     if (_undo.isEmpty || !running || booth.busy) return;
     final u = _undo.removeLast();
     _heldNext = u.next;
+    _rerouteSoon?.cancel();
+    _rerouted++; // and a re-route under way lays nothing down after this
+    mode = u.mode;
+    energyOffset = u.energy;
+    likeThis = u.like;
+    different = u.different;
+    set = u.set;
     final played = <int>{for (var i = 0; i <= _at && i < _tracks.length; i++) _tracks[i].id};
     final back = [for (final t in u.upcoming) if (!played.contains(t.id)) t];
     _tracks = [..._tracks.sublist(0, _at + 1), ...back];
@@ -906,6 +1282,7 @@ class AutoMix extends ChangeNotifier {
     _endGlide();
     _forgetThePair();
     _waiting = false;
+    _rerouteSoon?.cancel();
     _watch?.cancel();
     _watch = null;
     plan = null;
@@ -1248,6 +1625,7 @@ class AutoMix extends ChangeNotifier {
     _fitToNow();
     _readyFor = (from.track?.id, coming.id);
     _seenMoves[to.name] = to.handMoves;
+    if (fill) unawaited(_fillAhead());
     booth.note(BoothEventKind.next, 'Next: ${coming.displayTitle}', deck: to);
     final go2 = goesAt;
     booth.note(
@@ -1550,7 +1928,10 @@ class AutoMix extends ChangeNotifier {
             before: [..._before(), if (held) on],
             fromPitch: held ? 1 : masterTargetPitch,
             moveOf: _moveScore,
-            taste: taste);
+            taste: taste,
+            energyShift: energyOffset,
+            like: likeThis == null ? null : booth.timing.peek(likeThis!.id),
+            contrast: different);
     if (!held && ordered.isNotEmpty && ordered.first.id != rest.first.id) {
       final why = fitOf(ordered.first).why;
       booth.note(BoothEventKind.next,
@@ -1689,6 +2070,7 @@ class AutoMix extends ChangeNotifier {
     booth.note(BoothEventKind.next, 'Next: ${track.displayTitle} — $why');
     unawaited(_arrange(current, [track]));
     unawaited(_prepareNext());
+    _rerouteLater('${track.displayTitle} next, by hand');
   }
 
   /// [track] is what plays now: the record that was on counts as played, the plan for
@@ -1710,9 +2092,11 @@ class AutoMix extends ChangeNotifier {
     _seenMoves[m.name] = m.handMoves;
     _seenPitches[m.name] = m.handPitches;
     booth.note(BoothEventKind.auto, 'Now: ${track.displayTitle} — $why; the Auto DJ carries on from it');
+    if (was != null && (set?.slots.any((x) => x.track.id == was.id) ?? false)) _setPlayed.add(was.id);
     notifyListeners();
     unawaited(_arrange(was, [track]));
     unawaited(_prepareNext());
+    _rerouteLater('${track.displayTitle} on, by hand');
   }
 
   /// A hand mixed into the record that was next: taken as a mix made, and the booth
@@ -1738,6 +2122,7 @@ class AutoMix extends ChangeNotifier {
       _previews.remove((from.id, to.id));
     }
     _at++;
+    if (from != null && (set?.slots.any((x) => x.track.id == from.id) ?? false)) _setPlayed.add(from.id);
     _heldNext = null;
     _forgetThePair();
     booth.note(BoothEventKind.auto, 'Mixed into ${to.displayTitle} by hand — the Auto DJ carries on');
@@ -2042,7 +2427,7 @@ class AutoMix extends ChangeNotifier {
     if (coming == null) {
       // The last record — unless the booth is to keep going, from the library.
       if (fill && from.playing) {
-        unawaited(_fillFromLibrary());
+        unawaited(_fillAhead());
         return;
       }
       // Let it end, then stop.
@@ -2156,6 +2541,8 @@ class AutoMix extends ChangeNotifier {
         unawaited(_tell('mix', made, {'byHand': ended, if (_quick) 'skip': true}));
       }
       _at++;
+      final ft = from.track;
+      if (ft != null && (set?.slots.any((x) => x.track.id == ft.id) ?? false)) _setPlayed.add(ft.id);
       steers.remove(done);
       _previews.remove(done);
       _heldNext = null;
@@ -2228,6 +2615,7 @@ class AutoMix extends ChangeNotifier {
     _disposed = true;
     _asked++;
     _endGlide();
+    _rerouteSoon?.cancel();
     _watch?.cancel();
     _arrivals.cancel();
     super.dispose();

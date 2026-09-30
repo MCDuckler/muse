@@ -267,6 +267,23 @@ class ApiClient {
     ];
   }
 
+  /// A set built by the house from a pool to a shape (POST /booth/set): the raw
+  /// answer, read by DjSet.
+  Future<Map<String, dynamic>> boothSet(Map<String, dynamic> body) async =>
+      (await _decode(await net.post(_u('/booth/set'), headers: _headers, body: jsonEncode(body))) as Map)
+          .cast<String, dynamic>();
+
+  /// What else would sit in one slot of a set (POST /booth/slot).
+  Future<Map<String, dynamic>> boothSlot(Map<String, dynamic> body) async =>
+      (await _decode(await net.post(_u('/booth/slot'), headers: _headers, body: jsonEncode(body))) as Map)
+          .cast<String, dynamic>();
+
+  /// What a pool holds for a set (POST /booth/pool).
+  Future<Map<String, dynamic>> boothPool(Map<String, dynamic> source) async =>
+      (await _decode(await net.post(_u('/booth/pool'),
+              headers: _headers, body: jsonEncode({'source': source}))) as Map)
+          .cast<String, dynamic>();
+
   /// Songs that are not in the library yet and belong beside [tracks]: YouTube
   /// Music's radio tail for a few of them, the ones already held left out. Nothing is
   /// fetched by asking; a hit is fetched when it is added ([resolve]).

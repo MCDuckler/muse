@@ -207,3 +207,30 @@ def test_a_set_from_the_library_and_from_a_playlist(client, hdr):
     assert r.json()["measured"] == 4 and r.json()["unfetched_ids"] == []
 
     assert client.post("/booth/set", headers=hdr, json={"source": {}}).status_code == 400
+
+
+def test_more_like_this_leans_towards_one_records_sound():
+    p = _library()
+    anchor = 1
+    shape = setbuild.Shape.of({"smooth": 0.5})
+    plain = _ids(setbuild.build(p, shape, tracks=8))
+    shape.anchor = p.at[anchor]
+    leaned = _ids(setbuild.build(p, shape, tracks=8))
+
+    def alike(ids):
+        return float(np.mean([p.sound[p.at[i]] @ p.sound[p.at[anchor]] for i in ids]))
+    assert alike(leaned) > alike(plain) + 0.1
+
+
+def test_a_relative_curve_is_read_against_the_pools_own_loudness():
+    # Every record loud, the way a techno crate is: -9 to -6 LUFS.
+    rows = [_row(i, bpm=130, cam="8A", lufs=-9 + 3 * (i % 10) / 9, artist=f"A{i}",
+                 sound=[math.cos(i), math.sin(i), 0.2]) for i in range(1, 61)]
+    p = setbuild.assemble(rows, {}, set())
+    shape = setbuild.Shape.of({"energy": [[0, 0.0], [1, 1.0]]})
+    slots = setbuild.build(p, shape, tracks=10)
+    energies = [s["energy"] for s in slots]
+    assert energies[0] < energies[-1], "a build within what the pool has"
+    assert slots[0]["target"] >= min(p.energy) - 1e-9, "the softest target is the softest record here"
+    flat = setbuild.Shape.of({"energy": [[0, 0.0], [1, 1.0]], "relative": False})
+    assert setbuild.target(p, flat, 0) == 0.0

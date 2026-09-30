@@ -146,11 +146,13 @@ def build_set(body: dict = Body(...), user: dict = Depends(current_user)):
         pitch = float(start.get("pitch") or 1.0)
     except (TypeError, ValueError):
         pitch = 1.0
-    need = {i for i in [start_id, *(i for i, _ in pins), *must] if i is not None}
+    anchor = _int((body.get("shape") or {}).get("anchor"))
+    need = {i for i in [start_id, anchor, *(i for i, _ in pins), *must] if i is not None}
     try:
         with heavy.turn(f"set:{user['id']}"):
             p = _pool(user, library, ids, need)
             at = p.at
+            shape.anchor = at.get(anchor) if anchor is not None else None
             slots = setbuild.build(
                 p, shape,
                 start=at.get(start_id) if start_id is not None else None,
@@ -161,9 +163,10 @@ def build_set(body: dict = Body(...), user: dict = Depends(current_user)):
                 exclude={at[i] for i in exclude if i in at},
                 pitch=min(1.2, max(0.8, pitch)))
             stats = setbuild.stats(user["id"], library, ids, p)
+            drawn = setbuild.curve(p, shape)
     except heavy.Busy:
         _busy()
-    return {"slots": slots, "stats": stats}
+    return {"slots": slots, "stats": stats, "curve": drawn}
 
 
 @router.post("/slot")
@@ -180,11 +183,13 @@ def slot_choices(body: dict = Body(...), user: dict = Depends(current_user)):
         k = 0.0
     limit = max(1, min(20, _int(body.get("limit")) or 6))
     exclude = set(_ids(body.get("exclude"), 5000))
-    need = {i for i in (prev, nxt) if i is not None}
+    anchor = _int((body.get("shape") or {}).get("anchor"))
+    need = {i for i in (prev, nxt, anchor) if i is not None}
     try:
         with heavy.turn(f"set:{user['id']}"):
             p = _pool(user, library, ids, need)
             at = p.at
+            shape.anchor = at.get(anchor) if anchor is not None else None
             out = setbuild.alternatives(
                 p, shape, prev=at.get(prev) if prev is not None else None,
                 nxt=at.get(nxt) if nxt is not None else None, k=k,
