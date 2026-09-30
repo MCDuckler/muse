@@ -41,6 +41,14 @@ void main() {
     final mpv = _native(player);
     expect(mpv, isNotNull, reason: 'the player is not on libmpv');
     await mpv!.setProperty('ao', 'null');
+    // What mpv refuses is said in its log, not thrown: a command it would not take
+    // looks, from here, exactly like one it did.
+    final refused = <String>[];
+    final raw = JustAudioMediaKit.instanceIfRegistered!.playerFor(player.platformId!)!.raw;
+    final heard = raw.stream.log.listen((l) {
+      if (l.level == 'error' && l.text.contains('af-command')) refused.add('${l.prefix}: ${l.text}');
+    });
+    addTearDown(heard.cancel);
     // ignore: avoid_print
     print('mpv ${await mpv.getProperty('mpv-version')} · ffmpeg ${await mpv.getProperty('ffmpeg-version')}');
 
@@ -82,6 +90,12 @@ void main() {
       await mpv.command(['af-command', 'wetowl', 'volume', value, target]);
     }
     await mpv.command(['af-command', 'wetowl', 'f', '400', 'highpass@hp']);
+    // A target that is not in the chain has to be refused, or the check proves nothing.
+    await mpv.command(['af-command', 'wetowl', 'volume', '1', 'volume@nowhere']);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(refused, hasLength(1), reason: 'the knobs were not all taken: $refused');
+    expect(refused.single, contains('volume@nowhere'));
+    refused.clear();
 
     // Tempo held while synced to a faster record.
     await player.setSpeed(1.04);
@@ -116,6 +130,9 @@ void main() {
     }
     expect(stems, isTrue, reason: 'none of the stem chains went on');
     await mpv2.command(['af-command', 'wetowl', 'volume', '0', 'volume@v']);
+    await mpv2.command(['af-command', 'wetowl', 'volume', '0.5', 'volume@d']);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(refused, isEmpty, reason: 'the stem levels were not taken: $refused');
     await player.stop();
   });
 }

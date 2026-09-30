@@ -1,0 +1,119 @@
+# Build the libmpv the Mac app plays through, and keep it as a release here.
+#
+# The Mac's libmpv comes from media-kit's libmpv-darwin-build, like the iPhone's. Every
+# release of it up to v0.7.3 is mpv 0.36.0, whose af-command cannot name the filter it
+# is for: the booth turns one band with `af-command wetowl volume 0.01 volume@low`, and
+# 0.36 refuses the fourth argument ("has only 3 arguments") — without it, the command
+# would turn every volume in the chain at once. Linux and Windows have a newer mpv and
+# never noticed.
+#
+# So this builds media-kit's own recipe, at the release the vendored package names,
+# with one patch to mpv that gives af-command its target as mpv 0.37 has it
+# (app/third_party/media_kit_libs_macos_audio/libmpv/). Everything else is theirs,
+# byte for byte: the same Nix build, the same pins, the same flavour.
+#
+# Run once per change to the patch or the release; the result is a release on this
+# repository (a tag of its own, never a desktop- one) with the archive, whose sha256 goes
+# into app/third_party/media_kit_libs_macos_audio/macos/Makefile.
+#
+#   gh workflow run libmpv-darwin.yml
+name: libmpv for Apple
+
+on:
+  # While the Mac build is being made on its branch (a workflow can only be asked for
+  # by name once it is on master).
+  push:
+    branches: [macos-desktop]
+    paths:
+      - .github/workflows/libmpv-darwin.yml
+      - app/third_party/media_kit_libs_macos_audio/libmpv/**
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'version, as it goes in the archive name and the release tag'
+        default: 'v0.7.3-wetowl1'
+      targets:
+        description: 'Nix targets to build (space separated)'
+        default: 'mk-out-archive-xcframeworks-macos-universal-audio-encodersgpl'
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 300
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: muse
+      - uses: actions/checkout@v4
+        with:
+          repository: media-kit/libmpv-darwin-build
+          # v0.7.3
+          ref: 3ece46c27a532663494b8223703d07a495a516e8
+          path: ldb
+      - name: The patch
+        working-directory: ldb
+        run: |
+          cp ../muse/app/third_party/media_kit_libs_macos_audio/libmpv/*.patch patches/
+          # After their own mpv patches, for every variant.
+          sed -i '' '/mpv-audiounit-shared-session.patch/a\
+          patch -p1 <${../../../patches/mpv-filter-command-target.patch}
+          ' nix/packages/mk-pkg-mpv/default.nix
+          grep -n 'patch -p1' nix/packages/mk-pkg-mpv/default.nix
+          grep -q 'mpv-filter-command-target.patch' nix/packages/mk-pkg-mpv/default.nix
+          # A flake sees only what git knows about.
+          git add -A
+      - uses: DeterminateSystems/nix-installer-action@v22
+        with:
+          extra-conf: |
+            sandbox = true
+            sandbox-fallback = false
+      - uses: DeterminateSystems/magic-nix-cache-action@v13
+        with:
+          use-flakehub: false
+      - name: Build
+        working-directory: ldb
+        env:
+          VERSION: ${{ inputs.version || 'v0.7.3-wetowl1' }}
+          TARGETS: ${{ inputs.targets || 'mk-out-archive-xcframeworks-macos-universal-audio-encodersgpl' }}
+        run: |
+          # The Xcode their build is made with; see their nix/overlays/xcode.nix.
+          XCODE_PATH=$(realpath /Applications/Xcode_16.1.0.app)
+          "$XCODE_PATH/Contents/Developer/usr/bin/xcodebuild" -version
+          mkdir -p ../out
+          for t in $TARGETS; do
+            nix develop -c make XCODE_PATH="$XCODE_PATH" VERSION="$VERSION" TARGET="$t"
+            cp -L result/*.tar.gz ../out/
+          done
+          cd ../out && shasum -a 256 *.tar.gz | tee SHA256SUMS
+      - name: Check it
+        run: |
+          # mpv's own word on the fourth argument, in the library that was built.
+          mkdir check && tar -xzf out/*macos*.tar.gz -C check
+          mpv=$(find check -path '*Mpv.framework/Versions/A/Mpv' | head -1)
+          strings "$mpv" | grep -m1 'mpv 0\.'
+          lipo -archs "$mpv"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libmpv-darwin
+          path: out/
+          retention-days: 30
+      - name: Keep it
+        if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/macos')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version || 'v0.7.3-wetowl1' }}
+        run: |
+          # Never replaced: a Makefile somewhere pins these bytes. A new patch is a new
+          # version.
+          tag="libmpv-darwin-$VERSION"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "$tag is already a release; not replacing it — give this build a new version"
+            exit 0
+          fi
+          gh release create "$tag" out/*.tar.gz out/SHA256SUMS \
+            --title "libmpv for Apple · $VERSION" \
+            --notes "media-kit/libmpv-darwin-build v0.7.3 (3ece46c) with app/third_party/media_kit_libs_macos_audio/libmpv/mpv-filter-command-target.patch, built from ${{ github.sha }}. Not an app release." \
+            --target "${{ github.sha }}"

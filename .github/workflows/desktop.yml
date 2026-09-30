@@ -359,7 +359,11 @@ jobs:
           log="$HOME/Library/Application Support/io.wetowl.muse/wetowl.log"
           cat "$log" || true
           grep -q 'desktop audio ready (libmpv)' "$log"
-          osascript -e 'quit app "WetOwl"' || pkill -x WetOwl || true
+          # Quit as ⌘Q quits. Flutter answers the first ask with "not yet" while it asks
+          # the app (osascript calls that "User canceled"), then quits by itself.
+          osascript -e 'quit app "WetOwl"' || true
+          for i in $(seq 20); do pgrep -x WetOwl >/dev/null || break; sleep 0.5; done
+          if pgrep -x WetOwl >/dev/null; then echo "it would not quit"; pkill -x WetOwl; exit 1; fi
       - name: It takes a record apart
         env:
           HOUSE: ${{ inputs.server || 'https://89-58-49-140.nip.io' }}
