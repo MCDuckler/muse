@@ -1,0 +1,61 @@
+mpv 0.36.0: af-command / vf-command with an optional fourth argument, the target
+filter inside a lavfi graph — as mpv 0.37 and later have it.
+
+0.36 always sends a command to "all" the filters in the graph, so the booth's
+`af-command wetowl volume 0.01 volume@low` turned every volume in the chain at
+once (and mpv refused the fourth argument outright: "has only 3 arguments").
+libmpv-darwin-build pins mpv 0.36.0 in every release up to v0.7.3, so the
+Apple builds carry this until it moves on. Applied by
+.github/workflows/libmpv-darwin.yml.
+
+--- a/filters/filter.h
++++ b/filters/filter.h
+@@ -378,6 +378,7 @@
+     // For MP_FILTER_COMMAND_TEXT
+     const char *cmd;
+     const char *arg;
++    const char *target; // NULL or "all": every filter in the graph
+ 
+     // For MP_FILTER_COMMAND_GET_META
+     void *res; // must point to struct mp_tags*, will be set to new instance
+--- a/filters/f_lavfi.c
++++ b/filters/f_lavfi.c
+@@ -814,7 +814,9 @@
+ 
+     switch (cmd->type) {
+     case MP_FILTER_COMMAND_TEXT: {
+-        return avfilter_graph_send_command(c->graph, "all", cmd->cmd, cmd->arg,
++        return avfilter_graph_send_command(c->graph,
++                                           cmd->target ? cmd->target : "all",
++                                           cmd->cmd, cmd->arg,
+                                            &(char){0}, 0, 0) >= 0;
+     }
+     case MP_FILTER_COMMAND_GET_META: {
+--- a/player/command.c
++++ b/player/command.c
+@@ -5951,6 +5951,7 @@
+         .type = MP_FILTER_COMMAND_TEXT,
+         .cmd = cmd->args[1].v.s,
+         .arg = cmd->args[2].v.s,
++        .target = cmd->args[3].v.s,
+     };
+     cmd->success = mp_output_chain_command(chain, cmd->args[0].v.s, &filter_cmd);
+ }
+@@ -6595,11 +6596,15 @@
+ 
+     { "af-command", cmd_filter_command, { {"label", OPT_STRING(v.s)},
+                                           {"command", OPT_STRING(v.s)},
+-                                          {"argument", OPT_STRING(v.s)}, },
++                                          {"argument", OPT_STRING(v.s)},
++                                          {"target", OPT_STRING(v.s),
++                                           .flags = MP_CMD_OPT_ARG}, },
+         .priv = &(const int){STREAM_AUDIO} },
+     { "vf-command", cmd_filter_command, { {"label", OPT_STRING(v.s)},
+                                           {"command", OPT_STRING(v.s)},
+-                                          {"argument", OPT_STRING(v.s)}, },
++                                          {"argument", OPT_STRING(v.s)},
++                                          {"target", OPT_STRING(v.s),
++                                           .flags = MP_CMD_OPT_ARG}, },
+         .priv = &(const int){STREAM_VIDEO} },
+ 
+     { "ao-reload", cmd_ao_reload },
