@@ -389,7 +389,10 @@ def score(p: Pool, a: np.ndarray, b: np.ndarray, shape: Shape, pitch: float = 1.
         raw = fb / fa
     off = np.abs(ratio - 1)
     tempo = 0.5 * np.exp(-(off / COMFORTABLE) ** 2) + 0.1
-    tempo = np.where(off > REACH, 0.0, tempo)
+    # Out of the automix's reach: not a mix but a hand-over. The app's planner scores
+    # it nothing; a set built here pays for it — a path through the pool that walks
+    # to where it is going beats one that jumps.
+    tempo = np.where(off > REACH, -0.4, tempo)
     octave = (raw > math.sqrt(2)) | (raw < 1 / math.sqrt(2))
     tempo = np.where(octave, tempo * 0.5, tempo)
     total = np.where(known, tempo, 0.25)
