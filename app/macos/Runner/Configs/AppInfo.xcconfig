@@ -1,0 +1,11 @@
+// Application-level settings for the Runner target.
+
+// The application's name: WetOwl.app, and the window's title.
+PRODUCT_NAME = WetOwl
+
+// The same identifier the Linux build keeps its files under, so the app's own folder is
+// ~/Library/Application Support/io.wetowl.muse — where the helpers beside it look too.
+PRODUCT_BUNDLE_IDENTIFIER = io.wetowl.muse
+
+// The copyright displayed in application information
+PRODUCT_COPYRIGHT = Copyright © 2026 WetOwl.

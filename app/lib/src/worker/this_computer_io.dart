@@ -16,6 +16,7 @@ import '../state/updates.dart';
 import '../ui/mag.dart';
 import '../ui/mag_parts.dart';
 import 'background.dart';
+import 'build_stamp.dart';
 import 'downloader.dart';
 import 'helper_files.dart';
 import 'ingest_http.dart';
@@ -195,16 +196,7 @@ class PoolHere extends ChangeNotifier {
   bool get helperAlive => (heard?.fresh() ?? false) && heard?.pid != null;
 
   /// This app's own build, from the stamp beside it: what the helper has to be too.
-  late final String? myBuild = () {
-    try {
-      return File('${File(Platform.resolvedExecutable).parent.path}'
-              '${Platform.pathSeparator}build-stamp.txt')
-          .readAsStringSync()
-          .trim();
-    } catch (_) {
-      return null;
-    }
-  }();
+  late final String? myBuild = readBuildStamp();
 
   /// Tell the helper to go, and wait until it has — at most [within].
   Future<void> _helperGone({Duration within = const Duration(seconds: 12)}) async {
@@ -329,13 +321,18 @@ class PoolHere extends ChangeNotifier {
   }
 
   /// The process the helper's last status names, where it is still running and is the
-  /// helper: stopped. Whether there was one. Linux only — elsewhere a process cannot be
-  /// told for the helper by its number alone, and a wrong one is not to be killed.
+  /// helper: stopped. Whether there was one. Linux and a Mac only — on Windows a
+  /// process cannot be told for the helper by its number alone, and a wrong one is not
+  /// to be killed.
   Future<bool> _stuckHelperGone() async {
     final other = heard?.pid;
-    if (other == null || !Platform.isLinux || other == pid) return false;
+    if (other == null || !(Platform.isLinux || Platform.isMacOS) || other == pid) return false;
     try {
-      final line = await File('/proc/$other/cmdline').readAsString();
+      // A Mac has no /proc; ps says the same, and says nothing for a process that is
+      // not there.
+      final line = Platform.isMacOS
+          ? '${(await Process.run('/bin/ps', ['-p', '$other', '-o', 'command='])).stdout}'
+          : await File('/proc/$other/cmdline').readAsString();
       if (!line.contains('wetowl-fetch')) return false;
     } catch (_) {
       return false; // not running

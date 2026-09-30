@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build the desktop app — Windows and Linux — from what is actually on master, and
-# publish both.
+# Build the desktop app — Windows, Linux and macOS — from what is actually on master,
+# and publish all three.
 #
 # The same shape as deploy/ios.sh, for the same reason: GitHub builds whatever master is
 # there, so what is on this machine has to have been pushed before a build is asked for,
@@ -18,7 +18,7 @@ command -v gh >/dev/null || { echo "gh is how the build is asked for" >&2; exit 
 # inside a desktop build. An Android signing config left modified in the tree says nothing about
 # a desktop build, and a check that refuses to work for reasons that cannot matter is a
 # check people learn to skip.
-watched=(app/lib app/linux app/windows app/third_party app/pubspec.yaml app/pubspec.lock)
+watched=(app/lib app/bin app/linux app/windows app/macos app/third_party app/pubspec.yaml app/pubspec.lock)
 [ -z "$(git status --porcelain -- "${watched[@]}")" ] || {
   echo "uncommitted changes in what the desktop build is made of — commit them first" >&2
   git status --short -- "${watched[@]}" >&2

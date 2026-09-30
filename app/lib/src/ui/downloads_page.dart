@@ -433,7 +433,11 @@ class _Computers extends StatelessWidget {
         for (final d in devices)
           ListTile(
             leading: Icon(
-              d['platform'] == 'windows' ? Icons.desktop_windows_outlined : Icons.computer,
+              switch (d['platform']) {
+                'windows' => Icons.desktop_windows_outlined,
+                'macos' => Icons.laptop_mac,
+                _ => Icons.computer,
+              },
               color: d['live'] == true ? scheme.primary : scheme.onSurfaceVariant,
             ),
             title: Row(children: [

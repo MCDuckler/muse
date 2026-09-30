@@ -451,6 +451,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.2.1"
+  media_kit_libs_macos_audio:
+    dependency: "direct main"
+    description:
+      path: "third_party/media_kit_libs_macos_audio"
+      relative: true
+    source: path
+    version: "1.1.4"
   media_kit_libs_windows_audio:
     dependency: "direct main"
     description:

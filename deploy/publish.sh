@@ -247,14 +247,24 @@ publish_desktop() {
   local version
   version=$(sed -n 's/^version: *\([^+]*\).*/\1/p' app/pubspec.yaml | tr -d '[:space:]')
   local f name bytes
-  for f in wetowl-windows.zip wetowl-linux.tar.gz; do
+  for f in wetowl-windows.zip wetowl-linux.tar.gz wetowl-macos.zip wetowl-macos.dmg; do
     [ -f "$tmp/$f" ] || { echo "   ! $tag has no $f"; continue; }
     bytes=$(stat -c%s "$tmp/$f")
     name=${f%%.*}
+    # The Mac's disk image is for people, not for the app, which updates from the zip
+    # and reads the zip's manifest: the image goes up beside it and says nothing.
+    if [ "$f" = wetowl-macos.dmg ]; then
+      put "$tmp/$f" $DL/$f
+      echo "   $SERVER_URL/$f  ($tag, $((bytes / 1024 / 1024))MB)"
+      continue
+    fi
     # The stamp the app will report about itself, out of the archive: "is this newer
     # than what I am running" has to compare the same number the running copy says.
     local build=""
     case "$f" in
+      wetowl-macos.zip)
+                build=$(unzip -p "$tmp/$f" WetOwl.app/Contents/Resources/build-stamp.txt 2>/dev/null \
+                          | tr -dc '0-9') ;;
       *.zip)    build=$(unzip -p "$tmp/$f" build-stamp.txt 2>/dev/null | tr -dc '0-9') ;;
       *.tar.gz) build=$(tar -xOzf "$tmp/$f" wetowl/build-stamp.txt 2>/dev/null | tr -dc '0-9') ;;
     esac
@@ -278,6 +288,7 @@ publish_models() {
   on_box "mkdir -p $DL/models/$cl $DL/models/$cw"
   for f in scnet-small-v1.onnx.gz beat-this-final0.onnx.gz beat-this-frontend.json.gz \
       onnxruntime-1.30.0-linux-x64.so.gz onnxruntime-1.30.0-win-x64.dll.gz \
+      onnxruntime-1.30.0-macos-arm64.dylib.gz \
       $cl/libonnxruntime.so.1.30.0.gz $cl/libonnxruntime_providers_shared.so.gz \
       $cl/libonnxruntime_providers_cuda.so.gz \
       $cw/onnxruntime.dll.gz $cw/onnxruntime_providers_shared.dll.gz $cw/onnxruntime_providers_cuda.dll.gz; do

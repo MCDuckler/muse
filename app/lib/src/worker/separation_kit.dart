@@ -48,12 +48,16 @@ const beatFrontendFile = KitFile('beat-this-frontend.json',
     '7b2ba71db92b79cb33f45feb21854161de329b86a7e6ea686c3fec51ce85eb9f', 298186);
 
 /// ONNX Runtime 1.30.0 as Microsoft releases it (MIT), for the computers the
-/// separator is built for. Anything else goes on with the old arithmetic.
+/// separator is built for. Anything else goes on with the old arithmetic. A Mac with
+/// Apple silicon only: Microsoft stopped releasing one for Intel Macs, which leave
+/// their records to the rest of the pool.
 KitFile? get runtimeFile => switch (Abi.current()) {
       Abi.linuxX64 => const KitFile('onnxruntime-1.30.0-linux-x64.so',
           '245a6f8c38127551057a1cd1ffd59f0a186a227ade4f3492dea2494eb565542e', 28985152),
       Abi.windowsX64 => const KitFile('onnxruntime-1.30.0-win-x64.dll',
           '7e39e2bdbba836d98071ef28620735ba36a47c554cf794585269aecc50fab0da', 16462648),
+      Abi.macosArm64 => const KitFile('onnxruntime-1.30.0-macos-arm64.dylib',
+          'bcc9110f9d638a119de2db7afb3ba9a1da8085f0cb3401e1c48ae1caf450b6fa', 43879424),
       _ => null,
     };
 

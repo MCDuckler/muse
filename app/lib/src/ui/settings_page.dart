@@ -788,7 +788,7 @@ class _DesktopRowState extends State<_DesktopRow> {
 
   Future<void> _look() async {
     // The one this is, on a desk; both, in a browser, which cannot know which it is on.
-    for (final os in Updates.desktop != null ? [Updates.desktop!] : ['windows', 'linux']) {
+    for (final os in Updates.desktop != null ? [Updates.desktop!] : ['windows', 'macos', 'linux']) {
       final r = await Updates.publishedDesktop(_base, os);
       if (r != null && mounted) setState(() => _found[os] = r);
     }
@@ -807,20 +807,29 @@ class _DesktopRowState extends State<_DesktopRow> {
             final newer = Updates.desktop == os && release.isNewerThan(appBuild);
             // On a desk, only worth a row when there is something newer.
             if (Updates.desktop != null && !newer) return const SizedBox.shrink();
-            Future<void> get() => launchUrl(Uri.parse(Updates.desktopUrl(_base, os)),
+            Future<void> get() => launchUrl(Uri.parse(Updates.downloadUrl(_base, os)),
                 mode: LaunchMode.externalApplication);
             return ListTile(
               leading: Icon(Icons.desktop_windows_outlined,
                   color: newer ? Theme.of(context).colorScheme.primary : null),
               title: Text(newer
                   ? 'A newer build is ready'
-                  : os == 'windows'
-                      ? 'WetOwl for Windows'
-                      : 'WetOwl for Linux'),
+                  : switch (os) {
+                      'windows' => 'WetOwl for Windows',
+                      'macos' => 'WetOwl for Mac',
+                      _ => 'WetOwl for Linux',
+                    }),
               subtitle: Text([
                 release.size,
                 if (release.built != null) 'built ${release.built!.split('T').first}',
-                os == 'windows' ? 'unzip and run wetowl.exe' : 'unpack and run ./wetowl',
+                switch (os) {
+                  'windows' => 'unzip and run wetowl.exe',
+                  // Not signed by a paid Apple developer account, so the first open is
+                  // refused until it is allowed; the disk image's own note says how.
+                  'macos' => 'drag it to Applications · the first time, allow it in '
+                      'System Settings › Privacy & Security',
+                  _ => 'unpack and run ./wetowl',
+                },
               ].join(' · ')),
               trailing: FilledButton(onPressed: get, child: Text(newer ? 'Get it' : 'Download')),
               onTap: get,

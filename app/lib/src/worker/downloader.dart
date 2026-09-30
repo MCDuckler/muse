@@ -63,10 +63,16 @@ abstract class Runner {
 class ProcessRunner implements Runner {
   final _running = <Process>{};
 
+  /// On a Mac, the places Homebrew puts programs, on the PATH of what is started: yt-dlp
+  /// looks for its JavaScript runtime and for ffmpeg there by name, and an app opened
+  /// from the Finder has none of them on its own. See [Tools.macPlaces].
+  static final Map<String, String>? _environment =
+      Platform.isMacOS ? {'PATH': Tools.searchPath().join(':')} : null;
+
   @override
   Future<int> stream(String exe, List<String> args, void Function(String) onLine) async {
     // Never through a shell: the arguments are a list, and stay one.
-    final p = await Process.start(exe, args, runInShell: false);
+    final p = await Process.start(exe, args, runInShell: false, environment: _environment);
     _running.add(p);
     final both = [
       p.stdout.transform(utf8.decoder).transform(const LineSplitter()).forEach(onLine),
@@ -80,7 +86,7 @@ class ProcessRunner implements Runner {
 
   @override
   Future<({int code, String out, String err})> run(String exe, List<String> args) async {
-    final r = await Process.run(exe, args, runInShell: false);
+    final r = await Process.run(exe, args, runInShell: false, environment: _environment);
     return (code: r.exitCode, out: '${r.stdout}', err: '${r.stderr}');
   }
 
