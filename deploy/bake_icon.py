@@ -173,6 +173,8 @@ def main() -> int:
             canvas.paste(white.resize((inner, inner), Image.LANCZOS),
                          ((size - inner) // 2, (size - inner) // 2))
             canvas.save(out / "ic_stat_wetowl.png", optimize=True)
+        tray(white)
+        tray_ico(master)
         maskable(master)
         print(f"   icon baked in from {LOCAL or BASE} (the disco ball)")
         return 0
@@ -196,9 +198,37 @@ def main() -> int:
         white.resize((size, size), Image.LANCZOS).save(
             out / "ic_stat_wetowl.png", optimize=True)
 
+    tray(white)
+    tray_ico(master)
     maskable(master)
     print(f"   icon baked in from {LOCAL or BASE}")
     return 0
+
+
+def tray(white: Image.Image) -> None:
+    """The icon in a desk's tray, on Linux: the status bar's stencil, white on nothing.
+
+    GNOME's panel is dark and draws its own icons as white glyphs; a full-colour
+    square among them is a sticker. Windows's tray takes the app's own picture as a
+    small .ico (tray-sized only, 16 to 64: the assets ship on every platform), which
+    reads on a light taskbar as well as a dark one.
+    """
+    out = ROOT / "assets/tray"
+    out.mkdir(parents=True, exist_ok=True)
+    size = 64
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    inner = round(size * 0.84)
+    canvas.paste(white.resize((inner, inner), Image.LANCZOS),
+                 ((size - inner) // 2, (size - inner) // 2))
+    canvas.save(out / "tray.png", optimize=True)
+
+
+def tray_ico(master: Image.Image) -> None:
+    """Windows's tray icon: see [tray]."""
+    out = ROOT / "assets/tray"
+    out.mkdir(parents=True, exist_ok=True)
+    master.convert("RGBA").save(out / "tray.ico",
+                                sizes=[(s, s) for s in (16, 20, 24, 32, 40, 48, 64)])
 
 
 def maskable(master: Image.Image) -> None:

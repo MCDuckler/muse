@@ -13,6 +13,24 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     CreateAndAttachConsole();
   }
 
+#ifndef _DEBUG
+  // One WetOwl at a time in a built app. Started again while it runs — from the Start
+  // menu, most often, with its window shut into the tray — the window it has is shown
+  // and brought forward, rather than a second app with a second player in it. The
+  // mutex is held for the life of the process and let go of by Windows when it ends.
+  // A debug build stays as many as are started, beside the app in daily use.
+  HANDLE only_one = ::CreateMutexW(nullptr, TRUE, L"Local\\io.wetowl.muse");
+  if (only_one != nullptr && ::GetLastError() == ERROR_ALREADY_EXISTS) {
+    HWND there = ::FindWindowW(L"FLUTTER_RUNNER_WIN32_WINDOW", L"WetOwl");
+    if (there != nullptr) {
+      ::ShowWindow(there, ::IsIconic(there) ? SW_RESTORE : SW_SHOW);
+      ::SetForegroundWindow(there);
+    }
+    ::CloseHandle(only_one);
+    return EXIT_SUCCESS;
+  }
+#endif
+
   // Initialize COM, so that it is available for use in the library and/or
   // plugins.
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);

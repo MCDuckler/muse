@@ -91,6 +91,11 @@ class _BoothPageState extends State<BoothPage> {
       unawaited(toggleFullScreen());
       return KeyEventResult.handled;
     }
+    // Held with Ctrl (or ⌘) a key is the app's, not a deck's: Ctrl Q quits, Ctrl K goes
+    // anywhere, and neither should toggle SYNC or start a mix on its way past.
+    if (HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isMetaPressed) {
+      return KeyEventResult.ignored;
+    }
     final b = context.read<AppState>().booth;
     final k = e.logicalKey;
     final shift = HardwareKeyboard.instance.isShiftPressed;

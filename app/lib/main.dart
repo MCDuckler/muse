@@ -27,6 +27,7 @@ import 'src/ui/home_page.dart';
 import 'src/ui/loading.dart';
 import 'src/ui/login_page.dart';
 import 'src/ui/theme.dart';
+import 'src/ui/tray.dart';
 import 'src/ui/page_colour.dart';
 import 'src/ui/widths.dart';
 import 'src/ui/not_connected.dart' show noSoundBecause;
@@ -217,6 +218,8 @@ class MuseApp extends StatelessWidget {
           state.arrivedAt(Uri.base.path);
           state.boot();
           debugAppState = state;
+          // On a desk, an icon in the tray: the window can be shut and the music go on.
+          if (onADesk) unawaited(DeskTray.start(state));
           return state;
         }),
         // Picking several songs out of a list is its own small piece of state, and it
@@ -348,17 +351,19 @@ class AppShortcuts extends StatelessWidget {
   /// One list, read by the handler below and by the sheet that shows it: a shortcut
   /// nobody is told about is a shortcut nobody uses, and two lists would be one list
   /// and a lie.
-  static const keys = <(String, String)>[
-    ('Space', 'Play or pause'),
-    ('← / →', 'Back or forward ten seconds'),
-    ('N / P', 'Next song, previous song'),
-    ('S', 'Shuffle what is coming'),
-    ('R', 'Repeat: off, all, one'),
-    ('M', 'Mute'),
-    ('/', 'Search'),
-    ('Ctrl K', 'Jump to anything'),
-    ('?', 'This list'),
-  ];
+  static List<(String, String)> get keys => [
+        ('Space', 'Play or pause'),
+        ('← / →', 'Back or forward ten seconds'),
+        ('N / P', 'Next song, previous song'),
+        ('S', 'Shuffle what is coming'),
+        ('R', 'Repeat: off, all, one'),
+        ('M', 'Mute'),
+        ('/', 'Search'),
+        ('Ctrl K', 'Jump to anything'),
+        // Closing the window only puts it in the tray while the icon is up.
+        if (DeskTray.up) ('Ctrl Q', 'Quit (closing the window keeps it playing)'),
+        ('?', 'This list'),
+      ];
 
   static KeyEventResult handle(AppState app, KeyEvent event) {
     final player = app.player;
@@ -409,6 +414,16 @@ class AppShortcuts extends StatelessWidget {
               (event.logicalKey == LogicalKeyboardKey.question ||
                   event.character == '?')) {
             showShortcuts(context);
+            return KeyEventResult.handled;
+          }
+          // Ctrl-Q: the way out, while the window's close button only puts it in the
+          // tray. Works while typing too, as quitting does everywhere.
+          if (event is KeyDownEvent &&
+              DeskTray.up &&
+              event.logicalKey == LogicalKeyboardKey.keyQ &&
+              (HardwareKeyboard.instance.isControlPressed ||
+                  HardwareKeyboard.instance.isMetaPressed)) {
+            unawaited(DeskTray.quit());
             return KeyEventResult.handled;
           }
           // Ctrl-K, or ⌘K: the one shortcut that works while typing, because it is

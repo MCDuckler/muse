@@ -198,6 +198,15 @@ jobs:
 
           Without it the app opens and says so, and makes no sound.
 
+          The icon in the tray (closing the window keeps WetOwl playing there; quit
+          from the icon's menu or with Ctrl+Q) comes from AppIndicator, which most
+          desktops already have:
+            Arch / CachyOS / Manjaro:   sudo pacman -S libayatana-appindicator
+            Debian / Ubuntu / Mint:     sudo apt install libayatana-appindicator3-1
+            Fedora:                     sudo dnf install libayatana-appindicator-gtk3
+          GNOME also wants its "AppIndicator and KStatusNotifierItem Support"
+          extension. Without them there is no icon, and closing the window quits.
+
           Fetching music for the house (Settings > This computer) also wants
           yt-dlp, ffmpeg and nodejs (or deno): all three are ordinary packages.
           ./wetowl-fetch is the part that keeps fetching when the window is shut;

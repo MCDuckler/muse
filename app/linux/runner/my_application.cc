@@ -22,6 +22,16 @@ static void first_frame_cb(MyApplication* self, FlView* view) {
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
+  // WetOwl started again while it runs — from the menu, most often, with its window
+  // shut into the tray: the window it has, shown and brought forward, rather than a
+  // second app with a second player in it.
+  GList* windows = gtk_application_get_windows(GTK_APPLICATION(application));
+  if (windows != nullptr) {
+    GtkWindow* existing = GTK_WINDOW(windows->data);
+    gtk_widget_show(GTK_WIDGET(existing));
+    gtk_window_present(existing);
+    return;
+  }
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
 
@@ -142,7 +152,19 @@ MyApplication* my_application_new() {
   // the application to be recognized beyond its binary name.
   g_set_prgname(APPLICATION_ID);
 
+  // One WetOwl per session in a built app: a second start hands over to the first
+  // (my_application_activate), which matters once closing the window only puts it in
+  // the tray. A debug build stays as many as are started, so `flutter run` and the
+  // engine checks (tool/booth_probe, integration_test) run beside the app in daily
+  // use. (0 rather than G_APPLICATION_DEFAULT_FLAGS, which older GLibs do not have, or
+  // G_APPLICATION_FLAGS_NONE, which newer ones warn about — and warnings are errors
+  // here.)
+#ifdef NDEBUG
+  const GApplicationFlags flags = static_cast<GApplicationFlags>(0);
+#else
+  const GApplicationFlags flags = G_APPLICATION_NON_UNIQUE;
+#endif
   return MY_APPLICATION(g_object_new(my_application_get_type(),
                                      "application-id", APPLICATION_ID, "flags",
-                                     G_APPLICATION_NON_UNIQUE, nullptr));
+                                     flags, nullptr));
 }
