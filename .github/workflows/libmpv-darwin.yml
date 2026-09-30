@@ -24,13 +24,6 @@
 name: libmpv for Apple
 
 on:
-  # While the Mac build is being made on its branch (a workflow can only be asked for
-  # by name once it is on master).
-  push:
-    branches: [macos-desktop]
-    paths:
-      - .github/workflows/libmpv-darwin.yml
-      - app/third_party/media_kit_libs_macos_audio/libmpv/**
   workflow_dispatch:
     inputs:
       version:
@@ -108,7 +101,7 @@ jobs:
           path: out/
           retention-days: 30
       - name: Keep it
-        if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/macos')
+        if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}

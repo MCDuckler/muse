@@ -2,8 +2,8 @@
 # with af-command's target (see ../WETOWL.md and .github/workflows/libmpv-darwin.yml).
 all: Frameworks/*.xcframework Frameworks/.symlinks
 
-MPV_XCFRAMEWORKS_VERSION=v0.7.3-wetowl1
-MPV_XCFRAMEWORKS_SHA256SUM=a340329f6412b52c5793d17ee0ba10082ac3122faf8d4a5f7ee4eba8497c4a8f
+MPV_XCFRAMEWORKS_VERSION=v0.7.3-wetowl2
+MPV_XCFRAMEWORKS_SHA256SUM=4dc3e21917eea4fcbb85d8fa48812a0a503c7ce3dc40e1c35cec385990191539
 
 .cache/xcframeworks/libmpv-xcframeworks-${MPV_XCFRAMEWORKS_VERSION}-macos-universal.tar.gz:
 	mkdir -p .cache/xcframeworks
