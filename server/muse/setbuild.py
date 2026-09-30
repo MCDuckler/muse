@@ -522,8 +522,9 @@ def words(p: Pool, a: int, b: int, pitch: float = 1.0) -> str:
             out.append("double time" if raw > 1 else "half time")
         else:
             pct = abs(1 / ratio - 1) * 100
+            # [ratio] is how much faster the next record is than the one before it.
             out.append("the same tempo" if pct < 0.5
-                       else f"{pct:.0f} % {'faster' if 1 / ratio > 1 else 'slower'}")
+                       else f"{pct:.0f} % {'faster' if ratio > 1 else 'slower'}")
     ca, cb = int(p.cam[a]), int(p.cam[b])
     if ca and cb and min(p.conf[a], p.conf[b]) > 0.1:
         same = p.major[a] == p.major[b]

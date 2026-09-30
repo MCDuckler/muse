@@ -234,3 +234,11 @@ def test_a_relative_curve_is_read_against_the_pools_own_loudness():
     assert slots[0]["target"] >= min(p.energy) - 1e-9, "the softest target is the softest record here"
     flat = setbuild.Shape.of({"energy": [[0, 0.0], [1, 1.0]], "relative": False})
     assert setbuild.target(p, flat, 0) == 0.0
+
+
+def test_the_words_say_which_way_the_tempo_goes():
+    rows = [_row(1, bpm=128, cam="8A", lufs=-9, artist="A", sound=[1, 0, 0]),
+            _row(2, bpm=131, cam="8A", lufs=-9, artist="B", sound=[0, 1, 0])]
+    p = setbuild.assemble(rows, {}, set())
+    assert "2 % faster" in setbuild.words(p, p.at[1], p.at[2])
+    assert "2 % slower" in setbuild.words(p, p.at[2], p.at[1])
