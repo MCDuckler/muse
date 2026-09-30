@@ -7,6 +7,7 @@
 // when, and what did it do when the engine moved on by itself — none of which needs a
 // browser, which is what makes this runnable when the browser harness is not.
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/services.dart';
 import 'package:just_audio_platform_interface/just_audio_platform_interface.dart';
@@ -125,13 +126,28 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   /// always say they are perfect. Anything about holding a beat has to be measured
   /// from here.
   Duration get truePosition {
-    if (!playing) return position;
-    return position +
+    if (!playing || starved) return position;
+    return _folded(position +
         Duration(
             microseconds: (DateTime.now().difference(_since).inMicroseconds *
                     speed *
                     (1 + clockSkew))
-                .round());
+                .round()));
+  }
+
+  /// The engine's own A–B loop, as mpv's is: on reaching [loopB] it goes back to
+  /// [loopA] by seeking, and the seek costs [seekCost] of sound like any other.
+  Duration? loopA, loopB;
+
+  /// [at] brought round the A–B loop as many times as it has passed its end.
+  Duration _folded(Duration at) {
+    final a = loopA, b = loopB;
+    if (a == null || b == null || b <= a) return at;
+    final lost = Duration(microseconds: (seekCost.inMicroseconds * speed).round());
+    while (at >= b) {
+      at = a + (at - b) - lost;
+    }
+    return at;
   }
 
   /// How far this engine's idea of a second is from the wall's, as a fraction.
@@ -146,10 +162,11 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   /// Bring [position] up to now.
   void _advance() {
     final now = DateTime.now();
-    if (playing) {
-      position += Duration(
-          microseconds:
-              (now.difference(_since).inMicroseconds * speed * (1 + clockSkew)).round());
+    if (playing && !starved) {
+      position = _folded(position +
+          Duration(
+              microseconds:
+                  (now.difference(_since).inMicroseconds * speed * (1 + clockSkew)).round()));
     }
     _since = now;
   }
@@ -196,12 +213,23 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
     if (slowness > Duration.zero) await Future<void>.delayed(slowness);
   }
 
+  /// How far each position report is off the truth, at most, either way — the
+  /// scatter a real engine's reports have (mpv's, measured: ±12 ms about the true
+  /// line). Zero by default. Seeded, so a test that uses it fails the same way twice.
+  Duration reportJitter = Duration.zero;
+  final _jitter = math.Random(7);
+
   void _emit() {
     if (_events.isClosed) return;
+    final off = reportJitter <= Duration.zero || !playing
+        ? Duration.zero
+        : Duration(
+            microseconds:
+                ((_jitter.nextDouble() * 2 - 1) * reportJitter.inMicroseconds).round());
     _events.add(PlaybackEventMessage(
       processingState: state,
       updateTime: _since,
-      updatePosition: position,
+      updatePosition: position + off,
       bufferedPosition: position,
       duration: trackLength,
       icyMetadata: null,
@@ -276,9 +304,15 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
     return ConcatenatingRemoveRangeResponse();
   }
 
+  /// How long this engine takes to make a sound once it is told to play: the record
+  /// starts that much later than asked. Zero by default; a desk's is tens of
+  /// milliseconds, and it is what the booth learns to start a record early by.
+  Duration startCost = Duration.zero;
+
   @override
   Future<PlayResponse> play(PlayRequest request) async {
     _advance();
+    if (!playing && startCost > Duration.zero) _since = _since.add(startCost);
     playing = true;
     calls.add('play');
     _emit();
@@ -296,8 +330,13 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
     return PauseResponse();
   }
 
+  /// How long this engine takes to answer a seek at all — a busy machine, a file not
+  /// yet read. The record lands where it was sent; the caller waits this long for it.
+  Duration seekDelay = Duration.zero;
+
   @override
   Future<SeekResponse> seek(SeekRequest request) async {
+    if (seekDelay > Duration.zero) await Future<void>.delayed(seekDelay);
     if (request.index != null) index = request.index!;
     _advance();
     position = request.position ?? Duration.zero;
@@ -456,6 +495,25 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
     state = ProcessingStateMessage.idle;
     _emit();
   }
+
+  /// Run out of sound *while playing*: the record stops where it is and the engine
+  /// says it is buffering, still meant to be playing — a stream that has not kept up.
+  /// [feed] lets it go on from the same place.
+  void starve() {
+    _advance();
+    starved = true;
+    state = ProcessingStateMessage.buffering;
+    _emit();
+  }
+
+  void feed() {
+    _advance();
+    starved = false;
+    state = ProcessingStateMessage.ready;
+    _emit();
+  }
+
+  bool starved = false;
 
   /// Audio again.
   void recover() {

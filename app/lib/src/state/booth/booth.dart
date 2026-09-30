@@ -400,6 +400,8 @@ class Booth extends ChangeNotifier {
     this.b.parts = parts;
     this.a.engineLoop = (from, to) => this.mixer.setLoop(this.a, from, to);
     this.b.engineLoop = (from, to) => this.mixer.setLoop(this.b, from, to);
+    this.a.loopLead = (span) => this.mixer.loopLead(this.a, span);
+    this.b.loopLead = (span) => this.mixer.loopLead(this.b, span);
     this.a.chainLoop = (len) => this.mixer.loopInChain(this.a, len);
     this.b.chainLoop = (len) => this.mixer.loopInChain(this.b, len);
     this.a.stopChainLoop = (at) => this.mixer.stopChainLoop(this.a, at);
@@ -637,9 +639,31 @@ class Booth extends ChangeNotifier {
 
   Future<void> load(Deck deck, Track track, {Duration? at}) async {
     final t = await timing.of(track);
+    // Playing a record (not one that has run out): the new one is started again once
+    // it is on — a deck always takes a record parked (Deck.load), and one playing
+    // from wherever the engine happened to open it was never in step with anything.
+    final resume = deck.playing;
+    // A new record on the deck the other one follows, while that one plays on: the
+    // one playing leads now, and the new record follows it. Left the other way round,
+    // SYNC matches the record in the room to the one being put on — its tempo moved
+    // the moment the new grid lands on the deck, its beat pulled onto a record nobody
+    // can hear yet — which is what a DJ deck never does: the master passes to the
+    // deck that is still playing. Handed over before the load, not after it: the
+    // load itself is what would have set the follower's tempo.
+    final o = other(deck);
+    if (o.synced && o.playing && !busy) {
+      o.synced = false;
+      o.syncTrim = Duration.zero;
+      if (identical(_lockFollower, o)) await letGo();
+      deck.synced = true;
+      deck.syncTrim = Duration.zero;
+      master = o;
+      note(BoothEventKind.sync, '${deck.name} follows ${o.name}: it has a new record', deck: deck);
+    }
     try {
       await deck.load(track, timing: t, at: at);
       await mixer.loaded(deck);
+      await mixer.measureLatency(deck);
     } catch (_) {
       // The deck has written down what happened and said so; the room reads it off
       // the deck rather than the booth throwing out of whatever asked for the load.
@@ -647,6 +671,11 @@ class Booth extends ChangeNotifier {
     // A different record is a different loudness: the levels are worked out again.
     await _levels();
     notifyListeners();
+    if (resume && deck.loaded && !deck.playing) {
+      // At the other's tempo before it starts, not matched a moment after.
+      if (deck.synced) await sync(deck, quiet: true);
+      await play(deck);
+    }
   }
 
   // ------------------------------------------------------------------ the fader
@@ -974,9 +1003,16 @@ class Booth extends ChangeNotifier {
     final m = other(deck);
     final ft = deck.timing, mt = m.timing;
     final now = DateTime.now();
+    // At half or double the other's pulse (SYNC folds octaves), the quicker record's
+    // beats go in pairs, as the holding counts them (beatError): the slower record's
+    // beat lands on the first of a pair, never the second — half a pulse out otherwise,
+    // which is a beat of the quicker one, and a jump the moment the holding looks.
+    final deckWall = deck.beatInRecord.inMicroseconds / deck.tempo;
+    final mWall = m.beatInRecord.inMicroseconds / m.tempo;
+    final r = mWall <= 0 ? 1.0 : deckWall / mWall;
     // The other's beat to land on: its next, far enough ahead to seek in time.
     final soon = m.positionAt(now) + Duration(microseconds: (250000 * m.tempo).round());
-    final land = m.nextBeat(soon);
+    final land = m.nextBeat(soon, every: r > 1.5 ? 2 : 1);
     final mb = land == null || mt == null ? null : mt.smoothBeatAt(land + const Duration(milliseconds: 1));
     if (ft == null || mt == null || land == null || mb == null) {
       await deck.play();
@@ -996,7 +1032,11 @@ class Booth extends ChangeNotifier {
     // The follower's beat nearest where it is parked — moved, with bars, by up to two
     // beats to the one in the same place in its bar.
     var k = fb.phase < 0.5 ? fb.index : fb.index + 1;
-    if (bars) {
+    if (r < 0.75) {
+      // This one is the quicker: the first of a pair of its beats, the nearer one.
+      final pair = ((fb.index + fb.phase - ft.barStartsOn) / 2).round();
+      k = ft.barStartsOn + pair * 2;
+    } else if (bars && r <= 1.5) {
       final there = ((mb.index - mt.barStartsOn) % 4 + 4) % 4;
       var d = ((there - (k - ft.barStartsOn)) % 4 + 4) % 4;
       if (d > 2) d -= 4;
@@ -1012,6 +1052,7 @@ class Booth extends ChangeNotifier {
     _snapNext = false;
     final early = Duration(microseconds: (_startLead.inMicroseconds * m.tempo).round());
     await _until(m, land - early);
+    _started = (deck: deck, at: DateTime.now());
     await deck.play();
     _follow();
   }
@@ -1160,11 +1201,31 @@ class Booth extends ChangeNotifier {
   static const _closeOver = 2.5;
   static const _leanAtMost = 0.02;
 
+  /// The most a flam that can be heard is leaned out at: four per cent, so the
+  /// largest one short of a jump (150 ms) is gone in under four seconds rather than
+  /// eight. Pitch is kept by the stretcher; what is heard is the flam closing.
+  static const _flamLeanAtMost = 0.04;
+
   /// Past this many milliseconds it is not a question of measurement any more.
   static const _plainlyOut = 18.0;
 
+  /// A flam: out by this much, held steady, is leaned out as soon as it is seen rather
+  /// than when a drift window says the rate is right (see holdOnBeat). Ten milliseconds
+  /// is where two kicks start to be heard as two; the medians the holding reads are
+  /// steady to well under that on the desk's engine (the probe: ±0.3 ms), so it is not
+  /// the scatter being leaned against. A lean this small is a fraction of a per cent,
+  /// for two and a half seconds.
+  static const _flamAt = 10.0;
+
   void holdOnBeat(Deck follower, {bool snap = false}) {
     _lock?.cancel();
+    // What each deck's stretcher puts its sound behind by, read for the records on
+    // the decks now. It was read only when a mix started (go), so SYNC by hand held
+    // two records on no correction at all — 48 ms per unit of speed between them,
+    // which at the 0.63× the log once shows is 18 ms of flam held on purpose. The
+    // first reading is a settle away, and this is two property reads.
+    unawaited(mixer.measureLatency(follower));
+    unawaited(mixer.measureLatency(other(follower)));
     _heldJumps = 0;
     _phraseFixes = 0;
     _rateMoves = 0;
@@ -1209,12 +1270,23 @@ class Booth extends ChangeNotifier {
     // after a jump, how far short the jump landed. Both are learned for next time.
     var firstReading = true;
     var afterJump = false;
+    // Whether this hold's first reading says anything about the engine's start: only
+    // when the follower was itself just started on the beat.
+    final started = _started;
+    _started = null;
+    final learnsTheStart = started != null &&
+        identical(started.deck, follower) &&
+        began.difference(started.at) < const Duration(seconds: 3);
     var saidLost = false;
     var saidPhrase = false;
-    var lastPhrase = 0;
     // How many jumps have been spent where the room could hear them.
     var loudMoves = 0;
-    _lock = Timer.periodic(const Duration(milliseconds: 50), (t) async {
+    // One reading at a time. The timer does not wait for its own callback, and the
+    // callback waits on the engine (a bend, a jump): a second tick used to run in the
+    // middle of the first, read the window before the first had cleared it, and trim
+    // the rate or lean a second time for the same error.
+    var ticking = false;
+    Future<void> tick(Timer t) async {
       if (!follower.playing || !m.playing || !identical(other(follower), m)) {
         t.cancel();
         // One of them stopped: the follower goes back to its own pitch, and what was
@@ -1239,13 +1311,13 @@ class Booth extends ChangeNotifier {
       if (leaning != null) {
         if (DateTime.now().isBefore(leaning)) return;
         leanUntil = null;
-        await follower.bend(lockAt ?? follower.pitch);
         _rateMoves++;
         shifted += leanFor;
         leanFor = 0;
         seen.clear();
         settleUntil = DateTime.now().add(const Duration(milliseconds: 400));
         steadyFrom = settleUntil;
+        await follower.bend(lockAt ?? follower.pitch);
         return;
       }
       // Braking is a tempo that is deliberately running away, and nothing is lined up
@@ -1255,6 +1327,13 @@ class Booth extends ChangeNotifier {
       // which is most of what "the beat match is worst when one deck is looping" was,
       // the follower free-running at whatever rate it happened to have.
       if (ft == null || mt == null || m.braking) return;
+      // Either engine waiting for sound: nothing is heard of it, and the readings are
+      // of a clock that has stopped. Sat out, and the first ones after it too.
+      if (follower.stalled || m.stalled) {
+        seen.clear();
+        settleUntil = DateTime.now().add(const Duration(milliseconds: 400));
+        return;
+      }
       // What a loop does break is the phrase. A bar-long loop puts the record back
       // four beats every bar, so its place in the sixteen cycles on purpose — and a
       // measure that counts through the phrase reads that as a fault and moves the
@@ -1324,12 +1403,23 @@ class Booth extends ChangeNotifier {
       // again: the two used to be taken separately and could contradict each other,
       // which is the fault outOfStep exists to end. Only reported now — the move
       // itself is the error, all of it, in one go.
-      final outOfPhrase = beatsOff?.round() ?? 0;
-      // Said once it has held still across two readings: a reading taken as a marker
-      // goes by is a beat out on its own, and shouting about that is noise.
-      final steadyPhrase = outOfPhrase == lastPhrase;
-      lastPhrase = outOfPhrase;
-      if (!saidPhrase && heardNow && outOfPhrase != 0 && steadyPhrase) {
+      //
+      // Off the *median* the error is, not off the latest reading. The two were once
+      // taken from different readings, and where the count changes — a record whose
+      // sections change length puts two records' phrases two bars apart, which reads
+      // +8 one moment and −8 the next — the median still said 0 while the latest said
+      // −8: eight beats taken out of an error that had none in it, and a record in the
+      // room thrown three seconds for it ("B jumped -3067 ms to the beat — -8 beats of
+      // phrase left out … lost the beat by 3120 ms").
+      final outOfPhrase =
+          beatsOff == null ? 0 : (errAll.inMicroseconds / beatWall).round();
+      // And acted on only where the readings behind that median agree about it. A
+      // count on its way from one number to another — a marker going by on one record
+      // and not yet on the other — is no reason to move a record by whole beats; the
+      // beat inside it is still worth holding, and the phrase can wait a reading.
+      final phraseAgreed =
+          beatsOff == null || seen.every((h) => (h / beatWall).round() == outOfPhrase);
+      if (!saidPhrase && heardNow && outOfPhrase != 0 && phraseAgreed) {
         saidPhrase = true;
         note(BoothEventKind.trouble,
             '${follower.name} is $outOfPhrase beat${outOfPhrase.abs() == 1 ? '' : 's'} '
@@ -1348,7 +1438,8 @@ class Booth extends ChangeNotifier {
       // Taken out here, everything downstream agrees: the jump closes the beat, the
       // bend holds the beat, and the statistics say how well the *beat* was held,
       // which is the thing that was actually being held.
-      final leaveThePhrase = heardNow && !snap && outOfPhrase.abs() > 1;
+      final leaveThePhrase =
+          outOfPhrase != 0 && (!phraseAgreed || (heardNow && !snap && outOfPhrase.abs() > 1));
       final err = leaveThePhrase
           ? Duration(
               microseconds: errAll.inMicroseconds - (outOfPhrase * beatWall).round())
@@ -1364,27 +1455,45 @@ class Booth extends ChangeNotifier {
         firstReading = false;
         // Behind by this much from the start: the engine takes that long to make a
         // sound after it is told to play. The next mix starts it that much sooner.
-        _startLead = Duration(
-            microseconds: (_startLead.inMicroseconds - err.inMicroseconds * 0.8)
-                .round()
-                .clamp(0, 300000));
-        onLearned?.call();
-        if (_trace) {
-          debugPrint('lock: first reading ${ms.toStringAsFixed(1)} ms; '
-              'next start ${_startLead.inMilliseconds} ms early');
+        //
+        // Only where this hold began with the follower being *started* on the beat
+        // (_startInStep, go). SYNC pressed on two records already playing has no start
+        // in it: its first reading is however far apart they happened to be — a second
+        // or more — and that was taken for the engine's start-up time, clamped to 0 or
+        // 300 ms, and kept across restarts: the next mix started that far out. Nor
+        // from a reading too far out to be a start-up time at all.
+        //
+        // Only a reading that can be a start-up time at all. One a beat or more out —
+        // or most of one — is a record put in the wrong place, which the placing below
+        // puts right; its part inside the beat says nothing about the engine either
+        // (seen on the probe: a record parked 0.78 of a beat on read as "106 ms late",
+        // and the next start went 76 ms early for it).
+        if (learnsTheStart && ms.abs() < _learnsWithin) {
+          _startLead = Duration(
+              microseconds: (_startLead.inMicroseconds - err.inMicroseconds * 0.8)
+                  .round()
+                  .clamp(0, 300000));
+          onLearned?.call();
+          if (_trace) {
+            debugPrint('lock: first reading ${ms.toStringAsFixed(1)} ms; '
+                'next start ${_startLead.inMilliseconds} ms early');
+          }
         }
       } else if (afterJump) {
         afterJump = false;
         // A jump stops the sound for a moment, so it lands short by about that much:
-        // the next one goes that much further.
-        _jumpCarry = Duration(
-            microseconds: (_jumpCarry.inMicroseconds - err.inMicroseconds * 0.7)
-                .round()
-                .clamp(-20000, 120000));
-        onLearned?.call();
-        if (_trace) {
-          debugPrint('lock: after the jump ${ms.toStringAsFixed(1)} ms; '
-              'next jump ${_jumpCarry.inMilliseconds} ms further');
+        // the next one goes that much further. Not from a landing so far out that the
+        // jump was not what put it there.
+        if (ms.abs() < _learnsWithin) {
+          _jumpCarry = Duration(
+              microseconds: (_jumpCarry.inMicroseconds - err.inMicroseconds * 0.7)
+                  .round()
+                  .clamp(-20000, 120000));
+          onLearned?.call();
+          if (_trace) {
+            debugPrint('lock: after the jump ${ms.toStringAsFixed(1)} ms; '
+                'next jump ${_jumpCarry.inMilliseconds} ms further');
+          }
         }
       }
       // What actually puts a record in step is *placing* it, and the rate ratio off
@@ -1522,6 +1631,29 @@ class Booth extends ChangeNotifier {
         shifted = 0;
         steadyFrom = now.add(const Duration(milliseconds: 400));
       }
+      // A flam — out by more than anybody fails to hear, and by less than is worth a
+      // jump — is closed as soon as the readings agree on it, not once a drift window
+      // is long enough to say the rate is right. The standing-offset lean below waited
+      // for that, and on an engine whose reports scatter a few milliseconds the slope
+      // over a second or two of them is never small enough: the log's "held … half
+      // within 38.3 ms … 0 speeds sent to the engine" was a flam left standing until
+      // the nine-second rate window came round. The lean is a chosen rate for a chosen
+      // time and is added back into the window when it ends ([shifted]), so the rate
+      // is still learned through it — if the rate is what is wrong, the flam comes
+      // back more slowly each time until the trim takes it away for good.
+      if (ms.abs() > _flamAt) {
+        final lean = (-ms / (_closeOver * 1000)).clamp(-_flamLeanAtMost, _flamLeanAtMost);
+        final takes = (-ms / (lean * 1000) * 1000).round().clamp(150, 8000);
+        leanFor = -lean * takes;
+        leanUntil = now.add(Duration(milliseconds: takes));
+        _rateMoves++;
+        if (_trace) {
+          debugPrint('lock: a flam of ${ms.toStringAsFixed(1)} ms — '
+              'leaning ${(lean * 100).toStringAsFixed(2)}% for $takes ms');
+        }
+        await follower.bend((lockAt! * (1 + lean)).clamp(0.5, 2.0));
+        return;
+      }
       // Only what was read once the deck had stopped being moved about.
       //
       // The slope is the whole measurement, and a slope is ruined by its ends. The
@@ -1558,7 +1690,20 @@ class Booth extends ChangeNotifier {
         final bottom = n * sxx - sx * sx;
         final slope = bottom.abs() < 1e-9 ? 0.0 : (n * sxy - sx * sy) / bottom;
         final mean = sy / n;
-        if (span >= 9 && slope.abs() >= _driftWorthFixing) {
+        // And how sure that slope is: its standard error off the scatter about the
+        // line. A slope that is not clearly more than its own noise is not a drift —
+        // read as one, it trimmed the rate by noise and blocked the lean that would
+        // have closed what was really there.
+        var residual = 0.0;
+        for (final (x, y) in drift) {
+          final r = y - (mean + slope * (x - sx / n));
+          residual += r * r;
+        }
+        final spread = sxx - sx * sx / n;
+        final slopeNoise =
+            n > 2 && spread > 1e-9 ? math.sqrt(residual / (n - 2) / spread) : double.infinity;
+        bool drifting(double atLeast) => slope.abs() >= atLeast && slope.abs() > 2 * slopeNoise;
+        if (span >= 9 && drifting(_driftWorthFixing)) {
           // Running fast by slope parts per thousand: take exactly that off.
           lockAt = (lockAt! * (1 - slope / 1000)).clamp(0.5, 2.0);
           _rateTrims++;
@@ -1575,12 +1720,12 @@ class Booth extends ChangeNotifier {
           final lean = atNow.abs() > _offsetWorthClosing
               ? (-atNow / (_closeOver * 1000)).clamp(-_leanAtMost, _leanAtMost)
               : 0.0;
-          await follower.bend((lockAt! * (1 + lean)).clamp(0.5, 2.0));
           _rateMoves++;
           if (lean != 0) {
-            leanFor = atNow;
-            leanUntil = now.add(Duration(
-                milliseconds: (-atNow / (lean * 1000) * 1000).round().clamp(150, 8000)));
+            final takes = (-atNow / (lean * 1000) * 1000).round().clamp(150, 8000);
+            // What the lean will actually take out, which is what is added back.
+            leanFor = -lean * takes;
+            leanUntil = now.add(Duration(milliseconds: takes));
           }
           if (_trace) {
             debugPrint('lock: drifting ${slope.toStringAsFixed(2)} ms/s and '
@@ -1590,8 +1735,12 @@ class Booth extends ChangeNotifier {
           }
           seen.clear();
           drift.clear();
+          // The window starts again empty, so what was already taken out is not
+          // carried into it: the lean just set is counted when it ends.
+          shifted = 0;
           settleUntil = now.add(const Duration(milliseconds: 400));
           steadyFrom = settleUntil;
+          await follower.bend((lockAt! * (1 + lean)).clamp(0.5, 2.0));
           return;
         }
         // What is left over is a standing offset, and it is closed once, on purpose:
@@ -1611,17 +1760,17 @@ class Booth extends ChangeNotifier {
         // rate is wrong the same gap is back in a few seconds and closed again, which
         // is a correction loop with a longer period and no more use than the last
         // one. Drift is the rate's business, and the rate is corrected below.
-        if (atNow.abs() > _offsetWorthClosing && slope.abs() < _driftWorthFixing * 3) {
+        if (atNow.abs() > _offsetWorthClosing && !drifting(_driftWorthFixing * 3)) {
           final lean = (-atNow / (_closeOver * 1000)).clamp(-_leanAtMost, _leanAtMost);
-          final takes = (-atNow / (lean * 1000) * 1000).round();
-          await follower.bend((lockAt! * (1 + lean)).clamp(0.5, 2.0));
+          final takes = (-atNow / (lean * 1000) * 1000).round().clamp(150, 8000);
           _rateMoves++;
-          leanFor = atNow;
-          leanUntil = now.add(Duration(milliseconds: takes.clamp(150, 8000)));
+          leanFor = -lean * takes;
+          leanUntil = now.add(Duration(milliseconds: takes));
           if (_trace) {
             debugPrint('lock: ${atNow.toStringAsFixed(1)} ms out and steady — '
                 'leaning ${(lean * 100).toStringAsFixed(2)}% for $takes ms');
           }
+          await follower.bend((lockAt! * (1 + lean)).clamp(0.5, 2.0));
           return;
         }
         // Nothing thrown away here. A window that is holding steady is the evidence
@@ -1630,6 +1779,16 @@ class Booth extends ChangeNotifier {
         // be seen at all. It slides instead, on the prune above.
       }
       _lockBase = lockAt;
+    }
+
+    _lock = Timer.periodic(const Duration(milliseconds: 50), (t) async {
+      if (ticking) return;
+      ticking = true;
+      try {
+        await tick(t);
+      } finally {
+        ticking = false;
+      }
     });
     _lockBase = follower.pitch;
     _lockFollower = follower;
@@ -1641,6 +1800,14 @@ class Booth extends ChangeNotifier {
   /// How much sooner than the beat a record is told to play, so that it sounds on
   /// it: the engine's own start-up time, learned from each mix's first reading.
   Duration _startLead = Duration.zero;
+
+  /// The deck last started on the other's beat, and when: what tells a hold that its
+  /// first reading is about a start (see holdOnBeat).
+  ({Deck deck, DateTime at})? _started;
+
+  /// Past this many milliseconds a reading is not an engine's start-up time or what a
+  /// jump costs, whatever it is: not learned from.
+  static const _learnsWithin = 150.0;
 
   /// Told when [_startLead] or [_jumpCarry] has been learned again, so whoever keeps
   /// the app's settings can keep these too: forgotten at every start, the first mix and
@@ -2148,8 +2315,9 @@ class Booth extends ChangeNotifier {
   ///
   /// This is the part it cannot see: the four-bar rules on the two strips, counted
   /// the way the automix counts them when it parks a record to meet a phrase.
-  /// How far into its own four-bar phrase [d] is, in beats, counted continuously
-  /// from the marker before it. Null where the record has no phrase to speak of.
+  /// Where [d] is in its own four-bar phrase, in beats: minus the beats left to the
+  /// marker after it, so it rises continuously as the record plays. Null where the
+  /// record has no phrase to speak of.
   static double? _phraseBeats(Deck d, [Duration? at]) {
     final t = d.timing;
     if (t == null) return null;
@@ -2157,18 +2325,28 @@ class Booth extends ChangeNotifier {
     final marks = t.markers;
     if (beat <= 0 || marks.isEmpty) return null;
     final ms = (at ?? d.position).inMicroseconds / 1000.0;
-    // The marker at or before, with half a beat of grace so a reading taken a hair
-    // early belongs to the marker it was aimed at.
-    var i = -1;
-    for (var k = 0; k < marks.length; k++) {
-      if (marks[k] <= ms + beat / 2) {
-        i = k;
-      } else {
-        break;
-      }
+    // Counted *down* to the next marker, not up from the last one: the same thing a
+    // mix lines two records up by (_meetThePhrase, TrackTiming.placeInPhrase — bars
+    // left before both turn over). Counted up, the two agree only where both phrases
+    // are four bars long; after a section of odd length they disagreed by the bars it
+    // was short, and the holding read a record the meet had just put right as a bar
+    // or two out of the phrase.
+    //
+    // Half a beat of grace, so a reading taken a hair early belongs to the marker it
+    // was aimed at: that marker is passed.
+    var i = 0;
+    while (i < marks.length && marks[i] <= ms + beat / 2) {
+      i++;
     }
-    if (i < 0) return null;
-    return (ms - marks[i]) / beat;
+    if (i == 0) return null;
+    final prev = marks[i - 1];
+    // Past the last marker, or in a stretch longer than a phrase with none in it:
+    // counted as the four bars from the one before, as placeInPhrase counts it.
+    final regular = prev + 16 * beat;
+    var next = i < marks.length ? marks[i].toDouble() : regular;
+    if (next > regular + beat / 2 && ms + beat / 2 < regular) next = regular;
+    // A place in the phrase that rises as the record plays, like the count up did.
+    return -(next - ms) / beat;
   }
 
   static int beatsOutOfPhrase(Deck follower, Deck master) {
@@ -2209,10 +2387,23 @@ class Booth extends ChangeNotifier {
     final f = _phraseBeats(follower, follower.positionAt(now));
     final m = _phraseBeats(master, master.positionAt(now));
     if (f == null || m == null) return null;
-    var coarse = f - m;
-    // Through sixteen beats, so two bars either way is as far as anything is asked to
+    // In the wall clock's milliseconds, each record's beats at its own rate. Counted
+    // in beats, the two only mean the same where the records run at one pulse: SYNC
+    // folds octaves (140 against 70), and there the quicker record's count ran away
+    // from the other's at a beat a beat — the phrase "moved" every beat, and a record
+    // was jumped by whole beats for it.
+    final fWall = follower.beatInRecord.inMicroseconds / 1000 / follower.tempo;
+    final mWall = master.beatInRecord.inMicroseconds / 1000 / master.tempo;
+    if (fWall <= 0 || mWall <= 0) return null;
+    // The pulse they share — the quicker record's beats in pairs, as beatError takes
+    // them — and the phrase they are held to: the quicker record's, half the other's.
+    final r = fWall / mWall;
+    final unit = r < 0.75 ? fWall * 2 : (r > 1.5 ? mWall * 2 : fWall);
+    final phrase = 16 * math.min(fWall, mWall);
+    var coarse = f * fWall - m * mWall;
+    // Through the phrase, so two bars either way is as far as anything is asked to
     // move. Eight beats of room where there was half of one.
-    coarse -= (coarse / 16).roundToDouble() * 16;
+    coarse -= (coarse / phrase).roundToDouble() * phrase;
     // Which beat, from the markers; where in the beat, from the fitted grid.
     //
     // Not simply the markers' own figure. They are read off the analysis's downbeats,
@@ -2221,12 +2412,13 @@ class Booth extends ChangeNotifier {
     // phase drags the incoming record onto a wandering line, which is a fault this
     // booth has had once already. The fitted grid does not wander, but it can only
     // say where in the beat. So the markers are asked the one thing they are reliable
-    // about — which of the sixteen — and that is a whole number, so half a beat of
+    // about — which pulse of the phrase — and that is a whole number, so half a beat of
     // wander cannot change it.
-    final whole = (coarse - fineBeats).roundToDouble();
-    var d = whole + fineBeats;
-    d -= (d / 16).roundToDouble() * 16;
-    return d;
+    final fine = fineBeats * fWall;
+    final whole = ((coarse - fine) / unit).roundToDouble();
+    var d = whole * unit + fine;
+    d -= (d / phrase).roundToDouble() * phrase;
+    return d / fWall;
   }
 
   /// Where the fader is at [k] of a plan: travelled evenly between the steps that
@@ -2361,16 +2553,26 @@ class Booth extends ChangeNotifier {
     if (ft == null || tt == null || bar == null) return;
     final parked = to.position;
     final theirs = ft.placeInPhrase(at), mine = tt.placeInPhrase(parked);
-    if (theirs == null || mine == null) return;
-    // Forward by the difference in bars left: then both reach a marker together.
-    var d = (mine.of - mine.bar) - (theirs.of - theirs.bar);
+    final fromBar = ft.bar;
+    if (theirs == null || mine == null || fromBar == null) return;
+    // Forward by the difference in what is left to each one's next marker: then both
+    // reach a marker together. By the wall clock, each record's bars at its own rate —
+    // the same as counting bars where the two run at one pulse, and the only count
+    // that means anything where one runs at half the other's (SYNC folds octaves).
+    final toBarWall = bar.inMicroseconds / to.tempo;
+    final fromBarWall = fromBar.inMicroseconds / from.tempo;
+    if (toBarWall <= 0 || fromBarWall <= 0) return;
+    final phrase = 4 * math.min(toBarWall, fromBarWall);
+    var gap = (mine.of - mine.bar) * toBarWall - (theirs.of - theirs.bar) * fromBarWall;
+    gap -= (gap / phrase).roundToDouble() * phrase;
+    // In the incoming's own bars, to the half bar a half-time pair can need.
+    final d = (gap / toBarWall * 2).round() / 2;
     if (d == 0) return;
-    if (d > 2) d -= 4;
-    if (d < -2) d += 4;
-    var target = parked + bar * d;
+    var target = parked + Duration(microseconds: (bar.inMicroseconds * d).round());
     final first = tt.cues?.firstDownbeat ?? Duration.zero;
     if (target < first) target += bar * 4;
-    debugPrint('booth: ${to.name} moved ${d > 0 ? 'on' : 'back'} ${d.abs()} bar${d.abs() == 1 ? '' : 's'} '
+    final shown = d == d.roundToDouble() ? '${d.abs().round()}' : d.abs().toStringAsFixed(1);
+    debugPrint('booth: ${to.name} moved ${d > 0 ? 'on' : 'back'} $shown bar${d.abs() == 1 ? '' : 's'} '
         'to meet ${from.name}\'s phrase (bar ${theirs.bar + 1} of ${theirs.of})');
     await to.seek(tt.onGrid(target));
   }
@@ -2442,6 +2644,12 @@ class Booth extends ChangeNotifier {
         : (from.untilNextBeat(now, every: every) ?? Duration.zero);
     arming = (kind: kind, from: from.name, to: to.name, startsAt: now.add(wait));
     notifyListeners();
+    // Where in the master's record it goes: a place, not a wait. What happens between
+    // here and the start — the phrase met, the booth's own sounds rendered, "a second
+    // or two" — comes out of the time to it, rather than being added to it.
+    final goes = precise
+        ? startAt
+        : from.position + Duration(microseconds: (wait.inMicroseconds * from.tempo).round());
     // Phrase to phrase: the incoming starts as many bars short of its next four-bar
     // marker as the outgoing will be of its own, so the two records' phrases turn
     // over together for the whole of the mix. The automix parks the one on a marker
@@ -2449,9 +2657,6 @@ class Booth extends ChangeNotifier {
     // late, is put right here, by two bars at the most. Not a cut, which starts the
     // record where it was cued.
     if (synced && every == 4 && kind != Transition.cut && !to.playing) {
-      final goes = precise
-          ? startAt
-          : from.position + Duration(microseconds: (wait.inMicroseconds * from.tempo).round());
       await _meetThePhrase(from, goes, to);
       if (calledOff()) return;
     }
@@ -2483,12 +2688,22 @@ class Booth extends ChangeNotifier {
     if (!to.playing) {
       // Told to play a little before the beat, by as long as the engine has lately
       // taken to make a sound: then the sound lands on it.
-      final lead = _startLead;
-      if (precise) {
-        final early = Duration(microseconds: (lead.inMicroseconds * from.tempo).round());
-        await _until(from, startAt - early, stop: calledOff);
-      } else if (wait - lead > Duration.zero) {
-        await Future<void>.delayed(wait - lead);
+      //
+      // Waited for as a place in the master's record, the precise way, whoever chose
+      // it. A mix by hand used to sleep the whole wait it had worked out *before* the
+      // phrase was met and the sounds were loaded, and so started late by all of that:
+      // off its bar, and the next start was then learned from a start that was late
+      // for reasons that were not the engine's.
+      final early = Duration(microseconds: (_startLead.inMicroseconds * from.tempo).round());
+      final aim = goes - early;
+      await _until(from, aim, stop: calledOff);
+      // Late all the same — the preparation took longer than the bar it had: the
+      // incoming goes in as far as it would have got by now, so it is on the beat and
+      // on the phrase it was put on rather than behind both.
+      final over = from.position - aim;
+      if (synced && from.playing && over > const Duration(milliseconds: 8) && !calledOff()) {
+        final wall = over.inMicroseconds / from.tempo;
+        await to.seek(to.position + Duration(microseconds: (wall * to.tempo).round()));
       }
     }
     if (calledOff()) {
@@ -2498,7 +2713,10 @@ class Booth extends ChangeNotifier {
       return;
     }
     final parkedAt = to.position;
-    if (!to.playing) await to.play();
+    if (!to.playing) {
+      _started = (deck: to, at: DateTime.now());
+      await to.play();
+    }
     // And if it did not start, nothing is handed over: fading out of a record into
     // a deck that is not playing is fading out into silence.
     if (!_reallyPlaying(to)) {

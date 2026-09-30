@@ -57,6 +57,9 @@ class MediaKitPlayer extends AudioPlayerPlatform {
   /// [LoadRequest.initialPosition] or [seek] request before [Player.play] was called and/or finished loading.
   Duration? _setPosition;
 
+  /// WetOwl: the seek to [_setPosition] once it went out.
+  Future<void>? _seekingThere;
+
   Media? get _currentMedia {
     var medias = _player.state.playlist.medias;
     if (medias.isEmpty) return null;
@@ -87,7 +90,9 @@ class MediaKitPlayer extends AudioPlayerPlatform {
         if (_currentMedia?.extras?['overrideDuration'] != null) return;
 
         if (_setPosition != null && duration.inSeconds > 0) {
-          unawaited(_player.seek(_setPosition!));
+          // WetOwl: kept, so a load that holds the sound back until the record is
+          // where it was asked to be (see load) can wait for it.
+          _seekingThere = _player.seek(_setPosition!);
           _setPosition = null;
         }
         _updateDuration(duration);
@@ -252,6 +257,18 @@ class MediaKitPlayer extends AudioPlayerPlatform {
   @override
   Future<LoadResponse> load(LoadRequest request) async {
     _logger.finest('load(${request.toMap()})');
+    // WetOwl: a record asked for at a place while the player plays is opened paused,
+    // sent there, and only then let go. Opened playing, mpv played it from the top
+    // until the duration arrived and the seek to the place went out after it — a
+    // blip of the record's first moments, and position reports from there, in the
+    // middle of whatever the player was doing (a booth deck changing parts under a
+    // record in the mix). The place is also taken before the file is opened rather
+    // than after: a duration that arrived while open() was still being waited for
+    // found nothing to seek to, and the record played from the top for good.
+    final at = request.initialPosition;
+    final holdBack = _playing && at != null && at > Duration.zero;
+    _setPosition = at;
+    _seekingThere = null;
     _mediaOpened = false;
     _loadCompleter = Completer();
     _currentIndex = request.initialIndex ?? 0;
@@ -270,21 +287,35 @@ class MediaKitPlayer extends AudioPlayerPlatform {
           audioSource.children.map(_convertAudioSourceIntoMediaKit).toList(),
           index: _currentIndex);
 
-      await _player.open(playable, play: _playing);
+      await _player.open(playable, play: _playing && !holdBack);
     } else {
       final playable =
           _convertAudioSourceIntoMediaKit(request.audioSourceMessage);
       _logger.finest('playable is ${playable.toString()}');
-      await _player.open(playable, play: _playing);
+      await _player.open(playable, play: _playing && !holdBack);
     }
     _mediaOpened = true;
 
-    if (request.initialPosition != null) {
-      _setPosition = _position = request.initialPosition!;
-    }
+    if (at != null) _position = at;
 
     _updatePlaybackEvent();
     final duration = await _loadCompleter?.future;
+    if (holdBack) {
+      // WetOwl: the seek is sent when the duration is known, which is before the
+      // player reads ready — but it is only sent from that listener, so it is waited
+      // for rather than assumed. Bounded: a file whose duration never comes is let go
+      // from wherever it is rather than held silent.
+      for (var i = 0; i < 100 && _setPosition != null; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      try {
+        await _seekingThere?.timeout(const Duration(seconds: 2));
+      } catch (_) {}
+      if (_playing) {
+        _positionAt = DateTime.now();
+        await _player.play();
+      }
+    }
     return LoadResponse(duration: duration);
   }
 

@@ -227,8 +227,14 @@ abstract class Mixer {
   Future<void> measureLatency(Deck deck) async {}
 
   /// Loop [deck] from [from] to [to] inside the engine, or stop with nulls. False where
-  /// the engine cannot, and the deck loops by itself.
+  /// the engine cannot, and the deck loops by itself. The two ends are the engine's,
+  /// exactly: the deck has already put in what the engine needs (see [loopLead]).
   Future<bool> setLoop(Deck deck, Duration? from, Duration? to) async => false;
+
+  /// How far before a loop's own start [deck]'s engine should be sent round to, for a
+  /// loop [span] long: what its filters need to hear before their output is right
+  /// again. Nought where nothing needs it, or the loop is too short to spare it.
+  Duration loopLead(Deck deck, Duration span) => Duration.zero;
 
   /// Loop [deck] *inside its own filter chain*, from wherever it is now, for [length].
   ///

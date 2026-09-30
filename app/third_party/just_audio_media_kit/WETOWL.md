@@ -10,6 +10,8 @@ kills and the filter a deck has on a desk. Nothing else is changed.
 | `lib/just_audio_media_kit.dart` | `playerFor(id)` and `instanceIfRegistered`; `routed`, the instance a router sends players to when this is not the registered platform (the booth's decks on iOS, `app/lib/src/state/booth/deck_router.dart`). |
 
 | `lib/mediakit_player.dart` | The error listener: only "Failed to open <this record>" puts the player in idle. Upstream did it for any error mpv logged without a file name — including every audio filter it could not build, which made just_audio dispose the player under a booth deck whose best chain (Rubber Band) was not in that mpv. |
+| `lib/mediakit_player.dart` | A load asked to start at a place while the player plays is opened paused, sent there, and only then played (`holdBack`); the place is taken before the file is opened, not after. Opened playing, mpv played the file from the top until its duration arrived and the seek went out — a blip of the wrong part of the record — and a duration that arrived while `open()` was awaited found nothing to seek to. |
+| `lib/mediakit_player.dart` | The position carries the time it was read (`_positionAt`), and every playback event is stamped with that rather than "now". Upstream stamped cache/buffering events "now" beside the last time-pos, so just_audio's clock jumped back 100–200 ms at each and forward at the next report — the booth's beat-holding chased it ("deck: X moved N ms by itself"). |
 
 Every change is marked with a `WetOwl:` comment. The other half is
 `AudioPlayer.platformId` in `third_party/just_audio`, which is how a deck names its

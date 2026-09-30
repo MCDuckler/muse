@@ -46,6 +46,7 @@ class Deck extends ChangeNotifier {
     _subs.add(_player.positionStream.listen(_anchor));
     _subs.add(_player.playerStateStream.listen((s) {
       if (s.processingState == ProcessingState.completed) _ended();
+      _stallIf(s.playing && s.processingState == ProcessingState.buffering);
       notifyListeners();
     }));
   }
@@ -173,7 +174,11 @@ class Deck extends ChangeNotifier {
   /// for one record, and a nudge that the holding undid again would be no use at all.
   Duration syncTrim = Duration.zero;
 
-  bool get playing => _player.playing && !_ended_;
+  bool get playing => (_player.playing || _swapping) && !_ended_;
+
+  /// A part is going on under a record that plays on (see [swapTo]): the engine is
+  /// stopped for it, and the deck is not.
+  bool _swapping = false;
   bool _ended_ = false;
   bool get loaded => track != null;
 
@@ -193,8 +198,10 @@ class Deck extends ChangeNotifier {
   /// between: steady to a couple of milliseconds. A report far from where the clock
   /// is — a seek, a start, a stall, a loop jumping back — is believed outright.
   void _anchor(Duration at) {
+    // Mid-swap the engine is stopped and opening another file: what it says is about
+    // that, not about where the record has got to.
+    if (_swapping) return;
     final now = DateTime.now();
-    _watchTheWrap(at, now);
     // A seek asked for and not yet arrived: the engine goes on reporting where it
     // still is for a few frames, and those frames are a lie about where the record is.
     //
@@ -214,23 +221,68 @@ class Deck extends ChangeNotifier {
         _settling = null;
       }
     }
+    // Only once any seek has landed: a report on its way to where the record was sent
+    // is not the engine's loop coming round.
+    _watchTheWrap(at, now);
     if (!_trusting || !playing) {
       _fix = at;
       _fixedAt = now;
       _trusting = playing;
+      _suspect = null;
       return;
     }
-    final expected = positionAt(now);
+    // Against the clock as the engine keeps it: a loop carried in the chain is folded
+    // for everything that reads the deck, but the engine walks straight on through it.
+    // Held against the folded one, every report past the first time round was a loop's
+    // length "off", taken outright — so a chain loop, which is every loop of a bar or
+    // more, ran on raw reports with all their scatter.
+    final expected = _unfolded(now);
     final off = at - expected;
+    // When the engine read this: a report that carries no new reading — a buffering
+    // or cache event, or just_audio carrying the last one forward — has the same.
+    final read = _player.playbackEvent.updateTime;
     if (off.abs() > const Duration(milliseconds: 80)) {
-      // The engine says it is somewhere else, by more than its reports ever wander:
-      // believed, and said in the log — a record the booth did not move, moving, is
-      // what "it twitched" is. (A loop coming round is expected, and not said.)
-      if (loopStart == null) {
+      // The engine says it is somewhere else, by more than its reports ever wander.
+      // One such report is not believed on its own: a report that sat in a queue
+      // while the app was busy says where the record *was*, and believing it put the
+      // clock back a couple of hundred milliseconds and the beat-holding off after
+      // it, many times a second. Believed when the next report agrees — a record
+      // that really moved goes on being where it moved to — and said in the log: a
+      // record the booth did not move, moving, is what "it twitched" is. A loop
+      // coming round is expected: believed at once, and not said.
+      //
+      // The one that agrees has to be a *new* reading. Every buffering or cache event
+      // carries the last position with the moment it was read, and just_audio carries
+      // that forward between events: the same stale reading, agreeing with itself.
+      //
+      // Only the engine's loop coming round is expected — back, to about where its
+      // loop begins — and believed at once, not said. (It used to be any report at all
+      // while a loop was set, stale ones with the rest.)
+      final s0 = loopStart, e0 = loopEnd;
+      final comingRound = s0 != null &&
+          e0 != null &&
+          !_chainLooping &&
+          off.isNegative &&
+          at >= (_engineLoopStart ?? s0) - const Duration(milliseconds: 40) &&
+          at <= s0 + (e0 - s0) ~/ 2;
+      if (!comingRound) {
+        final suspect = _suspect;
+        final fresh = read != _suspectRead;
+        if (suspect == null ||
+            !fresh ||
+            (off - suspect).abs() > const Duration(milliseconds: 40)) {
+          if (suspect == null || fresh) {
+            _suspect = off;
+            _suspectRead = read;
+          }
+          return;
+        }
         debugPrint('deck: $name moved ${off.inMilliseconds} ms by itself at ${at.inMilliseconds} ms');
       }
+      _suspect = null;
       _fix = at;
     } else {
+      _suspect = null;
       // A twelfth of the difference each report, which keeps the clock from twitching
       // with every one — and, it turns out, is most of what keeps the beat-holding
       // stable. The reckoning runs *ahead* of the engine's reports by whatever the
@@ -248,6 +300,34 @@ class Deck extends ChangeNotifier {
   /// after anything that moves the record at once, until the next report.
   bool _trusting = false;
 
+  /// How far off the clock the last report was, when that was too far to be taken
+  /// on its own; see [_anchor].
+  Duration? _suspect;
+
+  /// When the engine read the position that [_suspect] came from.
+  DateTime? _suspectRead;
+
+  /// The engine has run out of sound and is waiting for more (a stream that has not
+  /// kept up), with the record meant to be playing. Nothing is heard, and the record
+  /// does not move: the clock stops with it. It used to run on — nothing the engine
+  /// said in the meantime could agree with it, so nothing stopped it — and the booth
+  /// went on holding the other record to one that had gone quiet.
+  bool get stalled => _stalled;
+  bool _stalled = false;
+
+  void _stallIf(bool now) {
+    if (now == _stalled) return;
+    final at = DateTime.now();
+    if (now) {
+      _fix = _unfolded(at);
+    } else {
+      _trusting = false;
+      _suspect = null;
+    }
+    _fixedAt = at;
+    _stalled = now;
+  }
+
   /// A fix from outside — the tests, mostly.
   @visibleForTesting
   void anchor(Duration at, DateTime when) {
@@ -256,12 +336,17 @@ class Deck extends ChangeNotifier {
     _trusting = false;
   }
 
+  /// The clock carried forward, as the engine's own would be: straight on past a
+  /// loop the chain is carrying, and past the end. What reports are held against.
+  Duration _unfolded(DateTime now) {
+    if (!playing || _stalled) return _fix;
+    final since = now.difference(_fixedAt);
+    return _fix + Duration(microseconds: (since.inMicroseconds * tempo).round());
+  }
+
   /// Where the record is *now*, carried forward from the last fix while it plays.
   Duration positionAt(DateTime now) {
-    if (!playing) return _fix;
-    final since = now.difference(_fixedAt);
-    final moved = Duration(microseconds: (since.inMicroseconds * tempo).round());
-    var at = _fix + moved;
+    var at = _unfolded(now);
     // A loop carried in the filter chain hands the same samples round again without
     // the engine knowing, so the engine's own clock walks straight on past the loop's
     // end for ever. What is *heard* is the loop, so what is reported is folded into it.
@@ -413,6 +498,42 @@ class Deck extends ChangeNotifier {
   }
 
   Future<void> _load(Track track, {TrackTiming? timing, Duration? at}) async {
+    // A record goes on parked, whatever the deck was doing. The engine goes on calling
+    // itself playing after a record runs out — just_audio's `playing` stays true at
+    // the end — and a record handed to it then starts at once: from the top for the
+    // moment before the engine is sent to where it was parked, and from there on
+    // unasked, with the booth holding the other deck to it. That was the record in the
+    // room thrown seconds the instant another was dropped on the deck that had run
+    // out. Whoever wants it playing starts it (Booth.load does, in step).
+    if (_player.playing) {
+      try {
+        await _player.pause();
+      } catch (_) {}
+    }
+    _trusting = false;
+    _suspect = null;
+    _settling = null;
+    _lastReport = null;
+    _wrappedAt = null;
+    _lead = Duration.zero;
+    _wrapSoon?.cancel();
+    _loop?.cancel();
+    _seamSoon?.cancel();
+    // The last record's loop is not this one's. mpv keeps its A–B points from one
+    // file to the next, and a chain still built round the old loop would go round
+    // the new record at the old one's length.
+    if (_engineLooping) {
+      _engineLooping = false;
+      try {
+        await engineLoop?.call(null, null);
+      } catch (_) {}
+    }
+    if (_chainLooping) {
+      _chainLooping = false;
+      try {
+        await stopChainLoop?.call(Duration.zero);
+      } catch (_) {}
+    }
     // What is already known about this record is not forgotten because the server
     // could not be asked again: a deck that loses its grid loses its sync, its loop
     // and its beat light, and the grid had not changed.
@@ -611,7 +732,7 @@ class Deck extends ChangeNotifier {
         return false;
       }
     }
-    final was = playing;
+    var was = playing;
     this.part = part;
     final before = _turn;
     final mine = Completer<void>();
@@ -619,9 +740,19 @@ class Deck extends ChangeNotifier {
     try {
       await before.timeout(_waitForATurn, onTimeout: () {});
       claiming?.call();
-      // Where the record will be when the load is done, not where it is now: a load
-      // takes a moment, and a deck that comes back a moment behind is out of time.
-      final began = DateTime.now();
+      was = playing;
+      // The engine is stopped for the swap, while the deck goes on playing as far as
+      // the booth is concerned: its clock runs on through the load (nothing the engine
+      // says meanwhile is taken, see [_anchor]), and a hold on the beat carries on
+      // over it rather than letting go. Handed a file while it played, the engine
+      // started the part from the top until it was sent where it belonged — a blip of
+      // the wrong bar in the middle of a mix.
+      _swapping = was;
+      if (was) {
+        try {
+          await _player.pause();
+        } catch (_) {}
+      }
       // Read *here*, not before the wait above. That wait is the other deck's turn at
       // the engine and lasts as long as its load — up to [_waitForATurn] — and the
       // record plays on through all of it. Taken beforehand, the part came back that
@@ -630,22 +761,28 @@ class Deck extends ChangeNotifier {
       final at = position;
       await _player.setAudioSource(_sourceFor(t), initialPosition: at);
       if (tempo != 1.0) await _player.setSpeed(tempo);
-      var there = at;
-      if (was) {
-        final took = DateTime.now().difference(began);
-        there = at + Duration(microseconds: (took.inMicroseconds * tempo).round());
-        await _player.seek(there);
-      }
+      // Where the record will be when the load is done, not where it was when it
+      // began: the clock ran on through it.
+      final there = was ? position : at;
+      if (was) await _player.seek(there);
       // The clock starts again from where the new file was put, not from reports
-      // about the old one.
+      // about the old one — and the record was *put* there, which whoever measures
+      // how the two decks drift has to know.
+      placed++;
+      _lastReport = null;
+      _wrappedAt = null;
       _fix = there;
       _fixedAt = DateTime.now();
       _trusting = false;
+      _suspect = null;
+      _settling = there;
+      _settlingAt = _fixedAt;
     } catch (e) {
       trouble = '$e';
       notifyListeners();
       return false;
     } finally {
+      _swapping = false;
       mine.complete();
     }
     // Started and let go of, after the turn is handed back: just_audio's own play()
@@ -694,7 +831,7 @@ class Deck extends ChangeNotifier {
   }
 
   Future<void> pause() async {
-    _fix = position;
+    _fix = _unfolded(DateTime.now());
     _wrapSoon?.cancel();
     await _player.pause();
     _fixedAt = DateTime.now();
@@ -705,6 +842,8 @@ class Deck extends ChangeNotifier {
   /// The engine's loop coming round, timed: how long it actually took against how
   /// long the loop is worth. The difference is what the wrap costs.
   void _watchTheWrap(Duration at, DateTime now) {
+    final last = _lastReport;
+    _lastReport = at;
     final start = loopStart, end = loopEnd;
     // Nothing wraps when the chain carries the loop: the engine plays straight on.
     if (_chainLooping) return;
@@ -717,49 +856,61 @@ class Deck extends ChangeNotifier {
     // report the engine sends, and clearing here wiped the other one's last wrap
     // before it could ever measure against it.
     if (!_engineLooping) return;
-    // Come round: the engine says it is back near the loop's start when the reckoning
-    // had it near the end.
+    final from = _engineLoopStart;
+    if (from == null) return;
     final span = end - start;
-    if (at > start + span ~/ 2 || positionAt(now) < end - span ~/ 2) return;
+    // Come round: the engine's own reports went back by most of a loop, to where the
+    // engine's loop begins. Read off the reports alone. It used to be read against
+    // this deck's clock — engine near the start while the clock was still near the
+    // end — and the wrap timer (_meetTheWrap) had usually put the clock back already
+    // by the time the first report after the wrap came in. That wrap was then not
+    // counted, the next measurement ran across two of them as though they were one
+    // very late one, and was thrown away: what a time round costs was hardly ever
+    // learned.
+    if (last == null || last - at < span ~/ 2) return;
+    if (at < from - const Duration(milliseconds: 40) || at > from + span ~/ 2) return;
+    final rate = tempo <= 0 ? 1.0 : tempo;
+    // When it came round: not when the report was read, which is up to a report's
+    // interval later, but that moment less how far past the loop's start the engine
+    // already is. The reports' coarseness then falls on each wrap's timing only as
+    // their scatter, not as their spacing.
+    final wrapped =
+        now.subtract(Duration(microseconds: ((at - from).inMicroseconds / rate).round()));
     final was = _wrappedAt;
-    // Twice for one time round: two reports running can both land in the first half
-    // of the loop while the reckoning is still in the second, and counting that as
-    // two wraps says the loop is a fraction of its length.
-    if (was != null && now.difference(was) < span ~/ 3) return;
+    // Twice for one time round: not from reports, which only come round once, but a
+    // loop moved or re-set under a running measurement is not counted as a wrap.
+    if (was != null &&
+        wrapped.difference(was) < Duration(microseconds: (span.inMicroseconds / rate / 3).round())) {
+      return;
+    }
     // Many times round, not one.
     //
-    // This used to answer every wrap on its own, and what it was answering was almost
-    // entirely noise. The moment a wrap is seen is the moment a *position report*
-    // shows it, and those come a couple of hundred milliseconds apart — so a thirty
-    // millisecond effect was being read off a measurement quantised five times
-    // coarser than itself. The log says exactly that: +29, -11, +13, -1, +78, -25,
-    // -23, +97, -33 ms, and an end pulled 7, 0, 7, 0, 19, 13, 1, 24, 15 ms early
-    // after them. It never settled, and a loop end that moves by twenty milliseconds
-    // is a loop that is musically short by twenty milliseconds — which at two seconds
-    // a time is twelve milliseconds a second of drift against the other deck. The
-    // timing being off and the two records colliding were the same fault.
-    //
-    // Counted over several times round instead, the coarseness falls on the two ends
-    // of the run rather than on every reading, so six wraps divide it by five.
+    // Each wrap is still timed off a report, and a report is worth a dozen
+    // milliseconds either way — against an effect of a few. Counted over several
+    // times round, that scatter falls on the two ends of the run rather than on every
+    // reading, so six wraps divide it by five. (One at a time, the log said +29, -11,
+    // +13, -1, +78, -25 ms, and an end pulled 7, 0, 7, 0, 19, 13 ms early after them:
+    // a loop end that moves by twenty milliseconds is a loop musically short by
+    // twenty, which at two seconds a time is twelve milliseconds a second of drift
+    // against the other deck.)
     if (was == null) {
-      _wrappedAt = now;
+      _wrappedAt = wrapped;
       _wrapsSince = 0;
       return;
     }
-    // The engine came round without this deck asking it to, so nothing above counted
-    // it as a placing and nothing put the filters back. Both matter: the record moved,
-    // which is a step in whatever is measuring how the two decks drift, and the graph
-    // was flushed, which is the equalizer and the stems gone.
+    // The engine came round without this deck asking it to: a step in whatever is
+    // measuring how the two decks drift, and the filter graph flushed, which is the
+    // equalizer and the stems gone. (The wrap timer does both too, when it gets there
+    // first; doing them twice costs nothing.)
     placed++;
     unawaited(Future<void>.sync(() => refreshFilters?.call()));
     _wrapsSince++;
     if (_wrapsSince < _wrapsToJudge) return;
     final want = Duration(
-        microseconds:
-            (span.inMicroseconds * _wrapsSince / (tempo <= 0 ? 1 : tempo)).round());
+        microseconds: (span.inMicroseconds * _wrapsSince / rate).round());
     final late = Duration(
-        microseconds: (now.difference(was) - want).inMicroseconds ~/ _wrapsSince);
-    _wrappedAt = now;
+        microseconds: (wrapped.difference(was) - want).inMicroseconds ~/ _wrapsSince);
+    _wrappedAt = wrapped;
     _wrapsSince = 0;
     // Anything wilder than the clamp is the wrong thing entirely.
     if (late.abs() > _mostLate * 2) return;
@@ -823,6 +974,9 @@ class Deck extends ChangeNotifier {
   /// What the engine was last told to pull the end back by.
   Duration _appliedLate = Duration.zero;
 
+  /// Where the engine last said the record was: what a wrap is seen against.
+  Duration? _lastReport;
+
   /// Where a seek was aimed and when, until the engine reports having got there.
   Duration? _settling;
   DateTime _settlingAt = DateTime.now();
@@ -838,6 +992,10 @@ class Deck extends ChangeNotifier {
 
   Future<void> seek(Duration to) async {
     placed++;
+    _lastReport = null;
+    // A record moved under the engine's own loop spoils the timing of its wraps. Not
+    // under the deck's own loop: this seek is how that one comes round.
+    if (_engineLooping) _wrappedAt = null;
     _fix = to;
     _fixedAt = DateTime.now();
     _trusting = false;
@@ -879,6 +1037,8 @@ class Deck extends ChangeNotifier {
     if (_chainLooping) unawaited(_outOfTheChain());
     final at = to < Duration.zero ? Duration.zero : to;
     _aim = at;
+    _lastReport = null;
+    _wrappedAt = null;
     _fix = at;
     _fixedAt = DateTime.now();
     _trusting = false;
@@ -921,7 +1081,7 @@ class Deck extends ChangeNotifier {
   /// Run the engine at [rate] without moving the deck's pitch: the booth holding two
   /// records on the beat. Put back with `bend(pitch)`.
   Future<void> bend(double rate) async {
-    _fix = position;
+    _fix = _unfolded(DateTime.now());
     _fixedAt = DateTime.now();
     tempo = rate.clamp(0.5, 2.0);
     await _player.setSpeed(tempo);
@@ -1010,14 +1170,35 @@ class Deck extends ChangeNotifier {
   DateTime? _wrappedAt;
   int _wrapsSince = 0;
 
-  /// The end the engine is given: the musical one, less what the wrap costs.
+  /// How far before the loop's own start the engine goes round to, for the loop on
+  /// now: what its filters need to hear first (Mixer.loopLead). Taken off the end as
+  /// well, so the loop keeps its length.
+  Duration _lead = Duration.zero;
+
+  /// Asks the mixer for [_lead], for a loop this long. Set by the booth.
+  Duration Function(Duration span)? loopLead;
+
+  /// Where the engine comes round to: the loop's start, less the lead.
+  Duration? get _engineLoopStart {
+    final start = loopStart;
+    if (start == null) return null;
+    final from = start - _lead;
+    return from < Duration.zero ? Duration.zero : from;
+  }
+
+  /// The end the engine is given: the musical one, less what the wrap costs and less
+  /// the lead the engine goes round from — so that a time round, from the engine's
+  /// start to its end and the seek back, is the loop's own length.
   Duration? get _engineLoopEnd {
     final end = loopEnd, start = loopStart;
     if (end == null || start == null) return end;
     // In the record's own time, which is what a loop's ends are in.
-    final pull = Duration(microseconds: (loopLate.inMicroseconds * tempo).round());
-    final back = end - pull;
-    return back > start + beatInRecord ~/ 4 ? back : end;
+    final cost = Duration(microseconds: (loopLate.inMicroseconds * tempo).round());
+    for (final pull in [cost + _lead, _lead]) {
+      final back = end - pull;
+      if (back > start + beatInRecord ~/ 4) return back;
+    }
+    return end;
   }
 
   /// A loop long enough to be worth carrying in the chain: a bar.
@@ -1044,8 +1225,17 @@ class Deck extends ChangeNotifier {
       return;
     }
     await _outOfTheChain();
-    final took = await f(loopStart, _engineLoopEnd);
+    final s0 = loopStart, e0 = loopEnd;
+    var lead = s0 != null && e0 != null && e0 > s0
+        ? (loopLead?.call(e0 - s0) ?? Duration.zero)
+        : Duration.zero;
+    if (s0 != null && lead > s0) lead = s0;
+    _lead = lead;
+    _lastReport = null;
+    final took = await f(_engineLoopStart, _engineLoopEnd);
     _engineLooping = took && loopStart != null;
+    // The deck's own loop comes round to the loop's start itself: no lead to allow for.
+    if (!_engineLooping) _lead = Duration.zero;
     if (_engineLooping) {
       _loop?.cancel();
       _meetTheWrap();
@@ -1079,6 +1269,7 @@ class Deck extends ChangeNotifier {
     if (!(await chainLoop!(end - start))) return false;
     await engineLoop?.call(null, null);
     await _player.seek(start);
+    _lastReport = null;
     _fix = start;
     _fixedAt = DateTime.now();
     _trusting = false;
@@ -1097,6 +1288,7 @@ class Deck extends ChangeNotifier {
     _chainLooping = false;
     await stopChainLoop?.call(at);
     await _player.seek(at);
+    _lastReport = null;
     _fix = at;
     _fixedAt = DateTime.now();
     _trusting = false;
@@ -1120,8 +1312,10 @@ class Deck extends ChangeNotifier {
   /// re-armed a loop's length at a time for as long as the loop is on.
   void _meetTheWrap() {
     _wrapSoon?.cancel();
-    final start = loopStart, end = _engineLoopEnd;
+    final start = _engineLoopStart, end = _engineLoopEnd;
     if (!_engineLooping || start == null || end == null || !playing) return;
+    // A time round in the record: from where the engine comes round to, to where it
+    // goes round from.
     final span = end - start;
     if (span <= Duration.zero) return;
     final at = position;
@@ -1144,7 +1338,12 @@ class Deck extends ChangeNotifier {
       //
       // Only when the reckoning has actually reached the end: a timer that fires early
       // must not drag the record backwards out from under the sound.
-      final at = position, end = _engineLoopEnd, start = loopStart;
+      // Onto where the *engine* comes round to — the lead before the loop's start —
+      // not the loop's start itself. Put on the start, this clock read the lead (sixty
+      // milliseconds with Rubber Band) ahead of the engine after every wrap, and the
+      // reports pulled it back a twelfth at a time: a sawtooth in everything read off
+      // it, the beat-holding first.
+      final at = position, end = _engineLoopEnd, start = _engineLoopStart;
       if (start != null && end != null && at >= end - const Duration(milliseconds: 20)) {
         _fix = start;
         _fixedAt = DateTime.now();
@@ -1240,10 +1439,15 @@ class Deck extends ChangeNotifier {
     // afterwards, so the loop keeps the length the timing wants and the cut lands
     // somewhere quiet. This is what "the timing is right and there is still a click"
     // was.
-    final pull = to - (_engineLoopEnd ?? to);
-    final quiet = await finder(this, from, to - pull);
+    //
+    // And the start the engine is given likewise: it comes round to the lead before
+    // the loop's start (see [_lead]), so that is where the splice's other side is.
+    final a = _chainLooping ? from : (_engineLoopStart ?? from);
+    final b = _chainLooping ? to : (_engineLoopEnd ?? to);
+    final lead = from - a, pull = to - b;
+    final quiet = await finder(this, a, b);
     if (quiet == null || loopStart != from || loopEnd != to) return;
-    loopStart = quiet.$1;
+    loopStart = quiet.$1 + lead;
     loopEnd = quiet.$2 + pull;
     await _loopInEngine();
   }
@@ -1306,7 +1510,7 @@ class Deck extends ChangeNotifier {
             .clamp(600000, 1400000));
     const steps = 18;
     for (var i = 1; i <= steps; i++) {
-      _fix = position;
+      _fix = _unfolded(DateTime.now());
       _fixedAt = DateTime.now();
       tempo = (was * (1 - i / steps)).clamp(_slowest, 2.0);
       try {

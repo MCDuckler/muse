@@ -17,6 +17,7 @@ import 'package:muse/src/state/booth/automix.dart';
 import 'package:muse/src/state/booth/booth.dart';
 import 'package:muse/src/state/booth/mixer.dart';
 import 'package:muse/src/state/booth/mixer_desktop.dart';
+import 'package:muse/src/state/booth/parts.dart';
 import 'package:muse/src/state/booth/deck.dart';
 
 import 'fake_audio.dart';
@@ -71,6 +72,29 @@ class QuietMixer extends Mixer {
 
   @override
   Future<void> loaded(Deck deck) async => loadedAgain.add(deck.name);
+
+  /// Whether decks loop in the engine (an A–B loop, as a desk's mpv does), and the
+  /// lead the engine is sent round from.
+  bool engineLoops = false;
+  Duration lead = Duration.zero;
+
+  @override
+  Future<bool> setLoop(Deck deck, Duration? from, Duration? to) async {
+    if (!engineLoops) return false;
+    final engine = (JustAudioPlatform.instance as FakeJustAudio).players[deck.player.platformId]!;
+    engine.loopA = from;
+    engine.loopB = to;
+    return true;
+  }
+
+  @override
+  Duration loopLead(Deck deck, Duration span) => engineLoops ? lead : Duration.zero;
+
+  /// Every time a deck's stretcher delay was asked for afresh.
+  final measured = <String>[];
+
+  @override
+  Future<void> measureLatency(Deck deck) async => measured.add(deck.name);
 
   @override
   bool get canKill => true;
@@ -427,6 +451,121 @@ void main() {
       await booth.letGo();
     }, timeout: const Timeout(Duration(seconds: 40)));
 
+    test('a master whose phrase runs short is not a reason to throw the record in the room',
+        () async {
+      // The night's log: "B jumped -3067 ms to the beat — -8 beats of phrase left out
+      // … (lost the beat by 3120 ms)". A's sections change length — a two-bar phrase
+      // at 32 s — so once it has passed, the two records' phrases sit two bars apart:
+      // eight beats, which reads +8 one moment and −8 the next. The phrase count taken
+      // off the latest reading, against an error that was the median of the last few,
+      // made the difference a phrase's worth of "lost beat", and jumped it.
+      final audio = JustAudioPlatform.instance as FakeJustAudio;
+      final t = beatsEvery(500, count: 1200);
+      booth.a.timing = TrackTiming(
+        durationMs: t.durationMs,
+        bpm: t.bpm,
+        beats: t.beats,
+        downbeats: t.downbeats,
+        fourBars: [
+          for (var ms = 0; ms <= 32000; ms += 8000) ms,
+          for (var ms = 36000; ms < 600000; ms += 8000) ms,
+        ],
+      );
+      await booth.setCrossfader(0.5); // B is heard
+      expect(await booth.setSync(booth.b, true), isTrue);
+      await booth.play(booth.b);
+      final engineA = audio.players[booth.a.player.platformId]!;
+      final engineB = audio.players[booth.b.player.platformId]!;
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      final seeksBefore = engineB.calls.where((c) => c.startsWith('seek')).length;
+      double heardApart() {
+        var d = ((engineB.truePosition - engineA.truePosition).inMicroseconds / 1000) % 500;
+        if (d > 250) d -= 500;
+        return d;
+      }
+      expect(heardApart().abs(), lessThan(10));
+      // On through A's short phrase and well past it.
+      while (booth.a.position < const Duration(seconds: 39)) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      final seeks = engineB.calls.where((c) => c.startsWith('seek')).length - seeksBefore;
+      expect(seeks, 0, reason: 'B was moved $seeks times while it was heard and on the beat');
+      expect(heardApart().abs(), lessThan(10));
+      await booth.letGo();
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
+    test('what the engine takes to start is learned from starts, not from SYNC pressed',
+        () async {
+      // SYNC pressed on two records already playing has no start in it: its first
+      // reading is however far apart the two happened to be — here 1.2 s — and taking
+      // that for the engine's start-up time put the next mix's start 300 ms out, and
+      // kept it there across restarts.
+      booth.restoreLearned(
+          startLead: const Duration(milliseconds: 30), jumpCarry: const Duration(milliseconds: 10));
+      await booth.setCrossfader(0.5);
+      await booth.b.seek(booth.a.position + const Duration(milliseconds: 1234));
+      await booth.b.play();
+      expect(await booth.setSync(booth.b, true), isTrue);
+      await Future<void>.delayed(const Duration(milliseconds: 2500));
+      expect(apart().inMilliseconds.abs(), lessThan(15));
+      expect(booth.learned.startLead, const Duration(milliseconds: 30));
+      await booth.letGo();
+    });
+
+    test('what the engine takes to start is learned from a start on the beat', () async {
+      final audio = JustAudioPlatform.instance as FakeJustAudio;
+      audio.players[booth.b.player.platformId]!.startCost = const Duration(milliseconds: 60);
+      await booth.setCrossfader(0.5);
+      expect(await booth.setSync(booth.b, true), isTrue);
+      await booth.play(booth.b);
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      expect(booth.learned.startLead.inMilliseconds, greaterThan(15),
+          reason: 'started 60 ms late: the next start goes that much sooner');
+      await booth.letGo();
+    });
+
+    test('an audible flam on engines that report roughly is closed in seconds, not ten',
+        () async {
+      // The night's log: "held in step over 99 readings — half within 38.3 ms … 0
+      // speeds sent to the engine", and 54 ms the same way. Under the jump, over what
+      // anybody hears as a flam, and left: the lean that closes a standing offset
+      // waited for the drift to be read as nil first, and read off a second and a half
+      // of rough reports the drift is never nil — so the flam stood until the rate
+      // window, nine seconds on, was long enough to settle it.
+      final audio = JustAudioPlatform.instance as FakeJustAudio;
+      final engineA = audio.players[booth.a.player.platformId]!;
+      final engineB = audio.players[booth.b.player.platformId]!;
+      for (final e in [engineA, engineB]) {
+        e.reportEvery = const Duration(milliseconds: 25);
+        e.reportJitter = const Duration(milliseconds: 12);
+      }
+      await booth.a.play(); // reporting from now on
+      await booth.setCrossfader(0.5); // heard: no quiet jump, and under the loud one
+      await booth.b.seek(booth.a.position + const Duration(milliseconds: 45));
+      await booth.b.play();
+      booth.holdOnBeat(booth.b);
+      double heardApart() {
+        var d = ((engineB.truePosition - engineA.truePosition).inMicroseconds / 1000) % 500;
+        if (d > 250) d -= 500;
+        return d;
+      }
+      expect(heardApart(), closeTo(45, 5));
+      await Future<void>.delayed(const Duration(milliseconds: 5000));
+      expect(heardApart().abs(), lessThan(12),
+          reason: 'still ${heardApart().toStringAsFixed(1)} ms out after five seconds');
+      await booth.letGo();
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
+    test('SYNC by hand holds on the stretchers\' delay as it is now, not as it was', () async {
+      await booth.setCrossfader(0.5);
+      await booth.b.seek(booth.a.position);
+      await booth.b.play();
+      mixer.measured.clear();
+      expect(await booth.setSync(booth.b, true), isTrue);
+      expect(mixer.measured, containsAll(['A', 'B']));
+      await booth.letGo();
+    });
+
     test('a long loop is carried in the chain, and the needle comes round with it',
         () async {
       // An engine loops by seeking and a seek empties the filter chain, so the band
@@ -464,6 +603,45 @@ void main() {
       d.putClockAtForTest(start + beat * 11);
       expect((d.position - first).inMilliseconds.abs(), lessThan(4),
           reason: 'one loop later is the same place in the loop');
+      await d.pause();
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
+    test('a loop carried in the chain still reads the engine gently, not report by report',
+        () async {
+      // Past its first time round the engine's clock is a loop's length on from the
+      // folded one, and every report used to be taken outright for being "far off":
+      // a chain loop — every loop of a bar or more — ran on raw reports, scatter and
+      // all.
+      mixer.carriesLoops = true;
+      final d = booth.b;
+      final engine = (JustAudioPlatform.instance as FakeJustAudio)
+          .players[d.player.platformId!]!;
+      engine.reportEvery = const Duration(milliseconds: 25);
+      engine.reportJitter = const Duration(milliseconds: 12);
+      await d.seek(const Duration(seconds: 10));
+      await d.play();
+      d.loop(4); // a bar: two seconds round
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(d.chainLooping, isTrue);
+      final s0 = d.loopStart!, e0 = d.loopEnd!;
+      Duration heard() {
+        final at = engine.truePosition;
+        if (at < e0) return at;
+        return s0 + Duration(microseconds: (at - s0).inMicroseconds % (e0 - s0).inMicroseconds);
+      }
+      // Once round and a bit, then watched.
+      await Future<void>.delayed(const Duration(milliseconds: 2600));
+      var worst = 0.0;
+      for (var i = 0; i < 120; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        var off = (d.position - heard()).inMicroseconds / 1000;
+        final len = (e0 - s0).inMicroseconds / 1000;
+        if (off > len / 2) off -= len;
+        if (off < -len / 2) off += len;
+        if (off.abs() > worst) worst = off.abs();
+      }
+      expect(worst, lessThan(8), reason: 'the clock followed the scatter: ${worst.toStringAsFixed(1)} ms');
+      d.unloop();
       await d.pause();
     }, timeout: const Timeout(Duration(seconds: 30)));
 
@@ -528,6 +706,50 @@ void main() {
           reason: 'nothing measured what the wrap cost over $wraps times round');
       expect(Deck.loopLate, lessThanOrEqualTo(cost + const Duration(milliseconds: 15)),
           reason: 'it learned more than the wrap can possibly cost: ${Deck.loopLate}');
+    }, timeout: const Timeout(Duration(seconds: 40)));
+
+    test('the engine\'s own loop: the clock comes round where the engine does, and learns the seek',
+        () async {
+      // A desk sends its engine round a stretcher's worth before the loop's start, so
+      // the filters are warm by the time the loop point comes. The clock used to be put
+      // on the loop's start itself at every wrap — sixty milliseconds ahead of the
+      // engine, pulled back a twelfth a report: a sawtooth in everything read off it.
+      // And the wraps were timed against that clock, so they were hardly ever counted.
+      Deck.loopLate = Duration.zero;
+      addTearDown(() => Deck.loopLate = Duration.zero);
+      mixer.engineLoops = true;
+      mixer.lead = const Duration(milliseconds: 60);
+      final engine = (JustAudioPlatform.instance as FakeJustAudio)
+          .players[booth.b.player.platformId!]!;
+      const cost = Duration(milliseconds: 25);
+      engine.seekCost = cost;
+      engine.reportEvery = const Duration(milliseconds: 40);
+      engine.reportJitter = const Duration(milliseconds: 4);
+      await booth.b.seek(const Duration(seconds: 10));
+      await booth.b.play();
+      booth.b.loop(2); // half a bar: a second round
+      addTearDown(booth.b.unloop);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(engine.loopA, booth.b.loopStart! - const Duration(milliseconds: 60),
+          reason: 'sent round from the lead before the start');
+      final began = DateTime.now();
+      final span = (booth.b.loopEnd! - booth.b.loopStart!).inMicroseconds / 1000;
+      var worst = 0.0;
+      while (DateTime.now().difference(began) < const Duration(seconds: 12)) {
+        await Future<void>.delayed(const Duration(milliseconds: 15));
+        if (DateTime.now().difference(began) < const Duration(seconds: 2)) continue;
+        // Round the loop: the clock and the engine a whole time round apart — for the
+        // moment between the engine coming round and the timer firing, on a busy
+        // machine — are in the same place in the beat, which is all anything reads.
+        var off = (booth.b.position - engine.truePosition).inMicroseconds / 1000;
+        off -= (off / span).roundToDouble() * span;
+        if (off.abs() > worst) worst = off.abs();
+      }
+      expect(worst, lessThan(30),
+          reason: 'the clock and the engine came apart by ${worst.toStringAsFixed(1)} ms');
+      // What a time round costs is the seek, not the seek and the lead together.
+      expect(Deck.loopLate.inMilliseconds, inInclusiveRange(10, 40),
+          reason: 'learned ${Deck.loopLate.inMilliseconds} ms for a 25 ms seek');
     }, timeout: const Timeout(Duration(seconds: 40)));
 
     test('a record that has just gone on gets its bands put back on it', () async {
@@ -965,6 +1187,71 @@ void main() {
       expect(booth.master.name, 'B');
     });
 
+    test('a mix by hand starts on the bar it was pressed for, however long getting ready took',
+        () async {
+      // The phrase is met (a seek of the incoming) and the booth's sounds are loaded
+      // between the press and the bar; a mix by hand slept the whole wait it had worked
+      // out before either, and started that much after its bar.
+      final audio = JustAudioPlatform.instance as FakeJustAudio;
+      await booth.setCrossfader(0);
+      await booth.b.seek(const Duration(milliseconds: 2000)); // a bar into its phrase
+      audio.players[booth.b.player.platformId]!.seekDelay = const Duration(milliseconds: 300);
+      // Pressed with a comfortable bar to go.
+      Duration nextBar() => booth.a.nextBeat(booth.a.position, every: 4)!;
+      while (nextBar() - booth.a.position < const Duration(milliseconds: 1000)) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      final bar = nextBar();
+      Duration? masterWhenItStarted;
+      booth.b.addListener(() {
+        if (booth.b.playing && masterWhenItStarted == null) {
+          masterWhenItStarted = booth.a.position;
+        }
+      });
+      unawaited(booth.go(Transition.blend, bars: 4));
+      while (masterWhenItStarted == null) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect((masterWhenItStarted! - bar).inMilliseconds.abs(), lessThan(25),
+          reason: 'started ${(masterWhenItStarted! - bar).inMilliseconds} ms off the bar');
+      booth.stopTransition();
+    });
+
+    test('a record at half the other\'s pulse is held on it, not jumped a beat at a time',
+        () async {
+      // 140 against 70: SYNC folds the octave and the two run at one pulse, the quicker
+      // record's beats in pairs. The phrase used to be counted in each record's own
+      // beats, and the quicker one's count ran away from the other's a beat a beat.
+      final audio = JustAudioPlatform.instance as FakeJustAudio;
+      booth.a.timing = beatsEvery(60000 / 140, count: 2400);
+      booth.b.timing = beatsEvery(60000 / 70, count: 1200);
+      // Not heard yet, as an incoming is: where it may be moved as often as it reads
+      // out, which is where a count running away does the most damage.
+      await booth.setCrossfader(0);
+      expect(await booth.setSync(booth.b, true), isTrue);
+      expect(booth.b.pitch, closeTo(1.0, 1e-6), reason: '70 is 140 at half time');
+      await booth.play(booth.b);
+      final engineA = audio.players[booth.a.player.platformId]!;
+      final engineB = audio.players[booth.b.player.platformId]!;
+      Duration heardApart() => Booth.beatError(
+            follower: booth.b.timing!,
+            followerAt: engineB.truePosition,
+            followerRate: booth.b.tempo,
+            master: booth.a.timing!,
+            masterAt: engineA.truePosition,
+            masterRate: booth.a.tempo,
+          )!;
+      await Future<void>.delayed(const Duration(milliseconds: 2500));
+      expect(heardApart().inMilliseconds.abs(), lessThan(15),
+          reason: '${heardApart().inMilliseconds} ms off the pulse after it settled');
+      final seeksBefore = engineB.calls.where((c) => c.startsWith('seek')).length;
+      await Future<void>.delayed(const Duration(seconds: 6));
+      final seeks = engineB.calls.where((c) => c.startsWith('seek')).length - seeksBefore;
+      expect(seeks, 0, reason: 'moved $seeks times while in step');
+      expect(heardApart().inMilliseconds.abs(), lessThan(15));
+      await booth.letGo();
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
     test('SYNC by hand matches a pitched deck to a tempo a few tenths away', () async {
       // A was left at -12.2 % by an earlier mix: 170.8 made, 150.0 on show. B is 147.
       // Two tempos 2 % apart on screen — and SYNC used to refuse, because A would end
@@ -996,6 +1283,103 @@ void main() {
       booth.b.timing = const TrackTiming(bpm: null, beats: []);
       expect(booth.whyNotSync(booth.a), 'No steady beat on B');
       expect(await booth.sync(booth.a), isFalse);
+    });
+
+    test('a record put on the deck that ran out is parked, and the live one is not moved',
+        () async {
+      // The night's log: A ran out, B was playing in the room following it, and a
+      // record dropped on A started at once — the engine still calls itself playing
+      // after the end — so the holding threw B 2.7 s to meet it.
+      final audio = JustAudioPlatform.instance as FakeJustAudio;
+      await booth.setCrossfader(1); // B is what the room hears
+      await booth.b.seek(booth.a.position + const Duration(milliseconds: 1234));
+      await booth.b.play();
+      expect(await booth.setSync(booth.b, true), isTrue);
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      final engineA = audio.players[booth.a.player.platformId]!;
+      engineA.reachEnd();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(booth.a.playing, isFalse);
+      booth.timing.put(3, beatsEvery(480, count: 1200));
+      // What the room hears of B: the engine's own position, not the deck's reckoning.
+      final engineB = audio.players[booth.b.player.platformId]!;
+      final bBefore = engineB.truePosition, t0 = DateTime.now();
+      final bCalls = engineB.calls.length;
+      await booth.load(booth.a, song(3));
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      expect(engineA.playing, isFalse, reason: 'the new record waits to be started');
+      expect(booth.a.playing, isFalse);
+      final carriedOn = bBefore + DateTime.now().difference(t0);
+      expect((engineB.truePosition - carriedOn).inMilliseconds.abs(), lessThan(5),
+          reason: 'B was moved ${(engineB.truePosition - carriedOn).inMilliseconds} ms: '
+              '${engineB.calls.sublist(bCalls)} speed ${engineB.speed}');
+      expect(booth.b.tempo, closeTo(1.0, 1e-9), reason: 'nor bent');
+      // And the one still playing leads now: the new record follows it.
+      expect(booth.b.synced, isFalse);
+      expect(booth.a.synced, isTrue);
+      expect(booth.master.name, 'B');
+    });
+
+    test('a record put on a deck that is playing goes on in step with the other', () async {
+      final audio = JustAudioPlatform.instance as FakeJustAudio;
+      await booth.setCrossfader(0);
+      await booth.b.seek(booth.a.position + const Duration(milliseconds: 777));
+      await booth.b.play();
+      expect(await booth.setSync(booth.b, true), isTrue);
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      // A new record on the master while the follower plays: B carries on untouched,
+      // and A — started again, since it was playing — comes in on B's beat.
+      booth.timing.put(3, beatsEvery(500, count: 1200));
+      final engineB = audio.players[booth.b.player.platformId]!;
+      final bBefore = engineB.truePosition, t0 = DateTime.now();
+      final engineA = audio.players[booth.a.player.platformId]!;
+      final loadsBefore = engineA.calls.length;
+      await booth.load(booth.a, song(3), at: const Duration(seconds: 20));
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      expect(booth.a.playing, isTrue);
+      final carriedOn = bBefore + DateTime.now().difference(t0);
+      expect((engineB.truePosition - carriedOn).inMilliseconds.abs(), lessThan(5),
+          reason: 'B was moved ${(engineB.truePosition - carriedOn).inMilliseconds} ms');
+      expect(apart().inMilliseconds.abs(), lessThan(15));
+      // Parked for the load and started once it was on: never playing from wherever
+      // the engine happened to open it.
+      final after = engineA.calls.sublist(loadsBefore);
+      expect(after.indexOf('pause'), lessThan(after.indexWhere((c) => c.startsWith('load'))),
+          reason: 'calls: $after');
+    });
+
+    test('a part put on under a record in the mix keeps its place, and the hold on it',
+        () async {
+      final audio = JustAudioPlatform.instance as FakeJustAudio;
+      await booth.setCrossfader(0.5);
+      await booth.b.seek(booth.a.position + const Duration(milliseconds: 1000));
+      await booth.b.play();
+      booth.holdOnBeat(booth.b);
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      expect(booth.holding, isTrue);
+      final engineA = audio.players[booth.a.player.platformId]!;
+      final engineB = audio.players[booth.b.player.platformId]!;
+      // What the room hears: the two engines' own places, on the same 500 ms grid.
+      double heardApart() {
+        var d = ((engineB.truePosition - engineA.truePosition).inMicroseconds / 1000) % 500;
+        if (d > 250) d -= 500;
+        return d;
+      }
+      expect(heardApart().abs(), lessThan(5));
+      booth.b.parts = _ReadyParts(ApiClient(baseUrl: 'http://example.invalid'));
+      engineB.slowness = const Duration(milliseconds: 150); // a load takes a while
+      final before = engineB.calls.length;
+      expect(await booth.b.swapTo('drums'), isTrue);
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(booth.holding, isTrue, reason: 'held across the swap, not let go of');
+      final calls = engineB.calls.sublist(before);
+      // Stopped, given the part, put where the record had got to, started: never
+      // handed a file while it played.
+      expect(calls.take(2).toList(), ['pause', 'load 1'], reason: '$calls');
+      expect(calls, contains('play'));
+      expect(heardApart().abs(), lessThan(5),
+          reason: 'the part came back ${heardApart().toStringAsFixed(1)} ms off the beat');
+      await booth.letGo();
     });
 
     test('a new record starts at its own speed; the same one keeps its pitch', () async {
@@ -1416,6 +1800,88 @@ void main() {
     expect(sd, lessThan(5), reason: 'reports scattered ±20 ms; the clock should not be');
   });
 
+  test('a deck\'s clock is not put back by one late report, but follows a real move', () async {
+    final audio = FakeJustAudio();
+    JustAudioPlatform.instance = audio;
+    final deck = Deck('A', api: ApiClient(baseUrl: 'http://example.invalid'));
+    addTearDown(deck.dispose);
+    await deck.load(song(1), timing: beatsEvery(500, count: 1200), at: const Duration(seconds: 10));
+    final engine = audio.players[deck.player.platformId]!;
+    await deck.play();
+    final began = DateTime.now();
+    const start = Duration(seconds: 10);
+    Duration truth() => start + DateTime.now().difference(began);
+    double err() => (deck.position - truth()).inMicroseconds / 1000;
+    for (var i = 0; i < 40; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      engine.tick(truth());
+    }
+    // A report that waited in a queue: where the record was 200 ms ago.
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    engine.tick(truth() - const Duration(milliseconds: 200));
+    expect(err().abs(), lessThan(30), reason: 'one stale report must not move the clock');
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    engine.tick(truth());
+    expect(err().abs(), lessThan(30));
+    // The record really stalled: every report after says so.
+    for (var i = 0; i < 3; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      engine.tick(truth() - const Duration(milliseconds: 300));
+    }
+    expect((err() + 300).abs(), lessThan(30), reason: 'a move the reports agree on is believed');
+  });
+
+  test('a stale report is not believed on the strength of itself carried forward', () async {
+    // A report read late — the app busy — says where the record was. The next thing
+    // to "agree" with it was just_audio carrying that same reading forward between
+    // events, or a cache event repeating it: the same stale reading, twice.
+    final audio = FakeJustAudio();
+    JustAudioPlatform.instance = audio;
+    final deck = Deck('A', api: ApiClient(baseUrl: 'http://example.invalid'));
+    addTearDown(deck.dispose);
+    await deck.load(song(1), timing: beatsEvery(500, count: 1200), at: const Duration(seconds: 10));
+    final engine = audio.players[deck.player.platformId]!;
+    await deck.play();
+    final began = DateTime.now();
+    const start = Duration(seconds: 10);
+    Duration truth() => start + DateTime.now().difference(began);
+    double err() => (deck.position - truth()).inMicroseconds / 1000;
+    for (var i = 0; i < 30; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      engine.tick(truth());
+    }
+    engine.tick(truth() - const Duration(milliseconds: 200));
+    // Nothing new from the engine for a third of a second: only that reading, carried.
+    await Future<void>.delayed(const Duration(milliseconds: 330));
+    expect(err().abs(), lessThan(30), reason: 'believed a stale reading: ${err()} ms');
+    engine.tick(truth());
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(err().abs(), lessThan(30));
+  });
+
+  test('a record that runs out of sound stops on the clock too, and goes on from there',
+      () async {
+    final audio = FakeJustAudio();
+    JustAudioPlatform.instance = audio;
+    final deck = Deck('A', api: ApiClient(baseUrl: 'http://example.invalid'));
+    addTearDown(deck.dispose);
+    await deck.load(song(1), timing: beatsEvery(500, count: 1200), at: const Duration(seconds: 10));
+    final engine = audio.players[deck.player.platformId]!;
+    engine.reportEvery = const Duration(milliseconds: 25);
+    await deck.play();
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    engine.starve();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(deck.stalled, isTrue);
+    final held = deck.position;
+    await Future<void>.delayed(const Duration(milliseconds: 600));
+    expect((deck.position - held).inMilliseconds.abs(), lessThan(5),
+        reason: 'the clock ran on over a record making no sound');
+    engine.feed();
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    expect((deck.position - engine.truePosition).inMilliseconds.abs(), lessThan(15));
+  });
+
   test('the automix judges tempo as far as it will pull, and half time as another feel', () {
     TrackTiming at(double bpm) => TrackTiming(
         durationMs: 60000, bpm: bpm, beats: [for (var i = 0; i < 200; i++) (i * 60000 / bpm).round()]);
@@ -1443,4 +1909,16 @@ void main() {
     expect(AutoMix.howWell(master, next, fromPitch: pitch),
         greaterThan(AutoMix.howWell(master, next)));
   });
+}
+
+/// Every part is here already: a swap is only the load.
+class _ReadyParts extends PartsStore {
+  _ReadyParts(super.api);
+
+  @override
+  Future<Stem> want(Track t, String name, {bool byHand = false, bool soon = false}) async =>
+      Stem.ready;
+
+  @override
+  String? pathFor(int trackId, String name) => '/nowhere/$trackId-$name.opus';
 }

@@ -529,20 +529,18 @@ class DesktopMixer extends VolumeMixer {
   /// Which shape of chain this deck's engine took, so a rebuild need not ask again.
   final _shape = <String, (int, int)>{};
 
-  /// The rate each deck's engine is running at, asked once.
-  final _rate = <String, int>{};
-
   @override
   Future<bool> loopInChain(Deck deck, Duration length) async {
     final mpv = _native(deck);
     if (mpv == null || length <= Duration.zero) return false;
-    var rate = _rate[deck.name];
-    if (rate == null) {
-      rate = int.tryParse(
-          (await mpv.getProperty('audio-params/samplerate')).split('.').first);
-      if (rate == null || rate <= 0) return false;
-      _rate[deck.name] = rate;
-    }
+    // The rate of the record on the deck *now*, asked every time. It was asked once
+    // per deck and kept, and a deck's records do not share one: a 44.1 kHz record
+    // after a 48 kHz stems file, or a 32 kHz part, got a loop 8 or 38 per cent the
+    // wrong length — going round at one length while the deck's clock folded it at
+    // the right one, off the grid a little more every time round.
+    final rate = int.tryParse(
+        (await mpv.getProperty('audio-params/samplerate')).split('.').first);
+    if (rate == null || rate <= 0) return false;
     final samples = (length.inMicroseconds * rate / 1e6).round();
     if (samples <= 0) return false;
     final was = _inChain[deck.name];
@@ -777,60 +775,48 @@ class DesktopMixer extends VolumeMixer {
     }
   }
 
+  /// The loop is entered a stretcher's worth early, and a band splitter's.
+  ///
+  /// mpv comes round an A–B loop by seeking, and a seek empties the filter chain —
+  /// so Rubber Band begins the new time round with nothing in it, and its first two
+  /// thousand samples of output are it filling up rather than the record. At 44.1 kHz
+  /// that is forty-six milliseconds of the top of the loop that never arrives, which
+  /// is "the timing is right but the start is cut off".
+  ///
+  /// And the *filters'* settling. A seek empties the whole chain, so the crossover
+  /// starts with no state and its first milliseconds of output are wrong — measured
+  /// through this very chain against the same audio run warm: 5.7 dB below the signal
+  /// over the first 2 ms, 20 dB over 2–5 ms, 43 dB over 5–10 ms, and gone by 15. Wrong
+  /// output from a band splitter is heard as the EQ not being applied, which is what
+  /// "there is a brief moment at the start of the loop where the eq settings are
+  /// ignored" is — and no amount of sending the settings again can help, because the
+  /// settings were never lost. What was lost was the filters' memory, and the only way
+  /// to give it back is to let them hear a little music before the loop point arrives.
+  ///
+  /// Added rather than maxed: the stretcher is at the end of the chain and the
+  /// crossover at the front, so one does not cover the other. Sent in that much before
+  /// the loop's start, the filling up happens on the bar before and the record is at
+  /// full voice by the time the loop point comes; the deck takes the same amount off
+  /// the loop's end, so it goes round at its own length (Deck._engineLoopEnd).
+  ///
+  /// Not for a loop too short to spare it: a roll an eighth of a beat long led in by
+  /// sixty milliseconds is a roll mostly made of the bar before it.
+  @override
+  Duration loopLead(Deck deck, Duration span) {
+    final prime = stretchLatency(deck) + _settling;
+    return span >= prime * 2 ? prime : Duration.zero;
+  }
+
+  /// How long the band splitter needs to hear before its output is right again. See
+  /// [loopLead], where it is measured.
+  static const _settling = Duration(milliseconds: 15);
+
   /// Loop natively: mpv's own A–B loop jumps back from inside the audio, where a
   /// timer in Dart is twenty milliseconds late at best and sounds it on a roll.
   /// Says whether it could.
-  /// How long the band splitter needs to hear before its output is right again. See
-  /// _loop, where it is measured.
-  static const _settling = Duration(milliseconds: 15);
-
   Future<bool> _loop(Deck deck, Duration? from, Duration? to) async {
     final mpv = _native(deck);
     if (mpv == null) return false;
-    // The loop is entered a stretcher's worth early.
-    //
-    // mpv comes round an A–B loop by seeking, and a seek empties the filter chain —
-    // so Rubber Band begins the new time round with nothing in it, and its first two
-    // thousand samples of output are it filling up rather than the record. At 44.1 kHz
-    // that is forty-six milliseconds of the top of the loop that never arrives, which
-    // is "the timing is right but the start is cut off".
-    //
-    // Sent in that much before the loop's own start, the filling up happens on the
-    // bar before and the record is at full voice by the time the loop point comes. The
-    // extra length is paid for by what the wrap costs (Deck.loopLate), which is
-    // measured rather than assumed and so takes this in without being told.
-    //
-    // Only where there is a stretcher to fill: [stretchLatency] is zero otherwise and
-    // this does nothing at all.
-    // Sent in before the loop's own start by two things added together.
-    //
-    // The stretcher's fill, as before — Rubber Band begins a new time round with
-    // nothing in it and its first couple of thousand samples are it filling up rather
-    // than the record.
-    //
-    // And the *filters'* settling, which was missing and is the other half of it. A
-    // seek empties the whole chain, so the crossover starts with no state and its first
-    // milliseconds of output are wrong — measured through this very chain against the
-    // same audio run warm: 5.7 dB below the signal over the first 2 ms, 20 dB over
-    // 2–5 ms, 43 dB over 5–10 ms, and gone by 15. Wrong output from a band splitter is
-    // heard as the EQ not being applied, which is what "there is a brief moment at the
-    // start of the loop where the eq settings are ignored" is — and no amount of
-    // sending the settings again can help, because the settings were never lost. What
-    // was lost was the filters' memory, and the only way to give it back is to let them
-    // hear a little music before the loop point arrives.
-    //
-    // Fifteen milliseconds is a thirtieth of a beat, and it is the record's own audio
-    // from just before the loop's start, landing on a splice chosen for not clicking.
-    // The extra length is paid for by what the wrap costs (Deck.loopLate), which is
-    // measured rather than assumed.
-    //
-    // Added rather than maxed: the stretcher is at the end of the chain and the
-    // crossover at the front, so one does not cover the other.
-    final prime = stretchLatency(deck) + _settling;
-    if (from != null && prime > Duration.zero) {
-      final early = from - prime;
-      from = early < Duration.zero ? Duration.zero : early;
-    }
     // To the microsecond: the engine splices to the sample, and a loop's ends are put
     // on exact samples so its seam does not click (quietSeam). Four places was a
     // tenth of a millisecond — four samples either way of where they were meant.
