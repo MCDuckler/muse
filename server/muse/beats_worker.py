@@ -16,7 +16,7 @@ import logging
 import pathlib
 import threading
 
-from . import beats, db
+from . import beats, db, traits
 
 log = logging.getLogger("muse.beats")
 
@@ -39,7 +39,7 @@ def one(data_dir: pathlib.Path) -> bool:
     # Never-analysed first, so a song somebody just added is not queued behind five
     # thousand re-readings.
     t = db.one(
-        """select t.id, m.path, m.sha256
+        """select t.id, t.loudness_lufs, m.path, m.sha256
              from tracks t
              join media m on m.track_id = t.id and m.role = 'canonical'
             where t.state = 'ready' and m.sha256 is not null
@@ -52,6 +52,12 @@ def one(data_dir: pathlib.Path) -> bool:
     try:
         found = beats.for_track(data_dir, pathlib.Path(t["path"]), t["sha256"], wait=None)
         bpm = found.get("bpm")
+        # Its row in the booth's index too, so a record fetched today is one a set
+        # built from the library can choose — not only once somebody has opened it.
+        try:
+            traits.remember(t, found)
+        except Exception as e:                           # noqa: BLE001
+            log.warning("could not index track %s for the booth: %s", t["id"], e)
     except Exception as e:                               # noqa: BLE001
         # A file that cannot be read is marked as looked at all the same: it will not
         # be readable next time either, and it must not be the only song ever tried.
