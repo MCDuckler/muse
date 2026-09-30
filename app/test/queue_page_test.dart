@@ -47,20 +47,25 @@ void main() {
   late HttpServer server;
   late AppState app;
 
+  /// What the fake house answers for a path, where a test wants to choose.
+  final answers = <String, Map<String, dynamic>>{};
+
   setUp(() async {
+    answers.clear();
     SharedPreferences.setMockInitialValues({});
     HttpOverrides.global = null;
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     unawaited(() async {
       await for (final request in server) {
         request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode(request.uri.path == '/auth/stream-key'
-            ? {
-                'key': 'test-key',
-                'expires_at':
-                    DateTime.now().millisecondsSinceEpoch ~/ 1000 + 86400,
-              }
-            : {'ok': true}));
+        request.response.write(jsonEncode(answers[request.uri.path] ??
+            (request.uri.path == '/auth/stream-key'
+                ? {
+                    'key': 'test-key',
+                    'expires_at':
+                        DateTime.now().millisecondsSinceEpoch ~/ 1000 + 86400,
+                  }
+                : {'ok': true})));
         await request.response.close();
       }
     }());
@@ -89,6 +94,50 @@ void main() {
   tearDown(() async {
     await app.player!.dispose();
     await server.close(force: true);
+  });
+
+  Map<String, dynamic> queueOf(int rev, List<int> ids) => {
+        'id': 1,
+        'name': 'Mine',
+        'cursor_index': 0,
+        'position_ms': 0,
+        'rev': rev,
+        'items': [for (final (i, id) in ids.indexed) song(id, i)],
+      };
+
+  test('an answer from before a reorder cannot put the row back', () async {
+    // Reported as "reordering the queue in a jam always snaps back", on both sides of
+    // the room. Every read of a queue races every write of it, and a room sends a
+    // handful of events a minute, each of which re-reads the queue — so a drag that
+    // takes a second nearly always has a read in flight across it. The row moved, the
+    // house was told, the house agreed, and then an answer from *before* the drag
+    // landed on top and put the row back.
+    //
+    // The queue's revision only ever goes up, so anything carrying an older one is
+    // news from the past and is thrown away.
+    answers['/queues/1/move'] = queueOf(2, [3, 1, 2]);
+    await app.moveInQueue(2, 0);
+    expect(app.player!.items.map((t) => t.id).toList(), [3, 1, 2]);
+
+    // The room speaks, and what it has to say set off before the drag did.
+    answers['/queues/1'] = queueOf(1, [1, 2, 3]);
+    expect(await app.reloadQueueForTest(), isFalse, reason: 'older than what is on');
+    expect(app.player!.items.map((t) => t.id).toList(), [3, 1, 2],
+        reason: 'the row stayed where it was put');
+
+    // Somebody else really does move something, and that is taken.
+    answers['/queues/1'] = queueOf(3, [2, 3, 1]);
+    expect(await app.reloadQueueForTest(), isTrue);
+    expect(app.player!.items.map((t) => t.id).toList(), [2, 3, 1]);
+  });
+
+  test('the same revision twice is still taken, and a different queue always is',
+      () async {
+    // Equal is not older: two reads of one state have to agree, and refusing the
+    // second would be refusing the truth.
+    answers['/queues/1'] = queueOf(1, [1, 2, 3]);
+    expect(await app.reloadQueueForTest(), isTrue);
+    expect(await app.reloadQueueForTest(), isTrue);
   });
 
   testWidgets('Up next is a page of its own, with the queue on it', (tester) async {

@@ -1309,9 +1309,34 @@ class AppState extends ChangeNotifier {
   /// The queue that has been selected, so its songs are not asked for twice.
   int? _prioritised;
 
+  /// The newest revision of the active queue this device has taken.
+  int _queueRev = -1;
+
+  /// Take [q] as the state of the active queue — unless it is older than what is
+  /// already on screen, in which case it is thrown away.
+  ///
+  /// Every read of a queue races every write of it, and a read that set off before a
+  /// change and arrives after it is a change undone. Reordering in a jam was exactly
+  /// that, and only in a jam: the room sends a handful of events a minute, every one of
+  /// which re-reads the queue, so a drag that took a second nearly always had a read in
+  /// flight across it. The row moved, the server was told, the server agreed — and then
+  /// an answer from before the drag landed on top and put the row back. Which is what
+  /// "it always snaps back" is, on both sides of the room, and why it never happened
+  /// outside one.
+  ///
+  /// The queue's revision is the whole cure: it only ever goes up, so anything carrying
+  /// an older one is news from the past. Held here rather than read off [activeQueue]
+  /// because a refused answer must not move it.
+  bool _takeQueue(Queue q) {
+    if (activeQueue?.id == q.id && q.rev < _queueRev) return false;
+    activeQueue = q;
+    _queueRev = q.rev;
+    return true;
+  }
+
   Future<void> _applyQueue(Queue updated) async {
     final changed = activeQueue?.id != updated.id;
-    activeQueue = updated;
+    if (!_takeQueue(updated)) return;
     await player?.loadQueue(updated);
     notifyListeners();
     unawaited(_keepTheseCovers(updated));
@@ -1480,9 +1505,9 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _resyncQueue() async {
-    await _reloadActiveQueue();
+    final fresh = await _reloadActiveQueue();
     final live = activeQueue;
-    if (live != null) await player?.loadQueue(live);
+    if (fresh && live != null) await player?.loadQueue(live);
     notifyListeners();
   }
 
@@ -2571,12 +2596,13 @@ class AppState extends ChangeNotifier {
       return;
     }
 
-    await _reloadActiveQueue();
+    final fresh = await _reloadActiveQueue();
     final live = activeQueue;
     if (live == null) return;
     // loadQueue keeps the song that is playing where it is: it relocates the loaded
-    // track rather than starting anything over.
-    await player?.loadQueue(live);
+    // track rather than starting anything over. Not where the read brought back
+    // something older than what is on screen: see _takeQueue.
+    if (fresh) await player?.loadQueue(live);
     // Which for a guest may be the wrong place: the host went to a song that was not
     // in this device's copy of the queue until just now.
     await _followTheRoomAgain();
@@ -2620,8 +2646,11 @@ class AppState extends ChangeNotifier {
       return;
     }
     if (activeQueue?.id == jam!.queueId) {
-      await _reloadActiveQueue();
-      if (activeQueue != null) await player?.loadQueue(activeQueue!);
+      // Only where it brought something newer: a room sends several of these a minute
+      // and each one used to hand the player a list, so a drag had to survive the race
+      // as well as the drag.
+      final fresh = await _reloadActiveQueue();
+      if (fresh && activeQueue != null) await player?.loadQueue(activeQueue!);
       await _followTheRoomAgain();
     } else if (!jam!.isHost) {
       // The host put something else on. Following the room means following what the
@@ -2659,16 +2688,30 @@ class AppState extends ChangeNotifier {
     });
   }
 
-  Future<void> _reloadActiveQueue() async {
+  /// Re-read the active queue the way a room's event does — reload, and hand it to
+  /// the player only where it brought back something newer. For a test.
+  @visibleForTesting
+  Future<bool> reloadQueueForTest() async {
+    final fresh = await _reloadActiveQueue();
+    if (fresh && activeQueue != null) await player?.loadQueue(activeQueue!);
+    return fresh;
+  }
+
+  /// Re-read the active queue. False where what came back was older than what is
+  /// already on screen and was thrown away — see [_takeQueue] — so that a caller does
+  /// not go on to hand it to the player.
+  Future<bool> _reloadActiveQueue() async {
     final q = activeQueue;
-    if (q == null) return;
+    if (q == null) return false;
     try {
-      activeQueue = await api.queue(q.id);
+      return _takeQueue(await api.queue(q.id));
     } on ApiException catch (e) {
       if (e.status != 404) rethrow;
       activeQueue = null;
+      _queueRev = -1;
       jam = null;
       await refresh();
+      return false;
     }
   }
 

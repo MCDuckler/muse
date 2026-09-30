@@ -66,6 +66,58 @@ def test_the_room_shares_the_queue_both_ways(client, hdr, guest, jam):
     assert track["id"] in [i["id"] for i in host_sees["items"]]
 
 
+def test_the_room_can_reorder_the_queue_from_either_end(client, hdr, guest, jam):
+    """Dragging a row in a jam, from the host's side and from a guest's.
+
+    Reported as "it always snaps back": the row returns to where it was the moment the
+    finger lets go. What a client does is move the row on screen, ask, and then take
+    whatever comes back — so a move the server refuses, or answers with the old order,
+    looks exactly like that.
+    """
+    client.post("/jams/join", headers=guest, json={"code": jam["code"]})
+    qid = jam["queue"]["id"]
+    ids = []
+    for name in ("one", "two", "three"):
+        t = client.post("/tracks/resolve", headers=hdr, json={"query": name}).json()
+        client.post(f"/queues/{qid}/items", headers=hdr, json={"track_ids": [t["id"]]})
+        ids.append(t["id"])
+    before = [i["id"] for i in client.get(f"/queues/{qid}", headers=hdr).json()["items"]]
+    assert before == ids, before
+
+    # The host drags the last row to the top.
+    r = client.post(f"/queues/{qid}/move", headers=hdr, json={"from": 2, "to": 0})
+    assert r.status_code == 200, r.text
+    assert [i["id"] for i in r.json()["items"]] == [ids[2], ids[0], ids[1]], \
+        "the answer to the move has to be the new order, or the screen puts it back"
+    again = client.get(f"/queues/{qid}", headers=hdr).json()
+    assert [i["id"] for i in again["items"]] == [ids[2], ids[0], ids[1]], "and it stuck"
+
+    # And a guest drags it back down. A jam is a queue everybody in it can use.
+    r = client.post(f"/queues/{qid}/move", headers=guest, json={"from": 0, "to": 2})
+    assert r.status_code == 200, r.text
+    assert [i["id"] for i in r.json()["items"]] == [ids[0], ids[1], ids[2]], r.text
+    seen = client.get(f"/queues/{qid}", headers=guest).json()
+    assert [i["id"] for i in seen["items"]] == [ids[0], ids[1], ids[2]]
+    # The host sees it too, since it is one queue and not two.
+    assert [i["id"] for i in client.get(f"/queues/{qid}", headers=hdr).json()["items"]] \
+        == [ids[0], ids[1], ids[2]]
+
+
+def test_a_reorder_moves_the_queue_on_so_the_room_re_reads_it(client, hdr, guest, jam):
+    """Every client skips a re-read when the revision it is told about is the one it
+    already has. A reorder that does not move the revision on is a reorder nobody else
+    in the room ever hears about."""
+    client.post("/jams/join", headers=guest, json={"code": jam["code"]})
+    qid = jam["queue"]["id"]
+    for name in ("a", "b"):
+        t = client.post("/tracks/resolve", headers=hdr, json={"query": name}).json()
+        client.post(f"/queues/{qid}/items", headers=hdr, json={"track_ids": [t["id"]]})
+    was = client.get(f"/queues/{qid}", headers=hdr).json()["rev"]
+    moved = client.post(f"/queues/{qid}/move", headers=guest,
+                        json={"from": 1, "to": 0}).json()
+    assert moved["rev"] > was, "a move has to move the revision on"
+
+
 def test_a_code_that_is_not_a_jam_says_so(client, guest):
     r = client.post("/jams/join", headers=guest, json={"code": "ZZZZZZ"})
     assert r.status_code == 404 and "not belong" in r.json()["detail"]
