@@ -7,10 +7,14 @@
 # would turn every volume in the chain at once. Linux and Windows have a newer mpv and
 # never noticed.
 #
+# And a target has to be found: their ffmpeg is 6.0, which named a filter written
+# `volume@low` just `low` — a regression FFmpeg fixed in 6.0.1.
+#
 # So this builds media-kit's own recipe, at the release the vendored package names,
-# with one patch to mpv that gives af-command its target as mpv 0.37 has it
-# (app/third_party/media_kit_libs_macos_audio/libmpv/). Everything else is theirs,
-# byte for byte: the same Nix build, the same pins, the same flavour.
+# with two patches (app/third_party/media_kit_libs_macos_audio/libmpv/): mpv's
+# af-command gets its target as mpv 0.37 has it, and ffmpeg gets its own 6.0.1 fix.
+# Everything else is theirs, byte for byte: the same Nix build, the same pins, the
+# same flavour.
 #
 # Run once per change to the patch or the release; the result is a release on this
 # repository (a tag of its own, never a desktop- one) with the archive, whose sha256 goes
@@ -31,7 +35,7 @@ on:
     inputs:
       version:
         description: 'version, as it goes in the archive name and the release tag'
-        default: 'v0.7.3-wetowl1'
+        default: 'v0.7.3-wetowl2'
       targets:
         description: 'Nix targets to build (space separated)'
         default: 'mk-out-archive-xcframeworks-macos-universal-audio-encodersgpl'
@@ -56,12 +60,16 @@ jobs:
         working-directory: ldb
         run: |
           cp ../muse/app/third_party/media_kit_libs_macos_audio/libmpv/*.patch patches/
-          # After their own mpv patches, for every variant.
+          # After their own patches, for every variant.
           sed -i '' '/mpv-audiounit-shared-session.patch/a\
           patch -p1 <${../../../patches/mpv-filter-command-target.patch}
           ' nix/packages/mk-pkg-mpv/default.nix
-          grep -n 'patch -p1' nix/packages/mk-pkg-mpv/default.nix
+          sed -i '' '/ffmpeg-fix-dash-base-url-escape.patch/a\
+          patch -p1 <${../../../patches/ffmpeg-graphparser-instance-name.patch}
+          ' nix/packages/mk-pkg-ffmpeg/default.nix
+          grep -n 'patch -p1' nix/packages/mk-pkg-mpv/default.nix nix/packages/mk-pkg-ffmpeg/default.nix
           grep -q 'mpv-filter-command-target.patch' nix/packages/mk-pkg-mpv/default.nix
+          grep -q 'ffmpeg-graphparser-instance-name.patch' nix/packages/mk-pkg-ffmpeg/default.nix
           # A flake sees only what git knows about.
           git add -A
       - uses: DeterminateSystems/nix-installer-action@v22
@@ -75,7 +83,7 @@ jobs:
       - name: Build
         working-directory: ldb
         env:
-          VERSION: ${{ inputs.version || 'v0.7.3-wetowl1' }}
+          VERSION: ${{ inputs.version || 'v0.7.3-wetowl2' }}
           TARGETS: ${{ inputs.targets || 'mk-out-archive-xcframeworks-macos-universal-audio-encodersgpl' }}
         run: |
           # The Xcode their build is made with; see their nix/overlays/xcode.nix.
@@ -104,7 +112,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          VERSION: ${{ inputs.version || 'v0.7.3-wetowl1' }}
+          VERSION: ${{ inputs.version || 'v0.7.3-wetowl2' }}
         run: |
           # Never replaced: a Makefile somewhere pins these bytes. A new patch is a new
           # version.
@@ -115,5 +123,5 @@ jobs:
           fi
           gh release create "$tag" out/*.tar.gz out/SHA256SUMS \
             --title "libmpv for Apple · $VERSION" \
-            --notes "media-kit/libmpv-darwin-build v0.7.3 (3ece46c) with app/third_party/media_kit_libs_macos_audio/libmpv/mpv-filter-command-target.patch, built from ${{ github.sha }}. Not an app release." \
+            --notes "media-kit/libmpv-darwin-build v0.7.3 (3ece46c) with the patches in app/third_party/media_kit_libs_macos_audio/libmpv/, built from ${{ github.sha }}. Not an app release." \
             --target "${{ github.sha }}"
