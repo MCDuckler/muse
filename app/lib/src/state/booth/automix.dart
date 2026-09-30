@@ -292,7 +292,9 @@ class AutoMix extends ChangeNotifier {
       final prev = i == 0 ? from : s.slots[i - 1].track;
       final ta = prev == null ? null : booth.timing.peek(prev.id);
       final tb = booth.timing.peek(slot.track.id);
-      if (i >= first || prev == null || ta == null || tb == null) {
+      // Judged again only where both records' beats are known: a timing with none
+      // would say less than the house did.
+      if (i >= first || prev == null || ta == null || tb == null || !ta.hasBeats || !tb.hasBeats) {
         out.add(slot);
         continue;
       }

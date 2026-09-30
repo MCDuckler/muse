@@ -2,6 +2,7 @@
 // with SHOTS=<dir> in the environment writes PNGs there. Without it, nothing is written
 // and it only checks the room builds at a desk's size without overflowing.
 import 'dart:io';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -110,9 +111,15 @@ void main() {
         : ['empty', 'playing', if (w == 1600) 'mixing', if (w != 1920) 'parts', if (w != 1280) 'crate', 'plan', 'set', 'planner', if (w == 1600) 'light']) {
       testWidgets('the booth at ${w.round()}x${h.round()}, $state', (tester) async {
         JustAudioPlatform.instance = FakeJustAudio();
-        useThisClientInstead(MockClient((r) async => r.url.path.contains('stream-key')
-            ? http.Response('{"key": "k", "expires_at": 99999999999}', 200)
-            : http.Response('{}', 200)));
+        useThisClientInstead(MockClient((r) async {
+          if (r.url.path.contains('stream-key')) return http.Response('{"key": "k", "expires_at": 99999999999}', 200);
+          // A house that builds sets: a dozen records rising to a peak and easing off.
+          http.Response json(Object o) =>
+              http.Response.bytes(utf8.encode(jsonEncode(o)), 200, headers: {'content-type': 'application/json; charset=utf-8'});
+          if (r.url.path.endsWith('/booth/set')) return json(_aSet());
+          if (r.url.path.endsWith('/booth/pool')) return json(_aPool());
+          return http.Response('{}', 200);
+        }));
         // The crate wide and the log folded, as a DJ leaves them.
         SharedPreferences.setMockInitialValues(state == 'crate'
             ? {'muse.booth.crateWide': true, 'muse.booth.logFolded': true}
@@ -124,7 +131,7 @@ void main() {
                         ? {'muse.booth.look': 'light', 'muse.booth.view': 'plan'}
                         : {});
         final app = AppState()..api = (ApiClient(baseUrl: 'http://example.invalid')..token = 'x');
-        if (state == 'crate') {
+        if (state == 'crate' || state == 'planner') {
           app.playlists = [
             for (final (i, n) in ['Favourites', 'Friday warm-up', 'Hardtekk crate', 'Eurodance', 'Peak time'].indexed)
               Playlist(id: 50 + i, name: n, kind: i == 0 ? 'favourites' : 'local', itemCount: 12 + i * 7, autoSplit: i == 2),
@@ -319,3 +326,43 @@ void main() {
   }
   }
 }
+
+
+/// What a house that builds sets answers: twelve records, loud in the middle.
+Map<String, dynamic> _aSet() {
+  const names = [
+    ('Pump Up the Jam', 'Technotronic'), ('Rhythm Is a Dancer', 'SNAP!'), ('Mr. Vain', 'Culture Beat'),
+    ('What Is Love', 'Haddaway'), ('Children', 'Robert Miles'), ('Freed from Desire', 'Gala'),
+    ('Better Off Alone', 'Alice Deejay'), ('Sandstorm', 'Darude'), ('Castles in the Sky', 'Ian Van Dahl'),
+    ('9PM (Till I Come)', 'ATB'), ('Kernkraft 400', 'Zombie Nation'), ('Blue (Da Ba Dee)', 'Eiffel 65'),
+  ];
+  final slots = <Map<String, dynamic>>[];
+  for (final (i, (t, a)) in names.indexed) {
+    final k = i / (names.length - 1);
+    final target = k < 0.75 ? 0.35 + 0.6 * k / 0.75 : 0.95 - 0.35 * (k - 0.75) / 0.25;
+    slots.add({
+      'track': {'id': 300 + i, 'title': t, 'artists': [a], 'duration_ms': 215000 + i * 7000, 'state': 'ready', 'stream_url': '/tracks/${300 + i}/stream'},
+      'fit': i == 0 ? null : 0.85 + (i % 4) * 0.08,
+      'why': i == 0 ? '' : ['the same key (8A→8A) · 2 % faster', 'a fifth apart (8A→9A) · as loud', 'relative major and minor · sounds alike', 'a tone up: a boost · 3 dB louder'][i % 4],
+      'energy': (target + ((i * 37) % 9 - 4) / 60).clamp(0.0, 1.0),
+      'target': target,
+      'bpm': 124.0 + i * 0.8,
+      'camelot': ['8A', '9A', '9B', '10A'][i % 4],
+      'parts': i % 3 == 0,
+      'pinned': i == 4,
+      'at_ms': i * 200000,
+    });
+  }
+  return {
+    'slots': slots,
+    'curve': [for (var i = 0; i <= 20; i++) i / 20 < 0.75 ? 0.35 + 0.6 * (i / 20) / 0.75 : 0.95 - 0.35 * (i / 20 - 0.75) / 0.25],
+    'stats': _aPool(),
+  };
+}
+
+Map<String, dynamic> _aPool() => {
+      'named': 5282, 'ready': 5282, 'measured': 5068, 'songs': 4900, 'unmeasured': 214, 'unfetched': 0, 'in_parts': 1210,
+      'bpm': {'from': 60, 'step': 2, 'counts': [for (var i = 0; i < 70; i++) (400 * math.exp(-math.pow((i - 33) / 6, 2))).round()]},
+      'energy': {'counts': [for (var i = 0; i < 20; i++) 10 + i * 12]},
+      'unfetched_ids': [],
+    };
