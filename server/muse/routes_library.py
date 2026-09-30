@@ -1225,6 +1225,58 @@ def move_item(queue_id: int, body: dict = Body(...), user: dict = Depends(curren
     return _queue_state(queue_id)
 
 
+@router.post("/queues/{queue_id}/arrange")
+def arrange_items(queue_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
+    """Put these rows, in this order, straight after another one — the booth's word on
+    what plays next.
+
+    `/move` keeps a selection in the order it was in, which is what a drag wants and
+    exactly what a set does not: the booth decides an order, and saying it as a drag
+    per record was a request per record, each shifting the ones after it. Here the rows
+    are named (item_id, which a reorder never changes) and laid down as asked, right
+    after `after` (an item_id; the playing row when left out). Every other row keeps
+    its own order around them, and the cursor stays on its row.
+    """
+    _own_queue(queue_id, user)
+    wanted = body.get("items")
+    if not isinstance(wanted, list) or not all(isinstance(x, int) for x in wanted):
+        raise HTTPException(400, "items is a list of item ids")
+    rows = db.all_("select pos, item_id, track_id, origin, added_by from queue_items "
+                   "where queue_id=%s order by pos", (queue_id,))
+    by_id = {r["item_id"]: r for r in rows}
+    # A row named twice goes where it is first named; a row that is not (or no longer)
+    # in the queue is passed over — the booth's list can be a moment older than this.
+    seen: set[int] = set()
+    block = []
+    for x in wanted:
+        if x in by_id and x not in seen:
+            seen.add(x)
+            block.append(by_id[x])
+    cursor = db.one("select cursor_index from queues where id=%s",
+                    (queue_id,))["cursor_index"]
+    playing = rows[cursor]["item_id"] if 0 <= cursor < len(rows) else None
+    after = body.get("after", playing)
+    if after is not None and (after not in by_id or after in seen):
+        raise HTTPException(400, "after is not a row of this queue")
+    remaining = [r for r in rows if r["item_id"] not in seen]
+    at = next((i + 1 for i, r in enumerate(remaining) if r["item_id"] == after), 0)
+    rows = remaining[:at] + block + remaining[at:]
+
+    with db.pool().connection() as c:
+        c.execute("delete from queue_items where queue_id=%s", (queue_id,))
+        for i, r in enumerate(rows):
+            c.execute("insert into queue_items(queue_id,pos,item_id,track_id,origin,added_by) "
+                      "values(%s,%s,%s,%s,%s,%s)",
+                      (queue_id, i, r["item_id"], r["track_id"], r["origin"],
+                       r["added_by"]))
+        new_cursor = next((i for i, r in enumerate(rows) if r["item_id"] == playing),
+                          cursor)
+        c.execute("update queues set rev=rev+1, cursor_index=%s, updated_at=now() "
+                  "where id=%s", (new_cursor, queue_id))
+    announce_queue(queue_id, user)
+    return _queue_state(queue_id)
+
+
 @router.post("/queues/{queue_id}/shuffle")
 def shuffle_queue(queue_id: int, body: dict = Body(default={}),
                   user: dict = Depends(current_user)):

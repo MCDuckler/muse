@@ -2244,6 +2244,19 @@ class TrackTiming {
     return onGrid(Duration(milliseconds: best), every: 4);
   }
 
+  /// The first marker at or after [at], on the steady grid — failing that the first
+  /// downbeat at or after it — or null where the record has neither left.
+  Duration? markerAtOrAfter(Duration at) {
+    final ms = at.inMilliseconds;
+    for (final x in markers) {
+      if (x < ms) continue;
+      final on = onGrid(Duration(milliseconds: x), every: 4);
+      // The grid can put a marker a hair before [at]: the next one then.
+      if (on >= at - const Duration(milliseconds: 20)) return on;
+    }
+    return nextOnGrid(at, every: 4);
+  }
+
   /// A bar of this record, in its own time: four beats on the steady grid, or at its
   /// tempo where there is none. Null with no tempo.
   Duration? get bar {

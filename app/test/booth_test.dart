@@ -766,6 +766,219 @@ void main() {
       booth.auto.stop();
     });
 
+    // ---------------------------------------------------------------- the booth's hands
+    /// A minute at twelve hundred a minute, grid to the end: a bar is a fifth of a
+    /// second, a marker every four bars, and a sound that ends a second before the file.
+    TrackTiming minute() => TrackTiming(
+          durationMs: 60000,
+          bpm: 1200,
+          beats: [for (var i = 0; i < 1200; i++) i * 50],
+          downbeats: [for (var i = 0; i < 1200; i += 4) i * 50],
+          cues: const MixCues(firstDownbeatMs: 0, mixInMs: 2000, mixOutMs: 40000, soundEndMs: 59000),
+        );
+
+    Future<void> until(bool Function() ok, {int ms = 3000}) async {
+      for (var i = 0; i < ms ~/ 20 && !ok(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    }
+
+    test('a record put on the free deck by hand is next, and the next one comes after it',
+        () async {
+      for (final id in [1, 2, 3, 4]) {
+        booth.timing.put(id, minute());
+      }
+      final auto = booth.auto;
+      final told = <List<int>>[];
+      auto.onArrange = (after, order) async => told.add([after?.id ?? -1, for (final t in order) t.id]);
+      await auto.start([song(1), song(2), song(3)]);
+      await until(() => auto.isReady);
+      expect(auto.next?.id, 2);
+      final free = booth.other(booth.master);
+      await booth.load(free, song(4));
+      expect(auto.next?.id, 4, reason: 'what a hand put on the free deck plays next');
+      expect(auto.after?.id, 2, reason: 'the one that was next comes after it, not out');
+      expect(told.last, [1, 4], reason: 'the queue is told: 4 straight after 1');
+      expect(auto.change?.what, contains('by hand'));
+      // A refresh of the queue in its old order does not undo a hand's choice.
+      auto.follow([song(1), song(2), song(3)]);
+      expect(auto.next?.id, 4);
+      await until(() => auto.isReady);
+      expect(free.track?.id, 4, reason: 'and nothing was loaded over it');
+      // UNDO: back as it was.
+      await auto.undoLast();
+      expect(auto.next?.id, 2);
+      await until(() => free.track?.id == 2);
+      expect(free.track?.id, 2);
+      // "Play it next" from the set goes through the queue the same way.
+      await auto.swapNext(song(3));
+      expect(auto.next?.id, 3);
+      expect(auto.after?.id, 2);
+      expect(told.last, [1, 3]);
+      auto.stop();
+    });
+
+    test('a record put on the deck in the room by hand is what plays now', () async {
+      for (final id in [1, 2, 3, 4]) {
+        booth.timing.put(id, minute());
+      }
+      final auto = booth.auto;
+      await auto.start([song(1), song(2), song(3)]);
+      await until(() => auto.isReady);
+      final room = booth.master;
+      await booth.load(room, song(4));
+      expect(auto.current?.id, 4, reason: 'what is playing is what the automix is on');
+      expect(auto.next?.id, 2, reason: 'and what was next still is');
+      await until(() => auto.isReady);
+      expect(room.playing, isTrue);
+      expect(auto.goesAt, isNotNull);
+      expect(auto.goesAt!, greaterThan(room.position), reason: 'a way out ahead of the record');
+      auto.stop();
+    });
+
+    test('a mix by hand into the next record is taken as made, and it carries on', () async {
+      for (final id in [1, 2, 3]) {
+        booth.timing.put(id, minute());
+      }
+      final auto = booth.auto;
+      await auto.start([song(1), song(2), song(3)]);
+      await until(() => auto.isReady);
+      await booth.go(Transition.cut);
+      await until(() => auto.current?.id == 2);
+      expect(auto.current?.id, 2);
+      expect(auto.next?.id, 3);
+      expect(auto.lastMix?.to.id, 2);
+      await until(() => booth.other(booth.master).track?.id == 3);
+      expect(booth.other(booth.master).track?.id, 3, reason: 'the one after is laid out');
+      auto.stop();
+    });
+
+    test('the other record brought in with the fader alone leads from then on', () async {
+      for (final id in [1, 2, 3]) {
+        booth.timing.put(id, minute());
+      }
+      final auto = booth.auto;
+      await auto.start([song(1), song(2), song(3)]);
+      await until(() => auto.isReady);
+      final room = booth.master, free = booth.other(room);
+      await free.play();
+      await booth.setCrossfader(identical(free, booth.b) ? 1 : 0);
+      await room.pause();
+      await until(() => auto.current?.id == 2);
+      expect(booth.master, same(free));
+      expect(auto.current?.id, 2);
+      expect(auto.state, isNot(AutoState.waiting));
+      auto.stop();
+    });
+
+    test('a record moved past its way out by hand does not go that instant', () async {
+      for (final id in [1, 2]) {
+        booth.timing.put(id, minute());
+      }
+      final auto = booth.auto;
+      await auto.start([song(1), song(2)]);
+      await until(() => auto.isReady);
+      final go = auto.goesAt!;
+      await booth.master.seekByHand(go + const Duration(seconds: 1));
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      expect(booth.busy, isFalse, reason: 'not a mix the moment it was noticed');
+      expect(booth.master.track?.id, 1);
+      expect(auto.goesAt!, greaterThan(booth.master.position + const Duration(seconds: 1)),
+          reason: 'the way out kept ahead of the record');
+      auto.stop();
+    });
+
+    test('paused by hand, the Auto DJ waits, and says so', () async {
+      for (final id in [1, 2]) {
+        booth.timing.put(id, minute());
+      }
+      final auto = booth.auto;
+      await auto.start([song(1), song(2)]);
+      await until(() => auto.isReady);
+      await booth.master.pause();
+      await until(() => auto.state == AutoState.waiting);
+      expect(auto.state, AutoState.waiting);
+      await booth.master.play();
+      await until(() => auto.state == AutoState.ready);
+      expect(auto.state, AutoState.ready);
+      auto.stop();
+    });
+
+    test('skip goes at the next bar, over a few', () async {
+      for (final id in [1, 2]) {
+        booth.timing.put(id, minute());
+      }
+      final auto = booth.auto;
+      await auto.start([song(1), song(2)]);
+      await until(() => auto.isReady);
+      final t0 = DateTime.now();
+      await auto.skip();
+      await until(() => booth.master.track?.id == 2);
+      expect(booth.master.track?.id, 2);
+      expect(DateTime.now().difference(t0), lessThan(const Duration(seconds: 3)));
+      expect(auto.lastMix?.plan.bars, lessThanOrEqualTo(4));
+      expect(auto.lastMix?.plan.why, contains('skipped'));
+      auto.stop();
+    });
+
+    group('a next that changes late', () {
+      /// A house slow to sign a stream: every load of a record waits three and a half
+      /// seconds for it first.
+      void slowHouse() {
+        useThisClientInstead(MockClient((r) async {
+          if (r.url.path.contains('/stream-key')) {
+            await Future<void>.delayed(const Duration(milliseconds: 3500));
+            return http.Response('{"key": "signed", "expires_at": 1}', 200);
+          }
+          return http.Response('{}', 200);
+        }));
+        addTearDown(() => useThisClientInstead(http.Client()));
+      }
+
+      test('is never mixed into the record that was next before it', () async {
+        for (final id in [1, 2, 3]) {
+          booth.timing.put(id, minute());
+        }
+        final auto = booth.auto;
+        await auto.start([song(1), song(2), song(3)]);
+        await until(() => auto.isReady);
+        slowHouse();
+        // Two seconds before the way out, the next changes: its record takes four.
+        final go = auto.goesAt!;
+        await booth.master.seek(go - const Duration(milliseconds: 2200));
+        auto.follow([song(1), song(3), song(2)]);
+        final masters = <int?>{};
+        for (var i = 0; i < 500 && booth.master.track?.id == 1; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          masters.add(booth.master.track?.id);
+        }
+        await until(() => booth.master.track?.id == 3, ms: 8000);
+        masters.add(booth.master.track?.id);
+        expect(masters, isNot(contains(2)), reason: 'never into the record that was next');
+        expect(booth.master.track?.id, 3);
+        auto.stop();
+      });
+
+      test('at the end of the record holds the floor until it is ready', () async {
+        for (final id in [1, 2, 3]) {
+          booth.timing.put(id, minute());
+        }
+        final auto = booth.auto;
+        await auto.start([song(1), song(2), song(3)]);
+        await until(() => auto.isReady);
+        slowHouse();
+        auto.follow([song(1), song(3), song(2)]);
+        // Near the end, with no room left to put the way out any later.
+        await booth.master.seekByHand(const Duration(milliseconds: 57200));
+        await until(() => auto.state == AutoState.holding, ms: 3000);
+        expect(auto.state, AutoState.holding);
+        expect(booth.master.loopStart, isNotNull, reason: 'its last bars go round');
+        await until(() => booth.master.track?.id == 3, ms: 10000);
+        expect(booth.master.track?.id, 3, reason: 'and it goes once the next is ready');
+        auto.stop();
+      });
+    });
+
     test('handing the booth a record it is already playing does not start it again',
         () async {
       booth.timing.put(1, grid(500));

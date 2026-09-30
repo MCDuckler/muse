@@ -637,7 +637,12 @@ class Booth extends ChangeNotifier {
   /// What went wrong on either deck, if anything did.
   String? get trouble => a.trouble ?? b.trouble;
 
-  Future<void> load(Deck deck, Track track, {Duration? at}) async {
+  /// Put [track] on [deck]. [byHand] unless the booth itself is doing it (the automix
+  /// starting, a session coming back): a record put on by a hand while the automix
+  /// runs is one it has to hear about — it is what plays next, or what plays now.
+  Future<void> load(Deck deck, Track track, {Duration? at, bool byHand = true}) async {
+    final told = byHand && auto.running;
+    if (told) await auto.beforeHandLoad(deck);
     final t = await timing.of(track);
     // Playing a record (not one that has run out): the new one is started again once
     // it is on — a deck always takes a record parked (Deck.load), and one playing
@@ -676,6 +681,7 @@ class Booth extends ChangeNotifier {
       if (deck.synced) await sync(deck, quiet: true);
       await play(deck);
     }
+    if (told && deck.track?.id == track.id) auto.handLoaded(deck, track);
   }
 
   // ------------------------------------------------------------------ the fader
@@ -1072,6 +1078,7 @@ class Booth extends ChangeNotifier {
   /// The pitch fader, by hand. Moving a synced deck's fader is taking it back, so its
   /// SYNC goes off; moving the leader's takes the follower with it.
   Future<void> pitchByHand(Deck deck, double rate) async {
+    deck.handPitches++;
     if (deck.synced) await setSync(deck, false);
     await deck.setTempo(rate);
     _follow();

@@ -544,6 +544,36 @@ def test_a_selection_moves_as_one_block(client, hdr, tracks):
     assert [i["pos"] for i in moved.json()["items"]] == list(range(6))
 
 
+def test_the_booth_arranges_what_comes_next(client, hdr, tracks):
+    """A set's order, said once: the named rows straight after the one named, in the
+    order asked for; everything else keeps its own order; the cursor keeps its row."""
+    q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
+    ids = [t["id"] for t in tracks]
+    got = client.post(f"/queues/{q['id']}/items", headers=hdr,
+                      json={"track_ids": ids + ids}).json()     # A B C A B C
+    items = got["items"]
+    row = [i["item_id"] for i in items]
+    # After the second row (B), the last C then the first A — reversed, which /move
+    # cannot say.
+    r = client.post(f"/queues/{q['id']}/arrange", headers=hdr,
+                    json={"after": row[1], "items": [row[5], row[0], 999999]})
+    assert r.status_code == 200, r.text
+    order = [i["item_id"] for i in r.json()["items"]]
+    assert order == [row[1], row[5], row[0], row[2], row[3], row[4]]
+    assert [i["pos"] for i in r.json()["items"]] == list(range(6))
+    # With no `after`, straight after the playing row (the cursor, row 0 here — which
+    # is now the old second row).
+    cursor_row = order[r.json()["cursor_index"]]
+    r = client.post(f"/queues/{q['id']}/arrange", headers=hdr, json={"items": [row[4]]})
+    order2 = [i["item_id"] for i in r.json()["items"]]
+    at = order2.index(cursor_row)
+    assert order2[at + 1] == row[4]
+    assert order2[r.json()["cursor_index"]] == cursor_row, "the cursor keeps its row"
+    bad = client.post(f"/queues/{q['id']}/arrange", headers=hdr,
+                      json={"after": 123456789, "items": [row[4]]})
+    assert bad.status_code == 400
+
+
 def test_moving_a_block_past_itself_is_not_an_error(client, hdr, tracks):
     q = client.post("/queues", headers=hdr, json={"name": "Now"}).json()
     ids = [t["id"] for t in tracks]

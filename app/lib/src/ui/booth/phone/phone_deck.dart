@@ -182,7 +182,7 @@ class _PhoneDeckState extends State<PhoneDeck> with TickerProviderStateMixin {
     final hand = ArmHand(
       reading: _reading,
       onPlace: (at) async {
-        await _d.seek(at);
+        await _d.placeByHand(at);
         if (!_d.playing) await _b.play(_d, bars: false);
       },
       onPark: _d.pause,

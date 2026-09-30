@@ -1094,6 +1094,22 @@ class Deck extends ChangeNotifier {
   /// never there. Counted rather than timed, so nothing can be missed between looks.
   int placed = 0;
 
+  /// Times a hand has moved this record somewhere else in it — a drag on the waves, a
+  /// hot cue, the needle put down — rather than the booth placing it. Counted, not
+  /// timed, so whoever minds (the automix: its out point was worked out for where
+  /// the record was) sees every one however late it looks. A nudge to bring the beats
+  /// in line is not one: that is the same place in the record, a few ms either way.
+  int handMoves = 0;
+
+  /// Times a hand has moved this deck's pitch fader.
+  int handPitches = 0;
+
+  /// The needle put down by hand at [at].
+  Future<void> placeByHand(Duration at) {
+    handMoves++;
+    return seek(at);
+  }
+
   Future<void> seek(Duration to) async {
     placed++;
     _lastReport = null;
@@ -1140,6 +1156,7 @@ class Deck extends ChangeNotifier {
     // else entirely.
     if (_chainLooping) unawaited(_outOfTheChain());
     final at = to < Duration.zero ? Duration.zero : to;
+    if ((at - aimedAt).abs() > const Duration(seconds: 1)) handMoves++;
     _aim = at;
     _lastReport = null;
     _wrappedAt = null;
@@ -1213,7 +1230,7 @@ class Deck extends ChangeNotifier {
 
   Future<void> jumpCue(int n) async {
     final at = hotCues[n];
-    if (at != null) await seek(at);
+    if (at != null) await placeByHand(at);
   }
 
   Duration? loopStart;

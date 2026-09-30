@@ -34,6 +34,32 @@ enum MixStyle {
   bold,
 }
 
+/// What the automix is doing, in one word — what the bars on the desk and the phone
+/// say, the same way on both.
+enum AutoState {
+  /// Switched off.
+  off,
+
+  /// Working out the next transition, or waiting for its record to arrive.
+  preparing,
+
+  /// The next record is on the free deck, the move planned, the moment counted down.
+  ready,
+
+  /// The record in the room was paused by a hand: nothing happens until it plays.
+  waiting,
+
+  /// The next record is not ready and the one in the room was running out: its last
+  /// bars go round until it is.
+  holding,
+
+  /// A transition is running — the automix's, or one somebody is doing by hand.
+  mixing,
+
+  /// Playing the last record there is, with nothing to follow it.
+  last,
+}
+
 class AutoMix extends ChangeNotifier {
   AutoMix(this.booth) {
     // A record the pool has just finished taking apart: in parts from now on, and if
@@ -319,12 +345,53 @@ class AutoMix extends ChangeNotifier {
     return null;
   }
 
+  // ------------------------------------------------------------------ the order is the queue's
+  /// Where an order the booth decides goes: into the queue, [order] straight after
+  /// [after]'s row (the record on now), records not in it added — so what the crate
+  /// shows is what plays, on every screen, and a record put back by a refresh of the
+  /// queue is not one the booth had put elsewhere. Set by the app; without it (a test,
+  /// a kept mix being done again) the booth keeps its order to itself.
+  Future<void> Function(Track? after, List<Track> order)? onArrange;
+  int _arranging = 0;
+  List<Track>? _queueWhileArranging;
+
+  Future<void> _arrange(Track? after, List<Track> order) async {
+    final tell = onArrange;
+    if (tell == null || order.isEmpty) return;
+    _arranging++;
+    try {
+      await tell(after, order).timeout(const Duration(seconds: 12));
+    } catch (_) {
+      // The house said no, or not in time: the booth plays its own order, and the
+      // queue shows the house's until somebody moves it.
+    } finally {
+      _arranging--;
+      // What the queue said while it was being told: its last word, now that it has
+      // heard the booth's.
+      final q = _queueWhileArranging;
+      if (_arranging == 0 && q != null) {
+        _queueWhileArranging = null;
+        follow(q);
+      }
+    }
+  }
+
+  /// The record a hand made next (put on the free deck, "play it next"): it stays
+  /// next whatever the booth would have chosen, until it has been mixed into.
+  int? _heldNext;
+
   /// The queue as it is now, while mixing: what comes after the record on now follows
   /// it — a record moved up, taken out or added in the crate is what the booth mixes
   /// into next, rather than whatever the queue was when the automix was switched on.
   /// The record playing stays where it is. A mix being done again keeps its own order.
   void follow(List<Track> queue) {
     if (!running || replaying) return;
+    // Half-way through telling the queue an order of its own: the queue's answers
+    // until then are about orders the booth has already moved on from.
+    if (_arranging > 0) {
+      _queueWhileArranging = queue;
+      return;
+    }
     final ready = [for (final t in queue) if (t.isReady) t];
     final on = current;
     final before = next?.id;
@@ -338,12 +405,19 @@ class AutoMix extends ChangeNotifier {
     }
     // Choosing for itself, the record it chose stays chosen while it is still to come:
     // put back in the queue's order on every refresh of the queue, it was chosen again,
-    // and the plan for it started over — for as long as the queue kept refreshing.
-    if (pickBest && before != null) {
-      final i = _tracks.indexWhere((t) => t.id == before);
+    // and the plan for it started over — for as long as the queue kept refreshing. And
+    // a record a hand made next stays next, whatever order the queue comes back in.
+    final keep = _heldNext ?? (pickBest ? before : null);
+    if (keep != null) {
+      final i = _tracks.indexWhere((t) => t.id == keep);
       if (i > _at + 1) {
         _tracks = [..._tracks]..insert(_at + 1, _tracks[i]);
         _tracks.removeAt(i + 1);
+      } else if (i < 0 && keep == _heldNext) {
+        // Not in the queue (it never got there, or was taken out of it) but on the
+        // free deck, where a hand put it: what is on the deck is what plays next.
+        final held = booth.other(booth.master).track;
+        if (held?.id == keep) _tracks = [..._tracks]..insert(_at + 1, held!);
       }
     }
     if (next?.id != before && !booth.busy && !_going) {
@@ -375,7 +449,7 @@ class AutoMix extends ChangeNotifier {
   /// How long until it does, by the wall clock at the master's tempo — or null when
   /// there is nothing lined up. Negative while the transition is running.
   Duration? get timeToGo {
-    final at = goesAt;
+    final at = _nowAsked ? Duration.zero : goesAt;
     final from = booth.master;
     if (at == null || !running) return null;
     final left = at - from.position;
@@ -396,26 +470,81 @@ class AutoMix extends ChangeNotifier {
   Future<void> mixNow() async {
     if (!running || next == null) return;
     booth.note(BoothEventKind.mix, 'Mixing now, by hand');
-    goesAt = Duration.zero;
+    // At the next downbeat once the next record is ready — straight away where it is.
+    _nowAsked = true;
     notifyListeners();
     await _tick();
   }
 
-  /// Not that one: put [track] next instead, and lay it out ready.
+  /// [track] next: put straight after the record on now — the one that was next
+  /// comes after it, not out — and laid out ready. A hand's choice: it stays next.
   Future<void> swapNext(Track track) async {
-    if (_at + 1 < _tracks.length) {
-      _tracks = [..._tracks]..[_at + 1] = track;
-    } else {
-      _tracks = [..._tracks, track];
+    if (!running) return;
+    if (next?.id == track.id) return;
+    _remember('${track.displayTitle} put next');
+    _heldNext = track.id;
+    _putNext(track);
+    booth.note(BoothEventKind.next, 'Next: ${track.displayTitle} — by hand');
+    unawaited(_arrange(current, [track]));
+    await _prepareNext();
+  }
+
+  /// [track] as the record after this one, in the booth's own list: a record already
+  /// further down moves up rather than playing twice.
+  void _putNext(Track track) {
+    final rest = [..._tracks.sublist(math.min(_at + 1, _tracks.length))];
+    final i = rest.indexWhere((t) => t.id == track.id);
+    if (i >= 0) rest.removeAt(i);
+    _tracks = [..._tracks.sublist(0, _at + 1), track, ...rest];
+  }
+
+  /// Not that one: the record after this one goes to the end of the queue — later, not
+  /// never — and whatever comes after it is laid out instead.
+  Future<void> dropNext() async {
+    if (_at + 1 >= _tracks.length) return;
+    final gone = _tracks[_at + 1];
+    _remember('${gone.displayTitle} moved later');
+    booth.note(BoothEventKind.skip, 'Not now: ${gone.displayTitle} — to the end of the queue');
+    if (_heldNext == gone.id) _heldNext = null;
+    final last = _tracks.last;
+    _tracks = [..._tracks]..removeAt(_at + 1);
+    // Behind everything else, where the queue has more than this one; the booth's own
+    // list keeps it too, at the end, so the queue's next word agrees.
+    if (!identical(last, gone)) {
+      _tracks = [..._tracks, gone];
+      unawaited(_arrange(last, [gone]));
     }
     await _prepareNext();
   }
 
-  /// Leave the record after this one out altogether.
-  Future<void> dropNext() async {
-    if (_at + 1 >= _tracks.length) return;
-    booth.note(BoothEventKind.skip, 'Skipped ${_tracks[_at + 1].displayTitle}');
-    _tracks = [..._tracks]..removeAt(_at + 1);
+  // ------------------------------------------------------------------ undoing
+  /// The last few things the booth did to the order by itself or on a hand's word —
+  /// each the order of what was to come before it, and in a few words what it was.
+  final _undo = <({String what, int? next, List<Track> upcoming, DateTime at})>[];
+
+  /// The newest of those while it is fresh: what the UNDO chip offers.
+  ({String what, DateTime at})? get change {
+    if (_undo.isEmpty) return null;
+    final u = _undo.last;
+    if (DateTime.now().difference(u.at) > const Duration(seconds: 15)) return null;
+    return (what: u.what, at: u.at);
+  }
+
+  void _remember(String what) {
+    _undo.add((what: what, next: _heldNext, upcoming: upcoming, at: DateTime.now()));
+    if (_undo.length > 5) _undo.removeAt(0);
+  }
+
+  /// What was to come before the last change, back as it was.
+  Future<void> undoLast() async {
+    if (_undo.isEmpty || !running || booth.busy) return;
+    final u = _undo.removeLast();
+    _heldNext = u.next;
+    final played = <int>{for (var i = 0; i <= _at && i < _tracks.length; i++) _tracks[i].id};
+    final back = [for (final t in u.upcoming) if (!played.contains(t.id)) t];
+    _tracks = [..._tracks.sublist(0, _at + 1), ...back];
+    booth.note(BoothEventKind.plan, 'Undone: ${u.what}');
+    unawaited(_arrange(current, back));
     await _prepareNext();
   }
 
@@ -737,6 +866,11 @@ class AutoMix extends ChangeNotifier {
     if (_tracks.isEmpty) return;
     _kept = kept;
     _at = at.clamp(0, _tracks.length - 1);
+    _heldNext = null;
+    _undo.clear();
+    _forgetThePair();
+    _waiting = false;
+    _self++;
     running = true;
     booth.note(BoothEventKind.auto,
         'Auto DJ on · ${_tracks.length - _at} record${_tracks.length - _at == 1 ? '' : 's'}, ${style.name}');
@@ -744,13 +878,21 @@ class AutoMix extends ChangeNotifier {
     final deck = booth.master;
     // The record it is already playing stays where it is: handing the queue to the
     // booth mid-song should be the booth taking over, not the song starting again.
-    if (deck.track?.id != _tracks[_at].id) {
-      await booth.load(deck, _tracks[_at], at: from);
-    } else if (from != null && (deck.position - from).abs() > const Duration(seconds: 2)) {
-      await deck.seek(from);
+    try {
+      if (deck.track?.id != _tracks[_at].id) {
+        await booth.load(deck, _tracks[_at], at: from, byHand: false);
+      } else if (from != null && (deck.position - from).abs() > const Duration(seconds: 2)) {
+        await deck.seek(from);
+      }
+      if (!deck.playing) await deck.play();
+      await booth.setCrossfader(identical(deck, booth.b) ? 1 : 0);
+    } finally {
+      _self--;
     }
-    if (!deck.playing) await deck.play();
-    await booth.setCrossfader(identical(deck, booth.b) ? 1 : 0);
+    for (final d in booth.decks) {
+      _seenMoves[d.name] = d.handMoves;
+      _seenPitches[d.name] = d.handPitches;
+    }
     await _prepareNext();
     _watch?.cancel();
     _watch = Timer.periodic(const Duration(milliseconds: 200), (_) => _tick());
@@ -762,6 +904,8 @@ class AutoMix extends ChangeNotifier {
     running = false;
     _asked++; // and a preparation under way writes no plan after it
     _endGlide();
+    _forgetThePair();
+    _waiting = false;
     _watch?.cancel();
     _watch = null;
     plan = null;
@@ -793,6 +937,21 @@ class AutoMix extends ChangeNotifier {
     if (now.track?.id != m.to.id || _at < 1 || _tracks[_at].id != m.to.id) return;
     final old = booth.other(now);
     _endGlide();
+    _forgetThePair();
+    _self++;
+    try {
+      await _replay(m, now, old);
+    } finally {
+      _self--;
+    }
+    for (final d in booth.decks) {
+      _seenMoves[d.name] = d.handMoves;
+    }
+    await _tell('replay', m, const {});
+    await _prepareNext();
+  }
+
+  Future<void> _replay(LastMix m, Deck now, Deck old) async {
     booth.note(BoothEventKind.auto, 'Again: ${m.from.displayTitle} into ${m.to.displayTitle}');
     final bar = now.timing?.bar ?? const Duration(seconds: 2);
     await now.pause();
@@ -808,8 +967,6 @@ class AutoMix extends ChangeNotifier {
     await old.play();
     _at--;
     steers[(m.from.id, m.to.id)] = m.plan;
-    await _tell('replay', m, const {});
-    await _prepareNext();
   }
 
   /// Every mix made and every hand on the plan, told to the house — quietly: a house
@@ -945,6 +1102,8 @@ class AutoMix extends ChangeNotifier {
 
   Future<void> _prepare(bool Function() stale) async {
     why = null;
+    _readyFor = null;
+    _plannedBars = null;
     _workingSince = DateTime.now();
     if (pickBest && !replaying) await _bringTheBestForward();
     if (stale()) return;
@@ -961,6 +1120,15 @@ class AutoMix extends ChangeNotifier {
     if (coming == null) {
       plan = null;
       goesAt = null;
+      _plannedOut = null;
+      notifyListeners();
+      return;
+    }
+    // The next record already playing on the free deck, and not by the automix: a
+    // hand is mixing into it. Nothing is loaded over it or planned for it; the booth
+    // takes it from there once the hand is done (see _observe).
+    if (to.playing && to.track?.id == coming.id && !booth.busy) {
+      working = null;
       notifyListeners();
       return;
     }
@@ -981,11 +1149,12 @@ class AutoMix extends ChangeNotifier {
     plan = chosen;
     if (was != null) {
       // As it was done: the same places, the same rate.
-      goesAt = Duration(milliseconds: was.outMs);
+      goesAt = _plannedOut = Duration(milliseconds: was.outMs);
       if (to.track?.id != coming.id) {
-        await to.load(coming, timing: timing, at: Duration(milliseconds: was.inMs));
+        await _loadOn(to, coming, timing, Duration(milliseconds: was.inMs));
       }
       if (was.tempo != 1.0) await to.setTempo(was.tempo);
+      if (!stale()) _readyFor = (from.track?.id, coming.id);
       notifyListeners();
       return;
     }
@@ -1023,9 +1192,10 @@ class AutoMix extends ChangeNotifier {
     if (to.track?.id != coming.id || to.playing) {
       working = 'putting it on deck ${to.name}';
       notifyListeners();
-      await to.load(coming, timing: timing, at: at);
+      await _loadOn(to, coming, timing, at);
     }
     if (stale()) return;
+    _plannedOut = goesAt;
     // Now that both are known — which is in stems, where each sings, what each
     // sings — the move itself, and where it goes out and comes in.
     MixPlan? planned;
@@ -1072,6 +1242,12 @@ class AutoMix extends ChangeNotifier {
     }
     if (stale()) return;
     working = null;
+    // The moment kept ahead of the record: a plan for a place already behind it (the
+    // next changed late, the house was slow) goes at the soonest marker there is room
+    // and time for.
+    _fitToNow();
+    _readyFor = (from.track?.id, coming.id);
+    _seenMoves[to.name] = to.handMoves;
     booth.note(BoothEventKind.next, 'Next: ${coming.displayTitle}', deck: to);
     final go2 = goesAt;
     booth.note(
@@ -1225,6 +1401,9 @@ class AutoMix extends ChangeNotifier {
     // turned down to the outgoing's level — and eased back up after (the glide).
     final match = levelMatch(from, to, goesAt ?? Duration.zero, inAt, p.bars);
     if (match != null) await booth.setGain(to, match);
+    _plannedOut = goesAt;
+    _plannedBars = p.bars;
+    _fitToNow();
     notifyListeners();
   }
 
@@ -1353,36 +1532,513 @@ class AutoMix extends ChangeNotifier {
   Future<void> _bringTheBestForward() async {
     final on = current;
     if (on == null || booth.master.timing == null || _at + 2 > _tracks.length - 1) return;
-    final rest = _tracks.sublist(_at + 1);
+    // A record a hand made next stays next: the order is chosen after it.
+    final held = _heldNext != null && next?.id == _heldNext;
+    final from = held ? next! : on;
+    final rest = _tracks.sublist(_at + (held ? 2 : 1));
+    if (rest.length < 2 && !held) return;
     for (final t in rest) {
       if (booth.timing.peek(t.id) == null) unawaited(booth.timing.of(t));
     }
-    final ordered = SetPlanner.order(rest,
-        from: on,
-        timingOf: booth.timing.peek,
-        arc: arc,
-        locked: locked,
-        before: _before(),
-        fromPitch: masterTargetPitch,
-        moveOf: _moveScore,
-        taste: taste);
-    if (ordered.first.id != rest.first.id) {
+    final ordered = rest.length < 2
+        ? rest
+        : SetPlanner.order(rest,
+            from: from,
+            timingOf: booth.timing.peek,
+            arc: arc,
+            locked: locked,
+            before: [..._before(), if (held) on],
+            fromPitch: held ? 1 : masterTargetPitch,
+            moveOf: _moveScore,
+            taste: taste);
+    if (!held && ordered.isNotEmpty && ordered.first.id != rest.first.id) {
       final why = fitOf(ordered.first).why;
       booth.note(BoothEventKind.next,
           'Picked ${ordered.first.displayTitle}${why.isEmpty ? '' : ': $why'}');
     }
-    _tracks = [..._tracks.sublist(0, _at + 1), ...ordered];
+    var same = ordered.length == rest.length;
+    for (var i = 0; same && i < rest.length; i++) {
+      same = ordered[i].id == rest[i].id;
+    }
+    if (same) return;
+    _tracks = [..._tracks.sublist(0, _at + (held ? 2 : 1)), ...ordered];
+    // The queue told, so the crate reads the order the booth will play.
+    unawaited(_arrange(from, ordered));
   }
 
   bool _going = false;
+
+  // ------------------------------------------------------------------ following the booth
+  /// The pair the last preparation finished for — the record on now and the record
+  /// next — and so the pair a transition may go between. Null while one is being
+  /// worked out. Written last, so a pair with this set is loaded, parked and matched.
+  (int?, int)? _readyFor;
+
+  /// Whether the free deck holds the next record, laid out and planned for.
+  bool get isReady {
+    final on = current, nxt = next;
+    if (on == null || nxt == null) return false;
+    return _readyFor == (on.id, nxt.id) && booth.other(booth.master).track?.id == nxt.id;
+  }
+
+  /// Where the planner wanted the old record to go out, and over how many bars, before
+  /// [_fitToNow] kept it ahead of the playhead: with the record moved back to before
+  /// it, the planner's own place and length come back.
+  Duration? _plannedOut;
+  int? _plannedBars;
+
+  /// The automix's own loads, deck by deck, while they run: a hand's load on the same
+  /// deck waits for one to finish rather than racing it for the engine.
+  final _loadingOn = <String, Future<void>>{};
+
+  Future<void> _loadOn(Deck deck, Track track, TrackTiming? timing, Duration? at) {
+    final f = deck.load(track, timing: timing, at: at);
+    _loadingOn[deck.name] = f;
+    return f.whenComplete(() {
+      if (identical(_loadingOn[deck.name], f)) _loadingOn.remove(deck.name);
+    });
+  }
+
+  /// What a hand did to each deck that the automix has already taken in: moves of the
+  /// record (Deck.handMoves) and of its pitch (Deck.handPitches).
+  final _seenMoves = <String, int>{};
+  final _seenPitches = <String, int>{};
+
+  /// Doing something to the decks itself that is not a transition (a mix done again):
+  /// what the decks say meanwhile is the automix's own doing, not a hand's.
+  int _self = 0;
+
+  /// A hand paused the record in the room.
+  bool _waiting = false;
+
+  /// "Go now" asked (MIX NOW, SKIP): goes at the next downbeat once the next record is
+  /// ready — straight away where it is.
+  bool _nowAsked = false;
+
+  /// SKIP asked: the move is a short one, whatever was planned.
+  bool _quick = false;
+
+  /// The booth is holding the floor: the record in the room going round its last bars
+  /// while the next one is not ready — on this deck, since this moment.
+  Deck? _holdDeck;
+  DateTime? _holdSince;
+  bool get _holding => _holdDeck != null;
+
+  /// A hand took the hold's loop off: this pair is not held again.
+  bool _holdRefused = false;
+
+  /// "Waiting for …" said once per pair, not on every push.
+  (int?, int)? _saidWaiting;
+
+  /// What the automix is doing, in one word.
+  AutoState get state {
+    if (!running) return AutoState.off;
+    if (booth.busy) return AutoState.mixing;
+    if (_waiting) return AutoState.waiting;
+    if (_holding) return AutoState.holding;
+    final to = booth.other(booth.master);
+    if (to.playing && booth.master.playing) return AutoState.mixing;
+    if (next == null) return AutoState.last;
+    if (!isReady) return AutoState.preparing;
+    return AutoState.ready;
+  }
+
+  /// The booth is about to put a record on [deck] for a hand. Whatever the automix was
+  /// preparing stops at its next step; a load of its own already under way on that
+  /// deck is let finish first — two loads on one deck at once end with whichever the
+  /// engine happened to answer last.
+  Future<void> beforeHandLoad(Deck deck) async {
+    if (!running) return;
+    _asked++;
+    final busy = _loadingOn[deck.name];
+    if (busy != null) {
+      try {
+        await busy.timeout(const Duration(seconds: 10));
+      } catch (_) {}
+    }
+  }
+
+  /// A hand has put [track] on [deck] while the automix runs. On the free deck it is
+  /// what plays next — the one that was next comes after it, not out; on the deck in
+  /// the room it is what plays now, and the way out is planned again from it.
+  void handLoaded(Deck deck, Track track) {
+    if (!running || replaying) return;
+    _seenMoves[deck.name] = deck.handMoves;
+    _seenPitches[deck.name] = deck.handPitches;
+    if (identical(deck, booth.master)) {
+      if (current?.id == track.id) {
+        // The same record again: its way out planned again from where it now is.
+        unawaited(_prepareNext());
+        return;
+      }
+      _adoptCurrent(track, why: 'put on deck ${deck.name} by hand');
+    } else {
+      _adoptNext(track, why: 'put on deck ${deck.name} by hand');
+    }
+  }
+
+  void _adoptNext(Track track, {required String why}) {
+    if (next?.id == track.id) {
+      _heldNext = track.id;
+      unawaited(_prepareNext());
+      return;
+    }
+    _remember('${track.displayTitle} $why');
+    _heldNext = track.id;
+    _putNext(track);
+    booth.note(BoothEventKind.next, 'Next: ${track.displayTitle} — $why');
+    unawaited(_arrange(current, [track]));
+    unawaited(_prepareNext());
+  }
+
+  /// [track] is what plays now: the record that was on counts as played, the plan for
+  /// getting out of it is gone, and what comes next is worked out from this one.
+  void _adoptCurrent(Track track, {required String why}) {
+    final was = current;
+    _remember('${track.displayTitle} $why');
+    if (was == null) {
+      _tracks = [track, ..._tracks.where((t) => t.id != track.id)];
+      _at = 0;
+    } else {
+      _putNext(track);
+      _at++;
+    }
+    if (_heldNext == track.id) _heldNext = null;
+    _forgetThePair();
+    _endGlide();
+    final m = booth.master;
+    _seenMoves[m.name] = m.handMoves;
+    _seenPitches[m.name] = m.handPitches;
+    booth.note(BoothEventKind.auto, 'Now: ${track.displayTitle} — $why; the Auto DJ carries on from it');
+    notifyListeners();
+    unawaited(_arrange(was, [track]));
+    unawaited(_prepareNext());
+  }
+
+  /// A hand mixed into the record that was next: taken as a mix made, and the booth
+  /// carries on from there.
+  void _advanceByHand() {
+    final from = current, to = next;
+    if (to == null) return;
+    if (from != null) {
+      final m = booth.taken.isNotEmpty ? booth.taken.last : null;
+      final same = m != null && m.from == from.id && m.to == to.id;
+      final made = LastMix(
+        from: from,
+        to: to,
+        plan: same ? MixPlan(m.kind, m.bars, why: 'by hand') : MixPlan(plan?.kind ?? Transition.blend, plan?.bars ?? 0, why: 'by hand'),
+        outAt: same ? Duration(milliseconds: m.outMs) : Duration.zero,
+        inAt: same ? Duration(milliseconds: m.inMs) : Duration.zero,
+        steered: true,
+        at: DateTime.now(),
+      );
+      lastMix = made;
+      unawaited(_tell('mix', made, {'byHand': true}));
+      steers.remove((from.id, to.id));
+      _previews.remove((from.id, to.id));
+    }
+    _at++;
+    _heldNext = null;
+    _forgetThePair();
+    booth.note(BoothEventKind.auto, 'Mixed into ${to.displayTitle} by hand — the Auto DJ carries on');
+    _startGlide();
+    notifyListeners();
+    unawaited(_prepareNext());
+  }
+
+  /// The plan for the pair that was coming, let go of: what is on now is another.
+  void _forgetThePair() {
+    _endHold();
+    plan = null;
+    planned = null;
+    options = const [];
+    goesAt = _plannedOut = null;
+    _plannedBars = null;
+    _readyFor = null;
+    _nowAsked = false;
+    _quick = false;
+    _holdRefused = false;
+  }
+
+  /// What the hands did since the last look, taken in: a record mixed into or put on
+  /// by hand, the record in the room moved or pitched, the record coming cued.
+  void _observe() {
+    if (!running || replaying || _going || booth.busy || _self > 0) return;
+    final m = booth.master, o = booth.other(m);
+    final on = m.track;
+    if (on != null && on.id != current?.id) {
+      if (on.id == next?.id) {
+        _advanceByHand();
+      } else {
+        _adoptCurrent(on, why: 'mixed in by hand');
+      }
+      return;
+    }
+    // The record in the room moved by hand: the way out kept ahead of it.
+    final moved = m.handMoves;
+    if (_seenMoves[m.name] != moved) {
+      final first = !_seenMoves.containsKey(m.name);
+      _seenMoves[m.name] = moved;
+      if (!first) {
+        if (_holding) _holdRefused = true;
+        _endHold();
+        _fitToNow(said: 'moved by hand');
+        notifyListeners();
+      }
+    }
+    // Its pitch moved by hand: a glide stops fighting the hand, and the record coming
+    // is matched to the new tempo and judged again (it can be out of reach now).
+    final pitched = m.handPitches;
+    if (_seenPitches[m.name] != pitched) {
+      final first = !_seenPitches.containsKey(m.name);
+      _seenPitches[m.name] = pitched;
+      if (!first) {
+        _endGlide();
+        unawaited(_prepareNext());
+      }
+    }
+    // The record coming cued by hand: it comes in from there.
+    final cued = o.handMoves;
+    if (_seenMoves[o.name] != cued) {
+      final first = !_seenMoves.containsKey(o.name);
+      _seenMoves[o.name] = cued;
+      final p = planned;
+      if (!first && p != null && !o.playing && o.track?.id == next?.id && canSteer) {
+        unawaited(steer(p.copyWith(inAt: o.position, outAt: goesAt)));
+      }
+    }
+  }
+
+  /// Time to get ready to go, in the record's own time: the arming and a breath for
+  /// the transition's own matching — never less than a bar.
+  Duration _budget(Deck from) {
+    final wall = armAhead + const Duration(milliseconds: 500);
+    var rec = Duration(microseconds: (wall.inMicroseconds * from.tempo).round());
+    final bar = from.timing?.bar;
+    if (bar != null && rec < bar) rec = bar;
+    return rec;
+  }
+
+  /// The move's length changed to [bars], the record coming parked again for it where
+  /// the plan did not place it itself.
+  void _setBars(int bars) {
+    final p = plan;
+    if (p == null || p.bars == bars) return;
+    plan = (kind: p.kind, bars: bars);
+    final was = planned;
+    if (was != null) planned = was.copyWith(bars: bars);
+    final to = booth.other(booth.master);
+    final tt = to.timing;
+    if (tt != null && !to.playing && to.track?.id == next?.id && was?.inAt == null) {
+      final inAt = comesInAt =
+          inPoint(tt, bars: bars, onTheDrop: style == MixStyle.bold && tt.drops.isNotEmpty);
+      if ((to.position - inAt).abs() > const Duration(milliseconds: 20)) unawaited(to.seek(inAt));
+    }
+  }
+
+  /// Keep the moment the old record goes out ahead of it.
+  ///
+  /// The planner's place where there is still time to get there; otherwise the
+  /// soonest four-bar marker that leaves time to get ready, with the move shortened,
+  /// where it has to be, to what is left of the record. Never a plan for a moment
+  /// already behind the playhead — which is a mix that starts the instant it is
+  /// noticed, wherever the record has got to: what a record moved by hand, or a next
+  /// changed a few seconds before the mix, used to get.
+  void _fitToNow({String? said}) {
+    final from = booth.master;
+    final t = from.timing;
+    final want = _plannedOut;
+    if (!running || want == null || _nowAsked) return;
+    final p = plan;
+    if (p != null) _plannedBars ??= p.bars;
+    if (t == null) {
+      goesAt = want;
+      return;
+    }
+    final soon = from.position + _budget(from);
+    if (want >= soon) {
+      goesAt = want;
+      final bars = _plannedBars;
+      if (bars != null) _setBars(bars);
+      return;
+    }
+    final at = t.markerAtOrAfter(soon) ?? soon;
+    final end = t.soundEnds ?? Duration(milliseconds: t.durationMs);
+    final bar = t.bar;
+    var bars = _plannedBars ?? p?.bars ?? 8;
+    if (bar != null) {
+      while (bars > 1 && at + bar * bars > end) {
+        bars = bars ~/ 2;
+      }
+    }
+    goesAt = at;
+    _setBars(bars);
+    booth.note(BoothEventKind.plan,
+        'Out of ${from.track?.displayTitle ?? 'it'} at ${clock(at)} over $bars bars'
+        ' — ${said ?? 'the planned place had gone by'}');
+  }
+
+  /// The next record is not ready at the moment it was due: later, if the record in
+  /// the room has room for it; if it has not, its last bars go round until it is.
+  void _notReady(Deck from, Track coming, {required bool ended}) {
+    // Silence can only wait; a loop already holds.
+    if (ended || _holding) return;
+    final t = from.timing;
+    final bar = t?.bar;
+    final plannedGo = goesAt;
+    if (t == null || bar == null || plannedGo == null) return;
+    final now = from.position;
+    // Only "go now" brought it here, and the planned moment is still ahead: that
+    // moment stands.
+    if (plannedGo > now + _budget(from)) return;
+    final end = t.soundEnds ?? Duration(milliseconds: t.durationMs);
+    final from2 = plannedGo + bar > now + _budget(from) ? plannedGo + bar : now + _budget(from);
+    final later = t.markerAtOrAfter(from2);
+    var bars = plan?.bars ?? 8;
+    if (later != null) {
+      while (bars > 4 && later + bar * bars > end) {
+        bars = bars ~/ 2;
+      }
+      if (later + bar * bars <= end) {
+        goesAt = later;
+        _setBars(bars);
+        final pair = (current?.id, coming.id);
+        if (_saidWaiting != pair) {
+          _saidWaiting = pair;
+          booth.note(BoothEventKind.plan,
+              'Waiting for ${coming.displayTitle} to be ready — out at ${clock(later)} instead');
+        }
+        notifyListeners();
+        return;
+      }
+    }
+    if (!_holdRefused) _startHold(from, coming);
+  }
+
+  /// Hold the floor: four bars of the record in the room go round until the next one
+  /// is ready — what a DJ whose next record has not arrived does, rather than let the
+  /// room go quiet.
+  void _startHold(Deck from, Track coming) {
+    if (_holding || from.timing?.bar == null) return;
+    _holdDeck = from;
+    _holdSince = DateTime.now();
+    from.loop(16);
+    booth.note(BoothEventKind.held,
+        'Holding the floor: four bars of ${from.track?.displayTitle ?? 'it'} go round until ${coming.displayTitle} is ready',
+        deck: from);
+    notifyListeners();
+  }
+
+  void _endHold() {
+    final d = _holdDeck;
+    if (d == null) return;
+    _holdDeck = null;
+    _holdSince = null;
+    if (d.loopStart != null) d.unloop();
+    notifyListeners();
+  }
+
+  void _setWaiting(bool on) {
+    if (_waiting == on) return;
+    _waiting = on;
+    if (on) {
+      booth.note(BoothEventKind.auto, 'Paused — the Auto DJ waits for the record to play again');
+    }
+    notifyListeners();
+  }
+
+  /// Skip: into the next record at the next bar, over a few bars — whatever the plan
+  /// said and wherever this one has got to. What a DJ does with a record the room has
+  /// had enough of.
+  Future<void> skip() async {
+    if (!running || next == null || booth.busy) return;
+    _quick = true;
+    _nowAsked = true;
+    booth.note(BoothEventKind.mix, 'Skip: into ${next!.displayTitle} at the next bar');
+    notifyListeners();
+    await _tick();
+  }
+
+  /// The short move a skip makes: in step, a blend of a few bars (an echo out for the
+  /// bold style, where the desk has one); out of step, a quick fade.
+  MixPlan _quickMove(Deck from, Deck to) {
+    final ft = from.timing, tt = to.timing;
+    final inStep = ft != null &&
+        tt != null &&
+        ft.hasBeats &&
+        tt.hasBeats &&
+        ft.gridBpm != null &&
+        tt.gridBpm != null &&
+        Booth.syncRatio(tt.gridBpm!, ft.gridBpm! * from.pitch, reach: Booth.bridgeReach) != null;
+    if (!inStep) return const MixPlan(Transition.fade, 2, why: 'skipped: a quick fade');
+    if (style == MixStyle.bold && booth.mixer.canShift) {
+      return const MixPlan(Transition.echoOut, 2, why: 'skipped: echoed out');
+    }
+    final bars = style == MixStyle.easy ? 8 : 4;
+    return MixPlan(Transition.blend, bars, why: 'skipped: $bars bars');
+  }
+
+  /// More of the record on now — [phrases] four-bar phrases (fewer with it negative):
+  /// the room wants more of it, or less. For this time only; nudgeOut is the one that
+  /// keeps a hand's word as the record's own cue.
+  void extend([int phrases = 2]) {
+    final from = booth.master;
+    final t = from.timing;
+    final bar = t?.bar;
+    final at = goesAt ?? _plannedOut;
+    if (!running || t == null || bar == null || at == null || booth.busy) return;
+    final end = t.soundEnds ?? Duration(milliseconds: t.durationMs);
+    final bars = plan?.bars ?? 8;
+    var out = at + bar * (4 * phrases);
+    final latest = end - bar * bars;
+    if (out > latest) out = t.markerAtOrBefore(latest) ?? latest;
+    final soon = from.position + _budget(from);
+    if (out < soon) out = t.markerAtOrAfter(soon) ?? soon;
+    final title = from.track?.displayTitle ?? 'it';
+    if ((out - at).abs() < const Duration(milliseconds: 50)) {
+      booth.note(BoothEventKind.plan,
+          phrases > 0 ? 'No more of $title to give: it is going out as late as it can' : 'It cannot go any sooner');
+      return;
+    }
+    _plannedOut = goesAt = out;
+    _nowAsked = false;
+    booth.note(BoothEventKind.plan, '${out > at ? 'Longer' : 'Sooner'}: out of $title at ${clock(out)}');
+    notifyListeners();
+  }
 
   Future<void> _tick() async {
     // Nothing while a mix is waiting for its beat or running — the automix's own, or
     // one somebody started by hand.
     if (!running || _going || booth.busy) return;
+    _observe();
+    if (!running) return;
     final from = booth.master;
-    final go = goesAt;
+    final to = booth.other(from);
     final coming = next;
+    // The record ran out — or never started. Either way the next one is what the
+    // queue is for: the booth does not sit in silence waiting for a clock that has
+    // stopped.
+    final ended = !from.playing &&
+        from.duration != null &&
+        from.position >= from.duration! - const Duration(milliseconds: 400);
+    if (!from.playing) {
+      // The hands took the other record into the room without a transition: started
+      // it, brought the fader across, stopped this one. That one leads now.
+      final towards = identical(to, booth.b) ? booth.crossfader : 1 - booth.crossfader;
+      if (to.playing && to.loaded && towards >= 0.5) {
+        booth.master = to;
+        _observe();
+        return;
+      }
+      if (!ended) {
+        _setWaiting(true);
+        return;
+      }
+    }
+    if (_waiting) {
+      _setWaiting(false);
+      _fitToNow(said: 'played again');
+    }
     if (coming == null) {
       // The last record — unless the booth is to keep going, from the library.
       if (fill && from.playing) {
@@ -1393,27 +2049,82 @@ class AutoMix extends ChangeNotifier {
       if (!from.playing) stop();
       return;
     }
+    // A hand mixing into the next record itself: the automix leaves it to the hand.
+    if (to.playing && from.playing) return;
+    // A hand took the hold's loop off: the record plays on, and is not held again.
+    final held = _holdDeck;
+    if (held != null && held.loopStart == null) {
+      _holdDeck = null;
+      _holdRefused = true;
+    }
+    final go = _nowAsked ? Duration.zero : goesAt;
     if (go == null) return;
-    // The record ran out — or never started. Either way the next one is what the
-    // queue is for: the booth does not sit in silence waiting for a clock that has
-    // stopped.
-    final ended = !from.playing &&
-        from.duration != null &&
-        from.position >= from.duration! - const Duration(milliseconds: 400);
-    if (!from.playing && !ended) return;
     // Armed a moment early, so the incoming can be started on the exact beat rather
     // than on the first tick after it — which was the next phrase, eight seconds and
     // more too late, with the whole mix landing that much after where it was aimed.
     final left = Duration(
         microseconds: ((go - from.position).inMicroseconds / from.tempo).round());
-    if (left > armAhead && !ended) return;
+    if (left > armAhead && !ended && !_holding) return;
+    // Never into anything but the record that is next. Its preparation still under
+    // way (the free deck may still hold the one before it): later, or held.
+    final holds = to.loaded && to.track?.id == coming.id;
+    if (!holds || (!isReady && _preparing != null && !ended)) {
+      if (_holding && _holdSince != null &&
+          DateTime.now().difference(_holdSince!) > const Duration(seconds: 90)) {
+        // Held for a minute and a half and still not there: the one after it instead.
+        booth.note(BoothEventKind.trouble, '${coming.displayTitle} did not arrive — the one after it instead');
+        _holdSince = DateTime.now();
+        if (after != null) {
+          unawaited(dropNext());
+        } else {
+          _endHold();
+          _holdRefused = true;
+        }
+        return;
+      }
+      _notReady(from, coming, ended: ended);
+      return;
+    }
+    if (_holding) {
+      // Ready while the floor was held: the loop let go, and the move starts where it
+      // would have come round — over what is left of the record after it.
+      final end = _holdDeck?.loopEnd;
+      _endHold();
+      final t = from.timing, bar = from.timing?.bar;
+      if (end != null && !_nowAsked && t != null && bar != null) {
+        _plannedOut = goesAt = end;
+        final sound = t.soundEnds ?? Duration(milliseconds: t.durationMs);
+        var bars = plan?.bars ?? 8;
+        while (bars > 1 && end + bar * bars > sound) {
+          bars = bars ~/ 2;
+        }
+        _plannedBars = bars;
+        _setBars(bars);
+        booth.note(BoothEventKind.plan,
+            '${coming.displayTitle} is ready: out of the loop at ${clock(end)} over $bars bars');
+      }
+      notifyListeners();
+      return;
+    }
     _going = true;
     try {
-      final chosen = plan ??
-          choose(from.timing, booth.other(from).timing,
+      var chosen = plan ??
+          choose(from.timing, to.timing,
               style: style,
-              parts: inParts(from.track, booth.other(from).track),
+              parts: inParts(from.track, to.track),
               fromPitch: from.pitch);
+      var shift = planned?.shift ?? 0;
+      if (_quick) {
+        final q = _quickMove(from, to);
+        chosen = (kind: q.kind, bars: q.bars);
+        shift = 0;
+        planned = q;
+        final tt = to.timing;
+        if (tt != null && !to.playing) {
+          final inAt = comesInAt = inPoint(tt, bars: q.bars);
+          if ((to.position - inAt).abs() > const Duration(milliseconds: 20)) await to.seek(inAt);
+        }
+      }
       final was = booth.master;
       // A preparation still under way was for the decks as they were: stopped here,
       // before it can load the next record over the one going live. A glide still on
@@ -1423,7 +2134,7 @@ class AutoMix extends ChangeNotifier {
       await booth.go(chosen.kind,
           bars: chosen.bars,
           startAt: ended ? null : startFor(from.timing, go, from.position),
-          shift: planned?.shift ?? 0);
+          shift: shift);
       if (identical(booth.master, was)) {
         // It refused: the record it was going into would not play. Say so and stop,
         // rather than trying the same thing again every fifth of a second.
@@ -1438,24 +2149,24 @@ class AutoMix extends ChangeNotifier {
           plan: planned ?? MixPlan(chosen.kind, chosen.bars),
           outAt: go,
           inAt: comesInAt ?? Duration.zero,
-          steered: steered,
+          steered: steered || _quick,
           at: DateTime.now(),
         );
         lastMix = made;
-        unawaited(_tell('mix', made, {'byHand': ended}));
+        unawaited(_tell('mix', made, {'byHand': ended, if (_quick) 'skip': true}));
       }
       _at++;
       steers.remove(done);
       _previews.remove(done);
-      options = const [];
-      planned = null;
+      _heldNext = null;
+      _saidWaiting = null;
       // The record now leading was bent to the last one's tempo, and turned down to
       // its level: eased back to its own over the next bars.
       _startGlide();
       // The plan just carried out is spent: left standing, its moment — long past on
       // the record now leading — would send the booth straight back the other way.
-      plan = null;
-      goesAt = null;
+      _forgetThePair();
+      _seenMoves[booth.master.name] = booth.master.handMoves;
       // Laid out in the background: a house slow to answer holds up the next plan,
       // never the booth.
       unawaited(_prepareNext());

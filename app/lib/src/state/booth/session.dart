@@ -129,7 +129,7 @@ class BoothSession {
       final deck = d['name'] == 'B' ? b.b : b.a;
       final t = tracks[(d['track_id'] as num).toInt()];
       if (t == null) continue;
-      await b.load(deck, t, at: Duration(milliseconds: (d['position_ms'] as num).toInt()));
+      await b.load(deck, t, at: Duration(milliseconds: (d['position_ms'] as num).toInt()), byHand: false);
       final pitch = (d['pitch'] as num?)?.toDouble();
       if (pitch != null && (pitch - 1).abs() > 1e-4) await deck.setTempo(pitch);
       if (d['playing'] == true) await deck.play();

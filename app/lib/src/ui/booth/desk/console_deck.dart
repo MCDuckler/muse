@@ -253,7 +253,7 @@ class _ConsoleDeckState extends State<ConsoleDeck> with TickerProviderStateMixin
     final hand = ArmHand(
       reading: _reading,
       onPlace: (at) async {
-        await _d.seek(at);
+        await _d.placeByHand(at);
         // With SYNC on, the needle lands in step: moved to the nearest beat.
         if (!_d.playing) await _b.play(_d, bars: false);
       },

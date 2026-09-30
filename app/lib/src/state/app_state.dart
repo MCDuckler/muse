@@ -363,6 +363,10 @@ class AppState extends ChangeNotifier {
     // A record the booth takes from the library at the end of the queue goes into
     // the crate, so what it plays is what the queue shows.
     b.auto.onFill = (t) => addTrack(t);
+    // And an order it decides — a record a hand put on a deck, one moved later, a set
+    // laid out — is the queue's order too, so the crate never says one thing while
+    // the booth plays another.
+    b.auto.onArrange = arrangeAfter;
     unawaited(SharedPreferences.getInstance().then((prefs) {
       final lead = prefs.getInt(_kStartLead), carry = prefs.getInt(_kJumpCarry);
       if (lead != null && carry != null) {
@@ -1102,6 +1106,79 @@ class AppState extends ChangeNotifier {
     await player?.loadQueue(activeQueue!);
     _rememberQueue(activeQueue!.id);
     notifyListeners();
+  }
+
+  /// [order] straight after [after]'s row in the queue — the booth's word on what
+  /// plays next. Records not in the queue are added first. Rows are named by item id,
+  /// so a song in the queue twice moves the copy still to come, not the one played.
+  Future<void> arrangeAfter(Track? after, List<Track> order) async {
+    if (order.isEmpty || _queueIsLocal) return;
+    var items = player?.items ?? const <Track>[];
+    final missing = [
+      for (final t in order)
+        if (!items.any((x) => x.id == t.id && x.queueItemId != null)) t,
+    ];
+    if (missing.isNotEmpty) {
+      await addTracks(missing);
+      items = player?.items ?? const <Track>[];
+    }
+    final q = activeQueue;
+    if (q == null) return;
+    // The row the order goes after: the booth's record, its own row where the track
+    // carries one, else the last copy of it at or before the cursor... or the first.
+    int? afterRow;
+    var afterAt = -1;
+    if (after != null) {
+      afterAt = items.indexWhere((x) => x.queueItemId != null && x.queueItemId == after.queueItemId);
+      if (afterAt < 0) afterAt = items.indexWhere((x) => x.id == after.id);
+      if (afterAt >= 0) afterRow = items[afterAt].queueItemId;
+    }
+    final taken = <int>{if (afterRow != null) afterRow};
+    final rows = <int>[];
+    for (final t in order) {
+      int? row;
+      // The copy still to come first, then any copy.
+      for (var pass = 0; pass < 2 && row == null; pass++) {
+        for (var i = 0; i < items.length; i++) {
+          final x = items[i];
+          final id = x.queueItemId;
+          if (id == null || x.id != t.id || taken.contains(id)) continue;
+          if (pass == 0 && i <= afterAt) continue;
+          row = id;
+          break;
+        }
+      }
+      if (row != null) {
+        taken.add(row);
+        rows.add(row);
+      }
+    }
+    if (rows.isEmpty) return;
+    try {
+      await _applyQueue(await api.arrangeQueue(q.id, rows, after: afterRow));
+    } on ApiException catch (e) {
+      // A house from before /arrange: the same thing said as single moves.
+      if (e.status != 404 && e.status != 405) rethrow;
+      await _arrangeByMoves(q.id, afterRow, rows);
+    }
+  }
+
+  Future<void> _arrangeByMoves(int queueId, int? afterRow, List<int> rows) async {
+    var state = activeQueue;
+    for (var k = 0; k < rows.length && state != null; k++) {
+      final list = state.items;
+      final off = state.windowFrom;
+      final from = list.indexWhere((x) => x.queueItemId == rows[k]);
+      final anchor = k == 0
+          ? (afterRow == null ? state.cursorIndex - off : list.indexWhere((x) => x.queueItemId == afterRow))
+          : list.indexWhere((x) => x.queueItemId == rows[k - 1]);
+      if (from < 0 || anchor < 0) break;
+      // Where it lands in the list with itself taken out of it.
+      final to = from > anchor ? anchor + 1 : anchor;
+      if (to == from) continue;
+      state = await api.moveQueueItem(queueId, off + from, off + to);
+    }
+    if (state != null) await _applyQueue(state);
   }
 
   /// Put this song on and play it, keeping the rest of the queue.

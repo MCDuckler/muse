@@ -1111,6 +1111,13 @@ class ApiClient {
               await net.delete(_u('/queues/$id/items/$pos'), headers: _headers))
           as Map<String, dynamic>);
 
+  /// These rows (by item id), in this order, straight after [after] — the playing row
+  /// when null. The booth's word on what plays next; see the house's /arrange.
+  Future<Queue> arrangeQueue(int id, List<int> itemIds, {int? after}) async =>
+      Queue.fromJson(await _decode(await net.post(_u('/queues/$id/arrange'),
+          headers: _headers,
+          body: jsonEncode({'items': itemIds, if (after != null) 'after': after}))) as Map<String, dynamic>);
+
   Future<Queue> moveQueueItem(int id, int from, int to) async =>
       Queue.fromJson(await _decode(await net.post(_u('/queues/$id/move'),
               headers: _headers, body: jsonEncode({'from': from, 'to': to})))
