@@ -8,7 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
 import '../api/connection.dart';
-import '../worker/build_stamp.dart';
+import '../worker/build_stamp_none.dart' if (dart.library.io) '../worker/build_stamp.dart';
 import 'playback_log.dart';
 
 /// What is on the server, and whether it is newer than what is running.

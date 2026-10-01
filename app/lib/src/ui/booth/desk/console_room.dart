@@ -1,4 +1,4 @@
-import '../engine_check.dart';
+import '../engine_check_none.dart' if (dart.library.io) '../engine_check.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
