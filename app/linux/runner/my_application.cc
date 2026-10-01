@@ -159,8 +159,12 @@ MyApplication* my_application_new() {
   // use. (0 rather than G_APPLICATION_DEFAULT_FLAGS, which older GLibs do not have, or
   // G_APPLICATION_FLAGS_NONE, which newer ones warn about — and warnings are errors
   // here.)
+  // WETOWL_NON_UNIQUE=1 lets a profile build (flutter drive --profile, the booth's
+  // frame measurements) run beside the installed app rather than handing over to it.
 #ifdef NDEBUG
-  const GApplicationFlags flags = static_cast<GApplicationFlags>(0);
+  const GApplicationFlags flags = g_getenv("WETOWL_NON_UNIQUE") != nullptr
+                                      ? G_APPLICATION_NON_UNIQUE
+                                      : static_cast<GApplicationFlags>(0);
 #else
   const GApplicationFlags flags = G_APPLICATION_NON_UNIQUE;
 #endif

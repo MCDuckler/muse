@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show compute, kIsWeb;
 import 'package:http/http.dart' as http;
 
 import 'connection.dart';
@@ -1657,16 +1658,22 @@ class ApiClient {
 
   /// The same shape in three bands — bass, middle, top — each 0 to 255, for a deck's
   /// waveform, where "the bass drops out here" is the thing worth seeing.
+  ///
+  /// Read on an isolate of its own, into bytes. A deck asks for a slice every hundredth
+  /// of a second — thirty thousand numbers a band on a long record, a third of a
+  /// megabyte of JSON — and decoding that where the frames are drawn was a hitch in
+  /// the room every time a record was loaded, which is usually mid-mix. Each value is
+  /// 0 to 255, so a Uint8List holds it in an eighth of the room a list of ints did.
   Future<({List<int> low, List<int> mid, List<int> high})?> peakBands(int trackId,
       {int slices = 1600}) async {
     try {
-      final d = await _decode(await net.get(
-              _u('/tracks/$trackId/peaks?slices=$slices&bands=true'),
-              headers: _headers))
-          as Map<String, dynamic>;
-      final b = (d['bands'] as Map).cast<String, dynamic>();
-      List<int> ints(String k) => [for (final v in (b[k] as List)) (v as num).toInt()];
-      return (low: ints('low'), mid: ints('mid'), high: ints('high'));
+      final r = await net.get(_u('/tracks/$trackId/peaks?slices=$slices&bands=true'),
+          headers: _headers);
+      if (r.statusCode >= 400 || r.bodyBytes.isEmpty) {
+        await _decode(r);
+        return null;
+      }
+      return await compute(_bandsOf, r.bodyBytes);
     } on ApiException catch (e) {
       if (e.status == 404) return null;
       rethrow;
@@ -1829,4 +1836,21 @@ String platformName() => _platformName();
 String _platformName() {
   // Avoids dart:io so the same code compiles for web.
   return const bool.fromEnvironment('dart.library.html') ? 'web' : 'app';
+}
+
+/// The three bands of a record's shape, out of the house's JSON, as bytes. Top level
+/// so it can run on an isolate of its own.
+({List<int> low, List<int> mid, List<int> high}) _bandsOf(Uint8List body) {
+  final d = jsonDecode(utf8.decode(body)) as Map<String, dynamic>;
+  final b = (d['bands'] as Map).cast<String, dynamic>();
+  Uint8List bytes(String k) {
+    final from = b[k] as List;
+    final out = Uint8List(from.length);
+    for (var i = 0; i < from.length; i++) {
+      out[i] = (from[i] as num).toInt().clamp(0, 255);
+    }
+    return out;
+  }
+
+  return (low: bytes('low'), mid: bytes('mid'), high: bytes('high'));
 }

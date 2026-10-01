@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
@@ -22,6 +24,13 @@ class BoothClock extends StatefulWidget {
   static BoothClockReader of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<_Ticking>()!.state;
 
+  /// [child], under the clock [from] is under — for a sheet or a dialog opened from the
+  /// room, whose route sits above the clock rather than inside it.
+  static Widget carriedFrom(BuildContext from, Widget child) {
+    final ticking = from.getInheritedWidgetOfExactType<_Ticking>();
+    return ticking == null ? child : _Ticking(state: ticking.state, child: child);
+  }
+
   @override
   State<BoothClock> createState() => _BoothClockState();
 }
@@ -44,6 +53,15 @@ class _BoothClockState extends State<BoothClock>
   final _speeds = <String, double>{};
   Duration? _last;
 
+  /// The wall clock at the ticker's nought: a frame's time is this plus the frame's
+  /// own timestamp. See [_tick].
+  DateTime? _epoch;
+
+  /// While nothing moves, the ticker rests and this looks in a few times a second
+  /// instead: for a record started, or moved while parked.
+  Timer? _resting;
+  int _still = 0;
+
   /// 33⅓: one turn every 1.8 s, the speed the record would really run.
   static const _fullSpeed = 1 / 1.8;
 
@@ -60,11 +78,56 @@ class _BoothClockState extends State<BoothClock>
   @override
   void initState() {
     super.initState();
+    widget.booth.addListener(_wake);
     _ticker.start();
   }
 
   @override
+  void didUpdateWidget(BoothClock old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.booth, widget.booth)) {
+      old.booth.removeListener(_wake);
+      widget.booth.addListener(_wake);
+    }
+  }
+
+  /// Ticking again, if it was resting: something in the booth changed.
+  void _wake() {
+    if (!mounted || _ticker.isActive) return;
+    _resting?.cancel();
+    _resting = null;
+    _still = 0;
+    _last = null;
+    _ticker.start();
+  }
+
+  /// Resting: nothing has moved for a while. A frame asked for sixty times a second
+  /// with nothing to show is still sixty frames drawn — the whole room composited
+  /// again each time — so the ticker stops, and a timer looks in instead in case a
+  /// record moved without the booth saying so.
+  void _rest() {
+    _ticker.stop();
+    _last = null;
+    _resting ??= Timer.periodic(const Duration(milliseconds: 100), (_) {
+      if (!mounted) return;
+      var moved = false;
+      for (final deck in [widget.booth.a, widget.booth.b]) {
+        final now = deck.position;
+        final n = positionOf(deck);
+        if (n.value != now) {
+          n.value = now;
+          moved = true;
+        }
+        if (deck.playing) moved = true;
+      }
+      if (moved) _wake();
+    });
+  }
+
+  @override
   void dispose() {
+    widget.booth.removeListener(_wake);
+    _resting?.cancel();
     _ticker.dispose();
     for (final n in _positions.values) {
       n.dispose();
@@ -81,20 +144,42 @@ class _BoothClockState extends State<BoothClock>
     if (last == null) return;
     final dt = (elapsed - last).inMicroseconds / 1e6;
     final still = stillness(context);
-    for (final deck in widget.booth.decks) {
-      positionOf(deck).value = deck.position;
+    // The time this frame is *for*, not the time this callback happened to run. The
+    // ticker's elapsed is counted in frames — vsync to vsync — while the wall clock
+    // read inside the callback lands wherever the frame's work let it, a few
+    // milliseconds early or late each time. Read off the wall clock, a strip moving a
+    // steady 100 pixels a second moved 1, then 2, then 1, then 3 pixels a frame, which
+    // is a judder the eye reads as lag. Kept to the wall clock over the long run, so
+    // positions still mean what the engine means by them.
+    final wall = DateTime.now();
+    var now = _epoch?.add(elapsed);
+    if (now == null || (wall.difference(now).inMicroseconds).abs() > 40000) {
+      _epoch = wall.subtract(elapsed);
+      now = wall;
+    }
+    var moving = false;
+    for (final deck in [widget.booth.a, widget.booth.b]) {
+      final p = positionOf(deck);
+      final at = deck.positionAt(now);
+      if (p.value != at) moving = true;
+      p.value = at;
+      if (deck.playing) moving = true;
       // Up over a third of a second, down over half: a platter has weight. A phone
       // asked to keep still gets the record at rest rather than a still one turning.
       final want = deck.playing && !still ? _fullSpeed * deck.tempo : 0.0;
       final was = _speeds[deck.name] ?? 0;
       final tau = want > was ? 0.33 : 0.5;
-      final now = was + (want - was) * (1 - _decay(dt / tau));
-      _speeds[deck.name] = now;
-      if (now.abs() > 1e-4) {
+      final speed = was + (want - was) * (1 - _decay(dt / tau));
+      _speeds[deck.name] = speed;
+      if (speed.abs() > 1e-4) {
+        moving = true;
         final turn = turnOf(deck);
-        turn.value = (turn.value + now * dt) % 1024;
+        turn.value = (turn.value + speed * dt) % 1024;
       }
     }
+    // Half a second of nothing moving, and the ticker rests.
+    _still = moving ? 0 : _still + 1;
+    if (_still > 30) _rest();
   }
 
   /// e^-x, near enough for a platter's inertia.

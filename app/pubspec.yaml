@@ -85,6 +85,9 @@ dev_dependencies:
   flutter_lints: ^5.0.0
   path_provider_platform_interface: ^2.1.3
   plugin_platform_interface: ^2.1.8
+  # integration_test/booth_perf_test.dart samples the UI isolate's CPU while the booth
+  # plays, to say what keeps its frames from starting on time.
+  vm_service: ^15.0.0
 
 flutter:
   uses-material-design: true

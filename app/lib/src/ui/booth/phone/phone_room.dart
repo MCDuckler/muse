@@ -21,6 +21,7 @@ import '../desk/console_waves.dart';
 import 'phone_auto.dart';
 import 'phone_deck.dart';
 import 'phone_mixer.dart';
+import '../booth_clock.dart';
 import '../look.dart';
 
 /// The booth on a phone: the same console as the desk's, folded to one column. The
@@ -84,7 +85,10 @@ class _PhoneRoomState extends State<PhoneRoom> {
         data: Console.light ? MuseTheme.light(app.palette) : MuseTheme.dark(app.palette),
         child: SizedBox(
           height: MediaQuery.sizeOf(sheet).height * height,
-          child: Padding(padding: const EdgeInsets.fromLTRB(8, 10, 8, 8), child: child),
+          // The room's clock comes too: the plan's playhead reads it.
+          child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 10, 8, 8),
+              child: BoothClock.carriedFrom(context, child)),
         ),
       ),
     );
@@ -111,40 +115,45 @@ class _PhoneRoomState extends State<PhoneRoom> {
 
   @override
   Widget build(BuildContext context) {
-    final app = context.watch<AppState>();
+    // Only the palette: see ConsoleRoom.
+    final palette = context.select<AppState, Palette>((a) => a.palette);
     return AnimatedBuilder(
       animation: boothLook,
       builder: (context, _) {
         final light = boothLook.apply(context);
         return Theme(
-      data: light ? MuseTheme.light(app.palette) : MuseTheme.dark(app.palette),
+      data: light ? MuseTheme.light(palette) : MuseTheme.dark(palette),
       child: Builder(
         builder: (context) => Scaffold(
           backgroundColor: Console.ground,
           body: SafeArea(
             child: Column(
               children: [
-                _bar(context),
+                BoothPanel(child: _bar(context)),
                 Expanded(
                   child: ListView(
                     padding: const EdgeInsets.fromLTRB(8, 0, 8, 24),
                     children: [
-                      SizedBox(height: 164, child: ConsoleWaves(booth: _b)),
+                      SizedBox(height: 164, child: BoothPanel(child: ConsoleWaves(booth: _b))),
                       const SizedBox(height: 8),
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Expanded(child: PhoneDeck(booth: _b, deck: _b.a, onLoad: () => _openCrate(_b.a))),
+                          Expanded(
+                              child: BoothPanel(
+                                  child: PhoneDeck(booth: _b, deck: _b.a, onLoad: () => _openCrate(_b.a)))),
                           const SizedBox(width: 8),
-                          Expanded(child: PhoneDeck(booth: _b, deck: _b.b, onLoad: () => _openCrate(_b.b))),
+                          Expanded(
+                              child: BoothPanel(
+                                  child: PhoneDeck(booth: _b, deck: _b.b, onLoad: () => _openCrate(_b.b)))),
                         ],
                       ),
                       const SizedBox(height: 8),
-                      PhoneMixer(booth: _b),
+                      BoothPanel(child: PhoneMixer(booth: _b)),
                       const SizedBox(height: 8),
-                      PhoneAutoCard(booth: _b, onSet: _openSet, onPlan: _openPlan),
+                      BoothPanel(child: PhoneAutoCard(booth: _b, onSet: _openSet, onPlan: _openPlan)),
                       const SizedBox(height: 8),
-                      SizedBox(height: 200, child: ConsoleLog(booth: _b)),
+                      SizedBox(height: 200, child: BoothPanel(child: ConsoleLog(booth: _b))),
                     ],
                   ),
                 ),

@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -1630,6 +1631,16 @@ abstract final class Disc {
   static String plain(Track track) => 'plain:${track.id}';
 
   /// A record, turning. Built once and rotated, rather than rebuilt every frame.
+  ///
+  /// Turned where it is painted, not by a Transform. A Transform whose angle changes
+  /// tells the accessibility tree its geometry changed, and that walks up to the
+  /// nearest semantics boundary and has everything under it worked out again — on a
+  /// desktop, where Flutter keeps the accessibility tree on all the time, that was the
+  /// whole booth's tree recomputed sixty times a second for each record turning, and
+  /// the larger part of every frame. A picture of a record has nothing to say to a
+  /// screen reader; turning it is a matter for the paint alone. The record itself is
+  /// a layer of its own, so a turn is that layer drawn at a new angle, not the
+  /// picture drawn again.
   static Widget spinning({
     required String url,
     required Animation<double> spin,
@@ -1638,32 +1649,112 @@ abstract final class Disc {
     required double fade,
     double label = 0.31,
   }) =>
-      AnimatedBuilder(
-        animation: spin,
-        builder: (context, child) => Transform.rotate(
-          // A record turns clockwise, which from above is the way a clock does.
-          angle: -(spin.value * 2 * math.pi + roll),
-          child: child,
-        ),
-        child: SizedBox(
-          width: size,
-          height: size,
-          child: url.startsWith('plain:')
-              ? RepaintBoundary(
-                  child: CustomPaint(
-                    painter: _PlainPressing(
-                        seed: int.tryParse(url.substring(6)) ?? 0,
-                        label: label,
-                        fade: fade),
-                  ),
-                )
-              : Image(
-                  image: artwork(url),
-                  fit: BoxFit.contain,
-                  gaplessPlayback: true,
-                  opacity: AlwaysStoppedAnimation(fade)),
+      RepaintBoundary(
+        child: _Turning(
+          spin: spin,
+          roll: roll,
+          child: RepaintBoundary(
+            child: SizedBox(
+              width: size,
+              height: size,
+              child: url.startsWith('plain:')
+                  ? CustomPaint(
+                      painter: _PlainPressing(
+                          seed: int.tryParse(url.substring(6)) ?? 0,
+                          label: label,
+                          fade: fade),
+                    )
+                  : Image(
+                      image: artwork(url),
+                      fit: BoxFit.contain,
+                      gaplessPlayback: true,
+                      opacity: AlwaysStoppedAnimation(fade)),
+            ),
+          ),
         ),
       );
+}
+
+/// Its child, turned about its middle by [spin] (in turns) and [roll] (radians) —
+/// clockwise, which from above is the way a record goes — at paint time only.
+class _Turning extends SingleChildRenderObjectWidget {
+  const _Turning({required this.spin, required this.roll, super.child});
+  final Animation<double> spin;
+  final double roll;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) => _RenderTurning(spin, roll);
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderTurning r) => r
+    ..spin = spin
+    ..roll = roll;
+}
+
+class _RenderTurning extends RenderProxyBox {
+  _RenderTurning(this._spin, this._roll);
+
+  Animation<double> _spin;
+  set spin(Animation<double> v) {
+    if (identical(v, _spin)) return;
+    if (attached) _spin.removeListener(markNeedsPaint);
+    _spin = v;
+    if (attached) _spin.addListener(markNeedsPaint);
+    markNeedsPaint();
+  }
+
+  double _roll;
+  set roll(double v) {
+    if (v == _roll) return;
+    _roll = v;
+    markNeedsPaint();
+  }
+
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    _spin.addListener(markNeedsPaint);
+  }
+
+  @override
+  void detach() {
+    _spin.removeListener(markNeedsPaint);
+    super.detach();
+  }
+
+  @override
+  bool get alwaysNeedsCompositing => child != null;
+
+  final _layer = LayerHandle<TransformLayer>();
+
+  Matrix4 get _turn {
+    final angle = -(_spin.value * 2 * math.pi + _roll);
+    final mid = size.center(Offset.zero);
+    return Matrix4.identity()
+      ..translateByDouble(mid.dx, mid.dy, 0, 1)
+      ..rotateZ(angle)
+      ..translateByDouble(-mid.dx, -mid.dy, 0, 1);
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    final c = child;
+    if (c == null) return;
+    _layer.layer = context.pushTransform(needsCompositing, offset, _turn, super.paint,
+        oldLayer: _layer.layer);
+  }
+
+  /// Where the child is drawn, for anything that asks (localToGlobal, a test).
+  /// Asked, not pushed: nothing here marks semantics dirty as the record turns.
+  @override
+  void applyPaintTransform(RenderBox child, Matrix4 transform) =>
+      transform.multiply(_turn);
+
+  @override
+  void dispose() {
+    _layer.layer = null;
+    super.dispose();
+  }
 }
 
 /// A record with no picture to put on its label.

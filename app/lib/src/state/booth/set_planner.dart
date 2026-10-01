@@ -407,6 +407,8 @@ class SetPlanner {
     final n = rest.length;
     final startEnergy = from == null ? null : energyOf(from, timingOf(from.id));
     final cache = <(int, int), Fit>{};
+    // Each record's artists, lower-cased once rather than once per time it is tried.
+    final names = <int, List<String>>{};
     // What a path has played, as the two things a candidate is checked against: read
     // once per path per step, not once per candidate — per candidate it was every
     // artist and every title of the set so far, 135 records deep, 146 000 times.
@@ -437,17 +439,26 @@ class SetPlanner {
       final t = t0 == null ? null : (t0 + energyShift).clamp(0.0, 1.0);
       final arcTerm = eb != null && t != null ? -0.4 * (eb - t).abs() : 0.0;
       var again = 0.0;
-      if (b.artists.any((s) => seen.names.contains(s.toLowerCase()))) again -= 0.3;
+      if ((names[b.id] ??= [for (final s in b.artists) s.toLowerCase()]).any(seen.names.contains)) {
+        again -= 0.3;
+      }
       if (seen.titles.contains(_titleKey(b.title))) again -= 0.5;
       return base + arcTerm + again;
     }
 
     // Beam search: each path a partial order and its score.
+    //
+    // A step scores every path's every next record, keeps the best [width], and only
+    // then makes those into paths. Making each candidate's path as it was scored —
+    // copying the path so far for every one of them — was a copy of the whole set for
+    // every record tried at every step, which on a long queue was most of the time
+    // this took, on the thread the room is drawn on, after every mix.
     var beam = <(List<Track>, double)>[(const [], 0.0)];
     final lockedAt = {for (var i = 0; i < n; i++) if (locked.contains(rest[i].id)) i: rest[i]};
     for (var at = 0; at < n; at++) {
-      final next = <(List<Track>, double)>[];
-      for (final (path, score) in beam) {
+      final next = <(int, Track, double)>[];
+      for (var p = 0; p < beam.length; p++) {
+        final (path, score) = beam[p];
         final used = {for (final t in path) t.id};
         final last = path.isEmpty ? from : path.last;
         final seen = heard(last, [...before, ...path]);
@@ -455,11 +466,11 @@ class SetPlanner {
             ? [lockedAt[at]!]
             : [for (final t in rest) if (!used.contains(t.id) && !locked.contains(t.id)) t];
         for (final c in candidates) {
-          next.add(([...path, c], score + fitOf(last, c, seen, at)));
+          next.add((p, c, score + fitOf(last, c, seen, at)));
         }
       }
-      next.sort((x, y) => y.$2.compareTo(x.$2));
-      beam = next.take(width).toList();
+      next.sort((x, y) => y.$3.compareTo(x.$3));
+      beam = [for (final (p, c, score) in next.take(width)) ([...beam[p].$1, c], score)];
     }
     return beam.isEmpty ? rest : beam.first.$1;
   }

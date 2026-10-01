@@ -147,20 +147,22 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
 
   @override
   Widget build(BuildContext context) {
-    final app = context.watch<AppState>();
+    // Only the palette: watching the whole app state rebuilt the room with every
+    // change anywhere in the app — a download's progress, a cover arriving.
+    final palette = context.select<AppState, Palette>((a) => a.palette);
     return AnimatedBuilder(
       animation: boothLook,
       builder: (context, _) {
         final light = boothLook.apply(context);
         return Theme(
-      data: light ? MuseTheme.light(app.palette) : MuseTheme.dark(app.palette),
+      data: light ? MuseTheme.light(palette) : MuseTheme.dark(palette),
       child: Builder(
         builder: (context) => Scaffold(
           backgroundColor: Console.ground,
           body: SafeArea(
             child: Column(
               children: [
-                _bar(context),
+                BoothPanel(child: _bar(context)),
                 Expanded(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
@@ -184,7 +186,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
                               children: [
                                 Expanded(
                                     flex: 3,
-                                    child: ConsoleCrate(
+                                    child: BoothPanel(child: ConsoleCrate(
                                       booth: _b,
                                       loadInto: _load,
                                       forDeck: _for,
@@ -194,14 +196,14 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
                                         setState(() => _wide = !_wide);
                                         unawaited(_keepLayout());
                                       },
-                                    )),
+                                    ))),
                                 const SizedBox(height: 10),
                                 if (_logFolded)
-                                  RepaintBoundary(child: ConsoleLog(booth: _b, folded: true, onFold: _fold))
+                                  BoothPanel(child: ConsoleLog(booth: _b, folded: true, onFold: _fold))
                                 else
                                   Expanded(
                                       flex: 2,
-                                      child: RepaintBoundary(child: ConsoleLog(booth: _b, onFold: _fold))),
+                                      child: BoothPanel(child: ConsoleLog(booth: _b, onFold: _fold))),
                               ],
                             ),
                           ),
@@ -250,9 +252,9 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
                   const SizedBox(width: 6),
                   Expanded(
                     child: switch (_view) {
-                      BoothView.waves => RepaintBoundary(child: ConsoleWaves(booth: _b)),
-                      BoothView.set => RepaintBoundary(child: ConsoleSetView(booth: _b)),
-                      BoothView.plan => RepaintBoundary(child: ConsolePlan(booth: _b)),
+                      BoothView.waves => BoothPanel(child: ConsoleWaves(booth: _b)),
+                      BoothView.set => BoothPanel(child: ConsoleSetView(booth: _b)),
+                      BoothView.plan => BoothPanel(child: ConsolePlan(booth: _b)),
                     },
                   ),
                 ],
@@ -264,15 +266,15 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Expanded(
-                      child: RepaintBoundary(
+                      child: BoothPanel(
                           child: ConsoleDeck(booth: _b, deck: _b.a, onLoad: () => _pick(_b.a)))),
                   const SizedBox(width: 10),
                   SizedBox(
                       width: mixer,
-                      child: RepaintBoundary(child: ConsoleMixer(booth: _b))),
+                      child: BoothPanel(child: ConsoleMixer(booth: _b))),
                   const SizedBox(width: 10),
                   Expanded(
-                      child: RepaintBoundary(
+                      child: BoothPanel(
                           child: ConsoleDeck(booth: _b, deck: _b.b, onLoad: () => _pick(_b.b)))),
                 ],
               ),
@@ -638,3 +640,4 @@ class _ViewSwitch extends StatelessWidget {
         ],
       );
 }
+

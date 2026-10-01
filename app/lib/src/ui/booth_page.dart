@@ -188,8 +188,9 @@ class _BoothPageState extends State<BoothPage> {
 
   @override
   Widget build(BuildContext context) {
-    final app = context.watch<AppState>();
-    final b = app.booth;
+    // The booth is made once and kept: nothing else of the app's state is drawn here,
+    // and watching all of it rebuilt the room with every change anywhere in the app.
+    final b = context.read<AppState>().booth;
     final compact = Width.of(context) == Width.compact;
 
     return ArmReach(

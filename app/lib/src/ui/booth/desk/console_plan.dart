@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -12,6 +13,7 @@ import '../../../state/booth/automix.dart';
 import '../../../state/booth/planner.dart';
 import '../../feel.dart';
 import '../../mag.dart';
+import '../booth_clock.dart';
 import 'console.dart';
 import 'console_set.dart' show planPair, startAuto;
 
@@ -36,13 +38,16 @@ class ConsolePlan extends StatefulWidget {
 }
 
 class _ConsolePlanState extends State<ConsolePlan> {
-  // The playhead moves between the booth's own reports.
+  // The playhead is drawn off the room's clock, over the drawing (see _PlanHead): the
+  // drawing itself — the two records' bars, the move over them, every word — used to
+  // be built and laid out again eight times a second to move that one line. What else
+  // reads the clock — how long the planner has been at it — is in whole seconds.
   Timer? _tick;
 
   @override
   void initState() {
     super.initState();
-    _tick = Timer.periodic(const Duration(milliseconds: 120), (_) {
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
     });
   }
@@ -220,7 +225,11 @@ class _ConsolePlanState extends State<ConsolePlan> {
       children: [
         Expanded(
           child: ClipRect(
-            child: CustomPaint(painter: _PlanPainter(picture)),
+            child: CustomPaint(
+              painter: _PlanPainter(picture, head: false),
+              foregroundPainter: _PlanHead(
+                  picture, BoothClock.of(context).positionOf(from)),
+            ),
           ),
         ),
         const SizedBox(height: 6),
@@ -419,6 +428,22 @@ class _Picture {
   final VocalMap? fromVoice, toVoice;
   final bool stems;
   final String fromTitle, toTitle;
+
+  /// The same drawing, wherever the playhead is.
+  bool sameAs(_Picture o) =>
+      identical(from, o.from) &&
+      identical(to, o.to) &&
+      fromDeck == o.fromDeck &&
+      toDeck == o.toDeck &&
+      goesAt == o.goesAt &&
+      inAt == o.inAt &&
+      bars == o.bars &&
+      identical(steps, o.steps) &&
+      identical(fromVoice, o.fromVoice) &&
+      identical(toVoice, o.toVoice) &&
+      stems == o.stems &&
+      fromTitle == o.fromTitle &&
+      toTitle == o.toTitle;
 }
 
 /// A place in [t], in its bars: 12.5 is half way through its thirteenth.
@@ -507,9 +532,36 @@ class PlanAt {
   }
 }
 
-class _PlanPainter extends CustomPainter {
-  _PlanPainter(this.p);
+/// Where the record playing is now, over the plan: a line, moved by the room's clock.
+class _PlanHead extends CustomPainter {
+  _PlanHead(this.p, this.position) : super(repaint: position);
   final _Picture p;
+  final ValueListenable<Duration> position;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final g = barAt(p.from, p.goesAt);
+    final start = g - _PlanPainter._around, end = g + p.bars + _PlanPainter._around;
+    final laneH = (size.height - 16.0) / 2;
+    final head = barAt(p.from, position.value);
+    if (head < start || head > end) return;
+    final x = (head - start) / (end - start) * size.width;
+    canvas.drawLine(Offset(x, 0), Offset(x, laneH),
+        Paint()
+          ..color = Console.ink
+          ..strokeWidth = 2);
+  }
+
+  @override
+  bool shouldRepaint(_PlanHead old) => old.position != position || !old.p.sameAs(p);
+}
+
+class _PlanPainter extends CustomPainter {
+  _PlanPainter(this.p, {this.head = true});
+  final _Picture p;
+
+  /// Whether the playhead is drawn here, or over it by a _PlanHead.
+  final bool head;
 
   static const _around = 8.0; // bars shown either side of the transition
 
@@ -548,9 +600,9 @@ class _PlanPainter extends CustomPainter {
     _automation(canvas, bottom, PlanAt(p.steps, p.toDeck), outgoing: false, x: x, g: g);
 
     // Where the record playing is now.
-    final head = barAt(p.from, p.playhead);
-    if (head >= start && head <= end) {
-      canvas.drawLine(Offset(x(head), 0), Offset(x(head), laneH),
+    final at = barAt(p.from, p.playhead);
+    if (head && at >= start && at <= end) {
+      canvas.drawLine(Offset(x(at), 0), Offset(x(at), laneH),
           Paint()
             ..color = Console.ink
             ..strokeWidth = 2);
@@ -686,7 +738,8 @@ class _PlanPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_PlanPainter old) => true;
+  bool shouldRepaint(_PlanPainter old) =>
+      old.head != head || !old.p.sameAs(p) || (head && old.p.playhead != p.playhead);
 }
 
 

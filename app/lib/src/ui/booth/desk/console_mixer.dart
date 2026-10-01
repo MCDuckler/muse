@@ -28,6 +28,32 @@ class _ConsoleMixerState extends State<ConsoleMixer> {
   Booth get _b => widget.booth;
 
   @override
+  void initState() {
+    super.initState();
+    _b.moves.addListener(_moved);
+  }
+
+  @override
+  void didUpdateWidget(covariant ConsoleMixer old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.booth, widget.booth)) {
+      old.booth.moves.removeListener(_moved);
+      widget.booth.moves.addListener(_moved);
+    }
+  }
+
+  @override
+  void dispose() {
+    _b.moves.removeListener(_moved);
+    super.dispose();
+  }
+
+  /// The crossfader, a knob, a gain: what this shows moved. See Booth.moves.
+  void _moved() {
+    if (mounted) setState(() {});
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Plate(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
@@ -166,9 +192,27 @@ class _MixButtonState extends State<MixButton> with SingleTickerProviderStateMix
       AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
 
   @override
+  void initState() {
+    super.initState();
+    _beat();
+  }
+
+  @override
   void didUpdateWidget(MixButton old) {
     super.didUpdateWidget(old);
-    widget.going || widget.arming != null ? _pulse.repeat(reverse: true) : _pulse.stop();
+    _beat();
+  }
+
+  /// Pulsing while a mix runs or waits for its beat. Only started when it is not
+  /// already going: the button is rebuilt with the mixer, many times a second during a
+  /// mix, and restarting the pulse each time held it at its first frame.
+  void _beat() {
+    final want = widget.going || widget.arming != null;
+    if (want && !_pulse.isAnimating) {
+      _pulse.repeat(reverse: true);
+    } else if (!want && _pulse.isAnimating) {
+      _pulse.stop();
+    }
   }
 
   @override
@@ -231,10 +275,11 @@ class _MixButtonState extends State<MixButton> with SingleTickerProviderStateMix
     );
   }
 
-  /// Waiting for the beat: how long, to the tenth — and a press calls it off.
-  Widget _countdown(DateTime at) => StreamBuilder<int>(
-        stream: Stream.periodic(const Duration(milliseconds: 50), (i) => i),
-        builder: (context, _) {
+  /// Waiting for the beat: how long, to the tenth — and a press calls it off. Read
+  /// off the clock each time the pulse redraws the button, which is every frame while
+  /// a mix is armed: a stream made in here was a new timer subscribed every frame.
+  Widget _countdown(DateTime at) => Builder(
+        builder: (context) {
           final left = at.difference(DateTime.now());
           final s = left.isNegative ? 0.0 : left.inMilliseconds / 1000;
           return Row(

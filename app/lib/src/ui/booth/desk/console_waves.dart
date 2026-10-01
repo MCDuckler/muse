@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../../state/booth/booth.dart';
@@ -19,8 +20,13 @@ class ConsoleWaves extends StatelessWidget {
   const ConsoleWaves({super.key, required this.booth});
   final Booth booth;
 
+  // The crossfader and the EQ change the drawing (the shape as the room hears it,
+  // the mix's progress), so the waves follow the booth's moves as well as the booth.
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) =>
+      ListenableBuilder(listenable: booth.moves, builder: (context, _) => _waves(context));
+
+  Widget _waves(BuildContext context) {
     return Plate(
       padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
       child: LayoutBuilder(builder: (context, c) {
@@ -33,7 +39,7 @@ class ConsoleWaves extends StatelessWidget {
                 _Overview(booth: booth, deck: booth.a, height: overview),
                 const SizedBox(height: 2),
                 _Lane(booth: booth, deck: booth.a, height: lane),
-                _Phase(booth: booth, height: meter),
+                RepaintBoundary(child: _Phase(booth: booth, height: meter)),
                 _Lane(booth: booth, deck: booth.b, height: lane, mirrored: true),
                 const SizedBox(height: 2),
                 _Overview(booth: booth, deck: booth.b, height: overview),
@@ -122,7 +128,7 @@ class _Lane extends StatelessWidget {
                     onScrub: (to) => unawaited(deck.seekByHand(to)),
                   ),
           ),
-          SizedBox(width: 62, child: _Left(deck: deck)),
+          SizedBox(width: 62, child: RepaintBoundary(child: _Left(deck: deck))),
         ],
       ),
     );
@@ -169,6 +175,19 @@ class _Overview extends StatelessWidget {
     final c = Console.deck(deck.name);
     final bands = booth.bands[t.id];
     final mark = booth.auto.running && identical(booth.master, deck) ? booth.auto.goesAt : null;
+    final position = BoothClock.of(context).positionOf(deck);
+    // Everything about the record that does not move with the needle, worked out once
+    // per build rather than once a frame.
+    final span = slicesSpan(deck.timing, total.inMicroseconds.toDouble()) / total.inMicroseconds;
+    final cues = [for (final d in deck.hotCues.values) d.inMicroseconds / total.inMicroseconds];
+    final markAt = mark == null ? null : mark.inMicroseconds / total.inMicroseconds;
+    // Every four bars, down the whole record: the same rules the lane draws tall, so
+    // the shape of the song can be read as phrases rather than as a lump — where its
+    // eights fall, and where one runs short.
+    final phrases = [
+      for (final m in deck.timing?.markers ?? const <int>[])
+        if (m * 1000 <= total.inMicroseconds) m * 1000 / total.inMicroseconds,
+    ];
     return Padding(
       padding: const EdgeInsets.only(left: 26, right: 62),
       child: LayoutBuilder(builder: (context, box) {
@@ -197,7 +216,7 @@ class _Overview extends StatelessWidget {
                     Positioned.fill(
                       child: RepaintBoundary(
                         child: ListenableBuilder(
-                          listenable: BoothClock.of(context).positionOf(deck),
+                          listenable: position,
                           builder: (context, _) => CustomPaint(
                             size: Size(box.maxWidth, height),
                             painter: _OverviewShape(
@@ -207,7 +226,7 @@ class _Overview extends StatelessWidget {
                               // say until the needle crosses into the next one. On a
                               // four-minute record that is a repaint a second or two
                               // instead of sixty.
-                              playedCol: (deck.position.inMicroseconds /
+                              playedCol: (position.value.inMicroseconds /
                                       total.inMicroseconds *
                                       box.maxWidth /
                                       2)
@@ -216,37 +235,22 @@ class _Overview extends StatelessWidget {
                               // How much of the record the slices cover. See
                               // slicesSpan: they were measured across the file, and
                               // `total` is the engine's idea of the record.
-                              span: slicesSpan(deck.timing, total.inMicroseconds.toDouble()) /
-                                  total.inMicroseconds,
+                              span: span,
                               inks: WaveInks.press,
                               colour: c,
-                              cues: [
-                                for (final d in deck.hotCues.values)
-                                  d.inMicroseconds / total.inMicroseconds
-                              ],
-                              mark:
-                                  mark == null ? null : mark.inMicroseconds / total.inMicroseconds,
-                              // Every four bars, down the whole record: the same rules the
-                              // lane draws tall, so the shape of the song can be read as
-                              // phrases rather than as a lump — where its eights fall, and
-                              // where one runs short.
-                              phrases: [
-                                for (final m in deck.timing?.markers ?? const <int>[])
-                                  if (m * 1000 <= total.inMicroseconds)
-                                    m * 1000 / total.inMicroseconds,
-                              ],
+                              cues: cues,
+                              mark: markAt,
+                              phrases: phrases,
                             ),
                           ),
                         ),
                       ),
                     ),
                     Positioned.fill(
-                      child: ListenableBuilder(
-                        listenable: BoothClock.of(context).positionOf(deck),
-                        builder: (context, _) => CustomPaint(
+                      child: RepaintBoundary(
+                        child: CustomPaint(
                           size: Size(box.maxWidth, height),
-                          painter:
-                              _OverviewHead(t: deck.position.inMicroseconds / total.inMicroseconds),
+                          painter: _OverviewHead(position: position, total: total),
                         ),
                       ),
                     ),
@@ -308,11 +312,14 @@ class _OverviewShape extends CustomPainter {
     final wh = h - foot;
     if (b != null && b.low.isNotEmpty) {
       final n = b.low.length;
-      final step = math.max(1, (n / w).floor());
+      final paint = Paint();
       for (var x = 0.0; x < w; x += 2) {
+        // Every slice under the bar's two pixels: stepping by one pixel's worth read
+        // half of them, and a short loud hit between two bars was simply not there.
         final i = (x / w / span * n).floor().clamp(0, n - 1);
+        final end = math.max(i + 1, ((x + 2) / w / span * n).floor()).clamp(0, n);
         var lo = 0, md = 0, hi = 0;
-        for (var k = i; k < math.min(n, i + step); k++) {
+        for (var k = i; k < end; k++) {
           if (b.low[k] > lo) lo = b.low[k];
           if (b.mid[k] > md) md = b.mid[k];
           if (b.high[k] > hi) hi = b.high[k];
@@ -328,9 +335,8 @@ class _OverviewShape extends CustomPainter {
         // which spent the only colour the strip had on saying something the needle
         // already says, and left the record's own shape with none.
         final ink = Color(waveInk(inks, lo / 255, md / 255, hi / 255));
-        canvas.drawRect(
-            Rect.fromLTWH(x, (wh - bar) / 2, 1.4, bar),
-            Paint()..color = x < played ? ink.withValues(alpha: 0.30) : ink);
+        canvas.drawRect(Rect.fromLTWH(x, (wh - bar) / 2, 1.4, bar),
+            paint..color = x < played ? ink.withValues(alpha: 0.30) : ink);
       }
     } else {
       canvas.drawRect(Rect.fromLTWH(0, wh / 2 - 1, w, 2), Paint()..color = Console.line);
@@ -376,18 +382,23 @@ class _OverviewShape extends CustomPainter {
 }
 
 /// The needle, and nothing else: what actually moves while a record plays.
+///
+/// Repainted straight off the clock, with nothing built: a rectangle moved is all a
+/// frame of it costs.
 class _OverviewHead extends CustomPainter {
-  const _OverviewHead({required this.t});
-  final double t;
+  _OverviewHead({required this.position, required this.total}) : super(repaint: position);
+  final ValueListenable<Duration> position;
+  final Duration total;
 
   @override
   void paint(Canvas canvas, Size size) {
+    final t = position.value.inMicroseconds / total.inMicroseconds;
     final x = size.width * t.clamp(0.0, 1.0);
     canvas.drawRect(Rect.fromLTWH(x - 1, -1, 2, size.height + 2), Paint()..color = Console.ink);
   }
 
   @override
-  bool shouldRepaint(_OverviewHead old) => old.t != t;
+  bool shouldRepaint(_OverviewHead old) => old.position != position || old.total != total;
 }
 
 /// How far apart the beats are: a needle about the middle, and a number only when
@@ -537,8 +548,10 @@ class _Arming extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: accent.withValues(alpha: 0.6)),
       ),
-      child: StreamBuilder<int>(
-        stream: Stream.periodic(const Duration(milliseconds: 50), (i) => i),
+      // Off the room's clock: a stream made in here was a new timer each time the waves
+      // were rebuilt, which during a mix is many times a second.
+      child: ListenableBuilder(
+        listenable: BoothClock.of(context).positionOf(booth.master),
         builder: (context, _) {
           final left = m.startsAt.difference(DateTime.now());
           final s = left.isNegative ? 0.0 : left.inMilliseconds / 1000;

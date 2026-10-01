@@ -218,7 +218,7 @@ class Deck extends ChangeNotifier {
     if (over <= Duration.zero) {
       stemLevels = to;
       await stemEngine?.call(this, to);
-      notifyListeners();
+      _notifyFinely();
       return;
     }
     const step = Duration(milliseconds: 20);
@@ -235,7 +235,7 @@ class Deck extends ChangeNotifier {
       if (wait > Duration.zero) await Future<void>.delayed(wait);
       slot += step;
     }
-    notifyListeners();
+    _notifyFinely();
   }
 
   /// A part has been asked for and is being made. Nothing changes on the deck while
@@ -1206,7 +1206,22 @@ class Deck extends ChangeNotifier {
     _fixedAt = DateTime.now();
     tempo = rate.clamp(0.5, 2.0);
     await _player.setSpeed(tempo);
-    notifyListeners();
+    _notifyFinely();
+  }
+
+  /// Whether the change being announced is a fine one — a tempo bent, stem levels
+  /// travelling — that only what draws the deck needs to hear about. True only while
+  /// the listeners are being told. See Booth.moves.
+  bool get changedFinely => _finely;
+  bool _finely = false;
+
+  void _notifyFinely() {
+    _finely = true;
+    try {
+      notifyListeners();
+    } finally {
+      _finely = false;
+    }
   }
 
   void _ended() {

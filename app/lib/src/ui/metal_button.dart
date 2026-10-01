@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -45,8 +46,89 @@ class MetalFace extends CustomPainter {
   /// The song's beat, one on it and falling to nothing: the bloom breathes with it.
   final ValueListenable<double>? beat;
 
+  /// Faces already drawn, as pictures of themselves. See [paint].
+  static final _baked = <Object, ui.Image>{};
+
+  /// How finely the light is told apart in the baked faces: a fade of the ring is
+  /// drawn in this many steps, which at a few hundred milliseconds is more steps than
+  /// frames.
+  static const _steps = 24;
+
+  /// Drawn once and kept as a picture, then put down whole each frame.
+  ///
+  /// A face is a dozen soft-edged strokes — the bloom, the tube's thread, the shadow
+  /// it stands in, the colour caught on the steel — and a stroke blurred is a pass of
+  /// its own for the GPU. Impeller, which draws the desk, keeps nothing between
+  /// frames: everything on screen is drawn again from its instructions every frame,
+  /// still or not. With a dozen of these on the deck and the mixer, that was a large
+  /// part of the time every frame took to draw while the booth stood still. As a
+  /// picture it is one image drawn — and it only changes with the light, which is
+  /// told apart in [_steps] steps.
   @override
   void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+    final on = lit.value;
+    final pulse = (beat?.value ?? 0.0) * on;
+    final dpr = ui.PlatformDispatcher.instance.implicitView?.devicePixelRatio ?? 1.0;
+    // What spills past the button: its shadow and the ring's bloom.
+    final margin = size.shortestSide * 0.45 + 8;
+    final key = (
+      size.width,
+      size.height,
+      dpr,
+      colour,
+      pressed,
+      dark,
+      (on * _steps).round(),
+      (pulse * _steps).round(),
+    );
+    var image = _baked.remove(key);
+    if (image == null) {
+      final r = ui.PictureRecorder();
+      final c = Canvas(r);
+      c.scale(dpr);
+      c.translate(margin, margin);
+      _face(c, size, (key.$7) / _steps, (key.$8) / _steps);
+      final picture = r.endRecording();
+      image = picture.toImageSync(
+          ((size.width + 2 * margin) * dpr).ceil(), ((size.height + 2 * margin) * dpr).ceil());
+      picture.dispose();
+      if (_baked.length >= 64) {
+        final oldest = _baked.keys.first;
+        _baked.remove(oldest)?.dispose();
+      }
+    }
+    // Most recently used last, so the oldest is the first to go.
+    _baked[key] = image;
+    canvas.drawImageRect(
+        image,
+        Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
+        Rect.fromLTWH(-margin, -margin, image.width / dpr, image.height / dpr),
+        Paint()..filterQuality = FilterQuality.medium);
+
+    // Waiting: a brighter length of tube running round. Live, because it moves.
+    final run = running;
+    if (busy && run != null) {
+      final c = size.center(Offset.zero);
+      final radius = size.shortestSide / 2;
+      final ring = radius * 0.79;
+      final ringWidth = radius * 0.115;
+      final at = run.value * 2 * math.pi;
+      canvas.drawArc(
+          Rect.fromCircle(center: c, radius: ring),
+          at,
+          math.pi * 0.55,
+          false,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = ringWidth * 1.1
+            ..strokeCap = StrokeCap.round
+            ..color = Colors.white.withValues(alpha: 0.8)
+            ..maskFilter = MaskFilter.blur(BlurStyle.normal, ringWidth * 0.4));
+    }
+  }
+
+  void _face(Canvas canvas, Size size, double on, double pulse) {
     final c = size.center(Offset.zero);
     final radius = size.shortestSide / 2;
     final plate = radius * 0.88;
@@ -54,8 +136,6 @@ class MetalFace extends CustomPainter {
     final ringWidth = radius * 0.115;
     final disc = radius * 0.655;
     final chamfer = radius * 0.05;
-    final on = lit.value;
-    final pulse = (beat?.value ?? 0.0) * on;
     final glow = (0.18 + 0.82 * on) * (pressed ? 0.6 : 1.0);
     final lamp = const Alignment(-0.7, -0.75);
 
@@ -141,22 +221,6 @@ class MetalFace extends CustomPainter {
           ..strokeWidth = ringWidth * 0.40
           ..color = hot.withValues(alpha: 0.95 * glow)
           ..maskFilter = MaskFilter.blur(BlurStyle.normal, ringWidth * 0.22));
-    // Waiting: a brighter length of tube running round.
-    final run = running;
-    if (busy && run != null) {
-      final at = run.value * 2 * math.pi;
-      canvas.drawArc(
-          Rect.fromCircle(center: c, radius: ring),
-          at,
-          math.pi * 0.55,
-          false,
-          Paint()
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = ringWidth * 1.1
-            ..strokeCap = StrokeCap.round
-            ..color = Colors.white.withValues(alpha: 0.8)
-            ..maskFilter = MaskFilter.blur(BlurStyle.normal, ringWidth * 0.4));
-    }
 
     // The gap between the ring and the disc: dark, and the disc's seat in it — a
     // hairline of shadow the disc sits down into.
@@ -268,14 +332,13 @@ class MetalIcon extends StatelessWidget {
   Widget build(BuildContext context) => Stack(
         alignment: Alignment.center,
         children: [
+          // The shadow's own translucency is in its colour, not an Opacity over it:
+          // the same picture, and one layer drawn off-screen instead of two.
           Transform.translate(
             offset: const Offset(0, 1),
-            child: Opacity(
-              opacity: 0.35,
-              child: ColorFiltered(
-                colorFilter: const ColorFilter.mode(Colors.black, BlendMode.srcIn),
-                child: child,
-              ),
+            child: ColorFiltered(
+              colorFilter: const ColorFilter.mode(Color(0x59000000), BlendMode.srcIn),
+              child: child,
             ),
           ),
           child,

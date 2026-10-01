@@ -241,7 +241,8 @@ class _ConsoleSetViewState extends State<ConsoleSetView> {
   Widget build(BuildContext context) {
     final booth = widget.booth;
     return ListenableBuilder(
-      listenable: Listenable.merge([booth, booth.auto]),
+      // The booth says whatever the Auto DJ says as well: one is enough.
+      listenable: booth,
       builder: (context, _) {
         final (records, played) = _records(context);
         return Plate(
@@ -977,6 +978,14 @@ class _StructurePainter extends CustomPainter {
     }
   }
 
+  // Compared rather than always redrawn: the set view is rebuilt with the booth, and
+  // each card's strip lays out a word for every section it shows.
   @override
-  bool shouldRepaint(_StructurePainter old) => true;
+  bool shouldRepaint(_StructurePainter old) =>
+      old.w.timing != w.timing ||
+      old.w.bands != w.bands ||
+      old.w.accent != w.accent ||
+      old.w.outAt != w.outAt ||
+      old.w.inAt != w.inAt ||
+      old.w.playhead != w.playhead;
 }

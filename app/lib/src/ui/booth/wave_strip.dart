@@ -213,6 +213,15 @@ class _WaveStripState extends State<WaveStrip> {
   Duration? _from;
   double _by = 0;
 
+  /// The record's picture, kept between frames. See [_Tiles].
+  final _tiles = _Tiles();
+
+  @override
+  void dispose() {
+    _tiles.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -249,6 +258,8 @@ class _WaveStripState extends State<WaveStrip> {
           child: RepaintBoundary(
             child: CustomPaint(
               painter: _StripPainter(
+                tiles: _tiles,
+                dpr: MediaQuery.devicePixelRatioOf(context),
                 position: position,
                 timing: widget.timing,
                 bands: widget.bands,
@@ -296,8 +307,114 @@ TextPainter _measured(String text, TextStyle style) {
   return tp;
 }
 
+/// A record's loudness in three bands, one column a pixel wide each, for one tile.
+typedef _Columns = ({Uint8List lo, Uint8List md, Uint8List hi});
+
+/// The strip's picture, in pieces laid along the record rather than across the
+/// screen.
+///
+/// Nearly everything on a strip is fixed to the record: its shape, its beats, its
+/// four-bar rules, its phrases, its sections, its cues. Only where the needle is
+/// changes from frame to frame — so the strip was spending sixty frames a second,
+/// on two lanes, working out again where sixteen hundred columns, five hundred beat
+/// ticks and a few dozen words go, to show them all one pixel to the left. Here they
+/// are drawn once, in tiles [width] pixels of record wide, into pictures that are
+/// kept; a frame is a few of those pictures put down at a new place. It also stops a
+/// thing the old way could not help: each frame re-sorted the record's slices into
+/// columns from a slightly different start, so the shape shimmered as it ran. Laid
+/// along the record, a column is the same column all the way across the screen.
+///
+/// Three layers, because they go stale at different times. What stands under the
+/// loop's shading (the sections), the shape (which the mixer's EQ re-colours while it
+/// moves), and the grid and words over it. A knob turning re-draws the shape's tiles
+/// from columns already sorted, and nothing else.
+class _Tiles {
+  static const width = 512.0;
+
+  /// Microseconds of record a pixel of tile is: the strip's zoom when they were made.
+  /// A deck's pitch changes the zoom a little (the window is in the room's time), and
+  /// within a per cent and a half the tiles are stretched to fit rather than redrawn —
+  /// a few pixels in a few hundred, which nobody can see, against a full redraw on
+  /// every bend of a tempo glide.
+  double scale = 0;
+  double height = 0;
+
+  Object? _binsKey, _underKey, _shapeKey, _overKey;
+  final _bins = <int, _Columns?>{};
+  final _under = <int, ui.Picture>{};
+  final _shape = <int, ui.Picture>{};
+  final _over = <int, ui.Picture>{};
+
+  /// The edges' fades, made once for a size.
+  (double, double, Color)? _fadeKey;
+  Shader? _fadeLeft, _fadeRight;
+
+  /// Lets go of everything when the zoom or the lane's height changes.
+  void rescale(double usPerPixel, double h) {
+    scale = usPerPixel;
+    height = h;
+    _binsKey = _underKey = _shapeKey = _overKey = null;
+    _bins.clear();
+    _drop(_under);
+    _drop(_shape);
+    _drop(_over);
+  }
+
+  bool fits(double usPerPixel, double h) =>
+      scale > 0 && h == height && (usPerPixel / scale - 1).abs() <= 0.015;
+
+  /// Keeps [layer] if [key] is what it was made for; empties it if not.
+  static Object? _check(Map<int, ui.Picture> layer, Object? had, Object key) {
+    if (had != key) _drop(layer);
+    return key;
+  }
+
+  void checkBins(Object key) {
+    if (_binsKey != key) {
+      _bins.clear();
+      _drop(_shape);
+      _shapeKey = null;
+    }
+    _binsKey = key;
+  }
+
+  void checkUnder(Object key) => _underKey = _check(_under, _underKey, key);
+  void checkShape(Object key) => _shapeKey = _check(_shape, _shapeKey, key);
+  void checkOver(Object key) => _overKey = _check(_over, _overKey, key);
+
+  /// Tiles far from [around] go, so a long record played through does not keep every
+  /// tile it has ever shown.
+  void forgetFarFrom(int around) {
+    for (final layer in [_under, _shape, _over]) {
+      layer.removeWhere((k, p) {
+        final far = (k - around).abs() > 8;
+        if (far) p.dispose();
+        return far;
+      });
+    }
+    _bins.removeWhere((k, _) => (k - around).abs() > 8);
+  }
+
+  static void _drop(Map<int, ui.Picture> layer) {
+    for (final p in layer.values) {
+      p.dispose();
+    }
+    layer.clear();
+  }
+
+  void dispose() {
+    _drop(_under);
+    _drop(_shape);
+    _drop(_over);
+    _bins.clear();
+    _fadeLeft = _fadeRight = null;
+  }
+}
+
 class _StripPainter extends CustomPainter {
   _StripPainter({
+    required this.tiles,
+    required this.dpr,
     required this.position,
     required this.timing,
     required this.bands,
@@ -315,6 +432,8 @@ class _StripPainter extends CustomPainter {
     required this.quiet,
   }) : super(repaint: position);
 
+  final _Tiles tiles;
+  final double dpr;
   final ValueListenable<Duration> position;
   final TrackTiming? timing;
   final ({List<int> low, List<int> mid, List<int> high})? bands;
@@ -330,6 +449,8 @@ class _StripPainter extends CustomPainter {
 
   /// Where the playhead stands: a third in, so most of the strip is what is coming.
   static const _head = 0.34;
+
+  static const _tw = _Tiles.width;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -355,44 +476,46 @@ class _StripPainter extends CustomPainter {
     // The line the shape stands about, and how far either side of it it may reach.
     // Room left under it for the beat ticks and over it for the phrase brackets.
     final axis = h * 0.46;
-    final half = h * 0.36;
     canvas.drawLine(Offset(0, axis), Offset(w, axis),
         Paint()..color = ink.withValues(alpha: 0.12)..strokeWidth = 1);
 
-    // What the record is doing here, where the house has read it off the stems: each
-    // section named at its start, a breakdown shaded, a drop marked.
-    final structure = timing?.structure;
-    if (structure != null && structure.sections.isNotEmpty) {
-      for (final s in structure.sections) {
-        final x0 = xOf(s.startMs * 1000.0), x1 = xOf(s.endMs * 1000.0);
-        if (x1 < 0 || x0 > w) continue;
-        if (s.label == 'breakdown' || s.label == 'build') {
-          canvas.drawRect(Rect.fromLTRB(x0.clamp(0, w), 0, x1.clamp(0, w), h),
-              Paint()..color = quiet.withValues(alpha: s.label == 'build' ? 0.10 : 0.07));
-        }
-        if (x0 >= 0 && x0 <= w) {
-          canvas.drawLine(Offset(x0, 0), Offset(x0, h), Paint()..color = quiet.withValues(alpha: 0.35)..strokeWidth = 1);
-          final tp = _measured(s.label.toUpperCase(),
-              TextStyle(fontSize: 7.5, letterSpacing: 0.8, color: quiet, fontWeight: FontWeight.w700));
-          canvas.save();
-          if (mirrored) {
-            canvas.translate(x0 + 3, h - 2);
-            canvas.scale(1, -1);
-            tp.paint(canvas, Offset.zero);
-          } else {
-            tp.paint(canvas, Offset(x0 + 3, 2));
-          }
-          canvas.restore();
-        }
-      }
-      for (final d in structure.dropsMs) {
-        final x = xOf(d * 1000.0);
-        if (x < 0 || x > w) continue;
-        canvas.drawLine(Offset(x, 0), Offset(x, h), Paint()..color = ink.withValues(alpha: 0.6)..strokeWidth = 1.5);
+    // The tiles: made at this zoom unless the last ones are close enough to stretch.
+    if (!tiles.fits(perPixel, h)) tiles.rescale(perPixel, h);
+    final scale = tiles.scale;
+    // Screen pixels to a tile pixel, and where the screen's left edge is in tile
+    // pixels.
+    final k = scale / perPixel;
+    final leftX = left / scale;
+    final first = (leftX / _tw).floor();
+    final last = ((leftX + w / k) / _tw).floor();
+    tiles.forgetFarFrom((first + last) ~/ 2);
+    final colours = (ink, accent, paper, quiet);
+    tiles.checkUnder((timing, mirrored, colours));
+    final b = bands;
+    final hasShape = b != null && b.low.isNotEmpty;
+    if (hasShape) {
+      tiles.checkBins((b, slicesSpan(timing, total)));
+      tiles.checkShape((inks, gains));
+    }
+    tiles.checkOver((timing, mirrored, colours, total));
+
+    void lay(Map<int, ui.Picture> layer, ui.Picture Function(int i) make) {
+      for (var i = first; i <= last; i++) {
+        final p = layer[i] ??= make(i);
+        // Put down on a whole device pixel, so a tick or a column stays crisp
+        // rather than smearing across two pixels as it travels.
+        final dx = ((i * _tw - leftX) * k * dpr).roundToDouble() / dpr;
+        canvas.save();
+        canvas.translate(dx, 0);
+        if (k != 1) canvas.scale(k, 1);
+        canvas.drawPicture(p);
+        canvas.restore();
       }
     }
 
-    // The loop, shaded, first: everything else is printed over it.
+    lay(tiles._under, (i) => _tile(i, (c, x0) => _drawUnder(c, x0, h)));
+
+    // The loop, shaded, over the sections and under everything else.
     final lp = loop;
     if (lp != null) {
       final x0 = xOf(lp.$1.inMicroseconds.toDouble()), x1 = xOf(lp.$2.inMicroseconds.toDouble());
@@ -400,174 +523,18 @@ class _StripPainter extends CustomPainter {
           Paint()..color = accent.withValues(alpha: 0.10));
     }
 
-    // The shape: a column a pixel wide for each pixel across, standing about the
-    // middle line rather than on the floor.
-    //
-    // Three filled outlines drawn over each other was what this was, and it could not
-    // work. Each band was a polygon from the foot up in its own ink at its own alpha,
-    // so the loudest band painted over the other two and the picture was one colour
-    // with a wash on it — a record's bass and its hats were the same shape in the same
-    // red. Worse, every band was normalised against *itself* on the house, so the three
-    // heights had no relation to each other at all (see peaks.py).
-    //
-    // A column takes the loudest slice under it, mixes the three bands into one colour,
-    // normalises that colour so its brightest channel is full, and stands it about the
-    // middle at the height of the loudest band. Hue is the balance of the record;
-    // height is how loud it is. Both sides of the middle, because that is what every DJ
-    // has looked at for twenty years and because a shape about a line is read faster
-    // than a skyline — the eye follows one edge and gets the other for nothing.
-    //
-    // Drawn as one call: a triangle pair per column into one Vertices, rather than a
-    // rectangle each. At sixteen hundred columns a lane and two lanes on a screen, that
-    // is the difference between two draw calls a frame and six thousand.
-    final b = bands;
-    if (b != null && b.low.isNotEmpty) {
-      final n = b.low.length;
-      final usPerSlice = slicesSpan(timing, total) / n;
-      final gain = gains;
-      final gl = gain?.low ?? 1.0, gm = gain?.mid ?? 1.0, gh = gain?.high ?? 1.0;
-      final cols = w.ceil();
-      final layers = inks.stacked ? 3 : 1;
-      final xy = Float32List(cols * 12 * layers);
-      final tint = Int32List(cols * 6 * layers);
-      var v = 0, c = 0;
-      for (var px = 0; px < cols; px++) {
-        var i0 = ((left + px * perPixel) / usPerSlice).floor();
-        var i1 = ((left + (px + 1) * perPixel) / usPerSlice).ceil();
-        if (i1 <= 0 || i0 >= n) continue;
-        if (i0 < 0) i0 = 0;
-        if (i1 > n) i1 = n;
-        if (i1 <= i0) i1 = i0 + 1;
-        var lo = 0, md = 0, hi = 0;
-        for (var i = i0; i < i1; i++) {
-          if (b.low[i] > lo) lo = b.low[i];
-          if (b.mid[i] > md) md = b.mid[i];
-          if (b.high[i] > hi) hi = b.high[i];
-        }
-        final l = lo * gl / 255, m = md * gm / 255, t = hi * gh / 255;
-        final peak = math.max(l, math.max(m, t));
-        if (peak <= 0.004) continue;
-        final x0 = px.toDouble(), x1 = x0 + 1;
-        void quad(double from, double to, int argb) {
-          xy[v++] = x0; xy[v++] = axis - to;
-          xy[v++] = x1; xy[v++] = axis - to;
-          xy[v++] = x1; xy[v++] = axis + to;
-          xy[v++] = x0; xy[v++] = axis - to;
-          xy[v++] = x1; xy[v++] = axis + to;
-          xy[v++] = x0; xy[v++] = axis + to;
-          for (var q = 0; q < 6; q++) {
-            tint[c++] = argb;
-          }
-        }
-        // A floor under it so a quiet passage is a thin line rather than a gap: a
-        // record with nothing in it still has to show where it is.
-        final tall = half * (0.03 + 0.97 * peak);
-        if (inks.stacked) {
-          // Outermost first, each layer painted over the one under it: the top of the
-          // record stands on the middle, which stands on the bass. The column is as
-          // tall as the loudest band either way, so the two kinds of palette draw a
-          // record at the same size and only differ in what fills it.
-          final sum = l + m + t;
-          if (sum <= 0) continue;
-          quad(0, tall, inks.high.toARGB32());
-          quad(0, tall * (l + m) / sum, inks.mid.toARGB32());
-          quad(0, tall * l / sum, inks.low.toARGB32());
-        } else {
-          quad(0, tall, waveInk(inks, l, m, t));
-        }
-      }
-      if (v > 0) {
-        canvas.drawVertices(
-            ui.Vertices.raw(ui.VertexMode.triangles, Float32List.sublistView(xy, 0, v),
-                colors: Int32List.sublistView(tint, 0, c)),
-            BlendMode.dst,
-            Paint());
-      }
+    if (hasShape) {
+      lay(tiles._shape, (i) => _tile(i, (c, x0) => _drawShape(c, i, x0, h, total)));
     } else {
       // No shape yet: a quiet line, so the grid still has something to stand on.
       canvas.drawRect(
           Rect.fromLTWH(0, axis - 1.5, w, 3), Paint()..color = ink.withValues(alpha: 0.10));
     }
 
-    // The grid: ticks along the foot, downbeats taller and darker.
-    final t = timing;
-    if (t != null && t.hasBeats) {
-      final tick = Paint()..color = ink.withValues(alpha: 0.35)..strokeWidth = 1;
-      final down = Paint()..color = ink.withValues(alpha: 0.7)..strokeWidth = 1.2;
-      final steady = t.steady;
-      if (steady != null) {
-        // The steady grid, the one SYNC and the beat-holding use: two records held on
-        // the beat show their ticks in one line down both strips.
-        final from = ((left / 1000 - steady.origin) / steady.period).floor();
-        final to = ((left + w * perPixel) / 1000 - steady.origin) / steady.period;
-        for (var k = from; k <= to.ceil(); k++) {
-          final ms = steady.origin + k * steady.period;
-          if (ms < t.beats.first - steady.period || ms > t.beats.last + steady.period) continue;
-          final x = xOf(ms * 1000);
-          final isDown = ((k - t.barStartsOn) % 4 + 4) % 4 == 0;
-          canvas.drawLine(Offset(x, h), Offset(x, h - (isDown ? 10 : 5)), isDown ? down : tick);
-        }
-      } else {
-        final beats = t.beats;
-        for (var i = 0; i < beats.length; i++) {
-          final x = xOf(beats[i] * 1000.0);
-          if (x < -2) continue;
-          if (x > w + 2) break;
-          final isDown = (i - t.barStartsOn) % 4 == 0;
-          canvas.drawLine(Offset(x, h), Offset(x, h - (isDown ? 10 : 5)), isDown ? down : tick);
-        }
-      }
-      // Every four bars, from where the record's sections start: a rule the height of
-      // the lane and the tallest tick, so two records lined up for a mix show it —
-      // their rules pass the playhead together, strip over strip.
-      final four = Paint()..color = ink.withValues(alpha: 0.3)..strokeWidth = 1;
-      final fourTick = Paint()..color = ink.withValues(alpha: 0.9)..strokeWidth = 2;
-      for (final m in t.markers) {
-        // Where the house put them, not where this would put them.
-        //
-        // They used to be snapped to the grid fitted here, four beats at a time,
-        // anchored on the bar phase. Where the two agree that does nothing; where
-        // they do not — the marks on one in forty records are not all on the same
-        // beat of the bar — it moved each rule on its own by as much as two beats,
-        // which is a phrase grid that is neither the house's nor evenly spaced. The
-        // marks are every fourth downbeat and already on the beat; re-deciding that
-        // from a second fit can only be a way to be wrong.
-        final x = xOf(m * 1000.0);
-        if (x < -2) continue;
-        if (x > w + 2) break;
-        canvas.drawLine(Offset(x, 0), Offset(x, h), four);
-        canvas.drawLine(Offset(x, h), Offset(x, h - 18), fourTick);
-      }
-      // Phrases: a bracket along the head, with the bar count typed at its start.
-      final phrases = t.phrases;
-      // Hoisted: a Paint built inside the loop is one allocation per phrase per frame.
-      final bracket = Paint()..color = ink.withValues(alpha: 0.55)..strokeWidth = 1;
-      for (var i = 0; i < phrases.length; i++) {
-        final x = xOf(phrases[i] * 1000.0);
-        final end = i + 1 < phrases.length ? xOf(phrases[i + 1] * 1000.0) : w + 20;
-        if (end < 0 || x > w) continue;
-        canvas.drawLine(Offset(math.max(0, x), 4), Offset(math.min(w, end - 3), 4), bracket);
-        canvas.drawLine(Offset(x, 4), Offset(x, 10), bracket);
-        _type(canvas, '${i + 1}', Offset(x + 3, 5), quiet, 8);
-      }
-      // Where the song opens up, drawn the full height of the lane: the thing a mix
-      // is landed on, so it has to be visible from further away than a flag.
-      for (final d in t.drops) {
-        final x = xOf(d * 1000.0);
-        if (x < -2 || x > w + 2) continue;
-        canvas.drawRect(Rect.fromLTWH(x - 1.5, 0, 3, h),
-            Paint()..color = accent.withValues(alpha: 0.35));
-        _type(canvas, 'DROP', Offset(x + 5, h * 0.36), accent, 8);
-      }
-      // The cues: IN and OUT flags in the accent, the way a mark is put on a record.
-      final cues = t.cues;
-      if (cues != null) {
-        _flag(canvas, xOf(cues.mixInMs * 1000.0), 'IN', h, w);
-        _flag(canvas, xOf(cues.mixOutMs * 1000.0), 'OUT', h, w);
-      }
-    }
+    lay(tiles._over, (i) => _tile(i, (c, x0) => _drawOver(c, x0, h, total)));
+
     for (final e in hotCues.entries) {
-      _flag(canvas, xOf(e.value.inMicroseconds.toDouble()), '${e.key}', h, w, hot: true);
+      _flag(canvas, xOf(e.value.inMicroseconds.toDouble()), '${e.key}', h, 0, w, hot: true);
     }
     // Where the booth means to mix out of this record: a rule with a hatched run up
     // to it, so how long there is left to it is read off the strip rather than the
@@ -584,7 +551,7 @@ class _StripPainter extends CustomPainter {
         canvas.drawLine(Offset(x, 0), Offset(x, h),
             Paint()..color = accent..strokeWidth = 1.4
               ..strokeCap = StrokeCap.round);
-        _flag(canvas, x, 'MIX', h, w);
+        _flag(canvas, x, 'MIX', h, 0, w);
       }
     }
 
@@ -599,18 +566,267 @@ class _StripPainter extends CustomPainter {
         Path()..moveTo(x - 5, 0)..lineTo(x + 5, 0)..lineTo(x, 6)..close(), Paint()..color = accent);
 
     // The edges fade, so the strip reads as a window onto the song, not the song.
-    for (final (x0, x1) in [(0.0, 18.0), (w - 18, w)]) {
-      canvas.drawRect(
-          Rect.fromLTRB(x0, 0, x1, h),
-          Paint()
-            ..shader = LinearGradient(
-              colors: x0 == 0 ? [paper, paper.withValues(alpha: 0)] : [paper.withValues(alpha: 0), paper],
-            ).createShader(Rect.fromLTRB(x0, 0, x1, h)));
+    final fk = (w, h, paper);
+    if (tiles._fadeKey != fk) {
+      tiles._fadeKey = fk;
+      tiles._fadeLeft = LinearGradient(colors: [paper, paper.withValues(alpha: 0)])
+          .createShader(Rect.fromLTRB(0, 0, 18, h));
+      tiles._fadeRight = LinearGradient(colors: [paper.withValues(alpha: 0), paper])
+          .createShader(Rect.fromLTRB(w - 18, 0, w, h));
+    }
+    canvas.drawRect(Rect.fromLTRB(0, 0, 18, h), Paint()..shader = tiles._fadeLeft);
+    canvas.drawRect(Rect.fromLTRB(w - 18, 0, w, h), Paint()..shader = tiles._fadeRight);
+  }
+
+  /// One tile's picture: [draw] is handed the canvas and the tile's left edge in tile
+  /// pixels of record, and draws in tile pixels with that edge at nought. Clipped to
+  /// the tile, hard, so whatever crosses into the next tile is drawn by each up to
+  /// their common edge and not twice over it.
+  ui.Picture _tile(int i, void Function(Canvas c, double x0) draw) {
+    final r = ui.PictureRecorder();
+    final c = Canvas(r);
+    c.clipRect(Rect.fromLTWH(0, -tiles.height, _tw, tiles.height * 3), doAntiAlias: false);
+    draw(c, i * _tw);
+    return r.endRecording();
+  }
+
+  /// Under the loop: what the record is doing here, where the house has read it off
+  /// the stems — each section named at its start, a breakdown shaded, a drop marked.
+  void _drawUnder(Canvas canvas, double x0, double h) {
+    final structure = timing?.structure;
+    if (structure == null || structure.sections.isEmpty) return;
+    final scale = tiles.scale;
+    double xOf(double us) => us / scale - x0;
+    final line = Paint()..color = quiet.withValues(alpha: 0.35)..strokeWidth = 1;
+    final style = TextStyle(fontSize: 7.5, letterSpacing: 0.8, color: quiet, fontWeight: FontWeight.w700);
+    for (final s in structure.sections) {
+      final a = xOf(s.startMs * 1000.0), z = xOf(s.endMs * 1000.0);
+      if (z < 0 || a > _tw + 80) continue;
+      if (s.label == 'breakdown' || s.label == 'build') {
+        canvas.drawRect(Rect.fromLTRB(a, 0, z, h),
+            Paint()..color = quiet.withValues(alpha: s.label == 'build' ? 0.10 : 0.07));
+      }
+      canvas.drawLine(Offset(a, 0), Offset(a, h), line);
+      final tp = _measured(s.label.toUpperCase(), style);
+      canvas.save();
+      if (mirrored) {
+        canvas.translate(a + 3, h - 2);
+        canvas.scale(1, -1);
+        tp.paint(canvas, Offset.zero);
+      } else {
+        tp.paint(canvas, Offset(a + 3, 2));
+      }
+      canvas.restore();
+    }
+    final drop = Paint()..color = ink.withValues(alpha: 0.6)..strokeWidth = 1.5;
+    for (final d in structure.dropsMs) {
+      final x = xOf(d * 1000.0);
+      if (x < -2 || x > _tw + 2) continue;
+      canvas.drawLine(Offset(x, 0), Offset(x, h), drop);
     }
   }
 
-  void _flag(Canvas canvas, double x, String text, double h, double w, {bool hot = false}) {
-    if (x < -30 || x > w + 30) return;
+  /// The record's loudness sorted into columns a pixel of tile wide, once for a
+  /// tile at a zoom: the loudest slice of each band under each column.
+  _Columns? _columns(int i, double total) {
+    if (tiles._bins.containsKey(i)) return tiles._bins[i];
+    final b = bands!;
+    final n = b.low.length;
+    final usPerSlice = slicesSpan(timing, total) / n;
+    final scale = tiles.scale;
+    final cols = _tw.toInt();
+    final lo = Uint8List(cols), md = Uint8List(cols), hi = Uint8List(cols);
+    final low = b.low, mid = b.mid, high = b.high;
+    var any = false;
+    for (var px = 0; px < cols; px++) {
+      final us0 = (i * _tw + px) * scale, us1 = us0 + scale;
+      var i0 = (us0 / usPerSlice).floor();
+      var i1 = (us1 / usPerSlice).ceil();
+      if (i1 <= 0 || i0 >= n) continue;
+      if (i0 < 0) i0 = 0;
+      if (i1 > n) i1 = n;
+      if (i1 <= i0) i1 = i0 + 1;
+      var l = 0, m = 0, t = 0;
+      for (var j = i0; j < i1; j++) {
+        final a = low[j], c = mid[j], e = high[j];
+        if (a > l) l = a;
+        if (c > m) m = c;
+        if (e > t) t = e;
+      }
+      lo[px] = l;
+      md[px] = m;
+      hi[px] = t;
+      any = true;
+    }
+    final got = any ? (lo: lo, md: md, hi: hi) : null;
+    tiles._bins[i] = got;
+    return got;
+  }
+
+  /// The shape: a column a pixel wide for each pixel across, standing about the
+  /// middle line rather than on the floor.
+  ///
+  /// Three filled outlines drawn over each other was what this was, and it could not
+  /// work. Each band was a polygon from the foot up in its own ink at its own alpha,
+  /// so the loudest band painted over the other two and the picture was one colour
+  /// with a wash on it — a record's bass and its hats were the same shape in the same
+  /// red. Worse, every band was normalised against *itself* on the house, so the three
+  /// heights had no relation to each other at all (see peaks.py).
+  ///
+  /// A column takes the loudest slice under it, mixes the three bands into one colour,
+  /// normalises that colour so its brightest channel is full, and stands it about the
+  /// middle at the height of the loudest band. Hue is the balance of the record;
+  /// height is how loud it is. Both sides of the middle, because that is what every DJ
+  /// has looked at for twenty years and because a shape about a line is read faster
+  /// than a skyline — the eye follows one edge and gets the other for nothing.
+  ///
+  /// Drawn as one call: a triangle pair per column into one Vertices, rather than a
+  /// rectangle each.
+  void _drawShape(Canvas canvas, int i, double x0, double h, double total) {
+    final cols = _columns(i, total);
+    if (cols == null) return;
+    final axis = h * 0.46;
+    final half = h * 0.36;
+    final gain = gains;
+    final gl = gain?.low ?? 1.0, gm = gain?.mid ?? 1.0, gh = gain?.high ?? 1.0;
+    final n = cols.lo.length;
+    final layers = inks.stacked ? 3 : 1;
+    final xy = Float32List(n * 12 * layers);
+    final tint = Int32List(n * 6 * layers);
+    final highInk = inks.high.toARGB32(), midInk = inks.mid.toARGB32(), lowInk = inks.low.toARGB32();
+    var v = 0, c = 0;
+    for (var px = 0; px < n; px++) {
+      final l = cols.lo[px] * gl / 255, m = cols.md[px] * gm / 255, t = cols.hi[px] * gh / 255;
+      final peak = math.max(l, math.max(m, t));
+      if (peak <= 0.004) continue;
+      final a = px.toDouble(), z = a + 1;
+      void quad(double to, int argb) {
+        xy[v++] = a; xy[v++] = axis - to;
+        xy[v++] = z; xy[v++] = axis - to;
+        xy[v++] = z; xy[v++] = axis + to;
+        xy[v++] = a; xy[v++] = axis - to;
+        xy[v++] = z; xy[v++] = axis + to;
+        xy[v++] = a; xy[v++] = axis + to;
+        for (var q = 0; q < 6; q++) {
+          tint[c++] = argb;
+        }
+      }
+      // A floor under it so a quiet passage is a thin line rather than a gap: a
+      // record with nothing in it still has to show where it is.
+      final tall = half * (0.03 + 0.97 * peak);
+      if (inks.stacked) {
+        // Outermost first, each layer painted over the one under it: the top of the
+        // record stands on the middle, which stands on the bass. The column is as
+        // tall as the loudest band either way, so the two kinds of palette draw a
+        // record at the same size and only differ in what fills it.
+        final sum = l + m + t;
+        if (sum <= 0) continue;
+        quad(tall, highInk);
+        quad(tall * (l + m) / sum, midInk);
+        quad(tall * l / sum, lowInk);
+      } else {
+        quad(tall, waveInk(inks, l, m, t));
+      }
+    }
+    if (v > 0) {
+      canvas.drawVertices(
+          ui.Vertices.raw(ui.VertexMode.triangles, Float32List.sublistView(xy, 0, v),
+              colors: Int32List.sublistView(tint, 0, c)),
+          BlendMode.dst,
+          Paint());
+    }
+  }
+
+  /// Over the shape: the grid — ticks along the foot, downbeats taller and darker —
+  /// the four-bar rules, the phrases, the drops and the record's own cues.
+  void _drawOver(Canvas canvas, double x0, double h, double total) {
+    final t = timing;
+    if (t == null || !t.hasBeats) return;
+    final scale = tiles.scale;
+    double xOf(double us) => us / scale - x0;
+    // A little past each edge, for what straddles it.
+    final usFrom = (x0 - 4) * scale, usTo = (x0 + _tw + 4) * scale;
+    final tick = Paint()..color = ink.withValues(alpha: 0.35)..strokeWidth = 1;
+    final down = Paint()..color = ink.withValues(alpha: 0.7)..strokeWidth = 1.2;
+    final steady = t.steady;
+    if (steady != null) {
+      // The steady grid, the one SYNC and the beat-holding use: two records held on
+      // the beat show their ticks in one line down both strips.
+      final from = ((usFrom / 1000 - steady.origin) / steady.period).floor();
+      final to = ((usTo / 1000 - steady.origin) / steady.period).ceil();
+      for (var k = from; k <= to; k++) {
+        final ms = steady.origin + k * steady.period;
+        if (ms < t.beats.first - steady.period || ms > t.beats.last + steady.period) continue;
+        final x = xOf(ms * 1000);
+        final isDown = ((k - t.barStartsOn) % 4 + 4) % 4 == 0;
+        canvas.drawLine(Offset(x, h), Offset(x, h - (isDown ? 10 : 5)), isDown ? down : tick);
+      }
+    } else {
+      final beats = t.beats;
+      for (var i = 0; i < beats.length; i++) {
+        final us = beats[i] * 1000.0;
+        if (us < usFrom) continue;
+        if (us > usTo) break;
+        final x = xOf(us);
+        final isDown = (i - t.barStartsOn) % 4 == 0;
+        canvas.drawLine(Offset(x, h), Offset(x, h - (isDown ? 10 : 5)), isDown ? down : tick);
+      }
+    }
+    // Every four bars, from where the record's sections start: a rule the height of
+    // the lane and the tallest tick, so two records lined up for a mix show it —
+    // their rules pass the playhead together, strip over strip.
+    final four = Paint()..color = ink.withValues(alpha: 0.3)..strokeWidth = 1;
+    final fourTick = Paint()..color = ink.withValues(alpha: 0.9)..strokeWidth = 2;
+    for (final m in t.markers) {
+      // Where the house put them, not where this would put them.
+      //
+      // They used to be snapped to the grid fitted here, four beats at a time,
+      // anchored on the bar phase. Where the two agree that does nothing; where
+      // they do not — the marks on one in forty records are not all on the same
+      // beat of the bar — it moved each rule on its own by as much as two beats,
+      // which is a phrase grid that is neither the house's nor evenly spaced. The
+      // marks are every fourth downbeat and already on the beat; re-deciding that
+      // from a second fit can only be a way to be wrong.
+      final us = m * 1000.0;
+      if (us < usFrom) continue;
+      if (us > usTo) break;
+      final x = xOf(us);
+      canvas.drawLine(Offset(x, 0), Offset(x, h), four);
+      canvas.drawLine(Offset(x, h), Offset(x, h - 18), fourTick);
+    }
+    // Phrases: a bracket along the head, with the bar count typed at its start.
+    final phrases = t.phrases;
+    final bracket = Paint()..color = ink.withValues(alpha: 0.55)..strokeWidth = 1;
+    final end = xOf(total) + 20;
+    for (var i = 0; i < phrases.length; i++) {
+      final x = xOf(phrases[i] * 1000.0);
+      final to = i + 1 < phrases.length ? xOf(phrases[i + 1] * 1000.0) : end;
+      if (to < 0 || x > _tw + 30) continue;
+      canvas.drawLine(Offset(x, 4), Offset(to - 3, 4), bracket);
+      canvas.drawLine(Offset(x, 4), Offset(x, 10), bracket);
+      _type(canvas, '${i + 1}', Offset(x + 3, 5), quiet, 8);
+    }
+    // Where the song opens up, drawn the full height of the lane: the thing a mix
+    // is landed on, so it has to be visible from further away than a flag.
+    final dropPaint = Paint()..color = accent.withValues(alpha: 0.35);
+    for (final d in t.drops) {
+      final x = xOf(d * 1000.0);
+      if (x < -40 || x > _tw + 2) continue;
+      canvas.drawRect(Rect.fromLTWH(x - 1.5, 0, 3, h), dropPaint);
+      _type(canvas, 'DROP', Offset(x + 5, h * 0.36), accent, 8);
+    }
+    // The cues: IN and OUT flags in the accent, the way a mark is put on a record.
+    final cues = t.cues;
+    if (cues != null) {
+      _flag(canvas, xOf(cues.mixInMs * 1000.0), 'IN', h, -40, _tw + 30);
+      _flag(canvas, xOf(cues.mixOutMs * 1000.0), 'OUT', h, -40, _tw + 30);
+    }
+  }
+
+  /// A flag on a rule, if [x] falls between [from] and [to].
+  void _flag(Canvas canvas, double x, String text, double h, double from, double to,
+      {bool hot = false}) {
+    if (x < from - 30 || x > to + 30) return;
     final c = hot ? ink : accent;
     canvas.drawLine(Offset(x, 12), Offset(x, h - 12),
         Paint()..color = c.withValues(alpha: 0.7)..strokeWidth = 1);
@@ -645,6 +861,8 @@ class _StripPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_StripPainter old) =>
+      old.tiles != tiles ||
+      old.dpr != dpr ||
       old.markAt != markAt ||
       old.mirrored != mirrored ||
       old.inks != inks ||
@@ -652,7 +870,11 @@ class _StripPainter extends CustomPainter {
       old.timing != timing ||
       old.bands != bands ||
       old.duration != duration ||
+      old.window != window ||
       old.loop != loop ||
       old.hotCues != hotCues ||
-      old.accent != accent;
+      old.accent != accent ||
+      old.ink != ink ||
+      old.paper != paper ||
+      old.quiet != quiet;
 }

@@ -421,8 +421,8 @@ class Booth extends ChangeNotifier {
         ..stemEngine = this.mixer.setStems
         ..firstLoadMissed = this.mixer.firstLoadMissed;
     }
-    this.a.addListener(notifyListeners);
-    this.b.addListener(notifyListeners);
+    this.a.addListener(() => _deckChanged(this.a));
+    this.b.addListener(() => _deckChanged(this.b));
     this.a.addListener(_follow);
     // A record's parts or beats arriving: what the house says of it is asked again.
     parts.arrivals.stream.listen(this.timing.forget);
@@ -475,6 +475,21 @@ class Booth extends ChangeNotifier {
 
   /// The booth mixing on its own. See AutoMix.
   late final AutoMix auto = AutoMix(this)..addListener(notifyListeners);
+
+  /// What changes continuously: the crossfader, the EQ, the filters and gains, a
+  /// mix's progress, a tempo held or glided, a stem plan's levels.
+  ///
+  /// These used to tell the booth itself, and the booth is what the whole room is
+  /// built from — so a transition, which moves the crossfader every 40 ms and the EQ
+  /// and filter with it, rebuilt both decks, the crate, the log and every bar of the
+  /// room twenty-five times a second, as did the tempo glide after each mix. Only the
+  /// mixer and the waves show any of these; they listen here as well, and the rest of
+  /// the room is rebuilt when something in it changes.
+  final moves = BoothMoves();
+
+  /// A deck said something changed: a fine change (a tempo bend, stem levels) is a
+  /// move; anything else is the booth's business.
+  void _deckChanged(Deck d) => d.changedFinely ? moves.ping() : notifyListeners();
 
   List<Deck> get decks => [a, b];
 
@@ -548,6 +563,7 @@ class Booth extends ChangeNotifier {
     if (_prepared) return;
     _prepared = true;
     addListener(_maybeKeep);
+    moves.addListener(_maybeKeep);
     // Speaking to each player once makes its element / session, in order.
     await a.player.setVolume(1);
     await b.player.setVolume(1);
@@ -709,7 +725,7 @@ class Booth extends ChangeNotifier {
 
   Future<void> setCrossfader(double x, {Duration over = Duration.zero}) async {
     crossfader = x.clamp(0.0, 1.0);
-    notifyListeners();
+    moves.ping();
     await _levels(over: over);
   }
 
@@ -749,7 +765,7 @@ class Booth extends ChangeNotifier {
 
   Future<void> setEq(Deck d, EqSet want) async {
     eq[d] = want;
-    notifyListeners();
+    moves.ping();
     await mixer.setEq(d, want);
   }
 
@@ -798,7 +814,7 @@ class Booth extends ChangeNotifier {
   Future<void> setPitchShift(Deck d, double semitones) async {
     _shift[d] = semitones;
     await mixer.setPitchShift(d, semitones);
-    notifyListeners();
+    moves.ping();
   }
 
   final Map<Deck, double> _shift = {};
@@ -821,7 +837,7 @@ class Booth extends ChangeNotifier {
 
   Future<void> setGain(Deck d, double value) async {
     gain[d] = value.clamp(0.0, 1.0);
-    notifyListeners();
+    moves.ping();
     await _levels();
   }
 
@@ -829,7 +845,7 @@ class Booth extends ChangeNotifier {
 
   Future<void> setFilter(Deck d, double value) async {
     filters[d] = value.clamp(-1.0, 1.0);
-    notifyListeners();
+    moves.ping();
     await mixer.setFilter(d, filters[d]!);
   }
 
@@ -2914,12 +2930,22 @@ class Booth extends ChangeNotifier {
     // incoming was even started, which is a bar too early to make a noise.
     if (fxSlot.containsKey(0)) unawaited(fx.fire(fxSlot[0]!));
 
-    _running = Timer.periodic(const Duration(milliseconds: 40), (t) async {
+    // One tick at a time. Each awaits the engine, and a tick that took longer than
+    // the next one's turn had the two running together — the same commands sent
+    // twice, and a step applied twice, since a step is only counted once it is done.
+    var ticking = false;
+    Future<void> tick(Timer t) async {
       final k = (DateTime.now().difference(began).inMicroseconds / length.inMicroseconds)
           .clamp(0.0, 1.0);
       final m = mixing;
       if (m != null) mixing = (kind: m.kind, from: m.from, to: m.to, bars: m.bars, k: k);
-      await setCrossfader(faderAt(k));
+      // Unchanged, the fader is not told again; the mix's progress still moves.
+      final x = faderAt(k);
+      if ((x - crossfader).abs() > 1e-4) {
+        await setCrossfader(x);
+      } else {
+        moves.ping();
+      }
       for (final deck in decks) {
         final want = filterAt(deck.name, k);
         if (want != null && (filters[deck] ?? 0) != want) await setFilter(deck, want);
@@ -2969,6 +2995,16 @@ class Booth extends ChangeNotifier {
         fullLaw = false;
         _done = null;
         if (!done.isCompleted) done.complete();
+      }
+    }
+
+    _running = Timer.periodic(const Duration(milliseconds: 40), (t) async {
+      if (ticking) return;
+      ticking = true;
+      try {
+        await tick(t);
+      } finally {
+        ticking = false;
       }
     });
     return done.future;
@@ -3080,6 +3116,8 @@ class Booth extends ChangeNotifier {
   @override
   void dispose() {
     removeListener(_maybeKeep);
+    moves.removeListener(_maybeKeep);
+    moves.dispose();
     partsJobs.removeListener(_partsChanged);
     _running?.cancel();
     _lock?.cancel();
@@ -3089,4 +3127,9 @@ class Booth extends ChangeNotifier {
     b.dispose();
     super.dispose();
   }
+}
+
+/// See [Booth.moves].
+class BoothMoves extends ChangeNotifier {
+  void ping() => notifyListeners();
 }

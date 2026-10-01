@@ -170,16 +170,22 @@ class LevelMeter extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // A layer of its own: the meter moves every frame a record plays, and without
+    // a boundary of its own each of those frames repainted the whole mixer round it —
+    // its knobs, its faders and the MIX button's glow.
     return SizedBox(
       width: width,
       height: height,
-      child: ListenableBuilder(
-        listenable: BoothClock.of(context).positionOf(deck),
-        builder: (context, _) => CustomPaint(
-          painter: _LevelPainter(
-            value: deck.playing ? (loudnessAt(deck, bands) ?? 0) * level : 0.0,
-            ink: scheme.onSurface,
-            accent: scheme.primary,
+      child: RepaintBoundary(
+        child: ListenableBuilder(
+          listenable: BoothClock.of(context).positionOf(deck),
+          builder: (context, _) => CustomPaint(
+            painter: _LevelPainter(
+              lit: _LevelPainter.litFor(
+                  deck.playing ? (loudnessAt(deck, bands) ?? 0) * level : 0.0),
+              ink: scheme.onSurface,
+              accent: scheme.primary,
+            ),
           ),
         ),
       ),
@@ -188,15 +194,19 @@ class LevelMeter extends StatelessWidget {
 }
 
 class _LevelPainter extends CustomPainter {
-  const _LevelPainter({required this.value, required this.ink, required this.accent});
-  final double value;
+  const _LevelPainter({required this.lit, required this.ink, required this.accent});
+
+  /// How many blocks are lit — the only thing the picture can show, so the only thing
+  /// compared: a level that moves within a block is not a repaint.
+  final int lit;
   final Color ink, accent;
+
+  static const blocks = 14;
+  static int litFor(double value) => (value.clamp(0.0, 1.0) * blocks).round();
 
   @override
   void paint(Canvas canvas, Size size) {
-    const blocks = 14;
     final h = size.height / blocks;
-    final lit = (value.clamp(0.0, 1.0) * blocks).round();
     for (var i = 0; i < blocks; i++) {
       final on = blocks - i <= lit;
       // The top three are the loud end: red when they light, ink when they do not.
@@ -212,7 +222,8 @@ class _LevelPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_LevelPainter old) => old.value != value || old.accent != accent;
+  bool shouldRepaint(_LevelPainter old) =>
+      old.lit != lit || old.accent != accent || old.ink != ink;
 }
 
 /// One band of a channel's EQ: a knob that turns, and kills when it is pushed.

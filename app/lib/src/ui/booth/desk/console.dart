@@ -117,6 +117,47 @@ class Plate extends StatelessWidget {
       );
 }
 
+/// A plate's edge breathing in [colour], over [child], while [on]: the record that is
+/// about to come in.
+///
+/// An edge of its own, in a layer of its own, over a plate that stays as it is. It
+/// used to be the plate's own border, so every frame of the pulse — sixty a second,
+/// for the sixteen seconds before every Auto DJ mix — built the whole deck again and
+/// drew all of it, to change the colour of a line round it.
+class PulseEdge extends StatelessWidget {
+  const PulseEdge(
+      {super.key, required this.pulse, required this.colour, required this.on, required this.child});
+  final Animation<double> pulse;
+  final Color colour;
+  final bool on;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Stack(
+        children: [
+          child,
+          if (on)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: RepaintBoundary(
+                  child: AnimatedBuilder(
+                    animation: pulse,
+                    builder: (context, _) => DecoratedBox(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                            color: Color.lerp(colour.withValues(alpha: 0.2), colour, pulse.value)!,
+                            width: 1.5),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      );
+}
+
 /// A pad: pressed, it does its one thing; lit, it says that thing is on.
 class Pad extends StatefulWidget {
   const Pad({
@@ -660,3 +701,19 @@ IconData transitionIcon(Transition k) => switch (k) {
       Transition.lunarEcho => Icons.nightlight_round,
       Transition.tremolo => Icons.vibration,
     };
+
+/// One part of the room — a deck, the mixer, the waves, the crate, the log — as a
+/// layer of its own and a node of its own in the accessibility tree.
+///
+/// The layer, so what moves in one part repaints that part. The node, because on a
+/// desktop Flutter keeps the accessibility tree on all the time, and a change inside
+/// a part — a number ticking, a light coming on — has everything up to the nearest
+/// boundary worked out again: without one per part, that was the whole room.
+class BoothPanel extends StatelessWidget {
+  const BoothPanel({super.key, required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) =>
+      Semantics(container: true, child: RepaintBoundary(child: child));
+}

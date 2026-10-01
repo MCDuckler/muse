@@ -473,8 +473,10 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
       ]);
     }
     if (_byMatch) {
-      final sorted = [for (var i = 0; i < items.length; i++) (i, items[i])]
-        ..sort((a, b) => _score(a.$2).compareTo(_score(b.$2)));
+      // Each record scored once, then sorted: scored inside the comparison it was
+      // the planner run twice for every comparison the sort made.
+      final sorted = [for (var i = 0; i < items.length; i++) (i, items[i], _score(items[i]))]
+        ..sort((a, b) => a.$3.compareTo(b.$3));
       return Column(children: [
         bar,
         const SizedBox(height: 4),

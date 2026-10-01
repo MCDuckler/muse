@@ -511,6 +511,7 @@ class AutoMix extends ChangeNotifier {
       final rows = await booth.api.boothFeedbackList().timeout(const Duration(seconds: 8));
       taste = Taste.fromFeedback(rows);
       _moveScores.clear();
+      _moveGuesses.clear();
       if (taste.count > 0) {
         final fav = taste.favourite;
         booth.note(BoothEventKind.plan,
@@ -677,6 +678,7 @@ class AutoMix extends ChangeNotifier {
   /// until both timings are here; the voices are asked for so the next asking is
   /// better informed. Cached per pair; cleared when the taste changes.
   final _moveScores = <(int, int, bool), double?>{};
+  final _moveGuesses = <(int, int, bool), (double, (bool, bool))>{};
   double? moveScoreOf(Track a, Track b) => _moveScore(a, b);
   double? _moveScore(Track a, Track b) {
     final ta = booth.timing.peek(a.id), tb = booth.timing.peek(b.id);
@@ -685,6 +687,12 @@ class AutoMix extends ChangeNotifier {
     final key = (a.id, b.id, stems);
     if (_moveScores.containsKey(key)) return _moveScores[key];
     final va = booth.vocals.peek(a.id), vb = booth.vocals.peek(b.id);
+    // A guess made before both voices were known stands until one of them arrives:
+    // worked out again on every asking, it was the whole transition planner run for
+    // every row of the crate and the set on every rebuild of the room.
+    final known = (va != null, vb != null);
+    final guess = _moveGuesses[key];
+    if (guess != null && guess.$2 == known) return guess.$1;
     if (va == null) unawaited(booth.vocals.of(a));
     if (vb == null) unawaited(booth.vocals.of(b));
     final best = Planner.options(
@@ -700,7 +708,12 @@ class AutoMix extends ChangeNotifier {
     ).first.score;
     // Kept only once both voices are known: until then the score is a guess that
     // would otherwise stand for the rest of the set.
-    if (va != null && vb != null) _moveScores[key] = best;
+    if (va != null && vb != null) {
+      _moveScores[key] = best;
+      _moveGuesses.remove(key);
+    } else {
+      _moveGuesses[key] = (best, known);
+    }
     return best;
   }
 
@@ -1038,6 +1051,7 @@ class AutoMix extends ChangeNotifier {
     style = how;
     _axes = null;
     _moveScores.clear();
+    _moveGuesses.clear();
     notifyListeners();
     unawaited(_prepareNext());
   }
@@ -1046,6 +1060,7 @@ class AutoMix extends ChangeNotifier {
   void setAxes(StyleAxes? dials) {
     _axes = dials;
     _moveScores.clear();
+    _moveGuesses.clear();
     notifyListeners();
     unawaited(_prepareNext());
   }

@@ -112,13 +112,10 @@ class _ConsoleDeckState extends State<ConsoleDeck> with TickerProviderStateMixin
       _pulse.stop();
       _pulse.value = 0;
     }
-    return AnimatedBuilder(
-      animation: _pulse,
-      builder: (context, _) => _plate(isMaster, armed ? Color.lerp(_colour.withValues(alpha: 0.2), _colour, _pulse.value) : null),
-    );
+    return PulseEdge(pulse: _pulse, colour: _colour, on: armed, child: _plate(isMaster));
   }
 
-  Widget _plate(bool isMaster, Color? pulse) {
+  Widget _plate(bool isMaster) {
     return DragTarget<Track>(
       onWillAcceptWithDetails: (_) {
         setState(() => _hovering = true);
@@ -130,7 +127,7 @@ class _ConsoleDeckState extends State<ConsoleDeck> with TickerProviderStateMixin
         unawaited(_b.load(_d, d.data));
       },
       builder: (context, candidates, rejected) => Plate(
-        edge: _hovering ? _colour : pulse ?? (isMaster ? _colour.withValues(alpha: 0.55) : null),
+        edge: _hovering ? _colour : (isMaster ? _colour.withValues(alpha: 0.55) : null),
         padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,

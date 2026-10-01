@@ -30,6 +30,32 @@ class _PhoneMixerState extends State<PhoneMixer> {
   Booth get _b => widget.booth;
 
   @override
+  void initState() {
+    super.initState();
+    _b.moves.addListener(_moved);
+  }
+
+  @override
+  void didUpdateWidget(covariant PhoneMixer old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.booth, widget.booth)) {
+      old.booth.moves.removeListener(_moved);
+      widget.booth.moves.addListener(_moved);
+    }
+  }
+
+  @override
+  void dispose() {
+    _b.moves.removeListener(_moved);
+    super.dispose();
+  }
+
+  /// The crossfader, a knob, a gain: what this shows moved. See Booth.moves.
+  void _moved() {
+    if (mounted) setState(() {});
+  }
+
+  @override
   Widget build(BuildContext context) {
     final accent = Theme.of(context).colorScheme.primary;
     final from = _b.master, to = _b.other(from);

@@ -95,10 +95,12 @@ class _PhoneDeckState extends State<PhoneDeck> with TickerProviderStateMixin {
       _pulse.stop();
       _pulse.value = 0;
     }
-    return AnimatedBuilder(
-      animation: _pulse,
-      builder: (context, _) => Plate(
-        edge: armed ? Color.lerp(_colour.withValues(alpha: 0.2), _colour, _pulse.value) : (isMaster ? _colour.withValues(alpha: 0.55) : null),
+    return PulseEdge(
+      pulse: _pulse,
+      colour: _colour,
+      on: armed,
+      child: Plate(
+        edge: isMaster ? _colour.withValues(alpha: 0.55) : null,
         padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
