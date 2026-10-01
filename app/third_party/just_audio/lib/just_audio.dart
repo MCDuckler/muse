@@ -3234,7 +3234,13 @@ class ConcatenatingAudioSource extends AudioSource {
       id: _id,
       children: children.map((child) => child._toMessage()).toList(),
       useLazyPreparation: useLazyPreparation,
-      shuffleOrder: _shuffleOrder.indices);
+      // WetOwl: a copy, like every request below already sends. The live list went
+      // out here, and just_audio_background (same isolate, no serialising) kept it
+      // as its own source's order — so every add or remove made while that player
+      // was not listening grew or shrank the order under a children list that stayed
+      // put. The next activation then threw "RangeError (length): Invalid value: Only
+      // valid value is 0: 1" before it loaded anything, every time, until a restart.
+      shuffleOrder: List.of(_shuffleOrder.indices));
 }
 
 /// An [AudioSource] that clips the audio of a [UriAudioSource] between a

@@ -40,6 +40,28 @@ void main() {
     await server.close(force: true);
   });
 
+  test('coming back from away starts over with new connections', () async {
+    // A phone that suspended the app kept the pooled sockets on its books while the
+    // box and iOS had both let go of them; the first requests back went down those.
+    final sockets = <String>{};
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    server.listen((req) {
+      sockets.add('${req.connectionInfo?.remotePort}');
+      req.response
+        ..write('ok')
+        ..close();
+    });
+    final url = Uri.parse('http://127.0.0.1:${server.port}/thing');
+
+    await net.get(url);
+    final before = net;
+    freshConnections();
+    expect(identical(net, before), isFalse);
+    expect((await net.get(url)).body, 'ok');
+    expect(sockets.length, 2, reason: 'a new socket, not the one from before');
+    await server.close(force: true);
+  });
+
   group('knowing whether the box is there', () {
     setUp(() => serverIsThere.value = true);
     tearDown(() {

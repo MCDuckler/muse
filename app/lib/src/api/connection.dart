@@ -60,9 +60,32 @@ class _Watched extends http.BaseClient {
   void close() => _inner.close();
 }
 
+/// Whether [net] is the app's own client, rather than one a test put in its place.
+bool _netIsOurs = true;
+
 /// Hand the app a different client, and take it back again.
 ///
 /// For tests, which need the answers without a socket: a screen that talks to the
 /// server can then be driven entirely on the test's own clock, where a real request
 /// would sit unfinished until somebody let the real event loop run.
-void useThisClientInstead(http.Client other) => net = other;
+void useThisClientInstead(http.Client other) {
+  net = other;
+  _netIsOurs = false;
+}
+
+/// Start over with new connections, after the app has been away.
+///
+/// The kept connections are what make the second request fast, and they are exactly
+/// what does not survive a phone putting the app to sleep: the box closes them after a
+/// while, iOS takes the sockets of an app it suspends, and nobody tells the pool. The
+/// first requests on coming back went down those dead sockets — covers that "did not
+/// arrive", and the "Can't reach the server" line with the server right there.
+///
+/// The old client is closed gently: idle connections go now, anything still in flight
+/// finishes on it.
+void freshConnections() {
+  if (kIsWeb || !_netIsOurs) return;
+  final old = net;
+  net = _Watched(http.Client());
+  old.close();
+}

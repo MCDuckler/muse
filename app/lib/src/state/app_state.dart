@@ -3157,6 +3157,13 @@ class AppState extends ChangeNotifier {
   late final AppLifecycleListener _lifecycle = AppLifecycleListener(
     onResume: () {
       PlaybackLog.note('app in front');
+      // Long enough away that the pooled connections are probably dead — see
+      // freshConnections. Before anything below asks the server for something.
+      final hid = _hiddenAt;
+      _hiddenAt = null;
+      if (hid != null && DateTime.now().difference(hid) > const Duration(seconds: 20)) {
+        freshConnections();
+      }
       // Somebody may have just come back from the settings page having turned it on.
       unawaited(checkTheBackgroundIsAllowed());
       unawaited(player?.resumeIfStopped());
@@ -3236,7 +3243,11 @@ class AppState extends ChangeNotifier {
   ///
   /// Nothing is lost: the artwork is on the disk now, so coming back reads it from
   /// there rather than from the server.
+  /// When the app last went out of sight, for [_lifecycle]'s onResume.
+  DateTime? _hiddenAt;
+
   void _travelLight() {
+    _hiddenAt = DateTime.now();
     PlaybackLog.note('app out of sight');
     // The one moment the answer matters: is anything holding this app up now that
     // nobody is looking at it.

@@ -15,6 +15,7 @@ booth could not make a sound at all. Every change is marked with a `WetOwl:` com
 |---|---|
 | `init` passes a second player to the real platform instead of throwing | The booth's decks are ordinary players. |
 | `disposePlayer` / `disposeAllPlayers` let go of those through the real platform | They were never this plugin's to hold. |
+| `AudioSourceExtension.shuffleIndices` plays a concatenation as listed when its order is not a permutation of its children | Same failure one step earlier: the extension indexes its children by the order before `_updateShuffleIndices` gets to look. The order went bad because just_audio sent its *live* shuffle list in the load message (fixed there, see just_audio/WETOWL.md); this keeps a bad one from ever killing a load again. |
 | `_updateShuffleIndices` ignores a shuffle order that does not describe the sequence | It builds an inverse by writing at `order[i]` into a list as long as the order, so anything but a permutation of `0..n-1` is out of range. With several players sharing one handler, the order and the source come from different players: measured on an iPhone as `RangeError (length): Invalid value: Only valid value is 0: 1` thrown out of a track load, which left playback dead until a restart. |
 
 The media session is unchanged: it belongs to the first player made, which is the app's
@@ -24,5 +25,5 @@ lockscreen.
 
 ## Updating upstream
 
-Copy the new release over this directory, keep this file, and re-apply the three
+Copy the new release over this directory, keep this file, and re-apply the four
 changes above.

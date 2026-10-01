@@ -175,6 +175,24 @@ void main() {
     expect(engine.sources[1], contains('/tracks/2/stream'));
   });
 
+  test('the engine fetches the stream itself, headers and all — no proxy on the phone',
+      () async {
+    // just_audio's header proxy listens on 127.0.0.1, and iOS takes that socket back
+    // from an app it suspends: back in front, every load was "(-1004) Could not
+    // connect to the server." until a restart. The engine is given the house's own
+    // address and the header to send with it.
+    await player.loadQueue(queueOf([track(1), track(2)]));
+    await player.playAt(0);
+    await settle();
+
+    final engine = audio.only;
+    expect(engine.sources.first, startsWith('${api.baseUrl}/tracks/1/stream'),
+        reason: 'the address the house is at, not a port on this phone');
+    final first = (engine.loaded! as ConcatenatingAudioSourceMessage).children.first
+        as UriAudioSourceMessage;
+    expect(first.headers?['Authorization'], 'Bearer test-token');
+  });
+
   group('one song into the next', () {
     // Songs here are a minute long. This one has two seconds of nothing after it.
     Map<String, dynamic> timed({int lead = 0, int tail = 0}) =>

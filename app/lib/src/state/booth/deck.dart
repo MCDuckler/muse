@@ -49,6 +49,9 @@ class Deck extends ChangeNotifier {
           // paused that way mid-mix was silence with nobody having touched anything,
           // and the Auto DJ then waited for a record that was never coming back.
           handleInterruptions: false,
+          // Headers sent by the engine, not a localhost proxy that iOS closes under a
+          // suspended app — see PlayerService._player.
+          useProxyForRequestHeaders: false,
           audioPipeline: this.equalizer == null
               ? null
               : AudioPipeline(androidAudioEffects: [this.equalizer!]),

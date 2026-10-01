@@ -926,8 +926,15 @@ extension AudioSourceExtension on AudioSourceMessage {
         childIndicesList.add(childIndices);
         offset += childIndices.length;
       }
+      // WetOwl: an order that is not one over these children is played as listed.
+      // See WETOWL.md: indexing childIndicesList with it threw out of a load.
+      final n = childIndicesList.length;
+      final order = self.shuffleOrder;
+      final valid = order.length == n &&
+          order.every((i) => i >= 0 && i < n) &&
+          order.toSet().length == n;
       final indices = <int>[];
-      for (final index in self.shuffleOrder) {
+      for (final index in valid ? order : List.generate(n, (i) => i)) {
         indices.addAll(childIndicesList[index]);
       }
       return indices;

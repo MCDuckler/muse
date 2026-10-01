@@ -250,6 +250,9 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   /// What the test is after is what the player *writes down* about it.
   bool failLoad = false;
 
+  /// The message the last load handed over, as it was handed — the object itself.
+  AudioSourceMessage? loaded;
+
   @override
   Future<LoadResponse> load(LoadRequest request) async {
     if (failLoad) {
@@ -257,6 +260,7 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
       throw PlatformException(code: 'nope', message: 'cannot open that');
     }
     await _slow();
+    loaded = request.audioSourceMessage;
     sources
       ..clear()
       ..addAll(_urlsOf(request.audioSourceMessage));

@@ -45,6 +45,14 @@ class PlayerService {
   final AndroidLoudnessEnhancer? androidLoudness =
       _hasSystemEffects ? AndroidLoudnessEnhancer() : null;
   late final AudioPlayer _player = AudioPlayer(
+    // The engine sends the stream's headers itself (AVURLAsset's header fields,
+    // ExoPlayer's request properties, mpv's http-header-fields) rather than through
+    // just_audio's proxy on 127.0.0.1. That proxy is a socket the app listens on, and
+    // iOS takes listening sockets back from an app it suspends: paused, out of sight
+    // for half a minute, then back in front, and the engine's next request went to a
+    // port nobody held — "(-1004) Could not connect to the server." on every load
+    // until a restart, because the proxy never learnt it was gone.
+    useProxyForRequestHeaders: false,
     audioPipeline: androidEqualizer == null
         ? null
         : AudioPipeline(androidAudioEffects: [androidLoudness!, androidEqualizer!]),

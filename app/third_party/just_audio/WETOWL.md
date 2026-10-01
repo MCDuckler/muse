@@ -68,3 +68,19 @@ which it is — and all it is given is a freshly made id.
 | File | Change |
 |---|---|
 | `lib/just_audio.dart` | **New.** `AudioPlayer(engine: …)`, and the static `AudioPlayer.engines` (id → engine), written as each platform id is made (`_newId`). The router is `app/lib/src/state/booth/deck_router.dart`. |
+
+## And a fourth: the order sent with a load is a copy
+
+`ConcatenatingAudioSource._toMessage` sent `_shuffleOrder.indices` itself, where every
+add/insert/remove/move request beside it sends `List.of(...)`. Over a method channel that
+would not matter — it is serialised. just_audio_background is in the same isolate and
+keeps the message as its own source, so it kept the live list: each change the app made
+while that player was idle (after a failed load, say) reshaped the order under a
+children list that never heard of it. Re-activating the player calls `setShuffleMode`
+before `load`, the handler indexed the children by that order, and threw `RangeError
+(length): Invalid value: Only valid value is 0: 1` — the load never ran, and nothing but a
+restart brought playback back.
+
+| File | Change |
+|---|---|
+| `lib/just_audio.dart` | `shuffleOrder: List.of(_shuffleOrder.indices)` in `ConcatenatingAudioSource._toMessage`. |
