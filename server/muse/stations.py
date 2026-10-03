@@ -18,7 +18,7 @@ yours and here, 1 only what is new — so it no longer has to be fifty downloads
 """
 from __future__ import annotations
 
-from . import catalog, db, jobs, recommend
+from . import catalog, db, discover, jobs, recommend
 
 # How many to put in a fresh station, and how many to add each time it runs low.
 #
@@ -37,12 +37,16 @@ SEEDS = 4
 
 
 def seed_tracks(kind: str, *, user_id: int, track_id: int | None,
-                album: str | None, artist: str | None) -> list[dict]:
+                album: str | None, artist: str | None,
+                genre: str | None = None) -> list[dict]:
     """The songs a station is built out of.
 
     One for a song; the record itself for an album; whatever of an artist is already
-    in the library for an artist.
+    in the library for an artist; for a genre, what the world plays under that name,
+    found or fetched (discover.genre_seeds).
     """
+    if kind == "genre":
+        return discover.genre_seeds(genre or "", user_id, most=SEEDS)
     if kind == "track":
         row = catalog.track_row(track_id) if track_id else None
         return [row] if row else []
@@ -87,7 +91,9 @@ def seed_tracks(kind: str, *, user_id: int, track_id: int | None,
 
 
 def name_for(kind: str, seeds: list[dict], *, album: str | None,
-             artist: str | None) -> str:
+             artist: str | None, genre: str | None = None) -> str:
+    if kind == "genre" and genre:
+        return f"{genre.title()} radio"
     if kind == "album" and album:
         return f"{album} radio"
     if kind == "artist" and artist:

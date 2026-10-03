@@ -45,11 +45,12 @@ import '../ui/snack.dart';
 /// and every tab number written out by hand was a number that then meant the wrong tab.
 abstract final class Tabs {
   static const home = 0;
-  static const queue = 1;
-  static const search = 2;
-  static const library = 3;
-  static const people = 4;
-  static const count = 5;
+  static const discover = 1;
+  static const queue = 2;
+  static const search = 3;
+  static const library = 4;
+  static const people = 5;
+  static const count = 6;
 }
 
 class AppState extends ChangeNotifier {
@@ -84,6 +85,9 @@ class AppState extends ChangeNotifier {
   /// send you to a tab — the player's "up next" is the queue, and the queue is a page
   /// people already know, not a sheet with its own half-copy of one.
   int homeTab = Tabs.home;
+
+  /// Goes up each time the server says this person's Discover lists were made.
+  int discoverBuilt = 0;
 
   /// Whether the column beside the page — what is playing, what is next — is folded
   /// out. Only ever asked on a screen wide enough to have one.
@@ -319,7 +323,8 @@ class AppState extends ChangeNotifier {
   // Moved each time the tabs did — Home put in front, Queues taken out into the
   // player, the queue put back in the bar — because every number an old key holds
   // means some other tab now.
-  static const _kHomeTab = 'muse.homeTab.v4';
+  static const _kHomeTab = 'muse.homeTab.v5';
+  static const _kHomeTabV4 = 'muse.homeTab.v4';
   static const _kHomeTabV3 = 'muse.homeTab.v3';
   static const _kDeskDock = 'muse.deskDock';
   static const _kSidebar = 'muse.sidebar';
@@ -717,13 +722,23 @@ class AppState extends ChangeNotifier {
     // it is the new thing, and the place the app now starts.
     // One step back from the last move: v3 was the same tabs without the queue
     // between Home and Search. Anything older opens on Home.
+    // v4 was the same tabs without Discover between Home and the queue: every tab
+    // after Home is one to the right of where it was.
+    final v4 = prefs.getInt(_kHomeTabV4);
     final v3 = prefs.getInt(_kHomeTabV3);
     homeTab = (prefs.getInt(_kHomeTab) ??
-            switch (v3) {
-              1 => Tabs.search,
-              2 => Tabs.library,
-              3 => Tabs.people,
-              _ => Tabs.home,
+            switch (v4) {
+              1 => Tabs.queue,
+              2 => Tabs.search,
+              3 => Tabs.library,
+              4 => Tabs.people,
+              0 => Tabs.home,
+              _ => switch (v3) {
+                  1 => Tabs.search,
+                  2 => Tabs.library,
+                  3 => Tabs.people,
+                  _ => Tabs.home,
+                },
             })
         .clamp(0, Tabs.count - 1);
     deskDock = prefs.getBool(_kDeskDock) ?? true;
@@ -1891,9 +1906,10 @@ class AppState extends ChangeNotifier {
       Track? seed,
       String? album,
       String? artist,
+      String? genre,
       bool play = true}) async {
     final made = await api.startStation(
-        kind: kind, trackId: seed?.id, album: album, artist: artist);
+        kind: kind, trackId: seed?.id, album: album, artist: artist, genre: genre);
     queues = await api.queues();
     if (!play) {
       if (!musicIsPlaying) await openQueue(made.id, autoplay: false);
@@ -3083,6 +3099,10 @@ class AppState extends ChangeNotifier {
           player?.applyProgress(id, Map<String, dynamic>.from(e.data));
           _progressed();
         }
+      } else if (e.event == 'discover_ready') {
+        // The lists made for this person are ready: the Discover page re-reads.
+        discoverBuilt++;
+        notifyListeners();
       } else if (e.event == 'parts_ready') {
         // A computer in the pool has handed a record's parts in.
         final id = e.data['track_id'] as int?;

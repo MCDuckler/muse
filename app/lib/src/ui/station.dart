@@ -21,24 +21,31 @@ Future<void> startStation(
   Track? seed,
   String? album,
   String? artist,
+  String? genre,
   bool play = true,
 }) async {
   final app = context.read<AppState>();
   final messenger = ScaffoldMessenger.of(context);
-  final kind = album != null
-      ? 'album'
-      : artist != null && seed == null
-          ? 'artist'
-          : 'track';
+  final kind = genre != null
+      ? 'genre'
+      : album != null
+          ? 'album'
+          : artist != null && seed == null
+              ? 'artist'
+              : 'track';
   if (kind == 'track' && seed == null) {
     messenger.say(snack(const Text('Nothing playing to start a station from')));
     return;
   }
 
-  messenger.say(snack(Text(play ? 'Starting a station…' : 'Making a station…')));
+  // A genre's station has to find its first songs out in the world, which takes a
+  // few seconds the first time; the message says so rather than looking stuck.
+  messenger.say(snack(Text(genre != null
+      ? 'Finding what the world plays as $genre…'
+      : play ? 'Starting a station…' : 'Making a station…')));
   try {
     final made = await app.startStation(
-        kind: kind, seed: seed, album: album, artist: artist, play: play);
+        kind: kind, seed: seed, album: album, artist: artist, genre: genre, play: play);
     if (play) {
       messenger.say(snack(Text(made.name)));
     } else if (app.activeQueue?.id == made.id) {

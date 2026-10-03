@@ -17,6 +17,7 @@ import '../api/models.dart';
 import 'browse_page.dart';
 import 'command_palette.dart';
 import 'cover_page.dart';
+import 'discover_page.dart';
 import '../api/client.dart' show ApiException;
 import 'desk_dock.dart';
 import 'dropped_files.dart';
@@ -212,8 +213,8 @@ class _HomePageState extends State<HomePage> {
       PlaybackLog.note('home shell built');
     }
     // In the order of Tabs.
-    const pages = [CoverPage(), QueuePage(), SearchPage(), LibraryPage(), SocialPage()];
-    const titles = ['Home', 'Queue', 'Search', 'Library', 'People'];
+    const pages = [CoverPage(), DiscoverPage(), QueuePage(), SearchPage(), LibraryPage(), SocialPage()];
+    const titles = ['Home', 'Discover', 'Queue', 'Search', 'Library', 'People'];
 
     final width = Width.of(context);
     // A desk gets the two things a phone has to take turns showing: the page, and what
@@ -536,6 +537,10 @@ class _Rail extends StatelessWidget {
             selectedIcon: Icon(Icons.newspaper),
             label: Text('Home')),
         NavigationRailDestination(
+            icon: Tooltip(message: 'Discover', child: Icon(Icons.explore_outlined)),
+            selectedIcon: Icon(Icons.explore),
+            label: Text('Discover')),
+        NavigationRailDestination(
             icon: Tooltip(message: 'Queue', child: Icon(Icons.queue_music_outlined)),
             selectedIcon: Icon(Icons.queue_music),
             label: Text('Queue')),
@@ -785,6 +790,12 @@ class MuseNavigationBar extends StatelessWidget {
             icon: Icon(Icons.newspaper_outlined),
             selectedIcon: Icon(Icons.newspaper),
             label: 'Home'),
+        // Something to put on before you know what: lists made for you, stations,
+        // what came out this week. See DiscoverPage.
+        NavigationDestination(
+            icon: Icon(Icons.explore_outlined),
+            selectedIcon: Icon(Icons.explore),
+            label: 'Discover'),
         // Back in the bar: what plays next is one thumb away from anywhere, without
         // opening the player first. Second, not first — the app still opens on Home.
         NavigationDestination(

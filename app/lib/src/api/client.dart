@@ -1167,7 +1167,8 @@ class ApiClient {
   /// the list of queues, so everything a queue can do it can do — reorder, remove,
   /// keep on the device, save to the library.
   Future<Queue> startStation(
-      {String kind = 'track', int? trackId, String? album, String? artist, double? fresh}) async =>
+      {String kind = 'track', int? trackId, String? album, String? artist, String? genre,
+      double? fresh}) async =>
       Queue.fromJson(await _decode(await net.post(_u('/stations'),
               headers: _headers,
               body: jsonEncode({
@@ -1175,8 +1176,79 @@ class ApiClient {
                 if (trackId != null) 'track_id': trackId,
                 if (album != null) 'album': album,
                 if (artist != null) 'artist': artist,
+                if (genre != null) 'genre': genre,
                 if (fresh != null) 'fresh': fresh,
               }))) as Map<String, dynamic>);
+
+  // ---------------- discover ----------------
+
+  /// The whole Discover page in one answer: the lists made for you (or word that
+  /// they are being made), stations and things to start one from, the news from
+  /// who and what you follow, acts to try.
+  Future<Discover> discover() async => Discover.fromJson(
+      await _decode(await net.get(_u('/discover'), headers: _headers)) as Map<String, dynamic>);
+
+  Future<({List<MadeList> items, bool building})> madeLists() async {
+    final d = await _decode(await net.get(_u('/discover/lists'), headers: _headers)) as Map<String, dynamic>;
+    return (
+      items: [for (final l in (d['items'] ?? const []) as List) MadeList.fromJson((l as Map).cast<String, dynamic>())],
+      building: (d['building'] ?? false) as bool,
+    );
+  }
+
+  Future<MadeList> madeList(String slug) async => MadeList.fromJson(
+      await _decode(await net.get(_u('/discover/lists/$slug'), headers: _headers)) as Map<String, dynamic>);
+
+  /// A made list as a playlist of your own, as it stands. Answers with the playlist id.
+  Future<int> keepMadeList(String slug) async {
+    final d = await _decode(await net.post(_u('/discover/lists/$slug/keep'), headers: _headers))
+        as Map<String, dynamic>;
+    return d['playlist_id'] as int;
+  }
+
+  /// Make the lists again now. [force] remakes this week's finds as well.
+  Future<void> rebuildMadeLists({bool force = false}) async => await _decode(await net.post(
+      _u('/discover/lists/rebuild'),
+      headers: {..._headers, 'Content-Type': 'application/json'},
+      body: jsonEncode({'force': force})));
+
+  /// Genres: followed, the ones you seem to play, and — typing — the register's matches.
+  Future<({List<String> following, List<GenreChip> suggested, List<String> found})> genres(
+      {String? q}) async {
+    final d = await _decode(await net.get(
+        _u('/discover/genres', {if (q != null && q.isNotEmpty) 'q': q}),
+        headers: _headers)) as Map<String, dynamic>;
+    return (
+      following: [for (final g in (d['following'] ?? const []) as List) '$g'],
+      suggested: [
+        for (final g in (d['suggested'] ?? const []) as List) GenreChip.fromJson((g as Map).cast<String, dynamic>())
+      ],
+      found: [for (final g in (d['found'] ?? const []) as List) '$g'],
+    );
+  }
+
+  Future<void> followGenre(String genre) async => await _decode(
+      await net.put(_u('/discover/genres/${Uri.encodeComponent(genre)}'), headers: _headers));
+
+  Future<void> unfollowGenre(String genre) async => await _decode(
+      await net.delete(_u('/discover/genres/${Uri.encodeComponent(genre)}'), headers: _headers));
+
+  Future<({List<Release> items, int unseen, int following, int genres})> releases(
+      {int limit = 60}) async {
+    final d = await _decode(await net.get(_u('/discover/feed', {'limit': limit}), headers: _headers))
+        as Map<String, dynamic>;
+    return (
+      items: [for (final r in (d['items'] ?? const []) as List) Release.fromJson((r as Map).cast<String, dynamic>())],
+      unseen: (d['unseen'] ?? 0) as int,
+      following: (d['following'] ?? 0) as int,
+      genres: (d['genres'] ?? 0) as int,
+    );
+  }
+
+  Future<void> markReleasesSeen(List<Release> items) async => await _decode(await net.post(
+      _u('/discover/feed/seen'),
+      headers: {..._headers, 'Content-Type': 'application/json'},
+      body: jsonEncode({'items': [for (final r in items) r.toSeenJson()]})));
 
   /// How far a station reaches past the library from here on.
   Future<Queue> tuneStation(int queueId, double fresh) async =>

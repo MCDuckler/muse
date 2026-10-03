@@ -249,7 +249,7 @@ void main() {
       // The two fold buttons are each other's opposite, and the rail names its
       // destinations where the open one writes them out.
       'Fold the library away', 'Show your library down the side',
-      'Home', 'Queue', 'Search', 'Library', 'People', 'Hide',
+      'Home', 'Discover', 'Queue', 'Search', 'Library', 'People', 'Hide',
     };
     // Inside the rail or the library column and nowhere else: the pages beyond them
     // have tools of their own — there are three Refresh buttons in this tree — and a

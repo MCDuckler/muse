@@ -195,6 +195,8 @@ class _PaletteState extends State<_Palette> {
           also: 'timer stop',
           run: () => app.setSleepTimer(null, endOfTrack: true)),
       go('Home', Tabs.home, Icons.newspaper, also: 'cover issue'),
+      go('Discover', Tabs.discover, Icons.explore,
+          also: 'radio stations mixes made for you new releases genres'),
       PaletteItem(
           title: 'Up next',
           group: 'Go to',

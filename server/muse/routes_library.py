@@ -1424,21 +1424,29 @@ def start_station(body: dict = Body(...), user: dict = Depends(current_user)):
     of those are things a queue can already do.
     """
     kind = (body.get("kind") or "track").strip()
-    if kind not in ("track", "album", "artist"):
-        raise HTTPException(400, "a station is made from a track, an album or an artist")
+    if kind not in ("track", "album", "artist", "genre"):
+        raise HTTPException(400, "a station is made from a track, an album, an artist or a genre")
     album = (body.get("album") or "").strip() or None
     artist = (body.get("artist") or "").strip() or None
+    genre = (body.get("genre") or "").strip().lower() or None
     track_id = body.get("track_id")
     fresh = _fresh(body.get("fresh"), 0.5)
+    if kind == "genre" and not genre:
+        raise HTTPException(400, "which genre?")
 
     seeds = stations.seed_tracks(kind, user_id=user["id"], track_id=track_id,
-                                 album=album, artist=artist)
+                                 album=album, artist=artist, genre=genre)
     if not seeds:
         raise HTTPException(
             400,
+            "Nothing to build a station from — nothing could be found for it."
+            if kind == "genre" else
             "Nothing here to build a station from — none of it is in your library.")
 
-    name = stations.name_for(kind, seeds, album=album, artist=artist)
+    name = stations.name_for(kind, seeds, album=album, artist=artist, genre=genre)
+    # Starting the same station twice is the same station again, not a 500 on the
+    # unique name: the old one is replaced.
+    db.run("delete from queues where user_id=%s and name=%s", (user["id"], name))
     queue = db.one(
         "insert into queues(user_id, name) values(%s,%s) returning *",
         (user["id"], name))
@@ -1458,7 +1466,7 @@ def start_station(body: dict = Body(...), user: dict = Depends(current_user)):
         """insert into stations(queue_id, owner_id, kind, seed_track, seed_text, name, fresh)
            values(%s,%s,%s,%s,%s,%s,%s)""",
         (queue["id"], user["id"], kind, seeds[0]["id"],
-         album if kind == "album" else artist, name, fresh),
+         {"album": album, "artist": artist, "genre": genre}.get(kind), name, fresh),
     )
     return {**_queue_state(queue["id"]), "added": len(found)}
 
@@ -1481,7 +1489,8 @@ def extend_station(queue_id: int, body: dict = Body(default={}),
     seeds = stations.seed_tracks(
         station["kind"], user_id=user["id"], track_id=station["seed_track"],
         album=station["seed_text"] if station["kind"] == "album" else None,
-        artist=station["seed_text"] if station["kind"] == "artist" else None)
+        artist=station["seed_text"] if station["kind"] == "artist" else None,
+        genre=station["seed_text"] if station["kind"] == "genre" else None)
     if not seeds:
         # The record it was made from has been taken out of the library since.
         seed = catalog.track_row(station["seed_track"]) if station["seed_track"] else None

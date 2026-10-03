@@ -2862,3 +2862,238 @@ class VocalMap {
     );
   }
 }
+
+// ---------------------------------------------------------------- Discover
+
+/// A list made for one person overnight: this week's finds, a daily mix, the
+/// release radar, on repeat, the time capsule, the house blend. Kept, not computed
+/// on every look, so it is the same list in the evening as in the morning.
+class MadeList {
+  final String slug;
+  final String name;
+  final String blurb;
+  final String kind;
+  final DateTime? builtAt;
+  final int count;
+  final List<Track> tracks;
+
+  /// Why a song is in it, by track id, where the list can say.
+  final Map<String, String> why;
+
+  const MadeList({
+    required this.slug,
+    required this.name,
+    this.blurb = '',
+    this.kind = '',
+    this.builtAt,
+    this.count = 0,
+    this.tracks = const [],
+    this.why = const {},
+  });
+
+  factory MadeList.fromJson(Map<String, dynamic> j) => MadeList(
+        slug: (j['slug'] ?? '') as String,
+        name: (j['name'] ?? '') as String,
+        blurb: (j['blurb'] ?? '') as String,
+        kind: (j['kind'] ?? ((j['slug'] ?? '') as String).split(':').first) as String,
+        builtAt: j['built_at'] is String ? DateTime.tryParse(j['built_at'] as String) : null,
+        count: (j['count'] ?? 0) as int,
+        tracks: [
+          for (final t in (j['tracks'] ?? const []) as List)
+            Track.fromJson((t as Map).cast<String, dynamic>())
+        ],
+        why: j['why'] is Map
+            ? (j['why'] as Map).map((k, v) => MapEntry('$k', '$v'))
+            : const {},
+      );
+
+  String whyFor(Track t) => why['${t.id}'] ?? '';
+}
+
+/// A station this person made before, to go back to.
+class YourStation {
+  final int queueId;
+  final String name;
+  final String kind;
+  final String? seedText;
+  final double fresh;
+  final int count;
+  final int? coverTrack;
+
+  const YourStation({
+    required this.queueId,
+    required this.name,
+    required this.kind,
+    this.seedText,
+    this.fresh = 0.5,
+    this.count = 0,
+    this.coverTrack,
+  });
+
+  factory YourStation.fromJson(Map<String, dynamic> j) => YourStation(
+        queueId: (j['queue_id'] ?? 0) as int,
+        name: (j['name'] ?? '') as String,
+        kind: (j['kind'] ?? 'track') as String,
+        seedText: j['seed_text'] as String?,
+        fresh: ((j['fresh'] as num?) ?? 0.5).toDouble(),
+        count: (j['count'] ?? 0) as int,
+        coverTrack: j['cover_track'] as int?,
+      );
+}
+
+/// An act to start a station from, with a cover of theirs to stand for them.
+class StationArtist {
+  final String name;
+  final int? coverTrack;
+  const StationArtist({required this.name, this.coverTrack});
+
+  factory StationArtist.fromJson(Map<String, dynamic> j) =>
+      StationArtist(name: (j['name'] ?? '') as String, coverTrack: j['cover_track'] as int?);
+}
+
+/// A genre: followed, or one you seem to play and might.
+class GenreChip {
+  final String genre;
+  final bool following;
+  final String why;
+  const GenreChip({required this.genre, this.following = false, this.why = ''});
+
+  factory GenreChip.fromJson(Map<String, dynamic> j) => GenreChip(
+        genre: (j['genre'] ?? '') as String,
+        following: (j['following'] ?? false) as bool,
+        why: (j['why'] ?? '') as String,
+      );
+}
+
+/// A record that is news: by an artist you follow, or in a genre you follow.
+class Release {
+  final String source;
+  final String provider;
+  final String? albumId;
+  final String? releaseMbid;
+  final String title;
+  final String artist;
+  final String? cover;
+  final String? releaseDate;
+  final String? recordType;
+  final int? tracks;
+  final bool unseen;
+  final bool inLibrary;
+  final String? genre;
+
+  const Release({
+    required this.source,
+    required this.provider,
+    required this.title,
+    required this.artist,
+    this.albumId,
+    this.releaseMbid,
+    this.cover,
+    this.releaseDate,
+    this.recordType,
+    this.tracks,
+    this.unseen = false,
+    this.inLibrary = false,
+    this.genre,
+  });
+
+  factory Release.fromJson(Map<String, dynamic> j) => Release(
+        source: (j['source'] ?? 'artist') as String,
+        provider: (j['provider'] ?? 'deezer') as String,
+        albumId: j['album_id']?.toString(),
+        releaseMbid: j['release_mbid'] as String?,
+        title: (j['title'] ?? '') as String,
+        artist: (j['artist'] ?? '') as String,
+        cover: j['cover'] as String?,
+        releaseDate: j['release_date'] as String?,
+        recordType: j['record_type'] as String?,
+        tracks: j['tracks'] as int?,
+        unseen: (j['unseen'] ?? false) as bool,
+        inLibrary: (j['in_library'] ?? false) as bool,
+        genre: j['genre'] as String?,
+      );
+
+  /// Enough for the server to mark it looked at.
+  Map<String, dynamic> toSeenJson() => {
+        'provider': provider,
+        if (albumId != null) 'album_id': albumId,
+        if (releaseMbid != null) 'release_mbid': releaseMbid,
+      };
+
+  /// Whether a tap can open it as a record page.
+  bool get opens => albumId != null && provider == 'deezer';
+}
+
+/// An act nobody here has played, that people who play yours do.
+class ArtistToTry {
+  final String name;
+  final String? mbid;
+  final String because;
+  const ArtistToTry({required this.name, this.mbid, this.because = ''});
+
+  factory ArtistToTry.fromJson(Map<String, dynamic> j) => ArtistToTry(
+        name: (j['name'] ?? '') as String,
+        mbid: j['mbid'] as String?,
+        because: (j['because'] ?? '') as String,
+      );
+}
+
+/// The Discover page, as one answer. Any part the server could not have is simply
+/// empty; the page draws what it has.
+class Discover {
+  final List<MadeList> lists;
+  final bool building;
+  final List<YourStation> stations;
+  final List<StationArtist> startArtists;
+  final List<Track> startTracks;
+  final List<GenreChip> startGenres;
+  final List<Release> releases;
+  final int unseen;
+  final int following;
+  final int genresFollowed;
+  final List<String> genres;
+  final List<GenreChip> suggestedGenres;
+  final List<ArtistToTry> artists;
+
+  const Discover({
+    this.lists = const [],
+    this.building = false,
+    this.stations = const [],
+    this.startArtists = const [],
+    this.startTracks = const [],
+    this.startGenres = const [],
+    this.releases = const [],
+    this.unseen = 0,
+    this.following = 0,
+    this.genresFollowed = 0,
+    this.genres = const [],
+    this.suggestedGenres = const [],
+    this.artists = const [],
+  });
+
+  factory Discover.fromJson(Map<String, dynamic> j) {
+    List<Map<String, dynamic>> rows(dynamic v) =>
+        [for (final e in (v ?? const []) as List) (e as Map).cast<String, dynamic>()];
+    final stations = (j['stations'] is Map ? j['stations'] as Map : const {}).cast<String, dynamic>();
+    final feed = (j['feed'] is Map ? j['feed'] as Map : const {}).cast<String, dynamic>();
+    final genres = (j['genres'] is Map ? j['genres'] as Map : const {}).cast<String, dynamic>();
+    return Discover(
+      lists: [for (final l in rows(j['lists'])) MadeList.fromJson(l)],
+      building: (j['building'] ?? false) as bool,
+      stations: [for (final s in rows(stations['yours'])) YourStation.fromJson(s)],
+      startArtists: [for (final a in rows(stations['artists'])) StationArtist.fromJson(a)],
+      startTracks: [for (final t in rows(stations['tracks'])) Track.fromJson(t)],
+      startGenres: [for (final g in rows(stations['genres'])) GenreChip.fromJson(g)],
+      releases: [for (final r in rows(feed['items'])) Release.fromJson(r)],
+      unseen: (feed['unseen'] ?? 0) as int,
+      following: (feed['following'] ?? 0) as int,
+      genresFollowed: (feed['genres'] ?? 0) as int,
+      genres: [for (final g in (genres['following'] ?? const []) as List) '$g'],
+      suggestedGenres: [for (final g in rows(genres['suggested'])) GenreChip.fromJson(g)],
+      artists: [for (final a in rows(j['artists'])) ArtistToTry.fromJson(a)],
+    );
+  }
+
+  bool get isEmpty =>
+      lists.isEmpty && stations.isEmpty && startArtists.isEmpty && releases.isEmpty && artists.isEmpty;
+}

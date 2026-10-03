@@ -21,8 +21,8 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from . import beats_worker
 from . import (
-    auth, catalog, config, db, direct_worker, enrich_worker, failures,
-               follows, heavy, jobs, progress,
+    auth, catalog, config, db, direct_worker, discover, enrich_worker, failures,
+               follows, heavy, jobs, progress, routes_discover,
                jam, routes_accounts, routes_browse, routes_downloads, routes_files, routes_samples,
                routes_follows, routes_jam, routes_marks,
                routes_library, routes_linked, routes_play, routes_recommend, routes_search,
@@ -110,6 +110,11 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             except Exception as e:                     # never block startup on this
                 logging.getLogger("muse").warning(
                     "could not schedule the follow poll: %s", e)
+            try:
+                discover.ensure_scheduled()
+            except Exception as e:
+                logging.getLogger("muse").warning(
+                    "could not schedule the discover build: %s", e)
         yield
         if worker:
             worker.stop()
@@ -917,6 +922,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     app.include_router(routes_downloads.router)
     routes_jam.set_publisher(publish)
     routes_library.set_publisher(publish)
+    discover.set_publisher(publish)
     app.include_router(routes_jam.router)
     app.include_router(routes_sources.router)
     app.include_router(routes_search.router)
@@ -932,6 +938,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     app.include_router(routes_files.router)
     app.include_router(routes_samples.router)
     app.include_router(routes_samples.board)
+    app.include_router(routes_discover.router)
     app.include_router(routes_play.router)
     return app
 

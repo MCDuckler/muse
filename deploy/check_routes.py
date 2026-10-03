@@ -42,7 +42,8 @@ for path in sorted(paths):
     probe = path.replace("{track_id}", "1").replace("{queue_id}", "1") \
                 .replace("{playlist_id}", "1").replace("{job_id}", "1") \
                 .replace("{kind}", "spotify").replace("{remote_id}", "x") \
-                .replace("{pos}", "0")
+                .replace("{pos}", "0").replace("{slug}", "weekly") \
+                .replace("{genre}", "techno")
     status, ctype, body = fetch(f"{BASE}{probe}")
     served_html = "text/html" in ctype or body.lstrip().startswith("<!DOCTYPE")
     if served_html:

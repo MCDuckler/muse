@@ -42,6 +42,9 @@ LANES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("fetch", ("ingest_direct",)),
     ("fetch", ("ingest_direct",)),
     ("slow", ("mirror", "refind", "follow_poll")),
+    # Its own lane: a person opening Discover for the first time is waiting on it,
+    # and should not be waiting behind a library import.
+    ("make", ("discover_build",)),
 )
 
 
@@ -91,6 +94,8 @@ class DirectWorker:
                             self._mirror(job)
                         elif kind == "follow_poll":
                             self._follow_poll(job)
+                        elif kind == "discover_build":
+                            self._discover_build(job)
                         else:
                             self._ingest(job)
                     except Exception as e:
@@ -120,6 +125,22 @@ class DirectWorker:
         # which is how the poll ran once per restart and never again.
         jobs.finish(job["id"])
         follows.ensure_scheduled()
+
+    def _discover_build(self, job: dict) -> None:
+        """One person's lists now, or the nightly round for everybody; the nightly
+        one queues the next night's as it finishes, like the follow poll."""
+        from . import discover
+        payload = job.get("payload") or {}
+        try:
+            result = discover.run_job(payload)
+            log.info("discover build %s: %s", payload or "nightly", result)
+        except Exception as e:
+            log.warning("discover build failed: %s", e)
+            jobs.fail(job["id"], str(e))
+            return
+        jobs.finish(job["id"])
+        if not payload.get("user_id"):
+            discover.ensure_scheduled()
 
     # ------------------------------------------------------------------ audio
     def _ingest(self, job: dict) -> None:

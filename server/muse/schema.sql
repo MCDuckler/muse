@@ -778,3 +778,51 @@ create table if not exists boards (
   rev        int not null default 1,
   updated_at timestamptz not null default now()
 );
+
+-- Discover (discover.py): genres followed beside artists, the news in each, the
+-- lists made for a person overnight, and what the weekly one has offered before so
+-- it does not come round again.
+create table if not exists genre_follows (
+  user_id    int not null references users(id) on delete cascade,
+  genre      text not null,
+  created_at timestamptz not null default now(),
+  primary key (user_id, genre)
+);
+
+-- Shared, like artist_releases: a record is news for a genre whoever follows it.
+create table if not exists genre_releases (
+  genre              text not null,
+  release_mbid       text not null,
+  release_group_mbid text,
+  title              text not null,
+  artist             text not null,
+  artist_mbids       text[] not null default '{}',
+  release_date       date,
+  record_type        text,
+  listens            int not null default 0,
+  cover              text,
+  deezer_album_id    text,
+  looked_up_at       timestamptz,
+  first_seen         timestamptz not null default now(),
+  primary key (genre, release_mbid)
+);
+create index if not exists genre_releases_recent on genre_releases(genre, release_date desc);
+
+create table if not exists made_lists (
+  user_id   int not null references users(id) on delete cascade,
+  slug      text not null,              -- weekly | daily:N | radar | repeat | again | house
+  name      text not null,
+  blurb     text not null default '',
+  track_ids int[] not null default '{}',
+  ordinal   int not null default 0,
+  meta      jsonb not null default '{}',
+  built_at  timestamptz not null default now(),
+  primary key (user_id, slug)
+);
+
+create table if not exists made_history (
+  user_id    int not null references users(id) on delete cascade,
+  track_id   int not null references tracks(id) on delete cascade,
+  offered_at timestamptz not null default now(),
+  primary key (user_id, track_id)
+);

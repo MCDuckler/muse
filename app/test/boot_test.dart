@@ -26,7 +26,7 @@ void main() {
   test('a start with settings already saved keeps them', () async {
     SharedPreferences.setMockInitialValues({
       'muse.discLabel': 0.6,
-      'muse.homeTab.v4': Tabs.library,
+      'muse.homeTab.v5': Tabs.library,
       'muse.deskDock': false,
       'muse.coverScale': 0.9,
     });
@@ -44,7 +44,7 @@ void main() {
   test('nonsense in the settings is clamped rather than obeyed', () async {
     SharedPreferences.setMockInitialValues({
       'muse.discLabel': 40.0,
-      'muse.homeTab.v4': 99,
+      'muse.homeTab.v5': 99,
       'muse.coverScale': -3.0,
     });
     final app = AppState();
@@ -62,6 +62,17 @@ void main() {
     final app = AppState();
     await app.boot();
     expect(app.homeTab, Tabs.home);
+  });
+
+  test('a tab remembered from before Discover keeps its place', () async {
+    // v4 counted Home, Queue, Search, Library, People. Discover went in after Home,
+    // so every tab after Home is one to the right of where it was.
+    for (final (before, now) in [(0, Tabs.home), (1, Tabs.queue), (2, Tabs.search), (3, Tabs.library), (4, Tabs.people)]) {
+      SharedPreferences.setMockInitialValues({'muse.homeTab.v4': before});
+      final app = AppState();
+      await app.boot();
+      expect(app.homeTab, now, reason: 'v4 tab $before');
+    }
   });
 
   test('a tab remembered from before the queue came back keeps its place', () async {
