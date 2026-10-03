@@ -605,16 +605,26 @@ class _BoardLightState extends State<BoardLight> {
 }
 
 /// Pin a row of the shown bank under the decks, or let it go.
-class _PinMenu extends StatelessWidget {
+class _PinMenu extends StatefulWidget {
   const _PinMenu({required this.board, required this.bank});
   final Soundboard board;
   final int bank;
+
+  @override
+  State<_PinMenu> createState() => _PinMenuState();
+}
+
+class _PinMenuState extends State<_PinMenu> {
+  final _menu = GlobalKey<PopupMenuButtonState<int>>();
+  Soundboard get board => widget.board;
+  int get bank => widget.bank;
 
   @override
   Widget build(BuildContext context) {
     final strip = board.doc.strip;
     final pinnedHere = strip != null && strip.bank == bank;
     return PopupMenuButton<int>(
+      key: _menu,
       tooltip: 'A row of pads under the decks',
       color: Console.raised,
       position: PopupMenuPosition.under,
@@ -635,13 +645,16 @@ class _PinMenu extends StatelessWidget {
           PopupMenuItem<int>(value: -1, height: 34, child: Text('UNPIN', style: Console.label(10, color: Console.ink))),
         ],
       ],
+      // The pad opens the menu itself: a pad with nothing to do draws itself as
+      // one that cannot be pressed.
       child: Pad(
         icon: Icons.push_pin_outlined,
         label: pinnedHere ? 'ROW ${strip.row + 1} PINNED' : 'PIN',
         height: 28,
         lit: pinnedHere,
         colour: Console.ink,
-        onTap: null,
+        tooltip: 'A row of pads under the decks',
+        onTap: () => _menu.currentState?.showButtonMenu(),
       ),
     );
   }
