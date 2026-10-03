@@ -133,9 +133,14 @@ class Soundboard extends ChangeNotifier implements BoardFace {
   ApiClient get _api => booth.api;
 
   /// Whether this library can hold the user's own sounds (a server to keep them).
+  @override
   bool get hasServer => _api.token != null;
 
+  @override
+  SampleLibrary get library => sampler.library;
+
   /// The user's own samples and the house's shelf, as the server lists them now.
+  @override
   Future<void> refreshLibrary() async {
     if (!hasServer) return;
     try {
@@ -150,6 +155,7 @@ class Soundboard extends ChangeNotifier implements BoardFace {
   }
 
   /// A file of the user's, kept on the server and in the library: the sample.
+  @override
   Future<Sample> importBytes(String filename, List<int> bytes, {String? name}) async {
     final j = await _api.uploadSample(bytes, filename, name: name);
     sampler.library.takeServerList([j, ...await _api.samples()].fold(<int, Map<String, dynamic>>{}, (m, s) {
@@ -186,12 +192,14 @@ class Soundboard extends ChangeNotifier implements BoardFace {
     return sampler.library.byId((j['id'] as num).toInt())!;
   }
 
+  @override
   Future<void> renameSample(Sample s, String name) async {
     await _api.renameSample(s.id, name);
     await refreshLibrary();
   }
 
   /// A sample gone from the library, the server and every pad that held it.
+  @override
   Future<void> forgetSample(Sample s) async {
     for (final p in doc.allPads.toList()) {
       if (p.spec.sampleId == s.id) await setPad(p.bank, p.pad, null);
@@ -373,6 +381,7 @@ class Soundboard extends ChangeNotifier implements BoardFace {
 
   /// [spec] heard on its own, from its trim-in, with no choke, no duck and no
   /// waiting: the edit panel's listen button. Stopped by [stopAll], or by the pad.
+  @override
   Future<void> listen(int bank, int pad) async {
     final spec = doc.pad(bank, pad);
     if (spec == null) return;
@@ -386,6 +395,7 @@ class Soundboard extends ChangeNotifier implements BoardFace {
   /// re-used for the next audition. Stopped by [stopAll] or the next one.
   static const _auditionKey = '~';
 
+  @override
   Future<void> audition(Sample sample) async {
     final spec = PadSpec(sampleId: sample.id, name: sample.name);
     final v = await sampler.warm(_auditionKey, sample, spec, level: (doc.level * booth.master_).clamp(0.0, 1.0));
@@ -394,6 +404,10 @@ class Soundboard extends ChangeNotifier implements BoardFace {
   }
 
   bool get auditioning => sampler.voices[_auditionKey]?.sounding ?? false;
+
+  /// One pad quiet, whatever it is doing: the settings' listen, stopped.
+  @override
+  Future<void> quiet(int bank, int pad) => sampler.stop(key: keyOf(bank, pad));
 
   /// A hold pad let go; nothing for any other kind.
   @override
@@ -450,6 +464,7 @@ class Soundboard extends ChangeNotifier implements BoardFace {
   }
 
   /// The pad at [bank], [pad] made [spec] — or cleared with null.
+  @override
   Future<void> setPad(int bank, int pad, PadSpec? spec) async {
     if (bank < 0 || bank >= doc.banks.length || pad < 0 || pad >= Bank.size) return;
     final key = keyOf(bank, pad);
@@ -465,6 +480,7 @@ class Soundboard extends ChangeNotifier implements BoardFace {
   }
 
   /// Two pads swapped, across banks or not.
+  @override
   Future<void> swap((int, int) from, (int, int) to) async {
     final a = doc.pad(from.$1, from.$2), b = doc.pad(to.$1, to.$2);
     if (a == null && b == null) return;
@@ -478,6 +494,7 @@ class Soundboard extends ChangeNotifier implements BoardFace {
     _keepSoon();
   }
 
+  @override
   Future<void> renameBank(int i, String name) async {
     doc.banks[i].name = name.trim().isEmpty ? BoardDoc.bankNames[i] : name.trim();
     doc.rev++;
@@ -488,8 +505,11 @@ class Soundboard extends ChangeNotifier implements BoardFace {
   /// The shown bank's first row pinned under the decks, or — pinned already — let go.
   Future<void> toggleStrip() => setStrip(doc.strip == null ? StripSpec(bank: bank, row: 0) : null);
 
+  @override
   Future<void> setStrip(StripSpec? strip) async {
     doc.strip = strip;
+    // A change to the document like any other: the screens that follow it hear of it.
+    doc.rev++;
     notifyListeners();
     await warm();
     _keepSoon();

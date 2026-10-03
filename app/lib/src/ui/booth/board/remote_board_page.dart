@@ -30,6 +30,8 @@ Future<void> openRemoteBoard(BuildContext context, DeviceInfo desk) async {
     desk,
     myName: deviceName(),
     relay: () => RelayLink(deskId: desk.id, post: app.api.boardEvents, states: app.boardStates),
+    // Signed in here too: the sounds to pick from are asked of the server, not the desk.
+    api: app.api,
   );
   if (remote == null) {
     messenger.say(snack(Text('${desk.name} could not be reached')));

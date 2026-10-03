@@ -5,9 +5,9 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../../../state/booth/board/board_face.dart';
 import '../../../state/booth/board/board_keys.dart';
 import '../../../state/booth/board/pad_spec.dart';
-import '../../../state/booth/board/soundboard.dart';
 import '../../feel.dart';
 import '../../mag.dart';
 import '../desk/console.dart';
@@ -24,7 +24,8 @@ class BoardEdit extends StatefulWidget {
     this.showKey = true,
   });
 
-  final Soundboard board;
+  /// The board: the desk's own, or a desk's on a screen that follows it.
+  final BoardFace board;
   final int bank, pad;
   final VoidCallback onClose;
 
@@ -91,7 +92,7 @@ class _BoardEditState extends State<BoardEdit> {
       );
     }
     final c = padColourOf(spec.colour, context);
-    final sample = widget.board.sampler.library.byId(spec.sampleId);
+    final sample = widget.board.library.byId(spec.sampleId);
     final peaks = widget.board.peaksOf(spec.sampleId);
     final length = sample?.length ?? const Duration(seconds: 1);
     final playing = widget.board.stateOf(widget.bank, widget.pad).sounding;
@@ -286,7 +287,7 @@ class _BoardEditState extends State<BoardEdit> {
                 colour: c,
                 lit: playing,
                 onTap: () => playing
-                    ? unawaited(widget.board.sampler.stop(key: Soundboard.keyOf(widget.bank, widget.pad)))
+                    ? unawaited(widget.board.quiet(widget.bank, widget.pad))
                     : unawaited(widget.board.listen(widget.bank, widget.pad)),
               ),
               const Spacer(),

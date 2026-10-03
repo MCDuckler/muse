@@ -13,7 +13,6 @@ import '../../../state/booth/board/board_face.dart';
 import '../../../state/booth/board/board_keys.dart';
 import '../../../state/booth/board/pad_spec.dart';
 import '../../../state/booth/board/samples.dart';
-import '../../../state/booth/board/soundboard.dart';
 import '../../../state/booth/booth.dart';
 import '../../dialogs.dart';
 import '../../feel.dart';
@@ -54,7 +53,6 @@ class _BoardRoomState extends State<BoardRoom> with SingleTickerProviderStateMix
   bool _editing = false;
 
   BoardFace get _face => widget.face;
-  Soundboard? get _own => _face is Soundboard ? _face as Soundboard : null;
 
   @override
   void initState() {
@@ -102,11 +100,9 @@ class _BoardRoomState extends State<BoardRoom> with SingleTickerProviderStateMix
 
   Future<void> _pick(Sample s) async {
     final at = _picking ?? _selected;
-    if (at == null) return;
-    final own = _own;
-    if (own == null) return;
-    final was = own.pad(at.$1, at.$2);
-    await own.setPad(at.$1, at.$2, was == null ? padFor(s) : was.copyWith(sampleId: s.id));
+    if (at == null || !_face.editable) return;
+    final was = _face.pad(at.$1, at.$2);
+    await _face.setPad(at.$1, at.$2, was == null ? padFor(s) : was.copyWith(sampleId: s.id));
     setState(() {
       _picking = null;
       _selected = at;
@@ -115,8 +111,7 @@ class _BoardRoomState extends State<BoardRoom> with SingleTickerProviderStateMix
 
   @override
   Widget build(BuildContext context) {
-    final own = _own;
-    final editable = own != null && _face.editable;
+    final editable = _face.editable;
     final selected = _selected;
     if (widget.narrow) return _narrow(context);
     return Row(
@@ -141,7 +136,7 @@ class _BoardRoomState extends State<BoardRoom> with SingleTickerProviderStateMix
                         width: 340,
                         child: BoothPanel(
                           child: BoardEdit(
-                            board: own,
+                            board: _face,
                             bank: selected.$1,
                             pad: selected.$2,
                             onClose: () => setState(() {
@@ -159,7 +154,9 @@ class _BoardRoomState extends State<BoardRoom> with SingleTickerProviderStateMix
             ],
           ),
         ),
-        if (own != null && widget.booth != null) ...[
+        // The library down the right: on the desk with its log under it; on a screen
+        // that follows a desk and may change it, on its own.
+        if (editable) ...[
           const SizedBox(width: 10),
           SizedBox(
             width: 300,
@@ -169,11 +166,13 @@ class _BoardRoomState extends State<BoardRoom> with SingleTickerProviderStateMix
                 Expanded(
                   flex: 3,
                   child: BoothPanel(
-                    child: BoardLibrary(board: own, booth: widget.booth, forPad: _picking, onPicked: (s) => unawaited(_pick(s))),
+                    child: BoardLibrary(board: _face, booth: widget.booth, forPad: _picking, onPicked: (s) => unawaited(_pick(s))),
                   ),
                 ),
-                const SizedBox(height: 10),
-                Expanded(flex: 2, child: BoothPanel(child: ConsoleLog(booth: widget.booth!))),
+                if (widget.booth != null) ...[
+                  const SizedBox(height: 10),
+                  Expanded(flex: 2, child: BoothPanel(child: ConsoleLog(booth: widget.booth!))),
+                ],
               ],
             ),
           ),
@@ -185,8 +184,7 @@ class _BoardRoomState extends State<BoardRoom> with SingleTickerProviderStateMix
   /// A phone: the bank row, the pads, the fader across, and a picked pad's
   /// settings under them; the library opens over the room when a pad asks.
   Widget _narrow(BuildContext context) {
-    final own = _own;
-    final editable = own != null && _face.editable;
+    final editable = _face.editable;
     final selected = _selected;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -199,7 +197,7 @@ class _BoardRoomState extends State<BoardRoom> with SingleTickerProviderStateMix
           SizedBox(
             height: 520,
             child: BoardEdit(
-              board: own,
+              board: _face,
               bank: selected.$1,
               pad: selected.$2,
               showKey: false,
@@ -233,8 +231,7 @@ class _BoardRoomState extends State<BoardRoom> with SingleTickerProviderStateMix
 
   /// The library over the room, for [at]: a tapped sound goes there.
   Future<void> _librarySheet(BuildContext context, (int, int) at) async {
-    final own = _own;
-    if (own == null) return;
+    if (!_face.editable) return;
     setState(() => _picking = at);
     await showModalBottomSheet<void>(
       context: context,
@@ -246,7 +243,7 @@ class _BoardRoomState extends State<BoardRoom> with SingleTickerProviderStateMix
         child: Padding(
           padding: const EdgeInsets.fromLTRB(8, 10, 8, 8),
           child: BoardLibrary(
-            board: own,
+            board: _face,
             booth: widget.booth,
             forPad: at,
             onPicked: (s) {
@@ -295,7 +292,7 @@ class _BoardRoomState extends State<BoardRoom> with SingleTickerProviderStateMix
             ),
             if (!narrow) ...[
               const SizedBox(width: 4),
-              _PinMenu(board: _own!, bank: _face.bank),
+              _PinMenu(board: _face, bank: _face.bank),
             ],
           ],
           const Spacer(),
@@ -340,11 +337,10 @@ class _BoardRoomState extends State<BoardRoom> with SingleTickerProviderStateMix
   }
 
   Future<void> _rename(BuildContext context, int i) async {
-    final own = _own;
-    if (own == null) return;
-    final name = await promptForName(context, 'Name bank ${BoardDoc.bankNames[i]}', own.doc.banks[i].name);
+    if (!_face.editable) return;
+    final name = await promptForName(context, 'Name bank ${BoardDoc.bankNames[i]}', _face.doc.banks[i].name);
     if (name == null) return;
-    await own.renameBank(i, name);
+    await _face.renameBank(i, name);
   }
 
   Widget _level() {
@@ -373,8 +369,7 @@ class _BoardRoomState extends State<BoardRoom> with SingleTickerProviderStateMix
 
   Widget _grid({int rows = 4}) {
     final bank = _face.bank;
-    final own = _own;
-    final editable = own != null && _face.editable;
+    final editable = _face.editable;
     return LayoutBuilder(builder: (context, c) {
       const gap = 8.0;
       final side = ((c.maxWidth - gap * (Bank.across - 1)) / Bank.across)
@@ -435,7 +430,7 @@ class _BoardRoomState extends State<BoardRoom> with SingleTickerProviderStateMix
       onWillAcceptWithDetails: (_) => true,
       onAcceptWithDetails: (d) {
         feel(Feel.commit);
-        unawaited(_own!.setPad(bank, i, spec == null ? padFor(d.data) : spec.copyWith(sampleId: d.data.id)));
+        unawaited(_face.setPad(bank, i, spec == null ? padFor(d.data) : spec.copyWith(sampleId: d.data.id)));
         setState(() => _selected = (bank, i));
       },
       builder: (context, candidates, _) => pad(candidates.isNotEmpty),
@@ -607,7 +602,7 @@ class _BoardLightState extends State<BoardLight> {
 /// Pin a row of the shown bank under the decks, or let it go.
 class _PinMenu extends StatefulWidget {
   const _PinMenu({required this.board, required this.bank});
-  final Soundboard board;
+  final BoardFace board;
   final int bank;
 
   @override
@@ -616,7 +611,7 @@ class _PinMenu extends StatefulWidget {
 
 class _PinMenuState extends State<_PinMenu> {
   final _menu = GlobalKey<PopupMenuButtonState<int>>();
-  Soundboard get board => widget.board;
+  BoardFace get board => widget.board;
   int get bank => widget.bank;
 
   @override

@@ -6,16 +6,24 @@
 // a POST up, a few hundred). The screen never makes a sound of its own; what it
 // shows is what the desk said, and the sweep across a pad is this screen's clock
 // carrying on from how far along the desk said the sound was.
+//
+// It changes the board too, where the desk takes changes over the wire (it says so
+// with the board): a change shows here at once and is said to the desk, whose board
+// — when it comes back — is the word on it. The sounds to pick from come from this
+// screen's own server where it has one (a phone, signed in), else from the desk
+// (the board's own window).
 import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
+import '../../../api/client.dart';
 import '../../../api/models.dart';
 import 'board_face.dart';
 import 'link_wire.dart';
 import 'pad_spec.dart';
 import 'remote_link_none.dart' if (dart.library.io) 'remote_link_io.dart' as lan;
+import 'samples.dart';
 import 'soundboard.dart' show PadState, Soundboard;
 
 /// A wire to the desk: lines up, lines down.
@@ -83,7 +91,7 @@ class RelayLink extends RemoteLink {
 
 /// The desk's board as this screen has it.
 class RemoteBoard extends ChangeNotifier implements BoardFace {
-  RemoteBoard._(this.desk, this._link) {
+  RemoteBoard._(this.desk, this._link, {this.api}) {
     _sub = _link.lines.listen(_arrived, onDone: _gone, onError: (Object _) => _gone());
     _pinger = Timer.periodic(const Duration(seconds: 2), (_) => _ping());
     _ping();
@@ -95,19 +103,33 @@ class RemoteBoard extends ChangeNotifier implements BoardFace {
     DeviceInfo desk, {
     required String myName,
     required RemoteLink Function() relay,
+    ApiClient? api,
   }) async {
     final advert = desk.boardLink;
     if (advert != null) {
       final direct = await lan.connectLan(advert, name: myName);
-      if (direct != null) return RemoteBoard._(desk, direct);
+      if (direct != null) return RemoteBoard._(desk, direct, api: api);
     }
-    return RemoteBoard._(desk, relay());
+    return RemoteBoard._(desk, relay(), api: api);
   }
 
   /// Over a link already made: the board's own window, given the desk's url.
-  factory RemoteBoard.over(DeviceInfo desk, RemoteLink link) => RemoteBoard._(desk, link);
+  factory RemoteBoard.over(DeviceInfo desk, RemoteLink link, {ApiClient? api}) => RemoteBoard._(desk, link, api: api);
 
   final DeviceInfo desk;
+
+  /// This screen's own way to the server, where it has one: the library is asked of
+  /// it, and a sound can be kept from here. Null in the board's own window, which
+  /// asks the desk.
+  final ApiClient? api;
+
+  /// Whether the desk takes the board's changes over the wire (it says so with the
+  /// board; a desk from before that is played, not changed).
+  bool _edits = false;
+  bool _libraryAsked = false;
+
+  @override
+  final library = SampleLibrary();
   final RemoteLink _link;
   StreamSubscription<String>? _sub;
   Timer? _pinger;
@@ -164,7 +186,16 @@ class RemoteBoard extends ChangeNotifier implements BoardFace {
           }
         }
         _ready = true;
+        _edits = m['edits'] != null;
         _playing(m);
+        if (_edits && !_libraryAsked) {
+          _libraryAsked = true;
+          unawaited(refreshLibrary());
+        }
+      case 'library':
+        library
+          ..takeServerList([for (final j in (m['own'] as List? ?? const [])) (j as Map).cast<String, dynamic>()])
+          ..takeHouseList([for (final j in (m['house'] as List? ?? const [])) (j as Map).cast<String, dynamic>()]);
       case 'playing':
         _playing(m);
       case 'pong':
@@ -205,7 +236,7 @@ class RemoteBoard extends ChangeNotifier implements BoardFace {
 
   // ------------------------------------------------------------------ the face
   @override
-  bool get editable => false;
+  bool get editable => _edits;
 
   @override
   PadSpec? pad(int bank, int pad) => doc.pad(bank, pad);
@@ -233,7 +264,7 @@ class RemoteBoard extends ChangeNotifier implements BoardFace {
   }
 
   @override
-  Float32List? peaksOf(int sampleId) => _peaks[sampleId];
+  Float32List? peaksOf(int sampleId) => _peaks[sampleId] ?? library.peaks[sampleId];
 
   @override
   Future<void> press(int bank, int pad) async =>
@@ -258,6 +289,99 @@ class RemoteBoard extends ChangeNotifier implements BoardFace {
     doc.level = v.clamp(0.0, 1.0);
     notifyListeners();
     _link.send(jsonEncode({'t': 'level', 'v': doc.level}));
+  }
+
+  // ------------------------------------------------------------------ changing it
+  void _say(Map<String, dynamic> m) => _link.send(jsonEncode(m));
+
+  @override
+  Future<void> setPad(int bank, int pad, PadSpec? spec) async {
+    if (bank < 0 || bank >= doc.banks.length || pad < 0 || pad >= Bank.size) return;
+    doc.banks[bank].pads[pad] = spec;
+    notifyListeners();
+    _say({'t': 'pad', 'bank': bank, 'pad': pad, 'spec': spec?.toJson()});
+  }
+
+  @override
+  Future<void> swap((int, int) from, (int, int) to) async {
+    final a = doc.pad(from.$1, from.$2), b = doc.pad(to.$1, to.$2);
+    if (a == null && b == null) return;
+    doc.banks[from.$1].pads[from.$2] = b;
+    doc.banks[to.$1].pads[to.$2] = a;
+    notifyListeners();
+    _say({'t': 'swap', 'from': [from.$1, from.$2], 'to': [to.$1, to.$2]});
+  }
+
+  @override
+  Future<void> renameBank(int i, String name) async {
+    if (i < 0 || i >= doc.banks.length) return;
+    doc.banks[i].name = name.trim().isEmpty ? BoardDoc.bankNames[i] : name.trim();
+    notifyListeners();
+    _say({'t': 'bankname', 'bank': i, 'name': name});
+  }
+
+  @override
+  Future<void> setStrip(StripSpec? strip) async {
+    doc.strip = strip;
+    notifyListeners();
+    _say({'t': 'strip', if (strip != null) ...{'bank': strip.bank, 'row': strip.row}});
+  }
+
+  @override
+  Future<void> listen(int bank, int pad) async => _say({'t': 'listen', 'bank': bank, 'pad': pad});
+
+  @override
+  Future<void> quiet(int bank, int pad) async => _say({'t': 'quiet', 'bank': bank, 'pad': pad});
+
+  // ------------------------------------------------------------------ the sounds
+  @override
+  bool get hasServer => api?.token != null;
+
+  @override
+  Future<void> refreshLibrary() async {
+    final a = api;
+    if (a == null || a.token == null) {
+      _say({'t': 'library?'});
+      return;
+    }
+    try {
+      final shelves = await a.sampleShelves();
+      library
+        ..takeServerList(shelves.own)
+        ..takeHouseList(shelves.house);
+      notifyListeners();
+    } catch (e) {
+      debugPrint('remote board: the library did not come — $e');
+    }
+  }
+
+  /// Heard on the desk: this screen never makes a sound of its own.
+  @override
+  Future<void> audition(Sample sample) async => _say({'t': 'audition', 'sample': sample.id});
+
+  @override
+  Future<Sample> importBytes(String filename, List<int> bytes, {String? name}) async {
+    final a = api;
+    if (a == null || a.token == null) throw StateError('No server on this screen to keep it on');
+    final j = await a.uploadSample(bytes, filename, name: name);
+    await refreshLibrary();
+    return library.byId((j['id'] as num).toInt()) ?? SampleLibrary.fromServer(j);
+  }
+
+  @override
+  Future<void> renameSample(Sample s, String name) async {
+    await api?.renameSample(s.id, name);
+    await refreshLibrary();
+  }
+
+  /// Off every pad that holds it, then off the server.
+  @override
+  Future<void> forgetSample(Sample s) async {
+    for (final p in doc.allPads.toList()) {
+      if (p.spec.sampleId == s.id) await setPad(p.bank, p.pad, null);
+    }
+    await api?.deleteSample(s.id);
+    await refreshLibrary();
   }
 
   @override

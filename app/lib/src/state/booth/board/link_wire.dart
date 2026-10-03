@@ -1,13 +1,17 @@
 // What goes over the wire between a desk's board and a screen showing it.
 //
 // Up, from the screen: presses, the bank, the level, stop — in the remote
-// decoder's words (control/decoders.dart). Down, from the desk: the board itself
-// whenever it changes, and what is sounding ten times a second while anything is.
+// decoder's words (control/decoders.dart) — and the board's changes (a pad set or
+// cleared, two swapped, a bank named, a row pinned, a pad or a sound listened to),
+// which the desk makes on its board itself (link_server.dart). Down, from the desk:
+// the board whenever it changes, what is sounding ten times a second while anything
+// is, and the library for a screen that has no server to ask.
 // Both ends are this program, so the shapes live in one place and are tested once.
 import 'dart:convert';
 
 import 'board_face.dart';
 import 'pad_spec.dart';
+import 'samples.dart';
 import 'soundboard.dart';
 
 abstract final class LinkWire {
@@ -16,6 +20,8 @@ abstract final class LinkWire {
   static Map<String, dynamic> boardMessage(Soundboard b, {required bool light}) => {
         // 't' first: a line is told apart by its first bytes before it is parsed.
         't': 'board',
+        // This desk takes the board's changes over the wire: a screen may edit.
+        'edits': 1,
         'doc': b.doc.toJson(),
         'bank': b.bank,
         'light': light,
@@ -48,6 +54,26 @@ abstract final class LinkWire {
     }
     return {'t': 'playing', 'pads': pads};
   }
+
+  /// The house's shelf and the user's own sounds, for a screen with no server of its
+  /// own to ask (the board's own window). The kit is built into every screen.
+  static Map<String, dynamic> libraryMessage(SampleLibrary l) => {
+        't': 'library',
+        'own': [for (final s in l.known.values) _sample(s)],
+        'house': [for (final s in l.house.values) _sample(s)],
+      };
+
+  static Map<String, dynamic> _sample(Sample s) => {
+        'id': s.id,
+        'name': s.name,
+        'duration_ms': s.length.inMilliseconds,
+        if (s.group != null) 'group': s.group,
+        if (s.hint != null) 'pad': s.hint,
+        if (s.words != null) 'words': s.words,
+      };
+
+  /// The lines that change the board rather than play it.
+  static const edits = {'pad', 'swap', 'bankname', 'strip', 'listen', 'quiet', 'audition', 'library?'};
 
   static String encode(Map<String, dynamic> m) => jsonEncode(m);
 

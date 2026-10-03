@@ -51,6 +51,10 @@ the parts that could only be checked with the real thing are marked **[hw]**.
   show; a pad's release matters — a hold pad plays while held), `board.bank.1`…`4`,
   `board.bank.prev/next`, `board.stop`, `board.level` (no soft take-over). Lights:
   `board.pad.N` while it sounds, `board.stop` while anything does.
+  A remote screen's *changes* to the board (`pad`, `swap`, `bankname`, `strip`, `listen`,
+  `quiet`, `audition`, `library?` lines — see `state/booth/board/link_wire.dart`) are not
+  control events: the desk's link takes them before the decoder and makes them on the board
+  itself, so they never show in the monitor.
 - **`ControllerLayout`** (JSON under `assets/controllers/`) — one file per device per
   protocol: how to recognise the device (USB vid/pid, HID/MIDI name patterns), each
   input (address → control id, kind, range, centre), each output (control id → LED

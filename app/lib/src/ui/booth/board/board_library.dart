@@ -6,6 +6,7 @@ import 'dart:async';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../../../state/booth/board/board_face.dart';
 import '../../../state/booth/board/pad_spec.dart';
 import '../../../state/booth/booth.dart';
 import '../../dialogs.dart';
@@ -22,7 +23,8 @@ enum LibraryTab { kit, house, yours }
 class BoardLibrary extends StatefulWidget {
   const BoardLibrary({super.key, required this.board, this.forPad, required this.onPicked, this.booth});
 
-  final Soundboard board;
+  /// The board the sounds go on: the desk's own, or a desk's on a screen that follows it.
+  final BoardFace board;
 
   /// The booth, for cutting bars off a deck; null on a screen with no decks.
   final Booth? booth;
@@ -85,7 +87,8 @@ class _BoardLibraryState extends State<BoardLibrary> {
   /// Bars off the master deck: which deck, how many.
   Future<void> _cut() async {
     final b = widget.booth;
-    if (b == null) return;
+    final own = widget.board;
+    if (b == null || own is! Soundboard) return;
     final deck = b.master.track != null ? b.master : b.other(b.master);
     if (deck.track == null) {
       ScaffoldMessenger.of(context).say(snack(const Text('Nothing on the decks to cut from')));
@@ -122,7 +125,7 @@ class _BoardLibraryState extends State<BoardLibrary> {
       ),
     );
     if (bars == null) return;
-    await _did(() => widget.board.cutFromDeck(deck, bars), done: '$bars bar${bars == 1 ? '' : 's'} cut, in your library');
+    await _did(() => own.cutFromDeck(deck, bars), done: '$bars bar${bars == 1 ? '' : 's'} cut, in your library');
   }
 
   Future<void> _forget(Sample s) async {
@@ -156,7 +159,7 @@ class _BoardLibraryState extends State<BoardLibrary> {
   @override
   Widget build(BuildContext context) {
     final words = _search.text.trim().toLowerCase().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
-    final library = widget.board.sampler.library;
+    final library = widget.board.library;
     final tab = !_chose && library.house.isNotEmpty ? LibraryTab.house : _tab;
     final all = switch (tab) {
       LibraryTab.kit => SampleKit.all,
@@ -168,14 +171,16 @@ class _BoardLibraryState extends State<BoardLibrary> {
     final entries = <Object>[];
     final perShelf = <String, int>{};
     if (tab == LibraryTab.house) {
+      // Each shelf once, in the order the shelves first come, its sounds in theirs.
+      final shelves = <String, List<Sample>>{};
       for (final s in rows) {
-        perShelf.update(s.group ?? '', (n) => n + 1, ifAbsent: () => 1);
+        (shelves[s.group ?? ''] ??= []).add(s);
       }
-      String? last;
-      for (final s in rows) {
-        if (s.group != last) entries.add(s.group ?? '');
-        last = s.group;
-        entries.add(s);
+      for (final MapEntry(key: group, value: sounds) in shelves.entries) {
+        perShelf[group] = sounds.length;
+        entries
+          ..add(group)
+          ..addAll(sounds);
       }
     } else {
       entries.addAll(rows);
@@ -273,8 +278,8 @@ class _BoardLibraryState extends State<BoardLibrary> {
                         board: widget.board,
                         asking: asking != null,
                         onTap: asking == null ? null : () => widget.onPicked(s),
-                        onRename: yours ? () => _rename(s) : null,
-                        onForget: yours ? () => _forget(s) : null,
+                        onRename: yours && server ? () => _rename(s) : null,
+                        onForget: yours && server ? () => _forget(s) : null,
                       );
                     },
                   ),
@@ -292,7 +297,7 @@ class _BoardLibraryState extends State<BoardLibrary> {
                   onTap: _busy ? null : () => unawaited(_import()),
                 ),
               ),
-              if (widget.booth != null) ...[
+              if (widget.booth != null && widget.board is Soundboard) ...[
                 const SizedBox(width: 6),
                 Expanded(
                   child: Pad(
@@ -342,7 +347,7 @@ class _SampleRow extends StatefulWidget {
   const _SampleRow(
       {required this.sample, required this.board, required this.asking, this.onTap, this.onRename, this.onForget});
   final Sample sample;
-  final Soundboard board;
+  final BoardFace board;
   final bool asking;
   final VoidCallback? onTap;
   final VoidCallback? onRename, onForget;

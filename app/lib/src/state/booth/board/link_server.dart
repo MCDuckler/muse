@@ -7,6 +7,10 @@
 // top of that it sends each screen the board itself and what is sounding, which
 // are more than lights.
 //
+// The lines that change the board — a pad set, two swapped, a bank named — are not
+// presses: they are made here, on the board itself, before the decoder sees them,
+// and the board the change made goes back to every screen as any change does.
+//
 // Two wires. On a desk a WebSocket server on the local network (link_server_io.dart):
 // a press is felt, not posted to another country. Everywhere, the server's relay:
 // a screen that cannot reach the desk directly sends its presses through the API,
@@ -20,6 +24,7 @@ import '../booth.dart';
 import '../control/layout.dart';
 import '../control/transport.dart';
 import 'link_wire.dart';
+import 'pad_spec.dart';
 import 'soundboard.dart';
 
 /// One screen on the link.
@@ -40,6 +45,10 @@ class LinkPeer extends OpenDevice {
   bool closed = false;
   DateTime heard = DateTime.now();
 
+  /// Offered each line first: true when it was taken (a change to the board), and
+  /// the decoder never sees it.
+  bool Function(LinkPeer peer, Map<String, dynamic> line)? onLine;
+
   /// Whether this screen reaches the desk directly.
   bool get direct => say != null;
 
@@ -49,6 +58,11 @@ class LinkPeer extends OpenDevice {
   /// A line from the screen, as bytes for the decoder.
   void arrived(String line) {
     heard = DateTime.now();
+    final take = onLine;
+    if (take != null) {
+      final m = LinkWire.decode(line);
+      if (m != null && take(this, m)) return;
+    }
     if (!closed) _in.add(Uint8List.fromList(utf8.encode(line)));
   }
 
@@ -109,6 +123,7 @@ class BoardLinkBase extends ControllerTransport {
 
   /// A screen arrived (over whichever wire).
   void admit(LinkPeer p) {
+    p.onLine = _take;
     peers[p.key] = p;
     if (!_changes.isClosed) _changes.add(null);
   }
@@ -143,6 +158,70 @@ class BoardLinkBase extends ControllerTransport {
   }
 
   bool get anyRelay => peers.values.any((p) => !p.direct && !p.closed);
+
+  // ------------------------------------------------------------------ changes, from a screen
+  bool _take(LinkPeer p, Map<String, dynamic> m) {
+    if (!LinkWire.edits.contains(m['t'])) return false;
+    unawaited(edit(p, m).catchError((Object e) => debugPrint('board link: ${m['t']} — $e')));
+    return true;
+  }
+
+  /// A screen's change, made on the board: what the board says next carries it back.
+  @visibleForTesting
+  Future<void> edit(LinkPeer p, Map<String, dynamic> m) async {
+    final b = board;
+    int? n(String k) => (m[k] as num?)?.toInt();
+    bool fits(int? bank, int? pad) =>
+        bank != null && pad != null && bank >= 0 && bank < b.doc.banks.length && pad >= 0 && pad < Bank.size;
+    (int, int)? at(String k) {
+      final v = m[k];
+      if (v is! List || v.length != 2 || v[0] is! num || v[1] is! num) return null;
+      final place = ((v[0] as num).toInt(), (v[1] as num).toInt());
+      return fits(place.$1, place.$2) ? place : null;
+    }
+
+    switch (m['t']) {
+      case 'pad':
+        final bank = n('bank'), pad = n('pad');
+        if (!fits(bank, pad)) return;
+        final j = m['spec'];
+        final spec = j is Map ? PadSpec.fromJson(j.cast<String, dynamic>()) : null;
+        if (spec != null && spec.sampleId > 0 && b.library.byId(spec.sampleId) == null) {
+          // A sound kept from another screen a moment ago: the library learns it first.
+          await b.refreshLibrary();
+        }
+        await b.setPad(bank!, pad!, spec);
+      case 'swap':
+        final from = at('from'), to = at('to');
+        if (from != null && to != null) await b.swap(from, to);
+      case 'bankname':
+        final i = n('bank');
+        if (i != null && i >= 0 && i < b.doc.banks.length) await b.renameBank(i, '${m['name'] ?? ''}');
+      case 'strip':
+        final bank = n('bank'), row = n('row');
+        await b.setStrip(bank == null || row == null || !fits(bank, row * Bank.across)
+            ? null
+            : StripSpec(bank: bank, row: row));
+      case 'listen':
+        final bank = n('bank'), pad = n('pad');
+        if (fits(bank, pad)) await b.listen(bank!, pad!);
+      case 'quiet':
+        final bank = n('bank'), pad = n('pad');
+        if (fits(bank, pad)) await b.quiet(bank!, pad!);
+      case 'audition':
+        final id = n('sample');
+        if (id == null) return;
+        var s = b.library.byId(id);
+        if (s == null) {
+          await b.refreshLibrary();
+          s = b.library.byId(id);
+        }
+        if (s != null) await b.audition(s);
+      case 'library?':
+        // Only a screen on a wire of its own asks: one on the relay has a server.
+        if (p.direct) p.say!(LinkWire.encode(LinkWire.libraryMessage(b.library)));
+    }
+  }
 
   // ------------------------------------------------------------------ down the wire
   void _watch() {
