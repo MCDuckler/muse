@@ -340,6 +340,13 @@ class _OpenByHandState extends State<_OpenByHand>
   /// pull got to, so the window picks up where the bar left off rather than snapping
   /// back to nothing first.
   void _open(double upwardPixelsPerSecond) {
+    // Android has no transition to carry the pull's speed into, so the pull simply
+    // ends in the player. See NowPlayingRoute.plainly.
+    if (NowPlayingRoute.plainly) {
+      Navigator.of(context, rootNavigator: true)
+          .push(NowPlayingRoute(from: PlayerBar.barRect(context)));
+      return;
+    }
     final route = NowPlayingRoute(from: PlayerBar.barRect(context), byHand: true);
     Navigator.of(context, rootNavigator: true).push(route);
     final hand = route.hand;

@@ -1,4 +1,6 @@
 // Opening and closing the player with a finger: the drag *is* the animation.
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muse/src/ui/now_playing.dart';
@@ -74,4 +76,35 @@ void main() {
     expect(route.isActive, isFalse);
     expect(find.text('home'), findsOneWidget);
   });
+  testWidgets('on Android the player is simply there, with nothing in between',
+      (tester) async {
+    // Reported as a wipe-up that takes too long and lags. What it costs is a
+    // screen-sized rounded clip with a blurred shadow under it and a cross-fade inside
+    // it, every frame for a third of a second, over the busiest page in the app — and
+    // what anybody wants from tapping the bar is the player, not a performance of the
+    // player arriving.
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    expect(NowPlayingRoute.plainly, isTrue);
+    final route = NowPlayingRoute(from: const Rect.fromLTWH(0, 700, 400, 64));
+    expect(route.transitionDuration, Duration.zero);
+    expect(route.reverseTransitionDuration, Duration.zero);
+
+    late BuildContext anywhere;
+    await tester.pumpWidget(MaterialApp(home: Builder(builder: (c) {
+      anywhere = c;
+      return const SizedBox();
+    })));
+    const page = SizedBox.shrink();
+    expect(
+        identical(
+            route.buildTransitions(anywhere, const AlwaysStoppedAnimation(0.5),
+                const AlwaysStoppedAnimation(0), page),
+            page),
+        isTrue,
+        reason: 'no window, no clip, no shadow — the page itself, half way through');
+    // Put back inside the body: the framework checks for a changed debug variable
+    // before a tearDown would get to it.
+    debugDefaultTargetPlatformOverride = null;
+  });
+
 }

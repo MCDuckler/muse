@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:flutter/foundation.dart'
+    show ValueListenable, TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:provider/provider.dart';
@@ -624,14 +625,31 @@ class _TheMusicWillStop extends StatelessWidget {
 /// Without one — opened by a keyboard shortcut, or from a screen with no bar — it
 /// falls back to rising from the bottom edge.
 class NowPlayingRoute extends PageRouteBuilder<void> {
+  /// Android opens the player with no animation at all.
+  ///
+  /// What the movement costs is a screen-sized rounded clip with a blurred shadow
+  /// under it and a cross-fade inside it, on every frame for a third of a second,
+  /// over the busiest page in the app. On a phone that is not a window opening, it is
+  /// a stutter with a shape — and the thing people want from tapping the bar is the
+  /// player, not a performance of the player arriving. So on Android there is nothing
+  /// between the tap and the page.
+  ///
+  /// The gestures go with it rather than being left to drive an animation that is no
+  /// longer drawn: a pull up still lifts the bar under the finger and opens on
+  /// release, and a pull down in the player still closes it. See _CloseByHand and
+  /// PlayerBar._open.
+  static bool get plainly => defaultTargetPlatform == TargetPlatform.android;
+
   NowPlayingRoute({this.from, this.byHand = false, WidgetBuilder? page})
       : super(
           // Opaque, so that once it has arrived the app underneath stops being drawn
           // at all. A see-through route keeps every screen below it painting for as
           // long as it is open, which is a whole app rendered behind a page that
           // covers it.
-          transitionDuration: const Duration(milliseconds: 380),
-          reverseTransitionDuration: const Duration(milliseconds: 320),
+          transitionDuration:
+              plainly ? Duration.zero : const Duration(milliseconds: 380),
+          reverseTransitionDuration:
+              plainly ? Duration.zero : const Duration(milliseconds: 320),
           pageBuilder: (context, _, __) =>
               page == null ? const NowPlayingScreen() : page(context),
         );
@@ -652,7 +670,7 @@ class NowPlayingRoute extends PageRouteBuilder<void> {
   @override
   Widget buildTransitions(BuildContext context, Animation<double> animation,
           Animation<double> secondaryAnimation, Widget child) =>
-      OpenFrom(animation: animation, from: from, child: child);
+      plainly ? child : OpenFrom(animation: animation, from: from, child: child);
 
   @override
   TickerFuture didPush() {
@@ -802,6 +820,9 @@ class _CloseByHandState extends State<_CloseByHand> {
   /// The route this screen is on, when it is one that can be driven. Opened any other
   /// way — a keyboard shortcut, a deep link — the drag simply closes it.
   NowPlayingRoute? get _route {
+    // Nothing to take hold of where the page did not animate in: a pull down is a
+    // flick that closes it, which is the branch in [_end].
+    if (NowPlayingRoute.plainly) return null;
     final route = ModalRoute.of(context);
     return route is NowPlayingRoute && route.hand != null ? route : null;
   }
