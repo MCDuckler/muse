@@ -120,6 +120,7 @@ class BoardLinkServer extends BoardLinkBase {
   List<String> _addrs = const ['127.0.0.1'];
 
   /// Looked up now and then by the app's device report: the network can change.
+  @override
   Future<void> refreshAddresses() async {
     try {
       final list = await NetworkInterface.list(type: InternetAddressType.IPv4, includeLinkLocal: false);
