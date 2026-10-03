@@ -70,6 +70,7 @@ def client(cfg, monkeypatch):
         for t in ("queue_items", "queues", "playlist_items", "playlist_unmatched",
                   "playlists", "listens", "media", "track_sources", "tracks", "jobs",
                   "devices", "workers", "invites", "provider_accounts", "settings",
+                  "samples", "boards",
                   "users", "radio_edges"):
             c.execute(f"truncate {t} restart identity cascade")
     recommend.forget_sound()

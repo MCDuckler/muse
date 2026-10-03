@@ -10,6 +10,7 @@ import '../playback_log.dart';
 import '../timing.dart';
 import 'automix.dart';
 import 'deck.dart';
+import 'board/soundboard.dart';
 import 'fx_channel.dart';
 import 'fx_sounds.dart';
 import 'mixer.dart';
@@ -376,6 +377,7 @@ class Booth extends ChangeNotifier {
     Mixer? mixer,
     TimingStore? timing,
     FxChannel? fx,
+    Soundboard Function(Booth)? board,
     Deck? a,
     Deck? b,
   })  : mixer = mixer ?? Mixer.forThisDevice(),
@@ -398,6 +400,7 @@ class Booth extends ChangeNotifier {
             claiming: () => this.mixer.expecting('B'));
     this.a.parts = parts;
     this.b.parts = parts;
+    this.board = board == null ? Soundboard(this) : board(this);
     this.a.engineLoop = (from, to) => this.mixer.setLoop(this.a, from, to);
     this.b.engineLoop = (from, to) => this.mixer.setLoop(this.b, from, to);
     this.a.loopLead = (span) => this.mixer.loopLead(this.a, span);
@@ -503,6 +506,8 @@ class Booth extends ChangeNotifier {
     stopTransition();
     await a.pause();
     await b.pause();
+    // And the board's pads, with whatever waits for a beat that is not coming.
+    await board.stopAll();
     // Meant to end: nothing to come back to.
     _wasLive = false;
     unawaited(BoothSession.clear());
@@ -733,7 +738,44 @@ class Booth extends ChangeNotifier {
   /// gain, with the record's own loudness taken off.
   ({double a, double b}) get levels {
     final l = levelsFor(crossfader, full: fullLaw);
-    return (a: l.a * gainOf(a) * trimFor(a), b: l.b * gainOf(b) * trimFor(b));
+    return (
+      a: l.a * gainOf(a) * trimFor(a) * master_ * duck_,
+      b: l.b * gainOf(b) * trimFor(b) * master_ * duck_,
+    );
+  }
+
+  /// The board's pads beside the decks: Soundboard.
+  late final Soundboard board;
+
+  /// How far the decks are held down while a pad that ducks them sounds, 0..1:
+  /// 1 is not at all. The board's, never a hand's, and never the master.
+  double duck_ = 1.0;
+
+  Future<void> setDuck(double value, {Duration over = Duration.zero}) async {
+    final v = value.clamp(0.0, 1.0);
+    if (v == duck_) return;
+    duck_ = v;
+    await _levels(over: over);
+  }
+
+  /// The master fader, 0..1: everything, after the crossfader. Full unless a
+  /// controller has one and moves it; the screen has no master fader.
+  double master_ = 1.0;
+
+  Future<void> setMaster(double value) async {
+    master_ = value.clamp(0.0, 1.0);
+    moves.ping();
+    await _levels();
+  }
+
+  /// Keylock on a deck: tempo moves without the pitch following. On by default, as
+  /// the engine's stretcher has it; off is the vinyl feel, where a faster record is
+  /// a higher one.
+  Future<void> setKeylock(Deck deck, bool on) async {
+    if (deck.keylock == on) return;
+    deck.keylock = on;
+    deck.changed();
+    await mixer.setKeylock(deck, on);
   }
 
   /// How much a record is turned down so that it sits at the same level as the other
@@ -3122,6 +3164,7 @@ class Booth extends ChangeNotifier {
     _running?.cancel();
     _lock?.cancel();
     unawaited(fx.dispose());
+    board.dispose();
     auto.dispose();
     a.dispose();
     b.dispose();

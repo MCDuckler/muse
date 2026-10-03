@@ -1,0 +1,4 @@
+# WetOwl: let the person at the desk open their DJ console's HID node.
+#   sudo cp 99-wetowl-dj.rules /etc/udev/rules.d/ && sudo udevadm control --reload && replug
+# Hercules DJ Console RMX (Guillemot 06f8:b101). Add a line per console.
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="06f8", ATTRS{idProduct}=="b101", MODE="0660", TAG+="uaccess"

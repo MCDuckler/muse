@@ -17,6 +17,8 @@ the player's business, on the device that receives it.
 """
 from __future__ import annotations
 
+import json
+
 import logging
 
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -47,7 +49,7 @@ def _rows(user_id: int, me: int) -> list[dict]:
     return db.all_(
         f"""select d.id as device, d.name as device_name, d.platform, d.kind,
                    d.last_seen, d.playing, d.position_ms, d.state_at, d.queue_id,
-                   d.item_id as device_item,
+                   d.item_id as device_item, d.board_link,
                    (extract(epoch from now() - d.state_at) * 1000)::int as age_ms,
                    d.track_id as has_track,
                    d.state_at > now() - interval '{LIVE}' as live,
@@ -85,6 +87,8 @@ def _public(row: dict, me: int) -> dict:
         "last_seen": row["last_seen"],
         "state_at": row["state_at"],
         "track": catalog.public(row) if row["has_track"] else None,
+        # Where its board can be reached, while it is live to be reached.
+        "board_link": row.get("board_link") if row["live"] else None,
     }
 
 
@@ -109,14 +113,19 @@ def report(body: dict = Body(default={}), user: dict = Depends(current_user)):
     """
     playing = bool(body.get("playing"))
     position_ms = int(body.get("position_ms") or 0)
+    link = body.get("board_link")
+    if link is not None and not isinstance(link, dict):
+        raise HTTPException(400, "board_link must be an object or null")
     db.run(
         """update devices
               set playing=%s, track_id=%s, queue_id=%s, position_ms=%s, item_id=%s,
                   state_at=now(), last_seen=now(),
-                  kind=coalesce(%s, kind)
+                  kind=coalesce(%s, kind),
+                  board_link=%s::jsonb
             where id=%s""",
         (playing, body.get("track_id"), body.get("queue_id"), position_ms,
-         body.get("item_id"), body.get("kind"), user["device_id"]),
+         body.get("item_id"), body.get("kind"),
+         json.dumps(link) if link is not None else None, user["device_id"]),
     )
     from .app import publish
 
@@ -318,3 +327,36 @@ def command(device_id: int, body: dict = Body(...),
                  "except": device_id},
                 to_user=user["id"])
     return {"sent": action, "to": target["name"]}
+
+
+@router.post("/board")
+def board_state(body: dict = Body(...), user: dict = Depends(current_user)):
+    """This device's DJ booth board, as it is now — for the screens of this account
+    that follow it through the server rather than directly. Nothing is kept: a
+    board is said again whenever it changes, and the playing list several times a
+    second while anything sounds."""
+    from .app import publish
+
+    publish("board_state", {"device_id": user["device_id"], **body}, to_user=user["id"])
+    return {"ok": True}
+
+
+@router.post("/{device_id}/board")
+def board_lines(device_id: int, body: dict = Body(...),
+                user: dict = Depends(current_user)):
+    """Presses for one of your devices' board, from this screen: a batch of the
+    link's lines (see the app's state/booth/board/link_wire), handed to that device
+    as a command and nobody else's."""
+    lines = body.get("lines")
+    if not isinstance(lines, list) or len(lines) > 64:
+        raise HTTPException(400, "lines must be a list of at most 64")
+    target = db.one("select id from devices where id=%s and user_id=%s",
+                    (device_id, user["id"]))
+    if not target:
+        raise HTTPException(404, "no device of yours by that id")
+    from .app import publish
+
+    publish("device_command",
+            {"to": device_id, "from": user["device_id"], "action": "board", "lines": lines},
+            to_user=user["id"])
+    return {"sent": len(lines), "to": device_id}

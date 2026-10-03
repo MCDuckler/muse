@@ -243,6 +243,62 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "5.0.0"
+  flutter_midi_command:
+    dependency: "direct main"
+    description:
+      name: flutter_midi_command
+      sha256: a8169d433be1b43acdc223a9d5b3781d1b3171b319d0d6217dfdf2bd7461a45a
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.3.0"
+  flutter_midi_command_android:
+    dependency: transitive
+    description:
+      name: flutter_midi_command_android
+      sha256: "80259c63ceda4455a8e07654b7b5618c1209452a04a72e3054c2426f240d584a"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.3.0"
+  flutter_midi_command_darwin:
+    dependency: transitive
+    description:
+      name: flutter_midi_command_darwin
+      sha256: "291fdfe3f456abdecfdb1aeeff4e511180309f93854beb5a7f9ea3ce57129e0c"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.3.0"
+  flutter_midi_command_linux:
+    dependency: "direct dev"
+    description:
+      name: flutter_midi_command_linux
+      sha256: "6b09e7c147ea86b3d4f9a721446a925cb9d974a12705fb0e0d982f4c27e6b4c8"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.3.0"
+  flutter_midi_command_platform_interface:
+    dependency: transitive
+    description:
+      name: flutter_midi_command_platform_interface
+      sha256: "8cd464da29ae2af194c099bdb62d70826a01a9eed72d40e64cd9ace5a1f218c8"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.3.0"
+  flutter_midi_command_web:
+    dependency: transitive
+    description:
+      name: flutter_midi_command_web
+      sha256: "12ab12de10487e443447ca105bba433c1d2eee070f886a68309f8d6e46311c13"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.3.0"
+  flutter_midi_command_windows:
+    dependency: transitive
+    description:
+      name: flutter_midi_command_windows
+      sha256: "743c4eb7493d750728e0670ae73d213060ec2b92856edf94c7ed01c9f5135964"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.3.0"
   flutter_test:
     dependency: "direct dev"
     description: flutter

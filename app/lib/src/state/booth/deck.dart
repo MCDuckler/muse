@@ -1251,6 +1251,85 @@ class Deck extends ChangeNotifier {
     if (at != null) await placeByHand(at);
   }
 
+  // ------------------------------------------------------------------ the cue button
+  /// The CUE point: where a controller's CUE button takes the record back to. Set
+  /// where the record was parked when CUE was pressed, the way a CDJ does it.
+  Duration? cuePoint;
+
+  /// Whether CUE is held down with the record playing from the cue point: let go
+  /// and it goes back there.
+  bool previewing = false;
+
+  /// CUE pressed. Playing → stop and go back to the cue point (or mark one here).
+  /// Parked at the cue point → play from it, for as long as the button is held.
+  /// Parked anywhere else → the cue point is here now.
+  Future<void> cueDown() async {
+    final at = cuePoint;
+    if (playing) {
+      await pause();
+      if (at != null) {
+        await placeByHand(at);
+      } else {
+        cuePoint = aimedAt;
+        notifyListeners();
+      }
+      return;
+    }
+    if (at != null && (aimedAt - at).abs() < const Duration(milliseconds: 60)) {
+      previewing = true;
+      await play();
+      return;
+    }
+    cuePoint = aimedAt;
+    notifyListeners();
+  }
+
+  /// CUE let go: the preview, if one was running, ends back at the cue point.
+  Future<void> cueUp() async {
+    if (!previewing) return;
+    previewing = false;
+    final at = cuePoint;
+    await pause();
+    if (at != null) await placeByHand(at);
+  }
+
+  // ------------------------------------------------------------------ loop in / out
+  /// Loop IN pressed: the loop will start here. The end comes with [loopOut]; until
+  /// then nothing loops, and a loop that was running is let go.
+  void loopIn() {
+    _seamSoon?.cancel();
+    final wasLooping = loopStart != null && loopEnd != null;
+    loopStart = aimedAt;
+    loopEnd = null;
+    _loopBars = null;
+    _loop?.cancel();
+    _wrapSoon?.cancel();
+    if (wasLooping || _engineLooping || _chainLooping) unawaited(_loopInEngine());
+    _engineLooping = false;
+    notifyListeners();
+  }
+
+  /// Loop OUT pressed: the loop ends here, and goes round from [loopIn]'s start. A
+  /// press with no start set, or ahead of where the start is, marks nothing.
+  void loopOut() {
+    final from = loopStart;
+    final to = aimedAt;
+    if (from == null || to <= from + const Duration(milliseconds: 20)) return;
+    loopEnd = to;
+    _loopBars = null;
+    _watchLoop();
+    unawaited(_loopInEngine());
+    _seamLater();
+    notifyListeners();
+  }
+
+  /// Whether the loop is one pending its OUT point.
+  bool get loopOpen => loopStart != null && loopEnd == null;
+
+  /// Keylock: the record's pitch stays where it was recorded as its tempo moves.
+  /// Set through Booth.setKeylock, which also tells the engine.
+  bool keylock = true;
+
   Duration? loopStart;
   Duration? loopEnd;
 

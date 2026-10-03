@@ -23,7 +23,7 @@ from . import beats_worker
 from . import (
     auth, catalog, config, db, direct_worker, enrich_worker, failures,
                follows, heavy, jobs, progress,
-               jam, routes_accounts, routes_browse, routes_downloads, routes_files,
+               jam, routes_accounts, routes_browse, routes_downloads, routes_files, routes_samples,
                routes_follows, routes_jam, routes_marks,
                routes_library, routes_linked, routes_play, routes_recommend, routes_search,
                routes_devices, routes_scrobble, routes_social,
@@ -930,6 +930,8 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     app.include_router(routes_sync.router)
     app.include_router(routes_spotify.router)
     app.include_router(routes_files.router)
+    app.include_router(routes_samples.router)
+    app.include_router(routes_samples.board)
     app.include_router(routes_play.router)
     return app
 

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DJ consoles the app wants to be offered when they are plugged in. Decimal ids:
+     Guillemot/Hercules is 0x06f8 = 1784; the DJ Console RMX is 0xb101 = 45313. -->
+<resources>
+    <usb-device vendor-id="1784" product-id="45313"/>
+</resources>

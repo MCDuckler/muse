@@ -20,6 +20,7 @@ class MainActivity : AudioServiceActivity() {
     /// which is a better trade than a plugin that has not been updated for this
     /// version of the Android build tools.
     private var spectrum: Spectrum? = null
+    private var hid: Hid? = null
 
     /**
      * Asking to be allowed to show the playing notification.
@@ -97,6 +98,16 @@ class MainActivity : AudioServiceActivity() {
         // See Keepalive: the radio has to stay up for a stream to keep arriving once
         // the screen is off.
         // The booth's three bands, split where a mixer splits them. See Bands.
+        // DJ consoles on an OTG cable. See Hid.
+        val consoles = Hid(this)
+        hid = consoles
+        MethodChannel(engine.dartExecutor.binaryMessenger, "muse/hid")
+            .setMethodCallHandler { call, result -> consoles.handle(call, result) }
+        EventChannel(engine.dartExecutor.binaryMessenger, "muse/hid/packets")
+            .setStreamHandler(consoles.packetHandler)
+        EventChannel(engine.dartExecutor.binaryMessenger, "muse/hid/changes")
+            .setStreamHandler(consoles.changeHandler)
+
         MethodChannel(engine.dartExecutor.binaryMessenger, "muse/bands")
             .setMethodCallHandler { call, result ->
                 when (call.method) {

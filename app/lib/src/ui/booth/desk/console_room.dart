@@ -1,7 +1,10 @@
 import '../engine_check_none.dart' if (dart.library.io) '../engine_check.dart';
+import '../controllers_sheet.dart';
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -13,7 +16,7 @@ import '../../../worker/parts_jobs.dart';
 import '../../dialogs.dart';
 import '../../mag.dart';
 import '../../snack.dart';
-import '../../full_screen.dart';
+import '../../window_mode.dart';
 import '../../theme.dart';
 import 'console.dart';
 import 'console_crate.dart';
@@ -24,6 +27,9 @@ import 'console_plan.dart';
 import 'console_set.dart';
 import 'console_waves.dart';
 import '../look.dart';
+import '../board/board_room.dart';
+import '../board/remote_board_page.dart';
+import '../board/pop_out_none.dart' if (dart.library.io) '../board/pop_out_io.dart';
 
 /// The booth on a desk: a console. The records' shapes across the top, a deck either
 /// side of the mixer under them, the crate down the right, and the booth's own mixing
@@ -55,10 +61,15 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
   /// What the middle of the booth shows: the waveforms, the set, or the plan.
   BoothView _view = BoothView.waves;
 
+  /// Which page of the room: the decks (0) or the board (1).
+  int _page = 0;
+  final _pages = PageController();
+
   static const _kWidth = 'muse.booth.crateWidth';
   static const _kWide = 'muse.booth.crateWide';
   static const _kLog = 'muse.booth.logFolded';
   static const _kView = 'muse.booth.view';
+  static const _kPage = 'muse.booth.page';
 
   Booth get _b => widget.booth;
   late final AppState _app = context.read<AppState>();
@@ -71,6 +82,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
     unawaited(_remember());
     _app.addListener(_queueMoved);
     planViewToggles.addListener(_togglePlan);
+    boardToggles.addListener(_toggleBoard);
     planPair.addListener(_pairAsked);
   }
 
@@ -96,7 +108,10 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
       _wide = prefs.getBool(_kWide) ?? false;
       _logFolded = prefs.getBool(_kLog) ?? false;
       _view = BoothView.values.asNameMap()[prefs.getString(_kView) ?? ''] ?? BoothView.waves;
+      // Back on the board only if something was still sounding there.
+      _page = (prefs.getInt(_kPage) ?? 0) == 1 && _b.board.anySounding ? 1 : 0;
     });
+    if (_page == 1 && _pages.hasClients) _pages.jumpToPage(1);
   }
 
   Future<void> _keepLayout() async {
@@ -105,6 +120,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
     await prefs.setBool(_kWide, _wide);
     await prefs.setBool(_kLog, _logFolded);
     await prefs.setString(_kView, _view.name);
+    await prefs.setInt(_kPage, _page);
   }
 
   /// The queue changed — in the crate or anywhere else: the automix follows it.
@@ -117,11 +133,11 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
 
   @override
   void dispose() {
-    // Out of the booth, out of full screen: the rest of the app has its own chrome.
-    if (fullScreen.value) unawaited(toggleFullScreen());
     _app.removeListener(_queueMoved);
     planViewToggles.removeListener(_togglePlan);
+    boardToggles.removeListener(_toggleBoard);
     planPair.removeListener(_pairAsked);
+    _pages.dispose();
     planPair.value = null;
     _tab.dispose();
     super.dispose();
@@ -154,73 +170,149 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
       animation: boothLook,
       builder: (context, _) {
         final light = boothLook.apply(context);
+        _app.boardLink?.setLight(light);
         return Theme(
-      data: light ? MuseTheme.light(palette) : MuseTheme.dark(palette),
-      child: Builder(
-        builder: (context) => Scaffold(
-          backgroundColor: Console.ground,
-          body: SafeArea(
-            child: Column(
-              children: [
-                BoothPanel(child: _bar(context)),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Expanded(child: _room()),
-                        if (_crate) ...[
-                          _Edge(
-                            onDrag: (dx) => setState(() {
-                              final screen = MediaQuery.sizeOf(context).width;
-                              _crateWidth = (_widthFor(screen) - dx).clamp(280.0, screen * 0.62);
-                              _wide = false;
-                            }),
-                            onDone: _keepLayout,
-                          ),
-                          SizedBox(
-                            width: _widthFor(MediaQuery.sizeOf(context).width),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                Expanded(
-                                    flex: 3,
-                                    child: BoothPanel(child: ConsoleCrate(
-                                      booth: _b,
-                                      loadInto: _load,
-                                      forDeck: _for,
-                                      tab: _tab,
-                                      wide: _wide,
-                                      onWide: () {
-                                        setState(() => _wide = !_wide);
-                                        unawaited(_keepLayout());
-                                      },
-                                    ))),
-                                const SizedBox(height: 10),
-                                if (_logFolded)
-                                  BoothPanel(child: ConsoleLog(booth: _b, folded: true, onFold: _fold))
-                                else
-                                  Expanded(
-                                      flex: 2,
-                                      child: BoothPanel(child: ConsoleLog(booth: _b, onFold: _fold))),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
+          data: light ? MuseTheme.light(palette) : MuseTheme.dark(palette),
+          child: Builder(
+            builder: (context) => Scaffold(
+              backgroundColor: Console.ground,
+              body: SafeArea(
+                child: Column(
+                  children: [
+                    BoothPanel(child: _bar(context)),
+                    Expanded(child: _pagesOfTheRoom(context)),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
-        ),
-      ),
-    );
+        );
       },
     );
   }
+
+  // ------------------------------------------------------------------ the two pages
+  /// The room is two pages side by side — the decks, and the board — and slides
+  /// between them. Never by dragging the page itself: a drag is a knob's or a
+  /// fader's, and a room that slid under a hand on the crossfader would be a bad
+  /// room. It slides on the tabs at the edges, the B key, the bar's light, and a
+  /// sideways wheel or two fingers across a trackpad.
+  Widget _pagesOfTheRoom(BuildContext context) => Listener(
+        onPointerSignal: _wheel,
+        child: PageView(
+          controller: _pages,
+          physics: const NeverScrollableScrollPhysics(),
+          onPageChanged: (i) => setState(() => _page = i),
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 0, 12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(child: _decksPage(context)),
+                  BoardTab(side: TabSide.right, label: 'BOARD', face: _b.board, onTap: () => _slideTo(1)),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(0, 0, 12, 12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  BoardTab(side: TabSide.left, label: 'DECKS', onTap: () => _slideTo(0)),
+                  Expanded(
+                    child: BoardRoom(
+                      face: _b.board,
+                      booth: _b,
+                      onPopOut: canPopOut ? () => unawaited(popOutBoard(_app.boardLink)) : null,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+
+  double _wheelDx = 0;
+  DateTime _wheelAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Sideways scrolling (or shift and the wheel): enough of it within a moment flips
+  /// the page. Up and down is the crate's and the log's.
+  void _wheel(PointerSignalEvent e) {
+    if (e is! PointerScrollEvent) return;
+    final dx = e.scrollDelta.dx != 0
+        ? e.scrollDelta.dx
+        : HardwareKeyboard.instance.isShiftPressed
+            ? e.scrollDelta.dy
+            : 0.0;
+    if (dx == 0) return;
+    final now = DateTime.now();
+    if (now.difference(_wheelAt) > const Duration(milliseconds: 400)) _wheelDx = 0;
+    _wheelAt = now;
+    _wheelDx += dx;
+    if (_wheelDx > 120) {
+      _wheelDx = 0;
+      _slideTo(1);
+    } else if (_wheelDx < -120) {
+      _wheelDx = 0;
+      _slideTo(0);
+    }
+  }
+
+  void _slideTo(int page) {
+    if (!_pages.hasClients) return;
+    if (page == _page && (_pages.page ?? _page) == page) return;
+    _pages.animateToPage(page, duration: const Duration(milliseconds: 260), curve: Curves.easeOutCubic);
+    _page = page;
+    unawaited(_keepLayout());
+  }
+
+  void _toggleBoard() => _slideTo(_page == 0 ? 1 : 0);
+
+  Widget _decksPage(BuildContext context) => Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(child: _room()),
+          if (_crate) ...[
+            _Edge(
+              onDrag: (dx) => setState(() {
+                final screen = MediaQuery.sizeOf(context).width;
+                _crateWidth = (_widthFor(screen) - dx).clamp(280.0, screen * 0.62);
+                _wide = false;
+              }),
+              onDone: _keepLayout,
+            ),
+            SizedBox(
+              width: _widthFor(MediaQuery.sizeOf(context).width),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                      flex: 3,
+                      child: BoothPanel(
+                          child: ConsoleCrate(
+                        booth: _b,
+                        loadInto: _load,
+                        forDeck: _for,
+                        tab: _tab,
+                        wide: _wide,
+                        onWide: () {
+                          setState(() => _wide = !_wide);
+                          unawaited(_keepLayout());
+                        },
+                      ))),
+                  const SizedBox(height: 10),
+                  if (_logFolded)
+                    BoothPanel(child: ConsoleLog(booth: _b, folded: true, onFold: _fold))
+                  else
+                    Expanded(flex: 2, child: BoothPanel(child: ConsoleLog(booth: _b, onFold: _fold))),
+                ],
+              ),
+            ),
+          ],
+        ],
+      );
 
   /// P: the next of the three.
   void _togglePlan() =>
@@ -279,6 +371,19 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
                 ],
               ),
             ),
+            // A row of the board pinned under the decks, when one is (⇧B).
+            ListenableBuilder(
+              listenable: _b.board,
+              builder: (context, _) => _b.board.doc.strip == null
+                  ? const SizedBox.shrink()
+                  : Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: SizedBox(
+                        height: BoardStrip.height,
+                        child: BoothPanel(child: BoardStrip(face: _b.board, onBoard: () => _slideTo(1))),
+                      ),
+                    ),
+            ),
           ],
         );
       });
@@ -307,6 +412,9 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
                   _tab.value = CrateTab.parts;
                 }),
               ),
+            const ControllerLight(),
+            const RemoteBoardButton(),
+            BoardLight(face: _b.board, onTap: () => _slideTo(_page == 0 ? 1 : 0)),
             if (_b.taken.isNotEmpty)
               IconButton(
                 icon: Icon(Icons.bookmark_add_outlined, color: Console.quiet),
@@ -314,14 +422,14 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
                 onPressed: () => _keep(context),
               ),
 
-            if (canGoFullScreen)
+            if (WindowMode.can)
               ValueListenableBuilder<bool>(
-                valueListenable: fullScreen,
+                valueListenable: windowMode.fullScreen,
                 builder: (context, on, _) => IconButton(
                   icon: Icon(on ? Icons.fullscreen_exit : Icons.fullscreen,
                       color: on ? Console.ink : Console.quiet),
                   tooltip: on ? 'Leave full screen (F11)' : 'Full screen (F11)',
-                  onPressed: () => unawaited(toggleFullScreen()),
+                  onPressed: () => unawaited(windowMode.toggleFullScreen()),
                 ),
               ),
             const LookButton(),

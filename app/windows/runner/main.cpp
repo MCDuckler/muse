@@ -19,7 +19,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // and brought forward, rather than a second app with a second player in it. The
   // mutex is held for the life of the process and let go of by Windows when it ends.
   // A debug build stays as many as are started, beside the app in daily use.
-  HANDLE only_one = ::CreateMutexW(nullptr, TRUE, L"Local\\io.wetowl.muse");
+  // The board's own window (started by the app with --board) is a second process
+  // on purpose, beside the one WetOwl.
+  const bool board_window = ::wcsstr(command_line, L"--board") != nullptr;
+  HANDLE only_one = board_window ? nullptr : ::CreateMutexW(nullptr, TRUE, L"Local\\io.wetowl.muse");
   if (only_one != nullptr && ::GetLastError() == ERROR_ALREADY_EXISTS) {
     HWND there = ::FindWindowW(L"FLUTTER_RUNNER_WIN32_WINDOW", L"WetOwl");
     if (there != nullptr) {

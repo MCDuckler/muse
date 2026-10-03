@@ -1,5 +1,6 @@
 import 'src/ui/booth_page.dart' show ResumeBooth;
-import 'src/ui/full_screen.dart';
+import 'src/ui/window_mode.dart';
+import 'src/ui/booth/board/board_window.dart';
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -53,8 +54,16 @@ bool get onADesk =>
         defaultTargetPlatform == TargetPlatform.windows ||
         defaultTargetPlatform == TargetPlatform.macOS);
 
-Future<void> main() async {
+Future<void> main([List<String> args = const []]) async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Started as the board's own window (see board_window.dart): nothing of the app
+  // but that — no login, no player, no tray, no fetcher.
+  final boardUrl = boardWindowUrl(args);
+  if (boardUrl != null) {
+    await readyTheBoardWindow();
+    runApp(BoardWindowApp(url: boardUrl));
+    return;
+  }
   // How long the frames are taking, on the machine they are slow on: see
   // frame_watch.dart. Receiving them costs nothing and it is the only way anything
   // here finds out whether a slow phone is slow in Dart or on the GPU.
@@ -84,7 +93,7 @@ Future<void> main() async {
     }
     wasOnError?.call(details);
   };
-  await readyTheWindow();
+  await windowMode.ready();
   _fontLicences();
 
   // How much decoded artwork to keep, in a browser.
@@ -368,6 +377,7 @@ class AppShortcuts extends StatelessWidget {
         ('/', 'Search'),
         ('Ctrl K', 'Jump to anything'),
         // Closing the window only puts it in the tray while the icon is up.
+        if (WindowMode.can) ('F11', 'Full screen, and back'),
         if (DeskTray.up) ('Ctrl Q', 'Quit (closing the window keeps it playing)'),
         ('?', 'This list'),
       ];
@@ -421,6 +431,17 @@ class AppShortcuts extends StatelessWidget {
               (event.logicalKey == LogicalKeyboardKey.question ||
                   event.character == '?')) {
             showShortcuts(context);
+            return KeyEventResult.handled;
+          }
+          // F11, or a Mac's ⌃⌘F: the window over the whole screen, and back — the
+          // program's, from any page, typing or not: it is nobody's text key.
+          if (event is KeyDownEvent &&
+              WindowMode.can &&
+              (event.logicalKey == LogicalKeyboardKey.f11 ||
+                  (event.logicalKey == LogicalKeyboardKey.keyF &&
+                      HardwareKeyboard.instance.isMetaPressed &&
+                      HardwareKeyboard.instance.isControlPressed))) {
+            unawaited(windowMode.toggleFullScreen());
             return KeyEventResult.handled;
           }
           // Ctrl-Q: the way out, while the window's close button only puts it in the

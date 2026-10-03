@@ -14,6 +14,9 @@ import 'package:provider/provider.dart';
 import '../../api/client.dart' show platformName;
 import '../../api/models.dart';
 import '../../state/app_state.dart';
+import '../../state/booth/board/pad_spec.dart';
+import '../../state/booth/board/sampler.dart';
+import '../../state/booth/board/samples.dart';
 import '../../state/booth/deck_router.dart';
 import '../../state/booth/mixer_desktop.dart';
 import '../settings_page.dart' show appBuild;
@@ -280,6 +283,7 @@ class EngineCheck {
       await player.stop();
 
       await _twoDecks(wav);
+      await _padLatency();
 
       // Stems: six channels, if a record here has them.
       final stems = await _aRecordWithStems();
@@ -409,6 +413,55 @@ class EngineCheck {
     } finally {
       await a.dispose();
       await b.dispose();
+    }
+  }
+
+  /// A pad of the board, pressed eight times: how long from the press to mpv's
+  /// clock moving — the part of the latency that is this program's and mpv's. What
+  /// the audio output adds after that is its buffer, said beside it.
+  Future<void> _padLatency() async {
+    final sampler = Sampler(library: SampleLibrary(), playerVolume: app.booth.mixer.playerVolume);
+    try {
+      final v = await sampler.warm(
+        'check',
+        SampleKit.byId(SampleKit.impact)!,
+        const PadSpec(sampleId: SampleKit.impact, name: 'CHECK'),
+        level: 0.3,
+      );
+      if (v == null) {
+        say('pad latency: FAIL the sound could not be readied');
+        return;
+      }
+      final mpv = _native(v.player);
+      if (mpv == null) {
+        say('pad latency: the voice is not on libmpv');
+        return;
+      }
+      // Once warm: the first press pays for whatever the engine has not done yet.
+      await sampler.fire('check');
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      final times = <double>[];
+      for (var i = 0; i < 8; i++) {
+        await sampler.stop(key: 'check');
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        final sw = Stopwatch()..start();
+        unawaited(sampler.fire('check'));
+        while (sw.elapsedMilliseconds < 500) {
+          final pos = double.tryParse(await _prop(mpv, 'time-pos')) ?? 0;
+          if (pos > 0.001) break;
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+        }
+        times.add(sw.elapsedMicroseconds / 1000);
+      }
+      times.sort();
+      say('pad latency, press to mpv moving: median ${times[times.length ~/ 2].toStringAsFixed(1)} ms, '
+          'best ${times.first.toStringAsFixed(1)}, worst ${times.last.toStringAsFixed(1)} · '
+          'then the output\'s audio-buffer=${await _prop(mpv, 'audio-buffer')} s');
+      await sampler.stop(key: 'check');
+    } catch (e) {
+      say('FAIL pad latency: $e');
+    } finally {
+      await sampler.dispose();
     }
   }
 

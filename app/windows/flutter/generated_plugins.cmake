@@ -4,6 +4,7 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   desktop_drop
+  flutter_midi_command_windows
   media_kit_libs_windows_audio
   screen_retriever_windows
   tray_manager

@@ -213,6 +213,10 @@ abstract class Mixer {
   /// -1 (low-pass, closed) through 0 (off) to 1 (high-pass, closed).
   Future<void> setFilter(Deck deck, double value);
 
+  /// Keylock off lets the pitch follow the tempo. Nothing, where the engine's
+  /// stretcher cannot be told; it keeps the pitch regardless.
+  Future<void> setKeylock(Deck deck, bool on) async {}
+
   /// A record has just gone on [deck]. Where the mixer lives in the player, this is
   /// when it can first reach it.
   Future<void> loaded(Deck deck) async {}

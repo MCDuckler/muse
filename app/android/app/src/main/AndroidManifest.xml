@@ -18,6 +18,9 @@
          this only buys the right to *ask*: the app downloads the APK and opens the
          system installer on it, and a person taps yes. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    <!-- A DJ console on an OTG cable. Not required: a phone without USB host still
+         runs everything else. -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false"/>
     <application
         android:label="WetOwl"
         android:name="${applicationName}"
@@ -44,6 +47,14 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- Plugging in a console the app knows offers to open the app, and the
+                 permission to talk to the console comes with saying yes. -->
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/usb_devices"/>
         </activity>
         <!-- just_audio_background: the media session that owns the lockscreen and
              notification controls, plus the receiver for headset buttons. -->

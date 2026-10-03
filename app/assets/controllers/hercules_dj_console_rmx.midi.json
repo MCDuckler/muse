@@ -1,0 +1,537 @@
+{
+ "id": "hercules_dj_console_rmx_midi",
+ "name": "Hercules DJ Console RMX (MIDI, Hercules driver)",
+ "protocol": "midi",
+ "about": "The RMX as its Windows/macOS driver presents it: one MIDI port, everything on channel 1 as control changes. Buttons send 0x7F/0x00; EQ, gain and pitch centre on 0x3F (0x40 on first-generation firmware). Lights are set by sending the button's own CC. From Mixxx's mapping by Anders Gunnarsson.",
+ "match": {
+  "usb": [
+   {
+    "vid": "06f8",
+    "pid": "b101"
+   }
+  ],
+  "names": [
+   "RMX",
+   "Hercules DJ Console"
+  ]
+ },
+ "midi": {
+  "channel": 0,
+  "on": 127,
+  "off": 0
+ },
+ "inputs": [
+  {
+   "id": "deck.a.play",
+   "kind": "button",
+   "cc": "0x0B"
+  },
+  {
+   "id": "deck.a.cue",
+   "kind": "button",
+   "cc": "0x0C"
+  },
+  {
+   "id": "deck.a.stop",
+   "kind": "button",
+   "cc": "0x0D"
+  },
+  {
+   "id": "deck.a.prev",
+   "kind": "button",
+   "cc": "0x09"
+  },
+  {
+   "id": "deck.a.next",
+   "kind": "button",
+   "cc": "0x0A"
+  },
+  {
+   "id": "deck.a.load",
+   "kind": "button",
+   "cc": "0x12"
+  },
+  {
+   "id": "deck.a.source",
+   "kind": "button",
+   "cc": "0x13"
+  },
+  {
+   "id": "deck.a.pfl",
+   "kind": "button",
+   "cc": "0x14"
+  },
+  {
+   "id": "deck.a.sync",
+   "kind": "button",
+   "cc": "0x07"
+  },
+  {
+   "id": "deck.a.keylock",
+   "kind": "button",
+   "cc": "0x08"
+  },
+  {
+   "id": "deck.a.pitchReset",
+   "kind": "button",
+   "cc": "0x11"
+  },
+  {
+   "id": "deck.a.kill.high",
+   "kind": "button",
+   "cc": "0x0E"
+  },
+  {
+   "id": "deck.a.kill.mid",
+   "kind": "button",
+   "cc": "0x0F"
+  },
+  {
+   "id": "deck.a.kill.low",
+   "kind": "button",
+   "cc": "0x10"
+  },
+  {
+   "id": "deck.a.jog",
+   "kind": "jog",
+   "cc": "0x2F",
+   "encoding": "signed7"
+  },
+  {
+   "id": "deck.a.pitch",
+   "kind": "fader",
+   "cc": "0x31",
+   "center": 63
+  },
+  {
+   "id": "deck.a.volume",
+   "kind": "fader",
+   "cc": "0x32"
+  },
+  {
+   "id": "deck.a.gain",
+   "kind": "pot",
+   "cc": "0x33",
+   "center": 63
+  },
+  {
+   "id": "deck.a.eq.high",
+   "kind": "pot",
+   "cc": "0x34",
+   "center": 63
+  },
+  {
+   "id": "deck.a.eq.mid",
+   "kind": "pot",
+   "cc": "0x35",
+   "center": 63
+  },
+  {
+   "id": "deck.a.eq.low",
+   "kind": "pot",
+   "cc": "0x36",
+   "center": 63
+  },
+  {
+   "id": "deck.a.pad.1",
+   "kind": "button",
+   "cc": "0x01"
+  },
+  {
+   "id": "deck.a.pad.2",
+   "kind": "button",
+   "cc": "0x02"
+  },
+  {
+   "id": "deck.a.pad.3",
+   "kind": "button",
+   "cc": "0x03"
+  },
+  {
+   "id": "deck.a.pad.4",
+   "kind": "button",
+   "cc": "0x04"
+  },
+  {
+   "id": "deck.a.pad.5",
+   "kind": "button",
+   "cc": "0x05"
+  },
+  {
+   "id": "deck.a.pad.6",
+   "kind": "button",
+   "cc": "0x06"
+  },
+  {
+   "id": "deck.b.play",
+   "kind": "button",
+   "cc": "0x23"
+  },
+  {
+   "id": "deck.b.cue",
+   "kind": "button",
+   "cc": "0x24"
+  },
+  {
+   "id": "deck.b.stop",
+   "kind": "button",
+   "cc": "0x25"
+  },
+  {
+   "id": "deck.b.prev",
+   "kind": "button",
+   "cc": "0x21"
+  },
+  {
+   "id": "deck.b.next",
+   "kind": "button",
+   "cc": "0x22"
+  },
+  {
+   "id": "deck.b.load",
+   "kind": "button",
+   "cc": "0x16"
+  },
+  {
+   "id": "deck.b.source",
+   "kind": "button",
+   "cc": "0x17"
+  },
+  {
+   "id": "deck.b.pfl",
+   "kind": "button",
+   "cc": "0x18"
+  },
+  {
+   "id": "deck.b.sync",
+   "kind": "button",
+   "cc": "0x1F"
+  },
+  {
+   "id": "deck.b.keylock",
+   "kind": "button",
+   "cc": "0x15"
+  },
+  {
+   "id": "deck.b.pitchReset",
+   "kind": "button",
+   "cc": "0x20"
+  },
+  {
+   "id": "deck.b.kill.high",
+   "kind": "button",
+   "cc": "0x26"
+  },
+  {
+   "id": "deck.b.kill.mid",
+   "kind": "button",
+   "cc": "0x27"
+  },
+  {
+   "id": "deck.b.kill.low",
+   "kind": "button",
+   "cc": "0x28"
+  },
+  {
+   "id": "deck.b.jog",
+   "kind": "jog",
+   "cc": "0x30",
+   "encoding": "signed7"
+  },
+  {
+   "id": "deck.b.pitch",
+   "kind": "fader",
+   "cc": "0x3B",
+   "center": 63
+  },
+  {
+   "id": "deck.b.volume",
+   "kind": "fader",
+   "cc": "0x3C"
+  },
+  {
+   "id": "deck.b.gain",
+   "kind": "pot",
+   "cc": "0x3D",
+   "center": 63
+  },
+  {
+   "id": "deck.b.eq.high",
+   "kind": "pot",
+   "cc": "0x3E",
+   "center": 63
+  },
+  {
+   "id": "deck.b.eq.mid",
+   "kind": "pot",
+   "cc": "0x3F",
+   "center": 63
+  },
+  {
+   "id": "deck.b.eq.low",
+   "kind": "pot",
+   "cc": "0x40",
+   "center": 63
+  },
+  {
+   "id": "deck.b.pad.1",
+   "kind": "button",
+   "cc": "0x19"
+  },
+  {
+   "id": "deck.b.pad.2",
+   "kind": "button",
+   "cc": "0x1A"
+  },
+  {
+   "id": "deck.b.pad.3",
+   "kind": "button",
+   "cc": "0x1B"
+  },
+  {
+   "id": "deck.b.pad.4",
+   "kind": "button",
+   "cc": "0x1C"
+  },
+  {
+   "id": "deck.b.pad.5",
+   "kind": "button",
+   "cc": "0x1D"
+  },
+  {
+   "id": "deck.b.pad.6",
+   "kind": "button",
+   "cc": "0x1E"
+  },
+  {
+   "id": "mixer.crossfader",
+   "kind": "fader",
+   "cc": "0x39"
+  },
+  {
+   "id": "mixer.master",
+   "kind": "fader",
+   "cc": "0x38"
+  },
+  {
+   "id": "mixer.balance",
+   "kind": "pot",
+   "cc": "0x37",
+   "center": 63
+  },
+  {
+   "id": "mixer.headMix",
+   "kind": "pot",
+   "cc": "0x3A",
+   "center": 63
+  },
+  {
+   "id": "mixer.scratch",
+   "kind": "button",
+   "cc": "0x29"
+  },
+  {
+   "id": "browse.up",
+   "kind": "button",
+   "cc": "0x2A"
+  },
+  {
+   "id": "browse.down",
+   "kind": "button",
+   "cc": "0x2B"
+  },
+  {
+   "id": "browse.left",
+   "kind": "button",
+   "cc": "0x2C"
+  },
+  {
+   "id": "browse.right",
+   "kind": "button",
+   "cc": "0x2D"
+  }
+ ],
+ "outputs": [
+  {
+   "id": "deck.a.play",
+   "cc": "0x0B"
+  },
+  {
+   "id": "deck.a.cue",
+   "cc": "0x0C"
+  },
+  {
+   "id": "deck.a.stop",
+   "cc": "0x0D"
+  },
+  {
+   "id": "deck.a.prev",
+   "cc": "0x09"
+  },
+  {
+   "id": "deck.a.next",
+   "cc": "0x0A"
+  },
+  {
+   "id": "deck.a.load",
+   "cc": "0x12"
+  },
+  {
+   "id": "deck.a.source",
+   "cc": "0x13"
+  },
+  {
+   "id": "deck.a.pfl",
+   "cc": "0x14"
+  },
+  {
+   "id": "deck.a.sync",
+   "cc": "0x07"
+  },
+  {
+   "id": "deck.a.keylock",
+   "cc": "0x08"
+  },
+  {
+   "id": "deck.a.pitchReset",
+   "cc": "0x11"
+  },
+  {
+   "id": "deck.a.kill.high",
+   "cc": "0x0E"
+  },
+  {
+   "id": "deck.a.kill.mid",
+   "cc": "0x0F"
+  },
+  {
+   "id": "deck.a.kill.low",
+   "cc": "0x10"
+  },
+  {
+   "id": "deck.a.pad.1",
+   "cc": "0x01"
+  },
+  {
+   "id": "deck.a.pad.2",
+   "cc": "0x02"
+  },
+  {
+   "id": "deck.a.pad.3",
+   "cc": "0x03"
+  },
+  {
+   "id": "deck.a.pad.4",
+   "cc": "0x04"
+  },
+  {
+   "id": "deck.a.pad.5",
+   "cc": "0x05"
+  },
+  {
+   "id": "deck.a.pad.6",
+   "cc": "0x06"
+  },
+  {
+   "id": "deck.b.play",
+   "cc": "0x23"
+  },
+  {
+   "id": "deck.b.cue",
+   "cc": "0x24"
+  },
+  {
+   "id": "deck.b.stop",
+   "cc": "0x25"
+  },
+  {
+   "id": "deck.b.prev",
+   "cc": "0x21"
+  },
+  {
+   "id": "deck.b.next",
+   "cc": "0x22"
+  },
+  {
+   "id": "deck.b.load",
+   "cc": "0x16"
+  },
+  {
+   "id": "deck.b.source",
+   "cc": "0x17"
+  },
+  {
+   "id": "deck.b.pfl",
+   "cc": "0x18"
+  },
+  {
+   "id": "deck.b.sync",
+   "cc": "0x1F"
+  },
+  {
+   "id": "deck.b.keylock",
+   "cc": "0x15"
+  },
+  {
+   "id": "deck.b.pitchReset",
+   "cc": "0x20"
+  },
+  {
+   "id": "deck.b.kill.high",
+   "cc": "0x26"
+  },
+  {
+   "id": "deck.b.kill.mid",
+   "cc": "0x27"
+  },
+  {
+   "id": "deck.b.kill.low",
+   "cc": "0x28"
+  },
+  {
+   "id": "deck.b.pad.1",
+   "cc": "0x19"
+  },
+  {
+   "id": "deck.b.pad.2",
+   "cc": "0x1A"
+  },
+  {
+   "id": "deck.b.pad.3",
+   "cc": "0x1B"
+  },
+  {
+   "id": "deck.b.pad.4",
+   "cc": "0x1C"
+  },
+  {
+   "id": "deck.b.pad.5",
+   "cc": "0x1D"
+  },
+  {
+   "id": "deck.b.pad.6",
+   "cc": "0x1E"
+  },
+  {
+   "id": "mixer.scratch",
+   "cc": "0x29"
+  }
+ ],
+ "notes": {
+  "deck.a.gain": "FILTER: the knob over the fader closes the top (left) or the bottom (right); centre is off.",
+  "deck.a.stop": "Hold = SHIFT. Tap alone = stop and go back to the cue point.",
+  "deck.a.pad.5": "Loop IN (shift: halve the loop).",
+  "deck.a.pad.6": "Loop OUT (shift: let the loop go).",
+  "deck.a.pad.1": "Hot cue 1\u20134: set, then jump; shift clears.",
+  "deck.a.pitchReset": "Pitch to 0 %. Shift: pitch fader range \u00b18 \u2192 \u00b116 \u2192 \u00b150 %.",
+  "deck.a.sync": "SYNC on/off. Shift: line the beats up once.",
+  "deck.a.cue": "CUE as on a CDJ. Shift: back to the start.",
+  "deck.a.play": "Play/pause. Shift: start on the other deck's next bar.",
+  "deck.a.prev": "Back a bar (shift: eight).",
+  "deck.a.next": "Forward a bar (shift: eight).",
+  "deck.a.pfl": "Not bound: the booth has one output.",
+  "mixer.balance": "Not bound.",
+  "mixer.headMix": "Not bound.",
+  "mixer.scratch": "Jog wheel: nudge \u2194 drag."
+ }
+}

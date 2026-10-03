@@ -7,6 +7,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -17,6 +18,9 @@ import 'package:just_audio_platform_interface/just_audio_platform_interface.dart
 import 'package:muse/src/api/client.dart';
 import 'package:muse/src/api/connection.dart';
 import 'package:muse/src/api/models.dart';
+import 'package:muse/src/state/booth/board/pad_spec.dart';
+import 'package:muse/src/ui/booth/board/board_pad.dart';
+import 'package:muse/src/ui/booth/board/board_room.dart';
 import 'package:muse/src/state/app_state.dart';
 import 'package:muse/src/state/booth/booth.dart';
 import 'package:muse/src/state/booth/planner.dart';
@@ -107,8 +111,8 @@ void main() {
   for (final dark in [true]) {
     final phone = w < 700;
     for (final state in phone
-        ? ['empty', 'playing', 'set', 'plan', 'planner', 'crate', 'light']
-        : ['empty', 'playing', if (w == 1600) 'mixing', if (w != 1920) 'parts', if (w != 1280) 'crate', 'plan', 'set', 'planner', if (w == 1600) 'light']) {
+        ? ['empty', 'playing', 'set', 'plan', 'planner', 'crate', 'light', 'board']
+        : ['empty', 'playing', if (w == 1600) 'mixing', if (w != 1920) 'parts', if (w != 1280) 'crate', 'plan', 'set', 'planner', if (w == 1600) 'light', if (w != 1920) 'board', if (w == 1600) 'board-light', if (w == 1600) 'strip']) {
       testWidgets('the booth at ${w.round()}x${h.round()}, $state', (tester) async {
         JustAudioPlatform.instance = FakeJustAudio();
         useThisClientInstead(MockClient((r) async {
@@ -129,7 +133,9 @@ void main() {
                     ? {'muse.booth.view': 'set'}
                     : state == 'light'
                         ? {'muse.booth.look': 'light', 'muse.booth.view': 'plan'}
-                        : {});
+                        : state == 'board-light'
+                            ? {'muse.booth.look': 'light'}
+                            : {});
         final app = AppState()..api = (ApiClient(baseUrl: 'http://example.invalid')..token = 'x');
         if (state == 'crate' || state == 'planner') {
           app.playlists = [
@@ -182,6 +188,9 @@ void main() {
             await (b.a.play()).timeout(const Duration(seconds: 10), onTimeout: () => throw StateError('stuck: b.a.play()'));
             await (b.setCrossfader(0.35)).timeout(const Duration(seconds: 10), onTimeout: () => throw StateError('stuck: b.setCrossfader(0.35)'));
             await (b.sync(b.b)).timeout(const Duration(seconds: 10), onTimeout: () => throw StateError('stuck: b.sync(b.b)'));
+            if (state == 'strip') {
+              await b.board.setStrip(const StripSpec(bank: 0, row: 0));
+            }
             if (state == 'mixing') {
               b.note(BoothEventKind.auto, 'Auto DJ on · 7 records, normal');
               b.note(BoothEventKind.next, 'Next: Euro Dance (Arweenn Nostalgic Mix)', deck: b.b);
@@ -258,6 +267,33 @@ void main() {
         for (var i = 0; i < 6; i++) {
           await tester.pump(const Duration(milliseconds: 100));
         }
+        if (state.startsWith('board')) {
+          // B slides the room to the board; a pad sounds; another's settings are open.
+          boardToggles.value++;
+          for (var i = 0; i < 6; i++) {
+            await tester.pump(const Duration(milliseconds: 100));
+          }
+          await tester.runAsync(() => b.board.press(0, 0));
+          // The sweep, not the riser: the riser waits for the bar, and a pad that fires
+          // as the test ends is a timer the harness counts against it.
+          await tester.runAsync(() => b.board.press(0, 2));
+          await tester.pump(const Duration(milliseconds: 100));
+          if (phone) {
+            await tester.longPress(find.byType(BoardPad).at(4));
+          } else {
+            await tester.tap(find.byType(BoardPad).at(4), buttons: kSecondaryButton);
+          }
+          for (var i = 0; i < 4; i++) {
+            await tester.pump(const Duration(milliseconds: 100));
+          }
+          expect(find.text('PAD 5 · BANK A'), findsOneWidget);
+          expect(phone ? find.byIcon(Icons.stop) : find.text('STOP ALL'), findsOneWidget);
+        }
+        if (state == 'strip') {
+          await tester.runAsync(() => b.board.press(0, 2));
+          await tester.pump(const Duration(milliseconds: 100));
+          expect(find.byType(BoardPad), findsNWidgets(8));
+        }
         if (state == 'parts') {
           // The bar's light opens the list.
           await tester.tap(find.text('42%'));
@@ -332,6 +368,9 @@ void main() {
           await b.stopAll();
           await app.player?.dispose();
         });
+        // Whatever the board still has on its clock — a save a second away, a sound's
+        // end — is let run out under the test's clock before the harness counts it.
+        await tester.pump(const Duration(seconds: 12));
         await tester.pumpWidget(const SizedBox());
         partsJobs.forget();
       }, variant: TargetPlatformVariant.only(TargetPlatform.linux));

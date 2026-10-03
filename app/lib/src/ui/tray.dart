@@ -5,6 +5,7 @@ import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../state/app_state.dart';
+import 'window_mode.dart';
 
 /// WetOwl in the tray, on a desk: the window can be shut and the music go on.
 ///
@@ -51,6 +52,7 @@ class DeskTray with TrayListener, WindowListener {
       _running = tray;
       await tray._menu(force: true);
       app.addListener(tray._changed);
+      windowMode.fullScreen.addListener(tray._changed);
       // Only now, with an icon to come back from: the close button hides.
       windowManager.addListener(tray);
       await windowManager.setPreventClose(true);
@@ -68,6 +70,7 @@ class DeskTray with TrayListener, WindowListener {
     _running = null;
     if (tray != null) {
       tray._app.removeListener(tray._changed);
+      windowMode.fullScreen.removeListener(tray._changed);
       trayManager.removeListener(tray);
       windowManager.removeListener(tray);
       try {
@@ -123,7 +126,7 @@ class DeskTray with TrayListener, WindowListener {
   Future<void> _menu({bool force = false}) async {
     if (_running != this) return;
     final now = _now;
-    final said = '${now.line}|${now.playing}|${now.booth}';
+    final said = '${now.line}|${now.playing}|${now.booth}|${windowMode.fullScreen.value}';
     if (!force && said == _said) return;
     _said = said;
     // The transport is the player's. While the booth has the sound it is the booth's
@@ -133,6 +136,7 @@ class DeskTray with TrayListener, WindowListener {
       await trayManager.setContextMenu(Menu(items: [
         MenuItem(key: 'now', label: _short(now.line), disabled: true),
         MenuItem(key: 'show', label: 'Open WetOwl'),
+        MenuItem(key: 'full', label: windowMode.fullScreen.value ? 'Leave full screen' : 'Full screen'),
         MenuItem.separator(),
         MenuItem(key: 'play', label: now.playing ? 'Pause' : 'Play', disabled: !transport),
         MenuItem(key: 'next', label: 'Next', disabled: !transport),
@@ -153,6 +157,11 @@ class DeskTray with TrayListener, WindowListener {
     switch (menuItem.key) {
       case 'show':
         unawaited(show());
+      case 'full':
+        unawaited(() async {
+          await show();
+          await windowMode.toggleFullScreen();
+        }());
       case 'play':
         unawaited(_app.playPause());
       case 'next':

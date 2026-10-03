@@ -528,12 +528,17 @@ class DeviceInfo {
     this.ageMs = 0,
     this.itemId,
     this.heardAt,
+    this.boardLink,
   });
 
   final int id;
   final String name;
   final String? platform;
   final String? kind;
+
+  /// How to reach this device's board directly, while its booth offers one: the
+  /// port, the token and the addresses to try. See state/booth/board/remote_board.
+  final Map<String, dynamic>? boardLink;
 
   /// Whether this is the device you are holding.
   final bool isThis;
@@ -576,6 +581,7 @@ class DeviceInfo {
         ageMs: (j['age_ms'] ?? 0) as int,
         itemId: j['item_id'] as int?,
         heardAt: DateTime.now(),
+        boardLink: j['board_link'] is Map ? (j['board_link'] as Map).cast<String, dynamic>() : null,
       );
 
   /// The same device, having just said something new about itself.
@@ -602,6 +608,7 @@ class DeviceInfo {
         lastSeen: DateTime.now(),
         itemId: itemId ?? this.itemId,
         heardAt: DateTime.now(),
+        boardLink: boardLink,
       );
 
   /// Where it has got to *now*: what it said, carried forward while it plays. What it

@@ -20,6 +20,13 @@ enum Stem {
   never,
 }
 
+/// The board was saved by another screen since this one read it: here is theirs.
+class BoardConflict implements Exception {
+  BoardConflict(this.doc, this.rev);
+  final Map<String, dynamic> doc;
+  final int rev;
+}
+
 class ApiException implements Exception {
   final int status;
   final String message;
@@ -1554,6 +1561,7 @@ class ApiClient {
     int? itemId,
     int positionMs = 0,
     String? kind,
+    Map<String, dynamic>? boardLink,
   }) async =>
       await _decode(await net.post(_u('/devices/state'),
           headers: _headers,
@@ -1564,7 +1572,73 @@ class ApiClient {
             if (itemId != null) 'item_id': itemId,
             'position_ms': positionMs,
             if (kind != null) 'kind': kind,
+            'board_link': boardLink,
           })));
+
+  /// The board's presses, from this screen to the desk whose board it shows,
+  /// through the server: the relay, for a screen that cannot reach the desk itself.
+  Future<void> boardEvents(int deskId, List<Map<String, dynamic>> lines) async =>
+      await _decode(await net.post(_u('/devices/$deskId/board'),
+          headers: _headers, body: jsonEncode({'lines': lines})));
+
+  // ---------------- the board's own sounds ----------------
+  Future<List<Map<String, dynamic>>> samples() async {
+    final d = await _decode(await net.get(_u('/samples'), headers: _headers)) as Map<String, dynamic>;
+    return [for (final s in (d['samples'] as List? ?? const [])) (s as Map).cast<String, dynamic>()];
+  }
+
+  Future<Map<String, dynamic>> uploadSample(List<int> bytes, String filename, {String? name}) async {
+    final request = http.MultipartRequest('POST', _u('/samples', {if (name != null) 'name': name}))
+      ..headers.addAll({if (token != null) 'Authorization': 'Bearer $token'})
+      ..files.add(http.MultipartFile.fromBytes('audio', bytes, filename: filename));
+    final response = await http.Response.fromStream(await request.send());
+    return (await _decode(response) as Map).cast<String, dynamic>();
+  }
+
+  /// Bars cut out of a record, on the server where the record is.
+  Future<Map<String, dynamic>> cutSample(
+          {required int trackId, required int fromMs, required int toMs, String? name}) async =>
+      (await _decode(await net.post(_u('/samples/cut'),
+              headers: _headers,
+              body: jsonEncode({
+                'track_id': trackId,
+                'from_ms': fromMs,
+                'to_ms': toMs,
+                if (name != null) 'name': name,
+              }))) as Map)
+          .cast<String, dynamic>();
+
+  Future<void> renameSample(int id, String name) async =>
+      await _decode(await net.patch(_u('/samples/$id'), headers: _headers, body: jsonEncode({'name': name})));
+
+  Future<void> deleteSample(int id) async => await _decode(await net.delete(_u('/samples/$id'), headers: _headers));
+
+  String sampleAudioUrl(int id) => '$baseUrl/samples/$id/audio';
+
+  /// The board kept for this account: null doc when none has been kept yet.
+  Future<({Map<String, dynamic>? doc, int rev})> board() async {
+    final d = await _decode(await net.get(_u('/booth/board'), headers: _headers)) as Map<String, dynamic>;
+    return (doc: d['doc'] is Map ? (d['doc'] as Map).cast<String, dynamic>() : null, rev: (d['rev'] as num).toInt());
+  }
+
+  /// The board, over the one kept — if [rev] is still its revision. A stale [rev]
+  /// throws [BoardConflict], with the board as the server has it.
+  Future<int> putBoard(Map<String, dynamic> doc, int rev) async {
+    final r = await net.put(_u('/booth/board'), headers: _headers, body: jsonEncode({'doc': doc, 'rev': rev}));
+    if (r.statusCode == 409) {
+      final body = jsonDecode(r.body);
+      final detail = body is Map ? body['detail'] : null;
+      if (detail is Map) {
+        throw BoardConflict((detail['doc'] as Map).cast<String, dynamic>(), (detail['rev'] as num).toInt());
+      }
+    }
+    final d = await _decode(r) as Map<String, dynamic>;
+    return (d['rev'] as num).toInt();
+  }
+
+  /// The desk's board as it is now, for the screens that follow it by relay.
+  Future<void> reportBoard(Map<String, dynamic> line) async =>
+      await _decode(await net.post(_u('/devices/board'), headers: _headers, body: jsonEncode(line)));
 
   Future<void> deviceCommand(int deviceId, String action,
           {int? queueId, int? trackId, int? positionMs}) async =>

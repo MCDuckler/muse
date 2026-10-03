@@ -148,3 +148,37 @@ def test_what_a_device_says_reaches_the_others_whole(client, hdr, desk, song, mo
     assert data["device_id"] == desk["id"]
     assert data["track_id"] == song["id"] and data["item_id"] == 7
     assert data["position_ms"] == 61_500 and data["playing"] is True
+
+
+def test_a_desk_offers_its_board_and_a_phone_presses_it_through_the_relay(client, hdr, desk):
+    # The desk says where its board can be reached directly...
+    link = {"port": 48123, "token": "abc" * 10, "addrs": ["192.168.1.20", "127.0.0.1"]}
+    r = client.post("/devices/state", headers=desk["hdr"], json={
+        "playing": False, "position_ms": 0, "kind": "desktop", "board_link": link,
+    })
+    assert r.status_code == 200
+    mine = client.get("/devices", headers=hdr).json()
+    theirs = next(d for d in mine["devices"] if d["id"] == desk["id"])
+    assert theirs["board_link"] == link
+
+    # ...and a phone that cannot reach it sends its presses through here.
+    r = client.post(f"/devices/{desk['id']}/board", headers=hdr, json={
+        "lines": [{"t": "press", "bank": 0, "pad": 2, "down": True},
+                  {"t": "press", "bank": 0, "pad": 2, "down": False}],
+    })
+    assert r.status_code == 200
+    assert r.json() == {"sent": 2, "to": desk["id"]}
+    # Nobody else's device.
+    assert client.post("/devices/999999/board", headers=hdr, json={"lines": []}).status_code == 404
+    assert client.post(f"/devices/{desk['id']}/board", headers=hdr, json={"lines": "no"}).status_code == 400
+
+    # The desk's board, said for the phone.
+    r = client.post("/devices/board", headers=desk["hdr"], json={"t": "playing", "pads": []})
+    assert r.status_code == 200
+
+    # The link is withdrawn with a null, and a bad one refused.
+    client.post("/devices/state", headers=desk["hdr"], json={"playing": False, "board_link": None})
+    mine = client.get("/devices", headers=hdr).json()
+    assert next(d for d in mine["devices"] if d["id"] == desk["id"])["board_link"] is None
+    assert client.post("/devices/state", headers=desk["hdr"],
+                       json={"playing": False, "board_link": "x"}).status_code == 400

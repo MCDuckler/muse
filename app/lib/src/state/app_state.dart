@@ -1,7 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -13,6 +14,16 @@ import '../api/models.dart';
 import 'eq_engines.dart';
 import 'equalizer.dart';
 import 'booth/booth.dart';
+import 'booth/control/crate_cursor.dart';
+import 'booth/control/hid_transport.dart';
+import 'booth/control/manager.dart';
+import 'booth/board/board_link.dart';
+import 'booth/board/board_store.dart';
+import 'booth/board/sampler.dart';
+import 'booth/board/samples.dart';
+import 'booth/board/soundboard.dart';
+import 'booth/board/sample_fetch_none.dart' if (dart.library.io) 'booth/board/sample_fetch_io.dart';
+import 'booth/control/midi_transport.dart';
 import 'device_name.dart';
 import 'offline.dart';
 import 'art_cache.dart';
@@ -356,10 +367,94 @@ class AppState extends ChangeNotifier {
 
   static const _kStartLead = 'muse.booth.startLeadUs', _kJumpCarry = 'muse.booth.jumpCarryUs';
 
+  /// The DJ controllers, made the first time the booth asks and kept: a console
+  /// stays connected, lights following the booth, until the app goes.
+  ControllerManager? _controllers;
+  Future<ControllerManager>? _controllersMaking;
+  CrateCursor? _crateCursor;
+
+  /// The controllers, if the booth has asked for them yet.
+  ControllerManager? get controllersIfMade => _controllers;
+
+  Future<ControllerManager> controllers() => _controllersMaking ??= _makeControllers();
+
+  Future<ControllerManager> _makeControllers() async {
+    final layouts = await shippedLayouts();
+    final cursor = _crateCursor = CrateCursor(booth: booth, items: () => player?.items ?? const []);
+    final link = _boardLink = boardLinkForThisDevice(booth: () => booth);
+    // What the desk's board says, for the screens that follow it through the
+    // server: no more than a few times a second, however fast the pads go.
+    link.snapshots.stream.listen(_relayOut);
+    final m = ControllerManager(
+      transports: [MidiTransport(), hidTransport(layouts), link],
+      layouts: layouts,
+      booth: booth,
+      hooks: cursor.hooks,
+    );
+    _controllers = m;
+    await m.start();
+    notifyListeners();
+    return m;
+  }
+
+  // ------------------------------------------------------------- the board's link
+  BoardLinkBase? _boardLink;
+
+  /// The desk's end of the board link, once the controllers are up.
+  BoardLinkBase? get boardLink => _boardLink;
+
+  /// What other desks' boards say, arrived through the server: for a RemoteBoard
+  /// on this screen that follows one by relay.
+  Stream<Map<String, dynamic>> get boardStates => _boardStates.stream;
+  final _boardStates = StreamController<Map<String, dynamic>>.broadcast();
+
+  String? _relayHeld;
+  Timer? _relayTimer;
+
+  /// A line for the relay peers. A board goes at once; the playing list, which
+  /// comes ten times a second, is thinned to four — the one in hand replaces the
+  /// one waiting.
+  void _relayOut(String line) {
+    if (line.startsWith('{"t":"board"')) {
+      unawaited(api.reportBoard(jsonDecode(line) as Map<String, dynamic>).catchError((_) {}));
+      return;
+    }
+    _relayHeld = line;
+    _relayTimer ??= Timer(const Duration(milliseconds: 250), () {
+      _relayTimer = null;
+      final held = _relayHeld;
+      _relayHeld = null;
+      if (held != null) unawaited(api.reportBoard(jsonDecode(held) as Map<String, dynamic>).catchError((_) {}));
+    });
+  }
+
+  /// Presses for this desk's board, arrived through the server.
+  void _relayIn(Map<String, dynamic> order) {
+    final from = order['from'] as int?;
+    final lines = order['lines'];
+    if (from == null || lines is! List) return;
+    final who = devices.where((d) => d.id == from).firstOrNull?.name ?? 'A screen';
+    unawaited(controllers().then((_) => _boardLink?.relayIn('relay:$from', '$who (relay)', lines)));
+  }
+
+  /// Where a controller's browse buttons have the crate's cursor.
+  ValueListenable<int>? get crateCursor => _crateCursor?.cursor;
+
   /// The booth, with what it learned about this machine's engine in earlier sessions
   /// given back to it, and kept whenever it learns more.
   Booth _makeBooth() {
-    final b = Booth(api, offlinePath: offline.pathFor)..addListener(_boothChanged);
+    final b = Booth(
+      api,
+      offlinePath: offline.pathFor,
+      board: (booth) => Soundboard(
+        booth,
+        sampler: Sampler(
+          library: SampleLibrary(fetch: sampleFetcher(api)),
+          playerVolume: booth.mixer.playerVolume,
+        ),
+        store: ServerBoardStore(local: BoardStore.forThisDevice(), read: api.board, write: api.putBoard),
+      ),
+    )..addListener(_boothChanged);
     // A record the booth takes from the library at the end of the queue goes into
     // the crate, so what it plays is what the queue shows.
     b.auto.onFill = (t) => addTrack(t);
@@ -2361,6 +2456,8 @@ class AppState extends ChangeNotifier {
     // While the booth has the sound, what this device is playing is the booth's
     // master record, and the other screens should say so.
     final booth = _booth;
+    final link = _boardLink;
+    await link?.refreshAddresses();
     if (booth != null && booth.live) {
       final on = booth.master;
       try {
@@ -2370,6 +2467,7 @@ class AppState extends ChangeNotifier {
           queueId: activeQueue?.id,
           positionMs: on.position.inMilliseconds,
           kind: deviceKind(),
+          boardLink: link?.advert,
         );
       } catch (_) {}
       return;
@@ -2393,6 +2491,7 @@ class AppState extends ChangeNotifier {
                 Duration.zero)
             .inMilliseconds,
         kind: deviceKind(),
+        boardLink: link?.advert,
       );
     } catch (_) {
       // Missing one of these costs a minute of staleness on somebody else's screen.
@@ -2472,6 +2571,10 @@ class AppState extends ChangeNotifier {
       return;
     }
     if (to != thisDevice || thisDevice == null) return;
+    if (action == 'board') {
+      _relayIn(order);
+      return;
+    }
 
     switch (action) {
       case 'take':
@@ -3009,6 +3112,8 @@ class AppState extends ChangeNotifier {
         await _onJamEvent(e.data);
       } else if (e.event == 'reaction') {
         heardAReaction(Map<String, dynamic>.from(e.data));
+      } else if (e.event == 'board_state') {
+        _boardStates.add(Map<String, dynamic>.from(e.data));
       } else if (e.event == 'sleeve_mark') {
         // Somebody drawing on the record in front of you, as they draw it.
         sleeveBoard.arrived(Map<String, dynamic>.from(e.data));
@@ -3305,6 +3410,8 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    unawaited(_controllers?.dispose());
+    _crateCursor?.dispose();
     _progressed.dispose();
     _statusTimer?.cancel();
     _jamTimer?.cancel();

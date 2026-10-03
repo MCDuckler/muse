@@ -1,0 +1,3 @@
+tags:
+  # test/controller_linux_midi_test.dart: a pretend console on the ALSA sequencer.
+  linux-midi:

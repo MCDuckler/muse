@@ -1,4 +1,3 @@
-import 'full_screen.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -8,10 +7,13 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/frame_watch.dart';
 import '../state/app_state.dart';
+import '../state/booth/board/board_keys.dart';
 import '../state/booth/booth.dart';
 import '../state/booth/deck.dart' as engine;
 import 'artwork.dart';
 import 'booth/booth_clock.dart';
+import 'booth/board/board_room.dart';
+import 'booth/board/pop_out_none.dart' if (dart.library.io) 'booth/board/pop_out_io.dart';
 import 'booth/desk/console_plan.dart';
 import 'booth/desk/console_room.dart';
 import 'booth/desk/console_set.dart' show startAuto;
@@ -53,6 +55,8 @@ class _BoothPageState extends State<BoothPage> {
     FrameWatch.where = 'booth';
     final app = context.read<AppState>();
     unawaited(app.booth.init());
+    // And the board's sounds made ready, so its keys fire from the decks' page too.
+    unawaited(app.booth.board.load());
     // The booth makes the sound now; the ordinary player keeps quiet.
     unawaited(app.player?.pause());
   }
@@ -85,32 +89,32 @@ class _BoothPageState extends State<BoothPage> {
     ('U', 'Auto DJ: undo what it just changed'),
     ('L', 'Plan a set'),
     ('P', 'Waveforms, the set, the plan'),
+    ('B', 'The board, and back to the decks'),
+    ('⇧ B', 'A row of the board pinned under the decks, or let go'),
+    ('⌥ B', 'The board in a window of its own'),
     ('R', 'Auto DJ: hear the last mix again'),
-    ('F11 · ⌃⌘F', 'Full screen'),
+    ...BoardKeys.sheet,
   ];
 
   KeyEventResult _keys(FocusNode node, KeyEvent e) {
-    if (e is! KeyDownEvent) return KeyEventResult.ignored;
-    // Typing in the crate's search is typing, not playing the decks.
-    final typing = FocusManager.instance.primaryFocus?.context
-        ?.findAncestorWidgetOfExactType<EditableText>();
-    if (typing != null) return KeyEventResult.ignored;
-    // And a Mac's own, where F11 is the system's.
-    final macFull = e.logicalKey == LogicalKeyboardKey.keyF &&
-        HardwareKeyboard.instance.isMetaPressed &&
-        HardwareKeyboard.instance.isControlPressed;
-    if (e.logicalKey == LogicalKeyboardKey.f11 || macFull) {
-      unawaited(toggleFullScreen());
-      return KeyEventResult.handled;
-    }
     // Held with Ctrl (or ⌘) a key is the app's, not a deck's: Ctrl Q quits, Ctrl K goes
     // anywhere, and neither should toggle SYNC or start a mix on its way past.
     if (HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isMetaPressed) {
       return KeyEventResult.ignored;
     }
+    // Typing in the crate's search is typing, not playing the decks.
+    final typing = FocusManager.instance.primaryFocus?.context
+        ?.findAncestorWidgetOfExactType<EditableText>();
     final b = context.read<AppState>().booth;
-    final k = e.logicalKey;
     final shift = HardwareKeyboard.instance.isShiftPressed;
+    // The board's keys first — function keys and the number pad are nobody's text
+    // keys — and up as well as down, since a hold pad lets go. A held key's repeats
+    // are the board's to swallow: a one-shot is not fired again by a finger resting.
+    if (b.board.keyEvent(e, typing: typing != null, shift: shift)) return KeyEventResult.handled;
+    if (e is! KeyDownEvent) return KeyEventResult.ignored;
+    if (typing != null) return KeyEventResult.ignored;
+    // F11 is the program's (AppShortcuts), not the booth's: it falls through.
+    final k = e.logicalKey;
     final master = b.master;
 
     void nudge(engine.Deck d, int ms) => unawaited(b.nudge(d, Duration(milliseconds: ms)));
@@ -170,6 +174,14 @@ class _BoothPageState extends State<BoothPage> {
       unawaited(b.auto.dropNext());
     } else if (k == LogicalKeyboardKey.keyP) {
       planViewToggles.value++;
+    } else if (k == LogicalKeyboardKey.keyB) {
+      if (HardwareKeyboard.instance.isAltPressed) {
+        unawaited(popOutBoard(context.read<AppState>().boardLink));
+      } else if (shift) {
+        unawaited(b.board.toggleStrip());
+      } else {
+        boardToggles.value++;
+      }
     } else if (k == LogicalKeyboardKey.keyR) {
       unawaited(b.auto.replayLast());
     } else if (k == LogicalKeyboardKey.arrowLeft) {

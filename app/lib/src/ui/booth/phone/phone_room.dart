@@ -1,4 +1,5 @@
 import '../engine_check_none.dart' if (dart.library.io) '../engine_check.dart';
+import '../controllers_sheet.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -23,6 +24,8 @@ import 'phone_deck.dart';
 import 'phone_mixer.dart';
 import '../booth_clock.dart';
 import '../look.dart';
+import '../board/board_room.dart';
+import '../board/remote_board_page.dart';
 
 /// The booth on a phone: the same console as the desk's, folded to one column. The
 /// two records' shapes across the top, the decks side by side under them, the mixer
@@ -42,6 +45,11 @@ class _PhoneRoomState extends State<PhoneRoom> {
   List<Track>? _queueSeen;
   bool _planOpen = false;
 
+  /// The decks (0) or the board (1): the room's two pages, turned by the bar's
+  /// button rather than by a swipe — a swipe is a fader's.
+  final _pages = PageController();
+  int _page = 0;
+
   Booth get _b => widget.booth;
 
   @override
@@ -50,10 +58,20 @@ class _PhoneRoomState extends State<PhoneRoom> {
     unawaited(boothLook.load());
     _app.addListener(_queueMoved);
     planPair.addListener(_pairAsked);
+    boardToggles.addListener(_toggleBoard);
+  }
+
+  void _toggleBoard() {
+    if (!_pages.hasClients) return;
+    _page = _page == 0 ? 1 : 0;
+    _pages.animateToPage(_page, duration: const Duration(milliseconds: 260), curve: Curves.easeOutCubic);
+    setState(() {});
   }
 
   @override
   void dispose() {
+    boardToggles.removeListener(_toggleBoard);
+    _pages.dispose();
     _app.removeListener(_queueMoved);
     planPair.removeListener(_pairAsked);
     planPair.value = null;
@@ -121,6 +139,7 @@ class _PhoneRoomState extends State<PhoneRoom> {
       animation: boothLook,
       builder: (context, _) {
         final light = boothLook.apply(context);
+        _app.boardLink?.setLight(light);
         return Theme(
       data: light ? MuseTheme.light(palette) : MuseTheme.dark(palette),
       child: Builder(
@@ -131,7 +150,30 @@ class _PhoneRoomState extends State<PhoneRoom> {
               children: [
                 BoothPanel(child: _bar(context)),
                 Expanded(
-                  child: ListView(
+                  child: PageView(
+                    controller: _pages,
+                    physics: const NeverScrollableScrollPhysics(),
+                    onPageChanged: (i) => setState(() => _page = i),
+                    children: [
+                      _decks(),
+                      ListView(
+                        padding: const EdgeInsets.fromLTRB(8, 0, 8, 24),
+                        children: [BoardRoom(face: _b.board, booth: _b, narrow: true)],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+      },
+    );
+  }
+
+  Widget _decks() => ListView(
                     padding: const EdgeInsets.fromLTRB(8, 0, 8, 24),
                     children: [
                       SizedBox(height: 164, child: BoothPanel(child: ConsoleWaves(booth: _b))),
@@ -155,21 +197,22 @@ class _PhoneRoomState extends State<PhoneRoom> {
                       const SizedBox(height: 8),
                       SizedBox(height: 200, child: BoothPanel(child: ConsoleLog(booth: _b))),
                     ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-      },
-    );
-  }
+                  );
 
   Widget _bar(BuildContext context) => SizedBox(
         height: 52,
-        child: Row(
+        // A phone's bar has room for its buttons only when they sit close.
+        child: IconButtonTheme(
+          data: IconButtonThemeData(
+            style: IconButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.all(4),
+              minimumSize: const Size(32, 32),
+              fixedSize: const Size(32, 32),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ),
+          child: Row(
           children: [
             IconButton(
               icon: Icon(Icons.arrow_back, color: Console.quiet),
@@ -185,6 +228,7 @@ class _PhoneRoomState extends State<PhoneRoom> {
               onSelected: (v) => switch (v) {
                 'keep' => _keep(context),
                 'look' => boothLook.cycle(),
+                'controllers' => openControllers(context),
                 _ => openEngineCheck(context),
               },
               itemBuilder: (_) => [
@@ -198,8 +242,11 @@ class _PhoneRoomState extends State<PhoneRoom> {
                 if (_b.taken.isNotEmpty)
                   const PopupMenuItem(value: 'keep', child: Text('Keep this mix')),
                 const PopupMenuItem(value: 'engine', child: Text('Engine check')),
+                const PopupMenuItem(value: 'controllers', child: Text('Controllers')),
               ],
             ),
+            const RemoteBoardButton(compact: true),
+            BoardLight(face: _b.board, onTap: _toggleBoard),
             IconButton(
               icon: Icon(Icons.inventory_2_outlined, color: Console.ink),
               tooltip: 'The crate',
@@ -207,6 +254,7 @@ class _PhoneRoomState extends State<PhoneRoom> {
             ),
             const SizedBox(width: 4),
           ],
+        ),
         ),
       );
 

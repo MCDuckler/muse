@@ -52,14 +52,29 @@ android {
         }
     }
 
+    // Every build type signs with the release key when there is one.
+    //
+    // A debug build signed with the debug key cannot install over the published APK,
+    // and when that install fails `flutter run` uninstalls the app and tries again —
+    // taking the login, the offline downloads and the settings with it. One key means
+    // a debug run upgrades the installed app in place, and the next published APK
+    // upgrades the debug run.
+    val appSigning = if (keystorePropertiesFile.exists())
+        signingConfigs.getByName("release")
+    else
+        signingConfigs.getByName("debug")
+
     buildTypes {
+        debug {
+            signingConfig = appSigning
+        }
+        // The Flutter plugin creates profile with initWith(debug) before this block
+        // runs, so it copied the debug key and has to be told separately.
+        getByName("profile") {
+            signingConfig = appSigning
+        }
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = if (keystorePropertiesFile.exists())
-                signingConfigs.getByName("release")
-            else
-                signingConfigs.getByName("debug")
+            signingConfig = appSigning
 
             // No shrinking, and above all no renaming of resources.
             //

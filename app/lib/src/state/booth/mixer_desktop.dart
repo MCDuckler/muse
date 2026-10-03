@@ -706,6 +706,19 @@ class DesktopMixer extends VolumeMixer {
     ]);
   }
 
+  /// mpv's `audio-pitch-correction`: yes is the stretcher keeping the pitch (keylock),
+  /// no is plain resampling, where a faster record is a higher one.
+  @override
+  Future<void> setKeylock(Deck deck, bool on) async {
+    final mpv = _native(deck);
+    if (mpv == null) return;
+    try {
+      await mpv.setProperty('audio-pitch-correction', on ? 'yes' : 'no');
+    } catch (e) {
+      debugPrint('mixer: deck ${deck.name} would not set keylock ($e)');
+    }
+  }
+
   @override
   Future<void> setFilter(Deck deck, double value) async {
     _filter[deck.name] = value.clamp(-1.0, 1.0);

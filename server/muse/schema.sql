@@ -742,3 +742,33 @@ create table if not exists rec_dismissals (
 -- How far a station reaches past what is already here: 0 is only the library, 1 is
 -- only songs new to it. See recommend.py.
 alter table stations add column if not exists fresh real not null default 0.5;
+
+-- How a screen reaches this device's DJ booth board directly: the port, the token and
+-- the addresses to try on the local network. Said with every device report while the
+-- booth offers one, null otherwise. See the app's state/booth/board/link_server.
+alter table devices add column if not exists board_link jsonb;
+
+-- The DJ booth's board: one person's own short sounds (a few seconds dropped on a
+-- pad, or cut out of a record), kept apart from the catalogue's tracks, and the board
+-- that holds them — one JSON document per person with a revision, like a queue's.
+-- See routes_samples.py.
+create table if not exists samples (
+  id          serial primary key,
+  user_id     int not null references users(id) on delete cascade,
+  name        text not null,
+  sha256      text not null,
+  path        text not null,
+  bytes       bigint not null,
+  duration_ms int not null default 0,
+  shape       jsonb not null default '[]',
+  origin      jsonb not null default '{}',
+  created_at  timestamptz not null default now()
+);
+create index if not exists samples_user on samples(user_id, created_at desc);
+
+create table if not exists boards (
+  user_id    int primary key references users(id) on delete cascade,
+  doc        jsonb not null,
+  rev        int not null default 1,
+  updated_at timestamptz not null default now()
+);
