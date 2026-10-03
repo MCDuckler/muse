@@ -304,6 +304,19 @@ void main() {
           }
         }
         final err = tester.takeException();
+        if (state == 'crate') {
+          // Two things the crate got wrong, caught here because this is where it is
+          // actually drawn at the widths people use it at.
+          final said = tester
+              .widgetList<Text>(find.byType(Text))
+              .map((t) => t.data)
+              .whereType<String>()
+              .toSet();
+          // It split in two whatever was going on, so with nothing picked it stood
+          // half empty with PICK A PLAYLIST in the middle of the empty half.
+          expect(said.contains('PICK A PLAYLIST'), isFalse,
+              reason: 'half the crate empty at ${w.round()}');
+        }
         // The picture first, even of a room that overflowed: it shows where.
         if (out != null) {
           await tester.runAsync(() async {

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -21,6 +22,34 @@ import 'set_planner_page.dart';
 
 /// The crate's pages.
 enum CrateTab { queue, fits, library, search, similar, parts }
+
+/// Whether every tab can wear its name in the width the row gives it.
+///
+/// A tab is one [Pad]: eight pixels of air, the icon at 0.42 of its height, five
+/// more, then the word — which a Pad clips rather than shrinking, so a word that
+/// does not fit is a word with its end cut off. The tabs share the row equally, so
+/// what each has is the row less the gaps and the widen button, divided by how many
+/// there are.
+@visibleForTesting
+bool crateWordsFit(
+  BuildContext context, List<(CrateTab, String, IconData)> tabs, double across) {
+  const height = 30.0, gap = 6.0, widen = 34.0, air = 8.0 * 2, between = 5.0;
+  final each = (across - gap * tabs.length - widen) / tabs.length;
+  if (each <= 0) return false;
+  final style = Console.label(math.max(8.0, height * 0.3));
+  var widest = 0.0;
+  for (final tab in tabs) {
+    final painter = TextPainter(
+        text: TextSpan(text: tab.$2, style: style),
+        maxLines: 1,
+        textScaler: MediaQuery.textScalerOf(context),
+        textDirection: TextDirection.ltr)
+      ..layout();
+    widest = math.max(widest, painter.width);
+  }
+  return each >= air + height * 0.42 + between + widest;
+}
+
 
 /// The crate: everything a set is made of, without leaving the booth.
 ///
@@ -235,20 +264,33 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
     return Plate(
       padding: const EdgeInsets.fromLTRB(10, 10, 10, 6),
       child: LayoutBuilder(builder: (context, c) {
-        final roomy = c.maxWidth >= 470;
+        final tabs = [
+          (CrateTab.queue, 'QUEUE', Icons.queue_music),
+          (CrateTab.fits, 'FITS', Icons.compare_arrows),
+          (CrateTab.library, 'LIBRARY', Icons.library_music_outlined),
+          (CrateTab.search, 'SEARCH', Icons.search),
+          (CrateTab.similar, 'SIMILAR', Icons.auto_awesome_outlined),
+          if (partsHere) (CrateTab.parts, 'PARTS', Icons.call_split),
+        ];
+        // Whether the words fit, asked rather than guessed.
+        //
+        // This was a width: past 470 pixels the tabs wore their names. But the tabs
+        // share the row equally, so what each one has is the row divided by however
+        // many there are — five, or six when a record is being taken apart — and the
+        // longest of the words has to fit in that with its icon beside it. At 470 with
+        // six tabs it does not, and a Pad clips rather than shrinking: the crate read
+        // LIBRAR, SEARO, SIMILA, which is how it looked on screen for anyone whose
+        // crate was that wide.
+        //
+        // Measured instead, against the font the labels are actually drawn in, so it
+        // also holds at a larger text size and for however many tabs there are.
+        final roomy = crateWordsFit(context, tabs, c.maxWidth);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Row(
               children: [
-                for (final (t, label, icon) in [
-                  (CrateTab.queue, 'QUEUE', Icons.queue_music),
-                  (CrateTab.fits, 'FITS', Icons.compare_arrows),
-                  (CrateTab.library, 'LIBRARY', Icons.library_music_outlined),
-                  (CrateTab.search, 'SEARCH', Icons.search),
-                  (CrateTab.similar, 'SIMILAR', Icons.auto_awesome_outlined),
-                  if (partsHere) (CrateTab.parts, 'PARTS', Icons.call_split),
-                ]) ...[
+                for (final (t, label, icon) in tabs) ...[
                   Expanded(
                     child: t == CrateTab.parts
                         ? ListenableBuilder(
@@ -629,7 +671,15 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
       );
     }
 
-    if (roomy) {
+    // Both at once, once there is something to put in the second pane.
+    //
+    // The split used to be unconditional, so with no playlist picked the crate stood
+    // half empty: two hundred pixels of names, a rule, and then four hundred pixels of
+    // nothing with an arrow in the middle of it saying PICK A PLAYLIST — while the
+    // decks next to it were squeezed to make room for it. The narrow crate has always
+    // done the sensible thing here; it does it at every width now, and the names get
+    // the whole crate until one of them is chosen.
+    if (roomy && _list != null) {
       return Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
