@@ -1,6 +1,6 @@
 // The sounds there are to put on a pad: the kit the booth makes, and (with the
-// server) the user's own. A row is heard with its button, dragged onto a pad, or —
-// while a pad is asking — tapped to go there.
+// server) the house's shelf and the user's own. A row is heard with its button,
+// dragged onto a pad, or — while a pad is asking — tapped to go there.
 import 'dart:async';
 
 import 'package:file_picker/file_picker.dart';
@@ -17,7 +17,7 @@ import '../../feel.dart';
 import '../../mag.dart';
 import '../desk/console.dart';
 
-enum LibraryTab { kit, yours }
+enum LibraryTab { kit, house, yours }
 
 class BoardLibrary extends StatefulWidget {
   const BoardLibrary({super.key, required this.board, this.forPad, required this.onPicked, this.booth});
@@ -37,6 +37,9 @@ class BoardLibrary extends StatefulWidget {
 
 class _BoardLibraryState extends State<BoardLibrary> {
   LibraryTab _tab = LibraryTab.kit;
+
+  /// Whether a tab was picked by hand: until then the house's shelf, once there is one.
+  bool _chose = false;
   final _search = TextEditingController();
   bool _busy = false;
 
@@ -52,7 +55,10 @@ class _BoardLibraryState extends State<BoardLibrary> {
     try {
       final s = await what();
       if (!mounted) return;
-      setState(() => _tab = LibraryTab.yours);
+      setState(() {
+        _tab = LibraryTab.yours;
+        _chose = true;
+      });
       if (widget.forPad != null) widget.onPicked(s);
       if (done != null) messenger.say(snack(Text(done)));
     } catch (e) {
@@ -141,16 +147,41 @@ class _BoardLibraryState extends State<BoardLibrary> {
     }
   }
 
+  /// Every word of the search in its name, its shelf or what it says.
+  static bool _matches(Sample s, List<String> words) {
+    final hay = '${s.name} ${s.group ?? ''} ${s.words ?? ''}'.toLowerCase();
+    return words.every(hay.contains);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final q = _search.text.trim().toLowerCase();
-    final all = switch (_tab) {
+    final words = _search.text.trim().toLowerCase().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    final library = widget.board.sampler.library;
+    final tab = !_chose && library.house.isNotEmpty ? LibraryTab.house : _tab;
+    final all = switch (tab) {
       LibraryTab.kit => SampleKit.all,
-      LibraryTab.yours => widget.board.sampler.library.known.values.toList(),
+      LibraryTab.house => library.house.values.toList(),
+      LibraryTab.yours => library.known.values.toList(),
     };
-    final rows = q.isEmpty ? all : [for (final s in all) if (s.name.toLowerCase().contains(q)) s];
+    final rows = words.isEmpty ? all : [for (final s in all) if (_matches(s, words)) s];
+    // The shelf reads bank by bank: a heading wherever the shelf changes.
+    final entries = <Object>[];
+    final perShelf = <String, int>{};
+    if (tab == LibraryTab.house) {
+      for (final s in rows) {
+        perShelf.update(s.group ?? '', (n) => n + 1, ifAbsent: () => 1);
+      }
+      String? last;
+      for (final s in rows) {
+        if (s.group != last) entries.add(s.group ?? '');
+        last = s.group;
+        entries.add(s);
+      }
+    } else {
+      entries.addAll(rows);
+    }
     final asking = widget.forPad;
-    final yours = _tab == LibraryTab.yours;
+    final yours = tab == LibraryTab.yours;
     final server = widget.board.hasServer;
     return DropToAdd(
       onFiles: _dropped,
@@ -162,16 +193,25 @@ class _BoardLibraryState extends State<BoardLibrary> {
           Row(children: [
             Text('LIBRARY', style: Console.label(10, color: Console.ink)),
             const Spacer(),
-            for (final (t, label) in const [(LibraryTab.kit, 'KIT'), (LibraryTab.yours, 'YOURS')]) ...[
-              Pad(
-                label: label,
-                height: 26,
-                lit: _tab == t,
-                colour: Console.ink,
-                onTap: () => setState(() => _tab = t),
-              ),
-              const SizedBox(width: 4),
-            ],
+            for (final (t, label) in const [
+              (LibraryTab.kit, 'KIT'),
+              (LibraryTab.house, 'HOUSE'),
+              (LibraryTab.yours, 'YOURS'),
+            ])
+              if (t != LibraryTab.house || server || library.house.isNotEmpty) ...[
+                Pad(
+                  label: label,
+                  height: 26,
+                  lit: tab == t,
+                  colour: Console.ink,
+                  tooltip: t == LibraryTab.house ? 'The house\'s sounds: everyone\'s to use' : null,
+                  onTap: () => setState(() {
+                    _tab = t;
+                    _chose = true;
+                  }),
+                ),
+                const SizedBox(width: 4),
+              ],
           ]),
           if (asking != null) ...[
             const SizedBox(height: 8),
@@ -207,27 +247,36 @@ class _BoardLibraryState extends State<BoardLibrary> {
                     child: Padding(
                       padding: const EdgeInsets.all(16),
                       child: Text(
-                        yours
-                            ? server
-                                ? 'Nothing of your own yet: import a file, drop one here, or cut bars off a deck.'
-                                : 'Your own sounds need the server: sign in to keep them.'
-                            : 'Nothing by that name.',
+                        words.isNotEmpty
+                            ? 'Nothing by that name.'
+                            : yours
+                                ? server
+                                    ? 'Nothing of your own yet: import a file, drop one here, or cut bars off a deck.'
+                                    : 'Your own sounds need the server: sign in to keep them.'
+                                : tab == LibraryTab.house
+                                    ? 'Nothing on the house\'s shelf yet.'
+                                    : 'Nothing by that name.',
                         textAlign: TextAlign.center,
                         style: Mag.typewriter(11, color: Console.quiet),
                       ),
                     ),
                   )
                 : ListView.builder(
-                    itemCount: rows.length,
+                    itemCount: entries.length,
                     itemExtent: 36,
-                    itemBuilder: (context, i) => _SampleRow(
-                      sample: rows[i],
-                      board: widget.board,
-                      asking: asking != null,
-                      onTap: asking == null ? null : () => widget.onPicked(rows[i]),
-                      onRename: yours ? () => _rename(rows[i]) : null,
-                      onForget: yours ? () => _forget(rows[i]) : null,
-                    ),
+                    itemBuilder: (context, i) {
+                      final e = entries[i];
+                      if (e is String) return _ShelfHeading(e, perShelf[e] ?? 0);
+                      final s = e as Sample;
+                      return _SampleRow(
+                        sample: s,
+                        board: widget.board,
+                        asking: asking != null,
+                        onTap: asking == null ? null : () => widget.onPicked(s),
+                        onRename: yours ? () => _rename(s) : null,
+                        onForget: yours ? () => _forget(s) : null,
+                      );
+                    },
                   ),
           ),
           const SizedBox(height: 8),
@@ -268,6 +317,25 @@ class _BoardLibraryState extends State<BoardLibrary> {
     ),
     );
   }
+}
+
+/// Where one of the house's shelves begins: its name and how many sounds are on it.
+class _ShelfHeading extends StatelessWidget {
+  const _ShelfHeading(this.label, this.count);
+  final String label;
+  final int count;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(4, 14, 4, 0),
+        child: Row(children: [
+          Text(label.toUpperCase(), style: Console.label(9, color: Console.quiet)),
+          const SizedBox(width: 6),
+          Text('$count', style: Mag.typewriter(10, color: Console.faint)),
+          const SizedBox(width: 8),
+          Expanded(child: Divider(height: 1, color: Console.line)),
+        ]),
+      );
 }
 
 class _SampleRow extends StatefulWidget {
@@ -363,8 +431,20 @@ class _SampleRowState extends State<_SampleRow> {
   }
 }
 
-/// A sample as a pad would first hold it: its name shouted, the kit's own colour.
+/// A sample as a pad would first hold it: its name shouted, the kit's own colour —
+/// or, for a house sound, the short name, colour and way of playing it came with.
 PadSpec padFor(Sample s) {
+  final hint = s.hint;
+  if (hint != null) {
+    return PadSpec(
+      sampleId: s.id,
+      name: ((hint['name'] as String?) ?? s.name).toUpperCase(),
+      colour: PadColour.parse(hint['colour'] as String?),
+      mode: PadMode.parse(hint['mode'] as String?),
+      choke: ((hint['choke'] as num?)?.toInt() ?? 0).clamp(0, 4),
+      duck: ((hint['duck'] as num?)?.toDouble() ?? 0.0).clamp(0.0, 1.0),
+    );
+  }
   final colour = switch (s.id) {
     SampleKit.impact => PadColour.a,
     SampleKit.riser => PadColour.violet,

@@ -238,6 +238,64 @@ def traits_index(measure: bool = False) -> None:
           + ("" if measure else " (--measure to work them out)"))
 
 
+def housesamples(folder: str, owner: str, apply: bool = False) -> None:
+    """Loads a sound library onto the house's shelf: every account's board can then hear
+    it and put it on a pad. The folder is one `wetowl-board-sounds` builds — a
+    manifest.json naming each sound, its file, its bank and how a pad should first hold
+    it. Run again, it adds what is new and leaves alone what is there (same bytes);
+    a sound the manifest renamed or regrouped is updated in place.
+
+    Prints what it would do and changes nothing unless asked.
+    """
+    import hashlib
+    import json
+    import pathlib
+
+    from . import config, db, deps
+    from .routes_samples import _keep
+
+    cfg = config.load()
+    deps.set_config(cfg)
+    db.init(cfg.dsn)
+    who = db.one("select id from users where name=%s", (owner,))
+    if not who:
+        sys.exit(f"no user {owner!r}")
+    root = pathlib.Path(folder)
+    manifest = json.loads((root / "manifest.json").read_text())
+    groups = {c["key"]: c["label"] for c in manifest["categories"]}
+    shelf = {r["sha256"]: r for r in db.all_("select id, sha256, name, origin from samples where house")}
+    added = renamed = same = 0
+    for n, s in enumerate(manifest["sounds"]):
+        f = root / s["file"]
+        digest = hashlib.sha256(f.read_bytes()).hexdigest()
+        origin = {
+            "kind": "house", "pack": manifest.get("name"), "key": s["id"], "order": n,
+            "group": groups.get(s["cat"], s["cat"]), "cat": s["cat"],
+            "pad": {"name": s["name"], **s.get("pad", {})},
+            "license": s.get("license"), "license_name": s.get("license_name"), "author": s.get("author"),
+            "source": (s.get("source") or {}).get("url"), "words": (s.get("text") or "")[:240] or None,
+        }
+        kept = shelf.get(digest)
+        if kept:
+            if kept["name"] != s["title"] or kept["origin"] != origin:
+                renamed += 1
+                if apply:
+                    db.run("update samples set name=%s, origin=%s where id=%s",
+                           (s["title"][:80], json.dumps(origin), kept["id"]))
+            else:
+                same += 1
+            continue
+        added += 1
+        if not apply:
+            if added <= 20:
+                print(f"  + {s['id']:<22} {s['title']}")
+            continue
+        row = _keep(who["id"], f, s["title"], origin, house=True)
+        print(f"  + {s['id']:<22} -> sample {row['id']}", flush=True)
+    print(f"{added} to add, {renamed} to update, {same} already on the shelf"
+          + ("" if apply else " — nothing changed; --apply to do it"))
+
+
 def main() -> None:
     match sys.argv[1:]:
         case ["traits"]:
@@ -268,11 +326,16 @@ def main() -> None:
             covers()
         case ["covers", "--apply"]:
             covers(apply=True)
+        case ["housesamples", folder, owner]:
+            housesamples(folder, owner)
+        case ["housesamples", folder, owner, "--apply"]:
+            housesamples(folder, owner, apply=True)
         case _:
             sys.exit("usage: python -m muse.cli [adduser <name> | secret "
                      "| splitartists [--apply] | fixsoundcloud [--apply] "
                      "| fixspotifynames [--apply] | markdead [--apply] "
-                     "| covers [--apply] | traits [--measure]]")
+                     "| covers [--apply] | traits [--measure] "
+                     "| housesamples <folder> <owner> [--apply]]")
 
 
 if __name__ == "__main__":

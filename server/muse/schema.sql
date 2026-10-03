@@ -766,6 +766,12 @@ create table if not exists samples (
 );
 create index if not exists samples_user on samples(user_id, created_at desc);
 
+-- The house's own sounds: a sample every account can hear, fetch and put on a pad —
+-- the shelf of horns, drops and memes loaded with `python -m muse.cli housesamples`.
+-- Still kept by whoever loaded it, and only they rename or remove one.
+alter table samples add column if not exists house boolean not null default false;
+create index if not exists samples_house on samples(id) where house;
+
 create table if not exists boards (
   user_id    int primary key references users(id) on delete cascade,
   doc        jsonb not null,

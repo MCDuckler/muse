@@ -1582,9 +1582,14 @@ class ApiClient {
           headers: _headers, body: jsonEncode({'lines': lines})));
 
   // ---------------- the board's own sounds ----------------
-  Future<List<Map<String, dynamic>>> samples() async {
+  Future<List<Map<String, dynamic>>> samples() async => (await sampleShelves()).own;
+
+  /// The account's own sounds and the house's shelf (every account's to use), in one ask.
+  Future<({List<Map<String, dynamic>> own, List<Map<String, dynamic>> house})> sampleShelves() async {
     final d = await _decode(await net.get(_u('/samples'), headers: _headers)) as Map<String, dynamic>;
-    return [for (final s in (d['samples'] as List? ?? const [])) (s as Map).cast<String, dynamic>()];
+    List<Map<String, dynamic>> rows(String key) =>
+        [for (final s in (d[key] as List? ?? const [])) (s as Map).cast<String, dynamic>()];
+    return (own: rows('samples'), house: rows('house'));
   }
 
   Future<Map<String, dynamic>> uploadSample(List<int> bytes, String filename, {String? name}) async {

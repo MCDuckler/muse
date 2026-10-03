@@ -9,6 +9,10 @@ when its owner says so.
 The board itself — which sound on which pad, how each plays — is one JSON document
 per person (`boards`), with a revision: a desk that saves over a phone's newer copy is
 told so (409) and reads again, as the queues do.
+
+The house's sounds are samples too, marked `house`: listed to every account beside its
+own, heard and fetched by anyone signed in, renamed or removed only by whoever loaded
+them (`python -m muse.cli housesamples`).
 """
 from __future__ import annotations
 
@@ -45,6 +49,24 @@ def _public(row: dict) -> dict:
         "shape": row.get("shape") or [],
         "created_at": row["created_at"],
         "audio_url": f"/samples/{row['id']}/audio",
+        "house": bool(row.get("house")),
+    }
+
+
+def _house(row: dict) -> dict:
+    """A house sound as the shelf lists it: what a library row and a pad need, and no
+    more — there are hundreds, and every board that opens asks for them."""
+    o = row.get("origin") or {}
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "duration_ms": row["duration_ms"],
+        "shape": row.get("shape") or [],
+        "group": o.get("group"),
+        "pad": o.get("pad"),
+        "words": o.get("words"),
+        "license": o.get("license"),
+        "audio_url": f"/samples/{row['id']}/audio",
     }
 
 
@@ -55,7 +77,15 @@ def _mine(sample_id: int, user_id: int) -> dict:
     return row
 
 
-def _keep(user_id: int, src: pathlib.Path, name: str, origin: dict) -> dict:
+def _hearable(sample_id: int, user_id: int) -> dict:
+    """Yours, or the house's."""
+    row = db.one("select * from samples where id=%s and (user_id=%s or house)", (sample_id, user_id))
+    if not row:
+        raise HTTPException(404, "no sample by that id")
+    return row
+
+
+def _keep(user_id: int, src: pathlib.Path, name: str, origin: dict, house: bool = False) -> dict:
     """[src], checked and kept: probed (audio, short enough), shaped, stored by its
     hash, written down. Returns the row."""
     try:
@@ -75,17 +105,20 @@ def _keep(user_id: int, src: pathlib.Path, name: str, origin: dict) -> dict:
     with src.open("rb") as fh:
         digest, path, size = storage.store_stream(_dir(), fh, ext, limit=MAX_BYTES)
     return db.one(
-        """insert into samples(user_id, name, sha256, path, bytes, duration_ms, shape, origin)
-           values(%s,%s,%s,%s,%s,%s,%s,%s) returning *""",
+        """insert into samples(user_id, name, sha256, path, bytes, duration_ms, shape, origin, house)
+           values(%s,%s,%s,%s,%s,%s,%s,%s,%s) returning *""",
         (user_id, name.strip()[:80] or "Sample", digest, str(path), size, ms,
-         json.dumps(shape), json.dumps(origin)),
+         json.dumps(shape), json.dumps(origin), house),
     )
 
 
 @router.get("")
 def mine(user: dict = Depends(current_user)):
-    rows = db.all_("select * from samples where user_id=%s order by created_at desc", (user["id"],))
-    return {"samples": [_public(r) for r in rows]}
+    """Your own sounds, and the house's beside them (an app that predates the shelf reads
+    only `samples` and is none the wiser)."""
+    rows = db.all_("select * from samples where user_id=%s and not house order by created_at desc", (user["id"],))
+    house = db.all_("select * from samples where house order by (origin->>'order')::int nulls last, id")
+    return {"samples": [_public(r) for r in rows], "house": [_house(r) for r in house]}
 
 
 @router.post("", status_code=201)
@@ -168,7 +201,7 @@ def forget(sample_id: int, user: dict = Depends(current_user)):
 @router.get("/{sample_id}/shape")
 def shape(sample_id: int, user: dict = Depends(current_user)):
     """The sound's shape across a pad: 128 levels, 0 to 255."""
-    row = _mine(sample_id, user["id"])
+    row = _hearable(sample_id, user["id"])
     return {"shape": row.get("shape") or []}
 
 
@@ -178,7 +211,7 @@ def audio(sample_id: int, request: Request, k: str | None = None,
     """The sound itself, whole or by range, for a bearer token or a signed key (a
     browser's audio element has no header)."""
     user = user_or_key(k, authorization)
-    row = _mine(sample_id, user["id"])
+    row = _hearable(sample_id, user["id"])
     from .app import _range_response
 
     return _range_response(pathlib.Path(row["path"]), request, etag=row["sha256"])

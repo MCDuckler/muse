@@ -135,11 +135,14 @@ class Soundboard extends ChangeNotifier implements BoardFace {
   /// Whether this library can hold the user's own sounds (a server to keep them).
   bool get hasServer => _api.token != null;
 
-  /// The user's own samples, as the server lists them now.
+  /// The user's own samples and the house's shelf, as the server lists them now.
   Future<void> refreshLibrary() async {
     if (!hasServer) return;
     try {
-      sampler.library.takeServerList(await _api.samples());
+      final shelves = await _api.sampleShelves();
+      sampler.library
+        ..takeServerList(shelves.own)
+        ..takeHouseList(shelves.house);
       notifyListeners();
     } catch (e) {
       debugPrint('board: the library did not come — $e');

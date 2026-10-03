@@ -111,3 +111,32 @@ def test_the_board_is_one_document_with_a_revision(client, hdr):
     fresh = client.put("/booth/board", headers=hdr, json={"doc": {**doc, "level": 0.2}, "rev": 1})
     assert fresh.json()["rev"] == 2
     assert client.put("/booth/board", headers=hdr, json={"doc": "no", "rev": 2}).status_code == 400
+
+
+def test_the_house_shelf_is_everyones_to_hear_and_its_keepers_to_change(client, hdr, tmp_path):
+    """A house sound is listed to every account beside its own, heard and fetched by
+    anyone signed in, and renamed or removed only by whoever loaded it."""
+    from muse import auth
+    from muse.routes_samples import _keep
+    keeper = auth.user_for_token(hdr["Authorization"].split(" ", 1)[1])["id"]
+    horn = _keep(keeper, _tone(tmp_path), "Air horn (canned)", {
+        "kind": "house", "order": 0, "group": "Horns & sirens",
+        "pad": {"name": "Air Horn", "colour": "orange", "mode": "oneShot", "choke": 0, "duck": 0},
+        "words": None, "license": "cc0"}, house=True)
+    other = auth.ensure_user("someone", pw_hash=auth.hash_password("x"))
+    theirs = {"Authorization": f"Bearer {auth.issue_token(other, 'Their phone', 'app')}"}
+
+    listed = client.get("/samples", headers=theirs).json()
+    assert listed["samples"] == []
+    assert [h["id"] for h in listed["house"]] == [horn["id"]]
+    h = listed["house"][0]
+    assert h["group"] == "Horns & sirens" and h["pad"]["name"] == "Air Horn" and len(h["shape"]) == 128
+
+    # The keeper's own list is their own sounds: the shelf is beside it, not in it.
+    assert client.get("/samples", headers=hdr).json()["samples"] == []
+
+    assert client.get(h["audio_url"], headers=theirs).status_code == 200
+    assert client.get(f"/samples/{horn['id']}/shape", headers=theirs).status_code == 200
+    assert client.patch(f"/samples/{horn['id']}", headers=theirs, json={"name": "Mine now"}).status_code == 404
+    assert client.delete(f"/samples/{horn['id']}", headers=theirs).status_code == 404
+    assert client.get(h["audio_url"], headers=theirs).status_code == 200

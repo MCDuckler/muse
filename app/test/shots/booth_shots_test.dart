@@ -122,6 +122,8 @@ void main() {
               http.Response.bytes(utf8.encode(jsonEncode(o)), 200, headers: {'content-type': 'application/json; charset=utf-8'});
           if (r.url.path.endsWith('/booth/set')) return json(_aSet());
           if (r.url.path.endsWith('/booth/pool')) return json(_aPool());
+          // The board's library: nothing of one's own, the house's shelf beside it.
+          if (r.url.path.endsWith('/samples')) return json({'samples': [], 'house': _houseShelf()});
           return http.Response('{}', 200);
         }));
         // The crate wide and the log folded, as a DJ leaves them.
@@ -418,3 +420,30 @@ Map<String, dynamic> _aPool() => {
       'energy': {'counts': [for (var i = 0; i < 20; i++) 10 + i * 12]},
       'unfetched_ids': [],
     };
+
+/// A few shelves of the house's sounds, as `GET /samples` lists them.
+List<Map<String, dynamic>> _houseShelf() {
+  var id = 100;
+  List<int> shape(int seed) => [for (var i = 0; i < 128; i++) (40 + 200 * ((i * (seed + 3)) % 17) / 16).round()];
+  Map<String, dynamic> s(String group, String name, String pad, String colour, int ms) => {
+        'id': ++id,
+        'name': name,
+        'duration_ms': ms,
+        'shape': shape(id),
+        'group': group,
+        'pad': {'name': pad, 'colour': colour, 'mode': 'oneShot', 'choke': 0, 'duck': 0},
+      };
+  return [
+    s('Horns & sirens', 'Air horn (canned, single blast)', 'Air Horn', 'orange', 1610),
+    s('Horns & sirens', 'MLG air horn', 'MLG Airhorn', 'orange', 2920),
+    s('Horns & sirens', 'DJ club air horn (the classic triple blast)', 'Club Airhorn', 'orange', 2930),
+    s('Horns & sirens', 'Reggae / dancehall air horn with echo', 'Reggae Horn', 'orange', 2730),
+    s('DJ tools', 'DJ rewind', 'Rewind', 'a', 2640),
+    s('DJ tools', 'Vinyl stop / brake', 'Vinyl Stop', 'a', 2240),
+    s('Meme classics', 'Vine boom', 'Vine Boom', 'violet', 1170),
+    s('Meme classics', 'Bruh', 'Bruh', 'violet', 600),
+    s('Meme classics', 'Sad violin', 'Sad Violin', 'violet', 4480),
+    s('TikTok era', 'FAHHHHH', 'FAHHH', 'violet', 1700),
+    s('TikTok era', 'Rizz', 'Rizz', 'violet', 1540),
+  ];
+}

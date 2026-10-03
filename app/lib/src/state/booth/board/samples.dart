@@ -3,7 +3,9 @@
 // A sample is a short sound with an id. The kit's are made by the booth itself
 // (fx_sounds.dart) and have negative ids, so they exist on every device without a
 // server; the user's own are files — dropped on a pad, picked, or cut from a record —
-// and later the server's, by its id.
+// and later the server's, by its id. The house's are the server's too: a shelf of
+// horns, drops and memes every account can use, each with the bank it sits in and how
+// a pad should first hold it.
 
 import 'package:flutter/foundation.dart';
 
@@ -40,12 +42,33 @@ class ServerSource extends SampleSource {
 
 /// A sound with a name and a length.
 class Sample {
-  const Sample({required this.id, required this.name, required this.length, required this.source});
+  const Sample({
+    required this.id,
+    required this.name,
+    required this.length,
+    required this.source,
+    this.house = false,
+    this.group,
+    this.hint,
+    this.words,
+  });
 
   final int id;
   final String name;
   final Duration length;
   final SampleSource source;
+
+  /// On the house's shelf: everyone's to use, nobody's here to rename or forget.
+  final bool house;
+
+  /// The shelf it sits on ('Horns & sirens'), for a house sound.
+  final String? group;
+
+  /// How a pad should first hold it: `name`, `colour`, `mode`, `choke`, `duck`.
+  final Map<String, dynamic>? hint;
+
+  /// What it says, for a sound that talks: found by a search for the words.
+  final String? words;
 
   @override
   String toString() => 'Sample #$id $name ${length.inMilliseconds} ms';
@@ -109,19 +132,28 @@ class SampleLibrary {
   final Future<String?> Function(int id)? fetch;
 
   /// A sample as the server lists it.
-  static Sample fromServer(Map<String, dynamic> j) => Sample(
+  static Sample fromServer(Map<String, dynamic> j, {bool house = false}) => Sample(
         id: (j['id'] as num).toInt(),
         name: j['name'] as String? ?? 'Sample',
         length: Duration(milliseconds: (j['duration_ms'] as num?)?.toInt() ?? 0),
         source: ServerSource((j['id'] as num).toInt()),
+        house: house,
+        group: j['group'] as String?,
+        hint: (j['pad'] as Map?)?.cast<String, dynamic>(),
+        words: j['words'] as String?,
       );
 
   /// The user's own, as the server lists them, with their shapes.
-  void takeServerList(List<Map<String, dynamic>> list) {
-    known.clear();
+  void takeServerList(List<Map<String, dynamic>> list) => _take(known, list, house: false);
+
+  /// The house's shelf, as the server lists it, with the shapes.
+  void takeHouseList(List<Map<String, dynamic>> list) => _take(house, list, house: true);
+
+  void _take(Map<int, Sample> into, List<Map<String, dynamic>> list, {required bool house}) {
+    into.clear();
     for (final j in list) {
-      final s = fromServer(j);
-      known[s.id] = s;
+      final s = fromServer(j, house: house);
+      into[s.id] = s;
       final shape = j['shape'];
       if (shape is List && shape.isNotEmpty) {
         peaks[s.id] = Float32List.fromList([for (final v in shape) ((v as num).toDouble() / 255).clamp(0.0, 1.0)]);
@@ -132,13 +164,16 @@ class SampleLibrary {
   /// The user's own samples, by id, as this device knows them.
   final known = <int, Sample>{};
 
+  /// The house's shelf, by id, in the order the server keeps it (bank by bank).
+  final house = <int, Sample>{};
+
   /// Each sample's shape, once it has been seen: 128 bins, 0..1.
   final peaks = <int, Float32List>{};
 
-  Sample? byId(int id) => id < 0 ? SampleKit.byId(id) : known[id];
+  Sample? byId(int id) => id < 0 ? SampleKit.byId(id) : known[id] ?? house[id];
 
   /// Every sample there is to pick from, the kit first.
-  List<Sample> get all => [...SampleKit.all, ...known.values];
+  List<Sample> get all => [...SampleKit.all, ...known.values, ...house.values];
 
   /// A file (or, in a browser, a URL) for [sample], or null where this device can
   /// put it nowhere.
