@@ -41,7 +41,11 @@ publish_server() {
   # On the box the tree being built from is this one; rsyncing it onto itself with
   # --delete would take the tests with it.
   if [ -z "$HERE" ]; then
+    # The box keeps a venv and a test cache of its own in server/ (it is a checkout that
+    # is worked in): --delete would replace them with this machine's, built for another
+    # Python.
     rsync -az --delete --exclude __pycache__ --exclude tests --exclude 'muse.toml' \
+      --exclude .venv --exclude .pytest_cache \
       -e "$SSH" server/ "$HOST":/opt/muse/server/
     scp -q -i "$KEY" deploy/Caddyfile "$HOST":/opt/muse/deploy/Caddyfile
   fi
