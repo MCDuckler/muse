@@ -11,6 +11,7 @@ import 'devices_sheet.dart';
 import 'feel.dart';
 import 'now_playing.dart';
 import 'swipe.dart';
+import 'widths.dart';
 import 'progress.dart';
 import 'pulse.dart';
 import 'mag.dart';
@@ -151,7 +152,7 @@ class PlayerBar extends StatelessWidget {
                 dense: true,
                 onTap: () {
               feel(Feel.tap);
-              _openNowPlaying(context);
+              openNowPlaying(context);
             },
                 leading: Stack(
                   clipBehavior: Clip.none,
@@ -223,17 +224,32 @@ class PlayerBar extends StatelessWidget {
     );
   }
 
-  /// Open the player, telling it where it is coming from.
+  /// Open the player: on a desk, the column beside the page; anywhere else, the page.
   ///
-  /// The rectangle is this bar's own, read at the moment it is tapped: the route grows
-  /// out of it and shrinks back into it, so the thing that was tapped is the thing
-  /// that opens.
+  /// The bar is the way in, on every size of screen. On a desk it unfolds into the
+  /// column down the right — which is this same player, with room around it — and the
+  /// bar gives way to it; the column's own Hide button folds it back and the bar
+  /// returns. One thing opening and closing, reached by pressing the thing it is.
   ///
-  /// On the app's own navigator, not a tab's: the player covers everything, tabs and
-  /// all, and it carries its own copy of the bar out of itself.
-  static void _openNowPlaying(BuildContext context) =>
-      Navigator.of(context, rootNavigator: true)
-          .push(nowPlayingRoute(from: barRect(context)));
+  /// It used to be reached by a double chevron at the *bottom of the left-hand rail*,
+  /// under Shortcuts and Settings: a control for the right-hand column, in the
+  /// opposite corner of the window, drawn as a panel-collapse arrow. The player was
+  /// the one thing in a music player that had no obvious way to it.
+  ///
+  /// Where there is no room for the column — a narrow window, a phone — the bar opens
+  /// the full page as before. The rectangle is the bar's own, read at the moment it is
+  /// tapped, so the route grows out of the thing that was tapped and shrinks back into
+  /// it. On the app's own navigator, not a tab's: the player covers everything, tabs
+  /// and all, and it carries its own copy of the bar out of itself.
+  static void openNowPlaying(BuildContext context) {
+    if (Width.forWidth(MediaQuery.sizeOf(context).width).hasDock) {
+      final app = context.read<AppState>();
+      if (!app.deskDock) app.toggleDeskDock();
+      return;
+    }
+    Navigator.of(context, rootNavigator: true)
+        .push(nowPlayingRoute(from: barRect(context)));
+  }
 
   /// Where this bar is on the screen, for the route to come out of.
   static Rect? barRect(BuildContext context) {
@@ -340,6 +356,12 @@ class _OpenByHandState extends State<_OpenByHand>
   /// pull got to, so the window picks up where the bar left off rather than snapping
   /// back to nothing first.
   void _open(double upwardPixelsPerSecond) {
+    // On a desk the pull unfolds the column, the same as a press does.
+    if (Width.forWidth(MediaQuery.sizeOf(context).width).hasDock) {
+      final app = context.read<AppState>();
+      if (!app.deskDock) app.toggleDeskDock();
+      return;
+    }
     // Android has no transition to carry the pull's speed into, so the pull simply
     // ends in the player. See NowPlayingRoute.plainly.
     if (NowPlayingRoute.plainly) {

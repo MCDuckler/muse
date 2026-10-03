@@ -48,7 +48,10 @@ class DeskDock extends StatelessWidget {
     // dock begins, not disappear under it — a list half-covered by a panel is a list
     // with its right-hand column missing.
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 220),
+      // Short enough that it reads as the bar unfolding rather than as a panel being
+      // announced. A quarter of a second is a long time to wait for something you
+      // pressed; everything in this shell moves on the same short ladder now.
+      duration: const Duration(milliseconds: 160),
       curve: Curves.easeOutCubic,
       width: open ? width : 0,
       child: ClipRect(

@@ -30,13 +30,9 @@ class LibrarySidebar extends StatefulWidget {
   const LibrarySidebar({
     super.key,
     required this.onSameTab,
-    required this.dockOpen,
-    this.onDock,
   });
 
   final VoidCallback onSameTab;
-  final bool dockOpen;
-  final VoidCallback? onDock;
 
   @override
   State<LibrarySidebar> createState() => _LibrarySidebarState();
@@ -212,15 +208,6 @@ class _LibrarySidebarState extends State<LibrarySidebar> {
                         .push(MaterialPageRoute(builder: (_) => const BoothPage())),
                   ),
                 const Spacer(),
-                if (widget.onDock != null)
-                  IconButton(
-                    icon: Icon(widget.dockOpen
-                        ? Icons.keyboard_double_arrow_right
-                        : Icons.keyboard_double_arrow_left),
-                    tooltip:
-                        widget.dockOpen ? 'Hide what is playing' : 'Show what is playing',
-                    onPressed: widget.onDock,
-                  ),
               ],
             ),
           ),

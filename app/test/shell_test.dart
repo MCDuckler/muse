@@ -21,6 +21,7 @@ import 'package:muse/src/api/models.dart';
 import 'package:muse/src/state/app_state.dart';
 import 'package:muse/src/state/selection.dart';
 import 'package:muse/src/ui/desk_dock.dart';
+import 'package:muse/src/ui/player_bar.dart';
 import 'package:muse/src/ui/home_page.dart';
 import 'package:muse/src/ui/sidebar.dart';
 import 'package:muse/src/ui/now_playing.dart';
@@ -204,6 +205,43 @@ void main() {
     expect(tester.widget<DeskDock>(find.byType(DeskDock)).open, isFalse);
     expect(app.deskDock, isFalse, reason: 'and it is remembered for next time');
     await drain(tester);
+  });
+
+  testWidgets('the bar is the way back to the player, on a desk as on a phone',
+      (tester) async {
+    // The player used to be reached by a double chevron at the bottom of the left-hand
+    // rail — a control for the right-hand column, in the opposite corner of the window,
+    // drawn as a panel-collapse arrow, under Shortcuts and Settings. The one thing in a
+    // music player with no obvious way to it.
+    //
+    // It is the bar now, which is the thing it is: pressed, it unfolds into the column;
+    // the column's own Hide folds it back and the bar returns.
+    await wholeShell(tester, const Size(1440, 900));
+    app.toggleDeskDock();
+    await tester.pumpAndSettle();
+    expect(tester.widget<DeskDock>(find.byType(DeskDock)).open, isFalse);
+    expect(find.byType(PlayerBar), findsOneWidget,
+        reason: 'folded away, what is playing is the bar along the bottom');
+
+    // What pressing the bar does, asked of the bar itself: the shell here has no
+    // engine behind it, so there is no row in the bar to put a finger on.
+    PlayerBar.openNowPlaying(
+        tester.element(find.byType(DeskDock)));
+    await tester.pumpAndSettle();
+    expect(app.deskDock, isTrue, reason: 'pressing the bar unfolds the column');
+    expect(tester.widget<DeskDock>(find.byType(DeskDock)).open, isTrue);
+    await drain(tester);
+  });
+
+  testWidgets('and that chevron is gone from both sides', (tester) async {
+    // The ones that are left fold the *library* away, which is a different thing and
+    // says so.
+    for (final size in [const Size(1440, 900), const Size(1200, 900)]) {
+      await wholeShell(tester, size);
+      expect(find.byTooltip('Show what is playing'), findsNothing);
+      expect(find.byTooltip('Hide what is playing'), findsNothing);
+      await drain(tester);
+    }
   });
 
   testWidgets('a middling window has the rail but keeps the player at the bottom',

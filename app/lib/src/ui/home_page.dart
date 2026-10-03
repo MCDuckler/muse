@@ -254,13 +254,9 @@ class _HomePageState extends State<HomePage> {
               width == Width.expanded &&
                       context.select<AppState, bool>((a) => a.sidebar)
                   ? LibrarySidebar(
-                      dockOpen: dock,
-                      onDock: width.hasDock ? app.toggleDeskDock : null,
                       onSameTab: _sameTab,
                     )
                   : _Rail(
-                      dockOpen: dock,
-                      onDock: width.hasDock ? app.toggleDeskDock : null,
                       onSameTab: _sameTab,
                     ),
             Expanded(
@@ -413,13 +409,9 @@ Future<void> _addDropped(
 /// the right-hand edge.
 class _Rail extends StatelessWidget {
   const _Rail({
-    required this.dockOpen,
-    required this.onDock,
     required this.onSameTab,
   });
 
-  final bool dockOpen;
-  final VoidCallback? onDock;
   final VoidCallback onSameTab;
 
   @override
@@ -495,14 +487,6 @@ class _Rail extends StatelessWidget {
                   onPressed: () => Navigator.of(context)
                       .push(MaterialPageRoute(builder: (_) => const SettingsPage())),
                 ),
-                if (onDock != null)
-                  IconButton(
-                    icon: Icon(dockOpen
-                        ? Icons.keyboard_double_arrow_right
-                        : Icons.keyboard_double_arrow_left),
-                    tooltip: dockOpen ? 'Hide what is playing' : 'Show what is playing',
-                    onPressed: onDock,
-                  ),
               ],
             ),
           ),
