@@ -233,6 +233,58 @@ void main() {
     await drain(tester);
   });
 
+  testWidgets('folding the library away does not change what the app can do',
+      (tester) async {
+    // Reported as "different icons in the sidebar when collapsing or not", and it was
+    // not only the icons: the folded rail had the keys, the open one had Refresh and
+    // the booth, and the pool came and went on its own. Narrowing the window took away
+    // a button you had just used and offered one you had never seen. Folding is a
+    // question about width.
+    //
+    // The two sets are compared whole rather than spot-checked for names, because a
+    // check for names passes whether or not it is looking at the thing it names — an
+    // earlier version of this test did exactly that, and went on passing with Refresh
+    // taken out of the rail.
+    const furniture = {
+      // The two fold buttons are each other's opposite, and the rail names its
+      // destinations where the open one writes them out.
+      'Fold the library away', 'Show your library down the side',
+      'Home', 'Queue', 'Search', 'Library', 'People', 'Hide',
+    };
+    // Inside the rail or the library column and nowhere else: the pages beyond them
+    // have tools of their own — there are three Refresh buttons in this tree — and a
+    // search of the whole screen finds those too, which is how an earlier version of
+    // this went on passing with Refresh taken out of the rail.
+    Set<String> tools() {
+      final side = find.byType(LibrarySidebar).evaluate().isNotEmpty
+          ? find.byType(LibrarySidebar)
+          : find.byType(NavigationRail);
+      expect(side, findsOneWidget, reason: 'neither way down the side was built');
+      return tester
+          .widgetList<Tooltip>(
+              find.descendant(of: side, matching: find.byType(Tooltip)))
+          .map((t) => (t.message ?? '').split(' · ').first)
+          .where((m) => m.isNotEmpty && !furniture.contains(m))
+          .toSet();
+    }
+
+    app.boothOn = true;
+    await wholeShell(tester, const Size(1440, 900));
+    final before = tools();
+    await drain(tester);
+
+    app.toggleSidebar();
+    await wholeShell(tester, const Size(1440, 900));
+    final after = tools();
+    await drain(tester);
+
+    expect(before, isNotEmpty, reason: 'nothing was found to compare');
+    expect(after, equals(before),
+        reason: 'folding changed what is on offer.\n'
+            '  only before: ${before.difference(after)}\n'
+            '  only after:  ${after.difference(before)}');
+  });
+
   testWidgets('and that chevron is gone from both sides', (tester) async {
     // The ones that are left fold the *library* away, which is a different thing and
     // says so.

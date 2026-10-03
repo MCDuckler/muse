@@ -11,6 +11,7 @@ import 'feel.dart';
 import 'home_page.dart' show openInTab;
 import 'jam_page.dart';
 import 'library_page.dart';
+import '../../main.dart' show showShortcuts;
 import 'booth_page.dart' show BoothPage;
 import 'mag.dart';
 import 'mag_parts.dart';
@@ -113,6 +114,12 @@ class _LibrarySidebarState extends State<LibrarySidebar> {
                   icon: const Icon(Icons.refresh, size: 20),
                   tooltip: 'Refresh',
                   onPressed: app.refresh,
+                ),
+                // And the keys, which only the folded rail used to offer.
+                IconButton(
+                  icon: const Icon(Icons.keyboard_outlined, size: 20),
+                  tooltip: 'Keys (?)',
+                  onPressed: () => showShortcuts(context),
                 ),
                 const Spacer(),
                 IconButton(

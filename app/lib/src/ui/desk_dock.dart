@@ -41,6 +41,14 @@ class DeskDock extends StatelessWidget {
   /// have to scroll to press pause on is not a player.
   static const defaultWidth = 420.0;
 
+  /// Narrower than this and the player's own controls do not fit across it.
+  ///
+  /// It was 320, and at 320 the row of them ran sixteen pixels past the edge of the
+  /// column — a black and yellow bar in a debug build and a button half off the panel
+  /// in a release one, for anybody who dragged the column as narrow as it would go.
+  /// Measured rather than chosen: 320 spills, 340 does not. See dock_player_test.
+  static const minWidth = 340.0;
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;

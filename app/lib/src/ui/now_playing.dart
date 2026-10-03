@@ -1739,7 +1739,32 @@ class _DeskNowPlayingState extends State<DeskNowPlaying> {
             if (side >= 140) {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [head, record(side: side), under],
+                children: [
+                  head,
+                  // The record takes what is left, and shrinks into it rather than
+                  // pushing the controls off the bottom.
+                  //
+                  // Its size used to be worked out from two constants — so much for
+                  // the head, so much for everything under the record — and a title
+                  // long enough to take two lines is taller than the constant says, so
+                  // the panel spilled over the height it had asked for: thirty-one
+                  // pixels of black and yellow across the bottom of the player in a
+                  // debug build, and the volume row cut off in a release one. An
+                  // estimate of somebody else's height is a guess, and this one was
+                  // wrong for any record with a long name.
+                  //
+                  // Measured instead, by the only thing that can: the head and the
+                  // controls take what they need, and whatever is left is the record's.
+                  // scaleDown, so it only ever gives way — a panel with room to spare
+                  // draws the record at the size it asked for, as before.
+                  Flexible(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: record(side: side),
+                    ),
+                  ),
+                  under,
+                ],
               );
             }
             // Shorter than a record and its controls together. Nothing is squashed;

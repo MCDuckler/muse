@@ -12,6 +12,7 @@ import 'glass.dart';
 import 'motion.dart';
 import 'pane.dart';
 import '../../main.dart' show showShortcuts;
+import 'booth_page.dart' show BoothPage;
 import '../api/models.dart';
 import 'browse_page.dart';
 import 'command_palette.dart';
@@ -323,11 +324,12 @@ class _HomePageState extends State<HomePage> {
               Grabbable(
                 width: context.select<AppState, double>((a) => a.dockWidth),
                 fromRight: true,
-                min: 320,
+                min: DeskDock.minWidth,
                 // Never more than half the window, whatever was saved on a bigger
                 // screen: a dock wider than the page it is beside is a page in a
                 // margin.
-                max: (MediaQuery.sizeOf(context).width * 0.5).clamp(320.0, 640.0),
+                max: (MediaQuery.sizeOf(context).width * 0.5)
+                    .clamp(DeskDock.minWidth, 640.0),
                 onChanged: (w) => app.setDockWidth(w),
                 onSettled: (w) => app.setDockWidth(w, remember: true),
               ),
@@ -336,9 +338,10 @@ class _HomePageState extends State<HomePage> {
                 open: dock,
                 width: context
                     .select<AppState, double>((a) => a.dockWidth)
-                    .clamp(320.0,
+                    .clamp(
+                        DeskDock.minWidth,
                         (MediaQuery.sizeOf(context).width * 0.5)
-                            .clamp(320.0, 640.0)),
+                            .clamp(DeskDock.minWidth, 640.0)),
                 onClose: app.toggleDeskDock,
               ),
           ],
@@ -454,16 +457,21 @@ class _Rail extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (pending > 0)
-                  IconButton(
-                    icon: Badge(
-                      label: Text('$pending'),
-                      child: const Icon(Icons.downloading),
-                    ),
-                    tooltip: 'Pool',
-                    onPressed: () => Navigator.of(context)
-                        .push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
-                  ),
+                // Always, as the library down the side has it. Shown only while
+                // something was pending, it was a button that appeared and disappeared
+                // on its own — and the pool is where you go to find out *why* nothing
+                // is pending, which is exactly when it was not there.
+                IconButton(
+                  icon: pending > 0
+                      ? Badge(
+                          label: Text('$pending'),
+                          child: const Icon(Icons.downloading),
+                        )
+                      : const Icon(Icons.downloading),
+                  tooltip: pending > 0 ? 'Pool · $pending to fetch' : 'Pool',
+                  onPressed: () => Navigator.of(context)
+                      .push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
+                ),
                 if (Width.of(context) == Width.expanded)
                   IconButton(
                     icon: const Icon(Icons.keyboard_double_arrow_right),
@@ -481,6 +489,26 @@ class _Rail extends StatelessWidget {
                   tooltip: 'Keys (?)',
                   onPressed: () => showShortcuts(context),
                 ),
+                // The same tools as the library down the side, because folding the
+                // library away is a question about *width* and not about what the app
+                // can do. It used to change the answer: the rail had the keys and the
+                // side had Refresh and the booth, so narrowing the window took away a
+                // button you had just used and offered one you had never seen.
+                IconButton(
+                  icon: const Icon(Icons.refresh),
+                  tooltip: 'Refresh',
+                  onPressed: app.refresh,
+                ),
+                if (app.boothOn)
+                  IconButton(
+                    icon: Icon(Icons.album_outlined,
+                        color: app.boothIfOpened?.live ?? false
+                            ? Theme.of(context).colorScheme.primary
+                            : null),
+                    tooltip: 'The booth',
+                    onPressed: () => Navigator.of(context, rootNavigator: true)
+                        .push(MaterialPageRoute(builder: (_) => const BoothPage())),
+                  ),
                 IconButton(
                   icon: const Icon(Icons.settings_outlined),
                   tooltip: 'Settings',
