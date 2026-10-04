@@ -3,11 +3,13 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
+import '../state/library_arrangement.dart';
 import '../worker/parts_jobs.dart';
 import 'artwork.dart';
 import 'command_palette.dart';
 import 'downloads_page.dart';
 import 'feel.dart';
+import 'folders.dart';
 import 'home_page.dart' show openFeedOnSecondTap, openInTab;
 import 'jam_page.dart';
 import 'library_page.dart';
@@ -63,13 +65,25 @@ class _LibrarySidebarState extends State<LibrarySidebar> {
     final scheme = Theme.of(context).colorScheme;
     final tab = context.select<AppState, int>((a) => a.homeTab);
     final playlists = context.select<AppState, List<Playlist>>((a) => a.playlists);
+    final folders = context.select<AppState, List<PlaylistFolder>>((a) => a.folders);
     final pending = context.select<AppState, int>((a) => a.downloadsPending);
     final jamming = context.select<AppState, String?>((a) => a.jam?.code);
     final q = _filter.text.trim().toLowerCase();
-    final shown = [
-      for (final p in playlists)
-        if (q.isEmpty || p.name.toLowerCase().contains(q)) p
-    ];
+    final arranged = LibraryArrangement(playlists, folders);
+    // Searching flattens the tree: a name typed is a name wanted, whichever divider
+    // it is behind, and the divider is written under it instead.
+    final List<Widget> rows = q.isNotEmpty
+        ? [
+            for (final p in playlists)
+              if (p.name.toLowerCase().contains(q))
+                _PlaylistRow(playlist: p, under: arranged.folderOf(p)?.name)
+          ]
+        : [
+            for (final p in arranged.pinned) _PlaylistRow(playlist: p, pinned: true),
+            for (final s in arranged.shelves) _FolderNode(shelf: s),
+            for (final p in arranged.loose)
+              if (!p.pinned) _PlaylistRow(playlist: p),
+          ];
 
     return Container(
       width: 264,
@@ -153,7 +167,7 @@ class _LibrarySidebarState extends State<LibrarySidebar> {
               ),
             ),
           Expanded(
-            child: shown.isEmpty
+            child: rows.isEmpty
                 ? Padding(
                     padding: const EdgeInsets.all(16),
                     child: Text(
@@ -165,8 +179,8 @@ class _LibrarySidebarState extends State<LibrarySidebar> {
                   )
                 : ListView.builder(
                     padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
-                    itemCount: shown.length,
-                    itemBuilder: (context, i) => _PlaylistRow(playlist: shown[i]),
+                    itemCount: rows.length,
+                    itemBuilder: (context, i) => rows[i],
                   ),
           ),
           Container(
@@ -275,11 +289,68 @@ class _Place extends StatelessWidget {
   }
 }
 
+/// A divider in the side column: the folder's name, how many, and — open — the lists
+/// behind it, indented. Open or closed the same way as on the library page.
+class _FolderNode extends StatelessWidget {
+  const _FolderNode({required this.shelf});
+  final FolderShelf shelf;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final app = context.read<AppState>();
+    final id = 'folder:${shelf.folder.id}';
+    final closed = context.select<AppState, bool>((a) => a.closedSections.contains(id));
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        InkWell(
+          onTap: () => app.setSectionClosed(id, !closed),
+          onLongPress: () => folderMenu(context, app, shelf),
+          onSecondaryTap: () => folderMenu(context, app, shelf),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 36,
+                  child: Icon(closed ? Icons.folder_outlined : Icons.folder_open_outlined,
+                      size: 20, color: scheme.onSurfaceVariant),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(shelf.folder.name.toUpperCase(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Mag.flag(10.5, color: scheme.onSurface)),
+                ),
+                Text('${shelf.playlists.length}',
+                    style: Mag.numerals(13, color: scheme.primary)),
+                Icon(closed ? Icons.expand_more : Icons.expand_less,
+                    size: 18, color: scheme.onSurfaceVariant),
+              ],
+            ),
+          ),
+        ),
+        if (!closed)
+          for (final p in shelf.playlists) _PlaylistRow(playlist: p, indent: 14),
+      ],
+    );
+  }
+}
+
 /// A playlist in the side: its cover, its name, how many songs.
 class _PlaylistRow extends StatelessWidget {
-  const _PlaylistRow({required this.playlist});
+  const _PlaylistRow({required this.playlist, this.indent = 0, this.under, this.pinned = false});
 
   final Playlist playlist;
+
+  /// How far in it stands: behind a divider, a little.
+  final double indent;
+
+  /// The folder it is behind, written under the name when the tree is flattened.
+  final String? under;
+  final bool pinned;
 
   @override
   Widget build(BuildContext context) {
@@ -290,7 +361,7 @@ class _PlaylistRow extends StatelessWidget {
       onTap: () => openInTab(
           app.homeTab, (_) => PlaylistPage(playlistId: p.id, name: p.name)),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+        padding: EdgeInsets.fromLTRB(6 + indent, 5, 6, 5),
         child: Row(
           children: [
             p.isFavourites
@@ -312,15 +383,21 @@ class _PlaylistRow extends StatelessWidget {
                           color: scheme.onSurface, fontWeight: FontWeight.w600)),
                   // "0 songs" is a zero in print: an empty list is called empty.
                   Text(
-                      p.itemCount == 0
-                          ? 'empty'
-                          : p.itemCount == 1
-                              ? '1 song'
-                              : '${p.itemCount} songs',
+                      [
+                        if (under != null) under!,
+                        p.itemCount == 0
+                            ? 'empty'
+                            : p.itemCount == 1
+                                ? '1 song'
+                                : '${p.itemCount} songs',
+                      ].join(' · '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: Mag.typewriter(10.5, color: scheme.onSurfaceVariant)),
                 ],
               ),
             ),
+            if (pinned) Icon(Icons.push_pin, size: 12, color: scheme.primary),
           ],
         ),
       ),

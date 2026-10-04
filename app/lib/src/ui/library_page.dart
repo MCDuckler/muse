@@ -16,6 +16,8 @@ import 'mag.dart';
 import 'mag_parts.dart';
 import 'feed_page.dart';
 import 'fold.dart';
+import 'folders.dart';
+import '../state/library_arrangement.dart';
 import 'kept_page.dart';
 import 'listening_page.dart';
 import 'mini_player.dart';
@@ -67,25 +69,10 @@ class LibraryPage extends StatelessWidget {
           actions: [
             PressButton(
               label: 'New',
-              onTap: () async {
-                final name = await promptForName(context, 'New playlist');
-                if (name == null) return;
-                await app.api.createPlaylist(name);
-                await app.refreshPlaylists();
-              },
+              onTap: () => newInLibrary(context, app),
             ),
           ],
-          builder: (context, shrunk) => Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              for (final p in app.playlists) _playlistRow(context, app, p, shrunk),
-              if (app.playlists.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.all(32),
-                  child: Center(child: Text('No playlists yet.')),
-                ),
-            ],
-          ),
+          builder: (context, shrunk) => _Playlists(shrunk: shrunk),
         ),
         // What is on the other services, and which of it is mirrored here.
         const ServiceShelf(),
@@ -93,11 +80,59 @@ class LibraryPage extends StatelessWidget {
       ),
     );
   }
+}
 
-  /// One playlist. Shrunk, it is a line: a small cover and the name, with the counts
-  /// left for the full size.
-  Widget _playlistRow(BuildContext context, AppState app, Playlist p, bool shrunk) =>
-    ListTile(
+/// The playlists, arranged the way the box is read: what is pinned on top, then the
+/// divider cards with their lists behind them, then everything loose.
+class _Playlists extends StatelessWidget {
+  const _Playlists({required this.shrunk});
+  final bool shrunk;
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    final arranged = LibraryArrangement(app.playlists, app.folders);
+    final scheme = Theme.of(context).colorScheme;
+    Widget label(String text) => Padding(
+          padding: EdgeInsets.fromLTRB(16, shrunk ? 6 : 12, 16, 2),
+          child: Text(text.toUpperCase(),
+              style: Mag.typewriter(10, color: scheme.onSurfaceVariant, bold: true)),
+        );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (arranged.pinned.isNotEmpty) ...[
+          label('Pinned'),
+          for (final p in arranged.pinned) PlaylistRow(playlist: p, shrunk: shrunk),
+        ],
+        for (final s in arranged.shelves) FolderCard(shelf: s, shrunk: shrunk),
+        if (!arranged.flat && arranged.loose.isNotEmpty) label('Everything else'),
+        for (final p in arranged.loose)
+          if (!p.pinned) PlaylistRow(playlist: p, shrunk: shrunk),
+        if (app.playlists.isEmpty)
+          const Padding(
+            padding: EdgeInsets.all(32),
+            child: Center(child: Text('No playlists yet.')),
+          ),
+      ],
+    );
+  }
+}
+
+/// One playlist. Shrunk, it is a line: a small cover and the name, with the counts
+/// left for the full size. The same row wherever a playlist is listed: loose in the
+/// library, behind a divider card, on a folder's page.
+class PlaylistRow extends StatelessWidget {
+  const PlaylistRow({super.key, required this.playlist, this.shrunk = false});
+
+  final Playlist playlist;
+  final bool shrunk;
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.read<AppState>();
+    final p = playlist;
+    return ListTile(
       dense: shrunk,
       visualDensity: shrunk ? VisualDensity.compact : null,
       // Favourites gets the heart it is filled with rather than a cover made of
@@ -120,6 +155,11 @@ class LibraryPage extends StatelessWidget {
           if (p.isMirror) ...[
             const SizedBox(width: 8),
             _SourceTag(kind: p.kind),
+          ],
+          if (p.pinned) ...[
+            const SizedBox(width: 6),
+            Icon(Icons.push_pin, size: 13,
+                color: Theme.of(context).colorScheme.primary),
           ],
         ],
       ),
@@ -217,12 +257,25 @@ class LibraryPage extends StatelessWidget {
             messenger.say(snack(Text(
                 '${full.items.length} added to '
                 '"${app.activeQueue?.name ?? 'the queue'}"')));
+          } else if (v == 'folder') {
+            await moveToFolderSheet(context, app, p);
+          } else if (v == 'pin') {
+            await app.api.pinPlaylist(p.id, !p.pinned);
+            await app.refreshPlaylists();
           }
         },
         itemBuilder: (context) => [
           const PopupMenuItem(value: 'play', child: Text('Play')),
           const PopupMenuItem(value: 'shuffle', child: Text('Shuffle')),
           const PopupMenuItem(value: 'queue', child: Text('Add all to queue')),
+          // Where it sits in the box: behind a divider, or at the very top.
+          if (!p.isFavourites) ...[
+            PopupMenuItem(
+                value: 'folder',
+                child: Text(p.folderId == null ? 'Move to a folder…' : 'Move to another folder…')),
+            PopupMenuItem(
+                value: 'pin', child: Text(p.pinned ? 'Unpin from the top' : 'Pin to the top')),
+          ],
           if (OfflineStore.supported) ...[
             const PopupMenuItem(
                 value: 'keep', child: Text('Keep on this device')),
@@ -266,6 +319,7 @@ class LibraryPage extends StatelessWidget {
       onTap: () => openPage(
           context, (_) => PlaylistPage(playlistId: p.id, name: p.name)),
     );
+  }
 }
 
 /// A picture of your own for a playlist, instead of the one drawn from its records.

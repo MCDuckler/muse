@@ -1308,6 +1308,53 @@ class ApiClient {
     return d.map((e) => Playlist.fromJson(e)).toList();
   }
 
+  // ---------------- folders ----------------
+  Future<List<PlaylistFolder>> folders() async {
+    final d = await _decode(await net.get(_u('/playlist-folders'), headers: _headers))
+        as Map<String, dynamic>;
+    return ((d['items'] ?? const []) as List)
+        .map((e) => PlaylistFolder.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<PlaylistFolder> createFolder(String name, {int? parentId}) async =>
+      PlaylistFolder.fromJson(await _decode(await net.post(_u('/playlist-folders'),
+              headers: _headers,
+              body: jsonEncode({'name': name, if (parentId != null) 'parent_id': parentId})))
+          as Map<String, dynamic>);
+
+  Future<PlaylistFolder> renameFolder(int id, String name) async =>
+      PlaylistFolder.fromJson(await _decode(await net.patch(_u('/playlist-folders/$id'),
+              headers: {..._headers, 'Content-Type': 'application/json'},
+              body: jsonEncode({'name': name}))) as Map<String, dynamic>);
+
+  /// The divider comes out; the playlists stay. Answers how many were in it.
+  Future<int> deleteFolder(int id) async {
+    final d = await _decode(await net.delete(_u('/playlist-folders/$id'), headers: _headers))
+        as Map<String, dynamic>;
+    return (d['freed'] ?? 0) as int;
+  }
+
+  /// Everything in the folder, list by list, each song once.
+  Future<List<Track>> folderTracks(int id) async {
+    final d = await _decode(
+        await net.get(_u('/playlist-folders/$id/tracks'), headers: _headers))
+        as Map<String, dynamic>;
+    return ((d['items'] ?? const []) as List)
+        .map((e) => Track.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// File a playlist in a folder, or back in the box with null.
+  Future<void> placePlaylist(int playlistId, {int? folderId, int? pos}) async =>
+      await _decode(await net.post(_u('/playlists/$playlistId/place'),
+          headers: _headers,
+          body: jsonEncode({'folder_id': folderId, if (pos != null) 'pos': pos})));
+
+  Future<void> pinPlaylist(int playlistId, bool pinned) async =>
+      await _decode(await net.post(_u('/playlists/$playlistId/pin'),
+          headers: _headers, body: jsonEncode({'pinned': pinned})));
+
   Future<Playlist> playlist(int id) async =>
       Playlist.fromJson(await _decode(await net.get(_u('/playlists/$id'), headers: _headers))
           as Map<String, dynamic>);

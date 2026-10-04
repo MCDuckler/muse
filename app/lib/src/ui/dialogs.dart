@@ -6,6 +6,7 @@ import '../api/client.dart';
 import '../api/models.dart';
 import 'artwork.dart';
 import '../state/app_state.dart';
+import '../state/library_arrangement.dart';
 import '../state/playlist_ticks.dart';
 import 'snack.dart';
 import 'widths.dart';
@@ -191,6 +192,18 @@ class _PlaylistPickerState extends State<_PlaylistPicker> {
     messenger.say(snack(Text(said)));
   }
 
+  List<(String?, List<Playlist>)> _grouped(List<Playlist> playlists) {
+    final arranged = LibraryArrangement(playlists, widget.app.folders);
+    if (arranged.flat) return [(null, playlists)];
+    return [
+      if (arranged.pinned.isNotEmpty) ('Pinned', arranged.pinned),
+      for (final s in arranged.shelves)
+        if (s.playlists.isNotEmpty) (s.folder.name, s.playlists),
+      (arranged.shelves.isEmpty ? null : 'Everything else',
+          [for (final p in arranged.loose) if (!p.pinned) p]),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final many = _tracks.length > 1;
@@ -273,18 +286,30 @@ class _PlaylistPickerState extends State<_PlaylistPicker> {
                           .say(snack(Text('Added to "$name"')));
                     },
                   ),
-                  for (final p in playlists)
-                    _PlaylistTick(
-                      playlist: p,
-                      state: _ticks.stateOf(p.id),
-                      loading: _loading,
-                      // A mirror of somebody else's list is a view, not a place to put
-                      // things; the server says so and the tick should not pretend
-                      // otherwise.
-                      onTap: p.editable
-                          ? () => setState(() => _ticks.toggle(p.id))
-                          : null,
-                    ),
+                  // The box, read the way the library reads it: pinned, then each
+                  // folder under its name, then everything loose.
+                  for (final (head, group) in _grouped(playlists)) ...[
+                    if (head != null)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 10, 16, 2),
+                        child: Text(head.toUpperCase(),
+                            style: Mag.typewriter(10,
+                                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                bold: true)),
+                      ),
+                    for (final p in group)
+                      _PlaylistTick(
+                        playlist: p,
+                        state: _ticks.stateOf(p.id),
+                        loading: _loading,
+                        // A mirror of somebody else's list is a view, not a place to put
+                        // things; the server says so and the tick should not pretend
+                        // otherwise.
+                        onTap: p.editable
+                            ? () => setState(() => _ticks.toggle(p.id))
+                            : null,
+                      ),
+                  ],
                 ],
               ),
             ),

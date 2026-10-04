@@ -24,6 +24,7 @@ import 'desk_dock.dart';
 import 'dropped_files.dart';
 import 'snack.dart';
 import 'library_page.dart';
+import 'folders.dart';
 import 'settings_page.dart';
 import 'sidebar.dart';
 import 'not_connected.dart';
@@ -158,7 +159,7 @@ class _HomePageState extends State<HomePage> {
 
   /// Open whatever the address bar was pointing at when the app started.
   ///
-  /// /p/12 a playlist, /t/34 a song, /a/Low a record, /r/Bicep an artist. Anything
+  /// /p/12 a playlist, /f/3 a folder, /t/34 a song, /a/Low a record, /r/Bicep an artist. Anything
   /// else is somebody's typo or an old link, and the app opens where it always does
   /// rather than saying so: a link that no longer works should not be a wall.
   Future<void> _followTheLink() async {
@@ -180,6 +181,11 @@ class _HomePageState extends State<HomePage> {
             .map((p) => p.name)
             .firstOrNull;
         _openInTab(Tabs.library, (_) => PlaylistPage(playlistId: id, name: name ?? 'Playlist'));
+      case 'f':
+        final id = int.tryParse(which);
+        if (id == null) return;
+        app.setHomeTab(Tabs.library);
+        _openInTab(Tabs.library, (_) => FolderPage(folderId: id));
       case 't':
         final id = int.tryParse(which);
         if (id == null) return;

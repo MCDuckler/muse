@@ -9,6 +9,7 @@ import '../state/app_state.dart';
 import 'browse_page.dart';
 import 'downloads_page.dart';
 import 'feel.dart';
+import 'folders.dart';
 import 'home_page.dart' show openInTab;
 import 'library_page.dart';
 import 'listening_page.dart';
@@ -254,15 +255,27 @@ class _PaletteState extends State<_Palette> {
     for (final c in _commands(app)) {
       offer(c);
     }
+    final folderNames = {for (final f in app.folders) f.id: f.name};
     for (final p in app.playlists) {
+      final folder = folderNames[p.folderId];
       offer(PaletteItem(
         title: p.name,
-        detail: '${p.itemCount} songs',
+        detail: folder == null ? '${p.itemCount} songs' : '$folder · ${p.itemCount} songs',
         group: 'Playlists',
         icon: Icons.queue_music_outlined,
-        also: 'playlist',
+        also: 'playlist ${folder ?? ''}',
         run: () => openInTab(
             Tabs.library, (_) => PlaylistPage(playlistId: p.id, name: p.name)),
+      ));
+    }
+    for (final f in app.folders) {
+      offer(PaletteItem(
+        title: f.name,
+        detail: '${f.count} playlists',
+        group: 'Folders',
+        icon: Icons.folder_outlined,
+        also: 'folder',
+        run: () => openInTab(Tabs.library, (_) => FolderPage(folderId: f.id)),
       ));
     }
     for (final queue in app.queues) {

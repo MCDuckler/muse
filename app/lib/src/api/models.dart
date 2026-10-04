@@ -690,6 +690,14 @@ class Playlist {
   /// title, artist, album, year, duration, bpm. Kept with the playlist.
   final String sort;
 
+  /// Where you filed it: the folder it sits in, its place there, whether it is pinned
+  /// to the top, and when you last opened it. Yours, not the playlist's — see
+  /// PlaylistFolder.
+  final int? folderId;
+  final int? placePos;
+  final bool pinned;
+  final DateTime? lastOpenedAt;
+
   const Playlist({
     required this.id,
     required this.name,
@@ -711,6 +719,10 @@ class Playlist {
     this.ownerName,
     this.ownerId,
     this.sort = 'added_desc',
+    this.folderId,
+    this.placePos,
+    this.pinned = false,
+    this.lastOpenedAt,
     bool? editable,
   }) : editable = editable ??
             ((kind == 'local' || kind == 'favourites') && mine);
@@ -742,6 +754,12 @@ class Playlist {
         ownerId: j['owner'] is Map ? (j['owner'] as Map)['id'] as int? : null,
         editable: j['editable'] as bool?,
         sort: (j['sort'] ?? 'added_desc') as String,
+        folderId: j['folder_id'] as int?,
+        placePos: j['place_pos'] as int?,
+        pinned: j['pinned'] == true,
+        lastOpenedAt: j['last_opened_at'] is String
+            ? DateTime.tryParse(j['last_opened_at'] as String)
+            : null,
       );
 
   /// Rows can be dragged only in the hand order; in any other, the positions on show
@@ -1749,6 +1767,32 @@ class LinkedService {
 }
 
 /// One of a linked service's lists, and whether we already mirror it.
+/// A divider card in the record box: a folder of playlists. Yours alone — a friend's
+/// list kept in your library goes in your folder, and nobody sees your folders.
+class PlaylistFolder {
+  final int id;
+  final String name;
+  final int? parentId;
+  final int pos;
+  final int count;
+
+  const PlaylistFolder({
+    required this.id,
+    required this.name,
+    this.parentId,
+    this.pos = 0,
+    this.count = 0,
+  });
+
+  factory PlaylistFolder.fromJson(Map<String, dynamic> j) => PlaylistFolder(
+        id: j['id'] as int,
+        name: (j['name'] ?? '') as String,
+        parentId: j['parent_id'] as int?,
+        pos: (j['pos'] ?? 0) as int,
+        count: (j['count'] ?? 0) as int,
+      );
+}
+
 class RemoteList {
   final String remoteId;
   final String name;

@@ -315,6 +315,10 @@ class AppState extends ChangeNotifier {
   Queue? activeQueue;
   List<Playlist> playlists = const [];
 
+  /// The dividers in the box. Asked for alongside the playlists; a server from before
+  /// there were any answers nothing, and the library is one flat list as before.
+  List<PlaylistFolder> folders = const [];
+
   StreamSubscription? _events;
   bool _disposed = false;
 
@@ -1129,6 +1133,7 @@ class AppState extends ChangeNotifier {
     queues = const [];
     _setQueue(null);
     playlists = const [];
+    folders = const [];
     favourites = <int>{};
     favouritesPlaylistId = null;
     jam = null;
@@ -1147,8 +1152,10 @@ class AppState extends ChangeNotifier {
     // Two questions, one wait: neither answer depends on the other.
     final asked = api.queues();
     final lists = api.playlists();
+    final dividers = _askFolders();
     queues = await asked;
     playlists = await lists;
+    folders = await dividers;
     if (activeQueue == null && queues.isNotEmpty) {
       // The one that was on last time, if it is still there; otherwise the first.
       final remembered = _lastQueueId;
@@ -1887,8 +1894,19 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> refreshPlaylists() async {
+    final dividers = _askFolders();
     playlists = await api.playlists();
+    folders = await dividers;
     notifyListeners();
+  }
+
+  Future<List<PlaylistFolder>> _askFolders() async {
+    try {
+      return await api.folders();
+    } catch (_) {
+      // A server from before folders, or a moment's trouble: the lists still come.
+      return folders;
+    }
   }
 
   /// Play a list of tracks now, replacing the queue.
