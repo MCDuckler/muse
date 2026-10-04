@@ -88,8 +88,10 @@ class _LibrarySidebarState extends State<LibrarySidebar> {
               icon: tab == index ? selectedIcon : icon,
               selected: tab == index,
               onTap: () {
-                if (tab == index) {
-                  if (!openFeedOnSecondTap(app, index)) widget.onSameTab();
+                if (openFeedOnSecondTap(app, index)) {
+                  // The feed is on its way.
+                } else if (tab == index) {
+                  widget.onSameTab();
                 } else {
                   feel(Feel.pick);
                 }

@@ -1,6 +1,7 @@
-# The WetOwl box (netcup, 89.58.49.140) runs api + db + caddy. It does NOT run the ingest worker:
-# YouTube refuses datacenter IPs (measured — see worker/NOTES.md), so the worker
-# lives on a residential connection and reaches this stack outbound only.
+# The WetOwl box (netcup, 89.58.49.140) runs api + db + caddy. YouTube refuses this box's own
+# address (measured — see worker/NOTES.md), which is why the ingest worker has lived on a
+# residential connection. `warp` and `worker` below are the attempt to change that: the
+# same worker, here, with only its YouTube traffic leaving through Cloudflare WARP.
 services:
   db:
     image: postgres:17-alpine
@@ -41,6 +42,48 @@ services:
     depends_on: [api]
     restart: unless-stopped
 
+  # Cloudflare WARP, as the address YouTube sees. From this box directly every request got
+  # "Sign in to confirm you're not a bot" — IPv4 and IPv6, four player clients, with and
+  # without a PO token — and the same requests through WARP downloaded.
+  #
+  # Two rules, both learned the expensive way:
+  #   * Never `network_mode: host`. WARP then routes the whole box through the tunnel,
+  #     replies to SSH and HTTPS leave by the wrong door, and the box drops off the
+  #     internet until someone reboots it from the provider's panel (2026-09-15).
+  #   * Never `ports:`. Docker-published ports bypass ufw here, so a published 1080 is an
+  #     open proxy for the whole internet. Only containers on `egress` can reach it.
+  warp:
+    image: caomingjun/warp:2026.7.1377.0-2.12.0
+    cap_add: [NET_ADMIN]
+    devices: ["/dev/net/tun:/dev/net/tun"]
+    sysctls:
+      net.ipv6.conf.all.disable_ipv6: "0"
+      net.ipv4.conf.all.src_valid_mark: "1"
+    environment:
+      WARP_SLEEP: "2"
+    volumes:
+      - ./data/warp:/var/lib/cloudflare-warp     # keep the registration across restarts
+    networks: [egress]
+    restart: unless-stopped
+
+  # The ingest worker, on the server, downloading through `warp`. Behind a profile until the
+  # soak test says WARP holds up: `docker compose --profile youtube up -d worker`. The laptop
+  # worker keeps leasing from the same queue, so a bot check here hands the job back and
+  # home picks it up.
+  worker:
+    build: ../worker
+    profiles: [youtube]
+    depends_on: [api, warp]
+    environment:
+      MUSE_API: http://api:8770
+      MUSE_WORKER_SECRET: ${MUSE_WORKER_SECRET:-}
+      MUSE_WORKER_NAME: wetowl-box-warp
+      MUSE_YTDLP: yt-dlp
+      MUSE_YTDLP_PROXY: socks5://warp:1080
+      MUSE_CONCURRENCY: "2"
+    networks: [default, egress]
+    restart: unless-stopped
+
   # Contingency, not baseline. The spike downloaded fine with neither a PO token
   # nor cookies; enable this (and MUSE_POT_BASE_URL on the worker) the day yt-dlp
   # starts reporting "PO Token required". Runs next to the WORKER, not here.
@@ -48,3 +91,8 @@ services:
   #   image: brainicism/bgutil-ytdlp-pot-provider
   #   ports: ["4416:4416"]
   #   restart: unless-stopped
+
+networks:
+  default: {}
+  # WARP's own network. Only what should leave through Cloudflare joins it.
+  egress: {}

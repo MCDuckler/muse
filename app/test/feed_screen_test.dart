@@ -17,6 +17,7 @@ import 'package:muse/src/api/connection.dart';
 import 'package:muse/src/state/app_state.dart';
 import 'package:muse/src/state/selection.dart';
 import 'package:muse/src/ui/feed_screen.dart';
+import 'package:muse/src/ui/home_page.dart' show MuseNavigationBar;
 import 'package:muse/src/ui/library_page.dart';
 import 'package:muse/src/ui/theme.dart';
 
@@ -147,6 +148,12 @@ void main() {
     expect(find.text('third'), findsOneWidget);
     expect(find.text('1 / 2'), findsOneWidget);
     await shot(tester, 'feed-phone');
+    // One list, scrolled: a drag up brings the second card into view.
+    await tester.drag(find.byType(ListView), const Offset(0, -900));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('SECOND SONG'), findsOneWidget);
+    expect(find.byType(PageView), findsNothing);
   });
 
   testWidgets('a genre on a card can be followed from there', (tester) async {
@@ -163,6 +170,18 @@ void main() {
     expect(state.discoverTappedAgain(), isFalse, reason: 'and the pair is spent');
     await Future<void>.delayed(const Duration(milliseconds: 500));
     expect(state.discoverTappedAgain(), isFalse, reason: 'too slow to be a pair');
+  });
+
+  testWidgets('from another tab it is two taps on Discover, not three', (tester) async {
+    app.homeTab = Tabs.home;
+    await show(tester, const MuseNavigationBar());
+    await tester.tap(find.text('Discover'));
+    await tester.pump();
+    expect(app.homeTab, Tabs.discover, reason: 'the first tap switches');
+    await tester.tap(find.text('Discover'));
+    await tester.pump();
+    expect(app.discoverTappedAgain(), isFalse,
+        reason: 'the pair was spent on opening the feed, so a third tap starts afresh');
   });
 
   testWidgets('a playlist offers its order, and only the hand order can be dragged', (tester) async {

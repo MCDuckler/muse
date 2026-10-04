@@ -46,8 +46,9 @@ final ValueNotifier<({int tab, WidgetBuilder page})?> _openRequests = ValueNotif
 /// Open [page] inside [tab], switching to it.
 void openInTab(int tab, WidgetBuilder page) => _openRequests.value = (tab: tab, page: page);
 
-/// The Discover tab tapped again while showing: the second tap of a quick pair opens
-/// the feed. Called by every bar that has the tab, before the usual same-tab work.
+/// The Discover tab tapped twice in quick succession opens the feed — whether the
+/// first tap switched to it or it was already showing, so coming from Home it is two
+/// taps and not three. Called by every bar that has the tab, before anything else.
 bool openFeedOnSecondTap(AppState app, int tapped) {
   if (tapped != Tabs.discover || !app.discoverTappedAgain()) return false;
   feel(Feel.commit);
@@ -532,9 +533,11 @@ class _Rail extends StatelessWidget {
         ),
       ),
       onDestinationSelected: (i) {
-        if (i != tab) {
+        if (openFeedOnSecondTap(app, i)) {
+          // The feed is on its way; no scroll-to-top under it.
+        } else if (i != tab) {
           feel(Feel.pick);
-        } else if (!openFeedOnSecondTap(app, i)) {
+        } else {
           onSameTab();
         }
         app.setHomeTab(i);
@@ -787,9 +790,11 @@ class MuseNavigationBar extends StatelessWidget {
       selectedIndex: tab,
       onDestinationSelected: (i) {
         final app = context.read<AppState>();
-        if (i != tab) {
+        if (openFeedOnSecondTap(app, i)) {
+          // The feed is on its way; no scroll-to-top under it.
+        } else if (i != tab) {
           feel(Feel.pick);
-        } else if (!openFeedOnSecondTap(app, i)) {
+        } else {
           onSameTab?.call();
         }
         app.setHomeTab(i);

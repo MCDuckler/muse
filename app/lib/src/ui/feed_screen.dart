@@ -24,7 +24,8 @@ import 'station.dart';
 /// things anybody does with a song they like — put it on a list, heart it, pass it on —
 /// then the genres it is filed under where it came from, each of which can be followed
 /// from here, and then two or three of what people said about it: Bandcamp's
-/// "supported by" box, SoundCloud's comments. Swipe up for the next.
+/// "supported by" box, SoundCloud's comments. One list, scrolled: a page view with
+/// a scroller inside each page gave the inside one every drag, and nothing moved.
 ///
 /// Opened from the button on the Discover page, and by tapping the Discover tab twice.
 class FeedScreen extends StatefulWidget {
@@ -38,7 +39,6 @@ class _FeedScreenState extends State<FeedScreen> {
   final _cards = <FeedCard>[];
   final _details = <int, CardDetails?>{};
   final _asked = <int>{};
-  final _page = PageController();
   Set<String> _following = {};
   int _total = 0;
   bool _loading = false;
@@ -49,12 +49,6 @@ class _FeedScreenState extends State<FeedScreen> {
     super.initState();
     unawaited(_more());
     unawaited(_loadGenres());
-  }
-
-  @override
-  void dispose() {
-    _page.dispose();
-    super.dispose();
   }
 
   Future<void> _loadGenres() async {
@@ -144,17 +138,13 @@ class _FeedScreenState extends State<FeedScreen> {
                               'trending in the genres you follow. Play a few songs, follow a '
                               'genre or two, and come back after the overnight build.')
                       : const SongsComing(rows: 3)
-          : PageView.builder(
-              controller: _page,
-              scrollDirection: Axis.vertical,
-              onPageChanged: (i) {
-                if (i + 1 < _cards.length) _detail(_cards[i + 1].track.id);
-                if (i >= _cards.length - 4) unawaited(_more());
-              },
+          : ListView.builder(
+              padding: EdgeInsets.only(bottom: bottomForPlayer(context)),
               itemCount: _cards.length,
               itemBuilder: (context, i) {
                 final card = _cards[i];
                 _detail(card.track.id);
+                if (i >= _cards.length - 4) unawaited(_more());
                 return _Card(
                   card: card,
                   details: _details[card.track.id],
@@ -191,12 +181,15 @@ class _Card extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final app = context.read<AppState>();
     final t = card.track;
-    return LayoutBuilder(builder: (context, box) {
-      // Nearly the width of the screen, and never more than half its height: the
-      // words and the comments have to fit under it on a phone held upright.
-      final side = (box.maxWidth - 32).clamp(120.0, box.maxHeight * 0.52);
-      return SingleChildScrollView(
-        padding: EdgeInsets.fromLTRB(16, 10, 16, bottomForPlayer(context)),
+    final screen = MediaQuery.sizeOf(context);
+    // Nearly the width of the screen, and never more than half its height, so the
+    // words and the first comment are in view with the picture on a phone held upright.
+    final side = (screen.width - 32).clamp(120.0, screen.height * 0.52);
+    return Container(
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: scheme.onSurface.withValues(alpha: 0.5), width: 1.5)),
+        ),
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 18),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -334,15 +327,9 @@ class _Card extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: Mag.quote(14, color: scheme.onSurface)),
             ],
-            const SizedBox(height: 12),
-            Center(
-              child: Icon(Icons.keyboard_arrow_down,
-                  color: scheme.onSurfaceVariant.withValues(alpha: 0.6)),
-            ),
           ],
         ),
       );
-    });
   }
 
   Widget _rule(ColorScheme scheme) =>
