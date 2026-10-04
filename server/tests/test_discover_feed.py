@@ -92,7 +92,7 @@ def test_importing_follows_adds_and_opens_labels_into_their_acts(client, hdr, mo
         {"name": "Only On Bandcamp", "url": "https://onlyonbandcamp.bandcamp.com"},
     ])
     monkeypatch.setattr(linked, "bandcamp_music", lambda url, newest=40: {
-        "name": None, "is_label": False, "records": [
+        "name": None, "is_label": url.startswith("https://ninjatune"), "records": [
             {"remote_id": f"{url}/album/one", "title": "One", "artist": "Only On Bandcamp",
              "cover": None, "record_type": "album"}]})
     monkeypatch.setattr(linked, "bandcamp_record", lambda url: {

@@ -675,8 +675,10 @@ _GRID_ITEM = re.compile(
     r'(?:(?!</li>).)*?<p class="title">(?P<title>.*?)</p>', re.S)
 _GRID_ART = re.compile(r'/img/a(\d+)_')
 _OVERRIDE = re.compile(r'<span class="artist-override">\s*(.*?)\s*</span>', re.S)
-# Past this many acts on one page's records, the page is a label whatever it calls
-# itself: Analog Africa and Klasse Wrecks are both "artist" accounts on Bandcamp.
+# Past this many other acts on a page's records — and with them behind at least half of
+# the records — the page is a label whatever it calls itself: Analog Africa and Klasse
+# Wrecks are both "artist" accounts on Bandcamp. The half is for an act with a few
+# collaborations and an alias or two, which is not a label (bvdub: 2 of 24).
 LABEL_ACTS = 3
 _TAG = re.compile(r'<a class="tag"[^>]*>\s*([^<]+?)\s*</a>')
 _COLLECTORS = re.compile(r'id="collectors-data" data-blob="([^"]+)"')
@@ -778,11 +780,12 @@ def bandcamp_music(url: str, newest: int = 40) -> dict:
         add(final, current.get("title"), data.get("artist"), data.get("art_id"),
             "track" if "/track/" in final else "album")
 
-    name = band.get("name") or ""
-    acts = {r["artist"].lower() for r in records
-            if r["artist"] and r["artist"].lower() != name.lower()}
+    name = (band.get("name") or "").lower()
+    others = [r["artist"].lower() for r in records
+              if r["artist"] and r["artist"].lower() != name]
+    label_like = len(set(others)) >= LABEL_ACTS and 2 * len(others) >= len(records)
     return {"name": band.get("name"),
-            "is_label": bool(band.get("is_label")) or len(acts) >= LABEL_ACTS,
+            "is_label": bool(band.get("is_label")) or label_like,
             "records": records[:newest]}
 
 

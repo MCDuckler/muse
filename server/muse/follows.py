@@ -129,11 +129,12 @@ def _refresh_bandcamp(url: str, name: str, *, is_label: bool = False, tries: int
         _retry_later("bandcamp", url, name, tries=tries, new_follower=new_follower)
         return 0
     records = music["records"]
-    if music["is_label"] and not is_label:
+    if music["is_label"] != is_label:
         # Many acts on one page's records is a label, whatever the page calls itself:
-        # the feed then says whose label a record came out on.
-        db.run("update artist_follows set is_label=true "
-               "where provider='bandcamp' and remote_id=%s", (url,))
+        # the feed then says whose label a record came out on. Read again each time, so
+        # a page that was taken for one and is not stops being called one.
+        db.run("update artist_follows set is_label=%s "
+               "where provider='bandcamp' and remote_id=%s", (music["is_label"], url))
     # By the record, not by whose page listed it: a record on both an act's page and
     # its label's is one row, and asking its date again on every poll of the other
     # page spent the few dates a poll may ask for.

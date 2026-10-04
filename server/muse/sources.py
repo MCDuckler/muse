@@ -141,9 +141,11 @@ def fetch_page(url: str) -> tuple[str, str]:
 
     For pages with no record blob to look for — a band's music page, a label's artists —
     where [_get_page] would ask again with every user agent and so fetch everything
-    twice from a service that answers a busy importer with 429.
+    twice from a service that answers a busy importer with 429. The plain agent: given
+    the browser's, Bandcamp leaves the record blob out of a record's page, which is what
+    a band with one record's music page turns into.
     """
-    req = urllib.request.Request(url, headers={"User-Agent": UAS[-1]})
+    req = urllib.request.Request(url, headers={"User-Agent": UAS[0]})
     with urllib.request.urlopen(req, timeout=30) as r:
         return r.read().decode("utf-8", "replace"), r.geturl()
 

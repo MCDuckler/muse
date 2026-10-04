@@ -78,6 +78,16 @@ def test_a_music_page_is_read_whole_newest_first_with_links_made_whole(monkeypat
     assert len(linked.bandcamp_music("https://clubdesigns.bandcamp.com", newest=2)["records"]) == 2
 
 
+def test_an_act_with_an_alias_and_a_collaboration_is_not_a_label(monkeypatch):
+    lis = [_li("album", n, f"/album/r{n}", f"Record {n}") for n in range(8)]
+    lis += [_li("album", 20, "/album/alias", "Alias", "Earth House Hold"),
+            _li("album", 21, "/album/collab", "Collab", "bvdub & zakè"),
+            _li("album", 22, "/album/split", "Split", "Somebody Else")]
+    page = _grid_page({"id": 2, "name": "bvdub", "is_label": False}, lis, None)
+    monkeypatch.setattr(sources, "fetch_page", lambda url: (page, "https://bvdub.bandcamp.com/music"))
+    assert linked.bandcamp_music("https://bvdub.bandcamp.com")["is_label"] is False
+
+
 def test_a_page_with_one_record_is_a_list_of_one(monkeypatch):
     tralbum = {"artist": "Somebody", "art_id": 99, "current": {"title": "Only Record"}}
     page = f'<script data-tralbum="{html.escape(json.dumps(tralbum))}"></script>'
