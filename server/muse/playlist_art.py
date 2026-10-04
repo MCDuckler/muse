@@ -24,12 +24,20 @@ ANGLE_DEGREES = 24.0          # the tilt of the bands; shallow enough to stay re
 COVERS_PER_ART = 4
 
 
-def _picks(playlist_id: int) -> list[dict]:
-    """Up to four covers, spread across the playlist rather than taken off the front.
+def _spread(rows: list) -> list:
+    """Up to four of these, spread across the playlist rather than taken off the front.
 
     The front of a long playlist is often four tracks from one record, which makes four
-    near-identical bands. Spreading picks four albums that actually differ.
+    near-identical bands. Spreading picks four albums that actually differ. The rows
+    arrive one per distinct cover, in playlist order.
     """
+    if len(rows) <= COVERS_PER_ART:
+        return rows
+    step = len(rows) / COVERS_PER_ART
+    return [rows[min(len(rows) - 1, int(i * step))] for i in range(COVERS_PER_ART)]
+
+
+def _picks(playlist_id: int) -> list[dict]:
     rows = db.all_(
         """select distinct on (c.sha256) c.sha256, c.path, c.color, i.pos
              from playlist_items i
@@ -40,17 +48,43 @@ def _picks(playlist_id: int) -> list[dict]:
         (playlist_id,),
     )
     rows.sort(key=lambda r: r["pos"])
-    if len(rows) <= COVERS_PER_ART:
-        return rows
-    step = len(rows) / COVERS_PER_ART
-    return [rows[min(len(rows) - 1, int(i * step))] for i in range(COVERS_PER_ART)]
+    return _spread(rows)
+
+
+def _sign(shas: list[str], name: str) -> str:
+    material = "|".join(shas) or f"name:{name}"
+    return hashlib.sha256(material.encode()).hexdigest()[:12]
 
 
 def signature(playlist_id: int, name: str) -> str:
     """Changes exactly when the picture would."""
-    picks = _picks(playlist_id)
-    material = "|".join(r["sha256"] for r in picks) or f"name:{name}"
-    return hashlib.sha256(material.encode()).hexdigest()[:12]
+    return _sign([r["sha256"] for r in _picks(playlist_id)], name)
+
+
+def signatures(playlists: list[dict]) -> dict[int, str]:
+    """The signature of every playlist in the list, from one query.
+
+    Listing the library asked this once per playlist — a `distinct on` each — and the
+    library is the app's most repeated request: three hundred playlists were three
+    hundred queries every time anything about one of them changed.
+    """
+    ids = [p["id"] for p in playlists]
+    shas: dict[int, list[str]] = {}
+    if ids:
+        for row in db.all_(
+            """select playlist_id, array_agg(sha256 order by pos) as shas
+                 from (select distinct on (i.playlist_id, c.sha256)
+                              i.playlist_id, c.sha256, i.pos
+                         from playlist_items i
+                         join tracks t on t.id = i.track_id
+                         join covers c on c.id = t.cover_id
+                        where i.playlist_id = any(%s)
+                        order by i.playlist_id, c.sha256, i.pos) firsts
+                group by playlist_id""",
+            (ids,),
+        ):
+            shas[row["playlist_id"]] = row["shas"]
+    return {p["id"]: _sign(_spread(shas.get(p["id"], [])), p["name"]) for p in playlists}
 
 
 def _wash(colours: list[str], seed: str) -> tuple[tuple[int, int, int], tuple[int, int, int]]:

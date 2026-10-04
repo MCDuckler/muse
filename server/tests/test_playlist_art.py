@@ -135,3 +135,25 @@ def test_four_covers_at_most_spread_across_the_playlist(client, hdr, playlist_wi
     picks = playlist_art._picks(playlist_with_art["id"])
     assert len(picks) <= playlist_art.COVERS_PER_ART
     assert [p["pos"] for p in picks] == sorted(p["pos"] for p in picks)
+
+
+def test_the_list_works_every_signature_out_at_once(client, hdr, cfg, playlist_with_art):
+    """One query for the lot, and the same answer the one-at-a-time route gives — for a
+    list with more covers than bands, one with fewer, and one with none."""
+    from muse import db
+
+    big = client.post("/playlists", headers=hdr, json={"name": "Big"}).json()
+    for i, colour in enumerate([(1, 2, 3), (40, 50, 60), (90, 10, 10), (0, 200, 0),
+                                (0, 0, 200), (120, 120, 120)]):
+        _track_with_cover(client, hdr, cfg, big["id"], 100 + i, colour)
+    empty = client.post("/playlists", headers=hdr, json={"name": "Empty"}).json()
+
+    rows = db.all_("select id, name from playlists where id = any(%s)",
+                   ([playlist_with_art["id"], big["id"], empty["id"]],))
+    at_once = playlist_art.signatures(rows)
+    assert at_once == {r["id"]: playlist_art.signature(r["id"], r["name"]) for r in rows}
+    assert len(set(at_once.values())) == 3
+
+    listed = {p["id"]: p for p in client.get("/playlists", headers=hdr).json()}
+    for r in rows:
+        assert listed[r["id"]]["cover_version"] == at_once[r["id"]]

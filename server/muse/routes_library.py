@@ -69,15 +69,16 @@ def announce_queue(queue_id: int, user: dict, cursor_moved: bool = False) -> Non
 
 
 # ------------------------------------------------------------------ playlists
-def with_cover(playlist: dict) -> dict:
+def with_cover(playlist: dict, drawn: str | None = None) -> dict:
     """Every playlist has a cover, whether or not anyone gave it one.
 
     The version is a hash of the art it is made from, so the client can cache the image
-    forever and still see it change the moment the playlist does.
+    forever and still see it change the moment the playlist does. [drawn] is that hash
+    when the caller already has it — the list of playlists works them all out at once.
     """
     # A cover somebody chose wins over the one drawn from the contents — and changes
     # the version, so the picture in a list updates the moment it is set.
-    sig = playlist.get("cover_sig") \
+    sig = playlist.get("cover_sig") or drawn \
         or playlist_art.signature(playlist["id"], playlist["name"])
     return {**playlist,
             "cover_url": f"/playlists/{playlist['id']}/cover",
@@ -126,7 +127,8 @@ def list_playlists(user: dict = Depends(current_user)):
             order by saved, (kind <> %s), (kind <> 'local'), lower(name)""",
         (user["id"], user["id"], FAVOURITES_KIND),
     )
-    return [{**with_cover(r), "saved": bool(r["saved"]),
+    drawn = playlist_art.signatures([r for r in rows if not r.get("cover_sig")])
+    return [{**with_cover(r, drawn.get(r["id"])), "saved": bool(r["saved"]),
              "owner_name": r["owner_name"],
              "open_edit": bool(r.get("open_edit")),
              "auto_split": bool(r.get("auto_split"))} for r in rows]
