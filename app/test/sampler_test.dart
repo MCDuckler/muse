@@ -122,6 +122,64 @@ void main() {
     await s.dispose();
   });
 
+  test('a sound the engine finished is paused before it is parked, so it does not play itself again',
+      () async {
+    final s = sampler();
+    await s.warm('A:1', SampleKit.byId(SampleKit.impact)!, impact, level: 1);
+    await s.fire('A:1');
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    final p = engine.players.values.single;
+    final before = p.calls.length;
+    // The file is a few frames shorter than its length says: the engine ends first.
+    p.reachEnd();
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(s.voices['A:1']!.sounding, isFalse);
+    expect(p.playing, isFalse, reason: 'just_audio keeps playing past the end; a seek on it plays');
+    expect(p.calls.sublist(before), containsAllInOrder(['pause', 'seek 0s']));
+    expect(p.position, Duration.zero);
+    await s.dispose();
+  });
+
+  test('a press during a fade wins: the fade stops touching the player', () async {
+    final s = sampler();
+    await s.warm('A:5', SampleKit.byId(SampleKit.hydrant)!, hold, level: 0.9);
+    await s.fire('A:5');
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    final v = s.voices['A:5']!;
+    final p = engine.players.values.single;
+    // Let go, and pressed again 5 ms into the 30 ms fade.
+    final letGo = s.release('A:5');
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+    final before = p.calls.length;
+    await s.fire('A:5');
+    await letGo;
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(v.sounding, isTrue);
+    expect(p.playing, isTrue, reason: 'the stale fade used to pause the new sound');
+    expect(p.volume, 0.9, reason: 'back up to its level before it sounded');
+    expect(p.calls.sublist(before), isNot(contains('pause')));
+    await s.dispose();
+  });
+
+  test('a press while the sound is still loading waits for it', () async {
+    final s = sampler();
+    engine.slowness = const Duration(milliseconds: 60);
+    final warming = s.warm('A:1', SampleKit.byId(SampleKit.impact)!, impact, level: 1);
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(s.voices['A:1'], isNotNull, reason: 'the voice exists before its sound is in');
+    final fired = s.fire('A:1');
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    final p = engine.players.values.single;
+    expect(p.calls.where((c) => c == 'play'), isEmpty, reason: 'nothing to play yet');
+    await warming;
+    await fired;
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(p.calls, contains('play'));
+    expect(s.voices['A:1']!.sounding, isTrue);
+    expect(p.calls.indexOf('play'), greaterThan(p.calls.indexWhere((c) => c.startsWith('load'))));
+    await s.dispose();
+  });
+
   test('a trim-out before the end stops the sound there; a loop goes round', () async {
     final s = sampler();
     await s.warm('A:1', SampleKit.byId(SampleKit.impact)!, short, level: 1);

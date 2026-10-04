@@ -40,8 +40,19 @@ class Voice {
   /// The volume it was last given, so a hold's fade can go back up.
   double volume = 1.0;
 
+  /// Whether a fade has the volume down: a press mid-fade puts it back first.
+  bool _fading = false;
+
   Timer? _end;
   StreamSubscription<PlayerState>? _state;
+
+  /// Counts the presses. A fade that started before the latest press stops touching
+  /// the player the moment it notices: see Sampler._quiet.
+  int _gen = 0;
+
+  /// The sound being loaded into the player, when it is; a press waits for it rather
+  /// than playing a player with nothing in it yet.
+  Future<void>? _loading;
 
   /// How long the sound plays, trim to trim.
   Duration get length {
@@ -119,18 +130,31 @@ class Sampler {
     v.sample = sample;
     try {
       if (!same) {
-        final source = await library.pathFor(sample);
-        if (source == null) {
-          _can = sample.source is! ServerSource ? false : _can;
-          await _drop(v);
-          return null;
+        // Written down before the first await: a press in the meantime finds the
+        // sample's id already on the voice and would play a player with nothing in
+        // it, so it waits on this instead.
+        final loading = Completer<void>();
+        v._loading = loading.future;
+        try {
+          final source = await library.pathFor(sample);
+          if (source == null) {
+            _can = sample.source is! ServerSource ? false : _can;
+            await _drop(v);
+            return null;
+          }
+          if (kIsWeb) {
+            await v.player.setUrl(source);
+          } else {
+            await v.player.setFilePath(source);
+          }
+          await v.player.seek(spec.trimIn);
+        } finally {
+          loading.complete();
+          if (identical(v._loading, loading.future)) v._loading = null;
         }
-        if (kIsWeb) {
-          await v.player.setUrl(source);
-        } else {
-          await v.player.setFilePath(source);
-        }
-        await v.player.seek(spec.trimIn);
+      } else if (v._loading != null) {
+        // The same sound, still on its way in from an earlier warm.
+        await v._loading;
       }
       await setLevel(key, level);
       return v;
@@ -170,13 +194,23 @@ class Sampler {
 
   /// [key]'s sound, from its start, now. A voice already sounding starts over.
   Future<void> fire(String key, {DateTime? at}) async {
-    final v = _voices[key];
+    var v = _voices[key];
     if (v == null) return;
     v.pressedAt = at ?? DateTime.now();
+    // This press outranks any fade still running on the voice: see _quiet.
+    final gen = ++v._gen;
     try {
+      // The sound still loading: wait for it, within reason. A pad pressed the moment
+      // its bank came up used to play a player with nothing in it — silence.
+      final loading = v._loading;
+      if (loading != null) {
+        await loading.timeout(const Duration(seconds: 3), onTimeout: () {});
+        v = _voices[key];
+        if (v == null || v._gen != gen) return;
+      }
       v._end?.cancel();
-      if (v.volume != _playerVolume(v.volume) && v.sounding) {
-        // A hold let go and pressed again before its fade was over: back up.
+      if (v._fading) {
+        // Pressed again mid-fade: back up to its level before it sounds.
         await v.player.setVolume(_playerVolume(v.volume));
       }
       await v.player.seek(v.spec.trimIn);
@@ -187,7 +221,7 @@ class Sampler {
       _armEnd(v);
       changed.ping();
     } catch (e) {
-      debugPrint('board: ${v.sample.name} did not fire — $e');
+      debugPrint('board: ${_voices[key]?.sample.name ?? key} did not fire — $e');
     }
   }
 
@@ -231,8 +265,19 @@ class Sampler {
     v.sounding = false;
     v.held = false;
     changed.ping();
-    // Parked at the start again, ready for the next press.
-    unawaited(v.player.seek(v.spec.trimIn).catchError((_) {}));
+    // Paused first, then parked. just_audio keeps `playing` true past the end of a
+    // sound, and a seek on a playing player plays: parked without the pause, every
+    // sound whose engine finished before the end timer did played itself again,
+    // unlit — the "plays twice" of a house sound whose file is a few frames shorter
+    // than its length says.
+    final gen = v._gen;
+    unawaited(() async {
+      try {
+        await v.player.pause();
+        if (v._gen != gen) return;       // pressed again meanwhile: its seek, not this
+        await v.player.seek(v.spec.trimIn);
+      } catch (_) {}
+    }());
   }
 
   /// A hold pad let go: three quick steps down so it does not click, then quiet.
@@ -255,30 +300,46 @@ class Sampler {
     v.sounding = false;
     v.held = false;
     changed.ping();
+    // A press during the fade wins: the moment one lands, this stops touching the
+    // player. It used to carry on and pause the sound the press had just started —
+    // a lit pad with nothing coming out of it.
+    final gen = v._gen;
+    bool superseded() => v._gen != gen;
     try {
       if (fade > Duration.zero) {
+        v._fading = true;
         final full = _playerVolume(v.volume);
         for (var i = 2; i >= 0; i--) {
+          if (superseded()) return;
           await v.player.setVolume(full * i / 3);
           await Future<void>.delayed(fade ~/ 3);
         }
       }
+      if (superseded()) return;
       // Paused and parked, not stopped: a stopped just_audio player gives its
       // engine up, and the next press would have to load the sound again.
       await v.player.pause();
+      if (superseded()) return;
       await v.player.seek(v.spec.trimIn);
-      if (fade > Duration.zero) await v.player.setVolume(_playerVolume(v.volume));
-    } catch (_) {}
+      if (fade > Duration.zero && !superseded()) {
+        await v.player.setVolume(_playerVolume(v.volume));
+      }
+    } catch (_) {
+    } finally {
+      if (!superseded()) v._fading = false;
+    }
   }
 
-  /// Every sounding voice in choke group [group] but [except], stopped.
+  /// Every sounding voice in choke group [group] but [except], stopped — together,
+  /// not one fade after another, so the pad that choked them is not late by their
+  /// number.
   Future<void> choke(int group, {required String except}) async {
     if (group <= 0) return;
-    for (final v in _voices.values.toList()) {
-      if (v.key != except && v.sounding && v.spec.choke == group) {
-        await stop(key: v.key, fade: const Duration(milliseconds: 15));
-      }
-    }
+    await Future.wait([
+      for (final v in _voices.values.toList())
+        if (v.key != except && v.sounding && v.spec.choke == group)
+          _quiet(v, const Duration(milliseconds: 15)),
+    ]);
   }
 
   /// What [key]'s player is told to play at: [level] is the whole law worked out

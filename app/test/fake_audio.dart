@@ -15,12 +15,17 @@ import 'package:just_audio_platform_interface/just_audio_platform_interface.dart
 class FakeJustAudio extends JustAudioPlatform {
   final players = <String, FakeAudioPlayer>{};
 
+  /// How slow every new player's load is: for the races that live in the window
+  /// between asking for a sound and having it.
+  Duration slowness = Duration.zero;
+
   FakeAudioPlayer get only => players.values.last;
 
   @override
   Future<AudioPlayerPlatform> init(InitRequest request) async {
     final player = FakeAudioPlayer(request.id);
     players[request.id] = player;
+    player.slowness = slowness;
     return player;
   }
 
