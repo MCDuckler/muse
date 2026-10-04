@@ -339,6 +339,9 @@ def feed(user_id: int, limit: int = 60) -> dict:
             "record_type": r["record_type"], "tracks": r["tracks"],
             "unseen": r["unseen"], "in_library": r["in_library"], "genre": None,
             "release_mbid": None,
+            # A record that came through a label: the row says so, since the act's
+            # name on it may be nobody you follow.
+            "via": r["via"] if r.get("is_label") else None,
         })
     genres = genres_of(user_id)
     if genres:
@@ -748,28 +751,64 @@ def build_daily_mixes(user_id: int, tas: recommend.Taste, *, network: bool = Tru
 
 def build_radar(user_id: int, *, network: bool = True) -> list[int]:
     """Release radar: a song from each record that came out this fortnight by the
-    artists and in the genres you follow."""
+    artists, labels and genres you follow.
+
+    A Deezer record is opened by its id and its songs found or fetched by name; a
+    Bandcamp record — an act's, or one of a label's — is its own page, and the song is
+    taken straight off it, in which case the box fetches it itself."""
     out: list[int] = []
+    why: dict[int, str] = {}
+    # A record reachable through both an act and its label is the act's: the act's
+    # follow sorts first and `distinct on` keeps it. Newest first after that.
     rows = db.all_(
-        """select r.album_id, r.title, r.artist, r.record_type
+        """select distinct on (r.provider, r.album_id)
+                  r.provider, r.album_id, r.title, r.artist, r.record_type, r.release_date,
+                  f.name as via, f.is_label
              from artist_follows f
              join artist_releases r on r.provider = f.provider and r.artist_id = f.remote_id
-            where f.user_id = %s and f.provider = 'deezer'
+            where f.user_id = %s
               and r.release_date >= current_date - %s * interval '1 day'
-            order by r.release_date desc limit 20""", (user_id, RADAR_DAYS))
+            order by r.provider, r.album_id, f.is_label""", (user_id, RADAR_DAYS))
+    rows.sort(key=lambda r: r["release_date"] or dt.date.min, reverse=True)
     if network:
-        for r in rows:
-            try:
-                album = discography.album(r["album_id"])
-            except discography.Unavailable:
-                break
-            tracks = album.get("tracks") or []
-            take = tracks[:2] if (r["record_type"] or "") == "album" else tracks[:1]
-            for t in take:
-                found = resolve_song(t["title"], (t.get("artists") or [r["artist"]])[0],
-                                     album=album.get("title"))
-                if found and found["id"] not in out:
-                    out.append(found["id"])
+        for r in rows[:30]:
+            reason = (f"new on {r['via']}" if r.get("is_label")
+                      else f"new from {r['via'] or r['artist']}")
+            found_ids: list[int] = []
+            if r["provider"] == "bandcamp":
+                try:
+                    tracks = [t for t in sources.bandcamp_tracks(r["album_id"]) if t["streamable"]]
+                except Exception as e:  # noqa: BLE001 — one page that will not load
+                    log.info("radar: %s: %s", r["album_id"], e)
+                    tracks = []
+                for t in tracks[:1]:
+                    known = catalog.find_by_provider("bandcamp", t["provider_id"])
+                    if not known:
+                        try:
+                            known = catalog.create_from_source(
+                                "bandcamp", {**t, "raw": t},
+                                discovered_via=VIA_DISCOVER, priority=jobs.PRIORITY_BULK)
+                        except Exception as e:  # noqa: BLE001
+                            log.info("radar: could not add %s: %s", t["title"], e)
+                            continue
+                    if known and known["state"] != "failed":
+                        found_ids.append(known["id"])
+            else:
+                try:
+                    album = discography.album(r["album_id"])
+                except discography.Unavailable:
+                    break
+                tracks = album.get("tracks") or []
+                take = tracks[:2] if (r["record_type"] or "") == "album" else tracks[:1]
+                for t in take:
+                    found = resolve_song(t["title"], (t.get("artists") or [r["artist"]])[0],
+                                         album=album.get("title"))
+                    if found:
+                        found_ids.append(found["id"])
+            for t in found_ids:
+                if t not in out:
+                    out.append(t)
+                    why[t] = reason
             if len(out) >= LIST_LENGTH["radar"]:
                 break
         genres = genres_of(user_id)
@@ -795,8 +834,8 @@ def build_radar(user_id: int, *, network: bool = True) -> list[int]:
                 if len(out) >= LIST_LENGTH["radar"]:
                     break
     _save(user_id, "radar", "Release radar",
-          "What came out this fortnight by the artists and in the genres you follow.",
-          out, 20)
+          "What came out this fortnight by the artists, labels and genres you follow.",
+          out, 20, {"why": why})
     return out
 
 

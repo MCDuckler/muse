@@ -83,9 +83,13 @@ BANDCAMP_NEWEST = 12
 BANDCAMP_DATES_PER_POLL = 6
 
 
-def _refresh_bandcamp(url: str, name: str) -> int:
+def _refresh_bandcamp(url: str, name: str, *, is_label: bool = False) -> int:
+    # A label puts out several records a week where an act puts out one a year, so a
+    # label's page is read further back and more of its new dates are asked for.
+    newest = BANDCAMP_NEWEST * (3 if is_label else 1)
+    dates = BANDCAMP_DATES_PER_POLL * (2 if is_label else 1)
     try:
-        records = linked.bandcamp_discography(url, newest=BANDCAMP_NEWEST)
+        records = linked.bandcamp_discography(url, newest=newest)
     except Exception as e:  # noqa: BLE001 — a page that will not load is not news
         log.info("could not refresh %s: %s", name, e)
         return 0
@@ -95,7 +99,7 @@ def _refresh_bandcamp(url: str, name: str) -> int:
     asked = 0
     for a in records:
         released = (known.get(a["remote_id"]) or {}).get("release_date")
-        if a["remote_id"] not in known and asked < BANDCAMP_DATES_PER_POLL:
+        if a["remote_id"] not in known and asked < dates:
             asked += 1
             try:
                 released = linked.bandcamp_record(a["remote_id"]).get("release_date")
@@ -118,7 +122,9 @@ def _refresh_bandcamp(url: str, name: str) -> int:
 def refresh_artist(provider: str, remote_id: str, name: str) -> int:
     """Write down what this artist has released. Returns how many records are known."""
     if provider == "bandcamp":
-        return _refresh_bandcamp(remote_id, name)
+        label = db.one("select bool_or(is_label) as l from artist_follows "
+                       "where provider='bandcamp' and remote_id=%s", (remote_id,))
+        return _refresh_bandcamp(remote_id, name, is_label=bool(label and label["l"]))
     try:
         albums = discography.artist_albums(remote_id)
     except discography.Unavailable as e:
@@ -149,6 +155,7 @@ def feed(user_id: int, limit: int = 60, offset: int = 0) -> list[dict]:
     return db.all_(
         """select r.provider, r.album_id, r.title, r.artist, r.artist_id, r.cover,
                   r.release_date, r.record_type, r.tracks, r.first_seen,
+                  f.name as via, f.is_label,
                   (s.album_id is null) as unseen,
                   exists (select 1
                             from library_items li

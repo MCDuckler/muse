@@ -160,6 +160,7 @@ class _FeedRow extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final subtitle = [
       item.artist,
+      if (item.via != null) 'on ${item.via}',
       if (item.releaseDate != null) item.releaseDate!,
       if (item.recordType != null) item.recordType!,
     ].join(' · ');

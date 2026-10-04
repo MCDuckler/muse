@@ -895,6 +895,7 @@ class _ReleaseRow extends StatelessWidget {
     final r = release;
     final subtitle = [
       r.artist,
+      if (r.via != null) 'on ${r.via}',
       if (r.releaseDate != null) r.releaseDate!,
       if (r.recordType != null) r.recordType!,
     ].join(' · ');

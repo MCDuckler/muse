@@ -213,3 +213,33 @@ def test_trending_lists_are_interleaved_in_the_feed_so_no_genre_hogs_it(client, 
     got = client.get("/discover/cards", headers=hdr).json()
     assert [c["track"]["id"] for c in got["items"]] == [songs[0], songs[2], songs[1], songs[3]]
     assert [c["why"] for c in got["items"]][:2] == ["trending in techno", "trending in ambient"]
+
+
+def test_a_labels_new_record_reaches_the_radar_and_says_whose_it_is(client, hdr, monkeypatch):
+    from muse import sources
+    me = _me()
+    monkeypatch.setattr(linked, "bandcamp_discography", lambda url, newest=40: [
+        {"remote_id": "https://djseinfeld.bandcamp.com/album/if-this-is-it", "title": "If This Is It",
+         "artist": "DJ Seinfeld", "cover": None, "record_type": "album"}])
+    monkeypatch.setattr(linked, "bandcamp_record", lambda url: {
+        "release_date": "2026-10-02", "tags": ["house"], "reviews": [], "about": None})
+    monkeypatch.setattr(sources, "bandcamp_tracks", lambda url: [
+        {"provider": "bandcamp", "provider_id": "8801", "title": "If This Is It", "artists": ["DJ Seinfeld"],
+         "album": "If This Is It", "track_no": 1, "duration_ms": 240000, "url": url + "#1",
+         "stream": "x", "streamable": True}])
+    follows.follow(me, {"remote_id": "https://ninjatune.bandcamp.com", "name": "Ninja Tune",
+                        "image": None, "is_label": True}, "bandcamp")
+
+    feed = client.get("/discover/feed", headers=hdr).json()
+    row = next(i for i in feed["items"] if i["title"] == "If This Is It")
+    assert row["artist"] == "DJ Seinfeld" and row["via"] == "Ninja Tune", "the act, and the label it came through"
+    assert row["provider"] == "bandcamp" and row["album_id"].startswith("https://djseinfeld")
+
+    discover.build_radar(me)
+    radar = discover.one_list(me, "radar")
+    assert [t["title"] for t in radar["tracks"]] == ["If This Is It"]
+    song = radar["tracks"][0]
+    assert song["source"] == "bandcamp" and song["discovered_via"] == "discover"
+    assert radar["why"][str(song["id"])] == "new on Ninja Tune"
+    cards = client.get("/discover/cards", headers=hdr).json()
+    assert cards["items"][0]["why"] == "new on Ninja Tune"

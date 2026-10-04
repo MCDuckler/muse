@@ -2119,6 +2119,7 @@ class FeedItem {
   final String artist;
   final String artistId;
   final String provider;
+  final String? via;
   final String? cover;
   final String? releaseDate;
   final String? recordType;
@@ -2132,6 +2133,7 @@ class FeedItem {
     required this.artist,
     required this.artistId,
     this.provider = 'deezer',
+    this.via,
     this.cover,
     this.releaseDate,
     this.recordType,
@@ -2146,6 +2148,7 @@ class FeedItem {
         artist: (j['artist'] ?? '') as String,
         artistId: (j['artist_id'] ?? '') as String,
         provider: (j['provider'] ?? 'deezer') as String,
+        via: j['via'] as String?,
         cover: j['cover'] as String?,
         releaseDate: j['release_date'] as String?,
         recordType: j['record_type'] as String?,
@@ -3050,6 +3053,9 @@ class Release {
   final bool inLibrary;
   final String? genre;
 
+  /// The label a record came through, when it was a label you follow and not the act.
+  final String? via;
+
   const Release({
     required this.source,
     required this.provider,
@@ -3064,6 +3070,7 @@ class Release {
     this.unseen = false,
     this.inLibrary = false,
     this.genre,
+    this.via,
   });
 
   factory Release.fromJson(Map<String, dynamic> j) => Release(
@@ -3080,6 +3087,7 @@ class Release {
         unseen: (j['unseen'] ?? false) as bool,
         inLibrary: (j['in_library'] ?? false) as bool,
         genre: j['genre'] as String?,
+        via: j['via'] as String?,
       );
 
   /// Enough for the server to mark it looked at.
