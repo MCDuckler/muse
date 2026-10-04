@@ -9,7 +9,12 @@ import '../../../api/client.dart';
 
 Future<String?> Function(int id) sampleFetcher(ApiClient api) {
   final inFlight = <int, Future<String?>>{};
-  return (id) => inFlight[id] ??= _fetch(api, id).whenComplete(() => inFlight.remove(id));
+  // A block, not an arrow: an arrow would hand whenComplete what remove() returns —
+  // this very future — and whenComplete waits for a future it is handed, so the fetch
+  // waited on itself and never came back (the file arrived; the pad never heard).
+  return (id) => inFlight[id] ??= _fetch(api, id).whenComplete(() {
+        inFlight.remove(id);
+      });
 }
 
 Future<String?> _fetch(ApiClient api, int id) async {
