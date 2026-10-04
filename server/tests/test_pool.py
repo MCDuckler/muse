@@ -276,3 +276,22 @@ def test_records_in_parts_from_before_the_tracker_are_queued_for_it(client, hdr,
     assert pool.beats_backfill(cfg.data_dir, force=True) == 0
     assert client.post("/internal/jobs/lease", headers=strong["hdr"],
                        json={"kind": "beats", "limit": 1}).json()["jobs"] == []
+
+
+def test_every_record_is_queued_for_the_tracker_the_ones_in_parts_first(client, hdr, a_record, a_part, cfg, tmp_path):
+    """The tracker's word used to reach only records already in parts — one in six.
+    Any ready record is queued now; the booth's own (in parts) go first."""
+    strong = _computer(client, hdr, "tracker-all")
+    plain = _another_record(client, hdr, tmp_path, "Plain", 771)
+    # a_record goes into parts; `plain` never does.
+    client.post(f"/pool/split/{a_record['id']}", headers=hdr)
+    job = _lease_split(client, strong, gpu=True)[0]
+    files = {n: (f"{n}.m4a", io.BytesIO(a_part), "audio/mp4") for n in pool.PARTS}
+    client.post(f"/internal/jobs/{job['id']}/parts", headers=strong["hdr"], files=files)
+
+    assert pool.beats_backfill(cfg.data_dir, force=True) == 2
+    order = [r["t"] for r in db.all_(
+        "select (payload->>'track_id')::int t from jobs where kind='beats' order by id")]
+    assert order == [a_record["id"], plain["id"]], "in parts first, then the newest"
+    assert pool.want_beats(cfg.data_dir, plain["id"]) is not None, "the same open job, not another"
+    assert db.one("select count(*) n from jobs where kind='beats'")["n"] == 2

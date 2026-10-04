@@ -137,13 +137,20 @@ def keep_beats(data_dir: pathlib.Path, sha: str, raw: bytes) -> pathlib.Path:
 def want_beats(data_dir: pathlib.Path, track_id: int,
                priority: int = jobs.PRIORITY_BULK) -> int | None:
     """Queue the record for the tracker alone — a computer in the pool running Beat
-    This! over it and handing the beats in — where it is in parts but has no beats from
-    the tracker yet. None where there is nothing to do."""
+    This! over it and handing the beats in — where it has no beats from the tracker
+    yet. None where there is nothing to do.
+
+    Any record, not only one already in parts. It used to be the parts' companion,
+    which left the tracker's word on five records in six unheard: measured over the
+    library, the house's own grid sits half a beat off the tracker's on one record in
+    fourteen and starts the bar on another beat on one in four, and the structure
+    only puts that right where the tracker has been heard.
+    """
     t = catalog.track_row(track_id)
     if not t or not t.get("sha256"):
         return None
     sha = t["sha256"]
-    if part_here(sha, "stems") is None or beats_path(data_dir, sha).exists():
+    if beats_path(data_dir, sha).exists():
         return None
     open_ = db.one(
         """select id from jobs
@@ -160,24 +167,30 @@ _beats_at = 0.0
 
 
 def beats_backfill(data_dir: pathlib.Path, force: bool = False, limit: int = 100) -> int:
-    """The records already in parts before there was a tracker: queued for it, a
-    batch at a time, behind everything anybody is waiting for. Asked every minute
-    while a computer with the tracker asks for that kind of work."""
+    """The records the tracker has not heard: queued for it, a batch at a time, behind
+    everything anybody is waiting for. Asked every minute while a computer with the
+    tracker asks for that kind of work.
+
+    Every ready record, the ones in parts first — those are the booth's, where a grid
+    half a beat out is a mix falling apart — then the newest. Five thousand records at
+    a hundred a minute is an evening for the queue and a few days of idle desktops."""
     global _beats_at
     now = time.monotonic()
     if not force and now - _beats_at < _BEATS_EVERY:
         return 0
     _beats_at = now
     rows = db.all_(
-        """select distinct tp.sha256, m.track_id
-             from track_parts tp
-             join media m on m.sha256 = tp.sha256 and m.role = 'canonical'
-            where tp.name = 'stems' and tp.version = %s
+        """select m.sha256, m.track_id,
+                  exists (select 1 from track_parts tp
+                           where tp.sha256 = m.sha256 and tp.name = 'stems') as in_parts
+             from media m
+             join tracks t on t.id = m.track_id
+            where m.role = 'canonical' and m.sha256 is not null and t.state = 'ready'
               and not exists (select 1 from jobs j
                                where j.kind = 'beats'
                                  and (j.payload->>'track_id')::int = m.track_id
                                  and j.state in ('pending','leased','failed'))
-            order by m.track_id desc""", (PARTS_VERSION,))
+            order by in_parts desc, m.track_id desc""")
     n = 0
     for r in rows:
         if beats_path(data_dir, r["sha256"]).exists():

@@ -179,7 +179,10 @@ def test_the_bar_is_where_the_record_changes_not_where_the_tracker_votes(
     assert got["bar_starts_on"] == 2, got["bar_starts_on"]
     # And so the rules land on the changes rather than two beats past them.
     assert got["four_bars"], "a record with bars has four-bar rules"
-    assert got["four_bars"][0] % 8000 == 1000, got["four_bars"][:4]
+    # Within a frame or two of it: the house reads this record's tempo itself now
+    # (it used to read it in threes, at 80, and the tracker's line was taken instead),
+    # and its onsets sit a few milliseconds from where the synthesis put them.
+    assert abs(got["four_bars"][0] % 8000 - 1000) <= 20, got["four_bars"][:4]
 
 
 def test_the_structure_is_served_and_built_again_as_parts_arrive(

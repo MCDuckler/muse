@@ -341,3 +341,42 @@ def test_the_bar_starts_where_the_record_changes(tmp_path):
     # The bar's one is on a beat whose number, counted from the first kick, is 2 mod 4.
     number = round(first_beat / (beat * 1000))
     assert number % 4 == 2
+
+
+def test_a_bassline_on_the_and_does_not_pull_the_grid_onto_the_and(tmp_path):
+    """Kick on every beat, clap on two and four, and a bass stab on every "and": the
+    bass alone says the and is the beat, and the grid used to sit there. The clap says
+    otherwise, and the clap is right."""
+    bpm, seconds = 128.0, 60
+    x = np.zeros(int(RATE * seconds))
+    beat = 60.0 / bpm
+    t = np.arange(int(RATE * 0.12)) / RATE
+    kick = 0.5 * np.sin(2 * np.pi * (50 + 70 * np.exp(-t * 40)) * t) * np.exp(-t * 20)
+    tc = np.arange(int(RATE * 0.06)) / RATE
+    rng = np.random.default_rng(3)
+    clap = 0.6 * rng.standard_normal(len(tc)) * np.exp(-tc * 60)
+    tb = np.arange(int(RATE * 0.22)) / RATE
+    stab = 0.9 * np.sin(2 * np.pi * 55 * tb) * np.exp(-tb * 6) * (1 - np.exp(-tb * 200))
+    n = int((seconds - 0.5) / beat)
+    for k in range(n):
+        at = int(k * beat * RATE)
+        x[at:at + len(kick)] += kick
+        if k % 2 == 1:
+            x[at:at + len(clap)] += clap
+        off = int((k + 0.5) * beat * RATE)
+        x[off:off + len(stab)] += stab[: len(x) - off]
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(RATE)
+        w.writeframes((np.clip(x * 0.5, -1, 1) * 32767).astype("<i2").tobytes())
+    f = tmp_path / "offbeat-bass.wav"
+    f.write_bytes(out.getvalue())
+    found = beats.measure(f)
+    assert abs(found["bpm"] - bpm) < 1.0
+    # Every beat found is on a kick (a whole number of beats from the start), not on
+    # a stab halfway between.
+    frac = [((b / 1000.0) / beat) % 1.0 for b in found["beats"][4:-4]]
+    frac = [min(f, 1 - f) for f in frac]
+    assert np.median(frac) < 0.15, f"beats sit {np.median(frac):.2f} of a beat from the kicks"

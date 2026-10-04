@@ -45,7 +45,9 @@ from . import analysis
 # 6: an exact grid carried on to where the sound starts and ends (the tracker lost the
 #    first two or three beats of nearly every record, and with them its first bar),
 #    and the four-bar markers where the record's sections start (four_bars).
-VERSION = 10  # 9: a record too busy for the tempo found is counted at the double; 10: and one read in threes is stepped up into the break it is (116 was two thirds of 174)
+VERSION = 11  # 9: a record too busy for the tempo found is counted at the double; 10: and one read in threes is stepped up into the break it is (116 was two thirds of 174)
+# 11: the beat and not the off-beat, by the snare and the sub-bass where the bass is on
+#     the "and"; and no step down a third from a tempo already busy enough to be the count.
 
 _RATE = 11025
 _FFT = 1024
@@ -159,10 +161,12 @@ def _ends(db: np.ndarray, threshold: float) -> str:
 
 # ------------------------------------------------------------------ beats
 def _onsets(x: np.ndarray) -> np.ndarray:
-    """How much new energy arrives at each frame, and the same for the bass alone."""
+    """How much new energy arrives at each frame; then the same for the bass alone
+    (below 200 Hz), the low mids (200–800), the snare's band (800–3000) and the sub
+    (below 60) — the bands the beat is told from the off-beat by."""
     n = 1 + (len(x) - _FFT) // _HOP
     if n < 8:
-        return np.zeros((2, 0), dtype=np.float32)
+        return np.zeros((5, 0), dtype=np.float32)
     idx = np.arange(_FFT)[None, :] + (_HOP * np.arange(n))[:, None]
     window = np.hanning(_FFT).astype(np.float32)
     # In blocks: the whole spectrogram of a long song at once is a lot of memory.
@@ -172,8 +176,10 @@ def _onsets(x: np.ndarray) -> np.ndarray:
     # half a beat out. Each band is put on its own scale and then the bass counts most:
     # in nearly everything with a pulse, the pulse is in the low end.
     hz = _RATE / _FFT
-    edges = [0, int(200 / hz) + 1, int(800 / hz) + 1, int(3000 / hz) + 1, _FFT // 2 + 1]
-    bands = np.zeros((4, n), dtype=np.float32)
+    # Five raw bands; the first two together are the bass as it always was.
+    edges = [0, int(60 / hz) + 1, int(200 / hz) + 1, int(800 / hz) + 1, int(3000 / hz) + 1,
+             _FFT // 2 + 1]
+    raw = np.zeros((5, n), dtype=np.float32)
     previous = None
     for start in range(0, n, 2048):
         block = x[idx[start:start + 2048]] * window
@@ -181,9 +187,10 @@ def _onsets(x: np.ndarray) -> np.ndarray:
         joined = mag if previous is None else np.vstack([previous, mag])
         rise = np.maximum(0.0, joined[1:] - joined[:-1])
         at = start if previous is None else start - 1
-        for b in range(4):
-            bands[b, at + 1: at + 1 + len(rise)] = rise[:, edges[b]:edges[b + 1]].sum(axis=1)
+        for b in range(5):
+            raw[b, at + 1: at + 1 + len(rise)] = rise[:, edges[b]:edges[b + 1]].sum(axis=1)
         previous = mag[-1:]
+    bands = np.stack([raw[0] + raw[1], raw[2], raw[3], raw[4]])
 
     def shaped(env: np.ndarray) -> np.ndarray:
         # Less its own local average, so a loud chorus is not one long onset; and to a
@@ -197,7 +204,40 @@ def _onsets(x: np.ndarray) -> np.ndarray:
     each = [shaped(b) for b in bands]
     together = 2.0 * each[0] + 1.0 * each[1] + 1.0 * each[2] + 0.4 * each[3]
     sd = float(together.std())
-    return np.stack([together / sd if sd > 1e-9 else together, each[0]])
+    return np.stack([together / sd if sd > 1e-9 else together, each[0], each[1], each[2],
+                     shaped(raw[0])])
+
+
+def _off_beat(on: dict[str, float], off: dict[str, float]) -> bool:
+    """Whether these are the off-beats: whether the beat is half a beat from here.
+
+    By the bass first, as before — if far more of it arrives between these beats than
+    on them, these are the off-beats. But on a record with its bassline on the "and" the
+    bass says the and, and the grid sat half a beat off the kick on one record in
+    fourteen. The snare and the clap do not play on the and, and the sub does not
+    either: where the snare's band clearly sits on the other phase (with the low mids
+    not against it), or the sub clearly does (with the snare not against it), that is
+    the beat.
+
+    Measured on the library against a neural tracker's reading: of 75 records sitting
+    half a beat off, 43 are put right, and of 150 that were right none are moved.
+    """
+    def ratio(band: str) -> float:
+        return on[band] / (off[band] + 1e-9)
+
+    # The snare and the sub first, either way: where they are clear, the bass is not
+    # asked — a bassline on the "and" is louder than the kick on the one, and asked
+    # first it moved the grid onto the and over a clap that said otherwise.
+    snare, lowmid, sub = ratio("snare"), ratio("lowmid"), ratio("sub")
+    if snare < 0.75 and snare * lowmid < 1.0:
+        return True
+    if snare > 1 / 0.75 and snare * lowmid > 1.0:
+        return False
+    if sub < 0.6 and snare < 1.0:
+        return True
+    if sub > 1 / 0.6 and snare > 1.0:
+        return False
+    return off["bass"] > 1.6 * on["bass"] + 1e-9
 
 
 def _tempo(env: np.ndarray) -> tuple[float, float]:
@@ -453,6 +493,14 @@ def _level(x: np.ndarray, bpm: float, env: np.ndarray | None = None) -> float:
             best, kept = other, max(s3, kept)
             continue
         if s3 >= max(0.15, 1.5 * kept) and at(kick, other) > max(0.05, at(kick, best)):
+            # Down a third only from a tempo too fast to be the count — fewer than one
+            # thing a beat. A record counted at 142 with a dotted rhythm scored better
+            # at 95 and was stepped down to it; at 142 it was doing 1.2 things a beat,
+            # which is a counted tempo, not one and a half times one. Measured against
+            # the neural tracker: 8 of 23 records read at two thirds put right, none of
+            # 150 right ones moved.
+            if ratio < 1 and env is not None and _busy(env, best) >= 1.0:
+                continue
             best, kept = other, s3
     return best
 
@@ -512,8 +560,21 @@ def _comb(env: np.ndarray, period: float, phases: np.ndarray, k: np.ndarray) -> 
     return ((1.0 - f) * env[i0] + f * env[i0 + 1]).mean(axis=1)
 
 
+def _comb_peak(env: np.ndarray, period: float, phase: float, k: np.ndarray) -> float:
+    """How much onset lands within a frame either side of each of [phase] + [k] beats:
+    the peak nearby rather than the value read between frames. A drum hit is one or two
+    frames wide and lands a frame early or late from beat to beat; read between frames
+    at one exact phase it is half missed, and the bands that tell the beat from the
+    off-beat come out closer to even than they are."""
+    pos = np.round(phase + k * period).astype(np.int64)
+    pos = pos[(pos >= 1) & (pos < len(env) - 1)]
+    if len(pos) == 0:
+        return 0.0
+    return float(np.mean(np.maximum(np.maximum(env[pos - 1], env[pos]), env[pos + 1])))
+
+
 def _one_grid(env: np.ndarray, low: np.ndarray, period: float,
-              first: int, last: int) -> np.ndarray | None:
+              first: int, last: int, bands: dict[str, np.ndarray] | None = None) -> np.ndarray | None:
     """The frames the beats fall on, as one exact grid — where the record keeps one
     tempo from end to end. None where it does not, and the tracked beats stand.
 
@@ -538,11 +599,21 @@ def _one_grid(env: np.ndarray, low: np.ndarray, period: float,
         bend = a - 2 * b + c
         if bend < 0:
             best += 0.1 * 0.5 * (a - c) / bend
-    # The beat, not the off-beat: where the bass lands, as the tracker decides it.
-    on = float(_comb(low, period, np.array([best]), k)[0])
-    off = float(_comb(low, period, np.array([best + period / 2]), k)[0])
-    if off > 1.6 * on + 1e-9:
-        best = (best + period / 2) % period
+    # The beat, not the off-beat: see _off_beat. Read as peaks near each beat, the way
+    # the rule was measured.
+    if bands:
+        on = {"bass": _comb_peak(low, period, best, k)}
+        off = {"bass": _comb_peak(low, period, best + period / 2, k)}
+        for name, env_ in bands.items():
+            on[name] = _comb_peak(env_, period, best, k)
+            off[name] = _comb_peak(env_, period, best + period / 2, k)
+        if _off_beat(on, off):
+            best = (best + period / 2) % period
+    else:
+        on_ = float(_comb(low, period, np.array([best]), k)[0])
+        off_ = float(_comb(low, period, np.array([best + period / 2]), k)[0])
+        if off_ > 1.6 * on_ + 1e-9:
+            best = (best + period / 2) % period
     # Each stretch of 32 beats, every 16, on its own: where would it put the beat? Twice
     # over — the second time with the period put right by the first. Where the period
     # is a hair out, the stretches say so by where they put the beat: a little later
@@ -628,25 +699,31 @@ def _track(env: np.ndarray, bpm: float, tightness: float = 100.0) -> np.ndarray:
     return np.array(beats[::-1], dtype=np.int64)
 
 
-def _on_the_beat(beats: np.ndarray, low: np.ndarray, period: float) -> np.ndarray:
-    """The same beats, moved half a beat along if that is where the bass is.
+def _on_the_beat(beats: np.ndarray, low: np.ndarray, period: float,
+                 bands: dict[str, np.ndarray] | None = None) -> np.ndarray:
+    """The same beats, moved half a beat along if that is where the beat is.
 
     Evenly spaced and sitting on onsets is true of the off-beats as well, and a tracker
-    cannot tell the two apart by spacing. The bass can: if far more of it arrives
-    halfway between these beats than on them, these are the off-beats.
+    cannot tell the two apart by spacing. The bass, the snare and the sub can: see
+    _off_beat.
     """
     if len(beats) < 8 or len(low) == 0:
         return beats
 
-    def bass_at(frames: np.ndarray) -> float:
-        frames = frames[(frames >= 1) & (frames < len(low) - 2)]
+    def at(env: np.ndarray, frames: np.ndarray) -> float:
+        frames = frames[(frames >= 1) & (frames < len(env) - 2)]
         if len(frames) == 0:
             return 0.0
-        return float(np.mean([low[f - 1: f + 2].max() for f in frames]))
+        return float(np.mean([env[f - 1: f + 2].max() for f in frames]))
 
     half = int(round(period / 2))
-    on, off = bass_at(beats), bass_at(beats + half)
-    return beats + half if off > 1.6 * on + 1e-6 else beats
+    on = {"bass": at(low, beats)}
+    off = {"bass": at(low, beats + half)}
+    for name, env_ in (bands or {}).items():
+        on[name] = at(env_, beats)
+        off[name] = at(env_, beats + half)
+    flip = _off_beat(on, off) if bands else off["bass"] > 1.6 * on["bass"] + 1e-6
+    return beats + half if flip else beats
 
 
 def _bar_starts_on_by_change(x: np.ndarray, beats_ms: np.ndarray) -> int | None:
@@ -744,7 +821,8 @@ def measure(audio: pathlib.Path) -> dict:
 
     if x is None or len(x) < _RATE * 10:
         return out
-    env, low = _onsets(x)
+    env, low, lowmid, snare, sub = _onsets(x)
+    bands = {"lowmid": lowmid, "snare": snare, "sub": sub}
     bpm, confidence = _tempo(env)
     out["confidence"] = round(confidence, 3)
     # Below this the envelope does not repeat at any tempo: there is no pulse to find,
@@ -758,7 +836,7 @@ def measure(audio: pathlib.Path) -> dict:
     if abs(leveled - bpm) > 0.01:
         bpm = _refine(env, leveled)
     beats = _track(env, bpm)
-    beats = _on_the_beat(beats, low, 60.0 * _FPS / bpm)
+    beats = _on_the_beat(beats, low, 60.0 * _FPS / bpm, bands)
     # Only where there is music. The tracker walks back from the end of the file to the
     # start of it, and would count its way through the silence at either end too.
     at_ms = (beats * _HOP + _ONSET_AT) * 1000.0 / _RATE
@@ -776,7 +854,7 @@ def measure(audio: pathlib.Path) -> dict:
         return analysis.add(out, x, [], 0, low, _FPS)
     # One exact grid where the record keeps one tempo, which is what the booth holds two
     # records together by; the beats as tracked where it does not.
-    grid = _one_grid(env, low, 60.0 * _FPS / bpm, int(beats[0]), int(beats[-1]) + 1)
+    grid = _one_grid(env, low, 60.0 * _FPS / bpm, int(beats[0]), int(beats[-1]) + 1, bands)
     if grid is not None:
         grid = _to_the_ends(grid, lead, duration * 1000 - tail)
         at_ms = (grid * _HOP + _ONSET_AT) * 1000.0 / _RATE

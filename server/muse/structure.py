@@ -53,7 +53,10 @@ _BUILD_RISE_DB = 3.0
 
 
 def cache_path(data_dir: pathlib.Path, sha: str, flags: str) -> pathlib.Path:
-    return data_dir / "beats" / f"{sha}-structure-v{VERSION}{'-' + flags if flags else ''}.json"
+    # The house's reading is in the name too: a structure is built on the house's
+    # beats, and a new reading of those (beats.VERSION) that left the structure cached
+    # on the old ones never reached a deck.
+    return data_dir / "beats" / f"{sha}-structure-v{VERSION}b{_beats.VERSION}{'-' + flags if flags else ''}.json"
 
 
 # ------------------------------------------------------------------ decoding
@@ -419,7 +422,7 @@ def build(data_dir: pathlib.Path, track: dict, timing: dict,
 
     if len(beats_ms) >= 8 and len(x) >= _RATE * 10:
         # Everything the analysis derives from the bars, derived again on these bars.
-        env, low = _beats._onsets(x)
+        env, low, _lowmid, _snare, _sub = _beats._onsets(x)
         derived = analysis.add(
             {"duration_ms": timing["duration_ms"], "tail_ms": timing.get("tail_ms", 0)},
             x, beats_ms, bar_on, low, _beats._FPS)
