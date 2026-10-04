@@ -298,3 +298,38 @@ def test_a_video_is_added_as_its_sound_under_its_own_name(client, hdr, monkeypat
         "place": "youtube", "id": "OTHER000001", "title": "Basement tape",
         "subtitle": "somebody · 40 views"})
     assert r.json()["title"] == "Basement tape" and r.json()["artists"] == ["somebody"]
+
+
+def test_your_playlists_and_folders_are_found_by_name(client, hdr, mine, monkeypatch):
+    """The library's own box finds these as you type; the Search tab did not know they
+    existed, so "Night Drive" everywhere got every song called that and not the list."""
+    monkeypatch.setattr(ytm, "search_songs", lambda q, limit=10: [])
+    monkeypatch.setattr(ytm, "search_albums", lambda q, limit=6: [])
+    monkeypatch.setattr(ytm, "search_artists", lambda q, limit=4: [])
+
+    p = client.post("/playlists", headers=hdr, json={"name": "Night Drive"}).json()
+    client.post(f"/playlists/{p['id']}/items", headers=hdr,
+                json={"track_ids": [mine[0]["id"]]})
+    f = client.post("/playlist-folders", headers=hdr, json={"name": "Night things"}).json()
+    client.post(f"/playlists/{p['id']}/place", headers=hdr, json={"folder_id": f["id"]})
+
+    found = client.get("/search/everything", headers=hdr,
+                       params={"q": "night", "where": "library"}).json()["items"]
+    kinds = {(r["kind"], r["title"]) for r in found}
+    assert ("playlist", "Night Drive") in kinds
+    assert ("folder", "Night things") in kinds
+    assert ("album", "A Night at the Opera") in kinds, "the rest of the library still answers"
+    row = next(r for r in found if r["kind"] == "playlist")
+    assert row["subtitle"] == "Night things · 1 songs".replace("1 songs", "1 songs")
+    assert row["cover_url"].startswith(f"/playlists/{p['id']}/cover?v=")
+    assert row["id"] == str(p["id"])
+
+    only = client.get("/search/everything", headers=hdr,
+                      params={"q": "night", "kind": "playlist"}).json()["items"]
+    assert {r["kind"] for r in only} <= {"playlist", "folder"}
+
+    # The heart is not a list anybody searches for, and other people's unsaved lists
+    # are not yours to find.
+    assert not any(r["title"] == "Favourites" for r in client.get(
+        "/search/everything", headers=hdr,
+        params={"q": "favour", "kind": "playlist"}).json()["items"])

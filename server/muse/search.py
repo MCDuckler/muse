@@ -24,7 +24,7 @@ log = logging.getLogger("muse.search")
 
 # Where results can come from. "library" is this box; the rest are somebody else's.
 PLACES = ("library", "ytmusic", "youtube", "spotify", "soundcloud", "bandcamp")
-KINDS = ("song", "album", "artist", "video")
+KINDS = ("song", "album", "artist", "video", "playlist")
 
 # How much a result is worth before anything is known about how well it matches.
 #
@@ -124,6 +124,64 @@ def _library_albums(user_id: int, q: str, limit: int) -> list[dict]:
                       if a["cover_track_id"] else None),
         "tracks": a["tracks"], "artist": a["artist"], "known": True,
     } for a in rows if a["name"]]
+
+
+def _library_playlists(user_id: int, q: str, limit: int) -> list[dict]:
+    """Your playlists and the ones you keep, by name — and your folders.
+
+    The library's own box finds these as you type; the Search tab did not know they
+    existed, so somebody searching for "Night Drive" everywhere got every song called
+    that and not the list.
+    """
+    rows = db.all_(
+        """select p.id, p.name, p.kind, p.cover_sig, p.owner_id, u.name as owner_name,
+                  (p.owner_id <> %s) as saved,
+                  (select count(*) from playlist_items i where i.playlist_id = p.id) as n,
+                  f.name as folder
+             from playlists p
+             join users u on u.id = p.owner_id
+             left join playlist_places pl on pl.playlist_id = p.id and pl.user_id = %s
+             left join playlist_folders f on f.id = pl.folder_id
+            where (p.owner_id = %s or exists (select 1 from playlist_saves s
+                                               where s.playlist_id = p.id and s.user_id = %s))
+              and p.kind <> 'favourites' and p.name ilike %s
+            order by (lower(p.name) = lower(%s)) desc, lower(p.name) limit %s""",
+        (user_id, user_id, user_id, user_id, f"%{q}%", q, limit),
+    )
+    from . import playlist_art
+    drawn = playlist_art.signatures([r for r in rows if not r["cover_sig"]])
+    out = []
+    for r in rows:
+        sig = r["cover_sig"] or drawn.get(r["id"])
+        subtitle = " · ".join(x for x in [
+            r["folder"],
+            f"from {r['owner_name']}" if r["saved"] else None,
+            {"local": None, "spotify": "Spotify", "youtube": "YouTube Music",
+             "ytmusic": "YouTube Music", "deezer": "Deezer", "soundcloud": "SoundCloud",
+             "bandcamp": "Bandcamp"}.get(r["kind"], r["kind"]),
+            f"{r['n']} songs",
+        ] if x)
+        out.append({
+            "kind": "playlist", "place": "library", "id": str(r["id"]),
+            "title": r["name"], "subtitle": subtitle,
+            "cover_url": f"/playlists/{r['id']}/cover?v={sig}",
+            "tracks": r["n"], "known": True, "mine": not r["saved"],
+        })
+    folders = db.all_(
+        """select f.id, f.name,
+                  (select count(*) from playlist_places pl
+                    where pl.folder_id = f.id and pl.user_id = f.user_id) as n
+             from playlist_folders f
+            where f.user_id = %s and f.name ilike %s
+            order by lower(f.name) limit 4""",
+        (user_id, f"%{q}%"),
+    )
+    out += [{
+        "kind": "folder", "place": "library", "id": str(f["id"]),
+        "title": f["name"], "subtitle": f"Folder · {f['n']} playlists",
+        "cover_url": None, "tracks": f["n"], "known": True, "mine": True,
+    } for f in folders]
+    return out
 
 
 def _library_artists(user_id: int, q: str, limit: int) -> list[dict]:
@@ -438,6 +496,9 @@ def everything(cfg, user_id: int, q: str, *, where: str = "all", kind: str = "al
             jobs["library:album"] = lambda: _library_albums(user_id, q, 6)
         if "artist" in kinds:
             jobs["library:artist"] = lambda: _library_artists(user_id, q, 6)
+        if "playlist" in kinds:
+            jobs["library:playlist"] = lambda: _library_playlists(
+                user_id, q, each if kind == "playlist" else 5)
     if "ytmusic" in places:
         if "song" in kinds:
             jobs["ytmusic:song"] = lambda: _ytm_songs(q, each)
