@@ -16,6 +16,7 @@ import 'skeleton.dart';
 import 'snack.dart';
 import 'song_row.dart' show FavouriteButton;
 import 'station.dart';
+import 'track_menu.dart' show addAndSay;
 
 /// The feed: one song at a time, as big as the screen allows.
 ///
@@ -87,6 +88,49 @@ class _FeedScreenState extends State<FeedScreen> {
       if (mounted && round == _round) setState(() => _error = e);
     } finally {
       if (round == _round) _loading = false;
+    }
+  }
+
+  /// Play the card at [i], and the feed with it: one queue of every song in it, in the
+  /// feed's order, playing from that song — the way a song tapped in a playlist plays
+  /// the playlist. What has not been scrolled to yet is fetched and put on the end once
+  /// the music has started, rather than kept waiting for.
+  Future<void> _play(int i) async {
+    final app = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    final service = _service;
+    final name = service == null
+        ? 'The feed'
+        : 'The feed · ${_serviceNames[service] ?? service}';
+    final loaded = [for (final c in _cards) c.track];
+    final total = _total;
+    try {
+      await app.playNow(loaded, startAt: i, named: name);
+    } catch (e) {
+      messenger.say(problem(e));
+      return;
+    }
+    if (total <= loaded.length) return;
+    final queueId = app.activeQueue?.id;
+    final have = {for (final t in loaded) t.id};
+    final rest = <Track>[];
+    try {
+      for (var offset = loaded.length; offset < total; offset += 50) {
+        final got = await app.api.feedCards(offset: offset, limit: 50, service: service);
+        for (final c in got.items) {
+          if (have.add(c.track.id)) rest.add(c.track);
+        }
+      }
+    } catch (_) {
+      // The songs already on are the feed as far as it was read; that is still a queue.
+    }
+    // Only onto the queue it started: somebody who has put something else on since
+    // does not want the rest of the feed on the end of that.
+    if (rest.isEmpty || app.activeQueue?.id != queueId) return;
+    try {
+      await app.addTracks(rest);
+    } catch (e) {
+      messenger.say(problem(e));
     }
   }
 
@@ -211,6 +255,7 @@ class _FeedScreenState extends State<FeedScreen> {
                   details: _details[card.track.id],
                   following: _following,
                   onGenre: _toggleGenre,
+                  onPlay: () => _play(i),
                   index: i,
                   count: _total,
                 );
@@ -280,6 +325,7 @@ class _Card extends StatelessWidget {
     required this.details,
     required this.following,
     required this.onGenre,
+    required this.onPlay,
     required this.index,
     required this.count,
   });
@@ -288,6 +334,9 @@ class _Card extends StatelessWidget {
   final CardDetails? details;
   final Set<String> following;
   final ValueChanged<String> onGenre;
+
+  /// Plays the feed from this card.
+  final VoidCallback onPlay;
   final int index;
   final int count;
 
@@ -321,7 +370,7 @@ class _Card extends StatelessWidget {
                 child: GestureDetector(
                   onTap: () {
                     feel(Feel.commit);
-                    unawaited(app.playTrackNow(t));
+                    onPlay();
                   },
                   child: Stack(
                     alignment: Alignment.bottomLeft,
@@ -372,7 +421,8 @@ class _Card extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 10),
-            // The three things done with a song, and a station from it.
+            // The things done with a song — on a list, in the queue, hearted, passed on
+            // — and a station from it.
             Container(
               decoration: BoxDecoration(
                 border: Border(
@@ -386,6 +436,27 @@ class _Card extends StatelessWidget {
                     onPressed: () => addToPlaylistSheet(context, app, t),
                     icon: const Icon(Icons.playlist_add, size: 20),
                     label: Text('ADD', style: Mag.flag(11, color: scheme.primary)),
+                  ),
+                ),
+                _rule(scheme),
+                // Onto the end of whatever is playing; held, it plays next. Not an
+                // IconButton: its tooltip takes the long press on a phone.
+                Expanded(
+                  child: Tooltip(
+                    message: 'Add to queue',
+                    triggerMode: TooltipTriggerMode.manual,
+                    child: Semantics(
+                      button: true,
+                      label: 'Add to queue',
+                      hint: 'Long press to play it next',
+                      child: InkResponse(
+                        radius: 22,
+                        onTap: () => addAndSay(context, t),
+                        onLongPress: () => addAndSay(context, t, mode: 'next'),
+                        child: const SizedBox(
+                            height: 40, child: Icon(Icons.queue_music, size: 22)),
+                      ),
+                    ),
                   ),
                 ),
                 _rule(scheme),
