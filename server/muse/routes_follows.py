@@ -118,9 +118,19 @@ def feed(limit: int = 60, offset: int = 0, user: dict = Depends(current_user)):
 
 @router.post("/feed/seen")
 def mark_seen(body: dict = Body(...), user: dict = Depends(current_user)):
+    """Looked at. `items` say where each record is from — a Bandcamp record's id is its
+    page — and a bare `album_ids` is the older form, all from one `provider`."""
+    seen = 0
+    by_provider: dict[str, list[str]] = {}
+    for i in body.get("items") or []:
+        if i.get("album_id"):
+            by_provider.setdefault(i.get("provider") or "deezer", []).append(str(i["album_id"]))
     ids = [str(i) for i in (body.get("album_ids") or [])]
-    return {"seen": follows.mark_seen(user["id"], ids,
-                                      body.get("provider") or "deezer")}
+    if ids:
+        by_provider.setdefault(body.get("provider") or "deezer", []).extend(ids)
+    for provider, album_ids in by_provider.items():
+        seen += follows.mark_seen(user["id"], album_ids, provider)
+    return {"seen": seen}
 
 
 @router.post("/feed/refresh")

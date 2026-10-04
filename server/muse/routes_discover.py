@@ -123,9 +123,12 @@ def artists(user: dict = Depends(current_user)):
 
 
 @router.get("/cards")
-def cards(offset: int = 0, limit: int = 20, user: dict = Depends(current_user)):
-    """The feed: one song after another, with why it is here."""
-    return discover.cards(user["id"], offset=max(0, offset), limit=max(1, min(limit, 50)))
+def cards(offset: int = 0, limit: int = 20, service: str | None = None,
+          user: dict = Depends(current_user)):
+    """The feed: one song after another, with why it is here — from every service, or
+    only the one asked for."""
+    return discover.cards(user["id"], offset=max(0, offset), limit=max(1, min(limit, 50)),
+                          service=service if service in discover.CARD_SERVICES else None)
 
 
 @router.get("/cards/{track_id}")

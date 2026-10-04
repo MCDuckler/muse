@@ -34,6 +34,11 @@ class _FeedPageState extends State<FeedPage> {
   Future<({List<FeedItem> items, int unseen, int following})>? _future;
   bool _checking = false;
 
+  /// Only one service's records, or null for all of them.
+  String? _provider;
+
+  static const _providerNames = {'deezer': 'Deezer', 'bandcamp': 'Bandcamp'};
+
   @override
   void initState() {
     super.initState();
@@ -47,9 +52,9 @@ class _FeedPageState extends State<FeedPage> {
   /// Marking as read is deliberate rather than automatic on scroll: something you
   /// glanced past on a train is exactly what you wanted to still be marked later.
   Future<void> _markAllSeen(List<FeedItem> items) async {
-    final ids = [for (final i in items) if (i.unseen) i.albumId];
-    if (ids.isEmpty) return;
-    await context.read<AppState>().api.markFeedSeen(ids);
+    final unseen = [for (final i in items) if (i.unseen) i];
+    if (unseen.isEmpty) return;
+    await context.read<AppState>().api.markFeedSeen(unseen);
     _load();
   }
 
@@ -113,35 +118,62 @@ class _FeedPageState extends State<FeedPage> {
               body: 'Nothing has come out since you started following.',
             );
           }
+          // Where the records come from: Deezer for the acts it knows, Bandcamp for
+          // the pages followed there — labels among them. A chip each once there are
+          // two; a second tap on the one that is on takes it off.
+          final providers = {for (final i in data.items) i.provider};
+          final provider = providers.contains(_provider) ? _provider : null;
+          final items = provider == null
+              ? data.items
+              : [for (final i in data.items) if (i.provider == provider) i];
+          final unseen = items.where((i) => i.unseen).length;
           return RecordRefresh(
             onRefresh: () async => _load(),
             child: ListView.builder(
               padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
-              itemCount: data.items.length + 1,
+              itemCount: items.length + 1,
               itemBuilder: (context, i) {
                 if (i == 0) {
                   return Padding(
                     padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
-                    child: Row(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: Text(
-                            data.unseen == 0
-                                ? '${data.following} followed'
-                                : '${data.unseen} new · ${data.following} followed',
-                            style: Theme.of(context).textTheme.bodySmall,
+                        if (providers.length > 1)
+                          Wrap(
+                            spacing: 8,
+                            children: [
+                              for (final p in providers)
+                                ChoiceChip(
+                                  label: Text(_providerNames[p] ?? p),
+                                  visualDensity: VisualDensity.compact,
+                                  selected: provider == p,
+                                  onSelected: (on) => setState(() => _provider = on ? p : null),
+                                ),
+                            ],
                           ),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                unseen == 0
+                                    ? '${data.following} followed'
+                                    : '$unseen new · ${data.following} followed',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ),
+                            if (unseen > 0)
+                              TextButton(
+                                onPressed: () => _markAllSeen(items),
+                                child: const Text('Mark all read'),
+                              ),
+                          ],
                         ),
-                        if (data.unseen > 0)
-                          TextButton(
-                            onPressed: () => _markAllSeen(data.items),
-                            child: const Text('Mark all read'),
-                          ),
                       ],
                     ),
                   );
                 }
-                return _FeedRow(item: data.items[i - 1], onOpened: _load);
+                return _FeedRow(item: items[i - 1], onOpened: _load);
               },
             ),
           );
@@ -195,7 +227,7 @@ class _FeedRow extends StatelessWidget {
         unawaited(context
             .read<AppState>()
             .api
-            .markFeedSeen([item.albumId]).catchError((_) {}));
+            .markFeedSeen([item]).catchError((_) {}));
         await Navigator.of(context).push(MaterialPageRoute(
           builder: (_) => item.provider == 'bandcamp'
               ? BandcampRecordPage(url: item.albumId, title: item.title)
@@ -218,54 +250,15 @@ class FollowingPage extends StatefulWidget {
 class _FollowingPageState extends State<FollowingPage> {
   Future<List<FollowedArtist>>? _future;
 
-  /// Which service is being imported from right now, if any.
-  String? _importing;
-
-  /// The services this account has linked — the ones follows can come from.
-  List<FollowSource> _sources = const [];
-
   @override
   void initState() {
     super.initState();
     _load();
-    unawaited(_loadSources());
   }
 
   void _load() => setState(() {
         _future = context.read<AppState>().api.follows();
       });
-
-  Future<void> _loadSources() async {
-    try {
-      final got = await context.read<AppState>().api.followSources();
-      if (mounted) setState(() => _sources = got);
-    } catch (_) {
-      // An older server: the menu offers every service and the server says which.
-    }
-  }
-
-  /// Bring over the artists this person already follows elsewhere.
-  ///
-  /// Every service names artists slightly differently and some of what they call an
-  /// artist is not one, so the answer is reported rather than assumed: what was found,
-  /// what was already here, and the names that could not be placed.
-  Future<void> _import(String provider) async {
-    final api = context.read<AppState>().api;
-    final messenger = ScaffoldMessenger.of(context);
-    setState(() => _importing = provider);
-    try {
-      messenger.say(snack(Text('Reading who you follow on $provider — a label is '
-          'opened into its acts, so this can take a minute…')));
-      final r = await api.importFollowsFrom(provider);
-      _load();
-      if (!mounted) return;
-      await showImportResult(context, r);
-    } catch (e) {
-      messenger.say(snack(Text('$e')));
-    } finally {
-      if (mounted) setState(() => _importing = null);
-    }
-  }
 
   Future<void> _add() async {
     final api = context.read<AppState>().api;
@@ -286,36 +279,6 @@ class _FollowingPageState extends State<FollowingPage> {
       appBar: AppBar(
         title: const Text('Following'),
         actions: [
-          if (_importing != null)
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 14),
-              child: Center(
-                child: SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2)),
-              ),
-            )
-          else
-            PopupMenuButton<String>(
-              icon: const Icon(Icons.download_outlined),
-              tooltip: 'Import who you follow',
-              onSelected: _import,
-              itemBuilder: (context) => _sources.isEmpty
-                  ? const [
-                      PopupMenuItem(value: 'spotify', child: Text('Import from Spotify')),
-                      PopupMenuItem(value: 'soundcloud', child: Text('Import from SoundCloud')),
-                      PopupMenuItem(value: 'deezer', child: Text('Import from Deezer')),
-                      PopupMenuItem(value: 'bandcamp', child: Text('Import from Bandcamp')),
-                    ]
-                  : [
-                      for (final s in _sources)
-                        PopupMenuItem(
-                            value: s.provider,
-                            child: Text('Import from ${s.label}'
-                                '${s.handle != null ? ' (${s.handle})' : ''}')),
-                    ],
-            ),
           IconButton(
               icon: const Icon(Icons.add), tooltip: 'Follow', onPressed: _add),
         ],
@@ -331,7 +294,8 @@ class _FollowingPageState extends State<FollowingPage> {
               icon: Icons.people_outline,
               title: 'Following nobody',
               body: 'Follow an artist from their page, with the + above, or bring '
-                  'over who you already follow on Spotify, SoundCloud or Deezer.',
+                  'over who you already follow on Spotify, SoundCloud or Deezer '
+                  'from Settings → Connected services.',
             );
           }
           return ListView.builder(

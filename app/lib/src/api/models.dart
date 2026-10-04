@@ -1752,21 +1752,27 @@ class LinkedService {
 class RemoteList {
   final String remoteId;
   final String name;
+  final String? owner;
   final int? count;
   final bool mirrored;
   final int mirroredItems;
 
-  const RemoteList({required this.remoteId, required this.name, this.count,
-      this.mirrored = false, this.mirroredItems = 0});
+  /// The copy here, once there is one — what tapping the list opens.
+  final int? playlistId;
+
+  const RemoteList({required this.remoteId, required this.name, this.owner, this.count,
+      this.mirrored = false, this.mirroredItems = 0, this.playlistId});
 
   factory RemoteList.fromJson(Map<String, dynamic> j) {
     final m = j['mirror'] as Map<String, dynamic>?;
     return RemoteList(
       remoteId: (j['remote_id'] ?? '') as String,
       name: (j['name'] ?? '') as String,
+      owner: j['owner'] as String?,
       count: j['count'] as int?,
       mirrored: m != null,
       mirroredItems: (m?['items'] ?? 0) as int,
+      playlistId: m?['playlist_id'] as int?,
     );
   }
 }
@@ -3187,13 +3193,18 @@ class FeedCard {
   final String list;
   final String listName;
   final String why;
-  const FeedCard({required this.track, this.list = '', this.listName = '', this.why = ''});
+
+  /// Where the song came from: bandcamp, soundcloud or youtube.
+  final String? service;
+  const FeedCard({required this.track, this.list = '', this.listName = '', this.why = '',
+      this.service});
 
   factory FeedCard.fromJson(Map<String, dynamic> j) => FeedCard(
         track: Track.fromJson((j['track'] as Map).cast<String, dynamic>()),
         list: (j['list'] ?? '') as String,
         listName: (j['list_name'] ?? '') as String,
         why: (j['why'] ?? '') as String,
+        service: j['service'] as String?,
       );
 }
 

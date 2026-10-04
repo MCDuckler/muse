@@ -13,7 +13,8 @@ import 'mini_player.dart';
 import 'snack.dart';
 import 'widths.dart';
 
-/// Connecting a Spotify account, and seeing what came across.
+/// Connecting a Spotify account. What it holds is listed in the Library, under From
+/// your services, beside the playlists it becomes.
 class SpotifyPage extends StatefulWidget {
   const SpotifyPage({super.key});
 
@@ -23,10 +24,6 @@ class SpotifyPage extends StatefulWidget {
 
 class _SpotifyPageState extends State<SpotifyPage> {
   Future<Map<String, dynamic>>? _account;
-  Future<List<SpotifyPlaylist>>? _playlists;
-  final _filter = TextEditingController();
-  final _busy = <String>{};
-  bool _syncing = false;
 
   /// Spotify's sign-in address, fetched *before* it is needed.
   ///
@@ -53,18 +50,14 @@ class _SpotifyPageState extends State<SpotifyPage> {
   }
 
   void _load() {
-    final api = context.read<AppState>().api;
-    // Asked once: the account and the playlists both hang off the same answer, and it
-    // was being fetched twice every time the screen loaded or came back to the front.
-    final account = api.spotifyAccount();
-    setState(() {
-      _account = account;
-      _playlists = account.then((a) {
-        if (a['account'] != null) return api.spotifyPlaylists();
+    final account = context.read<AppState>().api.spotifyAccount();
+    setState(() => _account = account);
+    account.then((a) {
+      final linked = a['account'] as Map<String, dynamic>?;
+      if (mounted && (linked == null || (linked['expired'] ?? false) == true)) {
         _armAuthUrl();
-        return <SpotifyPlaylist>[];
-      });
-    });
+      }
+    }, onError: (_) {});
   }
 
   /// Keep a sign-in address in hand for as long as this screen is not connected.
@@ -88,50 +81,7 @@ class _SpotifyPageState extends State<SpotifyPage> {
   void dispose() {
     _authRefresh?.cancel();
     _lifecycle?.dispose();
-    _filter.dispose();
     super.dispose();
-  }
-
-  /// Mirror or refresh one playlist. Everything is per playlist: this account has
-  /// hundreds, and each song mirrored costs a lookup on the other side.
-  Future<void> _mirror(SpotifyPlaylist p) async {
-    final app = context.read<AppState>();
-    final messenger = ScaffoldMessenger.of(context);
-    setState(() => _busy.add(p.remoteId));
-    try {
-      final results = await app.api.syncSpotify(remoteId: p.remoteId);
-      await app.refreshPlaylists();
-      final r = results.isEmpty ? null : results.first;
-      if (!mounted) return;
-      _load();
-      messenger.say(snack(Text(r == null
-            ? 'Nothing came back for ${p.name}'
-            : r['error'] != null
-                ? '${p.name}: ${r['error']}'
-                : '${p.name} · ${r['matched']} of ${r['total']} songs'
-                    '${(r['missing'] ?? 0) == 0 ? '' : ', ${r['missing']} not matched'}'),
-      ));
-    } catch (e) {
-      messenger.say(snack(Text('$e')));
-    } finally {
-      if (mounted) setState(() => _busy.remove(p.remoteId));
-    }
-  }
-
-  Future<void> _stopMirroring(SpotifyPlaylist p) async {
-    final app = context.read<AppState>();
-    final ok = await confirm(context, 'Stop mirroring ${p.name}?',
-        'It disappears from your playlists here. Nothing changes on Spotify.',
-                    action: 'Stop');
-    if (!ok || !mounted) return;
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      await app.api.deletePlaylist(p.playlistId!);
-      await app.refreshPlaylists();
-    } catch (e) {
-      messenger.say(problem(e));
-    }
-    _load();
   }
 
   /// Deliberately not async before the launch: see [_authUrl].
@@ -196,30 +146,6 @@ class _SpotifyPageState extends State<SpotifyPage> {
     }
   }
 
-  /// Refresh what is already mirrored — never everything.
-  Future<void> _refreshMirrors() async {
-    final app = context.read<AppState>();
-    final messenger = ScaffoldMessenger.of(context);
-    setState(() => _syncing = true);
-    try {
-      final results = await app.api.syncSpotify();
-      await app.refreshPlaylists();
-      if (!mounted) return;
-      _load();
-      final missing = results.fold<int>(
-          0, (sum, r) => sum + ((r['missing'] ?? 0) as int));
-      messenger.say(snack(Text(results.isEmpty
-            ? 'Nothing is mirrored yet — choose a playlist below'
-            : '${results.length} refreshed'
-                '${missing == 0 ? '' : ' · $missing songs not matched'}'),
-      ));
-    } catch (e) {
-      messenger.say(snack(Text('$e')));
-    } finally {
-      if (mounted) setState(() => _syncing = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
@@ -252,10 +178,11 @@ class _SpotifyPageState extends State<SpotifyPage> {
                     ? 'No account connected'
                     : 'Connected as ${account['display_name'] ?? 'your account'}'),
                 subtitle: Text(account == null
-                    ? 'Sign in to see your Spotify playlists here'
+                    ? 'Sign in to see your Spotify playlists in the Library'
                     : ((account['expired'] ?? false) as bool)
                         ? 'The sign-in expired — connect again'
-                        : 'Playlists are read-only, and playable'),
+                        : 'Its playlists are in the Library, under From your '
+                            'services, to mirror there'),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
@@ -268,17 +195,15 @@ class _SpotifyPageState extends State<SpotifyPage> {
                         onPressed: _connect,
                       )
                     else ...[
-                      FilledButton.icon(
-                        icon: _syncing
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(strokeWidth: 2))
-                            : const Icon(Icons.sync),
-                        label: const Text('Refresh mirrored'),
-                        onPressed: _syncing ? null : _refreshMirrors,
-                      ),
-                      const SizedBox(width: 8),
+                      // Expired is the one state where connecting again is the fix.
+                      if ((account['expired'] ?? false) as bool) ...[
+                        FilledButton.icon(
+                          icon: const Icon(Icons.link),
+                          label: const Text('Connect again'),
+                          onPressed: _connect,
+                        ),
+                        const SizedBox(width: 8),
+                      ],
                       TextButton(
                         onPressed: () async {
                           final ok = await confirm(context, 'Disconnect Spotify?',
@@ -301,117 +226,12 @@ class _SpotifyPageState extends State<SpotifyPage> {
                   ],
                 ),
               ),
-              if (account != null) _picker(),
             ],
           );
         },
       ),
     );
   }
-
-  Widget _picker() => FutureBuilder<List<SpotifyPlaylist>>(
-        future: _playlists,
-        builder: (context, snap) {
-          if (snap.hasError) {
-            return ErrorRetry(error: snap.error!, onRetry: _load);
-          }
-          if (!snap.hasData) {
-            return const Padding(
-              padding: EdgeInsets.all(28),
-              child: Center(child: CircularProgressIndicator()),
-            );
-          }
-          final all = snap.data!;
-          final query = _filter.text.trim().toLowerCase();
-          final shown = query.isEmpty
-              ? all
-              : all.where((p) => p.name.toLowerCase().contains(query)).toList();
-          shown.sort((a, b) {
-            if (a.isMirrored != b.isMirrored) return a.isMirrored ? -1 : 1;
-            return a.name.toLowerCase().compareTo(b.name.toLowerCase());
-          });
-
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Divider(),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                child: Text(
-                  '${all.length} playlists on Spotify · '
-                  '${all.where((p) => p.isMirrored).length} mirrored here',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-                child: TextField(
-                  controller: _filter,
-                  onChanged: (_) => setState(() {}),
-                  decoration: InputDecoration(
-                    hintText: 'Find a playlist',
-                    prefixIcon: const Icon(Icons.search),
-                    suffixIcon: _filter.text.isEmpty
-                        ? null
-                        : IconButton(
-                            icon: const Icon(Icons.close),
-                            onPressed: () => setState(_filter.clear),
-                          ),
-                  ),
-                ),
-              ),
-              // Only what is on screen is built: this account has 460 playlists.
-              for (final p in shown.take(60))
-                ListTile(
-                  leading: Icon(
-                      p.isShazam
-                          ? Icons.graphic_eq
-                          : p.isMirrored
-                              ? Icons.cloud_done_outlined
-                              : Icons.cloud_outlined,
-                      color: p.isShazam
-                          ? Theme.of(context).colorScheme.primary
-                          : null),
-                  title: Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                  // Shazam cannot be asked what somebody has tagged, but connected to
-                  // Spotify it keeps this list up to date for ever — so mirroring it
-                  // is the whole of "sync my Shazams", and saying so is the only way
-                  // anybody would know that from a playlist name among four hundred.
-                  subtitle: Text(p.isShazam
-                      ? 'Everything you have Shazammed · ${p.subtitle}'
-                      : p.subtitle),
-                  trailing: _busy.contains(p.remoteId)
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2))
-                      : PopupMenuButton<String>(
-                          onSelected: (v) =>
-                              v == 'stop' ? _stopMirroring(p) : _mirror(p),
-                          itemBuilder: (context) => [
-                            PopupMenuItem(
-                                value: 'mirror',
-                                child: Text(p.isMirrored
-                                    ? 'Refresh from Spotify'
-                                    : 'Add to my playlists')),
-                            if (p.isMirrored)
-                              const PopupMenuItem(
-                                  value: 'stop', child: Text('Stop mirroring')),
-                          ],
-                        ),
-                  onTap: _busy.contains(p.remoteId) ? null : () => _mirror(p),
-                ),
-              if (shown.length > 60)
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Text(
-                      '${shown.length - 60} more — search to narrow it down',
-                      style: Theme.of(context).textTheme.bodySmall),
-                ),
-            ],
-          );
-        },
-      );
 }
 
 

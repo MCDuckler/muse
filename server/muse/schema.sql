@@ -850,3 +850,21 @@ language sql immutable strict as $$
         '^[^[:alnum:]]+', ''),
       '[^[:alnum:]]+$', ''), ''), lower(name))
 $$;
+
+-- A Bandcamp record's id is its page. The music page's script hands most of them over
+-- relative — "/album/r4" — and they were kept that way, which is a record on every
+-- label at once and a page nothing could open. Made whole against the page that
+-- listed them; anything left relative is read again on the next poll.
+insert into feed_seen(user_id, provider, album_id, seen_at)
+select s.user_id, 'bandcamp', rtrim(r.artist_id, '/') || r.album_id, s.seen_at
+  from feed_seen s
+  join artist_releases r on r.provider = 'bandcamp' and r.album_id = s.album_id
+ where s.provider = 'bandcamp' and s.album_id like '/%'
+on conflict do nothing;
+delete from feed_seen where provider = 'bandcamp' and album_id like '/%';
+update artist_releases r set album_id = rtrim(r.artist_id, '/') || r.album_id
+ where r.provider = 'bandcamp' and r.album_id like '/%'
+   and not exists (select 1 from artist_releases x
+                    where x.provider = 'bandcamp'
+                      and x.album_id = rtrim(r.artist_id, '/') || r.album_id);
+delete from artist_releases where provider = 'bandcamp' and album_id like '/%';

@@ -667,6 +667,17 @@ _ROSTER = re.compile(
     r'<a[^>]+href="(?P<url>https?://[^"]+)"[^>]*>(?:(?!</a>).)*?'
     r'<div class="artists-grid-name">\s*(?P<name>[^<]+?)\s*</div>', re.S)
 _CLIENT_ITEMS = re.compile(r'data-client-items="([^"]+)"')
+# One record drawn into a music page's grid: its link, then its title, with the act
+# that made it in a span of its own when that is not the page itself. The picture is
+# in the src, or in data-original for one drawn lazily.
+_GRID_ITEM = re.compile(
+    r'<li data-item-id="(?P<kind>album|track)-\d+"(?:(?!</li>).)*?<a href="(?P<href>[^"]+)"'
+    r'(?:(?!</li>).)*?<p class="title">(?P<title>.*?)</p>', re.S)
+_GRID_ART = re.compile(r'/img/a(\d+)_')
+_OVERRIDE = re.compile(r'<span class="artist-override">\s*(.*?)\s*</span>', re.S)
+# Past this many acts on one page's records, the page is a label whatever it calls
+# itself: Analog Africa and Klasse Wrecks are both "artist" accounts on Bandcamp.
+LABEL_ACTS = 3
 _TAG = re.compile(r'<a class="tag"[^>]*>\s*([^<]+?)\s*</a>')
 _COLLECTORS = re.compile(r'id="collectors-data" data-blob="([^"]+)"')
 
@@ -682,7 +693,7 @@ def bandcamp_band(url: str) -> dict:
                  "interval '30 days'", (key,))
     if row:
         return row["body"]
-    page = sources._get_page(url.rstrip("/") + "/music")
+    page, _ = sources.fetch_page(url.rstrip("/") + "/music")
     m = _BAND.search(page)
     band = json.loads(html.unescape(m.group(1))) if m else {}
     out = {"name": band.get("name"), "is_label": bool(band.get("is_label")),
@@ -696,7 +707,7 @@ def bandcamp_band(url: str) -> dict:
 
 def bandcamp_roster(url: str, most: int = 60) -> list[dict]:
     """The acts on a label, from its artists page."""
-    page = sources._get_page(url.rstrip("/") + "/artists")
+    page, _ = sources.fetch_page(url.rstrip("/") + "/artists")
     out, seen = [], set()
     for m in _ROSTER.finditer(page):
         name = html.unescape(m.group("name")).strip()
@@ -714,17 +725,65 @@ def bandcamp_discography(url: str, newest: int = 40) -> list[dict]:
     """A band's records, newest first, as its music page lists them: title, artist
     (a label's items each say whose), the page, the art. No dates — those are on the
     record's own page, one fetch each, so the caller asks only about what is new."""
-    page = sources._get_page(url.rstrip("/") + "/music")
-    m = _CLIENT_ITEMS.search(page)
-    items = json.loads(html.unescape(m.group(1))) if m else []
-    out = []
-    for it in items[:newest]:
-        if not it.get("page_url") or not it.get("title"):
-            continue
-        out.append({"remote_id": it["page_url"].split("?")[0], "title": it["title"],
-                    "artist": it.get("artist"), "cover": bandcamp_art(it.get("art_id")),
-                    "record_type": it.get("type") or "album"})
-    return out
+    return bandcamp_music(url, newest=newest)["records"]
+
+
+def bandcamp_music(url: str, newest: int = 40) -> dict:
+    """A Bandcamp page's records, newest first, and whether it acts as a label.
+
+    The music page draws its first dozen or so records into the page and hands the rest
+    to its script as JSON, so both are read, in that order. Reading only the JSON — as
+    this once did — found nothing on a page short enough to have none, and skipped the
+    newest records of every page that had some. The JSON's links are mostly relative,
+    and are made whole here: "/album/r4" names a record on every label at once. A page
+    with one record sends /music straight to it, which is read as a list of one.
+    """
+    page, final = sources.fetch_page(url.rstrip("/") + "/music")
+    m = _BAND.search(page)
+    band = json.loads(html.unescape(m.group(1))) if m else {}
+    records: list[dict] = []
+    seen: set[str] = set()
+
+    def add(href: str | None, title: str | None, artist: str | None, art_id,
+            kind: str | None) -> None:
+        if not href or not title:
+            return
+        link = urllib.parse.urljoin(final, html.unescape(href)).split("?")[0].split("#")[0]
+        if link in seen:
+            return
+        seen.add(link)
+        records.append({"remote_id": link, "title": " ".join(title.split()),
+                        "artist": " ".join(artist.split()) if artist else None,
+                        "cover": bandcamp_art(art_id), "record_type": kind or "album"})
+
+    start = page.find('<ol id="music-grid"')
+    if start >= 0:
+        end = page.find("</ol>", start)
+        grid = page[start:end if end > 0 else None]
+        for li in _GRID_ITEM.finditer(grid):
+            title = li.group("title")
+            override = _OVERRIDE.search(title)
+            art = _GRID_ART.search(li.group(0))
+            add(li.group("href"), html.unescape(re.sub(r"<[^>]+>", "", title.split("<br")[0])),
+                html.unescape(override.group(1)) if override else None,
+                art.group(1) if art else None, li.group("kind"))
+        cm = _CLIENT_ITEMS.search(grid)
+        for it in json.loads(html.unescape(cm.group(1))) if cm else []:
+            add(it.get("page_url"), it.get("title"), it.get("artist"), it.get("art_id"),
+                it.get("type"))
+    elif "/album/" in final or "/track/" in final:
+        t = sources._TRALBUM.search(page)
+        data = json.loads(html.unescape(t.group(1))) if t else {}
+        current = data.get("current") or {}
+        add(final, current.get("title"), data.get("artist"), data.get("art_id"),
+            "track" if "/track/" in final else "album")
+
+    name = band.get("name") or ""
+    acts = {r["artist"].lower() for r in records
+            if r["artist"] and r["artist"].lower() != name.lower()}
+    return {"name": band.get("name"),
+            "is_label": bool(band.get("is_label")) or len(acts) >= LABEL_ACTS,
+            "records": records[:newest]}
 
 
 def bandcamp_record(url: str) -> dict:

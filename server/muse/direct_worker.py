@@ -41,7 +41,7 @@ LANES: tuple[tuple[str, tuple[str, ...]], ...] = (
     # says 429 when it has had enough — more hands do not make a rate limit lighter.
     ("fetch", ("ingest_direct",)),
     ("fetch", ("ingest_direct",)),
-    ("slow", ("mirror", "refind", "follow_poll")),
+    ("slow", ("mirror", "refind", "follow_poll", "follow_refresh")),
     # Its own lane: a person opening Discover for the first time is waiting on it,
     # and should not be waiting behind a library import.
     ("make", ("discover_build",)),
@@ -94,6 +94,9 @@ class DirectWorker:
                             self._mirror(job)
                         elif kind == "follow_poll":
                             self._follow_poll(job)
+                        elif kind == "follow_refresh":
+                            follows.refresh_later(job["payload"])
+                            jobs.finish(job["id"])
                         elif kind == "discover_build":
                             self._discover_build(job)
                         else:

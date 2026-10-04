@@ -44,6 +44,17 @@ class _FeedScreenState extends State<FeedScreen> {
   bool _loading = false;
   Object? _error;
 
+  /// Only the songs from one service, or null for all of them. Kept for the session,
+  /// so the feed opened again is the one that was being read.
+  static String? _lastService;
+  String? _service = _lastService;
+
+  /// How many songs each service has in the whole feed, unfiltered.
+  Map<String, int> _services = const {};
+
+  /// Bumped when the filter changes, so a page asked for under the old one is dropped.
+  int _round = 0;
+
   @override
   void initState() {
     super.initState();
@@ -61,19 +72,35 @@ class _FeedScreenState extends State<FeedScreen> {
   Future<void> _more() async {
     if (_loading || (_cards.isNotEmpty && _cards.length >= _total)) return;
     _loading = true;
+    final round = _round;
     try {
-      final got = await context.read<AppState>().api.feedCards(offset: _cards.length, limit: 20);
-      if (!mounted) return;
+      final got = await context.read<AppState>().api
+          .feedCards(offset: _cards.length, limit: 20, service: _service);
+      if (!mounted || round != _round) return;
       setState(() {
         _cards.addAll(got.items);
         _total = got.total;
+        _services = got.services;
         _error = null;
       });
     } catch (e) {
-      if (mounted) setState(() => _error = e);
+      if (mounted && round == _round) setState(() => _error = e);
     } finally {
-      _loading = false;
+      if (round == _round) _loading = false;
     }
+  }
+
+  void _only(String? service) {
+    if (service == _service) return;
+    setState(() {
+      _service = _lastService = service;
+      _round++;
+      _loading = false;
+      _cards.clear();
+      _total = 0;
+      _error = null;
+    });
+    unawaited(_more());
   }
 
   /// A card's genres and comments arrive as it comes into view, not all at once.
@@ -124,6 +151,35 @@ class _FeedScreenState extends State<FeedScreen> {
                     style: Mag.typewriter(11, color: scheme.onSurfaceVariant))),
             ),
         ],
+        // Which service the songs came from, to read only one of them. Offered once
+        // there are two to choose between, or while one is chosen.
+        bottom: _offered.length > 1 || _service != null
+            ? PreferredSize(
+                preferredSize: const Size.fromHeight(44),
+                child: SizedBox(
+                  height: 44,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                    children: [
+                      _ServiceChip(
+                        label: 'All',
+                        count: _services.values.fold(0, (a, b) => a + b),
+                        on: _service == null,
+                        onTap: () => _only(null),
+                      ),
+                      for (final s in _offered)
+                        _ServiceChip(
+                          label: _serviceNames[s] ?? s,
+                          count: _services[s] ?? 0,
+                          on: _service == s,
+                          onTap: () => _only(_service == s ? null : s),
+                        ),
+                    ],
+                  ),
+                ),
+              )
+            : null,
       ),
       body: _cards.isEmpty
           ? _error != null
@@ -131,12 +187,17 @@ class _FeedScreenState extends State<FeedScreen> {
               : _loading || _total == 0 && _error == null && _asked.isEmpty && _cards.isEmpty && _loading
                   ? const SongsComing(rows: 3)
                   : _total == 0 && !_loading
-                      ? const EmptyHint(
-                          icon: Icons.auto_awesome_outlined,
-                          title: 'Nothing in the feed yet',
-                          body: 'It is made of the lists on the Discover page and what is '
-                              'trending in the genres you follow. Play a few songs, follow a '
-                              'genre or two, and come back after the overnight build.')
+                      ? _service != null
+                          ? EmptyHint(
+                              icon: Icons.filter_alt_off_outlined,
+                              title: 'Nothing from ${_serviceNames[_service] ?? _service} now',
+                              body: 'Tap All to read the whole feed.')
+                          : const EmptyHint(
+                              icon: Icons.auto_awesome_outlined,
+                              title: 'Nothing in the feed yet',
+                              body: 'It is made of the lists on the Discover page and what is '
+                                  'trending in the genres you follow. Play a few songs, follow a '
+                                  'genre or two, and come back after the overnight build.')
                       : const SongsComing(rows: 3)
           : ListView.builder(
               padding: EdgeInsets.only(bottom: bottomForPlayer(context)),
@@ -155,6 +216,60 @@ class _FeedScreenState extends State<FeedScreen> {
                 );
               },
             ),
+    );
+  }
+}
+
+const _serviceNames = {
+  'bandcamp': 'Bandcamp',
+  'soundcloud': 'SoundCloud',
+  'youtube': 'YouTube',
+};
+
+extension on _FeedScreenState {
+  /// The services with songs in the feed, plus the one chosen even when it has none.
+  List<String> get _offered => [
+        for (final s in _serviceNames.keys)
+          if ((_services[s] ?? 0) > 0 || _service == s) s,
+      ];
+}
+
+class _ServiceChip extends StatelessWidget {
+  const _ServiceChip(
+      {required this.label, required this.count, required this.on, required this.onTap});
+  final String label;
+  final int count;
+  final bool on;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final ink = on ? scheme.surface : scheme.onSurface;
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: Semantics(
+        button: true,
+        selected: on,
+        label: '$label, $count songs',
+        child: ExcludeSemantics(
+          child: InkWell(
+            onTap: onTap,
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(10, 6, 10, 5),
+              decoration: BoxDecoration(
+                color: on ? scheme.onSurface : null,
+                border: Border.all(color: scheme.onSurface, width: 1.2),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Text(label.toUpperCase(), style: Mag.flag(10.5, color: ink)),
+                const SizedBox(width: 6),
+                Text('$count', style: Mag.typewriter(10.5, color: ink)),
+              ]),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

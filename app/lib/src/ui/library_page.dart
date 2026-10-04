@@ -15,12 +15,14 @@ import 'dialogs.dart';
 import 'mag.dart';
 import 'mag_parts.dart';
 import 'feed_page.dart';
+import 'fold.dart';
 import 'kept_page.dart';
 import 'listening_page.dart';
 import 'mini_player.dart';
 import 'pane.dart';
 import 'picks.dart';
 import 'selection_bar.dart';
+import 'service_shelf.dart';
 import 'spotify_page.dart' show UnmatchedPage;
 import 'song_row.dart';
 import 'snack.dart';
@@ -37,222 +39,241 @@ class LibraryPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
     return RecordRefresh(
-      onRefresh: app.refresh,
+      onRefresh: () async {
+        ServiceShelf.again.value++;
+        await app.refresh();
+      },
       child: ListView(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
       physics: const AlwaysScrollableScrollPhysics(),
       children: [
         // The contents page: every way into the library, each with a number that is
         // true about it.
-        const _Contents(),
+        LibraryFold(
+          id: 'contents',
+          title: 'Contents',
+          top: 10,
+          builder: (context, shrunk) => _Contents(shrunk: shrunk),
+        ),
         // Lists nobody made: questions about the library, answered when asked.
         const _SmartLists(),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(8, 24, 8, 8),
-          child: Row(
+        LibraryFold(
+          id: 'playlists',
+          // How many, when there are any: "Playlists · 0" is a zero in print.
+          title: app.playlists.isEmpty
+              ? 'Playlists'
+              : 'Playlists · ${app.playlists.length}',
+          actions: [
+            PressButton(
+              label: 'New',
+              onTap: () async {
+                final name = await promptForName(context, 'New playlist');
+                if (name == null) return;
+                await app.api.createPlaylist(name);
+                await app.refreshPlaylists();
+              },
+            ),
+          ],
+          builder: (context, shrunk) => Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // How many, when there are any: "Playlists · 0" is a zero in print.
-              Expanded(
-                  child: SectionFlag(app.playlists.isEmpty
-                      ? 'Playlists'
-                      : 'Playlists · ${app.playlists.length}')),
-              PressButton(
-                label: 'New',
-                onTap: () async {
-                  final name = await promptForName(context, 'New playlist');
-                  if (name == null) return;
-                  await app.api.createPlaylist(name);
-                  await app.refreshPlaylists();
-                },
-              ),
+              for (final p in app.playlists) _playlistRow(context, app, p, shrunk),
+              if (app.playlists.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(32),
+                  child: Center(child: Text('No playlists yet.')),
+                ),
             ],
           ),
         ),
-        for (final p in app.playlists)
-          ListTile(
-            // Favourites gets the heart it is filled with rather than a cover made of
-            // whatever happens to be in it first.
-            leading: p.isFavourites
-                ? SizedBox(
-                    width: 44,
-                    height: 44,
-                    child: Icon(Icons.favorite,
-                        color: Theme.of(context).colorScheme.primary),
-                  )
-                : PlaylistArt(playlist: p, size: 44),
-            title: Row(
-              children: [
-                Flexible(
-                  child: Text(p.name,
-                      maxLines: 1, overflow: TextOverflow.ellipsis),
-                ),
-                if (p.isMirror) ...[
-                  const SizedBox(width: 8),
-                  _SourceTag(kind: p.kind),
-                ],
-              ],
-            ),
-            // No account name: whose Spotify a mirror came from is the same answer
-            // for every mirror on the screen, and it was crowding out the counts that
-            // differ. The service is already on the row as an icon.
-            subtitle: Text([
-              '${p.itemCount} tracks',
-              // Somebody else's, kept here. Whose it is belongs on the row: a list
-              // you cannot change is confusing until you can see it is not yours.
-              if (p.saved) 'from ${p.ownerName ?? 'somebody'}',
-              if (p.openEdit && p.mine) 'shared',
-              if (p.autoSplit) 'taken apart',
-              if (p.unmatched > 0) '${p.unmatched} not matched',
-            ].join(' · ')),
-            trailing: PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert, size: 20),
-              onSelected: (v) async {
-                if (v == 'link') {
-                  await copyLink(context, '/p/${p.id}', p.name);
-                } else if (v == 'export' || v == 'export-csv') {
-                  // Opened rather than downloaded here: the server answers with a
-                  // file and a filename, so the browser saves it and a phone hands it
-                  // to whatever opens playlists.
-                  await launchUrl(
-                      Uri.parse(app.api.playlistExportUrl(p.id,
-                          format: v == 'export' ? 'm3u' : 'csv')),
-                      mode: LaunchMode.externalApplication);
-                } else if (v == 'play' || v == 'shuffle') {
-                  final full = await app.api.playlist(p.id);
-                  await app.playNow(full.items, shuffle: v == 'shuffle');
-                } else if (v == 'clone') {
-                  final name = await promptForName(
-                      context, 'Copy playlist', '${p.name} (copy)');
-                  if (name == null) return;
-                  await app.api.clonePlaylist(p.id, name: name);
-                  await app.refreshPlaylists();
-                } else if (v == 'unmatched') {
-                  if (!context.mounted) return;
-                  await openPage(context,
-                      (_) => UnmatchedPage(playlistId: p.id, name: p.name));
-                  await app.refreshPlaylists();
-                } else if (v == 'resync') {
-                  final messenger = ScaffoldMessenger.of(context);
-                  try {
-                    await app.api.syncSpotify();
-                    await app.refreshPlaylists();
-                    messenger.say(
-                        snack(Text('Refreshed from Spotify')));
-                  } catch (e) {
-                    messenger.say(snack(Text('$e')));
-                  }
-                } else if (v == 'keep') {
-                  final messenger = ScaffoldMessenger.of(context);
-                  final full = await app.api.playlist(p.id);
-                  final ready = [for (final t in full.items) if (t.isReady) t];
-                  if (!context.mounted) return;
-                  final bytes = ready.length;
-                  final sure = await confirm(
-                      context,
-                      'Keep "${p.name}" on this device?',
-                      '$bytes ${bytes == 1 ? 'song' : 'songs'} are downloaded to the '
-                          'phone and play with no signal. Songs still being fetched by '
-                          'the server are skipped.',
-                      action: 'Keep');
-                  if (!sure) return;
-                  await app.keepOffline(ready);
-                  messenger.say(
-                      snack(Text('Keeping $bytes songs')));
-                } else if (v == 'forget') {
-                  final full = await app.api.playlist(p.id);
-                  for (final t in full.items) {
-                    await app.forgetOffline(t.id);
-                  }
-                } else if (v == 'cover') {
-                  final messenger = ScaffoldMessenger.of(context);
-                  final file = await FilePicker.pickFile(type: FileType.image);
-                  if (file == null) return;
-                  try {
-                    await app.api
-                        .setPlaylistCover(p.id, await file.readAsBytes());
-                    await app.refreshPlaylists();
-                  } catch (e) {
-                    messenger.say(snack(Text('$e')));
-                  }
-                } else if (v == 'drawn-cover') {
-                  await app.api.clearPlaylistCover(p.id);
-                  await app.refreshPlaylists();
-                } else if (v == 'rename') {
-                  final name = await promptForName(context, 'Rename playlist', p.name);
-                  if (name == null) return;
-                  await app.api.renamePlaylist(p.id, name);
-                  await app.refreshPlaylists();
-                } else if (v == 'delete') {
-                  final ok = await confirm(context, 'Delete "${p.name}"?',
-                      'The tracks stay in your library.');
-                  if (!ok) return;
-                  await app.api.deletePlaylist(p.id);
-                  await app.refreshPlaylists();
-                } else if (v == 'queue') {
-                  final messenger = ScaffoldMessenger.of(context);
-                  final full = await app.api.playlist(p.id);
-                  await app.addTracks(full.items);
-                  messenger.say(snack(Text(
-                      '${full.items.length} added to '
-                      '"${app.activeQueue?.name ?? 'the queue'}"')));
-                }
-              },
-              itemBuilder: (context) => [
-                const PopupMenuItem(value: 'play', child: Text('Play')),
-                const PopupMenuItem(value: 'shuffle', child: Text('Shuffle')),
-                const PopupMenuItem(value: 'queue', child: Text('Add all to queue')),
-                if (OfflineStore.supported) ...[
-                  const PopupMenuItem(
-                      value: 'keep', child: Text('Keep on this device')),
-                  const PopupMenuItem(
-                      value: 'forget', child: Text('Stop keeping here')),
-                ],
-                // A playlist draws its own cover from the records in it; this is for
-                // when you have a picture in mind instead.
-                const PopupMenuItem(value: 'cover', child: Text('Choose a cover…')),
-                // Out, for once. Everything about this library comes in and nothing
-                // has ever left it.
-                const PopupMenuItem(value: 'link', child: Text('Copy a link')),
-                const PopupMenuItem(value: 'export', child: Text('Export as M3U')),
-                const PopupMenuItem(
-                    value: 'export-csv', child: Text('Export as a spreadsheet')),
-                if (p.customCover)
-                  const PopupMenuItem(
-                      value: 'drawn-cover', child: Text('Use the drawn cover')),
-                if (p.isMirror) ...[
-                  const PopupMenuItem(
-                      value: 'clone', child: Text('Make an editable copy')),
-                  if (p.unmatched > 0)
-                    PopupMenuItem(
-                        value: 'unmatched',
-                        child: Text('${p.unmatched} songs not matched…')),
-                  // Only where there is something to refresh from: this called the
-                  // Spotify sync whatever the playlist mirrored, so a YouTube Music
-                  // list offered "Refresh from Spotify" and then did nothing to it.
-                  if (p.kind == 'spotify')
-                    const PopupMenuItem(
-                        value: 'resync', child: Text('Refresh from Spotify')),
-                ] else if (!p.isFavourites)
-                  const PopupMenuItem(value: 'rename', child: Text('Rename…')),
-                // Favourites has no delete: it is where the heart button puts things,
-                // and the way to empty it is to unheart them.
-                if (!p.isFavourites)
-                  const PopupMenuItem(
-                      value: 'delete', child: Text('Remove from WetOwl')),
-              ],
-            ),
-            onTap: () => openPage(
-                context, (_) => PlaylistPage(playlistId: p.id, name: p.name)),
-          ),
-        if (app.playlists.isEmpty)
-          const Padding(
-            padding: EdgeInsets.all(32),
-            child: Center(child: Text('No playlists yet.')),
-          ),
+        // What is on the other services, and which of it is mirrored here.
+        const ServiceShelf(),
       ],
       ),
     );
   }
+
+  /// One playlist. Shrunk, it is a line: a small cover and the name, with the counts
+  /// left for the full size.
+  Widget _playlistRow(BuildContext context, AppState app, Playlist p, bool shrunk) =>
+    ListTile(
+      dense: shrunk,
+      visualDensity: shrunk ? VisualDensity.compact : null,
+      // Favourites gets the heart it is filled with rather than a cover made of
+      // whatever happens to be in it first.
+      leading: p.isFavourites
+          ? SizedBox(
+              width: shrunk ? 28 : 44,
+              height: shrunk ? 28 : 44,
+              child: Icon(Icons.favorite,
+                  size: shrunk ? 18 : null,
+                  color: Theme.of(context).colorScheme.primary),
+            )
+          : PlaylistArt(playlist: p, size: shrunk ? 28 : 44),
+      title: Row(
+        children: [
+          Flexible(
+            child: Text(p.name,
+                maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
+          if (p.isMirror) ...[
+            const SizedBox(width: 8),
+            _SourceTag(kind: p.kind),
+          ],
+        ],
+      ),
+      // No account name: whose Spotify a mirror came from is the same answer
+      // for every mirror on the screen, and it was crowding out the counts that
+      // differ. The service is already on the row as an icon.
+      subtitle: shrunk ? null : Text([
+        '${p.itemCount} tracks',
+        // Somebody else's, kept here. Whose it is belongs on the row: a list
+        // you cannot change is confusing until you can see it is not yours.
+        if (p.saved) 'from ${p.ownerName ?? 'somebody'}',
+        if (p.openEdit && p.mine) 'shared',
+        if (p.autoSplit) 'taken apart',
+        if (p.unmatched > 0) '${p.unmatched} not matched',
+      ].join(' · ')),
+      trailing: PopupMenuButton<String>(
+        icon: const Icon(Icons.more_vert, size: 20),
+        onSelected: (v) async {
+          if (v == 'link') {
+            await copyLink(context, '/p/${p.id}', p.name);
+          } else if (v == 'export' || v == 'export-csv') {
+            // Opened rather than downloaded here: the server answers with a
+            // file and a filename, so the browser saves it and a phone hands it
+            // to whatever opens playlists.
+            await launchUrl(
+                Uri.parse(app.api.playlistExportUrl(p.id,
+                    format: v == 'export' ? 'm3u' : 'csv')),
+                mode: LaunchMode.externalApplication);
+          } else if (v == 'play' || v == 'shuffle') {
+            final full = await app.api.playlist(p.id);
+            await app.playNow(full.items, shuffle: v == 'shuffle');
+          } else if (v == 'clone') {
+            final name = await promptForName(
+                context, 'Copy playlist', '${p.name} (copy)');
+            if (name == null) return;
+            await app.api.clonePlaylist(p.id, name: name);
+            await app.refreshPlaylists();
+          } else if (v == 'unmatched') {
+            if (!context.mounted) return;
+            await openPage(context,
+                (_) => UnmatchedPage(playlistId: p.id, name: p.name));
+            await app.refreshPlaylists();
+          } else if (v == 'resync') {
+            final messenger = ScaffoldMessenger.of(context);
+            try {
+              await app.api.syncSpotify();
+              await app.refreshPlaylists();
+              messenger.say(
+                  snack(Text('Refreshed from Spotify')));
+            } catch (e) {
+              messenger.say(snack(Text('$e')));
+            }
+          } else if (v == 'keep') {
+            final messenger = ScaffoldMessenger.of(context);
+            final full = await app.api.playlist(p.id);
+            final ready = [for (final t in full.items) if (t.isReady) t];
+            if (!context.mounted) return;
+            final bytes = ready.length;
+            final sure = await confirm(
+                context,
+                'Keep "${p.name}" on this device?',
+                '$bytes ${bytes == 1 ? 'song' : 'songs'} are downloaded to the '
+                    'phone and play with no signal. Songs still being fetched by '
+                    'the server are skipped.',
+                action: 'Keep');
+            if (!sure) return;
+            await app.keepOffline(ready);
+            messenger.say(
+                snack(Text('Keeping $bytes songs')));
+          } else if (v == 'forget') {
+            final full = await app.api.playlist(p.id);
+            for (final t in full.items) {
+              await app.forgetOffline(t.id);
+            }
+          } else if (v == 'cover') {
+            final messenger = ScaffoldMessenger.of(context);
+            final file = await FilePicker.pickFile(type: FileType.image);
+            if (file == null) return;
+            try {
+              await app.api
+                  .setPlaylistCover(p.id, await file.readAsBytes());
+              await app.refreshPlaylists();
+            } catch (e) {
+              messenger.say(snack(Text('$e')));
+            }
+          } else if (v == 'drawn-cover') {
+            await app.api.clearPlaylistCover(p.id);
+            await app.refreshPlaylists();
+          } else if (v == 'rename') {
+            final name = await promptForName(context, 'Rename playlist', p.name);
+            if (name == null) return;
+            await app.api.renamePlaylist(p.id, name);
+            await app.refreshPlaylists();
+          } else if (v == 'delete') {
+            final ok = await confirm(context, 'Delete "${p.name}"?',
+                'The tracks stay in your library.');
+            if (!ok) return;
+            await app.api.deletePlaylist(p.id);
+            await app.refreshPlaylists();
+          } else if (v == 'queue') {
+            final messenger = ScaffoldMessenger.of(context);
+            final full = await app.api.playlist(p.id);
+            await app.addTracks(full.items);
+            messenger.say(snack(Text(
+                '${full.items.length} added to '
+                '"${app.activeQueue?.name ?? 'the queue'}"')));
+          }
+        },
+        itemBuilder: (context) => [
+          const PopupMenuItem(value: 'play', child: Text('Play')),
+          const PopupMenuItem(value: 'shuffle', child: Text('Shuffle')),
+          const PopupMenuItem(value: 'queue', child: Text('Add all to queue')),
+          if (OfflineStore.supported) ...[
+            const PopupMenuItem(
+                value: 'keep', child: Text('Keep on this device')),
+            const PopupMenuItem(
+                value: 'forget', child: Text('Stop keeping here')),
+          ],
+          // A playlist draws its own cover from the records in it; this is for
+          // when you have a picture in mind instead.
+          const PopupMenuItem(value: 'cover', child: Text('Choose a cover…')),
+          // Out, for once. Everything about this library comes in and nothing
+          // has ever left it.
+          const PopupMenuItem(value: 'link', child: Text('Copy a link')),
+          const PopupMenuItem(value: 'export', child: Text('Export as M3U')),
+          const PopupMenuItem(
+              value: 'export-csv', child: Text('Export as a spreadsheet')),
+          if (p.customCover)
+            const PopupMenuItem(
+                value: 'drawn-cover', child: Text('Use the drawn cover')),
+          if (p.isMirror) ...[
+            const PopupMenuItem(
+                value: 'clone', child: Text('Make an editable copy')),
+            if (p.unmatched > 0)
+              PopupMenuItem(
+                  value: 'unmatched',
+                  child: Text('${p.unmatched} songs not matched…')),
+            // Only where there is something to refresh from: this called the
+            // Spotify sync whatever the playlist mirrored, so a YouTube Music
+            // list offered "Refresh from Spotify" and then did nothing to it.
+            if (p.kind == 'spotify')
+              const PopupMenuItem(
+                  value: 'resync', child: Text('Refresh from Spotify')),
+          ] else if (!p.isFavourites)
+            const PopupMenuItem(value: 'rename', child: Text('Rename…')),
+          // Favourites has no delete: it is where the heart button puts things,
+          // and the way to empty it is to unheart them.
+          if (!p.isFavourites)
+            const PopupMenuItem(
+                value: 'delete', child: Text('Remove from WetOwl')),
+        ],
+      ),
+      onTap: () => openPage(
+          context, (_) => PlaylistPage(playlistId: p.id, name: p.name)),
+    );
 }
 
 class PlaylistPage extends StatefulWidget {
@@ -761,7 +782,7 @@ class _SourceTag extends StatelessWidget {
         border: Border.all(color: scheme.primary.withValues(alpha: 0.6)),
         borderRadius: BorderRadius.circular(100),
       ),
-      child: Text(kind == 'spotify' ? 'Spotify' : kind,
+      child: Text(serviceLabel(kind),
           style: TextStyle(
               fontSize: 10.5, fontWeight: FontWeight.w700, color: scheme.primary)),
     );
@@ -922,8 +943,8 @@ class _PlaylistHeader extends StatelessWidget {
   }
 
   static String _sourceName(String kind) => switch (kind) {
-        'spotify' => 'a Spotify playlist',
-        'ytmusic' => 'a YouTube Music playlist',
+        'spotify' || 'ytmusic' || 'youtube' || 'deezer' || 'soundcloud' || 'bandcamp' =>
+          'a ${serviceLabel(kind)} playlist',
         _ => 'a playlist elsewhere',
       };
 }
@@ -937,7 +958,10 @@ class _PlaylistHeader extends StatelessWidget {
 /// The numbers are asked for once when the page opens, a page of one row each, and a
 /// card whose number has not arrived is still a card that opens.
 class _Contents extends StatefulWidget {
-  const _Contents();
+  const _Contents({this.shrunk = false});
+
+  /// Shrunk, the cards become a strip of labels: the same ways in, a line or two tall.
+  final bool shrunk;
 
   @override
   State<_Contents> createState() => _ContentsState();
@@ -994,30 +1018,35 @@ class _ContentsState extends State<_Contents> {
     final kept = app.offline.count;
     final cards = <Widget>[
       _IndexCard(
+        small: widget.shrunk,
         number: _n(_songs),
         title: 'Songs',
         blurb: 'Everything, sortable',
         onTap: () => openPage(context, (_) => const AllTracksPage()),
       ),
       _IndexCard(
+        small: widget.shrunk,
         number: _n(_records),
         title: 'Records',
         blurb: 'Every album and EP',
         onTap: () => openPage(context, (_) => const AlbumsPage()),
       ),
       _IndexCard(
+        small: widget.shrunk,
         number: _n(_artists),
         title: 'Artists',
         blurb: 'Everybody on them',
         onTap: () => openPage(context, (_) => const ArtistsPage()),
       ),
       _IndexCard(
+        small: widget.shrunk,
         number: 'Wk ${issueNumber(DateTime.now())}',
         title: 'The charts',
         blurb: 'Your top songs, and what moved',
         onTap: () => openPage(context, (_) => const ListeningPage()),
       ),
       _IndexCard(
+        small: widget.shrunk,
         number: _unseen > 0 ? '$_unseen' : (_following > 0 ? '$_following' : ''),
         title: 'New releases',
         blurb: _following == 0
@@ -1032,6 +1061,7 @@ class _ContentsState extends State<_Contents> {
         },
       ),
       _IndexCard(
+        small: widget.shrunk,
         number: '',
         title: 'Recently played',
         blurb: 'Everything, in the order you heard it',
@@ -1042,6 +1072,7 @@ class _ContentsState extends State<_Contents> {
       // the way to a plane.
       if (OfflineStore.supported)
         _IndexCard(
+          small: widget.shrunk,
           number: kept == 0 ? '' : _n(kept),
           title: 'On this device',
           blurb: kept == 0
@@ -1050,13 +1081,17 @@ class _ContentsState extends State<_Contents> {
           onTap: () => openPage(context, (_) => const KeptPage()),
         ),
     ];
+    if (widget.shrunk) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
+        child: Wrap(spacing: 6, runSpacing: 6, children: cards),
+      );
+    }
     return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 10, 8, 0),
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const SectionFlag('Contents'),
-          const SizedBox(height: 10),
           // Two to a row, each row as tall as its tallest card, so the cards line up
           // at any text size.
           for (var i = 0; i < cards.length; i += 2)
@@ -1104,6 +1139,7 @@ class _IndexCard extends StatelessWidget {
     required this.blurb,
     required this.onTap,
     this.sticker = false,
+    this.small = false,
   });
 
   final String number;
@@ -1114,9 +1150,13 @@ class _IndexCard extends StatelessWidget {
   /// Whether the number is news, and set on a sticker rather than in ink.
   final bool sticker;
 
+  /// A label in a strip rather than a card: the name and its number on one line.
+  final bool small;
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    if (small) return _label(context, scheme);
     final entry = _Numbered.of(context);
     // The figure's line is kept whether or not there is a figure, so the names in a
     // row sit on the same line; a card with nothing to count carries a short rule
@@ -1184,6 +1224,41 @@ class _IndexCard extends StatelessWidget {
     );
   }
 
+  Widget _label(BuildContext context, ColorScheme scheme) => Semantics(
+        button: true,
+        label: '$title${number.isEmpty || number == '·' ? '' : ', $number'}',
+        child: ExcludeSemantics(
+          child: InkWell(
+            onTap: onTap,
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(9, 5, 9, 4),
+              decoration: BoxDecoration(
+                border: Border.all(color: scheme.onSurface, width: 1.5),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Text(title.toUpperCase(),
+                      style: Mag.headline(15, color: scheme.onSurface)),
+                  if (number.isNotEmpty && number != '·') ...[
+                    const SizedBox(width: 7),
+                    sticker
+                        ? Container(
+                            padding: const EdgeInsets.fromLTRB(4, 1, 4, 0),
+                            color: MuseTheme.highlighter,
+                            child: Text('$number NEW',
+                                style: Mag.headline(13, color: MuseTheme.ink)),
+                          )
+                        : Text(number, style: Mag.numerals(15, color: scheme.primary)),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
   Widget _figure(ColorScheme scheme) => sticker
       ? Container(
           padding: const EdgeInsets.fromLTRB(6, 2, 6, 0),
@@ -1236,46 +1311,54 @@ class _SmartListsState extends State<_SmartLists> {
     final scheme = Theme.of(context).colorScheme;
     final shown = [for (final l in _lists) if (l.count > 0) l];
     if (shown.isEmpty) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 18, 8, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const SectionFlag('Lists that fill themselves in'),
-          const SizedBox(height: 4),
-          for (final l in shown)
-            InkWell(
-              onTap: () async {
-                await openPage(context, (_) => SmartListPage(id: l.id, name: l.name, blurb: l.blurb));
-                _ask();
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 4),
-                decoration: BoxDecoration(
-                  border: Border(
-                      bottom: BorderSide(color: scheme.onSurface.withValues(alpha: 0.16))),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(l.name.toUpperCase(),
-                              style: Mag.headline(20, color: scheme.onSurface)),
-                          const SizedBox(height: 2),
-                          Text(l.blurb,
-                              style: Mag.typewriter(11, color: scheme.onSurfaceVariant)),
-                        ],
+    return LibraryFold(
+      id: 'smart',
+      title: 'Lists that fill themselves in',
+      top: 18,
+      builder: (context, shrunk) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final l in shown)
+              InkWell(
+                onTap: () async {
+                  await openPage(context, (_) => SmartListPage(id: l.id, name: l.name, blurb: l.blurb));
+                  _ask();
+                },
+                child: Container(
+                  padding: EdgeInsets.symmetric(vertical: shrunk ? 5 : 9, horizontal: 4),
+                  decoration: BoxDecoration(
+                    border: Border(
+                        bottom: BorderSide(color: scheme.onSurface.withValues(alpha: 0.16))),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(l.name.toUpperCase(),
+                                style: Mag.headline(shrunk ? 16 : 20, color: scheme.onSurface)),
+                            // The name says what it is; the line under it says why,
+                            // which is for reading once, not every time.
+                            if (!shrunk) ...[
+                              const SizedBox(height: 2),
+                              Text(l.blurb,
+                                  style: Mag.typewriter(11, color: scheme.onSurfaceVariant)),
+                            ],
+                          ],
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    Text('${l.count}', style: Mag.numerals(22, color: scheme.primary)),
-                  ],
+                      const SizedBox(width: 12),
+                      Text('${l.count}',
+                          style: Mag.numerals(shrunk ? 17 : 22, color: scheme.primary)),
+                    ],
+                  ),
                 ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }

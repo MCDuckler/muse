@@ -1246,12 +1246,21 @@ class ApiClient {
   }
 
   /// The feed: one song after another, with why each is there.
-  Future<({List<FeedCard> items, int total})> feedCards({int offset = 0, int limit = 20}) async {
-    final d = await _decode(await net.get(_u('/discover/cards', {'offset': offset, 'limit': limit}),
+  /// A page of the feed — from every service, or only [service]'s songs — and how many
+  /// songs each service has in the whole of it, for the filter to offer.
+  Future<({List<FeedCard> items, int total, Map<String, int> services})> feedCards(
+      {int offset = 0, int limit = 20, String? service}) async {
+    final d = await _decode(await net.get(
+        _u('/discover/cards',
+            {'offset': offset, 'limit': limit, if (service != null) 'service': service}),
         headers: _headers)) as Map<String, dynamic>;
     return (
       items: [for (final c in (d['items'] ?? const []) as List) FeedCard.fromJson((c as Map).cast<String, dynamic>())],
       total: (d['total'] ?? 0) as int,
+      services: {
+        for (final e in ((d['services'] ?? const {}) as Map).entries)
+          '${e.key}': (e.value as num).toInt(),
+      },
     );
   }
 
@@ -1560,9 +1569,16 @@ class ApiClient {
     );
   }
 
-  Future<void> markFeedSeen(List<String> albumIds) async => await _decode(
+  /// Looked at. Each record says where it is from: a Bandcamp record's id is its page,
+  /// and marking every id as Deezer's left a label's records new for ever.
+  Future<void> markFeedSeen(List<FeedItem> items) async => await _decode(
       await net.post(_u('/feed/seen'),
-          headers: _headers, body: jsonEncode({'album_ids': albumIds})));
+          headers: _headers,
+          body: jsonEncode({
+            'items': [
+              for (final i in items) {'album_id': i.albumId, 'provider': i.provider}
+            ],
+          })));
 
   Future<void> refreshFeed() async =>
       await _decode(await net.post(_u('/feed/refresh'), headers: _headers));

@@ -54,9 +54,15 @@ def follow(user_id: int, artist: dict, provider: str = "deezer") -> dict:
         (user_id, provider, artist["remote_id"], artist["name"], artist.get("image"),
          bool(artist.get("is_label"))),
     )
-    found = refresh_artist(provider, artist["remote_id"], artist["name"])
-    # Everything already out stays out of the feed; only what lands from here on, and
-    # what is genuinely recent, is news.
+    found = refresh_artist(provider, artist["remote_id"], artist["name"],
+                           new_follower=user_id)
+    _old_news_seen(user_id, provider, artist["remote_id"])
+    return {"following": True, "releases": found}
+
+
+def _old_news_seen(user_id: int, provider: str, remote_id: str) -> None:
+    """Everything already out stays out of the feed; only what lands from here on, and
+    what is genuinely recent, is news."""
     db.run(
         """insert into feed_seen(user_id, provider, album_id)
            select %s, provider, album_id from artist_releases
@@ -64,9 +70,8 @@ def follow(user_id: int, artist: dict, provider: str = "deezer") -> dict:
               and (release_date is null
                    or release_date < current_date - %s * interval '1 day')
            on conflict do nothing""",
-        (user_id, provider, artist["remote_id"], FRESH_DAYS),
+        (user_id, provider, remote_id, FRESH_DAYS),
     )
-    return {"following": True, "releases": found}
 
 
 def unfollow(user_id: int, provider: str, remote_id: str) -> None:
@@ -82,24 +87,65 @@ def unfollow(user_id: int, provider: str, remote_id: str) -> None:
 BANDCAMP_NEWEST = 12
 BANDCAMP_DATES_PER_POLL = 6
 
+# A page that would not load is asked again rather than left for the next poll, six
+# hours away: an import reads dozens of pages in a row, Bandcamp answers that with 429,
+# and every follow refused that way used to sit there with no records until then.
+RETRY_SECONDS = 15 * 60
+RETRIES = 3
 
-def _refresh_bandcamp(url: str, name: str, *, is_label: bool = False) -> int:
+
+def _retry_later(provider: str, remote_id: str, name: str, *, tries: int,
+                 new_follower: int | None) -> None:
+    if tries >= RETRIES:
+        return
+    jobs.enqueue("follow_refresh",
+                 {"provider": provider, "remote_id": remote_id, "name": name,
+                  "tries": tries + 1, "new_follower": new_follower},
+                 priority=jobs.PRIORITY_BULK, delay_seconds=RETRY_SECONDS * (tries + 1))
+
+
+def refresh_later(payload: dict) -> int:
+    """What the worker runs for a retried refresh. A follow whose first read failed
+    gets its back catalogue marked as seen once it has one, as it would have then."""
+    found = refresh_artist(payload["provider"], payload["remote_id"], payload["name"],
+                           tries=int(payload.get("tries") or 0),
+                           new_follower=payload.get("new_follower"))
+    if payload.get("new_follower"):
+        _old_news_seen(int(payload["new_follower"]), payload["provider"],
+                       payload["remote_id"])
+    return found
+
+
+def _refresh_bandcamp(url: str, name: str, *, is_label: bool = False, tries: int = 0,
+                      new_follower: int | None = None) -> int:
     # A label puts out several records a week where an act puts out one a year, so a
     # label's page is read further back and more of its new dates are asked for.
     newest = BANDCAMP_NEWEST * (3 if is_label else 1)
     dates = BANDCAMP_DATES_PER_POLL * (2 if is_label else 1)
     try:
-        records = linked.bandcamp_discography(url, newest=newest)
+        music = linked.bandcamp_music(url, newest=newest)
     except Exception as e:  # noqa: BLE001 — a page that will not load is not news
         log.info("could not refresh %s: %s", name, e)
+        _retry_later("bandcamp", url, name, tries=tries, new_follower=new_follower)
         return 0
+    records = music["records"]
+    if music["is_label"] and not is_label:
+        # Many acts on one page's records is a label, whatever the page calls itself:
+        # the feed then says whose label a record came out on.
+        db.run("update artist_follows set is_label=true "
+               "where provider='bandcamp' and remote_id=%s", (url,))
+    # By the record, not by whose page listed it: a record on both an act's page and
+    # its label's is one row, and asking its date again on every poll of the other
+    # page spent the few dates a poll may ask for.
     known = {r["album_id"]: r for r in db.all_(
         "select album_id, release_date from artist_releases where provider='bandcamp' "
-        "and artist_id=%s", (url,))}
+        "and album_id = any(%s)", ([a["remote_id"] for a in records],))}
     asked = 0
     for a in records:
         released = (known.get(a["remote_id"]) or {}).get("release_date")
-        if a["remote_id"] not in known and asked < dates:
+        # New records first in line, then ones a past poll had no budget left for: a
+        # record without a date is in no radar and sorts below everything in the feed.
+        if released is None and asked < dates:
             asked += 1
             try:
                 released = linked.bandcamp_record(a["remote_id"]).get("release_date")
@@ -119,12 +165,14 @@ def _refresh_bandcamp(url: str, name: str, *, is_label: bool = False) -> int:
     return len(records)
 
 
-def refresh_artist(provider: str, remote_id: str, name: str) -> int:
+def refresh_artist(provider: str, remote_id: str, name: str, *, tries: int = 0,
+                   new_follower: int | None = None) -> int:
     """Write down what this artist has released. Returns how many records are known."""
     if provider == "bandcamp":
         label = db.one("select bool_or(is_label) as l from artist_follows "
                        "where provider='bandcamp' and remote_id=%s", (remote_id,))
-        return _refresh_bandcamp(remote_id, name, is_label=bool(label and label["l"]))
+        return _refresh_bandcamp(remote_id, name, is_label=bool(label and label["l"]),
+                                 tries=tries, new_follower=new_follower)
     try:
         albums = discography.artist_albums(remote_id)
     except discography.Unavailable as e:

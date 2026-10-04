@@ -136,6 +136,18 @@ def _get_page(url: str) -> str:
     return last.decode("utf-8", "replace")
 
 
+def fetch_page(url: str) -> tuple[str, str]:
+    """A page in one request, and the address it ended up at after redirects.
+
+    For pages with no record blob to look for — a band's music page, a label's artists —
+    where [_get_page] would ask again with every user agent and so fetch everything
+    twice from a service that answers a busy importer with 429.
+    """
+    req = urllib.request.Request(url, headers={"User-Agent": UAS[-1]})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return r.read().decode("utf-8", "replace"), r.geturl()
+
+
 def bandcamp_page(url: str) -> dict:
     """The JSON a Bandcamp page carries about itself.
 

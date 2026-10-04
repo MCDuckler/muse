@@ -91,9 +91,10 @@ def test_importing_follows_adds_and_opens_labels_into_their_acts(client, hdr, mo
         {"name": "Roster Act", "url": "https://rosteract.bandcamp.com"},
         {"name": "Only On Bandcamp", "url": "https://onlyonbandcamp.bandcamp.com"},
     ])
-    monkeypatch.setattr(linked, "bandcamp_discography", lambda url, newest=40: [
-        {"remote_id": f"{url}/album/one", "title": "One", "artist": "Only On Bandcamp",
-         "cover": None, "record_type": "album"}])
+    monkeypatch.setattr(linked, "bandcamp_music", lambda url, newest=40: {
+        "name": None, "is_label": False, "records": [
+            {"remote_id": f"{url}/album/one", "title": "One", "artist": "Only On Bandcamp",
+             "cover": None, "record_type": "album"}]})
     monkeypatch.setattr(linked, "bandcamp_record", lambda url: {
         "release_date": "2026-10-01", "tags": ["techno"], "reviews": [], "about": None})
 
@@ -218,9 +219,11 @@ def test_trending_lists_are_interleaved_in_the_feed_so_no_genre_hogs_it(client, 
 def test_a_labels_new_record_reaches_the_radar_and_says_whose_it_is(client, hdr, monkeypatch):
     from muse import sources
     me = _me()
-    monkeypatch.setattr(linked, "bandcamp_discography", lambda url, newest=40: [
-        {"remote_id": "https://djseinfeld.bandcamp.com/album/if-this-is-it", "title": "If This Is It",
-         "artist": "DJ Seinfeld", "cover": None, "record_type": "album"}])
+    monkeypatch.setattr(linked, "bandcamp_music", lambda url, newest=40: {
+        "name": "Ninja Tune", "is_label": True, "records": [
+            {"remote_id": "https://djseinfeld.bandcamp.com/album/if-this-is-it",
+             "title": "If This Is It", "artist": "DJ Seinfeld", "cover": None,
+             "record_type": "album"}]})
     monkeypatch.setattr(linked, "bandcamp_record", lambda url: {
         "release_date": "2026-10-02", "tags": ["house"], "reviews": [], "about": None})
     monkeypatch.setattr(sources, "bandcamp_tracks", lambda url: [

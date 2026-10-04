@@ -142,6 +142,29 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// How the library's sections are folded, by section: shrunk to a line a row, or
+  /// closed down to their heads. Per device, like the widths — a phone wants less of
+  /// the page than a desk does — and remembered, because a section somebody closed is
+  /// one they do not want to close again every time the app opens.
+  Set<String> shrunkSections = <String>{};
+  Set<String> closedSections = <String>{};
+
+  void setSectionShrunk(String id, bool shrunk) {
+    shrunk ? shrunkSections.add(id) : shrunkSections.remove(id);
+    SharedPreferences.getInstance()
+        .then((p) => p.setStringList(_kShrunkSections, shrunkSections.toList()))
+        .catchError((_) => false);
+    notifyListeners();
+  }
+
+  void setSectionClosed(String id, bool closed) {
+    closed ? closedSections.add(id) : closedSections.remove(id);
+    SharedPreferences.getInstance()
+        .then((p) => p.setStringList(_kClosedSections, closedSections.toList()))
+        .catchError((_) => false);
+    notifyListeners();
+  }
+
   void toggleDeskDock() {
     deskDock = !deskDock;
     SharedPreferences.getInstance()
@@ -342,6 +365,8 @@ class AppState extends ChangeNotifier {
   static const _kSidebar = 'muse.sidebar';
   static const _kDockWidth = 'muse.dockWidth';
   static const _kPaneWidth = 'muse.paneWidth';
+  static const _kShrunkSections = 'muse.library.shrunk';
+  static const _kClosedSections = 'muse.library.closed';
 
   /// The queue that was on when the app was last closed, so opening it again lands
   /// there rather than on whichever queue happens to be first in the list.
@@ -757,6 +782,8 @@ class AppState extends ChangeNotifier {
     sidebar = prefs.getBool(_kSidebar) ?? true;
     dockWidth = (prefs.getDouble(_kDockWidth) ?? 420).clamp(320, 640);
     paneWidth = (prefs.getDouble(_kPaneWidth) ?? 330).clamp(240, 560);
+    shrunkSections = {...?prefs.getStringList(_kShrunkSections)};
+    closedSections = {...?prefs.getStringList(_kClosedSections)};
     coverScale = (prefs.getDouble(_kCoverScale) ?? 0.74).clamp(0.5, 1.0);
     discScale = (prefs.getDouble(_kDiscScale) ?? 1.0).clamp(0.6, 1.15);
     discLabel = (prefs.getDouble(_kDiscLabel) ?? 0.31).clamp(0.18, 0.92);

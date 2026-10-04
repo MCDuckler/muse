@@ -10,6 +10,7 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import 'dialogs.dart';
+import 'feed_page.dart' show showImportResult;
 import 'mini_player.dart';
 import 'spotify_page.dart';
 import 'youtube_setup.dart';
@@ -17,6 +18,7 @@ import 'snack.dart';
 import 'widths.dart';
 import 'record_refresh.dart';
 import 'scrobbling.dart';
+import 'service_shelf.dart' show serviceIcon;
 
 /// Services linked by typing a name.
 ///
@@ -35,6 +37,18 @@ class _ServicesPageState extends State<ServicesPage> {
   List<LinkedService>? _services;
   Object? _error;
 
+  /// Who this is on Spotify, when it is connected: Spotify is linked on a page of its
+  /// own, but whether it is linked decides what can be imported here.
+  String? _spotifyAs;
+  bool _spotifyLinked = false;
+
+  /// Where follows can be brought over from, as the server counts it: the linked
+  /// accounts that say who they follow.
+  List<FollowSource> _followSources = const [];
+
+  /// Which service the followed artists are being brought over from, if any.
+  String? _importingFollows;
+
   @override
   void initState() {
     super.initState();
@@ -42,12 +56,62 @@ class _ServicesPageState extends State<ServicesPage> {
   }
 
   Future<void> _load() async {
+    final api = context.read<AppState>().api;
     try {
-      final s = await context.read<AppState>().api.linkedServices();
-      if (mounted) setState(() { _services = s; _error = null; });
+      final s = await api.linkedServices();
+      Map<String, dynamic>? spotify;
+      try {
+        spotify = await api.spotifyAccount();
+      } catch (_) {
+        // No Spotify on this server is "not linked", not a page that will not load.
+      }
+      var follows = const <FollowSource>[];
+      try {
+        follows = await api.followSources();
+      } catch (_) {
+        // A server from before it said: the section offers nothing rather than guesses.
+      }
+      final account = spotify?['account'] as Map<String, dynamic>?;
+      if (mounted) {
+        setState(() {
+          _services = s;
+          _error = null;
+          _spotifyLinked = account != null;
+          _spotifyAs = account?['display_name'] as String?;
+          _followSources = follows;
+        });
+      }
     } catch (e) {
       if (mounted) setState(() => _error = e);
     }
+  }
+
+  /// Bring over the artists this person already follows elsewhere. Adds to who is
+  /// followed here and never takes away; a Bandcamp label is opened into its acts.
+  ///
+  /// Every service names artists slightly differently and some of what they call an
+  /// artist is not one, so the answer is reported in full rather than assumed: what
+  /// was found, what was already here, and the names that could not be placed.
+  Future<void> _importFollows(FollowSource source) async {
+    final api = context.read<AppState>().api;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _importingFollows = source.provider);
+    messenger.say(snack(Text(source.provider == 'bandcamp'
+        ? 'Reading who you follow on Bandcamp — a label is opened into its acts, so '
+            'this can take a minute…'
+        : 'Reading who you follow on ${source.label}…')));
+    FollowImport r;
+    try {
+      r = await api.importFollowsFrom(source.provider);
+    } catch (e) {
+      messenger.say(problem(e));
+      return;
+    } finally {
+      // Done before the answer is shown: the button is not still working while the
+      // sheet saying what it did is open.
+      if (mounted) setState(() => _importingFollows = null);
+    }
+    if (mounted) await showImportResult(context, r);
   }
 
   bool _importing = false;
@@ -281,7 +345,8 @@ class _ServicesPageState extends State<ServicesPage> {
                         'Most of these are read by name rather than by signing in — a '
                         'profile id or a username is enough, and only what is public '
                         'is read. Spotify and YouTube Music need a sign-in, because '
-                        'nothing about those accounts is public.',
+                        'nothing about those accounts is public. Their playlists are '
+                        'in the Library, under From your services.',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                       const SizedBox(height: 12),
@@ -307,15 +372,58 @@ class _ServicesPageState extends State<ServicesPage> {
                         child: ListTile(
                           leading: const Icon(Icons.music_note_outlined),
                           title: const Text('Spotify'),
-                          subtitle: const Text(
-                              'Signs in properly — everything about a Spotify '
-                              'account is private'),
+                          subtitle: Text(_spotifyLinked
+                              ? _spotifyAs ?? 'Connected'
+                              : 'Signs in properly — everything about a Spotify '
+                                  'account is private'),
                           trailing: const Icon(Icons.chevron_right),
-                          onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                  builder: (_) => const SpotifyPage())),
+                          onTap: () async {
+                            await Navigator.of(context).push(MaterialPageRoute(
+                                builder: (_) => const SpotifyPage()));
+                            await _load();
+                          },
                         ),
                       ),
+                      const SizedBox(height: 18),
+                      const Divider(),
+                      // Moved here from the list of who you follow: which accounts
+                      // can be read is decided on this page, so what to bring over
+                      // from them is too.
+                      Text('Who you follow',
+                          style: Theme.of(context).textTheme.titleSmall),
+                      const SizedBox(height: 4),
+                      Text(
+                        _followSources.isEmpty
+                            ? 'Link Spotify, SoundCloud, Deezer or Bandcamp above to '
+                                'bring over the artists you follow there.'
+                            : 'Bring over the artists you already follow, so their '
+                                'next records turn up in the feed and on Discover. '
+                                'Nothing here is taken away, and a Bandcamp label is '
+                                'opened into the acts on it.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      if (_followSources.isNotEmpty) ...[
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            for (final f in _followSources)
+                              FilledButton.tonalIcon(
+                                onPressed: _importingFollows != null
+                                    ? null
+                                    : () => _importFollows(f),
+                                icon: _importingFollows == f.provider
+                                    ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(strokeWidth: 2))
+                                    : const Icon(Icons.person_add_alt_outlined),
+                                label: Text('From ${f.label}'),
+                              ),
+                          ],
+                        ),
+                      ],
                       const SizedBox(height: 18),
                       const Divider(),
                       // The other direction: not where music comes in from, but where
@@ -385,18 +493,12 @@ class _ServiceTile extends StatelessWidget {
   final VoidCallback onLink;
   final Future<void> Function() onUnlink;
 
-  IconData get _icon => switch (service.provider) {
-        'bandcamp' => Icons.album_outlined,
-        'soundcloud' => Icons.cloud_outlined,
-        _ => Icons.library_music_outlined,
-      };
-
   @override
   Widget build(BuildContext context) {
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       child: ListTile(
-        leading: Icon(_icon),
+        leading: Icon(serviceIcon(service.provider)),
         title: Text(service.label),
         subtitle: Text(service.isLinked
             ? [
@@ -404,114 +506,19 @@ class _ServiceTile extends StatelessWidget {
                 if (!service.plays) 'playlists only — Deezer cannot be played',
               ].join(' · ')
             : service.hint),
+        // What a linked account holds is listed in the Library, beside the playlists
+        // it would become, rather than here.
         trailing: service.isLinked
-            ? Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => _ServiceLists(service: service))),
-                    child: const Text('Lists'),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.link_off, size: 20),
-                    tooltip: 'Unlink',
-                    onPressed: onUnlink,
-                  ),
-                ],
+            ? IconButton(
+                icon: const Icon(Icons.link_off, size: 20),
+                tooltip: 'Unlink',
+                onPressed: onUnlink,
               )
             : FilledButton(onPressed: onLink, child: const Text('Link')),
       ),
     );
   }
 }
-
-/// What a linked account holds, and which of it to keep a copy of.
-class _ServiceLists extends StatefulWidget {
-  const _ServiceLists({required this.service});
-  final LinkedService service;
-
-  @override
-  State<_ServiceLists> createState() => _ServiceListsState();
-}
-
-class _ServiceListsState extends State<_ServiceLists> {
-  List<RemoteList>? _lists;
-  Object? _error;
-  final _busy = <String>{};
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    try {
-      final l = await context.read<AppState>().api.serviceLists(widget.service.provider);
-      if (mounted) setState(() { _lists = l; _error = null; });
-    } catch (e) {
-      if (mounted) setState(() => _error = e);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final lists = _lists;
-    return PlayerScaffold(
-      appBar: AppBar(title: Text(widget.service.label)),
-      body: _error != null && lists == null
-          ? ErrorRetry(error: _error!, onRetry: _load)
-          : lists == null
-              ? const Center(child: CircularProgressIndicator())
-              : lists.isEmpty
-                  ? EmptyHint(
-                      icon: Icons.queue_music_outlined,
-                      title: 'No playlists',
-                      body: '${widget.service.label} has nothing to copy for this '
-                          'account.',
-                    )
-                  : ListView(
-                  padding: EdgeInsets.only(bottom: bottomForPlayer(context)),
-                  children: [
-                    for (final l in lists)
-                      ListTile(
-                        title: Text(l.name, maxLines: 1,
-                            overflow: TextOverflow.ellipsis),
-                        subtitle: Text([
-                          if (l.count != null) '${l.count} items',
-                          if (l.mirrored) 'copied · ${l.mirroredItems} here',
-                        ].join(' · ')),
-                        trailing: _busy.contains(l.remoteId)
-                            ? const SizedBox(
-                                width: 18, height: 18,
-                                child: CircularProgressIndicator(strokeWidth: 2))
-                            : TextButton(
-                                onPressed: () => _mirror(l),
-                                child: Text(l.mirrored ? 'Refresh' : 'Copy'),
-                              ),
-                      ),
-                  ],
-                ),
-    );
-  }
-
-  Future<void> _mirror(RemoteList list) async {
-    final app = context.read<AppState>();
-    final messenger = ScaffoldMessenger.of(context);
-    setState(() => _busy.add(list.remoteId));
-    try {
-      await app.api.mirrorList(widget.service.provider, list);
-      messenger.say(snack(Text('Copying "${list.name}" — it will appear in your playlists')));
-      await app.refreshPlaylists();
-    } catch (e) {
-      messenger.say(snack(Text('$e')));
-    } finally {
-      if (mounted) setState(() => _busy.remove(list.remoteId));
-    }
-  }
-}
-
 
 /// The code, and the waiting.
 ///

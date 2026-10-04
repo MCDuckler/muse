@@ -374,12 +374,15 @@ def feed(user_id: int, limit: int = 60) -> dict:
 
 
 def mark_seen(user_id: int, items: list[dict]) -> int:
-    """Looked at: Deezer records by album id, ListenBrainz ones by release id."""
+    """Looked at: Deezer and Bandcamp records by album id, ListenBrainz ones by release
+    id. Bandcamp's were left out, so a followed label's records stayed new for ever."""
     n = 0
-    deezer = [str(i["album_id"]) for i in items if i.get("album_id") and i.get("provider") == "deezer"]
+    for provider in ("deezer", "bandcamp"):
+        ids = [str(i["album_id"]) for i in items
+               if i.get("album_id") and i.get("provider") == provider]
+        if ids:
+            n += follows.mark_seen(user_id, ids, provider)
     mb = [str(i["release_mbid"]) for i in items if i.get("release_mbid")]
-    if deezer:
-        n += follows.mark_seen(user_id, deezer, "deezer")
     if mb:
         n += follows.mark_seen(user_id, mb, "mb")
     return n
@@ -1005,10 +1008,18 @@ CARD_TTL = 7 * 86400
 COMMENTS_MOST = 5
 
 
-def cards(user_id: int, offset: int = 0, limit: int = 20) -> dict:
+# Where a song came from, as the feed's filter names it. Uploads have no service.
+CARD_SERVICES = ("bandcamp", "soundcloud", "youtube")
+
+
+def cards(user_id: int, offset: int = 0, limit: int = 20,
+          service: str | None = None) -> dict:
     """The songs the page would put in front of this person, one after another: new
     records by who and what they follow first, then this week's finds, then the daily
-    mixes and the house blend — nothing they have played lately, and each song once."""
+    mixes and the house blend — nothing they have played lately, and each song once.
+
+    [service] keeps only the songs that came from there — Bandcamp, SoundCloud or
+    YouTube — and the answer counts every service's songs, for the filter to offer."""
     lists = {entry["slug"]: entry for entry in lists_for(user_id, tracks=False)}
     recent = {r["track_id"] for r in db.all_(
         """select distinct track_id from listens where user_id=%s
@@ -1041,6 +1052,14 @@ def cards(user_id: int, offset: int = 0, limit: int = 20) -> dict:
                     continue
                 seen.add(t)
                 picked.append((t, slug, whys.get(str(t)) or ""))
+    where = {r["id"]: r["source"] for r in db.all_(
+        "select id, source from tracks where id = any(%s)", ([t for t, _, _ in picked],))}
+    services = {s: 0 for s in CARD_SERVICES}
+    for t, _, _ in picked:
+        if where.get(t) in services:
+            services[where[t]] += 1
+    if service:
+        picked = [p for p in picked if where.get(p[0]) == service]
     total = len(picked)
     page = picked[offset:offset + limit]
     tracks = recommend._rows_for([t for t, _, _ in page])
@@ -1052,8 +1071,9 @@ def cards(user_id: int, offset: int = 0, limit: int = 20) -> dict:
         entry = lists.get(slug) or {}
         items.append({"track": catalog.public(row), "list": slug,
                       "list_name": entry.get("name") or slug,
-                      "why": why or _card_why(slug, entry)})
-    return {"items": items, "total": total, "offset": offset}
+                      "why": why or _card_why(slug, entry),
+                      "service": where.get(t)})
+    return {"items": items, "total": total, "offset": offset, "services": services}
 
 
 def _card_why(slug: str, entry: dict) -> str:
