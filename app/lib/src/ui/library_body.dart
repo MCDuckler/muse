@@ -223,14 +223,26 @@ List<Widget> libraryRows(BuildContext context, LibraryQuery q, {required bool co
       _HandOffRow(query: q.query),
     ];
   }
+  Widget carried(Playlist p) =>
+      DraggablePlaylist(playlist: p, child: PlaylistRow(playlist: p, shrunk: compact));
   return [
     if (q.pinned.isNotEmpty) ...[
       const GroupLabel('Pinned'),
-      for (final p in q.pinned) PlaylistRow(playlist: p, shrunk: compact),
+      for (final p in q.pinned) carried(p),
     ],
     for (final s in q.shelves) FolderCard(shelf: s, shrunk: compact),
-    if (!q.flat && q.loose.isNotEmpty) const GroupLabel('Everything else'),
-    for (final p in q.loose) PlaylistRow(playlist: p, shrunk: compact),
+    // The label over the loose lists is also where a carried one is put back down.
+    if (!q.flat)
+      PlaylistDrop(
+        into: null,
+        builder: (context, hovering) => Container(
+          color: hovering ? scheme.primary.withValues(alpha: 0.12) : null,
+          child: GroupLabel(hovering
+              ? 'Drop here to take it out of its folder'
+              : q.loose.isEmpty ? 'Everything else is filed' : 'Everything else'),
+        ),
+      ),
+    for (final p in q.loose) carried(p),
     if (q.nothing)
       Padding(
         padding: const EdgeInsets.all(32),

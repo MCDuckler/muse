@@ -79,10 +79,24 @@ class _LibrarySidebarState extends State<LibrarySidebar> {
                 _PlaylistRow(playlist: p, under: arranged.folderOf(p)?.name)
           ]
         : [
-            for (final p in arranged.pinned) _PlaylistRow(playlist: p, pinned: true),
+            for (final p in arranged.pinned)
+              DraggablePlaylist(
+                  playlist: p, width: 240, child: _PlaylistRow(playlist: p, pinned: true)),
             for (final s in arranged.shelves) _FolderNode(shelf: s),
+            // The head over the loose lists takes a carried one back out of its folder.
+            if (arranged.shelves.isNotEmpty)
+              PlaylistDrop(
+                into: null,
+                builder: (context, hovering) => Container(
+                  color: hovering ? scheme.primary.withValues(alpha: 0.12) : null,
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
+                  child: Text(hovering ? 'OUT OF ITS FOLDER' : 'EVERYTHING ELSE',
+                      style: Mag.typewriter(9.5, color: scheme.onSurfaceVariant, bold: true)),
+                ),
+              ),
             for (final p in arranged.loose)
-              if (!p.pinned) _PlaylistRow(playlist: p),
+              if (!p.pinned)
+                DraggablePlaylist(playlist: p, width: 240, child: _PlaylistRow(playlist: p)),
           ];
 
     return Container(
@@ -304,11 +318,14 @@ class _FolderNode extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        InkWell(
+        PlaylistDrop(
+          into: shelf.folder.id,
+          builder: (context, hovering) => InkWell(
           onTap: () => app.setSectionClosed(id, !closed),
           onLongPress: () => folderMenu(context, app, shelf),
           onSecondaryTap: () => folderMenu(context, app, shelf),
-          child: Padding(
+          child: Container(
+            color: hovering ? scheme.primary.withValues(alpha: 0.12) : null,
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
             child: Row(
               children: [
@@ -331,9 +348,12 @@ class _FolderNode extends StatelessWidget {
               ],
             ),
           ),
+          ),
         ),
         if (!closed)
-          for (final p in shelf.playlists) _PlaylistRow(playlist: p, indent: 14),
+          for (final p in shelf.playlists)
+            DraggablePlaylist(
+                playlist: p, width: 240, child: _PlaylistRow(playlist: p, indent: 14)),
       ],
     );
   }

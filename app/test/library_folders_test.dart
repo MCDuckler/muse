@@ -162,6 +162,23 @@ void main() {
         reason: 'still loose: the heart is never filed');
   });
 
+  testWidgets('a playlist carried onto a divider card is filed behind it', (tester) async {
+    app.closedSections = {'contents', 'folder:1', 'folder:2'};
+    await show(tester, const LibraryPage());
+    final from = tester.getCenter(find.text('Loose one'));
+    final to = tester.getCenter(find.text('NIGHTS'));
+    final gesture = await tester.startGesture(from);
+    await tester.pump(const Duration(milliseconds: 600));
+    await gesture.moveTo(to);
+    await tester.pump();
+    expect(find.text('Loose one'), findsNWidgets(2), reason: 'the row and its ghost');
+    await gesture.up();
+    await tester.pumpAndSettle();
+    final place = asked.lastWhere((r) => r.url.path == '/playlists/13/place');
+    expect(jsonDecode(place.body)['folder_id'], 1);
+    expect(find.text('"Loose one" is in "Nights"'), findsOneWidget);
+  });
+
   testWidgets('New offers a folder as well as a playlist', (tester) async {
     app.closedSections = {'contents'};
     await show(tester, const LibraryPage());

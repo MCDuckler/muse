@@ -94,16 +94,21 @@ class FolderCard extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Container(
-          margin: const EdgeInsets.fromLTRB(8, 6, 8, 0),
-          decoration: BoxDecoration(
-            border: Border.all(color: scheme.onSurface, width: 1.5),
-          ),
-          child: Semantics(
-            button: true,
-            expanded: !closed,
-            label: '${folder.name}, ${lists.length} playlists',
-            child: head,
+        PlaylistDrop(
+          into: folder.id,
+          builder: (context, hovering) => Container(
+            margin: const EdgeInsets.fromLTRB(8, 6, 8, 0),
+            decoration: BoxDecoration(
+              color: hovering ? scheme.primary.withValues(alpha: 0.12) : null,
+              border: Border.all(
+                  color: hovering ? scheme.primary : scheme.onSurface, width: 1.5),
+            ),
+            child: Semantics(
+              button: true,
+              expanded: !closed,
+              label: '${folder.name}, ${lists.length} playlists',
+              child: head,
+            ),
           ),
         ),
         AnimatedSize(
@@ -122,7 +127,8 @@ class FolderCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      for (final p in lists) PlaylistRow(playlist: p, shrunk: shrunk),
+                      for (final p in lists)
+                        DraggablePlaylist(playlist: p, child: PlaylistRow(playlist: p, shrunk: shrunk)),
                       if (lists.isEmpty)
                         Padding(
                           padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
@@ -137,6 +143,85 @@ class FolderCard extends StatelessWidget {
       ],
     );
   }
+}
+
+/// File a dragged playlist where it was dropped, and say so. [into] null is the box.
+Future<void> dropPlaylist(BuildContext context, AppState app, Playlist p, int? into) async {
+  if (p.folderId == into || p.isFavourites) return;
+  final messenger = ScaffoldMessenger.of(context);
+  try {
+    await app.api.placePlaylist(p.id, folderId: into);
+    await app.refreshPlaylists();
+    if (into != null) app.setSectionClosed('folder:$into', false);
+    final name = into == null
+        ? null
+        : app.folders.where((f) => f.id == into).map((f) => f.name).firstOrNull;
+    messenger.say(snack(Text(name == null
+        ? '"${p.name}" is out of its folder'
+        : '"${p.name}" is in "$name"')));
+  } catch (e) {
+    messenger.say(problem(e));
+  }
+}
+
+/// A row that can be picked up and carried to a folder. A long press lifts it on a
+/// phone; a mouse drags it straight off. Favourites stays where it is.
+class DraggablePlaylist extends StatelessWidget {
+  const DraggablePlaylist({super.key, required this.playlist, required this.child, this.width = 280});
+  final Playlist playlist;
+  final Widget child;
+  final double width;
+
+  @override
+  Widget build(BuildContext context) {
+    if (playlist.isFavourites) return child;
+    final scheme = Theme.of(context).colorScheme;
+    final ghost = Material(
+      elevation: 6,
+      color: scheme.surface,
+      child: SizedBox(
+        width: width,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          child: Row(children: [
+            PlaylistArt(playlist: playlist, size: 32, radius: 2),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(playlist.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyMedium),
+            ),
+          ]),
+        ),
+      ),
+    );
+    return LongPressDraggable<Playlist>(
+      data: playlist,
+      // A mouse wants no hold; a finger does, or every scroll is a drag.
+      delay: const Duration(milliseconds: 350),
+      feedback: ghost,
+      childWhenDragging: Opacity(opacity: 0.4, child: child),
+      child: child,
+    );
+  }
+}
+
+/// Somewhere a carried playlist can be put down: a folder, or the box itself.
+class PlaylistDrop extends StatelessWidget {
+  const PlaylistDrop({super.key, required this.into, required this.builder});
+
+  /// The folder, or null for out of every folder.
+  final int? into;
+  final Widget Function(BuildContext context, bool hovering) builder;
+
+  @override
+  Widget build(BuildContext context) => DragTarget<Playlist>(
+        onWillAcceptWithDetails: (d) => d.data.folderId != into && !d.data.isFavourites,
+        onAcceptWithDetails: (d) =>
+            dropPlaylist(context, context.read<AppState>(), d.data, into),
+        builder: (context, candidates, _) => builder(context, candidates.isNotEmpty),
+      );
 }
 
 /// What can be done to a folder: played, renamed, given a new list, taken away.
