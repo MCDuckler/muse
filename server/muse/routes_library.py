@@ -105,8 +105,10 @@ def list_playlists(user: dict = Depends(current_user)):
                   (select count(*) from playlist_items i
                     where i.playlist_id = p.id) as items,
                   (select count(*) from playlist_unmatched u
-                    where u.playlist_id = p.id) as unmatched
+                    where u.playlist_id = p.id) as unmatched,
+                  pl.folder_id, pl.pos as place_pos, pl.pinned, pl.last_opened_at
              from playlists p
+             left join playlist_places pl on pl.playlist_id = p.id and pl.user_id = %s
             where p.owner_id=%s
            union all
            -- Somebody else's, kept here. Theirs still, which is why the owner's name
@@ -116,22 +118,29 @@ def list_playlists(user: dict = Depends(current_user)):
                   (select count(*) from playlist_items i
                     where i.playlist_id = p.id) as items,
                   (select count(*) from playlist_unmatched x
-                    where x.playlist_id = p.id) as unmatched
+                    where x.playlist_id = p.id) as unmatched,
+                  pl.folder_id, pl.pos as place_pos, pl.pinned, pl.last_opened_at
              from playlist_saves s
              join playlists p on p.id = s.playlist_id
              join users u on u.id = p.owner_id
+             left join playlist_places pl on pl.playlist_id = p.id and pl.user_id = s.user_id
             where s.user_id=%s
            ) all_of_them
             -- Favourites first, then the ones made here, then the mirrors, then
-            -- other people's.
+            -- other people's. Where each sits (folder, pin, hand order, last opened)
+            -- travels with the row; the app arranges by it.
             order by saved, (kind <> %s), (kind <> 'local'), lower(name)""",
-        (user["id"], user["id"], FAVOURITES_KIND),
+        (user["id"], user["id"], user["id"], FAVOURITES_KIND),
     )
     drawn = playlist_art.signatures([r for r in rows if not r.get("cover_sig")])
     return [{**with_cover(r, drawn.get(r["id"])), "saved": bool(r["saved"]),
              "owner_name": r["owner_name"],
              "open_edit": bool(r.get("open_edit")),
-             "auto_split": bool(r.get("auto_split"))} for r in rows]
+             "auto_split": bool(r.get("auto_split")),
+             "folder_id": r.get("folder_id"),
+             "place_pos": r.get("place_pos"),
+             "pinned": bool(r.get("pinned")),
+             "last_opened_at": r.get("last_opened_at")} for r in rows]
 
 
 @router.get("/playlists/{playlist_id}/export")
@@ -631,6 +640,11 @@ DEFAULT_SORT = "added_desc"
 @router.get("/playlists/{playlist_id}")
 def get_playlist(playlist_id: int, user: dict = Depends(current_user)):
     p = _readable(playlist_id, user)
+    # Opening a list is what "recently opened" is made of. Favourites is the heart,
+    # not a list anybody opens on purpose.
+    if p["kind"] != FAVOURITES_KIND:
+        from .routes_folders import opened
+        opened(user["id"], playlist_id)
     sort = p.get("sort") if p.get("sort") in SORTS else DEFAULT_SORT
     items = db.all_(
         f"""select i.pos, i.added_at, t.*, m.path, m.bytes, m.sha256, c.color as cover_color,

@@ -872,3 +872,27 @@ delete from artist_releases where provider = 'bandcamp' and album_id like '/%';
 -- Where a mirrored playlist's picture came from, beside its signature: a refresh that
 -- finds the same address has the same picture and need not download it to find out.
 alter table playlists add column if not exists cover_src text;
+
+-- Folders: the divider cards in the record box. Yours, not the playlist's — a friend's
+-- list kept in your library can be filed too, so where a list sits is a row per person
+-- (playlist_places), and a folder is a row of its own. One level is drawn for now; the
+-- parent is there for when two are wanted.
+create table if not exists playlist_folders (
+  id         serial primary key,
+  user_id    int not null references users(id) on delete cascade,
+  parent_id  int references playlist_folders(id) on delete cascade,
+  name       text not null,
+  pos        int not null default 0,
+  created_at timestamptz not null default now()
+);
+create index if not exists playlist_folders_user on playlist_folders(user_id, parent_id, pos);
+create table if not exists playlist_places (
+  user_id        int not null references users(id) on delete cascade,
+  playlist_id    int not null references playlists(id) on delete cascade,
+  folder_id      int references playlist_folders(id) on delete set null,
+  pos            int not null default 0,
+  pinned         boolean not null default false,
+  last_opened_at timestamptz,
+  primary key (user_id, playlist_id)
+);
+create index if not exists playlist_places_folder on playlist_places(user_id, folder_id, pos);
