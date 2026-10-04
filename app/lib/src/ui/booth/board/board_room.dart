@@ -102,7 +102,8 @@ class _BoardRoomState extends State<BoardRoom> with SingleTickerProviderStateMix
     final at = _picking ?? _selected;
     if (at == null || !_face.editable) return;
     final was = _face.pad(at.$1, at.$2);
-    await _face.setPad(at.$1, at.$2, was == null ? padFor(s) : was.copyWith(sampleId: s.id));
+    await _face.setPad(at.$1, at.$2,
+        was == null ? padFor(s) : replacing(was, s, old: _face.library.byId(was.sampleId)));
     setState(() {
       _picking = null;
       _selected = at;
@@ -430,7 +431,8 @@ class _BoardRoomState extends State<BoardRoom> with SingleTickerProviderStateMix
       onWillAcceptWithDetails: (_) => true,
       onAcceptWithDetails: (d) {
         feel(Feel.commit);
-        unawaited(_face.setPad(bank, i, spec == null ? padFor(d.data) : spec.copyWith(sampleId: d.data.id)));
+        unawaited(_face.setPad(bank, i,
+            spec == null ? padFor(d.data) : replacing(spec, d.data, old: _face.library.byId(spec.sampleId))));
         setState(() => _selected = (bank, i));
       },
       builder: (context, candidates, _) => pad(candidates.isNotEmpty),

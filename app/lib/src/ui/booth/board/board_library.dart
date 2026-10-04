@@ -436,6 +436,14 @@ class _SampleRowState extends State<_SampleRow> {
   }
 }
 
+/// [s] put on a pad that held [old] (the pad's [was]): the pad keeps what was set on
+/// it — colour, mode, choke, gain, key — but its name follows the new sound unless it
+/// was named by hand, and the trim, which was cut for the old sound, goes.
+PadSpec replacing(PadSpec was, Sample s, {Sample? old}) {
+  final byHand = old != null && was.name != padFor(old).name;
+  return was.copyWith(sampleId: s.id, name: byHand ? null : padFor(s).name, trimIn: Duration.zero, clearTrimOut: true);
+}
+
 /// A sample as a pad would first hold it: its name shouted, the kit's own colour —
 /// or, for a house sound, the short name, colour and way of playing it came with.
 PadSpec padFor(Sample s) {

@@ -3,7 +3,12 @@
 // it the way it came — short name, colour, mode, choke and duck.
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:muse/src/api/client.dart';
+import 'package:muse/src/api/connection.dart';
 import 'package:muse/src/state/booth/board/pad_spec.dart';
+import 'package:muse/src/state/booth/board/sample_fetch_none.dart' as web;
 import 'package:muse/src/state/booth/board/samples.dart';
 import 'package:muse/src/ui/booth/board/board_library.dart';
 
@@ -56,5 +61,32 @@ void main() {
     expect(spec.name, 'KICK');
     expect(spec.mode, PadMode.oneShot);
     expect(spec.colour, PadColour.white);
+  });
+
+  test('a sound put on a pad that held another takes its name, keeps the pad, loses the old trim', () {
+    final library = SampleLibrary()..takeHouseList([horn(), {'id': 48, 'name': 'Needle drop', 'duration_ms': 6700,
+      'pad': {'name': 'Needle Drop', 'colour': 'a', 'mode': 'oneShot'}}]);
+    final horn_ = library.byId(12)!, needle = library.byId(48)!;
+    final was = padFor(horn_).copyWith(colour: PadColour.teal, trimIn: const Duration(milliseconds: 300),
+        trimOut: const Duration(milliseconds: 900));
+    final now = replacing(was, needle, old: horn_);
+    expect(now.sampleId, 48);
+    expect(now.name, 'NEEDLE DROP', reason: 'the name follows the sound: a pad must not say what it does not play');
+    expect(now.colour, PadColour.teal, reason: 'what was set on the pad stays');
+    expect(now.mode, PadMode.hold);
+    expect(now.trimIn, Duration.zero);
+    expect(now.trimOut, isNull, reason: 'the old sound\'s trim is not the new one\'s');
+
+    final named = was.copyWith(name: 'MY HORN');
+    expect(replacing(named, needle, old: horn_).name, 'MY HORN', reason: 'a name given by hand stays');
+  });
+
+  test('in a browser a sample\'s sound is a signed url', () async {
+    useThisClientInstead(MockClient((r) async => r.url.path.endsWith('/auth/stream-key')
+        ? http.Response('{"key": "s1gned", "expires_at": 99999999999}', 200)
+        : http.Response('{}', 404)));
+    final api = ApiClient(baseUrl: 'http://example.invalid')..token = 'x';
+    final url = await web.sampleFetcher(api)(5);
+    expect(url, 'http://example.invalid/samples/5/audio?k=s1gned');
   });
 }

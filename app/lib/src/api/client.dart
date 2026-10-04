@@ -1690,7 +1690,12 @@ class ApiClient {
 
   Future<void> deleteSample(int id) async => await _decode(await net.delete(_u('/samples/$id'), headers: _headers));
 
-  String sampleAudioUrl(int id) => '$baseUrl/samples/$id/audio';
+  /// A sample's sound. Signed like a record's stream, for the browser's audio element,
+  /// which cannot send the Authorization header the desk's fetch does.
+  String sampleAudioUrl(int id) {
+    final key = _streamKey;
+    return '$baseUrl/samples/$id/audio${key == null ? '' : '?k=${Uri.encodeQueryComponent(key)}'}';
+  }
 
   /// The board kept for this account: null doc when none has been kept yet.
   Future<({Map<String, dynamic>? doc, int rev})> board() async {
