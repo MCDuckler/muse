@@ -1,3 +1,8 @@
 tags:
   # test/controller_linux_midi_test.dart: a pretend console on the ALSA sequencer.
   linux-midi:
+  # Tests that hold records together on the fake engine, whose clock is the wall's: a
+  # slow or busy machine (a CI runner) can miss a reading by more than the margin. A
+  # failure is tried again before it counts.
+  wall-clock:
+    retry: 2

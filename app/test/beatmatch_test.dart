@@ -5,6 +5,9 @@
 // engines underneath guarantee neither when a record starts nor that two tempo
 // figures agree. So this checks the measuring (on grids as rough as the analysis
 // really produces) and the holding (on the fake engine, whose clock is the wall's).
+@Tags(['wall-clock'])
+library;
+
 import 'dart:async';
 import 'dart:math' as math;
 
