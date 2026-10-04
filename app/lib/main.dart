@@ -21,6 +21,7 @@ import 'src/state/booth/deck_router.dart';
 import 'src/state/selection.dart';
 import 'src/state/frame_watch.dart';
 import 'src/state/playback_log.dart';
+import 'src/state/car.dart';
 import 'src/state/player.dart';
 import 'src/ui/search_page.dart' show searchWanted;
 import 'src/ui/command_palette.dart';
@@ -37,6 +38,10 @@ import 'src/ui/reactions.dart';
 /// Exposed for the integration test: the player lives behind a stream, and a test
 /// driving real widgets needs a way to read what it actually did.
 AppState? debugAppState;
+
+/// Whether there is a media session for the car to browse: only once the background
+/// wrapper is in place, which a desk and a browser never have.
+bool carReady = false;
 PlayerSnapshot? debugPlayerSnapshot() => debugAppState?.player?.last;
 
 /// Raw engine state, for diagnosing a headless run where audio silently does nothing.
@@ -197,7 +202,10 @@ Future<void> main([List<String> args = const []]) async {
       // between the two, staying alive matters more than being undismissable.
       androidNotificationOngoing: false,
       androidStopForegroundOnPause: false,
+      // The car is told the tree's hints are meant. See CarBrowser.
+      androidBrowsableRootExtras: CarBrowser.rootExtras,
       );
+      carReady = true;
       // Written down because the one thing the logs could not say was whether this
       // worked. A wrapper that is not installed is a player with no media session
       // behind it: no notification, no foreground service, and a process the system
@@ -234,6 +242,9 @@ class MuseApp extends StatelessWidget {
           state.arrivedAt(Uri.base.path);
           state.boot();
           debugAppState = state;
+          // Android Auto, a watch, a head unit: the library as the media session's
+          // browse tree, and the heart beside play and pause.
+          if (carReady) CarBrowser.install(state);
           // On a desk, an icon in the tray: the window can be shut and the music go on.
           if (onADesk) unawaited(DeskTray.start(state));
           return state;

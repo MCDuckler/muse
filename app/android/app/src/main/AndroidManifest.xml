@@ -26,6 +26,11 @@
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">
+        <!-- Android Auto: without this the car never lists the app, media session or
+             not. The descriptor says the app is a media app and nothing else. -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc"/>
         <activity
             android:name=".MainActivity"
             android:exported="true"

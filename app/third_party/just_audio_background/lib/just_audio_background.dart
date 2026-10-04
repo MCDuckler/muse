@@ -8,10 +8,45 @@ import 'package:just_audio_platform_interface/just_audio_platform_interface.dart
 import 'package:rxdart/rxdart.dart';
 import 'package:synchronized/synchronized.dart';
 
-export 'package:audio_service/audio_service.dart' show MediaItem;
+export 'package:audio_service/audio_service.dart'
+    show MediaItem, MediaControl, MediaAction, AudioServiceRepeatMode,
+        AudioServiceShuffleMode;
 
 late SwitchAudioHandler _audioHandler;
 late JustAudioPlatform _platform;
+
+/// WetOwl: what the media session is asked that the player alone cannot answer.
+///
+/// Android Auto (and anything else that browses a media session — a watch, Bluetooth
+/// head units) asks the session for a tree of things to play, searches it, presses
+/// buttons that are not play and pause, and wants to know whether the song is liked.
+/// None of that is the engine's business; it is the app's. The app hands one of these
+/// to [JustAudioBackground.hooks] and the handler forwards the questions. Without
+/// one, the session behaves as it always did.
+abstract class MediaSessionHooks {
+  /// The children of a node of the browse tree. The root is asked as
+  /// [AudioService.browsableRootId].
+  Future<List<MediaItem>> getChildren(String parentMediaId);
+
+  Future<List<MediaItem>> search(String query);
+
+  Future<void> playFromMediaId(String mediaId);
+
+  Future<void> playFromSearch(String query);
+
+  /// A button of the app's own was pressed: the name is the one the control was made
+  /// with. See [extraControls].
+  Future<void> customAction(String name, Map<String, dynamic>? extras);
+
+  /// Buttons beside play, pause and skip, drawn by the notification and the car. Asked
+  /// again on every state change, so they can follow the song.
+  List<MediaControl> extraControls();
+
+  /// The repeat mode the app is in, and being asked to go to.
+  AudioServiceRepeatMode get repeatMode;
+  Future<void> setRepeatMode(AudioServiceRepeatMode mode);
+  Future<void> setShuffleMode(AudioServiceShuffleMode mode);
+}
 
 /// Provides the [init] method to initialise just_audio for background playback.
 class JustAudioBackground {
@@ -72,6 +107,18 @@ class JustAudioBackground {
       androidBrowsableRootExtras: androidBrowsableRootExtras,
     );
   }
+
+  /// WetOwl: who answers the session's questions about browsing, searching and the
+  /// app's own buttons. See [MediaSessionHooks].
+  static MediaSessionHooks? hooks;
+
+  /// WetOwl: the buttons or the repeat mode changed on the app's side — say so to
+  /// everything showing the session.
+  static void refreshState() => _playerAudioHandler._broadcastStateIfActive();
+
+  /// WetOwl: a node of the browse tree changed; whoever is looking at it asks again.
+  static void notifyChildrenChanged(String parentMediaId) =>
+      _playerAudioHandler.childrenChanged(parentMediaId);
 }
 
 class _JustAudioBackgroundPlugin extends JustAudioPlatform {
@@ -254,15 +301,17 @@ class _JustAudioPlayer extends AudioPlayerPlatform {
 
   @override
   Future<SetLoopModeResponse> setLoopMode(SetLoopModeRequest request) async {
-    await _audioHandler
-        .setRepeatMode(AudioServiceRepeatMode.values[request.loopMode.index]);
+    // WetOwl: straight to the engine. setRepeatMode is what the car presses.
+    await _playerAudioHandler
+        .applyRepeatMode(AudioServiceRepeatMode.values[request.loopMode.index]);
     return SetLoopModeResponse();
   }
 
   @override
   Future<SetShuffleModeResponse> setShuffleMode(
       SetShuffleModeRequest request) async {
-    await _audioHandler.setShuffleMode(
+    // WetOwl: straight to the engine. setShuffleMode is what the car presses.
+    await _playerAudioHandler.applyShuffleMode(
         AudioServiceShuffleMode.values[request.shuffleMode.index]);
     return SetShuffleModeResponse();
   }
@@ -713,8 +762,8 @@ class _PlayerAudioHandler extends BaseAudioHandler
   @override
   Future<void> seekBackward(bool begin) async => _seekContinuously(begin, -1);
 
-  @override
-  Future<void> setRepeatMode(AudioServiceRepeatMode repeatMode) async {
+  /// WetOwl: the engine's loop mode, as the app's player sets it.
+  Future<void> applyRepeatMode(AudioServiceRepeatMode repeatMode) async {
     _repeatMode = repeatMode;
     _broadcastStateIfActive();
     (await _player).setLoopMode(SetLoopModeRequest(
@@ -722,14 +771,88 @@ class _PlayerAudioHandler extends BaseAudioHandler
             .values[min(LoopModeMessage.values.length - 1, repeatMode.index)]));
   }
 
+  /// WetOwl: pressed on the session — a car, a watch. The app decides what repeat
+  /// means for its queue; without hooks it is the engine's loop mode as before.
   @override
-  Future<void> setShuffleMode(AudioServiceShuffleMode shuffleMode) async {
+  Future<void> setRepeatMode(AudioServiceRepeatMode repeatMode) async {
+    final hooks = JustAudioBackground.hooks;
+    if (hooks != null) return hooks.setRepeatMode(repeatMode);
+    return applyRepeatMode(repeatMode);
+  }
+
+  Future<void> applyShuffleMode(AudioServiceShuffleMode shuffleMode) async {
     _shuffleMode = shuffleMode;
     _updateShuffleIndices();
     _broadcastStateIfActive();
     (await _player).setShuffleMode(SetShuffleModeRequest(
         shuffleMode: ShuffleModeMessage.values[
             min(ShuffleModeMessage.values.length - 1, shuffleMode.index)]));
+  }
+
+  @override
+  Future<void> setShuffleMode(AudioServiceShuffleMode shuffleMode) async {
+    final hooks = JustAudioBackground.hooks;
+    if (hooks != null) return hooks.setShuffleMode(shuffleMode);
+    return applyShuffleMode(shuffleMode);
+  }
+
+  // WetOwl: the browse tree, search and the app's own buttons, answered by the app.
+
+  final _children = <String, BehaviorSubject<Map<String, dynamic>>>{};
+
+  @override
+  Future<List<MediaItem>> getChildren(String parentMediaId,
+      [Map<String, dynamic>? options]) async {
+    final hooks = JustAudioBackground.hooks;
+    if (hooks == null) return const [];
+    try {
+      return await hooks.getChildren(parentMediaId);
+    } catch (e) {
+      // A list that cannot be read is an empty shelf in the car, not a crash in it.
+      debugPrint('media browse $parentMediaId: $e');
+      return const [];
+    }
+  }
+
+  @override
+  ValueStream<Map<String, dynamic>> subscribeToChildren(String parentMediaId) =>
+      _children.putIfAbsent(
+          parentMediaId, () => BehaviorSubject.seeded(<String, dynamic>{}));
+
+  void childrenChanged(String parentMediaId) =>
+      _children[parentMediaId]?.add(<String, dynamic>{});
+
+  @override
+  Future<List<MediaItem>> search(String query, [Map<String, dynamic>? extras]) async {
+    final hooks = JustAudioBackground.hooks;
+    if (hooks == null) return const [];
+    try {
+      return await hooks.search(query);
+    } catch (e) {
+      debugPrint('media search "$query": $e');
+      return const [];
+    }
+  }
+
+  @override
+  Future<void> playFromMediaId(String mediaId, [Map<String, dynamic>? extras]) async {
+    final hooks = JustAudioBackground.hooks;
+    if (hooks == null) return;
+    await hooks.playFromMediaId(mediaId);
+  }
+
+  @override
+  Future<void> playFromSearch(String query, [Map<String, dynamic>? extras]) async {
+    final hooks = JustAudioBackground.hooks;
+    if (hooks == null) return;
+    await hooks.playFromSearch(query);
+  }
+
+  @override
+  Future<dynamic> customAction(String name, [Map<String, dynamic>? extras]) async {
+    final hooks = JustAudioBackground.hooks;
+    if (hooks == null) return super.customAction(name, extras);
+    await hooks.customAction(name, extras);
   }
 
   @override
@@ -792,11 +915,16 @@ class _PlayerAudioHandler extends BaseAudioHandler
 
   /// Broadcasts the current state to all clients.
   void _broadcastState() {
+    // WetOwl: the app's own buttons go after the engine's — the car draws them in
+    // its playback view, the notification when it is opened out. The compact
+    // notification keeps to previous, play/pause and next.
+    final hooks = JustAudioBackground.hooks;
     final controls = [
       if (hasPrevious) MediaControl.skipToPrevious,
       if (_playing) MediaControl.pause else MediaControl.play,
       MediaControl.stop,
       if (hasNext) MediaControl.skipToNext,
+      ...?hooks?.extraControls(),
     ];
     playbackState.add(playbackState.nvalue!.copyWith(
       controls: controls,
@@ -804,9 +932,18 @@ class _PlayerAudioHandler extends BaseAudioHandler
         MediaAction.seek,
         MediaAction.seekForward,
         MediaAction.seekBackward,
+        if (hooks != null) ...{
+          MediaAction.setRepeatMode,
+          MediaAction.setShuffleMode,
+          MediaAction.playFromMediaId,
+          MediaAction.playFromSearch,
+        },
       },
+      repeatMode: hooks?.repeatMode ?? _repeatMode,
+      shuffleMode: _shuffleMode,
       androidCompactActionIndices: List.generate(controls.length, (i) => i)
-          .where((i) => controls[i].action != MediaAction.stop)
+          .where((i) => controls[i].action != MediaAction.stop &&
+              controls[i].action != MediaAction.custom)
           .toList(),
       processingState: _justAudioEvent.errorCode != null
           ? AudioProcessingState.error
