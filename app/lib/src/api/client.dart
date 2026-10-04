@@ -970,7 +970,11 @@ class ApiClient {
   Future<void> mirrorList(String provider, RemoteList list) async =>
       await _decode(await net.post(_u('/linked/$provider/sync'),
           headers: _headers,
-          body: jsonEncode({'remote_id': list.remoteId, 'name': list.name})));
+          body: jsonEncode({
+            'remote_id': list.remoteId,
+            'name': list.name,
+            if (list.image != null) 'image': list.image,
+          })));
 
   /// Copy one list by its id or its link, without having listed anything first — a
   /// public playlist somebody sent you needs no account here.

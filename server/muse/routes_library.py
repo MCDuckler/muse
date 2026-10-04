@@ -279,11 +279,12 @@ def prioritise_queue(queue_id: int, user: dict = Depends(current_user)):
 def playlist_cover(playlist_id: int, request: Request, size: str = "lg",
                    v: str | None = None, user: dict = Depends(user_or_key)):
     """Art built from the records in the playlist. See playlist_art for what it looks
-    like and why it is not a 2×2 grid."""
-    p = db.one("select * from playlists where id=%s and owner_id=%s",
-               (playlist_id, user["id"]))
-    if not p:
-        raise HTTPException(404, "no such playlist")
+    like and why it is not a 2×2 grid.
+
+    Anybody who may read the list may see its face: a friend's playlist kept in your
+    library was a grey square with a cloud on it, because this asked whose it was while
+    the list itself did not."""
+    p = _readable(playlist_id, user)
     if p.get("cover_sig"):
         chosen = images.path_for(cfg().image_dir, "playlist", playlist_id,
                                  p["cover_sig"], "sm" if size == "sm" else "lg")

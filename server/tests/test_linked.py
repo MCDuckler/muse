@@ -499,3 +499,48 @@ def test_a_sign_in_stored_before_that_check_says_what_is_wrong(client, hdr,
     r = client.get("/linked/youtube/playlists", headers=hdr)
     assert r.status_code == 409
     assert "link youtube again" in r.json()["detail"].lower()
+
+
+def test_a_linked_mirror_keeps_the_lists_own_picture(client, hdr, monkeypatch):
+    """Spotify mirrors kept their art; the linked services' never did, though Deezer and
+    SoundCloud both name a picture in their listings. The app passes it along with the
+    mirror, and the worker takes it on the first run."""
+    from muse import playlist_covers
+
+    monkeypatch.setattr(linked, "items",
+                        lambda provider, remote_id, offset=0, user_id=None: ([], None))
+    monkeypatch.setitem(linked._PROFILE, "soundcloud",
+                        lambda h: {"handle": h, "display_name": "Tycho"})
+    client.post("/linked/soundcloud", headers=hdr, json={"handle": "tycho"})
+
+    r = client.post("/linked/soundcloud/sync", headers=hdr,
+                    json={"remote_id": "tycho/sets/awake", "name": "Awake",
+                          "image": "https://i1.sndcdn.com/artworks-x-t500x500.jpg"})
+    assert r.status_code == 200
+    job = db.one("select payload from jobs where kind='mirror' order by id desc limit 1")
+    assert job["payload"]["image"] == "https://i1.sndcdn.com/artworks-x-t500x500.jpg"
+
+    taken = []
+    monkeypatch.setattr(playlist_covers, "take",
+                        lambda playlist_id, url: taken.append((playlist_id, url)) or True)
+    out = routes_linked.run_mirror_job(job["payload"])
+    assert taken == [(out["playlist_id"], "https://i1.sndcdn.com/artworks-x-t500x500.jpg")]
+
+    # A later run of the same mirror adds songs; it does not go and fetch the art again.
+    routes_linked.run_mirror_job({**job["payload"], "offset": 50})
+    assert len(taken) == 1
+
+
+def test_a_picture_that_cannot_be_fetched_leaves_the_drawn_cover(client, hdr, monkeypatch):
+    from muse import playlist_covers
+
+    p = client.post("/playlists", headers=hdr, json={"name": "Plain"}).json()
+
+    def refuse(url, timeout=20):
+        raise OSError("no route to host")
+
+    monkeypatch.setattr(playlist_covers.urllib.request, "urlopen", refuse)
+    assert playlist_covers.take(p["id"], "https://nowhere.example/x.jpg") is False
+    listed = next(x for x in client.get("/playlists", headers=hdr).json() if x["id"] == p["id"])
+    assert listed["custom_cover"] is False
+    assert client.get(f"/playlists/{p['id']}/cover", headers=hdr).status_code == 200

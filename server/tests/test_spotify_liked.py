@@ -195,7 +195,7 @@ def test_a_mirrored_playlist_keeps_spotifys_own_cover(client, hdr, monkeypatch, 
 
     from PIL import Image
 
-    from muse import db, images, routes_spotify, spotify
+    from muse import db, playlist_covers, routes_spotify, spotify
 
     buf = BytesIO()
     Image.new("RGB", (640, 640), (12, 200, 90)).save(buf, "PNG")
@@ -207,6 +207,8 @@ def test_a_mirrored_playlist_keeps_spotifys_own_cover(client, hdr, monkeypatch, 
     })
     monkeypatch.setattr(spotify, "playlist_items", lambda cfg, user_id, remote_id: [])
 
+    fetched = []
+
     class Answer:
         def read(self, n=None):
             return art
@@ -217,14 +219,23 @@ def test_a_mirrored_playlist_keeps_spotifys_own_cover(client, hdr, monkeypatch, 
         def __exit__(self, *a):
             return False
 
-    monkeypatch.setattr(routes_spotify.urllib.request, "urlopen",
-                        lambda url, timeout=20: Answer())
+    def urlopen(url, timeout=20):
+        fetched.append(url)
+        return Answer()
+
+    monkeypatch.setattr(playlist_covers.urllib.request, "urlopen", urlopen)
 
     out = routes_spotify._mirror(1, {"remote_id": "abc123", "name": ""})
     assert out["name"] == "Roadtrip"
 
-    row = db.one("select cover_sig from playlists where id=%s", (out["playlist_id"],))
+    row = db.one("select cover_sig, cover_src from playlists where id=%s",
+                 (out["playlist_id"],))
     assert row["cover_sig"], "the playlist keeps the picture it has over there"
+    assert row["cover_src"] == "https://i.scdn.co/image/whatever"
+
+    # Refreshed, the same address is not downloaded again to find the same picture.
+    routes_spotify._mirror(1, {"remote_id": "abc123", "name": "Roadtrip"})
+    assert fetched == ["https://i.scdn.co/image/whatever"]
 
     listed = next(p for p in client.get("/playlists", headers=hdr).json()
                   if p["id"] == out["playlist_id"])
@@ -232,3 +243,32 @@ def test_a_mirrored_playlist_keeps_spotifys_own_cover(client, hdr, monkeypatch, 
     assert listed["cover_version"] == row["cover_sig"]
     served = client.get(f"/playlists/{out['playlist_id']}/cover", headers=hdr)
     assert served.status_code == 200 and served.headers["content-type"] == "image/jpeg"
+
+
+def test_a_list_spotify_handed_over_bare_still_gets_its_picture(client, hdr, monkeypatch):
+    """The listing Spotify gives a development-mode app has no `images`, so a mirror made
+    from it arrived with no picture and was drawn from its records. The playlist itself
+    still says what it looks like, and is asked."""
+    from muse import db, playlist_covers, routes_spotify, spotify
+
+    asked = []
+
+    def playlist(cfg, user_id, remote_id):
+        asked.append(remote_id)
+        return {"remote_id": remote_id, "name": "Roadtrip", "owner": "chris",
+                "count": None, "image": "https://i.scdn.co/image/mosaic"}
+
+    monkeypatch.setattr(spotify, "playlist", playlist)
+    monkeypatch.setattr(spotify, "playlist_items", lambda cfg, user_id, remote_id: [])
+    taken = []
+    monkeypatch.setattr(playlist_covers, "take",
+                        lambda playlist_id, url: taken.append(url) or True)
+
+    out = routes_spotify._mirror(1, {"remote_id": "bare1", "name": "Roadtrip",
+                                     "owner": "chris", "count": 12, "image": None})
+    assert asked == ["bare1"]
+    assert taken == ["https://i.scdn.co/image/mosaic"]
+    # What the listing did say is kept where the playlist's own answer had nothing.
+    assert out["name"] == "Roadtrip"
+    assert db.one("select source_name from playlists where id=%s",
+                  (out["playlist_id"],))["source_name"] == "chris"

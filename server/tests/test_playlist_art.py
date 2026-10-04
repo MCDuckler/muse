@@ -90,13 +90,45 @@ def test_a_playlist_cover_needs_a_key_or_a_token(client, hdr):
     assert client.get(f"/playlists/{p['id']}/cover?k={key}").status_code == 200
 
 
-def test_someone_elses_playlist_is_not_yours_to_look_at(client, hdr, playlist_with_art):
+def test_a_friends_playlist_shows_its_face(client, hdr, playlist_with_art):
+    """Anybody who may read a list may see its cover: a friend's playlist kept in your
+    library used to be a grey square, because the cover asked whose it was while the
+    list did not. Favourites is nobody else's to look at, cover included."""
     client.post("/accounts", headers=hdr,
                 json={"name": "nosy", "password": "hunter2hunter2"})
-    theirs = client.post("/auth/login",
-                         data={"user": "nosy", "password": "hunter2hunter2"}).json()["token"]
-    assert client.get(f"/playlists/{playlist_with_art['id']}/cover",
-                      headers={"Authorization": f"Bearer {theirs}"}).status_code == 404
+    theirs = {"Authorization": "Bearer " + client.post(
+        "/auth/login", data={"user": "nosy", "password": "hunter2hunter2"}).json()["token"]}
+    served = client.get(f"/playlists/{playlist_with_art['id']}/cover", headers=theirs)
+    assert served.status_code == 200 and served.headers["content-type"] == "image/jpeg"
+
+    mine = next(p for p in client.get("/playlists", headers=hdr).json()
+                if p["kind"] == "favourites")
+    assert client.get(f"/playlists/{mine['id']}/cover", headers=theirs).status_code == 404
+
+
+def test_a_copy_keeps_the_cover_it_was_copied_from(client, hdr, playlist_with_art):
+    """"Make an editable copy" came back with art drawn from the records: the chosen
+    picture, the order and the fetch mode all stayed behind."""
+    original = playlist_with_art["id"]
+    chosen = client.post(f"/playlists/{original}/cover",
+                         headers={**hdr, "Content-Type": "application/octet-stream"},
+                         content=_png((10, 10, 10))).json()
+    client.patch(f"/playlists/{original}", headers=hdr, json={"sort": "title"})
+
+    copy = client.post(f"/spotify/playlists/{original}/clone", headers=hdr,
+                       json={"name": "Mine now"}).json()
+    listed = {p["id"]: p for p in client.get("/playlists", headers=hdr).json()}
+    assert listed[copy["id"]]["custom_cover"] is True
+    assert listed[copy["id"]]["cover_version"] == chosen["cover_version"]
+    assert listed[copy["id"]]["sort"] == "title"
+    served = client.get(f"/playlists/{copy['id']}/cover", headers=hdr)
+    assert served.status_code == 200 and served.headers["content-type"] == "image/jpeg"
+
+    # Letting the original go back to a drawn cover does not take the copy's away.
+    client.delete(f"/playlists/{original}/cover", headers=hdr)
+    assert client.get(f"/playlists/{copy['id']}/cover", headers=hdr).status_code == 200
+    assert next(p for p in client.get("/playlists", headers=hdr).json()
+                if p["id"] == copy["id"])["custom_cover"] is True
 
 
 def test_four_covers_at_most_spread_across_the_playlist(client, hdr, playlist_with_art):

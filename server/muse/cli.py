@@ -198,6 +198,66 @@ def covers(apply: bool = False) -> None:
     db.close()
 
 
+def mirrorcovers(apply: bool = False) -> None:
+    """Give every mirrored playlist the face it has on its service.
+
+    Mirrors made before the linked services kept pictures, and Spotify mirrors made from
+    a listing that carried none, were drawn from their records instead. Ask each service
+    once per account for its listing (Spotify: once per playlist, the listing being the
+    thing that is stripped) and take whatever picture it names.
+    """
+    from . import config, db, deps, linked, playlist_covers, spotify
+
+    conf = config.load()
+    db.init(conf.dsn)
+    deps.set_config(conf)
+    rows = db.all_(
+        """select id, owner_id, kind, remote_id, name, cover_sig, cover_src
+             from playlists
+            where kind not in ('local', 'favourites') and remote_id is not null
+            order by owner_id, kind, lower(name)""")
+    print(f"{len(rows)} mirrored playlists, "
+          f"{sum(1 for r in rows if not r['cover_sig'])} with no picture of their own")
+
+    listings: dict[tuple[int, str], dict[str, str | None]] = {}
+
+    def picture(row: dict) -> str | None:
+        if row["kind"] == "spotify":
+            if row["remote_id"] == spotify.LIKED:
+                return None
+            try:
+                return spotify.playlist(conf, row["owner_id"], row["remote_id"]).get("image")
+            except Exception as e:                # noqa: BLE001 - one list, not the run
+                print(f"  ! spotify would not say for {row['name']}: {e}")
+                return None
+        key = (row["owner_id"], row["kind"])
+        if key not in listings:
+            acc = linked.account(row["owner_id"], row["kind"])
+            try:
+                lists = linked.playlists(row["kind"], acc["handle"],
+                                         user_id=row["owner_id"]) if acc else []
+            except Exception as e:                # noqa: BLE001 - one service, not the run
+                print(f"  ! {row['kind']} would not list for user {row['owner_id']}: {e}")
+                lists = []
+            listings[key] = {l["remote_id"]: l.get("image") for l in lists}
+        return listings[key].get(row["remote_id"])
+
+    took = offered = 0
+    for row in rows:
+        url = picture(row)
+        if not url:
+            continue
+        offered += 1
+        if url == row["cover_src"] and row["cover_sig"]:
+            continue
+        print(f"  {row['kind']:10} {row['name'][:48]:48} {url[:60]}")
+        if apply and playlist_covers.take(row["id"], url):
+            took += 1
+    print(f"{offered} have a picture over there"
+          + (f"; {took} taken" if apply else "; dry run — pass --apply to take them"))
+    db.close()
+
+
 def traits_index(measure: bool = False) -> None:
     """The planner's index of every ready record (track_traits) from the analyses on
     disk — and with --measure, the analysis of every record that has none yet, which
@@ -326,6 +386,10 @@ def main() -> None:
             covers()
         case ["covers", "--apply"]:
             covers(apply=True)
+        case ["mirrorcovers"]:
+            mirrorcovers()
+        case ["mirrorcovers", "--apply"]:
+            mirrorcovers(apply=True)
         case ["housesamples", folder, owner]:
             housesamples(folder, owner)
         case ["housesamples", folder, owner, "--apply"]:

@@ -54,6 +54,7 @@ class _Remote {
     required this.here,
     required this.unmatched,
     required this.shazam,
+    required this.image,
   });
 
   _Remote.spotify(SpotifyPlaylist p)
@@ -66,6 +67,9 @@ class _Remote {
           here: p.mirroredTracks,
           unmatched: p.unmatched,
           shazam: p.isShazam,
+          // Spotify's listing carries no picture in development mode; the server
+          // asks the playlist itself when it mirrors one.
+          image: null,
         );
 
   _Remote.linked(RemoteList l)
@@ -80,6 +84,7 @@ class _Remote {
           here: l.mirroredItems,
           unmatched: 0,
           shazam: false,
+          image: l.image,
         );
 
   final String remoteId;
@@ -90,9 +95,11 @@ class _Remote {
   final int here;
   final int unmatched;
   final bool shazam;
+  final String? image;
 
   bool get mirrored => playlistId != null;
-  RemoteList get asList => RemoteList(remoteId: remoteId, name: name, count: count);
+  RemoteList get asList =>
+      RemoteList(remoteId: remoteId, name: name, count: count, image: image);
 }
 
 /// The playlists on every service connected here, and which of them to mirror.

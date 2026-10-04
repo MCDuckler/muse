@@ -10,7 +10,7 @@ import logging
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from . import catalog, db, jobs, linked, sync, ytm
+from . import catalog, db, jobs, linked, playlist_covers, sync, ytm
 from .deps import cfg, current_user
 from .routes_accounts import is_admin
 
@@ -237,7 +237,10 @@ def sync_playlists(provider: str, body: dict = Body(default={}),
     for remote_id in wanted:
         jobs.enqueue("mirror", {"provider": provider, "user_id": user["id"],
                                 "remote_id": remote_id,
-                                "name": body.get("name") or remote_id})
+                                "name": body.get("name") or remote_id,
+                                # The list's own picture, when the app saw one in the
+                                # listing: the worker has no listing to look it up in.
+                                "image": body.get("image")})
     return {"queued": wanted}
 
 
@@ -275,6 +278,7 @@ def run_mirror_job(payload: dict) -> dict:
     # The first run decides how this list behaves; later runs add to it. Past a few
     # hundred songs a mirror is a library, and the audio waits until something is played.
     if offset == 0:
+        playlist_covers.take(playlist_id, payload.get("image"))
         big = next_offset is not None or len(items) > BIG_MIRROR
         db.run("update playlists set download_mode=%s where id=%s",
                ("on_play" if big else "all", playlist_id))

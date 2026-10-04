@@ -30,6 +30,7 @@ import 'skeleton.dart';
 import 'theme.dart';
 import 'track_list.dart';
 import 'record_refresh.dart';
+import 'widths.dart';
 
 
 class LibraryPage extends StatelessWidget {
@@ -194,16 +195,7 @@ class LibraryPage extends StatelessWidget {
               await app.forgetOffline(t.id);
             }
           } else if (v == 'cover') {
-            final messenger = ScaffoldMessenger.of(context);
-            final file = await FilePicker.pickFile(type: FileType.image);
-            if (file == null) return;
-            try {
-              await app.api
-                  .setPlaylistCover(p.id, await file.readAsBytes());
-              await app.refreshPlaylists();
-            } catch (e) {
-              messenger.say(snack(Text('$e')));
-            }
+            await choosePlaylistCover(context, app, p);
           } else if (v == 'drawn-cover') {
             await app.api.clearPlaylistCover(p.id);
             await app.refreshPlaylists();
@@ -274,6 +266,20 @@ class LibraryPage extends StatelessWidget {
       onTap: () => openPage(
           context, (_) => PlaylistPage(playlistId: p.id, name: p.name)),
     );
+}
+
+/// A picture of your own for a playlist, instead of the one drawn from its records.
+Future<void> choosePlaylistCover(
+    BuildContext context, AppState app, Playlist playlist) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final file = await FilePicker.pickFile(type: FileType.image);
+  if (file == null) return;
+  try {
+    await app.api.setPlaylistCover(playlist.id, await file.readAsBytes());
+    await app.refreshPlaylists();
+  } catch (e) {
+    messenger.say(problem(e));
+  }
 }
 
 class PlaylistPage extends StatefulWidget {
@@ -850,11 +856,26 @@ class _PlaylistHeader extends StatelessWidget {
             children: [
               Padding(
                 padding: const EdgeInsets.only(top: 8, left: 4),
-                child: CutOut(
-                  turn: -0.035,
-                  taped: true,
-                  child: PlaylistArt(
-                      playlist: playlist, size: 112, radius: 0, small: false),
+                // The picture is the way to the picture: hold it (or right-click it)
+                // to change it. "Choose a cover…" is also the ninth row of a menu on
+                // another screen, which is where nobody looked for it.
+                child: Semantics(
+                  button: playlist.mine,
+                  label: playlist.mine ? 'Cover. Hold to change it' : 'Cover',
+                  child: GestureDetector(
+                    onLongPress: playlist.mine
+                        ? () => _coverSheet(context, app, playlist)
+                        : null,
+                    onSecondaryTap: playlist.mine
+                        ? () => _coverSheet(context, app, playlist)
+                        : null,
+                    child: CutOut(
+                      turn: -0.035,
+                      taped: true,
+                      child: PlaylistArt(
+                          playlist: playlist, size: 112, radius: 0, small: false),
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(width: 18),
@@ -940,6 +961,40 @@ class _PlaylistHeader extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  Future<void> _coverSheet(
+      BuildContext context, AppState app, Playlist playlist) async {
+    final picked = await ask<String>(
+      context,
+      builder: (sheet) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.image_outlined),
+              title: const Text('Choose a picture…'),
+              onTap: () => Navigator.of(sheet).pop('choose'),
+            ),
+            if (playlist.customCover)
+              ListTile(
+                leading: const Icon(Icons.auto_awesome_mosaic_outlined),
+                title: const Text('Use the drawn cover'),
+                subtitle: const Text('Made from the records in it'),
+                onTap: () => Navigator.of(sheet).pop('drawn'),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (picked == null || !context.mounted) return;
+    if (picked == 'choose') {
+      await choosePlaylistCover(context, app, playlist);
+    } else {
+      await app.api.clearPlaylistCover(playlist.id);
+      await app.refreshPlaylists();
+    }
+    onChanged();
   }
 
   static String _sourceName(String kind) => switch (kind) {

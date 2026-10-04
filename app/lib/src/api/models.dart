@@ -1760,8 +1760,12 @@ class RemoteList {
   /// The copy here, once there is one — what tapping the list opens.
   final int? playlistId;
 
+  /// The list's own picture over there, when the service names one. Sent along with
+  /// a mirror so the copy here wears the same face.
+  final String? image;
+
   const RemoteList({required this.remoteId, required this.name, this.owner, this.count,
-      this.mirrored = false, this.mirroredItems = 0, this.playlistId});
+      this.mirrored = false, this.mirroredItems = 0, this.playlistId, this.image});
 
   factory RemoteList.fromJson(Map<String, dynamic> j) {
     final m = j['mirror'] as Map<String, dynamic>?;
@@ -1770,6 +1774,7 @@ class RemoteList {
       name: (j['name'] ?? '') as String,
       owner: j['owner'] as String?,
       count: j['count'] as int?,
+      image: j['image'] as String?,
       mirrored: m != null,
       mirroredItems: (m?['items'] ?? 0) as int,
       playlistId: m?['playlist_id'] as int?,

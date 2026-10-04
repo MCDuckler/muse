@@ -10,14 +10,13 @@ that quietly comes back three tracks shorter is worse than one that says which t
 from __future__ import annotations
 
 import html
-import urllib.request
 
 import logging
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 
-from . import catalog, db, images, jobs, match, spotify, sync, ytm
+from . import catalog, db, jobs, match, playlist_covers, spotify, sync, ytm
 from .deps import cfg, current_user
 
 log = logging.getLogger("muse.spotify")
@@ -298,40 +297,19 @@ def _append_items(playlist_id: int, start: int, items: list[dict],
     return added
 
 
-def _take_cover(playlist_id: int, url: str | None) -> None:
-    """Keep the playlist's own picture, if it has one.
-
-    A mirrored playlist is recognisable by its art before it is readable by its name,
-    and the art muse draws for a playlist with no cover is for playlists that have
-    none. Fetched once per mirror run and stored like any chosen cover, so it survives
-    and caches the same way.
-    """
-    if not url:
-        return
-    try:
-        with urllib.request.urlopen(url, timeout=20) as r:
-            raw = r.read(images.MAX_BYTES + 1)
-        sig = images.store(cfg().image_dir, "playlist", playlist_id, raw)
-    except Exception as e:                        # noqa: BLE001 - art is not the point
-        log.info("could not take the cover for playlist %s: %s", playlist_id, e)
-        return
-    old = db.one("select cover_sig from playlists where id=%s", (playlist_id,))
-    if old and old["cover_sig"] == sig:
-        return
-    db.run("update playlists set cover_sig=%s where id=%s", (sig, playlist_id))
-    if old and old["cover_sig"]:
-        images.forget(cfg().image_dir, "playlist", playlist_id, old["cover_sig"])
-
-
 def _mirror(user_id: int, remote: dict) -> dict:
-    # A mirror queued from an id alone arrives with the id standing in for the name.
-    # Ask Spotify what the playlist is actually called rather than writing that down.
-    if (remote.get("name") or "").strip() in ("", remote["remote_id"]):
+    # A mirror queued from an id alone arrives with the id standing in for the name;
+    # one queued from the list of playlists arrives with no picture, because Spotify's
+    # development mode strips `images` off that list. Either way the playlist itself is
+    # asked — one request — rather than writing down an id or drawing a cover for a
+    # list that has one.
+    if (remote.get("name") or "").strip() in ("", remote["remote_id"]) \
+            or not remote.get("image"):
         try:
-            remote = {**remote, **spotify.playlist(cfg(), user_id, remote["remote_id"])}
+            asked = spotify.playlist(cfg(), user_id, remote["remote_id"])
+            remote = {**remote, **{k: v for k, v in asked.items() if v is not None}}
         except Exception as e:                    # noqa: BLE001 - a name is not worth failing over
-            log.info("could not read the name of spotify playlist %s: %s",
-                     remote["remote_id"], e)
+            log.info("could not read spotify playlist %s: %s", remote["remote_id"], e)
 
     row = db.one(
         """select id from playlists
@@ -350,7 +328,7 @@ def _mirror(user_id: int, remote: dict) -> dict:
             (user_id, remote["name"], remote["remote_id"], remote.get("owner")),
         )["id"]
 
-    _take_cover(playlist_id, remote.get("image"))
+    playlist_covers.take(playlist_id, remote.get("image"))
 
     items = spotify.playlist_items(cfg(), user_id, remote["remote_id"])
 
@@ -496,10 +474,15 @@ def clone(playlist_id: int, body: dict = Body(default={}),
         raise HTTPException(404, "no such playlist")
 
     name = (body.get("name") or f"{source['name']} (copy)").strip()
+    # The copy keeps the way the original was shown and fetched. What it does not keep
+    # is the link back: that is the point of it.
     new_id = db.one(
-        "insert into playlists(owner_id,name,kind) values(%s,%s,'local') returning id",
-        (user["id"], name),
+        """insert into playlists(owner_id,name,kind,sort,download_mode)
+           values(%s,%s,'local',%s,%s) returning id""",
+        (user["id"], name, source.get("sort") or "added_desc",
+         source.get("download_mode") or "all"),
     )["id"]
+    playlist_covers.copy(playlist_id, new_id)
     with db.pool().connection() as c:
         c.execute(
             """insert into playlist_items(playlist_id,pos,track_id)

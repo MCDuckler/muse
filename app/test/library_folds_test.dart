@@ -68,7 +68,12 @@ void main() {
           },
         ('GET', '/linked/youtube/playlists') => {
             'items': [
-              {'remote_id': 'PL1', 'name': 'Sunday Records', 'count': 9},
+              {
+                'remote_id': 'PL1',
+                'name': 'Sunday Records',
+                'count': 9,
+                'image': 'https://i.ytimg.com/vi/x/hqdefault.jpg',
+              },
             ],
           },
         ('GET', '/linked/soundcloud/playlists') => {'items': []},
@@ -170,6 +175,8 @@ void main() {
     await tester.pumpAndSettle();
     final sync = asked.lastWhere((r) => r.url.path == '/linked/youtube/sync');
     expect(jsonDecode(sync.body)['remote_id'], 'PL1');
+    // The list's own picture goes along, so the copy here wears the same face.
+    expect(jsonDecode(sync.body)['image'], 'https://i.ytimg.com/vi/x/hqdefault.jpg');
     expect(find.text('copying…'), findsOneWidget);
 
     await tester.tap(find.descendant(

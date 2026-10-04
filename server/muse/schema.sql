@@ -868,3 +868,7 @@ update artist_releases r set album_id = rtrim(r.artist_id, '/') || r.album_id
                     where x.provider = 'bandcamp'
                       and x.album_id = rtrim(r.artist_id, '/') || r.album_id);
 delete from artist_releases where provider = 'bandcamp' and album_id like '/%';
+
+-- Where a mirrored playlist's picture came from, beside its signature: a refresh that
+-- finds the same address has the same picture and need not download it to find out.
+alter table playlists add column if not exists cover_src text;
