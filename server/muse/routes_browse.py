@@ -11,10 +11,11 @@ every account saw every track on the box.
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
-from . import catalog, db, discography, follows, jobs, sync
+from . import catalog, db, discography, follows, jobs, linked, sync
 from .deps import current_user
 
 router = APIRouter(prefix="/library")
@@ -50,25 +51,35 @@ _MINE = "from tracks t join library_items li on li.track_id = t.id and li.user_i
 # name comes from whoever uploaded each song. Left alone that is three artists with a
 # third of the records each, and an artist page that is missing most of their music.
 #
-# So names are compared with everything that is not a letter or a digit removed, which
-# is what a person does when they read two spellings as the same name. Zero-width
-# characters go the same way, being punctuation to Postgres. What is *shown* is the
+# So names are compared with case, spaces, quotes and invisible characters set aside,
+# which is what a person does when they read two spellings as the same name — but not
+# with every mark removed: that made "M.O.O.N." and "Moon" one artist, "H.E.R." and
+# "Her" another, and every name made only of symbols a single artist called nothing.
+# The folding is the `artist_key` function in schema.sql. What is *shown* is the
 # spelling most of the tracks use, so the list reads the way the library does rather
 # than in some flattened form nobody typed.
 def _key(column: str) -> str:
-    return f"lower(regexp_replace({column}, '[^[:alnum:]]+', '', 'g'))"
+    return f"artist_key({column})"
 
 
 ARTIST_KEY = _key("artist")
 
 
+_QUIET = "[\\s'\"\u2019\u2018\u201c\u201d`\u00b4\u200b\u200c\u200d\u2060\ufeff\u00ad]+"
+
+
 def fold(text: str) -> str:
-    """The same folding as [_key], done here rather than in the query.
+    """The same folding as [_key] (schema.sql `artist_key`), done here rather than in
+    the query.
 
     A pattern cannot be folded by the database: "%bicep%" put through it comes out as
     "bicep" with the wildcards eaten, and matches only an artist called exactly that.
     """
-    return re.sub(r"[^\w]+|_", "", text or "", flags=re.UNICODE).lower()
+    raw = text or ""
+    out = unicodedata.normalize("NFKC", raw).lower()
+    out = re.sub(_QUIET, "", out)
+    out = re.sub(r"^[\W_]+|[\W_]+$", "", out, flags=re.UNICODE)
+    return out or raw.lower()
 # Any of a track's credits being this artist, whatever either spelling looks like.
 ONE_ARTIST = f"exists (select 1 from unnest(t.artists) a where {_key('a')} = {_key('%s')})"
 
@@ -963,6 +974,13 @@ def _artist_notes(user_id: int, artist: str, local: list[dict]) -> dict:
     }
 
 
+@router.get("/artists/about")
+def artist_about(artist: str, bandcamp: str | None = None, user: dict = Depends(current_user)):
+    """An act's own few words about themselves, from where their music came from
+    first (Bandcamp, SoundCloud) and YouTube Music after. Nothing found is an answer."""
+    return linked.about_artist(artist, bandcamp_url=bandcamp)
+
+
 @router.get("/artists/detail")
 def artist_detail(artist: str, user: dict = Depends(current_user)):
     """An artist, not just the four songs of theirs somebody added."""
@@ -978,9 +996,25 @@ def artist_detail(artist: str, user: dict = Depends(current_user)):
     except discography.Unavailable as e:
         error = str(e)
 
+    # Their Bandcamp page, if one is followed under this name or a song of theirs
+    # here came from one: the page with their records and their own words.
+    bandcamp_url = None
+    bc = db.one("select remote_id from artist_follows where provider='bandcamp' "
+                "and artist_key(name) = artist_key(%s) limit 1", (artist,))
+    if bc:
+        bandcamp_url = bc["remote_id"]
+    else:
+        for r in local:
+            if r.get("source") == "bandcamp":
+                src = db.one("select raw from track_sources where track_id=%s and provider='bandcamp'",
+                             (r["id"],))
+                raw = src["raw"] if src and isinstance(src["raw"], dict) else {}
+                bandcamp_url = linked.bandcamp_root_of(raw.get("url") or raw.get("pageUrl"))
+                if bandcamp_url:
+                    break
     out: dict = {
         "artist": {"name": artist, "source": None, "unavailable": error,
-                   "following": False},
+                   "following": False, "bandcamp_url": bandcamp_url},
         "albums": [], "top": [],
         "tracks": [catalog.public(r) for r in local],
         "yours": _artist_notes(user["id"], artist, local),
@@ -1005,7 +1039,7 @@ def artist_detail(artist: str, user: dict = Depends(current_user)):
     out["artist"] = {
         "name": found["name"], "image": found["image"], "remote_id": found["remote_id"],
         "albums": found.get("albums"), "fans": found.get("fans"),
-        "source": "deezer",
+        "source": "deezer", "bandcamp_url": bandcamp_url,
         "following": follows.is_following(user["id"], "deezer", found["remote_id"]),
     }
     out["albums"] = [{**a, "have": held.get(discography.norm(a["title"]), 0)}

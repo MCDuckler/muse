@@ -833,3 +833,20 @@ alter table playlists add column if not exists sort text not null default 'added
 
 -- A followed Bandcamp page may be a label rather than an act; the list says which.
 alter table artist_follows add column if not exists is_label boolean not null default false;
+
+-- One artist, however their name was typed — but not two artists with the same letters.
+-- Case, spaces, quotes and invisible characters are nobody's intent; dots and other
+-- marks inside a name are: "M.O.O.N." is not "Moon" and "H.E.R." is not "Her". A name
+-- made only of symbols keeps itself rather than folding to nothing and merging with
+-- every other such name. Mirrored in Python by routes_browse.fold.
+create or replace function artist_key(name text) returns text
+language sql immutable strict as $$
+  select coalesce(nullif(
+    regexp_replace(
+      regexp_replace(
+        regexp_replace(lower(normalize(name, NFKC)),
+                       '[\s''"’‘“”`´' || chr(8203) || chr(8204) || chr(8205) || chr(8288)
+                       || chr(65279) || chr(173) || ']+', '', 'g'),
+        '^[^[:alnum:]]+', ''),
+      '[^[:alnum:]]+$', ''), ''), lower(name))
+$$;

@@ -152,6 +152,14 @@ def search_artists(query: str, limit: int = 4) -> list[dict]:
     return out
 
 
+def artist(browse_id: str) -> dict:
+    """What YouTube Music knows about an act: its blurb and its related acts."""
+    a = _ask(lambda c: c.get_artist(browse_id))
+    return {"name": a.get("name"), "description": a.get("description"),
+            "related": [r.get("title") for r in (a.get("related") or {}).get("results") or []
+                        if r.get("title")]}
+
+
 def album_tracks(browse_id: str) -> dict:
     """What is on a record, so one found in a search can be opened rather than guessed.
 

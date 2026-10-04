@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from . import catalog, jobs, sources
+from . import catalog, jobs, linked, sources
 from .deps import current_user
 
 router = APIRouter(prefix="/sources")
@@ -141,3 +141,18 @@ def import_album(body: dict = Body(...), user: dict = Depends(current_user)):
 
     return {"playlist_id": playlist_id, "name": album, "added": len(resolved),
             "unavailable": len(tracks) - len(playable)}
+
+
+@router.get("/bandcamp/band")
+def bandcamp_band(url: str, user: dict = Depends(current_user)):
+    """A Bandcamp act or label, whole: name, picture, its own words, the acts on it if
+    it is a label, and its records — the page a follow of it opens as."""
+    if "bandcamp.com" not in url and not url.startswith("http"):
+        raise HTTPException(400, "a Bandcamp page URL")
+    try:
+        page = linked.bandcamp_band_page(url)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"Bandcamp did not answer: {e}")
+    from . import follows
+    page["following"] = follows.is_following(user["id"], "bandcamp", page["url"])
+    return page

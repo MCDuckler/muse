@@ -1511,14 +1511,26 @@ class ApiClient {
         .toList();
   }
 
-  Future<void> follow({String? name, String? remoteId, String? image}) async =>
+  Future<void> follow({String? name, String? remoteId, String? image, String? provider}) async =>
       await _decode(await net.post(_u('/follows'),
           headers: _headers,
           body: jsonEncode({
             if (name != null) 'name': name,
             if (remoteId != null) 'remote_id': remoteId,
             if (image != null) 'image': image,
+            if (provider != null) 'provider': provider,
           })));
+
+  /// A Bandcamp act or label, whole: picture, words, acts on it, records.
+  Future<BandcampBand> bandcampBand(String url) async => BandcampBand.fromJson(
+      await _decode(await net.get(_u('/sources/bandcamp/band', {'url': url}), headers: _headers))
+          as Map<String, dynamic>);
+
+  /// An act's own few words, from where their music came from first.
+  Future<ArtistAbout> artistAbout(String name, {String? bandcamp}) async => ArtistAbout.fromJson(
+      await _decode(await net.get(
+          _u('/library/artists/about', {'artist': name, if (bandcamp != null) 'bandcamp': bandcamp}),
+          headers: _headers)) as Map<String, dynamic>);
 
   Future<void> unfollow(String remoteId, {String provider = 'deezer'}) async => await _decode(
       await net.delete(_u('/follows/${Uri.encodeComponent(remoteId)}', {'provider': provider}),

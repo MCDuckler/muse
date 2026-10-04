@@ -890,3 +890,115 @@ def accounts(user_id: int) -> list[dict]:
              from provider_accounts where user_id=%s order by provider""",
         (user_id,),
     )
+
+
+_BIO = re.compile(r'<p id="bio-text"[^>]*>(.*?)</p>', re.S)
+_BIO_PIC = re.compile(r'class="[^"]*bio-pic[^"]*"[^>]*>.*?<img[^>]+src="(https://f\d\.bcbits\.com/img/[^"]+)"', re.S)
+
+
+def _plain(fragment: str) -> str:
+    text = re.sub(r"<br\s*/?>", "\n", fragment)
+    text = re.sub(r"<[^>]+>", "", text)
+    return re.sub(r"\n{3,}", "\n\n", html.unescape(text)).strip()
+
+
+def bandcamp_band_page(url: str) -> dict:
+    """A Bandcamp page whole: who it is, whether it is a label, its picture and its
+    own few words about itself, the acts on it if it is a label, and its records.
+    Three fetches at most; kept a day, since a page is looked at more than once."""
+    root = url.rstrip("/").split("?")[0]
+    key = f"bc:page:{root.lower()}"
+    row = db.one("select body from remote_cache where key=%s and fetched_at > now() - "
+                 "interval '1 day'", (key,))
+    if row:
+        return row["body"]
+    band = bandcamp_band(root)
+    front = sources._get_page(root + "/")
+    bio = _BIO.search(front)
+    pic = _BIO_PIC.search(front)
+    out = {
+        "url": root, "name": band.get("name"), "is_label": bool(band.get("is_label")),
+        "image": (pic.group(1) if pic else None) or band.get("image"),
+        "about": _plain(bio.group(1)) if bio else None,
+        "roster": bandcamp_roster(root) if band.get("is_label") else [],
+        "records": bandcamp_discography(root, newest=60),
+    }
+    db.run("""insert into remote_cache(key, body, fetched_at) values(%s,%s,now())
+              on conflict (key) do update set body=excluded.body, fetched_at=now()""",
+           (key, json.dumps(out)))
+    return out
+
+
+def bandcamp_root_of(track_url: str | None) -> str | None:
+    """The band's page from one of its track or album pages: the host is the band."""
+    m = re.match(r"(https?://[^/]+)/(track|album)/", track_url or "")
+    return m.group(1) if m else None
+
+
+def about_artist(name: str, *, bandcamp_url: str | None = None) -> dict:
+    """An artist's own few words about themselves, from where their music came from
+    first and anywhere else that has them after: the Bandcamp page's bio, the SoundCloud
+    profile's description, YouTube Music's artist blurb. Kept a week."""
+    from . import routes_browse
+    key = f"about:{routes_browse.fold(name)}"
+    row = db.one("select body from remote_cache where key=%s and fetched_at > now() - "
+                 "interval '7 days'", (key,))
+    if row:
+        return row["body"]
+    text, source, url = None, None, None
+    # Where their songs here came from, most first.
+    rows = db.all_(
+        """select s.provider, s.provider_id, s.raw, count(*) n
+             from tracks t join track_sources s on s.track_id = t.id
+            where s.provider in ('bandcamp', 'soundcloud')
+              and exists (select 1 from unnest(t.artists) a where artist_key(a) = artist_key(%s))
+            group by 1, 2, 3 order by n desc limit 6""", (name,))
+    tried: set[str] = set()
+    sources_ = []
+    if bandcamp_url:
+        sources_.append(("bandcamp", bandcamp_url))
+    for r in rows:
+        raw = r["raw"] if isinstance(r["raw"], dict) else json.loads(r["raw"] or "{}")
+        if r["provider"] == "bandcamp":
+            root = bandcamp_root_of(raw.get("url") or raw.get("pageUrl"))
+            if root:
+                sources_.append(("bandcamp", root))
+        else:
+            sources_.append(("soundcloud", r["provider_id"]))
+    sources_.append(("ytmusic", name))
+    for kind, ref in sources_:
+        if (kind, ref) in tried:
+            continue
+        tried.add((kind, ref))
+        try:
+            if kind == "bandcamp":
+                page = bandcamp_band_page(ref)
+                if page.get("about"):
+                    text, source, url = page["about"], "bandcamp", page["url"]
+            elif kind == "soundcloud":
+                t = _sc_api(f"/tracks/{ref}")
+                user = t.get("user") or {}
+                if user.get("id"):
+                    u = _sc_api(f"/users/{user['id']}")
+                    if (u.get("description") or "").strip():
+                        text, source, url = u["description"].strip(), "soundcloud", u.get("permalink_url")
+            else:
+                from . import ytm
+                want = routes_browse.fold(name)
+                for hit in ytm.search_artists(name, limit=3):
+                    if routes_browse.fold(hit["title"]) != want:
+                        continue
+                    a = ytm.artist(hit["browse_id"])
+                    if (a.get("description") or "").strip():
+                        text, source = a["description"].strip(), "youtube music"
+                        url = f"https://music.youtube.com/channel/{hit['browse_id']}"
+                    break
+        except Exception as e:  # noqa: BLE001 — the next place may have it
+            log.info("about %s via %s: %s", name, kind, e)
+        if text:
+            break
+    out = {"name": name, "text": text, "source": source, "url": url}
+    db.run("""insert into remote_cache(key, body, fetched_at) values(%s,%s,now())
+              on conflict (key) do update set body=excluded.body, fetched_at=now()""",
+           (key, json.dumps(out)))
+    return out

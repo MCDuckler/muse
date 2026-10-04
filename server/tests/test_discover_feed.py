@@ -243,3 +243,76 @@ def test_a_labels_new_record_reaches_the_radar_and_says_whose_it_is(client, hdr,
     assert radar["why"][str(song["id"])] == "new on Ninja Tune"
     cards = client.get("/discover/cards", headers=hdr).json()
     assert cards["items"][0]["why"] == "new on Ninja Tune"
+
+
+# ------------------------------------------------------------------ names, pages, words
+def test_two_acts_with_the_same_letters_are_not_one(client, hdr):
+    from muse import routes_browse
+    f = routes_browse.fold
+    assert f("M.O.O.N.") != f("Moon") and f("H.E.R.") != f("Her")
+    assert f("(((())))") != f("¥$") and f("🍁") != f("👁"), "symbols are not nothing"
+    assert f("BICEP") == f("Bicep") == f("bicep⁠") == f(" Bicep ")
+    assert f('Lee "Scratch" Perry') == f("Lee 'Scratch' Perry")
+    assert f("Barry Can't Swim") == f("Barry Can’t Swim")
+    assert f("L.B. Dub Corp") == f("L.B.Dub Corp") and f("Honk!") == f("Honk")
+    assert f("S.O.N.S") == f("S.O.N.S.") and f(".Vril") == f("Vril")
+    # And the database folds the same way.
+    for a, b, same in (("M.O.O.N.", "Moon", False), ("BICEP", "bicep⁠", True),
+                       ("(((())))", "¥$", False), ("Honk!", "Honk", True)):
+        row = db.one("select artist_key(%s) = artist_key(%s) as same", (a, b))
+        assert row["same"] is same, (a, b)
+        assert db.one("select artist_key(%s) as k", (a,))["k"] == f(a), a
+
+
+def test_an_artists_own_words_come_from_where_their_music_came_from(client, hdr, songs, monkeypatch):
+    from muse import ytm
+    # A SoundCloud act: the profile's description.
+    db.run("update track_sources set provider='soundcloud', provider_id='77', raw='{}' where track_id=%s",
+           (songs[1],))
+    monkeypatch.setattr(linked, "_sc_api", lambda path, **k: {"user": {"id": 5}} if path == "/tracks/77"
+                        else {"description": "Techno from Leipzig.", "permalink_url": "https://soundcloud.com/ann"})
+    monkeypatch.setattr(ytm, "search_artists", lambda q, limit=4: pytest.fail("asked YouTube first"))
+    r = client.get("/library/artists/about", headers=hdr, params={"artist": "Ann"}).json()
+    assert r == {"name": "Ann", "text": "Techno from Leipzig.", "source": "soundcloud",
+                 "url": "https://soundcloud.com/ann"}
+
+    # Nothing of theirs from anywhere with words: YouTube Music's blurb, by exact name.
+    monkeypatch.setattr(ytm, "search_artists", lambda q, limit=4: [
+        {"browse_id": "UCx", "title": "Mo", "subscribers": None, "thumbnail": None}])
+    monkeypatch.setattr(ytm, "artist", lambda b: {"name": "Mo", "description": "A duo from Oslo.", "related": []})
+    r = client.get("/library/artists/about", headers=hdr, params={"artist": "Mo"}).json()
+    assert r["text"] == "A duo from Oslo." and r["source"] == "youtube music"
+
+    # A Bandcamp page named outright wins over everything.
+    monkeypatch.setattr(linked, "bandcamp_band_page", lambda url: {
+        "url": url, "name": "Ninja Tune", "is_label": True, "image": None,
+        "about": "An independent record label in London.", "roster": [], "records": []})
+    r = client.get("/library/artists/about", headers=hdr,
+                   params={"artist": "Ninja Tune", "bandcamp": "https://ninjatune.bandcamp.com"}).json()
+    assert r["source"] == "bandcamp" and r["text"].startswith("An independent")
+
+    # Nobody has anything to say: still an answer, and still cached.
+    monkeypatch.setattr(ytm, "search_artists", lambda q, limit=4: [])
+    r = client.get("/library/artists/about", headers=hdr, params={"artist": "Kay"}).json()
+    assert r["text"] is None and r["source"] is None
+
+
+def test_a_labels_page_has_its_acts_and_its_records(client, hdr, monkeypatch):
+    monkeypatch.setattr(linked, "bandcamp_band_page", lambda url: {
+        "url": "https://ninjatune.bandcamp.com", "name": "Ninja Tune", "is_label": True,
+        "image": "https://f4.bcbits.com/img/1_10.jpg", "about": "Since 1990.",
+        "roster": [{"name": "Bonobo", "url": "https://bonobomusic.bandcamp.com"}],
+        "records": [{"remote_id": "https://bonobomusic.bandcamp.com/album/fragments", "title": "Fragments",
+                     "artist": "Bonobo", "cover": None, "record_type": "album"}]})
+    r = client.get("/sources/bandcamp/band", headers=hdr, params={"url": "https://ninjatune.bandcamp.com"})
+    assert r.status_code == 200, r.text
+    page = r.json()
+    assert page["is_label"] and page["roster"][0]["name"] == "Bonobo"
+    assert page["records"][0]["title"] == "Fragments" and page["following"] is False
+    follows.follow(_me(), {"remote_id": "https://ninjatune.bandcamp.com", "name": "Ninja Tune",
+                           "image": None, "is_label": True}, "bandcamp")
+    assert client.get("/sources/bandcamp/band", headers=hdr,
+                      params={"url": "https://ninjatune.bandcamp.com"}).json()["following"] is True
+    # The library's artist page points at the Bandcamp page when a follow has one.
+    detail = client.get("/library/artists/detail", headers=hdr, params={"artist": "Ninja Tune"}).json()
+    assert detail["artist"]["bandcamp_url"] == "https://ninjatune.bandcamp.com"

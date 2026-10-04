@@ -1943,6 +1943,9 @@ class ArtistDetail {
   final String name;
   final String? image;
   final String? remoteId;
+
+  /// Their Bandcamp page, when a follow or a song of theirs here has one.
+  final String? bandcampUrl;
   final String? unavailable;
   final bool following;
   final int? fans;
@@ -1957,6 +1960,7 @@ class ArtistDetail {
     required this.name,
     this.image,
     this.remoteId,
+    this.bandcampUrl,
     this.unavailable,
     this.following = false,
     this.fans,
@@ -1972,6 +1976,7 @@ class ArtistDetail {
       name: (a['name'] ?? '') as String,
       image: a['image'] as String?,
       remoteId: a['remote_id'] as String?,
+        bandcampUrl: a['bandcamp_url'] as String?,
       unavailable: a['unavailable'] as String?,
       following: (a['following'] ?? false) as bool,
       fans: a['fans'] as int?,
@@ -3224,6 +3229,80 @@ class CardDetails {
           for (final c in (j['comments'] ?? const []) as List) SongComment.fromJson((c as Map).cast<String, dynamic>())
         ],
         about: j['about'] as String?,
+        source: j['source'] as String?,
+        url: j['url'] as String?,
+      );
+}
+
+
+/// A Bandcamp act or label, whole: the page a follow of it opens as.
+class BandcampBand {
+  final String url;
+  final String name;
+  final bool isLabel;
+  final String? image;
+  final String? about;
+  final List<({String name, String url})> roster;
+  final List<BandcampRecord> records;
+  final bool following;
+
+  const BandcampBand({
+    required this.url,
+    required this.name,
+    this.isLabel = false,
+    this.image,
+    this.about,
+    this.roster = const [],
+    this.records = const [],
+    this.following = false,
+  });
+
+  factory BandcampBand.fromJson(Map<String, dynamic> j) => BandcampBand(
+        url: (j['url'] ?? '') as String,
+        name: (j['name'] ?? '') as String,
+        isLabel: (j['is_label'] ?? false) as bool,
+        image: j['image'] as String?,
+        about: j['about'] as String?,
+        roster: [
+          for (final r in (j['roster'] ?? const []) as List)
+            (name: ((r as Map)['name'] ?? '') as String, url: (r['url'] ?? '') as String)
+        ],
+        records: [
+          for (final r in (j['records'] ?? const []) as List) BandcampRecord.fromJson((r as Map).cast<String, dynamic>())
+        ],
+        following: (j['following'] ?? false) as bool,
+      );
+}
+
+/// One record on a Bandcamp page: on a label's page, each says whose it is.
+class BandcampRecord {
+  final String url;
+  final String title;
+  final String? artist;
+  final String? cover;
+  final String? recordType;
+  const BandcampRecord({required this.url, required this.title, this.artist, this.cover, this.recordType});
+
+  factory BandcampRecord.fromJson(Map<String, dynamic> j) => BandcampRecord(
+        url: (j['remote_id'] ?? j['url'] ?? '') as String,
+        title: (j['title'] ?? '') as String,
+        artist: j['artist'] as String?,
+        cover: j['cover'] as String?,
+        recordType: j['record_type'] as String?,
+      );
+}
+
+/// An act's own few words about themselves, and where they were found.
+class ArtistAbout {
+  final String name;
+  final String? text;
+  final String? source;
+  final String? url;
+  const ArtistAbout({required this.name, this.text, this.source, this.url});
+
+  factory ArtistAbout.fromJson(Map<String, dynamic> j) => ArtistAbout(
+        name: (j['name'] ?? '') as String,
+        text: j['text'] as String?,
         source: j['source'] as String?,
         url: j['url'] as String?,
       );

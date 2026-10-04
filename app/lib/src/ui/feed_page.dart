@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import 'artwork.dart';
+import 'bandcamp_page.dart';
 import 'browse_page.dart';
 import 'dialogs.dart';
 import 'mag.dart';
@@ -363,8 +364,9 @@ class _FollowingPageState extends State<FollowingPage> {
                 },
               ),
               onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) =>
-                    ArtistPage(artist: ArtistSummary(name: items[i].name, tracks: 0)),
+                builder: (_) => items[i].provider == 'bandcamp'
+                    ? BandcampBandPage(url: items[i].remoteId, name: items[i].name)
+                    : ArtistPage(artist: ArtistSummary(name: items[i].name, tracks: 0)),
               )),
             ),
           );

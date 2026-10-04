@@ -13,6 +13,7 @@ import '../state/paged.dart';
 import 'album_grid.dart';
 import 'feel.dart';
 import 'artwork.dart';
+import 'bandcamp_page.dart';
 import 'selection_bar.dart';
 import 'skeleton.dart';
 import 'song_row.dart';
@@ -1848,6 +1849,17 @@ class _ArtistHead extends StatelessWidget {
                 PressButton(
                   label: 'Station',
                   onTap: () => startStation(context, artist: detail.name),
+                ),
+              // Their own few words, from where their music came from.
+              PressButton(
+                label: 'About',
+                onTap: () => showAbout(context, detail.name, bandcamp: detail.bandcampUrl),
+              ),
+              if (detail.bandcampUrl != null)
+                PressButton(
+                  label: 'Bandcamp',
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => BandcampBandPage(url: detail.bandcampUrl!, name: detail.name))),
                 ),
               if (detail.remoteId == null && detail.unavailable != null)
                 Text('Only your library: ${detail.unavailable}',
