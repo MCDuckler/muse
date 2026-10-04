@@ -402,6 +402,11 @@ def test_a_playlist_can_be_reordered(client, hdr, library):
     p = client.post("/playlists", headers=hdr, json={"name": "Mix"}).json()
     client.post(f"/playlists/{p['id']}/items", headers=hdr,
                 json={"track_ids": library[:3]})
+    # Dragging is for the hand order; shown newest-first, the positions on screen are
+    # not the positions underneath, so the server says no rather than guess.
+    assert client.post(f"/playlists/{p['id']}/move", headers=hdr,
+                       json={"from": 0, "to": 2}).status_code == 400
+    client.patch(f"/playlists/{p['id']}", headers=hdr, json={"sort": "manual"})
     moved = client.post(f"/playlists/{p['id']}/move", headers=hdr,
                         json={"from": 0, "to": 2}).json()
     assert [i["id"] for i in moved["items"]] == [library[1], library[2], library[0]]

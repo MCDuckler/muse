@@ -826,3 +826,10 @@ create table if not exists made_history (
   offered_at timestamptz not null default now(),
   primary key (user_id, track_id)
 );
+
+-- How a playlist is shown: newest added first unless its owner says otherwise. `manual`
+-- is the hand order (pos), the only one that can be dragged. See routes_library.
+alter table playlists add column if not exists sort text not null default 'added_desc';
+
+-- A followed Bandcamp page may be a label rather than an act; the list says which.
+alter table artist_follows add column if not exists is_label boolean not null default false;

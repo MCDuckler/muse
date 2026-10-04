@@ -366,6 +366,10 @@ def test_a_backup_becomes_playlists(client, hdr):
     # The track that was created carries what the file knew about it, and a reference
     # that names it on the page it shares with the rest of the record.
     made = client.get(f"/playlists/{acid['id']}", headers=hdr).json()["items"]
+    # Shown newest-added first by default; in the hand order it is the file's order.
+    assert sorted(t["title"] for t in made) == ["First", "Second"]
+    client.patch(f"/playlists/{acid['id']}", headers=hdr, json={"sort": "manual"})
+    made = client.get(f"/playlists/{acid['id']}", headers=hdr).json()["items"]
     assert [t["title"] for t in made] == ["First", "Second"]
     assert all(t["source"] == "bandcamp" for t in made)
 

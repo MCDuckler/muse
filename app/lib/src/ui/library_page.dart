@@ -292,10 +292,13 @@ class _PlaylistPageState extends State<PlaylistPage> {
   ///
   /// The swipe is the easiest gesture in the app to make by accident, and this was
   /// the one place it still could not be taken back.
-  Future<void> _remove(Playlist list, int pos) async {
-    if (pos < 0 || pos >= list.items.length) return;
+  Future<void> _remove(Playlist list, int index) async {
+    if (index < 0 || index >= list.items.length) return;
     final app = context.read<AppState>();
-    final track = list.items[pos];
+    final track = list.items[index];
+    // The row's place in the list underneath, not on the screen: shown in any order
+    // but the hand order, the two are not the same.
+    final pos = track.queuePos ?? index;
     final messenger = ScaffoldMessenger.of(context);
     try {
       await app.api.removePlaylistItem(widget.playlistId, pos);
@@ -314,7 +317,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
             // Back on the end, then walked home to where it was.
             final back = await app.api.addToPlaylist(widget.playlistId, [track.id]);
             final landed = back.items.length - 1;
-            if (landed != pos && pos < back.items.length) {
+            if (list.handOrder && landed != pos && pos < back.items.length) {
               await app.api.movePlaylistItem(widget.playlistId, landed, pos);
             }
           } catch (e) {
@@ -326,6 +329,30 @@ class _PlaylistPageState extends State<PlaylistPage> {
       ),
     ));
   }
+
+  /// The order the list is shown in, kept with it on the server for every device.
+  Future<void> _sort(String sort) async {
+    final app = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await app.api.setPlaylistSort(widget.playlistId, sort);
+      _reload();
+    } catch (e) {
+      messenger.say(problem(e));
+    }
+  }
+
+  static const sorts = [
+    ('added_desc', 'Newest added first'),
+    ('added_asc', 'Oldest added first'),
+    ('manual', 'Hand order'),
+    ('title', 'Title'),
+    ('artist', 'Artist'),
+    ('album', 'Album'),
+    ('year', 'Year, newest first'),
+    ('duration', 'Length'),
+    ('bpm', 'Tempo'),
+  ];
 
   /// Keeping somebody else's list, or letting it go again.
   Future<void> _keep(Playlist list) async {
@@ -401,6 +428,26 @@ class _PlaylistPageState extends State<PlaylistPage> {
                 ),
               ),
         actions: [
+          if (list != null && list.mine)
+            PopupMenuButton<String>(
+              tooltip: 'Order',
+              icon: const Icon(Icons.sort),
+              initialValue: list.sort,
+              onSelected: _sort,
+              itemBuilder: (context) => [
+                for (final (value, label) in sorts)
+                  PopupMenuItem(
+                    value: value,
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      SizedBox(
+                        width: 28,
+                        child: list.sort == value ? const Icon(Icons.check, size: 18) : null,
+                      ),
+                      Flexible(child: Text(label, overflow: TextOverflow.ellipsis)),
+                    ]),
+                  ),
+              ],
+            ),
           if (list != null && !list.mine)
             IconButton(
               icon: Icon(
@@ -467,8 +514,8 @@ class _PlaylistPageState extends State<PlaylistPage> {
                     : (picked) async {
                         final at = [
                           for (var i = 0; i < items.length; i++)
-                            if (picked.any((p) => p.id == items[i].id)) i
-                        ];
+                            if (picked.any((p) => p.id == items[i].id)) items[i].queuePos ?? i
+                        ]..sort();
                         // Backwards: each removal shifts everything after it up.
                         for (final i in at.reversed) {
                           await app.api.removePlaylistItem(widget.playlistId, i);
@@ -514,7 +561,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                   )
                 : null,
             onReorderItem: (from, to) async {
-              if (!snap.data!.editable) return;
+              if (!snap.data!.editable || !snap.data!.handOrder) return;
               await app.api.movePlaylistItem(widget.playlistId, from, to);
               _reload();
             },
@@ -536,14 +583,18 @@ class _PlaylistPageState extends State<PlaylistPage> {
               track: items[i],
               selectable: where,
               onSwipeAway: () => _remove(snap.data!, i),
-              handle: ReorderableDragStartListener(
-                index: i,
-                child: Padding(
-                  padding: const EdgeInsets.only(left: 2, right: 2),
-                  child: Icon(Icons.drag_indicator,
-                      size: 18, color: Theme.of(context).colorScheme.outline),
-                ),
-              ),
+              // A handle only in the hand order: anywhere else the rows are a view,
+              // and dragging one would move a different row underneath.
+              handle: snap.data!.handOrder
+                  ? ReorderableDragStartListener(
+                      index: i,
+                      child: Padding(
+                        padding: const EdgeInsets.only(left: 2, right: 2),
+                        child: Icon(Icons.drag_indicator,
+                            size: 18, color: Theme.of(context).colorScheme.outline),
+                      ),
+                    )
+                  : null,
               onTap: () => app.playNow(items, startAt: i, named: widget.name),
               onRemove: () => _remove(snap.data!, i),
               onChanged: _reload,

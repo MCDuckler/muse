@@ -1,7 +1,6 @@
 // The board from a controller's side: the remote decoder's words become presses
 // on the booth's board through the one binding, and the pads light back.
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';

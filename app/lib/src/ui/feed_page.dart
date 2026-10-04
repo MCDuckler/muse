@@ -8,8 +8,11 @@ import '../state/app_state.dart';
 import 'artwork.dart';
 import 'browse_page.dart';
 import 'dialogs.dart';
+import 'mag.dart';
+import 'mag_parts.dart';
 import 'mini_player.dart';
 import 'snack.dart';
+import 'widths.dart';
 import 'skeleton.dart';
 import 'record_refresh.dart';
 
@@ -192,7 +195,9 @@ class _FeedRow extends StatelessWidget {
             .api
             .markFeedSeen([item.albumId]).catchError((_) {}));
         await Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => AlbumPage(remoteId: item.albumId, title: item.title),
+          builder: (_) => item.provider == 'bandcamp'
+              ? BandcampRecordPage(url: item.albumId, title: item.title)
+              : AlbumPage(remoteId: item.albumId, title: item.title),
         ));
         onOpened();
       },
@@ -214,15 +219,28 @@ class _FollowingPageState extends State<FollowingPage> {
   /// Which service is being imported from right now, if any.
   String? _importing;
 
+  /// The services this account has linked — the ones follows can come from.
+  List<FollowSource> _sources = const [];
+
   @override
   void initState() {
     super.initState();
     _load();
+    unawaited(_loadSources());
   }
 
   void _load() => setState(() {
         _future = context.read<AppState>().api.follows();
       });
+
+  Future<void> _loadSources() async {
+    try {
+      final got = await context.read<AppState>().api.followSources();
+      if (mounted) setState(() => _sources = got);
+    } catch (_) {
+      // An older server: the menu offers every service and the server says which.
+    }
+  }
 
   /// Bring over the artists this person already follows elsewhere.
   ///
@@ -234,14 +252,12 @@ class _FollowingPageState extends State<FollowingPage> {
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _importing = provider);
     try {
-      final r = await api.importFollows(provider);
-      final missed = (r['not_found'] as List?) ?? const [];
-      final line = StringBuffer('${r['followed']} new')
-        ..write(' · ${r['already']} already')
-        ..write(' of ${r['found']} on $provider');
-      if (missed.isNotEmpty) line.write(' · not found: ${missed.take(3).join(', ')}');
-      messenger.say(snack(Text(line.toString())));
+      messenger.say(snack(Text('Reading who you follow on $provider — a label is '
+          'opened into its acts, so this can take a minute…')));
+      final r = await api.importFollowsFrom(provider);
       _load();
+      if (!mounted) return;
+      await showImportResult(context, r);
     } catch (e) {
       messenger.say(snack(Text('$e')));
     } finally {
@@ -283,13 +299,20 @@ class _FollowingPageState extends State<FollowingPage> {
               icon: const Icon(Icons.download_outlined),
               tooltip: 'Import who you follow',
               onSelected: _import,
-              itemBuilder: (context) => const [
-                PopupMenuItem(value: 'spotify', child: Text('Import from Spotify')),
-                PopupMenuItem(
-                    value: 'soundcloud', child: Text('Import from SoundCloud')),
-                PopupMenuItem(value: 'deezer', child: Text('Import from Deezer')),
-                PopupMenuItem(value: 'bandcamp', child: Text('Import from Bandcamp')),
-              ],
+              itemBuilder: (context) => _sources.isEmpty
+                  ? const [
+                      PopupMenuItem(value: 'spotify', child: Text('Import from Spotify')),
+                      PopupMenuItem(value: 'soundcloud', child: Text('Import from SoundCloud')),
+                      PopupMenuItem(value: 'deezer', child: Text('Import from Deezer')),
+                      PopupMenuItem(value: 'bandcamp', child: Text('Import from Bandcamp')),
+                    ]
+                  : [
+                      for (final s in _sources)
+                        PopupMenuItem(
+                            value: s.provider,
+                            child: Text('Import from ${s.label}'
+                                '${s.handle != null ? ' (${s.handle})' : ''}')),
+                    ],
             ),
           IconButton(
               icon: const Icon(Icons.add), tooltip: 'Follow', onPressed: _add),
@@ -314,13 +337,27 @@ class _FollowingPageState extends State<FollowingPage> {
             itemCount: items.length,
             itemBuilder: (context, i) => ListTile(
               leading: ClipOval(child: Artwork(url: items[i].image, size: 44, radius: 22)),
-              title: Text(items[i].name),
-              subtitle: Text('${items[i].releases} records known'),
+              title: Row(children: [
+                Flexible(child: Text(items[i].name, overflow: TextOverflow.ellipsis)),
+                if (items[i].isLabel) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                    decoration: BoxDecoration(
+                        border: Border.all(color: Theme.of(context).colorScheme.outline)),
+                    child: Text('LABEL',
+                        style: Mag.flag(8, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                  ),
+                ],
+              ]),
+              subtitle: Text('${items[i].releases} records known'
+                  '${items[i].provider == 'bandcamp' ? ' · Bandcamp' : ''}'),
               trailing: IconButton(
                 icon: const Icon(Icons.close),
                 tooltip: 'Stop following',
                 onPressed: () async {
-                  await context.read<AppState>().api.unfollow(items[i].remoteId);
+                  await context.read<AppState>().api.unfollow(items[i].remoteId,
+                      provider: items[i].provider);
                   _load();
                 },
               ),
@@ -329,6 +366,149 @@ class _FollowingPageState extends State<FollowingPage> {
                     ArtistPage(artist: ArtistSummary(name: items[i].name, tracks: 0)),
               )),
             ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+
+/// What an import did, said in full: an import that touches a hundred follows and a
+/// few labels deserves more than one line that scrolls away.
+Future<void> showImportResult(BuildContext context, FollowImport r) => ask<void>(
+      context,
+      scrollable: true,
+      builder: (context) {
+        final scheme = Theme.of(context).colorScheme;
+        final lines = <String>[
+          '${r.followed} newly followed',
+          '${r.already} already followed — kept as they were',
+          if (r.labels > 0)
+            '${r.labels} label${r.labels == 1 ? '' : 's'} opened into ${r.fromLabels} acts',
+          '${r.found} read from ${r.from}',
+        ];
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SectionFlag('Imported'),
+              const SizedBox(height: 12),
+              for (final l in lines)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text(l, style: Mag.typewriter(12, color: scheme.onSurface)),
+                ),
+              if (r.notFound.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text('Could not be placed anywhere:',
+                    style: Mag.typewriter(11, color: scheme.onSurfaceVariant, bold: true)),
+                const SizedBox(height: 4),
+                Text(r.notFound.join(' · '),
+                    style: Mag.typewriter(11, color: scheme.onSurfaceVariant)),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+
+/// A record on Bandcamp, as its page lists it, with one button to bring it in.
+///
+/// A followed Bandcamp act's new record is a page there, not an entry anywhere else:
+/// this is that page, read, with the same "add the album" the search offers for a
+/// pasted link.
+class BandcampRecordPage extends StatefulWidget {
+  const BandcampRecordPage({super.key, required this.url, this.title});
+  final String url;
+  final String? title;
+
+  @override
+  State<BandcampRecordPage> createState() => _BandcampRecordPageState();
+}
+
+class _BandcampRecordPageState extends State<BandcampRecordPage> {
+  late Future<AlbumPreview> _future;
+  bool _importing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = context.read<AppState>().api.previewAlbum(widget.url);
+  }
+
+  Future<void> _import() async {
+    final app = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _importing = true);
+    try {
+      final r = await app.api.importAlbum(widget.url);
+      await app.refreshPlaylists();
+      messenger.say(snack(Text('Added "${r['name']}" — ${r['added']} tracks')));
+    } catch (e) {
+      messenger.say(problem(e));
+    } finally {
+      if (mounted) setState(() => _importing = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return PlayerScaffold(
+      appBar: AppBar(title: Text(widget.title ?? 'On Bandcamp')),
+      body: FutureBuilder<AlbumPreview>(
+        future: _future,
+        builder: (context, snap) {
+          if (snap.hasError) {
+            return ErrorRetry(
+                error: snap.error!,
+                onRetry: () => setState(() {
+                      _future = context.read<AppState>().api.previewAlbum(widget.url);
+                    }));
+          }
+          if (!snap.hasData) return const SongsComing(rows: 6);
+          final album = snap.data!;
+          return ListView(
+            padding: EdgeInsets.fromLTRB(0, 8, 0, bottomForPlayer(context)),
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 2),
+                child: Text((album.album ?? widget.title ?? '').toUpperCase(),
+                    style: Mag.headline(26, color: scheme.onSurface).copyWith(height: 0.98)),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                child: Text(
+                    [
+                      if (album.artist != null) album.artist!,
+                      '${album.tracks.length} tracks',
+                      if (album.unavailable > 0) '${album.unavailable} sold only',
+                      'Bandcamp',
+                    ].join(' · '),
+                    style: Mag.typewriter(11, color: scheme.onSurfaceVariant)),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: PressButton(
+                      label: _importing ? 'Adding…' : 'Add the album',
+                      loud: true,
+                      onTap: _importing ? null : _import),
+                ),
+              ),
+              for (final t in album.tracks)
+                ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.music_note, size: 20),
+                  title: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  subtitle: Text(t.lengthLine),
+                  trailing: t.known ? const Icon(Icons.check_circle_outline, size: 18) : null,
+                ),
+            ],
           );
         },
       ),

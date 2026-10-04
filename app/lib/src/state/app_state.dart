@@ -89,6 +89,18 @@ class AppState extends ChangeNotifier {
   /// Goes up each time the server says this person's Discover lists were made.
   int discoverBuilt = 0;
 
+  DateTime? _discoverTapped;
+
+  /// The Discover tab, tapped while already showing: twice in quick succession is
+  /// the way into the feed. Answers whether this tap was the second of a pair.
+  bool discoverTappedAgain() {
+    final now = DateTime.now();
+    final twice = _discoverTapped != null &&
+        now.difference(_discoverTapped!) < const Duration(milliseconds: 450);
+    _discoverTapped = twice ? null : now;
+    return twice;
+  }
+
   /// Whether the column beside the page — what is playing, what is next — is folded
   /// out. Only ever asked on a screen wide enough to have one.
   bool deskDock = true;

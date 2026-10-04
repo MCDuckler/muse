@@ -8,6 +8,7 @@ with the link could read.
 """
 from __future__ import annotations
 
+import datetime as dt
 import html
 import json
 import logging
@@ -603,21 +604,194 @@ def _deezer_following(handle: str) -> list[dict]:
     return out
 
 
+def bandcamp_image(image_id, size: int = 10) -> str | None:
+    """A Bandcamp image by id. 10 is a 1200px square, 2 a 350px one."""
+    return f"https://f4.bcbits.com/img/{image_id}_{size}.jpg" if image_id else None
+
+
+def bandcamp_art(art_id, size: int = 2) -> str | None:
+    return f"https://f4.bcbits.com/img/a{art_id}_{size}.jpg" if art_id else None
+
+
+def _band_url(entry: dict) -> str | None:
+    hints = entry.get("url_hints") or {}
+    if hints.get("custom_domain"):
+        return f"https://{hints['custom_domain']}"
+    if hints.get("subdomain"):
+        return f"https://{hints['subdomain']}.bandcamp.com"
+    return None
+
+
 def _bandcamp_following(handle: str) -> list[dict]:
-    """The bands a fan page follows, out of the page's own data blob."""
+    """Every band a fan follows.
+
+    The fan page's own blob caches the first forty-five or so; the rest are behind the
+    same paged API the collection uses. A follow is a band id, a name and the band's
+    page — which is what tells a label from an act, later, one page at a time.
+    """
     blob = _bandcamp_blob(handle)
-    cache = ((blob.get("item_cache") or {}).get("following_bands") or {})
-    out = []
-    for key, entry in cache.items():
+    fan = (blob.get("fan_data") or {}).get("fan_id")
+    out: list[dict] = []
+    seen: set = set()
+
+    def take(entry: dict) -> None:
         name = (entry or {}).get("name")
-        if name:
-            out.append({"name": name, "image": (entry or {}).get("image_id")})
-    if not out:
-        for band in (blob.get("following_bands_data") or {}).get("sequence") or []:
-            entry = cache.get(str(band)) or {}
-            if entry.get("name"):
-                out.append({"name": entry["name"], "image": entry.get("image_id")})
+        if not name or entry.get("band_id") in seen:
+            return
+        seen.add(entry.get("band_id"))
+        out.append({"name": name, "image": bandcamp_image(entry.get("image_id")),
+                    "url": _band_url(entry), "band_id": entry.get("band_id")})
+
+    for entry in ((blob.get("item_cache") or {}).get("following_bands") or {}).values():
+        take(entry)
+    token = "9999999999:9999999999"
+    for _ in range(40):                       # 4,000 follows is enough for anybody
+        if not fan:
+            break
+        try:
+            page = _json("https://bandcamp.com/api/fancollection/1/following_bands",
+                         {"fan_id": fan, "older_than_token": token, "count": 100})
+        except RateLimited:
+            break
+        for entry in page.get("followeers") or []:
+            take(entry)
+        token = page.get("last_token") or token
+        if not page.get("more_available"):
+            break
+        time.sleep(PAUSE_BETWEEN)
     return out
+
+
+_BAND = re.compile(r'data-band="([^"]+)"')
+_ROSTER = re.compile(
+    r'<a[^>]+href="(?P<url>https?://[^"]+)"[^>]*>(?:(?!</a>).)*?'
+    r'<div class="artists-grid-name">\s*(?P<name>[^<]+?)\s*</div>', re.S)
+_CLIENT_ITEMS = re.compile(r'data-client-items="([^"]+)"')
+_TAG = re.compile(r'<a class="tag"[^>]*>\s*([^<]+?)\s*</a>')
+_COLLECTORS = re.compile(r'id="collectors-data" data-blob="([^"]+)"')
+
+
+def bandcamp_band(url: str) -> dict:
+    """What a Bandcamp page is: its name, whether it is a label, its picture.
+
+    Cached a month in remote_cache: a page does not stop being a label, and an import
+    of three hundred follows is three hundred of these.
+    """
+    key = f"bc:band:{url.rstrip('/').lower()}"
+    row = db.one("select body from remote_cache where key=%s and fetched_at > now() - "
+                 "interval '30 days'", (key,))
+    if row:
+        return row["body"]
+    page = sources._get_page(url.rstrip("/") + "/music")
+    m = _BAND.search(page)
+    band = json.loads(html.unescape(m.group(1))) if m else {}
+    out = {"name": band.get("name"), "is_label": bool(band.get("is_label")),
+           "band_id": band.get("id"), "url": url.rstrip("/"),
+           "image": bandcamp_image(band.get("image_id") or band.get("bio_image_id"))}
+    db.run("""insert into remote_cache(key, body, fetched_at) values(%s,%s,now())
+              on conflict (key) do update set body=excluded.body, fetched_at=now()""",
+           (key, json.dumps(out)))
+    return out
+
+
+def bandcamp_roster(url: str, most: int = 60) -> list[dict]:
+    """The acts on a label, from its artists page."""
+    page = sources._get_page(url.rstrip("/") + "/artists")
+    out, seen = [], set()
+    for m in _ROSTER.finditer(page):
+        name = html.unescape(m.group("name")).strip()
+        link = html.unescape(m.group("url")).split("?")[0].rstrip("/")
+        if not name or link in seen:
+            continue
+        seen.add(link)
+        out.append({"name": name, "url": link})
+        if len(out) >= most:
+            break
+    return out
+
+
+def bandcamp_discography(url: str, newest: int = 40) -> list[dict]:
+    """A band's records, newest first, as its music page lists them: title, artist
+    (a label's items each say whose), the page, the art. No dates — those are on the
+    record's own page, one fetch each, so the caller asks only about what is new."""
+    page = sources._get_page(url.rstrip("/") + "/music")
+    m = _CLIENT_ITEMS.search(page)
+    items = json.loads(html.unescape(m.group(1))) if m else []
+    out = []
+    for it in items[:newest]:
+        if not it.get("page_url") or not it.get("title"):
+            continue
+        out.append({"remote_id": it["page_url"].split("?")[0], "title": it["title"],
+                    "artist": it.get("artist"), "cover": bandcamp_art(it.get("art_id")),
+                    "record_type": it.get("type") or "album"})
+    return out
+
+
+def bandcamp_record(url: str) -> dict:
+    """One record's page: its release date, its tags, and who bought it and said why.
+
+    The date and tags are in the page; the "supported by" box is a second JSON blob
+    on it, with each fan's few words and their favourite track. All three things the
+    Discover feed shows under a song, from the one page.
+    """
+    page = sources._get_page(url)
+    m = sources._TRALBUM.search(page)
+    data = json.loads(html.unescape(m.group(1))) if m else {}
+    current = data.get("current") or {}
+    stamp = current.get("release_date") or data.get("album_release_date")
+    released = None
+    if stamp:
+        try:
+            released = dt.datetime.strptime(stamp[:11], "%d %b %Y").date().isoformat()
+        except ValueError:
+            released = None
+    reviews = []
+    cm = _COLLECTORS.search(page)
+    if cm:
+        try:
+            blob = json.loads(html.unescape(cm.group(1)))
+        except ValueError:
+            blob = {}
+        for r in blob.get("reviews") or []:
+            if not (r.get("why") or "").strip():
+                continue
+            reviews.append({"name": r.get("name") or r.get("username") or "somebody",
+                            "text": r["why"].strip(), "favourite": r.get("fav_track_title"),
+                            "avatar": bandcamp_image(r.get("image_id"), 2)})
+    tags = []
+    for t in _TAG.findall(page):
+        t = html.unescape(t).strip().lower()
+        if t and t not in tags:
+            tags.append(t)
+    return {"title": current.get("title"), "artist": data.get("artist"),
+            "release_date": released, "tags": tags, "reviews": reviews,
+            "about": (current.get("about") or "").strip() or None,
+            "cover": bandcamp_art(data.get("art_id"), 10)}
+
+
+def soundcloud_track(track_id: str) -> dict:
+    """A SoundCloud track's genre and tags, and its latest comments."""
+    t = _sc_api(f"/tracks/{track_id}")
+    tags = []
+    if t.get("genre"):
+        tags.append(t["genre"].lower())
+    for tag in re.findall(r'"([^"]+)"|(\S+)', t.get("tag_list") or ""):
+        word = (tag[0] or tag[1]).strip().lower()
+        if word and word not in tags:
+            tags.append(word)
+    comments = []
+    try:
+        page = _sc_api(f"/tracks/{track_id}/comments", threaded=0, limit=12, sort="newest")
+        for c in page.get("collection") or []:
+            text = (c.get("body") or "").strip()
+            if text:
+                comments.append({"name": (c.get("user") or {}).get("username") or "somebody",
+                                 "text": text, "favourite": None,
+                                 "avatar": (c.get("user") or {}).get("avatar_url")})
+    except LinkError:
+        pass
+    return {"tags": tags, "reviews": comments, "about": (t.get("description") or "").strip() or None,
+            "url": t.get("permalink_url")}
 
 
 _FOLLOWING = {"soundcloud": _soundcloud_following,

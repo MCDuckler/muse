@@ -605,17 +605,38 @@ def suggested_for(playlist_id: int, limit: int = 8, user: dict = Depends(current
     return {"items": [catalog.public(p.row) for p in picks]}
 
 
+# How a playlist can be shown. The hand order (pos) is one of them, and the only one a
+# row can be dragged in; the rest are a view over the same rows, kept with the playlist
+# so every device opens it the same way. Newest added first is the default: a list
+# somebody keeps adding to is read from the top, the way a feed is.
+SORTS = {
+    # Ties — a record saved whole, a mirror filled in one pass — keep the hand order,
+    # so a saved queue still reads top to bottom as it played.
+    "added_desc": "i.added_at desc, i.pos",
+    "added_asc": "i.added_at, i.pos",
+    "manual": "i.pos",
+    "title": "lower(t.title), i.pos",
+    "artist": "lower(coalesce(t.artists[1], '')), lower(coalesce(t.album, '')), i.pos",
+    "album": "lower(coalesce(t.album, '')), lower(coalesce(t.artists[1], '')), i.pos",
+    "year": "t.release_year desc nulls last, i.pos",
+    "duration": "t.duration_ms nulls last, i.pos",
+    "bpm": "t.bpm nulls last, i.pos",
+}
+DEFAULT_SORT = "added_desc"
+
+
 @router.get("/playlists/{playlist_id}")
 def get_playlist(playlist_id: int, user: dict = Depends(current_user)):
     p = _readable(playlist_id, user)
+    sort = p.get("sort") if p.get("sort") in SORTS else DEFAULT_SORT
     items = db.all_(
-        """select i.pos, t.*, m.path, m.bytes, m.sha256, c.color as cover_color,
+        f"""select i.pos, i.added_at, t.*, m.path, m.bytes, m.sha256, c.color as cover_color,
                     c.sha256 as cover_sha
              from playlist_items i
              join tracks t on t.id=i.track_id
              left join media m on m.track_id=t.id and m.role='canonical'
              left join covers c on c.id=t.cover_id
-            where i.playlist_id=%s order by i.pos""",
+            where i.playlist_id=%s order by {SORTS[sort]}""",
         (playlist_id,),
     )
     # Position travels with the row: removing or reordering is by position, and the
@@ -646,7 +667,9 @@ def get_playlist(playlist_id: int, user: dict = Depends(current_user)):
                          and _may_write(p, user)),
             "download_mode": p.get("download_mode", "all"),
             "waiting": waiting,
-            "items": [{**catalog.public(t), "pos": t["pos"]} for t in items]}
+            "sort": sort,
+            "items": [{**catalog.public(t), "pos": t["pos"],
+                       "added_at": t["added_at"]} for t in items]}
 
 
 @router.post("/playlists/{playlist_id}/items")
@@ -781,6 +804,16 @@ def rename_playlist(playlist_id: int, body: dict = Body(...),
     The mix is kept as the booth wrote it and handed back as it was written: the
     server has no opinion about transitions. Null takes it off, and the playlist is
     an ordinary playlist again."""
+    if "sort" in body:
+        # The order a list is shown in belongs to whoever owns it, whatever kind of
+        # list it is — a mirror of a Spotify playlist can be read newest-first too.
+        _own_playlist(playlist_id, user)
+        sort = body.get("sort") or DEFAULT_SORT
+        if sort not in SORTS:
+            raise HTTPException(400, "sort: one of " + ", ".join(SORTS))
+        db.run("update playlists set sort=%s where id=%s", (sort, playlist_id))
+        if set(body) == {"sort"}:
+            return get_playlist(playlist_id, user)
     _editable(playlist_id, user)
     if "name" in body:
         name = (body.get("name") or "").strip()
@@ -793,7 +826,7 @@ def rename_playlist(playlist_id: int, body: dict = Body(...),
             raise HTTPException(400, "a mix is an object, or null")
         db.run("update playlists set mix=%s where id=%s",
                (Json(mix) if mix is not None else None, playlist_id))
-    if "name" not in body and "mix" not in body:
+    if not {"name", "mix", "sort"} & set(body):
         raise HTTPException(400, "nothing to change")
     return get_playlist(playlist_id, user)
 
@@ -801,11 +834,15 @@ def rename_playlist(playlist_id: int, body: dict = Body(...),
 @router.post("/playlists/{playlist_id}/move")
 def move_playlist_item(playlist_id: int, body: dict = Body(...),
                        user: dict = Depends(current_user)):
-    _holds_items(playlist_id, user)
+    p = _holds_items(playlist_id, user)
+    if (p.get("sort") or DEFAULT_SORT) != "manual":
+        # The positions the client sees are the sorted ones; moving by them would
+        # scramble the hand order underneath. The sort menu offers the hand order.
+        raise HTTPException(400, "Switch the list to its hand order to drag songs about.")
     src, dst = body.get("from"), body.get("to")
     if src is None or dst is None:
         raise HTTPException(400, "from and to are required")
-    rows = db.all_("select pos, track_id from playlist_items where playlist_id=%s "
+    rows = db.all_("select pos, track_id, added_at from playlist_items where playlist_id=%s "
                    "order by pos", (playlist_id,))
     if not (0 <= src < len(rows)) or not (0 <= dst < len(rows)):
         raise HTTPException(400, "position out of range")
@@ -814,8 +851,10 @@ def move_playlist_item(playlist_id: int, body: dict = Body(...),
     with db.pool().connection() as c:
         c.execute("delete from playlist_items where playlist_id=%s", (playlist_id,))
         for i, r in enumerate(rows):
-            c.execute("insert into playlist_items(playlist_id,pos,track_id) "
-                      "values(%s,%s,%s)", (playlist_id, i, r["track_id"]))
+            # When it was added travels with the song, or dragging one song would
+            # make the whole list "added just now" in every other order.
+            c.execute("insert into playlist_items(playlist_id,pos,track_id,added_at) "
+                      "values(%s,%s,%s,%s)", (playlist_id, i, r["track_id"], r["added_at"]))
     return get_playlist(playlist_id, user)
 
 

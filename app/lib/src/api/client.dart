@@ -1245,6 +1245,32 @@ class ApiClient {
     );
   }
 
+  /// The feed: one song after another, with why each is there.
+  Future<({List<FeedCard> items, int total})> feedCards({int offset = 0, int limit = 20}) async {
+    final d = await _decode(await net.get(_u('/discover/cards', {'offset': offset, 'limit': limit}),
+        headers: _headers)) as Map<String, dynamic>;
+    return (
+      items: [for (final c in (d['items'] ?? const []) as List) FeedCard.fromJson((c as Map).cast<String, dynamic>())],
+      total: (d['total'] ?? 0) as int,
+    );
+  }
+
+  /// What a card says under its song: genres and comments, from where it came from.
+  Future<CardDetails> cardDetails(int trackId) async => CardDetails.fromJson(
+      await _decode(await net.get(_u('/discover/cards/$trackId'), headers: _headers)) as Map<String, dynamic>);
+
+  /// Where follows can be brought over from: the services this account has linked.
+  Future<List<FollowSource>> followSources() async {
+    final d = await _decode(await net.get(_u('/follows/sources'), headers: _headers)) as Map<String, dynamic>;
+    return [for (final s in (d['items'] ?? const []) as List) FollowSource.fromJson((s as Map).cast<String, dynamic>())];
+  }
+
+  /// The order a playlist is shown in, kept with it on the server.
+  Future<Playlist> setPlaylistSort(int playlistId, String sort) async =>
+      Playlist.fromJson(await _decode(await net.patch(_u('/playlists/$playlistId'),
+          headers: {..._headers, 'Content-Type': 'application/json'},
+          body: jsonEncode({'sort': sort}))) as Map<String, dynamic>);
+
   Future<void> markReleasesSeen(List<Release> items) async => await _decode(await net.post(
       _u('/discover/feed/seen'),
       headers: {..._headers, 'Content-Type': 'application/json'},
@@ -1494,8 +1520,9 @@ class ApiClient {
             if (image != null) 'image': image,
           })));
 
-  Future<void> unfollow(String remoteId) async => await _decode(
-      await net.delete(_u('/follows/$remoteId'), headers: _headers));
+  Future<void> unfollow(String remoteId, {String provider = 'deezer'}) async => await _decode(
+      await net.delete(_u('/follows/${Uri.encodeComponent(remoteId)}', {'provider': provider}),
+          headers: _headers));
 
   /// Take the artists already followed somewhere else. Answers with what it managed:
   /// how many were found, how many were new, and the names it could not place.
@@ -1503,6 +1530,9 @@ class ApiClient {
       await _decode(await net.post(_u('/follows/import'),
           headers: _headers,
           body: jsonEncode({'provider': provider}))) as Map<String, dynamic>;
+
+  Future<FollowImport> importFollowsFrom(String provider) async =>
+      FollowImport.fromJson(await importFollows(provider));
 
   Future<({List<FeedItem> items, int unseen, int following})> feed(
       {int limit = 60}) async {

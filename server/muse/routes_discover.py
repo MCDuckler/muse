@@ -120,3 +120,15 @@ def seen(body: dict = Body(...), user: dict = Depends(current_user)):
 @router.get("/artists")
 def artists(user: dict = Depends(current_user)):
     return {"items": discover.artists_to_try(user["id"])}
+
+
+@router.get("/cards")
+def cards(offset: int = 0, limit: int = 20, user: dict = Depends(current_user)):
+    """The feed: one song after another, with why it is here."""
+    return discover.cards(user["id"], offset=max(0, offset), limit=max(1, min(limit, 50)))
+
+
+@router.get("/cards/{track_id}")
+def card(track_id: int, user: dict = Depends(current_user)):
+    """What a card says under the song: its genres and what people said about it."""
+    return discover.card_details(track_id)

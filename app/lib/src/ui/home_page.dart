@@ -18,6 +18,7 @@ import 'browse_page.dart';
 import 'command_palette.dart';
 import 'cover_page.dart';
 import 'discover_page.dart';
+import 'feed_screen.dart';
 import '../api/client.dart' show ApiException;
 import 'desk_dock.dart';
 import 'dropped_files.dart';
@@ -44,6 +45,15 @@ final ValueNotifier<({int tab, WidgetBuilder page})?> _openRequests = ValueNotif
 
 /// Open [page] inside [tab], switching to it.
 void openInTab(int tab, WidgetBuilder page) => _openRequests.value = (tab: tab, page: page);
+
+/// The Discover tab tapped again while showing: the second tap of a quick pair opens
+/// the feed. Called by every bar that has the tab, before the usual same-tab work.
+bool openFeedOnSecondTap(AppState app, int tapped) {
+  if (tapped != Tabs.discover || !app.discoverTappedAgain()) return false;
+  feel(Feel.commit);
+  openInTab(Tabs.discover, (_) => const FeedScreen());
+  return true;
+}
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -524,7 +534,7 @@ class _Rail extends StatelessWidget {
       onDestinationSelected: (i) {
         if (i != tab) {
           feel(Feel.pick);
-        } else {
+        } else if (!openFeedOnSecondTap(app, i)) {
           onSameTab();
         }
         app.setHomeTab(i);
@@ -776,12 +786,13 @@ class MuseNavigationBar extends StatelessWidget {
     return NavigationBar(
       selectedIndex: tab,
       onDestinationSelected: (i) {
+        final app = context.read<AppState>();
         if (i != tab) {
           feel(Feel.pick);
-        } else {
+        } else if (!openFeedOnSecondTap(app, i)) {
           onSameTab?.call();
         }
-        context.read<AppState>().setHomeTab(i);
+        app.setHomeTab(i);
         onLeaving?.call();
       },
       destinations: const [

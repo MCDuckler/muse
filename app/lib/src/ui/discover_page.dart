@@ -9,6 +9,7 @@ import 'artwork.dart';
 import 'browse_page.dart' show AlbumPage, ArtistPage;
 import 'dialogs.dart';
 import 'feed_page.dart';
+import 'feed_screen.dart';
 import 'feel.dart';
 import 'mag.dart';
 import 'mag_parts.dart';
@@ -21,6 +22,7 @@ import 'snack.dart';
 import 'song_row.dart';
 import 'station.dart';
 import 'track_list.dart';
+import 'widths.dart';
 
 /// Discover: something to put on before you know what you want.
 ///
@@ -141,6 +143,23 @@ class _DiscoverPageState extends State<DiscoverPage> {
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
             child: ThickAndThin(),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Row(children: [
+              PressButton(
+                  label: 'Open the feed',
+                  loud: true,
+                  onTap: () {
+                    feel(Feel.commit);
+                    openPage(context, (_) => const FeedScreen());
+                  }),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text('One song at a time, big — or tap Discover twice.',
+                    style: Mag.typewriter(10.5, color: scheme.onSurfaceVariant)),
+              ),
+            ]),
           ),
           if (page == null)
             const Padding(
@@ -782,6 +801,11 @@ class _Releases extends StatelessWidget {
                 },
                 child: const Text('Genres'),
               ),
+              TextButton.icon(
+                onPressed: () => _importFollows(context),
+                icon: const Icon(Icons.download_outlined, size: 16),
+                label: const Text('Import follows'),
+              ),
             ],
           ),
         ),
@@ -802,6 +826,61 @@ class _Releases extends StatelessWidget {
           ),
       ],
     );
+  }
+}
+
+/// Bring over who you follow on a linked service. Adds to the list, never replaces it;
+/// a Bandcamp label is opened into the acts on it.
+Future<void> _importFollows(BuildContext context) async {
+  final app = context.read<AppState>();
+  final messenger = ScaffoldMessenger.of(context);
+  List<FollowSource> sources;
+  try {
+    sources = await app.api.followSources();
+  } catch (e) {
+    messenger.say(problem(e));
+    return;
+  }
+  if (!context.mounted) return;
+  if (sources.isEmpty) {
+    messenger.say(snack(const Text('Link Spotify, SoundCloud, Deezer or Bandcamp under '
+        'Settings → Your music first')));
+    return;
+  }
+  final picked = await ask<FollowSource>(
+    context,
+    builder: (context) => Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(20, 18, 20, 6),
+          child: SectionFlag('Import who you follow'),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+          child: Text('Added to who you follow here — nothing is taken away. A Bandcamp '
+              'label is opened into the acts on it.',
+              style: Mag.typewriter(11, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+        ),
+        for (final s in sources)
+          ListTile(
+            leading: const Icon(Icons.download_outlined),
+            title: Text(s.label),
+            subtitle: s.handle != null ? Text(s.handle!) : null,
+            onTap: () => Navigator.of(context).pop(s),
+          ),
+        const SizedBox(height: 12),
+      ],
+    ),
+  );
+  if (picked == null || !context.mounted) return;
+  messenger.say(snack(Text('Reading who you follow on ${picked.label}…')));
+  try {
+    final r = await app.api.importFollowsFrom(picked.provider);
+    if (context.mounted) await showImportResult(context, r);
+  } catch (e) {
+    messenger.say(problem(e));
   }
 }
 
@@ -852,7 +931,9 @@ class _ReleaseRow extends StatelessWidget {
         final app = context.read<AppState>();
         final messenger = ScaffoldMessenger.of(context);
         unawaited(app.api.markReleasesSeen([r]).catchError((_) {}));
-        if (r.opens) {
+        if (r.opens && r.provider == 'bandcamp') {
+          await openPage(context, (_) => BandcampRecordPage(url: r.albumId!, title: r.title));
+        } else if (r.opens) {
           await openPage(context, (_) => AlbumPage(remoteId: r.albumId, title: r.title));
         } else {
           // Known only to the music database so far: the record page needs a Deezer

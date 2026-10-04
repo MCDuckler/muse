@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 
-from . import db, discography, jobs
+from . import db, discography, jobs, linked
 
 log = logging.getLogger("muse.follows")
 
@@ -25,7 +25,7 @@ POLL_SECONDS = 6 * 3600
 
 def list_for(user_id: int) -> list[dict]:
     return db.all_(
-        """select f.provider, f.remote_id, f.name, f.image, f.created_at,
+        """select f.provider, f.remote_id, f.name, f.image, f.created_at, f.is_label,
                   (select count(*) from artist_releases r
                     where r.provider=f.provider and r.artist_id=f.remote_id) as releases
              from artist_follows f
@@ -43,12 +43,16 @@ def is_following(user_id: int, provider: str, remote_id: str) -> bool:
 
 
 def follow(user_id: int, artist: dict, provider: str = "deezer") -> dict:
+    """Follow — on Deezer by its artist id, on Bandcamp by the band's page. A label is
+    followed the same way as an act; `is_label` is remembered so the list can say."""
     db.run(
-        """insert into artist_follows(user_id, provider, remote_id, name, image)
-           values(%s,%s,%s,%s,%s)
+        """insert into artist_follows(user_id, provider, remote_id, name, image, is_label)
+           values(%s,%s,%s,%s,%s,%s)
            on conflict (user_id, provider, remote_id)
-             do update set name=excluded.name, image=excluded.image""",
-        (user_id, provider, artist["remote_id"], artist["name"], artist.get("image")),
+             do update set name=excluded.name, image=coalesce(excluded.image, artist_follows.image),
+                           is_label=excluded.is_label""",
+        (user_id, provider, artist["remote_id"], artist["name"], artist.get("image"),
+         bool(artist.get("is_label"))),
     )
     found = refresh_artist(provider, artist["remote_id"], artist["name"])
     # Everything already out stays out of the feed; only what lands from here on, and
@@ -72,8 +76,49 @@ def unfollow(user_id: int, provider: str, remote_id: str) -> None:
     )
 
 
+# A Bandcamp follow is the band's page; its records are what that page lists. The
+# music page says nothing about dates, so each record not seen before costs one more
+# page — bounded, so a label with six hundred records does not cost six hundred.
+BANDCAMP_NEWEST = 12
+BANDCAMP_DATES_PER_POLL = 6
+
+
+def _refresh_bandcamp(url: str, name: str) -> int:
+    try:
+        records = linked.bandcamp_discography(url, newest=BANDCAMP_NEWEST)
+    except Exception as e:  # noqa: BLE001 — a page that will not load is not news
+        log.info("could not refresh %s: %s", name, e)
+        return 0
+    known = {r["album_id"]: r for r in db.all_(
+        "select album_id, release_date from artist_releases where provider='bandcamp' "
+        "and artist_id=%s", (url,))}
+    asked = 0
+    for a in records:
+        released = (known.get(a["remote_id"]) or {}).get("release_date")
+        if a["remote_id"] not in known and asked < BANDCAMP_DATES_PER_POLL:
+            asked += 1
+            try:
+                released = linked.bandcamp_record(a["remote_id"]).get("release_date")
+            except Exception:  # noqa: BLE001
+                released = None
+        db.run(
+            """insert into artist_releases(provider, artist_id, album_id, title, artist,
+                                           cover, release_date, record_type, tracks)
+               values('bandcamp',%s,%s,%s,%s,%s,%s,%s,null)
+               on conflict (provider, album_id) do update
+                 set title=excluded.title, cover=excluded.cover,
+                     release_date=coalesce(excluded.release_date, artist_releases.release_date)""",
+            (url, a["remote_id"], a["title"] or "", a.get("artist") or name, a.get("cover"),
+             released, a.get("record_type")))
+    db.run("update artist_follows set checked_at=now() where provider='bandcamp' and remote_id=%s",
+           (url,))
+    return len(records)
+
+
 def refresh_artist(provider: str, remote_id: str, name: str) -> int:
     """Write down what this artist has released. Returns how many records are known."""
+    if provider == "bandcamp":
+        return _refresh_bandcamp(remote_id, name)
     try:
         albums = discography.artist_albums(remote_id)
     except discography.Unavailable as e:
@@ -161,3 +206,71 @@ def ensure_scheduled(delay: float = POLL_SECONDS) -> None:
     if pending:
         return
     jobs.enqueue("follow_poll", {}, priority=jobs.PRIORITY_BULK, delay_seconds=delay)
+
+
+# ------------------------------------------------------------------ importing
+# A label's roster can run to a hundred acts; this many of them, and the label itself.
+ROSTER_MOST = 40
+
+
+def import_entries(user_id: int, provider: str, entries: list[dict], *,
+                   expand_labels: bool = True) -> dict:
+    """Follow everybody in [entries] who is not followed already. Nothing is unfollowed.
+
+    Each name is looked up on Deezer first, which is where release dates and album
+    pages come from; a Bandcamp page that Deezer does not know is followed as itself,
+    and a Bandcamp *label* — a page whose records are by many acts — is opened into
+    the acts on its roster, each followed on their own, and followed itself as well so
+    its compilations still arrive.
+    """
+    added, already, missed, labels, from_labels = 0, 0, [], 0, 0
+
+    def take(name: str, *, url: str | None = None, image: str | None = None,
+             is_label: bool = False) -> bool:
+        nonlocal added, already
+        artist = None
+        if not is_label:
+            try:
+                artist = discography.find_artist(name)
+            except discography.Unavailable:
+                artist = None
+        if artist:
+            key = ("deezer", artist["remote_id"])
+        elif url and provider == "bandcamp":
+            artist = {"remote_id": url, "name": name, "image": image, "is_label": is_label}
+            key = ("bandcamp", url)
+        else:
+            missed.append(name)
+            return False
+        if is_following(user_id, *key):
+            already += 1
+            return True
+        follow(user_id, artist, key[0])
+        added += 1
+        return True
+
+    for entry in entries:
+        name, url = entry.get("name"), entry.get("url")
+        if not name:
+            continue
+        band = None
+        if provider == "bandcamp" and url and expand_labels:
+            try:
+                band = linked.bandcamp_band(url)
+            except Exception:  # noqa: BLE001 — treated as an act, below
+                band = None
+        if band and band.get("is_label"):
+            labels += 1
+            take(name, url=url, image=entry.get("image") or band.get("image"), is_label=True)
+            try:
+                roster = linked.bandcamp_roster(url, most=ROSTER_MOST)
+            except Exception:  # noqa: BLE001
+                roster = []
+            for act in roster:
+                if take(act["name"], url=act.get("url")):
+                    from_labels += 1
+            continue
+        take(name, url=url, image=entry.get("image"))
+
+    return {"from": provider, "found": len(entries), "followed": added, "already": already,
+            "labels": labels, "from_labels": from_labels, "not_found": missed[:40]}

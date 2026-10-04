@@ -686,6 +686,10 @@ class Playlist {
   final String? ownerName;
   final int? ownerId;
 
+  /// How the server orders its songs: added_desc (the default), added_asc, manual,
+  /// title, artist, album, year, duration, bpm. Kept with the playlist.
+  final String sort;
+
   const Playlist({
     required this.id,
     required this.name,
@@ -706,6 +710,7 @@ class Playlist {
     this.autoSplit = false,
     this.ownerName,
     this.ownerId,
+    this.sort = 'added_desc',
     bool? editable,
   }) : editable = editable ??
             ((kind == 'local' || kind == 'favourites') && mine);
@@ -736,7 +741,12 @@ class Playlist {
             (j['owner'] is Map ? (j['owner'] as Map)['name'] as String? : null),
         ownerId: j['owner'] is Map ? (j['owner'] as Map)['id'] as int? : null,
         editable: j['editable'] as bool?,
+        sort: (j['sort'] ?? 'added_desc') as String,
       );
+
+  /// Rows can be dragged only in the hand order; in any other, the positions on show
+  /// are not the ones underneath.
+  bool get handOrder => sort == 'manual';
 
   bool get isMirror => kind != 'local' && kind != 'favourites';
 
@@ -2034,15 +2044,71 @@ class FollowedArtist {
   final String name;
   final String? image;
   final int releases;
+  final String provider;
+
+  /// A Bandcamp page that is a label rather than an act.
+  final bool isLabel;
 
   const FollowedArtist(
-      {required this.remoteId, required this.name, this.image, this.releases = 0});
+      {required this.remoteId,
+      required this.name,
+      this.image,
+      this.releases = 0,
+      this.provider = 'deezer',
+      this.isLabel = false});
 
   factory FollowedArtist.fromJson(Map<String, dynamic> j) => FollowedArtist(
         remoteId: (j['remote_id'] ?? '') as String,
         name: (j['name'] ?? '') as String,
         image: j['image'] as String?,
         releases: (j['releases'] ?? 0) as int,
+        provider: (j['provider'] ?? 'deezer') as String,
+        isLabel: (j['is_label'] ?? false) as bool,
+      );
+}
+
+/// Somewhere follows can be brought over from: a service this account has linked.
+class FollowSource {
+  final String provider;
+  final String label;
+  final String? handle;
+  const FollowSource({required this.provider, required this.label, this.handle});
+
+  factory FollowSource.fromJson(Map<String, dynamic> j) => FollowSource(
+        provider: (j['provider'] ?? '') as String,
+        label: (j['label'] ?? j['provider'] ?? '') as String,
+        handle: j['handle'] as String?,
+      );
+}
+
+/// What an import of follows did: counts, and the names that could not be placed.
+class FollowImport {
+  final String from;
+  final int found;
+  final int followed;
+  final int already;
+  final int labels;
+  final int fromLabels;
+  final List<String> notFound;
+
+  const FollowImport({
+    required this.from,
+    this.found = 0,
+    this.followed = 0,
+    this.already = 0,
+    this.labels = 0,
+    this.fromLabels = 0,
+    this.notFound = const [],
+  });
+
+  factory FollowImport.fromJson(Map<String, dynamic> j) => FollowImport(
+        from: (j['from'] ?? '') as String,
+        found: (j['found'] ?? 0) as int,
+        followed: (j['followed'] ?? 0) as int,
+        already: (j['already'] ?? 0) as int,
+        labels: (j['labels'] ?? 0) as int,
+        fromLabels: (j['from_labels'] ?? 0) as int,
+        notFound: [for (final n in (j['not_found'] ?? const []) as List) '$n'],
       );
 }
 
@@ -2052,6 +2118,7 @@ class FeedItem {
   final String title;
   final String artist;
   final String artistId;
+  final String provider;
   final String? cover;
   final String? releaseDate;
   final String? recordType;
@@ -2064,6 +2131,7 @@ class FeedItem {
     required this.title,
     required this.artist,
     required this.artistId,
+    this.provider = 'deezer',
     this.cover,
     this.releaseDate,
     this.recordType,
@@ -2077,6 +2145,7 @@ class FeedItem {
         title: (j['title'] ?? '') as String,
         artist: (j['artist'] ?? '') as String,
         artistId: (j['artist_id'] ?? '') as String,
+        provider: (j['provider'] ?? 'deezer') as String,
         cover: j['cover'] as String?,
         releaseDate: j['release_date'] as String?,
         recordType: j['record_type'] as String?,
@@ -3020,8 +3089,8 @@ class Release {
         if (releaseMbid != null) 'release_mbid': releaseMbid,
       };
 
-  /// Whether a tap can open it as a record page.
-  bool get opens => albumId != null && provider == 'deezer';
+  /// Whether a tap can open it as a record page: Deezer by id, Bandcamp by its page.
+  bool get opens => albumId != null && (provider == 'deezer' || provider == 'bandcamp');
 }
 
 /// An act nobody here has played, that people who play yours do.
@@ -3096,4 +3165,58 @@ class Discover {
 
   bool get isEmpty =>
       lists.isEmpty && stations.isEmpty && startArtists.isEmpty && releases.isEmpty && artists.isEmpty;
+}
+
+
+/// One song in the Discover feed, and why it is there.
+class FeedCard {
+  final Track track;
+  final String list;
+  final String listName;
+  final String why;
+  const FeedCard({required this.track, this.list = '', this.listName = '', this.why = ''});
+
+  factory FeedCard.fromJson(Map<String, dynamic> j) => FeedCard(
+        track: Track.fromJson((j['track'] as Map).cast<String, dynamic>()),
+        list: (j['list'] ?? '') as String,
+        listName: (j['list_name'] ?? '') as String,
+        why: (j['why'] ?? '') as String,
+      );
+}
+
+/// What somebody said about a record where it came from: Bandcamp's "supported by",
+/// SoundCloud's comments.
+class SongComment {
+  final String name;
+  final String text;
+  final String? favourite;
+  final String? avatar;
+  const SongComment({required this.name, required this.text, this.favourite, this.avatar});
+
+  factory SongComment.fromJson(Map<String, dynamic> j) => SongComment(
+        name: (j['name'] ?? '') as String,
+        text: (j['text'] ?? '') as String,
+        favourite: j['favourite'] as String?,
+        avatar: j['avatar'] as String?,
+      );
+}
+
+/// What a feed card says under the song: genres, comments, a line from the record.
+class CardDetails {
+  final List<String> genres;
+  final List<SongComment> comments;
+  final String? about;
+  final String? source;
+  final String? url;
+  const CardDetails({this.genres = const [], this.comments = const [], this.about, this.source, this.url});
+
+  factory CardDetails.fromJson(Map<String, dynamic> j) => CardDetails(
+        genres: [for (final g in (j['genres'] ?? const []) as List) '$g'],
+        comments: [
+          for (final c in (j['comments'] ?? const []) as List) SongComment.fromJson((c as Map).cast<String, dynamic>())
+        ],
+        about: j['about'] as String?,
+        source: j['source'] as String?,
+        url: j['url'] as String?,
+      );
 }

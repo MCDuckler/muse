@@ -28,7 +28,10 @@ import logging
 import random
 import time
 
-from . import brainz, catalog, db, discography, follows, jobs, recommend, ytm
+import json as _json
+import urllib.request
+
+from . import brainz, catalog, db, discography, follows, jobs, linked, recommend, sources, ytm
 
 log = logging.getLogger("muse.discover")
 
@@ -852,6 +855,7 @@ def build_for(user_id: int, *, network: bool = True, force: bool = False) -> dic
             log.exception("weekly for %s failed: %s", user_id, e)
     for name, fn in (("daily", lambda: build_daily_mixes(user_id, tas, network=network)),
                      ("radar", lambda: build_radar(user_id, network=network)),
+                     ("trending", lambda: build_trending(user_id, tas) if network else []),
                      ("repeat", lambda: build_repeat(user_id)),
                      ("again", lambda: build_again(user_id, tas)),
                      ("house", lambda: build_house(user_id, tas, network=network))):
@@ -951,3 +955,243 @@ def run_job(payload: dict) -> dict:
     if payload.get("user_id"):
         return build_for(int(payload["user_id"]))
     return poll()
+
+
+# ------------------------------------------------------------------ the feed
+# What a card can say under the song: the tags the record carries where it came from
+# (Bandcamp and SoundCloud both have them), the genres Deezer and MusicBrainz file the
+# record and the act under, and what people said — Bandcamp's "supported by" box and
+# SoundCloud's comments. Kept a week; a card is looked at more than once.
+CARD_TTL = 7 * 86400
+COMMENTS_MOST = 5
+
+
+def cards(user_id: int, offset: int = 0, limit: int = 20) -> dict:
+    """The songs the page would put in front of this person, one after another: new
+    records by who and what they follow first, then this week's finds, then the daily
+    mixes and the house blend — nothing they have played lately, and each song once."""
+    lists = {entry["slug"]: entry for entry in lists_for(user_id, tracks=False)}
+    recent = {r["track_id"] for r in db.all_(
+        """select distinct track_id from listens where user_id=%s
+            and started_at > now() - interval '36 hours'""", (user_id,))}
+    rows = db.all_("select slug, track_ids, meta from made_lists where user_id=%s "
+                   "order by ordinal", (user_id,))
+    by_slug = {r["slug"]: r for r in rows}
+    # The radar first, then the finds; then what is trending in each followed genre,
+    # a song from each in turn so no one genre takes the whole stretch; then the mixes.
+    trend = [slug for slug in by_slug if slug.startswith("trend:")]
+    order: list[list[str]] = [["radar"], [WEEKLY_SLUG], trend,
+                              ["daily:1", "daily:2", "daily:3", "daily:4"], ["house"], ["again"]]
+    picked: list[tuple[int, str, str]] = []
+    seen: set[int] = set()
+    for group in order:
+        lanes = []
+        for slug in group:
+            row = by_slug.get(slug)
+            if not row:
+                continue
+            meta = row["meta"] if isinstance(row["meta"], dict) else json.loads(row["meta"] or "{}")
+            lanes.append((slug, list(row["track_ids"] or []), meta.get("why") or {}))
+        # Round robin across the group's lists (one list is simply its own order).
+        while any(ids for _, ids, _ in lanes):
+            for slug, ids, whys in lanes:
+                if not ids:
+                    continue
+                t = ids.pop(0)
+                if t in seen or t in recent:
+                    continue
+                seen.add(t)
+                picked.append((t, slug, whys.get(str(t)) or ""))
+    total = len(picked)
+    page = picked[offset:offset + limit]
+    tracks = recommend._rows_for([t for t, _, _ in page])
+    items = []
+    for t, slug, why in page:
+        row = tracks.get(t)
+        if not row or row["state"] == "failed":
+            continue
+        entry = lists.get(slug) or {}
+        items.append({"track": catalog.public(row), "list": slug,
+                      "list_name": entry.get("name") or slug,
+                      "why": why or _card_why(slug, entry)})
+    return {"items": items, "total": total, "offset": offset}
+
+
+def _card_why(slug: str, entry: dict) -> str:
+    kind = slug.split(":")[0]
+    if kind == "trend":
+        return "trending in " + slug.partition(":")[2]
+    return {"radar": "new from somebody you follow", "weekly": "new to you this week",
+            "daily": "from " + (entry.get("name") or "a daily mix"),
+            "house": "what the house is playing", "again": "one you wore out and forgot"}.get(kind, "")
+
+
+def card_details(track_id: int) -> dict:
+    """Genres and comments for a song, from wherever it came from. Cached a week."""
+    key = f"card:{track_id}"
+    cached = brainz._cached(key, CARD_TTL)
+    if cached is not None:
+        return cached
+    row = db.one(
+        """select t.id, t.title, t.artists, t.album, s.provider, s.provider_id, s.raw
+             from tracks t left join track_sources s on s.track_id = t.id
+            where t.id = %s order by (s.provider = 'ytmusic') limit 1""", (track_id,))
+    if not row:
+        return {"genres": [], "comments": [], "about": None, "source": None, "url": None}
+    raw = row["raw"] if isinstance(row["raw"], dict) else json.loads(row["raw"] or "{}")
+    genres: list[str] = []
+    comments: list[dict] = []
+    about = None
+    url = None
+    try:
+        if row["provider"] == "bandcamp" and (raw.get("url") or raw.get("pageUrl")):
+            url = (raw.get("url") or raw.get("pageUrl")).split("#")[0]
+            rec = linked.bandcamp_record(url)
+            genres = rec["tags"]
+            comments = rec["reviews"]
+            about = rec.get("about")
+        elif row["provider"] == "soundcloud" and row["provider_id"]:
+            sc = linked.soundcloud_track(row["provider_id"])
+            genres = sc["tags"]
+            comments = sc["reviews"]
+            about = sc.get("about")
+            url = sc.get("url")
+    except Exception as e:  # noqa: BLE001 — a page that will not load leaves the card plain
+        log.info("card %s: %s", track_id, e)
+    if not genres:
+        genres = _deezer_genres(row["album"], (row["artists"] or [None])[0])
+    first = (row["artists"] or [None])[0]
+    if first:
+        entry = _artist_entry(first, ask=False)
+        for g in (entry or {}).get("genres") or []:
+            if g not in genres:
+                genres.append(g)
+    out = {"genres": genres[:10], "comments": comments[:COMMENTS_MOST], "about": about,
+           "source": row["provider"], "url": url}
+    brainz._store(key, out)
+    return out
+
+
+def _deezer_genres(album: str | None, artist: str | None) -> list[str]:
+    """The genres Deezer files a record under — a short list, but one every record
+    on it has, which is more than can be said for anywhere else."""
+    if not album:
+        return []
+    try:
+        found = discography.find_album(album, artist)
+        if not found:
+            return []
+        raw = discography._get(f"/album/{found['id']}", kind="album")
+    except discography.Unavailable:
+        return []
+    return [g["name"].lower() for g in ((raw.get("genres") or {}).get("data") or [])
+            if g.get("name")]
+
+
+# ------------------------------------------------------------------ trending by genre
+# What is being played this week in a genre, from the two places that say so and
+# serve the audio themselves: SoundCloud's search, asked for last week's most played
+# under the genre, and Bandcamp's discover page, asked for the tag's best sellers.
+# Both land as tracks the box fetches itself (no residential worker needed).
+TREND_GENRES_MOST = 8
+TREND_PER_GENRE = 12
+TREND_TTL = 12 * 3600
+
+
+def trending_named(genre: str) -> list[dict]:
+    """Songs trending in a genre, named: provider, provider_id, title, artists, url,
+    album. Kept half a day in remote_cache."""
+    g = _norm(genre)
+    key = f"trend:{g}"
+    cached = brainz._cached(key, TREND_TTL)
+    if cached is not None:
+        return cached
+    out: list[dict] = []
+    try:
+        page = linked._sc_api("/search/tracks", q="", limit=TREND_PER_GENRE, sort="popular",
+                              **{"filter.genre_or_tag": g, "filter.created_at": "last_week"})
+        for t in page.get("collection") or []:
+            item = linked._sc_item(t)
+            if item and item["title"]:
+                out.append({"provider": "soundcloud", "provider_id": item["remote_id"],
+                            "title": item["title"], "artists": item["artists"], "album": None,
+                            "duration_ms": item["duration_ms"],
+                            "url": item["source"]["url"], "page": t.get("permalink_url")})
+    except Exception as e:  # noqa: BLE001
+        log.info("soundcloud trending %s: %s", g, e)
+    try:
+        for a in bandcamp_discover(g, most=6):
+            try:
+                tracks = [t for t in sources.bandcamp_tracks(a["url"]) if t["streamable"]]
+            except Exception:  # noqa: BLE001
+                continue
+            if not tracks:
+                continue
+            t = tracks[0]
+            out.append({"provider": "bandcamp", "provider_id": t["provider_id"],
+                        "title": t["title"], "artists": t["artists"], "album": t["album"],
+                        "duration_ms": t["duration_ms"], "url": t["url"], "page": a["url"]})
+    except Exception as e:  # noqa: BLE001
+        log.info("bandcamp trending %s: %s", g, e)
+    brainz._store(key, out)
+    return out
+
+
+def bandcamp_discover(tag: str, most: int = 6, slice_: str = "top") -> list[dict]:
+    """Bandcamp's discover page for a tag: its best sellers ("top") or new arrivals."""
+    body = _json.dumps({"tag_norm_names": [tag.replace(" ", "-")], "geoname_id": 0,
+                        "slice": slice_, "time_facet_id": None, "cursor": "*",
+                        "size": most, "include_result_types": ["a", "t"]}).encode()
+    req = urllib.request.Request("https://bandcamp.com/api/discover/1/discover_web", data=body,
+                                 headers={"Content-Type": "application/json",
+                                          "User-Agent": sources.UA})
+    data = _json.loads(urllib.request.urlopen(req, timeout=30).read())
+    out = []
+    for r in data.get("results") or []:
+        url = (r.get("item_url") or "").split("?")[0]
+        if url:
+            out.append({"url": url, "title": r.get("title"), "artist": r.get("band_name")})
+    return out
+
+
+def trending_tracks(genre: str, user_id: int) -> list[int]:
+    """Trending songs in a genre as tracks here, found or brought in."""
+    ids: list[int] = []
+    for item in trending_named(genre):
+        known = catalog.find_by_provider(item["provider"], item["provider_id"])
+        if not known:
+            try:
+                known = catalog.create_from_source(
+                    item["provider"],
+                    {"provider_id": item["provider_id"], "title": item["title"],
+                     "artists": item["artists"], "album": item["album"],
+                     "duration_ms": item["duration_ms"], "url": item["url"],
+                     "raw": {k: v for k, v in item.items() if k != "page"}},
+                    discovered_via=VIA_DISCOVER, priority=jobs.PRIORITY_BULK)
+            except Exception as e:  # noqa: BLE001
+                log.info("could not add %s: %s", item["title"], e)
+                continue
+        if known and known["state"] != "failed" and known["id"] not in ids:
+            ids.append(known["id"])
+    return ids
+
+
+def build_trending(user_id: int, tas: recommend.Taste | None = None) -> list[str]:
+    """A list per genre this person follows — or, following none yet, the few they
+    seem to play — of what is trending in it this week."""
+    genres = genres_of(user_id)[:TREND_GENRES_MOST]
+    if not genres:
+        tas = tas or recommend.taste(user_id)
+        genres = [g["genre"] for g in suggested_genres(user_id, tas, limit=3)]
+    db.run("delete from made_lists where user_id=%s and slug like 'trend:%%'", (user_id,))
+    slugs = []
+    for n, g in enumerate(genres):
+        ids = trending_tracks(g, user_id)
+        if not ids:
+            continue
+        slug = f"trend:{g}"
+        _save(user_id, slug, f"Trending in {g}",
+              f"What is being played this week in {g}, on SoundCloud and Bandcamp.",
+              ids, 10 + n, {"genre": g})
+        slugs.append(slug)
+    return slugs

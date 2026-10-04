@@ -86,24 +86,26 @@ def import_follows(body: dict = Body(default={}), user: dict = Depends(current_u
     except Exception as e:
         raise HTTPException(502, f"{provider} did not answer: {e}")
 
-    added, already, missed = 0, 0, []
-    for entry in names:
-        try:
-            artist = discography.find_artist(entry["name"])
-        except discography.Unavailable:
-            missed.append(entry["name"])
-            continue
-        if not artist:
-            missed.append(entry["name"])
-            continue
-        if follows.is_following(user["id"], "deezer", artist["remote_id"]):
-            already += 1
-            continue
-        follows.follow(user["id"], artist)
-        added += 1
+    return follows.import_entries(user["id"], provider, names,
+                                  expand_labels=body.get("expand_labels", True))
 
-    return {"from": provider, "found": len(names), "followed": added,
-            "already": already, "not_found": missed[:40]}
+
+@router.get("/follows/sources")
+def sources(user: dict = Depends(current_user)):
+    """Where follows can be imported from: the services this account has linked."""
+    out = []
+    try:
+        from . import spotify
+        if spotify.account(user["id"]):
+            out.append({"provider": "spotify", "label": "Spotify"})
+    except Exception:  # noqa: BLE001 — not configured, not linked: not a source
+        pass
+    labels = {"soundcloud": "SoundCloud", "bandcamp": "Bandcamp", "deezer": "Deezer"}
+    for a in linked.accounts(user["id"]):
+        if a["provider"] in labels:
+            out.append({"provider": a["provider"], "label": labels[a["provider"]],
+                        "handle": a.get("display_name") or a.get("handle")})
+    return {"items": out}
 
 
 @router.get("/feed")

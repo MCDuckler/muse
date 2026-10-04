@@ -8,7 +8,7 @@ import 'artwork.dart';
 import 'command_palette.dart';
 import 'downloads_page.dart';
 import 'feel.dart';
-import 'home_page.dart' show openInTab;
+import 'home_page.dart' show openFeedOnSecondTap, openInTab;
 import 'jam_page.dart';
 import 'library_page.dart';
 import '../../main.dart' show showShortcuts;
@@ -89,7 +89,7 @@ class _LibrarySidebarState extends State<LibrarySidebar> {
               selected: tab == index,
               onTap: () {
                 if (tab == index) {
-                  widget.onSameTab();
+                  if (!openFeedOnSecondTap(app, index)) widget.onSameTab();
                 } else {
                   feel(Feel.pick);
                 }
