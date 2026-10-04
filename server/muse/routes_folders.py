@@ -137,6 +137,33 @@ def place_playlist(playlist_id: int, body: dict = Body(default={}),
             "pinned": row["pinned"]}
 
 
+@router.post("/playlists/order")
+def order_playlists(body: dict = Body(...), user: dict = Depends(current_user)):
+    """The hand order of one shelf — the box, or one folder — written down whole.
+
+    Dragging a row writes the whole shelf rather than one position: the positions of
+    everything else move too, and sending them all is what makes "where things are"
+    the same on every device afterwards.
+    """
+    folder = body.get("folder_id")
+    if folder is not None:
+        _own_folder(int(folder), user)
+    ids = [int(i) for i in (body.get("ids") or [])]
+    if not ids:
+        raise HTTPException(400, "ids required")
+    for pid in ids:
+        _readable(pid, user)
+    with db.pool().connection() as c:
+        for pos, pid in enumerate(ids):
+            c.execute(
+                """insert into playlist_places(user_id, playlist_id, folder_id, pos)
+                   values(%s,%s,%s,%s)
+                   on conflict (user_id, playlist_id)
+                   do update set folder_id=excluded.folder_id, pos=excluded.pos""",
+                (user["id"], pid, folder, pos))
+    return {"folder_id": folder, "ids": ids}
+
+
 @router.post("/playlists/{playlist_id}/pin")
 def pin_playlist(playlist_id: int, body: dict = Body(default={}),
                  user: dict = Depends(current_user)):

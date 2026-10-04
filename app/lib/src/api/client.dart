@@ -1351,6 +1351,11 @@ class ApiClient {
           headers: _headers,
           body: jsonEncode({'folder_id': folderId, if (pos != null) 'pos': pos})));
 
+  /// One shelf — the box, or a folder — in hand order, written whole.
+  Future<void> orderPlaylists(List<int> ids, {int? folderId}) async =>
+      await _decode(await net.post(_u('/playlists/order'),
+          headers: _headers, body: jsonEncode({'folder_id': folderId, 'ids': ids})));
+
   Future<void> pinPlaylist(int playlistId, bool pinned) async =>
       await _decode(await net.post(_u('/playlists/$playlistId/pin'),
           headers: _headers, body: jsonEncode({'pinned': pinned})));

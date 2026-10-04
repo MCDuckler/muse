@@ -254,6 +254,38 @@ List<Widget> libraryRows(BuildContext context, LibraryQuery q, {required bool co
   ];
 }
 
+/// The box in hand order: the same parts as [libraryRows], with the loose lists in a
+/// sliver of their own that can be dragged into place, and the lists behind each
+/// divider draggable within it. Pinned lists keep the order they were pinned in.
+List<Widget> libraryHandOrderSlivers(BuildContext context, LibraryQuery q,
+    {required bool compact}) {
+  final app = context.read<AppState>();
+  final scheme = Theme.of(context).colorScheme;
+  return [
+    SliverList.list(children: [
+      if (q.pinned.isNotEmpty) ...[
+        const GroupLabel('Pinned'),
+        for (final p in q.pinned) PlaylistRow(playlist: p, shrunk: compact),
+      ],
+      for (final s in q.shelves) FolderCard(shelf: s, shrunk: compact, reorderable: true),
+      if (!q.flat)
+        GroupLabel(q.loose.isEmpty ? 'Everything else is filed' : 'Everything else'),
+      if (q.loose.isEmpty && q.flat)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Text('Drag the handles to put the box in your own order.',
+              style: Mag.typewriter(11, color: scheme.onSurfaceVariant)),
+        ),
+    ]),
+    SliverReorderableList(
+      itemCount: q.loose.length,
+      onReorderItem: (from, to) => reorderShelf(context, app, q.loose, null, from, to),
+      itemBuilder: (context, i) => handledRow(context, i,
+          PlaylistRow(key: ValueKey(q.loose[i].id), playlist: q.loose[i], shrunk: compact)),
+    ),
+  ];
+}
+
 /// The last row of a search: what the library did not find by name, the Search tab
 /// looks for among the songs.
 class _HandOffRow extends StatelessWidget {

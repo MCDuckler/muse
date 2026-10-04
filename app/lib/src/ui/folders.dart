@@ -19,10 +19,13 @@ import 'widths.dart';
 /// in it stand under it, indented behind a rule; how it was left is remembered the way
 /// the library's sections are.
 class FolderCard extends StatelessWidget {
-  const FolderCard({super.key, required this.shelf, this.shrunk = false});
+  const FolderCard({super.key, required this.shelf, this.shrunk = false, this.reorderable = false});
 
   final FolderShelf shelf;
   final bool shrunk;
+
+  /// In the hand order, the lists behind the card drag into their places.
+  final bool reorderable;
 
   String get _foldId => 'folder:${shelf.folder.id}';
 
@@ -127,8 +130,22 @@ class FolderCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      for (final p in lists)
-                        DraggablePlaylist(playlist: p, child: PlaylistRow(playlist: p, shrunk: shrunk)),
+                      if (reorderable)
+                        ReorderableListView(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          buildDefaultDragHandles: false,
+                          onReorderItem: (from, to) =>
+                              reorderShelf(context, app, lists, folder.id, from, to),
+                          children: [
+                            for (var i = 0; i < lists.length; i++)
+                              handledRow(context, i,
+                                  PlaylistRow(key: ValueKey(lists[i].id), playlist: lists[i], shrunk: shrunk)),
+                          ],
+                        )
+                      else
+                        for (final p in lists)
+                          DraggablePlaylist(playlist: p, child: PlaylistRow(playlist: p, shrunk: shrunk)),
                       if (lists.isEmpty)
                         Padding(
                           padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
@@ -142,6 +159,42 @@ class FolderCard extends StatelessWidget {
         ),
       ],
     );
+  }
+}
+
+/// A row with a handle to drag it into its place, in the hand order.
+Widget handledRow(BuildContext context, int index, Widget row) => Material(
+      key: ValueKey('hand-$index-${row.key}'),
+      // The row is lifted out of the page while it is dragged, and a lifted ListTile
+      // wants a sheet of its own under it.
+      type: MaterialType.transparency,
+      child: Row(
+        children: [
+          ReorderableDragStartListener(
+            index: index,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 6, right: 2),
+              child: Icon(Icons.drag_indicator,
+                  size: 20, color: Theme.of(context).colorScheme.outline),
+            ),
+          ),
+          Expanded(child: row),
+        ],
+      ),
+    );
+
+/// A shelf's rows moved by hand: the new order written down whole.
+Future<void> reorderShelf(BuildContext context, AppState app, List<Playlist> shelf,
+    int? folderId, int from, int to) async {
+  final ids = [for (final p in shelf) p.id];
+  final moved = ids.removeAt(from);
+  ids.insert(to, moved);
+  final messenger = ScaffoldMessenger.of(context);
+  try {
+    await app.api.orderPlaylists(ids, folderId: folderId);
+    await app.refreshPlaylists();
+  } catch (e) {
+    messenger.say(problem(e));
   }
 }
 

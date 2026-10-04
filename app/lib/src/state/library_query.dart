@@ -23,7 +23,8 @@ enum LibraryChip {
   mirrors('Mirrors'),
   others('From others'),
   mixes('Mixes'),
-  crates('Crates');
+  crates('Crates'),
+  downloaded('Downloaded');
 
   const LibraryChip(this.label);
   final String label;
@@ -35,6 +36,8 @@ enum LibraryChip {
         others => p.saved,
         mixes => p.isMix,
         crates => p.autoSplit,
+        // Every song in it has its audio here: what will play on the train.
+        downloaded => p.itemCount > 0 && p.waiting == 0,
       };
 }
 
@@ -83,7 +86,9 @@ class LibraryQuery {
     chips = [
       LibraryChip.all,
       for (final c in LibraryChip.values)
-        if (c != LibraryChip.all && playlists.any(c.keeps)) c,
+        if (c != LibraryChip.all && playlists.any(c.keeps))
+          // "Downloaded" only means something once something is not.
+          if (c != LibraryChip.downloaded || playlists.any((p) => p.waiting > 0)) c,
     ];
   }
 
@@ -105,6 +110,10 @@ class LibraryQuery {
   late final List<LibraryChip> chips;
 
   bool get searching => query.isNotEmpty;
+
+  /// Whether the rows can be dragged into an order: only the hand order, of the whole
+  /// box — a part of it put in order would write an order for the rest too.
+  bool get reorderable => sort == LibrarySort.hand && !searching && chip == LibraryChip.all;
   bool get flat => _arranged.flat;
   bool get nothing => searching
       ? matches.isEmpty && matchedFolders.isEmpty

@@ -66,7 +66,7 @@ class _LibraryPageState extends State<LibraryPage> {
       query: _find.text,
     );
     final look = app.libraryLook;
-    final rows = look == LibraryLook.grid
+    final rows = look == LibraryLook.grid || q.reorderable
         ? const <Widget>[]
         : libraryRows(context, q, compact: look == LibraryLook.compact);
     return RecordRefresh(
@@ -121,6 +121,13 @@ class _LibraryPageState extends State<LibraryPage> {
               SliverToBoxAdapter(child: RecentsStrip(recent: q.recent.take(10).toList())),
             if (look == LibraryLook.grid)
               LibraryGrid(query: q, usable: box.maxWidth - 24)
+            else if (q.reorderable)
+              SliverPadding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                sliver: SliverMainAxisGroup(
+                    slivers: libraryHandOrderSlivers(context, q,
+                        compact: look == LibraryLook.compact)),
+              )
             else
               SliverPadding(
                 padding: const EdgeInsets.symmetric(horizontal: 8),

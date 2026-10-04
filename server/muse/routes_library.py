@@ -106,6 +106,8 @@ def list_playlists(user: dict = Depends(current_user)):
                     where i.playlist_id = p.id) as items,
                   (select count(*) from playlist_unmatched u
                     where u.playlist_id = p.id) as unmatched,
+                  (select count(*) from playlist_items i join tracks t on t.id = i.track_id
+                    where i.playlist_id = p.id and t.state in ('pending','failed')) as waiting,
                   pl.folder_id, pl.pos as place_pos, pl.pinned, pl.last_opened_at
              from playlists p
              left join playlist_places pl on pl.playlist_id = p.id and pl.user_id = %s
@@ -119,6 +121,8 @@ def list_playlists(user: dict = Depends(current_user)):
                     where i.playlist_id = p.id) as items,
                   (select count(*) from playlist_unmatched x
                     where x.playlist_id = p.id) as unmatched,
+                  (select count(*) from playlist_items i join tracks t on t.id = i.track_id
+                    where i.playlist_id = p.id and t.state in ('pending','failed')) as waiting,
                   pl.folder_id, pl.pos as place_pos, pl.pinned, pl.last_opened_at
              from playlist_saves s
              join playlists p on p.id = s.playlist_id

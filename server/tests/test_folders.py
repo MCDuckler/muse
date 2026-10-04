@@ -122,3 +122,26 @@ def test_playing_a_folder_plays_each_song_once_in_folder_order(client, hdr, thre
     client.post(f"/playlists/{three[0]}/place", headers=hdr, json={"folder_id": f})
     got = client.get(f"/playlist-folders/{f}/tracks", headers=hdr).json()["items"]
     assert [t["id"] for t in got] == [tracks[1], tracks[0], tracks[2]]
+
+
+def test_a_shelf_is_put_in_hand_order_whole(client, hdr, three):
+    f = client.post("/playlist-folders", headers=hdr, json={"name": "Set"}).json()["id"]
+    r = client.post("/playlists/order", headers=hdr,
+                    json={"folder_id": f, "ids": [three[2], three[0], three[1]]})
+    assert r.status_code == 200
+    listed = _listed(client, hdr)
+    assert [listed[i]["place_pos"] for i in (three[2], three[0], three[1])] == [0, 1, 2]
+    assert all(listed[i]["folder_id"] == f for i in three), "the order files them too"
+
+    # The box itself has an order as well.
+    client.post("/playlists/order", headers=hdr, json={"folder_id": None, "ids": [three[1]]})
+    listed = _listed(client, hdr)
+    assert listed[three[1]]["folder_id"] is None and listed[three[1]]["place_pos"] == 0
+    assert client.post("/playlists/order", headers=hdr, json={"ids": []}).status_code == 400
+
+
+def test_the_list_says_how_many_songs_have_no_audio_yet(client, hdr, three, tracks):
+    client.post(f"/playlists/{three[0]}/items", headers=hdr, json={"track_ids": tracks})
+    listed = _listed(client, hdr)
+    assert listed[three[0]]["waiting"] == 3, "freshly resolved songs have no audio yet"
+    assert listed[three[1]]["waiting"] == 0

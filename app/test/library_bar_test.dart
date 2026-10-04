@@ -178,4 +178,42 @@ void main() {
     expect(prefs.getString('muse.library.sort'), 'name');
     expect(prefs.getString('muse.library.look'), 'grid');
   });
+
+  testWidgets('in the hand order the rows get handles, and a drag writes the shelf whole',
+      (tester) async {
+    final ordered = <http.Request>[];
+    useThisClientInstead(MockClient((request) async {
+      if (request.url.path == '/playlists/order') ordered.add(request);
+      final Object body = switch ((request.method, request.url.path)) {
+        ('GET', '/playlists') => playlists,
+        ('GET', '/playlist-folders') => {'items': folders},
+        ('GET', '/library/smart') => {'lists': []},
+        ('GET', '/feed') => {'items': [], 'unseen': 0, 'following': 0},
+        _ => <String, dynamic>{},
+      };
+      return http.Response(jsonEncode(body), 200,
+          headers: {'content-type': 'application/json'});
+    }));
+    app.librarySort = LibrarySort.hand;
+    await show(tester);
+    expect(find.byIcon(Icons.drag_indicator), findsWidgets);
+
+    // Nothing has a place yet, so the box reads Favourites, Loose one, Saturday mix,
+    // Theirs; only the loose rows carry handles. Drag Theirs to the top.
+    expect(find.byIcon(Icons.drag_indicator), findsNWidgets(4));
+    final from = tester.getCenter(find.byIcon(Icons.drag_indicator).at(3));
+    final to = tester.getCenter(find.text('Favourites'));
+    final gesture = await tester.startGesture(from);
+    await tester.pump(const Duration(milliseconds: 600));
+    await gesture.moveTo(to - const Offset(0, 20));
+    await tester.pump();
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(ordered, isNotEmpty);
+    final body = jsonDecode(ordered.last.body);
+    expect(body['folder_id'], isNull);
+    final ids = (body['ids'] as List).cast<int>();
+    expect(ids.length, 4, reason: 'the whole shelf is written, not one position');
+    expect(ids.indexOf(14), lessThan(ids.indexOf(13)), reason: 'Theirs moved above Loose one');
+  });
 }
