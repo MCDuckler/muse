@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'library_query.dart';
+
 import '../api/client.dart';
 import '../api/connection.dart';
 import '../worker/this_computer.dart' show fetchedHerePath, stopFetching;
@@ -149,11 +151,39 @@ class AppState extends ChangeNotifier {
   Set<String> shrunkSections = <String>{};
   Set<String> closedSections = <String>{};
 
+  /// Sections somebody has sized by hand. Until then a section may start the size its
+  /// screen suits — the contents page is a strip on a phone — without that being
+  /// written down as a choice.
+  Set<String> decidedSections = <String>{};
+
   void setSectionShrunk(String id, bool shrunk) {
     shrunk ? shrunkSections.add(id) : shrunkSections.remove(id);
+    decidedSections.add(id);
     SharedPreferences.getInstance()
-        .then((p) => p.setStringList(_kShrunkSections, shrunkSections.toList()))
-        .catchError((_) => false);
+        .then((p) async {
+          await p.setStringList(_kShrunkSections, shrunkSections.toList());
+          await p.setStringList(_kDecidedSections, decidedSections.toList());
+        })
+        .catchError((_) {});
+    notifyListeners();
+  }
+
+  /// How the library's playlists are shown: order, look, which kind. Per device.
+  LibrarySort librarySort = LibrarySort.recent;
+  LibraryLook libraryLook = LibraryLook.list;
+  LibraryChip libraryChip = LibraryChip.all;
+
+  void setLibraryView({LibrarySort? sort, LibraryLook? look, LibraryChip? chip}) {
+    if (sort != null) librarySort = sort;
+    if (look != null) libraryLook = look;
+    if (chip != null) libraryChip = chip;
+    SharedPreferences.getInstance()
+        .then((p) async {
+          await p.setString(_kLibrarySort, librarySort.name);
+          await p.setString(_kLibraryLook, libraryLook.name);
+          await p.setString(_kLibraryChip, libraryChip.name);
+        })
+        .catchError((_) {});
     notifyListeners();
   }
 
@@ -371,6 +401,10 @@ class AppState extends ChangeNotifier {
   static const _kPaneWidth = 'muse.paneWidth';
   static const _kShrunkSections = 'muse.library.shrunk';
   static const _kClosedSections = 'muse.library.closed';
+  static const _kDecidedSections = 'muse.library.decided';
+  static const _kLibrarySort = 'muse.library.sort';
+  static const _kLibraryLook = 'muse.library.look';
+  static const _kLibraryChip = 'muse.library.chip';
 
   /// The queue that was on when the app was last closed, so opening it again lands
   /// there rather than on whichever queue happens to be first in the list.
@@ -788,6 +822,10 @@ class AppState extends ChangeNotifier {
     paneWidth = (prefs.getDouble(_kPaneWidth) ?? 330).clamp(240, 560);
     shrunkSections = {...?prefs.getStringList(_kShrunkSections)};
     closedSections = {...?prefs.getStringList(_kClosedSections)};
+    decidedSections = {...?prefs.getStringList(_kDecidedSections)};
+    librarySort = LibrarySort.values.asNameMap()[prefs.getString(_kLibrarySort)] ?? LibrarySort.recent;
+    libraryLook = LibraryLook.values.asNameMap()[prefs.getString(_kLibraryLook)] ?? LibraryLook.list;
+    libraryChip = LibraryChip.values.asNameMap()[prefs.getString(_kLibraryChip)] ?? LibraryChip.all;
     coverScale = (prefs.getDouble(_kCoverScale) ?? 0.74).clamp(0.5, 1.0);
     discScale = (prefs.getDouble(_kDiscScale) ?? 1.0).clamp(0.6, 1.15);
     discLabel = (prefs.getDouble(_kDiscLabel) ?? 0.31).clamp(0.18, 0.92);

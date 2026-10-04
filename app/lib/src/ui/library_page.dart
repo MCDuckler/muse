@@ -17,7 +17,8 @@ import 'mag_parts.dart';
 import 'feed_page.dart';
 import 'fold.dart';
 import 'folders.dart';
-import '../state/library_arrangement.dart';
+import 'library_body.dart';
+import '../state/library_query.dart';
 import 'kept_page.dart';
 import 'listening_page.dart';
 import 'mini_player.dart';
@@ -35,86 +36,106 @@ import 'record_refresh.dart';
 import 'widths.dart';
 
 
-class LibraryPage extends StatelessWidget {
+class LibraryPage extends StatefulWidget {
   const LibraryPage({super.key});
+
+  @override
+  State<LibraryPage> createState() => _LibraryPageState();
+}
+
+class _LibraryPageState extends State<LibraryPage> {
+  final _find = TextEditingController();
+  final _findFocus = FocusNode();
+
+  @override
+  void dispose() {
+    _find.dispose();
+    _findFocus.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
+    final compact = Width.of(context) == Width.compact;
+    final q = LibraryQuery(
+      playlists: app.playlists,
+      folders: app.folders,
+      sort: app.librarySort,
+      chip: app.libraryChip,
+      query: _find.text,
+    );
+    final look = app.libraryLook;
+    final rows = look == LibraryLook.grid
+        ? const <Widget>[]
+        : libraryRows(context, q, compact: look == LibraryLook.compact);
     return RecordRefresh(
       onRefresh: () async {
         ServiceShelf.again.value++;
         await app.refresh();
       },
-      child: ListView(
-      padding: const EdgeInsets.fromLTRB(8, 4, 8, 160),
-      physics: const AlwaysScrollableScrollPhysics(),
-      children: [
-        // The contents page: every way into the library, each with a number that is
-        // true about it.
-        LibraryFold(
-          id: 'contents',
-          title: 'Contents',
-          top: 10,
-          builder: (context, shrunk) => _Contents(shrunk: shrunk),
-        ),
-        // Lists nobody made: questions about the library, answered when asked.
-        const _SmartLists(),
-        LibraryFold(
-          id: 'playlists',
-          // How many, when there are any: "Playlists · 0" is a zero in print.
-          title: app.playlists.isEmpty
-              ? 'Playlists'
-              : 'Playlists · ${app.playlists.length}',
-          actions: [
-            PressButton(
-              label: 'New',
-              onTap: () => newInLibrary(context, app),
+      child: LayoutBuilder(
+        builder: (context, box) => CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            // The contents page: every way into the library, each with a number that is
+            // true about it. A strip on a phone until somebody opens it out.
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: LibraryFold(
+                  id: 'contents',
+                  title: 'Contents',
+                  top: 10,
+                  shrunkByDefault: compact,
+                  builder: (context, shrunk) => _Contents(shrunk: shrunk),
+                ),
+              ),
             ),
+            // Lists nobody made: questions about the library, answered when asked.
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8),
+                child: _SmartLists(),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+                child: SectionFlag(app.playlists.isEmpty
+                    ? 'Playlists'
+                    : 'Playlists · ${app.playlists.length}'),
+              ),
+            ),
+            SliverPersistentHeader(
+              pinned: true,
+              delegate: LibraryBar(
+                query: q,
+                controller: _find,
+                focus: _findFocus,
+                count: app.playlists.length,
+                onChanged: () => setState(() {}),
+              ),
+            ),
+            if (!q.searching && q.sort != LibrarySort.recent && q.recent.isNotEmpty)
+              SliverToBoxAdapter(child: RecentsStrip(recent: q.recent.take(10).toList())),
+            if (look == LibraryLook.grid)
+              LibraryGrid(query: q, usable: box.maxWidth - 24)
+            else
+              SliverPadding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                sliver: SliverList.builder(
+                  itemCount: rows.length,
+                  itemBuilder: (context, i) => rows[i],
+                ),
+              ),
+            // What is on the other services, and which of it is mirrored here: a line,
+            // and a page behind it.
+            const SliverToBoxAdapter(child: ServicesRow()),
+            const SliverToBoxAdapter(child: SizedBox(height: 160)),
           ],
-          builder: (context, shrunk) => _Playlists(shrunk: shrunk),
         ),
-        // What is on the other services, and which of it is mirrored here.
-        const ServiceShelf(),
-      ],
       ),
-    );
-  }
-}
-
-/// The playlists, arranged the way the box is read: what is pinned on top, then the
-/// divider cards with their lists behind them, then everything loose.
-class _Playlists extends StatelessWidget {
-  const _Playlists({required this.shrunk});
-  final bool shrunk;
-
-  @override
-  Widget build(BuildContext context) {
-    final app = context.watch<AppState>();
-    final arranged = LibraryArrangement(app.playlists, app.folders);
-    final scheme = Theme.of(context).colorScheme;
-    Widget label(String text) => Padding(
-          padding: EdgeInsets.fromLTRB(16, shrunk ? 6 : 12, 16, 2),
-          child: Text(text.toUpperCase(),
-              style: Mag.typewriter(10, color: scheme.onSurfaceVariant, bold: true)),
-        );
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (arranged.pinned.isNotEmpty) ...[
-          label('Pinned'),
-          for (final p in arranged.pinned) PlaylistRow(playlist: p, shrunk: shrunk),
-        ],
-        for (final s in arranged.shelves) FolderCard(shelf: s, shrunk: shrunk),
-        if (!arranged.flat && arranged.loose.isNotEmpty) label('Everything else'),
-        for (final p in arranged.loose)
-          if (!p.pinned) PlaylistRow(playlist: p, shrunk: shrunk),
-        if (app.playlists.isEmpty)
-          const Padding(
-            padding: EdgeInsets.all(32),
-            child: Center(child: Text('No playlists yet.')),
-          ),
-      ],
     );
   }
 }
@@ -123,10 +144,14 @@ class _Playlists extends StatelessWidget {
 /// left for the full size. The same row wherever a playlist is listed: loose in the
 /// library, behind a divider card, on a folder's page.
 class PlaylistRow extends StatelessWidget {
-  const PlaylistRow({super.key, required this.playlist, this.shrunk = false});
+  const PlaylistRow({super.key, required this.playlist, this.shrunk = false, this.under});
 
   final Playlist playlist;
   final bool shrunk;
+
+  /// The folder it is behind, said on the row when the dividers are not drawn — in
+  /// a search, where what matches is one flat list.
+  final String? under;
 
   @override
   Widget build(BuildContext context) {
@@ -167,6 +192,7 @@ class PlaylistRow extends StatelessWidget {
       // for every mirror on the screen, and it was crowding out the counts that
       // differ. The service is already on the row as an icon.
       subtitle: shrunk ? null : Text([
+        if (under != null) 'in $under',
         '${p.itemCount} tracks',
         // Somebody else's, kept here. Whose it is belongs on the row: a list
         // you cannot change is confusing until you can see it is not yours.

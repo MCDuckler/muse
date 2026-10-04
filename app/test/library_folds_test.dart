@@ -128,6 +128,7 @@ void main() {
       asked.any((r) => r.method == method && r.url.path == path);
 
   testWidgets('a section shrinks to a strip, and closes to its head', (tester) async {
+    app.decidedSections = {'contents'};
     await show(tester, const LibraryPage());
     expect(find.text('Everything, sortable'), findsOneWidget);
 
@@ -139,26 +140,35 @@ void main() {
     expect(app.shrunkSections, contains('contents'));
 
     expect(find.text('No playlists yet.'), findsOneWidget);
-    await tester.tap(find.text('PLAYLISTS'));
-    await tester.pumpAndSettle();
-    expect(find.text('No playlists yet.'), findsNothing);
-    expect(find.text('PLAYLISTS'), findsOneWidget, reason: 'the head stays');
+    expect(find.text('PLAYLISTS'), findsOneWidget);
 
     // Remembered on this device.
     final prefs = await SharedPreferences.getInstance();
-    expect(prefs.getStringList('muse.library.closed'), contains('playlists'));
     expect(prefs.getStringList('muse.library.shrunk'), contains('contents'));
+    expect(prefs.getStringList('muse.library.decided'), contains('contents'));
+  });
 
-    await tester.tap(find.text('PLAYLISTS'));
+  testWidgets('the contents page starts as a strip on a phone, cards once opened out',
+      (tester) async {
+    await show(tester, const LibraryPage());
+    expect(find.text('Everything, sortable'), findsNothing,
+        reason: 'a phone that nobody has sized the section on gets the strip');
+    expect(find.text('22,815'), findsOneWidget);
+    await tester.tap(find.byTooltip('Show it in full').first);
     await tester.pumpAndSettle();
-    expect(find.text('No playlists yet.'), findsOneWidget);
+    expect(find.text('Everything, sortable'), findsOneWidget);
+    expect(app.decidedSections, contains('contents'));
   });
 
   testWidgets('every connected service, its lists, and a button to mirror one',
       (tester) async {
     await show(tester, const LibraryPage());
     await tester.pumpAndSettle();
+    // A line in the library; the lists themselves are a page behind it.
     expect(find.text('FROM YOUR SERVICES'), findsOneWidget);
+    expect(find.text('SPOTIFY'), findsNothing);
+    await tester.tap(find.text('FROM YOUR SERVICES'));
+    await tester.pumpAndSettle();
     expect(find.text('SPOTIFY'), findsOneWidget);
     expect(find.text('YOUTUBE MUSIC'), findsOneWidget);
     expect(find.text('SOUNDCLOUD'), findsOneWidget);
@@ -188,11 +198,8 @@ void main() {
     expect(find.textContaining('38 of 40 songs'), findsOneWidget);
   });
 
-  testWidgets('a closed shelf asks the services nothing', (tester) async {
-    SharedPreferences.setMockInitialValues({
-      'muse.library.closed': ['services'],
-    });
-    app.closedSections = {'services'};
+  testWidgets('the library asks the services nothing until their page is opened',
+      (tester) async {
     await show(tester, const LibraryPage());
     await tester.pumpAndSettle();
     expect(find.text('FROM YOUR SERVICES'), findsOneWidget);
@@ -208,6 +215,8 @@ void main() {
   testWidgets('with nothing connected, the way to connect something', (tester) async {
     linked = false;
     await show(tester, const LibraryPage());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('FROM YOUR SERVICES'));
     await tester.pumpAndSettle();
     expect(find.text('CONNECT A SERVICE'), findsOneWidget);
   });

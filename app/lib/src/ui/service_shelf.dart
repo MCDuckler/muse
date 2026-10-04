@@ -11,8 +11,10 @@ import 'fold.dart';
 import 'library_page.dart' show PlaylistPage;
 import 'mag.dart';
 import 'mag_parts.dart';
+import 'mini_player.dart';
 import 'motion.dart';
 import 'pane.dart';
+import 'record_refresh.dart';
 import 'services_page.dart';
 import 'snack.dart';
 
@@ -109,7 +111,10 @@ class _Remote {
 /// playlists now, and asks the services nothing while it is closed: a Spotify account
 /// can hold four hundred lists, and each service is a request to somebody else.
 class ServiceShelf extends StatefulWidget {
-  const ServiceShelf({super.key});
+  const ServiceShelf({super.key, this.inFold = true});
+
+  /// In the library it was a fold among folds. On its own page it is the page.
+  final bool inFold;
 
   /// Pulled to refresh: everything asked again rather than kept.
   static final again = ValueNotifier<int>(0);
@@ -322,11 +327,13 @@ class _ServiceShelfState extends State<ServiceShelf> {
   }
 
   @override
-  Widget build(BuildContext context) => LibraryFold(
-        id: 'services',
-        title: 'From your services',
-        builder: _body,
-      );
+  Widget build(BuildContext context) => widget.inFold
+      ? LibraryFold(
+          id: 'services',
+          title: 'From your services',
+          builder: _body,
+        )
+      : _body(context, false);
 
   Widget _body(BuildContext context, bool shrunk) {
     // Asked the first time the shelf is open, and not before.
@@ -652,4 +659,27 @@ class _Trouble extends StatelessWidget {
       ),
     );
   }
+}
+
+
+/// Every service's lists on a page of their own: a shopping list, not the collection,
+/// and the longest thing the library page used to carry.
+class ServiceListsPage extends StatelessWidget {
+  const ServiceListsPage({super.key});
+
+  @override
+  Widget build(BuildContext context) => PlayerScaffold(
+        appBar: AppBar(title: const Text('From your services')),
+        body: RecordRefresh(
+          onRefresh: () async {
+            ServiceShelf.again.value++;
+            await context.read<AppState>().refreshPlaylists();
+          },
+          child: ListView(
+            padding: EdgeInsets.fromLTRB(8, 4, 8, bottomForPlayer(context)),
+            physics: const AlwaysScrollableScrollPhysics(),
+            children: const [ServiceShelf(inFold: false)],
+          ),
+        ),
+      );
 }

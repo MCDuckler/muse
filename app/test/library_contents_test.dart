@@ -50,6 +50,7 @@ void main() {
           headers: {'content-type': 'application/json'});
     }));
     app = AppState()..api = (ApiClient(baseUrl: 'http://example.invalid')..token = 'x');
+    app.decidedSections = {'contents'};
   });
 
   tearDown(() => useThisClientInstead(http.Client()));

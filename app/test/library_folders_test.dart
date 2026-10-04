@@ -171,7 +171,7 @@ void main() {
     expect(find.text('New folder…'), findsOneWidget);
     await tester.tap(find.text('New folder…'));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField), 'Fresh');
+    await tester.enterText(find.byType(TextField).last, 'Fresh');
     await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
     final made = asked.lastWhere((r) => r.url.path == '/playlist-folders' && r.method == 'POST');

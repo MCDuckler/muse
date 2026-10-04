@@ -17,7 +17,8 @@ import 'dialogs.dart' show Roomy;
 import 'feel.dart';
 import 'found_row.dart';
 import 'song_row.dart';
-import 'library_page.dart' show SmartListPage;
+import 'library_page.dart' show SmartListPage, PlaylistPage;
+import 'folders.dart' show FolderPage;
 import 'motion.dart';
 import 'pane.dart';
 import 'selection_bar.dart';
@@ -47,6 +48,10 @@ class SearchPage extends StatefulWidget {
 /// box is a momentary thing, not a piece of the app's condition, and asking twice in
 /// a row has to work, which a boolean cannot do.
 final ValueNotifier<int> searchWanted = ValueNotifier<int>(0);
+
+/// A question handed over from another screen: the words, and where to look. The
+/// library's own search box finds playlists; what it cannot find it hands here.
+final ValueNotifier<({String query, String where})?> searchAsked = ValueNotifier(null);
 
 class _SearchPageState extends State<SearchPage> {
   final _controller = TextEditingController();
@@ -106,6 +111,7 @@ class _SearchPageState extends State<SearchPage> {
     'video': 'Videos',
     'album': 'Records',
     'artist': 'Artists',
+    'playlist': 'Playlists',
   };
 
   /// Long enough not to fire on every keystroke, short enough that the results feel
@@ -121,7 +127,20 @@ class _SearchPageState extends State<SearchPage> {
     // shortcuts take up and down to mean "start and end of the line".
     _focus.onKeyEvent = _keys;
     searchWanted.addListener(_wanted);
+    searchAsked.addListener(_asked);
     unawaited(_loadRecent());
+    if (searchAsked.value != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _asked());
+    }
+  }
+
+  /// Another screen asked something on this one's behalf.
+  void _asked() {
+    final asked = searchAsked.value;
+    if (asked == null || !mounted) return;
+    searchAsked.value = null;
+    setState(() => _where = asked.where);
+    _searchAgainFor(asked.query);
   }
 
   /// Somebody pressed the slash key. Take the cursor, and select what is already
@@ -232,6 +251,7 @@ class _SearchPageState extends State<SearchPage> {
   void dispose() {
     _debounce?.cancel();
     searchWanted.removeListener(_wanted);
+    searchAsked.removeListener(_asked);
     _controller.dispose();
     _results.dispose();
     _focus.dispose();
@@ -356,6 +376,23 @@ class _SearchPageState extends State<SearchPage> {
               artist: ArtistSummary(
                   name: found.title,
                   tracks: found.place == 'library' ? found.tracks ?? 0 : 0))));
+      return;
+    }
+
+    // A playlist or a folder of yours: the library's own things, found from here.
+    if (found.kind == 'playlist') {
+      final id = int.tryParse(found.id);
+      if (id != null) {
+        navigator.push(MaterialPageRoute(
+            builder: (_) => PlaylistPage(playlistId: id, name: found.title)));
+      }
+      return;
+    }
+    if (found.kind == 'folder') {
+      final id = int.tryParse(found.id);
+      if (id != null) {
+        navigator.push(MaterialPageRoute(builder: (_) => FolderPage(folderId: id)));
+      }
       return;
     }
 
@@ -658,6 +695,8 @@ class _SearchPageState extends State<SearchPage> {
         'video' => 'Videos',
         'album' => 'Records',
         'artist' => 'Artists',
+        'playlist' => 'Playlists',
+        'folder' => 'Folders',
         _ => kind,
       }));
       for (final f in group) {
@@ -1261,6 +1300,8 @@ class _TopResult extends StatelessWidget {
       'album' => 'Record',
       'artist' => 'Artist',
       'video' => 'Video',
+      'playlist' => 'Playlist',
+      'folder' => 'Folder',
       _ => 'Song',
     };
     // The card is a row like the others, with a bigger picture: it can be pushed

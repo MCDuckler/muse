@@ -697,6 +697,7 @@ class Playlist {
   final int? placePos;
   final bool pinned;
   final DateTime? lastOpenedAt;
+  final DateTime? createdAt;
 
   const Playlist({
     required this.id,
@@ -723,6 +724,7 @@ class Playlist {
     this.placePos,
     this.pinned = false,
     this.lastOpenedAt,
+    this.createdAt,
     bool? editable,
   }) : editable = editable ??
             ((kind == 'local' || kind == 'favourites') && mine);
@@ -759,6 +761,9 @@ class Playlist {
         pinned: j['pinned'] == true,
         lastOpenedAt: j['last_opened_at'] is String
             ? DateTime.tryParse(j['last_opened_at'] as String)
+            : null,
+        createdAt: j['created_at'] is String
+            ? DateTime.tryParse(j['created_at'] as String)
             : null,
       );
 

@@ -21,6 +21,7 @@ class LibraryFold extends StatelessWidget {
     this.actions = const [],
     this.top = 24,
     this.canShrink = true,
+    this.shrunkByDefault = false,
   });
 
   /// What the fold is remembered under. Stable: renaming a section must not open it.
@@ -37,10 +38,16 @@ class LibraryFold extends StatelessWidget {
   final double top;
   final bool canShrink;
 
+  /// How it starts on a screen where nobody has sized it yet. The contents page is
+  /// a strip on a phone until somebody opens it out, and cards on a desk.
+  final bool shrunkByDefault;
+
   @override
   Widget build(BuildContext context) {
     final closed = context.select<AppState, bool>((a) => a.closedSections.contains(id));
-    final shrunk = context.select<AppState, bool>((a) => a.shrunkSections.contains(id));
+    final shrunk = context.select<AppState, bool>((a) => a.decidedSections.contains(id)
+        ? a.shrunkSections.contains(id)
+        : shrunkByDefault || a.shrunkSections.contains(id));
     final app = context.read<AppState>();
     final scheme = Theme.of(context).colorScheme;
 
