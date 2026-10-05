@@ -35,7 +35,8 @@ from . import analysis, beats as _beats, pool
 
 log = logging.getLogger("muse.structure")
 
-VERSION = 4  # 4: the bar's one is the house's reading of it, not the tracker's vote over it
+VERSION = 5  # 5: the four-bar grid anchored on the drops, the stems' among them
+# 4: the bar's one is the house's reading of it, not the tracker's vote over it
 # 3: cues after a chorus or a drop; the plain cues on the new rule
 _RATE = _beats._RATE
 
@@ -419,18 +420,10 @@ def build(data_dir: pathlib.Path, track: dict, timing: dict,
     out["beats"] = beats_ms
     out["bar_starts_on"] = bar_on
 
-    if len(beats_ms) >= 8 and len(x) >= _RATE * 10:
-        # Everything the analysis derives from the bars, derived again on these bars.
-        env, low, _lowmid, _snare, _sub = _beats._onsets(x)
-        derived = analysis.add(
-            {"duration_ms": timing["duration_ms"], "tail_ms": timing.get("tail_ms", 0)},
-            x, beats_ms, bar_on, low, _beats._FPS)
-        for key in ("key", "camelot", "key_confidence", "downbeats", "energy", "four_bars",
-                    "phrases", "drops", "cues", "sound"):
-            if key in derived:
-                out[key] = derived[key]
-    downbeats = list(out.get("downbeats") or [])
-
+    # The bars, and what each part of the record does in each: read first, because the
+    # drums coming back after a breakdown is the surest drop there is, and the four-bar
+    # grid is anchored on the drops (analysis.add).
+    downbeats = [int(b) for b in beats_ms[bar_on::4]]
     structure: dict = {"version": VERSION, "sources": sources}
     mix_db = bar_db(x, downbeats) if downbeats else []
     drums_db = rest_db = vocals_db = None
@@ -445,6 +438,20 @@ def build(data_dir: pathlib.Path, track: dict, timing: dict,
         except (subprocess.SubprocessError, OSError) as e:
             log.warning("could not read the stems of %s: %s", track.get("sha256", "")[:12], e)
             sources["stems"] = False
+    sections = label_bars(mix_db, drums_db, vocals_db) if mix_db else []
+    anchors = [s["start_bar"] for s in sections if s["label"] == "drop"] if drums_db is not None else []
+
+    if len(beats_ms) >= 8 and len(x) >= _RATE * 10:
+        # Everything the analysis derives from the bars, derived again on these bars.
+        env, low, _lowmid, _snare, _sub = _beats._onsets(x)
+        derived = analysis.add(
+            {"duration_ms": timing["duration_ms"], "tail_ms": timing.get("tail_ms", 0)},
+            x, beats_ms, bar_on, low, _beats._FPS, anchors=anchors)
+        for key in ("key", "camelot", "key_confidence", "downbeats", "energy", "four_bars",
+                    "phrases", "drops", "cues", "sound"):
+            if key in derived:
+                out[key] = derived[key]
+    downbeats = list(out.get("downbeats") or downbeats)
     structure.update({
         "bars_ms": downbeats,
         "mix_db": mix_db,
@@ -453,7 +460,6 @@ def build(data_dir: pathlib.Path, track: dict, timing: dict,
         "vocals_db": vocals_db,
         "lufs": track.get("loudness_lufs"),
     })
-    sections = label_bars(mix_db, drums_db, vocals_db) if mix_db else []
     for s in sections:
         s["start_ms"] = downbeats[s["start_bar"]]
         s["end_ms"] = downbeats[s["end_bar"]] if s["end_bar"] < len(downbeats) \

@@ -52,6 +52,14 @@ _GRID_FFT = 2048
 # the top of the record is believed before anything is heard.
 _GRID_SWITCH = 4.5
 _GRID_FROM_TOP = 1.0
+# What a drop is worth to the grid: the grid passes through it. A drop is where the
+# record opens up, the one bar a DJ is surest is on a phrase — and measured over the
+# library, 770 of 8,618 drops sat exactly two bars off a marker, in records whose grid
+# never moved: no one change could pay for the move, not even the drop itself (Call Me
+# Maybe's chorus at bar 14 against markers at 12 and 16, with the later ones at 44 and
+# 76 on the grid). More than two moves' worth, so the grid moves onto the drop and
+# stays there until the record itself says otherwise.
+_GRID_ANCHOR = 3.0 * _GRID_SWITCH
 
 # A bar has to be this much of the song's loudest to count as the song being "on".
 _ON = 0.6
@@ -278,7 +286,7 @@ def changes(spectra: np.ndarray, energy_db: np.ndarray) -> np.ndarray:
     return out
 
 
-def four_bars(strength: np.ndarray) -> list[int]:
+def four_bars(strength: np.ndarray, anchors: list[int] | None = None) -> list[int]:
     """The bars the record's four-bar grid is on: the markers a DJ lines two records
     up by, and what the booth mixes on.
 
@@ -293,7 +301,8 @@ def four_bars(strength: np.ndarray) -> list[int]:
     early. It moves on a clear change, which is where the new section starts.
     With nothing to go by, the grid is counted from the top. The best path through the
     four is found in one pass (Viterbi), and every bar four on from where its grid
-    starts is a marker.
+    starts is a marker. The [anchors] — the bars the record drops on — are markers
+    whatever else the record does (_GRID_ANCHOR).
     """
     n = len(strength)
     if n == 0:
@@ -307,6 +316,9 @@ def four_bars(strength: np.ndarray) -> list[int]:
     for i in range(2, n - 2):
         if strength[i] >= threshold and strength[i] == strength[max(0, i - 2):i + 3].max():
             votes[i] = strength[i]
+    for a in anchors or []:
+        if 0 <= a < n:
+            votes[a] = max(votes[a], _GRID_ANCHOR)
     score = np.array([_GRID_FROM_TOP, 0.0, 0.0, 0.0])
     back = np.zeros((n, 4), dtype=np.int64)
     for i in range(n):
@@ -361,7 +373,7 @@ def phrases(rows: np.ndarray, markers: list[int] | None = None) -> list[int]:
     return found
 
 
-def drops(levels: list[int], phrase_bars: list[int]) -> list[int]:
+def drops(levels: list[int], phrase_bars: list[int], markers: list[int] | None = None) -> list[int]:
     """The bars where the song opens up: a breakdown, then everything at once.
 
     What a DJ is listening for and what makes a mix sound meant rather than merely
@@ -388,12 +400,19 @@ def drops(levels: list[int], phrase_bars: list[int]) -> list[int]:
         ]
         if after - before < max(rises) - 1e-9:
             continue
-        # Onto the phrase it belongs to, where one is within a couple of bars.
+        # Onto the phrase it belongs to, where one is within a couple of bars; else
+        # onto the marker within a bar — the grid was anchored on this drop (add), on
+        # the bar near it where the sound changes most.
         at = b
         for p in phrase_bars:
             if abs(p - b) <= 2:
                 at = p
                 break
+        else:
+            for m in markers or []:
+                if abs(m - b) <= 1:
+                    at = m
+                    break
         if not found or at - found[-1] >= _DROP_SPAN:
             found.append(at)
     return found
@@ -517,8 +536,11 @@ def outro_start(energy_db: np.ndarray, drums: np.ndarray, novelty: np.ndarray,
 
 # ------------------------------------------------------------------ the whole of it
 def add(out: dict, x: np.ndarray, beats_ms: list[int], bar_starts_on: int,
-        low_env: np.ndarray, fps: float) -> dict:
-    """Write the song's key, bars, energy, phrases and cues into the beats' answer."""
+        low_env: np.ndarray, fps: float, anchors: list[int] | None = None) -> dict:
+    """Write the song's key, bars, energy, phrases and cues into the beats' answer.
+    [anchors] are bars the caller knows the record drops on (the drums coming back,
+    read off the stems in structure.py): markers of the four-bar grid, with the drops
+    the energy alone finds."""
     out.update(key_of(chroma(x)))
     if len(beats_ms) < 8:
         return out
@@ -530,11 +552,17 @@ def add(out: dict, x: np.ndarray, beats_ms: list[int], bar_starts_on: int,
     spectra = bar_spectra(x, downbeats)
     out["sound"] = sound_of(spectra, energy_db)
     novelty = changes(spectra, energy_db)
-    markers = four_bars(novelty)
+    # The drops as the energy alone finds them anchor the grid — each put on the bar
+    # within one where the sound changes most, since eight-bar means of the loudness
+    # place a step a bar early or late — and then they are found again, on the phrases
+    # that grid gives.
+    sharp = [max(0, b - 1) + int(np.argmax(novelty[max(0, b - 1):b + 2])) for b in drops(levels, [])
+             if b < len(novelty)]
+    markers = four_bars(novelty, sorted(set(sharp + list(anchors or []))))
     out["four_bars"] = [int(downbeats[b]) for b in markers if b < len(downbeats)]
     phrase_bars = phrases(rows, markers)
     out["phrases"] = [int(downbeats[b]) for b in phrase_bars if b < len(downbeats)]
-    out["drops"] = [int(downbeats[b]) for b in drops(levels, phrase_bars)
+    out["drops"] = [int(downbeats[b]) for b in drops(levels, phrase_bars, markers)
                     if b < len(downbeats)]
     where = sections(phrase_bars, levels, len(levels), markers)
     outro, out["mix_out_why"] = outro_start(

@@ -45,13 +45,14 @@ from . import analysis
 # 6: an exact grid carried on to where the sound starts and ends (the tracker lost the
 #    first two or three beats of nearly every record, and with them its first bar),
 #    and the four-bar markers where the record's sections start (four_bars).
-VERSION = 12  # 9: a record too busy for the tempo found is counted at the double; 10: and one read in threes is stepped up into the break it is (116 was two thirds of 174)
+VERSION = 13  # 9: a record too busy for the tempo found is counted at the double; 10: and one read in threes is stepped up into the break it is (116 was two thirds of 174)
 # 11: the beat and not the off-beat, by the snare and the sub-bass where the bass is on
 #     the "and"; and no step down a third from a tempo already busy enough to be the count.
 # 12: the tracker's word (Beat This!, handed in by the pool) in the house's own reading:
 #     its tempo family where the house locked onto two thirds or four thirds of the pulse,
 #     its beat where the house's grid sat half a beat off it, and its beats where the
 #     house heard no pulse. See tracker_line and measure.
+# 13: the four-bar grid passes through the drops (analysis.four_bars anchors).
 
 _RATE = 11025
 _FFT = 1024

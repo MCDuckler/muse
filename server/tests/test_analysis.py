@@ -188,6 +188,21 @@ def test_one_fill_a_bar_early_does_not_move_the_grid():
     assert marks == list(range(0, 48, 4))
 
 
+def test_the_grid_passes_through_the_drop():
+    # A record counted from the top with a two-bar pre-chorus: the drop at bar 14 is
+    # the one change there is, and alone it could never pay for moving the grid.
+    strength = np.zeros(96)
+    strength[14] = 3.5
+    for b in (8, 44, 60, 76):
+        strength[b] = 3.0
+    assert analysis.four_bars(strength) == list(range(0, 96, 4)), "one change, no move"
+    marks = analysis.four_bars(strength, anchors=[14])
+    # (Before the drop the grid is counted back from it — 2, 6, 10 — which is what a
+    # DJ counting in to the drop does too; the one weak change at 8 does not outweigh
+    # that.) Then back onto the old grid where the record's later changes are on it.
+    assert 14 in marks and {44, 60, 76} <= set(marks), "on the drop, then on the sections"
+
+
 def test_a_grid_that_starts_late_is_found_from_the_start():
     # A record whose sections all start on bar 3, 11, 19 …: the markers run from bar 3.
     strength = np.zeros(40)
