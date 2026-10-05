@@ -14,7 +14,7 @@ from muse import beats, heavy
 def test_one_record_asked_for_at_once_is_worked_out_once(tmp_path, monkeypatch):
     calls = []
 
-    def slow(audio):
+    def slow(audio, neural=None):
         calls.append(audio)
         time.sleep(0.3)
         return {"bpm": 120.0, "beats": []}
@@ -35,7 +35,7 @@ def test_no_more_than_so_many_at_once(tmp_path, monkeypatch):
     running = []
     most = []
 
-    def slow(audio):
+    def slow(audio, neural=None):
         running.append(1)
         most.append(len(running))
         time.sleep(0.2)

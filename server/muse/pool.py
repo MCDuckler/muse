@@ -131,6 +131,13 @@ def keep_beats(data_dir: pathlib.Path, sha: str, raw: bytes) -> pathlib.Path:
         "downbeats_ms": found["downbeats_ms"],
     }, separators=(",", ":")))
     tmp.replace(dest)
+    # The house's own reading weighs the tracker's in (beats.measure), so one made
+    # before this arrived is thrown away and the record is listened to again — by the
+    # next to ask for it, or by the beats worker, which takes the unanalysed first.
+    from . import beats as _beats
+    _beats.cache_path(data_dir, sha).unlink(missing_ok=True)
+    db.run("""update tracks set analysed_at = null
+               from media m where m.track_id = tracks.id and m.sha256 = %s""", (sha,))
     return dest
 
 

@@ -45,9 +45,13 @@ from . import analysis
 # 6: an exact grid carried on to where the sound starts and ends (the tracker lost the
 #    first two or three beats of nearly every record, and with them its first bar),
 #    and the four-bar markers where the record's sections start (four_bars).
-VERSION = 11  # 9: a record too busy for the tempo found is counted at the double; 10: and one read in threes is stepped up into the break it is (116 was two thirds of 174)
+VERSION = 12  # 9: a record too busy for the tempo found is counted at the double; 10: and one read in threes is stepped up into the break it is (116 was two thirds of 174)
 # 11: the beat and not the off-beat, by the snare and the sub-bass where the bass is on
 #     the "and"; and no step down a third from a tempo already busy enough to be the count.
+# 12: the tracker's word (Beat This!, handed in by the pool) in the house's own reading:
+#     its tempo family where the house locked onto two thirds or four thirds of the pulse,
+#     its beat where the house's grid sat half a beat off it, and its beats where the
+#     house heard no pulse. See tracker_line and measure.
 
 _RATE = 11025
 _FFT = 1024
@@ -393,7 +397,8 @@ _BREAK_TEMPO = (165.0, 178.0)
 _BUSY_IN_THREES = 2.0
 
 
-def _level(x: np.ndarray, bpm: float, env: np.ndarray | None = None) -> float:
+def _level(x: np.ndarray, bpm: float, env: np.ndarray | None = None,
+           octaves_only: bool = False) -> float:
     """The pulse a DJ counts: the kick drum's, where the tempo found is half, double or
     one and a half times it.
 
@@ -459,6 +464,10 @@ def _level(x: np.ndarray, bpm: float, env: np.ndarray | None = None) -> float:
             # handing that small number on as what has to be beaten made the triplet
             # step below trivial to pass — a break at 174 came out at 116.
             best, kept = bpm * 2, max(s2, kept)
+    # Seeded by the tracker's tempo (measure), the family is settled and only the octave
+    # is the house's to decide: no triplet step.
+    if octaves_only:
+        return best
     # The triplet step, either way: only on clear evidence, and never out of a break.
     #
     # Two thirds of a hundred and seventy-four is a hundred and sixteen, and that is
@@ -787,8 +796,121 @@ def _bar_starts_on(beats: np.ndarray, low: np.ndarray) -> int:
     return int(np.argmax(weight))
 
 
+# ------------------------------------------------------------------ the tracker's word
+# The trained tracker (Beat This!, run by the pool's computers — beat_net.dart — and kept
+# by pool.keep_beats) hears the music; the house's arithmetic hears the envelope. Where
+# the two disagree about the *family* of the tempo — the house locked onto two thirds or
+# four thirds of the pulse, and then doubled or halved that — the tracker is right nearly
+# every time: measured over the library, 678 records sat at 4/3, 2/3, 3/2 or 3/4 of the
+# tracker's count (Erasure at 170.9 for 115, Spray at 178.66 for 134), and the titles say
+# the house was wrong on all of those checked. Which *octave* of that family a DJ counts is
+# still the house's to decide: the tracker halves drum & bass and rap and doubles some
+# pop, and the house's rules for that (_level) were measured on exactly those.
+#
+# The tracker's beats are only as fine as its frames (20 ms) and its minimal peak picking
+# doubles a beat here and misses one there — half the library's readings have ten or
+# more such steps — so what is taken from it is never its beats one by one but one line
+# through them, and it is believed only where most of its beats sit on that line.
+_TRACKER_REGULAR = 0.8          # share of its beats one period from the last
+_TRACKER_ON_LINE = 0.15         # median distance from the line, in periods
+
+
+def tracker_line(beats_ms: list[int] | None) -> dict | None:
+    """The tracker's reading as one line — {"period_ms", "at0_ms", "bpm"} — where it is
+    steady enough to be one; None where it is not (a band, a tempo change, or a reading
+    that is mostly noise). A beat the tracker doubled or missed is still on the line, at
+    its own count of the period, and does not count against it."""
+    if not beats_ms or len(beats_ms) < 32:
+        return None
+    nb = np.array(beats_ms, dtype=float)
+    ibi = np.diff(nb)
+    period = float(np.median(ibi))
+    if period <= 0:
+        return None
+    regular = float(np.mean(np.abs(ibi / period - 1.0) < 0.1))
+    if regular < _TRACKER_REGULAR:
+        return None
+    # Each beat at its own count of the period: a doubled beat is half a step on, a
+    # missed one two. (Rounded to whole steps, a run of doubled beats stood still and
+    # broke the line for the rest of the record.) Then the line through the beats that
+    # sit on whole counts, fitted again at those counts.
+    steps = np.round(2.0 * ibi / period) / 2.0
+    k = np.concatenate([[0.0], np.cumsum(steps)])
+    period, at0 = np.polyfit(k, nb, 1)
+    if period <= 0:
+        return None
+    # The beat's phase: the beats on whole counts of that line, or those half a count
+    # from it, whichever there are more of — a tracker that heard the first beat on the
+    # "and", or changed its mind about the beat for a breakdown, has the rest of its
+    # beats half a count off its own first one. How many sit on the phase taken is how
+    # far the tracker's *beat* (as against its tempo) is to be believed: phase_share.
+    count = (nb - at0) / period
+    on = np.abs(count - np.round(count)) < 0.25
+    if float(on.mean()) < 0.5:
+        count = count - 0.5
+        on = np.abs(count - np.round(count)) < 0.25
+    k = np.round(count[on])
+    period, at0 = np.polyfit(k, nb[on], 1)
+    if period <= 0:
+        return None
+    residual = np.abs(nb[on] - (at0 + period * k))
+    if float(np.median(residual)) > _TRACKER_ON_LINE * period:
+        return None
+    return {"period_ms": float(period), "at0_ms": float(at0), "bpm": 60000.0 / float(period),
+            "phase_share": round(float(on.mean()), 3)}
+
+
+def _same_family(bpm: float, tracker_bpm: float) -> bool:
+    """Whether [bpm] is the tracker's tempo or an octave of it."""
+    return any(abs(bpm / (tracker_bpm * m) - 1.0) < 0.03 for m in (0.5, 1.0, 2.0))
+
+
+def _tracker_tempo(env: np.ndarray, x: np.ndarray, tracker_bpm: float) -> float:
+    """The tempo to count the record at, given the tracker's: the tracker's own count
+    where it is one a DJ would (70 to 190) — it has heard the music, and the house's
+    "tapped" prior of 80 to 160 is what halved the break it read at 174 — else the
+    octave of it the envelope repeats at within that range; then the house's own
+    octave rules (_level) on top: the kick on every beat of the double, the busy break.
+    The same path the house takes for a record it read right in the first place."""
+    if 70.0 <= tracker_bpm <= 190.0:
+        return _level(x, tracker_bpm, env, octaves_only=True)
+    candidates = [tracker_bpm * m for m in (0.5, 2.0) if 55.0 <= tracker_bpm * m <= 210.0]
+    if not candidates:
+        return tracker_bpm
+    span = min(len(env), int(_FPS * 240))
+    start = (len(env) - span) // 2
+    ac = _autocorrelation(env[start:start + span])
+
+    def at(b: float) -> float:
+        lag = 60.0 * _FPS / b
+        lo, hi = int(lag * 0.96), int(lag * 1.04) + 1
+        return float(ac[lo:hi].max()) if 0 < lo < hi < len(ac) else 0.0
+
+    strength = {b: at(b) for b in candidates}
+    tapped = [b for b in candidates if 80.0 <= b < 160.0]
+    best = max(candidates, key=strength.get)
+    if tapped and strength[tapped[0]] >= 0.3 * strength[best]:
+        best = tapped[0]
+    return _level(x, best, env, octaves_only=True)
+
+
+def _line_beats(line: dict, from_ms: float, to_ms: float) -> np.ndarray:
+    """The tracker's line as beats, in milliseconds, from where the sound starts to
+    where it ends."""
+    period, at0 = line["period_ms"], line["at0_ms"]
+    first = int(np.ceil((max(0.0, from_ms - 40.0) - at0) / period))
+    last = int(np.floor((to_ms - at0) / period))
+    return at0 + period * np.arange(first, last + 1)
+
+
+def _frames_of(at_ms: np.ndarray) -> np.ndarray:
+    return np.round((at_ms * _RATE / 1000.0 - _ONSET_AT) / _HOP).astype(np.int64)
+
+
 # ------------------------------------------------------------------ the whole of it
-def measure(audio: pathlib.Path) -> dict:
+def measure(audio: pathlib.Path, neural: dict | None = None) -> dict:
+    """What the record is made of in time; with the tracker's reading ([neural], as
+    pool.keep_beats kept it) weighed in where there is one — see tracker_line."""
     duration = _duration_s(audio)
     out: dict = {
         "version": VERSION, "duration_ms": int(duration * 1000),
@@ -823,27 +945,57 @@ def measure(audio: pathlib.Path) -> dict:
         return out
     env, low, lowmid, snare, sub = _onsets(x)
     bands = {"lowmid": lowmid, "snare": snare, "sub": sub}
+    sound_end = duration * 1000 - tail
+    line = tracker_line((neural or {}).get("beats_ms"))
+    # Its tempo is believed where there is a line at all; its beat only where most of
+    # its beats sit on the one phase of that line.
+    sure_of_the_beat = bool(line) and line["phase_share"] >= _TRACKER_REGULAR
+    if neural is not None:
+        out["tracker"] = {"bpm": round(line["bpm"], 2) if line else None,
+                          "steady": line is not None, "took": []}
+
+    def from_the_tracker() -> dict:
+        """The tracker's line as the record's beats, where the house heard no pulse."""
+        at_ms = np.maximum(_line_beats(line, lead, sound_end), 0.0)
+        if len(at_ms) < 8:
+            return analysis.add(out, x, [], 0, low, _FPS)
+        out["tracker"]["took"].append("beats")
+        out["bpm"] = round(line["bpm"], 2)
+        out["grid"] = True
+        out["beats"] = [int(round(ms)) for ms in at_ms]
+        by_change = _bar_starts_on_by_change(x, at_ms)
+        out["bar_starts_on"] = by_change if by_change is not None else _bar_starts_on(_frames_of(at_ms), low)
+        return analysis.add(out, x, out["beats"], out["bar_starts_on"], low, _FPS)
+
     bpm, confidence = _tempo(env)
     out["confidence"] = round(confidence, 3)
     # Below this the envelope does not repeat at any tempo: there is no pulse to find,
     # and beats laid over it anyway would be a metronome that ignores the music.
     if bpm <= 0 or confidence < 0.12:
-        return analysis.add(out, x, [], 0, low, _FPS)
+        return from_the_tracker() if sure_of_the_beat else analysis.add(out, x, [], 0, low, _FPS)
     # Refined first, so the half, the double and the triplet step are asked about at
     # exactly where they fall; refined again at whichever of them is the one.
     bpm = _refine(env, bpm)
     leveled = _level(x, bpm, env)
+    # The tracker's family where the house's is another: see tracker_line.
+    if line and not _same_family(leveled, line["bpm"]):
+        leveled = _tracker_tempo(env, x, line["bpm"])
+        out["tracker"]["took"].append("tempo")
     if abs(leveled - bpm) > 0.01:
-        bpm = _refine(env, leveled)
+        refined = _refine(env, leveled)
+        # Refined within the family taken, not out of it: the finer reading is looked
+        # for a fifth of a beat either side of the multiples, and on a record the
+        # envelope repeats at another count that is far enough to walk away.
+        bpm = refined if not line or _same_family(refined, line["bpm"]) else leveled
     beats = _track(env, bpm)
     beats = _on_the_beat(beats, low, 60.0 * _FPS / bpm, bands)
     # Only where there is music. The tracker walks back from the end of the file to the
     # start of it, and would count its way through the silence at either end too.
     at_ms = (beats * _HOP + _ONSET_AT) * 1000.0 / _RATE
-    sounding = (at_ms >= lead - 40) & (at_ms <= duration * 1000 - tail)
+    sounding = (at_ms >= lead - 40) & (at_ms <= sound_end)
     beats, at_ms = beats[sounding], at_ms[sounding]
     if len(beats) < 8:
-        return analysis.add(out, x, [], 0, low, _FPS)
+        return from_the_tracker() if sure_of_the_beat else analysis.add(out, x, [], 0, low, _FPS)
     # Whether the beats found are where the onsets are. On a song with a pulse they sit
     # on the peaks of the envelope; laid over something with none, they sit wherever
     # the spacing put them, and the envelope there is no higher than anywhere else.
@@ -851,18 +1003,31 @@ def measure(audio: pathlib.Path) -> dict:
     between = float(np.mean(env)) + 1e-9
     out["contrast"] = round(on_beat / between, 2)
     if out["contrast"] < _PULSE_CONTRAST:
-        return analysis.add(out, x, [], 0, low, _FPS)
+        return from_the_tracker() if sure_of_the_beat else analysis.add(out, x, [], 0, low, _FPS)
     # One exact grid where the record keeps one tempo, which is what the booth holds two
     # records together by; the beats as tracked where it does not.
     grid = _one_grid(env, low, 60.0 * _FPS / bpm, int(beats[0]), int(beats[-1]) + 1, bands)
     if grid is not None:
-        grid = _to_the_ends(grid, lead, duration * 1000 - tail)
+        grid = _to_the_ends(grid, lead, sound_end)
         at_ms = (grid * _HOP + _ONSET_AT) * 1000.0 / _RATE
         beats = np.round(grid).astype(np.int64)
         out["grid"] = True
     # The tempo as the beats actually came out — a line through all of them, which is
     # far finer than the spacing of two, counted in frames of 11 ms.
     slope = float(np.polyfit(np.arange(len(at_ms)), at_ms, 1)[0])
+    # The beat and not the and: where the tracker counts the same tempo and hears the
+    # beat half a beat from where the house put it, the house moves. Evenly spaced and
+    # on onsets is as true of the off-beats, and the tracker has heard the music.
+    if sure_of_the_beat and abs(60000.0 / slope / line["bpm"] - 1.0) < 0.03:
+        phase = ((at_ms - line["at0_ms"]) / line["period_ms"] + 0.5) % 1.0 - 0.5
+        if float(np.median(np.abs(phase))) > 0.35:
+            half = slope / 2
+            shift = half if at_ms[-1] + half <= sound_end or at_ms[0] - half < lead - 40 else -half
+            at_ms = at_ms + shift
+            keep = (at_ms >= lead - 40) & (at_ms <= sound_end)
+            at_ms = at_ms[keep]
+            beats = _frames_of(at_ms)
+            out["tracker"]["took"].append("beat")
     out["bpm"] = round(60000.0 / slope, 2)
     at_ms = np.maximum(at_ms, 0.0)
     out["beats"] = [int(round(ms)) for ms in at_ms]
@@ -875,7 +1040,7 @@ def for_track(data_dir: pathlib.Path, audio: pathlib.Path, sha: str,
               wait: float | None = 20.0) -> dict:
     """The song's timing, from disk if it has been worked out before; otherwise worked
     out in its turn (heavy.py), or heavy.Busy where the turn does not come in [wait]."""
-    from . import heavy
+    from . import heavy, pool
 
     cached = cache_path(data_dir, sha)
     try:
@@ -889,7 +1054,9 @@ def for_track(data_dir: pathlib.Path, audio: pathlib.Path, sha: str,
         except (OSError, ValueError):
             pass
         # Kept before the turn is let go of: the next to ask for it reads it from disk.
-        return _keep(cached, measure(audio))
+        # With the tracker's reading where the pool has handed one in; when one arrives
+        # later, pool.keep_beats throws this answer away so it is read again with it.
+        return _keep(cached, measure(audio, neural=pool.beats_here(data_dir, sha)))
 
 
 def _keep(cached: pathlib.Path, found: dict) -> dict:

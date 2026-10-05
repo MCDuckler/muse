@@ -10,7 +10,7 @@ import subprocess
 
 import pytest
 
-from muse import db, pool, structure
+from muse import beats, db, pool, structure
 
 
 # ------------------------------------------------------------------ by rule
@@ -193,8 +193,8 @@ def test_the_structure_is_served_and_built_again_as_parts_arrive(
     r = client.get(f"/tracks/{track['id']}/analysis?structure=1", headers=hdr)
     assert r.status_code == 200, r.text
     first = r.json()
-    assert first["structure"]["sources"] == {"beats": first["structure"]["sources"]["beats"],
-                                             "bar_phase": "house", "stems": False, "neural": False}
+    sources = first["structure"]["sources"]
+    assert sources["bar_phase"] in ("house", "change") and not sources["stems"] and not sources["neural"]
     assert first["structure"]["drums_db"] is None
     assert first["beats"], "the click train has a pulse"
 
@@ -252,5 +252,13 @@ def test_beats_handed_in_with_the_parts_are_checked(client, hdr, a_structured_re
     with pytest.raises(ValueError):
         pool.keep_beats(cfg.data_dir, sha, b"not json")
     good = json.dumps({"beats_ms": list(range(0, 5000, 500)), "downbeats_ms": [0, 2000, 4000]})
+    # A house reading made before the tracker's arrived is thrown away, and the record
+    # is listened to again: the beats worker takes the unanalysed first.
+    stale = beats.cache_path(cfg.data_dir, sha)
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text("{}")
+    db.run("update tracks set analysed_at = now() where id=%s", (track["id"],))
     pool.keep_beats(cfg.data_dir, sha, good.encode())
     assert pool.beats_here(cfg.data_dir, sha)["downbeats_ms"] == [0, 2000, 4000]
+    assert not stale.exists()
+    assert db.one("select analysed_at from tracks where id=%s", (track["id"],))["analysed_at"] is None

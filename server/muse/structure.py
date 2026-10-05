@@ -217,12 +217,11 @@ def _neural_line(neural: list[int], from_ms: int, to_ms: int) -> list[int]:
 
 
 def _steady(beats_ms: list[int]) -> bool:
-    """Whether beats keep one tempo closely enough to be a grid."""
-    if len(beats_ms) < 32:
-        return False
-    ibi = np.diff(np.array(beats_ms, dtype=float))
-    mid = ibi[len(ibi) // 8: -len(ibi) // 8 or None]
-    return float(np.std(mid) / np.mean(mid)) < 0.05
+    """Whether the tracker's beats keep one tempo closely enough to be a grid — one line
+    through them (beats.tracker_line), a beat it doubled or missed notwithstanding. The
+    spread of the intervals, as this was first read, threw out more than half the
+    library's readings over a handful of doubled beats each."""
+    return _beats.tracker_line(beats_ms) is not None
 
 
 # ------------------------------------------------------------------ sections

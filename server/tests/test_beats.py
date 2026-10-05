@@ -380,3 +380,72 @@ def test_a_bassline_on_the_and_does_not_pull_the_grid_onto_the_and(tmp_path):
     frac = [((b / 1000.0) / beat) % 1.0 for b in found["beats"][4:-4]]
     frac = [min(f, 1 - f) for f in frac]
     assert np.median(frac) < 0.15, f"beats sit {np.median(frac):.2f} of a beat from the kicks"
+
+
+# ------------------------------------------------------------------ the tracker's word
+def test_the_trackers_reading_is_one_line_despite_a_doubled_beat_or_two():
+    steady = [int(500 * k) for k in range(200)]
+    assert beats.tracker_line(steady)["bpm"] == pytest.approx(120, abs=0.01)
+    # A beat doubled here, one missed there — the way the tracker's peaks come out.
+    rough = sorted(set(steady[:50] + [steady[k] + 250 for k in range(50, 60)]
+                       + steady[60:120] + steady[122:]))
+    line = beats.tracker_line(rough)
+    assert line is not None and line["bpm"] == pytest.approx(120, abs=0.05)
+    assert line["phase_share"] > 0.9
+    # The tracker changed its mind about the beat for a stretch: the tempo is still
+    # its tempo, the beat is the one most of its beats are on, and it says how many.
+    flipped = steady[:120] + [b + 250 for b in steady[120:160]] + steady[160:]
+    line = beats.tracker_line(flipped)
+    assert line["bpm"] == pytest.approx(120, abs=0.05) and 0.75 < line["phase_share"] < 0.85
+    assert abs(line["at0_ms"]) < 20, "on the phase of the many, not the few"
+    rng = np.random.default_rng(1)
+    noise = sorted(int(x) for x in np.cumsum(rng.uniform(200, 900, 200)))
+    assert beats.tracker_line(noise) is None, "no line through a reading that is noise"
+    assert beats.tracker_line(steady[:20]) is None, "too few to say"
+
+
+def test_the_trackers_family_overrules_a_house_lock_on_a_third(tmp_path):
+    """The house read a record at four thirds of its pulse (178.66 for 134) and the
+    tracker, which has heard the music, said 134: the house counts the tracker's family
+    and keeps only the octave to itself."""
+    audio, _ = drums(100, 30, lead=0.0, tail=0.0)
+    f = tmp_path / "drums.wav"
+    f.write_bytes(audio)
+    x = beats._decode(f)
+    env = beats._onsets(x)[0]
+    assert not beats._same_family(100.0, 150.0) and beats._same_family(100.0, 200.0)
+    assert beats._same_family(178.66, 89.4) and not beats._same_family(178.66, 134.0)
+    counted = beats._tracker_tempo(env, x, 150.0)
+    assert counted in (pytest.approx(150, abs=0.01), pytest.approx(75, abs=0.01)), \
+        "the tracker's family, at whichever octave the house counts"
+    # (These drums have no pulse at 150 at all, so what the beats then do is not the
+    # question; that the house let go of its own count is.)
+    other = {"beats_ms": [int(400 * k) for k in range(75)]}            # the tracker: 150
+    found = beats.measure(f, other)
+    assert found["tracker"]["steady"] and "tempo" in found["tracker"]["took"]
+    assert found["bpm"] != pytest.approx(100, abs=2)
+    same = {"beats_ms": [int(300 * k) for k in range(100)]}            # the tracker: 200
+    found = beats.measure(f, same)
+    assert found["bpm"] == pytest.approx(100, abs=0.5) and found["tracker"]["took"] == [], \
+        "an octave of the house's own count is the house's to decide"
+    rng = np.random.default_rng(2)
+    noise = {"beats_ms": sorted(int(x) for x in np.cumsum(rng.uniform(200, 900, 100)))}
+    found = beats.measure(f, noise)
+    assert found["bpm"] == pytest.approx(100, abs=0.5) and not found["tracker"]["steady"], \
+        "a reading that is noise is written down as that and not believed"
+
+
+def test_the_trackers_beat_moves_a_grid_sitting_on_the_and(tmp_path):
+    audio, hits = drums(120, 30, lead=0.0, tail=0.0)
+    f = tmp_path / "drums.wav"
+    f.write_bytes(audio)
+    plain = beats.measure(f)
+    on_drums = [float(np.min(np.abs(np.array(hits) - b / 1000.0))) for b in plain["beats"][2:-2]]
+    assert max(on_drums) < 0.035
+    # The tracker hears the beat on the hats, half a beat from the drums.
+    other = {"beats_ms": [int(250 + 500 * k) for k in range(58)]}
+    found = beats.measure(f, other)
+    assert "beat" in found["tracker"]["took"]
+    off_drums = [float(np.min(np.abs(np.array(hits) - b / 1000.0))) for b in found["beats"][2:-2]]
+    assert min(off_drums) > 0.2, "every beat now sits half a beat from a drum"
+    assert found["bpm"] == pytest.approx(120, abs=0.5)
