@@ -1,7 +1,8 @@
 // When a phone's door to YouTube is open (worker/door_here_io.dart): while the app is on
 // the screen or playing, shut a minute after it is neither, never knocking again where it
 // was turned away, and opened afresh with a new token.
-import 'package:connectivity_plus/connectivity_plus.dart';
+import 'dart:io';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -46,6 +47,9 @@ class _Tunnel extends ExitTunnel {
     notifyListeners();
   }
 }
+
+(String, List<InternetAddress>) _if(String name, List<String> ips) =>
+    (name, [for (final ip in ips) InternetAddress(ip)]);
 
 void _tell(AppState app) {
   // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
@@ -152,10 +156,22 @@ void main() {
     door.dispose();
   });
 
+  test('Wi-Fi or the phone\'s data, by which interfaces have an address', () {
+    String n(List<(String, List<InternetAddress>)> up) => DoorHere.networkNamed(up);
+    expect(n([_if('lo0', ['127.0.0.1']), _if('pdp_ip0', ['10.1.2.3']),
+              _if('en0', ['192.168.1.20'])]), 'wifi', reason: 'an iPhone on Wi-Fi keeps its data up');
+    expect(n([_if('pdp_ip0', ['10.1.2.3']), _if('en0', ['fe80::1'])]), 'cellular',
+        reason: 'a link-local address is not a network');
+    expect(n([_if('rmnet_data0', ['2a01:598:1::5'])]), 'cellular');
+    expect(n([_if('ccmni1', ['10.0.0.9'])]), 'cellular');
+    expect(n([_if('wlan0', ['192.168.0.7']), _if('rmnet_data0', ['10.0.0.9'])]), 'wifi');
+    expect(n([_if('tun0', ['10.8.0.2'])]), 'unknown');
+    expect(n([]), 'none');
+  });
+
   testWidgets('tells the server when the network or the data rule changes', (tester) async {
     final door = await DoorHere.forTest(app, tunnel,
-        now: [ConnectivityResult.mobile],
-        changes: Stream.value([ConnectivityResult.wifi, ConnectivityResult.vpn]));
+        now: 'cellular', changes: Stream.value('wifi'));
     expect(door.hello()['network'], 'cellular');
     await tester.pump();
     expect(door.network, 'wifi');

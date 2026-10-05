@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -53,8 +52,7 @@ class DoorHere extends ChangeNotifier {
   /// With a tunnel and a network of the test's own, on any system.
   @visibleForTesting
   static Future<DoorHere> forTest(AppState app, ExitTunnel tunnel,
-      {List<ConnectivityResult> now = const [ConnectivityResult.wifi],
-      Stream<List<ConnectivityResult>> changes = const Stream.empty()}) async {
+      {String now = 'wifi', Stream<String> changes = const Stream.empty()}) async {
     _instance?.dispose();
     final d = _instance = DoorHere._(app);
     await d._init(tunnel: tunnel, now: now, changes: changes);
@@ -78,7 +76,7 @@ class DoorHere extends ChangeNotifier {
   bool _inFront = true;
   bool _playing = false;
   Timer? _shutting;
-  StreamSubscription<List<ConnectivityResult>>? _net;
+  StreamSubscription<String>? _net;
   StreamSubscription<PlayerSnapshot>? _heard;
   PlayerService? _watched;
   AppLifecycleListener? _life;
@@ -88,8 +86,8 @@ class DoorHere extends ChangeNotifier {
   String? _turnedAway;
   bool _gone = false;
 
-  Future<void> _init({ExitTunnel? tunnel, List<ConnectivityResult>? now,
-      Stream<List<ConnectivityResult>>? changes}) async {
+  Future<void> _init(
+      {ExitTunnel? tunnel, String? now, Stream<String>? changes}) async {
     final prefs = await SharedPreferences.getInstance();
     on = prefs.getBool(_kOn) ?? true;
     mobileData = prefs.getBool(_kData) ?? true;
@@ -113,13 +111,10 @@ class DoorHere extends ChangeNotifier {
         );
     if (tunnel == null) unawaited(_keepDir().then(DoorPuller.tidy).catchError((_) {}));
     this.tunnel.addListener(_tunnelChanged);
-    try {
-      network = _named(now ?? await Connectivity().checkConnectivity());
-    } catch (_) {
-      // No answer: the server treats an unknown network like a phone's data.
-    }
-    _net = (changes ?? Connectivity().onConnectivityChanged).listen((now) {
-      final n = _named(now);
+    network = now ?? await sniffNetwork();
+    _net = (changes ??
+            Stream<void>.periodic(const Duration(seconds: 30)).asyncMap((_) => sniffNetwork()))
+        .listen((n) {
       if (n == network) return;
       network = n;
       this.tunnel.sayHello();
@@ -163,12 +158,34 @@ class DoorHere extends ChangeNotifier {
   /// A song this phone fetched itself, where it is on the disk.
   String? pulledPath(int track) => puller.kept[track];
 
-  static String _named(List<ConnectivityResult> said) {
-    if (said.contains(ConnectivityResult.wifi)) return 'wifi';
-    if (said.contains(ConnectivityResult.ethernet)) return 'ethernet';
-    if (said.contains(ConnectivityResult.mobile)) return 'cellular';
-    if (said.isEmpty || said.every((r) => r == ConnectivityResult.none)) return 'none';
-    return 'unknown';
+  /// Wi-Fi or the phone's data, by the names of the interfaces that have an address.
+  ///
+  /// No plugin: the one there was asks iOS about satellite links, which only the newest
+  /// Xcode knows, and the iPhone build stopped building. This is all the server needs
+  /// it for: whether a song may come through this phone's own connection.
+  static Future<String> sniffNetwork() async {
+    try {
+      return networkNamed([
+        for (final i in await NetworkInterface.list()) (i.name, i.addresses),
+      ]);
+    } catch (_) {
+      return 'unknown';               // the server treats that like a phone's data
+    }
+  }
+
+  /// en0 is an iPhone's Wi-Fi and wlan an Android's; pdp_ip, rmnet and ccmni are
+  /// their data. Wi-Fi wins when both are up, as it does for the phone's own traffic.
+  @visibleForTesting
+  static String networkNamed(List<(String, List<InternetAddress>)> up) {
+    bool has(bool Function(String) named) => up.any((i) =>
+        named(i.$1) && i.$2.any((a) => !a.isLoopback && !a.isLinkLocal));
+    if (has((n) => n == 'en0' || n.startsWith('wlan'))) return 'wifi';
+    if (has((n) => n.startsWith('eth'))) return 'ethernet';
+    if (has((n) =>
+        n.startsWith('pdp_ip') || n.startsWith('rmnet') || n.startsWith('ccmni'))) {
+      return 'cellular';
+    }
+    return up.isEmpty ? 'none' : 'unknown';
   }
 
   void _tunnelChanged() {

@@ -3,7 +3,6 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
-  connectivity_plus
   desktop_drop
   flutter_midi_command_windows
   media_kit_libs_windows_audio
