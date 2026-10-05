@@ -9,6 +9,8 @@ Future<void> openDoorHere(AppState app) async {}
 
 Future<void> shutDoorHere() async {}
 
+String? doorPulledPath(int trackId) => null;
+
 Widget doorHereTile() => const SizedBox.shrink();
 
 Widget doorHereCard() => const SizedBox.shrink();

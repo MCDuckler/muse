@@ -10,6 +10,9 @@ import '../state/app_state.dart';
 import '../state/player.dart';
 import '../ui/mag.dart';
 import '../ui/mag_parts.dart';
+import 'package:path_provider/path_provider.dart';
+
+import 'door_pull.dart';
 import 'exit_tunnel.dart';
 
 /// Phones. A computer runs yt-dlp itself (this_computer_io.dart) and a browser cannot
@@ -60,6 +63,7 @@ class DoorHere extends ChangeNotifier {
 
   final AppState app;
   late final ExitTunnel tunnel;
+  late final DoorPuller puller;
 
   /// Fetch songs through this phone at all.
   bool on = true;
@@ -89,12 +93,25 @@ class DoorHere extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     on = prefs.getBool(_kOn) ?? true;
     mobileData = prefs.getBool(_kData) ?? true;
+    puller = DoorPuller(
+      baseUrl: () => app.api.baseUrl,
+      token: () => app.api.token,
+      keepDir: _keepDir,
+      onArrived: (track, _) {
+        notifyListeners();
+        // If the player is waiting on this one, it plays now, from this phone.
+        unawaited(app.player?.localArrived(track));
+      },
+      onSaid: (line) => debugPrint('door: $line'),
+    );
     this.tunnel = tunnel ??
         ExitTunnel(
           url: () => exitUrlFor(app.api.baseUrl),
           token: () => app.api.token,
           hello: hello,
+          onPull: pull,
         );
+    if (tunnel == null) unawaited(_keepDir().then(DoorPuller.tidy).catchError((_) {}));
     this.tunnel.addListener(_tunnelChanged);
     try {
       network = _named(now ?? await Connectivity().checkConnectivity());
@@ -128,7 +145,23 @@ class DoorHere extends ChangeNotifier {
         'mobile_data': mobileData,
         'platform': defaultTargetPlatform.name,
         'build': _build,
+        // It fetches a song itself when told where it is (door_pull.dart).
+        'pulls': 1,
       };
+
+  static Future<Directory> _keepDir() async => Directory(
+      '${(await getApplicationSupportDirectory()).path}${Platform.pathSeparator}pulled');
+
+  /// The server's word: fetch this song here.
+  void pull(Map<String, dynamic> order) {
+    final o = PullOrder.fromJson(order);
+    if (o == null) return;
+    notifyListeners();
+    unawaited(puller.pull(o).whenComplete(notifyListeners));
+  }
+
+  /// A song this phone fetched itself, where it is on the disk.
+  String? pulledPath(int track) => puller.kept[track];
 
   static String _named(List<ConnectivityResult> said) {
     if (said.contains(ConnectivityResult.wifi)) return 'wifi';
@@ -235,9 +268,11 @@ class DoorHere extends ChangeNotifier {
           ? 'Opening…'
           : 'Shut while WetOwl is in the background and quiet.',
       ExitState.connecting => 'Opening…',
-      ExitState.open => tunnel.streams > 0
-          ? 'Asking YouTube for a song right now.'
-          : 'Open. Songs you play that the house does not have come through here.',
+      ExitState.open => puller.working > 0
+          ? 'Fetching a song right now.'
+          : tunnel.streams > 0
+              ? 'Asking YouTube for a song right now.'
+              : 'Open. Songs you play that the house does not have come through here.',
       ExitState.waiting => 'Lost the server. Trying again.',
       ExitState.refused => tunnel.problem ?? 'The server said no.',
     };
@@ -267,6 +302,9 @@ Future<void> openDoorHere(AppState app) async {
 }
 
 Future<void> shutDoorHere() async => DoorHere.instance?.shut();
+
+/// A song this phone fetched itself, while it still has it.
+String? doorPulledPath(int trackId) => DoorHere.instance?.pulledPath(trackId);
 
 /// The settings row: what the door is doing, and the way to its switches.
 Widget doorHereTile() => const _DoorTile();
@@ -353,8 +391,8 @@ class _DoorCardState extends State<_DoorCard> with _Watching {
                 'YouTube only gives songs to a home or a phone connection, never to the '
                 'server. With this on, a song you play that the house does not have yet is '
                 'asked for through this phone, so it arrives with no computer switched on. '
-                'Asking costs about 400 KB. Usually the song itself comes through here too, '
-                'about 4 MB, and then it is the whole house’s.',
+                'Asking costs about 400 KB. Usually this phone then fetches the song itself, '
+                'about 4 MB, plays it straight away and hands the house its copy.',
                 style: typed),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
@@ -382,7 +420,8 @@ class _DoorCardState extends State<_DoorCard> with _Watching {
                     'ethernet' => 'On a cable',
                     'none' => 'No connection',
                     _ => 'Connection unknown',
-                  }} · ${t.opened} connections · ${_mb(t.bytes)} through this phone',
+                  }} · ${d.puller.pulled} fetched here · '
+                  '${_mb(t.bytes + d.puller.bytes)} through this phone',
                   style: typed),
             ),
           ],

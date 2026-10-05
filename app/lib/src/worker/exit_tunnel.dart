@@ -36,6 +36,9 @@ abstract final class ExitFrame {
   static const data = 4;
   static const close = 5;
   static const credit = 6;
+
+  /// From the server, on stream 0: a song for this phone to fetch itself (door_pull.dart).
+  static const pull = 7;
 }
 
 /// How much may be sent on one stream before hearing it arrived. Without it the
@@ -119,6 +122,7 @@ class ExitTunnel extends Told {
     ExitDial? dial,
     ExitConnect? connect,
     this.maxStreams = 6,
+    this.onPull,
   })  : _dial = dial ?? _defaultDial,
         _connect = connect ?? _defaultConnect;
 
@@ -129,6 +133,9 @@ class ExitTunnel extends Told {
   /// Asked again by [sayHello] whenever that changes.
   final Map<String, Object?> Function() hello;
   final int maxStreams;
+
+  /// Told what the server asks this phone to fetch itself.
+  final void Function(Map<String, dynamic> order)? onPull;
   final ExitDial _dial;
   final ExitConnect _connect;
 
@@ -290,6 +297,11 @@ class ExitTunnel extends Told {
             _wanted = false;
             _set(ExitState.refused);
           }
+        } catch (_) {}
+      case ExitFrame.pull when sid == 0:
+        try {
+          final order = jsonDecode(utf8.decode(payload));
+          if (order is Map<String, dynamic>) onPull?.call(order);
         } catch (_) {}
       case ExitFrame.open:
         if (payload.length < 3) return;

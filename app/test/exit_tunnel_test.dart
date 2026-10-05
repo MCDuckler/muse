@@ -241,6 +241,22 @@ void main() {
     await _until(() => house.doors == 2 && tunnel.state == ExitState.open);
   });
 
+  test('a song to fetch itself is passed on to whoever fetches', () async {
+    final orders = <Map<String, dynamic>>[];
+    tunnel = ExitTunnel(
+      url: () => house.url,
+      token: () => 'tok',
+      hello: () => {},
+      onPull: orders.add,
+    );
+    await tunnel.start();
+    await house.next((k, s) => k == ExitFrame.hello);
+    house.send(ExitFrame.pull, 0, utf8.encode(jsonEncode({'job': 3, 'track': 9})));
+    house.send(ExitFrame.pull, 0, utf8.encode('not json'));
+    await _until(() => orders.isNotEmpty);
+    expect(orders.single, {'job': 3, 'track': 9});
+  });
+
   test('stop shuts it and keeps it shut', () async {
     await tunnel.start();
     await house.next((k, s) => k == ExitFrame.hello);

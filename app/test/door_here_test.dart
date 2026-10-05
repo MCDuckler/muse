@@ -161,6 +161,7 @@ void main() {
     expect(door.network, 'wifi');
     expect(tunnel.hellos, 1);
 
+    expect(door.hello()['pulls'], 1, reason: 'it fetches a song itself when told where');
     await door.set(mobileData: false);
     expect(door.hello()['mobile_data'], false);
     expect(tunnel.hellos, 2);

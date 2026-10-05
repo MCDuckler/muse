@@ -11,7 +11,7 @@ import 'library_query.dart';
 
 import '../api/client.dart';
 import '../api/connection.dart';
-import '../worker/door_here.dart' show shutDoorHere;
+import '../worker/door_here.dart' show doorPulledPath, shutDoorHere;
 import '../worker/this_computer.dart' show fetchedHerePath, stopFetching;
 import '../api/models.dart';
 import 'eq_engines.dart';
@@ -1075,7 +1075,8 @@ class AppState extends ChangeNotifier {
     // The player reaches for a local file before the network — see _sourceFor.
     await offline.init();
     // Kept for the flight, or fetched on this computer a moment ago.
-    player!.offlinePath = (id) => offline.pathFor(id) ?? fetchedHerePath(id);
+    player!.offlinePath =
+        (id) => offline.pathFor(id) ?? fetchedHerePath(id) ?? doorPulledPath(id);
     // Removed first: signing out and back in runs this again, and a second listener
     // is every change to the kept music announced twice.
     offline
