@@ -3017,6 +3017,13 @@ class MadeList {
   /// Why a song is in it, by track id, where the list can say.
   final Map<String, String> why;
 
+  /// How long it plays, in minutes, when the server said.
+  final int? minutes;
+
+  /// How much each song drives, 0 still to 1, in the list's order — the sleep mix's
+  /// wind-down, drawn on its card.
+  final List<double> energy;
+
   const MadeList({
     required this.slug,
     required this.name,
@@ -3026,7 +3033,16 @@ class MadeList {
     this.count = 0,
     this.tracks = const [],
     this.why = const {},
+    this.minutes,
+    this.energy = const [],
   });
+
+  bool get isSleep => kind == 'sleep';
+
+  /// How long it plays: the server's word, else the songs added up.
+  Duration get length => minutes != null
+      ? Duration(minutes: minutes!)
+      : Duration(milliseconds: tracks.fold<int>(0, (n, t) => n + (t.durationMs ?? 0)));
 
   factory MadeList.fromJson(Map<String, dynamic> j) => MadeList(
         slug: (j['slug'] ?? '') as String,
@@ -3042,6 +3058,8 @@ class MadeList {
         why: j['why'] is Map
             ? (j['why'] as Map).map((k, v) => MapEntry('$k', '$v'))
             : const {},
+        minutes: (j['minutes'] as num?)?.round(),
+        energy: [for (final e in (j['energy'] ?? const []) as List) (e as num).toDouble()],
       );
 
   String whyFor(Track t) => why['${t.id}'] ?? '';

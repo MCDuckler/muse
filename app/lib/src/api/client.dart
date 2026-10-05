@@ -1189,8 +1189,11 @@ class ApiClient {
   /// The whole Discover page in one answer: the lists made for you (or word that
   /// they are being made), stations and things to start one from, the news from
   /// who and what you follow, acts to try.
-  Future<Discover> discover() async => Discover.fromJson(
-      await _decode(await net.get(_u('/discover'), headers: _headers)) as Map<String, dynamic>);
+  /// The page — and this device's clock, in minutes from UTC, so the lists made
+  /// overnight know when night is here (the sleep mix).
+  Future<Discover> discover() async => Discover.fromJson(await _decode(await net.get(
+          _u('/discover', {'tz': DateTime.now().timeZoneOffset.inMinutes}),
+          headers: _headers)) as Map<String, dynamic>);
 
   Future<({List<MadeList> items, bool building})> madeLists() async {
     final d = await _decode(await net.get(_u('/discover/lists'), headers: _headers)) as Map<String, dynamic>;

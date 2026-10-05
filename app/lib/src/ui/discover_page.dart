@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -28,8 +29,8 @@ import 'track_list.dart';
 ///
 /// Four departments on one page, each with its own well. The lists made for you —
 /// this week's finds, the daily mixes, the release radar, on repeat, the time capsule,
-/// the house blend — are built overnight on the server and kept, so the list in the
-/// evening is the list from the morning. Stations: the ones you made before, and the
+/// the house blend, the sleep mix — are built overnight on the server and kept, so the
+/// list in the evening is the list from the morning. At night the sleep mix is first. Stations: the ones you made before, and the
 /// acts and genres to start one from. New releases, by the artists *and the genres*
 /// you follow. And acts to try, which is the one thing the house's own data can never
 /// say and the world's listening can.
@@ -181,6 +182,27 @@ class _DiscoverPageState extends State<DiscoverPage> {
 
 // ---------------------------------------------------------------- made for you
 
+/// The lists in the order the shelf shows them: from eight in the evening to five in
+/// the morning the sleep mix comes first.
+List<MadeList> bedtimeOrder(List<MadeList> lists, DateTime now) {
+  if (now.hour >= 5 && now.hour < 20) return lists;
+  return [for (final l in lists) if (l.isSleep) l, for (final l in lists) if (!l.isSleep) l];
+}
+
+/// Play the sleep mix and set the sleep timer to its length, so it fades out where it
+/// ends — whatever the queue would have done after.
+Future<void> lightsOut(BuildContext context, MadeList list) async {
+  final app = context.read<AppState>();
+  final messenger = ScaffoldMessenger.of(context);
+  feel(Feel.commit);
+  await app.playNow(list.tracks, named: list.name);
+  final length = list.length;
+  if (length > Duration.zero) {
+    app.setSleepTimer(length);
+    messenger.say(snack(Text('Lights out — it fades out in ${length.inMinutes} min')));
+  }
+}
+
 class _MadeForYou extends StatelessWidget {
   const _MadeForYou({required this.page, required this.onChanged});
   final Discover page;
@@ -189,6 +211,7 @@ class _MadeForYou extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final lists = bedtimeOrder(page.lists, DateTime.now());
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -215,9 +238,9 @@ class _MadeForYou extends StatelessWidget {
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-              itemCount: page.lists.length,
+              itemCount: lists.length,
               separatorBuilder: (_, __) => const SizedBox(width: 14),
-              itemBuilder: (context, i) => _ListCard(list: page.lists[i], onChanged: onChanged),
+              itemBuilder: (context, i) => _ListCard(list: lists[i], onChanged: onChanged),
             ),
           ),
       ],
@@ -274,6 +297,28 @@ class _ListCard extends StatelessWidget {
                             ColoredBox(color: scheme.surfaceContainerHighest),
                         ],
                       ),
+                    // The sleep mix's wind-down along the foot of it: how much each
+                    // song drives, from the first to the stillest.
+                    if (list.isSleep && list.energy.length > 1)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        child: Container(
+                          height: 30,
+                          color: scheme.surface.withValues(alpha: 0.92),
+                          padding: const EdgeInsets.fromLTRB(6, 5, 48, 5),
+                          child: Row(children: [
+                            Icon(Icons.bedtime_outlined, size: 14, color: scheme.onSurface),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: CustomPaint(
+                                  painter: WindDown(list.energy, color: scheme.onSurface),
+                                  size: Size.infinite),
+                            ),
+                          ]),
+                        ),
+                      ),
                     // The band with the name on it: ink across the picture, the way a
                     // cover line goes over the photograph.
                     Positioned(
@@ -317,7 +362,10 @@ class _ListCard extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: Mag.typewriter(10, color: scheme.onSurfaceVariant)),
               const SizedBox(height: 2),
-              Text('${list.count} songs${_when(list.builtAt)}',
+              Text(
+                  '${list.count} songs'
+                  '${list.isSleep && list.minutes != null ? ' · ${list.minutes} min' : ''}'
+                  '${_when(list.builtAt)}',
                   style: Mag.typewriter(10, color: scheme.onSurfaceVariant.withValues(alpha: 0.8))),
             ],
           ),
@@ -457,15 +505,34 @@ class _MadeListPageState extends State<MadeListPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(list.blurb, style: Mag.typewriter(11, color: scheme.onSurfaceVariant)),
+                        if (list.isSleep && list.energy.length > 1) ...[
+                          const SizedBox(height: 10),
+                          SizedBox(
+                            height: 34,
+                            child: CustomPaint(
+                                painter: WindDown(list.energy, color: scheme.onSurface),
+                                size: Size.infinite),
+                          ),
+                        ],
                         const SizedBox(height: 10),
+                        // A sleep mix is laid out to wind down: played in its order, and
+                        // to the end with the timer set, never shuffled.
                         Wrap(spacing: 10, runSpacing: 8, children: [
-                          PressButton(
-                              label: 'Play all',
-                              loud: true,
-                              onTap: () => app.playNow(list.tracks, named: list.name)),
-                          PressButton(
-                              label: 'Shuffle',
-                              onTap: () => app.playNow(list.tracks, shuffle: true, named: list.name)),
+                          if (list.isSleep) ...[
+                            PressButton(
+                                label: 'Lights out', loud: true, onTap: () => lightsOut(context, list)),
+                            PressButton(
+                                label: 'Just play',
+                                onTap: () => app.playNow(list.tracks, named: list.name)),
+                          ] else ...[
+                            PressButton(
+                                label: 'Play all',
+                                loud: true,
+                                onTap: () => app.playNow(list.tracks, named: list.name)),
+                            PressButton(
+                                label: 'Shuffle',
+                                onTap: () => app.playNow(list.tracks, shuffle: true, named: list.name)),
+                          ],
                         ]),
                       ],
                     ),
@@ -498,6 +565,37 @@ class _MadeListPageState extends State<MadeListPage> {
       ),
     );
   }
+}
+
+/// A list's energy, song by song, as one line falling to the right: the sleep mix's
+/// shape. Scaled to its own most driving song, so the line fills the height it has.
+class WindDown extends CustomPainter {
+  WindDown(this.energy, {required this.color});
+  final List<double> energy;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (energy.length < 2 || size.isEmpty) return;
+    final top = math.max(0.05, energy.reduce(math.max));
+    final line = Path();
+    for (var i = 0; i < energy.length; i++) {
+      final x = size.width * i / (energy.length - 1);
+      final y = size.height * (1 - (energy[i] / top).clamp(0.0, 1.0)) * 0.85 + size.height * 0.075;
+      i == 0 ? line.moveTo(x, y) : line.lineTo(x, y);
+    }
+    canvas.drawPath(
+        line,
+        Paint()
+          ..color = color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.6
+          ..strokeJoin = StrokeJoin.round
+          ..strokeCap = StrokeCap.round);
+  }
+
+  @override
+  bool shouldRepaint(WindDown old) => old.color != color || old.energy != energy;
 }
 
 // ---------------------------------------------------------------- stations

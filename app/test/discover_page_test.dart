@@ -57,6 +57,21 @@ Map<String, dynamic> page({bool built = true, bool releases = true}) => {
                 'count': 1,
                 'tracks': [track(7, 'Tape Hiss', 'Morning Static')],
               },
+              {
+                'slug': 'sleep',
+                'name': 'Sleep mix',
+                'blurb': 'The calm end of what you play, slowing down as it goes — 62 minutes.',
+                'kind': 'sleep',
+                'count': 3,
+                'minutes': 62,
+                'energy': [0.3, 0.12, 0.02],
+                'why': {'201': 'you play it at night'},
+                'tracks': [
+                  track(201, 'Night Song', 'Quiet Act'),
+                  track(202, 'Stiller', 'Quieter Act'),
+                  track(203, 'Stillest', 'Hush'),
+                ],
+              },
             ]
           : [],
       'building': !built,
@@ -134,6 +149,7 @@ void main() {
   late AppState app;
   Map<String, dynamic> Function() answer = page;
   final asked = <String>[];
+  String? clock;
 
   setUpAll(() async {
     if (out == null) return;
@@ -154,6 +170,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     useThisClientInstead(MockClient((request) async {
       asked.add('${request.method} ${request.url.path}');
+      if (request.url.path == '/discover') clock = request.url.queryParameters['tz'];
       final body = switch (request.url.path) {
         '/discover' => answer(),
         '/discover/genres' => {
@@ -218,6 +235,33 @@ void main() {
     expect(find.text('New Record'), findsOneWidget);
     expect(find.text('Warehouse'), findsOneWidget, reason: 'a record in a followed genre');
     expect(find.text('Following 12 artists and 1 genre.'), findsOneWidget);
+    expect(find.text('SLEEP MIX'), findsOneWidget);
+    expect(find.text('3 songs · 62 min'), findsOneWidget, reason: 'how long the sleep mix plays');
+    expect(clock, '${DateTime.now().timeZoneOffset.inMinutes}', reason: 'the clock goes with the ask');
+  });
+
+  test('at night the sleep mix comes first on the shelf', () {
+    final lists = Discover.fromJson(page()).lists;
+    expect(bedtimeOrder(lists, DateTime(2026, 10, 5, 14)).first.slug, 'weekly');
+    expect(bedtimeOrder(lists, DateTime(2026, 10, 5, 22)).first.slug, 'sleep');
+    expect(bedtimeOrder(lists, DateTime(2026, 10, 6, 3)).first.slug, 'sleep');
+    expect(bedtimeOrder(lists, DateTime(2026, 10, 6, 5)).first.slug, 'weekly');
+    expect(bedtimeOrder(lists, DateTime(2026, 10, 5, 22)).map((l) => l.slug).toSet(),
+        lists.map((l) => l.slug).toSet());
+  });
+
+  testWidgets('the sleep mix plays in its order, to the end, with the lights out', (tester) async {
+    final list = Discover.fromJson(page()).lists.firstWhere((l) => l.isSleep);
+    expect(list.minutes, 62);
+    expect(list.energy, [0.3, 0.12, 0.02]);
+    expect(list.length, const Duration(minutes: 62));
+    await show(tester, MadeListPage(slug: list.slug, first: list));
+    expect(tester.takeException(), isNull);
+    expect(find.text('LIGHTS OUT'), findsOneWidget);
+    expect(find.text('JUST PLAY'), findsOneWidget);
+    expect(find.text('SHUFFLE'), findsNothing, reason: 'a wind-down is not shuffled');
+    expect(find.text('you play it at night'), findsOneWidget);
+    await shot(tester, 'sleep-mix-phone');
   });
 
   // The pictures are taken without the "1 NEW" sticker: with real fonts loaded the
