@@ -45,7 +45,7 @@ from . import analysis
 # 6: an exact grid carried on to where the sound starts and ends (the tracker lost the
 #    first two or three beats of nearly every record, and with them its first bar),
 #    and the four-bar markers where the record's sections start (four_bars).
-VERSION = 13  # 9: a record too busy for the tempo found is counted at the double; 10: and one read in threes is stepped up into the break it is (116 was two thirds of 174)
+VERSION = 14  # 9: a record too busy for the tempo found is counted at the double; 10: and one read in threes is stepped up into the break it is (116 was two thirds of 174)
 # 11: the beat and not the off-beat, by the snare and the sub-bass where the bass is on
 #     the "and"; and no step down a third from a tempo already busy enough to be the count.
 # 12: the tracker's word (Beat This!, handed in by the pool) in the house's own reading:
@@ -53,6 +53,8 @@ VERSION = 13  # 9: a record too busy for the tempo found is counted at the doubl
 #     its beat where the house's grid sat half a beat off it, and its beats where the
 #     house heard no pulse. See tracker_line and measure.
 # 13: the four-bar grid passes through the drops (analysis.four_bars anchors).
+# 14: the bar's one decided three ways — the change rule, the tracker's bars, and where
+#     the phrases change where those two disagree (bar_one).
 
 _RATE = 11025
 _FFT = 1024
@@ -736,7 +738,76 @@ def _on_the_beat(beats: np.ndarray, low: np.ndarray, period: float,
     return beats + half if flip else beats
 
 
-def _bar_starts_on_by_change(x: np.ndarray, beats_ms: np.ndarray) -> int | None:
+def _beat_spectra(x: np.ndarray, beats_ms: np.ndarray) -> np.ndarray:
+    """The spectrum of each beat, in 32 log-spaced bands: one row a beat."""
+    edges = np.unique(np.geomspace(2, 2048, 33).astype(int))
+    rows = []
+    for a, b in zip(beats_ms[:-1], beats_ms[1:]):
+        seg = x[int(a * _RATE / 1000):int(b * _RATE / 1000)]
+        if len(seg) < 256:
+            rows.append(np.zeros(len(edges) - 1))
+            continue
+        mag = np.abs(np.fft.rfft(seg * np.hanning(len(seg)), 4096))
+        rows.append(np.log1p(np.array([mag[edges[i]:edges[i + 1]].mean()
+                                       for i in range(len(edges) - 1)])))
+    return np.array(rows)
+
+
+def _beat_change(spec: np.ndarray, k: int) -> np.ndarray:
+    """How much the [k] beats after each beat differ from the [k] before it."""
+    n = len(spec)
+    change = np.zeros(n)
+    if n <= 2 * k:
+        return change
+    total = np.vstack([np.zeros(spec.shape[1]), np.cumsum(spec, axis=0)])
+    for i in range(k, n - k):
+        change[i] = float(np.linalg.norm((total[i + k] - total[i]) / k - (total[i] - total[i - k]) / k))
+    return change
+
+
+def _bar_starts_on_by_phrase(spec: np.ndarray) -> tuple[int | None, float]:
+    """Which beat of four the bar starts on, from where the record's *phrases* change:
+    (beat, how much of the change says so), or (None, share) where it cannot be said.
+
+    _bar_starts_on_by_change asks where the four beats after differ from the four
+    before and counts each such beat for its place in the bar — and one record in five
+    it disagrees with the tracker, most often by exactly two beats: a change counted
+    over four beats is as clear two beats into a bar as at its start, and on a
+    four-on-the-floor record the bar's one has nothing else to show for itself. But a
+    record's sections start on the one of a *phrase*, every sixteen beats (Zehren,
+    Alunno & Bientinesi 2020 put a DJ's cue points there and nowhere else), so the
+    change is read over four, eight and sixteen beats either side, and only its clear
+    peaks — one place in sixteen, each — are counted for their place in the bar. The
+    half-bar has to compete with the whole phrase, and loses.
+
+    Measured on 300 records the change rule and the tracker agree on: speaks on 86 %
+    of them and is right on 95 % of those. On 300 they disagree on it sides with each
+    about equally — so each of them was right about half the time, and this decides.
+    """
+    n = len(spec)
+    if n < 64:
+        return None, 0.0
+    change = np.zeros(n)
+    for k in (4, 8, 16):
+        c = _beat_change(spec, k)
+        if c.max() > 0:
+            change += c / c.max()
+    threshold = float(change.mean() + change.std())
+    peaks = [i for i in range(8, n - 8)
+             if change[i] >= threshold and change[i] == change[i - 8:i + 9].max()]
+    peaks = sorted(peaks, key=lambda i: -change[i])[:24]
+    if len(peaks) < 4:
+        return None, 0.0
+    weight = np.zeros(4)
+    for i in peaks:
+        weight[i % 4] += change[i]
+    best = int(np.argmax(weight))
+    share = float(weight[best] / weight.sum())
+    return (best, share) if share >= 0.5 else (None, share)
+
+
+def _bar_starts_on_by_change(x: np.ndarray, beats_ms: np.ndarray,
+                             spec: np.ndarray | None = None) -> int | None:
     """Which beat of four the bar starts on, from where the record changes.
 
     A record is written in bars and its sections start on the one: a breakdown, a
@@ -751,17 +822,8 @@ def _bar_starts_on_by_change(x: np.ndarray, beats_ms: np.ndarray) -> int | None:
     n = len(beats_ms)
     if n < 48:
         return None
-    edges = np.unique(np.geomspace(2, 2048, 33).astype(int))
-    rows = []
-    for a, b in zip(beats_ms[:-1], beats_ms[1:]):
-        seg = x[int(a * _RATE / 1000):int(b * _RATE / 1000)]
-        if len(seg) < 256:
-            rows.append(np.zeros(len(edges) - 1))
-            continue
-        mag = np.abs(np.fft.rfft(seg * np.hanning(len(seg)), 4096))
-        rows.append(np.log1p(np.array([mag[edges[i]:edges[i + 1]].mean()
-                                       for i in range(len(edges) - 1)])))
-    spec = np.array(rows)
+    if spec is None:
+        spec = _beat_spectra(x, beats_ms)
     k = 4
     change = np.zeros(len(spec))
     for i in range(k, len(spec) - k):
@@ -779,6 +841,63 @@ def _bar_starts_on_by_change(x: np.ndarray, beats_ms: np.ndarray) -> int | None:
     if weight[best] < 0.45 * weight.sum():
         return None
     return best
+
+
+def _tracker_bar(beats_ms, downbeats_ms, tolerance_ms: int = 45) -> tuple[int | None, float]:
+    """Which beat of four the bar starts on, by where the tracker heard the bars fall
+    among these beats — and how much of the tracker's word that is. None where its
+    bars fall on no one phase (or on too few of these beats)."""
+    if beats_ms is None or downbeats_ms is None or len(beats_ms) < 8 or len(downbeats_ms) < 4:
+        return None, 0.0
+    b = np.asarray(beats_ms)
+    votes = np.zeros(4)
+    for d in downbeats_ms:
+        i = int(np.argmin(np.abs(b - d)))
+        if abs(int(b[i]) - d) <= tolerance_ms:
+            votes[i % 4] += 1
+    if votes.sum() < 4:
+        return None, 0.0
+    best = int(np.argmax(votes))
+    # Of all the tracker's bars, not only of those that fell on a beat: a grid half a
+    # beat off the record has every bar but the intro's falling on no beat at all,
+    # and the four that did agreed with each other perfectly.
+    share = float(votes[best] / len(downbeats_ms))
+    return (best, share) if share >= 0.5 else (None, share)
+
+
+def bar_one(x: np.ndarray, beats_ms: np.ndarray, low: np.ndarray,
+            neural: dict | None) -> tuple[int, str, dict]:
+    """Which beat of four the bar starts on: (beat, who said so, notes).
+
+    Three readings, none of them sure on its own: where the record changes over four
+    beats (_bar_starts_on_by_change, the house's word), where the tracker heard the
+    bars (_tracker_bar), where the record's phrases change (_bar_starts_on_by_phrase).
+    The house's where the tracker agrees or has nothing to say; where the two disagree
+    — one record in five, each right about half the time — the phrase rule decides,
+    and the house's stands where it is silent. With no house reading the phrase rule,
+    then the tracker; with nothing at all, the bass (_bar_starts_on)."""
+    notes: dict = {}
+    at = np.asarray(beats_ms, dtype=float)
+    spec = _beat_spectra(x, at) if len(at) >= 48 and len(x) >= _RATE * 10 else None
+    change = _bar_starts_on_by_change(x, at, spec) if spec is not None else None
+    tracker, t_share = _tracker_bar(beats_ms, (neural or {}).get("downbeats_ms"))
+    if tracker is not None:
+        notes["bar_phase_agreement"] = round(t_share, 2)
+    phrase, p_share = _bar_starts_on_by_phrase(spec) if spec is not None else (None, 0.0)
+    if change is not None:
+        if tracker is None or tracker == change:
+            return change, "change", notes
+        notes["bar_phase_tracker_said"] = tracker
+        if phrase is not None:
+            notes["bar_phase_share"] = round(p_share, 2)
+            return phrase, "phrase" if phrase not in (change, tracker) else ("change" if phrase == change else "tracker"), notes
+        return change, "change", notes
+    if phrase is not None:
+        notes["bar_phase_share"] = round(p_share, 2)
+        return phrase, "phrase", notes
+    if tracker is not None:
+        return tracker, "tracker", notes
+    return _bar_starts_on(_frames_of(at), low), "bass", notes
 
 
 def _bar_starts_on(beats: np.ndarray, low: np.ndarray) -> int:
@@ -964,8 +1083,7 @@ def measure(audio: pathlib.Path, neural: dict | None = None) -> dict:
         out["bpm"] = round(line["bpm"], 2)
         out["grid"] = True
         out["beats"] = [int(round(ms)) for ms in at_ms]
-        by_change = _bar_starts_on_by_change(x, at_ms)
-        out["bar_starts_on"] = by_change if by_change is not None else _bar_starts_on(_frames_of(at_ms), low)
+        out["bar_starts_on"], out["bar_by"], _notes = bar_one(x, at_ms, low, neural)
         return analysis.add(out, x, out["beats"], out["bar_starts_on"], low, _FPS)
 
     bpm, confidence = _tempo(env)
@@ -1032,8 +1150,9 @@ def measure(audio: pathlib.Path, neural: dict | None = None) -> dict:
     out["bpm"] = round(60000.0 / slope, 2)
     at_ms = np.maximum(at_ms, 0.0)
     out["beats"] = [int(round(ms)) for ms in at_ms]
-    by_change = _bar_starts_on_by_change(x, at_ms)
-    out["bar_starts_on"] = by_change if by_change is not None else _bar_starts_on(beats, low)
+    out["bar_starts_on"], out["bar_by"], _notes = bar_one(x, at_ms, low, neural)
+    if neural is not None and out["bar_by"] == "tracker":
+        out["tracker"]["took"].append("bar")
     return analysis.add(out, x, out["beats"], out["bar_starts_on"], low, _FPS)
 
 

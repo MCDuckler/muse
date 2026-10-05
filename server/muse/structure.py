@@ -97,23 +97,8 @@ def bar_phase(beats_ms: list[int], neural_downbeats_ms: list[int],
               tolerance_ms: int = 45) -> tuple[int | None, float]:
     """Which beat of four the bar starts on, by where the tracker heard the bars fall
     among the house's beats — and how much of the tracker's word that is. None where
-    the tracker's bars fall on no one phase."""
-    if len(beats_ms) < 8 or len(neural_downbeats_ms) < 4:
-        return None, 0.0
-    b = np.array(beats_ms)
-    votes = np.zeros(4)
-    for d in neural_downbeats_ms:
-        i = int(np.argmin(np.abs(b - d)))
-        if abs(int(b[i]) - d) <= tolerance_ms:
-            votes[i % 4] += 1
-    if votes.sum() < 4:
-        return None, 0.0
-    best = int(np.argmax(votes))
-    # Of all the tracker's bars, not only of those that fell on a beat: a grid half a
-    # beat off the record has every bar but the intro's falling on no beat at all,
-    # and the four that did agreed with each other perfectly.
-    share = float(votes[best] / len(neural_downbeats_ms))
-    return (best, share) if share >= 0.5 else (None, share)
+    the tracker's bars fall on no one phase. (beats._tracker_bar; here by its old name.)"""
+    return _beats._tracker_bar(beats_ms, neural_downbeats_ms, tolerance_ms)
 
 
 def _phase_off(house: list[int], neural: list[int]) -> float:
@@ -376,47 +361,24 @@ def build(data_dir: pathlib.Path, track: dict, timing: dict,
     audio = pathlib.Path(track["path"])
     x = _mono(audio) if beats_ms else np.zeros(0, dtype=np.float32)
 
-    # Which beat of four the bar starts on: the house's reading of where this record's
-    # sections change, and the tracker's vote only where that reading has nothing to say.
-    #
-    # It used to be the tracker's whenever half its bars fell on one phase, straight
-    # over the top of the house's. Measured over two hundred records against where each
-    # record's energy actually *rises* — a drop, the bass coming back, the bar a section
-    # starts on, which is an answer neither of them is party to — the two disagree about
-    # twenty-five. Over those twenty-five, taking the house's reading where it has one
-    # and the tracker's where it does not is right thirteen times; taking the tracker's
-    # always is right seven. On the ones it got wrong the tracker was putting the bar
-    # *two beats* out on records the house had right, which is exactly what "the four-bar
-    # marker is two beats after the drop" was — on both of the records it was reported
-    # on, and on ten of the twenty-five here.
-    #
-    # Read again here rather than taken from [timing] because the beats may have been
-    # replaced above, and a phase counted against one set of beats means nothing
-    # against another.
-    by_change = (_beats._bar_starts_on_by_change(x, np.array(beats_ms, dtype=float))
-                 if len(beats_ms) >= 48 and len(x) >= _RATE * 10 else None)
-    if by_change is not None:
-        bar_on = by_change
-        sources["bar_phase"] = "change"
-    if neural:
-        phase, share = bar_phase(beats_ms, neural["downbeats_ms"])
-        if phase is not None:
-            sources["bar_phase_agreement"] = round(share, 2)
-            if by_change is None:
-                sources["bar_phase"] = "neural"
-                bar_on = phase
-            elif phase != by_change:
-                # Worth writing down: where the two disagree is where a record's grid is
-                # most likely to be wrong, whichever of them was believed.
-                sources["bar_phase_tracker_said"] = phase
-        elif len(beats_ms) < 8 and _steady(neural["beats_ms"]):
-            beats_ms = list(neural["beats_ms"])
-            nb = np.array(beats_ms)
-            firsts = [int(np.argmin(np.abs(nb - d))) % 4 for d in neural["downbeats_ms"]]
-            bar_on = int(np.bincount(firsts, minlength=4).argmax()) if firsts else 0
-            sources["beats"] = "neural"
-            sources["bar_phase"] = "neural"
-            out["bpm"] = round(60000.0 / float(np.median(np.diff(nb))), 2)
+    # Which beat of four the bar starts on: the house's reading of where the record
+    # changes, the tracker's bars, and where the phrases change to decide between them
+    # (beats.bar_one). Read again here rather than taken from [timing] because the
+    # beats may have been replaced above, and a phase counted against one set of
+    # beats means nothing against another.
+    low = None
+    if len(beats_ms) >= 8 and len(x) >= _RATE * 10:
+        env, low, _lowmid, _snare, _sub = _beats._onsets(x)
+        bar_on, sources["bar_phase"], notes = _beats.bar_one(x, np.array(beats_ms, dtype=float), low, neural)
+        sources.update(notes)
+    elif neural and len(beats_ms) < 8 and _steady(neural["beats_ms"]):
+        beats_ms = list(neural["beats_ms"])
+        nb = np.array(beats_ms)
+        firsts = [int(np.argmin(np.abs(nb - d))) % 4 for d in neural["downbeats_ms"]]
+        bar_on = int(np.bincount(firsts, minlength=4).argmax()) if firsts else 0
+        sources["beats"] = "neural"
+        sources["bar_phase"] = "neural"
+        out["bpm"] = round(60000.0 / float(np.median(np.diff(nb))), 2)
     out["beats"] = beats_ms
     out["bar_starts_on"] = bar_on
 
@@ -441,9 +403,8 @@ def build(data_dir: pathlib.Path, track: dict, timing: dict,
     sections = label_bars(mix_db, drums_db, vocals_db) if mix_db else []
     anchors = [s["start_bar"] for s in sections if s["label"] == "drop"] if drums_db is not None else []
 
-    if len(beats_ms) >= 8 and len(x) >= _RATE * 10:
+    if low is not None:
         # Everything the analysis derives from the bars, derived again on these bars.
-        env, low, _lowmid, _snare, _sub = _beats._onsets(x)
         derived = analysis.add(
             {"duration_ms": timing["duration_ms"], "tail_ms": timing.get("tail_ms", 0)},
             x, beats_ms, bar_on, low, _beats._FPS, anchors=anchors)

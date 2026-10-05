@@ -449,3 +449,37 @@ def test_the_trackers_beat_moves_a_grid_sitting_on_the_and(tmp_path):
     off_drums = [float(np.min(np.abs(np.array(hits) - b / 1000.0))) for b in found["beats"][2:-2]]
     assert min(off_drums) > 0.2, "every beat now sits half a beat from a drum"
     assert found["bpm"] == pytest.approx(120, abs=0.5)
+
+
+def test_the_bar_is_decided_three_ways(monkeypatch):
+    """The change rule's where the tracker agrees or is silent; the phrase rule decides
+    where they disagree; the house's stands where it too is silent."""
+    x = np.zeros(beats._RATE * 12, dtype=np.float32)
+    at = np.arange(64) * 500.0
+    low = np.zeros(2000, dtype=np.float32)
+    said = {}
+    monkeypatch.setattr(beats, "_beat_spectra", lambda x_, b: np.zeros((64, 32)))
+    monkeypatch.setattr(beats, "_bar_starts_on_by_change", lambda x_, b, spec=None: said["change"])
+    monkeypatch.setattr(beats, "_tracker_bar", lambda b, d, tolerance_ms=45: said["tracker"])
+    monkeypatch.setattr(beats, "_bar_starts_on_by_phrase", lambda spec: said["phrase"])
+    tracker = {"downbeats_ms": [0, 2000, 4000, 6000]}
+
+    said.update(change=1, tracker=(1, 0.9), phrase=(3, 0.7))
+    assert beats.bar_one(x, at, low, tracker)[:2] == (1, "change"), "agreed: the house's"
+    said.update(change=1, tracker=(None, 0.3), phrase=(3, 0.7))
+    assert beats.bar_one(x, at, low, tracker)[:2] == (1, "change"), "tracker silent: the house's"
+    said.update(change=1, tracker=(3, 0.9), phrase=(3, 0.7))
+    bar, by, notes = beats.bar_one(x, at, low, tracker)
+    assert (bar, by) == (3, "tracker") and notes["bar_phase_tracker_said"] == 3, "the phrases side with the tracker"
+    said.update(change=1, tracker=(3, 0.9), phrase=(1, 0.7))
+    assert beats.bar_one(x, at, low, tracker)[:2] == (1, "change"), "the phrases side with the house"
+    said.update(change=1, tracker=(3, 0.9), phrase=(2, 0.7))
+    assert beats.bar_one(x, at, low, tracker)[:2] == (2, "phrase"), "the phrases say a third thing"
+    said.update(change=1, tracker=(3, 0.9), phrase=(None, 0.4))
+    assert beats.bar_one(x, at, low, tracker)[:2] == (1, "change"), "phrases silent: the house's stands"
+    said.update(change=None, tracker=(3, 0.9), phrase=(2, 0.7))
+    assert beats.bar_one(x, at, low, tracker)[:2] == (2, "phrase"), "no house reading: the phrases"
+    said.update(change=None, tracker=(3, 0.9), phrase=(None, 0.4))
+    assert beats.bar_one(x, at, low, tracker)[:2] == (3, "tracker"), "then the tracker"
+    said.update(change=None, tracker=(None, 0.0), phrase=(None, 0.4))
+    assert beats.bar_one(x, at, low, None)[1] == "bass", "then the bass"
