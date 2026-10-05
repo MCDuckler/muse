@@ -142,13 +142,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
             // button that exists in two of the four layouts is a button nobody can
             // find — which is exactly what happened.
             actions: [
-              // Up next: the queue, which used to be a tab of its own and belongs to
-              // what is playing.
-              IconButton(
-                icon: const Icon(Icons.queue_music),
-                tooltip: 'Up next',
-                onPressed: () => openQueueScreen(context),
-              ),
+              // No queue button here: the queue's name in the middle of this bar is the
+              // way into it, and a second way in the same row was one too many.
               const WhereItPlays(compact: true),
               // The booth: the same records, mixed by hand. Only once it is switched
               // on in Settings, while it is early.
