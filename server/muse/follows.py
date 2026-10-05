@@ -11,6 +11,7 @@ bury the feed under sixty-five albums from the last twenty years.
 from __future__ import annotations
 
 import logging
+import re
 
 from . import db, discography, jobs, linked
 
@@ -270,12 +271,23 @@ ROSTER_MOST = 40
 
 
 def _titles(band: dict | None, by: str | None = None) -> list[str]:
-    """The records on a Bandcamp page, or on a label's page those by one act."""
+    """The records on a Bandcamp page that are its own act's — or, on a label's page,
+    those credited to one act on it."""
     if not band:
         return []
-    who = discography.norm(by) if by else None
+    who = by or band.get("name") or ""
     return [r["title"] for r in band.get("records") or []
-            if r.get("title") and (who is None or discography.norm(r.get("artist")) == who)]
+            if r.get("title") and (linked.credited_to(who, r.get("artist"))
+                                   if by or r.get("artist") else True)]
+
+
+def _record_key(title: str | None) -> str:
+    """A record's name with what varies between shops taken off: anything in brackets,
+    a "feat." and who follows it, and an EP or LP after the name."""
+    t = re.sub(r"[\[(][^\])]*[\])]", " ", (title or "").lower())
+    t = re.sub(r"\b(feat|ft|featuring)\b.*$", " ", t)
+    t = discography.norm(t)
+    return re.sub(r"\s+(e p|ep|l p|lp|single)$", "", t).strip()
 
 
 def same_act(artist: dict, titles: list[str]) -> bool:
@@ -283,22 +295,30 @@ def same_act(artist: dict, titles: list[str]) -> bool:
     a record in common. The name alone says nothing — there are a Cloudcore on Deezer
     with three singles and a CloudCore on Bandcamp that is a label — and a page that
     cannot show it is the same act is followed as itself, which is never wrong."""
-    want = {discography.norm(t) for t in titles} - {""}
+    want = {_record_key(t) for t in titles} - {""}
     if not want:
         return False
     try:
         theirs = discography.artist_albums(artist["remote_id"], limit=100)
     except Exception:  # noqa: BLE001 — unknown is not yes
         return False
-    return any(discography.norm(a.get("title")) in want for a in theirs)
+    for a in theirs:
+        key = _record_key(a.get("title"))
+        if not key:
+            continue
+        if key in want or any(len(k) >= 6 and len(key) >= 6 and (k in key or key in k)
+                              for k in want):
+            return True
+    return False
 
 
 def recheck(user_id: int, entries: list[dict], *, apply: bool = False) -> list[dict]:
     """Follows brought over from Bandcamp before same_act, put right: where the person
-    follows a Deezer act named like a page they follow on Bandcamp, and the page is a
-    label or shares no record with that act, the Deezer follow becomes the page. The
-    acts opened out of a label are looked at the same way. Answers what was (or with
-    apply=False, would be) changed."""
+    follows a Deezer act named like a page they follow on Bandcamp, and that act shares
+    no record with what the page has of its own, the Deezer follow becomes the page.
+    Never an unfollow without the page put in its place, and an act with nothing on its
+    page to compare is left as it is. Answers what was (or with apply=False, would be)
+    changed."""
     changed = []
 
     def wrong(name: str, titles: list[str], *, label: bool) -> dict | None:
@@ -307,8 +327,10 @@ def recheck(user_id: int, entries: list[dict], *, apply: bool = False) -> list[d
                          and artist_key(name) = artist_key(%s)""", (user_id, name))
         if not d:
             return None
-        if not label and (not titles or same_act({"remote_id": d["remote_id"]}, titles)):
+        if not titles and not label:
             # Nothing on the page to tell them apart by is not proof they differ.
+            return None
+        if titles and same_act({"remote_id": d["remote_id"]}, titles):
             return None
         return d
 
@@ -333,13 +355,8 @@ def recheck(user_id: int, entries: list[dict], *, apply: bool = False) -> list[d
         page = {"remote_id": url.rstrip("/"), "name": band.get("name") or name,
                 "image": entry.get("image") or band.get("image"), "is_label": label}
         if d := wrong(name, _titles(band), label=label):
-            swap(d, page, "a label" if label else "no record in common")
-        if not label:
-            continue
-        for act in linked.bandcamp_acts(url, band)[:ROSTER_MOST]:
-            if d := wrong(act["name"], _titles(band, by=act["name"]), label=False):
-                swap(d, {"remote_id": act["url"], "name": act["name"], "image": None}
-                     if act.get("url") else None, f"not the {act['name']} on {name}")
+            swap(d, page, "a label, and none of its records theirs" if label
+                 else "no record in common")
     return changed
 
 

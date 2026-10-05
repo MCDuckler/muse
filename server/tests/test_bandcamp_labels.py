@@ -161,3 +161,37 @@ def test_an_artists_page_does_not_borrow_a_label_of_the_same_name(client, hdr):
                    "bandcamp")
     r = client.get("/library/artists/detail", params={"artist": "Moonfield"}, headers=hdr)
     assert r.json()["artist"]["bandcamp_url"] == "https://moonfield.bandcamp.com"
+
+
+# ------------------------------------------------------------------ what it must not do
+def test_an_act_credited_with_company_is_not_a_label(monkeypatch):
+    PAGES["https://sunra.bandcamp.com"] = _page("Sun Ra", [
+        ("Lanquidity", "Sun Ra & His Arkestra"), ("Space Is The Place", "Sun Ra and his Arkestra"),
+        ("Strange Strings", "Sun Ra & His Astro Infinity Arkestra"), ("Nuclear War", None),
+        ("Disco 3000", "Sun Ra Quartet")])
+    assert linked.bandcamp_band("https://sunra.bandcamp.com")["is_label"] is False
+    assert linked.credited_to("Bou", "Boundary") is False, "whole words"
+    assert linked.credited_to("James Holden", "James Holden & The Animal Spirits") is True
+
+
+def test_a_record_is_the_same_record_whatever_the_shop_adds_to_its_name():
+    DEEZER_ARTISTS["omni trio"] = {"id": 800, "name": "Omni Trio", "nb_fan": 900}
+    DEEZER_ALBUMS["800"] = ["Renegade Snares", "The Deepest Cut, Vol. 1"]
+    artist = discography.find_artist("Omni Trio")
+    assert follows.same_act(artist, ["Renegade Snares EP"])
+    assert follows.same_act(artist, ["The Deepest Cut, Vol. 1 (2024 Remaster)"])
+    assert follows.same_act(artist, ["Renegade Snares (feat. Somebody)"])
+    assert not follows.same_act(artist, ["Something Else Entirely"])
+
+
+def test_putting_follows_right_never_leaves_an_act_unfollowed():
+    me = _me()
+    # Followed on Deezer, on the label's roster, with nothing on the label to compare.
+    follows.follow(me, {"remote_id": "700", "name": "optmst"}, "deezer")
+    follows.follow(me, {"remote_id": "500", "name": "Moonfield"}, "deezer")
+    PAGES["https://quiet.bandcamp.com"] = _page("Moonfield", [])
+    changed = follows.recheck(me, [{"name": "CloudCore", "url": CLOUDCORE},
+                                   {"name": "Moonfield", "url": "https://quiet.bandcamp.com"}],
+                              apply=True)
+    assert changed == [], "nothing to tell them apart by is not proof they differ"
+    assert {("deezer", "700", False), ("deezer", "500", False)} <= _followed()

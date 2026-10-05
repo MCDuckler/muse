@@ -16,6 +16,7 @@ import re
 import subprocess
 import time
 import urllib.error
+import unicodedata
 import urllib.parse
 import urllib.request
 
@@ -738,6 +739,20 @@ def bandcamp_discography(url: str, newest: int = 40) -> list[dict]:
     return bandcamp_music(url, newest=newest)["records"]
 
 
+def _words(s: str | None) -> list[str]:
+    return re.findall(r"[a-z0-9]+", unicodedata.normalize("NFKD", (s or "").lower()))
+
+
+def credited_to(name: str, artist: str | None) -> bool:
+    """Whether a record's credit is the page's own act: its name, or its name with
+    company — "Sun Ra & His Arkestra" on Sun Ra's page, "James Holden & The Animal
+    Spirits" on James Holden's. Whole words, so "Bou" is not in "Boundary"."""
+    own, said = _words(name), _words(artist)
+    if not own or not said:
+        return not said
+    return any(said[i:i + len(own)] == own for i in range(len(said) - len(own) + 1))
+
+
 def bandcamp_music(url: str, newest: int = 40) -> dict:
     """A Bandcamp page's records, newest first, and whether it acts as a label.
 
@@ -788,9 +803,9 @@ def bandcamp_music(url: str, newest: int = 40) -> dict:
         add(final, current.get("title"), data.get("artist"), data.get("art_id"),
             "track" if "/track/" in final else "album")
 
-    name = (band.get("name") or "").lower()
+    name = band.get("name") or ""
     others = [r["artist"].lower() for r in records
-              if r["artist"] and r["artist"].lower() != name]
+              if r["artist"] and not credited_to(name, r["artist"])]
     label_like = len(set(others)) >= LABEL_ACTS and 2 * len(others) >= len(records)
     return {"name": band.get("name"),
             "is_label": bool(band.get("is_label")) or label_like,
@@ -1009,11 +1024,11 @@ def bandcamp_acts(root: str, band: dict) -> list[dict]:
         roster = []
     if roster:
         return roster
-    name = (band.get("name") or "").lower()
+    name = band.get("name") or ""
     counted: dict[str, list] = {}
     for r in band.get("records") or []:
         who = (r.get("artist") or "").strip()
-        if who and who.lower() != name:
+        if who and not credited_to(name, who):
             counted.setdefault(who.lower(), [who, 0])[1] += 1
     acts = sorted(counted.values(), key=lambda a: -a[1])
     return [{"name": who, "url": ""} for who, _ in acts[:60]]
