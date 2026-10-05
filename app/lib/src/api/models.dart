@@ -366,6 +366,11 @@ class Queue {
   /// How far a station reaches past the library, 0 (only yours) to 1 (only new).
   final double? stationFresh;
 
+  /// The station this queue plays, and its playlist: a queue made from a station's
+  /// page remembers it, and is topped up from it as it is listened through.
+  final int? stationId;
+  final int? stationPlaylistId;
+
   const Queue({
     required this.id,
     required this.name,
@@ -378,6 +383,8 @@ class Queue {
     this.sharedFrom,
     this.stationKind,
     this.stationFresh,
+    this.stationId,
+    this.stationPlaylistId,
     this.windowFrom = 0,
     int? total,
     int? itemCount,
@@ -407,6 +414,9 @@ class Queue {
         stationFresh: j['station'] is Map
             ? ((j['station'] as Map)['fresh'] as num?)?.toDouble()
             : null,
+        stationId: j['station'] is Map ? (j['station'] as Map)['id'] as int? : null,
+        stationPlaylistId:
+            j['station'] is Map ? (j['station'] as Map)['playlist_id'] as int? : null,
       );
 
   /// A queue that keeps going.
@@ -670,6 +680,11 @@ class Playlist {
   final Map<String, dynamic>? mix;
   bool get isMix => mix != null;
 
+  /// What station this is, when the machine wrote it (kind "station"): what it was
+  /// made from and how far it reaches past the library. Null for a list somebody made.
+  final StationInfo? station;
+  bool get isStation => kind == 'station';
+
   /// Yours, or somebody else's kept in your library.
   final bool mine;
 
@@ -713,6 +728,7 @@ class Playlist {
     this.downloadMode = 'all',
     this.waiting = 0,
     this.mix,
+    this.station,
     this.mine = true,
     this.saved = false,
     this.openEdit = false,
@@ -727,7 +743,7 @@ class Playlist {
     this.createdAt,
     bool? editable,
   }) : editable = editable ??
-            ((kind == 'local' || kind == 'favourites') && mine);
+            ((kind == 'local' || kind == 'favourites' || kind == 'station') && mine);
 
   factory Playlist.fromJson(Map<String, dynamic> j) => Playlist(
         id: j['id'] as int,
@@ -745,6 +761,9 @@ class Playlist {
         downloadMode: (j['download_mode'] ?? 'all') as String,
         waiting: (j['waiting'] ?? 0) as int,
         mix: j['mix'] is Map ? (j['mix'] as Map).cast<String, dynamic>() : null,
+        station: j['station'] is Map
+            ? StationInfo.fromJson((j['station'] as Map).cast<String, dynamic>())
+            : null,
         // A list of your own says nothing about ownership; one of somebody else's
         // says both whose it is and that it is theirs.
         mine: j['mine'] as bool? ?? !(j['saved'] == true),
@@ -771,7 +790,7 @@ class Playlist {
   /// are not the ones underneath.
   bool get handOrder => sort == 'manual';
 
-  bool get isMirror => kind != 'local' && kind != 'favourites';
+  bool get isMirror => kind != 'local' && kind != 'favourites' && kind != 'station';
 
   /// The one playlist nobody made and nobody can remove.
   bool get isFavourites => kind == 'favourites';
@@ -3067,6 +3086,10 @@ class MadeList {
 
 /// A station this person made before, to go back to.
 class YourStation {
+  /// The station's own id, and the playlist it is. [queueId] is the old shape — a
+  /// station that was a queue — kept for a server from before.
+  final int id;
+  final int? playlistId;
   final int queueId;
   final String name;
   final String kind;
@@ -3076,7 +3099,9 @@ class YourStation {
   final int? coverTrack;
 
   const YourStation({
-    required this.queueId,
+    this.id = 0,
+    this.playlistId,
+    this.queueId = 0,
     required this.name,
     required this.kind,
     this.seedText,
@@ -3086,6 +3111,8 @@ class YourStation {
   });
 
   factory YourStation.fromJson(Map<String, dynamic> j) => YourStation(
+        id: (j['id'] ?? 0) as int,
+        playlistId: j['playlist_id'] as int?,
         queueId: (j['queue_id'] ?? 0) as int,
         name: (j['name'] ?? '') as String,
         kind: (j['kind'] ?? 'track') as String,
@@ -3093,6 +3120,46 @@ class YourStation {
         fresh: ((j['fresh'] as num?) ?? 0.5).toDouble(),
         count: (j['count'] ?? 0) as int,
         coverTrack: j['cover_track'] as int?,
+      );
+}
+
+/// What a playlist of the kind "station" is: what it was made from, and how far it
+/// reaches past the library (0 only yours, 1 only new).
+class StationInfo {
+  final int id;
+  final String kind;
+  final String? seedText;
+  final double fresh;
+  const StationInfo({required this.id, required this.kind, this.seedText, this.fresh = 0.5});
+
+  factory StationInfo.fromJson(Map<String, dynamic> j) => StationInfo(
+        id: (j['id'] ?? 0) as int,
+        kind: (j['kind'] ?? 'track') as String,
+        seedText: j['seed_text'] as String?,
+        fresh: ((j['fresh'] as num?) ?? 0.5).toDouble(),
+      );
+
+  /// What it was made from, said the way the page says it.
+  String get from => switch (kind) {
+        'album' => 'the record ${seedText ?? ''}'.trim(),
+        'artist' => seedText ?? 'an act',
+        'genre' => seedText ?? 'a genre',
+        _ => 'a song',
+      };
+}
+
+/// More of a station, as the server hands it back: how many were put on, the
+/// station's playlist as it is now, and the queue playing it where one was named.
+class StationGrowth {
+  final int added;
+  final Playlist playlist;
+  final Queue? queue;
+  const StationGrowth({required this.added, required this.playlist, this.queue});
+
+  factory StationGrowth.fromJson(Map<String, dynamic> j) => StationGrowth(
+        added: (j['added'] ?? 0) as int,
+        playlist: Playlist.fromJson((j['playlist'] as Map).cast<String, dynamic>()),
+        queue: j['queue'] is Map ? Queue.fromJson((j['queue'] as Map).cast<String, dynamic>()) : null,
       );
 }
 

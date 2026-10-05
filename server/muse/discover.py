@@ -396,16 +396,18 @@ def mark_seen(user_id: int, items: list[dict]) -> int:
 
 # ------------------------------------------------------------------ stations
 def your_stations(user_id: int, limit: int = 12) -> list[dict]:
+    """The stations somebody made, latest touched first: each a playlist now, with
+    its id, the station's own, and a record of it to stand for it."""
     return [dict(r) for r in db.all_(
-        """select s.queue_id, s.name, s.kind, s.seed_text, s.fresh, s.created_at,
-                  q.cursor_index, q.updated_at,
-                  (select count(*) from queue_items i where i.queue_id = s.queue_id) as count,
-                  (select t.id from queue_items i join tracks t on t.id = i.track_id
-                     where i.queue_id = s.queue_id and t.cover_id is not null
+        """select s.id, s.playlist_id, s.queue_id, s.name, s.kind, s.seed_text, s.fresh,
+                  s.created_at, s.updated_at,
+                  (select count(*) from playlist_items i where i.playlist_id = s.playlist_id) as count,
+                  (select t.id from playlist_items i join tracks t on t.id = i.track_id
+                     where i.playlist_id = s.playlist_id and t.cover_id is not null
                      order by i.pos limit 1) as cover_track
-             from stations s join queues q on q.id = s.queue_id
-            where s.owner_id = %s
-            order by q.updated_at desc limit %s""", (user_id, limit))]
+             from stations s
+            where s.owner_id = %s and s.playlist_id is not null
+            order by s.updated_at desc limit %s""", (user_id, limit))]
 
 
 def station_starters(user_id: int, tas: recommend.Taste | None = None) -> dict:

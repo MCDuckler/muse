@@ -1,5 +1,5 @@
-// A station is a queue that keeps going, so what matters here is when it is asked for
-// more — a queue nearly finished asked twice a second would be a download every time.
+// A station is a playlist the machine writes; a queue made from it remembers it, so
+// it can be topped up from it as it runs down.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muse/src/api/models.dart';
 
@@ -11,7 +11,8 @@ void main() {
         'cursor_index': 0,
         'position_ms': 0,
         'rev': 1,
-        if (station != null) 'station': {'kind': station, 'name': 'Song radio'},
+        if (station != null)
+          'station': {'id': 7, 'playlist_id': 70, 'kind': station, 'name': 'Song radio'},
         'items': [
           for (var i = 0; i < items; i++)
             {'id': i + 1, 'title': 'Song $i', 'artists': const ['A'],
@@ -23,6 +24,30 @@ void main() {
     expect(queue().isStation, isFalse);
     expect(queue(station: 'track').isStation, isTrue);
     expect(queue(station: 'album').stationKind, 'album');
+  });
+
+  test('a queue made from a station remembers it, and its playlist', () {
+    final q = queue(station: 'track');
+    expect(q.stationId, 7);
+    expect(q.stationPlaylistId, 70);
+    expect(queue().stationId, isNull);
+  });
+
+  test('a station is a playlist of its kind, with what it was made from on it', () {
+    final p = Playlist.fromJson({
+      'id': 70, 'name': 'Song radio', 'kind': 'station', 'items': 30, 'sort': 'manual',
+      'station': {'id': 7, 'kind': 'artist', 'seed_text': 'Spray', 'fresh': 1.0},
+      'editable': true,
+    });
+    expect(p.isStation, isTrue);
+    expect(p.isMirror, isFalse, reason: 'written here, not mirrored from elsewhere');
+    expect(p.station!.id, 7);
+    expect(p.station!.from, 'Spray');
+    expect(p.station!.fresh, 1.0);
+    expect(p.editable, isTrue, reason: 'yours to take songs out of');
+    final plain = Playlist.fromJson({'id': 1, 'name': 'Mine', 'kind': 'local', 'items': 3});
+    expect(plain.isStation, isFalse);
+    expect(plain.station, isNull);
   });
 
   test('a station carries its songs like any other queue', () {

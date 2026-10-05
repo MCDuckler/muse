@@ -1073,8 +1073,11 @@ class ApiClient {
           _u('/queues/$id', {if (around != null) 'around': '$around'}),
           headers: _headers)) as Map<String, dynamic>);
 
-  Future<Queue> createQueue(String name) async => Queue.fromJson(await _decode(
-      await net.post(_u('/queues'), headers: _headers, body: jsonEncode({'name': name})))
+  /// A queue; made to play a station where [stationId] says which, so it is topped
+  /// up from it as it is listened through.
+  Future<Queue> createQueue(String name, {int? stationId}) async => Queue.fromJson(await _decode(
+      await net.post(_u('/queues'), headers: _headers,
+          body: jsonEncode({'name': name, if (stationId != null) 'station_id': stationId})))
       as Map<String, dynamic>);
 
   /// Order is versioned. A 409 means someone else reordered it; the caller gets the
@@ -1170,10 +1173,12 @@ class ApiClient {
   /// Answers with the queue the station is: it has its own name and its own place in
   /// the list of queues, so everything a queue can do it can do — reorder, remove,
   /// keep on the device, save to the library.
-  Future<Queue> startStation(
+  /// A station: a playlist the machine writes from a song, a record, an act or a
+  /// genre. The playlist comes back, with "station" on it.
+  Future<Playlist> startStation(
       {String kind = 'track', int? trackId, String? album, String? artist, String? genre,
       double? fresh}) async =>
-      Queue.fromJson(await _decode(await net.post(_u('/stations'),
+      Playlist.fromJson(await _decode(await net.post(_u('/stations'),
               headers: _headers,
               body: jsonEncode({
                 'kind': kind,
@@ -1293,17 +1298,25 @@ class ApiClient {
       body: jsonEncode({'items': [for (final r in items) r.toSeenJson()]})));
 
   /// How far a station reaches past the library from here on.
-  Future<Queue> tuneStation(int queueId, double fresh) async =>
-      Queue.fromJson(await _decode(await net.patch(_u('/stations/$queueId'),
+  /// How far the station reaches past the library from here on.
+  Future<Playlist> tuneStation(int stationId, double fresh) async =>
+      Playlist.fromJson(await _decode(await net.patch(_u('/stations/$stationId'),
               headers: {..._headers, 'Content-Type': 'application/json'},
               body: jsonEncode({'fresh': fresh}))) as Map<String, dynamic>);
 
-  /// More of the same, asked for as it runs down.
-  Future<Queue> extendStation(int queueId, {int count = 8}) async =>
-      Queue.fromJson(await _decode(await net.post(
-              _u('/stations/$queueId/extend'),
+  /// More of the same on the end of the station — and of the queue playing it, where
+  /// [queueId] says which.
+  Future<StationGrowth> extendStation(int stationId, {int? queueId, int count = 20}) async =>
+      StationGrowth.fromJson(await _decode(await net.post(
+              _u('/stations/$stationId/extend'),
               headers: _headers,
-              body: jsonEncode({'count': count}))) as Map<String, dynamic>);
+              body: jsonEncode({'count': count, if (queueId != null) 'queue_id': queueId})))
+          as Map<String, dynamic>);
+
+  /// The station written again from its seeds.
+  Future<Playlist> refreshStation(int stationId) async =>
+      Playlist.fromJson(await _decode(await net.post(_u('/stations/$stationId/refresh'),
+              headers: _headers)) as Map<String, dynamic>);
 
   // ---------------- library ----------------
   Future<List<Playlist>> playlists() async {

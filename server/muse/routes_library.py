@@ -577,7 +577,7 @@ def _holds_items(playlist_id: int, user: dict) -> dict:
             "This is somebody else's playlist. They can let others add to it from "
             "its own screen.",
         )
-    if row["kind"] not in ("local", FAVOURITES_KIND):
+    if row["kind"] not in ("local", FAVOURITES_KIND, stations.KIND):
         raise HTTPException(
             409,
             f"This playlist mirrors {row['kind']} and cannot be edited here. "
@@ -599,7 +599,7 @@ def _editable(playlist_id: int, user: dict) -> dict:
             "This is somebody else's playlist. They can let others add to it from "
             "its own screen.",
         )
-    if row["kind"] != "local":
+    if row["kind"] not in ("local", stations.KIND):
         raise HTTPException(
             409,
             f"This playlist mirrors {row['kind']} and cannot be edited here. "
@@ -676,6 +676,7 @@ def get_playlist(playlist_id: int, user: dict = Depends(current_user)):
         "select 1 from playlist_saves where user_id=%s and playlist_id=%s",
         (user["id"], playlist_id))
     return {**with_cover(p),
+            "station": stations.by_playlist(playlist_id) if p["kind"] == stations.KIND else None,
             "unmatched": unmatched,
             "mine": p["owner_id"] == user["id"],
             "saved": bool(saved),
@@ -684,7 +685,7 @@ def get_playlist(playlist_id: int, user: dict = Depends(current_user)):
             "owner": {"id": owner.get("id"), "name": owner.get("name"),
                       "avatar_url": (f"/users/{owner['id']}/avatar"
                                      if owner.get("avatar_sig") else None)},
-            "editable": (p["kind"] in ("local", FAVOURITES_KIND)
+            "editable": (p["kind"] in ("local", FAVOURITES_KIND, stations.KIND)
                          and _may_write(p, user)),
             "download_mode": p.get("download_mode", "all"),
             "waiting": waiting,
@@ -979,7 +980,674 @@ def _queue_state(queue_id: int, *, around: int | None = None) -> dict:
             where i.queue_id=%s order by i.pos offset %s limit %s""",
         (queue_id, start, QUEUE_WINDOW),
     )
-    return {**q, "station": stations.describe(queue_id),
+    return {**q, "station": stations.describe_queue(queue_id),
+            # What the whole queue is, and which slice of it this is: the client needs
+            # both to say "1 of 14,022" and to know when to ask for the next slice.
+            "total": total, "window_from": start,
+            "items": [{**catalog.public(t), "origin": t["origin"], "pos": t["pos"],
+                       # The row's own name, which an insert above it does not change.
+                       "item_id": t["item_id"],
+                            # Only interesting in a jam, and harmless otherwise: it is
+                            # how "who put this on" gets answered without asking. The
+                            # id and the picture come too, so the answer can be a face
+                            # rather than a name nobody reads in a list of forty.
+                            "added_by": t["added_by"],
+                            "added_by_id": t["added_by_id"],
+                            "added_by_avatar": t["added_by_avatar"]}
+                           for t in items]}
+
+
+def _own_queue(queue_id: int, user: dict, *, adding: bool = False) -> dict:
+    """Your own queue — or one you have been let into.
+
+    A jam is exactly this: the host's queue, opened to the people who joined. Everyone
+    in the room reads it and adds to it — a shared queue nobody but the host may touch
+    is just somebody else's playlist with an audience.
+    """
+    row = db.one("select * from queues where id=%s and user_id=%s", (queue_id, user["id"]))
+    if row:
+        return row
+
+    if jam.may_touch_queue(queue_id, user["id"]):
+        return db.one("select * from queues where id=%s", (queue_id,))
+    raise HTTPException(404, "no such queue")
+
+
+@router.get("/queues")
+def list_queues(user: dict = Depends(current_user)):
+    """Your queues, and the one you are listening to with somebody else.
+
+    A jam's queue belongs to the host, so a guest's list did not contain the thing they
+    were actually listening to — and the moment anything reopened a queue for them,
+    they were quietly back on their own with the app still saying they were in a jam.
+    It is in the list now, named for whose it is.
+    """
+    return db.all_(
+        """select q.*, count(i.track_id) as items, null::text as shared_from
+             from queues q left join queue_items i on i.queue_id=q.id
+            where q.user_id=%s group by q.id
+            union all
+           select q.*, count(i.track_id) as items, h.name as shared_from
+             from jams j
+             join jam_members m on m.jam_id = j.id and m.user_id = %s
+             join queues q on q.id = j.queue_id
+             join users h on h.id = j.host_id
+             left join queue_items i on i.queue_id = q.id
+            where j.ended_at is null and q.user_id <> %s
+            group by q.id, h.name
+            order by updated_at desc""",
+        (user["id"], user["id"], user["id"]),
+    )
+
+
+@router.post("/queues", status_code=201)
+def create_queue(body: dict = Body(...), user: dict = Depends(current_user)):
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "name required")
+    existing = db.one("select id from queues where user_id=%s and name=%s", (user["id"], name))
+    if existing:
+        raise HTTPException(409, f"a queue named {name!r} already exists")
+    # Made to play a station: the queue remembers which, and is topped up from it.
+    station_id = body.get("station_id")
+    if station_id is not None and not stations.by_id(int(station_id), user["id"]):
+        raise HTTPException(404, "no such station")
+    q = db.one("insert into queues(user_id,name,station_id) values(%s,%s,%s) returning *",
+               (user["id"], name, station_id))
+    return _queue_state(q["id"])
+
+
+@router.get("/queues/{queue_id}")
+def get_queue(queue_id: int, around: int | None = None,
+              user: dict = Depends(current_user)):
+    """A queue, or the part of a long one worth having.
+
+    `around` asks for the slice centred somewhere other than the cursor — what the
+    client sends when somebody has scrolled towards the end of what it was given.
+    """
+    _own_queue(queue_id, user)
+    return _queue_state(queue_id, around=around)
+
+
+@router.patch("/queues/{queue_id}")
+def update_queue_settings(queue_id: int, body: dict = Body(...),
+                          user: dict = Depends(current_user)):
+    """Name, shuffle and repeat — deliberately separate from the item list.
+
+    These used to share the PUT, which reads items from `body.get("items") or []`, so a
+    client sending only `{"shuffle": true}` emptied the queue. Settings and order are
+    different operations with different risks and now have different endpoints.
+    """
+    _own_queue(queue_id, user)
+    if "repeat" in body and body["repeat"] not in ("off", "one", "all"):
+        raise HTTPException(400, "repeat must be off, one or all")
+    db.run(
+        """update queues set name=coalesce(%s,name), shuffle=coalesce(%s,shuffle),
+                  repeat=coalesce(%s,repeat), updated_at=now()
+            where id=%s""",
+        (body.get("name"), body.get("shuffle"), body.get("repeat"), queue_id),
+    )
+    return _queue_state(queue_id)
+
+
+@router.put("/queues/{queue_id}")
+def replace_queue(queue_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
+    """Full order replace. `rev` must match or the caller gets 409 plus the live state."""
+    q = _own_queue(queue_id, user)
+    if "items" not in body:
+        # Never infer "empty" from "unspecified": that is how a settings update used to
+        # erase a queue. Callers that mean to empty it send an explicit [].
+        raise HTTPException(400, "items is required — use PATCH for name/shuffle/repeat")
+    rev = body.get("rev")
+    if rev is not None and int(rev) != q["rev"]:
+        # Hand the loser the live state so it can merge, instead of guessing what changed.
+        # jsonable_encoder because the error path does not get FastAPI's response encoding.
+        raise HTTPException(409, jsonable_encoder(
+            {"reason": "stale rev", "current": _queue_state(queue_id)}))
+
+    items = body.get("items") or []
+    with db.pool().connection() as c:
+        c.execute("delete from queue_items where queue_id=%s", (queue_id,))
+        for pos, it in enumerate(items):
+            tid = it["track_id"] if isinstance(it, dict) else it
+            origin = it.get("origin", "user") if isinstance(it, dict) else "user"
+            c.execute("insert into queue_items(queue_id,pos,track_id,origin) values(%s,%s,%s,%s)",
+                      (queue_id, pos, tid, origin))
+        c.execute(
+            """update queues set rev=rev+1, updated_at=now(),
+                      name=coalesce(%s,name), shuffle=coalesce(%s,shuffle),
+                      repeat=coalesce(%s,repeat),
+                      cursor_index=least(coalesce(%s,cursor_index), greatest(%s-1,0))
+                where id=%s""",
+            (body.get("name"), body.get("shuffle"), body.get("repeat"),
+             body.get("cursor_index"), len(items), queue_id),
+        )
+    announce_queue(queue_id, user)
+    return _queue_state(queue_id)
+
+
+@router.patch("/queues/{queue_id}/cursor")
+def move_cursor(queue_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
+    """Cheap and frequent, so it does not bump `rev`: on a conflict the playing device wins."""
+    _own_queue(queue_id, user)
+    was = db.one("select cursor_index from queues where id=%s", (queue_id,))["cursor_index"]
+    db.run(
+        """update queues set cursor_index=coalesce(%s,cursor_index),
+                  position_ms=coalesce(%s,position_ms), updated_at=now()
+            where id=%s""",
+        (body.get("cursor_index"), body.get("position_ms"), queue_id),
+    )
+    q = db.one("select id,name,cursor_index,position_ms,rev from queues where id=%s", (queue_id,))
+    # Position is saved every ten seconds; only a change of track is news.
+    if body.get("cursor_index") is not None and body["cursor_index"] != was:
+        announce_queue(queue_id, user, cursor_moved=True)
+    return q
+
+
+def _shift_positions(c, queue_id: int, from_pos: int, delta: int) -> None:
+    """Move every row at or after `from_pos` along by `delta`.
+
+    (queue_id, pos) is a primary key and Postgres checks it row by row, so the obvious
+    `set pos = pos + 1` collides with the row still sitting in the slot the first one is
+    moving into. That is why "play next" answered 500 rather than putting a song next:
+    it only ever shifted anything when there was something to shift past. Parking the
+    whole block far above the queue first gives every row an empty slot to land in on
+    the way back.
+    """
+    if delta == 0:
+        return
+    park = 1_000_000
+    c.execute("update queue_items set pos = pos + %s where queue_id=%s and pos >= %s",
+              (park, queue_id, from_pos))
+    c.execute("update queue_items set pos = pos - %s where queue_id=%s and pos >= %s",
+              (park - delta, queue_id, park))
+
+
+@router.post("/queues/{queue_id}/items")
+def queue_add(queue_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
+    """`next` inserts above the autoplay/radio tail, not blindly at the top."""
+    _own_queue(queue_id, user, adding=True)
+    ids = body.get("track_ids") or []
+    if not ids:
+        raise HTTPException(400, "track_ids required")
+    mode = body.get("mode", "end")           # end | next
+    rows = db.all_("select pos, origin from queue_items where queue_id=%s order by pos",
+                   (queue_id,))
+    cursor = db.one("select cursor_index from queues where id=%s", (queue_id,))["cursor_index"]
+
+    if mode == "next":
+        # Straight after the song playing, and after anything else already queued up
+        # this way — so three "play next" in a row play in the order they were pressed.
+        #
+        # It used to walk past every user-added row after the cursor, which in a queue
+        # somebody had built by hand is all of them: "play next" put the song at the
+        # very end, which is the one place it was not supposed to go.
+        after = cursor
+        for r in rows:
+            if r["pos"] <= cursor:
+                continue
+            if r["origin"] == "next":
+                after = r["pos"]
+            else:
+                break
+        insert_at = after + 1
+    else:
+        insert_at = (rows[-1]["pos"] + 1) if rows else 0
+
+    with db.pool().connection() as c:
+        _shift_positions(c, queue_id, insert_at, len(ids))
+        for n, tid in enumerate(ids):
+            c.execute(
+                """insert into queue_items(queue_id,pos,track_id,origin,added_by)
+                   values(%s,%s,%s,%s,%s)""",
+                (queue_id, insert_at + n, tid,
+                 body.get("origin") or ("next" if mode == "next" else "user"),
+                 user["id"]))
+        c.execute("update queues set rev=rev+1, updated_at=now() where id=%s", (queue_id,))
+    announce_queue(queue_id, user)
+    return _queue_state(queue_id)
+
+
+@router.delete("/queues/{queue_id}/items/{pos}")
+def remove_item(queue_id: int, pos: int, user: dict = Depends(current_user)):
+    """Remove one track.
+
+    Re-sending the whole list to drop a single row races with anything else touching
+    the queue, and it is why fixing a queue used to need a terminal.
+    """
+    _own_queue(queue_id, user)
+    with db.pool().connection() as c:
+        gone = c.execute(
+            "delete from queue_items where queue_id=%s and pos=%s returning track_id",
+            (queue_id, pos),
+        ).fetchone()
+        if not gone:
+            raise HTTPException(404, "no item at that position")
+        _shift_positions(c, queue_id, pos + 1, -1)
+        # Keep the cursor pointing at the same *track*: removing something above the
+        # current one must not skip playback forward.
+        c.execute(
+            """update queues
+                  set cursor_index = case
+                        when cursor_index > %s then cursor_index - 1
+                        else cursor_index end,
+                      rev = rev + 1, updated_at = now()
+                where id=%s""",
+            (pos, queue_id),
+        )
+    announce_queue(queue_id, user)
+    return _queue_state(queue_id)
+
+
+@router.post("/queues/{queue_id}/move")
+def move_item(queue_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
+    """Reorder by dragging — one row, or a whole selection at once.
+
+    Positions are rewritten in one statement per row so the list can never end up with
+    a gap or a duplicate position.
+    """
+    _own_queue(queue_id, user)
+    src, dst = body.get("from"), body.get("to")
+    if src is None or dst is None:
+        raise HTTPException(400, "from and to are required")
+
+    rows = db.all_("select pos, item_id, track_id, origin, added_by from queue_items "
+                   "where queue_id=%s order by pos", (queue_id,))
+    # `from` may be several positions: dragging one row of a selection brings the rest
+    # with it, and doing that as one edit keeps them together and costs one request
+    # instead of a dozen that each shift the ones after them.
+    moving = sorted(src) if isinstance(src, list) else [src]
+    if not moving or not all(0 <= p < len(rows) for p in moving) \
+            or not (0 <= dst < len(rows)):
+        raise HTTPException(400, "position out of range")
+
+    block = [rows[p] for p in moving]
+    remaining = [r for i, r in enumerate(rows) if i not in set(moving)]
+    # `to` is where it lands in the list it is landing in — that is, with the rows
+    # being moved already taken out of it, which is what a drag reports.
+    at = max(0, min(len(remaining), dst))
+    cursor = db.one("select cursor_index from queues where id=%s",
+                    (queue_id,))["cursor_index"]
+    # Follow the *row* that was playing rather than the index it happened to have —
+    # and not the track either: with a song in the queue twice, "the first row holding
+    # this track" is the other copy, and the cursor jumped to it.
+    playing = rows[cursor]["item_id"] if 0 <= cursor < len(rows) else None
+    rows = remaining[:at] + block + remaining[at:]
+
+    with db.pool().connection() as c:
+        c.execute("delete from queue_items where queue_id=%s", (queue_id,))
+        for i, r in enumerate(rows):
+            # Rows keep their names through a reorder: a client holds on to the one
+            # that is playing by its item_id.
+            c.execute("insert into queue_items(queue_id,pos,item_id,track_id,origin,added_by) "
+                      "values(%s,%s,%s,%s,%s,%s)",
+                      (queue_id, i, r["item_id"], r["track_id"], r["origin"],
+                       r["added_by"]))
+        new_cursor = next((i for i, r in enumerate(rows) if r["item_id"] == playing),
+                          cursor)
+        c.execute("update queues set rev=rev+1, cursor_index=%s, updated_at=now() "
+                  "where id=%s", (new_cursor, queue_id))
+    announce_queue(queue_id, user)
+    return _queue_state(queue_id)
+
+
+@router.post("/queues/{queue_id}/arrange")
+def arrange_items(queue_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
+    """Put these rows, in this order, straight after another one — the booth's word on
+    what plays next.
+
+    `/move` keeps a selection in the order it was in, which is what a drag wants and
+    exactly what a set does not: the booth decides an order, and saying it as a drag
+    per record was a request per record, each shifting the ones after it. Here the rows
+    are named (item_id, which a reorder never changes) and laid down as asked, right
+    after `after` (an item_id; the playing row when left out). Every other row keeps
+    its own order around them, and the cursor stays on its row.
+    """
+    _own_queue(queue_id, user)
+    wanted = body.get("items")
+    if not isinstance(wanted, list) or not all(isinstance(x, int) for x in wanted):
+        raise HTTPException(400, "items is a list of item ids")
+    rows = db.all_("select pos, item_id, track_id, origin, added_by from queue_items "
+                   "where queue_id=%s order by pos", (queue_id,))
+    by_id = {r["item_id"]: r for r in rows}
+    # A row named twice goes where it is first named; a row that is not (or no longer)
+    # in the queue is passed over — the booth's list can be a moment older than this.
+    seen: set[int] = set()
+    block = []
+    for x in wanted:
+        if x in by_id and x not in seen:
+            seen.add(x)
+            block.append(by_id[x])
+    cursor = db.one("select cursor_index from queues where id=%s",
+                    (queue_id,))["cursor_index"]
+    playing = rows[cursor]["item_id"] if 0 <= cursor < len(rows) else None
+    after = body.get("after", playing)
+    if after is not None and (after not in by_id or after in seen):
+        raise HTTPException(400, "after is not a row of this queue")
+    remaining = [r for r in rows if r["item_id"] not in seen]
+    at = next((i + 1 for i, r in enumerate(remaining) if r["item_id"] == after), 0)
+    rows = remaining[:at] + block + remaining[at:]
+
+    with db.pool().connection() as c:
+        c.execute("delete from queue_items where queue_id=%s", (queue_id,))
+        for i, r in enumerate(rows):
+            c.execute("insert into queue_items(queue_id,pos,item_id,track_id,origin,added_by) "
+                      "values(%s,%s,%s,%s,%s,%s)",
+                      (queue_id, i, r["item_id"], r["track_id"], r["origin"],
+                       r["added_by"]))
+        new_cursor = next((i for i, r in enumerate(rows) if r["item_id"] == playing),
+                          cursor)
+        c.execute("update queues set rev=rev+1, cursor_index=%s, updated_at=now() "
+                  "where id=%s", (new_cursor, queue_id))
+    announce_queue(queue_id, user)
+    return _queue_state(queue_id)
+
+
+@router.post("/queues/{queue_id}/shuffle")
+def shuffle_queue(queue_id: int, body: dict = Body(default={}),
+                  user: dict = Depends(current_user)):
+    """Shuffle what is coming, once.
+
+    Not a mode. A shuffle you can switch on is a promise about every song after this
+    one for as long as it is on, which means the queue on screen is not the order you
+    will hear — and turning it off does not put anything back. This rearranges the
+    rows themselves, after the one playing, and then it is over: what the list says is
+    what happens.
+    """
+    _own_queue(queue_id, user)
+    cursor = db.one("select cursor_index from queues where id=%s",
+                    (queue_id,))["cursor_index"]
+    rows = db.all_("select pos, item_id, track_id, origin, added_by from queue_items "
+                   "where queue_id=%s order by pos", (queue_id,))
+    keep = [r for r in rows if r["pos"] <= cursor]
+    rest = [r for r in rows if r["pos"] > cursor]
+    if len(rest) < 2:
+        return _queue_state(queue_id)
+
+    # The app deals the rows itself the moment the button is pressed, so the list
+    # moves under the finger; this is it saying which order it dealt. Honoured when it
+    # is a permutation of what is actually after the cursor, otherwise dealt here —
+    # before, the server always dealt its own and the list reshuffled a second time
+    # when the answer arrived.
+    order = body.get("order")
+    if isinstance(order, list) and sorted(order) == sorted(r["track_id"] for r in rest):
+        pool: dict = {}
+        for r in rest:
+            pool.setdefault(r["track_id"], []).append(r)
+        rest = [pool[tid].pop(0) for tid in order]
+    else:
+        random.shuffle(rest)
+    with db.pool().connection() as c:
+        c.execute("delete from queue_items where queue_id=%s", (queue_id,))
+        for i, r in enumerate(keep + rest):
+            c.execute("""insert into queue_items(queue_id,pos,item_id,track_id,origin,added_by)
+                         values(%s,%s,%s,%s,%s,%s)""",
+                      (queue_id, i, r["item_id"], r["track_id"], r["origin"],
+                       r["added_by"]))
+        c.execute("update queues set rev=rev+1, updated_at=now() where id=%s",
+                  (queue_id,))
+    announce_queue(queue_id, user)
+    return _queue_state(queue_id)
+
+
+@router.post("/queues/{queue_id}/clear")
+def clear_queue(queue_id: int, body: dict = Body(default={}),
+                user: dict = Depends(current_user)):
+    """Clear everything, or just the machine-picked tail — the point of tagging radio
+    tracks with an origin in the first place."""
+    _own_queue(queue_id, user)
+    origin = (body or {}).get("origin")
+    with db.pool().connection() as c:
+        if origin:
+            c.execute("delete from queue_items where queue_id=%s and origin=%s",
+                      (queue_id, origin))
+        else:
+            c.execute("delete from queue_items where queue_id=%s", (queue_id,))
+        rows = c.execute("select pos from queue_items where queue_id=%s order by pos",
+                         (queue_id,)).fetchall()
+        for i, r in enumerate(rows):
+            c.execute("update queue_items set pos=%s where queue_id=%s and pos=%s",
+                      (i - len(rows), queue_id, r["pos"]))
+        c.execute("update queue_items set pos = pos + %s where queue_id=%s and pos < 0",
+                  (len(rows), queue_id))
+        c.execute("""update queues set rev=rev+1, updated_at=now(),
+                            cursor_index=least(cursor_index, greatest(%s-1, 0))
+                      where id=%s""", (len(rows), queue_id))
+    announce_queue(queue_id, user)
+    return _queue_state(queue_id)
+
+
+@router.delete("/playlists/{playlist_id}/items/{pos}")
+def remove_playlist_item(playlist_id: int, pos: int,
+                         user: dict = Depends(current_user)):
+    _holds_items(playlist_id, user)
+    with db.pool().connection() as c:
+        gone = c.execute(
+            "delete from playlist_items where playlist_id=%s and pos=%s returning track_id",
+            (playlist_id, pos),
+        ).fetchone()
+        if not gone:
+            raise HTTPException(404, "no item at that position")
+        c.execute("update playlist_items set pos = pos - 1 where playlist_id=%s and pos > %s",
+                  (playlist_id, pos))
+    return get_playlist(playlist_id, user)
+
+
+@router.post("/library/remove")
+def remove_from_library(body: dict = Body(...), user: dict = Depends(current_user)):
+    """Take songs out of your library — the wrong match, the one you never wanted.
+
+    Out of your playlists and queues too, since a song that is still on a list is back
+    in the library the next time that list is touched. Whatever nobody else holds is
+    deleted from the server with its audio; see removal.py.
+    """
+    ids = body.get("track_ids")
+    if not isinstance(ids, list) or not ids or not all(isinstance(i, int) for i in ids):
+        raise HTTPException(400, "track_ids must be a list of track ids")
+    done = removal.remove_from_library(user["id"], ids, cfg().data_dir)
+    for queue_id in done.pop("queues"):
+        announce_queue(queue_id, user)
+    return done
+
+
+@router.delete("/queues/{queue_id}")
+def delete_queue(queue_id: int, user: dict = Depends(current_user)):
+    _own_queue(queue_id, user)
+    db.run("delete from queues where id=%s", (queue_id,))
+    return {"deleted": queue_id}
+
+
+@router.post("/queues/{queue_id}/save-as-playlist", status_code=201)
+def save_as_playlist(queue_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
+    q = _own_queue(queue_id, user)
+    name = (body.get("name") or q["name"]).strip()
+    p = db.one("insert into playlists(owner_id,name) values(%s,%s) returning *",
+               (user["id"], name))
+    with db.pool().connection() as c:
+        c.execute(
+            """insert into playlist_items(playlist_id,pos,track_id)
+               select %s, pos, track_id from queue_items where queue_id=%s""",
+            (p["id"], queue_id),
+        )
+    return get_playlist(p["id"], user)
+
+
+# ------------------------------------------------------------------ stations
+def _fresh(value, default: float) -> float:
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _station(station_id: int, user: dict) -> dict:
+    station = stations.by_id(station_id, user["id"])
+    if not station or not station.get("playlist_id"):
+        raise HTTPException(404, "no such station")
+    return station
+
+
+def _station_playlist(station: dict, user: dict, **more) -> dict:
+    return {**get_playlist(station["playlist_id"], user), **more}
+
+
+@router.post("/stations", status_code=201)
+def start_station(body: dict = Body(...), user: dict = Depends(current_user)):
+    """Point at a song, a record, an artist or a genre and get a playlist of what
+    belongs next to it: thirty songs to look through, play from anywhere, keep, or ask
+    for more of. See stations.py. The answer is the playlist, with "station" on it."""
+    kind = (body.get("kind") or "track").strip()
+    if kind not in ("track", "album", "artist", "genre"):
+        raise HTTPException(400, "a station is made from a track, an album, an artist or a genre")
+    album = (body.get("album") or "").strip() or None
+    artist = (body.get("artist") or "").strip() or None
+    genre = (body.get("genre") or "").strip().lower() or None
+    track_id = body.get("track_id")
+    fresh = _fresh(body.get("fresh"), 0.5)
+    if kind == "genre" and not genre:
+        raise HTTPException(400, "which genre?")
+    made = stations.create(user["id"], kind, track_id=track_id, album=album, artist=artist,
+                           genre=genre, fresh=fresh)
+    if made is None:
+        raise HTTPException(
+            400,
+            "Nothing to build a station from — nothing could be found for it."
+            if kind == "genre" else
+            "Nothing here to build a station from — none of it is in your library.")
+    return {**get_playlist(made["playlist_id"], user), "added": made["added"]}
+
+
+@router.post("/stations/{station_id}/extend")
+def extend_station(station_id: int, body: dict = Body(default={}),
+                   user: dict = Depends(current_user)):
+    """More of the same on the end of the station — and on the end of the queue
+    playing it, where `queue_id` says which. Asked for by the app as the queue runs
+    down, and by the "More" button on the station's page."""
+    station = _station(station_id, user)
+    wanted = int(body.get("count") or stations.MORE)
+    found = stations.extend(station, user["id"], wanted=wanted)
+    queue = None
+    queue_id = body.get("queue_id")
+    if queue_id is not None:
+        _own_queue(int(queue_id), user)
+        if found:
+            have = {r["track_id"] for r in db.all_(
+                "select track_id from queue_items where queue_id=%s", (queue_id,))}
+            new = [t for t in found if t not in have]
+            if new:
+                queue_add(int(queue_id), {"track_ids": new, "mode": "end", "origin": "radio"}, user)
+        queue = _queue_state(int(queue_id))
+    return {"added": len(found), "playlist": get_playlist(station["playlist_id"], user),
+            "queue": queue}
+
+
+@router.post("/stations/{station_id}/refresh")
+def refresh_station(station_id: int, user: dict = Depends(current_user)):
+    """The station written again from its seeds: a new thirty."""
+    station = _station(station_id, user)
+    added = stations.refresh(station, user["id"])
+    return _station_playlist(station, user, added=added)
+
+
+@router.patch("/stations/{station_id}")
+def tune_station(station_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
+    """How far the station reaches past the library from here on: `fresh` 0 is only
+    what is yours and here, 1 only what is new. What is already on it stays."""
+    station = _station(station_id, user)
+    stations.tune(station_id, _fresh(body.get("fresh"), 0.5))
+    return _station_playlist(station, user)
+
+
+# ------------------------------------------------------------------ favourites
+FAVOURITES_KIND = "favourites"
+
+
+def favourites_id(user_id: int) -> int:
+    """The one playlist nobody has to make and nobody can delete."""
+    row = db.one("select id from playlists where owner_id=%s and kind=%s",
+                 (user_id, FAVOURITES_KIND))
+    if row:
+        return row["id"]
+    return db.one(
+        """insert into playlists(owner_id, name, kind, sync_mode)
+           values(%s,'Favourites',%s,'off') returning id""",
+        (user_id, FAVOURITES_KIND),
+    )["id"]
+
+
+@router.get("/favourites")
+def favourites(user: dict = Depends(current_user)):
+    """The ids, so a screen full of hearts is one request rather than one per song."""
+    playlist_id = favourites_id(user["id"])
+    rows = db.all_("select track_id from playlist_items where playlist_id=%s",
+                   (playlist_id,))
+    return {"playlist_id": playlist_id, "track_ids": [r["track_id"] for r in rows]}
+
+
+@router.post("/favourites/{track_id}")
+def set_favourite(track_id: int, body: dict = Body(default={}),
+                  user: dict = Depends(current_user)):
+    """Heart or unheart. Without a body it toggles, which is what a tap means."""
+    playlist_id = favourites_id(user["id"])
+    have = db.one("select pos from playlist_items where playlist_id=%s and track_id=%s",
+                  (playlist_id, track_id))
+    wanted = body.get("favourite")
+    if wanted is None:
+        wanted = have is None
+
+    if wanted and have is None:
+        at = (db.one("select coalesce(max(pos),-1) p from playlist_items where playlist_id=%s",
+                     (playlist_id,))["p"]) + 1
+        db.run("""insert into playlist_items(playlist_id,pos,track_id) values(%s,%s,%s)
+                  on conflict do nothing""", (playlist_id, at, track_id))
+    elif not wanted and have is not None:
+        db.run("delete from playlist_items where playlist_id=%s and track_id=%s",
+               (playlist_id, track_id))
+    return {"track_id": track_id, "favourite": bool(wanted), "playlist_id": playlist_id}
+
+
+# ------------------------------------------------------------------ queues
+# How much of a very long queue is sent at once.
+#
+# Somebody's mirrored favourites is fourteen thousand songs. Sent whole that is seven
+# megabytes of JSON, fourteen thousand objects to build, and all of it held for as long
+# as the app is open — which a browser on a phone answers by killing the page, and a
+# browser on a laptop answers by locking up for several seconds every time anything
+# about the queue changes. Nobody is reading row nine thousand; what is wanted is where
+# you are and what is coming. So that is what is sent, and the client asks again when
+# it gets near an edge.
+QUEUE_WINDOW = 600
+
+
+def _queue_state(queue_id: int, *, around: int | None = None) -> dict:
+    q = db.one("select * from queues where id=%s", (queue_id,))
+    total = db.one("select count(*) n from queue_items where queue_id=%s",
+                   (queue_id,))["n"]
+
+    # Counted in rows rather than in positions: a position is a sort key with gaps in
+    # it, and the cursor is an index into the list as the client sees it.
+    start = 0
+    if total > QUEUE_WINDOW:
+        centre = q["cursor_index"] if around is None else around
+        start = max(0, min(centre - QUEUE_WINDOW // 2, total - QUEUE_WINDOW))
+
+    # The media join is not optional: without it every row comes back with no
+    # stream_url, the client reads that as "not ready yet", and nothing in the queue
+    # is playable no matter how ready the track actually is.
+    items = db.all_(
+        """select i.pos, i.item_id, i.origin, u.name as added_by, u.id as added_by_id,
+                  u.avatar_sig as added_by_avatar,
+                  t.*, m.path, m.bytes, m.sha256,
+                  c.color as cover_color, c.sha256 as cover_sha
+             from queue_items i
+             join tracks t on t.id=i.track_id
+             left join users u on u.id = i.added_by
+             left join media m on m.track_id=t.id and m.role='canonical'
+             left join covers c on c.id=t.cover_id
+            where i.queue_id=%s order by i.pos offset %s limit %s""",
+        (queue_id, start, QUEUE_WINDOW),
+    )
+    return {**q, "station": stations.describe_queue(queue_id),
             # What the whole queue is, and which slice of it this is: the client needs
             # both to say "1 of 14,022" and to know when to ask for the next slice.
             "total": total, "window_from": start,
@@ -1472,109 +2140,3 @@ def _fresh(value, default: float) -> float:
         return max(0.0, min(1.0, float(value)))
     except (TypeError, ValueError):
         return default
-
-
-@router.post("/stations", status_code=201)
-def start_station(body: dict = Body(...), user: dict = Depends(current_user)):
-    """Point at a song, a record or an artist and play what belongs next to it.
-
-    The station is a queue of its own rather than a tail on the end of whatever was
-    playing: that is the difference between "add five more" and "put this on". It can
-    be reordered, taken from, kept on the device and saved to the library, because all
-    of those are things a queue can already do.
-    """
-    kind = (body.get("kind") or "track").strip()
-    if kind not in ("track", "album", "artist", "genre"):
-        raise HTTPException(400, "a station is made from a track, an album, an artist or a genre")
-    album = (body.get("album") or "").strip() or None
-    artist = (body.get("artist") or "").strip() or None
-    genre = (body.get("genre") or "").strip().lower() or None
-    track_id = body.get("track_id")
-    fresh = _fresh(body.get("fresh"), 0.5)
-    if kind == "genre" and not genre:
-        raise HTTPException(400, "which genre?")
-
-    seeds = stations.seed_tracks(kind, user_id=user["id"], track_id=track_id,
-                                 album=album, artist=artist, genre=genre)
-    if not seeds:
-        raise HTTPException(
-            400,
-            "Nothing to build a station from — nothing could be found for it."
-            if kind == "genre" else
-            "Nothing here to build a station from — none of it is in your library.")
-
-    name = stations.name_for(kind, seeds, album=album, artist=artist, genre=genre)
-    # Starting the same station twice is the same station again, not a 500 on the
-    # unique name: the old one is replaced.
-    db.run("delete from queues where user_id=%s and name=%s", (user["id"], name))
-    queue = db.one(
-        "insert into queues(user_id, name) values(%s,%s) returning *",
-        (user["id"], name))
-
-    # The seeds themselves first, so a station from a song starts with that song.
-    opening = [s["id"] for s in seeds][: stations.SEEDS]
-    queue_add(queue["id"], {"track_ids": opening, "mode": "end", "origin": "user"}, user)
-
-    avoid_tracks, _ = stations.already_in(queue["id"])
-    found = stations.gather(seeds, user_id=user["id"], wanted=stations.FIRST, fresh=fresh,
-                            avoid_tracks=avoid_tracks)
-    if found:
-        queue_add(queue["id"], {"track_ids": found, "mode": "end", "origin": "radio"},
-                  user)
-
-    db.run(
-        """insert into stations(queue_id, owner_id, kind, seed_track, seed_text, name, fresh)
-           values(%s,%s,%s,%s,%s,%s,%s)""",
-        (queue["id"], user["id"], kind, seeds[0]["id"],
-         {"album": album, "artist": artist, "genre": genre}.get(kind), name, fresh),
-    )
-    return {**_queue_state(queue["id"]), "added": len(found)}
-
-
-@router.post("/stations/{queue_id}/extend")
-def extend_station(queue_id: int, body: dict = Body(default={}),
-                   user: dict = Depends(current_user)):
-    """More of the same, asked for as the station runs down.
-
-    A station is endless from where somebody is standing and finite on the disk: it is
-    topped up a handful at a time as it is listened through, so one left running for an
-    hour costs an hour of downloads and one abandoned after two songs costs almost
-    nothing.
-    """
-    _own_queue(queue_id, user)
-    station = stations.describe(queue_id)
-    if not station:
-        raise HTTPException(404, "that queue is not a station")
-
-    seeds = stations.seed_tracks(
-        station["kind"], user_id=user["id"], track_id=station["seed_track"],
-        album=station["seed_text"] if station["kind"] == "album" else None,
-        artist=station["seed_text"] if station["kind"] == "artist" else None,
-        genre=station["seed_text"] if station["kind"] == "genre" else None)
-    if not seeds:
-        # The record it was made from has been taken out of the library since.
-        seed = catalog.track_row(station["seed_track"]) if station["seed_track"] else None
-        seeds = [seed] if seed else []
-    if not seeds:
-        return {**_queue_state(queue_id), "added": 0}
-
-    avoid_tracks, _ = stations.already_in(queue_id)
-    wanted = int(body.get("count") or stations.MORE)
-    found = stations.gather(seeds, user_id=user["id"], wanted=wanted,
-                            fresh=station["fresh"], queue_id=queue_id,
-                            since=station["created_at"], avoid_tracks=avoid_tracks)
-    if found:
-        queue_add(queue_id, {"track_ids": found, "mode": "end", "origin": "radio"}, user)
-    return {**_queue_state(queue_id), "added": len(found)}
-
-
-@router.patch("/stations/{queue_id}")
-def tune_station(queue_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
-    """How far the station reaches past the library from here on: `fresh` 0 is only
-    what is yours and here, 1 only what is new. What is already queued stays."""
-    _own_queue(queue_id, user)
-    if not stations.describe(queue_id):
-        raise HTTPException(404, "that queue is not a station")
-    db.run("update stations set fresh=%s where queue_id=%s",
-           (_fresh(body.get("fresh"), 0.5), queue_id))
-    return _queue_state(queue_id)

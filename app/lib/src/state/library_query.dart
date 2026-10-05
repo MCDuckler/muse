@@ -23,6 +23,7 @@ enum LibraryChip {
   mirrors('Mirrors'),
   others('From others'),
   mixes('Mixes'),
+  stations('Stations'),
   crates('Crates'),
   downloaded('Downloaded');
 
@@ -31,10 +32,12 @@ enum LibraryChip {
 
   bool keeps(Playlist p) => switch (this) {
         all => true,
-        mine => p.mine && !p.isMirror && !p.isMix,
+        mine => p.mine && !p.isMirror && !p.isMix && !p.isStation,
         mirrors => p.isMirror,
         others => p.saved,
         mixes => p.isMix,
+        // Written by the machine from a song, a record, an act or a genre.
+        stations => p.isStation,
         crates => p.autoSplit,
         // Every song in it has its audio here: what will play on the train.
         downloaded => p.itemCount > 0 && p.waiting == 0,

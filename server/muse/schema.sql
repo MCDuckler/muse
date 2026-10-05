@@ -162,13 +162,16 @@ create index if not exists playback_reports_recent
 -- thinks belongs next to it. The queue is the station — everything a queue can do a
 -- station can do — and this is what it was made from, so it can be asked for more.
 create table if not exists stations (
-  queue_id   int primary key references queues(id) on delete cascade,
-  owner_id   int not null references users(id) on delete cascade,
-  kind       text not null,
-  seed_track int references tracks(id) on delete set null,
-  seed_text  text,
-  name       text not null,
-  created_at timestamptz not null default now()
+  id          serial primary key,
+  queue_id    int references queues(id) on delete cascade,      -- the old shape
+  playlist_id int references playlists(id) on delete cascade,   -- the station itself
+  owner_id    int not null references users(id) on delete cascade,
+  kind        text not null,
+  seed_track  int references tracks(id) on delete set null,
+  seed_text   text,
+  name        text not null,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
 );
 
 create table if not exists listens (
@@ -928,3 +931,23 @@ create index if not exists exit_fetches_at on exit_fetches(at);
 
 -- A song the phone fetched itself and handed in, rather than one carried through it.
 alter table exit_fetches add column if not exists phone_pulled boolean;
+
+-- A station is a playlist the machine writes (stations.py, 2026-10-06), not a queue:
+-- the row points at its playlist, and a queue made from a station points back at it.
+-- Stations of the old shape are carried over at start-up (stations.adopt_queues).
+alter table stations add column if not exists id serial;
+alter table stations add column if not exists playlist_id int references playlists(id) on delete cascade;
+alter table stations add column if not exists updated_at timestamptz not null default now();
+do $$
+begin
+  if exists (select 1 from pg_constraint c
+              join pg_attribute a on a.attrelid = c.conrelid and a.attnum = any(c.conkey)
+             where c.conrelid = 'stations'::regclass and c.contype = 'p' and a.attname = 'queue_id') then
+    alter table stations drop constraint stations_pkey;
+    alter table stations add primary key (id);
+  end if;
+end $$;
+alter table stations alter column queue_id drop not null;
+create unique index if not exists stations_playlist_key on stations(playlist_id);
+create unique index if not exists stations_queue_key on stations(queue_id);
+alter table queues add column if not exists station_id int references stations(id) on delete set null;

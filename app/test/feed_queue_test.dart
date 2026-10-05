@@ -30,7 +30,7 @@ class _App extends AppState {
 
   @override
   Future<void> playNow(List<Track> tracks,
-      {int startAt = 0, bool shuffle = false, String? named}) async {
+      {int startAt = 0, bool shuffle = false, String? named, int? stationId}) async {
     played.add((ids: [for (final t in tracks) t.id], startAt: startAt, named: named));
     activeQueue = Queue.fromJson({'id': 77, 'name': named ?? 'Now', 'items': []});
   }

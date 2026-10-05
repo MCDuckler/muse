@@ -1258,16 +1258,26 @@ class AppState extends ChangeNotifier {
   /// [fresh] reuses the one with that name if it exists rather than making a second —
   /// playing the same album twice should land in the same place, not leave a trail of
   /// queues behind.
-  Future<Queue> ensureQueue(String name, {bool fresh = false}) async {
+  /// The queue called [name], made if there is none. Made to play a station where
+  /// [stationId] says which — and a queue by that name that plays no station, or
+  /// another, is replaced: the name is the station's, and the queue has to be too.
+  Future<Queue> ensureQueue(String name, {bool fresh = false, int? stationId}) async {
     Queue? found = _byName(name);
     if (found == null) {
       queues = await api.queues();
       found = _byName(name);
     }
+    if (found != null && stationId != null && found.stationId != stationId) {
+      try {
+        await api.deleteQueue(found.id);
+      } catch (_) {}
+      queues = await api.queues();
+      found = null;
+    }
     if (found != null) return api.queue(found.id);
 
     try {
-      final made = await api.createQueue(name);
+      final made = await api.createQueue(name, stationId: stationId);
       queues = await api.queues();
       return made;
     } on ApiException catch (e) {
@@ -1964,7 +1974,7 @@ class AppState extends ChangeNotifier {
   /// picking gone because you wanted to hear a record — so anything with a name of its
   /// own gets its own queue, and the old one is still in the list to go back to.
   Future<void> playNow(List<Track> tracks,
-      {int startAt = 0, bool shuffle = false, String? named}) async {
+      {int startAt = 0, bool shuffle = false, String? named, int? stationId}) async {
     if (tracks.isEmpty) return;
     _removedTracks.removeAll([for (final t in tracks) t.id]);
     if (offlineSession || !serverIsThere.value) {
@@ -1972,9 +1982,11 @@ class AppState extends ChangeNotifier {
     }
     // A queue made offline is this device's own; the server gets a real one.
     if (_queueIsLocal) _setQueue(null);
+    // Playing a station: a queue of its own that remembers the station, so it is
+    // topped up from it as it is listened through.
     final target = named == null
         ? (activeQueue ?? await ensureQueue('Now'))
-        : await ensureQueue(named, fresh: true);
+        : await ensureQueue(named, fresh: true, stationId: stationId);
 
     // "Shuffle" on a record or a playlist is the same one-shot deal as the button in
     // the player: the queue is built in a shuffled order and then played from the top.
@@ -1993,16 +2005,12 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Put something on and keep playing what belongs next to it.
-  ///
-  /// A station of its own rather than a tail on the end of what was playing: that is
-  /// the difference between "add five more" and "put this on", and it is why it can
-  /// be named, kept, and saved to the library afterwards.
-  ///
-  /// Or only made, with [play] off: the station is there to be looked through and
-  /// put on when wanted. What is playing keeps playing — the station waits as a
-  /// queue of its own; with nothing playing it is opened, parked on its first song.
-  Future<Queue> startStation(
+  /// A station: a playlist the machine writes from a song, a record, an act or a
+  /// genre — thirty songs to look through, filed with the playlists. With [play] it
+  /// is put on as well, from the top, as a queue of its own that is topped up from
+  /// the station as it is listened through. The playlist is returned either way, so
+  /// the caller can open its page.
+  Future<Playlist> startStation(
       {String kind = 'track',
       Track? seed,
       String? album,
@@ -2011,17 +2019,10 @@ class AppState extends ChangeNotifier {
       bool play = true}) async {
     final made = await api.startStation(
         kind: kind, trackId: seed?.id, album: album, artist: artist, genre: genre);
-    queues = await api.queues();
-    if (!play) {
-      if (!musicIsPlaying) await openQueue(made.id, autoplay: false);
-      notifyListeners();
-      return made;
-    }
-    _setQueue(made);
-    _rememberQueue(made.id);
-    await player?.loadQueue(made, autoplay: false);
-    if (made.items.isNotEmpty) {
-      await player?.playTrack(made.items.first.id, indexHint: 0);
+    // In the library at once: the station is a playlist there.
+    unawaited(refreshPlaylists().catchError((_) {}));
+    if (play && made.items.isNotEmpty) {
+      await playNow(made.items, named: made.name, stationId: made.station?.id);
     }
     notifyListeners();
     return made;
@@ -2096,9 +2097,15 @@ class AppState extends ChangeNotifier {
     _toppingUp = true;
     _toppedUp = now;
     try {
-      final grown = await api.extendStation(q.id);
-      if (_takeQueue(grown)) {
-        await player.loadQueue(grown);
+      // The station's playlist grows, and the queue playing it with it. A station of
+      // the old shape — a queue from before, with no playlist — has nothing to grow
+      // from any more and simply ends.
+      final sid = q.stationId;
+      if (sid == null) return;
+      final grown = await api.extendStation(sid, queueId: q.id);
+      final queue = grown.queue;
+      if (queue != null && _takeQueue(queue)) {
+        await player.loadQueue(queue);
         notifyListeners();
       }
     } catch (_) {
@@ -2111,8 +2118,10 @@ class AppState extends ChangeNotifier {
   /// How far the station on now reaches past the library, from its next top-up on.
   Future<void> tuneStation(double fresh) async {
     final q = activeQueue;
-    if (q == null || !q.isStation) return;
-    _setQueue(await api.tuneStation(q.id, fresh));
+    final sid = q?.stationId;
+    if (q == null || sid == null) return;
+    await api.tuneStation(sid, fresh);
+    _setQueue(await api.queue(q.id));
     notifyListeners();
   }
 

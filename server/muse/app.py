@@ -106,6 +106,12 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             direct.start()
         if listener:
             listener.start()
+        # Stations of the old shape (a queue) become playlists, once.
+        try:
+            from . import stations as _stations
+            _stations.adopt_queues()
+        except Exception as e:                         # never block startup on this
+            logging.getLogger("muse").warning("could not carry the old stations over: %s", e)
         if start_workers:
             # One outstanding poll job is the scheduler; it re-queues itself when it
             # runs. Asking at boot covers a box that was off when the last one was due.

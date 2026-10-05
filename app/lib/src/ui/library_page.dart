@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../api/client.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/offline.dart';
@@ -27,6 +28,7 @@ import 'picks.dart';
 import 'selection_bar.dart';
 import 'service_shelf.dart';
 import 'spotify_page.dart' show UnmatchedPage;
+import 'station.dart' show keepStation;
 import 'song_row.dart';
 import 'snack.dart';
 import 'skeleton.dart';
@@ -685,8 +687,8 @@ class _PlaylistPageState extends State<PlaylistPage> {
                     key: ValueKey('pl-ro-${items[i].id}-$i'),
                     track: items[i],
                     selectable: where,
-                    onTap: () =>
-                        app.playNow(items, startAt: i, named: widget.name),
+                    onTap: () => app.playNow(items,
+                        startAt: i, named: widget.name, stationId: snap.data!.station?.id),
                     onChanged: _reload,
                   )
                 : SongRow(
@@ -709,7 +711,8 @@ class _PlaylistPageState extends State<PlaylistPage> {
                       ),
                     )
                   : null,
-              onTap: () => app.playNow(items, startAt: i, named: widget.name),
+              onTap: () => app.playNow(items,
+                  startAt: i, named: widget.name, stationId: snap.data!.station?.id),
               onRemove: () => _remove(snap.data!, i),
               onChanged: _reload,
             ),
@@ -906,7 +909,14 @@ class _PlaylistHeader extends StatelessWidget {
     final app = context.read<AppState>();
     final scheme = Theme.of(context).colorScheme;
     final kicker = [
-      if (playlist.isFavourites) 'Favourites' else if (playlist.isMix) 'Mix' else 'Playlist',
+      if (playlist.isFavourites)
+        'Favourites'
+      else if (playlist.isMix)
+        'Mix'
+      else if (playlist.isStation)
+        'Station · from ${playlist.station?.from ?? 'a song'}'
+      else
+        'Playlist',
       if (playlist.saved && playlist.ownerName != null) 'from ${playlist.ownerName}',
       if (playlist.isMirror) 'mirrored',
       if (playlist.openEdit && playlist.mine) 'shared',
@@ -992,12 +1002,47 @@ class _PlaylistHeader extends StatelessWidget {
               PressButton(
                 label: 'Play',
                 loud: true,
-                onTap: items.isEmpty ? null : () => app.playNow(items),
+                onTap: items.isEmpty
+                    ? null
+                    : () => app.playNow(items,
+                        named: playlist.isStation ? playlist.name : null,
+                        stationId: playlist.station?.id),
               ),
               PressButton(
                 label: 'Shuffle',
-                onTap: items.isEmpty ? null : () => app.playNow(items, shuffle: true),
+                onTap: items.isEmpty
+                    ? null
+                    : () => app.playNow(items,
+                        shuffle: true,
+                        named: playlist.isStation ? playlist.name : null,
+                        stationId: playlist.station?.id),
               ),
+              // A station is written by the machine, and can be written more or
+              // again: twenty more on the end, or a new thirty from its seeds.
+              if (playlist.isStation && playlist.station != null && playlist.mine) ...[
+                PressButton(
+                  label: 'More songs',
+                  onTap: () => _station(context, app, (api) async {
+                    final grown = await api.extendStation(playlist.station!.id);
+                    return grown.added == 0
+                        ? 'Nothing more to be found for it'
+                        : '${grown.added} more on "${playlist.name}"';
+                  }),
+                ),
+                PressButton(
+                  label: 'Write it again',
+                  onTap: () => _station(context, app, (api) async {
+                    final again = await api.refreshStation(playlist.station!.id);
+                    return '"${again.name}" written again — ${again.itemCount} songs';
+                  }),
+                ),
+                PressButton(
+                  label: 'Keep as playlist',
+                  onTap: () async {
+                    await keepStation(context, station: playlist);
+                  },
+                ),
+              ],
               // A kept mix: the booth does again what it did, move for move.
               if (playlist.isMix && app.boothOn)
                 PressButton(
@@ -1009,6 +1054,31 @@ class _PlaylistHeader extends StatelessWidget {
                 ),
             ],
           ),
+          // How far the station reaches past the library: what you have, a bit of
+          // both, or something new — from its next songs on.
+          if (playlist.isStation && playlist.station != null && playlist.mine)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text('Reaches for',
+                        style: Mag.typewriter(11.5, color: scheme.onSurfaceVariant)),
+                  ),
+                  FreshDial(
+                    value: playlist.station!.fresh,
+                    onChanged: (v) => _station(context, app, (api) async {
+                      await api.tuneStation(playlist.station!.id, v);
+                      return switch (v) {
+                        0.0 => 'From here on, only songs you have',
+                        1.0 => 'From here on, mostly songs new to you',
+                        _ => 'From here on, yours and new',
+                      };
+                    }),
+                  ),
+                ],
+              ),
+            ),
           if (playlist.isMirror)
             note(
               playlist.unmatched > 0
@@ -1048,6 +1118,20 @@ class _PlaylistHeader extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  /// Something done to the station, said when it is done, and the page read again.
+  Future<void> _station(BuildContext context, AppState app,
+      Future<String> Function(ApiClient api) act) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final said = await act(app.api);
+      messenger.say(snack(Text(said)));
+      unawaited(app.refreshPlaylists().catchError((_) {}));
+      onChanged();
+    } catch (e) {
+      messenger.say(problem(e));
+    }
   }
 
   Future<void> _coverSheet(

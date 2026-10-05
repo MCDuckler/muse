@@ -22,6 +22,7 @@ import 'skeleton.dart';
 import 'sleeve_art.dart';
 import 'snack.dart';
 import 'song_row.dart';
+import 'library_page.dart' show PlaylistPage;
 import 'station.dart';
 import 'track_list.dart';
 
@@ -626,9 +627,9 @@ class _Stations extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
           child: Text(
             nothing
-                ? 'A station is a queue that keeps going. Start one from any song\'s menu, '
-                    'a record or an artist — the ones you make come back here.'
-                : 'Point at an act or a genre and it keeps playing what belongs next to it.',
+                ? 'A station is a playlist the machine writes and keeps writing. Start one '
+                    'from any song\'s menu, a record or an artist — the ones you make come back here.'
+                : 'Point at an act or a genre and it writes a list of what belongs next to it.',
             style: Mag.typewriter(11, color: scheme.onSurfaceVariant),
           ),
         ),
@@ -644,7 +645,15 @@ class _Stations extends StatelessWidget {
                 station: page.stations[i],
                 onTap: () {
                   feel(Feel.commit);
-                  unawaited(app.openQueue(page.stations[i].queueId));
+                  final s = page.stations[i];
+                  // A station is a playlist: its page, to look through and put on
+                  // from anywhere. One of the old shape (a queue) is still opened.
+                  if (s.playlistId != null) {
+                    unawaited(openPage(context,
+                        (_) => PlaylistPage(playlistId: s.playlistId!, name: s.name)));
+                  } else {
+                    unawaited(app.openQueue(s.queueId));
+                  }
                 },
               ),
             ),

@@ -197,15 +197,15 @@ def test_a_station_leans_towards_what_was_listened_through_and_away_from_skips(
     me = _me()
     _listen(me, b, 1)                              # heard through
     _listen(me, c, 0.5, done=False, ms=4_000)      # skipped at once
-    grown = client.post(f"/stations/{made['id']}/extend", headers=hdr,
+    grown = client.post(f"/stations/{made['station']['id']}/extend", headers=hdr,
                         json={"count": 1}).json()
-    assert grown["items"][-1]["id"] == e
+    assert grown["playlist"]["items"][-1]["id"] == e
 
 
 def test_a_station_can_be_turned_towards_new_songs(client, hdr, shelf):
     made = client.post("/stations", headers=hdr,
                        json={"kind": "track", "track_id": shelf[0]}).json()
-    tuned = client.patch(f"/stations/{made['id']}", headers=hdr, json={"fresh": 1})
+    tuned = client.patch(f"/stations/{made['station']['id']}", headers=hdr, json={"fresh": 1})
     assert tuned.status_code == 200, tuned.text
     assert tuned.json()["station"]["fresh"] == 1
 

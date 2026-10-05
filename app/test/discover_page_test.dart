@@ -77,7 +77,7 @@ Map<String, dynamic> page({bool built = true, bool releases = true}) => {
       'building': !built,
       'stations': {
         'yours': [
-          {'queue_id': 31, 'name': 'Techno radio', 'kind': 'genre', 'seed_text': 'techno', 'count': 14},
+          {'id': 3, 'playlist_id': 77, 'queue_id': null, 'name': 'Techno radio', 'kind': 'genre', 'seed_text': 'techno', 'count': 14},
         ],
         'artists': [
           {'name': 'Morning Static', 'cover_track': null},
