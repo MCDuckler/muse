@@ -170,6 +170,8 @@ def test_the_cover_has_a_mix_and_songs_loved_then_left(client, hdr, shelf):
     a, b, c, d, *_ = shelf
     me = _me()
     _list(client, hdr, "one", [a, b])
+    # A list made long ago: put on one this month, b would be a seed of the mix itself.
+    db.run("update playlist_items set added_at = now() - interval '60 days'")
     _listen(me, a, 60)
     for n in range(3):
         _listen(me, d, 60 * 24 * (90 + n))

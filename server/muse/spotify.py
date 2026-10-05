@@ -27,9 +27,10 @@ TOKEN_URL = "https://accounts.spotify.com/api/token"
 API = "https://api.spotify.com/v1"
 
 # Read-only. muse never writes to Spotify, and asking for less is the difference
-# between a scary consent screen and a boring one.
+# between a scary consent screen and a boring one. The top and recently played ones
+# are for Discover (elsewhere.py): what somebody plays there, not only what they kept.
 SCOPES = ("playlist-read-private playlist-read-collaborative user-library-read "
-          "user-follow-read")
+          "user-follow-read user-top-read user-read-recently-played")
 
 _states: dict[str, tuple[int, float]] = {}
 STATE_TTL = 600

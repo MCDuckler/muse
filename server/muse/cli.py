@@ -273,11 +273,16 @@ def traits_index(measure: bool = False) -> None:
         """select t.*, m.path, m.sha256 from tracks t
              join media m on m.track_id = t.id and m.role = 'canonical'
             where t.state = 'ready' order by t.id""")
-    kept = missing = 0
+    kept = missing = older = 0
     for t in rows:
         audio = pathlib.Path(t["path"] or "")
         cached = beats.cache_path(cfg.data_dir, t["sha256"])
         if not cached.exists() and not measure:
+            # Measured by an earlier version only: that still says how steady its pulse
+            # is and how hard its beats hit (the sleep mix's pulse and punch), which
+            # are filled in where they are missing — the rest waits for --measure.
+            if _older_pulse(cfg.data_dir, t["id"], t["sha256"]):
+                older += 1
             missing += 1
             continue
         if not audio.exists():
@@ -295,7 +300,32 @@ def traits_index(measure: bool = False) -> None:
             print(f"  {t['id']} {t['title']!r}: {e}")
             missing += 1
     print(f"{kept} indexed, {missing} without an analysis"
-          + ("" if measure else " (--measure to work them out)"))
+          + ("" if measure else " (--measure to work them out)")
+          + (f"; pulse and punch from an older one for {older}" if older else ""))
+
+
+def _older_pulse(data_dir, track_id: int, sha: str) -> bool:
+    """Pulse and punch from the newest earlier analysis of a record, where its traits
+    row has none."""
+    import json
+
+    from . import beats, db
+
+    for v in range(beats.VERSION - 1, 0, -1):
+        p = data_dir / "beats" / f"{sha}-v{v}.json"
+        if not p.exists():
+            continue
+        try:
+            found = json.loads(p.read_text())
+        except (OSError, ValueError):
+            return False
+        if found.get("confidence") is None:
+            return False
+        db.run("""update track_traits set pulse = %s, punch = %s
+                   where track_id = %s and pulse is null""",
+               (found.get("confidence"), found.get("contrast"), track_id))
+        return True
+    return False
 
 
 def housesamples(folder: str, owner: str, apply: bool = False) -> None:

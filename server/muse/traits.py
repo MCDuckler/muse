@@ -68,6 +68,11 @@ def of(track: dict, found: dict) -> dict:
         "sung": sung,
         "in_db": _edge_db(found, cues.get("mix_in_ms"), before=False),
         "out_db": _edge_db(found, cues.get("mix_out_ms"), before=True),
+        # How sure the beat tracker was that there is a pulse at all, and how far the
+        # beats stand out of the sound between them: a drum kit, or none. What the
+        # sleep mix (sleep.py) hears a calm record by, beside its loudness.
+        "pulse": found.get("confidence"),
+        "punch": found.get("contrast"),
     }
 
 
@@ -76,14 +81,16 @@ def remember(track: dict, found: dict) -> None:
     row = of(track, found)
     db.run(
         """insert into track_traits(track_id, bpm, camelot, key_confidence, lufs, sound,
-                                    sung, in_db, out_db, updated_at)
+                                    sung, in_db, out_db, pulse, punch, updated_at)
            values(%(track_id)s, %(bpm)s, %(camelot)s, %(key_confidence)s, %(lufs)s,
-                  %(sound)s, %(sung)s, %(in_db)s, %(out_db)s, now())
+                  %(sound)s, %(sung)s, %(in_db)s, %(out_db)s, %(pulse)s, %(punch)s, now())
            on conflict (track_id) do update set
              bpm=excluded.bpm, camelot=excluded.camelot,
              key_confidence=excluded.key_confidence, lufs=excluded.lufs,
              sound=excluded.sound, sung=excluded.sung, in_db=excluded.in_db,
-             out_db=excluded.out_db, updated_at=now()""",
+             out_db=excluded.out_db, pulse=coalesce(excluded.pulse, track_traits.pulse),
+             punch=coalesce(excluded.punch, track_traits.punch),
+             updated_at=now()""",
         {**row, "sound": json.dumps(row["sound"]) if row["sound"] is not None else None})
 
 

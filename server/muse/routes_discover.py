@@ -3,19 +3,25 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from . import discover, recommend
+from . import db, discover, recommend
 from .deps import current_user
 
 router = APIRouter(prefix="/discover")
 
 
 @router.get("")
-def page(user: dict = Depends(current_user)):
+def page(tz: int | None = None, user: dict = Depends(current_user)):
     """Everything on the page: the lists made for you (or word that they are being
     made), stations to go back to and things to start one from, the news from who
     and what you follow, and acts to try. Each part on its own, so one that cannot
-    be had leaves a gap rather than an error. Nothing here goes over the wire."""
+    be had leaves a gap rather than an error. Nothing here goes over the wire.
+
+    [tz] is the app's clock, in minutes from UTC: kept, so the overnight lists know
+    what night is for this person (the sleep mix, recommend.taste's night)."""
     uid = user["id"]
+    if tz is not None and -14 * 60 <= tz <= 14 * 60:
+        db.run("""update users set utc_offset_min = %s
+                   where id = %s and utc_offset_min is distinct from %s""", (tz, uid, tz))
     out: dict = {"lists": [], "building": False, "stations": {}, "feed": {}, "artists": [],
                  "genres": {"following": [], "suggested": []}}
     tas = recommend.taste(uid)

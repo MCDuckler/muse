@@ -810,7 +810,7 @@ create index if not exists genre_releases_recent on genre_releases(genre, releas
 
 create table if not exists made_lists (
   user_id   int not null references users(id) on delete cascade,
-  slug      text not null,              -- weekly | daily:N | radar | repeat | again | house
+  slug      text not null,              -- weekly | daily:N | radar | repeat | again | house | sleep | trend:G
   name      text not null,
   blurb     text not null default '',
   track_ids int[] not null default '{}',
@@ -896,3 +896,14 @@ create table if not exists playlist_places (
   primary key (user_id, playlist_id)
 );
 create index if not exists playlist_places_folder on playlist_places(user_id, folder_id, pos);
+
+-- How a record moves, beside how it sounds (traits.py): how sure the beat tracker was
+-- that it has a pulse at all, and how far its beats stand out of what is between them
+-- — a drum kit, or none. With its loudness, what the sleep mix (sleep.py) knows a calm
+-- record by. Filled from the analyses on disk by `python -m muse.cli traits`.
+alter table track_traits add column if not exists pulse real;
+alter table track_traits add column if not exists punch real;
+
+-- The person's clock, as their app last said it (minutes from UTC): what "night" is
+-- for them, for the songs they play to wind down. Null until an app has said.
+alter table users add column if not exists utc_offset_min int;

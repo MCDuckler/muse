@@ -291,6 +291,17 @@ def artist(name: str, *, ask: bool = True) -> dict | None:
     return out
 
 
+def known_artists(names) -> dict[str, dict]:
+    """What MusicBrainz said of these acts when last asked, by folded name — from the
+    cache alone, so an answer that must not wait on the network can still use it."""
+    keys = {f"mb:artist:{fold(n)}": fold(n) for n in names if fold(n)}
+    if not keys:
+        return {}
+    return {keys[r["key"]]: r["body"] for r in db.all_(
+        "select key, body from remote_cache where key = any(%s)", (list(keys),))
+        if r["body"]}
+
+
 def all_genres() -> list[str]:
     """Every genre MusicBrainz knows, about two thousand names, one line each."""
     text = _text(f"{MB}/genre/all", {"fmt": "txt"}, kind="genres")

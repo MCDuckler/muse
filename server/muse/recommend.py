@@ -24,11 +24,16 @@ questions at once and adds the answers up:
   sound     how alike two records sound (traits.sound), for what has been analysed.
   artist    the same act, a little.
 
-and then the person: what they finish (up), skip in the first half minute (down),
-heart (well up), have played in the last day and a half (not again yet), and have
-waved away from here before (never). Each signal is scaled to its best candidate
-before it is added, so no one of them drowns the rest whatever units it is counted
-in, and a song is only ever offered twice by any one artist in one answer.
+and then the person (taste): what they finish (up), skip in the first half minute
+(down), heart (well up), have played in the last day and a half (not again yet), and
+have waved away from here before (never) — and everything else they did that says
+what they like: the lists they made, what they liked on the services they mirrored,
+the lists of others they keep, the acts and genres they follow, the stations they
+started, what they mixed in the booth, the sleeves they drew on, the songs they voted
+to skip in a jam, and what Spotify and ListenBrainz know they play (elsewhere.py).
+Each signal is scaled to its best candidate before it is added, so no one of them
+drowns the rest whatever units it is counted in, and a song is only ever offered
+twice by any one artist in one answer.
 
 What comes back is in four kinds, because what can be done with a song depends on
 where it is: `library` is yours and here; `waiting` is yours but never fetched (a
@@ -37,13 +42,16 @@ mirrored like, usually — the best-kept secret of a twelve-thousand-song librar
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import math
+import os
 import time
 import unicodedata
+import zoneinfo
 from dataclasses import dataclass, field
 
-from . import catalog, db, match, search, traits, ytm
+from . import brainz, catalog, db, match, search, traits, ytm
 
 # How much each question counts for when it has a good answer. Fitted on the house's
 # own lists (2026-09-29): a fifth of each hand-made playlist hidden, the rest as seeds,
@@ -78,6 +86,59 @@ PER_ARTIST = 2
 
 
 # ------------------------------------------------------------------- the person
+# What each thing somebody did says about a song, a listen heard through being 1 (and
+# fading with TASTE_HALF_LIFE). Listens were once all there was — and the house has only
+# heard a month of anybody's, while the lists they made, what they liked on the services
+# they mirrored and the acts they follow go back years.
+HEART = 3.0             # a heart here
+OWN_LIST = 1.0          # put on a list of their own
+# What was kept rather than played counts for less: on the house's own week held out
+# (2026-10-05) these weights kept what the lists found the same or a little better,
+# where more of it buried what somebody actually plays under thousands of likes.
+LIKED_ELSEWHERE = 0.4   # liked on Spotify, SoundCloud, YouTube or Deezer; a Bandcamp wishlist
+MIRRORED = 0.25         # on another of their lists, mirrored from elsewhere
+SAVED = 0.2             # on somebody else's list they keep
+OPENED = 0.3            # on a list they opened this fortnight
+BOOTH = 0.4             # mixed in the booth, whose decks write no listens
+TOUCHED = 0.5           # drew on its sleeve, set its cues, cut a sample out of it
+STATION = 0.8           # started a station from it
+JAM_SKIP = -1.0         # voted to skip it in a jam
+FOLLOWED = 2.5          # an act they follow, on the act's score
+STATION_ARTIST = 1.5    # an act they started a station from
+
+# A likes list is newest first: its top is what somebody likes now, its bottom what they
+# liked years ago — still them, but less so.
+LIKED_HALF_RANK = 1500
+
+# What somebody keeps without playing adds up slowly on an act: two hundred liked songs
+# make a favourite, not a hundred times one.
+PASSIVE_SCALE = 2.0
+
+# Night on the person's clock: what they play then is what they play to wind down.
+NIGHT_FROM, NIGHT_TO = 22, 5
+HOUSE_TZ = os.environ.get("MUSE_TZ", "Europe/Berlin")
+
+# What each service calls somebody's likes, as against a list they made.
+_LIKES_IDS = ("liked-songs", "ll", "lm")
+_LIKES_ENDS = ("/likes", "/wishlist", "/collection")
+_LIKES_NAMES = ("liked songs", "liked music", "liked videos", "loved tracks", "lieblingssongs",
+                "favourite tracks", "favorite tracks", "coups de cœur", "titres likés",
+                "wishlist", "collection")
+# Credits that are not an act: a compilation's, an unknown uploader's.
+NOT_AN_ACT = {"various artists", "various", "va", "unknown artist", "unknown", "[unknown]",
+              "anonymous", "traditional"}
+
+SERVICE_NAMES = {"spotify": "Spotify", "soundcloud": "SoundCloud", "youtube": "YouTube",
+                 "ytmusic": "YouTube Music", "deezer": "Deezer", "bandcamp": "Bandcamp"}
+
+
+def is_likes(remote_id: str | None, name: str | None) -> bool:
+    """A mirrored list that is somebody's likes (or a wishlist) rather than a list."""
+    rid, n = (remote_id or "").lower(), (name or "").strip().lower()
+    return rid in _LIKES_IDS or rid.endswith(_LIKES_ENDS) or n in _LIKES_NAMES \
+        or n.endswith(" · likes")
+
+
 @dataclass
 class Taste:
     track: dict[int, float] = field(default_factory=dict)
@@ -86,40 +147,222 @@ class Taste:
     dismissed: set[str] = field(default_factory=set)
     library: set[int] = field(default_factory=set)
     hearted: set[int] = field(default_factory=set)
+    # Listens alone: what was heard through and skipped here.
+    heard: dict[int, float] = field(default_factory=dict)
+    # Everything done here — listens, hearts, own lists, the booth, a drawn-on sleeve —
+    # without what was kept from elsewhere: what somebody *plays*.
+    active: dict[int, float] = field(default_factory=dict)
+    # Listens alone, by act, so "you play a lot of" only ever says what is so.
+    artist_heard: dict[str, float] = field(default_factory=dict)
+    followed: set[str] = field(default_factory=set)
+    genres: dict[str, float] = field(default_factory=dict)
+    # Liked on another service (which one), and on a list of their own.
+    liked: dict[int, str] = field(default_factory=dict)
+    listed: set[int] = field(default_factory=set)
+    # Heard through at night on their clock, faded like any listen; skipped at night, less.
+    night: dict[int, float] = field(default_factory=dict)
+    # Acts somebody plays elsewhere, by how much (elsewhere.py).
+    elsewhere: dict[str, float] = field(default_factory=dict)
+
+
+def clock(user_id: int) -> dt.tzinfo:
+    """The person's clock: the offset their app last said, else the house's zone."""
+    row = db.one("select utc_offset_min from users where id = %s", (user_id,))
+    if row and row.get("utc_offset_min") is not None:
+        return dt.timezone(dt.timedelta(minutes=int(row["utc_offset_min"])))
+    try:
+        return zoneinfo.ZoneInfo(HOUSE_TZ)
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError):
+        return dt.timezone.utc
+
+
+def is_night(at: dt.datetime, tz: dt.tzinfo) -> bool:
+    h = at.astimezone(tz).hour
+    return h >= NIGHT_FROM or h < NIGHT_TO
+
+
+def _fade(days, half_life: float) -> float:
+    return 0.5 ** (max(0.0, float(days or 0)) / half_life)
 
 
 def taste(user_id: int) -> Taste:
-    """What this person likes, from what they did rather than what they said."""
+    """What this person likes, from what they did rather than what they said: here, in
+    the booth, and on the services they brought their music in from."""
     t = Taste()
-    rows = db.all_(
-        """select l.track_id, t.artists, l.completed, l.ms_played,
-                  extract(epoch from now() - l.started_at) / 86400 as days
-             from listens l join tracks t on t.id = l.track_id
-            where l.user_id = %s and l.started_at > now() - interval '400 days'""",
-        (user_id,))
-    for r in rows:
-        decay = 0.5 ** (float(r["days"]) / TASTE_HALF_LIFE)
-        if r["completed"] or (r["ms_played"] or 0) >= 90_000:
+    tz = clock(user_id)
+
+    def add(d: dict, k, v: float) -> None:
+        d[k] = d.get(k, 0.0) + v
+
+    # Listens: heard through up, skipped in the first half minute down, all fading.
+    for r in db.all_(
+            """select track_id, completed, ms_played, started_at,
+                      extract(epoch from now() - started_at) / 86400 as days
+                 from listens
+                where user_id = %s and started_at > now() - interval '400 days'""",
+            (user_id,)):
+        decay = _fade(r["days"], TASTE_HALF_LIFE)
+        ms = r["ms_played"] or 0
+        if r["completed"] or ms >= 90_000:
             v = 1.0
-        elif (r["ms_played"] or 0) < SKIP_MS:
+        elif ms < SKIP_MS:
             v = -1.2
         else:
             v = 0.2
-        t.track[r["track_id"]] = t.track.get(r["track_id"], 0.0) + v * decay
+        add(t.heard, r["track_id"], v * decay)
         if float(r["days"]) * 24 < RECENT_H:
             t.recent.add(r["track_id"])
+        if v != 0.2 and is_night(r["started_at"], tz):
+            add(t.night, r["track_id"], (1.0 if v > 0 else -0.5) * decay)
+    active = dict(t.heard)
+
     for r in db.all_(
-            """select i.track_id from playlist_items i
+            """select distinct i.track_id from playlist_items i
                  join playlists p on p.id = i.playlist_id
                 where p.owner_id = %s and p.kind = 'favourites'""", (user_id,)):
         t.hearted.add(r["track_id"])
-        t.track[r["track_id"]] = t.track.get(r["track_id"], 0.0) + 3.0
+        add(active, r["track_id"], HEART)
+
+    # Lists of their own, the newer additions counting more, never less than half.
+    for r in db.all_(
+            """select i.track_id, extract(epoch from now() - max(i.added_at)) / 86400 as days
+                 from playlist_items i join playlists p on p.id = i.playlist_id
+                where p.owner_id = %s and p.kind = 'local'
+                group by 1""", (user_id,)):
+        t.listed.add(r["track_id"])
+        add(active, r["track_id"], OWN_LIST * max(0.5, _fade(r["days"], 180)))
+
+    # The booth: every record mixed in, a mix thumbed up or played again.
+    for r in db.all_(
+            """select event, from_track, to_track, rating,
+                      extract(epoch from now() - at) / 86400 as days
+                 from mix_feedback
+                where user_id = %s and event in ('mix', 'rating', 'replay')
+                  and at > now() - interval '400 days'""", (user_id,)):
+        decay = _fade(r["days"], TASTE_HALF_LIFE)
+        if r["event"] == "mix":
+            pairs = [(r["to_track"], BOOTH)]
+        elif r["event"] == "replay" or (r["rating"] or 0) > 0:
+            pairs = [(r["from_track"], BOOTH / 2), (r["to_track"], BOOTH / 2)]
+        else:
+            continue
+        for tid, v in pairs:
+            if tid:
+                add(active, tid, v * decay)
+
+    # A sleeve drawn on, cues set by hand, a sample cut out of it: somebody cared.
+    for r in db.all_(
+            """select track_id from sleeve_marks where author_id = %s
+               union select track_id from track_cues where set_by = %s
+               union select (origin->>'track_id')::int from samples
+                      where user_id = %s and not house and origin->>'kind' = 'cut'
+                        and origin->>'track_id' ~ '^[0-9]+$'""", (user_id, user_id, user_id)):
+        if r["track_id"]:
+            add(active, r["track_id"], TOUCHED)
+
+    station_artists: dict[str, float] = {}
+    for r in db.all_(
+            """select kind, seed_track, seed_text,
+                      extract(epoch from now() - created_at) / 86400 as days
+                 from stations where owner_id = %s""", (user_id,)):
+        decay = _fade(r["days"], 60)
+        if r["kind"] == "track" and r["seed_track"]:
+            add(active, r["seed_track"], STATION * decay)
+        elif r["kind"] == "album" and r["seed_track"]:
+            add(active, r["seed_track"], STATION * decay / 2)
+        elif r["kind"] == "artist" and r["seed_text"]:
+            add(station_artists, r["seed_text"].lower(), STATION_ARTIST * decay)
+        elif r["kind"] == "genre" and r["seed_text"]:
+            g = brainz.fold(r["seed_text"])
+            if g:
+                t.genres[g] = max(t.genres.get(g, 0.0), 0.5)
+
+    for r in db.all_("select track_id from jam_skip_votes where user_id = %s", (user_id,)):
+        add(active, r["track_id"], JAM_SKIP)
+
+    # Kept rather than played: likes and lists from elsewhere, lists of others. A song
+    # on several counts for the most it is on, not for each.
+    passive: dict[int, float] = {}
+
+    def keep(tid: int, v: float) -> None:
+        if v > passive.get(tid, 0.0):
+            passive[tid] = v
+
+    for r in db.all_(
+            """select i.track_id, i.pos, p.kind, p.remote_id, p.name
+                 from playlist_items i join playlists p on p.id = i.playlist_id
+                where p.owner_id = %s and p.kind not in ('local', 'favourites')""",
+            (user_id,)):
+        if is_likes(r["remote_id"], r["name"]):
+            keep(r["track_id"], LIKED_ELSEWHERE
+                 * (0.35 + 0.65 * 0.5 ** (max(0, r["pos"] or 0) / LIKED_HALF_RANK)))
+            t.liked.setdefault(r["track_id"], r["kind"])
+        else:
+            keep(r["track_id"], MIRRORED)
+    for r in db.all_(
+            """select distinct i.track_id from playlist_saves s
+                 join playlist_items i on i.playlist_id = s.playlist_id
+                where s.user_id = %s""", (user_id,)):
+        keep(r["track_id"], SAVED)
+
+    # Lists opened lately: what somebody is into this week, a little.
+    lately: dict[int, float] = {}
+    for r in db.all_(
+            """select i.track_id,
+                      extract(epoch from now() - max(pp.last_opened_at)) / 86400 as days
+                 from playlist_places pp join playlist_items i on i.playlist_id = pp.playlist_id
+                where pp.user_id = %s and pp.last_opened_at > now() - interval '14 days'
+                group by 1""", (user_id,)):
+        lately[r["track_id"]] = OPENED * _fade(r["days"], 7)
+
+    t.followed = {r["name"].lower() for r in db.all_(
+        "select name from artist_follows where user_id = %s and not is_label", (user_id,))}
+    for r in db.all_("select genre from genre_follows where user_id = %s", (user_id,)):
+        t.genres[r["genre"]] = 1.0
+
+    try:
+        from . import elsewhere
+        known = elsewhere.known(user_id)
+    except Exception:  # noqa: BLE001 — what other services said is a bonus, never a need
+        known = {}
+    t.elsewhere = dict(known.get("artists") or {})
+    for tid, v in (known.get("tracks") or {}).items():
+        add(active, int(tid), float(v))
+    # A genre most of somebody's top acts elsewhere are filed under, a little.
+    for g, n in (known.get("genres") or {}).items():
+        if n >= 2:
+            t.genres[g] = max(t.genres.get(g, 0.0), 0.5)
+
+    t.active = active
+    t.track = dict(active)
+    for k, v in passive.items():
+        add(t.track, k, v)
+    for k, v in lately.items():
+        add(t.track, k, v)
+
     if t.track:
+        kept_by: dict[str, float] = {}
         for r in db.all_("select id, artists from tracks where id = any(%s)",
                          (list(t.track),)):
             for a in r["artists"] or []:
                 k = a.lower()
-                t.artist[k] = t.artist.get(k, 0.0) + t.track[r["id"]]
+                if k in NOT_AN_ACT:
+                    continue
+                if r["id"] in active:
+                    add(t.artist, k, active[r["id"]])
+                if r["id"] in t.heard:
+                    add(t.artist_heard, k, t.heard[r["id"]])
+                if r["id"] in passive:
+                    add(kept_by, k, passive[r["id"]])
+        for k, v in kept_by.items():
+            add(t.artist, k, PASSIVE_SCALE * math.log1p(v))
+    for k in t.followed:
+        add(t.artist, k, FOLLOWED)
+    for k, v in station_artists.items():
+        add(t.artist, k, v)
+    for k, v in t.elsewhere.items():
+        add(t.artist, k, v)
+
     t.dismissed = {r["key"] for r in db.all_(
         "select key from rec_dismissals where user_id = %s", (user_id,))}
     t.library = {r["track_id"] for r in db.all_(
@@ -362,6 +605,7 @@ class Pick:
     why: str
     row: dict               # tracks row, or remote meta
     seed: int | None = None  # the seed it goes with most
+    lead: str | None = None  # the question that answered it most (lists, radio, ...)
 
 
 def _norm_key(title: str, artists) -> tuple[str, str]:
@@ -382,6 +626,18 @@ def _rows_for(ids) -> dict[int, dict]:
              left join covers c on c.id = t.cover_id
              left join track_sources s on s.track_id = t.id and s.provider = 'ytmusic'
             where t.id = any(%s)""", (list(ids),))}
+
+
+def _genre_fit(artists: list[str], genres: dict[str, float],
+               known: dict[str, dict]) -> tuple[str, float] | None:
+    """The followed genre an act is filed under, and how much it is followed."""
+    best: tuple[str, float] | None = None
+    for name in artists[:2]:
+        for g in (known.get(brainz.fold(name)) or {}).get("genres") or []:
+            w = genres.get(brainz.fold(g))
+            if w and (best is None or w > best[1]):
+                best = (g, w)
+    return best
 
 
 def _phrase(signal: str, seed: dict | None, row: dict, taste_word: str | None) -> str:
@@ -471,6 +727,15 @@ def recommend(user_id: int, seeds: dict[int, float], *, limit: int = 12,
     rows = _rows_for(ids)
     seed_titles = {_norm_key(r["title"], r["artists"])[0] for r in seed_rows.values()}
     seed_videos = set(_videos_of(seeds).values())
+    # The genres somebody follows, against what MusicBrainz said of each act when it
+    # was last asked (from the cache: an answer never waits on it).
+    genres_known: dict[str, dict] = {}
+    if tas.genres:
+        names: set[str] = set()
+        for key in hits:
+            row = rows.get(key) if isinstance(key, int) else remote.get(key[2:])
+            names.update(((row or {}).get("artists") or [])[:2])
+        genres_known = brainz.known_artists(names)
 
     scored: list[Pick] = []
     for key, per in hits.items():
@@ -513,13 +778,26 @@ def recommend(user_id: int, seeds: dict[int, float], *, limit: int = 12,
                 score -= 0.8
             if key in tas.hearted:
                 taste_word = "one of your favourites"
-            elif where == "waiting" and mine_score == 0:
+            elif key in tas.liked:
+                service = tas.liked[key]
+                taste_word = f"you liked it on {SERVICE_NAMES.get(service, service.title())}"
+            elif where == "waiting" and not tas.heard.get(key):
                 taste_word = "in your library, never played here"
-        best_artist = max((tas.artist.get(a.lower(), 0.0) for a in row.get("artists") or []),
-                          default=0.0)
+        artists = row.get("artists") or []
+        best_artist = max((tas.artist.get(a.lower(), 0.0) for a in artists), default=0.0)
         score += 0.3 * math.tanh(best_artist / 4)
-        if best_artist >= 3 and not taste_word:
-            taste_word = f"you play a lot of {(row.get('artists') or [''])[0]}"
+        if not taste_word and artists:
+            heard = max(tas.artist_heard.get(a.lower(), 0.0) for a in artists)
+            followed = next((a for a in artists if a.lower() in tas.followed), None)
+            if heard >= 3:
+                taste_word = f"you play a lot of {artists[0]}"
+            elif followed:
+                taste_word = f"you follow {followed}"
+        fit = _genre_fit(artists, tas.genres, genres_known) if genres_known else None
+        if fit:
+            score += 0.15 * fit[1]
+            if not taste_word:
+                taste_word = f"{fit[0]}, which you follow" if fit[1] >= 1 else fit[0]
 
         if against.get(key):
             pen = sum(w[s] * v / top_against[s]
@@ -533,7 +811,7 @@ def recommend(user_id: int, seeds: dict[int, float], *, limit: int = 12,
         if taste_word:
             words.append(taste_word)
         scored.append(Pick(key=key, where=where, score=score, why=" · ".join(x for x in words if x),
-                           row=row, seed=per[lead][1] if lead else None))
+                           row=row, seed=per[lead][1] if lead else None, lead=lead))
 
     scored.sort(key=lambda p: -p.score)
     if only == "library":
@@ -631,7 +909,10 @@ PERSON_WEIGHTS = {"artist": 0.4, "sessions": 0.9}
 
 
 def seeds_of_person(user_id: int, most: int = 10, the_taste: Taste | None = None) -> dict[int, float]:
-    """What somebody has been playing and liking lately, for a mix made for them."""
+    """What somebody has been into lately, for a mix made for them: the songs heard
+    through most these last weeks, and beside them — up to a third of the seeds — what
+    else they did lately: hearted it, put it on a list, mixed it in the booth, started a
+    station from it, liked it on another service, played it there (elsewhere.py)."""
     rows = db.all_(
         """select track_id,
                   sum(case when completed or ms_played >= 90000 then 1 else 0 end
@@ -639,7 +920,54 @@ def seeds_of_person(user_id: int, most: int = 10, the_taste: Taste | None = None
              from listens where user_id = %s and started_at > now() - interval '60 days'
             group by 1 having sum(case when completed then 1 else 0 end) > 0
             order by w desc limit %s""", (user_id, most))
-    out = {r["track_id"]: max(0.3, min(1.0, float(r["w"]))) for r in rows if r["w"]}
+    played = {r["track_id"]: max(0.3, min(1.0, float(r["w"]))) for r in rows if r["w"]}
+
+    lately: dict[int, float] = {}
+
+    def put(tid: int | None, w: float) -> None:
+        if tid and tid not in played and w > lately.get(tid, 0.0):
+            lately[tid] = w
+
+    for r in db.all_(
+            """select i.track_id, p.kind, max(i.added_at) as at
+                 from playlist_items i join playlists p on p.id = i.playlist_id
+                where p.owner_id = %s and p.kind in ('favourites', 'local')
+                  and i.added_at > now() - interval '30 days'
+                group by 1, 2 order by at desc limit 60""", (user_id,)):
+        put(r["track_id"], 0.9 if r["kind"] == "favourites" else 0.7)
+    for r in db.all_(
+            """select to_track from mix_feedback
+                where user_id = %s and event = 'mix' and at > now() - interval '14 days'
+                group by 1 order by count(*) desc, max(at) desc limit 20""", (user_id,)):
+        put(r["to_track"], 0.6)
+    for r in db.all_(
+            """select seed_track from stations
+                where owner_id = %s and kind = 'track' and created_at > now() - interval '30 days'
+                order by created_at desc limit 10""", (user_id,)):
+        put(r["seed_track"], 0.6)
+    # The newest likes on another service, while the list is one that was read lately:
+    # the top of an old copy is what somebody liked a long time ago.
+    for r in db.all_(
+            """select i.track_id, i.pos, p.remote_id, p.name
+                 from playlist_items i join playlists p on p.id = i.playlist_id
+                where p.owner_id = %s and p.kind not in ('local', 'favourites')
+                  and i.pos < 10 and p.last_synced_at > now() - interval '60 days'""",
+            (user_id,)):
+        if is_likes(r["remote_id"], r["name"]):
+            put(r["track_id"], 0.5 - 0.02 * r["pos"])
+    try:
+        from . import elsewhere
+        for tid, w in elsewhere.lately(user_id).items():
+            put(int(tid), min(0.8, float(w)))
+    except Exception:  # noqa: BLE001
+        pass
+
+    room = min(len(lately), max(1, most // 3)) if lately else 0
+    out = dict(sorted(played.items(), key=lambda kv: -kv[1])[:most - room])
+    for tid, w in sorted(lately.items(), key=lambda kv: -kv[1]):
+        if len(out) >= most:
+            break
+        out.setdefault(tid, w)
     if len(out) < 3:
         tas = the_taste or taste(user_id)
         for t in list(tas.hearted)[: most - len(out)]:

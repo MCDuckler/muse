@@ -10,8 +10,9 @@ the one page every music app has, and adds the three things that were missing:
            three or four kinds of thing you actually play, each with a little that is
            new), the release radar (what came out this fortnight by who you follow),
            and the cheap ones that are still the most played buttons on any service —
-           on repeat, the time capsule, the house blend. Built overnight by the same
-           self-queueing job the follow poll uses, and on demand the first time.
+           on repeat, the time capsule, the house blend — and the sleep mix, the calm
+           end of what you play laid out to wind down (sleep.py). Built overnight by
+           the same self-queueing job the follow poll uses, and on demand the first time.
   genres   a second thing to follow besides an artist. Nothing here had a genre;
            MusicBrainz gives an artist its genres and ListenBrainz gives a genre its
            new records and its radio, so now "techno" is something the feed can
@@ -31,7 +32,8 @@ import time
 import json as _json
 import urllib.request
 
-from . import brainz, catalog, db, discography, follows, jobs, linked, recommend, sources, ytm
+from . import (brainz, catalog, db, discography, elsewhere, follows, jobs, linked, recommend,
+               sleep, sources, ytm)
 
 log = logging.getLogger("muse.discover")
 
@@ -48,7 +50,8 @@ VIA_DISCOVER = "discover"
 
 # How long each list is good for before the overnight job makes it again.
 WEEKLY_SLUG = "weekly"
-LIST_LENGTH = {"weekly": 25, "daily": 30, "radar": 30, "repeat": 30, "again": 30, "house": 30}
+LIST_LENGTH = {"weekly": 25, "daily": 30, "radar": 30, "repeat": 30, "again": 30, "house": 30,
+               "sleep": sleep.MOST}
 DAILY_MIXES_MOST = 4
 RADAR_DAYS = 14
 # Not offered in this week's finds again for this long after it was offered once.
@@ -63,6 +66,9 @@ BUILD_MINUTE = 20
 
 # How many genres one person can follow. Past this it is not following, it is all.
 GENRES_MOST = 40
+
+# How many of somebody's acts are looked up overnight for their genres.
+GENRE_WARM = 40
 
 
 # ------------------------------------------------------------------ small helpers
@@ -407,14 +413,21 @@ def station_starters(user_id: int, tas: recommend.Taste | None = None) -> dict:
     a few songs, and the genres they follow with a few they might."""
     tas = tas or recommend.taste(user_id)
     artists = []
-    for name in _top_artists(tas, most=10):
+    # An act's station starts from their songs in the library, so an act followed or
+    # played elsewhere with nothing here yet is not one to start from.
+    for name in _top_artists(tas, most=24):
         row = db.one(
             """select t.id, t.cover_id from tracks t
                 join library_items li on li.track_id = t.id and li.user_id = %s
-               where %s = any(t.artists) and t.cover_id is not null
-               order by (select count(*) from listens l where l.track_id = t.id) desc
+               where %s = any(t.artists)
+               order by t.cover_id is null,
+                        (select count(*) from listens l where l.track_id = t.id) desc
                limit 1""", (user_id, name))
-        artists.append({"name": name, "cover_track": row["id"] if row else None})
+        if not row:
+            continue
+        artists.append({"name": name, "cover_track": row["id"] if row["cover_id"] else None})
+        if len(artists) >= 10:
+            break
     songs = []
     seeds = recommend.seeds_of_person(user_id, most=6, the_taste=tas)
     if seeds:
@@ -509,6 +522,8 @@ def artists_to_try(user_id: int, tas: recommend.Taste | None = None,
     have = {r["a"] for r in db.all_(
         """select distinct lower(a) as a from tracks t
              join library_items li on li.track_id = t.id, unnest(t.artists) a""")}
+    # Nor anybody they follow or play elsewhere, here or not: those they know.
+    have |= tas.followed | set(tas.elsewhere)
     scored: dict[str, dict] = {}
     for name in _top_artists(tas, most=6):
         entry = _artist_entry(name, ask=ask)
@@ -542,10 +557,13 @@ def lists_for(user_id: int, *, tracks: bool = True) -> list[dict]:
         meta = r["meta"] if isinstance(r["meta"], dict) else json.loads(r["meta"] or "{}")
         entry = {"slug": r["slug"], "name": r["name"], "blurb": r["blurb"],
                  "built_at": r["built_at"], "count": len(r["track_ids"] or []),
-                 "kind": r["slug"].split(":")[0], **{k: meta[k] for k in ("why",) if k in meta}}
+                 "kind": r["slug"].split(":")[0],
+                 **{k: meta[k] for k in ("why", "minutes", "energy") if k in meta}}
         if tracks:
             entry["tracks"] = _rows(list(r["track_ids"] or []))
             entry["count"] = len(entry["tracks"])
+            entry.setdefault("minutes", round(
+                sum(t.get("duration_ms") or 0 for t in entry["tracks"]) / 60_000))
         out.append(entry)
     return out
 
@@ -671,8 +689,9 @@ def build_weekly(user_id: int, tas: recommend.Taste, *, network: bool = True) ->
 
 def _mix_seeds(user_id: int, tas: recommend.Taste) -> dict[str, list[int]]:
     """The acts somebody plays most, each with their songs in the library that
-    the person has actually played through."""
-    scored = {t: v for t, v in tas.track.items() if v > 0 and t in tas.library}
+    the person has actually played through — or put on a list, hearted, mixed: what
+    they *do*, not what they kept from elsewhere, which would bury the rest."""
+    scored = {t: v for t, v in tas.active.items() if v > 0 and t in tas.library}
     if not scored:
         return {}
     rows = db.all_(
@@ -886,6 +905,12 @@ def build_house(user_id: int, tas: recommend.Taste, *, network: bool = True) -> 
 def build_for(user_id: int, *, network: bool = True, force: bool = False) -> dict:
     """Every list for one person. The weekly one only once a week unless forced;
     the rest every time, since they are a morning's work at most."""
+    if network:
+        # What their other services say they play, once a day, before it is read.
+        try:
+            elsewhere.refresh(user_id)
+        except Exception as e:  # noqa: BLE001
+            log.info("could not ask elsewhere for %s: %s", user_id, e)
     tas = recommend.taste(user_id)
     built = []
     weekly_at = _built_at(user_id, WEEKLY_SLUG)
@@ -900,7 +925,8 @@ def build_for(user_id: int, *, network: bool = True, force: bool = False) -> dic
                      ("trending", lambda: build_trending(user_id, tas) if network else []),
                      ("repeat", lambda: build_repeat(user_id)),
                      ("again", lambda: build_again(user_id, tas)),
-                     ("house", lambda: build_house(user_id, tas, network=network))):
+                     ("house", lambda: build_house(user_id, tas, network=network)),
+                     ("sleep", lambda: sleep.build(user_id, tas, network=network, save=_save))):
         try:
             fn()
             built.append(name)
@@ -914,6 +940,10 @@ def build_for(user_id: int, *, network: bool = True, force: bool = False) -> dic
         try:
             suggested_genres(user_id, tas, ask=True)
             artists_to_try(user_id, tas, ask=True)
+            # And the genres of more of the acts they play, which is what lets a
+            # followed genre count for the songs offered to them (recommend._genre_fit).
+            for name in _top_artists(tas, most=GENRE_WARM):
+                _artist_entry(name, ask=True)
         except Exception as e:  # noqa: BLE001
             log.info("could not warm the map for %s: %s", user_id, e)
     if _publish:
