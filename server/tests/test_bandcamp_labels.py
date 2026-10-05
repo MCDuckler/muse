@@ -250,3 +250,17 @@ def test_labels_are_found_by_search(cfg, monkeypatch):
     # In an "everything" search they come along too, a few.
     mixed = search.everything(cfg, me, "cloudcore")["items"]
     assert any(h["kind"] == "label" and h["id"] == CLOUDCORE for h in mixed)
+
+
+def test_the_radar_takes_one_record_from_each_follow_before_anybodys_second():
+    import datetime as dt
+    from muse import discover
+    day = dt.date(2026, 10, 5)
+    busy = [{"via": "WRWTFWW Records", "artist": f"Act {n}", "album_id": f"w{n}",
+             "release_date": day - dt.timedelta(days=n % 3)} for n in range(11)]
+    quiet = [{"via": "CloudCore", "artist": "Zecho", "album_id": "atom",
+              "release_date": day - dt.timedelta(days=3)}]
+    order = discover._one_each(busy + quiet)
+    assert [r["album_id"] for r in order[:2]] == ["w0", "atom"], \
+        "the newest of each first, so the quiet label is second, not twelfth"
+    assert len(order) == 12

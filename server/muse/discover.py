@@ -771,6 +771,22 @@ def build_daily_mixes(user_id: int, tas: recommend.Taste, *, network: bool = Tru
     return slugs
 
 
+def _one_each(rows: list[dict]) -> list[dict]:
+    """Records newest first, but one from each act or label followed before anybody's
+    second. Newest first alone let a label with eleven records this fortnight fill the
+    radar, and CloudCore's one record never got in at all."""
+    rows = sorted(rows, key=lambda r: r["release_date"] or dt.date.min, reverse=True)
+    by: dict[str, list[dict]] = {}
+    for r in rows:
+        by.setdefault((r.get("via") or r.get("artist") or "").lower(), []).append(r)
+    out: list[dict] = []
+    while any(by.values()):
+        for queue in by.values():
+            if queue:
+                out.append(queue.pop(0))
+    return out
+
+
 def build_radar(user_id: int, *, network: bool = True) -> list[int]:
     """Release radar: a song from each record that came out this fortnight by the
     artists, labels and genres you follow.
@@ -791,7 +807,7 @@ def build_radar(user_id: int, *, network: bool = True) -> list[int]:
             where f.user_id = %s
               and r.release_date >= current_date - %s * interval '1 day'
             order by r.provider, r.album_id, f.is_label""", (user_id, RADAR_DAYS))
-    rows.sort(key=lambda r: r["release_date"] or dt.date.min, reverse=True)
+    rows = _one_each(rows)
     if network:
         for r in rows[:30]:
             reason = (f"new on {r['via']}" if r.get("is_label")
