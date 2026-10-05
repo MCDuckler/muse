@@ -11,6 +11,7 @@ import 'library_query.dart';
 
 import '../api/client.dart';
 import '../api/connection.dart';
+import '../worker/door_here.dart' show shutDoorHere;
 import '../worker/this_computer.dart' show fetchedHerePath, stopFetching;
 import '../api/models.dart';
 import 'eq_engines.dart';
@@ -1142,6 +1143,10 @@ class AppState extends ChangeNotifier {
     // of the token it keeps on disk for the windowless fetcher goes.
     try {
       await stopFetching();
+    } catch (_) {}
+    // And a phone's door to YouTube, opened with that same token.
+    try {
+      await shutDoorHere();
     } catch (_) {}
     _events?.cancel();
     _events = null;

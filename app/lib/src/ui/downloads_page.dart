@@ -12,6 +12,7 @@ import 'parts_jobs_section.dart';
 import 'snack.dart';
 import 'skeleton.dart';
 import 'record_refresh.dart';
+import '../worker/door_here.dart' show doorHereCard;
 import '../worker/this_computer.dart' show thisComputerCard;
 
 /// The pool: every computer in the house fetching songs and taking records apart for
@@ -155,9 +156,11 @@ class _DownloadsPageState extends State<DownloadsPage> {
                     children: [
                       _PoolSummary(pool: pool),
                       thisComputerCard(),
+                      doorHereCard(),
                       ..._working(pool),
                       ..._waiting(pool, app),
                       _Computers(pool: pool, onAct: _act),
+                      _Phones(pool: pool),
                       // The booth's own records being taken apart on this computer.
                       const PartsJobsSection(),
                       if (d.batches.isNotEmpty) ...[
@@ -567,6 +570,43 @@ class _ItemRow extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// Phones with their door to YouTube open (server/muse/exits.py): each fetches the songs
+/// its own person plays, nobody else's.
+class _Phones extends StatelessWidget {
+  const _Phones({required this.pool});
+  final Map<String, dynamic> pool;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final phones = [for (final e in (pool['exits'] as List? ?? const [])) e as Map];
+    if (phones.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _Label('Phones fetching their own songs · ${phones.length}'),
+        for (final e in phones)
+          ListTile(
+            leading: Icon(Icons.smartphone, color: scheme.primary),
+            title: Text('${e['name']}', maxLines: 1, overflow: TextOverflow.ellipsis),
+            subtitle: Text([
+              '${e['owner']}',
+              switch (e['network']) {
+                'wifi' => 'on Wi-Fi',
+                'cellular' => 'on mobile data',
+                _ => '',
+              },
+              if ((e['cooling'] as num? ?? 0) > 0)
+                'YouTube pushed back · resting ${((e['cooling'] as num) / 60).ceil()} min',
+              if ((e['working'] as num? ?? 0) > 0) 'busy with ${e['working']}',
+              if ((e['fetched_today'] as num? ?? 0) > 0) '${e['fetched_today']} fetched today',
+            ].where((x) => x.isNotEmpty).join(' · ')),
+          ),
+      ],
     );
   }
 }

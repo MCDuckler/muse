@@ -31,6 +31,7 @@ import 'snack.dart';
 import 'mag.dart';
 import 'mag_parts.dart';
 import 'equalizer_page.dart';
+import '../worker/door_here.dart';
 import '../worker/this_computer.dart';
 
 const appVersion = '0.1.0';
@@ -261,6 +262,8 @@ class _SettingsPageState extends State<SettingsPage> {
               onTap: () => openEqualizer(context),
             ),
           ),
+          // A phone fetches through its door instead: see worker/door_here.dart.
+          if (canOpenDoorHere) doorHereTile(),
           // Only where there is a computer to do it: see worker/this_computer.dart.
           if (canFetchMusicHere)
             ListTile(
