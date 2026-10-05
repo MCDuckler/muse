@@ -235,6 +235,9 @@ def _why(t: int, tas: recommend.Taste) -> str:
         return f"you liked it on {recommend.SERVICE_NAMES.get(service, service.title())}"
     if t in tas.listed:
         return "on one of your lists"
+    if t in tas.mirrored:
+        service = tas.mirrored[t]
+        return f"on your {recommend.SERVICE_NAMES.get(service, service.title())} lists"
     return ""
 
 
@@ -348,15 +351,19 @@ def build(user_id: int, tas: recommend.Taste | None = None, *, network: bool = T
 
 def _new_enough(p: recommend.Pick, seeds: dict[int, float], rows: dict[int, dict]) -> bool:
     """A song nobody here has heard is let in only where YouTube Music plays it after
-    one of the calmest of somebody's own songs — not for being by the same act, whose
-    other records may be anything — and only when nothing about it says it is loud."""
+    one of the calmest of somebody's own songs, and only when it is by the same act or
+    says it is still — its radio drifts to anything, a calm seed's included (Marina's
+    "Are You Satisfied?" after Penelope Scott, 2026-10-05) — and nothing about it says
+    it is loud."""
     meta = p.row or {}
     title = meta.get("title") or ""
     if not is_song(title, meta.get("duration_ms"), meta.get("artists")) or _LOUD.search(title):
         return False
-    if p.lead != "radio" or p.seed not in seeds:
+    if p.lead != "radio" or p.seed not in seeds or rows[p.seed]["energy"] > CALM_MAX * 0.7:
         return False
-    return rows[p.seed]["energy"] <= CALM_MAX * 0.7 or bool(_STILL.search(title))
+    theirs = {(a or "").lower() for a in rows[p.seed]["artists"] or []}
+    same = any((a or "").lower() in theirs for a in meta.get("artists") or [])
+    return same or bool(_STILL.search(title))
 
 
 def _choose(yours: dict[int, float], house: dict[int, float],

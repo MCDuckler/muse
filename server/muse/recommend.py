@@ -156,9 +156,11 @@ class Taste:
     artist_heard: dict[str, float] = field(default_factory=dict)
     followed: set[str] = field(default_factory=set)
     genres: dict[str, float] = field(default_factory=dict)
-    # Liked on another service (which one), and on a list of their own.
+    # Liked on another service (which one), on a list of their own, on one of their
+    # lists mirrored from another service (which one).
     liked: dict[int, str] = field(default_factory=dict)
     listed: set[int] = field(default_factory=set)
+    mirrored: dict[int, str] = field(default_factory=dict)
     # Heard through at night on their clock, faded like any listen; skipped at night, less.
     night: dict[int, float] = field(default_factory=dict)
     # Acts somebody plays elsewhere, by how much (elsewhere.py).
@@ -299,6 +301,7 @@ def taste(user_id: int) -> Taste:
             t.liked.setdefault(r["track_id"], r["kind"])
         else:
             keep(r["track_id"], MIRRORED)
+            t.mirrored.setdefault(r["track_id"], r["kind"])
     for r in db.all_(
             """select distinct i.track_id from playlist_saves s
                  join playlist_items i on i.playlist_id = s.playlist_id

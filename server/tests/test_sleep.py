@@ -175,8 +175,24 @@ def test_the_genres_an_act_is_filed_under_move_it_too(client, hdr, bedroom):
     assert sleep._rows(me)[t]["energy"] == pytest.approx(before + sleep.LOUD_GENRE)
 
 
-def test_new_songs_come_in_beside_the_calmest_and_never_first(client, hdr, bedroom):
-    """The conftest's YouTube Music answers every seed with a dozen radio songs."""
+def test_new_songs_come_in_beside_the_calmest_and_never_first(client, hdr, bedroom, monkeypatch):
+    """YouTube Music answers every seed with a dozen songs: some by the seed's own act,
+    some saying they are still, and the rest anything — which stay out."""
+    from muse import ytm
+
+    def radio(vid, limit=25):
+        seed = db.one("""select t.artists from track_sources s join tracks t on t.id = s.track_id
+                          where s.provider = 'ytmusic' and s.provider_id = %s""", (vid,))
+        act = (seed["artists"] if seed else ["Nobody"])[0]
+        return ([{"video_id": f"SAME{vid[-4:]}{n}", "title": f"Radio Track {n}", "artists": [act],
+                  "album": None, "duration_ms": 200_000, "raw": {}} for n in range(2)]
+                + [{"video_id": f"RAIN{vid[-4:]}", "title": "Radio Track in the Rain",
+                    "artists": ["Elsewhere Act"], "album": None, "duration_ms": 200_000, "raw": {}}]
+                + [{"video_id": f"PUMP{vid[-4:]}{n}", "title": f"Party Banger {n}",
+                    "artists": [f"Party Act {n}"], "album": None, "duration_ms": 200_000,
+                    "raw": {}} for n in range(6)])
+
+    monkeypatch.setattr(ytm, "watch_playlist", radio)
     me = _me()
     sleep.build(me, network=True, save=discover._save)
     mix = _mix(me)
@@ -185,6 +201,7 @@ def test_new_songs_come_in_beside_the_calmest_and_never_first(client, hdr, bedro
     assert 1 <= len(new) <= sleep.NEW_MOST
     assert ids[0] not in new and ids[-1] not in new
     assert all(mix["why"][str(t)].startswith("YouTube Music plays it after") for t in new)
+    assert not [t for t in mix["tracks"] if t["title"].startswith("Party Banger")]
     # Fetched, for tonight.
     assert db.one("select count(*) n from jobs where kind='ingest' and (payload->>'track_id')::int = any(%s)",
                   (new,))["n"] == len(new)

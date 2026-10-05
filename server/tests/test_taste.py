@@ -92,7 +92,7 @@ def test_everything_somebody_did_counts(client, hdr, shelf):
     assert tas.heard[a] > 0.9 and a not in tas.liked
     assert tas.track[b] == pytest.approx(recommend.OWN_LIST, abs=0.01) and b in tas.listed
     assert tas.liked[c] == "spotify" and 0 < tas.track[c] <= recommend.LIKED_ELSEWHERE
-    assert tas.track[d] == pytest.approx(recommend.MIRRORED)
+    assert tas.track[d] == pytest.approx(recommend.MIRRORED) and tas.mirrored[d] == "spotify"
     assert tas.track[e] == pytest.approx(recommend.SAVED)
     assert tas.track[f] == pytest.approx(recommend.BOOTH, abs=0.01)
     assert tas.track[g] == pytest.approx(recommend.TOUCHED)
