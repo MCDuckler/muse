@@ -14,6 +14,7 @@ STAGES = {
     "asking": "Asking YouTube through your phone",
     "downloading": "Downloading",
     "relaying": "Downloading through your phone",
+    "pulling": "Your phone is fetching it",
     "converting": "Converting",
     "measuring": "Checking loudness",
     "uploading": "Saving",

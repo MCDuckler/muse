@@ -11,7 +11,13 @@ phone's person asked for.
 
 That way everything that breaks when YouTube changes something stays here, where one
 upgrade of yt-dlp mends every phone at once. The question costs the phone about 370 KB
-and the song 4 MB, and most of the time the phone never carries the song at all.
+and the song 4 MB.
+
+Measured the same afternoon, the box was let pull the audio 0 times in 30, so most
+songs do come through the phone. A phone that says it can ("pulls") is then sent the
+address YouTube gave, fetches the song itself, plays it from its own disk at once and
+hands the house its copy (pulled() below). That is one trip down and one up, not down,
+up and down again.
 
 Three parts:
 
@@ -41,7 +47,8 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import (APIRouter, File, Form, Header, HTTPException, UploadFile, WebSocket,
+                     WebSocketDisconnect)
 from starlette.concurrency import run_in_threadpool
 
 from . import audiofile, auth, db, jobs, landing, progress
@@ -55,7 +62,7 @@ router = APIRouter()
 # A frame is one binary WebSocket message: its type (1 byte), the stream it belongs to
 # (4 bytes, big-endian), then the payload. Stream 0 is the conversation about the exit
 # itself. app/lib/src/worker/exit_tunnel.dart is the other half and has to agree.
-HELLO, OPEN, OPENED, REFUSED, DATA, CLOSE, CREDIT = range(7)
+HELLO, OPEN, OPENED, REFUSED, DATA, CLOSE, CREDIT, PULL = range(8)
 _HEAD = struct.Struct("!BI")
 
 # How much one side may send on a stream before hearing it has arrived. Without a limit
@@ -109,6 +116,8 @@ class Exit:
         self.ip = ip
         self.state: dict = {}
         self.since = time.time()
+        # The loop its WebSocket lives on, for orders sent from the runner's threads.
+        self.loop: asyncio.AbstractEventLoop | None = None
         self._streams: dict[int, _Stream] = {}
         self._next = 1
         self._send_lock = asyncio.Lock()
@@ -238,7 +247,7 @@ class Exit:
 
 
 # What a phone says about itself, kept; anything else it sends is ignored.
-_SAID = ("network", "mobile_data", "platform", "build")
+_SAID = ("network", "mobile_data", "platform", "build", "pulls")
 
 
 class Refused(Exception):
@@ -309,6 +318,7 @@ async def door(ws: WebSocket):
         await ws.close(code=4403)
         return
     ex = Exit(ws, device, _client_ip(ws))
+    ex.loop = asyncio.get_running_loop()
     old = _exits.get(ex.device_id)
     _exits[ex.device_id] = ex
     if old is not None:
@@ -557,6 +567,7 @@ def may_relay(ex: Exit) -> bool:
 def want(device_id: int | None, track_ids: list[int]) -> int:
     """The songs a device is about to play, in playing order: fetched through its own
     door, if it has one open. Answers how many were started."""
+    _sweep()
     ex = exit_for(device_id)
     if ex is None or _cfg is None or cooling(ex):
         return 0
@@ -569,7 +580,8 @@ def _kick(ex: Exit) -> int:
     started = 0
     while True:
         with ex.lock:
-            if ex.gone.is_set() or len(ex.working) >= PER_EXIT or not ex.wanted:
+            busy = len(ex.working) + _pulling_for(ex)
+            if ex.gone.is_set() or busy >= PER_EXIT or not ex.wanted:
                 return started
             tid = ex.wanted.popleft()
             if tid in ex.working or time.time() - ex.tried.get(tid, 0) < TRIED_WINDOW:
@@ -627,15 +639,17 @@ def _hand_back(job: dict, track_id: int) -> None:
 
 def _record(ex: Exit, track_id: int, outcome: str, ticket: Ticket | None = None,
             resolve_ms: int | None = None, direct: bool | None = None,
-            relayed: bool | None = None, error: str | None = None) -> None:
+            relayed: bool | None = None, error: str | None = None,
+            phone_pulled: bool | None = None, extra_bytes: int = 0) -> None:
     try:
         db.run(
             """insert into exit_fetches(device_id, track_id, network, outcome,
-                                        resolve_ms, direct, relayed, exit_bytes, error)
-               values(%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                                        resolve_ms, direct, relayed, exit_bytes, error,
+                                        phone_pulled)
+               values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
             (ex.device_id, track_id, ex.network, outcome, resolve_ms, direct, relayed,
-             (ticket.up + ticket.down) if ticket else None,
-             error[:500] if error else None))
+             ((ticket.up + ticket.down) if ticket else 0) + extra_bytes or None,
+             error[:500] if error else None, phone_pulled))
     except Exception as e:                       # the song matters more than the count
         log.warning("could not record an exit fetch: %s", e)
 
@@ -765,30 +779,50 @@ def fetch(ex: Exit, job: dict) -> str:
                     _record(ex, track_id, "handed_back", ticket, resolve_ms, direct,
                             False, refused)
                     return "handed_back"
-                got, said = _pull(info, tmp, track_id, ticket.proxy)
-                relayed = True
-                if got is None:
-                    if ex.gone.is_set():
-                        _hand_back(job, track_id)
-                        _record(ex, track_id, "lost", ticket, resolve_ms, False, True)
-                        return "lost"
-                    return _after_failure(ex, job, track_id, said, ticket, resolve_ms,
-                                          direct=False, relayed=True)
-
-            if got.suffix != ".m4a":
-                _say(track_id, "converting")
-                to = got.with_suffix(".m4a")
-                audiofile.to_m4a(got, to)
-                got = to
-            landing.land(_cfg, job["id"], track_id, got, _publish,
-                         lambda stage: _say(track_id, stage))
+                # A phone that fetches for itself is told where the song is, and the
+                # song never has to come back down to it from here.
+                order = _order(job, track_id, info) if ex.state.get("pulls") else None
+                if order is not None and _hand_over(ex, job, track_id, info, order,
+                                                    ticket, resolve_ms, direct, refused):
+                    return "pulling"
+                return _relay(ex, job, track_id, info, tmp, ticket, resolve_ms, direct,
+                              refused)
+            return _arrived(ex, job, track_id, got, ticket, resolve_ms, direct, None,
+                            refused)
     finally:
         ticket.done()
+
+
+def _arrived(ex: Exit, job: dict, track_id: int, got: pathlib.Path, ticket: Ticket,
+             resolve_ms: int | None, direct: bool | None, relayed: bool | None,
+             refused: str | None) -> str:
+    if got.suffix != ".m4a":
+        _say(track_id, "converting")
+        to = got.with_suffix(".m4a")
+        audiofile.to_m4a(got, to)
+        got = to
+    landing.land(_cfg, job["id"], track_id, got, _publish,
+                 lambda stage: _say(track_id, stage))
     _record(ex, track_id, "ready", ticket, resolve_ms, direct, relayed, refused)
     log.info("track %s via exit %s: %s, %d KB across the phone", track_id,
              ex.device_id, "direct" if direct else "relayed",
              (ticket.up + ticket.down) // 1024)
     return "ready"
+
+
+def _relay(ex: Exit, job: dict, track_id: int, info: pathlib.Path, tmp: pathlib.Path,
+           ticket: Ticket, resolve_ms: int | None, direct: bool | None,
+           refused: str | None) -> str:
+    """The song through the phone, from the answer it already helped get."""
+    got, said = _pull(info, tmp, track_id, ticket.proxy)
+    if got is None:
+        if ex.gone.is_set():
+            _hand_back(job, track_id)
+            _record(ex, track_id, "lost", ticket, resolve_ms, direct, True)
+            return "lost"
+        return _after_failure(ex, job, track_id, said, ticket, resolve_ms,
+                              direct=direct, relayed=True)
+    return _arrived(ex, job, track_id, got, ticket, resolve_ms, direct, True, refused)
 
 
 def _after_failure(ex: Exit, job: dict, track_id: int, said: str, ticket: Ticket,
@@ -818,13 +852,237 @@ def _after_failure(ex: Exit, job: dict, track_id: int, said: str, ticket: Ticket
     return "failed"
 
 
+# ------------------------------------------------------------------ the phone pulls it
+#
+# A song handed to a phone to fetch itself: its job stays leased to that phone's exit
+# while it does, and what yt-dlp found is kept, so a pull that fails can still come
+# through the phone the old way.
+PULL_SECONDS = 360.0
+_YOUTUBE_MEDIA = re.compile(r"^https://[a-z0-9.-]+\.googlevideo\.com/")
+
+
+class _Handed:
+    def __init__(self, ex: Exit, job: dict, track_id: int, info: pathlib.Path,
+                 resolve_ms: int | None, direct: bool | None, refused: str | None,
+                 crossed: int):
+        self.ex, self.job, self.track_id, self.info = ex, job, track_id, info
+        self.resolve_ms, self.direct, self.refused = resolve_ms, direct, refused
+        self.crossed = crossed
+        self.at = time.time()
+
+
+_handed: dict[int, _Handed] = {}
+_handed_lock = threading.Lock()
+
+
+def _pulling_for(ex: Exit) -> int:
+    with _handed_lock:
+        return sum(1 for h in _handed.values() if h.ex is ex)
+
+
+def _order(job: dict, track_id: int, info: pathlib.Path) -> dict | None:
+    """What a phone needs to fetch the format yt-dlp chose: one plain HTTPS address on
+    YouTube's media hosts, and the headers to ask with. None for anything else (a
+    playlist of pieces, say), which then comes through the phone the old way."""
+    try:
+        d = json.loads(info.read_text())
+    except (OSError, ValueError):
+        return None
+    if d.get("requested_formats") or d.get("protocol") not in ("https", "http"):
+        return None
+    url = d.get("url") or ""
+    if not _YOUTUBE_MEDIA.match(url):
+        return None
+    return {"job": job["id"], "track": track_id, "url": url,
+            "headers": d.get("http_headers") or {},
+            "bytes": d.get("filesize") or d.get("filesize_approx"),
+            "ext": d.get("ext"), "acodec": d.get("acodec"),
+            "chunk": (d.get("downloader_options") or {}).get("http_chunk_size")}
+
+
+def _tell_phone(ex: Exit, kind: int, what: dict) -> bool:
+    """A frame to the phone from one of the runner's threads."""
+    if ex.loop is None or ex.gone.is_set():
+        return False
+    try:
+        asyncio.run_coroutine_threadsafe(
+            ex.send(kind, 0, json.dumps(what).encode()), ex.loop).result(timeout=10)
+        return True
+    except Exception as e:
+        log.info("could not tell exit %s: %s", ex.device_id, e)
+        return False
+
+
+def _hand_over(ex: Exit, job: dict, track_id: int, info: pathlib.Path, order: dict,
+               ticket: Ticket, resolve_ms: int | None, direct: bool | None,
+               refused: str | None) -> bool:
+    keep = pathlib.Path(_cfg.data_dir) / "cache" / "exit-pulls"
+    keep.mkdir(parents=True, exist_ok=True)
+    kept = keep / f"{job['id']}.json"
+    shutil.copy(info, kept)
+    h = _Handed(ex, job, track_id, kept, resolve_ms, direct, refused,
+                ticket.up + ticket.down)
+    with _handed_lock:
+        _handed[job["id"]] = h
+    if not _tell_phone(ex, PULL, order):
+        with _handed_lock:
+            _handed.pop(job["id"], None)
+        kept.unlink(missing_ok=True)
+        return False
+    _say(track_id, "pulling")
+    return True
+
+
+def _take_handed(job_id: int, device_id: int) -> _Handed | None:
+    with _handed_lock:
+        h = _handed.get(job_id)
+        if h is None or h.ex.device_id != device_id:
+            return None
+        return _handed.pop(job_id)
+
+
+def _sweep() -> None:
+    """Songs a phone was sent to fetch and never brought back: given back."""
+    now = time.time()
+    with _handed_lock:
+        stale = [j for j, h in _handed.items() if now - h.at > PULL_SECONDS]
+        gone = [_handed.pop(j) for j in stale]
+    for h in gone:
+        h.info.unlink(missing_ok=True)
+        _hand_back(h.job, h.track_id)
+        _record(h.ex, h.track_id, "lost", None, h.resolve_ms, h.direct, False,
+                "the phone never brought it back", True, h.crossed)
+
+
+def _device_or_401(authorization: str | None) -> dict:
+    device = _device_for(authorization)
+    if device is None:
+        raise HTTPException(401, "missing or unknown token")
+    if device["blocked"]:
+        raise HTTPException(403, "an admin has kept this device out of the pool")
+    return device
+
+
+# The most a song from a phone may be: an hour-long set is about 60 MB.
+PHONE_UPLOAD_LIMIT = 200 * 1024 * 1024
+
+
+@router.post("/internal/exit/jobs/{job_id}/audio")
+def pulled(job_id: int, audio: UploadFile = File(...), meta: str = Form("{}"),
+           authorization: str | None = Header(None)):
+    """A song a phone fetched itself, handed in. Put right where it needs it (YouTube's
+    pieces into one plain m4a, by copying, never re-encoding), measured here, kept and
+    announced like any other."""
+    device = _device_or_401(authorization)
+    h = _take_handed(job_id, device["id"])
+    if h is None:
+        raise HTTPException(409, "not a song this device was sent to fetch")
+    try:
+        with tempfile.TemporaryDirectory(prefix="muse-pulled-") as tmp_s:
+            tmp = pathlib.Path(tmp_s)
+            raw = tmp / "raw.m4a"
+            size = 0
+            with raw.open("wb") as out:
+                while chunk := audio.file.read(1 << 20):
+                    size += len(chunk)
+                    if size > PHONE_UPLOAD_LIMIT:
+                        raise HTTPException(413, "too large to be a song")
+                    out.write(chunk)
+            fixed = tmp / "song.m4a"
+            r = subprocess.run(
+                [audiofile.FFMPEG, "-v", "error", "-y", "-i", str(raw), "-vn", "-c", "copy",
+                 "-movflags", "+faststart", "-f", "mp4", str(fixed)],
+                capture_output=True, text=True, timeout=120)
+            try:
+                info = audiofile.probe(fixed) if r.returncode == 0 else {}
+            except (subprocess.SubprocessError, ValueError, OSError):
+                info = {}
+            if not info.get("codec") or (info.get("duration_ms") or 0) < 500:
+                raise HTTPException(400, "that is not a song")
+            if audiofile.needs_transcode(info):
+                to = tmp / "song-aac.m4a"
+                audiofile.to_m4a(fixed, to)
+                fixed = to
+            landing.land(_cfg, job_id, h.track_id, fixed, _publish,
+                         lambda stage: _say(h.track_id, stage))
+    except HTTPException:
+        # Not taken: the song is given back for somebody else, rather than left
+        # waiting for a phone that has already said what it had.
+        _hand_back(h.job, h.track_id)
+        _record(h.ex, h.track_id, "failed", None, h.resolve_ms, h.direct, False,
+                "the phone handed in something that was not the song", True, h.crossed)
+        raise
+    except Exception as e:
+        log.exception("keeping track %s from phone %s failed: %s", h.track_id,
+                      device["id"], e)
+        _hand_back(h.job, h.track_id)
+        raise HTTPException(500, "could not keep it") from e
+    finally:
+        h.info.unlink(missing_ok=True)
+    try:
+        said = json.loads(meta or "{}")
+    except ValueError:
+        said = {}
+    fetched = said.get("bytes") if isinstance(said.get("bytes"), int) else size
+    _record(h.ex, h.track_id, "ready", None, h.resolve_ms, h.direct, False, h.refused,
+            True, h.crossed + fetched + size)
+    log.info("track %s pulled by phone %s itself, %d KB", h.track_id, device["id"],
+             size // 1024)
+    return {"ok": True}
+
+
+@router.post("/internal/exit/jobs/{job_id}/failed")
+def pull_failed(job_id: int, body: dict | None = None,
+                authorization: str | None = Header(None)):
+    """The phone could not fetch it itself: through the phone the old way, from the same
+    answer, where its data allows; else given back."""
+    device = _device_or_401(authorization)
+    h = _take_handed(job_id, device["id"])
+    if h is None:
+        raise HTTPException(409, "not a song this device was sent to fetch")
+    why = str((body or {}).get("why") or "the phone could not fetch it")[:300]
+    log.info("phone %s could not pull track %s itself: %s", device["id"], h.track_id, why)
+    if h.ex.gone.is_set() or not may_relay(h.ex):
+        h.info.unlink(missing_ok=True)
+        _hand_back(h.job, h.track_id)
+        _record(h.ex, h.track_id, "handed_back", None, h.resolve_ms, h.direct, False,
+                why, False, h.crossed)
+        return {"ok": True, "then": "handed_back"}
+    _pool.submit(_relay_later, h, why)
+    return {"ok": True, "then": "through_the_phone"}
+
+
+def _relay_later(h: _Handed, why: str) -> None:
+    ex = h.ex
+    with ex.lock:
+        ex.working.add(h.track_id)
+    try:
+        with _slots:
+            ticket = ex.ticket()
+            try:
+                with tempfile.TemporaryDirectory(prefix="muse-exit-") as tmp_s:
+                    _relay(ex, h.job, h.track_id, h.info, pathlib.Path(tmp_s), ticket,
+                           h.resolve_ms, h.direct, why)
+            finally:
+                ticket.done()
+    except Exception as e:
+        log.exception("relay after a failed pull of %s crashed: %s", h.track_id, e)
+        _hand_back(h.job, h.track_id)
+    finally:
+        h.info.unlink(missing_ok=True)
+        with ex.lock:
+            ex.working.discard(h.track_id)
+
+
 # ------------------------------------------------------------------ for the pool screen
 def overview() -> list[dict]:
+    _sweep()
     today = {r["device_id"]: r for r in db.all_(
         """select device_id,
                   count(*) filter (where outcome = 'ready') as ready,
                   count(*) filter (where outcome = 'ready' and direct) as direct,
                   count(*) filter (where outcome = 'ready' and relayed) as relayed,
+                  count(*) filter (where outcome = 'ready' and phone_pulled) as pulled,
                   coalesce(sum(exit_bytes), 0) as bytes
              from exit_fetches
             where at > now() - interval '24 hours'
@@ -841,6 +1099,7 @@ def overview() -> list[dict]:
             "since": ex.since, "working": len(ex.working),
             "cooling": round(cooling(ex)),
             "fetched_today": t.get("ready", 0), "direct_today": t.get("direct", 0),
-            "relayed_today": t.get("relayed", 0), "bytes_today": int(t.get("bytes", 0)),
+            "relayed_today": t.get("relayed", 0), "pulled_today": t.get("pulled", 0),
+            "pulling": _pulling_for(ex), "bytes_today": int(t.get("bytes", 0)),
         })
     return out

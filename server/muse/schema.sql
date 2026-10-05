@@ -925,3 +925,6 @@ create table if not exists exit_fetches (
   error       text
 );
 create index if not exists exit_fetches_at on exit_fetches(at);
+
+-- A song the phone fetched itself and handed in, rather than one carried through it.
+alter table exit_fetches add column if not exists phone_pulled boolean;

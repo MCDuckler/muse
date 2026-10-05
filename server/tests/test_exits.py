@@ -216,6 +216,15 @@ def a_song(tmp_path_factory) -> pathlib.Path:
     return out
 
 
+# What yt-dlp -J says about a song, as much of it as anything here reads.
+ANSWER = {
+    "id": "x", "formats": [], "protocol": "https", "ext": "m4a", "acodec": "mp4a.40.2",
+    "url": "https://rr1---sn-test.googlevideo.com/videoplayback?ip=192.0.2.7&itag=140",
+    "http_headers": {"User-Agent": "Mozilla/5.0 test"}, "filesize": 4096,
+    "downloader_options": {"http_chunk_size": 10485760},
+}
+
+
 class FakeYtdlp:
     """yt-dlp as the runner sees it: the answer to the question, and then the file, or
     not, depending on whether it came straight from YouTube or through the phone."""
@@ -233,7 +242,7 @@ class FakeYtdlp:
                 self.during()
             if self.ask != "ok":
                 return 1, "", self.ask
-            return 0, json.dumps({"id": "x", "formats": []}), ""
+            return 0, json.dumps(ANSWER), ""
         through = "--proxy" in args
         self.calls.append("relay" if through else "direct")
         assert args[args.index("-f") + 1] == exits.FORMAT, "the same choice again"
@@ -474,3 +483,133 @@ def test_the_door_stays_shut_without_a_token_or_for_a_blocked_device(client, hdr
         with pytest.raises(WebSocketDisconnect):
             ws.receive_bytes()
     assert exits.exit_for(device) is None
+
+
+# ------------------------------------------------------------------ the phone pulls it
+@pytest.fixture()
+def told(monkeypatch):
+    """What the server said to the phone over its door."""
+    said = []
+    monkeypatch.setattr(exits, "_tell_phone",
+                        lambda ex, kind, what: said.append((kind, what)) or True)
+    yield said
+    exits._handed.clear()
+
+
+def _pulled(client, hdr, job_id, body: bytes, meta=None):
+    return client.post(f"/internal/exit/jobs/{job_id}/audio", headers=hdr,
+                       files={"audio": ("song.m4a", body, "audio/mp4")},
+                       data={"meta": json.dumps(meta or {})})
+
+
+def test_a_phone_that_fetches_for_itself_is_told_where_and_hands_its_copy_in(
+        client, hdr, phone, a_song, told, monkeypatch):
+    phone.state["pulls"] = 1
+    tid = _song(client, hdr, "EXIT0000401")
+    fake = FakeYtdlp(a_song, direct="ERROR: HTTP Error 403: Forbidden")
+    monkeypatch.setattr(exits, "ytdlp", fake)
+    job = _claim(phone, tid)
+    assert exits.fetch(phone, job) == "pulling"
+    assert fake.calls == ["ask", "direct"], "nothing came through the phone from here"
+    (kind, order), = told
+    assert kind == exits.PULL
+    assert order["job"] == job["id"] and order["track"] == tid
+    assert order["url"] == ANSWER["url"] and order["headers"] == ANSWER["http_headers"]
+    assert db.one("select state from jobs where id=%s", (job["id"],))["state"] == "leased"
+    assert exits._pulling_for(phone) == 1
+
+    r = _pulled(client, hdr, job["id"], a_song.read_bytes(), {"bytes": 4096})
+    assert r.status_code == 200, r.text
+    t = db.one("select state, loudness_lufs from tracks where id=%s", (tid,))
+    assert t["state"] == "ready" and t["loudness_lufs"] is not None
+    row = _last_row()
+    assert row["outcome"] == "ready" and row["phone_pulled"] and not row["relayed"]
+    assert exits._pulling_for(phone) == 0
+    assert _pulled(client, hdr, job["id"], a_song.read_bytes()).status_code == 409
+
+
+def test_songs_a_phone_is_fetching_count_toward_what_it_does_at_once(
+        client, hdr, phone, a_song, told, monkeypatch):
+    phone.state["pulls"] = 1
+    monkeypatch.setattr(exits, "ytdlp", FakeYtdlp(a_song, direct="ERROR: HTTP Error 403"))
+    monkeypatch.setattr(exits, "_pool", _Now())
+    ids = [_song(client, hdr, f"EXIT00005{n:02d}") for n in range(3)]
+    exits.want(phone.device_id, ids)
+    assert len(told) == exits.PER_EXIT, "two being fetched by the phone, the third waits"
+
+
+def test_a_pull_that_fails_comes_through_the_phone_after_all(client, hdr, phone, a_song,
+                                                              told, monkeypatch):
+    phone.state["pulls"] = 1
+    tid = _song(client, hdr, "EXIT0000402")
+    fake = FakeYtdlp(a_song, direct="ERROR: HTTP Error 403")
+    monkeypatch.setattr(exits, "ytdlp", fake)
+    monkeypatch.setattr(exits, "_pool", _Now())
+    job = _claim(phone, tid)
+    assert exits.fetch(phone, job) == "pulling"
+    r = client.post(f"/internal/exit/jobs/{job['id']}/failed", headers=hdr,
+                    json={"why": "HTTP 403 from googlevideo"})
+    assert r.json()["then"] == "through_the_phone"
+    assert fake.calls == ["ask", "direct", "relay"], "from the answer it already had"
+    assert db.one("select state from tracks where id=%s", (tid,))["state"] == "ready"
+
+
+def test_a_failed_pull_on_data_it_may_not_use_is_given_back(client, hdr, phone, a_song,
+                                                            told, monkeypatch):
+    phone.state["pulls"] = 1
+    tid = _song(client, hdr, "EXIT0000403")
+    monkeypatch.setattr(exits, "ytdlp", FakeYtdlp(a_song, direct="ERROR: HTTP Error 403"))
+    job = _claim(phone, tid)
+    assert exits.fetch(phone, job) == "pulling"
+    phone.state.update(network="cellular", mobile_data=False)
+    r = client.post(f"/internal/exit/jobs/{job['id']}/failed", headers=hdr, json={})
+    assert r.json()["then"] == "handed_back"
+    assert db.one("select state, attempts from jobs where id=%s",
+                  (job["id"],)) == {"state": "pending", "attempts": 0}
+
+
+def test_what_is_not_a_song_is_not_kept_and_the_song_goes_back(client, hdr, phone, a_song,
+                                                               told, monkeypatch):
+    phone.state["pulls"] = 1
+    tid = _song(client, hdr, "EXIT0000404")
+    monkeypatch.setattr(exits, "ytdlp", FakeYtdlp(a_song, direct="ERROR: HTTP Error 403"))
+    job = _claim(phone, tid)
+    assert exits.fetch(phone, job) == "pulling"
+    assert _pulled(client, hdr, job["id"], b"<html>nope</html>").status_code == 400
+    assert db.one("select state from jobs where id=%s", (job["id"],))["state"] == "pending"
+    assert db.one("select state from tracks where id=%s", (tid,))["state"] != "ready"
+
+
+def test_only_a_known_device_hands_anything_in(client, hdr, phone, a_song, told,
+                                               monkeypatch):
+    phone.state["pulls"] = 1
+    tid = _song(client, hdr, "EXIT0000405")
+    monkeypatch.setattr(exits, "ytdlp", FakeYtdlp(a_song, direct="ERROR: HTTP Error 403"))
+    job = _claim(phone, tid)
+    exits.fetch(phone, job)
+    r = _pulled(client, {"Authorization": "Bearer nonsense"}, job["id"], a_song.read_bytes())
+    assert r.status_code == 401
+    assert exits._pulling_for(phone) == 1, "still the phone's to bring"
+
+
+def test_a_phone_that_never_brings_it_back_gives_it_back(client, hdr, phone, a_song, told,
+                                                         monkeypatch):
+    phone.state["pulls"] = 1
+    tid = _song(client, hdr, "EXIT0000406")
+    monkeypatch.setattr(exits, "ytdlp", FakeYtdlp(a_song, direct="ERROR: HTTP Error 403"))
+    job = _claim(phone, tid)
+    exits.fetch(phone, job)
+    monkeypatch.setattr(exits, "PULL_SECONDS", -1)
+    exits._sweep()
+    assert db.one("select state, attempts from jobs where id=%s",
+                  (job["id"],)) == {"state": "pending", "attempts": 0}
+    assert _last_row()["outcome"] == "lost"
+
+
+def test_an_older_app_that_cannot_fetch_for_itself_still_gets_the_song(
+        client, hdr, phone, a_song, told, monkeypatch):
+    tid = _song(client, hdr, "EXIT0000407")
+    fake = FakeYtdlp(a_song, direct="ERROR: HTTP Error 403")
+    monkeypatch.setattr(exits, "ytdlp", fake)
+    assert exits.fetch(phone, _claim(phone, tid)) == "ready"
+    assert not told and fake.calls[-1] == "relay"
