@@ -218,6 +218,28 @@ def _bandcamp_search(query: str, limit: int) -> list[dict]:
     return out
 
 
+def bandcamp_bands(query: str, limit: int = 12) -> list[dict]:
+    """Bandcamp pages by name, from its own search: who, where, whether it says it is a
+    label, its picture. One request; what a page *is* beyond its word takes reading it."""
+    body = json.dumps({"search_text": query, "search_filter": "b",
+                       "full_page": False, "fan_id": None}).encode()
+    req = urllib.request.Request(
+        "https://bandcamp.com/api/bcsearch_public_api/1/autocomplete_elastic",
+        data=body, headers={"Content-Type": "application/json", "User-Agent": UA})
+    data = json.loads(urllib.request.urlopen(req, timeout=20).read())
+    out = []
+    for r in (data.get("auto") or {}).get("results", []):
+        url = (r.get("item_url_root") or "").rstrip("/")
+        if r.get("type") != "b" or not url:
+            continue
+        out.append({"name": r.get("name") or "", "url": url,
+                    "is_label": bool(r.get("is_label")), "location": r.get("location"),
+                    "image": r.get("img")})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _bandcamp_fetch(ref: str, out_dir: pathlib.Path, report) -> dict:
     # A reference may name the track within the page it lives on: "<album url>#<id>".
     # Bandcamp's own links are per-track, but an import from somewhere else often knows

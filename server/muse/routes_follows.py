@@ -22,7 +22,7 @@ def add_follow(body: dict = Body(...), user: dict = Depends(current_user)):
     artist = None
     if remote_id:
         artist = {"remote_id": str(remote_id), "name": body.get("name") or str(remote_id),
-                  "image": body.get("image")}
+                  "image": body.get("image"), "is_label": bool(body.get("is_label"))}
     elif body.get("name"):
         try:
             artist = discography.find_artist(body["name"])
@@ -34,13 +34,25 @@ def add_follow(body: dict = Body(...), user: dict = Depends(current_user)):
         raise HTTPException(400, "name or remote_id required")
 
     result = follows.follow(user["id"], artist, provider)
+    _rebuild(user["id"])
     return {**artist, "provider": provider, **result}
+
+
+def _rebuild(user_id: int) -> None:
+    """Their Discover lists made again, soon: who somebody follows is what the radar and
+    the feed are made of, and a follow should not wait for the night to count."""
+    from . import discover
+    try:
+        discover.ask_for(user_id)
+    except Exception:  # noqa: BLE001 — the nightly build makes them anyway
+        pass
 
 
 @router.delete("/follows/{remote_id}")
 def remove_follow(remote_id: str, provider: str = "deezer",
                   user: dict = Depends(current_user)):
     follows.unfollow(user["id"], provider, remote_id)
+    _rebuild(user["id"])
     return {"following": False}
 
 
@@ -86,8 +98,11 @@ def import_follows(body: dict = Body(default={}), user: dict = Depends(current_u
     except Exception as e:
         raise HTTPException(502, f"{provider} did not answer: {e}")
 
-    return follows.import_entries(user["id"], provider, names,
-                                  expand_labels=body.get("expand_labels", True))
+    got = follows.import_entries(user["id"], provider, names,
+                                 expand_labels=body.get("expand_labels", True))
+    if got.get("followed"):
+        _rebuild(user["id"])
+    return got
 
 
 @router.get("/follows/sources")

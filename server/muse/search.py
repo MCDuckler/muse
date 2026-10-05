@@ -24,7 +24,7 @@ log = logging.getLogger("muse.search")
 
 # Where results can come from. "library" is this box; the rest are somebody else's.
 PLACES = ("library", "ytmusic", "youtube", "spotify", "soundcloud", "bandcamp")
-KINDS = ("song", "album", "artist", "video", "playlist")
+KINDS = ("song", "album", "artist", "video", "playlist", "label")
 
 # How much a result is worth before anything is known about how well it matches.
 #
@@ -212,6 +212,43 @@ def _library_artists(user_id: int, q: str, limit: int) -> list[dict]:
                       if a["cover_track_id"] else None),
         "tracks": a["tracks"], "known": True,
     } for a in rows if a["name"]]
+
+
+def _labels(user_id: int, q: str, limit: int, *, ask: bool) -> list[dict]:
+    """Record labels by name: the ones anybody here follows first, then what Bandcamp
+    finds that is a label — by its own word, or because the house has read the page and
+    found other people's records on it (CloudCore says it is an artist)."""
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    def add(url: str, name: str, image: str | None, subtitle: str, known: bool) -> None:
+        url = url.rstrip("/")
+        if not url or url.lower() in seen:
+            return
+        seen.add(url.lower())
+        out.append({"kind": "label", "place": "bandcamp", "id": url, "title": name,
+                    "subtitle": subtitle, "cover_url": image, "known": known})
+
+    for r in db.all_(
+            """select distinct on (lower(remote_id)) remote_id, name, image,
+                      bool_or(user_id = %s) over (partition by lower(remote_id)) as mine
+                 from artist_follows
+                where provider = 'bandcamp' and is_label and name ilike %s
+                order by lower(remote_id)""", (user_id, f"%{q}%")):
+        add(r["remote_id"], r["name"], r["image"],
+            "A label you follow" if r["mine"] else "A label somebody here follows", True)
+    if ask and len(out) < limit:
+        bands = sources.bandcamp_bands(q, 12)
+        read = {r["key"] for r in db.all_(
+            """select key from remote_cache where key = any(%s)
+                 and (body->>'is_label')::boolean""",
+            ([f"bc:band2:{b['url'].lower()}" for b in bands],))}
+        for b in bands:
+            if b["is_label"] or f"bc:band2:{b['url'].lower()}" in read:
+                add(b["url"], b["name"], b["image"],
+                    " · ".join(x for x in ("Label on Bandcamp", b.get("location")) if x),
+                    False)
+    return out[:limit]
 
 
 # ---------------------------------------------------------------- somebody else's
@@ -512,6 +549,10 @@ def everything(cfg, user_id: int, q: str, *, where: str = "all", kind: str = "al
             q, each if (kind == "video" or where == "youtube") else 5)
     if "spotify" in places:
         jobs["spotify:all"] = lambda: _spotify_hits(cfg, user_id, q, kinds, 6)
+    if "label" in kinds and ("bandcamp" in places or "library" in places):
+        # Only Bandcamp is asked; "library" alone is the labels followed here.
+        jobs["bandcamp:label"] = lambda: _labels(
+            user_id, q, each if kind == "label" else 4, ask="bandcamp" in places)
     for place in ("soundcloud", "bandcamp"):
         if place in places and "song" in kinds:
             jobs[f"{place}:song"] = (

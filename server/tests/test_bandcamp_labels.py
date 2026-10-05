@@ -195,3 +195,58 @@ def test_putting_follows_right_never_leaves_an_act_unfollowed():
                               apply=True)
     assert changed == [], "nothing to tell them apart by is not proof they differ"
     assert {("deezer", "700", False), ("deezer", "500", False)} <= _followed()
+
+
+# ------------------------------------------------------------------ labels in Discover and search
+def test_a_followed_labels_acts_count_for_the_taste_and_say_why():
+    from muse import recommend
+    me = _me()
+    follows.follow(me, {"remote_id": CLOUDCORE, "name": "CloudCore", "is_label": True}, "bandcamp")
+    follows.follow(me, {"remote_id": "600", "name": "Xpress"}, "deezer")
+    tas = recommend.taste(me)
+    assert tas.label_acts.get("zecho") == "CloudCore"
+    assert tas.artist.get("zecho") == recommend.LABEL_ACT, "a little, not like a follow"
+    assert "xpress" not in tas.label_acts, "followed outright: that counts for more already"
+    assert "cloudcore" not in tas.label_acts, "the label's own name is not an act on it"
+
+
+def test_following_or_unfollowing_makes_their_discover_lists_again(client, hdr):
+    db.run("delete from jobs where kind='discover_build'")
+    r = client.post("/follows", headers=hdr, json={
+        "provider": "bandcamp", "remote_id": CLOUDCORE, "name": "CloudCore", "is_label": True})
+    assert r.status_code in (200, 201), r.text
+    assert db.one("""select count(*) n from jobs where kind='discover_build'
+                      and payload->>'user_id' = %s""", (str(_me()),))["n"] == 1
+    row = db.one("select is_label from artist_follows where remote_id=%s", (CLOUDCORE,))
+    assert row["is_label"] is True
+
+
+def test_labels_are_found_by_search(cfg, monkeypatch):
+    from muse import search
+    me = _me()
+    follows.follow(me, {"remote_id": CLOUDCORE, "name": "CloudCore", "is_label": True,
+                        "image": None}, "bandcamp")
+    # Read by the house before, and found to be a label whatever it calls itself.
+    db.run("""insert into remote_cache(key, body, fetched_at)
+              values('bc:band2:https://cloudmachine.bandcamp.com',
+                     '{"name": "Cloud Machine", "is_label": true}', now())""")
+    monkeypatch.setattr(sources, "bandcamp_bands", lambda q, limit=12: [
+        {"name": "CloudCore", "url": CLOUDCORE, "is_label": False, "location": "London",
+         "image": None},
+        {"name": "Cloud Records", "url": "https://cloudrecords.bandcamp.com", "is_label": True,
+         "location": "Berlin", "image": "https://f4.bcbits.com/img/1_23.jpg"},
+        {"name": "Cloud Machine", "url": "https://cloudmachine.bandcamp.com", "is_label": False,
+         "location": None, "image": None},
+        {"name": "Cloudchord", "url": "https://cloudchord.bandcamp.com", "is_label": False,
+         "location": "Austin", "image": None},
+    ])
+    got = search.everything(cfg, me, "cloud", kind="label")["items"]
+    urls = [h["id"] for h in got]
+    assert urls[0] == CLOUDCORE and got[0]["subtitle"] == "A label you follow"
+    assert "https://cloudrecords.bandcamp.com" in urls, "Bandcamp says so"
+    assert "https://cloudmachine.bandcamp.com" in urls, "the house has read it as one"
+    assert "https://cloudchord.bandcamp.com" not in urls, "an act is not a label"
+    assert urls.count(CLOUDCORE) == 1 and all(h["kind"] == "label" for h in got)
+    # In an "everything" search they come along too, a few.
+    mixed = search.everything(cfg, me, "cloudcore")["items"]
+    assert any(h["kind"] == "label" and h["id"] == CLOUDCORE for h in mixed)

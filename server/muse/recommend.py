@@ -104,6 +104,7 @@ TOUCHED = 0.5           # drew on its sleeve, set its cues, cut a sample out of 
 STATION = 0.8           # started a station from it
 JAM_SKIP = -1.0         # voted to skip it in a jam
 FOLLOWED = 2.5          # an act they follow, on the act's score
+LABEL_ACT = 1.0         # an act on a label they follow: the label vouches, a little
 STATION_ARTIST = 1.5    # an act they started a station from
 
 # A likes list is newest first: its top is what somebody likes now, its bottom what they
@@ -155,6 +156,9 @@ class Taste:
     # Listens alone, by act, so "you play a lot of" only ever says what is so.
     artist_heard: dict[str, float] = field(default_factory=dict)
     followed: set[str] = field(default_factory=set)
+    # Acts on the labels somebody follows, by the label: following CloudCore is saying
+    # something about Zecho and Xpress too.
+    label_acts: dict[str, str] = field(default_factory=dict)
     genres: dict[str, float] = field(default_factory=dict)
     # Liked on another service (which one), on a list of their own, on one of their
     # lists mirrored from another service (which one).
@@ -320,6 +324,21 @@ def taste(user_id: int) -> Taste:
 
     t.followed = {r["name"].lower() for r in db.all_(
         "select name from artist_follows where user_id = %s and not is_label", (user_id,))}
+    # Whose records the labels they follow have put out, the newest first; not the
+    # label's own name on its compilations, and not "Various Artists".
+    from .linked import credited_to
+    for r in db.all_(
+            """select r.artist, f.name as label
+                 from artist_follows f
+                 join artist_releases r on r.provider = f.provider and r.artist_id = f.remote_id
+                where f.user_id = %s and f.is_label
+                order by r.release_date desc nulls last, r.first_seen desc
+                limit 400""", (user_id,)):
+        act = (r["artist"] or "").strip()
+        if (not act or act.lower() in NOT_AN_ACT or credited_to(r["label"], act)
+                or act.lower() in t.followed):
+            continue
+        t.label_acts.setdefault(act.lower(), r["label"])
     for r in db.all_("select genre from genre_follows where user_id = %s", (user_id,)):
         t.genres[r["genre"]] = 1.0
 
@@ -361,6 +380,8 @@ def taste(user_id: int) -> Taste:
             add(t.artist, k, PASSIVE_SCALE * math.log1p(v))
     for k in t.followed:
         add(t.artist, k, FOLLOWED)
+    for k in t.label_acts:
+        add(t.artist, k, LABEL_ACT)
     for k, v in station_artists.items():
         add(t.artist, k, v)
     for k, v in t.elsewhere.items():
@@ -792,10 +813,14 @@ def recommend(user_id: int, seeds: dict[int, float], *, limit: int = 12,
         if not taste_word and artists:
             heard = max(tas.artist_heard.get(a.lower(), 0.0) for a in artists)
             followed = next((a for a in artists if a.lower() in tas.followed), None)
+            on_label = next((tas.label_acts[a.lower()] for a in artists
+                             if a.lower() in tas.label_acts), None)
             if heard >= 3:
                 taste_word = f"you play a lot of {artists[0]}"
             elif followed:
                 taste_word = f"you follow {followed}"
+            elif on_label:
+                taste_word = f"on {on_label}, which you follow"
         fit = _genre_fit(artists, tas.genres, genres_known) if genres_known else None
         if fit:
             score += 0.15 * fit[1]

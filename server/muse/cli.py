@@ -127,6 +127,9 @@ def followscheck(apply: bool = False) -> None:
             print(f"{u['name']}: could not read who they follow: {e}")
             continue
         changed = follows.recheck(u["id"], entries, apply=apply)
+        if apply and changed:
+            from . import discover
+            discover.ask_for(u["id"])
         print(f"{u['name']}: {len(entries)} followed on Bandcamp, {len(changed)} to put right")
         for c in changed:
             print(f"   {c['deezer']} (deezer {c['deezer_id']}) -> "

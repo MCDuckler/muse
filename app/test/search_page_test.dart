@@ -18,6 +18,7 @@ import 'package:muse/src/api/connection.dart';
 import 'package:muse/src/state/app_state.dart';
 import 'package:muse/src/state/selection.dart';
 import 'package:muse/src/ui/found_row.dart';
+import 'package:muse/src/ui/bandcamp_page.dart';
 import 'package:muse/src/ui/search_page.dart';
 import 'package:muse/src/ui/skeleton.dart';
 
@@ -181,6 +182,36 @@ void main() {
 
     // And every row says where it came from.
     expect(find.byType(PlaceDot), findsWidgets);
+  });
+
+  testWidgets('a label is found under Labels, and opens its page', (tester) async {
+    useThisClientInstead(MockClient((request) async {
+      final label = request.url.path == '/search/everything';
+      return http.Response(
+          jsonEncode(label
+              ? {
+                  'items': [
+                    row('label', 'bandcamp', 'CloudCore', subtitle: 'A label you follow')
+                      ..['id'] = 'https://cloudcore.bandcamp.com',
+                    row('song', 'library', 'Atom', subtitle: 'Zecho'),
+                  ],
+                  'notes': <String, String>{},
+                }
+              : <String, dynamic>{}),
+          label ? 200 : 404,
+          headers: {'content-type': 'application/json'});
+    }));
+    await show(tester);
+    await type(tester, 'cloudcore');
+    expect(tester.takeException(), isNull);
+    Finder either(String t) => find.byWidgetPredicate(
+        (w) => w is Text && (w.data == t || w.data == t.toUpperCase()));
+    expect(either('CloudCore'), findsOneWidget);
+    await tester.tap(either('CloudCore'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    final page = tester.widget<BandcampBandPage>(find.byType(BandcampBandPage));
+    expect(page.url, 'https://cloudcore.bandcamp.com');
   });
 
   testWidgets('while the first search is still out, the page is not blank',

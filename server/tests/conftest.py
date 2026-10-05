@@ -58,6 +58,9 @@ def client(cfg, monkeypatch):
          "album": None, "duration_ms": 180_000 + n, "raw": {"radio_seed": vid}}
         for n in range(12)
     ])
+    # Nor is Bandcamp's band search; a test that wants labels says which.
+    from muse import sources
+    monkeypatch.setattr(sources, "bandcamp_bands", lambda q, limit=12: [])
     monkeypatch.setattr(ytm, "song", lambda vid: {
         "video_id": vid, "title": f"Song {vid}", "artists": ["Tester"],
         "album": None, "duration_ms": 60_000, "raw": {},

@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api/client.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
+import 'bandcamp_page.dart' show BandcampBandPage;
 import 'browse_page.dart';
 import 'sleeve_art.dart';
 import 'mag_parts.dart';
@@ -111,6 +112,8 @@ class _SearchPageState extends State<SearchPage> {
     'video': 'Videos',
     'album': 'Records',
     'artist': 'Artists',
+    // Record labels on Bandcamp: the ones followed here, and what Bandcamp finds.
+    'label': 'Labels',
     'playlist': 'Playlists',
   };
 
@@ -376,6 +379,13 @@ class _SearchPageState extends State<SearchPage> {
               artist: ArtistSummary(
                   name: found.title,
                   tracks: found.place == 'library' ? found.tracks ?? 0 : 0))));
+      return;
+    }
+
+    // A label is its Bandcamp page: its acts and its records.
+    if (found.kind == 'label') {
+      navigator.push(MaterialPageRoute(
+          builder: (_) => BandcampBandPage(url: found.id, name: found.title)));
       return;
     }
 
@@ -695,6 +705,7 @@ class _SearchPageState extends State<SearchPage> {
         'video' => 'Videos',
         'album' => 'Records',
         'artist' => 'Artists',
+        'label' => 'Labels',
         'playlist' => 'Playlists',
         'folder' => 'Folders',
         _ => kind,
@@ -1299,6 +1310,7 @@ class _TopResult extends StatelessWidget {
     final what = switch (f.kind) {
       'album' => 'Record',
       'artist' => 'Artist',
+      'label' => 'Label',
       'video' => 'Video',
       'playlist' => 'Playlist',
       'folder' => 'Folder',
