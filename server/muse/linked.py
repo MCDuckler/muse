@@ -685,22 +685,30 @@ _COLLECTORS = re.compile(r'id="collectors-data" data-blob="([^"]+)"')
 
 
 def bandcamp_band(url: str) -> dict:
-    """What a Bandcamp page is: its name, whether it is a label, its picture.
+    """What a Bandcamp page is: its name, whether it is a label, its picture, and what
+    is on it (title and whose, no more), to tell it from another act of the same name.
+
+    A label by the same rule as bandcamp_music, not by what the page calls itself:
+    CloudCore is an "artist" account whose records are by Zecho, optmst, Xpress and a
+    hundred more, and taken at its word it was followed as the Deezer act that happens
+    to be called Cloudcore too.
 
     Cached a month in remote_cache: a page does not stop being a label, and an import
-    of three hundred follows is three hundred of these.
+    of three hundred follows is three hundred of these. (band2: the answers kept before
+    the rule was used here said "not a label" to pages like CloudCore.)
     """
-    key = f"bc:band:{url.rstrip('/').lower()}"
+    key = f"bc:band2:{url.rstrip('/').lower()}"
     row = db.one("select body from remote_cache where key=%s and fetched_at > now() - "
                  "interval '30 days'", (key,))
     if row:
         return row["body"]
-    page, _ = sources.fetch_page(url.rstrip("/") + "/music")
-    m = _BAND.search(page)
-    band = json.loads(html.unescape(m.group(1))) if m else {}
-    out = {"name": band.get("name"), "is_label": bool(band.get("is_label")),
+    music = bandcamp_music(url, newest=60)
+    band = music.get("band") or {}
+    out = {"name": band.get("name"), "is_label": music["is_label"],
            "band_id": band.get("id"), "url": url.rstrip("/"),
-           "image": bandcamp_image(band.get("image_id") or band.get("bio_image_id"))}
+           "image": bandcamp_image(band.get("image_id") or band.get("bio_image_id")),
+           "records": [{"title": r["title"], "artist": r["artist"]}
+                       for r in music["records"]]}
     db.run("""insert into remote_cache(key, body, fetched_at) values(%s,%s,now())
               on conflict (key) do update set body=excluded.body, fetched_at=now()""",
            (key, json.dumps(out)))
@@ -786,7 +794,7 @@ def bandcamp_music(url: str, newest: int = 40) -> dict:
     label_like = len(set(others)) >= LABEL_ACTS and 2 * len(others) >= len(records)
     return {"name": band.get("name"),
             "is_label": bool(band.get("is_label")) or label_like,
-            "records": records[:newest]}
+            "records": records[:newest], "band": band}
 
 
 def bandcamp_record(url: str) -> dict:
@@ -969,7 +977,7 @@ def bandcamp_band_page(url: str) -> dict:
     own few words about itself, the acts on it if it is a label, and its records.
     Three fetches at most; kept a day, since a page is looked at more than once."""
     root = url.rstrip("/").split("?")[0]
-    key = f"bc:page:{root.lower()}"
+    key = f"bc:page2:{root.lower()}"
     row = db.one("select body from remote_cache where key=%s and fetched_at > now() - "
                  "interval '1 day'", (key,))
     if row:
@@ -982,13 +990,33 @@ def bandcamp_band_page(url: str) -> dict:
         "url": root, "name": band.get("name"), "is_label": bool(band.get("is_label")),
         "image": (pic.group(1) if pic else None) or band.get("image"),
         "about": _plain(bio.group(1)) if bio else None,
-        "roster": bandcamp_roster(root) if band.get("is_label") else [],
+        "roster": bandcamp_acts(root, band) if band.get("is_label") else [],
         "records": bandcamp_discography(root, newest=60),
     }
     db.run("""insert into remote_cache(key, body, fetched_at) values(%s,%s,now())
               on conflict (key) do update set body=excluded.body, fetched_at=now()""",
            (key, json.dumps(out)))
     return out
+
+
+def bandcamp_acts(root: str, band: dict) -> list[dict]:
+    """A label's acts: its artists page, or — on an "artist" account run as a label,
+    which has none — whose its records say they are, most records first, with no page
+    of their own to point at."""
+    try:
+        roster = bandcamp_roster(root)
+    except Exception:  # noqa: BLE001 — a 404 is the usual answer from such a page
+        roster = []
+    if roster:
+        return roster
+    name = (band.get("name") or "").lower()
+    counted: dict[str, list] = {}
+    for r in band.get("records") or []:
+        who = (r.get("artist") or "").strip()
+        if who and who.lower() != name:
+            counted.setdefault(who.lower(), [who, 0])[1] += 1
+    acts = sorted(counted.values(), key=lambda a: -a[1])
+    return [{"name": who, "url": ""} for who, _ in acts[:60]]
 
 
 def bandcamp_root_of(track_url: str | None) -> str | None:

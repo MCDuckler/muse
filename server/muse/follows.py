@@ -269,6 +269,80 @@ def ensure_scheduled(delay: float = POLL_SECONDS) -> None:
 ROSTER_MOST = 40
 
 
+def _titles(band: dict | None, by: str | None = None) -> list[str]:
+    """The records on a Bandcamp page, or on a label's page those by one act."""
+    if not band:
+        return []
+    who = discography.norm(by) if by else None
+    return [r["title"] for r in band.get("records") or []
+            if r.get("title") and (who is None or discography.norm(r.get("artist")) == who)]
+
+
+def same_act(artist: dict, titles: list[str]) -> bool:
+    """Whether a Deezer artist found by name is the act a Bandcamp page is: the two have
+    a record in common. The name alone says nothing — there are a Cloudcore on Deezer
+    with three singles and a CloudCore on Bandcamp that is a label — and a page that
+    cannot show it is the same act is followed as itself, which is never wrong."""
+    want = {discography.norm(t) for t in titles} - {""}
+    if not want:
+        return False
+    try:
+        theirs = discography.artist_albums(artist["remote_id"], limit=100)
+    except Exception:  # noqa: BLE001 — unknown is not yes
+        return False
+    return any(discography.norm(a.get("title")) in want for a in theirs)
+
+
+def recheck(user_id: int, entries: list[dict], *, apply: bool = False) -> list[dict]:
+    """Follows brought over from Bandcamp before same_act, put right: where the person
+    follows a Deezer act named like a page they follow on Bandcamp, and the page is a
+    label or shares no record with that act, the Deezer follow becomes the page. The
+    acts opened out of a label are looked at the same way. Answers what was (or with
+    apply=False, would be) changed."""
+    changed = []
+
+    def wrong(name: str, titles: list[str], *, label: bool) -> dict | None:
+        d = db.one("""select remote_id, name from artist_follows
+                       where user_id=%s and provider='deezer'
+                         and artist_key(name) = artist_key(%s)""", (user_id, name))
+        if not d:
+            return None
+        if not label and (not titles or same_act({"remote_id": d["remote_id"]}, titles)):
+            # Nothing on the page to tell them apart by is not proof they differ.
+            return None
+        return d
+
+    def swap(d: dict, page: dict | None, why: str) -> None:
+        changed.append({"deezer": d["name"], "deezer_id": d["remote_id"],
+                        "bandcamp": (page or {}).get("remote_id"), "why": why})
+        if not apply:
+            return
+        unfollow(user_id, "deezer", d["remote_id"])
+        if page and not is_following(user_id, "bandcamp", page["remote_id"]):
+            follow(user_id, page, "bandcamp")
+
+    for entry in entries:
+        name, url = entry.get("name"), entry.get("url")
+        if not name or not url:
+            continue
+        try:
+            band = linked.bandcamp_band(url)
+        except Exception:  # noqa: BLE001
+            continue
+        label = bool(band.get("is_label"))
+        page = {"remote_id": url.rstrip("/"), "name": band.get("name") or name,
+                "image": entry.get("image") or band.get("image"), "is_label": label}
+        if d := wrong(name, _titles(band), label=label):
+            swap(d, page, "a label" if label else "no record in common")
+        if not label:
+            continue
+        for act in linked.bandcamp_acts(url, band)[:ROSTER_MOST]:
+            if d := wrong(act["name"], _titles(band, by=act["name"]), label=False):
+                swap(d, {"remote_id": act["url"], "name": act["name"], "image": None}
+                     if act.get("url") else None, f"not the {act['name']} on {name}")
+    return changed
+
+
 def import_entries(user_id: int, provider: str, entries: list[dict], *,
                    expand_labels: bool = True) -> dict:
     """Follow everybody in [entries] who is not followed already. Nothing is unfollowed.
@@ -278,17 +352,22 @@ def import_entries(user_id: int, provider: str, entries: list[dict], *,
     and a Bandcamp *label* — a page whose records are by many acts — is opened into
     the acts on its roster, each followed on their own, and followed itself as well so
     its compilations still arrive.
+
+    From Bandcamp, a Deezer act of the same name is only taken for the page when the
+    two have a record in common (same_act): otherwise the page itself is followed.
     """
     added, already, missed, labels, from_labels = 0, 0, [], 0, 0
 
     def take(name: str, *, url: str | None = None, image: str | None = None,
-             is_label: bool = False) -> bool:
+             is_label: bool = False, titles: list[str] | None = None) -> bool:
         nonlocal added, already
         artist = None
         if not is_label:
             try:
                 artist = discography.find_artist(name)
             except discography.Unavailable:
+                artist = None
+            if artist and provider == "bandcamp" and not same_act(artist, titles or []):
                 artist = None
         if artist:
             key = ("deezer", artist["remote_id"])
@@ -310,7 +389,7 @@ def import_entries(user_id: int, provider: str, entries: list[dict], *,
         if not name:
             continue
         band = None
-        if provider == "bandcamp" and url and expand_labels:
+        if provider == "bandcamp" and url:
             try:
                 band = linked.bandcamp_band(url)
             except Exception:  # noqa: BLE001 — treated as an act, below
@@ -318,15 +397,15 @@ def import_entries(user_id: int, provider: str, entries: list[dict], *,
         if band and band.get("is_label"):
             labels += 1
             take(name, url=url, image=entry.get("image") or band.get("image"), is_label=True)
-            try:
-                roster = linked.bandcamp_roster(url, most=ROSTER_MOST)
-            except Exception:  # noqa: BLE001
-                roster = []
-            for act in roster:
-                if take(act["name"], url=act.get("url")):
+            if not expand_labels:
+                continue
+            for act in linked.bandcamp_acts(url, band)[:ROSTER_MOST]:
+                # What the label put out by them is what tells them from a namesake.
+                if take(act["name"], url=act.get("url") or None,
+                        titles=_titles(band, by=act["name"])):
                     from_labels += 1
             continue
-        take(name, url=url, image=entry.get("image"))
+        take(name, url=url, image=entry.get("image"), titles=_titles(band))
 
     return {"from": provider, "found": len(entries), "followed": added, "already": already,
             "labels": labels, "from_labels": from_labels, "not_found": missed[:40]}

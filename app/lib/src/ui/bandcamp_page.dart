@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
 import 'artwork.dart';
+import 'browse_page.dart' show ArtistPage;
 import 'dialogs.dart';
 import 'feed_page.dart' show BandcampRecordPage;
 import 'mag.dart';
@@ -200,8 +201,12 @@ class _BandcampBandPageState extends State<BandcampBandPage> {
                     children: [
                       for (final act in band.roster)
                         InkWell(
+                          // An act read off the records of an "artist" account run as a
+                          // label has no page of its own to open: its page here instead.
                           onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                              builder: (_) => BandcampBandPage(url: act.url, name: act.name))),
+                              builder: (_) => act.url.isEmpty
+                                  ? ArtistPage(artist: ArtistSummary(name: act.name, tracks: 0))
+                                  : BandcampBandPage(url: act.url, name: act.name))),
                           child: Container(
                             padding: const EdgeInsets.fromLTRB(10, 6, 10, 5),
                             decoration: BoxDecoration(border: Border.all(color: scheme.onSurface, width: 1.1)),

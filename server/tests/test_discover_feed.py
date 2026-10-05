@@ -84,9 +84,17 @@ def test_importing_follows_adds_and_opens_labels_into_their_acts(client, hdr, mo
             {"remote_id": "dz-2", "name": "Roster Act", "image": None} if name == "Roster Act" else
             None)
     monkeypatch.setattr(discography, "find_artist", find_artist)
+    # A Deezer act is only taken for a Bandcamp page when they share a record.
+    monkeypatch.setattr(discography, "artist_albums", lambda aid, limit=60: [
+        {"remote_id": f"{aid}-a1", "title": {"dz-1": "Panic Lines",
+                                              "dz-2": "Roster Record"}.get(aid, "?")}])
     monkeypatch.setattr(linked, "bandcamp_band", lambda url: {
         "name": "Ninja Tune", "is_label": url.startswith("https://ninjatune"),
-        "url": url, "image": None})
+        "url": url, "image": None,
+        "records": ([{"title": "Roster Record", "artist": "Roster Act"},
+                     {"title": "One", "artist": "Only On Bandcamp"}]
+                    if url.startswith("https://ninjatune")
+                    else [{"title": "Panic Lines", "artist": None}])})
     monkeypatch.setattr(linked, "bandcamp_roster", lambda url, most=60: [
         {"name": "Roster Act", "url": "https://rosteract.bandcamp.com"},
         {"name": "Only On Bandcamp", "url": "https://onlyonbandcamp.bandcamp.com"},

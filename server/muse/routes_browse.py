@@ -999,9 +999,12 @@ def artist_detail(artist: str, user: dict = Depends(current_user)):
     # Their Bandcamp page, if one is followed under this name or a song of theirs
     # here came from one: the page with their records and their own words.
     bandcamp_url = None
-    bc = db.one("select remote_id from artist_follows where provider='bandcamp' "
-                "and artist_key(name) = artist_key(%s) limit 1", (artist,))
-    if bc:
+    # An act's page before a label's; and a label's only when no act goes by the name.
+    # CloudCore the label and Cloudcore the act on Deezer are spelled alike and are not
+    # the same: the act's page pointing at the label's records was the mix-up.
+    bc = db.one("select remote_id, is_label from artist_follows where provider='bandcamp' "
+                "and artist_key(name) = artist_key(%s) order by is_label limit 1", (artist,))
+    if bc and not (bc["is_label"] and found):
         bandcamp_url = bc["remote_id"]
     else:
         for r in local:

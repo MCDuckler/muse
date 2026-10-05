@@ -108,6 +108,33 @@ def fixspotifynames(apply: bool = False) -> None:
     db.close()
 
 
+def followscheck(apply: bool = False) -> None:
+    """Follows brought over from Bandcamp that went to a Deezer act of the same name
+    rather than to the page: put back on the page (follows.recheck). Everybody with a
+    Bandcamp account linked; prints what changes, and changes it only with --apply."""
+    from . import config, db, follows, linked
+
+    db.init(config.load().dsn)
+    users = db.all_("select id, name from users order by id")
+    for u in users:
+        account = next((a for a in linked.accounts(u["id"]) if a["provider"] == "bandcamp"),
+                       None)
+        if not account:
+            continue
+        try:
+            entries = linked.following("bandcamp", account["handle"])
+        except Exception as e:  # noqa: BLE001
+            print(f"{u['name']}: could not read who they follow: {e}")
+            continue
+        changed = follows.recheck(u["id"], entries, apply=apply)
+        print(f"{u['name']}: {len(entries)} followed on Bandcamp, {len(changed)} to put right")
+        for c in changed:
+            print(f"   {c['deezer']} (deezer {c['deezer_id']}) -> "
+                  f"{c['bandcamp'] or 'unfollowed'}  [{c['why']}]")
+    if not apply:
+        print("dry run — pass --apply to write it")
+
+
 def markdead(apply: bool = False) -> None:
     """Write off copies that have already been proved gone.
 
@@ -408,6 +435,10 @@ def main() -> None:
             fixspotifynames()
         case ["fixspotifynames", "--apply"]:
             fixspotifynames(apply=True)
+        case ["followscheck"]:
+            followscheck()
+        case ["followscheck", "--apply"]:
+            followscheck(apply=True)
         case ["markdead"]:
             markdead()
         case ["markdead", "--apply"]:
