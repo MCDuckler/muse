@@ -21,7 +21,8 @@ from muse import auth, config, db, recommend, ytm   # noqa: E402
 # box whose virtualenv has come apart. It must never be a database with anything in it:
 # _fresh_db drops and recreates TEST_DB every session.
 BASE_DSN = os.environ.get("MUSE_TEST_DSN", "host=127.0.0.1 port=5433 user=muse dbname=postgres")
-TEST_DB = "muse_test"
+# MUSE_TEST_DB: a second checkout running its suite at the same time needs its own.
+TEST_DB = os.environ.get("MUSE_TEST_DB", "muse_test")
 TEST_DSN = BASE_DSN.replace("dbname=postgres", f"dbname={TEST_DB}")
 
 

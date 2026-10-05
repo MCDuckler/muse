@@ -9,7 +9,9 @@ mutagen
 pillow
 pytest
 # SoundCloud is fetched here, not at home: it does not care that this is a datacenter.
-yt-dlp
+# YouTube too, asked through somebody's phone (exits.py); deno is the JavaScript
+# runtime yt-dlp solves YouTube's puzzles with, installed as a binary by the extra.
+yt-dlp[default,deno]
 # iPhones hand over HEIC, and Pillow cannot open one without this.
 pillow-heif>=0.18
 # Beat tracking and silence detection (beats.py): an FFT is not a thing to write by hand.

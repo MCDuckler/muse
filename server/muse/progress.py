@@ -11,7 +11,9 @@ import time
 # stage -> what the person waiting is actually being told
 STAGES = {
     "queued": "Waiting for the downloader",
+    "asking": "Asking YouTube through your phone",
     "downloading": "Downloading",
+    "relaying": "Downloading through your phone",
     "converting": "Converting",
     "measuring": "Checking loudness",
     "uploading": "Saving",

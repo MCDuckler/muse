@@ -907,3 +907,21 @@ alter table track_traits add column if not exists punch real;
 -- The person's clock, as their app last said it (minutes from UTC): what "night" is
 -- for them, for the songs they play to wind down. Null until an app has said.
 alter table users add column if not exists utc_offset_min int;
+
+-- Songs fetched through a phone's open door (exits.py): one row each, so whether the
+-- server could pull the audio itself, or it had to come through the phone, is a number
+-- and not a guess.
+create table if not exists exit_fetches (
+  id          bigserial primary key,
+  at          timestamptz not null default now(),
+  device_id   int references devices(id) on delete set null,
+  track_id    int,
+  network     text,
+  outcome     text not null,       -- ready | handed_back | cooling | failed | lost
+  resolve_ms  int,
+  direct      boolean,             -- the server pulled the audio itself
+  relayed     boolean,             -- the audio came through the phone
+  exit_bytes  bigint,              -- what crossed the phone, both ways
+  error       text
+);
+create index if not exists exit_fetches_at on exit_fetches(at);

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from . import db, jobs, pool
+from . import db, exits, jobs, pool
 from .deps import current_user
 
 router = APIRouter(prefix="/pool")
@@ -18,7 +18,10 @@ def _is_admin(user: dict) -> bool:
 
 @router.get("")
 def overview(user: dict = Depends(current_user)):
-    return pool.overview(user["device_id"], _is_admin(user))
+    seen = pool.overview(user["device_id"], _is_admin(user))
+    # Phones with their door open for their own songs, beside the computers.
+    seen["exits"] = exits.overview()
+    return seen
 
 
 @router.post("/pause")

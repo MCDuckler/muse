@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from . import beats_worker
 from . import (
-    auth, catalog, config, db, direct_worker, discover, enrich_worker, failures,
+    auth, catalog, config, db, direct_worker, discover, enrich_worker, exits, failures,
                follows, heavy, jobs, progress, routes_discover,
                jam, routes_accounts, routes_browse, routes_downloads, routes_files, routes_samples,
                routes_follows, routes_jam, routes_marks,
@@ -30,7 +30,7 @@ from . import (
                routes_sources,
                routes_spotify,
                routes_sync, sleeve, pool, routes_pool, routes_booth,
-               match, storage, ytm)
+               landing, match, storage, ytm)
 from . import deps
 from .deps import current_user, worker_auth
 
@@ -92,10 +92,14 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
 
     listener = beats_worker.BeatsWorker(cfg) if start_workers else None
 
+    # YouTube through somebody's phone: the songs that phone's person is about to play.
+    exits.configure(cfg, publish)
+
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         global _loop
         _loop = asyncio.get_running_loop()
+        await exits.start_proxy()
         if worker:
             worker.start()
         if direct:
@@ -122,6 +126,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             direct.stop()
         if listener:
             listener.stop()
+        await exits.stop_proxy()
         _loop = None
 
     app = FastAPI(title="WetOwl", docs_url="/api-docs", lifespan=lifespan)
@@ -811,50 +816,10 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             pool.split_done(int(split["payload"]["track_id"]))
             publish("pool", {})
             return {"ok": True}
-        # Named by where the song actually lives, not by where the worker happens to
-        # fetch from — see failures.classify.
-        heard_from = db.one("select source from tracks where id=%s",
-                            (body.get("track_id"),)) if body.get("track_id") else None
-        code, message, retryable = failures.classify(
-            raw, (heard_from or {}).get("source"))
-        # The worker's own judgement can only make a failure *less* retryable.
-        retryable = retryable and bool(body.get("retryable", True))
-        jobs.fail(job_id, raw or message, retryable)
-
-        if tid := body.get("track_id"):
-            progress.clear(tid)
-            attempts = db.one("select attempts from jobs where id=%s", (job_id,))
-            will_retry = retryable and (attempts or {}).get("attempts", 99) < jobs.MAX_ATTEMPTS
-            db.run(
-                """update tracks set state=%s, fail_reason=%s, fail_code=%s where id=%s""",
-                ("pending" if will_retry else "failed", message, code, tid),
-            )
-            # A copy that is gone stays gone. Marked rather than deleted — it is still
-            # the reason the track is here — but never chosen again, so asking for the
-            # song reaches for a copy that might work instead of the one known not to.
-            #
-            # Read off the job rather than out of the request. The worker reports what
-            # went wrong and which track it was, and has never sent the video id — so
-            # this looked for one that was never there and marked nothing, and one
-            # track failed on the same dead id ten times in a row. The server queued
-            # the job; it knows perfectly well what it asked for.
-            if code in failures.GONE:
-                job = db.one("select payload from jobs where id=%s", (job_id,))
-                video = ((job or {}).get("payload") or {}).get("video_id")
-                if video:
-                    db.run("""update track_sources
-                                 set raw = coalesce(raw,'{}'::jsonb) || '{"dead": true}'
-                               where track_id=%s and provider_id=%s""", (tid, video))
-                # Nothing left that could work. A video being deleted says nothing
-                # about the song, so go and look for another copy of it rather than
-                # leaving somebody to notice and press a button — which is the whole
-                # difference between "this isn't on YouTube any more" being true of a
-                # video and being wrong about a song that plainly is.
-                if jobs.best_source(int(tid)) is None:
-                    jobs.enqueue("refind", {"track_id": int(tid)},
-                                 priority=jobs.PRIORITY_BULK)
-            publish("track_failed", {"track_id": tid, "reason": message, "code": code,
-                                     "will_retry": will_retry})
+        tid = body.get("track_id")
+        code, retryable = landing.failed(
+            job_id, int(tid) if tid else None, raw,
+            bool(body.get("retryable", True)), publish)
         return {"ok": True, "code": code, "retryable": retryable}
 
     # ---------------- admin ----------------
@@ -871,9 +836,12 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             "select count(*) n from jobs where kind='ingest' and state in ('pending','leased')"
         )
         age = float(worker["age"]) if worker and worker["age"] is not None else None
+        # A phone with its door open fetches its own songs (exits.py), computer or not.
+        through_here = exits.exit_for(user.get("device_id")) is not None
         return {
             "ingest_worker": worker["name"] if worker else None,
-            "ingest_online": age is not None and age < 90,
+            "ingest_online": (age is not None and age < 90) or through_here,
+            "fetching_through_here": through_here,
             "last_seen_seconds": age,
             "downloads_pending": pending["n"],
             "in_progress": progress.snapshot(),
@@ -920,6 +888,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     app.include_router(routes_pool.router)
     app.include_router(routes_booth.router)
     app.include_router(routes_downloads.router)
+    app.include_router(exits.router)
     routes_jam.set_publisher(publish)
     routes_library.set_publisher(publish)
     discover.set_publisher(publish)

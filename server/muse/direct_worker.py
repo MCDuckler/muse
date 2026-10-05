@@ -16,8 +16,8 @@ import tempfile
 import threading
 import time
 
-from . import (catalog, db, failures, follows, jobs, progress, refind,
-               sources, storage)
+from . import (catalog, db, failures, follows, jobs, landing, progress, refind,
+               sources)
 
 log = logging.getLogger("muse.direct")
 
@@ -161,38 +161,11 @@ class DirectWorker:
         try:
             with tempfile.TemporaryDirectory(prefix="muse-direct-") as tmp:
                 got = sources.fetch(provider, ref, pathlib.Path(tmp), report)
-                path: pathlib.Path = got["path"]
-
-                report("measuring")
-                info = sources.probe(path)
-                lufs, gain = sources.loudness(path)
-
-                report("storing")
-                with path.open("rb") as fh:
-                    digest, stored, size = storage.store_stream(
-                        self.cfg.audio_dir, fh, path.suffix or ".m4a")
-
-            db.run(
-                """insert into media(track_id,sha256,codec,bitrate,bytes,path)
-                   values(%s,%s,%s,%s,%s,%s)
-                   on conflict (track_id,sha256) do nothing""",
-                (track_id, digest, info.get("codec"), info.get("bitrate"), size,
-                 str(stored)),
-            )
-            db.run(
-                """update tracks set state='ready', fail_reason=null, fail_code=null,
-                          duration_ms=coalesce(%s,duration_ms),
-                          loudness_lufs=%s, gain_db=%s
-                    where id=%s""",
-                (info.get("duration_ms"), lufs, gain, track_id),
-            )
-            jobs.finish(job["id"])
-            progress.clear(track_id)
-            jobs.enqueue("meta", {"track_id": track_id})
-            if self.publish:
-                self.publish("track_ready", {"track_id": track_id, "bytes": size})
+                landed = landing.land(self.cfg, job["id"], track_id, got["path"],
+                                      self.publish, report)
             log.info("fetched %s track %s in %.1fs (%s, %.1f MB)", provider, track_id,
-                     time.monotonic() - started, info.get("codec"), size / 1e6)
+                     time.monotonic() - started, landed.get("codec"),
+                     landed["bytes"] / 1e6)
         except sources.SourceError as e:
             # Something about this track, not about the network: do not keep asking.
             #

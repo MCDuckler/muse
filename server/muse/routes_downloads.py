@@ -11,8 +11,8 @@ import json
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from . import (catalog, db, failures, jobs, match, progress, refind, sources,
-               sync, ytm)
+from . import (catalog, db, exits, failures, jobs, match, progress, refind,
+               sources, sync, ytm)
 from .deps import current_user
 
 router = APIRouter(prefix="/downloads")
@@ -282,7 +282,11 @@ def promote(body: dict = Body(...), user: dict = Depends(current_user)):
     for step, track_id in enumerate(ids[:8]):
         (done if jobs.promote(track_id, jobs.PRIORITY_NOW + step) else stuck).append(
             track_id)
+    # Asked from a phone with its door open: fetched through it now, rather than
+    # waiting for a computer in the pool to be switched on (exits.py).
+    through = exits.want(user.get("device_id"), done)
     return {"promoted": len(done), "queued": done, "stuck": stuck,
+            "through_this_device": through,
             "ready": [r["id"] for r in db.all_(
                 "select id from tracks where id = any(%s) and state='ready'",
                 (ids,))]}
