@@ -182,6 +182,11 @@ class _DiscoverPageState extends State<DiscoverPage> {
 
 // ---------------------------------------------------------------- made for you
 
+/// What time the shelf thinks it is. A test sets it: the order depends on the hour,
+/// and a test that only passes at night fails every build made in the day.
+@visibleForTesting
+DateTime Function() shelfClock = DateTime.now;
+
 /// The lists in the order the shelf shows them: from eight in the evening to five in
 /// the morning the sleep mix comes first.
 List<MadeList> bedtimeOrder(List<MadeList> lists, DateTime now) {
@@ -211,7 +216,7 @@ class _MadeForYou extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final lists = bedtimeOrder(page.lists, DateTime.now());
+    final lists = bedtimeOrder(page.lists, shelfClock());
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [

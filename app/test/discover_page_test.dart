@@ -222,6 +222,9 @@ void main() {
   }
 
   testWidgets('the page draws every department it was given', (tester) async {
+    // Evening: the sleep mix leads the shelf, so it is on screen to be found.
+    shelfClock = () => DateTime(2026, 10, 5, 22);
+    addTearDown(() => shelfClock = DateTime.now);
     await show(tester, const DiscoverPage());
     expect(tester.takeException(), isNull);
     expect(find.text('MADE FOR YOU'), findsOneWidget);
