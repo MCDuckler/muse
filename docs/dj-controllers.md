@@ -18,9 +18,10 @@ the parts that could only be checked with the real thing are marked **[hw]**.
   |---|---|---|
   | Linux | HID via `/dev/hidrawN` (needs a udev rule) | implemented; scan tested on a fake sysfs, open/read needs **[hw]** |
   | Android | HID via `UsbManager` interrupt endpoint (USB host / OTG) | implemented (Hid.kt), needs **[hw]** |
+  | macOS | HID via IOKit's `IOHIDManager` (Hid.swift, no driver, no entitlement) | implemented 2026-10-06, needs **[hw]** |
   | Linux, MIDI | `flutter_midi_command` over the ALSA sequencer | **verified end to end** with `tool/fake_midi_controller.c` |
   | Windows / macOS + Hercules driver | MIDI via `flutter_midi_command` | implemented, needs **[hw]** |
-  | macOS / Windows without driver | HID (IOHIDManager / hid.dll) | not yet — transport stub |
+  | Windows without driver | HID (hid.dll) | not yet — transport stub |
   | iOS / iPadOS | no public USB-HID API; CoreMIDI only | **RMX cannot work**; class-compliant MIDI controllers do |
   | web | Web MIDI through `flutter_midi_command` | MIDI controllers only |
   | a phone, a tablet, the board's own window | `Protocol.remote`: JSON lines over a WebSocket on the local network, or the server's relay | **verified on the loopback** (`test/board_link_test.dart`); see `state/booth/board/link_server.dart` |
@@ -159,7 +160,7 @@ hercules_dj_console_rmx.hid.json`.
 
 1. Engine: vocabulary, layouts, decoders, soft take-over, binding, manager, tests.
 2. Booth additions: cue point, jog, loop in/out, master, keylock.
-3. Transports: MIDI (`flutter_midi_command`), HID Linux (hidraw), HID Android (Kotlin).
+3. Transports: MIDI (`flutter_midi_command`), HID Linux (hidraw), HID Android (Kotlin) and macOS (Swift) over one channel transport (`hid_channel.dart`).
 4. UI: light in the bar, Controllers dialog with monitor, phone menu entry, key sheet row.
 5. Platform plumbing: pubspec, Android manifest + device filter, `deploy/99-wetowl-dj.rules`.
 6. **[hw]** first contact: fix centres/polarity/jog scale, verify LEDs, tune jog feel.

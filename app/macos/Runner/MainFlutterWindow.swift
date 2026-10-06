@@ -2,6 +2,9 @@ import Cocoa
 import FlutterMacOS
 
 class MainFlutterWindow: NSWindow {
+  /// DJ consoles that are HID devices — the Hercules RMX without its driver. See Hid.swift.
+  private var hid: Hid?
+
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
     self.contentViewController = flutterViewController
@@ -21,6 +24,7 @@ class MainFlutterWindow: NSWindow {
     self.setFrameAutosaveName("WetOwl")
 
     RegisterGeneratedPlugins(registry: flutterViewController)
+    hid = Hid.register(with: flutterViewController.engine.binaryMessenger)
 
     super.awakeFromNib()
   }

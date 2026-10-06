@@ -1,6 +1,6 @@
 /// HID controllers — the Hercules consoles without their driver — on whatever this
-/// platform offers: hidraw on Linux, the USB host API on Android, nothing yet on a
-/// Mac or Windows (there, the Hercules driver's MIDI port is the way in).
+/// platform offers: hidraw on Linux, the USB host API on Android, IOKit's HID manager
+/// on a Mac, nothing yet on Windows (there, the Hercules driver's MIDI port is the way in).
 library;
 
 import 'hid_none.dart' if (dart.library.io) 'hid_io.dart' as io;
