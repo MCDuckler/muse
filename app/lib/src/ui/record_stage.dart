@@ -3017,17 +3017,39 @@ class RecordLight extends CustomPainter {
         canvas.restore();
       }
     }
-    // The moulded rim catches the lamp as a bright thread along its edge.
+    // The moulded rim catches the lamp as a bright thread along its edge: brightest
+    // where it faces the lamp and gone by either end, the way a highlight on a curved
+    // edge is. In one flat colour it stopped dead at both ends, a cut line on the rim.
+    const rimMiddle = -2.20, rimSweep = 1.6;
+    const rimStart = rimMiddle - rimSweep / 2;
+    final rimPeak = math.min(1.0, 0.62 * strength);
+    final rimWidth = math.max(1.2, r * 0.0075);
     canvas.drawArc(
       Rect.fromCircle(center: middle, radius: r - 1.2),
-      -2.20 - 0.55,
-      1.10,
+      rimStart,
+      rimSweep,
       false,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = math.max(1.0, r * 0.006)
-        ..strokeCap = StrokeCap.round
-        ..color = Color.fromRGBO(255, 255, 255, 0.34 * strength),
+        ..strokeWidth = rimWidth
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, rimWidth * 0.3)
+        // Along the arc, turned to it the same way as the wedges above.
+        ..shader = ui.Gradient.sweep(
+          middle,
+          [
+            for (final f in const [0.0, 0.18, 0.62, 1.0, 0.62, 0.18, 0.0])
+              Color.fromRGBO(255, 255, 255, rimPeak * f),
+          ],
+          const [0.0, 0.14, 0.32, 0.5, 0.68, 0.86, 1.0],
+          TileMode.clamp,
+          0,
+          rimSweep,
+          (Matrix4.identity()
+                ..translateByDouble(middle.dx, middle.dy, 0, 1)
+                ..rotateZ(rimStart)
+                ..translateByDouble(-middle.dx, -middle.dy, 0, 1))
+              .storage,
+        ),
     );
     canvas.restore();
   }
