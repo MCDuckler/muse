@@ -14,10 +14,18 @@ import 'package:muse/src/api/connection.dart';
 import 'package:muse/src/api/models.dart';
 import 'package:muse/src/state/app_state.dart';
 import 'package:muse/src/state/selection.dart';
+import 'package:muse/src/ui/browse_page.dart' show AlbumPage, ArtistPage;
 import 'package:muse/src/ui/feed_screen.dart';
 
 Map<String, dynamic> _card(int id) => {
-      'track': {'id': id, 'title': 'Song $id', 'artists': ['Somebody'], 'state': 'ready'},
+      'track': {
+        'id': id,
+        'title': 'Song $id',
+        // The second is by two, so the way to its artists has to ask which.
+        'artists': id == 2 ? ['Bicep', 'Clara La San'] : ['Somebody'],
+        'album': 'Record $id',
+        'state': 'ready',
+      },
       'list': 'weekly',
       'why': 'new to you this week',
       'service': 'bandcamp',
@@ -63,6 +71,9 @@ void main() {
             'services': {'bandcamp': 5},
           },
         '/discover/genres' => {'following': [], 'suggested': [], 'found': []},
+        '/recommend/dislike' => {
+            'disliked': !((jsonDecode(request.body) as Map)['undo'] as bool),
+          },
         _ => {'genres': [], 'comments': []},
       };
       return http.Response(jsonEncode(body), 200, headers: {'content-type': 'application/json'});
@@ -120,8 +131,46 @@ void main() {
     expect(app.added.last.mode, 'next');
   });
 
-  testWidgets('five buttons under a song fit a small phone', (tester) async {
+  testWidgets('six buttons under a song fit a small phone', (tester) async {
     await show(tester, width: 320);
     expect(tester.takeException(), isNull);
+    expect(find.byTooltip('Share a link'), findsNothing);
+    expect(find.byTooltip('Start a station from it'), findsNothing);
+  });
+
+  testWidgets('the arrow at the end of the row is the record the song is from', (tester) async {
+    await show(tester);
+    await tester.tap(find.byTooltip('The record').first);
+    await tester.pumpAndSettle();
+    expect(tester.widget<AlbumPage>(find.byType(AlbumPage)).album?.name, 'Record 1');
+  });
+
+  testWidgets('a song by two asks which artist, and opens that one', (tester) async {
+    await show(tester);
+    final both = find.byTooltip('The artists');
+    expect(both, findsOneWidget, reason: 'only the second card is by two');
+    await tester.ensureVisible(both);
+    await tester.pumpAndSettle();
+    await tester.tap(both);
+    await tester.pumpAndSettle();
+    expect(find.text('Bicep'), findsOneWidget);
+    expect(find.text('Clara La San'), findsOneWidget);
+    await tester.tap(find.text('Clara La San'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<ArtistPage>(find.byType(ArtistPage)).artist.name, 'Clara La San');
+  });
+
+  testWidgets('not for me takes the card out, and undo puts it back', (tester) async {
+    await show(tester);
+    expect(find.bySemanticsLabel('Play Song 1'), findsOneWidget);
+    await tester.tap(find.byTooltip('Not for me').first);
+    await tester.pumpAndSettle();
+    expect(find.bySemanticsLabel('Play Song 1'), findsNothing);
+    expect(app.isDisliked(1), isTrue);
+    expect(find.textContaining('will not be offered again'), findsOneWidget);
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+    expect(find.bySemanticsLabel('Play Song 1'), findsOneWidget);
+    expect(app.isDisliked(1), isFalse);
   });
 }

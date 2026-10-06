@@ -5,8 +5,9 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
+import 'artist_choice.dart';
 import 'artwork.dart';
-import 'browse_page.dart' show ArtistPage;
+import 'browse_page.dart' show AlbumPage;
 import 'dialogs.dart';
 import 'feel.dart';
 import 'mag.dart';
@@ -16,7 +17,7 @@ import 'skeleton.dart';
 import 'snack.dart';
 import 'song_row.dart' show FavouriteButton;
 import 'station.dart';
-import 'track_menu.dart' show addAndSay;
+import 'track_menu.dart' show addAndSay, sayDisliked;
 
 /// The feed: one song at a time, as big as the screen allows.
 ///
@@ -180,6 +181,23 @@ class _FeedScreenState extends State<FeedScreen> {
     }
   }
 
+  /// Said no to: the card goes at once, and Undo puts it back where it was.
+  void _dislike(FeedCard card) {
+    final at = _cards.indexOf(card);
+    if (at < 0) return;
+    setState(() {
+      _cards.removeAt(at);
+      _total = (_total - 1).clamp(0, 1 << 30);
+    });
+    unawaited(sayDisliked(context, card.track, true, onUndo: () {
+      if (!mounted || _cards.contains(card)) return;
+        setState(() {
+        _cards.insert(at.clamp(0, _cards.length), card);
+        _total += 1;
+      });
+    }));
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -256,6 +274,7 @@ class _FeedScreenState extends State<FeedScreen> {
                   following: _following,
                   onGenre: _toggleGenre,
                   onPlay: () => _play(i),
+                  onDislike: () => _dislike(card),
                   index: i,
                   count: _total,
                 );
@@ -326,11 +345,15 @@ class _Card extends StatelessWidget {
     required this.following,
     required this.onGenre,
     required this.onPlay,
+    required this.onDislike,
     required this.index,
     required this.count,
   });
 
   final FeedCard card;
+
+  /// Not for me: out of the feed now, and held against its artist from here on.
+  final VoidCallback onDislike;
   final CardDetails? details;
   final Set<String> following;
   final ValueChanged<String> onGenre;
@@ -407,11 +430,8 @@ class _Card extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: Mag.headline(26, color: scheme.onSurface).copyWith(height: 0.98)),
             const SizedBox(height: 2),
-            GestureDetector(
-              onTap: t.artists.isEmpty
-                  ? null
-                  : () => Navigator.of(context).push(MaterialPageRoute(
-                      builder: (_) => ArtistPage(artist: ArtistSummary(name: t.artists.first, tracks: 0)))),
+            Builder(builder: (line) => GestureDetector(
+              onTap: artistsOf(t).isEmpty ? null : () => openArtistOf(context, t, anchor: line),
               child: Text(
                 [if (t.artists.isNotEmpty) 'by ${t.artistLine}', if ((t.album ?? '').isNotEmpty) t.album!]
                     .join(' · '),
@@ -419,10 +439,10 @@ class _Card extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: Mag.typewriter(12, color: scheme.onSurfaceVariant),
               ),
-            ),
+            )),
             const SizedBox(height: 10),
-            // The things done with a song — on a list, in the queue, hearted, passed on
-            // — and a station from it.
+            // The things done with a song — on a list, in the queue, hearted — and the
+            // way on to who made it and the record it is from, the arrow at the end.
             Container(
               decoration: BoxDecoration(
                 border: Border(
@@ -431,11 +451,13 @@ class _Card extends StatelessWidget {
                 ),
               ),
               child: Row(children: [
+                // An icon like the rest: six to a row leaves a small phone no room for
+                // a word.
                 Expanded(
-                  child: TextButton.icon(
+                  child: IconButton(
+                    tooltip: 'Add to a playlist',
                     onPressed: () => addToPlaylistSheet(context, app, t),
-                    icon: const Icon(Icons.playlist_add, size: 20),
-                    label: Text('ADD', style: Mag.flag(11, color: scheme.primary)),
+                    icon: Icon(Icons.playlist_add, size: 23, color: scheme.primary),
                   ),
                 ),
                 _rule(scheme),
@@ -464,17 +486,40 @@ class _Card extends StatelessWidget {
                 _rule(scheme),
                 Expanded(
                   child: IconButton(
-                    tooltip: 'Share a link',
-                    onPressed: () => copyLink(context, '/t/${t.id}', t.displayTitle),
-                    icon: const Icon(Icons.share_outlined, size: 22),
+                    tooltip: 'Not for me',
+                    onPressed: onDislike,
+                    icon: const Icon(Icons.thumb_down_outlined, size: 21),
                   ),
                 ),
                 _rule(scheme),
+                // Who made it; by several, a menu of them.
+                Expanded(
+                  child: Builder(builder: (button) {
+                    final names = artistsOf(t);
+                    return IconButton(
+                      tooltip: names.length > 1 ? 'The artists' : 'The artist',
+                      onPressed: names.isEmpty
+                          ? null
+                          : () => openArtistOf(context, t, anchor: button),
+                      icon: Icon(names.length > 1 ? Icons.people_outline : Icons.person_outline,
+                          size: 22),
+                    );
+                  }),
+                ),
+                _rule(scheme),
+                // The record it is from.
                 Expanded(
                   child: IconButton(
-                    tooltip: 'Start a station from it',
-                    onPressed: () => startStation(context, seed: t),
-                    icon: const Icon(Icons.radio, size: 22),
+                    tooltip: (t.album ?? '').isEmpty ? 'Not on a record' : 'The record',
+                    onPressed: (t.album ?? '').isEmpty
+                        ? null
+                        : () => Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => AlbumPage(
+                                album: AlbumSummary(
+                                    name: t.album!,
+                                    artist: t.artists.isEmpty ? '' : t.artists.first,
+                                    tracks: 0)))),
+                    icon: const Icon(Icons.arrow_forward, size: 22),
                   ),
                 ),
               ]),

@@ -14,6 +14,7 @@ import '../state/keepalive.dart';
 import '../state/offline.dart';
 import '../state/playback_log.dart';
 import '../state/player.dart';
+import 'artist_choice.dart';
 import 'artwork.dart';
 import 'back_and_forth.dart';
 import 'devices_sheet.dart';
@@ -954,15 +955,8 @@ class _Credits extends StatelessWidget {
     final lines = <Widget>[
         link(
           track.artistLine.toUpperCase(),
-          () => Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => ArtistPage(
-              artist: ArtistSummary(
-                  name: track.artists.isEmpty
-                      ? track.artistLine
-                      : track.artists.first,
-                  tracks: 0),
-            ),
-          )),
+          // By several: which of them, in a sheet.
+          () => openArtistOf(context, track),
         ),
         if (track.albumLine != null)
           link(
