@@ -105,6 +105,9 @@ STATION = 0.8           # started a station from it
 JAM_SKIP = -1.0         # voted to skip it in a jam
 FOLLOWED = 2.5          # an act they follow, on the act's score
 LABEL_ACT = 1.0         # an act on a label they follow: the label vouches, a little
+DISLIKED = -2.0         # a song of theirs said no to, on the act's score
+# Said no to this many of an act's songs: none of theirs is offered at all.
+DISLIKES_ENOUGH = 2
 STATION_ARTIST = 1.5    # an act they started a station from
 
 # A likes list is newest first: its top is what somebody likes now, its bottom what they
@@ -159,6 +162,9 @@ class Taste:
     # Acts on the labels somebody follows, by the label: following CloudCore is saying
     # something about Zecho and Xpress too.
     label_acts: dict[str, str] = field(default_factory=dict)
+    # Said no to: the songs, and how many of each act's.
+    disliked: set[int] = field(default_factory=set)
+    artist_disliked: dict[str, int] = field(default_factory=dict)
     genres: dict[str, float] = field(default_factory=dict)
     # Liked on another service (which one), on a list of their own, on one of their
     # lists mirrored from another service (which one).
@@ -355,6 +361,14 @@ def taste(user_id: int) -> Taste:
         if n >= 2:
             t.genres[g] = max(t.genres.get(g, 0.0), 0.5)
 
+    # A song said no to counts for nothing it was played or kept for: it seeds nothing,
+    # and does not speak for its artist.
+    t.disliked = {r["track_id"] for r in db.all_(
+        "select track_id from track_dislikes where user_id = %s", (user_id,))}
+    for signal in (active, passive, lately):
+        for tid in t.disliked:
+            signal.pop(tid, None)
+
     t.active = active
     t.track = dict(active)
     for k, v in passive.items():
@@ -387,11 +401,42 @@ def taste(user_id: int) -> Taste:
     for k, v in t.elsewhere.items():
         add(t.artist, k, v)
 
+    # And against its artist: a little for one, nothing of theirs at all past a couple.
+    if t.disliked:
+        for r in db.all_("select artists from tracks where id = any(%s)", (list(t.disliked),)):
+            for a in r["artists"] or []:
+                k = a.lower()
+                if k in NOT_AN_ACT:
+                    continue
+                t.artist_disliked[k] = t.artist_disliked.get(k, 0) + 1
+                add(t.artist, k, DISLIKED)
+
     t.dismissed = {r["key"] for r in db.all_(
         "select key from rec_dismissals where user_id = %s", (user_id,))}
+    t.dismissed |= {f"t:{tid}" for tid in t.disliked}
     t.library = {r["track_id"] for r in db.all_(
         "select track_id from library_items where user_id = %s", (user_id,))}
     return t
+
+
+def dislike(user_id: int, track_id: int, *, undo: bool = False) -> bool:
+    """Not for me — or, with [undo], it was after all. Taken out of every list made
+    for them at once, so the feed does not offer it again before the next build.
+    Answers whether it is disliked now."""
+    if undo:
+        db.run("delete from track_dislikes where user_id=%s and track_id=%s",
+               (user_id, track_id))
+        return False
+    db.run("insert into track_dislikes(user_id, track_id) values(%s,%s) "
+           "on conflict do nothing", (user_id, track_id))
+    db.run("update made_lists set track_ids = array_remove(track_ids, %s) "
+           "where user_id=%s and %s = any(track_ids)", (track_id, user_id, track_id))
+    return True
+
+
+def disliked(user_id: int) -> list[int]:
+    return [r["track_id"] for r in db.all_(
+        "select track_id from track_dislikes where user_id=%s order by at desc", (user_id,))]
 
 
 def dismiss(user_id: int, *, track_id: int | None = None, video_id: str | None = None) -> None:
@@ -808,6 +853,8 @@ def recommend(user_id: int, seeds: dict[int, float], *, limit: int = 12,
             elif where == "waiting" and not tas.heard.get(key):
                 taste_word = "in your library, never played here"
         artists = row.get("artists") or []
+        if any(tas.artist_disliked.get(a.lower(), 0) >= DISLIKES_ENOUGH for a in artists):
+            continue
         best_artist = max((tas.artist.get(a.lower(), 0.0) for a in artists), default=0.0)
         score += 0.3 * math.tanh(best_artist / 4)
         if not taste_word and artists:

@@ -1552,6 +1552,21 @@ class ApiClient {
     return (d['favourite'] ?? false) as bool;
   }
 
+  /// Not for me — or with [dislike] false, taken back. Answers what the server holds.
+  Future<bool> setDislike(int trackId, {required bool dislike}) async {
+    final d = await _decode(await net.post(_u('/recommend/dislike'),
+        headers: {..._headers, 'Content-Type': 'application/json'},
+        body: jsonEncode({'track_id': trackId, 'undo': !dislike}))) as Map<String, dynamic>;
+    return (d['disliked'] ?? false) as bool;
+  }
+
+  /// The songs said no to.
+  Future<List<int>> dislikes() async {
+    final d = await _decode(await net.get(_u('/recommend/dislikes'), headers: _headers))
+        as Map<String, dynamic>;
+    return [for (final id in (d['track_ids'] ?? const []) as List) (id as num).toInt()];
+  }
+
   // ---------------- following ----------------
   /// Playlists from another player's backup file.
   ///

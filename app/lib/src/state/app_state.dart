@@ -218,6 +218,10 @@ class AppState extends ChangeNotifier {
   /// The hearted songs, as ids. Held here rather than asked per row: a list of four
   /// hundred would otherwise be four hundred requests to draw one icon each.
   Set<int> favourites = <int>{};
+
+  /// Songs said no to: never offered again, and held against their artists when the
+  /// Discover lists are made (server/muse/recommend.py).
+  Set<int> disliked = <int>{};
   int? favouritesPlaylistId;
   /// Whether anything is able to download right now. The ingest worker runs on a
   /// machine that sleeps, and a row spinning forever with no explanation is the worst
@@ -1103,6 +1107,7 @@ class AppState extends ChangeNotifier {
     final status = _pollStatus();
     final library = refresh();
     final hearts = refreshFavourites();
+    unawaited(refreshDislikes());
     final room = refreshJam();
     // Status first of the four, because sleeve URLs carry the renderer's version and
     // a first pass at the wrong one is a screen's worth of artwork fetched twice.
@@ -1179,6 +1184,7 @@ class AppState extends ChangeNotifier {
     playlists = const [];
     folders = const [];
     favourites = <int>{};
+    disliked = <int>{};
     favouritesPlaylistId = null;
     jam = null;
     jamPosition = null;
@@ -1921,6 +1927,36 @@ class AppState extends ChangeNotifier {
       notifyListeners();
     } catch (_) {
       // A heart that cannot be read is not worth an error on screen.
+    }
+  }
+
+  bool isDisliked(int trackId) => disliked.contains(trackId);
+
+  Future<void> refreshDislikes() async {
+    try {
+      disliked = (await api.dislikes()).toSet();
+      notifyListeners();
+    } catch (_) {
+      // An older server, or a moment's trouble: nothing is marked, nothing breaks.
+    }
+  }
+
+  /// Not for me, or taken back: shown at once, put right if the server disagrees, as a
+  /// heart is. Answers whether it is disliked now.
+  Future<bool> setDisliked(int trackId, bool wanted) async {
+    wanted ? disliked.add(trackId) : disliked.remove(trackId);
+    notifyListeners();
+    try {
+      final actual = await api.setDislike(trackId, dislike: wanted);
+      if (actual != wanted) {
+        actual ? disliked.add(trackId) : disliked.remove(trackId);
+        notifyListeners();
+      }
+      return actual;
+    } catch (_) {
+      wanted ? disliked.remove(trackId) : disliked.add(trackId);
+      notifyListeners();
+      return !wanted;
     }
   }
 

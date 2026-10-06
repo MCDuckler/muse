@@ -911,6 +911,15 @@ alter table track_traits add column if not exists punch real;
 -- for them, for the songs they play to wind down. Null until an app has said.
 alter table users add column if not exists utc_offset_min int;
 
+-- Not for me: a song somebody said no to. Never offered to them again, and counted
+-- against its artist in their taste (recommend.taste).
+create table if not exists track_dislikes (
+  user_id  int not null references users(id) on delete cascade,
+  track_id int not null references tracks(id) on delete cascade,
+  at       timestamptz not null default now(),
+  primary key (user_id, track_id)
+);
+
 -- Songs fetched through a phone's open door (exits.py): one row each, so whether the
 -- server could pull the audio itself, or it had to come through the phone, is a number
 -- and not a guess.

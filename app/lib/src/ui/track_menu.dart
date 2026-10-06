@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/offline.dart';
+import 'artist_choice.dart';
 import 'source_dot.dart';
 import 'browse_page.dart';
 import 'dialogs.dart';
@@ -114,16 +117,28 @@ Future<void> showTrackSheet(
                 ),
               ));
             }),
-          if (track.artists.isNotEmpty)
-            _item(sheet, Icons.person_outline, 'Go to ${track.artists.first}', () {
-              Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => ArtistPage(
-                  artist: ArtistSummary(name: track.artists.first, tracks: 0),
-                ),
-              ));
-            }),
+          // Every artist on it, not just the first: a song by two is by both. Past a
+          // few, one entry that asks which.
+          if (artistsOf(track).length > 4)
+            _item(sheet, Icons.people_outline, 'Go to an artist…',
+                () => openArtistOf(context, track))
+          else
+            for (final name in artistsOf(track))
+              _item(sheet, Icons.person_outline, 'Go to $name', () {
+                Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => ArtistPage(artist: ArtistSummary(name: name, tracks: 0)),
+                ));
+              }),
           _item(sheet, Icons.lyrics_outlined, 'Lyrics',
               () => showLyrics(context, track)),
+          // Not for me: never offered again, and counted against its artist in what
+          // Discover makes. Here, too, to take back.
+          if (app.isDisliked(track.id))
+            _item(sheet, Icons.thumb_down, 'Not for me — take it back',
+                () => sayDisliked(context, track, false))
+          else
+            _item(sheet, Icons.thumb_down_outlined, 'Not for me',
+                () => sayDisliked(context, track, true)),
           _item(sheet, Icons.edit_outlined, 'Edit details…', () async {
             final changed = await editTrackDialog(context, track);
             if (changed) onChanged?.call();
@@ -231,6 +246,31 @@ Future<void> _start(BuildContext context, AppState app, Track track) async {
   messenger.say(snack(Text(started
           ? '${track.displayTitle} is downloading'
           : 'Nowhere left to fetch ${track.displayTitle} from')));
+}
+
+/// Said no to (or taken back), and said so — with the way back right there.
+Future<void> sayDisliked(BuildContext context, Track track, bool dislike,
+    {VoidCallback? onUndo}) async {
+  final app = context.read<AppState>();
+  final messenger = ScaffoldMessenger.of(context);
+  final now = await app.setDisliked(track.id, dislike);
+  if (now != dislike) {
+    messenger.say(const SnackBar(content: Text('That did not reach the server — try again')));
+    return;
+  }
+  messenger.say(SnackBar(
+    content: Text(dislike
+        ? 'Not for you: ${track.displayTitle} will not be offered again'
+        : '${track.displayTitle} can be offered again'),
+    action: dislike
+        ? SnackBarAction(
+            label: 'Undo',
+            onPressed: () {
+              unawaited(app.setDisliked(track.id, false));
+              onUndo?.call();
+            })
+        : null,
+  ));
 }
 
 Widget _item(BuildContext sheet, IconData icon, String label, VoidCallback action,

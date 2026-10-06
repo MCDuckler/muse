@@ -83,6 +83,25 @@ def for_home(limit: int = 12, user: dict = Depends(current_user)):
     return {"sections": sections}
 
 
+@router.post("/dislike")
+def dislike(body: dict = Body(...), user: dict = Depends(current_user)):
+    """Not for me, said about a song: never offered again, and held against its
+    artist when the lists are made. {"undo": true} takes it back."""
+    try:
+        track_id = int(body["track_id"])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(400, "which track, as a number")
+    if not catalog.track_row(track_id):
+        raise HTTPException(404, "no such track")
+    return {"track_id": track_id,
+            "disliked": recommend.dislike(user["id"], track_id, undo=bool(body.get("undo")))}
+
+
+@router.get("/dislikes")
+def dislikes(user: dict = Depends(current_user)):
+    return {"track_ids": recommend.disliked(user["id"])}
+
+
 @router.post("/dismiss")
 def dismiss(body: dict = Body(...), user: dict = Depends(current_user)):
     """Not for me: never offered to this person again."""

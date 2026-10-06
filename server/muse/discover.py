@@ -579,6 +579,10 @@ def one_list(user_id: int, slug: str) -> dict | None:
 
 def _save(user_id: int, slug: str, name: str, blurb: str, ids: list[int],
           ordinal: int, meta: dict | None = None) -> None:
+    # Whatever made the list, nothing they have said no to is on it.
+    no = {r["track_id"] for r in db.all_(
+        "select track_id from track_dislikes where user_id=%s", (user_id,))}
+    ids = [i for i in ids if i not in no]
     db.run(
         """insert into made_lists(user_id, slug, name, blurb, track_ids, ordinal, meta, built_at)
            values(%s,%s,%s,%s,%s,%s,%s,now())
@@ -1072,6 +1076,9 @@ def cards(user_id: int, offset: int = 0, limit: int = 20,
     recent = {r["track_id"] for r in db.all_(
         """select distinct track_id from listens where user_id=%s
             and started_at > now() - interval '36 hours'""", (user_id,))}
+    # Said no to: out of the feed, whichever list it was on.
+    recent |= {r["track_id"] for r in db.all_(
+        "select track_id from track_dislikes where user_id=%s", (user_id,))}
     rows = db.all_("select slug, track_ids, meta from made_lists where user_id=%s "
                    "order by ordinal", (user_id,))
     by_slug = {r["slug"]: r for r in rows}
