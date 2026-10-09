@@ -45,7 +45,7 @@ from . import analysis
 # 6: an exact grid carried on to where the sound starts and ends (the tracker lost the
 #    first two or three beats of nearly every record, and with them its first bar),
 #    and the four-bar markers where the record's sections start (four_bars).
-VERSION = 14  # 9: a record too busy for the tempo found is counted at the double; 10: and one read in threes is stepped up into the break it is (116 was two thirds of 174)
+VERSION = 15  # 9: a record too busy for the tempo found is counted at the double; 10: and one read in threes is stepped up into the break it is (116 was two thirds of 174)
 # 11: the beat and not the off-beat, by the snare and the sub-bass where the bass is on
 #     the "and"; and no step down a third from a tempo already busy enough to be the count.
 # 12: the tracker's word (Beat This!, handed in by the pool) in the house's own reading:
@@ -55,6 +55,8 @@ VERSION = 14  # 9: a record too busy for the tempo found is counted at the doubl
 # 13: the four-bar grid passes through the drops (analysis.four_bars anchors).
 # 14: the bar's one decided three ways — the change rule, the tracker's bars, and where
 #     the phrases change where those two disagree (bar_one).
+# 15: the exact grid's period put right before the stretches are asked to agree, so a
+#     long record on one grid is given it (_one_grid).
 
 _RATE = 11025
 _FFT = 1024
@@ -630,32 +632,48 @@ def _one_grid(env: np.ndarray, low: np.ndarray, period: float,
     # over — the second time with the period put right by the first. Where the period
     # is a hair out, the stretches say so by where they put the beat: a little later
     # each one along, in a straight line whose slope is how much.
-    for attempt in range(2):
-        near = best + np.arange(-period / 4, period / 4, 0.1)
-        agree, asked = 0, 0
-        centres, phases = [], []
+    #
+    # The period first, then the agreement. It used to ask for the agreement first,
+    # and on a six-minute record a period a hundredth of a per cent short walks the
+    # beat three frames over the record — past the tolerance in every later stretch,
+    # so the record was refused for the very drift the slope was there to put right
+    # (CHROMA 011 A.L.O.E II: 53 % agreed, the slope never ran). So: the line through
+    # every clear stretch, robustly (a breakdown where the tracker slipped a beat sits
+    # eight frames off the line and is left out), the period put right by it, and only
+    # then each stretch asked whether it agrees.
+    near = best + np.arange(-period / 4, period / 4, 0.1)
+
+    def stretches(best_: float, period_: float) -> list[tuple[float, float]]:
+        out = []
         for w in range(0, len(k) - 32 + 1, 16):
             kw = k[w:w + 32]
-            sw = _comb(env, period, near, kw)
+            sw = _comb(env, period_, near, kw)
             if float(sw.max()) < 1.3 * float(np.mean(sw)) + 1e-9:
                 continue                # nothing clear here: a breakdown, a silence
-            asked += 1
-            found = float(near[int(np.argmax(sw))])
-            if abs(found - best) <= 1.2:
-                agree += 1
-                centres.append(float(kw.mean()))
-                phases.append(found)
-        if asked < 4 or agree < 0.85 * asked:
-            return None
-        if attempt == 1 or len(centres) < 4:
-            break
-        slope, at0 = np.polyfit(np.array(centres), np.array(phases), 1)
+            out.append((float(kw.mean()), float(near[int(np.argmax(sw))])))
+        return out
+
+    found = stretches(best, period)
+    if len(found) < 4:
+        return None
+    centres = np.array([c for c, _ in found])
+    phases = np.array([p for _, p in found])
+    if len(found) >= 6:
+        slope, at0 = np.polyfit(centres, phases, 1)
+        off = np.abs(phases - (at0 + slope * centres))
+        close = off <= max(1.2, 3.0 * float(np.median(off)))
+        if close.sum() >= 4:
+            slope, at0 = np.polyfit(centres[close], phases[close], 1)
         # Never more than a whisker: this puts right a hundredth of a beat a minute, and
         # anything bigger is the stretches disagreeing, not the period.
-        if abs(slope) > 0.002 * period:
-            break
-        period += float(slope)
-        best = float(at0)
+        if abs(slope) <= 0.002 * period:
+            period += float(slope)
+            best = float(at0)
+            near = best + np.arange(-period / 4, period / 4, 0.1)
+            found = stretches(best, period)
+    agree = sum(1 for _, p in found if abs(p - best) <= 1.2)
+    if len(found) < 4 or agree < 0.85 * len(found):
+        return None
     return best + k * period
 
 
