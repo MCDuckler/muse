@@ -355,9 +355,20 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         try:
             meta = meta or ytm.song(video_id)
         except ytm.Unavailable:
-            meta = None            # the id is enough to queue it; the title fills in later
-        meta = meta or {"video_id": video_id, "title": video_id, "artists": [],
-                        "album": None, "duration_ms": None, "raw": {}}
+            meta = None
+        # What the caller already knows of it — the search hit it was picked from —
+        # over what YouTube would not say just now. A record queued by its id alone
+        # was named by that id and credited to nobody, and nothing ever came back to
+        # put it right (the meta job does now: enrich._names).
+        known = {"title": (body.get("title") or "").strip(),
+                 "artists": [str(a) for a in (body.get("artists") or []) if a],
+                 "album": body.get("album"), "duration_ms": body.get("duration_ms")}
+        if not meta or not (meta.get("title") or "").strip():
+            meta = ({**known, "raw": {}} if known["title"]
+                    else {"title": video_id, "artists": [], "album": None,
+                          "duration_ms": None, "raw": {}})
+        elif known["artists"] and not meta.get("artists"):
+            meta["artists"] = known["artists"]
         meta["video_id"] = video_id
         created = catalog.create_from_ytm(meta, discovered_via=catalog.VIA_USER)
         catalog.remember(user["id"], created["id"])

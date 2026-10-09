@@ -15,7 +15,9 @@ import 'song_row.dart';
 /// is resolved (fetched, on this computer, at once), one of yours that was never
 /// fetched is fetched. Answers with the track.
 Future<Track> bringIn(AppState app, Pick p) async {
-  final t = p.track ?? await app.api.resolve(videoId: p.hit!.videoId);
+  final h = p.hit;
+  final t = p.track ??
+      await app.api.resolve(videoId: h!.videoId, title: h.title, artists: h.artists, album: h.album);
   if (!t.isReady) unawaited(fetchHereNow([t.id]));
   return t;
 }

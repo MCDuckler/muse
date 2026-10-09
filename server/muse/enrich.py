@@ -18,7 +18,7 @@ import re
 
 import httpx
 
-from . import catalog, db, match, sources, storage
+from . import catalog, db, match, sources, storage, ytm
 
 log = logging.getLogger("muse.enrich")
 
@@ -241,11 +241,48 @@ def _share_with_album(t: dict, cover_id: int) -> int:
             (cover_id, *where)).rowcount
 
 
+def _names(t: dict) -> dict:
+    """A record named by its video id, or credited to nobody: asked of YouTube again,
+    and the row put right where it answers. The track as it is now, either way."""
+    own = db.one(
+        """select provider_id from track_sources
+            where track_id=%s and provider='ytmusic' limit 1""", (t["id"],))
+    vid = (own or {}).get("provider_id")
+    if not vid:
+        return t
+    placeholder = (t.get("title") or "").strip() in ("", vid)
+    if not placeholder and t.get("artists"):
+        return t
+    try:
+        found = ytm.song(vid)
+    except ytm.Unavailable:
+        return t
+    if not found or not (found.get("title") or "").strip():
+        return t
+    updates, params = [], []
+    if placeholder:
+        updates.append("title=%s")
+        params.append(found["title"])
+    if not t.get("artists") and found.get("artists"):
+        updates.append("artists=%s")
+        params.append(catalog.credits(found["artists"]))
+    if placeholder and found.get("album") and not t.get("album"):
+        updates.append("album=%s")
+        params.append(found["album"])
+    if not updates:
+        return t
+    params.append(t["id"])
+    db.run(f"update tracks set {', '.join(updates)} where id=%s", tuple(params))
+    log.info("track %s named: %r by %s", t["id"], found["title"], found.get("artists"))
+    return catalog.track_row(t["id"]) or t
+
+
 def enrich_track(cfg, track_id: int) -> dict:
     """Fill in album, year, ISRC and — the point of the exercise — a cover."""
     t = catalog.track_row(track_id)
     if not t:
         return {"skipped": "gone"}
+    t = _names(t)
 
     title = t["title"] or ""
     artist = (t["artists"] or [None])[0] or ""

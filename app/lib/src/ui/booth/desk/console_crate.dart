@@ -766,7 +766,9 @@ class _ElsewhereState extends State<_Elsewhere> {
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _adding = true);
     try {
-      final t = widget.track ?? await app.api.resolve(videoId: widget.hit.videoId);
+      final h = widget.hit;
+      final t = widget.track ??
+          await app.api.resolve(videoId: h.videoId, title: h.title, artists: h.artists, album: h.album);
       // 'library': fetched and kept, and nothing queued — a record for later.
       if (mode != 'library') {
         await app.addTrack(t, mode: mode);

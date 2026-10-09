@@ -193,10 +193,22 @@ def album_tracks(browse_id: str) -> dict:
 
 
 def song(video_id: str) -> dict | None:
+    """What YouTube Music calls this video: a song, with its artists and album, or —
+    where it is not filed as a song (a label's upload, a live set, a bootleg) — the
+    video's own title and channel, which is all it says about itself. None only when
+    YouTube says nothing at all. (It used to answer None for every video that is not a
+    song, and the record was then named by its id, for good.)"""
     res = _ask(lambda c: c.search(video_id, filter="songs", limit=1))
     for r in res:
         if r.get("videoId") == video_id:
             return _flatten(r)
+    try:
+        v = video(video_id)
+    except Unavailable:
+        v = None
+    if v and v.get("title"):
+        return {"video_id": video_id, "title": v["title"], "artists": v.get("artists") or [],
+                "album": None, "duration_ms": v.get("duration_ms"), "raw": v.get("raw") or {}}
     return None
 
 

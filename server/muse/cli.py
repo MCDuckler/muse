@@ -416,8 +416,40 @@ def housesamples(folder: str, owner: str, apply: bool = False) -> None:
           + ("" if apply else " — nothing changed; --apply to do it"))
 
 
+def fixnames(apply: bool = False) -> None:
+    """Every ready record named by its video id or credited to nobody, asked of
+    YouTube again (enrich._names) — now, rather than on its next meta job."""
+    from . import config, db, enrich
+
+    cfg = config.load()
+    db.init(cfg.dsn)
+    rows = db.all_(
+        """select t.id, t.title, t.artists from tracks t
+             join track_sources s on s.track_id=t.id and s.provider='ytmusic'
+            where t.state='ready' and (t.title = s.provider_id
+                   or coalesce(array_length(t.artists,1),0)=0)
+            order by t.id""")
+    print(f"{len(rows)} records named by their id or by nobody")
+    if not apply:
+        for r in rows[:40]:
+            print(f"  {r['id']} {r['title']!r} {r['artists']}")
+        print("(--apply to ask YouTube for their names)")
+        return
+    named = 0
+    for r in rows:
+        t = enrich._names({"id": r["id"], "title": r["title"], "artists": r["artists"], "album": None})
+        if t.get("title") != r["title"] or t.get("artists") != r["artists"]:
+            named += 1
+            print(f"  {r['id']}: {t.get('title')!r} by {t.get('artists')}")
+    print(f"{named} of {len(rows)} named")
+
+
 def main() -> None:
     match sys.argv[1:]:
+        case ["fixnames"]:
+            fixnames()
+        case ["fixnames", "--apply"]:
+            fixnames(apply=True)
         case ["traits"]:
             traits_index()
         case ["traits", "--measure"]:
@@ -462,7 +494,7 @@ def main() -> None:
             sys.exit("usage: python -m muse.cli [adduser <name> | secret "
                      "| splitartists [--apply] | fixsoundcloud [--apply] "
                      "| fixspotifynames [--apply] | markdead [--apply] "
-                     "| covers [--apply] | traits [--measure] "
+                     "| covers [--apply] | traits [--measure] | fixnames [--apply] "
                      "| housesamples <folder> <owner> [--apply]]")
 
 

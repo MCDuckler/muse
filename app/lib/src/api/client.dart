@@ -530,10 +530,28 @@ class ApiClient {
           }))) as Map<String, dynamic>);
 
   /// 200 when the server already had it, 202 when it just queued a download.
-  Future<Track> resolve({String? videoId, String? query}) async {
+  ///
+  /// With what is known of the song — the search hit it was picked from — so that a
+  /// record YouTube will not describe just then is still named: queued by its id
+  /// alone it was named by that id and credited to nobody.
+  Future<Track> resolve({
+    String? videoId,
+    String? query,
+    String? title,
+    List<String> artists = const [],
+    String? album,
+    int? durationMs,
+  }) async {
     final r = await net.post(_u('/tracks/resolve'),
         headers: _headers,
-        body: jsonEncode({if (videoId != null) 'video_id': videoId, if (query != null) 'query': query}));
+        body: jsonEncode({
+          if (videoId != null) 'video_id': videoId,
+          if (query != null) 'query': query,
+          if (title != null && title.isNotEmpty) 'title': title,
+          if (artists.isNotEmpty) 'artists': artists,
+          if (album != null) 'album': album,
+          if (durationMs != null) 'duration_ms': durationMs,
+        }));
     return Track.fromJson(await _decode(r) as Map<String, dynamic>);
   }
 
