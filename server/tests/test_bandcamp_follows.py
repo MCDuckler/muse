@@ -157,6 +157,33 @@ def test_a_bandcamp_record_once_looked_at_stays_looked_at(client, hdr):
     assert r.json()["seen"] == 1 and follows.feed(me)[0]["unseen"] is False
 
 
+def test_a_pre_order_stands_where_it_was_announced_and_a_record_is_listed_once(client, hdr):
+    """Joe's feed opened on the same WRWTFWW pre-orders every day: dated December, they
+    sorted above everything out this week, and each came three times (the label's own
+    domain, its bandcamp.com page, the act's)."""
+    me = _me()
+    db.run("""insert into artist_follows(user_id, provider, remote_id, name, is_label)
+              values(%s,'bandcamp','https://wrwtfww.com','WRWTFWW Records',true)""", (me,))
+    for url, title, out, seen in [
+            ("https://wrwtfww.com/album/bluster", "All That Bluster", "current_date + 80", "current_date - 6"),
+            ("https://wrwtfww.bandcamp.com/album/bluster", "All That Bluster", "current_date + 80", "current_date - 6"),
+            ("https://nina.bandcamp.com/album/bluster", "All That Bluster", "current_date + 80", "current_date - 4"),
+            ("https://wrwtfww.com/album/fresh", "Fresh", "current_date - 1", "current_date - 1"),
+            ("https://wrwtfww.com/album/older", "Older", "current_date - 20", "current_date - 20")]:
+        db.run(f"""insert into artist_releases(provider, artist_id, album_id, title, artist,
+                                               release_date, first_seen)
+                   values('bandcamp','https://wrwtfww.com',%s,%s,'Nina & The Fireflies',
+                          {out}, {seen})""", (url, title))
+    db.run("""insert into feed_seen(user_id, provider, album_id)
+              values(%s,'bandcamp','https://nina.bandcamp.com/album/bluster')""", (me,))
+
+    feed = follows.feed(me)
+    assert [r["title"] for r in feed] == ["Fresh", "All That Bluster", "Older"]
+    bluster = feed[1]
+    assert bluster["upcoming"] is True and bluster["unseen"] is False
+    assert [i["title"] for i in discover.feed(me)["items"]] == ["Fresh", "All That Bluster", "Older"]
+
+
 def test_relative_record_ids_are_made_whole():
     me = _me()
     db.run("""insert into artist_releases(provider, artist_id, album_id, title, artist)

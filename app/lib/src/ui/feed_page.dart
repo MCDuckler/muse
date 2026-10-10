@@ -194,7 +194,8 @@ class _FeedRow extends StatelessWidget {
     final subtitle = [
       item.artist,
       if (item.via != null) 'on ${item.via}',
-      if (item.releaseDate != null) item.releaseDate!,
+      if (item.releaseDate != null)
+        item.upcoming ? 'out ${item.releaseDate!}' : item.releaseDate!,
       if (item.recordType != null) item.recordType!,
     ].join(' · ');
 

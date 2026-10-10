@@ -348,6 +348,8 @@ def feed(user_id: int, limit: int = 60) -> dict:
             # A record that came through a label: the row says so, since the act's
             # name on it may be nobody you follow.
             "via": r["via"] if r.get("is_label") else None,
+            "upcoming": r["upcoming"],
+            "in_feed_on": r["in_feed_on"].isoformat() if r["in_feed_on"] else None,
         })
     genres = genres_of(user_id)
     if genres:
@@ -365,6 +367,7 @@ def feed(user_id: int, limit: int = 60) -> dict:
             if r["release_mbid"] in seen_mbids or _norm(r["artist"]) in followed_artists:
                 continue
             seen_mbids.add(r["release_mbid"])
+            upcoming = bool(r["release_date"] and r["release_date"] > dt.date.today())
             items.append({
                 "source": "genre", "provider": "deezer" if r["deezer_album_id"] else "mb",
                 "album_id": r["deezer_album_id"], "title": r["title"], "artist": r["artist"],
@@ -372,8 +375,12 @@ def feed(user_id: int, limit: int = 60) -> dict:
                 "release_date": r["release_date"].isoformat() if r["release_date"] else None,
                 "record_type": r["record_type"], "tracks": None, "unseen": r["unseen"],
                 "in_library": False, "genre": r["genre"], "release_mbid": r["release_mbid"],
+                "upcoming": upcoming,
+                "in_feed_on": (r["first_seen"].date() if upcoming
+                               else r["release_date"]).isoformat() if r["release_date"] else None,
             })
-    items.sort(key=lambda i: (i["release_date"] or ""), reverse=True)
+    # Where it came into the feed, not when it is out: a pre-order would sit on top.
+    items.sort(key=lambda i: (i["in_feed_on"] or ""), reverse=True)
     items = items[:limit]
     return {"items": items, "unseen": sum(1 for i in items if i["unseen"]),
             "following": len(follows.list_for(user_id)), "genres": len(genres)}

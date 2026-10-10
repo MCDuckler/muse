@@ -201,12 +201,22 @@ def feed(user_id: int, limit: int = 60, offset: int = 0) -> list[dict]:
 
     "New" is per person and means not yet scrolled past — which is why the album a
     follow brought in yesterday stays marked until it has actually been looked at.
+
+    A pre-order stands where it was announced, not at its release date: dated weeks
+    ahead it sorted above everything and sat at the top of the feed every day until it
+    came out. On the day it does come out it is at the top again, as it should be.
+    One record is one row: a label's records turn up under its own domain, its
+    bandcamp.com page and the act's page (WRWTFWW's came three times each).
     """
     return db.all_(
-        """select r.provider, r.album_id, r.title, r.artist, r.artist_id, r.cover,
+        """with rows as (
+           select r.provider, r.album_id, r.title, r.artist, r.artist_id, r.cover,
                   r.release_date, r.record_type, r.tracks, r.first_seen,
                   f.name as via, f.is_label,
                   (s.album_id is null) as unseen,
+                  coalesce(r.release_date > current_date, false) as upcoming,
+                  case when r.release_date > current_date then r.first_seen::date
+                       else r.release_date end as in_feed_on,
                   exists (select 1
                             from library_items li
                             join tracks t on t.id = li.track_id
@@ -218,8 +228,13 @@ def feed(user_id: int, limit: int = 60, offset: int = 0) -> list[dict]:
              left join feed_seen s
                on s.user_id = f.user_id and s.provider = r.provider
               and s.album_id = r.album_id
-            where f.user_id = %s
-            order by r.release_date desc nulls last, r.first_seen desc
+            where f.user_id = %s),
+           one as (
+           select distinct on (lower(artist), lower(title)) *
+             from rows
+            order by lower(artist), lower(title), unseen, first_seen)
+           select * from one
+            order by in_feed_on desc nulls last, first_seen desc
             limit %s offset %s""",
         (user_id, min(limit, 200), offset),
     )

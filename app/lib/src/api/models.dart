@@ -2211,6 +2211,9 @@ class FeedItem {
   final bool unseen;
   final bool inLibrary;
 
+  /// A pre-order: [releaseDate] is still to come.
+  final bool upcoming;
+
   const FeedItem({
     required this.albumId,
     required this.title,
@@ -2224,6 +2227,7 @@ class FeedItem {
     this.tracks,
     this.unseen = false,
     this.inLibrary = false,
+    this.upcoming = false,
   });
 
   factory FeedItem.fromJson(Map<String, dynamic> j) => FeedItem(
@@ -2239,6 +2243,7 @@ class FeedItem {
         tracks: j['tracks'] as int?,
         unseen: (j['unseen'] ?? false) as bool,
         inLibrary: (j['in_library'] ?? false) as bool,
+        upcoming: (j['upcoming'] ?? false) as bool,
       );
 }
 
