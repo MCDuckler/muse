@@ -788,7 +788,8 @@ def _one_each(rows: list[dict]) -> list[dict]:
     """Records newest first, but one from each act or label followed before anybody's
     second. Newest first alone let a label with eleven records this fortnight fill the
     radar, and CloudCore's one record never got in at all."""
-    rows = sorted(rows, key=lambda r: r["release_date"] or dt.date.min, reverse=True)
+    rows = sorted(rows, key=lambda r: r.get("in_feed_on") or r["release_date"] or dt.date.min,
+                  reverse=True)
     by: dict[str, list[dict]] = {}
     for r in rows:
         by.setdefault((r.get("via") or r.get("artist") or "").lower(), []).append(r)
@@ -810,16 +811,23 @@ def build_radar(user_id: int, *, network: bool = True) -> list[int]:
     out: list[int] = []
     why: dict[int, str] = {}
     # A record reachable through both an act and its label is the act's: the act's
-    # follow sorts first and `distinct on` keeps it. Newest first after that.
+    # follow sorts first and `distinct on` keeps it — one record however many pages
+    # carry it (a label's own domain, its bandcamp.com page, the act's). Newest first
+    # after that, a pre-order by the day it was announced: by its release date, the
+    # December ones led Joe's feed every morning in October.
     rows = db.all_(
-        """select distinct on (r.provider, r.album_id)
+        """select distinct on (lower(r.artist), lower(r.title))
                   r.provider, r.album_id, r.title, r.artist, r.record_type, r.release_date,
-                  f.name as via, f.is_label
+                  f.name as via, f.is_label,
+                  case when r.release_date > current_date then r.first_seen::date
+                       else r.release_date end as in_feed_on
              from artist_follows f
              join artist_releases r on r.provider = f.provider and r.artist_id = f.remote_id
             where f.user_id = %s
-              and r.release_date >= current_date - %s * interval '1 day'
-            order by r.provider, r.album_id, f.is_label""", (user_id, RADAR_DAYS))
+              and case when r.release_date > current_date then r.first_seen::date
+                       else r.release_date end >= current_date - %s * interval '1 day'
+            order by lower(r.artist), lower(r.title), f.is_label, r.first_seen""",
+        (user_id, RADAR_DAYS))
     rows = _one_each(rows)
     if network:
         for r in rows[:30]:

@@ -264,3 +264,31 @@ def test_the_radar_takes_one_record_from_each_follow_before_anybodys_second():
     assert [r["album_id"] for r in order[:2]] == ["w0", "atom"], \
         "the newest of each first, so the quiet label is second, not twelfth"
     assert len(order) == 12
+
+
+def test_a_pre_order_leads_the_radar_only_from_when_it_was_announced(monkeypatch):
+    """Joe's card feed opened on WRWTFWW's December pre-orders every morning in
+    October: the radar took every record dated after a fortnight ago — the future
+    included — newest first, and each record three times over."""
+    from muse import discover
+    me = _me()
+    db.run("delete from artist_follows")
+    db.run("delete from artist_releases")
+    db.run("""insert into artist_follows(user_id, provider, remote_id, name, is_label)
+              values(%s,'bandcamp','https://wrwtfww.com','WRWTFWW Records',true)""", (me,))
+    for url, title, out, seen in [
+            ("https://wrwtfww.com/album/b", "All That Bluster", "current_date + 80", "current_date - 30"),
+            ("https://wrwtfww.bandcamp.com/album/b", "All That Bluster", "current_date + 80", "current_date - 30"),
+            ("https://wrwtfww.com/album/soon", "Soon", "current_date + 40", "current_date - 1"),
+            ("https://wrwtfww.bandcamp.com/album/soon", "Soon", "current_date + 40", "current_date - 1"),
+            ("https://wrwtfww.com/album/fresh", "Fresh", "current_date - 2", "current_date - 2")]:
+        db.run(f"""insert into artist_releases(provider, artist_id, album_id, title, artist,
+                                               release_date, first_seen)
+                   values('bandcamp','https://wrwtfww.com',%s,%s,'Nina',{out},{seen})""",
+               (url, title))
+    asked: list[str] = []
+    monkeypatch.setattr(sources, "bandcamp_tracks", lambda url: asked.append(url) or [])
+    monkeypatch.setattr(discover, "genres_of", lambda uid: [])
+    discover.build_radar(me)
+    titles = [u.rsplit("/", 1)[1] for u in asked]
+    assert titles == ["soon", "fresh"], "announced yesterday, then out two days ago; the old pre-order not at all"
