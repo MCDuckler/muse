@@ -1,0 +1,37 @@
+{
+  "id": "veins",
+  "name": "Veins",
+  "energy": [
+    0.0,
+    0.8
+  ],
+  "sections": [
+    "intro",
+    "breakdown",
+    "break",
+    "verse",
+    "outro",
+    "on"
+  ],
+  "layers": [
+    {
+      "sim": "physarum"
+    }
+  ],
+  "particles": [],
+  "text": {
+    "title": true,
+    "lyrics": true,
+    "where": "low"
+  },
+  "post": {
+    "trails": 0.5,
+    "bloom": 0.9,
+    "fringe": 0.004,
+    "vignette": 0.7,
+    "grain": 0.6,
+    "recipe": 0.7
+  },
+  "priority": 0.3,
+  "instant": false
+}

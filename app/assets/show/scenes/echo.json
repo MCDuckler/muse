@@ -1,0 +1,41 @@
+{
+  "id": "echo",
+  "name": "Echo",
+  "energy": [
+    0.0,
+    1.0
+  ],
+  "sections": [],
+  "needs": [
+    "camera"
+  ],
+  "priority": 1.2,
+  "instant": true,
+  "layers": [
+    {
+      "shader": "echo",
+      "samplers": [
+        "camera",
+        "history"
+      ],
+      "knobs": {
+        "m1": 0.4,
+        "m2": 0.6,
+        "m3": 0.4
+      }
+    }
+  ],
+  "particles": [],
+  "text": {
+    "title": false,
+    "lyrics": false
+  },
+  "post": {
+    "trails": 0.0,
+    "bloom": 0.5,
+    "fringe": 0.006,
+    "vignette": 0.5,
+    "grain": 0.5,
+    "recipe": 0.0
+  }
+}

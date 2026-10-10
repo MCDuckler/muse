@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 
 import 'connection.dart';
 import 'models.dart';
+import 'pulse.dart';
 
 /// What the server has of one part of a record.
 enum Stem {
@@ -1993,6 +1994,22 @@ class ApiClient {
         return null;
       }
       return await compute(_bandsOf, r.bodyBytes);
+    } on ApiException catch (e) {
+      if (e.status == 404) return null;
+      rethrow;
+    }
+  }
+
+  /// The song's sound fifty times a second — bands, kick, onsets, stems — for the
+  /// show (see Pulse). Null where the house has no audio for it yet.
+  Future<Pulse?> pulse(int trackId) async {
+    try {
+      final r = await net.get(_u('/tracks/$trackId/pulse'), headers: _headers);
+      if (r.statusCode >= 400 || r.bodyBytes.isEmpty) {
+        await _decode(r);
+        return null;
+      }
+      return await compute(Pulse.fromBytes, r.bodyBytes);
     } on ApiException catch (e) {
       if (e.status == 404) return null;
       rethrow;

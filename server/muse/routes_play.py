@@ -11,6 +11,8 @@ from . import catalog, db, traits
 from . import analysis as _analysis
 from . import beats as _beats
 from . import peaks as _peaks
+from . import pool
+from . import pulse as _pulse
 from . import scrobble
 from .deps import cfg, current_user
 
@@ -46,6 +48,28 @@ def peaks(track_id: int, response: Response, slices: int = _peaks.SLICES,
     if bands:
         return {"bands": shape, "slices": len(shape["low"])}
     return {"peaks": shape, "slices": len(shape)}
+
+
+@router.get("/tracks/{track_id}/pulse")
+def pulse(track_id: int, response: Response, user: dict = Depends(current_user)):
+    """The song's sound fifty times a second — five bands, the kick, the onsets, and
+    each stem where the song is in parts — for the show (pulse.py). Bytes, base64."""
+    t = catalog.track_row(track_id)
+    if not t or not t.get("path"):
+        raise HTTPException(404, "not ready" if t else "no such track")
+    audio = pathlib.Path(t["path"])
+    if not audio.exists():
+        raise HTTPException(404, "the audio is missing")
+    stems = pool.part_here(t["sha256"], "stems")
+    try:
+        packed = _pulse.for_track(cfg().data_dir, audio, t["sha256"], stems)
+    except (subprocess.SubprocessError, OSError) as e:
+        raise HTTPException(502, "could not read the audio") from e
+    # With the stems the answer is final; without, the record may be taken apart
+    # later and the fuller answer should be asked for again then.
+    response.headers["Cache-Control"] = (
+        "private, max-age=31536000, immutable" if stems else "private, max-age=600")
+    return packed
 
 
 @router.get("/tracks/{track_id}/analysis")

@@ -14,6 +14,7 @@ library;
 import 'dart:async';
 
 import '../booth.dart';
+import '../../show/show_engine.dart';
 import '../deck.dart';
 import '../mixer.dart' show EqSet;
 import 'soft_takeover.dart';
@@ -61,6 +62,7 @@ class BoothBinding {
   final _jog = {Side.a: _JogFeel(), Side.b: _JogFeel()};
 
   Deck deckOf(Side side) => side == Side.a ? booth.a : booth.b;
+  ShowEngine get show => booth.show;
 
   // ------------------------------------------------------------------ in
   Future<void> handle(SurfaceEvent e) async {
@@ -97,8 +99,25 @@ class BoothBinding {
         if (e.pressed) _browse(-1, 0);
       case Controls.browseRight:
         if (e.pressed) _browse(1, 0);
+      // The two knobs no booth with one output has a use for are the show's.
       case Controls.balance:
+      case Controls.showIntensity:
+        if (_take(e, show.macros.intensity)) show.setMacros(show.macros.copyWith(intensity: e.value));
       case Controls.headMix:
+      case Controls.showColour:
+        if (_take(e, show.macros.colour)) show.setMacros(show.macros.copyWith(colour: e.value));
+      case Controls.showPrev:
+        if (e.pressed) show.previousScene();
+      case Controls.showNext:
+        if (e.pressed) show.nextScene();
+      case Controls.showHit:
+        if (e.pressed) show.hit();
+      case Controls.showBlackout:
+        if (e.pressed) show.setMacros(show.macros.copyWith(blackout: !show.macros.blackout));
+      case Controls.showFreeze:
+        if (e.pressed) show.setMacros(show.macros.copyWith(freeze: !show.macros.freeze));
+      case Controls.showStrobe:
+        show.setMacros(show.macros.copyWith(strobe: e.pressed ? 1.0 : 0.0));
       case Controls.mic:
         onNote?.call('${e.id}: not bound');
       case Controls.boardStop:
@@ -246,8 +265,30 @@ class BoothBinding {
           _ => (2, eq.highKilled),
         };
         await booth.kill(d, band, !on);
+      // PFL and SOURCE have no use in a booth with one output: they are the show's.
+      // PFL: the scene before (A) or after (B). SOURCE: a hit (A), the blackout (B);
+      // with shift, the picture frozen (A), the strobe for as long as it is held (B).
       case Controls.pfl:
+        if (!e.pressed) return;
+        if (side == Side.a) {
+          show.previousScene();
+        } else {
+          show.nextScene();
+        }
       case Controls.source:
+        if (shift) {
+          if (side == Side.a) {
+            if (e.pressed) show.setMacros(show.macros.copyWith(freeze: !show.macros.freeze));
+          } else {
+            show.setMacros(show.macros.copyWith(strobe: e.pressed ? 1.0 : 0.0));
+          }
+        } else if (e.pressed) {
+          if (side == Side.a) {
+            show.hit();
+          } else {
+            show.setMacros(show.macros.copyWith(blackout: !show.macros.blackout));
+          }
+        }
       case Controls.fx:
         onNote?.call('${e.id}: not bound');
       default:
@@ -311,8 +352,15 @@ class BoothBinding {
     booth.a.addListener(_lights);
     booth.b.addListener(_lights);
     booth.board.addListener(_lights);
+    show.addListener(_showLights);
     _lit.clear();
     _lights();
+  }
+
+  /// Only the show's own lights, on its frames: the rest do not move with it.
+  void _showLights() {
+    _led(Controls.deck(Side.a, Controls.source), show.macros.hit > 0);
+    _led(Controls.deck(Side.b, Controls.source), show.macros.blackout);
   }
 
   void detach() {
@@ -323,6 +371,7 @@ class BoothBinding {
     booth.a.removeListener(_lights);
     booth.b.removeListener(_lights);
     booth.board.removeListener(_lights);
+    show.removeListener(_showLights);
     for (final j in _jog.values) {
       j.dispose();
     }
@@ -350,7 +399,8 @@ class BoothBinding {
         LedState(id(Controls.pad(6)), looping),
         LedState(id(Controls.load), false),
         LedState(id(Controls.pfl), false),
-        LedState(id(Controls.source), false),
+        // SOURCE A lit on a hit, B while the room is blacked out.
+        LedState(id(Controls.source), side == Side.a ? show.macros.hit > 0 : show.macros.blackout),
       ]);
     }
     // The board: the shown bank's pads, lit while they sound.

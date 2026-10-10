@@ -1,0 +1,38 @@
+{
+  "id": "blocks",
+  "name": "Blocks",
+  "energy": [
+    0.4,
+    1.0
+  ],
+  "sections": [
+    "drop",
+    "chorus",
+    "inst",
+    "build",
+    "on"
+  ],
+  "priority": 2.0,
+  "instant": true,
+  "layers": [
+    {
+      "shader": "blocks",
+      "knobs": {
+        "m1": 0.0
+      }
+    }
+  ],
+  "particles": [],
+  "text": {
+    "title": false,
+    "lyrics": false
+  },
+  "post": {
+    "trails": 0.0,
+    "bloom": 0.3,
+    "fringe": 0.005,
+    "vignette": 0.3,
+    "grain": 0.3,
+    "recipe": 0.0
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "id": "drift",
+  "name": "Drift",
+  "energy": [
+    0.0,
+    0.45
+  ],
+  "sections": [
+    "intro",
+    "breakdown",
+    "break",
+    "outro"
+  ],
+  "layers": [
+    {
+      "shader": "drift",
+      "knobs": {
+        "m1": 0.0
+      }
+    }
+  ],
+  "text": {
+    "title": true,
+    "lyrics": true,
+    "where": "low"
+  },
+  "post": {
+    "trails": 0.0,
+    "bloom": 0.9,
+    "fringe": 0.003,
+    "vignette": 0.6,
+    "grain": 0.6,
+    "recipe": 0
+  },
+  "particles": [
+    "dust"
+  ],
+  "priority": 0.2,
+  "instant": true
+}

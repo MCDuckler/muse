@@ -104,6 +104,33 @@ flutter:
     - assets/tray/
     # DJ controller layouts: one JSON per device per protocol. See docs/dj-controllers.md.
     - assets/controllers/
+    # The stage's scenes: one JSON per look. See lib/src/ui/show/scene.dart.
+    - assets/show/scenes/
+
+  # The stage's shaders (lib/src/ui/show/). Each is compiled for every backend at build
+  # time and loaded with FragmentProgram.fromAsset by the same path.
+  shaders:
+    - shaders/show/field.frag
+    - shaders/show/feedback.frag
+    - shaders/show/blur.frag
+    - shaders/show/composite.frag
+    - shaders/show/finish.frag
+    - shaders/show/tunnel.frag
+    - shaders/show/drift.frag
+    - shaders/show/build.frag
+    - shaders/show/kaleido.frag
+    - shaders/show/grid.frag
+    - shaders/show/toon.frag
+    - shaders/show/flash.frag
+    - shaders/show/echo.frag
+    - shaders/show/fold.frag
+    - shaders/show/blocks.frag
+    - shaders/show/kinetic.frag
+    - shaders/show/sim/fluid_advect.frag
+    - shaders/show/sim/fluid_div.frag
+    - shaders/show/sim/fluid_jacobi.frag
+    - shaders/show/sim/fluid_project.frag
+    - shaders/show/sim/fluid_look.frag
 
   fonts:
     - family: Manrope

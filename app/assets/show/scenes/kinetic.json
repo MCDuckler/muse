@@ -1,0 +1,41 @@
+{
+  "id": "kinetic",
+  "name": "Kinetic",
+  "energy": [
+    0.3,
+    1.0
+  ],
+  "sections": [
+    "drop",
+    "chorus",
+    "inst",
+    "build",
+    "verse",
+    "on"
+  ],
+  "priority": 1.9,
+  "instant": true,
+  "layers": [
+    {
+      "shader": "kinetic",
+      "knobs": {
+        "m1": 0.0
+      }
+    }
+  ],
+  "particles": [
+    "sparks"
+  ],
+  "text": {
+    "title": false,
+    "lyrics": false
+  },
+  "post": {
+    "trails": 0.35,
+    "bloom": 0.9,
+    "fringe": 0.006,
+    "vignette": 0.5,
+    "grain": 0.4,
+    "recipe": 0.0
+  }
+}

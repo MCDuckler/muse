@@ -25,6 +25,7 @@ import 'console_log.dart';
 import 'console_mixer.dart';
 import 'console_plan.dart';
 import 'console_set.dart';
+import '../../show/show_tile.dart';
 import 'console_waves.dart';
 import '../look.dart';
 import '../board/board_room.dart';
@@ -82,6 +83,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
     unawaited(_remember());
     _app.addListener(_queueMoved);
     planViewToggles.addListener(_togglePlan);
+    showViewToggles.addListener(_toggleShow);
     boardToggles.addListener(_toggleBoard);
     planPair.addListener(_pairAsked);
   }
@@ -135,6 +137,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
   void dispose() {
     _app.removeListener(_queueMoved);
     planViewToggles.removeListener(_togglePlan);
+    showViewToggles.removeListener(_toggleShow);
     boardToggles.removeListener(_toggleBoard);
     planPair.removeListener(_pairAsked);
     _pages.dispose();
@@ -318,6 +321,9 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
   void _togglePlan() =>
       _show(BoothView.values[(_view.index + 1) % BoothView.values.length]);
 
+  /// V: the show, or back to the waveforms.
+  void _toggleShow() => _show(_view == BoothView.show ? BoothView.waves : BoothView.show);
+
   void _fold() {
     setState(() => _logFolded = !_logFolded);
     unawaited(_keepLayout());
@@ -330,6 +336,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
           BoothView.waves => (c.maxHeight * 0.3).clamp(150.0, 320.0),
           BoothView.set => (c.maxHeight * 0.36).clamp(250.0, 300.0),
           BoothView.plan => (c.maxHeight * 0.42).clamp(240.0, 420.0),
+          BoothView.show => (c.maxHeight * 0.36).clamp(220.0, 360.0),
         };
         final mixer = (c.maxWidth * 0.2).clamp(230.0, 290.0);
         return Column(
@@ -347,6 +354,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
                       BoothView.waves => BoothPanel(child: ConsoleWaves(booth: _b)),
                       BoothView.set => BoothPanel(child: ConsoleSetView(booth: _b)),
                       BoothView.plan => BoothPanel(child: ConsolePlan(booth: _b)),
+                      BoothView.show => BoothPanel(child: ShowTile(booth: _b)),
                     },
                   ),
                 ],
@@ -733,6 +741,7 @@ class _ViewSwitch extends StatelessWidget {
             (BoothView.waves, Icons.graphic_eq, 'The waveforms (P cycles)'),
             (BoothView.set, Icons.view_week_outlined, 'The set: every record to come, and the moves between'),
             (BoothView.plan, Icons.insights, 'The plan: the next move, drawn out and steerable'),
+            (BoothView.show, Icons.theaters_outlined, 'The show: what the stage is drawing (V)'),
           ]) ...[
             Pad(
               icon: icon,

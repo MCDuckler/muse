@@ -85,6 +85,9 @@ class BoardLinkBase extends ControllerTransport {
   final Booth Function() _booth;
   Soundboard get board => _booth().board;
 
+  /// The booth itself, for the stage's wire (link_server_io.dart).
+  Booth get booth => _booth();
+
   final peers = <String, LinkPeer>{};
   final _changes = StreamController<void>.broadcast();
 

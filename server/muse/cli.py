@@ -416,6 +416,39 @@ def housesamples(folder: str, owner: str, apply: bool = False) -> None:
           + ("" if apply else " — nothing changed; --apply to do it"))
 
 
+def pulse_backfill() -> None:
+    """The pulse (pulse.py) of every ready record that has none yet, for the show —
+    with the stems where the record is in parts. A few seconds a record, in the
+    house's turns (heavy.py), so it can run beside the house."""
+    import pathlib
+
+    from . import config, db, pool, pulse
+
+    cfg = config.load()
+    db.init(cfg.dsn)
+    rows = db.all_(
+        """select t.id, t.title, m.path, m.sha256 from tracks t
+             join media m on m.track_id = t.id and m.role = 'canonical'
+            where t.state = 'ready' order by t.id""")
+    made = had = missing = 0
+    for t in rows:
+        audio = pathlib.Path(t["path"] or "")
+        stems = pool.part_here(t["sha256"], "stems")
+        if pulse.cache_path(cfg.data_dir, t["sha256"], stems is not None).exists():
+            had += 1
+            continue
+        if not audio.exists():
+            missing += 1
+            continue
+        try:
+            pulse.for_track(cfg.data_dir, audio, t["sha256"], stems)
+            made += 1
+        except Exception as e:  # noqa: BLE001
+            print(f"  {t['id']} {t['title']!r}: {e}")
+            missing += 1
+    print(f"{made} measured, {had} already there, {missing} could not be")
+
+
 def fixnames(apply: bool = False) -> None:
     """Every ready record named by its video id or credited to nobody, asked of
     YouTube again (enrich._names) — now, rather than on its next meta job."""
@@ -450,6 +483,8 @@ def main() -> None:
             fixnames()
         case ["fixnames", "--apply"]:
             fixnames(apply=True)
+        case ["pulse", "--backfill"]:
+            pulse_backfill()
         case ["traits"]:
             traits_index()
         case ["traits", "--measure"]:
@@ -494,7 +529,7 @@ def main() -> None:
             sys.exit("usage: python -m muse.cli [adduser <name> | secret "
                      "| splitartists [--apply] | fixsoundcloud [--apply] "
                      "| fixspotifynames [--apply] | markdead [--apply] "
-                     "| covers [--apply] | traits [--measure] | fixnames [--apply] "
+                     "| covers [--apply] | traits [--measure] | pulse --backfill | fixnames [--apply] "
                      "| housesamples <folder> <owner> [--apply]]")
 
 

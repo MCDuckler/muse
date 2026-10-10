@@ -1,0 +1,32 @@
+{
+  "id": "build",
+  "name": "Build",
+  "energy": [
+    0.3,
+    1.0
+  ],
+  "sections": [
+    "build"
+  ],
+  "layers": [
+    {
+      "shader": "build"
+    }
+  ],
+  "text": {
+    "title": false,
+    "lyrics": false
+  },
+  "post": {
+    "trails": 0.45,
+    "bloom": 1.0,
+    "fringe": 0.01,
+    "vignette": 0.5,
+    "grain": 0.6,
+    "recipe": 0.5
+  },
+  "particles": [
+    "rise",
+    "sparks"
+  ]
+}

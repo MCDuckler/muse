@@ -1,0 +1,39 @@
+{
+  "id": "fluid",
+  "name": "Fluid",
+  "energy": [
+    0.0,
+    1.0
+  ],
+  "sections": [
+    "drop",
+    "chorus",
+    "verse",
+    "inst",
+    "on",
+    "build"
+  ],
+  "layers": [
+    {
+      "sim": "fluid"
+    }
+  ],
+  "particles": [
+    "dust"
+  ],
+  "text": {
+    "title": false,
+    "lyrics": true,
+    "where": "low"
+  },
+  "post": {
+    "trails": 0.25,
+    "bloom": 0.8,
+    "fringe": 0.006,
+    "vignette": 0.6,
+    "grain": 0.6,
+    "recipe": 0
+  },
+  "priority": 0,
+  "instant": false
+}

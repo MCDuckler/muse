@@ -1,0 +1,44 @@
+{
+  "id": "kaleido",
+  "name": "Kaleido",
+  "energy": [
+    0.4,
+    1.0
+  ],
+  "sections": [
+    "drop",
+    "chorus",
+    "verse",
+    "inst",
+    "on"
+  ],
+  "needs": [
+    "cover"
+  ],
+  "layers": [
+    {
+      "shader": "kaleido",
+      "samplers": [
+        "cover"
+      ],
+      "knobs": {
+        "m1": 0.0
+      }
+    }
+  ],
+  "text": {
+    "title": false,
+    "lyrics": false
+  },
+  "post": {
+    "trails": 0.4,
+    "bloom": 0.7,
+    "fringe": 0.006,
+    "vignette": 0.6,
+    "grain": 0.6,
+    "recipe": 0.8
+  },
+  "particles": [
+    "dust"
+  ]
+}

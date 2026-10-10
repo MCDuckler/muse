@@ -1,6 +1,7 @@
 import 'src/ui/booth_page.dart' show ResumeBooth;
 import 'src/ui/window_mode.dart';
 import 'src/ui/booth/board/board_window.dart';
+import 'src/ui/show/stage_window.dart';
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -67,6 +68,12 @@ Future<void> main([List<String> args = const []]) async {
   if (boardUrl != null) {
     await readyTheBoardWindow();
     runApp(BoardWindowApp(url: boardUrl));
+    return;
+  }
+  // Or as the stage's window (see show/stage_window.dart): the show and nothing else.
+  if (wantsStageWindow(args)) {
+    await readyTheStageWindow(args);
+    runApp(StageWindowApp(args: args));
     return;
   }
   // How long the frames are taking, on the machine they are slow on: see

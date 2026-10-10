@@ -67,6 +67,12 @@ static void my_application_activate(GApplication* application) {
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   fl_dart_project_set_dart_entrypoint_arguments(
       project, self->dart_entrypoint_arguments);
+  // Impeller is the renderer on Linux since Flutter 3.47 (it says so on stdout:
+  // "Using the Impeller rendering backend (OpenGLESSDF)"). WETOWL_SKIA=1 asks for
+  // Skia instead, so the stage's shaders (lib/src/ui/show/) can be measured on both.
+  if (g_getenv("WETOWL_SKIA") != nullptr) {
+    fl_dart_project_set_enable_impeller(project, FALSE);
+  }
 
   FlView* view = fl_view_new(project);
   GdkRGBA background_color;

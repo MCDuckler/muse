@@ -11,6 +11,7 @@ import 'package:muse/src/state/booth/control/binding.dart';
 import 'package:muse/src/state/booth/control/layout.dart';
 import 'package:muse/src/state/booth/control/manager.dart';
 import 'package:muse/src/state/booth/control/surface.dart';
+import 'package:muse/src/state/show/show_director.dart';
 import 'package:muse/src/state/booth/control/transport.dart';
 import 'package:muse/src/state/booth/deck.dart';
 import 'package:muse/src/state/booth/mixer.dart';
@@ -268,6 +269,59 @@ void main() {
       expect(loads, [booth.b]);
       await bind.handle(down(Controls.browseDown));
       expect(notes.last, contains('no crate'));
+    });
+  });
+
+  group('the show', () {
+    setUp(() {
+      booth.show.director.scenes = const [SceneMeta(id: 'one'), SceneMeta(id: 'two'), SceneMeta(id: 'three')];
+      booth.show.tick(DateTime(2026, 1, 1));
+      bind.attach();
+    });
+
+    test('PFL steps the scene either way', () async {
+      final was = booth.show.director.scene;
+      await bind.handle(down(b(Controls.pfl)));
+      expect(booth.show.director.scene, isNot(was));
+      final next = booth.show.director.scene;
+      await bind.handle(down(a(Controls.pfl)));
+      expect(booth.show.director.scene, was);
+      expect(next, isNot(was));
+    });
+
+    test('SOURCE A hits, SOURCE B blacks out; shift freezes and strobes', () async {
+      await bind.handle(down(a(Controls.source)));
+      expect(booth.show.macros.hit, 1);
+      expect(leds.any((l) => l.id == a(Controls.source) && l.on), isTrue, reason: 'the hit lights SOURCE A');
+      await bind.handle(down(b(Controls.source)));
+      expect(booth.show.macros.blackout, isTrue);
+      await bind.handle(down(b(Controls.source)));
+      expect(booth.show.macros.blackout, isFalse);
+      await bind.handle(down(a(Controls.stop)));
+      await bind.handle(down(a(Controls.source)));
+      expect(booth.show.macros.freeze, isTrue);
+      await bind.handle(down(b(Controls.source)));
+      expect(booth.show.macros.strobe, 1);
+      await bind.handle(up(b(Controls.source)));
+      expect(booth.show.macros.strobe, 0);
+      await bind.handle(up(a(Controls.stop)));
+    });
+
+    test('BALANCE is the master, HEADMIX the colour', () async {
+      // Soft take-over: the knob has to pass where the master is (all the way up).
+      await bind.handle(SurfaceEvent(Controls.balance, ControlKind.pot, 1.0));
+      await bind.handle(SurfaceEvent(Controls.balance, ControlKind.pot, 0.4));
+      expect(booth.show.macros.intensity, closeTo(0.4, 1e-9));
+      await bind.handle(SurfaceEvent(Controls.headMix, ControlKind.pot, 0.0));
+      await bind.handle(SurfaceEvent(Controls.headMix, ControlKind.pot, 0.25));
+      expect(booth.show.macros.colour, closeTo(0.25, 1e-9));
+    });
+
+    test('the dotted names from a remote work the same', () async {
+      await bind.handle(down(Controls.showNext));
+      expect(booth.show.director.scene, 'two');
+      await bind.handle(down(Controls.showBlackout));
+      expect(booth.show.macros.blackout, isTrue);
     });
   });
 

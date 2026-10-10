@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../api/client.dart';
 import '../../api/models.dart';
+import '../../api/pulse.dart';
 import '../../worker/parts_jobs.dart';
 import '../playback_log.dart';
 import '../timing.dart';
@@ -16,6 +17,7 @@ import 'fx_sounds.dart';
 import 'mixer.dart';
 import 'parts.dart';
 import 'session.dart';
+import '../show/show_engine.dart';
 
 /// How one record gives way to the next.
 enum Transition {
@@ -429,6 +431,8 @@ class Booth extends ChangeNotifier {
     this.a.addListener(_follow);
     // A record's parts or beats arriving: what the house says of it is asked again.
     parts.arrivals.stream.listen(this.timing.forget);
+    // And its pulse, which has the stems in it once they are there.
+    parts.arrivals.stream.listen(pulse.remove);
     this.b.addListener(_follow);
     partsJobs.addListener(_partsChanged);
   }
@@ -608,6 +612,32 @@ class Booth extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Each record's pulse (api/pulse.dart), once fetched, by track: what the show reads
+  /// at the needle. Asked for by the show itself, for whatever is on a deck.
+  final pulse = <int, Pulse>{};
+  final _fetchingPulse = <int>{};
+
+  Future<void> fetchPulse(Track track) async {
+    if (pulse.containsKey(track.id) || !_fetchingPulse.add(track.id)) return;
+    try {
+      final got = await api.pulse(track.id);
+      if (got != null) {
+        pulse[track.id] = got;
+      } else {
+        // A house without the pulse yet: one made of the shape's three bands, which
+        // every house has (Pulse.fromBands) — no air, no stems, but a kick.
+        await fetchBands(track);
+        final b = bands[track.id];
+        final ms = track.durationMs ?? 0;
+        if (b != null && ms > 0) pulse[track.id] = Pulse.fromBands(b.low, b.mid, b.high, ms);
+      }
+    } catch (_) {
+      // No pulse: the show reads the bars and the shape instead.
+    } finally {
+      _fetchingPulse.remove(track.id);
+    }
+  }
+
   /// Where the *picture* says the record opens up, against where the rules are drawn.
   ///
   /// This is the one number a report about a beatgrid actually turns on, and it cannot
@@ -746,6 +776,15 @@ class Booth extends ChangeNotifier {
 
   /// The board's pads beside the decks: Soundboard.
   late final Soundboard board;
+
+  /// A mix's step as it is applied, and a sound of the booth's as it is fired: what
+  /// the show (state/show/) listens to for the things it cannot read off the state.
+  final stepApplied = Said<MixStep>();
+  final fxFired = Said<FxShot>();
+
+  /// The show's engine on this booth: what the stage and the lights read. Started
+  /// by the room's clock (BoothClock) while the booth is open.
+  late final ShowEngine show = ShowEngine(this);
 
   /// How far the decks are held down while a pad that ducks them sounds, 0..1:
   /// 1 is not at all. The board's, never a hand's, and never the master.
@@ -2970,7 +3009,10 @@ class Booth extends ChangeNotifier {
 
     // A sound hung on the step at 0 goes now: that step was applied before the
     // incoming was even started, which is a bar too early to make a noise.
-    if (fxSlot.containsKey(0)) unawaited(fx.fire(fxSlot[0]!));
+    if (fxSlot.containsKey(0)) {
+      unawaited(fx.fire(fxSlot[0]!));
+      fxFired.say(steps[0].fx!);
+    }
 
     // One tick at a time. Each awaits the engine, and a tick that took longer than
     // the next one's turn had the two running together — the same commands sent
@@ -3010,8 +3052,12 @@ class Booth extends ChangeNotifier {
         }
       }
       while (next < steps.length && k >= steps[next].at) {
-        if (fxSlot.containsKey(next)) unawaited(fx.fire(fxSlot[next]!));
+        if (fxSlot.containsKey(next)) {
+          unawaited(fx.fire(fxSlot[next]!));
+          fxFired.say(steps[next].fx!);
+        }
         await _applyStep(steps[next]);
+        stepApplied.say(steps[next]);
         next++;
       }
       if (k >= 1) {
@@ -3164,6 +3210,7 @@ class Booth extends ChangeNotifier {
     _running?.cancel();
     _lock?.cancel();
     unawaited(fx.dispose());
+    show.dispose();
     board.dispose();
     auto.dispose();
     a.dispose();
@@ -3175,4 +3222,18 @@ class Booth extends ChangeNotifier {
 /// See [Booth.moves].
 class BoothMoves extends ChangeNotifier {
   void ping() => notifyListeners();
+}
+
+/// Something the booth did, said as it does it, for whoever listens: a mix's step
+/// applied, a sound fired. Said every time, not only when it differs from the last —
+/// a ValueNotifier holding the same step twice would say it once.
+class Said<T> extends ChangeNotifier {
+  T? last;
+  int count = 0;
+
+  void say(T what) {
+    last = what;
+    count++;
+    notifyListeners();
+  }
 }

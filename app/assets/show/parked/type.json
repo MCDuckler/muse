@@ -1,0 +1,43 @@
+{
+  "id": "type",
+  "name": "Type",
+  "energy": [
+    0.2,
+    0.9
+  ],
+  "sections": [
+    "verse",
+    "chorus",
+    "intro",
+    "on"
+  ],
+  "needs": [
+    "words"
+  ],
+  "layers": [
+    {
+      "shader": "drift",
+      "knobs": {
+        "m1": 1.0
+      },
+      "dim": 0.5
+    }
+  ],
+  "text": {
+    "title": true,
+    "lyrics": true,
+    "where": "big",
+    "jitter": true
+  },
+  "post": {
+    "trails": 0.3,
+    "bloom": 0.6,
+    "fringe": 0.004,
+    "vignette": 0.5,
+    "grain": 0.6,
+    "recipe": 0.3
+  },
+  "particles": [
+    "dust"
+  ]
+}

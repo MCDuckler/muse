@@ -76,6 +76,18 @@ abstract final class Controls {
   static const browseRight = 'browse.right';
   static const mic = 'mic';
 
+  // ----------------------------------------------------------------- the show
+  /// The stage (state/show/): the scene either way, a hit, the blackout, the strobe
+  /// held, the picture frozen; a master and a turn of the colour.
+  static const showPrev = 'show.scene.prev';
+  static const showNext = 'show.scene.next';
+  static const showHit = 'show.hit';
+  static const showBlackout = 'show.blackout';
+  static const showStrobe = 'show.strobe';
+  static const showFreeze = 'show.freeze';
+  static const showIntensity = 'show.intensity';
+  static const showColour = 'show.colour';
+
   // ----------------------------------------------------------------- the board
   /// `board.pad.N`, N = 1..16 of the bank on show.
   static String boardPad(int n) => 'board.pad.$n';

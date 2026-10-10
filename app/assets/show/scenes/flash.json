@@ -1,0 +1,32 @@
+{
+  "id": "flash",
+  "name": "Flash",
+  "energy": [
+    0.55,
+    1.0
+  ],
+  "sections": [
+    "drop",
+    "chorus"
+  ],
+  "layers": [
+    {
+      "shader": "flash"
+    }
+  ],
+  "particles": [],
+  "text": {
+    "title": false,
+    "lyrics": false
+  },
+  "post": {
+    "trails": 0.0,
+    "bloom": 0.25,
+    "fringe": 0.004,
+    "vignette": 0.3,
+    "grain": 0.3,
+    "recipe": 0.0
+  },
+  "priority": 2.5,
+  "instant": true
+}

@@ -1,0 +1,35 @@
+{
+  "id": "grid",
+  "name": "Grid",
+  "energy": [
+    0.4,
+    1.0
+  ],
+  "sections": [
+    "drop",
+    "inst",
+    "verse",
+    "on"
+  ],
+  "layers": [
+    {
+      "shader": "grid"
+    }
+  ],
+  "text": {
+    "title": true,
+    "lyrics": false,
+    "where": "low"
+  },
+  "post": {
+    "trails": 0.35,
+    "bloom": 1.0,
+    "fringe": 0.005,
+    "vignette": 0.4,
+    "grain": 0.6,
+    "recipe": 0.2
+  },
+  "particles": [
+    "sparks"
+  ]
+}

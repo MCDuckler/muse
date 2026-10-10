@@ -1,0 +1,48 @@
+{
+  "id": "fold",
+  "name": "Fold",
+  "energy": [
+    0.2,
+    1.0
+  ],
+  "sections": [
+    "drop",
+    "chorus",
+    "inst",
+    "verse",
+    "on",
+    "build"
+  ],
+  "needs": [
+    "camera"
+  ],
+  "priority": 1.0,
+  "instant": true,
+  "layers": [
+    {
+      "shader": "fold",
+      "samplers": [
+        "camera",
+        "motion"
+      ],
+      "knobs": {
+        "m1": 0.0
+      }
+    }
+  ],
+  "particles": [
+    "sparks"
+  ],
+  "text": {
+    "title": false,
+    "lyrics": false
+  },
+  "post": {
+    "trails": 0.45,
+    "bloom": 0.7,
+    "fringe": 0.008,
+    "vignette": 0.6,
+    "grain": 0.5,
+    "recipe": 0.2
+  }
+}

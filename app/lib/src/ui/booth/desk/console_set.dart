@@ -24,7 +24,7 @@ import 'set_planner_page.dart';
 final planPair = ValueNotifier<(int, int)?>(null);
 
 /// The middle of the booth shows one of three things.
-enum BoothView { waves, set, plan }
+enum BoothView { waves, set, plan, show }
 
 // ------------------------------------------------------------------ the bar
 /// The Auto DJ in the booth's top bar: the switch; what it is doing in a word and

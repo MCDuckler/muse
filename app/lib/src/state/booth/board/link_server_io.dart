@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 
 import '../booth.dart';
 import '../control/transport.dart';
+import '../../show/show_wire.dart';
 import 'link_server.dart';
 
 BoardLinkBase boardLink({required Booth Function() booth}) => BoardLinkServer(booth: booth);
@@ -53,10 +54,14 @@ class BoardLinkServer extends BoardLinkBase {
 
   Future<void> _request(HttpRequest req) async {
     final q = req.uri.queryParameters;
-    final ok = req.uri.path == '/board' &&
-        _token != null &&
-        q['t'] == _token &&
-        WebSocketTransformer.isUpgradeRequest(req);
+    final upgrade = _token != null && q['t'] == _token && WebSocketTransformer.isUpgradeRequest(req);
+    // The stage's window (ui/show/stage_window.dart) reads the show here, on the
+    // same server and token: frames out, nothing in but pings.
+    if (req.uri.path == '/stage' && upgrade) {
+      await _stage(req);
+      return;
+    }
+    final ok = req.uri.path == '/board' && upgrade;
     if (!ok) {
       req.response.statusCode = HttpStatus.forbidden;
       await req.response.close();
@@ -107,6 +112,45 @@ class BoardLinkServer extends BoardLinkBase {
     );
     admit(peer);
   }
+
+  final _stages = <WebSocket>{};
+
+  Future<void> _stage(HttpRequest req) async {
+    if (_stages.length >= 4) {
+      req.response.statusCode = HttpStatus.tooManyRequests;
+      await req.response.close();
+      return;
+    }
+    final WebSocket ws;
+    try {
+      ws = await WebSocketTransformer.upgrade(req);
+    } catch (e) {
+      debugPrint('stage link: upgrade failed — $e');
+      return;
+    }
+    _stages.add(ws);
+    final wire = ShowWire(booth.show, (line) {
+      try {
+        ws.add(line);
+      } catch (_) {}
+    });
+    ws.listen(
+      (data) {
+        if (data is String && data.startsWith('{"t":"ping"')) ws.add(data.replaceFirst('"ping"', '"pong"'));
+      },
+      onDone: () {
+        wire.close();
+        _stages.remove(ws);
+      },
+      onError: (Object _) {
+        wire.close();
+        _stages.remove(ws);
+      },
+    );
+  }
+
+  /// How many stages are reading the show.
+  int get stages => _stages.length;
 
   /// The local addresses a screen on the same network can try, the port and the
   /// token: what this desk tells the account about itself.

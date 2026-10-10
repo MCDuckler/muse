@@ -112,7 +112,7 @@ void main() {
     final phone = w < 700;
     for (final state in phone
         ? ['empty', 'playing', 'set', 'plan', 'planner', 'crate', 'light', 'board']
-        : ['empty', 'playing', if (w == 1600) 'mixing', if (w != 1920) 'parts', if (w != 1280) 'crate', 'plan', 'set', 'planner', if (w == 1600) 'light', if (w != 1920) 'board', if (w == 1600) 'board-light', if (w == 1600) 'strip']) {
+        : ['empty', 'playing', if (w == 1600) 'mixing', if (w != 1920) 'parts', if (w != 1280) 'crate', 'plan', 'set', if (w == 1600) 'show', 'planner', if (w == 1600) 'light', if (w != 1920) 'board', if (w == 1600) 'board-light', if (w == 1600) 'strip']) {
       testWidgets('the booth at ${w.round()}x${h.round()}, $state', (tester) async {
         JustAudioPlatform.instance = FakeJustAudio();
         useThisClientInstead(MockClient((r) async {
@@ -133,6 +133,8 @@ void main() {
                 ? {'muse.booth.view': 'plan'}
                 : state == 'set'
                     ? {'muse.booth.view': 'set'}
+                : state == 'show'
+                    ? {'muse.booth.view': 'show'}
                     : state == 'light'
                         ? {'muse.booth.look': 'light', 'muse.booth.view': 'plan'}
                         : state == 'board-light'

@@ -1,0 +1,38 @@
+{
+  "id": "tunnel",
+  "name": "Tunnel",
+  "energy": [
+    0.5,
+    1.0
+  ],
+  "sections": [
+    "drop",
+    "chorus",
+    "inst"
+  ],
+  "layers": [
+    {
+      "shader": "tunnel",
+      "knobs": {
+        "m1": 1.0
+      }
+    }
+  ],
+  "text": {
+    "title": false,
+    "lyrics": true,
+    "where": "low"
+  },
+  "post": {
+    "trails": 0.45,
+    "bloom": 0.6,
+    "fringe": 0.01,
+    "vignette": 0.7,
+    "grain": 0.6,
+    "recipe": 0.6
+  },
+  "particles": [
+    "sparks",
+    "dust"
+  ]
+}

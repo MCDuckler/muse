@@ -80,6 +80,8 @@ class _BoothClockState extends State<BoothClock>
     super.initState();
     widget.booth.addListener(_wake);
     _ticker.start();
+    // The show runs while the room is open: see state/show/show_engine.dart.
+    widget.booth.show.start();
   }
 
   @override
@@ -127,6 +129,7 @@ class _BoothClockState extends State<BoothClock>
   @override
   void dispose() {
     widget.booth.removeListener(_wake);
+    widget.booth.show.stop();
     _resting?.cancel();
     _ticker.dispose();
     for (final n in _positions.values) {

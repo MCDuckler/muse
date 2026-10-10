@@ -1,0 +1,43 @@
+{
+  "id": "toon",
+  "name": "Fractal Cartoon",
+  "energy": [
+    0.2,
+    1.0
+  ],
+  "sections": [
+    "verse",
+    "chorus",
+    "inst",
+    "drop",
+    "build",
+    "on",
+    "intro"
+  ],
+  "layers": [
+    {
+      "shader": "toon",
+      "knobs": {
+        "m1": 0.0,
+        "m2": 0.0,
+        "m3": 0.0
+      }
+    }
+  ],
+  "particles": [],
+  "text": {
+    "title": true,
+    "lyrics": false,
+    "where": "low"
+  },
+  "post": {
+    "trails": 0.0,
+    "bloom": 0.5,
+    "fringe": 0.006,
+    "vignette": 0.5,
+    "grain": 0.5,
+    "recipe": 0.0
+  },
+  "priority": 0.6,
+  "instant": true
+}
