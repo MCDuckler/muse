@@ -347,18 +347,17 @@ class _PhoneDeckState extends State<PhoneDeck> with TickerProviderStateMixin {
       final set = _d.hotCues.containsKey(n);
       return Expanded(
         child: Pad(
-          label: '$n',
+          label: _d.padLabel(n),
           colour: _colour,
           dim: set,
           height: 28,
-          tooltip: set ? 'Cue $n · hold to clear' : 'Set cue $n here',
+          tooltip: _d.padTip(n, clear: 'hold to clear'),
           onTap: on ? () => set ? _d.jumpCue(n) : _d.setCue(n) : null,
           onLongPress: set
-              ? () {
-                  _d.hotCues.remove(n);
-                  _d.changed();
-                }
-              : null,
+              ? () => _d.clearCue(n)
+              : on && engine.Deck.autoPads && _d.padByHand(n)
+                  ? () => _d.autoCue(n)
+                  : null,
         ),
       );
     }

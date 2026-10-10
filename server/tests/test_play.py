@@ -201,8 +201,23 @@ def test_a_hand_cue_is_kept_and_served_with_the_analysis(client, hdr):
     r = client.put(f"/tracks/{t['id']}/cues", headers=hdr, json={"out_ms": 181000})
     assert r.status_code == 200 and r.json()["out_ms"] == 181000 and r.json()["in_ms"] is None
     r = client.put(f"/tracks/{t['id']}/cues", headers=hdr, json={"in_ms": 12000})
-    assert r.json() == {"track_id": t["id"], "out_ms": 181000, "in_ms": 12000}
+    assert r.json() == {"track_id": t["id"], "out_ms": 181000, "in_ms": 12000, "pads": {}}
     assert client.put(f"/tracks/{t['id']}/cues", headers=hdr, json={"in_ms": -1}).status_code == 400
     got = client.get(f"/tracks/{t['id']}/cues", headers=hdr).json()
     assert got["out_ms"] == 181000 and got["in_ms"] == 12000
     assert client.put("/tracks/999999/cues", headers=hdr, json={"out_ms": 1}).status_code == 404
+
+
+def test_a_pad_a_hand_set_or_cleared_is_kept_and_the_rest_left_to_the_booth(client, hdr):
+    t = client.post("/tracks/resolve", headers=hdr, json={"video_id": "CUEVID02"}).json()
+    u = f"/tracks/{t['id']}/cues"
+    assert client.get(u, headers=hdr).json()["pads"] == {}
+    r = client.put(u, headers=hdr, json={"pads": {"2": 61000, "3": None}})
+    assert r.status_code == 200 and r.json()["pads"] == {"2": 61000, "3": None}
+    # The mix cues are not touched by a pad, nor the other pads by one pad.
+    client.put(u, headers=hdr, json={"out_ms": 181000})
+    r = client.put(u, headers=hdr, json={"pads": {"3": "auto"}})
+    assert r.json()["pads"] == {"2": 61000} and r.json()["out_ms"] == 181000
+    assert client.get(u, headers=hdr).json()["pads"] == {"2": 61000}
+    for bad in ({"9": 1}, {"x": 1}, {"1": -5}, {"1": "soon"}, {"1": True}):
+        assert client.put(u, headers=hdr, json={"pads": bad}).status_code == 400

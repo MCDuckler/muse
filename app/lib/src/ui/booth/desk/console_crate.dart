@@ -17,11 +17,12 @@ import '../../artwork.dart';
 import '../../mag.dart';
 import '../../snack.dart';
 import 'console.dart';
+import 'console_check.dart';
 import 'data_marks.dart';
 import 'set_planner_page.dart';
 
 /// The crate's pages.
-enum CrateTab { queue, fits, library, search, similar, parts }
+enum CrateTab { queue, fits, library, search, similar, check, parts }
 
 /// Whether every tab can wear its name in the width the row gives it.
 ///
@@ -270,6 +271,7 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
           (CrateTab.library, 'LIBRARY', Icons.library_music_outlined),
           (CrateTab.search, 'SEARCH', Icons.search),
           (CrateTab.similar, 'SIMILAR', Icons.auto_awesome_outlined),
+          (CrateTab.check, 'CHECK', Icons.fact_check_outlined),
           if (partsHere) (CrateTab.parts, 'PARTS', Icons.call_split),
         ];
         // Whether the words fit, asked rather than guessed.
@@ -359,6 +361,17 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
                     booth: widget.booth,
                     row: (t, note) => _Row(
                       key: ValueKey('sim-${t.id}'),
+                      track: t,
+                      booth: widget.booth,
+                      loadInto: widget.loadInto,
+                      forDeck: widget.forDeck,
+                      roomy: roomy,
+                      note: note,
+                    )),
+                CrateTab.check => CueCheckList(
+                    booth: widget.booth,
+                    row: (t, note) => _Row(
+                      key: ValueKey('chk-${t.id}'),
                       track: t,
                       booth: widget.booth,
                       loadInto: widget.loadInto,

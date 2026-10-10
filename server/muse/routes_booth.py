@@ -216,3 +216,83 @@ def pool_stats(body: dict = Body(...), user: dict = Depends(current_user)):
             "select id from tracks where id = any(%s) and state <> 'ready' order by id limit 2000",
             (list(ids),))]
     return out
+
+
+# ------------------------------------------------------------------ the cue check
+GRID_VERDICTS = ("ok", "double", "half", "off", "one", "other")
+_BANDS = (0, 100, 118, 126, 135, 150, 999)
+
+
+@router.get("/check")
+def check_list(n: int = 40, user: dict = Depends(current_user)):
+    """Records for this person to check by ear: ones they have, playable now, with a
+    grid — spread over the tempos (a sample all at 124 says nothing about the 170s)
+    and the same list every time it is asked for, so it can be worked through."""
+    from . import discover
+    n = max(5, min(100, n))
+    rows = db.all_(
+        """select t.id, t.bpm
+             from tracks t
+            where t.state = 'ready' and t.bpm is not null
+              and t.duration_ms between 120000 and 540000
+              and (exists (select 1 from library_items li
+                            where li.user_id = %s and li.track_id = t.id)
+                   or (select count(*) from listens l
+                        where l.user_id = %s and l.track_id = t.id) >= 2)
+            order by md5(%s::text || ':' || t.id::text)
+            limit 600""", (user["id"], user["id"], user["id"]))
+    bands: list[list[int]] = [[] for _ in _BANDS[1:]]
+    for r in rows:
+        for i in range(len(_BANDS) - 1):
+            if _BANDS[i] <= r["bpm"] < _BANDS[i + 1]:
+                bands[i].append(r["id"])
+                break
+    ids: list[int] = []
+    while len(ids) < n and any(bands):
+        for b in bands:
+            if b and len(ids) < n:
+                ids.append(b.pop(0))
+    done = {r["track_id"]: r for r in db.all_(
+        "select track_id, grid, pads, note, checked_at from cue_checks where user_id=%s",
+        (user["id"],))}
+    hand = {r["track_id"]: r["pads"] or {} for r in db.all_(
+        "select track_id, pads from track_cues where track_id = any(%s)", (ids,))}
+    items = []
+    for t in discover._rows(ids):
+        c = done.get(t["id"])
+        items.append({"track": t, "hand_pads": hand.get(t["id"], {}),
+                      "grid": c["grid"] if c else None, "note": c["note"] if c else None,
+                      "checked_at": c["checked_at"].isoformat() if c else None})
+    return {"items": items, "checked": sum(1 for i in items if i["checked_at"])}
+
+
+@router.put("/check/{track_id}")
+def check_one(track_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
+    """Checked: what the grid is like, and where the pads were left."""
+    from . import beats as _beats
+    grid = body.get("grid")
+    if grid is not None and grid not in GRID_VERDICTS:
+        raise HTTPException(400, f"grid is one of {', '.join(GRID_VERDICTS)}")
+    pads = body.get("pads") if isinstance(body.get("pads"), dict) else {}
+    clean = {}
+    for k, v in pads.items():
+        if not str(k).isdigit() or not isinstance(v, dict) or not isinstance(v.get("ms"), int):
+            raise HTTPException(400, 'a pad is {"ms": int, "auto": bool}')
+        clean[str(int(k))] = {"ms": v["ms"], "auto": bool(v.get("auto"))}
+    if not db.one("select 1 from tracks where id=%s", (track_id,)):
+        raise HTTPException(404, "no such track")
+    db.run(
+        """insert into cue_checks(user_id, track_id, grid, pads, note, beats_version)
+           values(%s,%s,%s,%s,%s,%s)
+           on conflict (user_id, track_id) do update set grid=excluded.grid,
+             pads=excluded.pads, note=excluded.note, beats_version=excluded.beats_version,
+             checked_at=now()""",
+        (user["id"], track_id, grid, json.dumps(clean), (body.get("note") or None),
+         _beats.VERSION))
+    return {"track_id": track_id, "grid": grid, "pads": clean}
+
+
+@router.delete("/check/{track_id}")
+def check_undo(track_id: int, user: dict = Depends(current_user)):
+    db.run("delete from cue_checks where user_id=%s and track_id=%s", (user["id"], track_id))
+    return {"track_id": track_id}

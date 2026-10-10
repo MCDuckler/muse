@@ -152,6 +152,7 @@ class WaveStrip extends StatefulWidget {
     required this.playing,
     this.loop,
     this.hotCues = const {},
+    this.cueLabels = const {},
     this.window = const Duration(seconds: 20),
     this.height = 72,
     this.onScrub,
@@ -187,6 +188,10 @@ class WaveStrip extends StatefulWidget {
   final bool playing;
   final (Duration, Duration)? loop;
   final Map<int, Duration> hotCues;
+
+  /// The word on a cue's flag where it is not its number: what the booth placed it
+  /// for (Deck.padLabel).
+  final Map<int, String> cueLabels;
 
   /// How much of the song the strip shows at once.
   final Duration window;
@@ -267,6 +272,7 @@ class _WaveStripState extends State<WaveStrip> {
                 window: window,
                 loop: widget.loop,
                 hotCues: widget.hotCues,
+                cueLabels: widget.cueLabels,
                 markAt: widget.markAt,
                 mirrored: widget.mirrored,
                 inks: widget.inks,
@@ -422,6 +428,7 @@ class _StripPainter extends CustomPainter {
     required this.window,
     required this.loop,
     required this.hotCues,
+    required this.cueLabels,
     required this.markAt,
     required this.mirrored,
     required this.inks,
@@ -441,6 +448,7 @@ class _StripPainter extends CustomPainter {
   final Duration window;
   final (Duration, Duration)? loop;
   final Map<int, Duration> hotCues;
+  final Map<int, String> cueLabels;
   final Duration? markAt;
   final bool mirrored;
   final WaveInks inks;
@@ -534,7 +542,8 @@ class _StripPainter extends CustomPainter {
     lay(tiles._over, (i) => _tile(i, (c, x0) => _drawOver(c, x0, h, total)));
 
     for (final e in hotCues.entries) {
-      _flag(canvas, xOf(e.value.inMicroseconds.toDouble()), '${e.key}', h, 0, w, hot: true);
+      _flag(canvas, xOf(e.value.inMicroseconds.toDouble()), cueLabels[e.key] ?? '${e.key}', h, 0, w,
+          hot: true);
     }
     // Where the booth means to mix out of this record: a rule with a hatched run up
     // to it, so how long there is left to it is read off the strip rather than the
@@ -873,6 +882,7 @@ class _StripPainter extends CustomPainter {
       old.window != window ||
       old.loop != loop ||
       old.hotCues != hotCues ||
+      !mapEquals(old.cueLabels, cueLabels) ||
       old.accent != accent ||
       old.ink != ink ||
       old.paper != paper ||

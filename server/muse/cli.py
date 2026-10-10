@@ -477,8 +477,62 @@ def fixnames(apply: bool = False) -> None:
     print(f"{named} of {len(rows)} named")
 
 
+def cuebench() -> None:
+    """The house against the cue check (booth CHECK page): how far its in and out are
+    from where the DJ left pads 1 and 4, in bars, and what the grid was said to be.
+    A pad left where the booth put it counts as the booth's place being right."""
+    import collections
+    import pathlib
+
+    from . import beats, config, db
+
+    cfg = config.load()
+    db.init(cfg.dsn)
+    rows = db.all_(
+        """select c.track_id, c.grid, c.pads, c.beats_version, u.name, t.title, m.path, m.sha256
+             from cue_checks c join users u on u.id = c.user_id
+             join tracks t on t.id = c.track_id
+             left join media m on m.track_id = t.id and m.role = 'canonical'
+            order by c.checked_at""")
+    grids = collections.Counter(r["grid"] or "none" for r in rows)
+    print(f"{len(rows)} records checked; grid: " +
+          ", ".join(f"{k} {v}" for k, v in grids.most_common()))
+    off = {"in": collections.Counter(), "out": collections.Counter()}
+    kept = {"in": 0, "out": 0}
+
+    def bucket(bars: float) -> str:
+        b = abs(bars)
+        return ("on" if b < 0.5 else "≤4" if b <= 4 else "≤8" if b <= 8
+                else "≤16" if b <= 16 else ">16")
+
+    for r in rows:
+        if not r["path"] or not pathlib.Path(r["path"]).exists():
+            continue
+        found = beats.for_track(cfg.data_dir, pathlib.Path(r["path"]), r["sha256"])
+        cues, bpm = found.get("cues") or {}, found.get("bpm")
+        if not cues or not bpm:
+            continue
+        bar = 240000 / bpm
+        for n, side, key in (("1", "in", "mix_in_ms"), ("4", "out", "mix_out_ms")):
+            p = (r["pads"] or {}).get(n)
+            if not p:
+                continue
+            kept[side] += p.get("auto", False)
+            bars = (cues[key] - p["ms"]) / bar
+            off[side][bucket(bars)] += 1
+            if abs(bars) > 8:
+                print(f"  {side:3} {bars:+6.1f} bars  {r['title']}  ({r['name']})")
+    for side in ("in", "out"):
+        n = sum(off[side].values())
+        if n:
+            print(f"{side}: {n} pads, booth's own kept {kept[side]}; house off by " +
+                  ", ".join(f"{k} {off[side][k]}" for k in ("on", "≤4", "≤8", "≤16", ">16")))
+
+
 def main() -> None:
     match sys.argv[1:]:
+        case ["cuebench"]:
+            cuebench()
         case ["fixnames"]:
             fixnames()
         case ["fixnames", "--apply"]:
@@ -530,7 +584,7 @@ def main() -> None:
                      "| splitartists [--apply] | fixsoundcloud [--apply] "
                      "| fixspotifynames [--apply] | markdead [--apply] "
                      "| covers [--apply] | traits [--measure] | pulse --backfill | fixnames [--apply] "
-                     "| housesamples <folder> <owner> [--apply]]")
+                     "| housesamples <folder> <owner> [--apply] | cuebench]")
 
 
 if __name__ == "__main__":

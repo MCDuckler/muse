@@ -3462,3 +3462,26 @@ class ArtistAbout {
         url: j['url'] as String?,
       );
 }
+
+
+/// One record in the cue check (the booth's CHECK page): the record, and what was said
+/// about it once it was checked.
+class CueCheck {
+  const CueCheck({required this.track, this.grid, this.note, this.checkedAt});
+
+  final Track track;
+
+  /// ok | double | half | off | one | other, once checked.
+  final String? grid;
+  final String? note;
+  final String? checkedAt;
+
+  bool get checked => checkedAt != null;
+
+  factory CueCheck.fromJson(Map<String, dynamic> j) => CueCheck(
+        track: Track.fromJson((j['track'] as Map).cast<String, dynamic>()),
+        grid: j['grid'] as String?,
+        note: j['note'] as String?,
+        checkedAt: j['checked_at'] as String?,
+      );
+}

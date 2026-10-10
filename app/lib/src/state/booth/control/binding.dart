@@ -312,8 +312,7 @@ class BoothBinding {
         shift ? d.unloop() : d.loopOut();
       default:
         if (shift) {
-          d.hotCues.remove(n);
-          d.changed();
+          d.hotCues.containsKey(n) ? d.clearCue(n) : d.autoCue(n);
         } else if (d.hotCues.containsKey(n)) {
           await d.jumpCue(n);
         } else {

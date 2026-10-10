@@ -707,6 +707,25 @@ create table if not exists track_cues (
   updated_at timestamptz not null default now()
 );
 alter table tracks add column if not exists beats_version int;
+-- The pads a record comes with in the booth (hot cues 1–8), where a hand moved them
+-- from the ones the booth would put there itself: {"2": 61234} a pad set by hand,
+-- {"3": null} a pad a hand cleared. A pad not named is the booth's to place.
+alter table track_cues add column if not exists pads jsonb not null default '{}';
+
+-- The cue check: records a DJ listened to in the booth and said whether the house had
+-- them right — the grid (`grid`: ok | double | half | off | one | other) and the pads
+-- as they were left (`pads`: {"1": {"ms": 61234, "auto": true}, …}; auto = the booth's
+-- own place, kept). The ground truth the cue and grid rules are measured against.
+create table if not exists cue_checks (
+  user_id    int not null references users(id) on delete cascade,
+  track_id   int not null references tracks(id) on delete cascade,
+  grid       text,
+  pads       jsonb not null default '{}',
+  note       text,
+  beats_version int,
+  checked_at timestamptz not null default now(),
+  primary key (user_id, track_id)
+);
 
 -- What YouTube Music plays after a song, kept: every watch playlist the house asks
 -- for is written down here, one row a song it offered, so the next question about the

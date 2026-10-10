@@ -109,6 +109,7 @@ class _Lane extends StatelessWidget {
                         ? (deck.loopStart!, deck.loopEnd!)
                         : null,
                     hotCues: deck.hotCues,
+                    cueLabels: {for (final n in deck.padWhy.keys) n: deck.padLabel(n)},
                     markAt: auto.running && identical(booth.master, deck) ? auto.goesAt : null,
                     height: height,
                     // Sixteen seconds of the room's time, not the record's: a deck at

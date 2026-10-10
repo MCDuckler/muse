@@ -10,6 +10,7 @@ import '../../api/client.dart';
 import '../../api/models.dart';
 import '../playback_log.dart';
 import '../player.dart' show PlayerService;
+import 'auto_pads.dart';
 import 'deck_router.dart';
 import 'mixer.dart' show StemLevels;
 import 'parts.dart';
@@ -657,6 +658,10 @@ class Deck extends ChangeNotifier {
     trouble = null;
     neverParts.clear();
     hotCues.clear();
+    padWhy.clear();
+    _padsByHand.clear();
+    _placePads();
+    unawaited(_handPads(track.id));
     loopStart = loopEnd = null;
     _loopBars = null;
     // Parked where a DJ would drop it: on the first downbeat, if there is one — on the
@@ -1238,12 +1243,105 @@ class Deck extends ChangeNotifier {
   /// Places in the record a button jumps to.
   final Map<int, Duration> hotCues = {};
 
+  /// The pads the booth placed itself (see AutoPads), and what each is for. A pad
+  /// not in here was set by a hand.
+  final Map<int, PadWhy> padWhy = {};
+
+  /// Pads a hand set or cleared on this record, here or anywhere: the booth does not
+  /// place those again. Kept by the house for the record (track_cues.pads).
+  final Set<int> _padsByHand = {};
+
+  /// Whether a record comes with its pads placed. On unless a DJ said otherwise.
+  static bool autoPads = true;
+
+  /// Whether a hand set or cleared pad [n] on this record.
+  bool padByHand(int n) => _padsByHand.contains(n);
+
+  /// The word on pad [n]: what the booth placed it for, or its number.
+  String padLabel(int n) => padWhy[n]?.short ?? '$n';
+
+  /// What pad [n] does, said on a pointer resting on it.
+  String padTip(int n, {required String clear}) {
+    final why = padWhy[n];
+    if (why != null) return 'Cue $n · ${why.long}, placed by the booth · $clear';
+    if (hotCues.containsKey(n)) return 'Cue $n · $clear';
+    return padByHand(n) && autoPads ? 'Set cue $n here · hold to let the booth place it' : 'Set cue $n here';
+  }
+
   /// Said when something outside changed what this deck holds — a cue cleared, say.
   void changed() => notifyListeners();
 
+  /// A pad set by hand, here — or at [at].
   void setCue(int n, [Duration? at]) {
-    hotCues[n] = at ?? position;
+    final to = at ?? position;
+    hotCues[n] = to;
+    padWhy.remove(n);
+    _padsByHand.add(n);
     notifyListeners();
+    _keepPad(n, ms: to.inMilliseconds);
+  }
+
+  /// A pad cleared by hand: it stays empty on this record, here and on every deck.
+  void clearCue(int n) {
+    if (hotCues.remove(n) == null) return;
+    padWhy.remove(n);
+    _padsByHand.add(n);
+    notifyListeners();
+    _keepPad(n);
+  }
+
+  /// A pad given back to the booth: placed again where the booth would put it.
+  void autoCue(int n) {
+    _padsByHand.remove(n);
+    hotCues.remove(n);
+    padWhy.remove(n);
+    _placePads();
+    notifyListeners();
+    _keepPad(n, auto: true);
+  }
+
+  void _placePads() {
+    final t = timing;
+    if (!autoPads || t == null) return;
+    for (final e in AutoPads.of(t).entries) {
+      if (_padsByHand.contains(e.key) || hotCues.containsKey(e.key)) continue;
+      hotCues[e.key] = e.value.at;
+      padWhy[e.key] = e.value.why;
+    }
+  }
+
+  /// What a hand did to this record's pads before, from the house.
+  Future<void> _handPads(int trackId) async {
+    final Map<int, int?> kept;
+    try {
+      kept = await api.pads(trackId).timeout(const Duration(seconds: 8));
+    } catch (_) {
+      return;
+    }
+    if (track?.id != trackId || kept.isEmpty) return;
+    for (final e in kept.entries) {
+      // Set or cleared on this deck since the load: this deck's hand is the later one.
+      if (_padsByHand.contains(e.key)) continue;
+      _padsByHand.add(e.key);
+      padWhy.remove(e.key);
+      final ms = e.value;
+      if (ms == null) {
+        hotCues.remove(e.key);
+      } else {
+        hotCues[e.key] = Duration(milliseconds: ms);
+      }
+    }
+    notifyListeners();
+  }
+
+  /// Told to the house quietly: a house that cannot be reached loses a pad, not a set.
+  void _keepPad(int n, {int? ms, bool auto = false}) {
+    final id = track?.id;
+    if (id == null) return;
+    unawaited(api
+        .setPad(id, n, ms: ms, auto: auto)
+        .timeout(const Duration(seconds: 8))
+        .catchError((_) {}));
   }
 
   Future<void> jumpCue(int n) async {

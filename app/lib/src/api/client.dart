@@ -354,6 +354,54 @@ class ApiClient {
             if (inMs != null || clearIn) 'in_ms': inMs,
           })));
 
+  /// The pads a hand set (milliseconds) or cleared (null) on [trackId]; a pad not
+  /// named is the booth's to place. Asked apart from the analysis, which is cached.
+  Future<Map<int, int?>> pads(int trackId) async {
+    final d = await _decode(await net.get(_u('/tracks/$trackId/cues'), headers: _headers))
+        as Map<String, dynamic>;
+    final p = (d['pads'] as Map?) ?? const {};
+    return {
+      for (final e in p.entries)
+        if (int.tryParse('${e.key}') != null) int.parse('${e.key}'): (e.value as num?)?.toInt(),
+    };
+  }
+
+  /// One pad from a hand: [ms] set there, null cleared, [auto] given back to the booth.
+  Future<void> setPad(int trackId, int n, {int? ms, bool auto = false}) async =>
+      _decode(await net.put(_u('/tracks/$trackId/cues'),
+          headers: {..._headers, 'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'pads': {'$n': auto ? 'auto' : ms},
+          })));
+
+  /// The cue check: records to check by ear, the same list each time, and what was
+  /// said about the ones already checked.
+  Future<({List<CueCheck> items, int checked})> cueCheck({int n = 40}) async {
+    final d = await _decode(await net.get(_u('/booth/check', {'n': n}), headers: _headers))
+        as Map<String, dynamic>;
+    return (
+      items: [
+        for (final i in (d['items'] ?? const []) as List) CueCheck.fromJson((i as Map).cast<String, dynamic>()),
+      ],
+      checked: (d['checked'] ?? 0) as int,
+    );
+  }
+
+  /// Checked: what the grid is like, and where each pad was left (auto = the booth's
+  /// own place, kept).
+  Future<void> checkCues(int trackId,
+          {required String grid, required Map<int, ({int ms, bool auto})> pads, String? note}) async =>
+      _decode(await net.put(_u('/booth/check/$trackId'),
+          headers: {..._headers, 'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'grid': grid,
+            'note': note,
+            'pads': {for (final e in pads.entries) '${e.key}': {'ms': e.value.ms, 'auto': e.value.auto}},
+          })));
+
+  Future<void> uncheckCues(int trackId) async =>
+      _decode(await net.delete(_u('/booth/check/$trackId'), headers: _headers));
+
   /// Have the pool take a record apart, now.
   Future<void> poolSplit(int trackId) async =>
       _decode(await net.post(_u('/pool/split/$trackId'), headers: _headers));

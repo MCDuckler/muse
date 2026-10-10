@@ -436,17 +436,16 @@ class _ConsoleDeckState extends State<ConsoleDeck> with TickerProviderStateMixin
       final set = _d.hotCues.containsKey(n);
       return Expanded(
         child: Pad(
-          label: '$n',
+          label: _d.padLabel(n),
           colour: _colour,
           dim: set,
-          tooltip: set ? 'Cue $n · right-click to clear' : 'Set cue $n here',
+          tooltip: _d.padTip(n, clear: 'right-click to clear'),
           onTap: on ? () => set ? _d.jumpCue(n) : _d.setCue(n) : null,
           onLongPress: set
-              ? () {
-                  _d.hotCues.remove(n);
-                  _d.changed();
-                }
-              : null,
+              ? () => _d.clearCue(n)
+              : on && engine.Deck.autoPads && _d.padByHand(n)
+                  ? () => _d.autoCue(n)
+                  : null,
         ),
       );
     }

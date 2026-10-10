@@ -6,6 +6,7 @@ import subprocess
 
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Response
+from psycopg.types.json import Json
 
 from . import catalog, db, traits
 from . import analysis as _analysis
@@ -93,6 +94,10 @@ def analysis(track_id: int, response: Response, structure: bool = False,
         raise HTTPException(404, "the audio is missing")
     try:
         found = _beats.for_track(cfg().data_dir, audio, t["sha256"])
+        # The library's tempo is the plain analysis's, whoever asks: the structure may
+        # count another octave, and a track whose bpm flipped with every structure=1
+        # ask and back with the worker's next pass was sorted and matched by both.
+        plain_bpm = found.get("bpm")
         if structure:
             from . import structure as _structure
             found = _structure.for_track(cfg().data_dir, t, found)
@@ -101,10 +106,10 @@ def analysis(track_id: int, response: Response, structure: bool = False,
     if found.get("cues") and found.get("downbeats"):
         found["cues"] = _analysis.sane_cues(found["cues"], found["downbeats"])
     if (t.get("analysed_at") is None
-            or t.get("bpm") != found.get("bpm")
+            or t.get("bpm") != plain_bpm
             or t.get("beats_version") != _beats.VERSION):
         db.run("update tracks set bpm=%s, analysed_at=now(), beats_version=%s where id=%s",
-               (found.get("bpm"), _beats.VERSION, track_id))
+               (plain_bpm, _beats.VERSION, track_id))
     # A record measured before there was a sound to it: given one now, and kept.
     if "sound" not in found and found.get("downbeats"):
         try:
@@ -127,32 +132,50 @@ def analysis(track_id: int, response: Response, structure: bool = False,
 
 @router.get("/tracks/{track_id}/cues")
 def cues(track_id: int, user: dict = Depends(current_user)):
-    """Where a hand said this record leaves and comes in, if anybody has."""
-    row = db.one("select out_ms, in_ms, updated_at from track_cues where track_id=%s", (track_id,))
+    """Where a hand said this record leaves and comes in, if anybody has, and the pads
+    a hand set or cleared. Asked apart from the analysis, which is cached for a year."""
+    row = db.one("select out_ms, in_ms, pads, updated_at from track_cues where track_id=%s",
+                 (track_id,))
     return {"track_id": track_id, "out_ms": row["out_ms"] if row else None,
             "in_ms": row["in_ms"] if row else None,
+            "pads": (row["pads"] or {}) if row else {},
             "updated_at": row["updated_at"].isoformat() if row else None}
+
+
+PADS = 8
 
 
 @router.put("/tracks/{track_id}/cues")
 def set_cues(track_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
     """Keep a hand's cue: either or both of out_ms and in_ms; null clears one. The
-    other is left as it was."""
+    other is left as it was. `pads` names only the pads that changed: milliseconds a
+    pad set by hand, null one cleared by hand, "auto" one given back to the booth."""
     if not catalog.track_row(track_id):
         raise HTTPException(404, "no such track")
-    have = db.one("select out_ms, in_ms from track_cues where track_id=%s", (track_id,)) or {}
+    have = db.one("select out_ms, in_ms, pads from track_cues where track_id=%s",
+                  (track_id,)) or {}
     out_ms = body["out_ms"] if "out_ms" in body else have.get("out_ms")
     in_ms = body["in_ms"] if "in_ms" in body else have.get("in_ms")
     for v in (out_ms, in_ms):
         if v is not None and (not isinstance(v, int) or v < 0):
             raise HTTPException(400, "a cue is milliseconds, or null")
+    pads = dict(have.get("pads") or {})
+    for k, v in (body.get("pads") or {}).items():
+        if not str(k).isdigit() or not 1 <= int(k) <= PADS:
+            raise HTTPException(400, f"a pad is 1 to {PADS}")
+        if v == "auto":
+            pads.pop(str(int(k)), None)
+        elif v is None or (isinstance(v, int) and not isinstance(v, bool) and v >= 0):
+            pads[str(int(k))] = v
+        else:
+            raise HTTPException(400, 'a pad is milliseconds, null or "auto"')
     db.run(
-        """insert into track_cues(track_id, out_ms, in_ms, set_by, updated_at)
-           values(%s,%s,%s,%s,now())
+        """insert into track_cues(track_id, out_ms, in_ms, pads, set_by, updated_at)
+           values(%s,%s,%s,%s,%s,now())
            on conflict (track_id) do update set out_ms=excluded.out_ms, in_ms=excluded.in_ms,
-             set_by=excluded.set_by, updated_at=now()""",
-        (track_id, out_ms, in_ms, user["id"]))
-    return {"track_id": track_id, "out_ms": out_ms, "in_ms": in_ms}
+             pads=excluded.pads, set_by=excluded.set_by, updated_at=now()""",
+        (track_id, out_ms, in_ms, Json(pads), user["id"]))
+    return {"track_id": track_id, "out_ms": out_ms, "in_ms": in_ms, "pads": pads}
 
 
 @router.get("/tracks/{track_id}/vocals")
