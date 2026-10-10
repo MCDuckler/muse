@@ -62,6 +62,14 @@ class CameraFeed extends ChangeNotifier {
   Future<void> start() async {
     if (_ffmpeg != null) return;
     trouble = null;
+    // Never under a test: a camera scene in a widget test would start ffmpeg on
+    // the test machine — and on a runner without one, leak the failure past the
+    // test's own error handler and hold the test open on the pipe until it timed
+    // out (CI, 2026-10-10: ten minutes, then cancelled).
+    if (Platform.environment.containsKey('FLUTTER_TEST')) {
+      trouble = 'no camera in a test';
+      return;
+    }
     try {
       final p = await Process.start('ffmpeg', [
         '-hide_banner', '-loglevel', 'error', '-nostdin',
