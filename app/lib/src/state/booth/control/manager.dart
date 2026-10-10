@@ -95,6 +95,7 @@ class ControllerManager extends ChangeNotifier {
   bool autoConnect = true;
 
   bool _started = false;
+  bool _disposed = false;
   final _subs = <StreamSubscription<void>>[];
   Timer? _rescan;
 
@@ -112,15 +113,17 @@ class ControllerManager extends ChangeNotifier {
     } catch (_) {
       // No preferences: defaults, and nothing remembered.
     }
+    // Put away while the preferences were being read: nothing to start.
+    if (_disposed) return;
     var polls = false;
     for (final t in transports) {
       if (!t.available) continue;
       _subs.add(t.changes.listen((_) => unawaited(rescan())));
       polls |= t.pollsOnly;
     }
-    // A transport that cannot say when something was plugged in gets looked at now
-    // and then. None of the current ones needs it: a timer that never stops is a
-    // timer every widget test trips over.
+    // A transport that cannot say when something was plugged in (HID on macOS) gets
+    // looked at now and then; the timer goes with the manager, so a booth that is
+    // put away stops polling.
     if (polls) _rescan = Timer.periodic(const Duration(seconds: 3), (_) => unawaited(rescan(quiet: true)));
     await rescan();
   }
@@ -128,7 +131,7 @@ class ControllerManager extends ChangeNotifier {
   bool _scanning = false;
 
   Future<void> rescan({bool quiet = false}) async {
-    if (_scanning) return;
+    if (_scanning || _disposed) return;
     _scanning = true;
     try {
       final all = <FoundDevice>[];
@@ -327,6 +330,7 @@ class ControllerManager extends ChangeNotifier {
 
   @override
   Future<void> dispose() async {
+    _disposed = true;
     _rescan?.cancel();
     for (final s in _subs) {
       await s.cancel();

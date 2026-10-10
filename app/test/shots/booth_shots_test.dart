@@ -371,6 +371,8 @@ void main() {
         await tester.runAsync(() async {
           await b.stopAll();
           await app.player?.dispose();
+          // The controllers' poll (macOS looks for HID every 3 s) stops with the booth.
+          await app.stopControllers();
         });
         // Whatever the board still has on its clock — a save a second away, a sound's
         // end — is let run out under the test's clock before the harness counts it.

@@ -43,7 +43,12 @@ class MidiTransport extends ControllerTransport {
   }
 
   @override
-  Future<void> dispose() async => _midi.dispose();
+  Future<void> dispose() async {
+    // The plugin's teardown is a platform call it does not wait for; where there is
+    // no platform (a test) that call fails later, in whatever zone it was made in —
+    // this one, so the failure stays here.
+    runZonedGuarded(_midi.dispose, (_, __) {});
+  }
 }
 
 class _OpenMidi extends OpenDevice {

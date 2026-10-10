@@ -463,7 +463,21 @@ class AppState extends ChangeNotifier {
 
   Future<ControllerManager> controllers() => _controllersMaking ??= _makeControllers();
 
+  /// The controllers put away. Whatever was made is disposed; one still being made
+  /// — its start can sit on a platform call for good under a test — is not waited
+  /// for, but disposed the moment it exists, before it can arm its poll.
+  Future<void> stopControllers() async {
+    _controllersGen++;
+    _controllersMaking = null;
+    final m = _controllers;
+    _controllers = null;
+    await m?.dispose();
+  }
+
+  int _controllersGen = 0;
+
   Future<ControllerManager> _makeControllers() async {
+    final gen = _controllersGen;
     final layouts = await shippedLayouts();
     final cursor = _crateCursor = CrateCursor(booth: booth, items: () => player?.items ?? const []);
     final link = _boardLink = boardLinkForThisDevice(booth: () => booth);
@@ -476,6 +490,11 @@ class AppState extends ChangeNotifier {
       booth: booth,
       hooks: cursor.hooks,
     );
+    if (gen != _controllersGen) {
+      // Stopped while the layouts were loading: made, and put straight away.
+      await m.dispose();
+      return m;
+    }
     _controllers = m;
     await m.start();
     notifyListeners();
@@ -3576,7 +3595,7 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
-    unawaited(_controllers?.dispose());
+    unawaited(stopControllers());
     _crateCursor?.dispose();
     _progressed.dispose();
     _statusTimer?.cancel();
