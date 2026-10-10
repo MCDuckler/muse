@@ -93,6 +93,40 @@ def test_sections_of_one_name_side_by_side_are_one():
     assert got[0]["vocals"] is True
 
 
+def _secs(*spans):
+    return [{"start_bar": a, "end_bar": b, "label": l, "drums": True, "vocals": False,
+             "energy_db": -10.0} for a, b, l in spans]
+
+
+def test_sections_start_on_the_four_bar_grid():
+    # Read a bar early (a fill), a bar late, two bars off: each onto its marker; the
+    # record's first section stays at its start, and a start with no marker within two
+    # bars stays where it was heard.
+    mix = [-10.0] * 64
+    got = structure.on_the_grid(
+        _secs((0, 7, "intro"), (7, 17, "inst"), (17, 30, "breakdown"), (30, 43, "drop"),
+              (43, 64, "outro")),
+        [0, 8, 16, 24, 32, 40, 48, 56], mix)
+    assert [(s["start_bar"], s["end_bar"]) for s in got] == [
+        (0, 8), (8, 16), (16, 32), (32, 43), (43, 64)]
+    # Of two markers as near, the earlier.
+    got = structure.on_the_grid(_secs((0, 6, "intro"), (6, 20, "inst")), [0, 4, 8], mix)
+    assert got[1]["start_bar"] == 4
+
+
+def test_a_section_snapping_leaves_with_no_bars_joins_the_one_before():
+    mix = [-10.0] * 32
+    got = structure.on_the_grid(
+        _secs((0, 7, "intro"), (7, 8, "build"), (8, 15, "drop"), (15, 32, "outro")),
+        [0, 8, 16, 24], mix)
+    assert [(s["label"], s["start_bar"], s["end_bar"]) for s in got] == [
+        ("intro", 0, 8), ("drop", 8, 16), ("outro", 16, 32)]
+    # Two of a name, side by side once the one between went: one.
+    got = structure.on_the_grid(
+        _secs((0, 7, "inst"), (7, 8, "break"), (8, 20, "inst")), [0, 8, 16], mix)
+    assert [(s["label"], s["start_bar"], s["end_bar"]) for s in got] == [("inst", 0, 20)]
+
+
 def test_without_stems_only_the_mix_speaks():
     mix = [-30.0] * 4 + [-10.0] * 24 + [-30.0] * 4
     got = structure.label_bars(mix, None, None)
@@ -262,3 +296,17 @@ def test_beats_handed_in_with_the_parts_are_checked(client, hdr, a_structured_re
     assert pool.beats_here(cfg.data_dir, sha)["downbeats_ms"] == [0, 2000, 4000]
     assert not stale.exists()
     assert db.one("select analysed_at from tracks where id=%s", (track["id"],))["analysed_at"] is None
+
+
+def test_the_librarys_tempo_is_the_plain_analysiss_whoever_asks(
+        client, hdr, a_structured_record, monkeypatch):
+    """A structure that counts the other octave is served with it, but the library's
+    bpm stays the plain analysis's: it used to flip with every structure=1 ask and
+    back again on the worker's next pass."""
+    track, _stems = a_structured_record
+    plain = client.get(f"/tracks/{track['id']}/analysis", headers=hdr).json()
+    monkeypatch.setattr(structure, "for_track",
+                        lambda data_dir, t, found: {**found, "bpm": found["bpm"] * 2})
+    served = client.get(f"/tracks/{track['id']}/analysis?structure=1", headers=hdr).json()
+    assert served["bpm"] == plain["bpm"] * 2
+    assert db.one("select bpm from tracks where id=%s", (track["id"],))["bpm"] == plain["bpm"]

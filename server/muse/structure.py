@@ -35,7 +35,8 @@ from . import analysis, beats as _beats, pool
 
 log = logging.getLogger("muse.structure")
 
-VERSION = 5  # 5: the four-bar grid anchored on the drops, the stems' among them
+VERSION = 6  # 6: sections start on the four-bar grid's markers
+# 5: the four-bar grid anchored on the drops, the stems' among them
 # 4: the bar's one is the house's reading of it, not the tracker's vote over it
 # 3: cues after a chorus or a drop; the plain cues on the new rule
 _RATE = _beats._RATE
@@ -324,6 +325,56 @@ def label_bars(mix_db: list[float], drums_db: list[float] | None,
     return merged
 
 
+def on_the_grid(sections: list[dict], markers: list[int], mix_db: list[float]) -> list[dict]:
+    """The sections, each starting on a marker of the four-bar grid where there is one
+    within two bars — the nearer first, the earlier of two as near.
+
+    Sections are read bar by bar off the loudness, and a part comes in a bar before
+    the phrase it belongs to (a fill, a kick let in early) or a bar after (a long
+    reverse cymbal): about half their starts sat a bar or two off the grid the booth
+    mixes on, and a drop drawn a bar before its marker was a drop the decks were
+    lined up a bar wrong for. The record's first section stays at its start. A section
+    that snapping would leave with no bars is joined to the one before it."""
+    if len(sections) < 2 or not markers:
+        return sections
+    on = sorted(set(markers))
+    bounds = [s["start_bar"] for s in sections]
+    moved = [bounds[0]]
+    for b in bounds[1:]:
+        near = [m for m in on if abs(m - b) <= 2 and m > moved[-1]]
+        # Nearest first; of two as near, the earlier.
+        moved.append(min(near, key=lambda m: (abs(m - b), m)) if near else b)
+    end = sections[-1]["end_bar"]
+    out: list[dict] = []
+    for k, sec in enumerate(sections):
+        a = moved[k]
+        b = moved[k + 1] if k + 1 < len(sections) else end
+        # No bars left between its start and the next one's (or a start kept off the
+        # grid that the one before was moved past): the one before has it.
+        if b <= a or (out and a <= out[-1]["start_bar"]):
+            continue
+        s = dict(sec, start_bar=a, end_bar=b)
+        if b > a and len(mix_db) >= b:
+            s["energy_db"] = round(float(np.mean(mix_db[a:b])), 1)
+        if out:
+            out[-1]["end_bar"] = a
+        out.append(s)
+    if out:
+        out[-1]["end_bar"] = end
+    # Two of a name side by side after a short one between them went: one.
+    merged: list[dict] = []
+    for s in out:
+        if merged and merged[-1]["label"] == s["label"]:
+            merged[-1]["end_bar"] = s["end_bar"]
+            merged[-1]["vocals"] = merged[-1].get("vocals") or s.get("vocals")
+            if len(mix_db) >= s["end_bar"]:
+                merged[-1]["energy_db"] = round(float(np.mean(
+                    mix_db[merged[-1]["start_bar"]:s["end_bar"]])), 1)
+        else:
+            merged.append(s)
+    return merged
+
+
 # ------------------------------------------------------------------ the whole of it
 def build(data_dir: pathlib.Path, track: dict, timing: dict,
           neural: dict | None, stems_path: pathlib.Path | None) -> dict:
@@ -413,6 +464,10 @@ def build(data_dir: pathlib.Path, track: dict, timing: dict,
             if key in derived:
                 out[key] = derived[key]
     downbeats = list(out.get("downbeats") or downbeats)
+    # The grid's markers as bars, and the sections onto them.
+    bar_of = {int(d): i for i, d in enumerate(downbeats)}
+    markers = [bar_of[m] for m in out.get("four_bars") or [] if int(m) in bar_of]
+    sections = on_the_grid(sections, markers, mix_db)
     structure.update({
         "bars_ms": downbeats,
         "mix_db": mix_db,
