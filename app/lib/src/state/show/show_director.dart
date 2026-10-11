@@ -38,7 +38,7 @@ class SceneMeta {
   /// The section labels it suits; empty is any.
   final List<String> sections;
 
-  /// What it cannot do without: `cover`, `words`.
+  /// What it cannot do without: `cover`, `words`, `camera`, `milk`.
   final List<String> needs;
 
   factory SceneMeta.fromJson(Map<String, dynamic> j) {
@@ -120,6 +120,7 @@ class ShowDirector {
       if (sc.needs.contains('cover') && !hasCover) continue;
       if (sc.needs.contains('words') && !hasWords) continue;
       if (sc.needs.contains('camera') && !camOn) continue;
+      if (sc.needs.contains('milk') && s['milk.ok'] < 0.5) continue;
       var score = 0.0;
       // A room with people moving in it is a room worth showing.
       if (sc.needs.contains('camera')) score += 2.5 * camMotion - 0.5;

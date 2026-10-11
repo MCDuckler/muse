@@ -1,0 +1,39 @@
+{
+  "id": "milk",
+  "name": "MilkDrop",
+  "energy": [
+    0.0,
+    1.0
+  ],
+  "sections": [],
+  "needs": [
+    "milk"
+  ],
+  "priority": 1.6,
+  "instant": false,
+  "layers": [
+    {
+      "shader": "milk",
+      "samplers": [
+        "milk"
+      ],
+      "knobs": {
+        "m1": 0.25,
+        "m2": 0.5
+      }
+    }
+  ],
+  "particles": [],
+  "text": {
+    "title": false,
+    "lyrics": false
+  },
+  "post": {
+    "trails": 0.0,
+    "bloom": 0.45,
+    "fringe": 0.004,
+    "vignette": 0.35,
+    "grain": 0.25,
+    "recipe": 0.0
+  }
+}

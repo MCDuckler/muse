@@ -10,8 +10,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../state/app_state.dart';
 import '../../state/booth/booth.dart';
 import '../../state/show/camera_feed.dart';
+import '../../state/show/milk_feed.dart';
 import '../../state/show/show_state.dart';
 import '../booth/desk/console.dart';
+import 'milk_page.dart';
 import 'show_canvas.dart';
 import 'stage_kit.dart';
 import 'stage_page.dart';
@@ -138,6 +140,44 @@ class _ShowTileState extends State<ShowTile> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
+                  const SizedBox(height: 4),
+                  // MilkDrop: the preset on, and the hands on it — where the helper is here.
+                  if (MilkFeed.shared.available)
+                    ListenableBuilder(
+                      listenable: MilkFeed.shared,
+                      builder: (context, _) {
+                        final milk = MilkFeed.shared;
+                        final d = milk.director;
+                        return Row(
+                          children: [
+                            Expanded(
+                              child: InkWell(
+                                onTap: () => openMilkPage(context, widget.booth),
+                                child: Text(
+                                  milk.running ? (milk.presetName ?? 'MilkDrop…') : 'MilkDrop presets…',
+                                  style: TextStyle(color: milk.running ? Console.ink : Console.quiet, fontSize: 12),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ),
+                            if (milk.running) ...[
+                              Pad(icon: Icons.casino_outlined, width: 22, height: 22, colour: Console.quiet, tooltip: 'Another preset', onTap: d.random),
+                              const SizedBox(width: 2),
+                              Pad(
+                                icon: d.locked ? Icons.lock : Icons.lock_open,
+                                width: 22,
+                                height: 22,
+                                lit: d.locked,
+                                colour: Console.quiet,
+                                tooltip: d.locked ? 'Held' : 'Hold this preset',
+                                onTap: () => d.set(locked: !d.locked),
+                              ),
+                            ],
+                          ],
+                        );
+                      },
+                    ),
                   const Spacer(),
                   Row(
                     children: [

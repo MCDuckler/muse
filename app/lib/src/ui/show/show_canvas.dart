@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
 import '../../state/show/camera_feed.dart';
+import '../../state/show/milk_feed.dart';
 import '../../state/show/show_feed.dart';
 import '../../state/show/show_state.dart';
 import '../mag.dart';
@@ -276,6 +277,8 @@ class _StagePainter extends CustomPainter {
         return cam.prev ?? cam.frame ?? black;
       case 'motion':
         return cam.motion ?? black;
+      case 'milk':
+        return MilkFeed.shared.frame ?? black;
       default:
         return black;
     }
@@ -283,6 +286,22 @@ class _StagePainter extends CustomPainter {
 
   ui.Image? _sceneHistory;
   DateTime? _cameraWantedAt;
+  DateTime? _milkWantedAt;
+
+  /// MilkDrop, for a scene that needs it: the helper started when one is on,
+  /// stopped a while after none has been (unless the window pinned it).
+  void _milk(Scene scene) {
+    final milk = MilkFeed.shared;
+    final wants = scene.meta.needs.contains('milk');
+    final now = DateTime.now();
+    if (wants) {
+      _milkWantedAt = now;
+      if (!milk.running) unawaited(milk.start());
+    } else if (milk.running && !milk.pinned) {
+      final last = _milkWantedAt;
+      if (last == null || now.difference(last) > const Duration(seconds: 30)) milk.stop();
+    }
+  }
 
   /// The camera, for a scene that needs it: started when one is on, stopped a
   /// while after none has been (unless the window pinned it).
@@ -399,6 +418,7 @@ class _StagePainter extends CustomPainter {
     final secondary = st.palette.secondary.toColor();
 
     _camera(scene);
+    _milk(scene);
 
     // 1. the scene — kept as its own history where a layer feeds on itself.
     final drawn = _scene(scene, st, w, h);

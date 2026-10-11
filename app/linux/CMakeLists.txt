@@ -106,6 +106,17 @@ foreach(bundled_library ${PLUGIN_BUNDLED_LIBRARIES})
     COMPONENT Runtime)
 endforeach(bundled_library)
 
+# MilkDrop: the wetowl-milk helper and the projectM it carries (native/milk/),
+# built here and put beside the app's libraries. See lib/src/state/show/milk_feed.dart.
+option(WETOWL_MILK "Build the MilkDrop helper" ON)
+if(WETOWL_MILK AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../native/milk/CMakeLists.txt")
+  add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../native/milk" milk)
+  install(TARGETS wetowl-milk projectM
+    RUNTIME DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    LIBRARY DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+endif()
+
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/linux/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"

@@ -21,6 +21,7 @@ import 'show_director.dart';
 import 'show_dynamics.dart';
 import 'show_events.dart';
 import 'camera_feed.dart';
+import 'milk_feed.dart';
 import 'show_feed.dart';
 import 'show_genome.dart';
 import 'show_palette.dart';
@@ -31,6 +32,14 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
     booth.stepApplied.addListener(_stepSaid);
     booth.fxFired.addListener(_fxSaid);
     _state = _blank(DateTime.now());
+    // MilkDrop's sound: the record's file here, or its stream.
+    MilkFeed.shared.pcm.source = (id) {
+      final local = booth.a.offlinePath?.call(id);
+      if (local != null) return (url: local, headers: const <String, String>{});
+      final track = booth.a.track?.id == id ? booth.a.track : booth.b.track?.id == id ? booth.b.track : null;
+      if (track == null) return null;
+      return (url: booth.api.streamUrl(track), headers: booth.api.streamHeaders);
+    };
   }
 
   final Booth booth;
@@ -186,7 +195,7 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
       macros: _macros,
       genome: _genome,
     );
-    _state = _state.copyWith(dyn: {...dynamics.frame(_state, dt), ...CameraFeed.shared.numbers});
+    _state = _state.copyWith(dyn: {...dynamics.frame(_state, dt), ...CameraFeed.shared.numbers, ...MilkFeed.shared.numbers});
 
     final said = eventsBetween(prev, _state);
     if (_pending.isNotEmpty) {
@@ -207,6 +216,12 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
       clearSceneFrom: d.from == null,
       macros: _macros,
     );
+    // MilkDrop, where it is on: the numbers and the sound, and its director's cuts.
+    final milk = MilkFeed.shared;
+    if (milk.running) {
+      milk.tick(_state);
+      milk.director.frame(_state, said);
+    }
     notifyListeners();
     for (final e in said) {
       _events.add(e);

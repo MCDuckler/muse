@@ -1,0 +1,397 @@
+diff --git a/src/api/include/projectM-4/parameters.h b/src/api/include/projectM-4/parameters.h
+index 2d9c70c..69fdd27 100644
+--- a/src/api/include/projectM-4/parameters.h
++++ b/src/api/include/projectM-4/parameters.h
+@@ -273,6 +273,19 @@ PROJECTM_EXPORT void projectm_set_window_size(projectm_handle instance, size_t w
+  */
+ PROJECTM_EXPORT void projectm_get_window_size(projectm_handle instance, size_t* width, size_t* height);
+ 
++/**
++ * @brief Sets a value preset code can read by name (WetOwl's patch).
++ *
++ * The name becomes a variable in per-frame, per-vertex, shape and waveform code,
++ * like bass or time. Set every name once before the first preset loads; the values
++ * can change every frame.
++ *
++ * @param instance The projectM instance handle.
++ * @param name The variable name, e.g. "wo_kick".
++ * @param value Its value for the frames to come.
++ */
++PROJECTM_EXPORT void projectm_set_custom_variable(projectm_handle instance, const char* name, float value);
++
+ #ifdef __cplusplus
+ } // extern "C"
+ #endif
+diff --git a/src/libprojectM/MilkdropPreset/PerFrameContext.cpp b/src/libprojectM/MilkdropPreset/PerFrameContext.cpp
+index a408e63..4296d8b 100644
+--- a/src/libprojectM/MilkdropPreset/PerFrameContext.cpp
++++ b/src/libprojectM/MilkdropPreset/PerFrameContext.cpp
+@@ -1,5 +1,7 @@
+ #include "PerFrameContext.hpp"
+ 
++#include "WetOwlVariablesEval.hpp"
++
+ #include "MilkdropPresetExceptions.hpp"
+ 
+ #ifdef MILKDROP_PRESET_DEBUG
+@@ -114,6 +116,8 @@ void PerFrameContext::RegisterBuiltinVariables()
+     REG_VAR(blur2_max);
+     REG_VAR(blur3_max);
+     REG_VAR(blur1_edge_darken);
++
++    WetOwlRegister(perFrameCodeContext, wetowl);
+ }
+ 
+ void PerFrameContext::EvaluateInitCode(PresetState& state)
+@@ -229,6 +233,8 @@ void PerFrameContext::LoadStateVariables(PresetState& state)
+     *blur2_max = static_cast<PRJM_EVAL_F>(state.blur2Max);
+     *blur3_max = static_cast<PRJM_EVAL_F>(state.blur3Max);
+     *blur1_edge_darken = static_cast<PRJM_EVAL_F>(state.blur1EdgeDarken);
++
++    WetOwlLoad(wetowl);
+ }
+ 
+ void PerFrameContext::CompilePerFrameCode(const std::string& perFrameCode)
+diff --git a/src/libprojectM/MilkdropPreset/PerFrameContext.hpp b/src/libprojectM/MilkdropPreset/PerFrameContext.hpp
+index aca786b..08ee392 100644
+--- a/src/libprojectM/MilkdropPreset/PerFrameContext.hpp
++++ b/src/libprojectM/MilkdropPreset/PerFrameContext.hpp
+@@ -4,6 +4,8 @@
+ 
+ #include <projectm-eval.h>
+ 
++#include <vector>
++
+ namespace libprojectM {
+ namespace MilkdropPreset {
+ 
+@@ -64,6 +66,8 @@ public:
+     void ExecutePerFrameCode();
+ 
+     projectm_eval_context* perFrameCodeContext{nullptr}; //!< The code runtime context, holds memory buffers and variables.
++
++    std::vector<PRJM_EVAL_F*> wetowl; //!< The host's wo_* values (WetOwlVariables).
+     projectm_eval_code* perFrameCodeHandle{nullptr}; //!< The compiled per-frame code handle.
+ 
+     PRJM_EVAL_F* zoom{};
+diff --git a/src/libprojectM/MilkdropPreset/PerPixelContext.cpp b/src/libprojectM/MilkdropPreset/PerPixelContext.cpp
+index 378258d..a7fee32 100644
+--- a/src/libprojectM/MilkdropPreset/PerPixelContext.cpp
++++ b/src/libprojectM/MilkdropPreset/PerPixelContext.cpp
+@@ -1,5 +1,7 @@
+ #include "PerPixelContext.hpp"
+ 
++#include "WetOwlVariablesEval.hpp"
++
+ #include "MilkdropPresetExceptions.hpp"
+ 
+ #ifdef MILKDROP_PRESET_DEBUG
+@@ -69,6 +71,8 @@ void PerPixelContext::RegisterBuiltinVariables()
+     REG_VAR(pixelsy);
+     REG_VAR(aspectx);
+     REG_VAR(aspecty);
++
++    WetOwlRegister(perPixelCodeContext, wetowl);
+ }
+ 
+ void PerPixelContext::LoadStateReadOnlyVariables(PresetState& state, PerFrameContext& perFrameState)
+@@ -89,6 +93,8 @@ void PerPixelContext::LoadStateReadOnlyVariables(PresetState& state, PerFrameCon
+     *pixelsy = static_cast<PRJM_EVAL_F>(state.renderContext.viewportSizeY);
+     *aspectx = static_cast<PRJM_EVAL_F>(state.renderContext.aspectX);
+     *aspecty = static_cast<PRJM_EVAL_F>(state.renderContext.aspectY);
++
++    WetOwlLoad(wetowl);
+ }
+ 
+ void PerPixelContext::LoadPerFrameQVariables(PresetState& state, PerFrameContext& perFrameState)
+diff --git a/src/libprojectM/MilkdropPreset/PerPixelContext.hpp b/src/libprojectM/MilkdropPreset/PerPixelContext.hpp
+index 9bd25ba..976c5c0 100644
+--- a/src/libprojectM/MilkdropPreset/PerPixelContext.hpp
++++ b/src/libprojectM/MilkdropPreset/PerPixelContext.hpp
+@@ -5,6 +5,8 @@
+ 
+ #include <projectm-eval.h>
+ 
++#include <vector>
++
+ namespace libprojectM {
+ namespace MilkdropPreset {
+ 
+@@ -59,6 +61,8 @@ public:
+     void ExecutePerPixelCode();
+ 
+     projectm_eval_context* perPixelCodeContext{nullptr}; //!< The code runtime context, holds memory buffers and variables.
++
++    std::vector<PRJM_EVAL_F*> wetowl; //!< The host's wo_* values (WetOwlVariables).
+     projectm_eval_code* perPixelCodeHandle{nullptr};     //!< The compiled per-pixel code handle.
+ 
+     PRJM_EVAL_F* zoom{};
+diff --git a/src/libprojectM/MilkdropPreset/ShapePerFrameContext.cpp b/src/libprojectM/MilkdropPreset/ShapePerFrameContext.cpp
+index fe804de..04370c5 100644
+--- a/src/libprojectM/MilkdropPreset/ShapePerFrameContext.cpp
++++ b/src/libprojectM/MilkdropPreset/ShapePerFrameContext.cpp
+@@ -1,5 +1,7 @@
+ #include "ShapePerFrameContext.hpp"
+ 
++#include "WetOwlVariablesEval.hpp"
++
+ #include "CustomShape.hpp"
+ #include "MilkdropPresetExceptions.hpp"
+ #include "PerFrameContext.hpp"
+@@ -83,6 +85,8 @@ void ShapePerFrameContext::RegisterBuiltinVariables()
+     REG_VAR(border_g);
+     REG_VAR(border_b);
+     REG_VAR(border_a);
++
++    WetOwlRegister(perFrameCodeContext, wetowl);
+ }
+ void ShapePerFrameContext::LoadStateVariables(const PresetState& state,
+                                               CustomShape& shape,
+@@ -133,6 +137,8 @@ void ShapePerFrameContext::LoadStateVariables(const PresetState& state,
+     *border_g = static_cast<double>(shape.m_border_g);
+     *border_b = static_cast<double>(shape.m_border_b);
+     *border_a = static_cast<double>(shape.m_border_a);
++
++    WetOwlLoad(wetowl);
+ }
+ 
+ void ShapePerFrameContext::EvaluateInitCode(const std::string& perFrameInitCode,
+diff --git a/src/libprojectM/MilkdropPreset/ShapePerFrameContext.hpp b/src/libprojectM/MilkdropPreset/ShapePerFrameContext.hpp
+index f52095e..7880efa 100644
+--- a/src/libprojectM/MilkdropPreset/ShapePerFrameContext.hpp
++++ b/src/libprojectM/MilkdropPreset/ShapePerFrameContext.hpp
+@@ -2,6 +2,8 @@
+ 
+ #include "PresetState.hpp"
+ 
++#include <vector>
++
+ namespace libprojectM {
+ namespace MilkdropPreset {
+ 
+@@ -61,6 +63,8 @@ public:
+     void ExecutePerFrameCode();
+ 
+     projectm_eval_context* perFrameCodeContext{nullptr}; //!< The code runtime context, holds memory buffers and variables.
++
++    std::vector<PRJM_EVAL_F*> wetowl; //!< The host's wo_* values (WetOwlVariables).
+     projectm_eval_code* perFrameCodeHandle{nullptr};     //!< The compiled per-frame code handle.
+ 
+     // Expression variable pointers.
+diff --git a/src/libprojectM/MilkdropPreset/WaveformPerFrameContext.cpp b/src/libprojectM/MilkdropPreset/WaveformPerFrameContext.cpp
+index 926a762..63f31de 100644
+--- a/src/libprojectM/MilkdropPreset/WaveformPerFrameContext.cpp
++++ b/src/libprojectM/MilkdropPreset/WaveformPerFrameContext.cpp
+@@ -1,5 +1,7 @@
+ #include "WaveformPerFrameContext.hpp"
+ 
++#include "WetOwlVariablesEval.hpp"
++
+ #include "CustomWaveform.hpp"
+ #include "MilkdropPresetExceptions.hpp"
+ #include "PerFrameContext.hpp"
+@@ -64,6 +66,8 @@ void WaveformPerFrameContext::RegisterBuiltinVariables()
+     REG_VAR(b);
+     REG_VAR(a);
+     REG_VAR(samples);
++
++    WetOwlRegister(perFrameCodeContext, wetowl);
+ }
+ 
+ void WaveformPerFrameContext::LoadStateVariables(PresetState& state, const PerFrameContext& presetPerFrameContext, CustomWaveform& waveform)
+@@ -94,6 +98,8 @@ void WaveformPerFrameContext::LoadStateVariables(PresetState& state, const PerFr
+     *b = static_cast<double>(waveform.m_b);
+     *a = static_cast<double>(waveform.m_a);
+     *samples = static_cast<double>(waveform.m_samples);
++
++    WetOwlLoad(wetowl);
+ }
+ 
+ void WaveformPerFrameContext::EvaluateInitCode(const std::string& perFrameInitCode,
+diff --git a/src/libprojectM/MilkdropPreset/WaveformPerFrameContext.hpp b/src/libprojectM/MilkdropPreset/WaveformPerFrameContext.hpp
+index 9993f04..53dee87 100644
+--- a/src/libprojectM/MilkdropPreset/WaveformPerFrameContext.hpp
++++ b/src/libprojectM/MilkdropPreset/WaveformPerFrameContext.hpp
+@@ -2,6 +2,8 @@
+ 
+ #include "PresetState.hpp"
+ 
++#include <vector>
++
+ namespace libprojectM {
+ namespace MilkdropPreset {
+ 
+@@ -55,6 +57,8 @@ public:
+     void ExecutePerFrameCode();
+ 
+     projectm_eval_context* perFrameCodeContext{nullptr}; //!< The code runtime context, holds memory buffers and variables.
++
++    std::vector<PRJM_EVAL_F*> wetowl; //!< The host's wo_* values (WetOwlVariables).
+     projectm_eval_code* perFrameCodeHandle{nullptr}; //!< The compiled per-frame code handle.
+ 
+     PRJM_EVAL_F* time{};
+diff --git a/src/libprojectM/MilkdropPreset/WaveformPerPointContext.cpp b/src/libprojectM/MilkdropPreset/WaveformPerPointContext.cpp
+index 5e775dc..2f9f3f2 100644
+--- a/src/libprojectM/MilkdropPreset/WaveformPerPointContext.cpp
++++ b/src/libprojectM/MilkdropPreset/WaveformPerPointContext.cpp
+@@ -1,5 +1,7 @@
+ #include "WaveformPerPointContext.hpp"
+ 
++#include "WetOwlVariablesEval.hpp"
++
+ #include "CustomWaveform.hpp"
+ #include "MilkdropPresetExceptions.hpp"
+ #include "PerFrameContext.hpp"
+@@ -68,6 +70,8 @@ void WaveformPerPointContext::RegisterBuiltinVariables()
+     REG_VAR(g);
+     REG_VAR(b);
+     REG_VAR(a);
++
++    WetOwlRegister(perPointCodeContext, wetowl);
+ }
+ 
+ void WaveformPerPointContext::LoadReadOnlyStateVariables(const PerFrameContext& presetPerFrameContext)
+@@ -82,6 +86,8 @@ void WaveformPerPointContext::LoadReadOnlyStateVariables(const PerFrameContext&
+     *bass_att = *presetPerFrameContext.bass_att;
+     *mid_att = *presetPerFrameContext.mid_att;
+     *treb_att = *presetPerFrameContext.treb_att;
++
++    WetOwlLoad(wetowl);
+ }
+ 
+ void WaveformPerPointContext::CompilePerPointCode(const std::string& perPointCode,
+diff --git a/src/libprojectM/MilkdropPreset/WaveformPerPointContext.hpp b/src/libprojectM/MilkdropPreset/WaveformPerPointContext.hpp
+index 7f28ef8..873e767 100644
+--- a/src/libprojectM/MilkdropPreset/WaveformPerPointContext.hpp
++++ b/src/libprojectM/MilkdropPreset/WaveformPerPointContext.hpp
+@@ -2,6 +2,8 @@
+ 
+ #include "PresetState.hpp"
+ 
++#include <vector>
++
+ namespace libprojectM {
+ namespace MilkdropPreset {
+ 
+@@ -46,6 +48,8 @@ public:
+     void ExecutePerPointCode();
+ 
+     projectm_eval_context* perPointCodeContext{nullptr}; //!< The code runtime context, holds memory buffers and variables.
++
++    std::vector<PRJM_EVAL_F*> wetowl; //!< The host's wo_* values (WetOwlVariables).
+     projectm_eval_code* perPointCodeHandle{nullptr}; //!< The compiled waveform per-point code handle.
+ 
+     PRJM_EVAL_F* time{};
+diff --git a/src/libprojectM/MilkdropPreset/WetOwlVariables.hpp b/src/libprojectM/MilkdropPreset/WetOwlVariables.hpp
+new file mode 100644
+index 0000000..7970801
+--- /dev/null
++++ b/src/libprojectM/MilkdropPreset/WetOwlVariables.hpp
+@@ -0,0 +1,40 @@
++#pragma once
++
++/**
++ * @file WetOwlVariables.hpp
++ * @brief Values the host sets by name, read in preset code like bass or time.
++ *
++ * WetOwl's patch. A preset's equations can read wo_* (whatever the host set through
++ * projectm_set_custom_variable) in per-frame, per-vertex, shape and waveform code.
++ * Names are registered in a code context when its preset loads; a name set after
++ * that is read by the next preset.
++ */
++
++#include <string>
++#include <vector>
++
++namespace libprojectM {
++namespace MilkdropPreset {
++
++struct WetOwlVariables
++{
++    static inline std::vector<std::string> names;
++    static inline std::vector<float> values;
++
++    static void Set(const char* name, float value)
++    {
++        for (size_t i = 0; i < names.size(); i++)
++        {
++            if (names[i] == name)
++            {
++                values[i] = value;
++                return;
++            }
++        }
++        names.emplace_back(name);
++        values.push_back(value);
++    }
++};
++
++} // namespace MilkdropPreset
++} // namespace libprojectM
+diff --git a/src/libprojectM/MilkdropPreset/WetOwlVariablesEval.hpp b/src/libprojectM/MilkdropPreset/WetOwlVariablesEval.hpp
+new file mode 100644
+index 0000000..b708d59
+--- /dev/null
++++ b/src/libprojectM/MilkdropPreset/WetOwlVariablesEval.hpp
+@@ -0,0 +1,35 @@
++#pragma once
++
++/**
++ * @file WetOwlVariablesEval.hpp
++ * @brief The host's wo_* values, registered in and loaded into a code context.
++ */
++
++#include "WetOwlVariables.hpp"
++
++#include <projectm-eval.h>
++
++#include <vector>
++
++namespace libprojectM {
++namespace MilkdropPreset {
++
++inline void WetOwlRegister(projectm_eval_context* ctx, std::vector<PRJM_EVAL_F*>& slots)
++{
++    slots.clear();
++    for (const auto& name : WetOwlVariables::names)
++    {
++        slots.push_back(projectm_eval_context_register_variable(ctx, name.c_str()));
++    }
++}
++
++inline void WetOwlLoad(const std::vector<PRJM_EVAL_F*>& slots)
++{
++    for (size_t i = 0; i < slots.size() && i < WetOwlVariables::values.size(); i++)
++    {
++        *slots[i] = static_cast<PRJM_EVAL_F>(WetOwlVariables::values[i]);
++    }
++}
++
++} // namespace MilkdropPreset
++} // namespace libprojectM
+diff --git a/src/libprojectM/ProjectMCWrapper.cpp b/src/libprojectM/ProjectMCWrapper.cpp
+index cbf5f6e..c74d973 100644
+--- a/src/libprojectM/ProjectMCWrapper.cpp
++++ b/src/libprojectM/ProjectMCWrapper.cpp
+@@ -2,6 +2,8 @@
+ 
+ #include <projectM-4/projectM.h>
+ 
++#include "MilkdropPreset/WetOwlVariables.hpp"
++
+ #include <Audio/AudioConstants.hpp>
+ 
+ #include <cstring>
+@@ -171,6 +173,12 @@ void projectm_opengl_render_frame(projectm_handle instance)
+     projectMInstance->RenderFrame();
+ }
+ 
++void projectm_set_custom_variable(projectm_handle instance, const char* name, float value)
++{
++    (void) instance;
++    libprojectM::MilkdropPreset::WetOwlVariables::Set(name, value);
++}
++
+ void projectm_set_beat_sensitivity(projectm_handle instance, float sensitivity)
+ {
+     auto projectMInstance = handle_to_instance(instance);
