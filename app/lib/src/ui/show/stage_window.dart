@@ -108,7 +108,7 @@ class _StageWindowState extends State<_StageWindow> {
   final _shot = GlobalKey();
   bool _closing = false;
 
-  int _frames = 0, _raster = 0, _worst = 0;
+  int _frames = 0, _raster = 0, _worst = 0, _build = 0, _buildWorst = 0, _milkWas = 0;
   Timer? _saying, _counting;
   void _took(List<FrameTiming> frames) {
     for (final f in frames) {
@@ -116,6 +116,9 @@ class _StageWindowState extends State<_StageWindow> {
       final r = f.rasterDuration.inMicroseconds;
       _raster += r;
       if (r > _worst) _worst = r;
+      final b = f.buildDuration.inMicroseconds;
+      _build += b;
+      if (b > _buildWorst) _buildWorst = b;
     }
   }
 
@@ -142,10 +145,14 @@ class _StageWindowState extends State<_StageWindow> {
   void _say() {
     final n = _frames;
     if (n == 0) return;
+    final milk = MilkFeed.shared.frames;
     // ignore: avoid_print
     print('STAGE fps=${(n / 5).toStringAsFixed(1)} raster ${(_raster / n / 1000).toStringAsFixed(1)}/${(_worst / 1000).toStringAsFixed(1)} ms '
+        'build ${(_build / n / 1000).toStringAsFixed(1)}/${(_buildWorst / 1000).toStringAsFixed(1)} ms '
+        '${MilkFeed.shared.running ? 'milk=${((milk - _milkWas) / 5).toStringAsFixed(1)} ' : ''}'
         'scene=${_feed?.state.scene} hits kick=$_kicks snare=$_snares top=$_tops low~${(_samples == 0 ? 0 : _lowSum / _samples).toStringAsFixed(2)} exp=${_expMax.toStringAsFixed(2)}');
-    _frames = _raster = _worst = 0;
+    _frames = _raster = _worst = _build = _buildWorst = 0;
+    _milkWas = milk;
     _kicks = _snares = _tops = 0;
     _lowSum = _expMax = 0;
     _samples = 0;

@@ -20,7 +20,10 @@
 //   stdout — frames: "MILK" + u32 width + u32 height + u32 sequence, then RGBA
 //            bytes, top row first. Only rendered while the parent reads: a full
 //            pipe blocks the render, which is the parent saying it is behind.
-//   stderr — lines: "ready", "preset ok NAME", "preset failed NAME: WHY", "egl ...".
+//            Nothing else: the pipe is kept for the frames alone, and what the
+//            libraries print to stdout goes to stderr (see main).
+//   stderr — lines: "ready", "preset ok NAME", "preset failed NAME: WHY", "egl ...",
+//            and whatever projectM has to say.
 //
 // Offscreen through EGL, trying the surfaceless platform, then a GBM render node,
 // then whatever the default display is (X11, Wayland) — so it draws on a desk
@@ -360,10 +363,28 @@ int main(int argc, char** argv) {
         }
     }
 
+    // The frames get the pipe to themselves, before anything can print: projectM's
+    // shader translator writes its complaints about a preset with printf, and on
+    // stdout they landed in the middle of a frame — the parent, out of step, ended
+    // the helper and started it again, on the same preset, every second or two.
+    // The frames go out on a copy of stdout; stdout itself is stderr from here on.
 #ifdef _WIN32
     _setmode(_fileno(stdin), _O_BINARY);
-    _setmode(_fileno(stdout), _O_BINARY);
+    const int framesFd = _dup(_fileno(stdout));
+    _dup2(_fileno(stderr), _fileno(stdout));
+    SetStdHandle(STD_OUTPUT_HANDLE, GetStdHandle(STD_ERROR_HANDLE));
+    _setmode(framesFd, _O_BINARY);
+    FILE* frames = _fdopen(framesFd, "wb");
+#else
+    const int framesFd = dup(STDOUT_FILENO);
+    dup2(STDERR_FILENO, STDOUT_FILENO);
+    FILE* frames = fdopen(framesFd, "wb");
 #endif
+    if (!frames) {
+        say("frames: no pipe");
+        return 2;
+    }
+    std::setvbuf(stdout, nullptr, _IONBF, 0);  // the complaints in the log as they come
     Egl egl;
     if (!egl.open() || !egl.resize(width, height)) return 2;
     say("egl " + egl.platform + " " + reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
@@ -430,7 +451,7 @@ int main(int argc, char** argv) {
     uint32_t seq = 0;
     std::vector<uint8_t> flipped(static_cast<size_t>(width) * height * 4);
 
-    const auto frameTime = std::chrono::microseconds(1000000 / (fps > 0 ? fps : 60));
+    auto frameTime = std::chrono::microseconds(1000000 / (fps > 0 ? fps : 60));
     auto next = std::chrono::steady_clock::now();
     std::vector<int16_t> pcm;
 
@@ -464,7 +485,10 @@ int main(int argc, char** argv) {
             } else if (word == "fps") {
                 int f = 0;
                 in >> f;
-                if (f > 0) projectm_set_fps(pm, f);
+                if (f > 0) {
+                    projectm_set_fps(pm, f);
+                    frameTime = std::chrono::microseconds(1000000 / f);
+                }
             } else if (word == "preset" || word == "preset-soft") {
                 std::string path;
                 std::getline(in, path);
@@ -547,11 +571,11 @@ int main(int argc, char** argv) {
                 }
                 glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
                 uint32_t header[4] = {0x4b4c494d /* "MILK" */, static_cast<uint32_t>(width), static_cast<uint32_t>(height), seq++};
-                if (std::fwrite(header, 1, sizeof header, stdout) != sizeof header ||
-                    std::fwrite(flipped.data(), 1, flipped.size(), stdout) != flipped.size()) {
+                if (std::fwrite(header, 1, sizeof header, frames) != sizeof header ||
+                    std::fwrite(flipped.data(), 1, flipped.size(), frames) != flipped.size()) {
                     break;  // the parent is gone
                 }
-                std::fflush(stdout);
+                std::fflush(frames);
             }
         }
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);

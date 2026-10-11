@@ -69,15 +69,17 @@ class MilkDirector extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// The helper just came up: the preset on last, or any.
+  /// The helper just came up: the preset on last (unless it was on when the
+  /// helper died), or any.
   void started() {
-    final p = feed.library.last ?? _pick();
+    final last = feed.library.last;
+    final p = last != null && !feed.crashed.contains(last.path) ? last : _pick();
     if (p != null) feed.load(p);
     feed.lock(locked);
   }
 
   MilkPreset? _pick({MilkPreset? not}) {
-    final pool = feed.library.pool(favouritesOnly: favouritesOnly, minRating: minRating);
+    final pool = feed.library.pool(favouritesOnly: favouritesOnly, minRating: minRating).where((p) => !feed.crashed.contains(p.path)).toList();
     if (pool.isEmpty) return null;
     if (pool.length == 1) return pool.first;
     MilkPreset p;

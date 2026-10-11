@@ -9,6 +9,7 @@
 // growing and shrinking, which is what the ear hears too.
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
@@ -98,14 +99,19 @@ class DeckPcm {
         '-i', url,
         '-vn', '-f', 's16le', '-ac', '1', '-ar', '$rate', '-',
       ];
-      final proc = await Process.start(await Tools.ffmpegCommand(), args);
-      final chunks = BytesBuilder(copy: false);
-      proc.stderr.drain<void>().ignore();
-      await for (final c in proc.stdout) {
-        chunks.add(c);
-      }
-      final code = await proc.exitCode;
-      final bytes = chunks.takeBytes();
+      final ffmpeg = await Tools.ffmpegCommand();
+      // Read on an isolate of its own: a record is some 25 MB through ffmpeg's pipe,
+      // which on Windows is 1 KB wide and read 64 KB a turn — four hundred turns of
+      // the UI isolate's loop, on the stage's time. The bytes come back whole.
+      final (code, bytes) = await Isolate.run(() async {
+        final proc = await Process.start(ffmpeg, args);
+        final chunks = BytesBuilder(copy: false);
+        proc.stderr.drain<void>().ignore();
+        await for (final c in proc.stdout) {
+          chunks.add(c);
+        }
+        return (await proc.exitCode, chunks.takeBytes());
+      }, debugName: 'milk pcm');
       if (code != 0 && bytes.isEmpty) {
         debugPrint('milk pcm: ffmpeg $code for $id');
         return;

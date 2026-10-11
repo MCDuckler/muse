@@ -5,14 +5,17 @@
 // The helper is projectM — the open MilkDrop — with WetOwl's patch, which lets
 // preset code read the show by name: wo_kick, wo_drop, wo_bar and the rest of
 // [varsOf]. Every engine tick sends those and the PCM at the needle (deck_pcm.dart);
-// the helper draws at its own pace and writes raw frames on its stdout, of which
-// only the latest is kept. Which preset is on is the director's (milk_director.dart)
-// or the hands'; the library (milk_library.dart) knows what there is.
+// the helper draws at its own pace and writes raw frames on its stdout, read on an
+// isolate of their own (milk_pipe.dart), the newest handed over as the last is
+// taken. Which preset is on is the director's (milk_director.dart) or the hands';
+// the library (milk_library.dart) knows what there is.
+//
+// Listeners hear what changes by the moment — on, off, the preset, trouble; the
+// frames have [shown] of their own, for a painter, not a widget tree.
 //
 // Runs only while something is looking (the milk scene on the stage, the window
 // asked for it); nothing is written anywhere but the helper's pipes.
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -22,6 +25,7 @@ import 'package:flutter/foundation.dart';
 import 'deck_pcm.dart';
 import 'milk_director.dart';
 import 'milk_library.dart';
+import 'milk_pipe.dart';
 import 'show_state.dart';
 
 class MilkFeed extends ChangeNotifier {
@@ -33,11 +37,17 @@ class MilkFeed extends ChangeNotifier {
   static const width = 960, height = 540;
   static const fps = 60;
 
+  /// What the booth's small preview of the stage gets by on, where nothing here
+  /// wants more: a quarter of the picture at half the rate. The stage in a window
+  /// of its own runs a helper of its own, and two at full size was the GPU's
+  /// whole evening.
+  static const smallWidth = 480, smallHeight = 270, smallFps = 30;
+
   final library = MilkLibrary();
   late final director = MilkDirector(this);
   final pcm = DeckPcm();
 
-  Process? _helper;
+  MilkPipe? _helper;
   Future<void>? _starting;
 
   /// On, or on its way: a scene asks every frame, and the first start copies the
@@ -58,18 +68,41 @@ class MilkFeed extends ChangeNotifier {
   MilkPreset? preset;
 
   ui.Image? frame;
-  int frames = 0;
+
+  /// The frames come, by count: for a painter of them ([frame] is the latest).
+  final shown = ValueNotifier<int>(0);
+  int get frames => shown.value;
+
   final _att = [1.0, 1.0, 1.0];
   bool _ready = false;
 
-  bool _decoding = false;
-  StreamSubscription<List<int>>? _sub;
-  IOSink? _in;
+  /// A stage, the browser or the maker looked last at this time; the booth's
+  /// preview does not count.
+  DateTime _wholeWanted = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _whole = true;
 
-  /// Where the helper is: beside the app (the bundle), under its lib/, named by
-  /// WETOWL_MILK, or the development build. Null where there is none — a Mac, a
-  /// Windows desk, for now.
-  static String? helperPath() {
+  /// Called by whatever draws MilkDrop, each time it does.
+  void want({required bool whole}) {
+    if (whole) _wholeWanted = DateTime.now();
+  }
+
+  /// The helper told its size and rate, where who is looking changed.
+  void _size() {
+    final whole = DateTime.now().difference(_wholeWanted) < const Duration(seconds: 2);
+    if (whole == _whole) return;
+    _whole = whole;
+    _send(whole ? 'size $width $height' : 'size $smallWidth $smallHeight');
+    _send('fps ${whole ? fps : smallFps}');
+  }
+
+  /// Where the helper is, looked for once: the engine asks every tick whether there
+  /// is one, and on a Windows desk every look on disk passes the virus scanner.
+  static String? helperPath() => _path ??= _find();
+  static String? _path;
+
+  /// Beside the app (the bundle), under its lib/, named by WETOWL_MILK, or the
+  /// development build. Null where there is none — a Mac, for now.
+  static String? _find() {
     final env = Platform.environment['WETOWL_MILK'];
     if (env != null && File(env).existsSync()) return env;
     if (kIsWeb) return null;
@@ -91,10 +124,24 @@ class MilkFeed extends ChangeNotifier {
   /// Whether there is a helper to run at all.
   bool get available => helperPath() != null;
 
+  static const _numbersOff = {'milk.ok': 0.0, 'milk.on': 0.0};
+
   Future<void> start() => _starting ??= _start().whenComplete(() => _starting = null);
+
+  /// The presets the helper died on, this run: not put on again (the director
+  /// starts on the last one, and a preset that crashes it crashes it every time).
+  final crashed = <String>{};
+
+  /// After a crash, not started again before this: a second, then longer, up to
+  /// half a minute, while it keeps crashing soon after it starts.
+  DateTime? _notBefore;
+  DateTime? _startedAt;
+  int _crashes = 0;
 
   Future<void> _start() async {
     if (_helper != null) return;
+    final wait = _notBefore;
+    if (wait != null && DateTime.now().isBefore(wait)) return;
     trouble = null;
     // Never under a test: see CameraFeed.start.
     if (Platform.environment.containsKey('FLUTTER_TEST')) {
@@ -109,18 +156,22 @@ class MilkFeed extends ChangeNotifier {
     }
     try {
       await library.ready();
-      final proc = await Process.start(path, ['--size', '${width}x$height', '--fps', '$fps', '--textures', library.texturesDir]);
-      _helper = proc;
-      _in = proc.stdin;
-      _frameBuf = null;
-      _cursor = 0;
       _ready = false;
-      _sub = proc.stdout.listen(_arrived, onDone: _ended);
-      proc.stderr.transform(const SystemEncoding().decoder).transform(const LineSplitter()).listen(_said);
-      unawaited(proc.exitCode.then((code) {
-        if (_helper == proc) debugPrint('milk: wetowl-milk left with $code${trouble == null ? '' : ': $trouble'}');
-        _ended();
-      }));
+      late final MilkPipe pipe;
+      pipe = await MilkPipe.start(
+        path,
+        ['--size', '${width}x$height', '--fps', '$fps', '--textures', library.texturesDir],
+        frame: (rgba, w, h) => _arrived(pipe, rgba, w, h),
+        said: _said,
+        ended: (code) {
+          if (_helper != pipe) return;
+          debugPrint('milk: wetowl-milk left with $code${trouble == null ? '' : ': $trouble'}');
+          _ended();
+        },
+      );
+      _helper = pipe;
+      _whole = true;
+      _startedAt = DateTime.now();
       pcm.reset();
       director.started();
       notifyListeners();
@@ -132,24 +183,26 @@ class MilkFeed extends ChangeNotifier {
   }
 
   void stop() {
-    final proc = _helper;
+    final pipe = _helper;
     _helper = null;
-    _send('quit');
-    unawaited(_sub?.cancel());
-    _sub = null;
-    _in = null;
-    proc?.kill();
-    _frameBuf = null;
-    _cursor = 0;
+    pipe?.stop();
     _ready = false;
     notifyListeners();
   }
 
+  /// The helper gone on its own: the preset it was on is let go of, and the next
+  /// start waits a little longer each time it does so again soon.
   void _ended() {
     if (_helper == null) return;
     _helper = null;
-    _in = null;
+    _ready = false;
     trouble ??= 'MilkDrop stopped';
+    final on = preset;
+    if (on != null && crashed.add(on.path)) debugPrint('milk: not again this run: ${on.fullName}');
+    final now = DateTime.now();
+    final started = _startedAt;
+    _crashes = started != null && now.difference(started) < const Duration(seconds: 30) ? _crashes + 1 : 1;
+    _notBefore = now.add(Duration(seconds: math.min(30, 1 << (_crashes - 1))));
     notifyListeners();
   }
 
@@ -166,24 +219,18 @@ class MilkFeed extends ChangeNotifier {
     } else if (line.startsWith('preset failed ')) {
       presetTrouble.value = line.substring(14);
       notifyListeners();
-    } else if (line.startsWith('egl')) {
-      // The renderer, for the log.
+    } else if (RegExp(r'^(egl|wgl|gl|projectm|frames):').hasMatch(line)) {
+      // The helper's own word on why it cannot draw.
       debugPrint('milk: $line');
-    } else if (line.trim().isNotEmpty) {
       trouble = line;
+    } else if (line.trim().isNotEmpty) {
+      // The renderer ("egl surfaceless ..."), and projectM on a preset's code
+      // (its shader translator's complaints): for the log.
+      debugPrint('milk: $line');
     }
   }
 
-  void _send(String line, [List<int>? payload]) {
-    final sink = _in;
-    if (sink == null) return;
-    try {
-      sink.write('$line\n');
-      if (payload != null) sink.add(payload);
-    } catch (_) {
-      // The pipe is gone: the exit will say so.
-    }
-  }
+  void _send(String line, [Uint8List? payload]) => _helper?.send(line, payload);
 
   // ---------------------------------------------------------------- the hands
   /// A preset by file: a cut, or a blend into it.
@@ -208,6 +255,7 @@ class MilkFeed extends ChangeNotifier {
   /// Every tick of the show's engine: the numbers, the sound.
   void tick(ShowState st) {
     if (_helper == null || !_ready) return;
+    _size();
     final vars = varsOf(st);
     _send('vars ${vars.entries.map((e) => '${e.key}=${e.value.toStringAsFixed(4)}').join(' ')}');
     // MilkDrop's bass/mid/treb from the show's own hits and bands rather than
@@ -302,82 +350,36 @@ class MilkFeed extends ChangeNotifier {
       };
 
   // ---------------------------------------------------------------- the frames
-  static const _header = 16;
-  final _head = Uint8List(_header);
-  Uint8List? _frameBuf;
-  int _cursor = 0, _frameW = 0, _frameH = 0;
-
-  /// Two frames' worth, used by turns: one filling while the other is decoded —
-  /// not two megabytes fresh sixty times a second.
-  final _pool = <Uint8List>[];
-  int _poolAt = 0;
-  Uint8List _buffer(int n) {
-    while (_pool.length < 2) {
-      _pool.add(Uint8List(n));
-    }
-    var b = _pool[_poolAt = (_poolAt + 1) % 2];
-    if (b.length != n) b = _pool[_poolAt] = Uint8List(n);
-    return b;
-  }
-
-  /// Each chunk off the pipe copied once, into the frame being gathered: a frame
-  /// is two megabytes in thirty-odd reads, and gathering it by appending (and
-  /// copying what was there each time) was most of the stage's frame.
-  void _arrived(List<int> chunk) {
-    final c = chunk is Uint8List ? chunk : Uint8List.fromList(chunk);
-    var off = 0;
-    while (off < c.length) {
-      final buf = _frameBuf;
-      if (buf == null) {
-        // The header first: what size the frame is.
-        final n = math.min(_header - _cursor, c.length - off);
-        _head.setRange(_cursor, _cursor + n, c, off);
-        _cursor += n;
-        off += n;
-        if (_cursor < _header) return;
-        final bd = ByteData.sublistView(_head);
-        _cursor = 0;
-        if (bd.getUint32(0, Endian.little) != 0x4b4c494d) {
-          // Out of step: the helper is restarted rather than searched.
-          trouble = 'MilkDrop frames out of step';
-          stop();
-          return;
-        }
-        _frameW = bd.getUint32(4, Endian.little);
-        _frameH = bd.getUint32(8, Endian.little);
-        _frameBuf = _buffer(_frameW * _frameH * 4);
-        continue;
+  /// A frame off the pipe, made a picture; the pipe told when it is, for the next.
+  void _arrived(MilkPipe pipe, Uint8List rgba, int w, int h) {
+    ui.decodeImageFromPixels(rgba, w, h, ui.PixelFormat.rgba8888, (img) {
+      pipe.took();
+      if (_helper != pipe) {
+        img.dispose();
+        return;
       }
-      final n = math.min(buf.length - _cursor, c.length - off);
-      buf.setRange(_cursor, _cursor + n, c, off);
-      _cursor += n;
-      off += n;
-      if (_cursor < buf.length) return;
-      _frameBuf = null;
-      _cursor = 0;
-      if (_decoding) continue;  // a frame still on its way: this one is dropped
-      _decoding = true;
-      ui.decodeImageFromPixels(buf, _frameW, _frameH, ui.PixelFormat.rgba8888, (img) {
-        frame?.dispose();
-        frame = img;
-        frames++;
-        _decoding = false;
-        notifyListeners();
-      });
-    }
+      final first = frame == null;
+      frame?.dispose();
+      frame = img;
+      shown.value++;
+      if (first) notifyListeners();
+    });
   }
 
   /// The numbers for the engine, by name.
-  Map<String, double> get numbers => {
-        'milk.ok': available ? 1 : 0,
-        'milk.on': running && frame != null ? 1 : 0,
-      };
+  Map<String, double> get numbers => !available
+      ? _numbersOff
+      : {
+          'milk.ok': 1,
+          'milk.on': running && frame != null ? 1 : 0,
+        };
 
   @override
   void dispose() {
     stop();
     frame?.dispose();
     presetTrouble.dispose();
+    shown.dispose();
     super.dispose();
   }
 }

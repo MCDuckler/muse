@@ -299,6 +299,7 @@ class _StagePainter extends CustomPainter {
     final now = DateTime.now();
     if (wants) {
       _milkWantedAt = now;
+      milk.want(whole: !preview);
       if (!milk.running) unawaited(milk.start());
     } else if (milk.running && !milk.pinned) {
       final last = _milkWantedAt;

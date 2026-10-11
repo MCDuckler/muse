@@ -36,11 +36,13 @@ class MilkPreview extends StatelessWidget {
 }
 
 class _FramePainter extends CustomPainter {
-  _FramePainter(this.feed) : super(repaint: feed);
+  _FramePainter(this.feed) : super(repaint: feed.shown);
   final MilkFeed feed;
 
   @override
   void paint(Canvas canvas, Size size) {
+    // The browser and the maker judge presets by this: the whole picture.
+    feed.want(whole: true);
     final img = feed.frame;
     if (img == null) return;
     canvas.drawImageRect(

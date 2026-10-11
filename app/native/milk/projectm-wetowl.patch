@@ -489,3 +489,29 @@ index cbf5f6e..31d5168 100644
  void projectm_set_beat_sensitivity(projectm_handle instance, float sensitivity)
  {
      auto projectMInstance = handle_to_instance(instance);
+diff --git a/src/libprojectM/Renderer/TextureSamplerDescriptor.cpp b/src/libprojectM/Renderer/TextureSamplerDescriptor.cpp
+index 25efe8e3..1011af05 100644
+--- a/src/libprojectM/Renderer/TextureSamplerDescriptor.cpp
++++ b/src/libprojectM/Renderer/TextureSamplerDescriptor.cpp
+@@ -20,7 +20,9 @@ TextureSamplerDescriptor::TextureSamplerDescriptor(const std::shared_ptr<class T
+ 
+ auto TextureSamplerDescriptor::Empty() const -> bool
+ {
+-    return m_texture->Empty();
++    // WetOwl's patch: a sampler whose texture was never found has none at all,
++    // and asking it crashed the renderer on the preset's first frame.
++    return !m_texture || m_texture->Empty();
+ }
+ 
+ void TextureSamplerDescriptor::Bind(GLint unit, const Shader& shader) const
+@@ -136,7 +138,9 @@ auto TextureSamplerDescriptor::TexSizeDeclaration() const -> std::string
+ 
+ void TextureSamplerDescriptor::TryUpdate(TextureManager& textureManager)
+ {
+-    if (!Empty())
++    // WetOwl's patch: once failed is failed, as the flag says (it was never read,
++    // and a missing texture was looked for again every frame).
++    if (!Empty() || m_updateFailed)
+     {
+         return;
+     }
