@@ -1,7 +1,7 @@
 // The stage over the whole window, in this process: for one screen mirrored to a
 // television, or a look at the show as the room will see it. Esc comes back.
 //
-// Keys: ← → the scene · H hit · B blackout · S strobe (held) · F freeze · Esc back.
+// Keys: ← → the scene · L hold it · H hit · B blackout · S strobe (held) · F freeze · Esc back.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -24,8 +24,11 @@ Future<void> openStagePage(BuildContext context, Booth booth) => Navigator.of(co
 
 /// The performer's hands on a stage, by key — on the engine, or on a demo feed.
 class StageHands {
-  const StageHands({required this.next, required this.previous, required this.hit, required this.macros, required this.setMacros});
+  const StageHands({required this.next, required this.previous, required this.hit, required this.macros, required this.setMacros, this.hold = _nothing});
   final VoidCallback next, previous, hit;
+
+  /// The scene on held, or let go.
+  final VoidCallback hold;
   final ShowMacros Function() macros;
   final void Function(ShowMacros) setMacros;
 
@@ -35,6 +38,7 @@ class StageHands {
         hit: booth.show.hit,
         macros: () => booth.show.macros,
         setMacros: booth.show.setMacros,
+        hold: () => booth.show.holdScene(!booth.show.sceneHeld),
       );
 
   static const none = StageHands(next: _nothing, previous: _nothing, hit: _nothing, macros: _noMacros, setMacros: _setNothing);
@@ -57,6 +61,8 @@ class StageHands {
       next();
     } else if (k == LogicalKeyboardKey.arrowLeft) {
       previous();
+    } else if (k == LogicalKeyboardKey.keyL) {
+      hold();
     } else if (k == LogicalKeyboardKey.keyH || k == LogicalKeyboardKey.space) {
       hit();
     } else if (k == LogicalKeyboardKey.keyB) {

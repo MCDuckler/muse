@@ -1,0 +1,41 @@
+{
+  "id": "siebenschlaefer",
+  "name": "Siebenschläfer",
+  "energy": [
+    0.0,
+    1.0
+  ],
+  "sections": [
+    "drop",
+    "build",
+    "breakdown",
+    "break",
+    "intro",
+    "outro",
+    "chorus",
+    "verse",
+    "inst",
+    "on"
+  ],
+  "priority": 0.4,
+  "instant": true,
+  "layers": [
+    {
+      "sim": "siebenschlaefer"
+    }
+  ],
+  "particles": [],
+  "text": {
+    "title": false,
+    "lyrics": false
+  },
+  "post": {
+    "trails": 0.0,
+    "bloom": 0.12,
+    "fringe": 0.0,
+    "vignette": 0.1,
+    "grain": 0.3,
+    "recipe": 0.0,
+    "tone": 0.0
+  }
+}

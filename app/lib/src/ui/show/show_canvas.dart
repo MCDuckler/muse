@@ -35,7 +35,7 @@ class StagePrograms {
   final Map<String, ui.FragmentProgram> sims;
   final ui.FragmentProgram feedback, blur, finish, under;
 
-  static const simShaders = ['fluid_advect', 'fluid_div', 'fluid_jacobi', 'fluid_project', 'fluid_look'];
+  static const simShaders = ['fluid_advect', 'fluid_div', 'fluid_jacobi', 'fluid_project', 'fluid_look', 'meme_fx'];
 
   static Future<StagePrograms> load(SceneBook book) async {
     final names = book.shaders.toList();
@@ -537,13 +537,19 @@ class _StagePainter extends CustomPainter {
       ..setFloat(7, leaving == null ? 0 : st.sceneK)
       ..setFloat(8, _clock.elapsedMicroseconds / 1e6)
       ..setFloat(9, scene.post.grain)
+      ..setFloat(10, scene.post.tone)
       ..setImageSampler(0, leaving ?? current)
       ..setImageSampler(1, bloom)
       ..setImageSampler(2, current);
     canvas.drawRect(Offset.zero & size, Paint()..shader = _finish);
 
-    // 6. the words.
-    if (!preview && !st.macros.blackout) _words(canvas, size, scene, st);
+    // 6. the words: a sim's own (the meme edit's captions), then the scene's.
+    if (!preview && !st.macros.blackout) {
+      for (final sim in _sims.values) {
+        if (sim is SimOverlay) (sim as SimOverlay).paintOver(canvas, size, st, leaving == null ? 1 : st.sceneK);
+      }
+      _words(canvas, size, scene, st);
+    }
 
     bh.dispose();
     bloom.dispose();

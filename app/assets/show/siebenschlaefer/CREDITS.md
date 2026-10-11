@@ -1,0 +1,84 @@
+# Siebenschläfer — picture credits
+
+The photographs, engravings and the clip of Glis glis (the edible dormouse, Siebenschläfer) in this
+folder come from Wikimedia Commons. `photos/` holds them resized; `stickers/` holds cut-outs of some
+of them (background removed, a white sticker outline added) and `clips/` frames of a video — adaptations,
+shared under the same licence as the original. Each is listed once below with its author, licence and source.
+
+- **7schlaefer de 2009-2.jpg** — Michael Hanselmann, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:7schlaefer_de_2009-2.jpg
+- **7schlaefer de 2009.jpg** — Michael Hanselmann @ http://www.michaelhanselmann.de/bilder.htm, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:7schlaefer_de_2009.jpg
+- **7schlaefer.jpg** — Michael Hanselmann, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:7schlaefer.jpg
+- **Atlas de poche des mammifères de France, de la Suisse romane et de la Belgique (Pl. 13) (6312164630).jpg** — Martin, René, Public domain. https://commons.wikimedia.org/wiki/File:Atlas_de_poche_des_mammif%C3%A8res_de_France,_de_la_Suisse_romane_et_de_la_Belgique_(Pl._13)_(6312164630).jpg
+- **Deiker Jagdbare Tiere 1093196.jpg** — Carl Friedrich Deiker, Public domain. https://commons.wikimedia.org/wiki/File:Deiker_Jagdbare_Tiere_1093196.jpg
+- **Die Säugthiere in Abbildungen nach der Natur, mit Beschreibungen (Plate CCXXV) (8608927049).jpg** — Goldfuss, Georg August; Schreber, Johann Christian Daniel; Wagner, Andreas Johann, Public domain. https://commons.wikimedia.org/wiki/File:Die_S%C3%A4ugthiere_in_Abbildungen_nach_der_Natur,_mit_Beschreibungen_(Plate_CCXXV)_(8608927049).jpg
+- **Edible dormouse - Relmuis - Glis glis 02.jpg** — Bouke ten Cate, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Edible_dormouse_-_Relmuis_-_Glis_glis_02.jpg
+- **Edible dormouse - Relmuis - Glis glis 03.jpg** — Bouke ten Cate, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Edible_dormouse_-_Relmuis_-_Glis_glis_03.jpg
+- **Edible dormouse - Relmuis - Glis glis 04.jpg** — Bouke ten Cate, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Edible_dormouse_-_Relmuis_-_Glis_glis_04.jpg
+- **Edible dormouse - Relmuis - Glis glis.jpg** — Bouke ten Cate, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Edible_dormouse_-_Relmuis_-_Glis_glis.jpg
+- **Fat Dormouse.jpg** — Alexlancashire, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Fat_Dormouse.jpg
+- **Glirarium (Exponat) - MEAC, 30-08-21.jpg** — Viscondedeportoseguro, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Glirarium_(Exponat)_-_MEAC,_30-08-21.jpg
+- **Glis glis (edible dormouse) in winter sleep.jpg** — Krzysztof Dreszer, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Glis_glis_(edible_dormouse)_in_winter_sleep.jpg
+- **Glis glis - Kazimieras Martinaitis - 66529621.jpeg** — Kazimieras Martinaitis, CC BY 4.0. https://commons.wikimedia.org/wiki/File:Glis_glis_-_Kazimieras_Martinaitis_-_66529621.jpeg
+- **Glis glis .jpg** — Youbadou, CC BY 4.0. https://commons.wikimedia.org/wiki/File:Glis_glis_.jpg
+- **Glis glis 0201.JPG** — Azay, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Glis_glis_0201.JPG
+- **Glis glis 0738.JPG** — Azay, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Glis_glis_0738.JPG
+- **Glis glis 4058 (cropped).JPG** — Azay, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Glis_glis_4058_(cropped).JPG
+- **Glis glis Haut-Doubs (cropped).jpg** — Bertille de Fombelle, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Glis_glis_Haut-Doubs_(cropped).jpg
+- **Glis glis Haut-Doubs.jpg** — Bertille de Fombelle, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Glis_glis_Haut-Doubs.jpg
+- **Glis glis in Valea Drăganului 2022 01.jpg** — Pasztilla aka Attila Terbócs, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Glis_glis_in_Valea_Dr%C4%83ganului_2022_01.jpg
+- **Glis glis in Valea Drăganului 2022 02.jpg** — Pasztilla aka Attila Terbócs, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Glis_glis_in_Valea_Dr%C4%83ganului_2022_02.jpg
+- **Glis glis in Valea Drăganului 2022 03.jpg** — Pasztilla aka Attila Terbócs, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Glis_glis_in_Valea_Dr%C4%83ganului_2022_03.jpg
+- **Glis glis in Valea Drăganului 2022 04.jpg** — Pasztilla aka Attila Terbócs, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Glis_glis_in_Valea_Dr%C4%83ganului_2022_04.jpg
+- **Glis glis large.ogv** — Michael Hanselmann, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Glis_glis_large.ogv
+- **Glis glis-face.jpg** — Johann H. Addicks - addicks@gmx.net, GFDL 1.2. https://commons.wikimedia.org/wiki/File:Glis_glis-face.jpg
+- **Glis glis.jpg** — Youbadou, CC BY 4.0. https://commons.wikimedia.org/wiki/File:Glis_glis.jpg
+- **Glis-glis.jpg** — Bjoern Clauss, CC BY-SA 2.5. https://commons.wikimedia.org/wiki/File:Glis-glis.jpg
+- **Jurij Šubic - Slovenski polharji.jpg** — Jurij Šubic, Public domain. https://commons.wikimedia.org/wiki/File:Jurij_%C5%A0ubic_-_Slovenski_polharji.jpg
+- **Loir gris fruit.jpg** — Julien 31, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Loir_gris_fruit.jpg
+- **Loir maison.jpg** — Julien 31, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Loir_maison.jpg
+- **Loir monteaperta 2012.jpg** — Jean-Marc Pascolo, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Loir_monteaperta_2012.jpg
+- **Loirs mangeant.jpg** — X-OR 31, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Loirs_mangeant.jpg
+- **Meyers b11 s0979a.jpg** — Bibliographisches Institut, Public domain. https://commons.wikimedia.org/wiki/File:Meyers_b11_s0979a.jpg
+- **Museo archeologico di Monterenzio - gliarium abc2.jpg** — Patafisik, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Museo_archeologico_di_Monterenzio_-_gliarium_abc2.jpg
+- **Museo archeologico di Monterenzio - glirarium abc4.jpg** — Patafisik, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Museo_archeologico_di_Monterenzio_-_glirarium_abc4.jpg
+- **Museo archeologico nazionale di Chiusi - glirarium.JPG** — Marco Daniele, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Museo_archeologico_nazionale_di_Chiusi_-_glirarium.JPG
+- **Penny Magazine 1832 012 The Dormouse.jpg** — Unknown artistUnknown artist, Public domain. https://commons.wikimedia.org/wiki/File:Penny_Magazine_1832_012_The_Dormouse.jpg
+- **Pisanello - Codex Vallardi 2387.jpg** — Pisanello, Public domain. https://commons.wikimedia.org/wiki/File:Pisanello_-_Codex_Vallardi_2387.jpg
+- **Popielica (Glis Glis) 002.JPG** — TomaszG, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Popielica_(Glis_Glis)_002.JPG
+- **Popielica (Glis Glis) 003.JPG** — TomaszG, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Popielica_(Glis_Glis)_003.JPG
+- **Popielica (Glis Glis) 004.JPG** — TomaszG, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Popielica_(Glis_Glis)_004.JPG
+- **Popielica (Glis glis) 001.JPG** — TomaszG, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Popielica_(Glis_glis)_001.JPG
+- **Popielica Glis glis .jpg** — Stanislaw Szydlo, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Popielica_Glis_glis_.jpg
+- **Puh na stablu, Paklenica 073158 1.webm** — Quahadi Añtó 06:54, 20 May 2015 (UTC), CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Puh_na_stablu,_Paklenica_073158_1.webm
+- **Siebenschlaefer Zwiegel01.JPG** — Zwiegel, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Siebenschlaefer_Zwiegel01.JPG
+- **Siebenschlaefer Zwiegel02.JPG** — Zwiegel, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Siebenschlaefer_Zwiegel02.JPG
+- **Siebenschlaefer Zwiegel08.JPG** — Zwiegel, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Siebenschlaefer_Zwiegel08.JPG
+- **Siebenschlaefer Zwiegel10.JPG** — Zwiegel, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Siebenschlaefer_Zwiegel10.JPG
+- **Siebenschlaefer Zwiegel17.JPG** — Zwiegel, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Siebenschlaefer_Zwiegel17.JPG
+- **Siebenschlaefer Zwiegel19.JPG** — Zwiegel, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Siebenschlaefer_Zwiegel19.JPG
+- **Siebenschlaefer Zwiegel20.JPG** — Zwiegel, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Siebenschlaefer_Zwiegel20.JPG
+- **Siebenschlaefer-01-BC.JPG** — No machine-readable author provided. Bascon assumed (based on copyright claims)., Public domain. https://commons.wikimedia.org/wiki/File:Siebenschlaefer-01-BC.JPG
+- **Siebenschlaefer-drawing.jpg** — unknown, Public domain. https://commons.wikimedia.org/wiki/File:Siebenschlaefer-drawing.jpg
+- **Siebenschlaefer.jpg** — Verpacker, Public domain. https://commons.wikimedia.org/wiki/File:Siebenschlaefer.jpg
+- **Siebenschläder auf Baum2 (cropped).JPG** — Svíčková, CC BY 3.0. https://commons.wikimedia.org/wiki/File:Siebenschl%C3%A4der_auf_Baum2_(cropped).JPG
+- **Siebenschläder auf Baum2.JPG** — Svíčková, CC BY 3.0. https://commons.wikimedia.org/wiki/File:Siebenschl%C3%A4der_auf_Baum2.JPG
+- **Siebenschläfer Haselnuss.JPG** — Svíčková, CC BY 3.0. https://commons.wikimedia.org/wiki/File:Siebenschl%C3%A4fer_Haselnuss.JPG
+- **Siebenschläfer auf Baum.JPG** — Svíčková, CC BY 3.0. https://commons.wikimedia.org/wiki/File:Siebenschl%C3%A4fer_auf_Baum.JPG
+- **Siebenschläfer im Fudatal bei Kassel -Germany 2019.jpg** — Unim0g KS, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Siebenschl%C3%A4fer_im_Fudatal_bei_Kassel_-Germany_2019.jpg
+- **Siebenschläfer im Geo-Naturpark Bergstraße-Odenwald.jpg** — Herwig Winter, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Siebenschl%C3%A4fer_im_Geo-Naturpark_Bergstra%C3%9Fe-Odenwald.jpg
+- **Siebenschläfer im Geäst.JPG** — Svíčková, CC BY 3.0. https://commons.wikimedia.org/wiki/File:Siebenschl%C3%A4fer_im_Ge%C3%A4st.JPG
+- **Siebenschläfer im Haus.JPG** — Svíčková, CC BY 3.0. https://commons.wikimedia.org/wiki/File:Siebenschl%C3%A4fer_im_Haus.JPG
+- **Siebenschläfer kletternd.JPG** — Svíčková, CC BY 3.0. https://commons.wikimedia.org/wiki/File:Siebenschl%C3%A4fer_kletternd.JPG
+- **Siebenschläfer vom Wörthersee.JPG** — Seemann, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Siebenschl%C3%A4fer_vom_W%C3%B6rthersee.JPG
+- **Siebenschläfer.jpg** — Karsten Ratzke, CC0. https://commons.wikimedia.org/wiki/File:Siebenschl%C3%A4fer.jpg
+- **Siebenschläferfütterung.JPG** — Svíčková, CC BY 3.0. https://commons.wikimedia.org/wiki/File:Siebenschl%C3%A4ferf%C3%BCtterung.JPG
+- **Siebenschläferfütterung2.JPG** — Svíčková, CC BY 3.0. https://commons.wikimedia.org/wiki/File:Siebenschl%C3%A4ferf%C3%BCtterung2.JPG
+- **Siebenschläferfütterung3.JPG** — Svíčková, CC BY 3.0. https://commons.wikimedia.org/wiki/File:Siebenschl%C3%A4ferf%C3%BCtterung3.JPG
+- **Siebenschläferheck.JPG** — Svíčková, CC BY 3.0. https://commons.wikimedia.org/wiki/File:Siebenschl%C3%A4ferheck.JPG
+- **Siebenschläfernase.JPG** — Svíčková, CC BY 3.0. https://commons.wikimedia.org/wiki/File:Siebenschl%C3%A4fernase.JPG
+- **Sivi puh (Glis Glis).jpg** — Tibor927, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Sivi_puh_(Glis_Glis).jpg
+- **Sivi puh 005.jpg** — Frka, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Sivi_puh_005.jpg
+- **Sivi puh 020.jpg** — Frka, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Sivi_puh_020.jpg
+- **The animal kingdom (Pl. 18) (6963235726).jpg** — Bull; Cuvier, Georges; Gray, George Robert; Gray, John Edward; Griffith, Edward; Pidgeon, Edward.; Smith, Charles Hamilton; Westwood, J. O., Public domain. https://commons.wikimedia.org/wiki/File:The_animal_kingdom_(Pl._18)_(6963235726).jpg
+- **Vergleichende Naturbeschreibung der Säugethiere (Pl. XIV) BHL47498177.jpg** — Johann Eberhard Ihle / Johann Nussbiegel, Public domain. https://commons.wikimedia.org/wiki/File:Vergleichende_Naturbeschreibung_der_S%C3%A4ugethiere_(Pl._XIV)_BHL47498177.jpg
+- **Vrag polhe pase-Valvasor.jpg** — Johann Weikhard von Valvasor, Public domain. https://commons.wikimedia.org/wiki/File:Vrag_polhe_pase-Valvasor.jpg

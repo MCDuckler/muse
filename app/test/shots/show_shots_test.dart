@@ -13,6 +13,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muse/src/state/show/show_demo.dart';
 import 'package:muse/src/ui/show/show_canvas.dart';
+import 'package:muse/src/ui/show/show_meme.dart';
 import 'package:muse/src/ui/show/stage_kit.dart';
 
 Future<void> _font(String family, List<String> files) async {
@@ -36,6 +37,8 @@ void main() {
     await _font('Archivo', ['$f/Archivo.ttf']);
     await _font('CourierPrime', ['$f/CourierPrime-Regular.ttf']);
     kit = await StageKit.load();
+    // The meme edit's pictures, decoded here where the clock is real.
+    await MemeBank.of('siebenschlaefer').decodeAll();
     // The demo record's cover, decoded here: the stage cannot wait for a fetch.
     final bytes = await File('assets/brand/ball.webp').readAsBytes();
     final codec = await ui.instantiateImageCodec(bytes);
@@ -43,7 +46,7 @@ void main() {
   });
 
   test('every scene file loads, with its shader', () {
-    expect(kit.book.scenes.keys, containsAll(['drift', 'fluid', 'veins', 'toon', 'flash', 'echo', 'fold', 'blocks', 'kinetic']));
+    expect(kit.book.scenes.keys, containsAll(['drift', 'fluid', 'veins', 'toon', 'flash', 'echo', 'fold', 'blocks', 'kinetic', 'siebenschlaefer']));
     for (final s in kit.book.scenes.values) {
       for (final sh in s.shaders) {
         expect(kit.programs.scenes.containsKey(sh), isTrue, reason: '${s.id} wants $sh');
@@ -61,6 +64,7 @@ void main() {
     ('fold', Duration(seconds: 44)),
     ('blocks', Duration(seconds: 40)),
     ('kinetic', Duration(seconds: 36)),
+    ('siebenschlaefer', Duration(seconds: 40)),
   ]) {
     testWidgets('the stage: $scene', (tester) async {
       tester.view.physicalSize = const Size(1280, 720);

@@ -106,6 +106,13 @@ flutter:
     - assets/controllers/
     # The stage's scenes: one JSON per look. See lib/src/ui/show/scene.dart.
     - assets/show/scenes/
+    # The Siebenschläfer scene's bank: photographs, cut-outs, captions, and who took
+    # the pictures (CREDITS.md). See lib/src/ui/show/show_meme.dart.
+    - assets/show/siebenschlaefer/
+    - assets/show/siebenschlaefer/photos/
+    - assets/show/siebenschlaefer/stickers/
+    - assets/show/siebenschlaefer/clips/climb/
+    - assets/show/siebenschlaefer/clips/tree/
     # MilkDrop's own presets, written out to the data folder on first run (the
     # wetowl-milk helper reads files). See lib/src/state/show/milk_library.dart.
     - assets/milk/presets/
@@ -136,6 +143,7 @@ flutter:
     - shaders/show/sim/fluid_jacobi.frag
     - shaders/show/sim/fluid_project.frag
     - shaders/show/sim/fluid_look.frag
+    - shaders/show/sim/meme_fx.frag
 
   fonts:
     - family: Manrope

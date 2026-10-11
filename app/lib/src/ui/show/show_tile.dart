@@ -126,6 +126,15 @@ class _ShowTileState extends State<ShowTile> {
                   Row(
                     children: [
                       Expanded(child: Text(scene?.name ?? '—', style: TextStyle(color: Console.ink, fontWeight: FontWeight.w700, fontSize: 15))),
+                      Pad(
+                        icon: show.sceneHeld ? Icons.lock : Icons.lock_open,
+                        width: 26,
+                        height: 26,
+                        lit: show.sceneHeld,
+                        colour: Console.quiet,
+                        tooltip: show.sceneHeld ? 'This scene is held — let the director choose again' : 'Hold this scene: the stage stays on it, the arrows still change it',
+                        onTap: () => show.holdScene(!show.sceneHeld),
+                      ),
                       Pad(icon: Icons.timer_outlined, width: 26, height: 26, colour: Console.quiet, tooltip: 'The picture against the sound', onTap: () => _offset(context)),
                     ],
                   ),

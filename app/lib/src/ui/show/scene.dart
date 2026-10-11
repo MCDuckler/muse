@@ -14,7 +14,8 @@
 //     ],
 //     "particles": ["sparks", "dust"],      see show_particles.dart
 //     "text": {"title": true, "lyrics": true, "where": "low" | "big", "jitter": false},
-//     "post": {"trails": 0.86, "bloom": 0.7, "fringe": 0.012, "vignette": 0.7}
+//     "post": {"trails": 0.86, "bloom": 0.7, "fringe": 0.012, "vignette": 0.7,
+//              "tone": 1}                     0 = the picture as drawn, no film curve
 //   }
 import 'dart:convert';
 
@@ -61,7 +62,7 @@ class SceneText {
 }
 
 class ScenePost {
-  const ScenePost({this.trails = 0, this.bloom = 0.5, this.fringe = 0.008, this.vignette = 0.6, this.grain = 0.5, this.recipe = 0});
+  const ScenePost({this.trails = 0, this.bloom = 0.5, this.fringe = 0.008, this.vignette = 0.6, this.grain = 0.5, this.recipe = 0, this.tone = 1});
 
   /// The trails are added to the frame, so at 0.5 light lingers for a few frames and
   /// at 0.8 it piles up (the finish's curve keeps it from clipping, but it will be
@@ -72,6 +73,10 @@ class ScenePost {
   /// trails, 0..1: the fold, the warp, the turn of the hue, the drift.
   final double recipe;
 
+  /// How much of the finish's film curve (ACES) the scene goes through, 0..1. A
+  /// scene of light wants it; one of photographs wants 0, or every white is grey.
+  final double tone;
+
   factory ScenePost.fromJson(Map<String, dynamic>? j) => j == null
       ? const ScenePost()
       : ScenePost(
@@ -81,6 +86,7 @@ class ScenePost {
           vignette: (j['vignette'] as num?)?.toDouble() ?? 0.6,
           grain: (j['grain'] as num?)?.toDouble() ?? 0.5,
           recipe: ((j['recipe'] as num?)?.toDouble() ?? 0).clamp(0.0, 1.0),
+          tone: ((j['tone'] as num?)?.toDouble() ?? 1).clamp(0.0, 1.0),
         );
 }
 

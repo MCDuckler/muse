@@ -18,6 +18,7 @@ uniform float uBloomAmount;  // how much of the bloom
 uniform float uMixK;         // 0 all uBase, 1 all uNext
 uniform float uTime;         // for the grain
 uniform float uGrain;        // 0..1, how much grain
+uniform float uTone;         // 0..1, how much of the film curve (0: clipped as drawn)
 uniform sampler2D uBase;
 uniform sampler2D uBloom;
 uniform sampler2D uNext;
@@ -54,7 +55,7 @@ void main() {
   // The vignette falls on the light, before the curve, so the corners darken
   // the way a lens does.
   light *= 1.0 - smoothstep(0.35, 1.0, sqrt(r2) * 1.414) * 0.75 * uVignette;
-  vec3 col = aces(light * 1.1);
+  vec3 col = mix(clamp(light, 0.0, 1.0), aces(light * 1.1), uTone);
   // Grain, finer than a pixel of the working size and moving every frame.
   float g = hash(FlutterFragCoord().xy + fract(uTime * 7.31) * 100.0) - 0.5;
   col += g * uGrain * (0.06 + 0.06 * (1.0 - dot(col, vec3(0.333))));

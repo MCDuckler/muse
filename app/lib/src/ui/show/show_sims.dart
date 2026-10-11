@@ -25,6 +25,7 @@ import 'package:flutter/material.dart';
 
 import '../../state/show/show_state.dart';
 import 'show_canvas.dart' show StagePrograms;
+import 'show_meme.dart';
 
 abstract class SimLayer {
   String get kind;
@@ -39,8 +40,22 @@ abstract class SimLayer {
   static SimLayer? make(String kind) => switch (kind) {
         'fluid' => FluidSim(),
         'physarum' => PhysarumSim(),
+        'siebenschlaefer' => MemeEdit(kind),
         _ => null,
       };
+
+  /// What a sim of [kind] should have ready before it is first on: the meme edit's
+  /// pictures, so a drop cut onto it is not a black frame.
+  static void warm(String kind) {
+    if (kind == 'siebenschlaefer') MemeBank.of(kind);
+  }
+}
+
+/// A sim that also draws over the whole stage at the screen's own size, after the
+/// finish — words, mostly, which the working size would blur.
+abstract class SimOverlay {
+  /// [opacity] is how far the scene is in (a dissolve to it).
+  void paintOver(Canvas canvas, Size size, ShowState st, double opacity);
 }
 
 /// A pass: [draw] into a [w]×[h] picture, kept as an image.

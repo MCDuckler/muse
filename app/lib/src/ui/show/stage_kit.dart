@@ -5,6 +5,7 @@ import 'dart:async';
 
 import 'scene.dart';
 import 'show_canvas.dart';
+import 'show_sims.dart';
 
 class StageKit {
   const StageKit(this.book, this.programs);
@@ -15,6 +16,11 @@ class StageKit {
 
   static Future<StageKit> load() => _loading ??= () async {
         final book = await SceneBook.load();
+        for (final s in book.scenes.values) {
+          for (final l in s.layers) {
+            if (l.sim != null) SimLayer.warm(l.sim!);
+          }
+        }
         final programs = await StagePrograms.load(book);
         return StageKit(book, programs);
       }();

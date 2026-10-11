@@ -134,6 +134,15 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   }
   void chooseScene(String id) => director.choose(id);
 
+  /// The scene on held: the director's rules stay off it until it is let go (the
+  /// arrows still move it, and the next one is held instead). One look as a mode.
+  bool get sceneHeld => director.locked;
+  void holdScene(bool on) {
+    director.locked = on;
+    if (!running) tick(DateTime.now());
+    notifyListeners();
+  }
+
   void _stepSaid() {
     final s = booth.stepApplied.last;
     if (s == null) return;
