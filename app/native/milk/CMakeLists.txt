@@ -26,7 +26,12 @@ set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
 set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 
+# The source is kept under the patch's hash: a changed patch is a fresh fetch, since
+# FetchContent applies a patch once, at the clone.
+file(SHA1 "${CMAKE_CURRENT_SOURCE_DIR}/projectm-wetowl.patch" WETOWL_MILK_PATCH_HASH)
+string(SUBSTRING "${WETOWL_MILK_PATCH_HASH}" 0 10 WETOWL_MILK_PATCH_HASH)
 FetchContent_Declare(projectm
+  SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/projectm-${WETOWL_MILK_PATCH_HASH}-src"
   GIT_REPOSITORY https://github.com/projectM-visualizer/projectm.git
   GIT_TAG        v4.1.6
   GIT_SHALLOW    TRUE
@@ -43,11 +48,19 @@ set(CMAKE_PROJECT_VERSION_MINOR 1)
 set(CMAKE_PROJECT_VERSION_PATCH 6)
 FetchContent_MakeAvailable(projectm)
 
-set(OpenGL_GL_PREFERENCE GLVND)
-find_package(OpenGL REQUIRED COMPONENTS EGL OpenGL)
-
 add_executable(wetowl-milk wetowl-milk.cpp)
-target_link_libraries(wetowl-milk PRIVATE libprojectM::projectM OpenGL::EGL OpenGL::OpenGL)
+if(WIN32)
+  # A hidden window's context through WGL; the GL functions through GLEW (projectM
+  # needs it on Windows anyway: vcpkg install glew).
+  find_package(OpenGL REQUIRED)
+  find_package(GLEW REQUIRED)
+  target_link_libraries(wetowl-milk PRIVATE libprojectM::projectM OpenGL::GL GLEW::GLEW)
+  set_target_properties(wetowl-milk PROPERTIES WIN32_EXECUTABLE FALSE)
+else()
+  set(OpenGL_GL_PREFERENCE GLVND)
+  find_package(OpenGL REQUIRED COMPONENTS EGL OpenGL)
+  target_link_libraries(wetowl-milk PRIVATE libprojectM::projectM OpenGL::EGL OpenGL::OpenGL)
+endif()
 target_include_directories(wetowl-milk PRIVATE
   "${projectm_SOURCE_DIR}/src/api/include"
   "${projectm_BINARY_DIR}/src/api/include"

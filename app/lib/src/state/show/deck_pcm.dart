@@ -13,6 +13,8 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 
+import '../../worker/tools.dart';
+
 import 'show_state.dart';
 
 /// Where a record's sound is to be read from: a file here, or the stream with its
@@ -22,8 +24,10 @@ typedef PcmSource = ({String url, Map<String, String> headers})? Function(int tr
 class DeckPcm {
   static const rate = 44100;
 
-  /// Set by the engine: how to reach a record.
+  /// Set by the engine: how to reach a record. Without one (a stage in another
+  /// process) the deck's own stream is read, with [headers].
   PcmSource? source;
+  Map<String, String> headers = const {};
 
   final _records = <int, Int16List>{};
   final _loading = <int>{};
@@ -47,7 +51,7 @@ class DeckPcm {
       }
       final rec = _records[id];
       if (rec == null) {
-        _ask(id);
+        _ask(id, d.streamUrl);
         continue;
       }
       final now = (d.position.inMicroseconds * rate / 1e6).round().clamp(0, rec.length);
@@ -78,9 +82,9 @@ class DeckPcm {
     return out;
   }
 
-  void _ask(int id) {
-    if (_loading.contains(id) || source == null) return;
-    final src = source!(id);
+  void _ask(int id, String? streamUrl) {
+    if (_loading.contains(id)) return;
+    final src = source?.call(id) ?? (streamUrl == null ? null : (url: streamUrl, headers: headers));
     if (src == null) return;
     _loading.add(id);
     unawaited(_decode(id, src.url, src.headers).whenComplete(() => _loading.remove(id)));
@@ -94,7 +98,7 @@ class DeckPcm {
         '-i', url,
         '-vn', '-f', 's16le', '-ac', '1', '-ar', '$rate', '-',
       ];
-      final proc = await Process.start('ffmpeg', args);
+      final proc = await Process.start(await Tools.ffmpegCommand(), args);
       final chunks = BytesBuilder(copy: false);
       proc.stderr.drain<void>().ignore();
       await for (final c in proc.stdout) {

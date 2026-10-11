@@ -1,8 +1,8 @@
 diff --git a/src/api/include/projectM-4/parameters.h b/src/api/include/projectM-4/parameters.h
-index 2d9c70c..69fdd27 100644
+index 2d9c70c..d2029e7 100644
 --- a/src/api/include/projectM-4/parameters.h
 +++ b/src/api/include/projectM-4/parameters.h
-@@ -273,6 +273,19 @@ PROJECTM_EXPORT void projectm_set_window_size(projectm_handle instance, size_t w
+@@ -273,6 +273,36 @@ PROJECTM_EXPORT void projectm_set_window_size(projectm_handle instance, size_t w
   */
  PROJECTM_EXPORT void projectm_get_window_size(projectm_handle instance, size_t* width, size_t* height);
  
@@ -18,6 +18,23 @@ index 2d9c70c..69fdd27 100644
 + * @param value Its value for the frames to come.
 + */
 +PROJECTM_EXPORT void projectm_set_custom_variable(projectm_handle instance, const char* name, float value);
++
++/**
++ * @brief The host's own bass/mid/treb in place of the FFT's (WetOwl's patch).
++ *
++ * 1.0 is MilkDrop's "average"; a hit lands around 2 to 3. The *_att values are
++ * the slow followers presets compare against. Set every frame; cleared with
++ * projectm_clear_audio_levels. The waveform and the spectrum still come from the
++ * PCM.
++ */
++PROJECTM_EXPORT void projectm_set_audio_levels(projectm_handle instance, float bass, float mid, float treb,
++                                               float bass_att, float mid_att, float treb_att);
++PROJECTM_EXPORT void projectm_clear_audio_levels(projectm_handle instance);
++
++/**
++ * @brief The framebuffer the final frame is drawn into (WetOwl's patch); 0 is the window's.
++ */
++PROJECTM_EXPORT void projectm_opengl_set_target_framebuffer(projectm_handle instance, unsigned int framebuffer);
 +
  #ifdef __cplusplus
  } // extern "C"
@@ -284,10 +301,10 @@ index 7f28ef8..873e767 100644
      PRJM_EVAL_F* time{};
 diff --git a/src/libprojectM/MilkdropPreset/WetOwlVariables.hpp b/src/libprojectM/MilkdropPreset/WetOwlVariables.hpp
 new file mode 100644
-index 0000000..7970801
+index 0000000..11f62bf
 --- /dev/null
 +++ b/src/libprojectM/MilkdropPreset/WetOwlVariables.hpp
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,48 @@
 +#pragma once
 +
 +/**
@@ -310,6 +327,14 @@ index 0000000..7970801
 +{
 +    static inline std::vector<std::string> names;
 +    static inline std::vector<float> values;
++
++    /// The host's own bass/mid/treb (with their slow followers) in place of the
++    /// FFT's, while set: a beat grid, not a guess at one. Negative = not set.
++    static inline float levels[6] = {-1, -1, -1, -1, -1, -1};
++    static inline bool levelsSet = false;
++
++    /// The framebuffer the final frame is drawn into: 0 is the window's.
++    static inline unsigned int targetFramebuffer = 0;
 +
 +    static void Set(const char* name, float value)
 +    {
@@ -369,8 +394,51 @@ index 0000000..b708d59
 +
 +} // namespace MilkdropPreset
 +} // namespace libprojectM
+diff --git a/src/libprojectM/ProjectM.cpp b/src/libprojectM/ProjectM.cpp
+index ae9390e..f7bfb88 100644
+--- a/src/libprojectM/ProjectM.cpp
++++ b/src/libprojectM/ProjectM.cpp
+@@ -21,6 +21,7 @@
+ 
+ #include "ProjectM.hpp"
+ 
++#include "MilkdropPreset/WetOwlVariables.hpp"
+ #include "Preset.hpp"
+ #include "PresetFactoryManager.hpp"
+ #include "TimeKeeper.hpp"
+@@ -104,6 +105,19 @@ void ProjectM::RenderFrame()
+     // Update and retrieve audio data
+     m_audioStorage.UpdateFrameAudioData(m_timeKeeper->SecondsSinceLastFrame(), m_frameCount);
+     auto audioData = m_audioStorage.GetFrameAudioData();
++    // WetOwl's patch: the host's levels over the FFT's, where it set them.
++    if (MilkdropPreset::WetOwlVariables::levelsSet)
++    {
++        const auto* lv = MilkdropPreset::WetOwlVariables::levels;
++        audioData.bass = lv[0];
++        audioData.mid = lv[1];
++        audioData.treb = lv[2];
++        audioData.bassAtt = lv[3];
++        audioData.midAtt = lv[4];
++        audioData.trebAtt = lv[5];
++        audioData.vol = (lv[0] + lv[1] + lv[2]) / 3.0f;
++        audioData.volAtt = (lv[3] + lv[4] + lv[5]) / 3.0f;
++    }
+ 
+     // Check if the preset isn't locked, and we've not already notified the user
+     if (!m_presetChangeNotified)
+@@ -166,8 +180,8 @@ void ProjectM::RenderFrame()
+     // ToDo: Call the to-be-implemented render method in Renderer
+     m_activePreset->RenderFrame(audioData, renderContext);
+ 
+-    // ToDo: Allow external apps to provide a custom target framebuffer.
+-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
++    // WetOwl's patch: the host's framebuffer, where it gave one.
++    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, MilkdropPreset::WetOwlVariables::targetFramebuffer);
+ 
+     if (m_transition != nullptr && m_transitioningPreset != nullptr)
+     {
 diff --git a/src/libprojectM/ProjectMCWrapper.cpp b/src/libprojectM/ProjectMCWrapper.cpp
-index cbf5f6e..c74d973 100644
+index cbf5f6e..31d5168 100644
 --- a/src/libprojectM/ProjectMCWrapper.cpp
 +++ b/src/libprojectM/ProjectMCWrapper.cpp
 @@ -2,6 +2,8 @@
@@ -382,7 +450,7 @@ index cbf5f6e..c74d973 100644
  #include <Audio/AudioConstants.hpp>
  
  #include <cstring>
-@@ -171,6 +173,12 @@ void projectm_opengl_render_frame(projectm_handle instance)
+@@ -171,6 +173,38 @@ void projectm_opengl_render_frame(projectm_handle instance)
      projectMInstance->RenderFrame();
  }
  
@@ -390,6 +458,32 @@ index cbf5f6e..c74d973 100644
 +{
 +    (void) instance;
 +    libprojectM::MilkdropPreset::WetOwlVariables::Set(name, value);
++}
++
++void projectm_set_audio_levels(projectm_handle instance, float bass, float mid, float treb,
++                               float bass_att, float mid_att, float treb_att)
++{
++    (void) instance;
++    auto& v = libprojectM::MilkdropPreset::WetOwlVariables::levels;
++    v[0] = bass;
++    v[1] = mid;
++    v[2] = treb;
++    v[3] = bass_att;
++    v[4] = mid_att;
++    v[5] = treb_att;
++    libprojectM::MilkdropPreset::WetOwlVariables::levelsSet = true;
++}
++
++void projectm_clear_audio_levels(projectm_handle instance)
++{
++    (void) instance;
++    libprojectM::MilkdropPreset::WetOwlVariables::levelsSet = false;
++}
++
++void projectm_opengl_set_target_framebuffer(projectm_handle instance, unsigned int framebuffer)
++{
++    (void) instance;
++    libprojectM::MilkdropPreset::WetOwlVariables::targetFramebuffer = framebuffer;
 +}
 +
  void projectm_set_beat_sensitivity(projectm_handle instance, float sensitivity)

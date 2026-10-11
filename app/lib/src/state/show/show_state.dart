@@ -124,6 +124,7 @@ class ShowDeck {
     this.keyHue,
     this.coverColor,
     this.coverUrl,
+    this.streamUrl,
     this.level = 0,
     this.eqLow = 1,
     this.eqMid = 1,
@@ -191,6 +192,9 @@ class ShowDeck {
 
   /// Where the cover is, for a stage in another process to fetch it.
   final String? coverUrl;
+
+  /// Where the record's sound is, for the same stage's MilkDrop.
+  final String? streamUrl;
 
   /// What this channel sends: its share of the crossfader at its gain, 0 to 1.
   final double level;
@@ -324,6 +328,7 @@ class ShowDeck {
         'keyHue': keyHue,
         'coverColor': coverColor?.toARGB32(),
         'coverUrl': coverUrl,
+        'streamUrl': streamUrl,
         'level': level,
         'eqLow': eqLow,
         'eqMid': eqMid,
@@ -367,6 +372,7 @@ class ShowDeck {
         keyHue: (j['keyHue'] as num?)?.toDouble(),
         coverColor: j['coverColor'] is num ? Color((j['coverColor'] as num).toInt()) : null,
         coverUrl: j['coverUrl'] as String?,
+        streamUrl: j['streamUrl'] as String?,
         level: _d(j['level']),
         eqLow: j['eqLow'] is num ? _d(j['eqLow']) : 1,
         eqMid: j['eqMid'] is num ? _d(j['eqMid']) : 1,
@@ -499,6 +505,8 @@ class ShowMacros {
     this.blackout = false,
     this.freeze = false,
     this.hit = 0,
+    this.milkUnder = false,
+    this.milkPreset,
     this.macros = const [0, 0, 0, 0, 0, 0, 0, 0],
   });
 
@@ -507,6 +515,12 @@ class ShowMacros {
   /// 1 as it lands and falling; eight knobs each scene reads its own way.
   final double intensity, colour, strobe, hit;
   final bool blackout, freeze;
+
+  /// MilkDrop's picture under every scene (where there is a helper).
+  final bool milkUnder;
+
+  /// The MilkDrop preset on, by its full name, for a stage in another process.
+  final String? milkPreset;
   final List<double> macros;
 
   static const none = ShowMacros();
@@ -517,6 +531,9 @@ class ShowMacros {
     double? strobe,
     bool? blackout,
     bool? freeze,
+    bool? milkUnder,
+    String? milkPreset,
+    bool clearMilkPreset = false,
     double? hit,
     List<double>? macros,
   }) =>
@@ -526,6 +543,8 @@ class ShowMacros {
         strobe: strobe ?? this.strobe,
         blackout: blackout ?? this.blackout,
         freeze: freeze ?? this.freeze,
+        milkUnder: milkUnder ?? this.milkUnder,
+        milkPreset: clearMilkPreset ? null : milkPreset ?? this.milkPreset,
         hit: hit ?? this.hit,
         macros: macros ?? this.macros,
       );
@@ -536,6 +555,7 @@ class ShowMacros {
     m['show.strobe'] = strobe;
     m['show.blackout'] = blackout ? 1 : 0;
     m['show.freeze'] = freeze ? 1 : 0;
+    m['show.milkUnder'] = milkUnder ? 1 : 0;
     m['show.hit'] = hit;
     for (var i = 0; i < macros.length; i++) {
       m['show.macro.${i + 1}'] = macros[i];
@@ -544,7 +564,9 @@ class ShowMacros {
 
   Map<String, dynamic> toJson() => {
         'intensity': intensity, 'colour': colour, 'strobe': strobe, 'blackout': blackout,
-        'freeze': freeze, 'hit': hit, 'macros': macros,
+        'freeze': freeze,
+        'milkUnder': milkUnder,
+        if (milkPreset != null) 'milkPreset': milkPreset, 'hit': hit, 'macros': macros,
       };
 
   factory ShowMacros.fromJson(Map<String, dynamic> j) => ShowMacros(
@@ -553,6 +575,8 @@ class ShowMacros {
         strobe: _d(j['strobe']),
         blackout: j['blackout'] == true,
         freeze: j['freeze'] == true,
+        milkUnder: j['milkUnder'] == true,
+        milkPreset: j['milkPreset'] as String?,
         hit: _d(j['hit']),
         macros: [for (final v in (j['macros'] as List? ?? const [])) _d(v)],
       );

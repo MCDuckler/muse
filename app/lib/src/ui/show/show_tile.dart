@@ -148,32 +148,51 @@ class _ShowTileState extends State<ShowTile> {
                       builder: (context, _) {
                         final milk = MilkFeed.shared;
                         final d = milk.director;
+                        final only = show.milkOnly;
                         return Row(
                           children: [
                             Expanded(
-                              child: InkWell(
-                                onTap: () => openMilkPage(context, widget.booth),
-                                child: Text(
-                                  milk.running ? (milk.presetName ?? 'MilkDrop…') : 'MilkDrop presets…',
-                                  style: TextStyle(color: milk.running ? Console.ink : Console.quiet, fontSize: 12),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
+                              child: Text(
+                                milk.running ? (milk.presetName ?? 'MilkDrop…') : 'MilkDrop off',
+                                style: TextStyle(color: milk.running ? Console.ink : Console.quiet, fontSize: 12),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
-                            if (milk.running) ...[
-                              Pad(icon: Icons.casino_outlined, width: 22, height: 22, colour: Console.quiet, tooltip: 'Another preset', onTap: d.random),
-                              const SizedBox(width: 2),
-                              Pad(
-                                icon: d.locked ? Icons.lock : Icons.lock_open,
-                                width: 22,
-                                height: 22,
-                                lit: d.locked,
-                                colour: Console.quiet,
-                                tooltip: d.locked ? 'Held' : 'Hold this preset',
-                                onTap: () => d.set(locked: !d.locked),
-                              ),
-                            ],
+                            Pad(
+                              icon: Icons.filter_center_focus,
+                              width: 22,
+                              height: 22,
+                              lit: only,
+                              colour: Console.quiet,
+                              tooltip: only ? 'Only MilkDrop — back to the scenes' : 'Only MilkDrop: the stage held on it, ‹ › on its presets',
+                              onTap: () => show.setMilkOnly(!only),
+                            ),
+                            const SizedBox(width: 2),
+                            Pad(
+                              icon: Icons.layers_outlined,
+                              width: 22,
+                              height: 22,
+                              lit: st.macros.milkUnder,
+                              colour: Console.quiet,
+                              tooltip: st.macros.milkUnder ? 'MilkDrop under the scenes — off' : 'MilkDrop under every scene',
+                              onTap: () => show.setMacros(show.macros.copyWith(milkUnder: !show.macros.milkUnder)),
+                            ),
+                            const SizedBox(width: 2),
+                            Pad(icon: Icons.casino_outlined, width: 22, height: 22, colour: Console.quiet, tooltip: 'Another preset', onTap: () {
+                              if (!milk.running) unawaited(milk.start());
+                              d.random();
+                            }),
+                            const SizedBox(width: 2),
+                            Pad(
+                              icon: d.locked ? Icons.lock : Icons.lock_open,
+                              width: 22,
+                              height: 22,
+                              lit: d.locked,
+                              colour: Console.quiet,
+                              tooltip: d.locked ? 'Held' : 'Hold this preset',
+                              onTap: () => d.set(locked: !d.locked),
+                            ),
                           ],
                         );
                       },
@@ -223,6 +242,16 @@ class _ShowTileState extends State<ShowTile> {
                     ],
                   ),
                   const SizedBox(height: 6),
+                  if (MilkFeed.shared.available)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: _Button(
+                        icon: Icons.blur_on,
+                        label: 'MilkDrop presets',
+                        tip: 'Browse, favourite, make and edit MilkDrop presets',
+                        onTap: () => openMilkPage(context, widget.booth),
+                      ),
+                    ),
                   Row(
                     children: [
                       Expanded(

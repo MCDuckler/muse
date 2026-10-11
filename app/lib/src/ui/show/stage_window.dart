@@ -35,6 +35,7 @@ import '../../state/app_state.dart' show AppState;
 import '../../state/booth/booth.dart';
 import '../../state/playback_log.dart';
 import '../../state/show/camera_feed.dart';
+import '../../state/show/milk_feed.dart';
 import '../../state/player.dart' show PlayerService;
 import '../../state/show/show_demo.dart';
 import '../../state/show/show_feed.dart';
@@ -188,6 +189,11 @@ class _StageWindowState extends State<_StageWindow> {
       _remote = RemoteShowFeed();
       _feed = _remote;
       unawaited(_connect(url));
+      // MilkDrop here reads the records' streams with this desk's token.
+      SharedPreferences.getInstance().then((prefs) {
+        final token = prefs.getString('muse.token');
+        if (token != null) MilkFeed.shared.pcm.headers = {'Authorization': 'Bearer $token'};
+      }).ignore();
     }
   }
 
@@ -237,6 +243,7 @@ class _StageWindowState extends State<_StageWindow> {
           ..choose(widget.args[sc + 1])
           ..locked = true;
       }
+      if (widget.args.contains('--milk-under')) booth.show.setMacros(booth.show.macros.copyWith(milkUnder: true));
       booth.show.start();
       await booth.play(booth.a);
       final t = booth.timing.peek(id);

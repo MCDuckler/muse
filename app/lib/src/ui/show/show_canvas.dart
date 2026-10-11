@@ -290,9 +290,9 @@ class _StagePainter extends CustomPainter {
 
   /// MilkDrop, for a scene that needs it: the helper started when one is on,
   /// stopped a while after none has been (unless the window pinned it).
-  void _milk(Scene scene) {
+  void _milk(Scene scene, {bool under = false}) {
     final milk = MilkFeed.shared;
-    final wants = scene.meta.needs.contains('milk');
+    final wants = under || scene.meta.needs.contains('milk');
     final now = DateTime.now();
     if (wants) {
       _milkWantedAt = now;
@@ -347,6 +347,18 @@ class _StagePainter extends CustomPainter {
           }
           _sims.clear();
           _particleScene = scene.id;
+        }
+        // MilkDrop under it all, where the hands asked: the scene's layers add over
+        // its picture, the scene's post goes over both.
+        final under = live && st.macros.milkUnder && !scene.layers.any((l) => l.samplers.contains('milk'));
+        final milkFrame = under ? MilkFeed.shared.frame : null;
+        if (milkFrame != null) {
+          final pw = milkFrame.width.toDouble(), ph = milkFrame.height.toDouble();
+          final scale = math.max(w / pw, h / ph);
+          final dw = pw * scale, dh = ph * scale;
+          c.drawImageRect(milkFrame, Rect.fromLTWH(0, 0, pw, ph), Rect.fromLTWH((w - dw) / 2, (h - dh) / 2, dw, dh),
+              Paint()..filterQuality = FilterQuality.low);
+          first = false;
         }
         for (final layer in scene.layers) {
           final simKind = layer.sim;
@@ -418,7 +430,7 @@ class _StagePainter extends CustomPainter {
     final secondary = st.palette.secondary.toColor();
 
     _camera(scene);
-    _milk(scene);
+    _milk(scene, under: st.macros.milkUnder);
 
     // 1. the scene — kept as its own history where a layer feeds on itself.
     final drawn = _scene(scene, st, w, h);

@@ -14,7 +14,10 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 class MilkPreset {
-  const MilkPreset({required this.path, required this.name, required this.author, required this.collection});
+  const MilkPreset({required this.path, required this.name, required this.author, required this.collection, this.rating = 3});
+
+  /// The author's own word on it, 0..5 (fRating); 3 where the file does not say.
+  final double rating;
 
   /// The file, as the helper is told it.
   final String path;
@@ -29,7 +32,7 @@ class MilkPreset {
   String get fullName => author.isEmpty ? name : '$author - $name';
 
   /// Author and title off a file name, by the convention "Author - Title.milk".
-  static MilkPreset of(String path, String collection) {
+  static MilkPreset of(String path, String collection, {double rating = 3}) {
     var base = path.split(Platform.pathSeparator).last;
     if (base.toLowerCase().endsWith('.milk')) base = base.substring(0, base.length - 5);
     final dash = base.indexOf(' - ');
@@ -38,7 +41,20 @@ class MilkPreset {
       name: dash > 0 ? base.substring(dash + 3) : base,
       author: dash > 0 ? base.substring(0, dash) : '',
       collection: collection,
+      rating: rating,
     );
+  }
+
+  /// The rating read off the file's head, where it has one.
+  static Future<double> ratingOf(String path) async {
+    try {
+      final f = File(path).openRead(0, 400);
+      final head = await f.transform(const SystemEncoding().decoder).join();
+      final m = RegExp(r'fRating=([\d.]+)').firstMatch(head);
+      return m == null ? 3 : (double.tryParse(m.group(1)!) ?? 3).clamp(0.0, 5.0);
+    } catch (_) {
+      return 3;
+    }
   }
 }
 
@@ -137,7 +153,9 @@ class MilkLibrary extends ChangeNotifier {
       final d = Directory(dir);
       if (!d.existsSync()) return;
       await for (final e in d.list(recursive: true, followLinks: false)) {
-        if (e is File && e.path.toLowerCase().endsWith('.milk')) found.add(MilkPreset.of(e.path, collection));
+        if (e is File && e.path.toLowerCase().endsWith('.milk')) {
+          found.add(MilkPreset.of(e.path, collection, rating: await MilkPreset.ratingOf(e.path)));
+        }
       }
     }
     await walk('$home${Platform.pathSeparator}shipped', 'shipped');
@@ -151,6 +169,8 @@ class MilkLibrary extends ChangeNotifier {
       ..addAll(found);
     if (_ready) notifyListeners();
   }
+
+  MilkPreset? byName(String fullName) => presets.cast<MilkPreset?>().firstWhere((p) => p!.fullName == fullName, orElse: () => null);
 
   MilkPreset? byPath(String? path) => path == null ? null : presets.cast<MilkPreset?>().firstWhere((p) => p!.path == path, orElse: () => null);
 
@@ -206,20 +226,22 @@ class MilkLibrary extends ChangeNotifier {
 
   /// The pool the director draws from: the favourites where there are enough,
   /// or everything.
-  List<MilkPreset> pool({bool favouritesOnly = false}) {
+  List<MilkPreset> pool({bool favouritesOnly = false, double minRating = 0}) {
     if (favouritesOnly) {
       final f = presets.where(isFavourite).toList();
       if (f.isNotEmpty) return f;
     }
-    return presets;
+    final rated = presets.where((p) => p.rating >= minRating || p.collection == 'mine').toList();
+    return rated.isEmpty ? presets : rated;
   }
 
-  List<MilkPreset> search(String query, {String? collection, bool favouritesOnly = false}) {
+  List<MilkPreset> search(String query, {String? collection, bool favouritesOnly = false, double minRating = 0}) {
     final q = query.trim().toLowerCase();
     return [
       for (final p in presets)
         if ((collection == null || p.collection == collection) &&
             (!favouritesOnly || isFavourite(p)) &&
+            (p.rating >= minRating || p.collection == 'mine') &&
             (q.isEmpty || p.fullName.toLowerCase().contains(q)))
           p,
     ];

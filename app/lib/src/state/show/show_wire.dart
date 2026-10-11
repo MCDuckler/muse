@@ -17,6 +17,7 @@ import 'package:flutter/foundation.dart';
 
 import 'show_events.dart';
 import 'show_feed.dart';
+import 'milk_feed.dart';
 import 'show_state.dart';
 
 /// The booth's end: a feed written to one peer.
@@ -98,6 +99,7 @@ class RemoteShowFeed extends ChangeNotifier implements ShowFeed {
         final s = j['s'];
         if (s is Map) {
           _heard = ShowState.fromJson(s.cast<String, dynamic>());
+          _milk(_heard!);
           _heardAt = DateTime.now();
           _state = _heard!;
           notifyListeners();
@@ -107,6 +109,20 @@ class RemoteShowFeed extends ChangeNotifier implements ShowFeed {
         if (e is Map) _events.add(ShowEvent.fromJson(e.cast<String, dynamic>()));
       default:
         break;
+    }
+  }
+
+  /// MilkDrop here, as there: the numbers and the sound from the frame, the
+  /// preset the booth has on (by name, out of the same library).
+  void _milk(ShowState st) {
+    final milk = MilkFeed.shared;
+    if (!milk.running) return;
+    milk.director.locked = true;
+    milk.tick(st);
+    final want = st.macros.milkPreset;
+    if (want != null && want != milk.preset?.fullName) {
+      final p = milk.library.byName(want);
+      if (p != null) milk.load(p);
     }
   }
 

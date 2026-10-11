@@ -59,6 +59,7 @@ class MilkFeed extends ChangeNotifier {
 
   ui.Image? frame;
   int frames = 0;
+  final _att = [1.0, 1.0, 1.0];
   bool _ready = false;
 
   bool _decoding = false;
@@ -209,6 +210,19 @@ class MilkFeed extends ChangeNotifier {
     if (_helper == null || !_ready) return;
     final vars = varsOf(st);
     _send('vars ${vars.entries.map((e) => '${e.key}=${e.value.toStringAsFixed(4)}').join(' ')}');
+    // MilkDrop's bass/mid/treb from the show's own hits and bands rather than
+    // its FFT: 1 is its "average"; a hit lands at 2 to 3, where presets' thresholds
+    // (bass_att > 1.3 and the like) are. The followers ease over a sixth of a second.
+    final f = st.flat;
+    final lv = [
+      0.55 + 1.0 * (f['dyn.band.low'] ?? 0) + 1.7 * (f['dyn.hit.kick'] ?? 0),
+      0.55 + 1.0 * (f['dyn.band.mid'] ?? 0) + 1.5 * (f['dyn.hit.snare'] ?? 0),
+      0.55 + 1.0 * (f['dyn.band.high'] ?? 0) + 1.5 * (f['dyn.hit.top'] ?? 0),
+    ];
+    for (var i = 0; i < 3; i++) {
+      _att[i] += (lv[i] - _att[i]) * 0.12;
+    }
+    _send('audio ${lv.map((v) => v.toStringAsFixed(3)).join(' ')} ${_att.map((v) => v.toStringAsFixed(3)).join(' ')}');
     final samples = pcm.slice(st);
     if (samples != null && samples.isNotEmpty) {
       _send('pcm ${samples.length}', samples.buffer.asUint8List(samples.offsetInBytes, samples.lengthInBytes));

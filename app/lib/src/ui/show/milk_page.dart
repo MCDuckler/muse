@@ -34,6 +34,7 @@ class _MilkPageState extends State<MilkPage> {
   final _query = TextEditingController();
   String? _collection;
   bool _favouritesOnly = false;
+  bool _ratedOnly = true;
   bool _wasPinned = false;
 
   MilkFeed get feed => MilkFeed.shared;
@@ -136,7 +137,15 @@ class _MilkPageState extends State<MilkPage> {
           final list = _list(accent);
           final side = _side(accent);
           if (narrow) {
-            return Column(children: [Padding(padding: const EdgeInsets.all(12), child: side), Expanded(child: list)]);
+            // The picture and its switches take what they need, scrolling past half
+            // the height; the list has the rest.
+            return Column(children: [
+              ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: c.maxHeight * 0.55),
+                child: SingleChildScrollView(child: Padding(padding: const EdgeInsets.all(12), child: side)),
+              ),
+              Expanded(child: list),
+            ]);
           }
           return Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -212,7 +221,38 @@ class _MilkPageState extends State<MilkPage> {
                     selected: d.favouritesOnly,
                     onSelected: (v) => d.set(favouritesOnly: v),
                   ),
+                  FilterChip(
+                    label: Text('rated ${d.minRating.round()}+'),
+                    selected: d.minRating > 0,
+                    tooltip: 'Only presets their author rated this or better (the originals rate themselves 1 to 5)',
+                    onSelected: (_) => d.set(minRating: d.minRating >= 4 ? 0 : d.minRating + 1),
+                  ),
                 ],
+              ),
+              const SizedBox(height: 8),
+              ListenableBuilder(
+                listenable: widget.booth.show,
+                builder: (context, _) {
+                  final show = widget.booth.show;
+                  return Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      FilterChip(
+                        avatar: const Icon(Icons.filter_center_focus, size: 16),
+                        label: const Text('only MilkDrop on the stage'),
+                        selected: show.milkOnly,
+                        onSelected: show.setMilkOnly,
+                      ),
+                      FilterChip(
+                        avatar: const Icon(Icons.layers_outlined, size: 16),
+                        label: const Text('MilkDrop under every scene'),
+                        selected: show.macros.milkUnder,
+                        onSelected: (v) => show.setMacros(show.macros.copyWith(milkUnder: v)),
+                      ),
+                    ],
+                  );
+                },
               ),
               const SizedBox(height: 10),
               Text(
@@ -231,7 +271,7 @@ class _MilkPageState extends State<MilkPage> {
     return ListenableBuilder(
       listenable: library,
       builder: (context, _) {
-        final found = library.search(_query.text, collection: _collection, favouritesOnly: _favouritesOnly);
+        final found = library.search(_query.text, collection: _collection, favouritesOnly: _favouritesOnly, minRating: _ratedOnly ? feed.director.minRating : 0);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -268,6 +308,11 @@ class _MilkPageState extends State<MilkPage> {
                     selected: _favouritesOnly,
                     onSelected: (_) => setState(() => _favouritesOnly = !_favouritesOnly),
                   ),
+                  ChoiceChip(
+                    label: Text('rated ${feed.director.minRating.round()}+'),
+                    selected: _ratedOnly,
+                    onSelected: (_) => setState(() => _ratedOnly = !_ratedOnly),
+                  ),
                   for (final c in collections)
                     ChoiceChip(
                       label: Text(c),
@@ -303,7 +348,7 @@ class _MilkPageState extends State<MilkPage> {
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Text(p.name, style: TextStyle(color: on ? accent : Console.ink, fontSize: 13, fontWeight: on ? FontWeight.w700 : FontWeight.w500), maxLines: 1, overflow: TextOverflow.ellipsis),
-                                      Text([if (p.author.isNotEmpty) p.author, if (p.collection != 'shipped') p.collection].join(' · '), style: TextStyle(color: Console.quiet, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                      Text([if (p.author.isNotEmpty) p.author, if (p.collection != 'shipped') p.collection, '★' * p.rating.round()].join(' · '), style: TextStyle(color: Console.quiet, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
                                     ],
                                   ),
                                 ),

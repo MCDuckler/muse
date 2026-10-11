@@ -12,6 +12,8 @@
 //     var NAME VALUE        one value preset code reads by name (wo_kick, ...)
 //     vars N=V N=V ...      several at once
 //     pcm N                 N int16 mono samples at 44100 Hz follow (2N bytes)
+//     audio B M T BA MA TA  bass/mid/treb and their slow followers, in place of the
+//                           FFT's (1 = average, a hit 2..3); "audio off" for the FFT
 //     beat S                projectM's beat sensitivity
 //     textures DIR          where presets' textures are looked for
 //     quit
@@ -25,11 +27,21 @@
 // with no window of its own and on a box with no display at all.
 #include <projectM-4/projectM.h>
 
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#include <GL/glew.h>
+#include <GL/wglew.h>
+#include <fcntl.h>
+#include <io.h>
+#else
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #define GL_GLEXT_PROTOTYPES 1
 #include <GL/gl.h>
 #include <GL/glext.h>
+#include <unistd.h>
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -43,7 +55,6 @@
 #include <sstream>
 #include <string>
 #include <thread>
-#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -65,11 +76,17 @@ void say(const std::string& s) {
 
 // Reads stdin whole lines (and payloads) on its own thread, so the render loop
 // never waits on the pipe.
+#ifdef _WIN32
+long readIn(void* buf, size_t n) { return _read(0, buf, static_cast<unsigned int>(n)); }
+#else
+long readIn(void* buf, size_t n) { return static_cast<long>(read(STDIN_FILENO, buf, n)); }
+#endif
+
 bool readExact(std::vector<uint8_t>& out, size_t n) {
     out.resize(n);
     size_t got = 0;
     while (got < n) {
-        ssize_t r = read(STDIN_FILENO, out.data() + got, n - got);
+        long r = readIn(out.data() + got, n - got);
         if (r <= 0) return false;
         got += static_cast<size_t>(r);
     }
@@ -80,7 +97,7 @@ void readerThread() {
     std::string line;
     char c;
     while (true) {
-        ssize_t r = read(STDIN_FILENO, &c, 1);
+        long r = readIn(&c, 1);
         if (r <= 0) break;
         if (c != '\n') {
             line += c;
@@ -112,6 +129,77 @@ void readerThread() {
     g_wake.notify_one();
 }
 
+#ifdef _WIN32
+// Windows: a window that is never shown, for its OpenGL context and its default
+// framebuffer (which projectM draws into). Resized with the picture.
+struct Egl {
+    HWND window = nullptr;
+    HDC dc = nullptr;
+    HGLRC context = nullptr;
+    int width = 0, height = 0;
+    std::string platform = "wgl";
+
+    bool open() {
+        WNDCLASSA wc = {};
+        wc.style = CS_OWNDC;
+        wc.lpfnWndProc = DefWindowProcA;
+        wc.hInstance = GetModuleHandleA(nullptr);
+        wc.lpszClassName = "wetowl-milk";
+        RegisterClassA(&wc);
+        window = CreateWindowExA(0, "wetowl-milk", "wetowl-milk", WS_POPUP, 0, 0, 64, 64, nullptr, nullptr, wc.hInstance, nullptr);
+        if (!window) {
+            say("wgl: no window");
+            return false;
+        }
+        dc = GetDC(window);
+        PIXELFORMATDESCRIPTOR pfd = {};
+        pfd.nSize = sizeof pfd;
+        pfd.nVersion = 1;
+        pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL;
+        pfd.iPixelType = PFD_TYPE_RGBA;
+        pfd.cColorBits = 32;
+        pfd.cAlphaBits = 8;
+        int pf = ChoosePixelFormat(dc, &pfd);
+        if (!pf || !SetPixelFormat(dc, pf, &pfd)) {
+            say("wgl: no pixel format");
+            return false;
+        }
+        // An old-style context first, to reach the function that makes a new one.
+        HGLRC old = wglCreateContext(dc);
+        if (!old || !wglMakeCurrent(dc, old)) {
+            say("wgl: no context");
+            return false;
+        }
+        glewExperimental = GL_TRUE;
+        if (glewInit() != GLEW_OK) {
+            say("wgl: glew failed");
+            return false;
+        }
+        if (wglewIsSupported("WGL_ARB_create_context")) {
+            const int attribs[] = {
+                WGL_CONTEXT_MAJOR_VERSION_ARB, 3,
+                WGL_CONTEXT_MINOR_VERSION_ARB, 3,
+                WGL_CONTEXT_PROFILE_MASK_ARB, WGL_CONTEXT_CORE_PROFILE_BIT_ARB,
+                0};
+            context = wglCreateContextAttribsARB(dc, nullptr, attribs);
+        }
+        if (!context) context = old; else {
+            wglMakeCurrent(nullptr, nullptr);
+            wglDeleteContext(old);
+            wglMakeCurrent(dc, context);
+            glewInit();
+        }
+        return true;
+    }
+
+    bool resize(int w, int h) {
+        SetWindowPos(window, nullptr, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_HIDEWINDOW);
+        width = w;
+        height = h;
+        return true;
+    }
+};
+#else
 struct Egl {
     EGLDisplay display = EGL_NO_DISPLAY;
     EGLContext context = EGL_NO_CONTEXT;
@@ -207,6 +295,8 @@ struct Egl {
     }
 };
 
+#endif
+
 std::string presetName(const std::string& path) {
     auto slash = path.find_last_of('/');
     auto name = slash == std::string::npos ? path : path.substr(slash + 1);
@@ -236,6 +326,10 @@ int main(int argc, char** argv) {
         }
     }
 
+#ifdef _WIN32
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
     Egl egl;
     if (!egl.open() || !egl.resize(width, height)) return 2;
     say("egl " + egl.platform + " " + reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
@@ -345,6 +439,17 @@ int main(int argc, char** argv) {
                 if (n > 0) {
                     projectm_pcm_add_int16(pm, reinterpret_cast<const int16_t*>(cmd.payload.data()),
                                            static_cast<unsigned int>(n), PROJECTM_MONO);
+                }
+            } else if (word == "audio") {
+                std::string first;
+                in >> first;
+                if (first == "off") {
+                    projectm_clear_audio_levels(pm);
+                } else {
+                    float lv[6] = {1, 1, 1, 1, 1, 1};
+                    lv[0] = std::strtof(first.c_str(), nullptr);
+                    for (int i = 1; i < 6; i++) in >> lv[i];
+                    projectm_set_audio_levels(pm, lv[0], lv[1], lv[2], lv[3], lv[4], lv[5]);
                 }
             } else if (word == "beat") {
                 float s = 1;

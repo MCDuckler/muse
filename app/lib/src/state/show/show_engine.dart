@@ -114,8 +114,24 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   DateTime? _hitAt;
 
   /// The performer's hands on the scenes.
-  void nextScene() => director.next();
-  void previousScene() => director.next(by: -1);
+  void nextScene() => milkOnly ? MilkFeed.shared.director.next() : director.next();
+  void previousScene() => milkOnly ? MilkFeed.shared.director.previous() : director.next(by: -1);
+
+  /// Nothing but MilkDrop on the stage: the scene held on it, the arrows and the
+  /// pads on its presets instead.
+  bool get milkOnly => director.locked && director.scene == 'milk';
+  void setMilkOnly(bool on) {
+    if (on) {
+      director
+        ..choose('milk')
+        ..locked = true;
+      unawaited(MilkFeed.shared.start());
+    } else {
+      director.locked = false;
+    }
+    if (!running) tick(DateTime.now());
+    notifyListeners();
+  }
   void chooseScene(String id) => director.choose(id);
 
   void _stepSaid() {
@@ -216,11 +232,17 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
       clearSceneFrom: d.from == null,
       macros: _macros,
     );
-    // MilkDrop, where it is on: the numbers and the sound, and its director's cuts.
+    // MilkDrop, where it is on: the numbers and the sound, and its director's cuts;
+    // the preset on goes over the wire, so a stage in another process shows the same.
     final milk = MilkFeed.shared;
     if (milk.running) {
       milk.tick(_state);
       milk.director.frame(_state, said);
+      final on = milk.preset?.fullName;
+      if (on != _macros.milkPreset) {
+        _macros = _macros.copyWith(milkPreset: on, clearMilkPreset: on == null);
+        _state = _state.copyWith(macros: _macros);
+      }
     }
     notifyListeners();
     for (final e in said) {
@@ -245,6 +267,7 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
       name: deck.name,
       track: track,
       coverUrl: booth.api.coverUrl(track),
+      streamUrl: booth.api.streamUrl(track),
       playing: deck.playing,
       position: at < Duration.zero ? Duration.zero : at,
       timing: timing,

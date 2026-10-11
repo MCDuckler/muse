@@ -35,19 +35,25 @@ class MilkDirector extends ChangeNotifier {
   /// Cut on a drop, and on the hands' hit.
   bool cutOnDrop = true;
 
-  static const _kEvery = 'muse.milk.everyBars', _kFav = 'muse.milk.favouritesOnly', _kDrop = 'muse.milk.cutOnDrop';
+  /// The least an author's rating may be for the director to pick it: the
+  /// originals rate themselves 1..5, and under 3 is mostly the dull ones.
+  double minRating = 3;
+
+  static const _kEvery = 'muse.milk.everyBars', _kFav = 'muse.milk.favouritesOnly', _kDrop = 'muse.milk.cutOnDrop', _kRating = 'muse.milk.minRating';
 
   void unawaitedLoad() {
     SharedPreferences.getInstance().then((p) {
       everyBars = p.getInt(_kEvery) ?? everyBars;
       favouritesOnly = p.getBool(_kFav) ?? favouritesOnly;
       cutOnDrop = p.getBool(_kDrop) ?? cutOnDrop;
+      minRating = p.getDouble(_kRating) ?? minRating;
       notifyListeners();
     }).ignore();
   }
 
-  void set({int? everyBars, bool? favouritesOnly, bool? cutOnDrop, bool? locked}) {
+  void set({int? everyBars, bool? favouritesOnly, bool? cutOnDrop, bool? locked, double? minRating}) {
     if (everyBars != null) this.everyBars = everyBars;
+    if (minRating != null) this.minRating = minRating;
     if (favouritesOnly != null) this.favouritesOnly = favouritesOnly;
     if (cutOnDrop != null) this.cutOnDrop = cutOnDrop;
     if (locked != null) {
@@ -58,6 +64,7 @@ class MilkDirector extends ChangeNotifier {
       await p.setInt(_kEvery, this.everyBars);
       await p.setBool(_kFav, this.favouritesOnly);
       await p.setBool(_kDrop, this.cutOnDrop);
+      await p.setDouble(_kRating, this.minRating);
     }).ignore();
     notifyListeners();
   }
@@ -70,7 +77,7 @@ class MilkDirector extends ChangeNotifier {
   }
 
   MilkPreset? _pick({MilkPreset? not}) {
-    final pool = feed.library.pool(favouritesOnly: favouritesOnly);
+    final pool = feed.library.pool(favouritesOnly: favouritesOnly, minRating: minRating);
     if (pool.isEmpty) return null;
     if (pool.length == 1) return pool.first;
     MilkPreset p;
@@ -90,7 +97,7 @@ class MilkDirector extends ChangeNotifier {
   }
 
   void _step(int by) {
-    final list = feed.library.search('', favouritesOnly: favouritesOnly);
+    final list = feed.library.search('', favouritesOnly: favouritesOnly, minRating: minRating);
     if (list.isEmpty) return;
     final cur = feed.preset;
     final i = cur == null ? -1 : list.indexWhere((p) => p.path == cur.path);

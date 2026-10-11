@@ -42,6 +42,13 @@ jobs:
       - name: Fetch packages
         working-directory: app
         run: flutter pub get
+      - name: GLEW, for MilkDrop's helper
+        shell: bash
+        run: |
+          # projectM needs GLEW on Windows (app/native/milk); vcpkg's toolchain file
+          # in the environment is read by every CMake the Flutter build runs.
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" install glew:x64-windows
+          echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> "$GITHUB_ENV"
       - name: Build
         working-directory: app
         shell: bash

@@ -18,6 +18,8 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 
+import '../../worker/tools.dart';
+
 class CameraFeed extends ChangeNotifier {
   CameraFeed._();
 
@@ -71,7 +73,7 @@ class CameraFeed extends ChangeNotifier {
       return;
     }
     try {
-      final p = await Process.start('ffmpeg', [
+      final p = await Process.start(await Tools.ffmpegCommand(), [
         '-hide_banner', '-loglevel', 'error', '-nostdin',
         ..._args(device),
         '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', '${width}x$height',

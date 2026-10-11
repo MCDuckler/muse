@@ -87,6 +87,20 @@ if(PLUGIN_BUNDLED_LIBRARIES)
     COMPONENT Runtime)
 endif()
 
+# MilkDrop: the wetowl-milk helper and the projectM it carries (native/milk/), put
+# beside the app. Needs GLEW (vcpkg install glew:x64-windows, with vcpkg's toolchain
+# in CMAKE_TOOLCHAIN_FILE); without it the app is built without MilkDrop.
+option(WETOWL_MILK "Build the MilkDrop helper" ON)
+find_package(GLEW QUIET)
+if(WETOWL_MILK AND GLEW_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../native/milk/CMakeLists.txt")
+  add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../native/milk" milk)
+  install(TARGETS wetowl-milk projectM
+    RUNTIME DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    LIBRARY DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+  install(FILES $<TARGET_RUNTIME_DLLS:wetowl-milk> DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" COMPONENT Runtime)
+endif()
+
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/windows/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"

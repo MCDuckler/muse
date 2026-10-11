@@ -133,6 +133,18 @@ class Tools {
     return dirs;
   }
 
+  /// The ffmpeg to run for a pipe (the camera, MilkDrop's sound): the one beside
+  /// the app's tools where there is one, else whatever the path has.
+  static Future<String> ffmpegCommand() => _ffmpeg ??= () async {
+        final exe = Platform.isWindows ? 'ffmpeg.exe' : 'ffmpeg';
+        for (final d in searchPath()) {
+          final f = File('$d${Platform.pathSeparator}$exe');
+          if (await f.exists()) return f.path;
+        }
+        return 'ffmpeg';
+      }();
+  static Future<String>? _ffmpeg;
+
   static Future<Tools> find({Directory? own}) async {
     Future<String?> where(String name) async {
       final exe = Platform.isWindows ? '$name.exe' : name;

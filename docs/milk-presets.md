@@ -43,9 +43,18 @@ per-frame, per-vertex, shape and waveform code. All 0..1 unless said.
 | `wo_level_a`, `wo_level_b` | each deck's share of the output |
 | `wo_cam_motion`, `wo_cam_x`, `wo_cam_y` | the room's camera, where it is on |
 
-A shipped preset knows none of these; the show drives it from outside instead
-(the director cuts on hits and drops, blends every so many bars, holds through a
-breakdown; the scene's own shader steps in on the kick and flashes on a hit).
+A shipped preset knows none of these — but it reads `bass`, `mid`, `treb` and
+their `_att` followers, and those are the show's too: the helper is told them every
+tick from WetOwl's own bands and hits on the record's grid (a kick lands `bass` at
+2–3, where presets' thresholds are), in place of projectM's guess from an FFT. So
+every preset follows the beat the booth hears. On top the director cuts on hits
+and drops, blends every so many bars and holds through a breakdown; the scene's
+own shader steps in on the kick and flashes on a hit.
+
+The show tile's `MilkDrop presets` button opens the browser (search, ★, folders
+brought in, the director's rules) and the maker (`New preset` / `Edit this one`);
+the two pads beside the preset's name put MilkDrop under every scene, or hold the
+stage on MilkDrop alone with ‹ › stepping its presets.
 
 ## Writing one
 
@@ -68,11 +77,19 @@ that will not compile.
 line) and writes frames on stdout (`MILK`, width, height, sequence as little-endian
 u32, then RGBA top row first). Commands: `size W H`, `fps N`, `preset PATH`,
 `preset-soft PATH`, `data N` + N bytes, `data-soft N`, `lock 0|1`,
-`var NAME VALUE`, `vars N=V …`, `pcm N` + N int16 mono 44.1 kHz samples, `beat S`,
-`textures DIR`, `quit`. It renders through EGL without a window (surfaceless, a
-GPU device, or the default display) — so it works on a desk with no window of its
-own and in the headless bench. Linux today; built by `flutter build linux` through
-`linux/CMakeLists.txt` (needs cmake, git, EGL and OpenGL headers).
+`var NAME VALUE`, `vars N=V …`, `pcm N` + N int16 mono 44.1 kHz samples,
+`audio B M T BA MA TA` (the levels preset code reads as bass/mid/treb and their
+followers; `audio off` for projectM's own), `beat S`, `textures DIR`, `quit`. On
+Linux it renders through EGL without a window (surfaceless, a GPU device, or the
+default display) — so it works on a desk with no window of its own and in the
+headless bench; on Windows through a window that is never shown. Built by
+`flutter build linux` / `flutter build windows` through `linux/CMakeLists.txt` and
+`windows/CMakeLists.txt` (Linux needs cmake, git, EGL and OpenGL headers; Windows
+needs GLEW from vcpkg with its toolchain file in `CMAKE_TOOLCHAIN_FILE`). A Mac
+helper is still to come.
 
 The patch to projectM is `app/native/milk/projectm-wetowl.patch` (adds
-`projectm_set_custom_variable`); the version is pinned in its CMakeLists.
+`projectm_set_custom_variable`, `projectm_set_audio_levels` and
+`projectm_opengl_set_target_framebuffer`); the version is pinned in its
+CMakeLists, and the fetched source is keyed by the patch's hash, so a changed
+patch is a fresh fetch.

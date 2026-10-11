@@ -69,12 +69,13 @@ void main() {
   // The palette through it: the primary where it is dark, the secondary where
   // it is bright, as much as the knob says.
   float lum = dot(col, vec3(0.299, 0.587, 0.114));
+  // Black stays black: the tint scales with what is there, never lifts it.
   vec3 tint = mix(hsl(uHue, 0.8, 0.35), hsl(uHue2, 0.7, 0.7), smoothstep(0.1, 0.9, lum));
-  col = mix(col, tint * (0.3 + 1.4 * lum), uM1);
+  col = mix(col, tint * 1.6 * lum, uM1);
   // A flash on the hands' hit, and the top end as a thin sparkle at the edges.
   col = mix(col, vec3(1.0), uHit * 0.6);
   float edge = smoothstep(0.35, 0.5, max(abs(uv.x - 0.5), abs(uv.y - 0.5)));
   col += hsl(uHue2, 0.9, 0.6) * edge * 0.25 * uHitTop;
-  col *= 0.85 + 0.3 * uExposure;
+  col *= 0.8 + 0.3 * uExposure;
   fragColor = vec4(col, 1.0);
 }
