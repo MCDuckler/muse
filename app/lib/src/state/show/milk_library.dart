@@ -63,7 +63,16 @@ class MilkLibrary extends ChangeNotifier {
 
   Future<void> _init() async {
     final env = Platform.environment['WETOWL_MILK_HOME'];
-    home = env ?? '${(await getApplicationSupportDirectory()).path}${Platform.pathSeparator}milk';
+    if (env != null) {
+      home = env;
+    } else {
+      try {
+        home = '${(await getApplicationSupportDirectory()).path}${Platform.pathSeparator}milk';
+      } catch (_) {
+        // No platform to ask (a test): somewhere, rather than nowhere.
+        home = '${Directory.systemTemp.path}${Platform.pathSeparator}wetowl-milk';
+      }
+    }
     for (final d in ['shipped', 'mine', 'textures']) {
       await Directory('$home${Platform.pathSeparator}$d').create(recursive: true);
     }
