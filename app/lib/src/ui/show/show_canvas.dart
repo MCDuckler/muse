@@ -28,12 +28,12 @@ import 'show_sims.dart';
 
 /// Every program the stage draws with, loaded once.
 class StagePrograms {
-  StagePrograms._(this.scenes, this.sims, this.feedback, this.blur, this.finish);
+  StagePrograms._(this.scenes, this.sims, this.feedback, this.blur, this.finish, this.under);
   final Map<String, ui.FragmentProgram> scenes;
 
   /// The simulations' passes (shaders/show/sim/), by file name.
   final Map<String, ui.FragmentProgram> sims;
-  final ui.FragmentProgram feedback, blur, finish;
+  final ui.FragmentProgram feedback, blur, finish, under;
 
   static const simShaders = ['fluid_advect', 'fluid_div', 'fluid_jacobi', 'fluid_project', 'fluid_look'];
 
@@ -45,6 +45,7 @@ class StagePrograms {
       ui.FragmentProgram.fromAsset('shaders/show/feedback.frag'),
       ui.FragmentProgram.fromAsset('shaders/show/blur.frag'),
       ui.FragmentProgram.fromAsset('shaders/show/finish.frag'),
+      ui.FragmentProgram.fromAsset('shaders/show/under.frag'),
     ]);
     final k = names.length + simShaders.length;
     return StagePrograms._(
@@ -53,6 +54,7 @@ class StagePrograms {
       loaded[k],
       loaded[k + 1],
       loaded[k + 2],
+      loaded[k + 3],
     );
   }
 }
@@ -176,6 +178,7 @@ class _StagePainter extends CustomPainter {
     _blurH = p.blur.fragmentShader();
     _blurV = p.blur.fragmentShader();
     _finish = p.finish.fragmentShader();
+    _under = p.under.fragmentShader();
   }
 
   ShowFeed feed;
@@ -187,7 +190,7 @@ class _StagePainter extends CustomPainter {
   double dpr = 1;
   void Function(Duration took)? onFrame;
 
-  late final ui.FragmentShader _feedback, _blurH, _blurV, _finish;
+  late final ui.FragmentShader _feedback, _blurH, _blurV, _finish, _under;
   final _layerShaders = <String, ui.FragmentShader>{};
   ui.Image? _history;
   String? _historyScene;
@@ -336,7 +339,29 @@ class _StagePainter extends CustomPainter {
 
   /// The scene drawn: its layers, one over the other, and its particles over them
   /// (the scene on, not one being left: [live]).
-  ui.Image _scene(Scene scene, ShowState st, int w, int h, {bool live = true}) => _pass(w, h, (c) {
+  ui.Image _scene(Scene scene, ShowState st, int w, int h, {bool live = true}) {
+    final layers = _sceneLayers(scene, st, w, h, live: live);
+    // MilkDrop under it all, where the hands asked, the way they asked (under.frag);
+    // the scene's post goes over both. Not for a scene that draws MilkDrop itself.
+    final milk = MilkFeed.shared.frame;
+    if (!live || !st.macros.milkUnder || milk == null || scene.layers.any((l) => l.samplers.contains('milk'))) return layers;
+    final f = st.flat;
+    _under
+      ..setFloat(0, w.toDouble())
+      ..setFloat(1, h.toDouble())
+      ..setFloat(2, st.macros.milkMix.toDouble())
+      ..setFloat(3, f['dyn.beat.decay'] ?? 0)
+      ..setFloat(4, f['dyn.bar.saw'] ?? 0)
+      ..setFloat(5, f['dyn.hit.kick'] ?? 0)
+      ..setFloat(6, _clock.elapsedMicroseconds / 1e6)
+      ..setImageSampler(0, layers)
+      ..setImageSampler(1, milk);
+    final out = _pass(w, h, (c) => c.drawRect(Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()), Paint()..shader = _under));
+    layers.dispose();
+    return out;
+  }
+
+  ui.Image _sceneLayers(Scene scene, ShowState st, int w, int h, {bool live = true}) => _pass(w, h, (c) {
         final f = st.flat;
         var first = true;
         // A new scene starts its particles and its simulations afresh.
@@ -347,18 +372,6 @@ class _StagePainter extends CustomPainter {
           }
           _sims.clear();
           _particleScene = scene.id;
-        }
-        // MilkDrop under it all, where the hands asked: the scene's layers add over
-        // its picture, the scene's post goes over both.
-        final under = live && st.macros.milkUnder && !scene.layers.any((l) => l.samplers.contains('milk'));
-        final milkFrame = under ? MilkFeed.shared.frame : null;
-        if (milkFrame != null) {
-          final pw = milkFrame.width.toDouble(), ph = milkFrame.height.toDouble();
-          final scale = math.max(w / pw, h / ph);
-          final dw = pw * scale, dh = ph * scale;
-          c.drawImageRect(milkFrame, Rect.fromLTWH(0, 0, pw, ph), Rect.fromLTWH((w - dw) / 2, (h - dh) / 2, dw, dh),
-              Paint()..filterQuality = FilterQuality.low);
-          first = false;
         }
         for (final layer in scene.layers) {
           final simKind = layer.sim;

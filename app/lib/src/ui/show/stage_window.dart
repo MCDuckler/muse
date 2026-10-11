@@ -243,7 +243,11 @@ class _StageWindowState extends State<_StageWindow> {
           ..choose(widget.args[sc + 1])
           ..locked = true;
       }
-      if (widget.args.contains('--milk-under')) booth.show.setMacros(booth.show.macros.copyWith(milkUnder: true));
+      if (widget.args.contains('--milk-under')) {
+        final mm = widget.args.indexOf('--milk-mix');
+        final mix = mm >= 0 && mm + 1 < widget.args.length ? int.tryParse(widget.args[mm + 1]) ?? 0 : 0;
+        booth.show.setMacros(booth.show.macros.copyWith(milkUnder: true, milkMix: mix));
+      }
       booth.show.start();
       await booth.play(booth.a);
       final t = booth.timing.peek(id);

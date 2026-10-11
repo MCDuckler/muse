@@ -88,12 +88,24 @@ class MilkDirector extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------- the hands
+  /// A preset the hands picked stays until a drop or a hit (where those cut), or
+  /// the hands pick again: the bar clock, a breakdown, a new record leave it be.
+  bool heldByHand = false;
+
+  /// The hands' choice: a cut, and held.
+  void pick(MilkPreset p) {
+    heldByHand = true;
+    feed.load(p);
+  }
+
   void next() => _step(1);
   void previous() => _step(-1);
 
-  void random({bool soft = false}) {
+  void random({bool soft = false, bool byHand = false}) {
     final p = _pick(not: feed.preset);
-    if (p != null) feed.load(p, soft: soft);
+    if (p == null) return;
+    heldByHand = byHand;
+    feed.load(p, soft: soft && !byHand);
   }
 
   void _step(int by) {
@@ -102,7 +114,7 @@ class MilkDirector extends ChangeNotifier {
     final cur = feed.preset;
     final i = cur == null ? -1 : list.indexWhere((p) => p.path == cur.path);
     final n = i < 0 ? 0 : (i + by) % list.length;
-    feed.load(list[n < 0 ? n + list.length : n]);
+    pick(list[n < 0 ? n + list.length : n]);
   }
 
   // ---------------------------------------------------------------- the music
@@ -118,16 +130,17 @@ class MilkDirector extends ChangeNotifier {
           if (cutOnDrop) random();
           return;
         case ShowEventKind.breakdown:
-          random(soft: true);
+          if (!heldByHand) random(soft: true);
           return;
         case ShowEventKind.loaded:
           // A new record on the master: a new look for it.
-          if (e.deck == st.masterName) random(soft: true);
+          if (e.deck == st.masterName && !heldByHand) random(soft: true);
           return;
         default:
           break;
       }
     }
+    if (heldByHand) return;
     final bar = st.master.barIndex;
     if (everyBars > 0 && bar != null && bar != _lastBar) {
       _lastBar = bar;

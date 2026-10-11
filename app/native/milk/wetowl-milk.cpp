@@ -346,7 +346,7 @@ int main(int argc, char** argv) {
     // The booth decides when presets change; projectM's own clock never does.
     projectm_set_preset_duration(pm, 1e9);
     projectm_set_hard_cut_enabled(pm, false);
-    projectm_set_soft_cut_duration(pm, 2.0);
+    projectm_set_soft_cut_duration(pm, 1.2);
     projectm_set_preset_switch_failed_event_callback(pm, onSwitchFailed, nullptr);
     if (!textures.empty()) {
         const char* paths[] = {textures.c_str()};

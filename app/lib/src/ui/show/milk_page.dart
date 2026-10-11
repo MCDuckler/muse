@@ -12,6 +12,7 @@ import '../../state/booth/booth.dart';
 import '../../state/show/milk_feed.dart';
 import '../../state/show/milk_library.dart';
 import '../../state/show/milk_preset_text.dart';
+import '../../state/show/show_state.dart';
 import '../booth/desk/console.dart';
 import '../mag.dart';
 import '../snack.dart';
@@ -180,7 +181,7 @@ class _MilkPageState extends State<MilkPage> {
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   Pad(icon: Icons.chevron_left, width: 34, colour: Console.ink, tooltip: 'The preset before', onTap: d.previous),
-                  Pad(icon: Icons.casino_outlined, width: 34, colour: Console.ink, tooltip: 'Any other', onTap: d.random),
+                  Pad(icon: Icons.casino_outlined, width: 34, colour: Console.ink, tooltip: 'Any other', onTap: () => d.random(byHand: true)),
                   Pad(icon: Icons.chevron_right, width: 34, colour: Console.ink, tooltip: 'The next', onTap: d.next),
                   Pad(
                     icon: d.locked ? Icons.lock : Icons.lock_open,
@@ -250,6 +251,16 @@ class _MilkPageState extends State<MilkPage> {
                         selected: show.macros.milkUnder,
                         onSelected: (v) => show.setMacros(show.macros.copyWith(milkUnder: v)),
                       ),
+                      if (show.macros.milkUnder)
+                        for (var i = 0; i < ShowMacros.milkMixes.length; i++)
+                          Tooltip(
+                            message: ShowMacros.milkMixes[i].$2,
+                            child: ChoiceChip(
+                              label: Text(ShowMacros.milkMixes[i].$1),
+                              selected: show.macros.milkMix == i,
+                              onSelected: (_) => show.setMacros(show.macros.copyWith(milkMix: i)),
+                            ),
+                          ),
                     ],
                   );
                 },
@@ -335,7 +346,7 @@ class _MilkPageState extends State<MilkPage> {
                         final on = feed.preset?.path == p.path;
                         final fav = library.isFavourite(p);
                         return InkWell(
-                          onTap: () => setState(() => feed.load(p, soft: true)),
+                          onTap: () => setState(() => feed.director.pick(p)),
                           onLongPress: () => _fork(p),
                           child: Container(
                             color: on ? accent.withValues(alpha: 0.15) : null,

@@ -175,13 +175,16 @@ class _ShowTileState extends State<ShowTile> {
                               height: 22,
                               lit: st.macros.milkUnder,
                               colour: Console.quiet,
-                              tooltip: st.macros.milkUnder ? 'MilkDrop under the scenes — off' : 'MilkDrop under every scene',
+                              tooltip: st.macros.milkUnder
+                                  ? 'MilkDrop under the scenes, ${ShowMacros.milkMixes[st.macros.milkMix % ShowMacros.milkMixes.length].$1} — off; hold for the next way'
+                                  : 'MilkDrop under every scene',
                               onTap: () => show.setMacros(show.macros.copyWith(milkUnder: !show.macros.milkUnder)),
+                              onLongPress: () => show.setMacros(show.macros.copyWith(milkUnder: true, milkMix: (show.macros.milkMix + 1) % ShowMacros.milkMixes.length)),
                             ),
                             const SizedBox(width: 2),
                             Pad(icon: Icons.casino_outlined, width: 22, height: 22, colour: Console.quiet, tooltip: 'Another preset', onTap: () {
                               if (!milk.running) unawaited(milk.start());
-                              d.random();
+                              d.random(byHand: true);
                             }),
                             const SizedBox(width: 2),
                             Pad(

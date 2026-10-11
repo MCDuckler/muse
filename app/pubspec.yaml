@@ -130,6 +130,7 @@ flutter:
     - shaders/show/blocks.frag
     - shaders/show/kinetic.frag
     - shaders/show/milk.frag
+    - shaders/show/under.frag
     - shaders/show/sim/fluid_advect.frag
     - shaders/show/sim/fluid_div.frag
     - shaders/show/sim/fluid_jacobi.frag

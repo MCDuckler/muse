@@ -506,6 +506,7 @@ class ShowMacros {
     this.freeze = false,
     this.hit = 0,
     this.milkUnder = false,
+    this.milkMix = 0,
     this.milkPreset,
     this.macros = const [0, 0, 0, 0, 0, 0, 0, 0],
   });
@@ -518,6 +519,23 @@ class ShowMacros {
 
   /// MilkDrop's picture under every scene (where there is a helper).
   final bool milkUnder;
+
+  /// The ways a scene can sit on MilkDrop, by milkMix: a name and a word each.
+  static const milkMixes = [
+    ('add', 'the scene\'s light added over MilkDrop'),
+    ('screen', 'screened: neither blows the other out'),
+    ('dim', 'MilkDrop at a third, the scene on top'),
+    ('window', 'MilkDrop shows through the scene\'s bright parts'),
+    ('mask', 'MilkDrop only where the scene is dark'),
+    ('frame', 'the scene in the middle, MilkDrop round it'),
+    ('bands', 'vertical bands by turns, stepping with the beat'),
+    ('flip', 'the scene over MilkDrop; MilkDrop over it on each kick'),
+    ('outline', 'MilkDrop\'s edges only, as lines under the scene'),
+    ('contrast', 'the difference of the two'),
+  ];
+
+  /// How the scene sits on it: see ShowMacros.milkMixes and shaders/show/under.frag.
+  final int milkMix;
 
   /// The MilkDrop preset on, by its full name, for a stage in another process.
   final String? milkPreset;
@@ -532,6 +550,7 @@ class ShowMacros {
     bool? blackout,
     bool? freeze,
     bool? milkUnder,
+    int? milkMix,
     String? milkPreset,
     bool clearMilkPreset = false,
     double? hit,
@@ -544,6 +563,7 @@ class ShowMacros {
         blackout: blackout ?? this.blackout,
         freeze: freeze ?? this.freeze,
         milkUnder: milkUnder ?? this.milkUnder,
+        milkMix: milkMix ?? this.milkMix,
         milkPreset: clearMilkPreset ? null : milkPreset ?? this.milkPreset,
         hit: hit ?? this.hit,
         macros: macros ?? this.macros,
@@ -556,6 +576,7 @@ class ShowMacros {
     m['show.blackout'] = blackout ? 1 : 0;
     m['show.freeze'] = freeze ? 1 : 0;
     m['show.milkUnder'] = milkUnder ? 1 : 0;
+    m['show.milkMix'] = milkMix.toDouble();
     m['show.hit'] = hit;
     for (var i = 0; i < macros.length; i++) {
       m['show.macro.${i + 1}'] = macros[i];
@@ -566,6 +587,7 @@ class ShowMacros {
         'intensity': intensity, 'colour': colour, 'strobe': strobe, 'blackout': blackout,
         'freeze': freeze,
         'milkUnder': milkUnder,
+        'milkMix': milkMix,
         if (milkPreset != null) 'milkPreset': milkPreset, 'hit': hit, 'macros': macros,
       };
 
@@ -576,6 +598,7 @@ class ShowMacros {
         blackout: j['blackout'] == true,
         freeze: j['freeze'] == true,
         milkUnder: j['milkUnder'] == true,
+        milkMix: (j['milkMix'] as num?)?.toInt() ?? 0,
         milkPreset: j['milkPreset'] as String?,
         hit: _d(j['hit']),
         macros: [for (final v in (j['macros'] as List? ?? const [])) _d(v)],
