@@ -101,6 +101,13 @@
 		file_server
 	}
 
+	# Mail Coach (uni mail to-do list; systemd `mailcoach`, private repo MCDuckler/mailcoach).
+	# It binds the compose gateway, so only Caddy reaches it. The old Mail Coach iPhone app
+	# talks to this path; Pendler (below) serves the same thing under its own host.
+	handle_path /mail/* {
+		reverse_proxy 172.18.0.1:8790
+	}
+
 	# Flutter web build. try_files so a deep link still lands on the app shell.
 	#
 	# Everything revalidates. Nothing here said anything about caching, so browsers
@@ -123,5 +130,25 @@
 		file_server {
 			precompressed br zstd gzip
 		}
+	}
+}
+
+# Pendler (commute app + Mail Coach; systemd `pendler`, repo MCDuckler/pendler). Node serves
+# the PWA, the API and the iPhone builds itself; Caddy only adds TLS. /mail is Mail Coach.
+pendler.89-58-49-140.nip.io {
+	encode zstd gzip
+	handle_path /mail/* {
+		reverse_proxy 172.18.0.1:8790
+	}
+	handle {
+		reverse_proxy 172.18.0.1:8792
+	}
+}
+
+# ntfy — push relay for Mail Coach and Pendler (container `ntfy`, /opt/mailcoach-ntfy,
+# deny-all auth). Long-lived subscriptions, so no buffering.
+ntfy.89-58-49-140.nip.io {
+	reverse_proxy ntfy:80 {
+		flush_interval -1
 	}
 }
