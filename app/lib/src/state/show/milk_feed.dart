@@ -307,6 +307,19 @@ class MilkFeed extends ChangeNotifier {
   Uint8List? _frameBuf;
   int _cursor = 0, _frameW = 0, _frameH = 0;
 
+  /// Two frames' worth, used by turns: one filling while the other is decoded —
+  /// not two megabytes fresh sixty times a second.
+  final _pool = <Uint8List>[];
+  int _poolAt = 0;
+  Uint8List _buffer(int n) {
+    while (_pool.length < 2) {
+      _pool.add(Uint8List(n));
+    }
+    var b = _pool[_poolAt = (_poolAt + 1) % 2];
+    if (b.length != n) b = _pool[_poolAt] = Uint8List(n);
+    return b;
+  }
+
   /// Each chunk off the pipe copied once, into the frame being gathered: a frame
   /// is two megabytes in thirty-odd reads, and gathering it by appending (and
   /// copying what was there each time) was most of the stage's frame.
@@ -332,7 +345,7 @@ class MilkFeed extends ChangeNotifier {
         }
         _frameW = bd.getUint32(4, Endian.little);
         _frameH = bd.getUint32(8, Endian.little);
-        _frameBuf = Uint8List(_frameW * _frameH * 4);
+        _frameBuf = _buffer(_frameW * _frameH * 4);
         continue;
       }
       final n = math.min(buf.length - _cursor, c.length - off);

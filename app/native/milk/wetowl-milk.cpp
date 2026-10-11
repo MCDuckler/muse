@@ -43,6 +43,7 @@
 #include <unistd.h>
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -82,30 +83,63 @@ long readIn(void* buf, size_t n) { return _read(0, buf, static_cast<unsigned int
 long readIn(void* buf, size_t n) { return static_cast<long>(read(STDIN_FILENO, buf, n)); }
 #endif
 
-bool readExact(std::vector<uint8_t>& out, size_t n) {
-    out.resize(n);
-    size_t got = 0;
-    while (got < n) {
-        long r = readIn(out.data() + got, n - got);
+// Stdin read in chunks (a byte a call is a system call a byte, which on Windows
+// is most of a core at sixty lines a second), handed out as lines and payloads.
+struct Reader {
+    std::vector<uint8_t> buf;
+    size_t at = 0, end = 0;
+
+    bool fill() {
+        if (at > 0 && at == end) at = end = 0;
+        if (end == buf.size()) {
+            if (at > 0) {
+                std::memmove(buf.data(), buf.data() + at, end - at);
+                end -= at;
+                at = 0;
+            } else {
+                buf.resize(buf.empty() ? 65536 : buf.size() * 2);
+            }
+        }
+        long r = readIn(buf.data() + end, buf.size() - end);
         if (r <= 0) return false;
-        got += static_cast<size_t>(r);
+        end += static_cast<size_t>(r);
+        return true;
     }
-    return true;
-}
+
+    bool line(std::string& out) {
+        while (true) {
+            for (size_t i = at; i < end; i++) {
+                if (buf[i] == '\n') {
+                    out.assign(reinterpret_cast<const char*>(buf.data() + at), i - at);
+                    at = i + 1;
+                    return true;
+                }
+            }
+            if (!fill()) return false;
+        }
+    }
+
+    bool exact(std::vector<uint8_t>& out, size_t n) {
+        out.resize(n);
+        size_t got = 0;
+        while (got < n) {
+            if (at == end && !fill()) return false;
+            size_t take = std::min(n - got, end - at);
+            std::memcpy(out.data() + got, buf.data() + at, take);
+            at += take;
+            got += take;
+        }
+        return true;
+    }
+};
 
 void readerThread() {
+    Reader reader;
+    reader.buf.resize(65536);
     std::string line;
-    char c;
-    while (true) {
-        long r = readIn(&c, 1);
-        if (r <= 0) break;
-        if (c != '\n') {
-            line += c;
-            continue;
-        }
+    while (reader.line(line)) {
         Command cmd;
         cmd.line = line;
-        line.clear();
         std::istringstream in(cmd.line);
         std::string word;
         in >> word;
@@ -113,7 +147,7 @@ void readerThread() {
             size_t n = 0;
             in >> n;
             size_t bytes = word == "pcm" ? n * 2 : n;
-            if (!readExact(cmd.payload, bytes)) break;
+            if (!reader.exact(cmd.payload, bytes)) break;
         }
         {
             std::lock_guard<std::mutex> lock(g_mutex);
@@ -357,6 +391,30 @@ int main(int argc, char** argv) {
     reader.detach();
     say("ready");
 
+    // The frame is drawn into a framebuffer of our own, not the context's default
+    // one: a window that is never shown owns no pixels on Windows (what is read
+    // back is whatever was there), and a Mac context without a drawable has none.
+    GLuint fbo = 0, fboTex = 0;
+    auto makeFbo = [&]() {
+        if (fbo) {
+            glDeleteFramebuffers(1, &fbo);
+            glDeleteTextures(1, &fboTex);
+        }
+        glGenTextures(1, &fboTex);
+        glBindTexture(GL_TEXTURE_2D, fboTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glGenFramebuffers(1, &fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fboTex, 0);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) say("gl: the framebuffer is not complete");
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        projectm_opengl_set_target_framebuffer(pm, fbo);
+    };
+    makeFbo();
+
     // Two pixel buffers: the frame just drawn is read back while the next draws.
     GLuint pbo[2] = {0, 0};
     glGenBuffers(2, pbo);
@@ -398,6 +456,7 @@ int main(int argc, char** argv) {
                     height = h;
                     if (!egl.resize(w, h)) return 2;
                     projectm_set_window_size(pm, w, h);
+                    makeFbo();
                     allocPbo();
                     pending = -1;
                     flipped.resize(static_cast<size_t>(w) * h * 4);
@@ -470,10 +529,11 @@ int main(int argc, char** argv) {
         if (next < now - frameTime * 4) next = now;  // fell behind: do not chase
 
         // Draw, and ask for this frame's pixels; take the frame before's.
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
         glViewport(0, 0, width, height);
         projectm_opengl_render_frame(pm);
         int mine = (pending + 1) & 1;
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
         glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[mine]);
         glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
         if (pending >= 0) {
