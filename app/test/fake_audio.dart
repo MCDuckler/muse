@@ -322,6 +322,10 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
   Future<PlayResponse> play(PlayRequest request) async {
     _advance();
     if (!playing && startCost > Duration.zero) _since = _since.add(startCost);
+    if (state == ProcessingStateMessage.completed) {
+      position = Duration.zero;
+      _offTheEnd();
+    }
     playing = true;
     calls.add('play');
     _emit();
@@ -349,6 +353,7 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
     if (request.index != null) index = request.index!;
     _advance();
     position = request.position ?? Duration.zero;
+    _offTheEnd();
     // The stop: the clock is started from a moment in the future, so the wall time
     // the seek took is time the record did not play.
     if (seekCost > Duration.zero) _since = _since.add(seekCost);
@@ -537,6 +542,26 @@ class FakeAudioPlayer extends AudioPlayerPlatform {
     state = ProcessingStateMessage.completed;
     _emit();
     state = ProcessingStateMessage.ready;
+  }
+
+  /// The record ran out and the engine stays there, the file still open: no sound,
+  /// and "completed" until it is moved off the end — sent somewhere, or told to play
+  /// (mpv behind just_audio_media_kit, which goes back to the top for that).
+  void runOut() {
+    _advance();
+    position = trackLength;
+    playing = false;
+    state = ProcessingStateMessage.completed;
+    _emit();
+  }
+
+  /// An engine that goes on saying "completed" after it has been moved off its end,
+  /// as just_audio_media_kit did until mpv next said it was buffering — which a local
+  /// file need never do.
+  bool stickyEnd = false;
+
+  void _offTheEnd() {
+    if (state == ProcessingStateMessage.completed && !stickyEnd) state = ProcessingStateMessage.ready;
   }
 
   /// Time passing while a song plays.

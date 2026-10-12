@@ -59,7 +59,12 @@ class Deck extends ChangeNotifier {
         );
     _subs.add(_player.positionStream.listen(_anchor));
     _subs.add(_player.playerStateStream.listen((s) {
-      if (s.processingState == ProcessingState.completed) _ended();
+      // The end is the engine arriving at "completed", not every state that says so:
+      // just_audio sends the state it last had with every play() — "completed",
+      // for a record started again after it ran out — and read as the end once more,
+      // that was the record heard and the deck stopped, until PLAY was pressed again.
+      if (s.processingState == ProcessingState.completed && _engineState != ProcessingState.completed) _ended();
+      _engineState = s.processingState;
       _stallIf(s.playing && s.processingState == ProcessingState.buffering);
       _watchForAStop(s);
       notifyListeners();
@@ -275,6 +280,10 @@ class Deck extends ChangeNotifier {
   Duration syncTrim = Duration.zero;
 
   bool get playing => (_player.playing || _swapping) && !_ended_;
+
+  /// What the engine last said it was doing: for telling its arriving at the end
+  /// from its saying again that it is there.
+  ProcessingState? _engineState;
 
   /// A part is going on under a record that plays on (see [swapTo]): the engine is
   /// stopped for it, and the deck is not.
@@ -910,6 +919,13 @@ class Deck extends ChangeNotifier {
   /// there until the record was over. So it is started and let go of, and this waits
   /// only for the engine to say it is playing.
   Future<void> play() async {
+    // A record that ran out and is still where it ran out: from the cue point, or the
+    // top. There is nothing left to play at the end, and engines differ about what
+    // play means there (mpv goes back to the top unasked, a phone's does nothing).
+    final d = duration;
+    if (_ended_ && (d == null || position >= d - const Duration(seconds: 1))) {
+      await seek(cuePoint ?? Duration.zero);
+    }
     _ended_ = false;
     _fixedAt = DateTime.now();
     _trusting = false;
@@ -1236,6 +1252,14 @@ class Deck extends ChangeNotifier {
     _ended_ = true;
     _loop?.cancel();
     _wrapSoon?.cancel();
+    // The engine stopped too, as far as just_audio knows. It goes on calling itself
+    // playing at the end, and a play() asked of it while it does is never passed on:
+    // PLAY after the end did nothing at all, or, where a seek was taken as the cue
+    // to go on, the record came back on with the deck still reading as stopped.
+    if (_player.playing) {
+      _stopping = true;
+      unawaited(_player.pause().catchError((Object _) {}));
+    }
     notifyListeners();
   }
 

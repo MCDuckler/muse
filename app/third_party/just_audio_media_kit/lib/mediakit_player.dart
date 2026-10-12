@@ -157,6 +157,14 @@ class MediaKitPlayer extends AudioPlayerPlatform {
             // is not looping (technically this shouldn't be fired if the player is looping)
             _player.state.playlistMode == PlaylistMode.none) {
           _processingState = ProcessingStateMessage.completed;
+        } else if (!completed &&
+            _processingState == ProcessingStateMessage.completed) {
+          // WetOwl: off the end again — a seek, or play from the end (which media_kit
+          // answers with a seek to the top). The file is still open, so it is ready.
+          // Upstream left the state "completed" until mpv next said it was buffering,
+          // which a local file may never do: a record started again after it ran out
+          // went on being reported finished while it played.
+          _processingState = ProcessingStateMessage.ready;
         }
         _errorCode = null;
         _errorMessage = null;
