@@ -157,8 +157,11 @@ vec3 march(vec3 from, vec3 dir, vec3 skyLow, vec3 skyHigh, vec3 sunCol, vec3 cel
   // a size under four and a half they would cover the whole sky).
   float sunsize = 7.0 - uBandLow * 1.5 - uHitKick * 1.4;
   float raysize = 2.2 - 0.9 * uHitKick;
-  float an2 = atan(dir.x, dir.y) + uBar * 6.2831 * 0.5 + uTime * 0.3;
-  float stripe = abs(0.2 - mod(an2, 0.4));
+  // The rays: sixteen to the turn, so they meet themselves where the angle wraps
+  // (under the sun); a stripe of 0.4 left a cut ray there, its sides out of step.
+  const float ray = 6.2831853 / 16.0;
+  float an2 = atan(dir.x, dir.y) + uBar * 6.2831853 * 0.5 + uTime * 0.3;
+  float stripe = abs(ray * 0.5 - mod(an2, ray)) * (0.4 / ray);
   float s = pow(clamp(1.0 - length(dir.xy) * sunsize - stripe, 0.0, 1.0), 0.1);
   float sb = pow(clamp(1.0 - length(dir.xy) * (sunsize - 0.2) - stripe, 0.0, 1.0), 0.1);
   float sg = pow(clamp(1.0 - length(dir.xy) * raysize - 0.5 * stripe, 0.0, 1.0), 3.0);

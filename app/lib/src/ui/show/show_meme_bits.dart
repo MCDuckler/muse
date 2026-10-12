@@ -1328,7 +1328,11 @@ class KaleidoBit extends MemeBit {
         ..lineTo(centre.dx + math.cos(a1) * far, centre.dy + math.sin(a1) * far)
         ..close());
       c.translate(centre.dx, centre.dy);
-      c.rotate(a0 + turn);
+      // A wedge and its mirror meet at their shared edge: the picture's angle runs
+      // up from a0 in one and down from a1 in the next, and the turn goes against
+      // the mirror. Turned the same way in both (as it was), every edge was a seam
+      // with its two sides out of step.
+      c.rotate(i.isOdd ? a1 - turn : a0 + turn);
       if (i.isOdd) c.scale(1, -1);
       c.translate(-centre.dx, -centre.dy);
       shot.draw(c, img);
