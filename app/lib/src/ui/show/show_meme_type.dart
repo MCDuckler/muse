@@ -13,17 +13,24 @@ import '../mag.dart';
 typedef BoldWord = (TextPainter stroke, TextPainter face);
 
 class MemeType {
-  final _painters = <String, TextPainter>{};
+  var _painters = <String, TextPainter>{};
+
+  /// The painters let go of at the last clear-out, disposed at the next: one handed
+  /// out just before a clear-out is still being painted with (a bold word's stroke,
+  /// when its face was the one that filled the cache), and disposing it there threw
+  /// "text geometry was not yet calculated" mid-frame.
+  var _retired = <String, TextPainter>{};
 
   TextPainter text(String key, TextSpan Function() span, {TextAlign align = TextAlign.center, double? maxWidth}) {
     final k = maxWidth == null ? key : '$key|${maxWidth.round()}';
     final hit = _painters[k];
     if (hit != null) return hit;
     if (_painters.length > 500) {
-      for (final p in _painters.values) {
+      for (final p in _retired.values) {
         p.dispose();
       }
-      _painters.clear();
+      _retired = _painters;
+      _painters = {};
     }
     return _painters[k] = TextPainter(text: span(), textDirection: TextDirection.ltr, textAlign: align)..layout(maxWidth: maxWidth ?? double.infinity);
   }
@@ -255,10 +262,11 @@ class MemeType {
   }
 
   void dispose() {
-    for (final p in _painters.values) {
+    for (final p in [..._painters.values, ..._retired.values]) {
       p.dispose();
     }
     _painters.clear();
+    _retired.clear();
   }
 }
 

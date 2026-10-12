@@ -61,6 +61,16 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+// The fast GPU where a laptop has two (NVIDIA Optimus, AMD switchable graphics): the
+// drivers read these from the program itself, and without them its OpenGL is the
+// integrated chip's, drawing MilkDrop beside the app on the weaker of the two.
+extern "C" {
+__declspec(dllexport) unsigned long NvOptimusEnablement = 0x00000001;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+#endif
+
 namespace {
 
 struct Command {

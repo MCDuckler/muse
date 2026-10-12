@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -306,6 +307,16 @@ class _OverviewShape extends CustomPainter {
     final w = size.width, h = size.height;
     final b = bands;
     final played = playedCol * 2.0;
+    // Every bar and rule a quad of one draw: drawn a rectangle at a time, the shape
+    // was some eight hundred commands, and the renderer replays all of them every
+    // frame whether this repainted or not (see baked.dart).
+    final xy = <double>[];
+    final ink = <int>[];
+    void quad(double l, double t, double r, double bt, Color c) {
+      xy.addAll([l, t, r, t, l, bt, r, t, r, bt, l, bt]);
+      final v = c.toARGB32();
+      ink.addAll([v, v, v, v, v, v]);
+    }
     // A strip along the foot for the four-bar rules, and the shape stands on it.
     // Drawn *through* the shape they were a grid over the record; drawn under it they
     // are a ruler beside it, which is what they are for.
@@ -313,7 +324,6 @@ class _OverviewShape extends CustomPainter {
     final wh = h - foot;
     if (b != null && b.low.isNotEmpty) {
       final n = b.low.length;
-      final paint = Paint();
       for (var x = 0.0; x < w; x += 2) {
         // Every slice under the bar's two pixels: stepping by one pixel's worth read
         // half of them, and a short loud hit between two bars was simply not there.
@@ -335,9 +345,8 @@ class _OverviewShape extends CustomPainter {
         // other way about — the played part in the deck's colour, the rest in grey —
         // which spent the only colour the strip had on saying something the needle
         // already says, and left the record's own shape with none.
-        final ink = Color(waveInk(inks, lo / 255, md / 255, hi / 255));
-        canvas.drawRect(Rect.fromLTWH(x, (wh - bar) / 2, 1.4, bar),
-            paint..color = x < played ? ink.withValues(alpha: 0.30) : ink);
+        final c = Color(waveInk(inks, lo / 255, md / 255, hi / 255));
+        quad(x, (wh - bar) / 2, x + 1.4, (wh + bar) / 2, x < played ? c.withValues(alpha: 0.30) : c);
       }
     } else {
       canvas.drawRect(Rect.fromLTWH(0, wh / 2 - 1, w, 2), Paint()..color = Console.line);
@@ -350,17 +359,23 @@ class _OverviewShape extends CustomPainter {
       if (apart >= 5) {
         canvas.drawRect(
             Rect.fromLTWH(0, h - 1, w, 1), Paint()..color = Console.ink.withValues(alpha: 0.10));
-        final rule = Paint()..color = Console.ink.withValues(alpha: 0.45);
+        final rule = Console.ink.withValues(alpha: 0.45);
         // Every fourth — sixteen bars — stands the full depth of the strip, so the
         // eights are countable without counting.
-        final eight = Paint()..color = Console.ink.withValues(alpha: 0.75);
+        final eight = Console.ink.withValues(alpha: 0.75);
         for (var i = 0; i < phrases.length; i++) {
           final x = w * phrases[i];
           final tall = i % 4 == 0 && apart >= 12;
           final up = tall ? foot : foot * 0.6;
-          canvas.drawRect(Rect.fromLTWH(x, h - up, 1, up), tall ? eight : rule);
+          quad(x, h - up, x + 1, h, tall ? eight : rule);
         }
       }
+    }
+    if (xy.isNotEmpty) {
+      canvas.drawVertices(
+          ui.Vertices.raw(ui.VertexMode.triangles, Float32List.fromList(xy), colors: Int32List.fromList(ink)),
+          BlendMode.dst,
+          Paint());
     }
     for (final c in cues) {
       canvas.drawRect(Rect.fromLTWH(w * c - 1, 0, 2, h), Paint()..color = colour);

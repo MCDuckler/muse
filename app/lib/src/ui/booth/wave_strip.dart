@@ -351,9 +351,11 @@ class _Tiles {
   final _shape = <int, ui.Picture>{};
   final _over = <int, ui.Picture>{};
 
-  /// The edges' fades, made once for a size.
+  /// The edges' fades, made once for a size: coloured corners rather than a
+  /// gradient, which Impeller's GLES backend draws in three render passes of its
+  /// own, every frame (see baked.dart).
   (double, double, Color)? _fadeKey;
-  Shader? _fadeLeft, _fadeRight;
+  ui.Vertices? _fades;
 
   /// Lets go of everything when the zoom or the lane's height changes.
   void rescale(double usPerPixel, double h) {
@@ -413,7 +415,8 @@ class _Tiles {
     _drop(_shape);
     _drop(_over);
     _bins.clear();
-    _fadeLeft = _fadeRight = null;
+    _fades?.dispose();
+    _fades = null;
   }
 }
 
@@ -578,13 +581,18 @@ class _StripPainter extends CustomPainter {
     final fk = (w, h, paper);
     if (tiles._fadeKey != fk) {
       tiles._fadeKey = fk;
-      tiles._fadeLeft = LinearGradient(colors: [paper, paper.withValues(alpha: 0)])
-          .createShader(Rect.fromLTRB(0, 0, 18, h));
-      tiles._fadeRight = LinearGradient(colors: [paper.withValues(alpha: 0), paper])
-          .createShader(Rect.fromLTRB(w - 18, 0, w, h));
+      final clear = paper.withValues(alpha: 0);
+      tiles._fades?.dispose();
+      tiles._fades = ui.Vertices(
+        ui.VertexMode.triangles,
+        [
+          Offset.zero, const Offset(18, 0), Offset(0, h), const Offset(18, 0), Offset(18, h), Offset(0, h),
+          Offset(w - 18, 0), Offset(w, 0), Offset(w - 18, h), Offset(w, 0), Offset(w, h), Offset(w - 18, h),
+        ],
+        colors: [paper, clear, paper, clear, clear, paper, clear, paper, clear, paper, paper, clear],
+      );
     }
-    canvas.drawRect(Rect.fromLTRB(0, 0, 18, h), Paint()..shader = tiles._fadeLeft);
-    canvas.drawRect(Rect.fromLTRB(w - 18, 0, w, h), Paint()..shader = tiles._fadeRight);
+    canvas.drawVertices(tiles._fades!, BlendMode.dst, Paint());
   }
 
   /// One tile's picture: [draw] is handed the canvas and the tile's left edge in tile

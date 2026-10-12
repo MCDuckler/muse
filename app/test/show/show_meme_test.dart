@@ -1,6 +1,9 @@
 // The Siebenschläfer edit's clock: the mood read off the record, the length of a cut,
 // and the cut itself — the same picture for the same record and cut, a roll that
 // flickers between two, the drop's first beats lasered.
+import 'dart:ui' show PictureRecorder;
+
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muse/src/state/show/show_state.dart';
 import 'package:muse/src/ui/show/show_meme.dart';
@@ -217,5 +220,19 @@ void main() {
         pick?.dispose();
       }
     });
+  });
+
+  test('a bold word survives the text cache clearing itself out between its stroke and its face', () {
+    // The stroke is the 501st painter, the face the one that finds the cache full:
+    // disposing everything there left the stroke dead in the hand that was about to
+    // paint it ("text geometry was not yet calculated", on a stage, mid-set).
+    final type = MemeType();
+    for (var i = 0; i < 500; i++) {
+      type.text('k$i', () => TextSpan(text: '$i'));
+    }
+    final word = type.bold('LÄDT', 40, Colors.white);
+    final canvas = Canvas(PictureRecorder());
+    type.paintBold(canvas, word, const Offset(100, 100));
+    type.dispose();
   });
 }

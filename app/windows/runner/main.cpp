@@ -42,6 +42,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
   flutter::DartProject project(L"data");
+  // The fast GPU where a laptop has two: Windows hands a program the one that saves
+  // power unless it asks, and the booth and the stage are a program that wants the
+  // other.
+  project.set_gpu_preference(
+      flutter::DartProject::GpuPreference::HighPerformancePreference);
 
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();

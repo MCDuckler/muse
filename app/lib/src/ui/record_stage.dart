@@ -14,6 +14,7 @@ import '../api/models.dart';
 import '../state/app_state.dart';
 import '../state/art_cache.dart';
 import '../state/sleeve_board.dart';
+import 'baked.dart';
 import 'mirror_ball.dart' show RoomLight, RoomLightScope;
 import 'sleeve_art.dart';
 import 'sleeve_ink.dart';
@@ -2158,6 +2159,7 @@ class Tonearm extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     Widget draw(double groove, double? held, double lift) => CustomPaint(
           painter: _ArmPainter(
+            slot: this.hand,
             radius: radius,
             drop: drop,
             landed: landed,
@@ -2193,6 +2195,7 @@ class Tonearm extends StatelessWidget {
 
 class _ArmPainter extends CustomPainter {
   _ArmPainter({
+    this.slot,
     required this.radius,
     required this.drop,
     required this.landed,
@@ -2222,6 +2225,15 @@ class _ArmPainter extends CustomPainter {
   /// How far it is lifted off the record by that hand, 0 to 1.
   final double lift;
 
+  /// Whose arm this is (its deck's hand), so each keeps its own picture of itself.
+  final Object? slot;
+
+  /// The arms, as pictures of themselves: an arm left to play its record moves a
+  /// degree a minute, and drawn afresh every frame its gradients and its shadow
+  /// cost the GPU a dozen and more passes a frame (see baked.dart). Held, lifted or
+  /// swinging in, it is drawn as it is.
+  static final _still = BakedShelf(4);
+
   Color get colour => scheme.onSurface;
 
   @override
@@ -2248,7 +2260,13 @@ class _ArmPainter extends CustomPainter {
       case ArmStyle.off:
         return;
       case ArmStyle.classic:
-        paintClassicArm(canvas, g, angle: angle, lift: lift, dim: dim);
+        final slot = this.slot;
+        if (slot != null && held == null && lift == 0 && landed >= 1) {
+          _still.of(slot).drawTurning(canvas, size, (radius, drop, label, dim),
+              angle: angle, about: pivot, paint: (c, a) => paintClassicArm(c, g, angle: a, dim: dim));
+        } else {
+          paintClassicArm(canvas, g, angle: angle, lift: lift, dim: dim);
+        }
       case ArmStyle.studio:
         _studio(canvas, middle, pivot, head, playing, angle, onGroove, length);
       case ArmStyle.drawn:
@@ -2912,6 +2930,19 @@ class RecordLight extends CustomPainter {
   @override
   void paint(Canvas canvas, Size box) {
     if (strength <= 0) return;
+    // Without a room to move in and with the light all the way up, it is the same
+    // picture every frame: drawn once, kept as an image (see baked.dart). Both decks
+    // of a booth share it.
+    if (room == null && strength >= 1) {
+      _still.of((box, size, drop, label)).draw(canvas, box, (box, size, drop, label), (c) => _paint(c, box));
+      return;
+    }
+    _paint(canvas, box);
+  }
+
+  static final _still = BakedShelf(4);
+
+  void _paint(Canvas canvas, Size box) {
     final middle = Offset(box.width / 2, box.height / 2 + drop);
     final r = size / 2;
     final disc = Rect.fromCircle(center: middle, radius: r);

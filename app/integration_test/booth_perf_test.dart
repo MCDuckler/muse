@@ -12,14 +12,21 @@
 //
 // Profile, not debug: a debug build is a different program as far as speed goes. The
 // numbers land in build/integration_response_data.json and on the console.
+//
+//   --dart-define=PERF_PARTS=true   each part of the room alone first (PART lines):
+//                                   its raster time and the render passes a frame of
+//                                   it costs — where a frame's GPU time goes.
+//   --dart-define=PERF_TRACE=true   the layers the frame is made of (LAYERS), and with
+//     --dart-define=PERF_OUT=<dir>  four seconds of the engine's trace (timeline.json).
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
-import 'dart:ui' show FramePhase;
+import 'dart:ui' show FramePhase, ImageByteFormat;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -30,6 +37,14 @@ import 'package:muse/src/api/models.dart';
 import 'package:muse/src/state/app_state.dart';
 import 'package:muse/src/state/booth/deck.dart';
 import 'package:muse/src/state/booth/mixer.dart' show EqSet;
+import 'package:muse/src/ui/booth/booth_clock.dart';
+import 'package:muse/src/ui/booth/wave_strip.dart';
+import 'package:muse/src/ui/booth/desk/console.dart' show BoothPanel;
+import 'package:muse/src/ui/booth/desk/console_deck.dart';
+import 'package:muse/src/ui/booth/desk/console_log.dart';
+import 'package:muse/src/ui/booth/desk/console_mixer.dart';
+import 'package:muse/src/ui/booth/desk/console_set.dart' show ConsoleAutoBar;
+import 'package:muse/src/ui/booth/desk/console_waves.dart';
 import 'package:muse/src/ui/booth_page.dart';
 import 'package:muse/src/ui/theme.dart';
 import 'package:provider/provider.dart';
@@ -331,6 +346,43 @@ class _Cpu {
   }
 }
 
+/// The engine's trace over [long]: frames drawn, and per frame the raster time and
+/// the render passes the GPU was given (each one a target switched to and drawn).
+Future<Map<String, Object>> _passes(Duration long) async {
+  final info = await dev.Service.getInfo();
+  final uri = info.serverWebSocketUri;
+  if (uri == null) return {};
+  final s = await vmServiceConnectUri(uri.toString());
+  await s.setVMTimelineFlags(['Embedder']);
+  await s.clearVMTimeline();
+  await Future<void>.delayed(long);
+  final t = await s.getVMTimeline();
+  await s.setVMTimelineFlags([]);
+  await s.dispose();
+  var frames = 0, passes = 0, rasterUs = 0;
+  final open = <int, List<Map<String, dynamic>>>{};
+  for (final e in (t.traceEvents ?? const <vm.TimelineEvent>[]).map((e) => e.json!)) {
+    final name = e['name'], ph = e['ph'], tid = e['tid'] as int? ?? 0;
+    if (ph == 'B') {
+      (open[tid] ??= []).add(e);
+      if (name == 'RenderPassGLES::EncodeCommandsInReactor') passes++;
+    } else if (ph == 'E') {
+      final st = open[tid];
+      if (st == null || st.isEmpty) continue;
+      final b = st.removeLast();
+      if (b['name'] == 'GPURasterizer::Draw') {
+        frames++;
+        rasterUs += (e['ts'] as int) - (b['ts'] as int);
+      }
+    }
+  }
+  return {
+    'frames': frames,
+    'passes_per_frame': frames == 0 ? 0 : double.parse((passes / frames).toStringAsFixed(1)),
+    'raster_ms': frames == 0 ? 0 : double.parse((rasterUs / frames / 1000).toStringAsFixed(2)),
+  };
+}
+
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   JustAudioMediaKit.pitch = false;
@@ -403,7 +455,113 @@ void main() {
       report[name] = r;
     }
 
+    // The room taken apart (PERF_PARTS): each part alone, at about its size in the
+    // room, with what the GPU was asked to do for it.
+    if (const bool.fromEnvironment('PERF_PARTS')) {
+      final shot = GlobalKey();
+      Widget alone(Widget part, double w, double h) => ChangeNotifierProvider<AppState>.value(
+            value: app,
+            child: MaterialApp(
+              debugShowCheckedModeBanner: false,
+              theme: MuseTheme.dark(),
+              home: Scaffold(
+                  body: BoothClock(
+                      booth: b,
+                      child: Stack(children: [
+                        Align(
+                            alignment: Alignment.topLeft,
+                            child: RepaintBoundary(key: shot, child: SizedBox(width: w, height: h, child: part))),
+                        // Something always moving, so a still part is drawn every frame
+                        // too, as it is in the room.
+                        const Positioned(right: 0, bottom: 0, child: SizedBox(width: 4, height: 4, child: CircularProgressIndicator())),
+                      ]))),
+            ),
+          );
+      final parts = <String, Widget>{
+        'empty': alone(const SizedBox.shrink(), 10, 10),
+        'room': ChangeNotifierProvider<AppState>.value(
+            value: app, child: MaterialApp(debugShowCheckedModeBanner: false, theme: MuseTheme.dark(), home: const BoothPage())),
+        'waves': alone(BoothPanel(child: ConsoleWaves(booth: b)), 1600, 300),
+        'deck': alone(BoothPanel(child: ConsoleDeck(booth: b, deck: b.a, onLoad: () {})), 700, 520),
+        // One record's strip, as a lane draws it.
+        'strip': alone(
+            Builder(
+                builder: (context) => WaveStrip(
+                      position: BoothClock.of(context).positionOf(b.a),
+                      timing: b.a.timing,
+                      bands: b.bands[b.a.track!.id],
+                      duration: b.a.duration ?? Duration.zero,
+                      playing: b.a.playing,
+                      hotCues: b.a.hotCues,
+                      height: 110,
+                      window: const Duration(seconds: 16),
+                      accent: Colors.orange,
+                    )),
+            1500,
+            110),
+        'mixer': alone(BoothPanel(child: ConsoleMixer(booth: b)), 280, 520),
+        'log': alone(BoothPanel(child: ConsoleLog(booth: b)), 1600, 200),
+        'autobar': alone(ConsoleAutoBar(booth: b, onSetView: () {}), 1600, 60),
+        'panel': alone(const BoothPanel(child: SizedBox.expand()), 700, 520),
+      };
+      for (final e in parts.entries) {
+        await tester.pumpWidget(e.value);
+        await tester.runAsync(() => Future<void>.delayed(const Duration(seconds: 2)));
+        final r = await tester.runAsync(() => _passes(const Duration(seconds: 3)));
+        // ignore: avoid_print
+        print('PART ${e.key} ${jsonEncode(r)}');
+        // And what it looked like, to compare a change against.
+        const out = String.fromEnvironment('PERF_OUT');
+        final boundary = shot.currentContext?.findRenderObject();
+        if (out.isNotEmpty && boundary is RenderRepaintBoundary) {
+          await tester.runAsync(() async {
+            final img = await boundary.toImage(pixelRatio: 1);
+            final png = await img.toByteData(format: ImageByteFormat.png);
+            File('$out/part-${e.key}.png').writeAsBytesSync(png!.buffer.asUint8List());
+          });
+        }
+      }
+      await tester.pumpWidget(parts['room']!);
+      await tester.runAsync(() => Future<void>.delayed(const Duration(seconds: 2)));
+    }
     await stretch('playing', const Duration(seconds: 12), null);
+    // The layers the frame is made of, by kind (PERF_TRACE): each that cannot be
+    // drawn straight into its parent is a pass of its own on the GPU.
+    if (const bool.fromEnvironment('PERF_TRACE')) {
+      final counts = <String, int>{};
+      void walk(Layer? l, int depth) {
+        while (l != null) {
+          var k = l.runtimeType.toString();
+          if (l is OpacityLayer) k = 'OpacityLayer(${l.alpha})';
+          counts.update(k, (v) => v + 1, ifAbsent: () => 1);
+          if (l is ContainerLayer) walk(l.firstChild, depth + 1);
+          l = l.nextSibling;
+        }
+      }
+      // ignore: invalid_use_of_protected_member
+      walk(binding.renderViews.first.layer, 0);
+      // ignore: avoid_print
+      print('LAYERS ${jsonEncode(counts)}');
+    }
+    // The engine's own trace of four seconds of it, where asked (PERF_TRACE, with
+    // PERF_OUT): what the raster thread spent its frames on, by event.
+    const trace = bool.fromEnvironment('PERF_TRACE');
+    const traceOut = String.fromEnvironment('PERF_OUT');
+    if (trace && traceOut.isNotEmpty) {
+      await tester.runAsync(() async {
+        final info = await dev.Service.getInfo();
+        final uri = info.serverWebSocketUri;
+        if (uri == null) return;
+        final s = await vmServiceConnectUri(uri.toString());
+        await s.setVMTimelineFlags(['Embedder', 'Dart', 'GC']);
+        await s.clearVMTimeline();
+        await Future<void>.delayed(const Duration(seconds: 4));
+        final t = await s.getVMTimeline();
+        File('$traceOut/timeline.json').writeAsStringSync(jsonEncode(t.json));
+        await s.setVMTimelineFlags([]);
+        await s.dispose();
+      });
+    }
     await stretch('mixing', const Duration(seconds: 12), (i) async {
       final k = (i % 200) / 200;
       await b.setCrossfader(k);
