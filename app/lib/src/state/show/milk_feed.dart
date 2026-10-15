@@ -81,18 +81,34 @@ class MilkFeed extends ChangeNotifier {
   DateTime _wholeWanted = DateTime.fromMillisecondsSinceEpoch(0);
   bool _whole = true;
 
+  /// Anything at all looked last at this time: the preview counts here.
+  DateTime _anyWanted = DateTime.now();
+  bool _idle = false;
+
+  /// What the helper renders at while nothing draws it — a minimised stage, a
+  /// hidden window: a frame now and then, so it is warm when it is looked at again,
+  /// not sixty a second for nobody.
+  static const idleFps = 2;
+
   /// Called by whatever draws MilkDrop, each time it does.
   void want({required bool whole}) {
-    if (whole) _wholeWanted = DateTime.now();
+    final now = DateTime.now();
+    _anyWanted = now;
+    if (whole) _wholeWanted = now;
+    // Looked at again: back to its rate now, not at the next tick.
+    if (_idle && _helper != null && _ready) _size();
   }
 
   /// The helper told its size and rate, where who is looking changed.
   void _size() {
-    final whole = DateTime.now().difference(_wholeWanted) < const Duration(seconds: 2);
-    if (whole == _whole) return;
+    final now = DateTime.now();
+    final idle = now.difference(_anyWanted) > const Duration(seconds: 2);
+    final whole = now.difference(_wholeWanted) < const Duration(seconds: 2);
+    if (whole == _whole && idle == _idle) return;
+    if (whole != _whole) _send(whole ? 'size $width $height' : 'size $smallWidth $smallHeight');
     _whole = whole;
-    _send(whole ? 'size $width $height' : 'size $smallWidth $smallHeight');
-    _send('fps ${whole ? fps : smallFps}');
+    _idle = idle;
+    _send('fps ${idle ? idleFps : whole ? fps : smallFps}');
   }
 
   /// Where the helper is, looked for once: the engine asks every tick whether there
@@ -209,6 +225,11 @@ class MilkFeed extends ChangeNotifier {
   void _said(String line) {
     if (line == 'ready') {
       _ready = true;
+      // A helper starts whole and at full rate (--size, --fps): what is sent from
+      // here is measured against that.
+      _whole = true;
+      _idle = false;
+      _anyWanted = DateTime.now();
       return;
     }
     if (line.startsWith('preset ok ')) {

@@ -14,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:muse/src/state/show/show_demo.dart';
 import 'package:muse/src/ui/show/show_canvas.dart';
 import 'package:muse/src/ui/show/show_meme.dart';
+import 'package:muse/src/ui/show/show_turntable.dart';
 import 'package:muse/src/ui/show/stage_kit.dart';
 
 Future<void> _font(String family, List<String> files) async {
@@ -39,6 +40,8 @@ void main() {
     kit = await StageKit.load();
     // The meme edit's pictures, decoded here where the clock is real.
     await MemeBank.of('siebenschlaefer').decodeAll();
+    // And the turntable's models off the web.
+    await TurntableBank.shared.warm();
     // The demo record's cover, decoded here: the stage cannot wait for a fetch.
     final bytes = await File('assets/brand/ball.webp').readAsBytes();
     final codec = await ui.instantiateImageCodec(bytes);
@@ -46,11 +49,22 @@ void main() {
   });
 
   test('every scene file loads, with its shader', () {
-    expect(kit.book.scenes.keys, containsAll(['drift', 'fluid', 'veins', 'toon', 'flash', 'echo', 'fold', 'blocks', 'kinetic', 'siebenschlaefer']));
+    expect(kit.book.scenes.keys, containsAll(['drift', 'fluid', 'veins', 'toon', 'flash', 'echo', 'fold', 'blocks', 'kinetic', 'siebenschlaefer', 'turntable']));
     for (final s in kit.book.scenes.values) {
       for (final sh in s.shaders) {
         expect(kit.programs.scenes.containsKey(sh), isTrue, reason: '${s.id} wants $sh');
       }
+    }
+  });
+
+  test('the turntable builds its shapes and reads its .glb and .obj models', () {
+    final names = [for (final m in TurntableBank.shared.models) m.name];
+    expect(names, containsAll(['knot', 'shell', 'klein', 'gear', 'cars/taxi', 'pets/animal-giraffe', 'misc/pipe']));
+    for (final m in TurntableBank.shared.models) {
+      expect(m.hi.triangles, greaterThan(10), reason: m.name);
+      expect(m.lo.triangles, lessThanOrEqualTo(m.hi.triangles), reason: m.name);
+      // Every corner a number, and the shape fitted: two units at its longest.
+      expect(m.hi.pos.every((x) => x.isFinite && x.abs() <= 1.0001), isTrue, reason: m.name);
     }
   });
 
@@ -65,6 +79,7 @@ void main() {
     ('blocks', Duration(seconds: 40)),
     ('kinetic', Duration(seconds: 36)),
     ('siebenschlaefer', Duration(seconds: 40)),
+    ('turntable', Duration(seconds: 40)),
   ]) {
     testWidgets('the stage: $scene', (tester) async {
       tester.view.physicalSize = const Size(1280, 720);

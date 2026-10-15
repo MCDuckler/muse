@@ -69,6 +69,7 @@ class ShowCanvas extends StatefulWidget {
     this.scale = 0.75,
     this.preview = false,
     this.onFrame,
+    this.slow,
     this.covers = const {},
   });
 
@@ -89,13 +90,19 @@ class ShowCanvas extends StatefulWidget {
   /// Told each frame's time, for a measurement.
   final void Function(Duration took)? onFrame;
 
+  /// Asked each frame: true for ten frames a second, not sixty. The booth's preview
+  /// while a stage in a window of its own is showing the real thing on the same GPU.
+  final bool Function()? slow;
+
   @override
   State<ShowCanvas> createState() => _ShowCanvasState();
 }
 
 class _ShowCanvasState extends State<ShowCanvas> with SingleTickerProviderStateMixin {
   late final Ticker _ticker;
+  late final AppLifecycleListener _life;
   final _tick = ValueNotifier<int>(0);
+  Duration _lastTick = Duration.zero;
   late final _StagePainter _painter;
   late final _Covers _covers;
 
@@ -104,7 +111,21 @@ class _ShowCanvasState extends State<ShowCanvas> with SingleTickerProviderStateM
     super.initState();
     _covers = _Covers(() => _tick.value++, given: widget.covers);
     _painter = _StagePainter(widget.feed, widget.book, widget.programs, _covers, _tick, widget.scale, widget.preview);
-    _ticker = createTicker((_) => _tick.value++)..start();
+    _ticker = createTicker(_frame)..start();
+    // Hidden or minimised, nothing is drawn: the stage in its own window kept every
+    // pass running for a window nobody could see.
+    _life = AppLifecycleListener(onHide: () => _ticker.muted = true, onShow: () => _ticker.muted = false);
+  }
+
+  /// At most sixty a second — a 144 Hz screen drew every pass more than twice as
+  /// often for a show whose state comes thirty times a second — and, where [ShowCanvas.slow]
+  /// says so, ten.
+  void _frame(Duration elapsed) {
+    final slow = widget.slow?.call() ?? false;
+    final gap = slow ? const Duration(milliseconds: 99) : const Duration(microseconds: 15500);
+    if (elapsed - _lastTick < gap) return;
+    _lastTick = elapsed;
+    _tick.value++;
   }
 
   @override
@@ -115,6 +136,7 @@ class _ShowCanvasState extends State<ShowCanvas> with SingleTickerProviderStateM
 
   @override
   void dispose() {
+    _life.dispose();
     _ticker.dispose();
     _painter.dispose();
     _covers.dispose();
@@ -189,6 +211,9 @@ class _StagePainter extends CustomPainter {
   final _Working working;
   double dpr = 1;
   void Function(Duration took)? onFrame;
+
+  /// The most pixels a working pass is drawn at: about 1600 × 900.
+  static const maxWorkingPixels = 1600 * 900;
 
   late final ui.FragmentShader _feedback, _blurH, _blurV, _finish, _under;
   final _layerShaders = <String, ui.FragmentShader>{};
@@ -436,8 +461,14 @@ class _StagePainter extends CustomPainter {
       canvas.drawRect(Offset.zero & size, Paint()..color = Colors.black);
       return;
     }
-    final w = math.max(8, (size.width * dpr * working.scale).round());
-    final h = math.max(8, (size.height * dpr * working.scale).round());
+    // The working size in pixels, capped: a 4K television, or a desk at 150 %, put
+    // every full-size pass at five to eight million pixels for a picture the bloom
+    // and the grain soften anyway. The finish and the words still go out at the
+    // screen's own size.
+    final px = size.width * dpr * size.height * dpr;
+    final cap = px <= maxWorkingPixels ? 1.0 : math.sqrt(maxWorkingPixels / px);
+    final w = math.max(8, (size.width * dpr * cap * working.scale).round());
+    final h = math.max(8, (size.height * dpr * cap * working.scale).round());
     // The bloom at a quarter of the working size: wide and soft, and cheap.
     final hw = math.max(4, w ~/ 4), hh = math.max(4, h ~/ 4);
     final f = st.flat;

@@ -163,7 +163,9 @@ class _StageWindowState extends State<_StageWindow> {
     super.initState();
     SchedulerBinding.instance.addTimingsCallback(_took);
     _saying = Timer.periodic(const Duration(seconds: 5), (_) => _say());
-    _counting = Timer.periodic(const Duration(milliseconds: 8), (_) => _count());
+    // The hits for the STAGE line, counted at the wire's own rate: at 125 Hz each
+    // look built the whole state's flat map again, twice the painter's rate.
+    _counting = Timer.periodic(const Duration(milliseconds: 33), (_) => _count());
     // `--shot`: a frame saved on its own after six seconds, and again every four,
     // for a run nobody is watching.
     if (widget.args.contains('--shot')) {

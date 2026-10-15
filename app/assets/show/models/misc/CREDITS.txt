@@ -1,0 +1,6 @@
+pipe.obj
+
+"pipe 3_merge" (lod mesh), by Radek Jedrecki (Dziq),
+made for the game Red Eclipse (redeclipse.net), from its data/dziq/ folder.
+Licensed CC BY-SA: https://creativecommons.org/licenses/by-sa/4.0/
+Copied unchanged; renamed. Drawn as a hologram, for its shape alone.

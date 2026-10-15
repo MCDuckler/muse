@@ -89,11 +89,22 @@ class ShowDirector {
     _go(id, SceneChange.dissolve);
   }
 
+  /// Scenes turned off by hand, by id: the director never reaches for one and the
+  /// arrows step past it. Chosen by name, one still goes on.
+  Set<String> off = {};
+
+  /// The scenes not turned off — all of them, if every one is.
+  List<SceneMeta> get on {
+    final on = [for (final s in scenes) if (!off.contains(s.id)) s];
+    return on.isEmpty ? scenes : on;
+  }
+
   void next({int by = 1}) {
-    if (scenes.isEmpty) return;
-    final i = scenes.indexWhere((s) => s.id == _scene);
-    final n = ((i < 0 ? 0 : i + by) % scenes.length + scenes.length) % scenes.length;
-    choose(scenes[n].id);
+    final on = this.on;
+    if (on.isEmpty) return;
+    final i = on.indexWhere((s) => s.id == _scene);
+    final n = ((i < 0 ? 0 : i + by) % on.length + on.length) % on.length;
+    choose(on[n].id);
   }
 
   void _go(String id, SceneChange how) {
@@ -116,7 +127,7 @@ class ShowDirector {
     final out = <(double, SceneMeta)>[];
     final camOn = (s['cam.on']) > 0.5 && (s['cam.light']) > 0.08;
     final camMotion = s['cam.motion'];
-    for (final sc in scenes) {
+    for (final sc in on) {
       if (sc.needs.contains('cover') && !hasCover) continue;
       if (sc.needs.contains('words') && !hasWords) continue;
       if (sc.needs.contains('camera') && !camOn) continue;
@@ -173,7 +184,10 @@ class ShowDirector {
       _heldBy = null;
     }
 
-    final fits = fitting(s);
+    var fits = fitting(s);
+    // Nothing that suits (every scene that would is turned off, or wants what is not
+    // here): any that is on, rather than none.
+    if (fits.isEmpty) fits = on;
     if (_scene == null) {
       _go(fits.first.id, SceneChange.cut);
     } else if (_heldBy == null && !locked) {

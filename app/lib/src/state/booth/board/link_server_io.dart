@@ -150,6 +150,7 @@ class BoardLinkServer extends BoardLinkBase {
   }
 
   /// How many stages are reading the show.
+  @override
   int get stages => _stages.length;
 
   /// The local addresses a screen on the same network can try, the port and the

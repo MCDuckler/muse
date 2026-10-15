@@ -4,7 +4,7 @@
 // A scene lists one as `{"sim": "fluid"}`. Each frame the stage hands the sim the
 // show's frame and gets back an image to lay over the scene; the sim keeps its own
 // textures (or its own arrays) between frames and is thrown away when the scene
-// changes. Two so far:
+// changes:
 //
 //   fluid    Stam's stable fluids in five shader passes at a quarter of the working
 //            size: velocity and dye carried along, the divergence relaxed out by a
@@ -17,6 +17,8 @@
 //            their own and reorganise when the rules move — which the record does:
 //            the section sets how far they look, the energy how fast they go, the
 //            kick how much they lay.
+//   turntable  A low-poly model turning on a platter, squashed, stretched and
+//            wobbled by the record (show_turntable.dart).
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -26,6 +28,7 @@ import 'package:flutter/material.dart';
 import '../../state/show/show_state.dart';
 import 'show_canvas.dart' show StagePrograms;
 import 'show_meme.dart';
+import 'show_turntable.dart';
 
 abstract class SimLayer {
   String get kind;
@@ -41,6 +44,7 @@ abstract class SimLayer {
         'fluid' => FluidSim(),
         'physarum' => PhysarumSim(),
         'siebenschlaefer' => MemeEdit(kind),
+        'turntable' => TurntableSim(),
         _ => null,
       };
 
@@ -48,6 +52,7 @@ abstract class SimLayer {
   /// pictures, so a drop cut onto it is not a black frame.
   static void warm(String kind) {
     if (kind == 'siebenschlaefer') MemeBank.of(kind);
+    if (kind == 'turntable') TurntableBank.shared.warm();
   }
 }
 
@@ -85,7 +90,9 @@ class FluidSim implements SimLayer {
   double _kickWas = 0;
   double _pushX = 0.5, _pushY = 0.5, _pushDX = 0, _pushDY = 0, _pushK = 0;
   double _walk = 0;
-  static const _jacobiRounds = 7;
+  /// The pressure carries over from frame to frame, so a few rounds a frame settle
+  /// it: seven cost a render pass each on GLES for little the eye could find.
+  static const _jacobiRounds = 4;
 
   void _shaders(StagePrograms p) {
     _advect ??= p.sims['fluid_advect']!.fragmentShader();
@@ -288,7 +295,11 @@ class PhysarumSim implements SimLayer {
   double _exposure = 0.5;
 
   void _size(int w, int h) {
-    final gw = math.max(48, w ~/ 4), gh = math.max(27, h ~/ 4);
+    // A quarter of the working size, but no bigger than 320 × 180: the agents' cost
+    // grows with the cells they sense and the blur runs over every one, and a 4K
+    // stage made it four times the work for a picture drawn soft anyway.
+    final k = math.min(1.0, math.min(320 / (w / 4), 180 / (h / 4)));
+    final gw = math.max(48, (w / 4 * k).round()), gh = math.max(27, (h / 4 * k).round());
     if (gw == _gw && gh == _gh) return;
     _gw = gw;
     _gh = gh;
@@ -302,6 +313,10 @@ class PhysarumSim implements SimLayer {
       _a[i] = _rng.nextDouble() * math.pi * 2;
     }
   }
+
+  /// The trail's brightness curve, k^1.6 × 0.9, looked up: a pow per cell per frame
+  /// was a good share of the frame.
+  static final _curve = Float64List.fromList([for (var i = 0; i < 256; i++) math.pow(i / 255, 1.6) * 0.9]);
 
   int _cell(double x, double y) {
     var ix = x.floor(), iy = y.floor();
@@ -415,7 +430,7 @@ class PhysarumSim implements SimLayer {
     for (var i = 0; i < gw * gh; i++) {
       final v = _trail[i] * scale;
       final k = v.clamp(0.0, 1.0);
-      final kk = math.pow(k, 1.6).toDouble() * 0.9;
+      final kk = _curve[(k * 255).round()];
       final mixK = (v * 0.6).clamp(0.0, 1.0);
       rgba[i * 4] = ((primary.r * (1 - mixK) + accent.r * mixK) * 255 * kk).round().clamp(0, 255);
       rgba[i * 4 + 1] = ((primary.g * (1 - mixK) + accent.g * mixK) * 255 * kk).round().clamp(0, 255);

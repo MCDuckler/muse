@@ -309,6 +309,10 @@ class BoardLinkBase extends ControllerTransport {
   /// How a screen finds this desk directly: null where there is no such wire.
   Map<String, dynamic>? get advert => null;
 
+  /// How many stages in windows of their own are reading the show: none where
+  /// this link serves none.
+  int get stages => 0;
+
   /// The network can change under a desk: looked at again now and then.
   Future<void> refreshAddresses() async {}
 

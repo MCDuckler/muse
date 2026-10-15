@@ -116,6 +116,13 @@ flutter:
     # MilkDrop's own presets, written out to the data folder on first run (the
     # wetowl-milk helper reads files). See lib/src/state/show/milk_library.dart.
     - assets/milk/presets/
+    # The turntable's models off the web, read for their shapes: Kenney's Car Kit and
+    # Cube Pets (CC0, the License.txt in each). Any .glb or .obj dropped in here joins
+    # the ring. See lib/src/ui/show/show_turntable.dart.
+    - assets/show/models/cars/
+    - assets/show/models/pets/
+    # Dziq's pipe junction from Red Eclipse (CC BY-SA, CREDITS.txt beside it).
+    - assets/show/models/misc/
 
   # The stage's shaders (lib/src/ui/show/). Each is compiled for every backend at build
   # time and loaded with FragmentProgram.fromAsset by the same path.

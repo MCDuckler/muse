@@ -12,6 +12,7 @@ import '../../state/booth/booth.dart';
 import '../../state/show/camera_feed.dart';
 import '../../state/show/milk_feed.dart';
 import '../../state/show/show_state.dart';
+import '../../worker/tools.dart';
 import '../booth/desk/console.dart';
 import 'milk_page.dart';
 import 'show_canvas.dart';
@@ -34,6 +35,9 @@ class _ShowTileState extends State<ShowTile> {
   StageKit? _kit;
   String? _trouble;
 
+  /// No ffmpeg on this computer: said under the hands, with what to do about it.
+  bool _noFfmpeg = false;
+
   @override
   void initState() {
     super.initState();
@@ -43,10 +47,29 @@ class _ShowTileState extends State<ShowTile> {
   /// The performer's offset for this screen: see ShowEngine.offsetMs.
   static const _kOffset = 'muse.show.offsetMs';
 
+  /// The scenes turned off in the menu, by id: see ShowDirector.off.
+  static const _kOff = 'muse.show.scenesOff';
+
+  Future<void> _setSceneOff(String id, bool off) async {
+    final show = widget.booth.show;
+    if (off) {
+      show.director.off.add(id);
+    } else {
+      show.director.off.remove(id);
+    }
+    // Turned off while it is on: on to the next one now, not at the next section.
+    if (off && show.state.scene == id) show.nextScene();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_kOff, show.director.off.toList()..sort());
+  }
+
   Future<void> _load() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       widget.booth.show.offsetMs = prefs.getInt(_kOffset) ?? 0;
+      widget.booth.show.director.off = {...?prefs.getStringList(_kOff)};
+      final ffmpeg = await Tools.hasFfmpeg();
+      if (mounted && !ffmpeg) setState(() => _noFfmpeg = true);
       final kit = await StageKit.load();
       widget.booth.show.director.scenes = kit.book.metas;
       if (mounted) setState(() => _kit = kit);
@@ -107,7 +130,15 @@ class _ShowTileState extends State<ShowTile> {
                   ? Center(child: Text('The stage could not load.\n$_trouble', style: TextStyle(color: Console.quiet)))
                   : kit == null
                       ? const SizedBox.shrink()
-                      : ShowCanvas(feed: show, book: kit.book, programs: kit.programs, scale: 0.4, preview: true),
+                      : ShowCanvas(
+                          feed: show,
+                          book: kit.book,
+                          programs: kit.programs,
+                          scale: 0.4,
+                          preview: true,
+                          // A stage popped out has the real thing: the preview goes slow.
+                          slow: () => (context.read<AppState>().boardLink?.stages ?? 0) > 0,
+                        ),
             ),
           ),
         ),
@@ -125,7 +156,59 @@ class _ShowTileState extends State<ShowTile> {
                 children: [
                   Row(
                     children: [
-                      Expanded(child: Text(scene?.name ?? '—', style: TextStyle(color: Console.ink, fontWeight: FontWeight.w700, fontSize: 15))),
+                      Expanded(
+                        // The scene's name is the list of them: any one, straight to it.
+                        child: kit == null
+                            ? Text(scene?.name ?? '—', style: TextStyle(color: Console.ink, fontWeight: FontWeight.w700, fontSize: 15))
+                            : PopupMenuButton<String>(
+                                tooltip: 'Choose a scene, or turn scenes off',
+                                onSelected: show.chooseScene,
+                                itemBuilder: (context) => [
+                                  const PopupMenuItem<String>(
+                                    enabled: false,
+                                    height: 28,
+                                    child: Text('A name puts it on · a switch off keeps the director away from it', style: TextStyle(fontSize: 11)),
+                                  ),
+                                  for (final s in kit.book.scenes.values.toList()..sort((a, b) => a.name.compareTo(b.name)))
+                                    PopupMenuItem<String>(
+                                      value: s.id,
+                                      child: StatefulBuilder(builder: (context, setItem) {
+                                        final isOn = !show.director.off.contains(s.id);
+                                        return Row(
+                                          children: [
+                                            SizedBox(width: 22, child: s.id == st.scene ? const Icon(Icons.play_arrow, size: 16) : null),
+                                            Expanded(
+                                              child: Text(
+                                                s.meta.needs.contains('camera') ? '${s.name} (camera)' : s.name,
+                                                style: TextStyle(color: isOn ? null : Theme.of(context).disabledColor),
+                                              ),
+                                            ),
+                                            Tooltip(
+                                              message: isOn ? 'On: the director may choose it' : 'Off: the director passes it by',
+                                              child: Switch(
+                                                value: isOn,
+                                                onChanged: (v) {
+                                                  unawaited(_setSceneOff(s.id, !v));
+                                                  setItem(() {});
+                                                },
+                                              ),
+                                            ),
+                                          ],
+                                        );
+                                      }),
+                                    ),
+                                ],
+                                child: Row(
+                                  children: [
+                                    Flexible(
+                                      child: Text(scene?.name ?? '—',
+                                          style: TextStyle(color: Console.ink, fontWeight: FontWeight.w700, fontSize: 15), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                    ),
+                                    Icon(Icons.arrow_drop_down, size: 18, color: Console.quiet),
+                                  ],
+                                ),
+                              ),
+                      ),
                       Pad(
                         icon: show.sceneHeld ? Icons.lock : Icons.lock_open,
                         width: 26,
@@ -209,6 +292,20 @@ class _ShowTileState extends State<ShowTile> {
                         );
                       },
                     ),
+                  if (_noFfmpeg || MilkFeed.shared.pcm.noFfmpeg)
+                    Tooltip(
+                      message: 'MilkDrop hears the records through ffmpeg, and the camera is read through it. ${Tools.ffmpegHint}',
+                      child: Row(
+                        children: [
+                          const Icon(Icons.warning_amber_rounded, size: 14, color: Color(0xffe0a030)),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text('No ffmpeg: MilkDrop is deaf, no camera',
+                                style: TextStyle(color: Console.quiet, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+                          ),
+                        ],
+                      ),
+                    ),
                   const Spacer(),
                   Row(
                     children: [
@@ -228,7 +325,11 @@ class _ShowTileState extends State<ShowTile> {
                             height: 30,
                             lit: cam.running,
                             colour: cam.running ? const Color(0xffe0302a) : Console.ink,
-                            tooltip: cam.running ? 'The camera is on — off' : 'The room\'s camera on (the camera scenes need it)',
+                            tooltip: cam.running
+                                ? 'The camera is on — off'
+                                : cam.trouble != null
+                                    ? 'The room\'s camera on — last time: ${cam.trouble}'
+                                    : 'The room\'s camera on (the camera scenes need it)',
                             onTap: () {
                               if (cam.running) {
                                 cam.pinned = false;

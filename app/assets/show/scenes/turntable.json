@@ -1,0 +1,38 @@
+{
+  "id": "turntable",
+  "name": "Turntable",
+  "energy": [
+    0.15,
+    1.0
+  ],
+  "sections": [
+    "drop",
+    "chorus",
+    "verse",
+    "inst",
+    "on",
+    "build"
+  ],
+  "priority": 1.8,
+  "instant": true,
+  "layers": [
+    {
+      "sim": "turntable"
+    }
+  ],
+  "particles": [
+    "dust"
+  ],
+  "text": {
+    "title": false,
+    "lyrics": false
+  },
+  "post": {
+    "trails": 0.3,
+    "bloom": 0.9,
+    "fringe": 0.006,
+    "vignette": 0.5,
+    "grain": 0.35,
+    "recipe": 0.0
+  }
+}
