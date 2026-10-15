@@ -10,7 +10,7 @@
 //   SPIRAL     a phyllotaxis — shapes at the golden angle, a wave of scale running
 //              out from the middle on every kick;
 //   LATTICE    a hex field of small shapes, a wave crossing it over the bar, the
-//              field folded six ways on alternate bars;
+//              field swirled round the middle on alternate bars;
 //   NESTED     polygons inside polygons, turning against each other, sides changing
 //              with the bar, the whole stack expanding on the kick;
 //   MANDALA    a few big shapes folded into eight wedges and twisted, the twist
@@ -168,14 +168,16 @@ vec3 spiral(vec2 p, float px, vec3 c1, vec3 c2, float salt, float barN, float ki
 }
 
 vec3 lattice(vec2 p, float px, vec3 c1, vec3 c2, float salt, float barN, float kickPop, float calm) {
-  // Six-way fold on alternate bars.
-  if (mod(barN, 2.0) < 1.0) {
-    float a = atan(p.y, p.x), r = length(p);
-    float seg = TAU / 6.0;
-    a = abs(mod(a, seg) - seg * 0.5);
-    p = vec2(cos(a), sin(a)) * r;
-  }
   p = rot(uTime * 0.04 * calm) * p;
+  // A swirl on alternate bars: the field twisted round the middle, more the further
+  // out. It was a six-way mirror fold, but a square lattice is not symmetric about
+  // lines at 30 and 60 degrees (and it turned under the mirrors besides), so every
+  // mirror line was a seam: rows of shapes meeting their own reflection out of step,
+  // a knot of half-shapes in the middle. A twist has no lines to break.
+  if (mod(barN, 2.0) < 1.0) {
+    float r = length(p);
+    p = rot(r * (2.2 + 2.5 * uBandLow) * calm) * p;
+  }
   float cellsize = 0.11 - 0.03 * uBuild;
   // A hex lattice: two offset square grids, the nearer centre wins.
   vec2 g1 = p / cellsize;
@@ -279,7 +281,9 @@ void main() {
   // The snare: a quarter turn and the halves thrown apart, for the instant it lasts.
   float snare = uHitSnare;
   p = rot(snare * TAU * 0.25) * p;
-  p.x += (p.y > 0.0 ? 1.0 : -1.0) * snare * 0.12;
+  // Sheared over a narrow band rather than cut along the middle: a cut left a seam
+  // the trails carried for a while after.
+  p.x += (smoothstep(-0.06, 0.06, p.y) * 2.0 - 1.0) * snare * 0.12;
   // A build draws the picture in; the drop flings it back out.
   p *= 1.0 + 0.5 * uBuild - 0.25 * smoothstep(0.9, 1.0, uDropNear);
   // A slow breathing of the whole, with the bar.
