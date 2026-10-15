@@ -72,6 +72,10 @@ def load(path: str | os.PathLike | None = None) -> Config:
     )
     if not cfg.worker_secret:
         raise SystemExit("worker.secret is empty — the ingest worker would be unauthenticated")
+    # The example's placeholder is public: it is both the workers' credential and the
+    # key every stream link is signed with.
+    if cfg.worker_secret.strip().upper() in ("CHANGE-ME", "CHANGEME"):
+        raise SystemExit("worker.secret is still the example's — run `python -m muse.cli secret`")
     cfg.audio_dir.mkdir(parents=True, exist_ok=True)
     cfg.cover_dir.mkdir(parents=True, exist_ok=True)
     return cfg

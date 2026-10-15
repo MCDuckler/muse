@@ -261,6 +261,10 @@ def _bandcamp_fetch(ref: str, out_dir: pathlib.Path, report) -> dict:
 
     report("downloading", 0.0)
     dest = out_dir / f"{track['provider_id']}.mp3"
+    # The stream's address comes out of the page: fetched only from Bandcamp's own
+    # file host, or a page could send the box to anything it can reach.
+    if not host_is(track["stream"], "bcbits.com"):
+        raise SourceError("Bandcamp's stream was not on Bandcamp")
     req = urllib.request.Request(track["stream"], headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=120) as r, dest.open("wb") as fh:
         total = int(r.headers.get("Content-Length") or 0)
@@ -294,13 +298,26 @@ def fetch(provider: str, ref: str, out_dir: pathlib.Path, report) -> dict:
     return _FETCH[provider](ref, out_dir, report)
 
 
+def host_is(url: str, *domains: str) -> bool:
+    """Whether [url] is http(s) on one of [domains] or a subdomain of one — not a
+    host that merely ends in the same letters (evilbandcamp.com), and never file:,
+    ftp: or anything else urllib or yt-dlp would also open."""
+    try:
+        parts = urllib.parse.urlparse(url)
+    except ValueError:
+        return False
+    if parts.scheme not in ("http", "https"):
+        return False
+    host = (parts.hostname or "").lower().rstrip(".")
+    return any(host == d or host.endswith("." + d) for d in domains)
+
+
 def provider_for_url(url: str) -> str | None:
-    host = (urllib.parse.urlparse(url).hostname or "").lower()
-    if host.endswith("bandcamp.com"):
+    if host_is(url, "bandcamp.com"):
         return "bandcamp"
-    if host.endswith("soundcloud.com"):
+    if host_is(url, "soundcloud.com"):
         return "soundcloud"
-    if host.endswith(("youtube.com", "youtu.be", "music.youtube.com")):
+    if host_is(url, "youtube.com", "youtu.be"):
         return "youtube"
     return None
 

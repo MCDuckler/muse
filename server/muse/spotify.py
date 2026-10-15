@@ -80,7 +80,9 @@ def authorize_url(cfg, user_id: int) -> str:
         "redirect_uri": redirect,
         "scope": SCOPES,
         "state": state,
-        "show_dialog": "false",
+        # Asked every time: with the dialog skipped, a link someone else made linked a
+        # signed-in victim's Spotify to the other person's account without a word.
+        "show_dialog": "true",
     })
 
 

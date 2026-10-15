@@ -5,6 +5,16 @@
 89-58-49-140.nip.io {
 	encode zstd gzip
 
+	# HTTPS only from now on; no sniffing a type the server did not say; the app in
+	# no one else's frame; and no address (stream keys ride in ?k=) handed on as a
+	# referrer when a link leaves.
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+	}
+
 	# SSE must not be buffered or the client never sees track_ready.
 	handle /events {
 		reverse_proxy api:8770 {

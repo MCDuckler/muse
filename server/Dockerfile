@@ -14,4 +14,9 @@ ENV MUSE_CONFIG=/config/muse.toml
 # its own heap of freed memory, and the server grew until it was killed.
 ENV MALLOC_ARENA_MAX=2
 EXPOSE 8770
-CMD ["python", "-m", "uvicorn", "muse.main:app", "--host", "0.0.0.0", "--port", "8770"]
+# The client's own address from Caddy's X-Forwarded-For: without it every request came
+# from Caddy's container and the login limit was one bucket for the whole internet
+# (one attempt every five seconds from anyone locked everyone out). Safe to trust from
+# anywhere: 8770 is not published, Caddy is the only thing that reaches it, and Caddy
+# replaces whatever X-Forwarded-For a client sends with the address it really came from.
+CMD ["python", "-m", "uvicorn", "muse.main:app", "--host", "0.0.0.0", "--port", "8770", "--proxy-headers", "--forwarded-allow-ips", "*"]

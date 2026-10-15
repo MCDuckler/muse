@@ -54,6 +54,10 @@ def resolve(body: dict = Body(...), user: dict = Depends(current_user)):
     provider_id = str(body.get("provider_id") or "")
     if provider not in sources.DIRECT or not provider_id:
         raise HTTPException(400, "provider and provider_id required")
+    # The link is what the server fetches: it must be the provider's own, or any
+    # signed-in user could point the box at whatever it can reach.
+    if body.get("url") and sources.provider_for_url(str(body["url"])) != provider:
+        raise HTTPException(400, f"not a {provider} link")
 
     existing = catalog.find_by_provider(provider, provider_id)
     if existing:
@@ -147,7 +151,7 @@ def import_album(body: dict = Body(...), user: dict = Depends(current_user)):
 def bandcamp_band(url: str, user: dict = Depends(current_user)):
     """A Bandcamp act or label, whole: name, picture, its own words, the acts on it if
     it is a label, and its records — the page a follow of it opens as."""
-    if "bandcamp.com" not in url and not url.startswith("http"):
+    if sources.provider_for_url(url) != "bandcamp":
         raise HTTPException(400, "a Bandcamp page URL")
     try:
         page = linked.bandcamp_band_page(url)

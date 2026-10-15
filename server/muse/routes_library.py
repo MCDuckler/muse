@@ -1452,7 +1452,10 @@ def remove_from_library(body: dict = Body(...), user: dict = Depends(current_use
 
 @router.delete("/queues/{queue_id}")
 def delete_queue(queue_id: int, user: dict = Depends(current_user)):
-    _own_queue(queue_id, user)
+    # The owner's alone: a jam lets its guests read and add to the host's queue, not
+    # throw it away — and any signed-in user can see the running jams and join one.
+    if not db.one("select 1 from queues where id=%s and user_id=%s", (queue_id, user["id"])):
+        raise HTTPException(404, "no such queue")
     db.run("delete from queues where id=%s", (queue_id,))
     return {"deleted": queue_id}
 
@@ -2114,7 +2117,10 @@ def remove_from_library(body: dict = Body(...), user: dict = Depends(current_use
 
 @router.delete("/queues/{queue_id}")
 def delete_queue(queue_id: int, user: dict = Depends(current_user)):
-    _own_queue(queue_id, user)
+    # The owner's alone: a jam lets its guests read and add to the host's queue, not
+    # throw it away — and any signed-in user can see the running jams and join one.
+    if not db.one("select 1 from queues where id=%s and user_id=%s", (queue_id, user["id"])):
+        raise HTTPException(404, "no such queue")
     db.run("delete from queues where id=%s", (queue_id,))
     return {"deleted": queue_id}
 

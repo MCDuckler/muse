@@ -122,6 +122,9 @@ def create_invite(body: dict = Body(default={}), user: dict = Depends(current_us
 
 @router.get("/invites")
 def list_invites(user: dict = Depends(current_user)):
+    # The codes are live keys to a new account: an admin's to see, as making and
+    # revoking them are. Open, any user could read one and redeem it themselves.
+    _admin(user)
     return {"items": db.all_(
         """select code, note, created_at, expires_at, used_at,
                   (select name from users where id=used_by) as used_by
