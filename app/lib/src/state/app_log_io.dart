@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'redact.dart';
+
 /// Where the log is, or null where there is none.
 String? get appLogPath => _file?.path;
 File? _file;
@@ -51,7 +53,7 @@ Future<void> startAppLog() async {
 }
 
 void _write(String message) {
-  final line = '${DateTime.now().toIso8601String().substring(11, 23)} $message';
+  final line = '${DateTime.now().toIso8601String().substring(11, 23)} ${redact(message)}';
   final sink = _sink;
   if (sink == null) {
     if (_early.length < 500) _early.add(line);

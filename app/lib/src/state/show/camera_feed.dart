@@ -89,6 +89,10 @@ class CameraFeed extends ChangeNotifier {
       });
       unawaited(p.exitCode.then((_) => _ended()));
       notifyListeners();
+    } on ProcessException {
+      trouble = 'The camera needs ffmpeg, and there is none. ${Tools.ffmpegHint}';
+      _ffmpeg = null;
+      notifyListeners();
     } catch (e) {
       trouble = 'ffmpeg: $e';
       _ffmpeg = null;

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'redact.dart';
 
 /// A short written record of what the audio engine did, kept across restarts.
 ///
@@ -62,7 +63,7 @@ class PlaybackLog {
   static void note(String what) {
     final now = DateTime.now();
     String two(int v) => v.toString().padLeft(2, '0');
-    _lines.add('${two(now.hour)}:${two(now.minute)}:${two(now.second)} $what');
+    _lines.add('${two(now.hour)}:${two(now.minute)}:${two(now.second)} ${redact(what)}');
     _noted++;
     while (_lines.length > _max) {
       _lines.removeAt(0);

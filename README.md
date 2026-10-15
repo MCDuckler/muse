@@ -51,6 +51,19 @@ cp muse.example.toml muse.toml
 ./.venv/bin/python -m muse.cli adduser chris # -> [[users]] block
 ```
 
+## The desktop app needs ffmpeg
+
+WetOwl on a desk runs `ffmpeg` from the PATH for two things: MilkDrop hears the records
+through it, and the room's camera is read through it. Without it MilkDrop plays deaf and
+the camera scenes stay dark; the show panel says so under its buttons. Install it, then
+start WetOwl again (the PATH is read once):
+
+```
+winget install Gyan.FFmpeg     # Windows
+brew install ffmpeg            # macOS
+sudo apt install ffmpeg        # Debian, Ubuntu
+```
+
 ## API
 
 ```

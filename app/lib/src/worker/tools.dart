@@ -145,6 +145,18 @@ class Tools {
       }();
   static Future<String>? _ffmpeg;
 
+  /// Whether there is an ffmpeg to run at all. MilkDrop hears the records through
+  /// it and the camera is read through it; without one both go quiet. Read once:
+  /// an ffmpeg installed while the app runs is found when it is started again.
+  static Future<bool> hasFfmpeg() async => (await ffmpegCommand()) != 'ffmpeg';
+
+  /// What to tell someone who has none.
+  static String get ffmpegHint => Platform.isWindows
+      ? 'Install it (winget install Gyan.FFmpeg) and start WetOwl again.'
+      : Platform.isMacOS
+          ? 'Install it (brew install ffmpeg) and start WetOwl again.'
+          : "Install it (your package manager's ffmpeg) and start WetOwl again.";
+
   static Future<Tools> find({Directory? own}) async {
     Future<String?> where(String name) async {
       final exe = Platform.isWindows ? '$name.exe' : name;

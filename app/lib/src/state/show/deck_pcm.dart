@@ -32,6 +32,23 @@ class DeckPcm {
 
   final _records = <int, Int16List>{};
   final _loading = <int>{};
+
+  /// When a record last failed to decode, by track: not asked again for [retryAfter].
+  /// Without this a failure was asked again the next frame — a new isolate and a new
+  /// ffmpeg sixty times a second, which froze the desk (a desk with no ffmpeg on its
+  /// path failed every one of them).
+  final _failed = <int, DateTime>{};
+  static const retryAfter = Duration(minutes: 1);
+
+  /// No ffmpeg to run at all: nothing is asked until the app is started again.
+  bool _noFfmpeg = false;
+  bool get noFfmpeg => _noFfmpeg;
+
+  /// How many decodes were started, and whether one is under way: for a test.
+  @visibleForTesting
+  int decodes = 0;
+  @visibleForTesting
+  bool get busy => _loading.isNotEmpty;
   final _order = <int>[];
 
   /// The sample each deck was last read to, by deck name.
@@ -84,10 +101,13 @@ class DeckPcm {
   }
 
   void _ask(int id, String? streamUrl) {
-    if (_loading.contains(id)) return;
+    if (_noFfmpeg || _loading.contains(id)) return;
+    final failed = _failed[id];
+    if (failed != null && DateTime.now().difference(failed) < retryAfter) return;
     final src = source?.call(id) ?? (streamUrl == null ? null : (url: streamUrl, headers: headers));
     if (src == null) return;
     _loading.add(id);
+    decodes++;
     unawaited(_decode(id, src.url, src.headers).whenComplete(() => _loading.remove(id)));
   }
 
@@ -95,7 +115,11 @@ class DeckPcm {
     try {
       final args = [
         '-hide_banner', '-loglevel', 'error', '-nostdin',
-        if (url.startsWith('http') && headers.isNotEmpty) ...['-headers', headers.entries.map((e) => '${e.key}: ${e.value}\r\n').join()],
+        // The header only where the address does not carry its own key: on ffmpeg's
+        // command line the bearer token is readable by anything on this computer that
+        // can list processes, and a signed stream address (?k=) needs no token.
+        if (url.startsWith('http') && headers.isNotEmpty && !Uri.parse(url).queryParameters.containsKey('k'))
+          ...['-headers', headers.entries.map((e) => '${e.key}: ${e.value}\r\n').join()],
         '-i', url,
         '-vn', '-f', 's16le', '-ac', '1', '-ar', '$rate', '-',
       ];
@@ -114,8 +138,10 @@ class DeckPcm {
       }, debugName: 'milk pcm');
       if (code != 0 && bytes.isEmpty) {
         debugPrint('milk pcm: ffmpeg $code for $id');
+        _failed[id] = DateTime.now();
         return;
       }
+      _failed.remove(id);
       _records[id] = Int16List.view(bytes.buffer, bytes.offsetInBytes, bytes.length ~/ 2);
       _order.remove(id);
       _order.add(id);
@@ -123,8 +149,14 @@ class DeckPcm {
       while (_order.length > 3) {
         _records.remove(_order.removeAt(0));
       }
+    } on ProcessException catch (e) {
+      // Not the exception itself: its words carry the command, and the command
+      // carries the stream's bearer token.
+      debugPrint('milk pcm: no ffmpeg to run (${e.message}); MilkDrop goes without the records\' sound');
+      _noFfmpeg = true;
     } catch (e) {
-      debugPrint('milk pcm: $e');
+      debugPrint('milk pcm: ${e.runtimeType} for $id');
+      _failed[id] = DateTime.now();
     }
   }
 }
