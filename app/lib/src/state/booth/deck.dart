@@ -333,6 +333,11 @@ class Deck extends ChangeNotifier {
     // Only once any seek has landed: a report on its way to where the record was sent
     // is not the engine's loop coming round.
     _watchTheWrap(at, now);
+    final quiet = _quietUntil;
+    if (quiet != null) {
+      if (now.isBefore(quiet)) return;
+      _quietUntil = null;
+    }
     if (!_trusting || !playing) {
       _fix = at;
       _fixedAt = now;
@@ -351,6 +356,24 @@ class Deck extends ChangeNotifier {
     // or cache event, or just_audio carrying the last one forward — has the same.
     final read = _player.playbackEvent.updateTime;
     if (off.abs() > const Duration(milliseconds: 80)) {
+      // Back from a part's swap, the engine late: just_audio says "playing" when it is
+      // told to, and mpv's sound comes back a good half second after that, while this
+      // clock — which the beat-holding and the other deck are matched to — ran from
+      // the word. Believing the engine (as it was, "B moved -608 ms by itself") put the
+      // record that far off the beat and the other deck was moved to follow. The beat
+      // is the clock's: the record is sent to it.
+      final swapped = _swappedAt;
+      if (swapped != null && off.isNegative && now.difference(swapped) < const Duration(seconds: 3)) {
+        _swappedAt = null;
+        _suspect = null;
+        _settling = expected;
+        _settlingAt = now;
+        _lastReport = null;
+        placed++;
+        PlaybackLog.booth('deck: $name back from its swap ${(-off).inMilliseconds} ms late, sent on to the beat');
+        unawaited(_player.seek(expected));
+        return;
+      }
       // The engine says it is somewhere else, by more than its reports ever wander.
       // One such report is not believed on its own: a report that sat in a queue
       // while the app was busy says where the record *was*, and believing it put the
@@ -372,7 +395,7 @@ class Deck extends ChangeNotifier {
           e0 != null &&
           !_chainLooping &&
           off.isNegative &&
-          at >= (_engineLoopStart ?? s0) - const Duration(milliseconds: 40) &&
+          at >= (_engineLoopStart ?? s0) - _comesRoundShort &&
           at <= s0 + (e0 - s0) ~/ 2;
       if (!comingRound) {
         final suspect = _suspect;
@@ -408,6 +431,15 @@ class Deck extends ChangeNotifier {
   /// Whether the clock is running on reports, and so only nudged by them. False
   /// after anything that moves the record at once, until the next report.
   bool _trusting = false;
+
+  /// Until when reports are let pass: just after the engine's loop came round.
+  DateTime? _quietUntil;
+
+  /// How far short of where its loop goes round to the engine's first reports after
+  /// a wrap can be, and still be the wrap: measured at 140 to 190 ms on a Windows
+  /// desk with Rubber Band on. At 40 ms the wraps were neither recognised nor
+  /// learned from.
+  static const _comesRoundShort = Duration(milliseconds: 300);
 
   /// How far off the clock the last report was, when that was too far to be taken
   /// on its own; see [_anchor].
@@ -642,8 +674,12 @@ class Deck extends ChangeNotifier {
         await engineLoop?.call(null, null);
       } catch (_) {}
     }
-    if (_chainLooping) {
+    _chainIn?.cancel();
+    _chainIn = null;
+    if (_chainBuilt) {
       _chainLooping = false;
+      _chainBuilt = false;
+      _chainStart = _chainSpan = null;
       try {
         await stopChainLoop?.call(Duration.zero);
       } catch (_) {}
@@ -907,10 +943,16 @@ class Deck extends ChangeNotifier {
     // Started and let go of, after the turn is handed back: just_audio's own play()
     // completes when playback stops, and awaited inside the turn it held every other
     // load — the other deck's next record included — behind this one.
-    if (was) await play();
+    if (was) {
+      await play();
+      _swappedAt = DateTime.now();
+    }
     notifyListeners();
     return true;
   }
+
+  /// When a part's swap last started the record again: see [_anchor].
+  DateTime? _swappedAt;
 
   /// Start the record, and return once it is playing — not once it has stopped.
   ///
@@ -996,7 +1038,7 @@ class Deck extends ChangeNotifier {
     // very late one, and was thrown away: what a time round costs was hardly ever
     // learned.
     if (last == null || last - at < span ~/ 2) return;
-    if (at < from - const Duration(milliseconds: 40) || at > from + span ~/ 2) return;
+    if (at < from - _comesRoundShort || at > from + span ~/ 2) return;
     final rate = tempo <= 0 ? 1.0 : tempo;
     // When it came round: not when the report was read, which is up to a report's
     // interval later, but that moment less how far past the loop's start the engine
@@ -1135,6 +1177,12 @@ class Deck extends ChangeNotifier {
   }
 
   Future<void> seek(Duration to) async {
+    // Under a chain loop, the chain's loop would start again from wherever this lands
+    // and the deck's clock go on folding at the old start: the two apart from then
+    // on, the beat-holding answering the difference with another seek. Out of the
+    // chain first; the loop goes back in at its next start.
+    final rechain = _chainBuilt && loopStart != null;
+    if (_chainBuilt) await _outOfTheChain();
     placed++;
     _lastReport = null;
     // A record moved under the engine's own loop spoils the timing of its wraps. Not
@@ -1151,6 +1199,7 @@ class Deck extends ChangeNotifier {
     // the booth's own placing of a record.
     unawaited(Future<void>.sync(() => refreshFilters?.call()));
     notifyListeners();
+    if (rechain) unawaited(_loopInEngine());
   }
 
   /// Where a hand has asked this record to be, kept until the engine has caught up.
@@ -1178,7 +1227,7 @@ class Deck extends ChangeNotifier {
     // A hand anywhere on the record ends a chain loop: the chain's loop is fixed to
     // the samples it was built around, and a seek would set it going from somewhere
     // else entirely.
-    if (_chainLooping) unawaited(_outOfTheChain());
+    if (_chainBuilt) unawaited(_outOfTheChain());
     final at = to < Duration.zero ? Duration.zero : to;
     if ((at - aimedAt).abs() > const Duration(seconds: 1)) handMoves++;
     _aim = at;
@@ -1426,7 +1475,7 @@ class Deck extends ChangeNotifier {
     _loopBars = null;
     _loop?.cancel();
     _wrapSoon?.cancel();
-    if (wasLooping || _engineLooping || _chainLooping) unawaited(_loopInEngine());
+    if (wasLooping || _engineLooping || _chainBuilt) unawaited(_loopInEngine());
     _engineLooping = false;
     notifyListeners();
   }
@@ -1605,33 +1654,96 @@ class Deck extends ChangeNotifier {
   /// the chain on and then send the deck to the loop's start, and zero is exactly
   /// there.
   Future<bool> _intoTheChain(Duration start, Duration end) async {
-    if (_chainLooping) return true;
-    if (!(await chainLoop!(end - start))) return false;
+    final span = end - start;
+    if (_chainBuilt && _chainStart == start && _chainSpan == span) return true;
+    // Only the start moved (the seam search settling it on a quiet sample) before the
+    // record went in: the chain is the right size already, only the moment changes.
+    final rebuild = !(_chainBuilt && !_chainLooping && _chainSpan == span);
+    // Resized or moved — a loop halved, a roll stepping down, a new length pressed:
+    // the chain's loop is fixed to the size and the samples it was built round, and
+    // returning here (as it did) left it going round the old ones while the deck's
+    // clock folded at the new length. A two-bar loop halved stayed two bars long.
+    if (rebuild) {
+      if (_chainBuilt) await _outOfTheChain();
+      if (!(await chainLoop!(span))) return false;
+    }
+    _chainBuilt = true;
+    _chainStart = start;
+    _chainSpan = span;
     await engineLoop?.call(null, null);
-    await _player.seek(start);
-    _lastReport = null;
-    _fix = start;
-    _fixedAt = DateTime.now();
-    _trusting = false;
-    _chainLooping = true;
     _engineLooping = false;
     _loop?.cancel();
     _wrapSoon?.cancel();
-    notifyListeners();
+    // Into the loop when the record gets to its start — or, where the start is
+    // already behind it, to its end, where the loop would come round anyway. Not at
+    // once: the start is a downbeat up to three beats ahead or one behind, and the
+    // seek straight there moved the record by a fraction of a beat, which the
+    // beat-holding then answered by moving the other deck.
+    final at = position;
+    var left = (at < start ? start : end) - at;
+    if (left < Duration.zero) left = Duration.zero;
+    final wall = Duration(microseconds: (left.inMicroseconds / (tempo <= 0 ? 1 : tempo)).round());
+    _chainIn?.cancel();
+    _chainIn = Timer(wall, () {
+      _chainIn = null;
+      unawaited(_enterTheChain(start, span));
+    });
     return true;
   }
 
-  /// Takes it back out, and leaves the record where the room last heard it.
-  Future<void> _outOfTheChain() async {
-    if (!_chainLooping) return;
-    final at = position;
-    _chainLooping = false;
-    await stopChainLoop?.call(at);
-    await _player.seek(at);
-    _lastReport = null;
-    _fix = at;
+  /// The chain is built round the loop ([_chainBuilt]) but the record not yet sent
+  /// into it ([_chainIn] waits for the moment); and what it was built round.
+  bool _chainBuilt = false;
+  Timer? _chainIn;
+  Duration? _chainStart, _chainSpan;
+
+  /// The record onto the loop's start, now the chain carries it: the first sample
+  /// after a seek is where the chain's loop begins.
+  Future<void> _enterTheChain(Duration start, Duration span) async {
+    if (!_chainBuilt || _chainStart != start || _chainSpan != span || loopStart != start) return;
+    _fix = start;
     _fixedAt = DateTime.now();
     _trusting = false;
+    _settling = start;
+    _settlingAt = _fixedAt;
+    _suspect = null;
+    _lastReport = null;
+    _chainLooping = true;
+    placed++;
+    await _player.seek(start);
+    unawaited(Future<void>.sync(() => refreshFilters?.call()));
+    notifyListeners();
+  }
+
+  /// Takes it back out, and leaves the record where the room is hearing it.
+  Future<void> _outOfTheChain() async {
+    _chainIn?.cancel();
+    _chainIn = null;
+    if (!_chainBuilt) return;
+    final entered = _chainLooping;
+    // Read while the clock still folds into the loop: where the room is.
+    final at = position;
+    _chainBuilt = false;
+    _chainLooping = false;
+    _chainStart = null;
+    _chainSpan = null;
+    if (entered) {
+      // The record put there first, with the loop still in the chain — the chain's
+      // loop starts again from wherever a seek lands, so nothing is heard to move —
+      // and the chain rebuilt after. The other way round, the room heard the engine's
+      // own unfolded place for as long as the rebuild took, and the seek back went to
+      // where the record had been before it: thrown back by the rebuild's time.
+      _fix = at;
+      _fixedAt = DateTime.now();
+      _trusting = false;
+      _settling = at;
+      _settlingAt = _fixedAt;
+      _suspect = null;
+      _lastReport = null;
+      placed++;
+      await _player.seek(at);
+    }
+    await stopChainLoop?.call(at);
   }
 
   /// Puts the mixer's settings back the instant the engine comes round, rather than
@@ -1687,7 +1799,15 @@ class Deck extends ChangeNotifier {
       if (start != null && end != null && at >= end - const Duration(milliseconds: 20)) {
         _fix = start;
         _fixedAt = DateTime.now();
-        _trusting = false;
+        // The engine's first reports after it has come round are its worst: a fifth of
+        // a second short of where it went round to, for the next few. Taken as fact
+        // (this clock was marked untrusted here, so the first was taken outright, and
+        // the next agreed with it) every wrap stepped the clock back a quarter of a
+        // second, logged as the deck moving by itself, and the beat-holding jumped the
+        // other deck to follow. They are let pass for a moment, and the clock goes on
+        // trusting itself, nudged by what comes after.
+        _quietUntil = _fixedAt.add(const Duration(milliseconds: 350));
+        _suspect = null;
         placed++;
         notifyListeners();
       }
@@ -1782,8 +1902,8 @@ class Deck extends ChangeNotifier {
     //
     // And the start the engine is given likewise: it comes round to the lead before
     // the loop's start (see [_lead]), so that is where the splice's other side is.
-    final a = _chainLooping ? from : (_engineLoopStart ?? from);
-    final b = _chainLooping ? to : (_engineLoopEnd ?? to);
+    final a = _chainBuilt ? from : (_engineLoopStart ?? from);
+    final b = _chainBuilt ? to : (_engineLoopEnd ?? to);
     final lead = from - a, pull = to - b;
     final quiet = await finder(this, a, b);
     if (quiet == null || loopStart != from || loopEnd != to) return;
@@ -1887,7 +2007,7 @@ class Deck extends ChangeNotifier {
     _loopBars = null;
     _loop?.cancel();
     _wrapSoon?.cancel();
-    if (was || _engineLooping || _chainLooping) unawaited(_loopInEngine());
+    if (was || _engineLooping || _chainBuilt) unawaited(_loopInEngine());
     _engineLooping = false;
     notifyListeners();
   }

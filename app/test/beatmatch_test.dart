@@ -593,8 +593,12 @@ void main() {
       d.loopStart = start;
       d.loopEnd = start + beat * 8; // two bars: worth carrying
       await d.setLoopForTest();
-      expect(d.chainLooping, isTrue, reason: 'two bars is worth carrying');
       expect(mixer.carried['B'], beat * 8);
+      // Into the loop when the record reaches its start — a beat from here — not by a
+      // seek there at once, which moved the record by a fraction of a beat.
+      expect(d.chainLooping, isFalse, reason: 'not in it before the record gets there');
+      await Future<void>.delayed(beat * 1.2);
+      expect(d.chainLooping, isTrue, reason: 'two bars is worth carrying');
 
       // Wherever the engine's clock has got to, the deck reports somewhere in the loop.
       for (final on in [0, 1, 3, 8, 8.5, 17, 100]) {
@@ -628,7 +632,11 @@ void main() {
       await d.seek(const Duration(seconds: 10));
       await d.play();
       d.loop(4); // a bar: two seconds round
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      // In when the record gets to the loop: up to three beats ahead, or round at
+      // the end of the first time through where it started a beat behind.
+      for (var i = 0; i < 160 && !d.chainLooping; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
       expect(d.chainLooping, isTrue);
       final s0 = d.loopStart!, e0 = d.loopEnd!;
       Duration heard() {
@@ -649,6 +657,29 @@ void main() {
       }
       expect(worst, lessThan(8), reason: 'the clock followed the scatter: ${worst.toStringAsFixed(1)} ms');
       d.unloop();
+      await d.pause();
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
+    test('a carried loop halved is carried at its new length', () async {
+      // The chain's loop is fixed to the size it was built round: a two-bar loop
+      // halved (by hand, or a roll stepping down) went on going round two bars while
+      // the deck's clock folded at one — the loop "taking longer than it should".
+      mixer.carriesLoops = true;
+      final d = booth.b;
+      await d.play();
+      final beat = d.beatInRecord;
+      final start = d.position + beat;
+      d.loopStart = start;
+      d.loopEnd = start + beat * 8;
+      await d.setLoopForTest();
+      expect(mixer.carried['B'], beat * 8);
+      d.halveLoop();
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(mixer.carried['B'], beat * 4, reason: 'the chain still carries ${mixer.carried['B']}');
+      // And once more, under a bar: no longer worth carrying, handed to the engine.
+      d.halveLoop();
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(mixer.carried.containsKey('B'), isFalse);
       await d.pause();
     }, timeout: const Timeout(Duration(seconds: 30)));
 

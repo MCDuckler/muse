@@ -1367,6 +1367,8 @@ class Booth extends ChangeNotifier {
     // put somewhere — by a hand, by a loop, by this loop's own jump — starts the
     // measuring again rather than being fitted through.
     var placed = follower.placed;
+    // And the master's: its loop coming round, above all.
+    var masterPlaced = m.placed;
     // Since when the deck has been left alone. Readings before this are the engine
     // catching up, not the record drifting.
     var steadyFrom = began;
@@ -1451,6 +1453,20 @@ class Booth extends ChangeNotifier {
       // is most of what "it takes too long to match" is.
       final settle = snap ? const Duration(milliseconds: 150) : const Duration(milliseconds: 600);
       if (DateTime.now().difference(began) < settle) return;
+      // The master put somewhere — its loop came round, or a hand moved it. Only the
+      // follower's moves were watched, so every wrap of a looping master went into the
+      // follower's readings as the follower falling off the beat: jumps, flam leans
+      // and a rate fitted through the steps. What was measured before it is about
+      // another arrangement of the two; a moment is let pass and it starts again.
+      if (m.placed != masterPlaced) {
+        masterPlaced = m.placed;
+        seen.clear();
+        drift.clear();
+        shifted = 0;
+        settleUntil = DateTime.now().add(const Duration(milliseconds: 400));
+        steadyFrom = settleUntil;
+        return;
+      }
       if (DateTime.now().isBefore(settleUntil)) return;
       final now = DateTime.now();
       // The phase inside the beat, off the two fitted grids: fine, steady, and blind
