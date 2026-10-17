@@ -1,6 +1,8 @@
 # The dancer
 
 - The dancer: a photogrammetry scan of the house's own Chris (photos by the house, 2026-10-16), rigged here.
+- Joe and Chris (white tee): photogrammetry scans of the house's Joe and Chris (photos by the house, 2026-10-17),
+  rigged the same way, the moves retargeted from the first scan's rig (tools/show-dance/dance_model.py).
 - The motion: Bandai Namco Research Motiondataset (dataset 1, `dance-long_normal_001`, `dance-short_normal_001`),
   https://github.com/BandaiNamcoResearchInc/Bandai-Namco-Research-Motiondataset — CC BY-NC 4.0 (non-commercial).
 - More motion: CMU Graphics Lab Motion Capture Database, http://mocap.cs.cmu.edu (free for any use; created with

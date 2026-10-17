@@ -275,6 +275,8 @@ class DanceModels {
   const DanceModels._();
   static const all = [
     ('chris', 'Chris (scan)'),
+    ('chris2', 'Chris (white tee)'),
+    ('joe', 'Joe (scan)'),
     ('banana', 'Cool Banana'),
     ('hotdog', 'Hotdog'),
     ('stickbug', 'Sr. Stickbug'),

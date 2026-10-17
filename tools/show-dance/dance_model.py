@@ -1,5 +1,5 @@
 # Any humanoid model (a Mixamo/VRM-style skeleton) made a dancer like the scan:
-#   blender -b --python dance_model.py -- <model.glb|.vrm> <out.blend>
+#   blender -b --python dance_model.py -- <model.glb|.vrm|scan rig .blend> <out.blend>
 # Its bones renamed to the Bandai-Namco names the rig uses (skel.MIXAMO), the bones
 # outside that chain folded into their nearest kept ancestor (their weights too),
 # and every capture the scan's rig dances (long, short, the CMU takes) retarget onto
@@ -18,10 +18,18 @@ MIXAMO = {"Hips": "Hips", "Spine": "Spine", "Spine2": "Chest", "Neck": "Neck", "
           "RightUpLeg": "UpperLeg_R", "RightLeg": "LowerLeg_R", "RightFoot": "Foot_R", "RightToeBase": "Toes_R"}
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
-glb = src if src.endswith(".glb") else src + ".glb"
-if glb != src:
-    import shutil; shutil.copy(src, glb)
-bpy.ops.import_scene.gltf(filepath=glb)
+if src.endswith(".blend"):
+    # another scan, rigged by rig.py: Bandai names already, its own dance dropped
+    with bpy.data.libraries.load(src) as (s, d):
+        d.objects = list(s.objects)
+    for o in d.objects:
+        if o is not None: bpy.context.scene.collection.objects.link(o)
+    for act in list(bpy.data.actions): bpy.data.actions.remove(act)
+else:
+    glb = src if src.endswith(".glb") else src + ".glb"
+    if glb != src:
+        import shutil; shutil.copy(src, glb)
+    bpy.ops.import_scene.gltf(filepath=glb)
 arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
 meshes = [o for o in bpy.data.objects if o.type == "MESH" and len(o.vertex_groups) > 0]
 for o in list(bpy.data.objects):
@@ -37,10 +45,10 @@ mesh.name = "scan"
 mesh.data.uv_layers.active_index = 0
 
 # names
+keep = set(retarget.CHAIN)
 for b in arm.data.bones:
     n = b.name.split(":")[-1]
-    b.name = MIXAMO.get(n, "x_" + n)
-keep = set(retarget.CHAIN)
+    b.name = MIXAMO.get(n, n if n in keep else "x_" + n)
 missing = keep - {b.name for b in arm.data.bones}
 assert not missing, f"missing bones {missing}"
 # weights of the dropped bones to their nearest kept ancestor
