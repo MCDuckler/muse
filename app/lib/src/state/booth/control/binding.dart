@@ -46,6 +46,14 @@ class BoothBinding {
 
   final SoftTakeover takeover;
 
+  /// The EQ bands (deck/band) the knob itself turned down to the kill: there the
+  /// knob is at its stop, not somewhere a kill button left the band.
+  final _killedByKnob = <String>{};
+
+  /// A fader's last few steps read as its stop: a worn fader at the bottom sends
+  /// 0, 1, 0, 2... and the deck flickered in and out of silence.
+  static const _faderFloor = 3.5 / 127;
+
   /// The pitch fader's reach either side of 0, cycled with shift + pitch reset.
   static const pitchRanges = [0.08, 0.16, 0.50];
   int pitchRangeIndex = 0;
@@ -232,7 +240,10 @@ class BoothBinding {
         final by = d.beatInRecord * 4 * bars;
         await booth.nudge(d, name == Controls.prev ? -by : by);
       case Controls.volume:
-        if (_take(e, booth.gainOf(d))) await booth.setGain(d, e.value);
+        final v = e.value < _faderFloor ? 0.0 : e.value;
+        // Already at the stop and still there: the noise is not a move.
+        if (v == 0 && booth.gainOf(d) == 0) return;
+        if (_take(e, booth.gainOf(d))) await booth.setGain(d, v);
       case Controls.gain:
         // The knob over the fader is the filter: centre is off.
         final sw = (booth.filters[d] ?? 0) / 2 + 0.5;
@@ -246,13 +257,23 @@ class BoothBinding {
         final eq = booth.eqOf(d);
         final band = switch (name) { Controls.eqLow => 0, Controls.eqMid => 1, _ => 2 };
         final now = switch (band) { 0 => eq.low, 1 => eq.mid, _ => eq.high };
-        // A killed band's knob reads where it would be unkilled: turning it is taking
-        // the band back, not nudging a value nobody can hear.
-        final sw = now <= EqSet.killed ? 0.5 : EqSet.knobOf(now);
+        final key = '${d.name}/$band';
+        // Killed by the knob's own stop: the knob is there (and turning it up again is
+        // simply turning it). Killed by a button: the knob takes the band back from
+        // wherever it is, at once — waiting for it to come round to the middle left a
+        // knob that did nothing.
+        final killed = now <= EqSet.killed;
+        if (killed && !_killedByKnob.contains(key)) takeover.drop(e.id);
+        final sw = killed ? (_killedByKnob.contains(key) ? 0.0 : e.value) : EqSet.knobOf(now);
         if (!_take(e, sw)) return;
         var t = e.value;
         if ((t - 0.5).abs() < 0.012) t = 0.5;
         final db = EqSet.dbOf(t);
+        if (db <= EqSet.killed) {
+          _killedByKnob.add(key);
+        } else {
+          _killedByKnob.remove(key);
+        }
         await booth.setEq(d, switch (band) { 0 => eq.withLow(db), 1 => eq.withMid(db), _ => eq.withHigh(db) });
       case Controls.killLow:
       case Controls.killMid:
@@ -264,6 +285,7 @@ class BoothBinding {
           Controls.killMid => (1, eq.midKilled),
           _ => (2, eq.highKilled),
         };
+        _killedByKnob.remove('${d.name}/$band');
         await booth.kill(d, band, !on);
       // PFL and SOURCE have no use in a booth with one output: they are the show's.
       // PFL: the scene before (A) or after (B). SOURCE: a hit (A), the blackout (B);

@@ -167,6 +167,46 @@ void main() {
       expect(booth.eqOf(booth.a).midKilled, isFalse);
     });
 
+    test('an EQ knob turned down to its stop keeps working on the way back up', () async {
+      // As a real knob does it: a step at a time, all the way down and back.
+      for (var v = 0.5; v >= 0; v -= 1 / 127) {
+        await bind.handle(at(a(Controls.eqLow), v, kind: ControlKind.pot));
+      }
+      await bind.handle(at(a(Controls.eqLow), 0.0, kind: ControlKind.pot));
+      expect(booth.eqOf(booth.a).lowKilled, isTrue);
+      await bind.handle(at(a(Controls.eqLow), 2 / 127, kind: ControlKind.pot));
+      expect(booth.eqOf(booth.a).lowKilled, isFalse, reason: 'the knob moved off its stop');
+      expect(booth.eqOf(booth.a).low, EqSet.dbOf(2 / 127));
+      await bind.handle(at(a(Controls.eqLow), 0.2, kind: ControlKind.pot));
+      expect(booth.eqOf(booth.a).low, EqSet.dbOf(0.2));
+    });
+
+    test('a band killed by its button is taken back by the knob from where it is', () async {
+      await bind.handle(at(a(Controls.eqMid), 0.5, kind: ControlKind.pot));
+      await bind.handle(at(a(Controls.eqMid), 0.7, kind: ControlKind.pot));
+      await bind.handle(down(a(Controls.killMid)));
+      expect(booth.eqOf(booth.a).midKilled, isTrue);
+      await bind.handle(at(a(Controls.eqMid), 0.69, kind: ControlKind.pot));
+      expect(booth.eqOf(booth.a).mid, EqSet.dbOf(0.69));
+    });
+
+    test('a channel fader resting at its stop: the noise there is not a move', () async {
+      await bind.handle(at(a(Controls.volume), 1.0));
+      for (var v = 1.0; v >= 0; v -= 4 / 127) {
+        await bind.handle(at(a(Controls.volume), v));
+      }
+      await bind.handle(at(a(Controls.volume), 0.0));
+      expect(booth.gainOf(booth.a), 0);
+      final sets = mixer.levels.length;
+      for (final v in [1 / 127, 0.0, 2 / 127, 1 / 127, 3 / 127, 0.0]) {
+        await bind.handle(at(a(Controls.volume), v));
+        expect(booth.gainOf(booth.a), 0);
+      }
+      expect(mixer.levels.length, sets, reason: 'nothing sent for the jitter');
+      await bind.handle(at(a(Controls.volume), 10 / 127));
+      expect(booth.gainOf(booth.a), closeTo(10 / 127, 1e-9), reason: 'a real move up still is one');
+    });
+
     test('the gain knob is the filter, off at its centre', () async {
       await bind.handle(at(a(Controls.gain), 0.5, kind: ControlKind.pot));
       await bind.handle(at(a(Controls.gain), 0.1, kind: ControlKind.pot));
