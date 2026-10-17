@@ -45,7 +45,7 @@ from . import analysis
 # 6: an exact grid carried on to where the sound starts and ends (the tracker lost the
 #    first two or three beats of nearly every record, and with them its first bar),
 #    and the four-bar markers where the record's sections start (four_bars).
-VERSION = 15  # 9: a record too busy for the tempo found is counted at the double; 10: and one read in threes is stepped up into the break it is (116 was two thirds of 174)
+VERSION = 16  # 9: a record too busy for the tempo found is counted at the double; 10: and one read in threes is stepped up into the break it is (116 was two thirds of 174)
 # 11: the beat and not the off-beat, by the snare and the sub-bass where the bass is on
 #     the "and"; and no step down a third from a tempo already busy enough to be the count.
 # 12: the tracker's word (Beat This!, handed in by the pool) in the house's own reading:
@@ -57,6 +57,9 @@ VERSION = 15  # 9: a record too busy for the tempo found is counted at the doubl
 #     the phrases change where those two disagree (bar_one).
 # 15: the exact grid's period put right before the stretches are asked to agree, so a
 #     long record on one grid is given it (_one_grid).
+# 16: where the house's own grid will not hold but the tracker reads the record as
+#     steady, the tracker's line is the grid (_tracker_grid): a fifth of the library
+#     was left on beats tracked one at a time, wobbling round the beat.
 
 _RATE = 11025
 _FFT = 1024
@@ -677,6 +680,126 @@ def _one_grid(env: np.ndarray, low: np.ndarray, period: float,
     return best + k * period
 
 
+def _tracker_grid(env: np.ndarray, line: dict, bpm: float, first: int, last: int,
+                  beats_ms: list[int] | None = None) -> np.ndarray | None:
+    """The tracker's line as the record's exact grid (frames), where the house's own
+    did not hold ([_one_grid] refused it) but the tracker found one steady line through
+    the record. None where the line is not one the onsets bear out.
+
+    The house refuses a grid where its stretches of 32 beats disagree about the beat,
+    and keeps the beats it tracked one at a time instead — and on a record whose kick
+    is syncopated (hip-hop, breaks) or whose bass leads the beat, those wander round it
+    by a tenth of a beat and more, from beat to beat. One record in five of the library
+    was left like that while the tracker, which has heard the music rather than its
+    onsets, read a line straight through it (Hayvan: the house's beats 240 to 298 px
+    apart on a drawing of four seconds, the tracker's even, and on the kicks). Its
+    period is taken as it is — a line through hundreds of beats is right to a hundredth
+    of a beat a minute — counted in the house's octave. Its phase only within an eighth
+    of a beat, where the onsets put it: the tracker places a beat by its own lights, and
+    on some records sits 70 ms behind the hit (Let Yourself Go).
+
+    And only where the record is one line: a band's tempo drifts, and its tracker's
+    beats lie on a line only on average (a median within a seventh of a beat is all
+    [tracker_line] asks) — given one, Breaking the Law sat 40 ms off its own kick for
+    minutes. So the tracker's beats must hold to the line stretch by stretch, and so must
+    the onsets, as [_one_grid] asks of the house's own.
+    """
+    house_ms = 60000.0 / bpm
+    line = dict(line)
+    # The line's period put right by its own beats first: [tracker_line] counts a beat
+    # it doubled or missed by rounding, and one miscounted bends the line — Hayvan's
+    # beats ran from 67 ms after it to 108 ms before it, straight down, over the record.
+    # A line through each 32 beats' place against it, the stretches far off it left out,
+    # and its slope taken into the period (a whisker at most, as the house's own).
+    if beats_ms and len(beats_ms) >= 64:
+        nb = np.asarray(beats_ms, dtype=float)
+        for _ in range(2):
+            # Each stretch's place against the line as an angle round the beat (a
+            # doubled or missing beat does not move it), unwrapped along the record: a
+            # line a hair out walks its beats round more than half a beat over a long
+            # record, and read in plain milliseconds that wrapped.
+            per = line["period_ms"]
+            angle = 2.0 * np.pi * (nb - line["at0_ms"]) / per
+            mids, phases = [], []
+            for w in range(0, len(nb) - 32 + 1, 16):
+                z = np.mean(np.exp(1j * angle[w:w + 32]))
+                if abs(z) < 0.6:
+                    continue            # the stretch's beats do not agree among themselves
+                mids.append(float(np.median(nb[w:w + 32]) - line["at0_ms"]) / per)
+                phases.append(float(np.angle(z)))
+            if len(mids) < 6:
+                break
+            mids_ = np.array(mids)
+            means_ = np.unwrap(np.array(phases)) * per / (2.0 * np.pi)
+            slope, at = np.polyfit(mids_, means_, 1)
+            off = np.abs(means_ - (at + slope * mids_))
+            close = off <= max(8.0, 3.0 * float(np.median(off)))
+            if close.sum() >= 6:
+                slope, at = np.polyfit(mids_[close], means_[close], 1)
+            if abs(slope) > 0.005 * per:
+                break
+            line["period_ms"] += float(slope)
+            line["at0_ms"] += float(at)
+    per_ms = float(line["period_ms"])
+    octave = int(round(np.log2(per_ms / house_ms)))
+    per_ms /= 2.0 ** octave
+    if abs(per_ms / house_ms - 1.0) > 0.03:
+        return None
+    period = per_ms / 1000.0 * _FPS
+    if last - first < 32 * period:
+        return None
+    k = np.arange(int(np.ceil(first / period)), int(np.floor(last / period)))
+    at0 = (float(line["at0_ms"]) * _RATE / 1000.0 - _ONSET_AT) / _HOP
+    # Counted at half the tracker's tempo, the house's beat is one of the tracker's
+    # two: the one the onsets favour.
+    starts = [at0 + j * float(line["period_ms"]) / 1000.0 * _FPS for j in range(max(1, 2 ** octave))]
+    best, best_score = None, -1.0
+    for start in starts:
+        near = (start % period) + np.arange(-period / 8, period / 8, 0.1)
+        score = _comb(env, period, near, k)
+        i = int(np.argmax(score))
+        if score[i] <= best_score:
+            continue
+        phase = float(near[i])
+        if 0 < i < len(score) - 1:
+            a, b, c = score[i - 1], score[i], score[i + 1]
+            bend = a - 2 * b + c
+            if bend < 0:
+                phase += 0.1 * 0.5 * (a - c) / bend
+        best, best_score = phase, float(score[i])
+    # On the onsets, not merely near them: the beat carries clearly more than the bar's
+    # average place does.
+    everywhere = _comb(env, period, np.arange(0.0, period, 0.25), k)
+    if best is None or best_score < 1.3 * float(everywhere.mean()):
+        return None
+    # The tracker's own beats on the line, 32 at a time: no stretch of them sitting off
+    # it on average (a drummer's drift), where they are on the line at all.
+    if beats_ms:
+        nb = np.asarray(beats_ms, dtype=float)
+        line_ms = float(line["at0_ms"])
+        count = (nb - line_ms) / float(line["period_ms"])
+        res = (count - np.round(count)) * float(line["period_ms"])
+        on = np.abs(res) < float(line["period_ms"]) / 4
+        limit = max(12.0, 0.03 * float(line["period_ms"]))
+        for w in range(0, len(nb) - 32 + 1, 16):
+            sel = on[w:w + 32]
+            if sel.sum() >= 16 and abs(float(res[w:w + 32][sel].mean())) > limit:
+                return None
+    # And the onsets, stretch by stretch: each clear one puts the beat where the grid
+    # does, give or take a frame and a half.
+    near = best + np.arange(-period / 8, period / 8, 0.1)
+    clear = agree = 0
+    for w in range(0, len(k) - 32 + 1, 16):
+        sw = _comb(env, period, near, k[w:w + 32])
+        if float(sw.max()) < 1.3 * float(np.mean(sw)) + 1e-9:
+            continue
+        clear += 1
+        agree += abs(float(near[int(np.argmax(sw))]) - best) <= 1.5
+    if clear < 4 or agree < 0.8 * clear:
+        return None
+    return best + k * period
+
+
 def _to_the_ends(grid: np.ndarray, from_ms: float, to_ms: float) -> np.ndarray:
     """An exact grid carried on to where the sound starts and where it ends.
 
@@ -1144,6 +1267,12 @@ def measure(audio: pathlib.Path, neural: dict | None = None) -> dict:
     # One exact grid where the record keeps one tempo, which is what the booth holds two
     # records together by; the beats as tracked where it does not.
     grid = _one_grid(env, low, 60.0 * _FPS / bpm, int(beats[0]), int(beats[-1]) + 1, bands)
+    # Not one the house would stand by, but one the tracker reads straight through the
+    # record: its line, on the onsets.
+    if grid is None and line and _same_family(bpm, line["bpm"]):
+        grid = _tracker_grid(env, line, bpm, int(beats[0]), int(beats[-1]) + 1, (neural or {}).get("beats_ms"))
+        if grid is not None:
+            out["tracker"]["took"].append("grid")
     if grid is not None:
         grid = _to_the_ends(grid, lead, sound_end)
         at_ms = (grid * _HOP + _ONSET_AT) * 1000.0 / _RATE

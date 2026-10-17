@@ -483,3 +483,43 @@ def test_the_bar_is_decided_three_ways(monkeypatch):
     assert beats.bar_one(x, at, low, tracker)[:2] == (3, "tracker"), "then the tracker"
     said.update(change=None, tracker=(None, 0.0), phrase=(None, 0.4))
     assert beats.bar_one(x, at, low, None)[1] == "bass", "then the bass"
+
+
+def _pulses(beat_ms: np.ndarray, frames: int) -> np.ndarray:
+    """An onset envelope with a hit at each of [beat_ms] (where the house would see it)."""
+    rng = np.random.default_rng(3)
+    env = rng.random(frames) * 0.3
+    at = (beat_ms * beats._RATE / 1000.0 - beats._ONSET_AT) / beats._HOP
+    for f in at:
+        i = int(np.floor(f))
+        if 0 <= i < frames - 1:
+            env[i] += 4.0 * (1 - (f - i))
+            env[i + 1] += 4.0 * (f - i)
+    return env
+
+
+def test_where_the_house_holds_no_grid_the_trackers_steady_line_is_one():
+    # 96 a minute for five minutes. The tracker's line read a hair slow (a beat
+    # miscounted) and 60 ms late; its beats themselves are right.
+    period = 60000.0 / 96
+    true = 400.0 + period * np.arange(470)
+    env = _pulses(true, int(310 * beats._FPS))
+    line = {"period_ms": period * 1.0015, "at0_ms": 400.0 + 60.0, "bpm": 60000.0 / (period * 1.0015)}
+    grid = beats._tracker_grid(env, line, 96.0, 40, len(env) - 40, [int(round(b)) for b in true])
+    assert grid is not None
+    got_ms = (grid * beats._HOP + beats._ONSET_AT) * 1000.0 / beats._RATE
+    got_ms = got_ms[(got_ms > true[0] - period / 2) & (got_ms < true[-1] + period / 2)]
+    assert len(got_ms) >= len(true) - 2
+    near = np.array([np.min(np.abs(true - g)) for g in got_ms])
+    assert float(np.max(near)) < 6.0, "every beat on a hit, the line's period and lateness put right"
+
+
+def test_a_band_drifting_round_its_tempo_is_not_given_the_trackers_line():
+    # A drummer: the beat 40 ms either side of the average over a minute and a half.
+    period = 60000.0 / 96
+    k = np.arange(470)
+    true = 400.0 + period * k + 40.0 * np.sin(2 * np.pi * k / 150)
+    env = _pulses(true, int(310 * beats._FPS))
+    line = beats.tracker_line([int(round(b)) for b in true])
+    assert line is not None, "on a line on average: the tracker's own test passes it"
+    assert beats._tracker_grid(env, line, 96.0, 40, len(env) - 40, [int(round(b)) for b in true]) is None
