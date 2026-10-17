@@ -36,6 +36,19 @@ WE_API double we_latency(void);
 // The engine's clock, the one positions are stamped with (monotonic; offline: the
 // frames rendered so far).
 WE_API double we_now(void);
+// How the audio thread is keeping up: its load, the time a call took over the time
+// it had (an average over about a second, and the worst since the last ask); the calls
+// that ran late (each a gap in the sound) since the start; whether keylocked decks
+// were moved to Rubber Band's faster engine for it; the period asked of the device.
+typedef struct {
+  double average, worst;
+  int64_t late;
+  int32_t faster, period;
+} we_load_state;
+WE_API void we_load(we_load_state* out);
+// Keylocked decks on Rubber Band's faster engine (1) or its finer one (0) from now on,
+// moved over where they are heard; the load no longer chooses.
+WE_API void we_stretch(int faster);
 // Offline only: render frames of the stereo master (interleaved floats) into out,
 // and each deck's own output (post fader, stereo) into decks[d] when not null.
 WE_API void we_render(float* out, int frames, float** decks);

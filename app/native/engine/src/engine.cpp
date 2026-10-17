@@ -94,6 +94,7 @@ struct Mark { double in, ratio, out; };
 struct Voice {
   bool used = false, keylock = true;
   std::unique_ptr<RubberBandStretcher> rb;
+  bool faster = false;      // rb is Rubber Band's lighter engine (R2), not R3
   double head = 0;          // the record frame read next
   double ratio = 1;         // record frames per output frame, as last set
   double pitch = 1;
@@ -198,6 +199,18 @@ struct Engine {
   int64_t shift = 2048;
   bool split = false;   // WETOWL_ENGINE_SPLIT: deck A alone on the left, B on the right (the probe)
   std::vector<float> scratchL, scratchR, scratchOut;
+  // The audio thread's load: how long a callback took against the time it had (an
+  // average over about a second, the worst since Dart last asked), and the callbacks
+  // that took longer than that (each one heard as a gap). Keylocked decks run on
+  // Rubber Band's finer engine (R3) until the load says the machine cannot carry it,
+  // then on its faster one (R2), for the rest of the run.
+  int period = 0;
+  std::atomic<float> loadAvg{0}, loadWorst{0};
+  std::atomic<int64_t> late{0};
+  double lateScore = 0;
+  std::atomic<bool> faster{false};
+  bool stretchPinned = false;   // WETOWL_ENGINE_STRETCH said which: never switched
+  bool revoice = false;
   float* outScratch[2];
   float tmp[kBlock * 2];
   float trimBuf[8192 * 2];
@@ -317,11 +330,14 @@ void voiceStart(Deck& d, Voice& v, double at, bool keylock, double ratio) {
   v.keylock = keylock; v.head = at; v.ratio = ratio;
   v.ghostLeft = 0; v.lastHeard = at;
   if (keylock) {
-    if (!v.rb) {
-      const auto o = RubberBandStretcher::OptionProcessRealTime | RubberBandStretcher::OptionEngineFiner |
+    const bool faster = E->faster.load();
+    if (!v.rb || v.faster != faster) {
+      const auto o = RubberBandStretcher::OptionProcessRealTime |
+                     (faster ? RubberBandStretcher::OptionEngineFaster | RubberBandStretcher::OptionWindowShort : RubberBandStretcher::OptionEngineFiner) |
                      RubberBandStretcher::OptionPitchHighConsistency | RubberBandStretcher::OptionChannelsTogether;
       v.rb.reset(new RubberBandStretcher((size_t)E->rate, 2, o, 1.0, 1.0));
       v.rb->setMaxProcessSize(4096);
+      v.faster = faster;
     }
     v.rb->reset();
     v.rb->setTimeRatio(1.0 / ratio);
@@ -809,12 +825,15 @@ void block(float* out, int n, float** deckOut, double at) {
   for (auto& d : E->decks) publish(d, at);
 }
 
-void renderAll(float* out, int frames, float** deckOut) {
+// t0: when the sound card asked for these frames. Each block is heard `latency`
+// after that, plus the frames before it in the same call — not after the moment it
+// happens to be rendered, which on a busy machine is later and later through the call.
+void renderAll(float* out, int frames, float** deckOut, double t0 = 0) {
   int done = 0;
   float* dk[WE_DECKS];
   while (done < frames) {
     const int n = std::min(kBlock, frames - done);
-    const double at = E->device ? now() + E->latency : (double)E->rendered.load() / E->rate;
+    const double at = E->device ? t0 + E->latency + (double)done / E->rate : (double)E->rendered.load() / E->rate;
     for (int i = 0; i < WE_DECKS; i++) dk[i] = deckOut && deckOut[i] ? deckOut[i] + (size_t)done * 2 : nullptr;
     block(out + (size_t)done * 2, n, deckOut ? dk : nullptr, at);
     done += n;
@@ -822,9 +841,41 @@ void renderAll(float* out, int frames, float** deckOut) {
   }
 }
 
+// Every keylocked deck onto the stretcher the run is on now, where it is heard: a
+// jump to its own place, crossfaded over 30 ms.
+void revoiceAll() {
+  for (auto& d : E->decks) {
+    if (!d.playing || !d.keylock || d.braking) continue;
+    Voice& v = activeVoice(d);
+    if (!v.used || !v.keylock || v.faster == E->faster.load()) continue;
+    jump(d, heardOf(d), (int)(E->rate * 0.03));
+  }
+}
+
+bool anyKeylocked() {
+  for (auto& d : E->decks) if (d.playing && d.keylock && !d.braking) return true;
+  return false;
+}
+
 void callback(ma_device*, void* out, const void*, ma_uint32 frames) {
   if (!E) return;
-  renderAll((float*)out, (int)frames, nullptr);
+  const double t0 = now();
+  if (E->revoice) { E->revoice = false; revoiceAll(); }
+  renderAll((float*)out, (int)frames, nullptr, t0);
+  // How long that took against the time there was.
+  const double budget = (double)frames / E->rate;
+  const float load = (float)((now() - t0) / budget);
+  const float a = (float)std::min(1.0, budget / 1.0);
+  E->loadAvg.store(E->loadAvg.load() + (load - E->loadAvg.load()) * a);
+  if (load > E->loadWorst.load()) E->loadWorst.store(load);
+  E->lateScore *= std::exp(-budget / 5.0);
+  if (load > 1.0f) { E->late.fetch_add(1); E->lateScore += 1; }
+  // Too much for this machine with keylocked decks on R3: R2 from here on. Three late
+  // calls within seconds, or most of the time there is spent.
+  if (!E->faster.load() && !E->stretchPinned && anyKeylocked() && (E->lateScore >= 3 || E->loadAvg.load() > 0.6f)) {
+    E->faster.store(true);
+    E->revoice = true;
+  }
 }
 
 void push(const Cmd& c) {
@@ -863,8 +914,19 @@ WE_API int we_start(int rate, int device) {
     cfg.playback.format = ma_format_f32;
     cfg.playback.channels = 2;
     cfg.sampleRate = (ma_uint32)(rate > 0 ? rate : 0);
-    cfg.periodSizeInFrames = 256;
-    cfg.performanceProfile = ma_performance_profile_low_latency;
+    // The period: 256 frames where the system's sound server takes them in its stride
+    // (PipeWire, measured); on Windows a larger one, so that the stretchers' work —
+    // which comes in bursts of a whole FFT frame — has room in each call (WASAPI's own
+    // period is 10 ms anyway). WETOWL_ENGINE_PERIOD overrides.
+#ifdef _WIN32
+    int period = 1024;
+#else
+    int period = 256;
+#endif
+    if (const char* pe = std::getenv("WETOWL_ENGINE_PERIOD")) { const int p = std::atoi(pe); if (p >= 64 && p <= 8192) period = p; }
+    E->period = period;
+    cfg.periodSizeInFrames = (ma_uint32)period;
+    cfg.performanceProfile = period <= 256 ? ma_performance_profile_low_latency : ma_performance_profile_conservative;
     cfg.dataCallback = callback;
     cfg.noClip = MA_TRUE;
     if (ma_device_init(nullptr, &cfg, &E->dev) != MA_SUCCESS) {
@@ -876,6 +938,10 @@ WE_API int we_start(int rate, int device) {
     E->latency = (double)(E->dev.playback.internalPeriodSizeInFrames * E->dev.playback.internalPeriods) / E->rate;
   }
   E->shift = E->rate > 50000 ? 4096 : 2048;
+  if (const char* st = std::getenv("WETOWL_ENGINE_STRETCH")) {
+    if (std::strcmp(st, "faster") == 0) { E->faster.store(true); E->stretchPinned = true; }
+    if (std::strcmp(st, "finer") == 0) E->stretchPinned = true;
+  }
   { const char* sp = std::getenv("WETOWL_ENGINE_SPLIT"); E->split = sp && sp[0] == '1'; }
   E->scratchL.assign(8192, 0.f); E->scratchR.assign(8192, 0.f);
   E->limiter.init(E->rate);
@@ -910,8 +976,26 @@ WE_API int we_rate(void) { return E ? E->rate : 0; }
 WE_API double we_latency(void) { return E ? E->latency : 0; }
 WE_API double we_now(void) { return now(); }
 
+WE_API void we_stretch(int faster) {
+  if (!E) return;
+  E->stretchPinned = true;
+  if (E->faster.exchange(faster != 0) != (faster != 0)) E->revoice = true;
+}
+
+WE_API void we_load(we_load_state* out) {
+  if (!out) return;
+  *out = we_load_state{};
+  if (!E) return;
+  out->average = E->loadAvg.load();
+  out->worst = E->loadWorst.exchange(0);
+  out->late = E->late.load();
+  out->faster = E->faster.load() ? 1 : 0;
+  out->period = E->period;
+}
+
 WE_API void we_render(float* out, int frames, float** decks) {
   if (!E || E->device) return;
+  if (E->revoice) { E->revoice = false; revoiceAll(); }
   renderAll(out, frames, decks);
   freeRetired();
 }

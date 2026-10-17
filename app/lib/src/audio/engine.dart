@@ -53,6 +53,20 @@ final class EngineDeckState extends Struct {
   external double peakR;
 }
 
+/// How the audio thread keeps up (we_load_state).
+final class EngineLoadState extends Struct {
+  @Double()
+  external double average;
+  @Double()
+  external double worst;
+  @Int64()
+  external int late;
+  @Int32()
+  external int faster;
+  @Int32()
+  external int period;
+}
+
 /// A deck's state as last read.
 class DeckReading {
   const DeckReading({
@@ -118,6 +132,7 @@ class Engine {
     final rate = lib.lookupFunction<Int32 Function(), int Function()>('we_rate')();
     _it = Engine._(lib, rate);
     PlaybackLog.booth('engine: running at $rate Hz, ${(_it!.latency * 1000).toStringAsFixed(1)} ms to the ear');
+    _it!._watchLoad();
     return _it;
   }
 
@@ -158,6 +173,46 @@ class Engine {
   final int rate;
 
   late final double latency = _lib.lookupFunction<Double Function(), double Function()>('we_latency')();
+  late final _load = _lib.lookupFunction<Void Function(Pointer<EngineLoadState>), void Function(Pointer<EngineLoadState>)>('we_load');
+  late final _stretch = _lib.lookupFunction<_VI, void Function(int)>('we_stretch');
+
+  /// Key lock on Rubber Band's faster stretcher (true) or its finer one: from now on,
+  /// and no longer chosen by the load.
+  void stretchFaster(bool on) => _stretch(on ? 1 : 0);
+
+  /// How the audio thread keeps up: its load (time taken over time there was) on
+  /// average and at worst since the last ask, the calls that ran late (each a gap
+  /// in the sound), whether key lock was moved to the faster stretcher for it.
+  ({double average, double worst, int late, bool faster, int period}) load() {
+    final p = calloc<EngineLoadState>();
+    try {
+      _load(p);
+      final r = p.ref;
+      return (average: r.average, worst: r.worst, late: r.late, faster: r.faster != 0, period: r.period);
+    } finally {
+      calloc.free(p);
+    }
+  }
+
+  /// Every 30 s while it is working, a line in the playback log: what a desk that
+  /// stutters is doing, read off the house afterwards. And once, when the engine
+  /// gives up the finer stretcher for this machine.
+  void _watchLoad() {
+    var lastLate = 0;
+    var wasFaster = false;
+    Timer.periodic(const Duration(seconds: 30), (_) {
+      final l = load();
+      if (l.faster && !wasFaster) {
+        PlaybackLog.booth('engine: too much for this machine with key lock on the finer stretcher — moved to the faster one');
+      }
+      wasFaster = l.faster;
+      final late = l.late - lastLate;
+      lastLate = l.late;
+      if (l.average < 0.02 && late == 0) return;
+      PlaybackLog.booth('ENGINE load ${(l.average * 100).round()}% average, ${(l.worst * 100).round()}% at worst, '
+          '$late late in 30 s (${l.late} in all), key lock ${l.faster ? 'faster' : 'finer'}, period ${l.period}');
+    });
+  }
   late final double Function() now = _lib.lookupFunction<Double Function(), double Function()>('we_now');
 
   late final _sourceNew = _lib.lookupFunction<Int32 Function(Int32, Int64), int Function(int, int)>('we_source_new');

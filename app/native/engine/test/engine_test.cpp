@@ -153,6 +153,40 @@ static void test_sync(bool keylock, bool late) {
   CHECK(worst(steady) < 0.5, "held %.3f ms apart at worst", worst(steady));
 }
 
+// Synced, keylocked, both decks moved to the faster stretcher mid-play (what the engine
+// does on a machine that cannot carry the finer one): no beat moves, none goes missing.
+static void test_stretch_switch() {
+  std::printf("both decks onto the faster stretcher while synced\n");
+  fresh();
+  auto A = clicks(124, 0.37, 120, 1), B = clicks(128, 0.21, 120, 2);
+  load(0, A); load(1, B);
+  we_deck_keylock(0, 1); we_deck_keylock(1, 1);
+  we_deck_rate(0, 1.03);
+  we_deck_play(0, 1);
+  Run run;
+  render(run, 1.0);
+  we_deck_seek(1, 10.0);
+  we_deck_start(1, 0, 1, -1, 0);
+  we_deck_sync(1, 0, 1, 0);
+  const double t0 = run.a.size() / 2.0 / R;
+  render(run, 10);
+  we_deck_state before{}; we_deck_read(0, &before);
+  const double switched = run.a.size() / 2.0 / R;
+  we_stretch(1);
+  render(run, 15);
+  auto ea = onsets(run.a), eb = onsets(run.b);
+  auto after = apart(ea, eb, switched + 0.1, switched + 14.5);
+  // A's clicks keep their spacing through the switch: no gap, no repeat.
+  double gap = 0;
+  for (size_t i = 1; i < ea.size(); i++) if (ea[i] > switched - 1 && ea[i - 1] < switched + 1) gap = std::max(gap, std::fabs((ea[i] - ea[i - 1]) - 60.0 / (124 * 1.03)) * 1000);
+  std::printf("  after: %zu clicks, worst %.3f ms apart; A's spacing across the switch off by %.3f ms\n", after.size(), worst(after), gap);
+  CHECK(after.size() > 25, "only %zu clicks after the switch", after.size());
+  // R2 places a beat to within a few ms, not R3's tenths: held, but looser.
+  CHECK(worst(after) < 3.5, "%.3f ms apart after the switch", worst(after));
+  CHECK(gap < 1.0, "A's beat moved %.3f ms across the switch", gap);
+  (void)t0; (void)before;
+}
+
 static void test_long_hold() {
   std::printf("ten minutes synced, key lock on\n");
   fresh();
@@ -316,6 +350,7 @@ int main(int argc, char** argv) {
   if (want("start")) test_start_at();
   if (want("end")) test_end();
   if (want("long")) test_long_hold();
+  if (want("stretch")) test_stretch_switch();
   we_stop();
   std::printf(failures ? "%d FAILED\n" : "all passed\n", failures);
   return failures ? 1 : 0;
