@@ -1,0 +1,39 @@
+{
+  "id": "glide",
+  "name": "Glide",
+  "energy": [
+    0.25,
+    1.0
+  ],
+  "sections": [
+    "drop",
+    "chorus",
+    "inst",
+    "build",
+    "verse",
+    "on"
+  ],
+  "priority": 1.8,
+  "instant": true,
+  "layers": [
+    {
+      "shader": "glide",
+      "knobs": {
+        "m1": 0.0
+      }
+    }
+  ],
+  "particles": [],
+  "text": {
+    "title": false,
+    "lyrics": false
+  },
+  "post": {
+    "trails": 0.22,
+    "bloom": 0.6,
+    "fringe": 0.004,
+    "vignette": 0.45,
+    "grain": 0.3,
+    "recipe": 0.0
+  }
+}

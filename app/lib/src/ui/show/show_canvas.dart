@@ -355,6 +355,7 @@ class _StagePainter extends CustomPainter {
       if (layer.shader == 'fold' && k == 1) return g['camera.fold'];
       if (layer.shader == 'blocks' && k == 1) return g['blocks.salt'];
       if (layer.shader == 'kinetic' && k == 1) return g['kinetic.salt'];
+      if (layer.shader == 'glide' && k == 1) return g['glide.salt'];
     }
     return layer.knob(k);
   }
