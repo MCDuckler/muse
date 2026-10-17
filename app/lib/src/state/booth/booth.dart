@@ -718,6 +718,9 @@ class Booth extends ChangeNotifier {
       o.synced = false;
       o.syncTrim = Duration.zero;
       if (identical(_lockFollower, o)) await letGo();
+      // SYNC by hand outlives the hold that started it (letGo leaves it on in the
+      // engine): let go there too, or it goes on following the record put on here.
+      o.engineSync(null);
       deck.synced = true;
       deck.syncTrim = Duration.zero;
       master = o;
@@ -1034,7 +1037,11 @@ class Booth extends ChangeNotifier {
       if (!deck.synced) return true;
       deck.synced = false;
       deck.syncTrim = Duration.zero;
+      final mixHolds = busy && identical(_lockFollower, deck);
       if (identical(_lockFollower, deck) && !busy) await letGo();
+      // Off in the engine as well, whichever hold it was left on by; a mix's own
+      // hold ends with the mix.
+      if (!mixHolds) deck.engineSync(null);
       note(BoothEventKind.sync, 'SYNC off on ${deck.name}', deck: deck);
       notifyListeners();
       return true;
@@ -1044,6 +1051,9 @@ class Booth extends ChangeNotifier {
     if (!await sync(deck)) return false;
     m.synced = false;
     m.syncTrim = Duration.zero;
+    // The master follows nothing: two decks each following the other halved both
+    // tempos every block in the engine, to nothing.
+    m.engineSync(null);
     deck.synced = true;
     master = m;
     // Already both playing: put in step at once, as the button does, rather than
@@ -2811,6 +2821,7 @@ class Booth extends ChangeNotifier {
     // A mix does its own matching and holding, and after it the other record leads:
     // SYNC by hand is over.
     for (final d in decks) {
+      if (d.synced) d.engineSync(null);
       d.synced = false;
       d.syncTrim = Duration.zero;
     }

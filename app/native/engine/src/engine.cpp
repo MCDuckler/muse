@@ -47,6 +47,7 @@ namespace we {
 constexpr int kBlock = 256;           // the engine's own block, frames
 constexpr int kChunkBits = 16;        // a source's memory comes in chunks of 64k frames
 constexpr int64_t kChunk = 1 << kChunkBits;
+constexpr double kRateMin = 0.25, kRateMax = 4.0;   // a deck's rate, and its bend, each
 
 // ------------------------------------------------------------------ sources
 struct Source {
@@ -325,7 +326,14 @@ inline void stepGains(Deck& d) {
 }
 
 // ------------------------------------------------------------------ voices
+// What a stretcher is ever asked for: the rate and the bend at their ends, and never
+// a NaN (Rubber Band R3 reads out of bounds far past these).
+inline double stretchable(double ratio) {
+  return std::isfinite(ratio) ? std::clamp(ratio, kRateMin * kRateMin, kRateMax * kRateMax) : 1.0;
+}
+
 void voiceStart(Deck& d, Voice& v, double at, bool keylock, double ratio) {
+  if (keylock) ratio = stretchable(ratio);
   v.used = true; v.dying = false;
   v.keylock = keylock; v.head = at; v.ratio = ratio;
   v.ghostLeft = 0; v.lastHeard = at;
@@ -382,6 +390,7 @@ double voiceHeard(Voice& v) {
 // A keylocked voice's rate: the stretcher told now, the timing of the frames fed from
 // here on reckoned with it kShift frames back.
 void voiceRatio(Voice& v, double ratio) {
+  if (v.keylock) ratio = stretchable(ratio);
   if (ratio == v.ratio && v.marks.count) return;
   v.ratio = ratio;
   if (!v.keylock) return;
@@ -528,11 +537,14 @@ bool syncError(Deck& f, Deck& m, double& errSec, double& rateFor, bool refold) {
 void syncBlock(Deck& f) {
   if (f.master < 0 || f.master == f.index) return;
   Deck& m = E->decks[f.master];
+  // A brake is the master's alone: followed, a keylocked follower would be stretched
+  // to a fiftieth of its speed.
+  if (m.braking) return;
   double err = 0, rateFor = f.rate;
   if (!syncError(f, m, err, rateFor, false)) return;
   f.phaseError = -err;
   // The tempo, always: a master's fader carries the follower in the same block.
-  f.rate = rateFor;
+  f.rate = std::clamp(rateFor, kRateMin, kRateMax);
   if (!f.playing || !m.playing) { f.trim = 1; return; }
   if (f.snapPending) {
     f.snapPending = false;
@@ -604,8 +616,8 @@ void apply(const Cmd& c) {
     }
     case kPlay: play(d, c.i0 != 0); if (!c.i0) d.braking = false; break;
     case kSeek: jump(d, secToFrame(c.d0)); break;
-    case kRate: if (d.master < 0) d.rate = std::clamp(c.d0, 0.25, 4.0); break;
-    case kBend: d.bend = std::clamp(c.d0, 0.25, 4.0); break;
+    case kRate: if (d.master < 0) d.rate = std::clamp(c.d0, kRateMin, kRateMax); break;
+    case kBend: d.bend = std::clamp(c.d0, kRateMin, kRateMax); break;
     case kKeylock:
       if ((c.i0 != 0) != d.keylock) {
         d.keylock = c.i0 != 0;
@@ -620,10 +632,18 @@ void apply(const Cmd& c) {
       break;
     }
     case kSync:
-      if (c.i0 < 0) { d.master = -1; d.trim = 1; d.snapPending = false; break; }
+      if (c.i0 < 0 || c.i0 >= WE_DECKS || c.i0 == c.deck) { d.master = -1; d.trim = 1; d.snapPending = false; break; }
+      // The master never follows its follower, however far round: SYNC passes to it.
+      // Left following, each would set its tempo from the other's every block, and
+      // with their folds a factor of two apart both rates halve every block, to
+      // nothing in a tenth of a second (the stretcher crashed at the bottom).
+      for (int k = c.i0, hops = 0; k >= 0 && hops < WE_DECKS; k = E->decks[(size_t)k].master, hops++) {
+        Deck& x = E->decks[(size_t)k];
+        if (x.master == c.deck) { x.master = -1; x.trim = 1; x.snapPending = false; break; }
+      }
       d.master = c.i0; d.every = std::max(1, c.i1); d.offset = c.d0;
       d.heardNow = heardOf(d);
-      { double e, r; if (syncError(d, E->decks[(size_t)c.i0], e, r, true)) d.rate = r; }
+      { double e, r; if (syncError(d, E->decks[(size_t)c.i0], e, r, true)) d.rate = std::clamp(r, kRateMin, kRateMax); }
       d.snapPending = true;
       break;
     case kBarOne: d.barOne = c.i0; break;

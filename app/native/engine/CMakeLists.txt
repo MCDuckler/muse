@@ -35,6 +35,11 @@ find_package(Threads REQUIRED)
 target_link_libraries(wetowl_engine PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
 if(UNIX AND NOT APPLE)
   target_link_libraries(wetowl_engine PRIVATE m)
+  # Every symbol found at link time, not when the booth first plays: CI's clang once
+  # left Rubber Band's atomic<double>::is_lock_free() to a libatomic the library did
+  # not link, and every Linux build died on its first keylocked deck. (Rubber Band's
+  # own checks now ask is_always_lock_free, at compile time: the one change to it.)
+  target_link_options(wetowl_engine PRIVATE -Wl,--no-undefined)
 endif()
 
 option(WETOWL_ENGINE_TESTS "Build the engine's own tests" OFF)

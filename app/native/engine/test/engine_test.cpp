@@ -338,6 +338,58 @@ static void test_brake() {
   CHECK(!st.playing, "still playing after the brake");
 }
 
+// B follows A; then A is told to follow B (SYNC by hand left on in the engine, a mix
+// the other way round): B lets go and A follows, rather than each setting its tempo
+// from the other's every block — with A's fader out past the fold, both halved every
+// block, to nothing in a tenth of a second, and Rubber Band crashed.
+static void test_sync_cycle() {
+  std::printf("SYNC asked the other way round: the master passes\n");
+  fresh();
+  auto A = clicks(124, 0.37, 120, 1), B = clicks(126, 0.21, 120, 2);
+  load(0, A); load(1, B);
+  we_deck_keylock(0, 1); we_deck_keylock(1, 1);
+  we_deck_rate(0, 1.6);
+  we_deck_play(0, 1); we_deck_play(1, 1);
+  Run run;
+  render(run, 1);
+  we_deck_sync(1, 0, 1, 0);
+  render(run, 2);
+  we_deck_sync(0, 1, 1, 0);
+  render(run, 8);
+  we_deck_state a{}, b{}; we_deck_read(0, &a); we_deck_read(1, &b);
+  std::printf("  A %.4f× synced %d, B %.4f× synced %d\n", a.rate, a.synced, b.rate, b.synced);
+  CHECK(a.synced && !b.synced, "A synced %d, B synced %d", a.synced, b.synced);
+  CHECK(std::fabs(b.rate - 0.7873) < 0.01 && std::fabs(a.rate - b.rate * 126 / 124) < 0.01,
+        "rates A %.4f, B %.4f", a.rate, b.rate);
+  const double t = run.a.size() / 2.0 / R;
+  auto steady = apart(onsets(run.a), onsets(run.b), t - 6, t);
+  // Both keylocked at 0.8×, slower than the other tests: within a millisecond.
+  CHECK(steady.size() > 6 && worst(steady) < 1.5, "%zu clicks, %.3f ms apart at worst", steady.size(), worst(steady));
+}
+
+// The master braked: the keylocked follower plays on at its tempo, not stretched down
+// to a fiftieth of it with the master.
+static void test_brake_master() {
+  std::printf("the master braked, its follower plays on\n");
+  fresh();
+  auto A = clicks(124, 0.37, 60, 1), B = clicks(128, 0.21, 60, 2);
+  load(0, A); load(1, B);
+  we_deck_keylock(0, 1); we_deck_keylock(1, 1);
+  we_deck_play(0, 1); we_deck_play(1, 1);
+  Run run;
+  render(run, 1);
+  we_deck_sync(1, 0, 1, 0);
+  render(run, 1);
+  we_deck_state b0{}; we_deck_read(1, &b0);
+  we_deck_brake(0, 1.0);
+  double lowest = 10;
+  render(run, 1.5, [&](double) { we_deck_state b{}; we_deck_read(1, &b); lowest = std::min(lowest, b.rate); });
+  we_deck_state a{}; we_deck_read(0, &a);
+  std::printf("  follower %.4f× before, lowest %.4f× through the brake\n", b0.rate, lowest);
+  CHECK(!a.playing, "the master still plays");
+  CHECK(lowest > b0.rate - 0.01, "the follower went down to %.4f×", lowest);
+}
+
 int main(int argc, char** argv) {
   const std::string only = argc > 1 ? argv[1] : "";
   auto want = [&](const char* name) { return only.empty() || only == name; };
@@ -346,7 +398,8 @@ int main(int argc, char** argv) {
   if (want("loop")) { test_loop(true); test_loop(false); }
   if (want("seam")) test_seam();
   if (want("jump")) test_jump();
-  if (want("brake")) test_brake();
+  if (want("brake")) { test_brake(); test_brake_master(); }
+  if (want("cycle")) test_sync_cycle();
   if (want("start")) test_start_at();
   if (want("end")) test_end();
   if (want("long")) test_long_hold();

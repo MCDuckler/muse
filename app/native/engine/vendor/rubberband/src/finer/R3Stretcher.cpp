@@ -154,10 +154,10 @@ R3Stretcher::initialise()
 
     calculateHop();
 
-    if (!m_inhop.is_lock_free()) {
+    if (!std::atomic<int>::is_always_lock_free) {
         m_log.log(0, "R3Stretcher: WARNING: std::atomic<int> is not lock-free");
     }
-    if (!m_timeRatio.is_lock_free()) {
+    if (!std::atomic<double>::is_always_lock_free) {
         m_log.log(0, "R3Stretcher: WARNING: std::atomic<double> is not lock-free");
     }
 }

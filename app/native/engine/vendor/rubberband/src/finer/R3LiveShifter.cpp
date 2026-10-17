@@ -125,7 +125,7 @@ R3LiveShifter::initialise()
 
     createResamplers();
 
-    if (!m_pitchScale.is_lock_free()) {
+    if (!std::atomic<double>::is_always_lock_free) {
         m_log.log(0, "R3LiveShifter: WARNING: std::atomic<double> is not lock-free");
     }
 }
