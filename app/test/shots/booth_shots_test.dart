@@ -271,6 +271,28 @@ void main() {
         for (var i = 0; i < 6; i++) {
           await tester.pump(const Duration(milliseconds: 100));
         }
+        if (state == 'empty') {
+          // A click on the room where nothing answers it must not fall through to the
+          // route's modal barrier, which cannot be dismissed and plays the system's
+          // error sound for it.
+          final barrier = <RenderObject>{};
+          for (final e in find.byType(ModalBarrier, skipOffstage: false).evaluate()) {
+            void collect(Element x) {
+              final r = x.renderObject;
+              if (r != null) barrier.add(r);
+              x.visitChildElements(collect);
+            }
+            collect(e);
+          }
+          final through = <Offset>[];
+          for (var y = 4.0; y < h; y += h / 24) {
+            for (var x = 4.0; x < w; x += w / 24) {
+              final hit = tester.hitTestOnBinding(Offset(x, y));
+              if (hit.path.any((e) => barrier.contains(e.target))) through.add(Offset(x, y));
+            }
+          }
+          expect(through, isEmpty, reason: 'clicks reaching the barrier at $through');
+        }
         if (state.startsWith('board')) {
           // B slides the room to the board; a pad sounds; another's settings are open.
           boardToggles.value++;

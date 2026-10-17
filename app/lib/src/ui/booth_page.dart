@@ -219,16 +219,22 @@ class _BoothPageState extends State<BoothPage> {
     final b = context.read<AppState>().booth;
     final compact = Width.of(context) == Width.compact;
 
-    return ArmReach(
-      child: BoothClock(
-        booth: b,
-        child: Focus(
-          focusNode: _focus,
-          autofocus: !compact,
-          onKeyEvent: _keys,
-          child: AnimatedBuilder(
-            animation: b,
-            builder: (context, _) => compact ? PhoneRoom(booth: b) : ConsoleRoom(booth: b, keys: keys),
+    // A click on the room where nothing answers it stops here. Through to the route
+    // underneath it lands on the page's modal barrier, which cannot be dismissed and
+    // says so with the system's error sound.
+    return Listener(
+      behavior: HitTestBehavior.opaque,
+      child: ArmReach(
+        child: BoothClock(
+          booth: b,
+          child: Focus(
+            focusNode: _focus,
+            autofocus: !compact,
+            onKeyEvent: _keys,
+            child: AnimatedBuilder(
+              animation: b,
+              builder: (context, _) => compact ? PhoneRoom(booth: b) : ConsoleRoom(booth: b, keys: keys),
+            ),
           ),
         ),
       ),
