@@ -1,0 +1,30 @@
+{
+  "id": "dance-art",
+  "name": "Dancer · Stylized",
+  "energy": [
+    0.0,
+    1.0
+  ],
+  "sections": [],
+  "priority": 0.3,
+  "instant": true,
+  "layers": [
+    {
+      "sim": "dance.art"
+    }
+  ],
+  "particles": [],
+  "text": {
+    "title": false,
+    "lyrics": false
+  },
+  "post": {
+    "trails": 0.0,
+    "bloom": 0.12,
+    "fringe": 0.0,
+    "vignette": 0.15,
+    "grain": 0.12,
+    "recipe": 0.0,
+    "tone": 0.0
+  }
+}

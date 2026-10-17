@@ -27,6 +27,7 @@ import 'package:flutter/material.dart';
 
 import '../../state/show/show_state.dart';
 import 'show_canvas.dart' show StagePrograms;
+import 'show_dance.dart';
 import 'show_meme.dart';
 import 'show_turntable.dart';
 
@@ -45,14 +46,16 @@ abstract class SimLayer {
         'physarum' => PhysarumSim(),
         'siebenschlaefer' => MemeEdit(kind),
         'turntable' => TurntableSim(),
+        'dance.disco' || 'dance.neon' || 'dance.shadow' || 'dance.art' => DanceSim(kind),
         _ => null,
       };
 
   /// What a sim of [kind] should have ready before it is first on: the meme edit's
-  /// pictures, so a drop cut onto it is not a black frame.
+  /// pictures and the dancer's first moves, so a drop cut onto it is not a black frame.
   static void warm(String kind) {
     if (kind == 'siebenschlaefer') MemeBank.of(kind);
     if (kind == 'turntable') TurntableBank.shared.warm();
+    if (kind.startsWith('dance.')) DanceAssets.of('dance');
   }
 }
 

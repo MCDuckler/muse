@@ -1,0 +1,30 @@
+{
+  "id": "dance-shadow",
+  "name": "Dancer · Shadow",
+  "energy": [
+    0.0,
+    0.75
+  ],
+  "sections": [],
+  "priority": 0.25,
+  "instant": true,
+  "layers": [
+    {
+      "sim": "dance.shadow"
+    }
+  ],
+  "particles": [],
+  "text": {
+    "title": false,
+    "lyrics": false
+  },
+  "post": {
+    "trails": 0.0,
+    "bloom": 0.15,
+    "fringe": 0.0,
+    "vignette": 0.4,
+    "grain": 0.2,
+    "recipe": 0.0,
+    "tone": 0.0
+  }
+}

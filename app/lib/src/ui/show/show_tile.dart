@@ -16,6 +16,7 @@ import '../../worker/tools.dart';
 import '../booth/desk/console.dart';
 import 'milk_page.dart';
 import 'show_canvas.dart';
+import 'show_dance.dart' show DanceModels;
 import 'stage_kit.dart';
 import 'stage_page.dart';
 import 'stage_pop_out_none.dart' if (dart.library.io) 'stage_pop_out_io.dart';
@@ -50,6 +51,16 @@ class _ShowTileState extends State<ShowTile> {
   /// The scenes turned off in the menu, by id: see ShowDirector.off.
   static const _kOff = 'muse.show.scenesOff';
 
+  /// Who dances in the dancer scenes: see ShowMacros.dancer.
+  static const _kDancer = 'muse.show.dancer';
+
+  Future<void> _setDancer(String id) async {
+    final show = widget.booth.show;
+    show.setMacros(show.macros.copyWith(dancer: id));
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kDancer, id);
+  }
+
   Future<void> _setSceneOff(String id, bool off) async {
     final show = widget.booth.show;
     if (off) {
@@ -68,6 +79,8 @@ class _ShowTileState extends State<ShowTile> {
       final prefs = await SharedPreferences.getInstance();
       widget.booth.show.offsetMs = prefs.getInt(_kOffset) ?? 0;
       widget.booth.show.director.off = {...?prefs.getStringList(_kOff)};
+      final dancer = prefs.getString(_kDancer);
+      if (dancer != null) widget.booth.show.setMacros(widget.booth.show.macros.copyWith(dancer: dancer));
       final ffmpeg = await Tools.hasFfmpeg();
       if (mounted && !ffmpeg) setState(() => _noFfmpeg = true);
       final kit = await StageKit.load();
@@ -209,6 +222,20 @@ class _ShowTileState extends State<ShowTile> {
                                 ),
                               ),
                       ),
+                      // On a dancer scene: who dances.
+                      if (st.scene?.startsWith('dance-') ?? false)
+                        PopupMenuButton<String>(
+                          tooltip: 'Who dances: ${DanceModels.all.where((d) => d.$1 == st.macros.dancer).firstOrNull?.$2 ?? 'a mix, each record its own'}',
+                          onSelected: (id) => unawaited(_setDancer(id)),
+                          itemBuilder: (context) => [
+                            for (final (id, name) in [(DanceModels.mix, 'Mix — each record its own'), ...DanceModels.all])
+                              CheckedPopupMenuItem<String>(value: id, checked: (st.macros.dancer ?? DanceModels.mix) == id, child: Text(name)),
+                          ],
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 3),
+                            child: Icon(Icons.accessibility_new, size: 18, color: Console.quiet),
+                          ),
+                        ),
                       Pad(
                         icon: show.sceneHeld ? Icons.lock : Icons.lock_open,
                         width: 26,

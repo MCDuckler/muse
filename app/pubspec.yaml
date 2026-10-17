@@ -113,6 +113,14 @@ flutter:
     - assets/show/siebenschlaefer/stickers/
     - assets/show/siebenschlaefer/clips/climb/
     - assets/show/siebenschlaefer/clips/tree/
+    - assets/show/dance/
+    - assets/show/dance/chris/
+    - assets/show/dance/banana/
+    - assets/show/dance/hotdog/
+    - assets/show/dance/stickbug/
+    - assets/show/dance/stonks/
+    - assets/show/dance/alien/
+    - assets/show/dance/doge/
     # MilkDrop's own presets, written out to the data folder on first run (the
     # wetowl-milk helper reads files). See lib/src/state/show/milk_library.dart.
     - assets/milk/presets/
@@ -151,6 +159,7 @@ flutter:
     - shaders/show/sim/fluid_project.frag
     - shaders/show/sim/fluid_look.frag
     - shaders/show/sim/meme_fx.frag
+    - shaders/show/sim/dance_fx.frag
 
   fonts:
     - family: Manrope

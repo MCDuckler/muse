@@ -35,7 +35,7 @@ class StagePrograms {
   final Map<String, ui.FragmentProgram> sims;
   final ui.FragmentProgram feedback, blur, finish, under;
 
-  static const simShaders = ['fluid_advect', 'fluid_div', 'fluid_jacobi', 'fluid_project', 'fluid_look', 'meme_fx'];
+  static const simShaders = ['fluid_advect', 'fluid_div', 'fluid_jacobi', 'fluid_project', 'fluid_look', 'meme_fx', 'dance_fx'];
 
   static Future<StagePrograms> load(SceneBook book) async {
     final names = book.shaders.toList();

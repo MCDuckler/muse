@@ -49,7 +49,7 @@ void main() {
   });
 
   test('every scene file loads, with its shader', () {
-    expect(kit.book.scenes.keys, containsAll(['drift', 'fluid', 'veins', 'toon', 'flash', 'echo', 'fold', 'blocks', 'kinetic', 'siebenschlaefer', 'turntable']));
+    expect(kit.book.scenes.keys, containsAll(['drift', 'fluid', 'veins', 'toon', 'flash', 'echo', 'fold', 'blocks', 'kinetic', 'siebenschlaefer', 'turntable', 'dance-disco', 'dance-neon', 'dance-shadow', 'dance-art']));
     for (final s in kit.book.scenes.values) {
       for (final sh in s.shaders) {
         expect(kit.programs.scenes.containsKey(sh), isTrue, reason: '${s.id} wants $sh');
