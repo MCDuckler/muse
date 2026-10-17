@@ -288,16 +288,25 @@ class DanceModels {
   /// Each record its own lead, the troupe of the others.
   static const mix = 'mix';
 
-  /// The lead for record [salt] when the panel says [choice].
-  static String lead(String? choice, int salt) {
-    if (choice != null && choice != mix && all.any((m) => m.$1 == choice)) return choice;
-    return all[(memeHash(salt % 9973, 17, 29) * all.length).floor() % all.length].$1;
+  /// Who may dance in a mix: all but those switched [off] (all of them off is none).
+  static List<String> pool(Iterable<String> off) {
+    final on = [for (final m in all) if (!off.contains(m.$1)) m.$1];
+    return on.isEmpty ? [for (final m in all) m.$1] : on;
   }
 
-  /// Member [i]'s model: the lead's, or in a mix one of the others.
-  static String member(String? choice, int salt, int i) {
-    if (choice != null && choice != mix) return lead(choice, salt);
-    final others = [for (final m in all) if (m.$1 != lead(choice, salt)) m.$1];
+  /// The lead for record [salt] when the panel says [choice], [off] switched off.
+  static String lead(String? choice, int salt, [Iterable<String> off = const []]) {
+    if (choice != null && choice != mix && all.any((m) => m.$1 == choice)) return choice;
+    final p = pool(off);
+    return p[(memeHash(salt % 9973, 17, 29) * p.length).floor() % p.length];
+  }
+
+  /// Member [i]'s model: the lead's, or in a mix one of the others on.
+  static String member(String? choice, int salt, int i, [Iterable<String> off = const []]) {
+    if (choice != null && choice != mix) return lead(choice, salt, off);
+    final first = lead(choice, salt, off);
+    final others = [for (final m in pool(off)) if (m != first) m];
+    if (others.isEmpty) return first;
     return others[(memeHash(salt % 9973, 31 + i, 37) * others.length).floor() % others.length];
   }
 }
@@ -526,7 +535,7 @@ class DanceSim implements SimLayer {
     final kick = f['dyn.hit.kick'] ?? 0;
 
     final choice = _forcedModel ?? st.macros.dancer;
-    final leadA = _ready(DanceModels.lead(choice, salt));
+    final leadA = _ready(DanceModels.lead(choice, salt, st.macros.dancersOff));
     if (_hero == null || _heroModel != leadA.name) {
       _hero = _bodies.putIfAbsent('${leadA.name}/lead', () => DanceBody(leadA.rig!.meshes.first, leadA.skin!));
       _heroModel = leadA.name;
@@ -610,7 +619,7 @@ class DanceSim implements SimLayer {
       final mb = _members[i];
       mb.inK = (mb.inK + (mb.leaving ? -1 : 1) * dt * bpm / 60 / 1.0).clamp(0.0, 1.0);
       if (mb.inK <= 0 && mb.leaving) continue;
-      final ma = _ready(DanceModels.member(choice, salt, i));
+      final ma = _ready(DanceModels.member(choice, salt, i, st.macros.dancersOff));
       final mr = ma.rig!;
       if (mb.body == null || mb.model != ma.name) {
         // Bodies kept by model and place in the troupe, so a new troupe reuses them.

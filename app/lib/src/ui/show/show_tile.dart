@@ -61,6 +61,26 @@ class _ShowTileState extends State<ShowTile> {
     await prefs.setString(_kDancer, id);
   }
 
+  /// The dancers switched off in the menu, by id: see ShowMacros.dancersOff.
+  static const _kDancersOff = 'muse.show.dancersOff';
+
+  Future<void> _setDancerOff(String id, bool off) async {
+    final show = widget.booth.show;
+    final now = {...show.macros.dancersOff};
+    if (off) {
+      now.add(id);
+    } else {
+      now.remove(id);
+    }
+    final list = now.toList()..sort();
+    // The one chosen to dance alone, switched off: back to the mix.
+    final alone = show.macros.dancer == id && off;
+    show.setMacros(show.macros.copyWith(dancersOff: list, dancer: alone ? DanceModels.mix : null));
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_kDancersOff, list);
+    if (alone) await prefs.setString(_kDancer, DanceModels.mix);
+  }
+
   Future<void> _setSceneOff(String id, bool off) async {
     final show = widget.booth.show;
     if (off) {
@@ -81,6 +101,8 @@ class _ShowTileState extends State<ShowTile> {
       widget.booth.show.director.off = {...?prefs.getStringList(_kOff)};
       final dancer = prefs.getString(_kDancer);
       if (dancer != null) widget.booth.show.setMacros(widget.booth.show.macros.copyWith(dancer: dancer));
+      final dancersOff = prefs.getStringList(_kDancersOff);
+      if (dancersOff != null) widget.booth.show.setMacros(widget.booth.show.macros.copyWith(dancersOff: dancersOff));
       final ffmpeg = await Tools.hasFfmpeg();
       if (mounted && !ffmpeg) setState(() => _noFfmpeg = true);
       final kit = await StageKit.load();
@@ -228,8 +250,41 @@ class _ShowTileState extends State<ShowTile> {
                           tooltip: 'Who dances: ${DanceModels.all.where((d) => d.$1 == st.macros.dancer).firstOrNull?.$2 ?? 'a mix, each record its own'}',
                           onSelected: (id) => unawaited(_setDancer(id)),
                           itemBuilder: (context) => [
-                            for (final (id, name) in [(DanceModels.mix, 'Mix — each record its own'), ...DanceModels.all])
-                              CheckedPopupMenuItem<String>(value: id, checked: (st.macros.dancer ?? DanceModels.mix) == id, child: Text(name)),
+                            const PopupMenuItem<String>(
+                              enabled: false,
+                              height: 28,
+                              child: Text('A name dances alone · a switch off keeps them out of the mix', style: TextStyle(fontSize: 11)),
+                            ),
+                            CheckedPopupMenuItem<String>(
+                              value: DanceModels.mix,
+                              checked: (st.macros.dancer ?? DanceModels.mix) == DanceModels.mix,
+                              child: const Text('Mix — each record its own'),
+                            ),
+                            for (final (id, name) in DanceModels.all)
+                              PopupMenuItem<String>(
+                                value: id,
+                                child: StatefulBuilder(builder: (context, setItem) {
+                                  final isOn = !show.macros.dancersOff.contains(id);
+                                  return Row(
+                                    children: [
+                                      SizedBox(width: 22, child: st.macros.dancer == id ? const Icon(Icons.check, size: 16) : null),
+                                      Expanded(
+                                        child: Text(name, style: TextStyle(color: isOn ? null : Theme.of(context).disabledColor)),
+                                      ),
+                                      Tooltip(
+                                        message: isOn ? 'On: may dance in the mix' : 'Off: never in the mix',
+                                        child: Switch(
+                                          value: isOn,
+                                          onChanged: (v) {
+                                            unawaited(_setDancerOff(id, !v));
+                                            setItem(() {});
+                                          },
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                }),
+                              ),
                           ],
                           child: Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 3),

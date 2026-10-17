@@ -10,6 +10,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muse/src/ui/show/show_dance.dart';
 import 'package:muse/src/ui/show/show_dance_rig.dart';
+import 'package:muse/src/state/show/show_state.dart' show ShowMacros;
 import 'package:muse/src/ui/show/show_meme_bank.dart' show MemeMood;
 
 DanceRig shipped([String model = 'chris']) {
@@ -163,5 +164,32 @@ void main() {
     }
     expect([DanceArt.trails, DanceArt.chrono, DanceArt.mono], contains(DanceClock.art(MemeMood.rage, 5, 2)));
     expect(DanceClock.entries(move('x', DanceTier.mid)), [0, 2, 4, 6]);
+  });
+
+  test('dancers switched off: never in a mix, a chosen one still dances, all off is none off', () {
+    const off = ['chris', 'banana', 'hotdog', 'stickbug'];
+    for (var salt = 0; salt < 400; salt++) {
+      final lead = DanceModels.lead(DanceModels.mix, salt, off);
+      expect(off, isNot(contains(lead)));
+      for (var i = 0; i < 6; i++) {
+        final m = DanceModels.member(DanceModels.mix, salt, i, off);
+        expect(off, isNot(contains(m)));
+        expect(m, isNot(lead));
+      }
+    }
+    expect(DanceModels.lead('banana', 7, off), 'banana');
+    final every = [for (final m in DanceModels.all) m.$1];
+    expect(DanceModels.pool(every), every);
+    // One left on: the troupe is all of them.
+    final one = [for (final m in every) if (m != 'joe') m];
+    expect(DanceModels.lead(DanceModels.mix, 3, one), 'joe');
+    expect(DanceModels.member(DanceModels.mix, 3, 2, one), 'joe');
+  });
+
+  test('the switches travel to a stage in another window', () {
+    const m = ShowMacros(dancer: 'mix', dancersOff: ['chris', 'doge']);
+    final back = ShowMacros.fromJson(jsonDecode(jsonEncode(m.toJson())) as Map<String, dynamic>);
+    expect(back.dancersOff, ['chris', 'doge']);
+    expect(ShowMacros.fromJson(const {}).dancersOff, isEmpty);
   });
 }

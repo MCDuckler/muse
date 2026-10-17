@@ -509,12 +509,17 @@ class ShowMacros {
     this.milkMix = 0,
     this.milkPreset,
     this.dancer,
+    this.dancersOff = const [],
     this.macros = const [0, 0, 0, 0, 0, 0, 0, 0],
   });
 
   /// Who dances in the dancer scenes (show_dance.dart's DanceModels), or null / "mix"
   /// for each record its own.
   final String? dancer;
+
+  /// The dancers switched off in the panel, by id: never in a mix, as lead or in a
+  /// troupe (all of them off is none off).
+  final List<String> dancersOff;
 
   /// A master for everything, 0 to 1; a turn of the palette's hue, 0 to 1 round;
   /// the strobe held, 0 to 1; everything off; the picture held still; the last hit,
@@ -559,6 +564,7 @@ class ShowMacros {
     String? milkPreset,
     bool clearMilkPreset = false,
     String? dancer,
+    List<String>? dancersOff,
     double? hit,
     List<double>? macros,
   }) =>
@@ -572,6 +578,7 @@ class ShowMacros {
         milkMix: milkMix ?? this.milkMix,
         milkPreset: clearMilkPreset ? null : milkPreset ?? this.milkPreset,
         dancer: dancer ?? this.dancer,
+        dancersOff: dancersOff ?? this.dancersOff,
         hit: hit ?? this.hit,
         macros: macros ?? this.macros,
       );
@@ -597,6 +604,7 @@ class ShowMacros {
         'milkMix': milkMix,
         if (milkPreset != null) 'milkPreset': milkPreset, 'hit': hit, 'macros': macros,
         if (dancer != null) 'dancer': dancer,
+        if (dancersOff.isNotEmpty) 'dancersOff': dancersOff,
       };
 
   factory ShowMacros.fromJson(Map<String, dynamic> j) => ShowMacros(
@@ -609,6 +617,7 @@ class ShowMacros {
         milkMix: (j['milkMix'] as num?)?.toInt() ?? 0,
         milkPreset: j['milkPreset'] as String?,
         dancer: j['dancer'] as String?,
+        dancersOff: [for (final v in (j['dancersOff'] as List? ?? const [])) '$v'],
         hit: _d(j['hit']),
         macros: [for (final v in (j['macros'] as List? ?? const [])) _d(v)],
       );
