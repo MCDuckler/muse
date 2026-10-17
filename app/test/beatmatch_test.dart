@@ -517,6 +517,35 @@ void main() {
       await booth.letGo();
     });
 
+    test('half and double: the follower at half or twice the beat SYNC chose, pressed on either deck',
+        () async {
+      expect(await booth.scaleSync(booth.a, 2), isFalse, reason: 'nothing synced');
+      expect(await booth.setSync(booth.b, true), isTrue);
+      final plain = booth.b.pitch;
+      expect(await booth.scaleSync(booth.b, 2), isTrue);
+      expect(booth.b.pitch, closeTo(plain * 2, 1e-9));
+      expect(booth.syncOctaveOf(booth.b), 2);
+      expect(booth.syncOctaveOf(booth.a), 0.5);
+      // Pressed on the master: the follower moves the other way, the master stays.
+      final masterPitch = booth.a.pitch;
+      expect(await booth.scaleSync(booth.a, 2), isTrue);
+      expect(booth.b.pitch, closeTo(plain, 1e-9));
+      expect(booth.a.pitch, masterPitch);
+      await booth.scaleSync(booth.b, 0.5);
+      expect(booth.b.pitch, closeTo(plain / 2, 1e-9));
+      // The master's tempo moved: the follower kept at its half.
+      await booth.a.setTempo(masterPitch * 1.02);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(booth.b.pitch, closeTo(plain / 2 * 1.02, 1e-6));
+      // SYNC off and on again: back to the beat SYNC chooses.
+      await booth.setSync(booth.b, false);
+      expect(booth.syncOctaveOf(booth.b), 1);
+      await booth.a.setTempo(masterPitch);
+      expect(await booth.setSync(booth.b, true), isTrue);
+      expect(booth.b.pitch, closeTo(plain, 1e-9));
+      await booth.letGo();
+    });
+
     test('what the engine takes to start is learned from a start on the beat', () async {
       final audio = JustAudioPlatform.instance as FakeJustAudio;
       audio.players[booth.b.player.platformId]!.startCost = const Duration(milliseconds: 60);

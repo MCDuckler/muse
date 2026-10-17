@@ -187,6 +187,57 @@ static void test_stretch_switch() {
   (void)t0; (void)before;
 }
 
+// SYNC's fold doubled and halved again by hand: the follower's tempo there at once,
+// and every master beat still has one of the follower's on it.
+static void test_octave(bool kl) {
+  std::printf("the follower at double, then back, key lock %s\n", kl ? "on" : "off");
+  fresh();
+  auto A = clicks(124, 0.37, 120, 1), B = clicks(128, 0.21, 120, 2);
+  load(0, A); load(1, B);
+  we_deck_keylock(0, kl); we_deck_keylock(1, kl);
+  we_deck_play(0, 1);
+  Run run;
+  render(run, 1.0);
+  we_deck_seek(1, 10.0);
+  we_deck_start(1, 0, 1, -1, 0);
+  we_deck_sync(1, 0, 1, 0);
+  render(run, 6);
+  we_deck_state st{}; we_deck_read(1, &st);
+  const double plain = st.rate;
+  const double t1 = run.a.size() / 2.0 / R;
+  we_deck_sync_octave(1, 2);
+  render(run, 12);
+  we_deck_read(1, &st);
+  const double doubled = st.rate;
+  auto ea = onsets(run.a), eb = onsets(run.b);
+  auto onMaster = apart(eb, ea, t1 + 0.3, t1 + 11.5);   // each of A's beats against B's nearest
+  size_t na = 0, nb = 0;
+  for (double t : ea) if (t > t1 + 0.3 && t < t1 + 11.5) na++;
+  for (double t : eb) if (t > t1 + 0.3 && t < t1 + 11.5) nb++;
+  std::printf("  rate %.4f -> %.4f; %zu master beats, %zu of the follower's; worst %.3f ms\n", plain, doubled, na, nb, worst(onMaster));
+  // The follower's beats against the master's and the halves between them: with key
+  // lock a click squeezed to half its length is sometimes too short to find, so
+  // the ones found are judged, and enough must be found.
+  std::vector<double> halves;
+  for (size_t i = 0; i + 1 < ea.size(); i++) { halves.push_back(ea[i]); halves.push_back((ea[i] + ea[i + 1]) / 2); }
+  auto onGrid = apart(halves, eb, t1 + 0.3, t1 + 11.5);
+  std::printf("  the follower's found on the halved grid: worst %.3f ms\n", worst(onGrid));
+  CHECK(std::fabs(doubled / plain - 2) < 0.002, "rate went %.4f -> %.4f", plain, doubled);
+  CHECK(nb > na * 3 / 2, "only %zu follower beats against %zu", nb, na);
+  // A stretcher squeezing a click to half its length places it within a ms or two.
+  const double allow = kl ? 2.0 : 0.5;
+  CHECK(!onGrid.empty() && worst(onGrid) < allow, "follower beats %.3f ms off the halved grid", worst(onGrid));
+  const double t2 = run.a.size() / 2.0 / R;
+  we_deck_sync_octave(1, 1);
+  render(run, 8);
+  we_deck_read(1, &st);
+  auto ea2 = onsets(run.a), eb2 = onsets(run.b);
+  auto back = apart(ea2, eb2, t2 + 0.3, t2 + 7.5);
+  std::printf("  back: rate %.4f, worst %.3f ms\n", st.rate, worst(back));
+  CHECK(std::fabs(st.rate - plain) < 0.002, "rate back at %.4f, was %.4f", st.rate, plain);
+  CHECK(!back.empty() && worst(back) < 0.5, "%.3f ms apart after halving back", worst(back));
+}
+
 static void test_long_hold() {
   std::printf("ten minutes synced, key lock on\n");
   fresh();
@@ -404,6 +455,7 @@ int main(int argc, char** argv) {
   if (want("end")) test_end();
   if (want("long")) test_long_hold();
   if (want("stretch")) test_stretch_switch();
+  if (want("octave")) { test_octave(false); test_octave(true); }
   we_stop();
   std::printf(failures ? "%d FAILED\n" : "all passed\n", failures);
   return failures ? 1 : 0;

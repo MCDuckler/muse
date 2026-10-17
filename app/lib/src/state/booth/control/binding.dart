@@ -55,7 +55,7 @@ class BoothBinding {
   static const _faderFloor = 3.5 / 127;
 
   /// The pitch fader's reach either side of 0, cycled with shift + pitch reset.
-  static const pitchRanges = [0.08, 0.16, 0.50];
+  static const pitchRanges = [0.16, 0.32, 0.50, 0.08];
   int pitchRangeIndex = 0;
   double get pitchRange => pitchRanges[pitchRangeIndex];
 

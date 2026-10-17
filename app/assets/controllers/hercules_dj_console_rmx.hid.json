@@ -363,7 +363,8 @@
    "report": 1,
    "byte": 9,
    "max": 255,
-   "center": 128
+   "center": 128,
+   "invert": true
   },
   {
    "id": "deck.a.volume",
@@ -440,7 +441,8 @@
    "report": 1,
    "byte": 19,
    "max": 255,
-   "center": 128
+   "center": 128,
+   "invert": true
   },
   {
    "id": "deck.b.volume",
@@ -595,7 +597,7 @@
   "deck.a.pad.5": "Loop IN (shift: halve the loop).",
   "deck.a.pad.6": "Loop OUT (shift: let the loop go).",
   "deck.a.pad.1": "Hot cue 1\u20134: set, then jump; shift clears.",
-  "deck.a.pitchReset": "Pitch to 0 %. Shift: pitch fader range \u00b18 \u2192 \u00b116 \u2192 \u00b150 %.",
+  "deck.a.pitchReset": "Pitch to 0 %. Shift: pitch fader range \u00b116 \u2192 \u00b132 \u2192 \u00b150 \u2192 \u00b18 %.",
   "deck.a.sync": "SYNC on/off. Shift: line the beats up once.",
   "deck.a.cue": "CUE as on a CDJ. Shift: back to the start.",
   "deck.a.play": "Play/pause. Shift: start on the other deck's next bar.",

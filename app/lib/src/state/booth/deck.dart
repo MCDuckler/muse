@@ -216,6 +216,12 @@ class Deck extends ChangeNotifier {
     n.engine.sync(n.index, master?._native?.index, every: every, offset: offset);
   }
 
+  /// On the engine: this deck, synced, at half or double the beat SYNC chose.
+  void engineSyncOctave(double octave) {
+    final n = _native;
+    if (n != null) n.engine.syncOctave(n.index, octave);
+  }
+
   /// On the engine: a synced deck's place against the master moved (a nudge by ear).
   void engineSyncOffset(Duration offset) {
     final n = _native;

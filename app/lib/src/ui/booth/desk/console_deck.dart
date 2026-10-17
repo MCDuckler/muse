@@ -182,6 +182,7 @@ class _ConsoleDeckState extends State<ConsoleDeck> with TickerProviderStateMixin
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            ..._octaveTags(),
             if (isMaster) ...[
               Text('MASTER', style: Console.label(8, color: _colour)),
               const SizedBox(width: 6),
@@ -401,6 +402,23 @@ class _ConsoleDeckState extends State<ConsoleDeck> with TickerProviderStateMixin
     return Row(children: _left ? row : row.reversed.toList());
   }
 
+  /// Half and double, while either deck follows the other: this deck at half or twice
+  /// the beat SYNC chose against the other one (see Booth.scaleSync). Small, under the
+  /// tempo they change, and only while there is a sync for them to change.
+  List<Widget> _octaveTags() {
+    final other = _b.other(_d);
+    if (!_d.synced && !other.synced) return const [];
+    final o = _b.syncOctaveOf(_d);
+    return [
+      _TinyTag(label: '½', colour: _colour, lit: o < 1, tooltip: '${_d.name} at half the beat against ${other.name}',
+          onTap: () => unawaited(_b.scaleSync(_d, 0.5))),
+      const SizedBox(width: 4),
+      _TinyTag(label: '×2', colour: _colour, lit: o > 1, tooltip: '${_d.name} at double the beat against ${other.name}',
+          onTap: () => unawaited(_b.scaleSync(_d, 2))),
+      const SizedBox(width: 6),
+    ];
+  }
+
   /// SYNC, as on any deck: pressed, this deck follows the other — tempo and beat,
   /// for as long as it is on. Lit while it is. Pressed again, or the pitch fader
   /// moved, and it lets go.
@@ -603,6 +621,34 @@ class _ConsoleDeckState extends State<ConsoleDeck> with TickerProviderStateMixin
 }
 
 /// A record's key, lit when it sits with the other deck's.
+/// A tag-sized button, like the key's tag beside it: half and double.
+class _TinyTag extends StatelessWidget {
+  const _TinyTag({required this.label, required this.colour, required this.lit, required this.tooltip, required this.onTap});
+  final String label;
+  final Color colour;
+  final bool lit;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+        message: tooltip,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(3),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(5, 1, 5, 1),
+            decoration: BoxDecoration(
+              color: lit ? colour : null,
+              border: Border.all(color: colour.withValues(alpha: 0.8)),
+              borderRadius: BorderRadius.circular(3),
+            ),
+            child: Text(label, style: Mag.typewriter(10.5, color: lit ? Console.ground : colour, bold: true)),
+          ),
+        ),
+      );
+}
+
 class _KeyTag extends StatelessWidget {
   const _KeyTag({required this.deck, required this.against});
   final engine.Deck deck;

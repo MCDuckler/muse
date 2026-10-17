@@ -313,6 +313,19 @@ class _PhoneDeckState extends State<PhoneDeck> with TickerProviderStateMixin {
               ),
             ),
             const SizedBox(width: 4),
+            for (final (label, factor) in const [('½', 0.5), ('×2', 2.0)]) ...[
+              Expanded(
+                child: Pad(
+                  label: label,
+                  colour: _colour,
+                  lit: factor < 1 ? _b.syncOctaveOf(_d) < 1 : _b.syncOctaveOf(_d) > 1,
+                  height: 30,
+                  tooltip: '${_d.name} at ${factor < 1 ? 'half' : 'double'} the beat against ${other.name}',
+                  onTap: on && (_d.synced || other.synced) ? () => unawaited(_b.scaleSync(_d, factor)) : null,
+                ),
+              ),
+              const SizedBox(width: 4),
+            ],
             Expanded(
               flex: 2,
               child: Pad(

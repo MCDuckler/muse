@@ -33,6 +33,17 @@ void main() {
       }
     });
 
+    test('the RMX pitch faders are read flipped: the hardware ran backwards', () {
+      for (final f in ['hercules_dj_console_rmx.midi.json', 'hercules_dj_console_rmx.hid.json']) {
+        for (final id in ['deck.a.pitch', 'deck.b.pitch']) {
+          final p = shipped(f).inputs.firstWhere((i) => i.id == id);
+          expect(p.position(0), 1.0, reason: '$f $id');
+          expect(p.position(p.max), 0.0, reason: '$f $id');
+          expect(p.position(p.center!), 0.5, reason: '$f $id');
+        }
+      }
+    });
+
     test('two inputs on one address is refused when the file is read', () {
       expect(
           () => layoutJson([

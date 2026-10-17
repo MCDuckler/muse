@@ -989,8 +989,11 @@ class Booth extends ChangeNotifier {
     final from = deck.timing?.gridBpm;
     final to = target ?? m.bpm;
     if (from == null || to == null) return false;
-    final ratio = syncRatio(from, to, reach: reach);
-    if (ratio == null) return false;
+    final folded = syncRatio(from, to, reach: reach);
+    if (folded == null) return false;
+    // Half or double where the DJ asked for it ([scaleSync]), for SYNC's own; not for
+    // a tempo the automix asks for.
+    final ratio = target == null ? folded * _octaveOf(deck) : folded;
     final was = deck.pitch;
     await deck.setTempo(ratio);
     if (!quiet && (was - ratio).abs() > 0.0001) {
@@ -1042,6 +1045,8 @@ class Booth extends ChangeNotifier {
       // Off in the engine as well, whichever hold it was left on by; a mix's own
       // hold ends with the mix.
       if (!mixHolds) deck.engineSync(null);
+      _octave = 1;
+      deck.engineSyncOctave(1);
       note(BoothEventKind.sync, 'SYNC off on ${deck.name}', deck: deck);
       notifyListeners();
       return true;
@@ -1054,6 +1059,7 @@ class Booth extends ChangeNotifier {
     // The master follows nothing: two decks each following the other halved both
     // tempos every block in the engine, to nothing.
     m.engineSync(null);
+    m.engineSyncOctave(1);
     deck.synced = true;
     master = m;
     // Already both playing: put in step at once, as the button does, rather than
@@ -1062,6 +1068,54 @@ class Booth extends ChangeNotifier {
     _snapNext = deck.playing && m.playing;
     note(BoothEventKind.sync, '${deck.name} follows ${m.name}', deck: deck);
     _follow();
+    notifyListeners();
+    return true;
+  }
+
+  // ------------------------------------------------------------------ half / double
+  /// SYNC folds tempos into an octave: a record at 70 follows one at 140 as if it were
+  /// 140's half, which is usually right and sometimes not — a grid read at half the
+  /// record's beat, or a half-time feel wanted on purpose. The DJ's own octave on top,
+  /// kept for the pair of records it was set for.
+  double _octave = 1;
+  (int?, int?) _octaveFor = (null, null);
+
+  double _octaveOf(Deck follower) {
+    final pair = (follower.track?.id, other(follower).track?.id);
+    if (_octave != 1 && pair != _octaveFor) _octave = 1;
+    return _octave;
+  }
+
+  /// How fast [deck] runs against the other while one follows the other: 2 is twice
+  /// the beat SYNC would have chosen, 0.5 half; 1 with nothing synced.
+  double syncOctaveOf(Deck deck) {
+    final f = a.synced ? a : b.synced ? b : null;
+    if (f == null) return 1;
+    final o = _octaveOf(f);
+    return identical(deck, f) ? o : 1 / o;
+  }
+
+  /// [deck] at [factor] (2 or 0.5) the speed it runs at against the other, while one
+  /// follows the other. Pressed on the follower it moves; pressed on the master, the
+  /// follower moves the other way — the master's tempo is the one the room is on.
+  /// Says whether there was a sync to scale.
+  Future<bool> scaleSync(Deck deck, double factor) async {
+    final f = a.synced ? a : b.synced ? b : null;
+    if (f == null) return false;
+    final o = (_octaveOf(f) * (identical(deck, f) ? factor : 1 / factor)).clamp(0.25, 4.0);
+    _octave = o;
+    _octaveFor = (f.track?.id, other(f).track?.id);
+    await sync(f, quiet: true);
+    if (f.onEngine) {
+      f.engineSyncOctave(o);
+    } else {
+      _snapNext = f.playing && other(f).playing;
+      if (_snapNext) holdOnBeat(f, snap: true);
+      _snapNext = false;
+    }
+    note(BoothEventKind.sync,
+        '${f.name} at ${o == 1 ? 'the beat SYNC chose' : o > 1 ? '${o.round()}× the beat' : '1/${(1 / o).round()} the beat'} of ${other(f).name}',
+        deck: f);
     notifyListeners();
     return true;
   }
@@ -1084,7 +1138,8 @@ class Booth extends ChangeNotifier {
       // The leader's pitch moved, or either has a new record: matched again, quietly —
       // a fader being dragged is a hundred changes, not a hundred lines in the log.
       final from = f.timing?.gridBpm, to = m.bpm;
-      final want = from == null || to == null ? null : syncRatio(from, to, reach: handReach);
+      final folded = from == null || to == null ? null : syncRatio(from, to, reach: handReach);
+      final want = folded == null ? null : folded * _octaveOf(f);
       if (want != null && (f.pitch - want).abs() > 1e-6) {
         unawaited(sync(f, quiet: true));
       }
@@ -2061,6 +2116,8 @@ class Booth extends ChangeNotifier {
     _rateTrims = 0;
     _held.clear();
     follower.engineSync(m, offset: follower.syncTrim);
+    // The DJ's half or double, for SYNC by hand; a mix holds on the beat it chose.
+    follower.engineSyncOctave(busy ? 1 : _octaveOf(follower));
     _engineWatch = Timer.periodic(const Duration(milliseconds: 250), (_) {
       final r = follower.engineReading, rm = m.engineReading;
       if (r == null || rm == null || !r.playing || !rm.playing) return;

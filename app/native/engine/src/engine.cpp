@@ -133,6 +133,7 @@ struct Deck {
   int master = -1, every = 1;
   double offset = 0;         // seconds of its own record ahead of the master's beat
   double fold = 1;           // its beats per master beat
+  double octave = 1;         // on top of the fold: half (0.5) or double (2) the beat it locks to
   bool snapPending = false;
   double phaseError = 0;
   // a start in step, when the master is heard at startAt
@@ -159,7 +160,7 @@ struct Deck {
 
 enum CmdKind {
   kSource, kSourceGain, kPlay, kSeek, kRate, kBend, kKeylock, kShift, kBeats, kSync, kBarOne, kStart,
-  kLoop, kLoopBeats, kLevel, kEq, kFilter, kGate, kEcho, kBrake, kMaster, kFreeSource, kSyncOffset, kAlign
+  kLoop, kLoopBeats, kLevel, kEq, kFilter, kGate, kEcho, kBrake, kMaster, kFreeSource, kSyncOffset, kAlign, kSyncOctave
 };
 struct Cmd {
   CmdKind kind;
@@ -519,7 +520,7 @@ bool syncError(Deck& f, Deck& m, double& errSec, double& rateFor, bool refold) {
   const double pm = periodAt(m, hm), pf = periodAt(f, hf);
   const double masterBeatsPerSec = effRate(m) / pm;
   const double base = masterBeatsPerSec * pf;
-  if (refold) f.fold = foldFor(base);
+  if (refold) f.fold = foldFor(base) * f.octave;
   rateFor = base * f.fold;
   const double q = f.fold;
   const double phm = beatIndexAt(m, hm) - m.barOne, phf = beatIndexAt(f, hf) - f.barOne - f.offset / pf;
@@ -568,7 +569,7 @@ void syncBlock(Deck& f) {
 double inStepNear(Deck& f, Deck& m, double near) {
   const double hm = frameToSec(m.heardNow);
   const double pm = periodAt(m, hm), pf = periodAt(f, frameToSec(near));
-  f.fold = foldFor(effRate(m) / pm * pf);
+  f.fold = foldFor(effRate(m) / pm * pf) * f.octave;
   const double q = f.fold;
   const double want = q * (beatIndexAt(m, hm) - m.barOne) + f.barOne + f.offset / pf;
   const double mod = (double)std::max(1, f.every) * std::max(1.0, q);  // in follower beats
@@ -581,7 +582,7 @@ double inStepNear(Deck& f, Deck& m, double near) {
 // is, nearest `near` (frames): for a start at a moment still to come.
 double inStepAt(Deck& f, Deck& m, double masterSec, double near) {
   const double pm = periodAt(m, masterSec), pf = periodAt(f, frameToSec(near));
-  f.fold = foldFor(effRate(m) / pm * pf);
+  f.fold = foldFor(effRate(m) / pm * pf) * f.octave;
   const double q = f.fold;
   const double want = q * (beatIndexAt(m, masterSec) - m.barOne) + f.barOne + f.offset / pf;
   const double mod = (double)std::max(1, f.every) * std::max(1.0, q);
@@ -662,6 +663,17 @@ void apply(const Cmd& c) {
       break;
     }
     case kSyncOffset: d.offset = c.d0; break;
+    case kSyncOctave:
+      // Half or double the beat the follower locks to: the tempo at once, and put
+      // in step with one jump (as SYNC pressed with both playing is).
+      d.octave = std::clamp(c.d0, 0.125, 8.0);
+      if (d.master >= 0 && d.master < WE_DECKS) {
+        Deck& m = E->decks[(size_t)d.master];
+        d.heardNow = heardOf(d); m.heardNow = heardOf(m);
+        double e, r; if (syncError(d, m, e, r, true)) d.rate = std::clamp(r, kRateMin, kRateMax);
+        d.snapPending = true;
+      }
+      break;
     case kAlign:
       if (c.i0 < 0 || c.i0 >= WE_DECKS || c.i0 == c.deck) break;
       if (d.master < 0) { d.every = std::max(1, c.i1); d.offset = c.d0; }
@@ -1092,6 +1104,7 @@ WE_API void we_deck_bar_one(int deck, int beat) { Cmd c{kBarOne}; c.deck = deck;
 WE_API void we_deck_start(int deck, int master, int every, double at, double offset) {
   Cmd c{kStart}; c.deck = deck; c.i0 = master; c.i1 = every; c.d1 = at; c.d0 = offset; push(c);
 }
+WE_API void we_deck_sync_octave(int deck, double octave) { Cmd c{kSyncOctave}; c.deck = deck; c.d0 = octave; push(c); }
 WE_API void we_deck_sync_offset(int deck, double offset) { Cmd c{kSyncOffset}; c.deck = deck; c.d0 = offset; push(c); }
 WE_API void we_deck_align(int deck, int master, int every, double offset) {
   Cmd c{kAlign}; c.deck = deck; c.i0 = master; c.i1 = every; c.d0 = offset; push(c);

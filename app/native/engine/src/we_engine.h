@@ -104,6 +104,9 @@ WE_API void we_deck_start(int deck, int master, int every, double at, double off
 // A synced deck's offset changed (a nudge by ear) without jumping it there: it is
 // eased there by the hold.
 WE_API void we_deck_sync_offset(int deck, double offset);
+// On top of SYNC's own fold: the follower locked at half (0.5) or double (2) the
+// beat it would choose, its tempo moved there at once and its beat put in step.
+WE_API void we_deck_sync_octave(int deck, double octave);
 // Puts the deck's beat on the master's once, now, without holding it there.
 WE_API void we_deck_align(int deck, int master, int every, double offset);
 

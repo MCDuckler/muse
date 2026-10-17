@@ -238,6 +238,7 @@ class Engine {
   late final _start = _lib
       .lookupFunction<Void Function(Int32, Int32, Int32, Double, Double), void Function(int, int, int, double, double)>('we_deck_start');
   late final _syncOffset = _lib.lookupFunction<_VID, void Function(int, double)>('we_deck_sync_offset');
+  late final _syncOctave = _lib.lookupFunction<_VID, void Function(int, double)>('we_deck_sync_octave');
   late final _align = _lib.lookupFunction<Void Function(Int32, Int32, Int32, Double), void Function(int, int, int, double)>('we_deck_align');
   late final _loop = _lib.lookupFunction<Void Function(Int32, Double, Double), void Function(int, double, double)>('we_deck_loop');
   late final _level = _lib.lookupFunction<Void Function(Int32, Float, Double), void Function(int, double, double)>('we_deck_level');
@@ -267,6 +268,10 @@ class Engine {
   void sync(int deck, int? master, {int every = 1, Duration offset = Duration.zero}) =>
       _sync(deck, master ?? -1, every, offset.inMicroseconds / 1e6);
   void syncOffset(int deck, Duration offset) => _syncOffset(deck, offset.inMicroseconds / 1e6);
+
+  /// A synced deck locked at [octave] times the beat SYNC would choose (0.5 half, 2
+  /// double): there at once, in step with one jump.
+  void syncOctave(int deck, double octave) => _syncOctave(deck, octave);
   void align(int deck, int master, {int every = 1, Duration offset = Duration.zero}) =>
       _align(deck, master, every, offset.inMicroseconds / 1e6);
   void barOne(int deck, int beat) => _barOne(deck, beat);

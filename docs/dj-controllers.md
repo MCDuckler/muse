@@ -63,7 +63,7 @@ the parts that could only be checked with the real thing are marked **[hw]**.
   (14-bit faders, sysex init, odd jog encodings) go behind a named `quirk` string.
 - **`BoothBinding`** — the one place hardware intent becomes booth calls. Knows
   nothing about bytes. Holds modifier state (STOP held = shift; SCRATCH toggles jog
-  mode; pitch range cycles ±8/16/50 %). Listens to booth/decks and pushes LED states
+  mode; pitch range cycles ±16/32/50/8 %, flipped on the RMX so up is slower). Listens to booth/decks and pushes LED states
   back (play, cue, sync, keylock, pfl, scratch, pitch-reset-at-zero, loop/pad lit).
 - **`SoftTakeover`** — a knob/fader on connect is wherever it was left; its first
   move must not yank the software value. Mixxx's rule: ignore moves until the

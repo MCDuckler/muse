@@ -217,19 +217,29 @@ void main() {
   });
 
   group('tempo', () {
-    test('the pitch fader is ±8 % and resets; shift + reset widens it', () async {
+    test('the pitch fader is ±16 % and resets; shift + reset widens it to 32, 50, then 8', () async {
       await bind.handle(at(a(Controls.pitch), 0.5));
       await bind.handle(at(a(Controls.pitch), 1.0));
-      expect(booth.a.pitch, closeTo(1.08, 1e-9));
+      expect(booth.a.pitch, closeTo(1.16, 1e-9));
       await bind.handle(down(a(Controls.pitchReset)));
       expect(booth.a.pitch, 1.0);
-      await bind.handle(down(a(Controls.stop)));
-      await bind.handle(down(a(Controls.pitchReset)));
-      await bind.handle(up(a(Controls.stop)));
-      expect(bind.pitchRange, 0.16);
+      Future<void> widen() async {
+        await bind.handle(down(a(Controls.stop)));
+        await bind.handle(down(a(Controls.pitchReset)));
+        await bind.handle(up(a(Controls.stop)));
+      }
+
+      await widen();
+      expect(bind.pitchRange, 0.32);
       await bind.handle(at(a(Controls.pitch), 0.5));
       await bind.handle(at(a(Controls.pitch), 0.0));
-      expect(booth.a.pitch, closeTo(0.84, 1e-9));
+      expect(booth.a.pitch, closeTo(0.68, 1e-9));
+      await widen();
+      expect(bind.pitchRange, 0.50);
+      await widen();
+      expect(bind.pitchRange, 0.08);
+      await widen();
+      expect(bind.pitchRange, 0.16);
     });
 
     test('the jog wheel moves a parked record, bends a playing one, then lets it settle', () async {
