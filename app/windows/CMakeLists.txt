@@ -87,6 +87,16 @@ if(PLUGIN_BUNDLED_LIBRARIES)
     COMPONENT Runtime)
 endif()
 
+# The booth's engine (native/engine/): see the Linux CMakeLists.
+option(WETOWL_ENGINE "Build the booth's engine" ON)
+if(WETOWL_ENGINE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../native/engine/CMakeLists.txt")
+  add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../native/engine" engine)
+  install(TARGETS wetowl_engine
+    RUNTIME DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    LIBRARY DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+endif()
+
 # MilkDrop: the wetowl-milk helper and the projectM it carries (native/milk/), put
 # beside the app. Needs GLEW (vcpkg install glew:x64-windows, with vcpkg's toolchain
 # in CMAKE_TOOLCHAIN_FILE); without it the app is built without MilkDrop.

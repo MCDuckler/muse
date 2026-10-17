@@ -118,13 +118,15 @@ class Tools {
       ];
 
   /// The PATH to search: the one this program was given, and on a Mac the places
-  /// above after it.
+  /// above after it. On Windows the app's own folder comes first: the Windows build
+  /// ships ffmpeg and ffprobe beside wetowl.exe (the booth's engine decodes through
+  /// it, and nobody there has one on their PATH).
   static List<String> searchPath({Map<String, String>? environment, bool? mac}) {
     final env = environment ?? Platform.environment;
-    final dirs = (env['PATH'] ?? '')
-        .split(Platform.isWindows ? ';' : ':')
-        .where((d) => d.isNotEmpty)
-        .toList();
+    final dirs = [
+      if (environment == null && Platform.isWindows) File(Platform.resolvedExecutable).parent.path,
+      ...(env['PATH'] ?? '').split(Platform.isWindows ? ';' : ':').where((d) => d.isNotEmpty),
+    ];
     if (mac ?? Platform.isMacOS) {
       for (final d in macPlaces(env)) {
         if (!dirs.contains(d)) dirs.add(d);
@@ -149,6 +151,16 @@ class Tools {
   /// it and the camera is read through it; without one both go quiet. Read once:
   /// an ffmpeg installed while the app runs is found when it is started again.
   static Future<bool> hasFfmpeg() async => (await ffmpegCommand()) != 'ffmpeg';
+
+  /// The same, asked without waiting: for a choice made in a constructor (the booth's
+  /// engine, which cannot play what ffmpeg cannot decode for it).
+  static bool hasFfmpegNow() {
+    final exe = Platform.isWindows ? 'ffmpeg.exe' : 'ffmpeg';
+    for (final d in searchPath()) {
+      if (File('$d${Platform.pathSeparator}$exe').existsSync()) return true;
+    }
+    return false;
+  }
 
   /// What to tell someone who has none.
   static String get ffmpegHint => Platform.isWindows

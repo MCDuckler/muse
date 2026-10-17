@@ -53,6 +53,7 @@ Future<String> mpvSays(Deck d) async {
 }
 
 Future<void> toProbe(Deck d) async {
+  if (d.onEngine) return;  // the engine's output is the probe's sink already
   final id = d.player.platformId;
   final native = JustAudioMediaKit.instanceIfRegistered?.playerFor(id!)?.raw.platform;
   if (native is NativePlayer) await native.setProperty('audio-device', device);

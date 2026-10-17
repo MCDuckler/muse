@@ -5,7 +5,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'deck.dart';
+import '../../audio/engine.dart';
 import 'deck_router.dart';
+import 'mixer_native.dart';
 import 'mixer_none.dart' if (dart.library.js_interop) 'mixer_web.dart' as web;
 import 'mixer_none.dart' if (dart.library.io) 'mixer_desktop.dart' as desk;
 
@@ -317,6 +319,10 @@ abstract class Mixer {
     if (defaultTargetPlatform == TargetPlatform.linux ||
         defaultTargetPlatform == TargetPlatform.windows ||
         defaultTargetPlatform == TargetPlatform.macOS) {
+      // The booth's own engine where it runs: every deck in one callback. libmpv's
+      // decks otherwise, as before.
+      final engine = Engine.instance;
+      if (engine != null) return NativeMixer(engine);
       return desk.desktopMixer() ?? VolumeMixer();
     }
     return VolumeMixer();

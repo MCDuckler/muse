@@ -78,6 +78,30 @@ jobs:
           echo "d2d081547efea8a1530f4ba0bf58a0d72069b25c40d8b2a7071cea5aa82381c6  mpv-dev/libmpv-2.dll" | sha256sum -c -
           cp mpv-dev/libmpv-2.dll build/windows/x64/runner/Release/libmpv-2.dll
           ls -l build/windows/x64/runner/Release/libmpv-2.dll
+      - name: ffmpeg beside it
+        working-directory: app
+        shell: bash
+        run: |
+          # The booth's engine (native/engine) plays records decoded by ffmpeg, and the
+          # downloader, MilkDrop and the camera run it too; on Windows nobody has one on
+          # their PATH, so the box carries its own. The app looks beside wetowl.exe first
+          # (Tools.searchPath). Gyan's essentials build (GPL, like libmpv and Rubber Band),
+          # from the GitHub mirror, which keeps old versions; pinned and checked.
+          url=https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip
+          curl -fsSL -o ffmpeg.zip "$url"
+          echo "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba  ffmpeg.zip" | sha256sum -c -
+          7z e -y -offmpeg ffmpeg.zip '*/bin/ffmpeg.exe' '*/bin/ffprobe.exe' '*/LICENSE' > /dev/null
+          ( cd ffmpeg && sha256sum -c - <<'SUM'
+          3256173f3f8bffd7df12227c68adf68025edb1832273a9530688a7bb1ed8edec  ffmpeg.exe
+          f0d36ecbbdd3bcfac3efa078c96c7271c2e68b3810595552ac3b7f17e9a65c52  ffprobe.exe
+          SUM
+          )
+          out=build/windows/x64/runner/Release
+          cp ffmpeg/ffmpeg.exe ffmpeg/ffprobe.exe "$out/"
+          cp ffmpeg/LICENSE "$out/ffmpeg-LICENSE.txt"
+          "$out/ffmpeg.exe" -hide_banner -version | head -1
+          # And the engine has to be in the box, or the booth is on libmpv again.
+          ls -l "$out/wetowl_engine.dll"
       - name: Build the windowless fetcher
         working-directory: app
         shell: bash

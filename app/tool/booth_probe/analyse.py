@@ -35,6 +35,11 @@ print(f'B − A on each beat: median {np.median(off):+.1f} ms, spread (sd) {off.
       f'nine tenths within {np.percentile(np.abs(off-np.median(off)),90):.1f} ms of it, worst {np.max(np.abs(off)):.1f} ms')
 for s in np.array_split(np.arange(len(off)), 8):
     if len(s): print(f'   {t[s[0]]:5.1f}s  {np.median(off[s]):+6.1f} ms  (±{off[s].std():.1f})')
+import os
+if os.environ.get('PROBE_BEATS'):
+    # every beat, for where a mix starts and anything odd
+    for tt, oo in zip(t, off):
+        print(f'      beat {tt:6.2f}s  {oo:+7.2f} ms')
 for name, f0 in (('A tone', 220), ('B tone', 440)):
     y = band(f0-30, f0+30); w = int(0.01*sr); n = len(y)//w
     r = np.sqrt((y[:n*w].reshape(n, w)**2).mean(1)); top = np.percentile(r, 95)

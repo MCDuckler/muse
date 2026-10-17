@@ -33,6 +33,8 @@ Track track(int id, int durationMs) => Track.fromJson({
     });
 
 Future<void> toSink(Deck d, String sink) async {
+  // On the booth's own engine the probe hears its split output (A left, B right).
+  if (d.onEngine) return;
   final native = JustAudioMediaKit.instanceIfRegistered?.playerFor(d.player.platformId!)?.raw.platform;
   if (native is NativePlayer) await native.setProperty('audio-device', 'pipewire/$sink');
 }
@@ -71,6 +73,10 @@ void main() {
       await toSink(booth.a, 'wetowl_probe_a');
       await toSink(booth.b, 'wetowl_probe_b');
       await booth.setCrossfader(0.5);
+      if (spec['keylock_off'] == true) {
+        await booth.setKeylock(booth.a, false);
+        await booth.setKeylock(booth.b, false);
+      }
       if (spec['drop_check'] == true) {
         // "Not that one" on the real engine: the Auto DJ running, a record parked on
         // the free deck, then the next dropped — which loads another onto that deck
@@ -160,7 +166,8 @@ void main() {
       note('A ${ta.gridBpm?.toStringAsFixed(2)} steady=${ta.steady != null}; B ${tb.gridBpm?.toStringAsFixed(2)} steady=${tb.steady != null}');
       // What the engine reports in the first moments, against the wall clock: the
       // start is where a clock can be wrong.
-      final reports = booth.a.player.positionStream.listen((p) => note('A reports ${p.inMilliseconds} (clock ${booth.a.position.inMilliseconds})'));
+      final reports = booth.a.player.positionStream.listen((p) => booth.a.onEngine ? null : note('A reports ${p.inMilliseconds} (clock ${booth.a.position.inMilliseconds})'));
+      note('engine: A ${booth.a.onEngine ? 'on the booth\'s engine' : 'on libmpv'}');
       note('A play asked');
       await booth.play(booth.a);
       note('A playing');

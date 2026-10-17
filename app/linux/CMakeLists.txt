@@ -117,6 +117,16 @@ if(WETOWL_MILK AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../native/milk/CMakeLists
     COMPONENT Runtime)
 endif()
 
+# The booth's engine (native/engine/): every deck mixed in one audio callback, loaded
+# by lib/src/audio/engine.dart. Without it the booth plays on libmpv as before.
+option(WETOWL_ENGINE "Build the booth's engine" ON)
+if(WETOWL_ENGINE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../native/engine/CMakeLists.txt")
+  add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../native/engine" engine)
+  install(TARGETS wetowl_engine
+    LIBRARY DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+endif()
+
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/linux/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"

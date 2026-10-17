@@ -38,6 +38,11 @@ date +%s.%N > "$W/rec_started.txt"
 pw-record --target wetowl_probe_mix -P '{ stream.capture.sink=true }' --rate 48000 --channels 2 --format f32 "$W/rec.wav" &
 REC=$!
 cd "$APP"
+# On the booth's own engine (PROBE_ENGINE=native): its output split, A left and B
+# right, straight into the mix sink.
+if [ "${PROBE_ENGINE:-}" = native ]; then
+  export WETOWL_ENGINE=native WETOWL_ENGINE_SPLIT=1 PULSE_SINK=wetowl_probe_mix
+fi
 flutter test integration_test/booth_manual_sync_test.dart -d linux \
   --dart-define=PROBE_DIR="$W" --dart-define=BOOTH_TRACE=true > "$W/test.out" 2>&1 || { tail -30 "$W/test.out"; exit 1; }
 grep -E "^(booth|deck):" "$W/test.out" || true

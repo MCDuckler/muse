@@ -27,6 +27,8 @@ SINK=$(pactl load-module module-null-sink sink_name=wetowl_probe sink_properties
 pw-record --target wetowl_probe -P '{ stream.capture.sink=true }' --rate 48000 --channels 2 --format f32 "$W/rec.wav" &
 REC=$!
 cd "$APP"
+# On the booth's own engine (PROBE_ENGINE=native): its output straight into the sink.
+if [ "${PROBE_ENGINE:-}" = native ]; then export WETOWL_ENGINE=native PULSE_SINK=wetowl_probe; fi
 flutter test integration_test/booth_sync_test.dart -d linux \
   --dart-define=PROBE_DIR="$W" --dart-define=PROBE_PITCH="${PROBE_PITCH:-1}" --dart-define=BOOTH_TRACE=true > "$W/test.out" 2>&1 || { tail -30 "$W/test.out"; exit 1; }
 grep -E '^booth:' "$W/test.out" || true
@@ -35,4 +37,5 @@ grep -hE "bpm on show|started;" "$W/events.txt" 2>/dev/null || true
 # measured, the rate it set.
 grep -E '^lock: ' "$W/test.out" | awk 'NR % 40 == 1 {print "   " $0}' || true
 kill -INT $REC; wait $REC 2>/dev/null || true; REC=
+if [ -n "${PROBE_KEEP:-}" ]; then mkdir -p "$PROBE_KEEP"; cp "$W"/rec.wav "$W"/test.out "$PROBE_KEEP"/; cp "$W"/events.txt "$PROBE_KEEP"/ 2>/dev/null || true; fi
 "$PY" "$HERE/analyse.py" "$W/rec.wav"

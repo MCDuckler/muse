@@ -15,6 +15,7 @@ import 'board/soundboard.dart';
 import 'fx_channel.dart';
 import 'fx_sounds.dart';
 import 'mixer.dart';
+import 'mixer_native.dart';
 import 'parts.dart';
 import 'session.dart';
 import '../show/show_engine.dart';
@@ -402,6 +403,12 @@ class Booth extends ChangeNotifier {
             claiming: () => this.mixer.expecting('B'));
     this.a.parts = parts;
     this.b.parts = parts;
+    // On the booth's own engine: the two decks are two of its decks.
+    final m = this.mixer;
+    if (m is NativeMixer) {
+      this.a.useEngine(m.engine, 0);
+      this.b.useEngine(m.engine, 1);
+    }
     this.board = board == null ? Soundboard(this) : board(this);
     this.a.engineLoop = (from, to) => this.mixer.setLoop(this.a, from, to);
     this.b.engineLoop = (from, to) => this.mixer.setLoop(this.b, from, to);
@@ -995,6 +1002,10 @@ class Booth extends ChangeNotifier {
   /// Nudge [deck] so its beat falls with the master's. Only the phase, not the tempo.
   Future<void> align(Deck deck) async {
     final m = other(deck);
+    if (deck.onEngine) {
+      deck.engineAlign(m, offset: deck.syncTrim);
+      return;
+    }
     final now = DateTime.now();
     final mine = deck.beatAt(now), theirs = m.beatAt(now);
     // A nudge is a move in the record, so it is counted in the record's own beats.
@@ -1067,7 +1078,11 @@ class Booth extends ChangeNotifier {
       if (want != null && (f.pitch - want).abs() > 1e-6) {
         unawaited(sync(f, quiet: true));
       }
-      if (f.playing && m.playing && !holding && f.hasBeats && m.hasBeats) {
+      if (f.onEngine) {
+        // The engine holds the beat itself, playing or not: told once.
+        if (!identical(_lockFollower, f) && f.hasBeats && m.hasBeats) holdOnBeat(f, snap: _snapNext);
+        _snapNext = false;
+      } else if (f.playing && m.playing && !holding && f.hasBeats && m.hasBeats) {
         holdOnBeat(f, snap: _snapNext);
         _snapNext = false;
       }
@@ -1106,6 +1121,7 @@ class Booth extends ChangeNotifier {
     final m = other(deck);
     final ft = deck.timing, mt = m.timing;
     final now = DateTime.now();
+    final engine = deck.onEngine && m.onEngine;
     // At half or double the other's pulse (SYNC folds octaves), the quicker record's
     // beats go in pairs, as the holding counts them (beatError): the slower record's
     // beat lands on the first of a pair, never the second — half a pulse out otherwise,
@@ -1153,6 +1169,14 @@ class Booth extends ChangeNotifier {
     // Held a little ahead where a hand trimmed it so: started that much ahead too.
     await deck.seek(beat + Duration(microseconds: (deck.syncTrim.inMicroseconds * deck.tempo).round()));
     _snapNext = false;
+    if (engine) {
+      // The engine starts it from there the moment the master is heard on its beat:
+      // to the sample, with nothing to learn about how late an engine starts.
+      deck.startWith(m, at: land, offset: deck.syncTrim);
+      _started = (deck: deck, at: DateTime.now());
+      _follow();
+      return;
+    }
     final early = Duration(microseconds: (_startLead.inMicroseconds * m.tempo).round());
     await _until(m, land - early);
     _started = (deck: deck, at: DateTime.now());
@@ -1168,6 +1192,8 @@ class Booth extends ChangeNotifier {
       final trimmed = deck.syncTrim + by;
       const most = Duration(milliseconds: 150);
       deck.syncTrim = trimmed > most ? most : trimmed < -most ? -most : trimmed;
+      // On the engine the new place is where it is held from now on.
+      if (deck.onEngine) deck.engineSyncOffset(deck.syncTrim);
     }
     await deck.nudgeByHand(by);
   }
@@ -1322,6 +1348,7 @@ class Booth extends ChangeNotifier {
   static const _flamAt = 10.0;
 
   void holdOnBeat(Deck follower, {bool snap = false}) {
+    if (follower.onEngine && other(follower).onEngine) return _holdOnEngine(follower);
     _lock?.cancel();
     // What each deck's stretcher puts its sound behind by, read for the records on
     // the decks now. It was read only when a mix started (go), so SYNC by hand held
@@ -1960,6 +1987,18 @@ class Booth extends ChangeNotifier {
   Future<void> letGo() async {
     _lock?.cancel();
     _lock = null;
+    final held = _engineHold;
+    if (held != null) {
+      _engineHold = null;
+      _engineWatch?.cancel();
+      _engineWatch = null;
+      // SYNC by hand stays on in the engine (it holds whenever both play); a mix's
+      // hold ends with the mix.
+      if (!held.synced) {
+        held.engineSync(null);
+        await held.bend(held.pitch);
+      }
+    }
     if (_held.isNotEmpty) {
       final sorted = [..._held]..sort();
       note(BoothEventKind.held,
@@ -1988,7 +2027,36 @@ class Booth extends ChangeNotifier {
   }
 
   /// Whether a follower is being held on the master's beat.
-  bool get holding => _lock != null;
+  bool get holding => _lock != null || _engineHold != null;
+
+  /// The follower the engine holds on the beat, where it does.
+  Deck? _engineHold;
+  Timer? _engineWatch;
+
+  /// The engine holds [follower] on the other's beat: one call, then nothing to do —
+  /// its tempo is the master's in an exact ratio, and where each is heard is known to
+  /// the sample. What is kept here is only the record of how close it stayed, for the
+  /// log, read off the engine four times a second.
+  void _holdOnEngine(Deck follower) {
+    final m = other(follower);
+    _lock?.cancel();
+    _lock = null;
+    _engineWatch?.cancel();
+    _engineHold = follower;
+    _lockFollower = follower;
+    _lockBase = follower.pitch;
+    _heldJumps = 0;
+    _phraseFixes = 0;
+    _rateMoves = 0;
+    _rateTrims = 0;
+    _held.clear();
+    follower.engineSync(m, offset: follower.syncTrim);
+    _engineWatch = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      final r = follower.engineReading, rm = m.engineReading;
+      if (r == null || rm == null || !r.playing || !rm.playing) return;
+      if (_held.length < 20000) _held.add((r.phaseError * 1000).abs());
+    });
+  }
 
   /// Wait until the master reaches [at] in its record, by the wall clock at its rate —
   /// closely: slept most of the way, then the last stretch measured again, because a
@@ -2805,7 +2873,24 @@ class Booth extends ChangeNotifier {
     }
     // What the plan opens with, set before the incoming makes a sound.
     if (steps.isNotEmpty) await _applyStep(steps.first);
-    if (!to.playing) {
+    final onEngine = to.onEngine && from.onEngine;
+    if (!to.playing && onEngine && synced && from.playing) {
+      // The engine starts it to the sample as the master is heard at [goes]: waited
+      // for here only until just before, so a mix called off in the meantime is.
+      final beat = from.beat ?? const Duration(milliseconds: 500);
+      final margin = Duration(microseconds: (math.min(250000, beat.inMicroseconds ~/ 2) * from.tempo).round());
+      await _until(from, goes - margin, stop: calledOff);
+      if (!calledOff()) {
+        _started = (deck: to, at: DateTime.now());
+        to.engineSync(from, offset: Duration.zero);
+        // Already past it (the preparation ran long): in step from now, not late.
+        if (from.position >= goes) {
+          to.startWith(from);
+        } else {
+          to.startWith(from, at: goes);
+        }
+      }
+    } else if (!to.playing) {
       // Told to play a little before the beat, by as long as the engine has lately
       // taken to make a sound: then the sound lands on it.
       //

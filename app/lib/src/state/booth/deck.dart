@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 
+import '../../audio/engine.dart';
 import '../../api/client.dart';
 import '../../api/models.dart';
 import '../playback_log.dart';
@@ -14,6 +15,8 @@ import 'auto_pads.dart';
 import 'deck_router.dart';
 import 'mixer.dart' show StemLevels;
 import 'parts.dart';
+
+part 'deck_native.dart';
 
 /// One of the two records on the deck.
 ///
@@ -180,6 +183,50 @@ class Deck extends ChangeNotifier {
 
   late final AudioPlayer _player;
   AudioPlayer get player => _player;
+
+  /// The booth's own engine, where it runs (a desk): this deck is then one of its
+  /// decks rather than a libmpv player of its own. See deck_native.dart.
+  _NativeLink? _native;
+  bool get onEngine => _native != null;
+
+  /// Which of the engine's decks this is, on one.
+  int? get engineIndex => _native?.index;
+
+  /// Plays on [engine] as its deck [index] from now on. Said by the booth before any
+  /// record goes on.
+  void useEngine(Engine engine, int index) {
+    _native = _NativeLink(engine, index);
+  }
+
+  /// The engine's word on this deck, where it is on one: what it is heard doing.
+  DeckReading? get engineReading => _native == null ? null : _readNow();
+
+  /// On the engine: start in step with [master] — the engine puts it there to the
+  /// sample, now (its beat nearest where it is parked lined up with the master's) or,
+  /// with [at], from exactly where it is parked the moment the master is heard there.
+  void startWith(Deck master, {int every = 1, Duration? at, Duration offset = Duration.zero}) =>
+      _nativeStartWith(master, every: every, at: at, offset: offset);
+
+  /// On the engine: SYNC — this deck's tempo the master's (folded within half/double)
+  /// and its beat held on the master's, [every] master beats to a line-up, [offset]
+  /// ahead. Null [master] lets go.
+  void engineSync(Deck? master, {int every = 1, Duration offset = Duration.zero}) {
+    final n = _native;
+    if (n == null) return;
+    n.engine.sync(n.index, master?._native?.index, every: every, offset: offset);
+  }
+
+  /// On the engine: a synced deck's place against the master moved (a nudge by ear).
+  void engineSyncOffset(Duration offset) {
+    final n = _native;
+    if (n != null) n.engine.syncOffset(n.index, offset);
+  }
+
+  /// On the engine: this deck's beat put on [master]'s once, now.
+  void engineAlign(Deck master, {int every = 1, Duration offset = Duration.zero}) {
+    final n = _native, m = master._native;
+    if (n != null && m != null) n.engine.align(n.index, m.index, every: every, offset: offset);
+  }
   final _subs = <StreamSubscription<dynamic>>[];
 
   Track? track;
@@ -279,7 +326,7 @@ class Deck extends ChangeNotifier {
   /// for one record, and a nudge that the holding undid again would be no use at all.
   Duration syncTrim = Duration.zero;
 
-  bool get playing => (_player.playing || _swapping) && !_ended_;
+  bool get playing => _native != null ? _nativePlaying : (_player.playing || _swapping) && !_ended_;
 
   /// What the engine last said it was doing: for telling its arriving at the end
   /// from its saying again that it is there.
@@ -291,7 +338,15 @@ class Deck extends ChangeNotifier {
   bool _ended_ = false;
   bool get loaded => track != null;
 
-  Duration? get duration => _player.duration ?? track?.duration;
+  Duration? get duration {
+    final n = _native;
+    if (n != null) {
+      final src = n.main;
+      if (src != null && src.done && !src.failed) return Duration(microseconds: (src.seconds * 1e6).round());
+      return track?.duration;
+    }
+    return _player.duration ?? track?.duration;
+  }
 
   // ------------------------------------------------------------------ the clock
   Duration _fix = Duration.zero;
@@ -453,7 +508,7 @@ class Deck extends ChangeNotifier {
   /// does not move: the clock stops with it. It used to run on — nothing the engine
   /// said in the meantime could agree with it, so nothing stopped it — and the booth
   /// went on holding the other record to one that had gone quiet.
-  bool get stalled => _stalled;
+  bool get stalled => _native == null && _stalled;
   bool _stalled = false;
 
   void _stallIf(bool now) {
@@ -490,6 +545,7 @@ class Deck extends ChangeNotifier {
 
   /// Where the record is *now*, carried forward from the last fix while it plays.
   Duration positionAt(DateTime now) {
+    if (_native != null) return _nativePositionAt(now);
     var at = _unfolded(now);
     // A loop carried in the filter chain hands the same samples round again without
     // the engine knowing, so the engine's own clock walks straight on past the loop's
@@ -689,6 +745,10 @@ class Deck extends ChangeNotifier {
     // and its beat light, and the grid had not changed.
     final same = this.track?.id == track.id;
     final knew = same ? this.timing : null;
+    if (_native != null) {
+      _n.want = false;
+      _n.engine.play(_n.index, false);
+    }
     // A different record starts at its own speed: the pitch the last one was left at
     // is nothing to do with this one, and a deck that showed a record at another
     // record's pitch showed a BPM that was neither's.
@@ -716,6 +776,18 @@ class Deck extends ChangeNotifier {
         (first == null ? null : this.timing!.onGrid(first)) ??
         this.timing?.lead ??
         Duration.zero;
+    if (_native != null) {
+      try {
+        await _nativeLoad(track, start);
+      } catch (e) {
+        trouble = '$e';
+        notifyListeners();
+        rethrow;
+      }
+      _sayIfTheGridsDisagree();
+      notifyListeners();
+      return;
+    }
     try {
       claiming?.call();
       final stems = _stemsFrom != null;
@@ -850,6 +922,7 @@ class Deck extends ChangeNotifier {
       notifyListeners();
       return true;
     }
+    if (_native != null && part == null) return _nativeSwap(t, null);
     if (part != null) {
       makingPart = true;
       notifyListeners();
@@ -886,6 +959,7 @@ class Deck extends ChangeNotifier {
         return false;
       }
     }
+    if (_native != null) return _nativeSwap(t, part);
     var was = playing;
     this.part = part;
     final before = _turn;
@@ -961,6 +1035,7 @@ class Deck extends ChangeNotifier {
   /// there until the record was over. So it is started and let go of, and this waits
   /// only for the engine to say it is playing.
   Future<void> play() async {
+    if (_native != null) return _nativePlay();
     // A record that ran out and is still where it ran out: from the cue point, or the
     // top. There is nothing left to play at the end, and engines differ about what
     // play means there (mpv goes back to the top unasked, a phone's does nothing).
@@ -999,6 +1074,7 @@ class Deck extends ChangeNotifier {
   }
 
   Future<void> pause() async {
+    if (_native != null) return _nativePause();
     _fix = _unfolded(DateTime.now());
     _wrapSoon?.cancel();
     _stopping = true;
@@ -1177,6 +1253,7 @@ class Deck extends ChangeNotifier {
   }
 
   Future<void> seek(Duration to) async {
+    if (_native != null) return _nativeSeek(to);
     // Under a chain loop, the chain's loop would start again from wherever this lands
     // and the deck's clock go on folding at the old start: the two apart from then
     // on, the beat-holding answering the difference with another seek. Out of the
@@ -1224,6 +1301,11 @@ class Deck extends ChangeNotifier {
   /// hand had been. Now the screen follows at once (the fix is set before anything is
   /// awaited) and the engine is told again only once it has answered.
   Future<void> seekByHand(Duration to) async {
+    if (_native != null) {
+      final at = to < Duration.zero ? Duration.zero : to;
+      if ((at - aimedAt).abs() > const Duration(seconds: 1)) handMoves++;
+      return _nativeSeek(at);
+    }
     // A hand anywhere on the record ends a chain loop: the chain's loop is fixed to
     // the samples it was built around, and a seek would set it going from somewhere
     // else entirely.
@@ -1275,6 +1357,12 @@ class Deck extends ChangeNotifier {
   /// Run the engine at [rate] without moving the deck's pitch: the booth holding two
   /// records on the beat. Put back with `bend(pitch)`.
   Future<void> bend(double rate) async {
+    if (_native != null) {
+      tempo = rate.clamp(0.5, 2.0);
+      _nativeRate();
+      _notifyFinely();
+      return;
+    }
     _fix = _unfolded(DateTime.now());
     _fixedAt = DateTime.now();
     tempo = rate.clamp(0.5, 2.0);
@@ -1301,6 +1389,10 @@ class Deck extends ChangeNotifier {
     _ended_ = true;
     _loop?.cancel();
     _wrapSoon?.cancel();
+    if (_native != null) {
+      notifyListeners();
+      return;
+    }
     // The engine stopped too, as far as just_audio knows. It goes on calling itself
     // playing at the end, and a play() asked of it while it does is never passed on:
     // PLAY after the end did nothing at all, or, where a seek was taken as the cue
@@ -1600,6 +1692,7 @@ class Deck extends ChangeNotifier {
   Duration get _worthCarrying => beatInRecord * 4;
 
   Future<void> _loopInEngine() async {
+    if (_native != null) return _nativeLoop();
     final f = engineLoop;
     if (f == null) return;
     _wrappedAt = null;
@@ -1875,6 +1968,7 @@ class Deck extends ChangeNotifier {
   /// buttons moves it several times a second; only where it settles is worth reading.
   void _seamLater() {
     _seamSoon?.cancel();
+    if (_native != null) return;  // the engine crossfades its own seam
     if (!findSeams) return;
     final ticket = ++_seamTicket;
     _seamSoon = Timer(const Duration(milliseconds: 600), () {
@@ -1963,11 +2057,12 @@ class Deck extends ChangeNotifier {
   /// length at any tempo.
   Future<void> brake({Duration? over}) async {
     if (!playing) return;
-    braking = true;
-    final was = tempo;
     final length = over ??
         Duration(microseconds: ((beat ?? const Duration(milliseconds: 450)).inMicroseconds * 2)
             .clamp(600000, 1400000));
+    if (_native != null) return _nativeBrake(length);
+    braking = true;
+    final was = tempo;
     const steps = 18;
     for (var i = 1; i <= steps; i++) {
       _fix = _unfolded(DateTime.now());
@@ -2004,6 +2099,12 @@ class Deck extends ChangeNotifier {
     _seamSoon?.cancel();
     final was = loopStart != null;
     loopStart = loopEnd = null;
+    if (_native != null) {
+      _loopBars = null;
+      _nativeLoop();
+      notifyListeners();
+      return;
+    }
     _loopBars = null;
     _loop?.cancel();
     _wrapSoon?.cancel();
@@ -2027,6 +2128,7 @@ class Deck extends ChangeNotifier {
   /// the record's grid instead of walking off it a little more every time round.
   void _watchLoop() {
     _loop?.cancel();
+    if (_native != null) return;  // the engine goes round itself, to the sample
     late void Function() again;
     again = () {
       final end = loopEnd, start = loopStart;
@@ -2084,6 +2186,7 @@ class Deck extends ChangeNotifier {
     for (final s in _subs) {
       s.cancel();
     }
+    if (_native != null) _nativeDispose();
     _player.dispose();
     super.dispose();
   }
