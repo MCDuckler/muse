@@ -110,8 +110,23 @@ class _StageWindowState extends State<_StageWindow> {
 
   int _frames = 0, _raster = 0, _worst = 0, _build = 0, _buildWorst = 0, _milkWas = 0;
   Timer? _saying, _counting;
+  /// WETOWL_FRAME_TRACE=1: every gap of over 40 ms between two frames reaching the
+  /// screen said, with when — for a hitch that comes back on a rhythm (what it lines
+  /// up with says what it is). Read off the raster finishing: the embedder's vsync
+  /// stamps are not to be trusted on Linux.
+  static final _trace = Platform.environment['WETOWL_FRAME_TRACE'] == '1';
+  final _since = Stopwatch()..start();
+  int _lastShown = 0;
+
   void _took(List<FrameTiming> frames) {
     for (final f in frames) {
+      final shown = f.timestampInMicroseconds(ui.FramePhase.rasterFinish);
+      if (_trace && _lastShown > 0 && shown - _lastShown > 40000) {
+        // ignore: avoid_print
+        print('FRAME gap ${(shown - _lastShown) ~/ 1000} ms at ${(_since.elapsedMilliseconds / 1000).toStringAsFixed(1)}s: '
+            'that frame built ${f.buildDuration.inMilliseconds}, rastered ${f.rasterDuration.inMilliseconds}');
+      }
+      _lastShown = shown;
       _frames++;
       final r = f.rasterDuration.inMicroseconds;
       _raster += r;
