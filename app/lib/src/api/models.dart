@@ -2304,6 +2304,35 @@ class Scrobbling {
   }
 }
 
+/// A record's tempo and key, as the house has them on file (/booth/traits): what a
+/// crate shows, asked for a whole crate at once instead of each record's analysis.
+class TrackFacts {
+  const TrackFacts({this.bpm, this.camelot, this.keyConfidence = 0});
+
+  factory TrackFacts.fromJson(Map<String, dynamic> j) => TrackFacts(
+        bpm: (j['bpm'] as num?)?.toDouble(),
+        camelot: j['camelot'] as String?,
+        keyConfidence: (j['key_confidence'] as num?)?.toDouble() ?? 0,
+      );
+
+  final double? bpm;
+  final String? camelot;
+  final double keyConfidence;
+}
+
+/// Records a step or less apart on the Camelot wheel, or the same place in the other mode.
+bool camelotNear(String? a, String? b) {
+  if (a == null || b == null || a.length < 2 || b.length < 2) return false;
+  final na = int.tryParse(a.substring(0, a.length - 1)), nb = int.tryParse(b.substring(0, b.length - 1));
+  if (na == null || nb == null) return false;
+  final ma = a[a.length - 1], mb = b[b.length - 1];
+  if (ma == mb) {
+    final d = (na - nb).abs();
+    return d <= 1 || d == 11;
+  }
+  return na == nb;
+}
+
 /// What a song is made of in time: where the sound really starts and ends in its file,
 /// how fast it goes, and where its beats fall. Worked out by the server, once per song.
 class TrackTiming {
@@ -2476,17 +2505,7 @@ class TrackTiming {
   final MixCues? cues;
 
   /// Records a step or less apart on the wheel, or the same place in the other mode.
-  bool inKeyWith(TrackTiming other) {
-    final a = camelot, b = other.camelot;
-    if (a == null || b == null) return false;
-    final na = int.parse(a.substring(0, a.length - 1)), ma = a[a.length - 1];
-    final nb = int.parse(b.substring(0, b.length - 1)), mb = b[b.length - 1];
-    if (ma == mb) {
-      final d = (na - nb).abs();
-      return d <= 1 || d == 11;
-    }
-    return na == nb;
-  }
+  bool inKeyWith(TrackTiming other) => camelotNear(camelot, other.camelot);
 
   final int durationMs;
 

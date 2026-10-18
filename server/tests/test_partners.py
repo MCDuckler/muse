@@ -66,5 +66,27 @@ def test_partners_come_from_the_library_best_first(client, hdr):
     got = client.get("/booth/partners", headers=hdr,
                      params={"from_track": on, "limit": 1}).json()["partners"]
     assert len(got) == 1 and got[0]["track"]["id"] == good
+    got = client.get("/booth/partners", headers=hdr,
+                     params={"from_track": on, "in_key": "true"}).json()["partners"]
+    assert clash not in [p["track"]["id"] for p in got] and good in [p["track"]["id"] for p in got], \
+        "in key only: 9A next to 8A, never 2B"
+    assert traits.near_key("8A", "8A") and traits.near_key("8A", "9A") and traits.near_key("12A", "1A")
+    assert traits.near_key("8A", "8B") and not traits.near_key("8A", "9B") and not traits.near_key("8A", None)
     kept = db.one("select in_db, out_db, sung from track_traits where track_id=%s", (on,))
     assert kept["in_db"] is not None and kept["out_db"] is not None
+
+
+def test_a_crate_gets_tempo_and_key_in_one_ask(client, hdr):
+    ids = [client.post("/tracks/resolve", headers=hdr, json={"video_id": v}).json()["id"]
+           for v in ("TAA", "TBB", "TCC")]
+    known, plain, never = ids
+    db.run("update tracks set state='ready' where id = any(%s)", (ids,))
+    traits.remember({"id": known, "loudness_lufs": -9},
+                    {"bpm": 124.0, "camelot": "5A", "key_confidence": 0.7, "energy": [200] * 8,
+                     "downbeats": [i * 1935 for i in range(8)]})
+    db.run("update tracks set bpm = 96 where id = %s", (plain,))  # tempo only, from before the index
+    got = client.get(f"/booth/traits?ids={known},{plain},{never},nope", headers=hdr).json()["traits"]
+    assert got[str(known)] == {"bpm": 124.0, "camelot": "5A", "key_confidence": 0.7}
+    assert got[str(plain)] == {"bpm": 96.0, "camelot": None, "key_confidence": 0.0}
+    assert str(never) not in got, "a record nobody measured is left out"
+    assert client.get("/booth/traits", headers=hdr).json() == {"traits": {}}

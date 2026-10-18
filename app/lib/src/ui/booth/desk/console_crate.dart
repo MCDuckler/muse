@@ -173,7 +173,8 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
       // The same judging the Auto DJ picks by: the house's pick from the whole
       // library, judged again here with the moves, the seam and the taste.
       final found = await widget.booth.auto
-          .partnersFor(from, limit: 16, source: SetSource.wholeLibrary, exclude: [from.id, for (final t in queued) t.id])
+          .partnersFor(from,
+              limit: 16, source: SetSource.wholeLibrary, exclude: [from.id, for (final t in queued) t.id], keyFirst: true)
           .timeout(const Duration(seconds: 40));
       if (!mounted || _fitsFor != from.id) return;
       setState(() {
@@ -464,7 +465,8 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
                           // no such thing. What can honestly be shown is how this one
                           // compares to the best the library had, which is the
                           // question somebody scrolling the list is asking.
-                          final best = found.first.fit;
+                          // (The best by score: those in key come first, not always the best.)
+                          final best = found.map((f) => f.fit).reduce(math.max);
                           return ListView.builder(
                             itemCount: found.length,
                             itemBuilder: (context, i) => _Row(
@@ -1098,10 +1100,14 @@ class _Toggle extends StatelessWidget {
       );
 }
 
-/// A "more" menu of (label, icon, action).
+/// A "more" menu of (label, icon, action). [onOpen] and [onClose] say when its menu
+/// is up: a row that shows this only under the pointer must keep it on while the
+/// pointer is over the menu, or the button is gone before the choice comes back and
+/// Flutter drops the choice on the floor.
 class _Menu extends StatelessWidget {
-  const _Menu({required this.items});
+  const _Menu({required this.items, this.onOpen, this.onClose});
   final List<(String, IconData, Future<void> Function())> items;
+  final VoidCallback? onOpen, onClose;
 
   @override
   Widget build(BuildContext context) => PopupMenuButton<int>(
@@ -1110,7 +1116,12 @@ class _Menu extends StatelessWidget {
         iconSize: 18,
         icon: Icon(Icons.more_horiz, color: Console.quiet),
         color: Console.raised,
-        onSelected: (i) => unawaited(items[i].$3()),
+        onOpened: onOpen,
+        onCanceled: onClose,
+        onSelected: (i) {
+          onClose?.call();
+          unawaited(items[i].$3());
+        },
         itemBuilder: (context) => [
           for (final (i, (label, icon, _)) in items.indexed)
             PopupMenuItem(
@@ -1165,6 +1176,9 @@ class _Row extends StatefulWidget {
 class _RowState extends State<_Row> {
   bool _over = false;
 
+  /// The row's menu is up: it stays mounted though the pointer has left the row.
+  bool _menuOpen = false;
+
   List<(String, IconData, Future<void> Function())> _actions(AppState app) {
     final t = widget.track;
     final pos = widget.queuePos;
@@ -1173,8 +1187,8 @@ class _RowState extends State<_Row> {
       if (widget.booth.auto.running && t.isReady && widget.booth.auto.next?.id != t.id)
         ('Mix in next', Icons.queue_play_next, () => widget.booth.auto.swapNext(t)),
       if (pos == null) ...[
-        ('Add to the queue', Icons.playlist_add, () => app.addTrack(t)),
-        ('Add as the next', Icons.playlist_play, () => app.addTrack(t, mode: 'next')),
+        ('Add to the queue', Icons.playlist_add, () => _toQueue(app)),
+        ('Add as the next', Icons.playlist_play, () => _toQueue(app, mode: 'next')),
       ] else ...[
         ('Move to the top', Icons.vertical_align_top, () => app.moveInQueue(pos, 0)),
         ('Take out of the queue', Icons.remove_circle_outline,
@@ -1188,6 +1202,52 @@ class _RowState extends State<_Row> {
           await widget.booth.parts.want(t, 'drums', byHand: true);
         }),
     ];
+  }
+
+  /// Onto a queue: the one playing when it is the only one, else a choice of them
+  /// (the one playing first and marked), at the end or as the next.
+  Future<void> _toQueue(AppState app, {String mode = 'end'}) async {
+    final t = widget.track;
+    final messenger = ScaffoldMessenger.of(context);
+    final queues = [
+      ...app.queues.where((q) => q.id == app.activeQueue?.id),
+      ...app.queues.where((q) => q.id != app.activeQueue?.id),
+    ];
+    Queue? picked;
+    if (queues.length <= 1) {
+      picked = queues.firstOrNull;
+    } else {
+      picked = await showDialog<Queue>(
+        context: context,
+        builder: (context) => SimpleDialog(
+          backgroundColor: Console.panel,
+          title: Text(mode == 'next' ? 'NEXT IN' : 'ADD TO', style: Console.label(10, color: Console.ink)),
+          children: [
+            for (final q in queues)
+              SimpleDialogOption(
+                onPressed: () => Navigator.of(context).pop(q),
+                child: Row(children: [
+                  Icon(q.id == app.activeQueue?.id ? Icons.play_arrow : Icons.queue_music, size: 15, color: Console.quiet),
+                  const SizedBox(width: 10),
+                  Expanded(child: Text(q.name, style: Mag.typewriter(13, color: Console.ink))),
+                  Text('${q.total}', style: Mag.typewriter(11, color: Console.quiet)),
+                ]),
+              ),
+          ],
+        ),
+      );
+      if (picked == null || !mounted) return;
+    }
+    try {
+      if (picked == null) {
+        await app.addTrack(t, mode: mode);
+      } else {
+        await app.addTracksTo(picked, [t], mode: mode);
+      }
+      messenger.say(snack(Text(mode == 'next' ? 'Next in ${picked?.name ?? 'the queue'}' : 'Added to ${picked?.name ?? 'the queue'}')));
+    } catch (e) {
+      messenger.say(problem(e));
+    }
   }
 
   Future<void> _toPlaylist(AppState app) async {
@@ -1333,7 +1393,14 @@ class _RowState extends State<_Row> {
                       textAlign: TextAlign.right,
                       style: Mag.typewriter(10.5, color: Console.faint)),
                 ),
-              if (_over || widget.roomy) _Menu(items: _actions(app)),
+              if (_over || _menuOpen || widget.roomy)
+                _Menu(
+                  items: _actions(app),
+                  onOpen: () => setState(() => _menuOpen = true),
+                  onClose: () {
+                    if (mounted) setState(() => _menuOpen = false);
+                  },
+                ),
             ],
           ),
         ),
@@ -1409,41 +1476,47 @@ class _Facts extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<TrackTiming?>(
-      future: booth.timing.of(track),
-      initialData: booth.timing.peek(track.id),
-      builder: (context, snap) {
-        final tm = snap.data;
-        if (tm == null) return SizedBox(width: roomy ? 76 : 40);
-        final master = booth.master.timing;
-        final shown = booth.master.bpm;
-        final tempoOk = tm.bpm != null && shown != null && Booth.syncRatio(tm.bpm!, shown) != null;
-        final keyOk = master != null && tm.inKeyWith(master);
-        final good = Console.deck(booth.master.name);
-        return SizedBox(
-          width: roomy ? 116 : null,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              DataMarks(booth: booth, track: track, timing: tm, size: 5),
-              const SizedBox(width: 6),
-              if (tm.bpm != null)
-                Text(tm.bpm!.toStringAsFixed(0),
-                    style: Mag.numerals(14, color: tempoOk ? good : Console.quiet)),
-              if (tm.camelot != null) ...[
+    // The tempo and key on file first, for the whole crate in one ask; the record's
+    // whole analysis (its marks, and the sort by how well it follows) as it comes,
+    // two at a time behind whatever a deck is asking for.
+    return FutureBuilder<TrackFacts?>(
+      future: booth.facts.of(track),
+      initialData: booth.facts.peek(track.id),
+      builder: (context, facts) => FutureBuilder<TrackTiming?>(
+        future: booth.timing.later(track),
+        initialData: booth.timing.peek(track.id),
+        builder: (context, snap) {
+          final tm = snap.data, f = facts.data;
+          final bpm = tm?.bpm ?? f?.bpm, camelot = tm?.camelot ?? f?.camelot;
+          if (bpm == null && camelot == null && tm == null) return SizedBox(width: roomy ? 76 : 40);
+          final shown = booth.master.bpm;
+          final tempoOk = bpm != null && shown != null && Booth.syncRatio(bpm, shown) != null;
+          final keyOk = camelotNear(camelot, booth.master.timing?.camelot);
+          final good = Console.deck(booth.master.name);
+          return SizedBox(
+            width: roomy ? 116 : null,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                DataMarks(booth: booth, track: track, timing: tm, size: 5),
                 const SizedBox(width: 6),
-                SizedBox(
-                  width: 28,
-                  child: Text(tm.camelot!,
-                      textAlign: TextAlign.right,
-                      style: Mag.typewriter(10.5, color: keyOk ? good : Console.faint, bold: true)),
-                ),
+                if (bpm != null)
+                  Text(bpm.toStringAsFixed(0), style: Mag.numerals(14, color: tempoOk ? good : Console.quiet)),
+                if (camelot != null) ...[
+                  const SizedBox(width: 6),
+                  SizedBox(
+                    width: 28,
+                    child: Text(camelot,
+                        textAlign: TextAlign.right,
+                        style: Mag.typewriter(10.5, color: keyOk ? good : Console.faint, bold: true)),
+                  ),
+                ],
               ],
-            ],
-          ),
-        );
-      },
+            ),
+          );
+        },
+      ),
     );
   }
 }

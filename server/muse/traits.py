@@ -236,11 +236,27 @@ def _traits(row: dict) -> dict:
             "sound": sound}
 
 
+def near_key(ca: str | None, cb: str | None) -> bool:
+    """In a key that mixes with the other: the same, a step either way on the wheel,
+    or the relative major or minor (the app's camelotNear)."""
+    if not ca or not cb or len(ca) < 2 or len(cb) < 2:
+        return False
+    try:
+        na, nb = int(ca[:-1]), int(cb[:-1])
+    except ValueError:
+        return False
+    if ca[-1] == cb[-1]:
+        return (nb - na) % 12 in (0, 1, 11)
+    return na == nb
+
+
 def partners(user_id: int, from_id: int, exclude: set[int], limit: int = 12,
-             wanted_step: float = 0.0, avoid_artists: set[str] = frozenset()) -> list[dict]:
+             wanted_step: float = 0.0, avoid_artists: set[str] = frozenset(),
+             in_key: bool = False) -> list[dict]:
     """The records in this person's library that would follow [from_id] best, by
     what is known of each — best first, never one in [exclude], with the same artist
-    as any in [avoid_artists] (the records lately played) marked down."""
+    as any in [avoid_artists] (the records lately played) marked down. [in_key]: only
+    those in a key that mixes with its own (near_key)."""
     got = _rows(user_id, [from_id])
     if not got:
         return []
@@ -249,6 +265,8 @@ def partners(user_id: int, from_id: int, exclude: set[int], limit: int = 12,
     out = []
     for row in _rows(user_id):
         if row["id"] == from_id or row["id"] in exclude:
+            continue
+        if in_key and not near_key(a.get("camelot"), row.get("camelot")):
             continue
         b = _traits(row)
         score, words = judge(a, b, wanted_step)

@@ -601,8 +601,14 @@ class AutoMix extends ChangeNotifier {
   /// house's coarse pick of a few dozen, judged again here with everything the set
   /// planner reads — the seam, the sound, the move the transition planner would make
   /// — best first.
+  ///
+  /// [keyFirst] (the crate's FITS): the records in a key that mixes with [from]'s —
+  /// the same, a step either way on the wheel, its relative major or minor — ahead
+  /// of every other, each lot best first. The house is asked for the library's
+  /// records in key as well, since its own pick weighs the key at a sixth of the
+  /// score and can leave every one of them out.
   Future<List<({Track track, double fit, String why})>> partnersFor(Track from,
-      {int limit = 6, SetSource? source, Iterable<int> exclude = const []}) async {
+      {int limit = 6, SetSource? source, Iterable<int> exclude = const [], bool keyFirst = false}) async {
     final here = _tracks.indexWhere((t) => t.id == from.id);
     final before = here < 0 ? _before() : [for (var i = math.max(0, here - 3); i < here; i++) _tracks[i]];
     final n = _tracks.length;
@@ -645,9 +651,24 @@ class AutoMix extends ChangeNotifier {
         return const [];
       }
     }
+    if (keyFirst && (pool.library || pool == SetSource.wholeLibrary)) {
+      try {
+        final inKey = await booth.api
+            .partners(from.id,
+                exclude: [for (final t in _tracks) t.id, ...exclude],
+                limit: 16,
+                step: wanted,
+                avoid: {for (final t in [from, ...before]) ...t.artists},
+                inKey: true)
+            .timeout(const Duration(seconds: 12));
+        final have = {for (final p in coarse) p.track.id};
+        coarse = [...coarse, for (final p in inKey) if (have.add(p.track.id)) p];
+      } catch (_) {}
+    }
     if (coarse.isEmpty) return const [];
     final ta = await booth.timing.of(from).timeout(const Duration(seconds: 10), onTimeout: () => null);
-    if (ta == null) return coarse.take(limit).toList();
+    if (ta == null && !keyFirst) return coarse.take(limit).toList();
+    if (ta == null) return (await _keyFirst(from, null, coarse)).take(limit).toList();
     // The fine judging needs each one's timing; asked for together, within reason.
     await Future.wait([
       for (final p in coarse) booth.timing.of(p.track).timeout(const Duration(seconds: 10), onTimeout: () => null),
@@ -670,7 +691,22 @@ class AutoMix extends ChangeNotifier {
       fine.add((track: p.track, fit: f.score, why: f.why));
     }
     fine.sort((x, y) => y.fit.compareTo(x.fit));
+    if (keyFirst) return (await _keyFirst(from, ta, fine)).take(limit).toList();
     return fine.take(limit).toList();
+  }
+
+  /// [found] with those in a key that mixes with [from]'s first, each lot in the order
+  /// it came: the keys from the records' analyses where they are here, else from what
+  /// the house has on file.
+  Future<List<({Track track, double fit, String why})>> _keyFirst(
+      Track from, TrackTiming? ta, List<({Track track, double fit, String why})> found) async {
+    await Future.wait([booth.facts.of(from), for (final p in found) booth.facts.of(p.track)])
+        .timeout(const Duration(seconds: 8), onTimeout: () => const []);
+    String? keyOf(Track t, TrackTiming? tm) => tm?.camelot ?? booth.facts.peek(t.id)?.camelot;
+    final k = keyOf(from, ta ?? booth.timing.peek(from.id));
+    if (k == null) return found;
+    bool near(Track t) => camelotNear(k, keyOf(t, booth.timing.peek(t.id)));
+    return [for (final p in found) if (near(p.track)) p, for (final p in found) if (!near(p.track)) p];
   }
 
   /// How well the transition planner could mix [a] into [b], from what is known

@@ -220,6 +220,17 @@ class ApiClient {
           await net.get(_u('/tracks/$trackId/analysis?structure=1'), headers: _headers))
       as Map<String, dynamic>);
 
+  /// Tempo and key of each of [ids] the house has measured, in one ask (see
+  /// server/muse/routes_booth.py record_traits).
+  Future<Map<int, TrackFacts>> facts(Iterable<int> ids) async {
+    final d = await _decode(await net.get(_u('/booth/traits', {'ids': ids.join(',')}), headers: _headers))
+        as Map<String, dynamic>;
+    return {
+      for (final e in (d['traits'] as Map<String, dynamic>).entries)
+        int.parse(e.key): TrackFacts.fromJson(e.value as Map<String, dynamic>),
+    };
+  }
+
   // ---------------- the pool ----------------
   /// Everything the pool screen shows: the computers, what each is doing, what is
   /// waiting, the pauses. See server/muse/pool.py.
@@ -256,7 +267,11 @@ class ApiClient {
   /// step in loudness the set's arc wants (0 to 1 scale); [avoid] artists lately
   /// played. Each with the house's score and its words.
   Future<List<({Track track, double fit, String why})>> partners(int fromTrack,
-      {Iterable<int> exclude = const [], int limit = 12, double step = 0, Iterable<String> avoid = const []}) async {
+      {Iterable<int> exclude = const [],
+      int limit = 12,
+      double step = 0,
+      Iterable<String> avoid = const [],
+      bool inKey = false}) async {
     final d = await _decode(await net.get(
         _u('/booth/partners', {
           'from_track': fromTrack,
@@ -264,6 +279,7 @@ class ApiClient {
           'limit': limit,
           'step': step,
           'avoid': avoid.join(','),
+          if (inKey) 'in_key': 'true',
         }),
         headers: _headers)) as Map<String, dynamic>;
     return [

@@ -173,6 +173,43 @@ void main() {
       expect(mixer.claims, ['A', 'B']);
     });
 
+    test("the crate's FITS: the records in a key that mixes come first", () async {
+      // On: 8A. The house's pick likes a record in 2B best (a clash); in key, 9A and
+      // 8B (a step on the wheel, the relative major) are asked for as well.
+      Map<String, Object?> p(int id, double fit) => {
+            'track': {'id': id, 'title': 'Song $id', 'artists': ['Artist $id'], 'state': 'ready',
+                'stream_url': '/tracks/$id/stream', 'source': 'youtube'},
+            'fit': fit,
+            'why': ''
+          };
+      final asked = <String>[];
+      useThisClientInstead(MockClient((r) async {
+        final json = {'content-type': 'application/json'};
+        if (r.url.path == '/booth/partners') {
+          final inKey = r.url.queryParameters['in_key'] == 'true';
+          asked.add(inKey ? 'in key' : 'all');
+          return http.Response(
+              jsonEncode({'partners': inKey ? [p(3, 1.0), p(4, 0.9)] : [p(2, 1.5), p(3, 1.0)]}), 200,
+              headers: json);
+        }
+        if (r.url.path == '/booth/traits') {
+          return http.Response(jsonEncode({'traits': {
+            '1': {'bpm': 124, 'camelot': '8A', 'key_confidence': 0.9},
+            '2': {'bpm': 124, 'camelot': '2B', 'key_confidence': 0.9},
+            '3': {'bpm': 124, 'camelot': '9A', 'key_confidence': 0.9},
+            '4': {'bpm': 124, 'camelot': '8B', 'key_confidence': 0.9},
+          }}), 200, headers: json);
+        }
+        return http.Response(jsonEncode({'detail': 'no'}), 404, headers: json);
+      }));
+      addTearDown(() => useThisClientInstead(http.Client()));
+      final found = await booth.auto.partnersFor(song(1), limit: 16, source: SetSource.wholeLibrary, keyFirst: true);
+      expect([for (final f in found) f.track.id], [3, 4, 2], reason: 'in key first, each lot best first');
+      expect(asked, containsAll(['all', 'in key']));
+      final plain = await booth.auto.partnersFor(song(1), limit: 16, source: SetSource.wholeLibrary);
+      expect([for (final f in plain) f.track.id], [2, 3], reason: 'the automix keeps its own judging');
+    });
+
     test('a part goes on the platter in the record\'s place, or says it is being made',
         () async {
       // The server makes a part the first time anybody asks and answers 202 until it

@@ -55,17 +55,40 @@ def feedback_list(limit: int = 200, user: dict = Depends(current_user)):
 
 @router.get("/partners")
 def partners(from_track: int, exclude: str = "", limit: int = 12, step: float = 0.0,
-             avoid: str = "", user: dict = Depends(current_user)):
+             avoid: str = "", in_key: bool = False, user: dict = Depends(current_user)):
     """The records in this person's library that would follow [from_track] best, by
     what the house knows of each (track_traits): its tempo, its key, its loudness,
     how it sounds. Coarse — the app judges the handful sent back finely, with the
     voices and the moves. [exclude] is what is in the queue already, comma-separated;
     [step] the step in loudness (0 to 1 scale) the set's arc wants here; [avoid] the
-    artists lately played, comma-separated."""
+    artists lately played, comma-separated; [in_key] only records in a key that mixes
+    with its own — the same, a step on the wheel, the relative major or minor."""
     ids = {int(x) for x in exclude.split(",") if x.strip().lstrip("-").isdigit()}
     return {"partners": traits.partners(
         user["id"], from_track, ids, limit=limit, wanted_step=step,
-        avoid_artists={s for s in avoid.split(",") if s.strip()})}
+        avoid_artists={s for s in avoid.split(",") if s.strip()}, in_key=in_key)}
+
+
+@router.get("/traits")
+def record_traits(ids: str = "", user: dict = Depends(current_user)):
+    """Tempo and key of each record named ([ids], comma-separated, up to a thousand),
+    from what the house already knows (track_traits): one look in the database for a
+    whole crate. The crate asked each record's full analysis for these two numbers,
+    and a record not yet measured by the house's current reading is seconds of work —
+    a crate's worth at once queued behind two turns, most told to come back, and the
+    crate stood with no tempo and no key on most of its records. A record the house
+    has not measured at all is left out."""
+    want = [i for i in (_int(x) for x in ids.split(",")[:1000]) if i is not None]
+    if not want:
+        return {"traits": {}}
+    rows = db.all_(
+        """select t.id, coalesce(x.bpm, t.bpm) as bpm, x.camelot, x.key_confidence
+             from tracks t left join track_traits x on x.track_id = t.id
+            where t.id = any(%s) and (x.track_id is not null or t.bpm is not null)""",
+        (want,))
+    return {"traits": {str(r["id"]): {"bpm": r["bpm"], "camelot": r["camelot"],
+                                      "key_confidence": r["key_confidence"] or 0.0}
+                       for r in rows}}
 
 
 # ------------------------------------------------------------------ sets from a pool
