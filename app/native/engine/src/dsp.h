@@ -161,6 +161,8 @@ struct Limiter {
     delay.assign(look * 2 + 2, 0.f);
     release = (float)std::exp(-1.0 / (0.2 * rate));
   }
+  // How many frames late a sample comes out.
+  size_t delayFrames() const { return look + 1; }
   void run(float* lr, int frames) {
     for (int i = 0; i < frames; i++) {
       float l = lr[i * 2], r = lr[i * 2 + 1];

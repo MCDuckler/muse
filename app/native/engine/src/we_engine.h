@@ -145,6 +145,29 @@ typedef struct {
 } we_deck_state;
 
 WE_API void we_deck_read(int deck, we_deck_state* out);
+
+// ---- what is heard, measured (tap.h) ----------------------------------------
+
+// Buses: a deck (0..WE_DECKS-1, its output post fader) or the master (WE_MASTER).
+#define WE_MASTER WE_DECKS
+#define WE_SPECTRUM 32
+// Each 0..1 against a fixed scale (a mastered record's loud near 1). The levels are
+// the latest row heard by `to`; the hits (kick, snare, hat, onset) and the peak the
+// most of every row heard in (from, to], so a hit between two reads is still seen.
+typedef struct {
+  double at;            // when the latest row is heard, we_now() time
+  float sub, low, mid, high, air;
+  float kick, snare, hat, onset;
+  float rms, peak;
+  float spectrum[WE_SPECTRUM];  // the master's only: 30 Hz .. 16 kHz, log-spaced
+  int32_t rows;         // rows in the span
+} we_features_state;
+// Measuring is on while asked: from the first call, until ten seconds after the
+// last. Returns 1 when there was a row heard by `to`, else 0 (and out zeroed).
+WE_API int we_features(int bus, double from, double to, we_features_state* out);
+// The last n mono samples of a bus heard by `at` (we_now() time), at the engine's
+// rate. Returns n, or 0 where they are not (or no longer) there.
+WE_API int we_scope(int bus, double at, float* out, int n);
 // Where the deck is heard right now (heard + time since × rate), source seconds.
 WE_API double we_deck_position(int deck);
 

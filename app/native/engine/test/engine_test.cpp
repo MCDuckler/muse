@@ -18,6 +18,7 @@ static int failures = 0;
 #define CHECK(cond, ...) do { if (!(cond)) { failures++; std::printf("  FAIL %s:%d: ", __FILE__, __LINE__); std::printf(__VA_ARGS__); std::printf("\n"); } } while (0)
 
 static const int R = 48000;
+static const int kBlockFrames = 256;
 
 // A click track: a burst on every beat (louder on the bar's one), a quiet noise bed.
 struct Track { std::vector<int16_t> pcm; std::vector<double> beats; };
@@ -441,6 +442,100 @@ static void test_brake_master() {
   CHECK(lowest > b0.rate - 0.01, "the follower went down to %.4f×", lowest);
 }
 
+// A kick drum (a falling 55 Hz sine, 150 ms) every half second, hats between.
+static Track kicks(double seconds) {
+  Track t;
+  const int64_t n = (int64_t)(seconds * R);
+  t.pcm.assign((size_t)n * 2, 0);
+  unsigned s = 7;
+  for (double b = 0.5; b < seconds - 0.3; b += 0.5) {
+    t.beats.push_back(b);
+    const int64_t k = (int64_t)std::llround(b * R);
+    for (int j = 0; j < R * 0.15 && k + j < n; j++) {
+      const double tt = (double)j / R;
+      const float x = 0.8f * (float)(std::exp(-tt / 0.06) * std::sin(2 * M_PI * (55 + 80 * std::exp(-tt / 0.01)) * tt));
+      t.pcm[(size_t)(k + j) * 2] = t.pcm[(size_t)(k + j) * 2 + 1] = (int16_t)(x * 32767);
+    }
+    // a hat on the off-beat: noise, 30 ms
+    const int64_t h = k + R / 4;
+    for (int j = 0; j < R * 0.03 && h + j < n; j++) {
+      s = s * 1664525u + 1013904223u;
+      const float x = 0.15f * std::exp(-j / (R * 0.008f)) * (((int)(s >> 16) - 32768) / 32768.f);
+      t.pcm[(size_t)(h + j) * 2] = t.pcm[(size_t)(h + j) * 2 + 1] = (int16_t)std::clamp((t.pcm[(size_t)(h + j) * 2] + x * 32767.f), -32767.f, 32767.f);
+    }
+  }
+  return t;
+}
+
+// The tap: each kick's measure peaks within a few milliseconds of when it is heard,
+// a low-band kill takes the kick and the sub away, the scope gives back the samples.
+static void test_tap() {
+  std::printf("the tap\n");
+  fresh();
+  const Track t = kicks(12);
+  load(0, t);
+  we_features_state f{};
+  we_features(WE_MASTER, 0, 0, &f);
+  we_deck_play(0, 1);
+  std::vector<float> out(kBlockFrames * 2);
+  struct Row { double at; float kick, sub, hat; };
+  std::vector<Row> rows;
+  double last = 0;
+  bool killed = false;
+  float scope[480];
+  int scoped = 0;
+  double scopeErr = 0;
+  while (we_now() < 11.5) {
+    we_render(out.data(), kBlockFrames, nullptr);
+    const double now = we_now();
+    if (!killed && now >= 8.0) { we_deck_eq(0, -40, 0, 0, 0); killed = true; }
+    if (we_features(WE_MASTER, last, now, &f) && f.rows > 0) rows.push_back({f.at, f.kick, f.sub, f.hat});
+    // the scope, read at a kick's start + 10 ms: the last 480 samples end on its 10th ms
+    if (scoped < 3 && now > 2.05 + scoped && now < 2.1 + scoped) {
+      const double kickAt = t.beats[(size_t)(3 + 2 * scoped)];
+      if (we_scope(WE_MASTER, kickAt + 0.010, scope, 480) == 480) {
+        // the master is the deck at -4.5 dB through the limiter: compare shapes, by the
+        // first sample over a threshold
+        int first = -1;
+        for (int i = 0; i < 480; i++) if (std::fabs(scope[i]) > 0.05f) { first = i; break; }
+        scopeErr = std::max(scopeErr, std::fabs((first - 0) / (double)R - 0.0));
+        scoped++;
+      }
+    }
+    last = now;
+  }
+  // per kick before the kill: the row its kick peaks in, against the kick's time
+  // Heard 3 ms after its place in the record: the limiter's look-ahead.
+  const double held = 145.0 / R;
+  std::vector<double> lag, rise;
+  float before = 0, after = 0;
+  for (double b0 : t.beats) {
+    const double b = b0 + held;
+    float top = 0; double at = 0;
+    for (auto& r : rows) if (r.at >= b - 0.02 && r.at < b + 0.12 && r.kick > top) { top = r.kick; at = r.at; }
+    double half = at;
+    for (auto& r : rows) if (r.at >= b - 0.02 && r.at <= at && r.kick >= top * 0.5f) { half = r.at; break; }
+    if (b0 < 7.5) { lag.push_back(at - b); rise.push_back(half - b); before = std::max(before, top); }
+    else if (b0 > 8.2) after = std::max(after, top);
+  }
+  auto span = [](const std::vector<double>& v, double& lo, double& hi) {
+    lo = 1; hi = -1; for (double l : v) { lo = std::min(lo, l); hi = std::max(hi, l); }
+  };
+  double lo, hi, rlo, rhi;
+  span(lag, lo, hi); span(rise, rlo, rhi);
+  std::printf("  kick: over half %.1f..%.1f ms after it is heard, at its top %.1f..%.1f ms; %d rows\n", rlo * 1000, rhi * 1000,
+              lo * 1000, hi * 1000, (int)rows.size());
+  CHECK(rlo >= -0.002 && rhi <= 0.008, "the kick over half %.1f..%.1f ms after", rlo * 1000, rhi * 1000);
+  CHECK(hi <= 0.014, "the kick's top %.1f..%.1f ms after", lo * 1000, hi * 1000);
+  CHECK(before > 0.5f, "kick only reached %.2f", before);
+  std::printf("  kick %.2f before the low kill, %.2f after\n", before, after);
+  CHECK(after < before * 0.15f, "the kill left the kick at %.2f", after);
+  CHECK(scoped == 3, "the scope gave %d of 3", scoped);
+  // The master is heard through the limiter's 3 ms look-ahead (145 frames).
+  std::printf("  scope: the kick starts at sample %.0f of 480 (the limiter holds it 145)\n", scopeErr * R);
+  CHECK(scopeErr * R > 140 && scopeErr * R < 170, "scope off by %.1f ms", scopeErr * 1000 - 3.0);
+}
+
 int main(int argc, char** argv) {
   const std::string only = argc > 1 ? argv[1] : "";
   auto want = [&](const char* name) { return only.empty() || only == name; };
@@ -456,6 +551,7 @@ int main(int argc, char** argv) {
   if (want("long")) test_long_hold();
   if (want("stretch")) test_stretch_switch();
   if (want("octave")) { test_octave(false); test_octave(true); }
+  if (want("tap")) test_tap();
   we_stop();
   std::printf(failures ? "%d FAILED\n" : "all passed\n", failures);
   return failures ? 1 : 0;

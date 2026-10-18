@@ -20,6 +20,7 @@
 // through tempo steps for R2 and R3 at 44.1/48 kHz).
 #include "we_engine.h"
 #include "dsp.h"
+#include "tap.h"
 
 #include "rubberband/RubberBandStretcher.h"
 #define MA_NO_DECODING
@@ -38,6 +39,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 using RubberBand::RubberBandStretcher;
@@ -175,7 +177,56 @@ struct State {
   we_deck_state s{};
 };
 
+// ------------------------------------------------------------------ the tap
+// What is heard, measured (tap.h): every deck's output and the master's, as
+// mono, copied by the audio thread into a ring (a copy and nothing more), measured
+// by a thread of its own, the rows kept for Dart and the stage to read. On while
+// someone asks for features, off ten seconds after the last ask.
+constexpr int kBuses = WE_DECKS + 1;            // the decks, then the master
+constexpr int kTapBits = 16;
+constexpr int64_t kTap = 1 << kTapBits;         // frames of each bus kept: 1.4 s at 48 kHz
+constexpr int kRows = 1024;                     // rows kept per bus: 5.5 s
+constexpr int kBlockTimes = 1024;
+
+struct RowSlot {
+  std::atomic<uint32_t> seq{0};
+  FeatureRow r;
+};
+
+// A block written to the tap: its first frame and when that frame is heard.
+struct BlockTime {
+  std::atomic<int64_t> frame{0};
+  std::atomic<double> at{0};
+};
+
+struct Tap {
+  std::array<std::vector<float>, kBuses> ring;
+  std::atomic<int64_t> written{0};               // frames written to every bus
+  std::array<BlockTime, kBlockTimes> blocks;
+  std::atomic<int64_t> blockCount{0};
+  std::atomic<double> asked{-1e9};               // we_now() of the last ask
+  bool wasOn = false;                            // the audio thread's own
+  // the measuring side
+  std::array<Analyzer, kBuses> analyzers;
+  int64_t read = 0;
+  int64_t origin = 0;                            // the tap frame the analyzers started at
+  int64_t blockAt = 0;                           // the block the measuring is in
+  std::array<std::array<RowSlot, kRows>, kBuses> rows;
+  std::array<std::atomic<int64_t>, kBuses> rowCount{};
+  std::thread thread;
+  std::atomic<bool> running{false};
+  std::atomic<int64_t> restart{0};               // bumped by the audio thread on a gap
+  int64_t restartSeen = 0;
+};
+
 struct Engine {
+  // The sound device's own context: its thread asked for the realtime scheduler
+  // (SCHED_FIFO on Linux, where the audio group's rtprio limit allows it; miniaudio
+  // falls back to a normal thread where it does not), so a split or a build on the
+  // same machine cannot hold the callback up. WETOWL_ENGINE_RT=0 leaves it a normal
+  // thread.
+  ma_context ctx{};
+  bool hasCtx = false;
   int rate = 48000;
   bool device = false;
   ma_device dev{};
@@ -216,6 +267,8 @@ struct Engine {
   float* outScratch[2];
   float tmp[kBlock * 2];
   float trimBuf[8192 * 2];
+  Tap tap;
+  float tapMono[kBuses][kBlock];
 };
 
 Engine* E = nullptr;
@@ -814,6 +867,26 @@ void publish(Deck& d, double at) {
   st.seq.fetch_add(1, std::memory_order_acq_rel);
 }
 
+// The block, as mono, into the tap: each deck's (post fader) and the master's.
+void tapWrite(const float* out, int n, double at) {
+  Tap& t = E->tap;
+  const bool on = now() - t.asked.load(std::memory_order_relaxed) < 10.0;
+  if (!on) { t.wasOn = false; return; }
+  if (!t.wasOn) { t.wasOn = true; t.restart.fetch_add(1, std::memory_order_release); }
+  const int64_t w = t.written.load(std::memory_order_relaxed);
+  for (int b = 0; b < kBuses; b++) {
+    const float* src = b < WE_DECKS ? E->decks[(size_t)b].buf : out;
+    float* dst = t.ring[(size_t)b].data();
+    for (int k = 0; k < n; k++) dst[(size_t)((w + k) & (kTap - 1))] = 0.5f * (src[k * 2] + src[k * 2 + 1]);
+  }
+  const int64_t bc = t.blockCount.load(std::memory_order_relaxed);
+  BlockTime& bt = t.blocks[(size_t)(bc % kBlockTimes)];
+  bt.frame.store(w, std::memory_order_relaxed);
+  bt.at.store(at, std::memory_order_relaxed);
+  t.blockCount.store(bc + 1, std::memory_order_release);
+  t.written.store(w + n, std::memory_order_release);
+}
+
 void block(float* out, int n, float** deckOut, double at) {
   // commands, if Dart is not adding to them this very moment
   if (E->cmdLock.try_lock()) {
@@ -855,6 +928,7 @@ void block(float* out, int n, float** deckOut, double at) {
     E->limiter.run(out, n);
   }
   for (auto& d : E->decks) publish(d, at);
+  tapWrite(out, n, at);
 }
 
 // t0: when the sound card asked for these frames. Each block is heard `latency`
@@ -887,6 +961,66 @@ void revoiceAll() {
 bool anyKeylocked() {
   for (auto& d : E->decks) if (d.playing && d.keylock && !d.braking) return true;
   return false;
+}
+
+// How much later than its block a bus is heard: a deck's sound still goes through
+// the master's limiter, which holds it back by its look-ahead.
+double busDelay(int bus) {
+  return bus < WE_DECKS && !E->split ? (double)E->limiter.delayFrames() / E->rate : 0.0;
+}
+
+// When tap frame f is heard: from the block it was written in.
+double tapTimeOf(Tap& t, int64_t f) {
+  const int64_t count = t.blockCount.load(std::memory_order_acquire);
+  if (count == 0) return 0;
+  if (t.blockAt < count - kBlockTimes + 1) t.blockAt = count - kBlockTimes + 1;
+  if (t.blockAt < 0) t.blockAt = 0;
+  if (t.blockAt >= count) t.blockAt = count - 1;
+  const int64_t oldest = std::max<int64_t>(0, count - kBlockTimes + 1);
+  while (t.blockAt > oldest && t.blocks[(size_t)(t.blockAt % kBlockTimes)].frame.load(std::memory_order_relaxed) > f) t.blockAt--;
+  while (t.blockAt + 1 < count && t.blocks[(size_t)((t.blockAt + 1) % kBlockTimes)].frame.load(std::memory_order_relaxed) <= f) t.blockAt++;
+  const BlockTime& b = t.blocks[(size_t)(t.blockAt % kBlockTimes)];
+  return b.at.load(std::memory_order_relaxed) + (double)(f - b.frame.load(std::memory_order_relaxed)) / E->rate;
+}
+
+// Measures what the tap holds that has not been: the measuring thread's, or the
+// offline render's own after each render.
+void tapMeasure() {
+  Tap& t = E->tap;
+  const int64_t restart = t.restart.load(std::memory_order_acquire);
+  const int64_t w = t.written.load(std::memory_order_acquire);
+  if (restart != t.restartSeen) {
+    // Off and on again: the measures start afresh from what is new.
+    t.restartSeen = restart;
+    for (int b = 0; b < kBuses; b++) t.analyzers[(size_t)b].init(E->rate, b == WE_DECKS);
+    t.read = t.origin = w;
+  }
+  // Fallen behind by more than the ring holds: start afresh from what is still there.
+  if (w - t.read > kTap - 4096) {
+    t.read = t.origin = w - kTap / 2;
+    for (int b = 0; b < kBuses; b++) t.analyzers[(size_t)b].init(E->rate, b == WE_DECKS);
+  }
+  while (t.read < w) {
+    const int n = (int)std::min<int64_t>(kBlock, w - t.read);
+    for (int b = 0; b < kBuses; b++) {
+      float* m = E->tapMono[b];
+      const float* ring = t.ring[(size_t)b].data();
+      for (int k = 0; k < n; k++) m[k] = ring[(size_t)((t.read + k) & (kTap - 1))];
+      // The analyzer counts frames from its own start, which was tap frame `origin`.
+      t.analyzers[(size_t)b].feed(m, n, [&](const FeatureRow& row0, int64_t hopEnd) {
+        FeatureRow row = row0;
+        row.at = tapTimeOf(t, t.origin + hopEnd - 1) + busDelay(b);
+        auto& count = t.rowCount[(size_t)b];
+        const int64_t c = count.load(std::memory_order_relaxed);
+        RowSlot& slot = t.rows[(size_t)b][(size_t)(c % kRows)];
+        slot.seq.fetch_add(1, std::memory_order_acq_rel);
+        slot.r = row;
+        slot.seq.fetch_add(1, std::memory_order_acq_rel);
+        count.store(c + 1, std::memory_order_release);
+      });
+    }
+    t.read += n;
+  }
 }
 
 void callback(ma_device*, void* out, const void*, ma_uint32 frames) {
@@ -961,8 +1095,16 @@ WE_API int we_start(int rate, int device) {
     cfg.performanceProfile = period <= 256 ? ma_performance_profile_low_latency : ma_performance_profile_conservative;
     cfg.dataCallback = callback;
     cfg.noClip = MA_TRUE;
-    if (ma_device_init(nullptr, &cfg, &E->dev) != MA_SUCCESS) {
+    {
+      const char* rt = std::getenv("WETOWL_ENGINE_RT");
+      const bool wantRt = !(rt && rt[0] == '0');
+      ma_context_config cc = ma_context_config_init();
+      cc.threadPriority = wantRt ? ma_thread_priority_realtime : ma_thread_priority_highest;
+      E->hasCtx = ma_context_init(nullptr, 0, &cc, &E->ctx) == MA_SUCCESS;
+    }
+    if (ma_device_init(E->hasCtx ? &E->ctx : nullptr, &cfg, &E->dev) != MA_SUCCESS) {
       lastError = "no sound card would open";
+      if (E->hasCtx) ma_context_uninit(&E->ctx);
       delete E; E = nullptr;
       return 1;
     }
@@ -975,7 +1117,9 @@ WE_API int we_start(int rate, int device) {
     if (std::strcmp(st, "finer") == 0) E->stretchPinned = true;
   }
   { const char* sp = std::getenv("WETOWL_ENGINE_SPLIT"); E->split = sp && sp[0] == '1'; }
+  { const char* raw = std::getenv("WETOWL_TAP_RAW"); Analyzer::raw = raw && raw[0] == '1'; }
   E->scratchL.assign(8192, 0.f); E->scratchR.assign(8192, 0.f);
+  for (auto& r : E->tap.ring) r.assign((size_t)kTap, 0.f);
   E->limiter.init(E->rate);
   E->master.now = E->master.target = 1;
   for (int i = 0; i < WE_DECKS; i++) {
@@ -988,8 +1132,19 @@ WE_API int we_start(int rate, int device) {
   if (E->device && ma_device_start(&E->dev) != MA_SUCCESS) {
     lastError = "the sound card would not start";
     ma_device_uninit(&E->dev);
+    if (E->hasCtx) { ma_context_uninit(&E->ctx); E->hasCtx = false; }
     delete E; E = nullptr;
     return 2;
+  }
+  if (E->device) {
+    // The measuring, every couple of milliseconds: nothing to do while the tap is off.
+    E->tap.running = true;
+    E->tap.thread = std::thread([] {
+      while (E->tap.running.load()) {
+        tapMeasure();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      }
+    });
   }
   return 0;
 }
@@ -997,6 +1152,9 @@ WE_API int we_start(int rate, int device) {
 WE_API void we_stop(void) {
   if (!E) return;
   if (E->device) ma_device_uninit(&E->dev);
+  if (E->hasCtx) { ma_context_uninit(&E->ctx); E->hasCtx = false; }
+  E->tap.running = false;
+  if (E->tap.thread.joinable()) E->tap.thread.join();
   freeRetired();
   for (auto* s : E->sources) delete s;
   for (auto& d : E->decks) delete d.beats;
@@ -1029,6 +1187,7 @@ WE_API void we_render(float* out, int frames, float** decks) {
   if (!E || E->device) return;
   if (E->revoice) { E->revoice = false; revoiceAll(); }
   renderAll(out, frames, decks);
+  tapMeasure();
   freeRetired();
 }
 
@@ -1142,6 +1301,69 @@ WE_API void we_deck_read(int deck, we_deck_state* out) {
       return;
     }
   }
+}
+
+WE_API int we_features(int bus, double from, double to, we_features_state* out) {
+  if (!out) return 0;
+  *out = we_features_state{};
+  if (!E || bus < 0 || bus >= kBuses) return 0;
+  Tap& t = E->tap;
+  t.asked.store(now(), std::memory_order_relaxed);
+  const int64_t count = t.rowCount[(size_t)bus].load(std::memory_order_acquire);
+  bool have = false;
+  int inSpan = 0;
+  for (int64_t i = count - 1; i >= 0 && i > count - kRows + 8; i--) {
+    RowSlot& slot = t.rows[(size_t)bus][(size_t)(i % kRows)];
+    FeatureRow r;
+    bool ok = false;
+    for (int tries = 0; tries < 100 && !ok; tries++) {
+      const uint32_t a = slot.seq.load(std::memory_order_acquire);
+      if (a & 1) continue;
+      r = slot.r;
+      ok = slot.seq.load(std::memory_order_acquire) == a;
+    }
+    if (!ok || r.at > to) continue;
+    if (!have) {
+      // The latest heard by `to`: the levels and the spectrum.
+      have = true;
+      out->at = r.at;
+      out->sub = r.sub; out->low = r.low; out->mid = r.mid; out->high = r.high; out->air = r.air;
+      out->rms = r.rms;
+      std::copy(std::begin(r.spectrum), std::end(r.spectrum), out->spectrum);
+      out->kick = r.kick; out->snare = r.snare; out->hat = r.hat; out->onset = r.onset; out->peak = r.peak;
+    }
+    if (r.at <= from) break;
+    // The hits: the most of each over the span, so one between two reads is seen.
+    inSpan++;
+    out->kick = std::max(out->kick, r.kick); out->snare = std::max(out->snare, r.snare);
+    out->hat = std::max(out->hat, r.hat); out->onset = std::max(out->onset, r.onset);
+    out->peak = std::max(out->peak, r.peak);
+  }
+  out->rows = inSpan;
+  return have ? 1 : 0;
+}
+
+WE_API int we_scope(int bus, double at, float* out, int n) {
+  if (!E || !out || n <= 0 || bus < 0 || bus >= kBuses || n > kTap / 4) return 0;
+  Tap& t = E->tap;
+  t.asked.store(now(), std::memory_order_relaxed);
+  const int64_t count = t.blockCount.load(std::memory_order_acquire);
+  const int64_t w = t.written.load(std::memory_order_acquire);
+  if (count == 0) return 0;
+  // The block heard at `at`, newest first.
+  int64_t frame = -1;
+  for (int64_t i = count - 1; i >= 0 && i > count - kBlockTimes + 8; i--) {
+    const BlockTime& b = t.blocks[(size_t)(i % kBlockTimes)];
+    const double bat = b.at.load(std::memory_order_relaxed);
+    if (bat <= at) { frame = b.frame.load(std::memory_order_relaxed) + (int64_t)((at - bat - busDelay(bus)) * E->rate); break; }
+  }
+  if (frame < 0) return 0;
+  frame = std::min(frame, w);
+  const int64_t first = frame - n;
+  if (first < 0 || first < w - kTap + 4096) return 0;
+  const float* ring = t.ring[(size_t)bus].data();
+  for (int k = 0; k < n; k++) out[k] = ring[(size_t)((first + k) & (kTap - 1))];
+  return n;
 }
 
 WE_API double we_deck_position(int deck) {

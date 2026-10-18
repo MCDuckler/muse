@@ -2,11 +2,13 @@
 // 16-bit mono at 44.1 kHz, in memory), and every tick the stretch from where the
 // needle was to where it is, at the channel's level, the two decks summed.
 //
-// Decoded rather than tapped off the engine: the show's clock is the ear's — the
-// deck's position less the stretcher's latency plus the performer's offset — and a
-// slice read at that clock lands on the picture where the beat does, on any
-// desk, with no audio capture to set up. The stretcher's tempo shows as the slice
-// growing and shrinking, which is what the ear hears too.
+// Where the booth plays on its own engine, the samples are the engine's instead
+// ([heard]: the master as the room hears it, every EQ and echo in it). Elsewhere —
+// the old engine, a stage in another process — decoded: the show's clock is the
+// ear's — the deck's position less the stretcher's latency plus the performer's
+// offset — and a slice read at that clock lands on the picture where the beat does,
+// on any desk, with no audio capture to set up. The stretcher's tempo shows as the
+// slice growing and shrinking, which is what the ear hears too.
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
@@ -29,6 +31,10 @@ class DeckPcm {
   /// process) the deck's own stream is read, with [headers].
   PcmSource? source;
   Map<String, String> headers = const {};
+
+  /// The samples since the last tick off the booth's engine, or null where it has
+  /// none (then the records are decoded here).
+  Int16List? Function()? heard;
 
   final _records = <int, Int16List>{};
   final _loading = <int>{};
@@ -59,6 +65,8 @@ class DeckPcm {
   /// The samples since the last tick, both decks through their faders; null while
   /// nothing is decoded yet.
   Int16List? slice(ShowState st) {
+    final h = heard?.call();
+    if (h != null) return h;
     Int32List? mix;
     var longest = 0;
     for (final d in [st.a, st.b]) {

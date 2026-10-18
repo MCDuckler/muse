@@ -61,11 +61,13 @@ class _Follower {
 
 class ShowDynamics {
   final _sub = _Follower(), _low = _Follower(), _mid = _Follower(), _high = _Follower(), _air = _Follower();
-  final _kick = _Follower(), _onset = _Follower();
+  final _kick = _Follower(), _onset = _Follower(), _snare = _Follower(), _hat = _Follower();
   double _loud = 0, _exposure = 0.7, _energy = 0;
 
-  /// One frame: the `dyn.*` for [st], [dt] seconds after the last.
-  Map<String, double> frame(ShowState st, double dt) {
+  /// One frame: the `dyn.*` for [st], [dt] seconds after the last. [heard]: the
+  /// sound is the engine's measure (show_heard.dart), which has the snare's and the
+  /// hats' own onsets; the pulse has not, and they are guessed from the bands.
+  Map<String, double> frame(ShowState st, double dt, {bool heard = false}) {
     dt = dt.clamp(1 / 240, 0.1);
     final a = st.audio;
     _sub.feed(a.sub, dt, release: 0.15);
@@ -73,14 +75,21 @@ class ShowDynamics {
     _mid.feed(a.mid, dt, release: 0.1);
     _high.feed(a.high, dt, release: 0.08);
     _air.feed(a.air, dt, release: 0.06);
-    _kick.feed(a.kick, dt, release: 0.1, fall: 0.18, sensitivity: 1.3);
+    // The pulse's kick is blurred over 20 ms frames and wants lifting; the heard one
+    // is sharp, and lifted it hits on a rolling bass's every sixteenth too.
+    _kick.feed(a.kick, dt, release: 0.1, fall: 0.18, sensitivity: heard ? 1.0 : 1.3);
     _onset.feed(a.onset, dt, release: 0.08, fall: 0.15);
+    _snare.feed(a.snare, dt, release: 0.08, fall: 0.18);
+    _hat.feed(a.hat, dt, release: 0.06, fall: 0.12);
 
     // The kick hit: the kick channel's leap, backed by the bass; the snare's from
-    // the middle; the top's from the air and the highs.
+    // the middle (or its own onsets, where heard); the top's from the air and the
+    // highs (or the hats').
     final kickHit = math.max(_kick.hit, math.min(_sub.hit, _low.hit) * 0.8);
-    final snareHit = math.max(_mid.hit, _onset.hit * 0.7) * (1 - kickHit * 0.5);
-    final topHit = math.max(_air.hit, _high.hit * 0.8);
+    final snareHit = heard
+        ? math.max(_snare.hit, _mid.hit * 0.5) * (1 - kickHit * 0.5)
+        : math.max(_mid.hit, _onset.hit * 0.7) * (1 - kickHit * 0.5);
+    final topHit = heard ? math.max(_hat.hit, _air.hit * 0.8) : math.max(_air.hit, _high.hit * 0.8);
 
     // The loudness, and an exposure that follows it: up in a third of a second,
     // down in two, so a drop lights the room and a breakdown dims it but not to

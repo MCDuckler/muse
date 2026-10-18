@@ -67,6 +67,65 @@ final class EngineLoadState extends Struct {
   external int period;
 }
 
+/// What is heard, measured (we_features_state).
+final class EngineFeaturesState extends Struct {
+  @Double()
+  external double at;
+  @Float()
+  external double sub;
+  @Float()
+  external double low;
+  @Float()
+  external double mid;
+  @Float()
+  external double high;
+  @Float()
+  external double air;
+  @Float()
+  external double kick;
+  @Float()
+  external double snare;
+  @Float()
+  external double hat;
+  @Float()
+  external double onset;
+  @Float()
+  external double rms;
+  @Float()
+  external double peak;
+  @Array(32)
+  external Array<Float> spectrum;
+  @Int32()
+  external int rows;
+}
+
+/// One bus's sound as the room hears it, measured off the engine's output (native/
+/// engine/src/tap.h): each 0..1 on a fixed scale, a mastered record's loud near 1.
+/// The levels are the latest heard; the hits the most of each over the span asked.
+class HeardSound {
+  const HeardSound({
+    required this.at,
+    required this.sub,
+    required this.low,
+    required this.mid,
+    required this.high,
+    required this.air,
+    required this.kick,
+    required this.snare,
+    required this.hat,
+    required this.onset,
+    required this.rms,
+    required this.peak,
+    required this.rows,
+    this.spectrum,
+  });
+  final double at, sub, low, mid, high, air, kick, snare, hat, onset, rms, peak;
+  final int rows;
+
+  /// The master's only: 32 bins from 30 Hz to 16 kHz, log-spaced.
+  final Float32List? spectrum;
+}
+
 /// A deck's state as last read.
 class DeckReading {
   const DeckReading({
@@ -100,6 +159,13 @@ class Engine {
 
   static Engine? _it;
   static bool _tried = false;
+
+  /// The engine if it is running already — never started by asking (the show reads
+  /// what it hears this way, and must not be what starts the booth's sound).
+  static Engine? get started => _it;
+
+  /// The master's bus, for [heard] and [scope]; a deck's is its index.
+  static const master = 4;
 
   /// Turned off for this run (the tests, a desk that asked for the old engine).
   static bool disabled = false;
@@ -253,7 +319,53 @@ class Engine {
   late final _render = _lib.lookupFunction<Void Function(Pointer<Float>, Int32, Pointer<Pointer<Float>>),
       void Function(Pointer<Float>, int, Pointer<Pointer<Float>>)>('we_render');
 
+  late final _features = _lib.lookupFunction<Int32 Function(Int32, Double, Double, Pointer<EngineFeaturesState>),
+      int Function(int, double, double, Pointer<EngineFeaturesState>)>('we_features');
+  late final _scope =
+      _lib.lookupFunction<Int32 Function(Int32, Double, Pointer<Float>, Int32), int Function(int, double, Pointer<Float>, int)>('we_scope');
+
   final Pointer<EngineDeckState> _state = calloc<EngineDeckState>();
+  final Pointer<EngineFeaturesState> _heard = calloc<EngineFeaturesState>();
+  Pointer<Float> _scopeBuf = nullptr;
+  int _scopeCap = 0;
+
+  // ------------------------------------------------------------------ what is heard
+  /// [bus] (a deck's index, or [master]) as heard by [to] (the engine's clock, [now]),
+  /// its hits the most of each since [from]. Null until there is a row: the engine
+  /// starts measuring on the first ask and stops ten seconds after the last.
+  HeardSound? heard(int bus, double from, double to) {
+    if (_features(bus, from, to, _heard) == 0) return null;
+    final f = _heard.ref;
+    return HeardSound(
+      at: f.at,
+      sub: f.sub,
+      low: f.low,
+      mid: f.mid,
+      high: f.high,
+      air: f.air,
+      kick: f.kick,
+      snare: f.snare,
+      hat: f.hat,
+      onset: f.onset,
+      rms: f.rms,
+      peak: f.peak,
+      rows: f.rows,
+      spectrum: bus == master ? Float32List.fromList([for (var i = 0; i < 32; i++) f.spectrum[i]]) : null,
+    );
+  }
+
+  /// The last [n] mono samples of [bus] heard by [at], at the engine's [rate]; null
+  /// where they are not (or no longer) kept.
+  Float32List? scope(int bus, double at, int n) {
+    if (n <= 0) return null;
+    if (n > _scopeCap) {
+      if (_scopeBuf != nullptr) calloc.free(_scopeBuf);
+      _scopeCap = n * 2;
+      _scopeBuf = calloc<Float>(_scopeCap);
+    }
+    if (_scope(bus, at, _scopeBuf, n) != n) return null;
+    return Float32List.fromList(_scopeBuf.asTypedList(n));
+  }
 
   // ------------------------------------------------------------------ decks
   void source(int deck, int slot, int source) => _deckSource(deck, slot, source);
