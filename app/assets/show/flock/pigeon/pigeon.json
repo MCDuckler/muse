@@ -1,0 +1,35 @@
+{
+ "frame": "x forward, y right, z up, metres",
+ "hinge": [
+  0.055,
+  0.03,
+  0.012
+ ],
+ "wingspan": 0.6599999999999999,
+ "lods": [
+  {
+   "name": "near",
+   "verts": 769,
+   "tris": 1478,
+   "offset": 0
+  },
+  {
+   "name": "mid",
+   "verts": 193,
+   "tris": 346,
+   "offset": 38859
+  },
+  {
+   "name": "far",
+   "verts": 54,
+   "tris": 80,
+   "offset": 48462
+  }
+ ],
+ "source": {
+  "title": "Rock Pigeon - Columba livia (MLZ:Bird:65962)",
+  "author": "MooreLab, Moore Laboratory of Zoology, Occidental College",
+  "url": "https://sketchfab.com/3d-models/rock-pigeon-columba-livia-12fac1c431644b7f9480079636aee332",
+  "license": "CC BY 4.0"
+ }
+}
