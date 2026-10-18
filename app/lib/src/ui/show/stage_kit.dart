@@ -12,16 +12,23 @@ class StageKit {
   final SceneBook book;
   final StagePrograms programs;
 
+  static StageKit? _kit;
   static Future<StageKit>? _loading;
 
-  static Future<StageKit> load() => _loading ??= () async {
-        final book = await SceneBook.load();
-        for (final s in book.scenes.values) {
-          for (final l in s.layers) {
-            if (l.sim != null) SimLayer.warm(l.sim!);
-          }
+  /// Read once; the kit itself is kept, not the future that read it — a future
+  /// completed in one test's zone would never deliver to the next test's await.
+  static Future<StageKit> load() {
+    final kit = _kit;
+    if (kit != null) return Future.value(kit);
+    return _loading ??= () async {
+      final book = await SceneBook.load();
+      for (final s in book.scenes.values) {
+        for (final l in s.layers) {
+          if (l.sim != null) SimLayer.warm(l.sim!);
         }
-        final programs = await StagePrograms.load(book);
-        return StageKit(book, programs);
-      }();
+      }
+      final programs = await StagePrograms.load(book);
+      return _kit = StageKit(book, programs);
+    }();
+  }
 }

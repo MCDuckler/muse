@@ -127,6 +127,22 @@ if(WETOWL_ENGINE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../native/engine/CMakeL
     COMPONENT Runtime)
 endif()
 
+# The native stage (native/stage/): the show in OpenGL ES 3 on a thread of its own,
+# shown in the app through runner/stage_texture.cc, and the scenes' sources beside it
+# (it reads them, not Flutter's compiled shaders). Without it the show draws on its
+# Flutter stage as before.
+option(WETOWL_STAGE "Build the native stage" ON)
+if(WETOWL_STAGE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../native/stage/CMakeLists.txt")
+  add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../native/stage" stage)
+  install(TARGETS wetowl_stage
+    LIBRARY DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+  install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../shaders/show/"
+    DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/stage"
+    COMPONENT Runtime
+    FILES_MATCHING PATTERN "*.frag" PATTERN "*.glsl")
+endif()
+
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/linux/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"

@@ -1,7 +1,8 @@
 // The stage over the whole window, in this process: for one screen mirrored to a
 // television, or a look at the show as the room will see it. Esc comes back.
 //
-// Keys: ← → the scene · L hold it · H hit · B blackout · S strobe (held) · F freeze · Esc back.
+// Keys: ← → the scene · L hold it · H hit · B blackout · S strobe (held) · F freeze · I the
+// debug words (which stage draws, why, how fast) · Esc back.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -10,7 +11,8 @@ import 'package:flutter/services.dart';
 import '../../state/booth/booth.dart';
 import '../../state/show/show_feed.dart';
 import '../../state/show/show_state.dart';
-import 'show_canvas.dart';
+import 'native_stage.dart';
+import 'show_debug.dart';
 import 'stage_kit.dart';
 
 Future<void> openStagePage(BuildContext context, Booth booth) => Navigator.of(context, rootNavigator: true).push(
@@ -115,6 +117,10 @@ class _StagePageState extends State<StagePage> {
       Navigator.of(context).maybePop();
       return KeyEventResult.handled;
     }
+    if (e is KeyDownEvent && e.logicalKey == LogicalKeyboardKey.keyI) {
+      ShowDebug.toggle();
+      return KeyEventResult.handled;
+    }
     return widget.onKey.key(e) ? KeyEventResult.handled : KeyEventResult.ignored;
   }
 
@@ -131,7 +137,7 @@ class _StagePageState extends State<StagePage> {
             ? Center(child: Text('The stage could not load its shaders.\n$_trouble'))
             : kit == null
                 ? const SizedBox.shrink()
-                : ShowCanvas(feed: widget.feed, book: kit.book, programs: kit.programs, scale: widget.scale),
+                : StageSurface(feed: widget.feed, book: kit.book, programs: kit.programs, scale: widget.scale),
       ),
     );
   }

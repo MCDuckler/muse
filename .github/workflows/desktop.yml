@@ -165,14 +165,16 @@ jobs:
     if: inputs.platforms == 'all' || inputs.platforms == '' || contains(inputs.platforms, 'linux')
     # The oldest Ubuntu GitHub still runs: see the note at the top.
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - name: What the build needs
         run: |
           sudo apt-get update
-          # The EGL and OpenGL headers are MilkDrop's (app/native/milk).
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libmpv-dev libegl1-mesa-dev libgl1-mesa-dev
+          # The EGL and OpenGL headers are MilkDrop's (app/native/milk); the OpenGL ES
+          # ones are the native stage's (app/native/stage), which builds a second,
+          # ES-flavoured projectM of its own.
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libmpv-dev libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev
       - uses: subosito/flutter-action@v2
         with:
           channel: stable

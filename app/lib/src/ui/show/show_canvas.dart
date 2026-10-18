@@ -20,9 +20,12 @@ import 'package:flutter/scheduler.dart';
 import '../../state/show/camera_feed.dart';
 import '../../state/show/milk_feed.dart';
 import '../../state/show/show_feed.dart';
+import '../../state/show/show_pool.dart' show QualityPool;
+import '../../state/show/show_rig.dart';
 import '../../state/show/show_state.dart';
 import '../mag.dart';
 import 'scene.dart';
+import 'show_common.dart';
 import 'show_particles.dart';
 import 'show_sims.dart';
 
@@ -35,10 +38,13 @@ class StagePrograms {
   final Map<String, ui.FragmentProgram> sims;
   final ui.FragmentProgram feedback, blur, finish, under;
 
-  static const simShaders = ['fluid_advect', 'fluid_div', 'fluid_jacobi', 'fluid_project', 'fluid_look', 'meme_fx', 'dance_fx'];
+  static const simShaders = ['fluid_advect', 'fluid_div', 'fluid_jacobi', 'fluid_project', 'fluid_look', 'meme_fx', 'dance_fx', 'flock_fx', 'words_fx'];
+
+  /// Shaders no scene file names: the grounds' own.
+  static const groundShaders = ['pulse'];
 
   static Future<StagePrograms> load(SceneBook book) async {
-    final names = book.shaders.toList();
+    final names = {...book.shaders, ...groundShaders}.toList();
     final loaded = await Future.wait([
       for (final n in names) ui.FragmentProgram.fromAsset('shaders/show/$n.frag'),
       for (final n in simShaders) ui.FragmentProgram.fromAsset('shaders/show/sim/$n.frag'),
@@ -104,12 +110,12 @@ class _ShowCanvasState extends State<ShowCanvas> with SingleTickerProviderStateM
   final _tick = ValueNotifier<int>(0);
   Duration _lastTick = Duration.zero;
   late final _StagePainter _painter;
-  late final _Covers _covers;
+  late final StageCovers _covers;
 
   @override
   void initState() {
     super.initState();
-    _covers = _Covers(() => _tick.value++, given: widget.covers);
+    _covers = StageCovers(() => _tick.value++, given: widget.covers);
     _painter = _StagePainter(widget.feed, widget.book, widget.programs, _covers, _tick, widget.scale, widget.preview);
     _ticker = createTicker(_frame)..start();
     // Hidden or minimised, nothing is drawn: the stage in its own window kept every
@@ -206,7 +212,7 @@ class _StagePainter extends CustomPainter {
   ShowFeed feed;
   final SceneBook book;
   final StagePrograms p;
-  final _Covers covers;
+  final StageCovers covers;
   final bool preview;
   final _Working working;
   double dpr = 1;
@@ -241,49 +247,12 @@ class _StagePainter extends CustomPainter {
 
   /// The common block (shaders/show/common.glsl), from the frame, for a layer.
   void _bind(ui.FragmentShader s, ShowState st, Map<String, double> f, int w, int h, SceneLayer layer) {
-    final master = 'master';
-    final beat = f['$master.beat.phase'] ?? 0;
-    final bar = f['$master.bar.phase'] ?? 0;
-    final phrase = f['$master.phrase.phase'] ?? 0;
     var i = 0;
-    void set(double v) => s.setFloat(i++, v);
-    set(w.toDouble());
-    set(h.toDouble());
-    set(_clock.elapsedMicroseconds / 1e6);
-    set(beat);
-    set(bar);
-    set(phrase);
-    set(f['$master.energy'] ?? 0);
-    set(f['intensity'] ?? 0);
-    set(f['audio.kick'] ?? 0);
-    set(f['audio.low'] ?? 0);
-    set(f['audio.mid'] ?? 0);
-    set(f['audio.high'] ?? 0);
-    set(f['audio.air'] ?? 0);
-    set(f['audio.onset'] ?? 0);
-    set(f['palette.primary.h'] ?? 0);
-    set(f['palette.secondary.h'] ?? 0);
-    set(f['$master.drop.near'] ?? 0);
-    set(f['$master.build.k'] ?? 0);
-    set(f['show.hit'] ?? 0);
-    set(f['$master.vocal'] ?? 0);
-    for (var k = 1; k <= 4; k++) {
-      set(_knob(layer, k, st));
+    s.setFloat(i++, w.toDouble());
+    s.setFloat(i++, h.toDouble());
+    for (final v in commonBlock(st, layer, _clock.elapsedMicroseconds / 1e6)) {
+      s.setFloat(i++, v);
     }
-    // The dynamics.
-    set(f['dyn.hit.kick'] ?? 0);
-    set(f['dyn.hit.snare'] ?? 0);
-    set(f['dyn.hit.top'] ?? 0);
-    set(f['dyn.beat.decay'] ?? 0);
-    set(f['dyn.bar.decay'] ?? 0);
-    set(f['dyn.bar.saw'] ?? 0);
-    set(f['dyn.phrase.saw'] ?? 0);
-    set(f['dyn.downbeat'] ?? 0);
-    set(f['dyn.exposure'] ?? 0.7);
-    set(f['dyn.band.low'] ?? 0);
-    set(f['dyn.band.mid'] ?? 0);
-    set(f['dyn.band.high'] ?? 0);
-    set(f['$master.bar.index'] ?? 0);
     var si = 0;
     for (final name in layer.samplers) {
       s.setImageSampler(si++, _sampler(name, st));
@@ -316,8 +285,9 @@ class _StagePainter extends CustomPainter {
   DateTime? _cameraWantedAt;
   DateTime? _milkWantedAt;
 
-  /// MilkDrop, for a scene that needs it: the helper started when one is on,
-  /// stopped a while after none has been (unless the window pinned it).
+  /// MilkDrop, for a scene that needs it (or a rig with it as the ground): the
+  /// helper started when one is on, stopped a while after none has been (unless the
+  /// window pinned it).
   void _milk(Scene scene, {bool under = false}) {
     final milk = MilkFeed.shared;
     final wants = under || scene.meta.needs.contains('milk');
@@ -332,11 +302,12 @@ class _StagePainter extends CustomPainter {
     }
   }
 
-  /// The camera, for a scene that needs it: started when one is on, stopped a
-  /// while after none has been (unless the window pinned it).
-  void _camera(Scene scene) {
+  /// The camera, for a scene that needs it (or a rig with the room as the ground):
+  /// started when one is on, stopped a while after none has been (unless the window
+  /// pinned it).
+  void _camera(Scene scene, {bool ground = false}) {
     final cam = CameraFeed.shared;
-    final wants = scene.meta.needs.contains('camera');
+    final wants = ground || scene.meta.needs.contains('camera');
     final now = DateTime.now();
     if (wants) {
       _cameraWantedAt = now;
@@ -347,45 +318,94 @@ class _StagePainter extends CustomPainter {
     }
   }
 
-  /// A layer's knob: the record's genome where the scene is one of the camera's.
-  double _knob(SceneLayer layer, int k, ShowState st) {
-    final g = st.genome;
-    if (!g.isEmpty) {
-      if (layer.shader == 'echo' && k <= 3) return [g['camera.zoom'], g['camera.turn'], g['camera.hue']][k - 1];
-      if (layer.shader == 'fold' && k == 1) return g['camera.fold'];
-      if (layer.shader == 'blocks' && k == 1) return g['blocks.salt'];
-      if (layer.shader == 'kinetic' && k == 1) return g['kinetic.salt'];
-      if (layer.shader == 'glide' && k == 1) return g['glide.salt'];
-    }
-    return layer.knob(k);
-  }
-
   final _particles = <String, ParticleSystem>{};
   final _sims = <String, SimLayer>{};
   String? _particleScene;
 
   /// The scene drawn: its layers, one over the other, and its particles over them
-  /// (the scene on, not one being left: [live]).
+  /// (the scene on, not one being left: [live]) — the figure; then the blend of it
+  /// with the ground under it, the frame's rig's way (under.frag). Not for a scene
+  /// that draws MilkDrop itself, nor where there is nothing to blend.
   ui.Image _scene(Scene scene, ShowState st, int w, int h, {bool live = true}) {
     final layers = _sceneLayers(scene, st, w, h, live: live);
-    // MilkDrop under it all, where the hands asked, the way they asked (under.frag);
-    // the scene's post goes over both. Not for a scene that draws MilkDrop itself.
-    final milk = MilkFeed.shared.frame;
-    if (!live || !st.macros.milkUnder || milk == null || scene.layers.any((l) => l.samplers.contains('milk'))) return layers;
+    if (!live || scene.layers.any((l) => l.samplers.contains('milk'))) return layers;
+    final rig = st.rig;
+    final blend = rig.blend;
+    // The figure layer over the ground whole: nothing of the ground would show.
+    if (blend.strength <= 0 || blend.ground == GroundMode.over) return layers;
+    final ground = _ground(rig, st, w, h);
+    if (ground == null) return layers;
     final f = st.flat;
     _under
       ..setFloat(0, w.toDouble())
       ..setFloat(1, h.toDouble())
-      ..setFloat(2, st.macros.milkMix.toDouble())
+      ..setFloat(2, blend.ground.index.toDouble())
       ..setFloat(3, f['dyn.beat.decay'] ?? 0)
       ..setFloat(4, f['dyn.bar.saw'] ?? 0)
       ..setFloat(5, f['dyn.hit.kick'] ?? 0)
       ..setFloat(6, _clock.elapsedMicroseconds / 1e6)
+      ..setFloat(7, blend.figure.index.toDouble())
+      // Which pixels are the figure: the ones at alpha 254/255 (a canvas keeps no
+      // coverage below 1).
+      ..setFloat(8, 0)
+      ..setFloat(9, blend.strength)
+      ..setFloat(10, ground.fit)
+      ..setFloat(11, rig.ground.dim)
       ..setImageSampler(0, layers)
-      ..setImageSampler(1, milk);
+      ..setImageSampler(1, ground.image);
     final out = _pass(w, h, (c) => c.drawRect(Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()), Paint()..shader = _under));
     layers.dispose();
+    if (ground.own) ground.image.dispose();
     return out;
+  }
+
+  /// The ground under the figure, as a picture: MilkDrop's frame or the room's (16:9,
+  /// to be fitted), the record's cover (square), a wash of the palette, a field's or
+  /// the pulse's shader drawn at the working size, or black. Null while a frame is
+  /// not here yet. [fit] its own aspect where it is to be filled and cropped, 0 where
+  /// it is the stage's size; [own]: made here, to be disposed.
+  ({ui.Image image, double fit, bool own})? _ground(ShowRig rig, ShowState st, int w, int h) {
+    final g = rig.ground;
+    switch (g.kind) {
+      case Ground.milk:
+        final m = MilkFeed.shared.frame;
+        return m == null ? null : (image: m, fit: 16 / 9, own: false);
+      case Ground.camera:
+        final m = CameraFeed.shared.frame;
+        return m == null ? null : (image: m, fit: CameraFeed.width / CameraFeed.height, own: false);
+      case Ground.cover:
+        final m = covers.of(st.master.trackId, st.master.coverUrl);
+        return m == null ? null : (image: m, fit: m.width / m.height, own: false);
+      case Ground.pulse:
+        final program = p.scenes['pulse'];
+        if (program == null) return (image: black, fit: 0, own: false);
+        final shader = _shaderFor('pulse');
+        _bind(shader, st, st.flat, w, h, SceneLayer(shader: 'pulse', knobs: {'m1': pulseVariant(g.field).toDouble()}));
+        final img = _pass(w, h, (c) => c.drawRect(Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()), Paint()..shader = shader));
+        return (image: img, fit: 0, own: true);
+      case Ground.wash:
+        final pal = st.palette;
+        final a = pal.primary.toColor(), b = pal.secondary.toColor();
+        final img = _pass(w, h, (c) => c.drawRect(
+              Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()),
+              Paint()
+                ..shader = ui.Gradient.linear(Offset.zero, Offset(0, h.toDouble()), [
+                  Color.fromARGB(255, (a.r * 56).round(), (a.g * 56).round(), (a.b * 56).round()),
+                  Color.fromARGB(255, (b.r * 31).round(), (b.g * 31).round(), (b.b * 31).round()),
+                ]),
+            ));
+        return (image: img, fit: 0, own: true);
+      case Ground.field:
+        final name = g.field;
+        final program = name == null ? null : p.scenes[name];
+        if (program == null) return (image: black, fit: 0, own: false);
+        final shader = _shaderFor(name!);
+        _bind(shader, st, st.flat, w, h, SceneLayer(shader: name, knobs: g.knobs));
+        final img = _pass(w, h, (c) => c.drawRect(Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()), Paint()..shader = shader));
+        return (image: img, fit: 0, own: true);
+      default:
+        return (image: black, fit: 0, own: false);
+    }
   }
 
   ui.Image _sceneLayers(Scene scene, ShowState st, int w, int h, {bool live = true}) => _pass(w, h, (c) {
@@ -430,11 +450,12 @@ class _StagePainter extends CustomPainter {
           c.drawRect(Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()), paint);
           first = false;
         }
-        if (!live || scene.particles.isEmpty) return;
+        final particles = finishOf(scene, st).particles;
+        if (!live || particles.isEmpty) return;
         final primary = st.palette.primary.toColor();
         final accent = st.palette.accent.toColor();
         final t = _clock.elapsedMicroseconds / 1e6;
-        for (final kind in scene.particles) {
+        for (final kind in particles) {
           final sys = _particles.putIfAbsent(kind, () => ParticleSystem(kind));
           sys.step(st, st.macros.freeze ? 0 : _dt, w, h);
           sys.draw(c, primary, accent, t);
@@ -467,16 +488,17 @@ class _StagePainter extends CustomPainter {
     // and the grain soften anyway. The finish and the words still go out at the
     // screen's own size.
     final px = size.width * dpr * size.height * dpr;
+    // The quality tier caps the working size; the stage still goes lower on its own.
+    working.top = QualityPool.workScale;
+    if (working.scale > working.top) working.scale = working.top;
     final cap = px <= maxWorkingPixels ? 1.0 : math.sqrt(maxWorkingPixels / px);
     final w = math.max(8, (size.width * dpr * cap * working.scale).round());
     final h = math.max(8, (size.height * dpr * cap * working.scale).round());
     // The bloom at a quarter of the working size: wide and soft, and cheap.
     final hw = math.max(4, w ~/ 4), hh = math.max(4, h ~/ 4);
-    final f = st.flat;
-    final secondary = st.palette.secondary.toColor();
 
-    _camera(scene);
-    _milk(scene, under: st.macros.milkUnder);
+    _camera(scene, ground: st.rig.ground.kind == Ground.camera);
+    _milk(scene, under: st.rig.ground.kind == Ground.milk);
 
     // 1. the scene — kept as its own history where a layer feeds on itself.
     final drawn = _scene(scene, st, w, h);
@@ -491,30 +513,20 @@ class _StagePainter extends CustomPainter {
 
     // 2. the trails, where the scene has them, over last frame's — which is not
     //    carried over from another scene.
+    final fin = finishOf(scene, st);
     ui.Image current;
-    if (scene.post.trails > 0) {
+    if (fin.trails > 0) {
       final prev = _history;
       final usable = prev != null && prev.width == w && prev.height == h && _historyScene == scene.id;
       // The record's recipe, as much of it as the scene takes.
-      final k = scene.post.recipe;
-      final g = st.genome;
-      double gene(String name, double or) => g.isEmpty ? or : or + (g[name] - or) * k;
-      final decay = gene('feedback.decay', scene.post.trails);
+      final r = trailRecipe(scene, st);
       _feedback
         ..setFloat(0, w.toDouble())
-        ..setFloat(1, h.toDouble())
-        ..setFloat(2, decay)
-        ..setFloat(3, gene('feedback.zoom', 1.0 + 0.010 * (f['master.energy'] ?? 0)))
-        ..setFloat(4, gene('feedback.rotate', 0.003))
-        ..setFloat(5, 0.12)
-        ..setFloat(6, secondary.r)
-        ..setFloat(7, secondary.g)
-        ..setFloat(8, secondary.b)
-        ..setFloat(9, k >= 0.5 && !g.isEmpty ? g['feedback.fold'] : 0)
-        ..setFloat(10, gene('feedback.warp', 0))
-        ..setFloat(11, gene('feedback.hueTurn', 0))
-        ..setFloat(12, gene('feedback.shiftX', 0))
-        ..setFloat(13, gene('feedback.shiftY', 0))
+        ..setFloat(1, h.toDouble());
+      for (var i = 0; i < r.length; i++) {
+        _feedback.setFloat(2 + i, r[i]);
+      }
+      _feedback
         ..setFloat(14, _clock.elapsedMicroseconds / 1e6)
         ..setImageSampler(0, usable ? prev : drawn)
         ..setImageSampler(1, drawn);
@@ -556,21 +568,18 @@ class _StagePainter extends CustomPainter {
     final bloom = _pass(hw, hh, (c) => c.drawRect(Rect.fromLTWH(0, 0, hw.toDouble(), hh.toDouble()), Paint()..shader = _blurV));
 
     // 5. onto the screen.
-    final beat = f['master.beat.phase'] ?? 0;
-    final strobe = st.macros.strobe > 0 && ((beat * 4).floor() % 2 == 0) ? st.macros.strobe : 0.0;
-    final hit = st.macros.hit;
     _finish
       ..setFloat(0, size.width)
       ..setFloat(1, size.height)
-      ..setFloat(2, math.max(strobe, hit * 0.7))
+      ..setFloat(2, stageWhite(st))
       ..setFloat(3, st.macros.blackout ? 1 : 0)
-      ..setFloat(4, scene.post.fringe)
-      ..setFloat(5, scene.post.vignette)
-      ..setFloat(6, scene.post.bloom)
+      ..setFloat(4, fin.fringe)
+      ..setFloat(5, fin.vignette)
+      ..setFloat(6, fin.bloom)
       ..setFloat(7, leaving == null ? 0 : st.sceneK)
       ..setFloat(8, _clock.elapsedMicroseconds / 1e6)
-      ..setFloat(9, scene.post.grain)
-      ..setFloat(10, scene.post.tone)
+      ..setFloat(9, fin.grain)
+      ..setFloat(10, fin.tone)
       ..setImageSampler(0, leaving ?? current)
       ..setImageSampler(1, bloom)
       ..setImageSampler(2, current);
@@ -587,71 +596,14 @@ class _StagePainter extends CustomPainter {
     bh.dispose();
     bloom.dispose();
     leaving?.dispose();
-    if (scene.post.trails <= 0 && !feedsOnItself) current.dispose();
+    if (fin.trails <= 0 && !feedsOnItself) current.dispose();
 
     final took = _clock.elapsed - began;
     working.frameAt(began.inMicroseconds);
     onFrame?.call(took);
   }
 
-  void _words(Canvas canvas, Size size, Scene scene, ShowState st) {
-    final m = st.master;
-    final accent = st.palette.accent.toColor();
-    final ink = Colors.white.withValues(alpha: 0.92);
-    final big = scene.text.big;
-    final margin = size.width * 0.05;
-    final jitter = scene.text.jitter ? (st['audio.onset']) * 6 : 0.0;
-    Offset shake() => jitter == 0 ? Offset.zero : Offset((_rng.nextDouble() - 0.5) * jitter, (_rng.nextDouble() - 0.5) * jitter);
-
-    if (scene.text.title && m.title != null) {
-      final title = big ? m.title!.toUpperCase() : m.title!;
-      final tp = TextPainter(
-        text: TextSpan(children: [
-          TextSpan(text: title, style: Mag.headline(big ? size.height * 0.16 : size.height * 0.05, color: ink)),
-          if (m.artist != null)
-            TextSpan(text: '\n${m.artist}', style: Mag.flag(big ? size.height * 0.035 : size.height * 0.02, color: accent)),
-        ]),
-        textDirection: TextDirection.ltr,
-        maxLines: 3,
-        ellipsis: '…',
-      )..layout(maxWidth: size.width - 2 * margin);
-      final at = big
-          ? Offset((size.width - tp.width) / 2, size.height * 0.12) + shake()
-          : Offset(margin, size.height - margin - tp.height - (scene.text.lyrics ? size.height * 0.09 : 0));
-      tp.paint(canvas, at);
-    }
-
-    if (scene.text.lyrics && m.lyric != null) {
-      final style = Mag.title(big ? size.height * 0.07 : size.height * 0.045, color: ink);
-      final tp = TextPainter(
-        text: TextSpan(text: m.lyric, style: style),
-        textDirection: TextDirection.ltr,
-        textAlign: big ? TextAlign.center : TextAlign.left,
-        maxLines: 2,
-        ellipsis: '…',
-      )..layout(maxWidth: size.width - 2 * margin);
-      final at = big
-          ? Offset((size.width - tp.width) / 2, size.height * 0.62) + shake()
-          : Offset(margin, size.height - margin - tp.height);
-      // The line sung so far in the accent, the rest in ink: a reveal.
-      tp.paint(canvas, at);
-      final sung = (m.lyricK * tp.width).clamp(0.0, tp.width);
-      if (sung > 0) {
-        canvas.save();
-        canvas.clipRect(Rect.fromLTWH(at.dx, at.dy, sung, tp.height));
-        TextPainter(
-          text: TextSpan(text: m.lyric, style: style.copyWith(color: accent)),
-          textDirection: TextDirection.ltr,
-          textAlign: big ? TextAlign.center : TextAlign.left,
-          maxLines: 2,
-          ellipsis: '…',
-        )
-          ..layout(maxWidth: size.width - 2 * margin)
-          ..paint(canvas, at);
-        canvas.restore();
-      }
-    }
-  }
+  void _words(Canvas canvas, Size size, Scene scene, ShowState st) => paintStageWords(canvas, size, scene, st, _rng);
 
   @override
   bool shouldRepaint(_StagePainter old) => true;
@@ -687,8 +639,8 @@ class _NoSim implements SimLayer {
 }
 
 /// The covers, as images the shaders can sample, by track: fetched once each.
-class _Covers {
-  _Covers(this.onLoaded, {Map<int, ui.Image> given = const {}}) : _images = {...given}, _given = given.keys.toSet();
+class StageCovers {
+  StageCovers(this.onLoaded, {Map<int, ui.Image> given = const {}}) : _images = {...given}, _given = given.keys.toSet();
   final void Function() onLoaded;
   final Map<int, ui.Image?> _images;
   final Set<int> _given;
@@ -718,6 +670,68 @@ class _Covers {
     }
     for (final e in _images.entries) {
       if (!_given.contains(e.key)) e.value?.dispose();
+    }
+  }
+}
+
+/// The scene's words over a stage: the record's title, the line being sung, at the
+/// screen's own size, so they stay sharp.
+void paintStageWords(Canvas canvas, Size size, Scene scene, ShowState st, math.Random rng) {
+  final m = st.master;
+  final fin = finishOf(scene, st);
+  final accent = st.palette.accent.toColor();
+  final ink = Colors.white.withValues(alpha: 0.92);
+  final big = fin.where == 'big';
+  final margin = size.width * 0.05;
+  final jitter = fin.jitter ? (st['audio.onset']) * 6 : 0.0;
+  Offset shake() => jitter == 0 ? Offset.zero : Offset((rng.nextDouble() - 0.5) * jitter, (rng.nextDouble() - 0.5) * jitter);
+
+  if (fin.title && m.title != null) {
+    final title = big ? m.title!.toUpperCase() : m.title!;
+    final tp = TextPainter(
+      text: TextSpan(children: [
+        TextSpan(text: title, style: Mag.headline(big ? size.height * 0.16 : size.height * 0.05, color: ink)),
+        if (m.artist != null)
+          TextSpan(text: '\n${m.artist}', style: Mag.flag(big ? size.height * 0.035 : size.height * 0.02, color: accent)),
+      ]),
+      textDirection: TextDirection.ltr,
+      maxLines: 3,
+      ellipsis: '…',
+    )..layout(maxWidth: size.width - 2 * margin);
+    final at = big
+        ? Offset((size.width - tp.width) / 2, size.height * 0.12) + shake()
+        : Offset(margin, size.height - margin - tp.height - (fin.lyrics ? size.height * 0.09 : 0));
+    tp.paint(canvas, at);
+  }
+
+  if (fin.lyrics && m.lyric != null) {
+    final style = Mag.title(big ? size.height * 0.07 : size.height * 0.045, color: ink);
+    final tp = TextPainter(
+      text: TextSpan(text: m.lyric, style: style),
+      textDirection: TextDirection.ltr,
+      textAlign: big ? TextAlign.center : TextAlign.left,
+      maxLines: 2,
+      ellipsis: '…',
+    )..layout(maxWidth: size.width - 2 * margin);
+    final at = big
+        ? Offset((size.width - tp.width) / 2, size.height * 0.62) + shake()
+        : Offset(margin, size.height - margin - tp.height);
+    // The line sung so far in the accent, the rest in ink: a reveal.
+    tp.paint(canvas, at);
+    final sung = (m.lyricK * tp.width).clamp(0.0, tp.width);
+    if (sung > 0) {
+      canvas.save();
+      canvas.clipRect(Rect.fromLTWH(at.dx, at.dy, sung, tp.height));
+      TextPainter(
+        text: TextSpan(text: m.lyric, style: style.copyWith(color: accent)),
+        textDirection: TextDirection.ltr,
+        textAlign: big ? TextAlign.center : TextAlign.left,
+        maxLines: 2,
+        ellipsis: '…',
+      )
+        ..layout(maxWidth: size.width - 2 * margin)
+        ..paint(canvas, at);
+      canvas.restore();
     }
   }
 }

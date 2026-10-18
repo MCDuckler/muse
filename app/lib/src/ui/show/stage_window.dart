@@ -32,14 +32,17 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../api/client.dart';
 import '../../state/app_state.dart' show AppState;
+import '../../state/booth/board/link_server.dart' show encodeStageThumb;
 import '../../state/booth/booth.dart';
 import '../../state/playback_log.dart';
 import '../../state/show/camera_feed.dart';
 import '../../state/show/milk_feed.dart';
+import '../../state/show/show_state.dart' show ShowMacros;
 import '../../state/player.dart' show PlayerService;
 import '../../state/show/show_demo.dart';
 import '../../state/show/show_feed.dart';
 import '../../state/show/show_wire.dart';
+import 'scene.dart';
 import 'show_spike.dart';
 import 'stage_kit.dart';
 import 'stage_page.dart';
@@ -141,7 +144,7 @@ class _StageWindowState extends State<_StageWindow> {
   /// and the loudest the bands got — to be read against the record's tempo.
   int _kicks = 0, _snares = 0, _tops = 0;
   double _kickWas = 0, _snareWas = 0, _topWas = 0, _lowSum = 0, _expMax = 0;
-  int _samples = 0;
+  int _samples = 0, _heard = 0;
   void _count() {
     final f = _feed?.state.flat;
     if (f == null) return;
@@ -155,6 +158,7 @@ class _StageWindowState extends State<_StageWindow> {
     _lowSum += f['dyn.band.low'] ?? 0;
     _samples++;
     _expMax = math.max(_expMax, f['dyn.exposure'] ?? 0);
+    if ((f['live.on'] ?? 0) > 0.5) _heard++;
   }
 
   void _say() {
@@ -165,12 +169,13 @@ class _StageWindowState extends State<_StageWindow> {
     print('STAGE fps=${(n / 5).toStringAsFixed(1)} raster ${(_raster / n / 1000).toStringAsFixed(1)}/${(_worst / 1000).toStringAsFixed(1)} ms '
         'build ${(_build / n / 1000).toStringAsFixed(1)}/${(_buildWorst / 1000).toStringAsFixed(1)} ms '
         '${MilkFeed.shared.running ? 'milk=${((milk - _milkWas) / 5).toStringAsFixed(1)} ' : ''}'
-        'scene=${_feed?.state.scene} hits kick=$_kicks snare=$_snares top=$_tops low~${(_samples == 0 ? 0 : _lowSum / _samples).toStringAsFixed(2)} exp=${_expMax.toStringAsFixed(2)}');
+        'scene=${_feed?.state.scene} hits kick=$_kicks snare=$_snares top=$_tops low~${(_samples == 0 ? 0 : _lowSum / _samples).toStringAsFixed(2)} exp=${_expMax.toStringAsFixed(2)} '
+        'sound=${_samples > 0 && _heard * 2 > _samples ? 'heard' : 'pulse'}');
     _frames = _raster = _worst = _build = _buildWorst = 0;
     _milkWas = milk;
     _kicks = _snares = _tops = 0;
     _lowSum = _expMax = 0;
-    _samples = 0;
+    _samples = _heard = 0;
   }
 
   @override
@@ -223,7 +228,7 @@ class _StageWindowState extends State<_StageWindow> {
 
   Future<void> _startDemo() async {
     final kit = await StageKit.load();
-    final demo = DemoShowFeed(scenes: kit.book.metas)..start();
+    final demo = DemoShowFeed(scenes: kit.book.metas, looks: kit.book.looks)..start();
     // `--scene <id>`: that scene held, for looking at it.
     final i = widget.args.indexOf('--scene');
     if (i >= 0 && i + 1 < widget.args.length) {
@@ -261,15 +266,18 @@ class _StageWindowState extends State<_StageWindow> {
       final track = await api.track(id);
       await booth.load(booth.a, track, at: at, byHand: false);
       booth.show.director.scenes = kit.book.metas;
+      booth.show.looks = kit.book.looks;
       final sc = widget.args.indexOf('--scene');
       if (sc >= 0 && sc + 1 < widget.args.length) {
         booth.show.director
           ..choose(widget.args[sc + 1])
           ..locked = true;
       }
+      // MilkDrop is under every scene unless asked not to be (the bench's plain look).
+      if (widget.args.contains('--no-milk-under')) booth.show.setMacros(booth.show.macros.copyWith(milkUnder: false));
       if (widget.args.contains('--milk-under')) {
         final mm = widget.args.indexOf('--milk-mix');
-        final mix = mm >= 0 && mm + 1 < widget.args.length ? int.tryParse(widget.args[mm + 1]) ?? 0 : 0;
+        final mix = mm >= 0 && mm + 1 < widget.args.length ? int.tryParse(widget.args[mm + 1]) ?? ShowMacros.contrast : ShowMacros.contrast;
         booth.show.setMacros(booth.show.macros.copyWith(milkUnder: true, milkMix: mix));
       }
       booth.show.start();
@@ -305,6 +313,9 @@ class _StageWindowState extends State<_StageWindow> {
           ws.add('{"t":"ping"}');
         } catch (_) {}
       });
+      // The picture back to the booth, small, so it need not draw the show itself.
+      _thumbs?.cancel();
+      _thumbs = Timer.periodic(const Duration(milliseconds: 200), (_) => unawaited(_thumb(ws)));
       ws.listen(
         (data) {
           if (data is String) _remote?.arrived(data);
@@ -317,8 +328,34 @@ class _StageWindowState extends State<_StageWindow> {
     }
   }
 
+  Timer? _thumbs;
+  bool _thumbing = false;
+
+  /// The stage as a 320-wide picture, raw RGBA with a four-byte header, to [ws].
+  Future<void> _thumb(WebSocket ws) async {
+    if (_thumbing || _closing) return;
+    final boundary = _shot.currentContext?.findRenderObject();
+    if (boundary is! RenderRepaintBoundary || boundary.size.isEmpty) return;
+    _thumbing = true;
+    try {
+      final k = 320 / boundary.size.width;
+      final image = await boundary.toImage(pixelRatio: k);
+      final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      if (data != null && _ws == ws) {
+        ws.add(encodeStageThumb(image.width, image.height, data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes)));
+      }
+      image.dispose();
+    } catch (_) {
+      // A frame missed is nothing; the next comes in a moment.
+    } finally {
+      _thumbing = false;
+    }
+  }
+
   void _lost(String url) {
     _ping?.cancel();
+    _thumbs?.cancel();
+    _thumbs = null;
     _ws = null;
     if (!mounted || _closing) return;
     setState(() => _word = 'The booth went away. Trying again…');
@@ -333,6 +370,7 @@ class _StageWindowState extends State<_StageWindow> {
     _saying?.cancel();
     _counting?.cancel();
     _ping?.cancel();
+    _thumbs?.cancel();
     _reconnect?.cancel();
     unawaited(_ws?.close());
     _demo?.dispose();

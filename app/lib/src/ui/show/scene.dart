@@ -22,6 +22,7 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 
 import '../../state/show/show_director.dart';
+import '../../state/show/show_rig.dart';
 
 class SceneLayer {
   const SceneLayer({this.shader, this.sim, this.samplers = const [], this.knobs = const {}, this.dim = 1});
@@ -153,4 +154,69 @@ class SceneBook {
         for (final s in jsons)
           if (jsonDecode(s) case final Map<String, dynamic> j) Scene.fromJson(j).id: Scene.fromJson(j),
       });
+}
+
+/// A scene file read as a look (show_rig.dart): what it draws, as layers. One shader
+/// layer is a shader figure, or a field ground where the shader is a backdrop (drift)
+/// or draws MilkDrop or the camera itself; a simulation is its figure. The post, the
+/// text and the particles are the finish. The stages still read the scene; the rig
+/// is what travels in the frame and what the panel will edit.
+extension SceneLook on Scene {
+  Look get look => Look(id: id, name: name, rig: rig, meta: meta, shipped: true);
+
+  ShowRig get rig {
+    final finish = RigFinish(
+      trails: post.trails,
+      bloom: post.bloom,
+      tone: post.tone,
+      fringe: post.fringe,
+      vignette: post.vignette,
+      grain: post.grain,
+      recipe: post.recipe,
+      title: text.title,
+      lyrics: text.lyrics,
+      where: text.where,
+      jitter: text.jitter,
+      particles: particles,
+    );
+    final layer = layers.firstOrNull;
+    if (layer == null) return ShowRig(finish: finish);
+    final sim = layer.sim;
+    if (sim != null) {
+      final figure = switch (sim) {
+        'fluid' => const RigFigure(kind: Figure.fluid),
+        'physarum' => const RigFigure(kind: Figure.veins),
+        'siebenschlaefer' => const RigFigure(kind: Figure.meme),
+        'turntable' => const RigFigure(kind: Figure.turntable),
+        'flock' => const RigFigure(kind: Figure.birds),
+        'words' => const RigFigure(kind: Figure.words),
+        'dance.disco' => const RigFigure(kind: Figure.dancers, dressing: Dressing.disco),
+        'dance.neon' => const RigFigure(kind: Figure.dancers, dressing: Dressing.neon),
+        'dance.shadow' => const RigFigure(kind: Figure.dancers, dressing: Dressing.shadow),
+        'dance.art' => const RigFigure(kind: Figure.dancers, dressing: Dressing.none),
+        _ => RigFigure.none,
+      };
+      return ShowRig(figure: figure, finish: finish);
+    }
+    final shader = layer.shader;
+    if (shader == null) return ShowRig(finish: finish);
+    if (layer.samplers.contains('milk')) return ShowRig(ground: RigGround(kind: Ground.milk, knobs: layer.knobs), finish: finish);
+    if (layer.samplers.contains('camera')) {
+      return ShowRig(ground: RigGround(kind: Ground.camera, treatment: shader, knobs: layer.knobs), finish: finish);
+    }
+    final figure = switch (shader) {
+      'kinetic' => Figure.kinetic,
+      'blocks' => Figure.blocks,
+      'flash' => Figure.flash,
+      'glide' => Figure.glide,
+      _ => null,
+    };
+    if (figure == null) return ShowRig(ground: RigGround(kind: Ground.field, field: shader, dim: layer.dim, knobs: layer.knobs), finish: finish);
+    return ShowRig(figure: RigFigure(kind: figure, knobs: layer.knobs), finish: finish);
+  }
+}
+
+extension SceneBookLooks on SceneBook {
+  /// Every scene as a look, by id.
+  Map<String, Look> get looks => {for (final s in scenes.values) s.id: s.look};
 }

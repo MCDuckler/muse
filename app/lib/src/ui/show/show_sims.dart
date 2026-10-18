@@ -19,6 +19,9 @@
 //            kick how much they lay.
 //   turntable  A low-poly model turning on a platter, squashed, stretched and
 //            wobbled by the record (show_turntable.dart).
+//   flock    A murmuration: a thousand boids steered by the record, drawn in one of
+//            a dozen looks (show_flock.dart).
+//   words    The record's lyrics set as type, in five styles (show_words.dart).
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -28,8 +31,11 @@ import 'package:flutter/material.dart';
 import '../../state/show/show_state.dart';
 import 'show_canvas.dart' show StagePrograms;
 import 'show_dance.dart';
+import 'show_flock.dart';
+import 'show_flock_bird.dart';
 import 'show_meme.dart';
 import 'show_turntable.dart';
+import 'show_words.dart';
 
 abstract class SimLayer {
   String get kind;
@@ -47,6 +53,8 @@ abstract class SimLayer {
         'siebenschlaefer' => MemeEdit(kind),
         'turntable' => TurntableSim(),
         'dance.disco' || 'dance.neon' || 'dance.shadow' || 'dance.art' => DanceSim(kind),
+        'flock' => FlockSim(kind),
+        'words' => WordsSim(),
         _ => null,
       };
 
@@ -55,7 +63,12 @@ abstract class SimLayer {
   static void warm(String kind) {
     if (kind == 'siebenschlaefer') MemeBank.of(kind);
     if (kind == 'turntable') TurntableBank.shared.warm();
-    if (kind.startsWith('dance.')) DanceAssets.of('dance');
+    if (kind.startsWith('dance.')) {
+      for (final m in DanceModels.all) {
+        DanceAssets.of(m.$1);
+      }
+    }
+    if (kind == 'flock') BirdAssets.of('pigeon');
   }
 }
 

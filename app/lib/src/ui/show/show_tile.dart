@@ -15,8 +15,11 @@ import '../../state/show/show_state.dart';
 import '../../worker/tools.dart';
 import '../booth/desk/console.dart';
 import 'milk_page.dart';
-import 'show_canvas.dart';
+import 'native_stage.dart';
+import 'scene.dart';
 import 'show_dance.dart' show DanceModels;
+import 'show_debug.dart';
+import 'stage_preview.dart';
 import 'stage_kit.dart';
 import 'stage_page.dart';
 import 'stage_pop_out_none.dart' if (dart.library.io) 'stage_pop_out_io.dart';
@@ -25,8 +28,11 @@ import 'stage_pop_out_none.dart' if (dart.library.io) 'stage_pop_out_io.dart';
 final showViewToggles = ValueNotifier<int>(0);
 
 class ShowTile extends StatefulWidget {
-  const ShowTile({super.key, required this.booth});
+  const ShowTile({super.key, required this.booth, this.onRig});
   final Booth booth;
+
+  /// Opens the show's own page (the rig), where there is one.
+  final VoidCallback? onRig;
 
   @override
   State<ShowTile> createState() => _ShowTileState();
@@ -35,6 +41,9 @@ class ShowTile extends StatefulWidget {
 class _ShowTileState extends State<ShowTile> {
   StageKit? _kit;
   String? _trouble;
+
+  /// Which stage draws the small picture, and how fast: for the line under it.
+  final _info = ValueNotifier<StageInfo>(StageInfo.none);
 
   /// No ffmpeg on this computer: said under the hands, with what to do about it.
   bool _noFfmpeg = false;
@@ -45,109 +54,58 @@ class _ShowTileState extends State<ShowTile> {
     unawaited(_load());
   }
 
+  @override
+  void dispose() {
+    _info.dispose();
+    super.dispose();
+  }
+
   /// The performer's offset for this screen: see ShowEngine.offsetMs.
   static const _kOffset = 'muse.show.offsetMs';
 
-  /// The scenes turned off in the menu, by id: see ShowDirector.off.
-  static const _kOff = 'muse.show.scenesOff';
-
-  /// Who dances in the dancer scenes: see ShowMacros.dancer.
-  static const _kDancer = 'muse.show.dancer';
-
-  Future<void> _setDancer(String id) async {
+  /// Who dances in the dancer scenes: the pool's (show_pool.dart), and from there
+  /// ShowMacros.dancer.
+  void _setDancer(String id) {
     final show = widget.booth.show;
-    show.setMacros(show.macros.copyWith(dancer: id));
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kDancer, id);
+    final mix = id == DanceModels.mix;
+    show.setPool(show.pool.copyWith(dancer: mix ? null : id, clearDancer: mix));
   }
 
-  /// The dancers switched off in the menu, by id: see ShowMacros.dancersOff.
-  static const _kDancersOff = 'muse.show.dancersOff';
-
-  Future<void> _setDancerOff(String id, bool off) async {
+  /// A dancer switched off in the menu: never in a mix, as lead or in a troupe.
+  void _setDancerOff(String id, bool off) {
     final show = widget.booth.show;
-    final now = {...show.macros.dancersOff};
-    if (off) {
-      now.add(id);
-    } else {
-      now.remove(id);
-    }
-    final list = now.toList()..sort();
+    var pool = show.pool.withOff('dancer.$id', off);
     // The one chosen to dance alone, switched off: back to the mix.
-    final alone = show.macros.dancer == id && off;
-    show.setMacros(show.macros.copyWith(dancersOff: list, dancer: alone ? DanceModels.mix : null));
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(_kDancersOff, list);
-    if (alone) await prefs.setString(_kDancer, DanceModels.mix);
+    if (off && pool.dancer == id) pool = pool.copyWith(clearDancer: true);
+    show.setPool(pool);
   }
 
-  Future<void> _setSceneOff(String id, bool off) async {
+  /// A scene (a look) switched off in the menu: see ShowDirector.off.
+  void _setSceneOff(String id, bool off) {
     final show = widget.booth.show;
-    if (off) {
-      show.director.off.add(id);
-    } else {
-      show.director.off.remove(id);
-    }
+    show.setPool(show.pool.withOff('look.$id', off));
     // Turned off while it is on: on to the next one now, not at the next section.
     if (off && show.state.scene == id) show.nextScene();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(_kOff, show.director.off.toList()..sort());
   }
 
   Future<void> _load() async {
     try {
+      await ShowDebug.load();
       final prefs = await SharedPreferences.getInstance();
       widget.booth.show.offsetMs = prefs.getInt(_kOffset) ?? 0;
-      widget.booth.show.director.off = {...?prefs.getStringList(_kOff)};
-      final dancer = prefs.getString(_kDancer);
-      if (dancer != null) widget.booth.show.setMacros(widget.booth.show.macros.copyWith(dancer: dancer));
-      final dancersOff = prefs.getStringList(_kDancersOff);
-      if (dancersOff != null) widget.booth.show.setMacros(widget.booth.show.macros.copyWith(dancersOff: dancersOff));
+      await widget.booth.show.ready();
       final ffmpeg = await Tools.hasFfmpeg();
       if (mounted && !ffmpeg) setState(() => _noFfmpeg = true);
       final kit = await StageKit.load();
       widget.booth.show.director.scenes = kit.book.metas;
+      widget.booth.show.looks = kit.book.looks;
       if (mounted) setState(() => _kit = kit);
     } catch (e) {
       if (mounted) setState(() => _trouble = '$e');
     }
   }
 
-  Future<void> _offset(BuildContext context) async {
-    final show = widget.booth.show;
-    var ms = show.offsetMs;
-    await showDialog<void>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          title: const Text('The picture against the sound'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('A flash that lands after the kick wants the picture earlier; one before it, later. '
-                  'A television over HDMI is usually 40 to 100 ms late.'),
-              const SizedBox(height: 12),
-              Text(ms == 0 ? 'As the deck says' : '${ms > 0 ? 'Later' : 'Earlier'} by ${ms.abs()} ms'),
-              Slider(
-                value: ms.toDouble(),
-                min: -250,
-                max: 250,
-                divisions: 100,
-                onChanged: (v) {
-                  setState(() => ms = v.round());
-                  show.offsetMs = ms;
-                },
-              ),
-            ],
-          ),
-          actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Done'))],
-        ),
-      ),
-    );
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_kOffset, ms);
-  }
+  Future<void> _offset(BuildContext context) => showTileOffsetDialog(context, widget.booth);
 
   @override
   Widget build(BuildContext context) {
@@ -165,15 +123,7 @@ class _ShowTileState extends State<ShowTile> {
                   ? Center(child: Text('The stage could not load.\n$_trouble', style: TextStyle(color: Console.quiet)))
                   : kit == null
                       ? const SizedBox.shrink()
-                      : ShowCanvas(
-                          feed: show,
-                          book: kit.book,
-                          programs: kit.programs,
-                          scale: 0.4,
-                          preview: true,
-                          // A stage popped out has the real thing: the preview goes slow.
-                          slow: () => (context.read<AppState>().boardLink?.stages ?? 0) > 0,
-                        ),
+                      : StagePreview(feed: show, book: kit.book, programs: kit.programs, scale: 0.4, info: _info),
             ),
           ),
         ),
@@ -223,7 +173,7 @@ class _ShowTileState extends State<ShowTile> {
                                               child: Switch(
                                                 value: isOn,
                                                 onChanged: (v) {
-                                                  unawaited(_setSceneOff(s.id, !v));
+                                                  _setSceneOff(s.id, !v);
                                                   setItem(() {});
                                                 },
                                               ),
@@ -248,7 +198,7 @@ class _ShowTileState extends State<ShowTile> {
                       if (st.scene?.startsWith('dance-') ?? false)
                         PopupMenuButton<String>(
                           tooltip: 'Who dances: ${DanceModels.all.where((d) => d.$1 == st.macros.dancer).firstOrNull?.$2 ?? 'a mix, each record its own'}',
-                          onSelected: (id) => unawaited(_setDancer(id)),
+                          onSelected: _setDancer,
                           itemBuilder: (context) => [
                             const PopupMenuItem<String>(
                               enabled: false,
@@ -276,7 +226,7 @@ class _ShowTileState extends State<ShowTile> {
                                         child: Switch(
                                           value: isOn,
                                           onChanged: (v) {
-                                            unawaited(_setDancerOff(id, !v));
+                                            _setDancerOff(id, !v);
                                             setItem(() {});
                                           },
                                         ),
@@ -304,15 +254,21 @@ class _ShowTileState extends State<ShowTile> {
                     ],
                   ),
                   const SizedBox(height: 2),
-                  Text(
-                    [
-                      if (m.section != null) m.section!,
-                      if (m.dropBeatsAway != null && m.dropBeatsAway! > 0) 'drop in ${m.dropBeatsAway!.ceil()}',
-                      if (st.mix.on) 'mix ${(st.mix.k * 100).round()}%',
-                    ].join(' · '),
-                    style: TextStyle(color: Console.quiet, fontSize: 12),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  ValueListenableBuilder<StageInfo>(
+                    valueListenable: _info,
+                    builder: (context, info, _) => Text(
+                      [
+                        if (m.section != null) m.section!,
+                        if (m.dropBeatsAway != null && m.dropBeatsAway! > 0) 'drop in ${m.dropBeatsAway!.ceil()}',
+                        if (st.mix.on) 'mix ${(st.mix.k * 100).round()}%',
+                        // Which stage draws this picture: the native one, or Flutter's —
+                        // and how fast. The debug pad says why, over the picture.
+                        '${info.word}${info.parked ? ' parked' : ''}${info.fps > 0 ? ' ${info.fps.round()}' : ''}',
+                      ].join(' · '),
+                      style: TextStyle(color: Console.quiet, fontSize: 12),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                   const SizedBox(height: 4),
                   // MilkDrop: the preset on, and the hands on it — where the helper is here.
@@ -434,6 +390,21 @@ class _ShowTileState extends State<ShowTile> {
                         tooltip: 'Blackout',
                         onTap: () => show.setMacros(show.macros.copyWith(blackout: !show.macros.blackout)),
                       ),
+                      const SizedBox(width: 4),
+                      ValueListenableBuilder<bool>(
+                        valueListenable: ShowDebug.on,
+                        builder: (context, on, _) => Pad(
+                          icon: Icons.bug_report_outlined,
+                          width: 30,
+                          height: 30,
+                          lit: on,
+                          colour: Console.ink,
+                          tooltip: on
+                              ? 'The debug words over every stage — off'
+                              : 'Debug words over every stage: which renderer draws it (native or Flutter), why, how fast (I on the stage page)',
+                          onTap: ShowDebug.toggle,
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 6),
@@ -446,6 +417,11 @@ class _ShowTileState extends State<ShowTile> {
                         tip: 'Browse, favourite, make and edit MilkDrop presets',
                         onTap: () => openMilkPage(context, widget.booth),
                       ),
+                    ),
+                  if (widget.onRig != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: _Button(icon: Icons.tune, label: 'The rig', tip: 'The show\'s own page: its layers, its pool, the dancers (K)', onTap: widget.onRig),
                     ),
                   Row(
                     children: [
@@ -503,3 +479,45 @@ class _Button extends StatelessWidget {
 
 /// The state line's words for a frame, for a test.
 String showTileWords(ShowState st) => [st.scene ?? '—', st.master.section ?? ''].join(' ');
+
+/// The performer's offset for this screen (ShowEngine.offsetMs), asked for in a
+/// dialog and kept — the tile's, and the show page's.
+Future<void> showTileOffsetDialog(BuildContext context, Booth booth) async {
+  const kOffset = 'muse.show.offsetMs';
+  {
+    final show = booth.show;
+    var ms = show.offsetMs;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('The picture against the sound'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('A flash that lands after the kick wants the picture earlier; one before it, later. '
+                  'A television over HDMI is usually 40 to 100 ms late.'),
+              const SizedBox(height: 12),
+              Text(ms == 0 ? 'As the deck says' : '${ms > 0 ? 'Later' : 'Earlier'} by ${ms.abs()} ms'),
+              Slider(
+                value: ms.toDouble(),
+                min: -250,
+                max: 250,
+                divisions: 100,
+                onChanged: (v) {
+                  setState(() => ms = v.round());
+                  show.offsetMs = ms;
+                },
+              ),
+            ],
+          ),
+          actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Done'))],
+        ),
+      ),
+    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(kOffset, ms);
+  }
+}
+
