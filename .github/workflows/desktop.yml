@@ -32,7 +32,9 @@ jobs:
   windows:
     if: inputs.platforms == 'all' || inputs.platforms == '' || contains(inputs.platforms, 'windows')
     runs-on: windows-latest
-    timeout-minutes: 30
+    # ANGLE takes vcpkg the better part of an hour to build; it is kept between runs
+    # (below), so only the first run after the runner's vcpkg moves on takes that long.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
@@ -42,12 +44,23 @@ jobs:
       - name: Fetch packages
         working-directory: app
         run: flutter pub get
-      - name: GLEW, for MilkDrop's helper
+      - name: Which vcpkg this runner has
+        id: vcpkg
+        shell: bash
+        run: echo "rev=$(git -C "$VCPKG_INSTALLATION_ROOT" rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - name: vcpkg's libraries, kept between runs
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg\installed
+          key: vcpkg-installed-x64-windows-${{ steps.vcpkg.outputs.rev }}-glew-angle
+      - name: GLEW, for MilkDrop's helper; ANGLE, for the native stage
         shell: bash
         run: |
-          # projectM needs GLEW on Windows (app/native/milk); vcpkg's toolchain file
-          # in the environment is read by every CMake the Flutter build runs.
-          "$VCPKG_INSTALLATION_ROOT/vcpkg" install glew:x64-windows
+          # projectM needs GLEW on Windows (app/native/milk), and the native stage
+          # (app/native/stage) draws OpenGL ES through ANGLE on Direct3D; vcpkg's
+          # toolchain file in the environment is read by every CMake the Flutter build
+          # runs. Already installed from the cache, vcpkg has nothing to do here.
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" install glew:x64-windows angle:x64-windows
           echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> "$GITHUB_ENV"
       - name: Build
         working-directory: app
@@ -102,6 +115,54 @@ jobs:
           "$out/ffmpeg.exe" -hide_banner -version | head -1
           # And the engine has to be in the box, or the booth is on libmpv again.
           ls -l "$out/wetowl_engine.dll"
+      - name: The native stage draws here
+        working-directory: app
+        shell: pwsh
+        run: |
+          # The stage window on the demo record for a while, a frame saved every
+          # four seconds (--shot): the pictures and the log go up as an artifact for
+          # a look, and the log has to say the native stage drew them — through
+          # ANGLE on Windows' own software rasteriser, there being no card here.
+          $env:WETOWL_NON_UNIQUE = "1"
+          $exe = "build\windows\x64\runner\Release\wetowl.exe"
+          Get-ChildItem build\windows\x64\runner\Release\*.dll | Select-Object -ExpandProperty Name
+          # The library loaded here first: Windows' own word on anything it is missing.
+          # What the stage's library and ANGLE's import, and where each of those is
+          # (beside the app, Windows' own, or missing): a load that fails says only
+          # "a module could not be found".
+          Write-Host "--- vcpkg's bin"; Get-ChildItem C:\vcpkg\installed\x64-windows\bin\*.dll | Select-Object -ExpandProperty Name
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -property installationPath
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1 -ExpandProperty FullName
+          foreach ($dll in "wetowl_stage.dll","libEGL.dll","libGLESv2.dll") {
+            Write-Host "--- $dll imports"
+            $deps = & $dumpbin /nologo /dependents "build\windows\x64\runner\Release\$dll" | Where-Object { $_ -match '^\s+\S+\.dll$' } | ForEach-Object { $_.Trim() }
+            foreach ($d in $deps) {
+              $where = if (Test-Path "build\windows\x64\runner\Release\$d") { "beside the app" } elseif (Test-Path "$env:SystemRoot\System32\$d") { "Windows' own" } elseif ($d -like "api-ms-*" -or $d -like "ext-ms-*") { "an API set" } else { "MISSING" }
+              Write-Host "  $d  ($where)"
+            }
+          }
+          Push-Location build\windows\x64\runner\Release
+          try { [System.Runtime.InteropServices.NativeLibrary]::Load((Resolve-Path wetowl_stage.dll).Path) | Out-Null; Write-Host "wetowl_stage.dll loads" } catch { Write-Host "wetowl_stage.dll would not load: $_" }
+          Pop-Location
+          $p = Start-Process -FilePath $exe -ArgumentList "--stage","--demo","--scene","dance-disco","--shot","--shot-every","4000","--shot-scale","0.5" -PassThru -NoNewWindow -RedirectStandardOutput stage-smoke.log -RedirectStandardError stage-smoke.err
+          if (-not $p.WaitForExit(40000)) { Stop-Process -Id $p.Id -Force }
+          Start-Sleep -Seconds 2
+          Write-Host "--- what it said about the stage"
+          Select-String -Path stage-smoke.log -Pattern "stage|STAGE" | Select-Object -First 80 | ForEach-Object { $_.Line }
+          New-Item -ItemType Directory -Force stage-smoke | Out-Null
+          Copy-Item "$env:TEMP\wetowl-stage-*.png" stage-smoke\ -ErrorAction SilentlyContinue
+          Copy-Item stage-smoke.log, stage-smoke.err stage-smoke\ -ErrorAction SilentlyContinue
+          $shots = (Get-ChildItem stage-smoke\*.png -ErrorAction SilentlyContinue).Count
+          Write-Host "shots: $shots"
+          if ($shots -lt 1) { Write-Error "the stage window saved no frame"; exit 1 }
+          if (-not (Select-String -Path stage-smoke.log -Pattern "native" -Quiet)) { Write-Error "the log never says the native stage drew"; exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-stage-smoke
+          path: app/stage-smoke
+          retention-days: 7
       - name: Build the windowless fetcher
         working-directory: app
         shell: bash

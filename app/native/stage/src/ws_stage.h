@@ -37,6 +37,16 @@ WS_API int ws_attach_current(void);
 // Draws with no window, on EGL device `device` (-1: the default display). Returns
 // 0 or an error number.
 WS_API int ws_attach_headless(int device);
+// Windows: draws through ANGLE (libEGL.dll and libGLESv2.dll beside the app: OpenGL
+// ES 3 on Direct3D 11) in a context of its own, and hands each finished frame over
+// as a Direct3D texture shared by handle (ws_share), for the view's own Direct3D to
+// open — or, where the card will not share, as pixels (ws_pixels). Returns 0 or an
+// error number; elsewhere 5.
+WS_API int ws_attach_shared(void);
+// What this build and this attach have, as bits: 1 MilkDrop in the stage's own
+// context (ws_milk; without it the helper's frames go up as the texture named
+// "milk", ws_dance_texture); 2 frames shared by Direct3D handle; 4 frames as pixels.
+WS_API int ws_features(void);
 WS_API const char* ws_error(void);
 WS_API void ws_stop(void);
 
@@ -88,6 +98,14 @@ WS_API void ws_inputs(const float* values, int n);
 WS_API uint32_t ws_latest(int* width, int* height);
 // Called (on the stage's thread) each time a frame is finished.
 WS_API void ws_on_frame(void (*callback)(void* user), void* user);
+// The newest finished frame as a Direct3D share handle (ws_attach_shared, features
+// bit 2), finished on the GPU already, and its size; null when there is none yet.
+WS_API void* ws_share(int* width, int* height);
+// The newest finished frame as pixels (features bit 4): RGBA, top row first, kept
+// until ws_pixels_done; null when there is none yet. The stage's thread waits on
+// the next frame meanwhile, so be quick.
+WS_API const uint8_t* ws_pixels(int* width, int* height);
+WS_API void ws_pixels_done(void);
 
 // MilkDrop in the stage's context: the helper's commands (native/milk/wetowl-milk.cpp
 // lists them), applied on the stage's thread before its next frame. "open W H FPS

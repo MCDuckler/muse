@@ -111,6 +111,49 @@ if(WETOWL_MILK AND GLEW_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../native/
   install(FILES $<TARGET_RUNTIME_DLLS:wetowl-milk> DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" COMPONENT Runtime)
 endif()
 
+# The native stage (native/stage/): the show in OpenGL ES 3 on a thread of its own,
+# through ANGLE on Direct3D 11 here (vcpkg install angle:x64-windows, with vcpkg's
+# toolchain in CMAKE_TOOLCHAIN_FILE), shown in the app through runner/stage_texture.cpp,
+# and the scenes' sources beside it. Without ANGLE the app is built without it, and
+# the show draws on its Flutter stage as before.
+option(WETOWL_STAGE "Build the native stage" ON)
+find_package(unofficial-angle CONFIG QUIET)
+if(WETOWL_STAGE AND unofficial-angle_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../native/stage/CMakeLists.txt")
+  add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../native/stage" stage)
+  install(TARGETS wetowl_stage
+    RUNTIME DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    LIBRARY DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+  install(FILES $<TARGET_RUNTIME_DLLS:wetowl_stage> DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" COMPONENT Runtime)
+  # ANGLE's own need — zlib, which libGLESv2.dll imports and the target's list of
+  # DLLs leaves out — from beside the release libGLESv2.dll. Not found by name:
+  # vcpkg's debug tree comes first on the prefix path of a build with no
+  # CMAKE_BUILD_TYPE, as Visual Studio's is, and the debug DLLs want zlibd1.dll and
+  # the debug runtime, which no desk has.
+  get_target_property(WETOWL_GLES_DLL unofficial::angle::libGLESv2 IMPORTED_LOCATION_RELEASE)
+  if(NOT WETOWL_GLES_DLL)
+    get_target_property(WETOWL_GLES_DLL unofficial::angle::libGLESv2 IMPORTED_LOCATION)
+  endif()
+  if(WETOWL_GLES_DLL)
+    get_filename_component(WETOWL_ANGLE_BIN "${WETOWL_GLES_DLL}" DIRECTORY)
+    # vcpkg's zlib is z.dll (libGLESv2.dll imports it by that name); zlib1.dll in
+    # other years.
+    file(GLOB WETOWL_ZLIB_DLLS "${WETOWL_ANGLE_BIN}/z.dll" "${WETOWL_ANGLE_BIN}/zlib1.dll" "${WETOWL_ANGLE_BIN}/zlib.dll")
+    if(WETOWL_ZLIB_DLLS)
+      message(STATUS "stage: ${WETOWL_ZLIB_DLLS} go beside the app")
+      install(FILES ${WETOWL_ZLIB_DLLS} DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" COMPONENT Runtime)
+    else()
+      message(WARNING "stage: no zlib beside ${WETOWL_GLES_DLL}")
+    endif()
+  else()
+    message(WARNING "stage: ANGLE's libGLESv2 has no location to take zlib from")
+  endif()
+  install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../shaders/show/"
+    DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/stage"
+    COMPONENT Runtime
+    FILES_MATCHING PATTERN "*.frag" PATTERN "*.glsl")
+endif()
+
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/windows/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"

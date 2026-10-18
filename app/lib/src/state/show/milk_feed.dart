@@ -87,6 +87,12 @@ class MilkFeed extends ChangeNotifier {
 
   ui.Image? frame;
 
+  /// The helper's frames as they come, raw (RGBA, top row first), before they are
+  /// decoded for [frame]: the native stage without MilkDrop of its own (Windows)
+  /// uploads them as its picture. Called on the UI isolate; the bytes are the
+  /// helper's buffer, good for the call only.
+  void Function(Uint8List rgba, int width, int height)? rawFrames;
+
   /// The frames come, by count: for a painter of them ([frame] is the latest).
   final shown = ValueNotifier<int>(0);
   int get frames => shown.value;
@@ -430,6 +436,7 @@ class MilkFeed extends ChangeNotifier {
   // ---------------------------------------------------------------- the frames
   /// A frame off the pipe, made a picture; the pipe told when it is, for the next.
   void _arrived(MilkPipe pipe, Uint8List rgba, int w, int h) {
+    rawFrames?.call(rgba, w, h);
     ui.decodeImageFromPixels(rgba, w, h, ui.PixelFormat.rgba8888, (img) {
       pipe.took();
       if (_helper != pipe) {

@@ -140,7 +140,7 @@ class NativeStage {
   /// Why the native stage is not to be had here now, or null when it is.
   static String? whyNot() {
     if (kIsWeb) return 'the web';
-    if (!Platform.isLinux) return 'the native stage is Linux only so far';
+    if (!Platform.isLinux && !Platform.isWindows) return 'the native stage is Linux and Windows only so far';
     if (Platform.environment['WETOWL_STAGE'] == 'flutter') return 'WETOWL_STAGE=flutter';
     // Never under a test: no runner, no channel.
     if (Platform.environment.containsKey('FLUTTER_TEST')) return 'a test';
@@ -206,14 +206,24 @@ class NativeStage {
     _tried = true;
     try {
       final exe = File(Platform.resolvedExecutable).parent.path;
-      for (final p in ['$exe/lib/libwetowl_stage.so', 'libwetowl_stage.so']) {
+      // Beside the app's other libraries: bundle/lib on Linux, the app's own folder
+      // on Windows (where the runner loaded it already, by the same name).
+      final names = Platform.isWindows ? ['$exe\\wetowl_stage.dll', 'wetowl_stage.dll'] : ['$exe/lib/libwetowl_stage.so', 'libwetowl_stage.so'];
+      for (final p in names) {
         try {
           return _it = NativeStage._(DynamicLibrary.open(p));
-        } catch (_) {}
+        } catch (e) {
+          openError = '$e';
+        }
       }
-    } catch (_) {}
+    } catch (e) {
+      openError = '$e';
+    }
     return null;
   }
+
+  /// Why the library would not open, where it would not (the debug words, the log).
+  static String? openError;
 
   /// What it can draw: one shader, sampling nothing but MilkDrop (which it draws
   /// itself, in its own context); or the dancers.
@@ -371,6 +381,31 @@ class NativeStage {
   /// MilkDrop drawn here, in the stage's context (MilkFeed.want).
   late final milk = MilkInStage(send: _milkSend, said: _milkSaid);
 
+  /// What this build of the stage has (ws_features): 1 MilkDrop in its own
+  /// context, 2 frames shared by Direct3D handle, 4 frames as pixels. A library
+  /// from before the call: MilkDrop, as every Linux build had.
+  int get features {
+    try {
+      return _lib.lookupFunction<Int32 Function(), int Function()>('ws_features')();
+    } catch (_) {
+      return 1;
+    }
+  }
+
+  /// Whether MilkDrop draws in the stage's own context; without it (Windows) the
+  /// helper's frames go up as the texture named "milk" (NativeStageView).
+  bool get hasMilk => features & 1 != 0;
+
+  /// What it has, in words, for the debug words and the log.
+  String words() {
+    final f = features;
+    return [
+      f & 1 != 0 ? 'MilkDrop of its own' : 'MilkDrop from the helper',
+      if (f & 2 != 0) 'frames shared by Direct3D handle',
+      if (f & 4 != 0) 'frames as pixels',
+    ].join(', ');
+  }
+
   final Pointer<Float> _block = calloc<Float>(64);
   final Pointer<_Stats> _st = calloc<_Stats>();
   String? _sceneOn;
@@ -391,6 +426,7 @@ class NativeStage {
     _closing = null;
     try {
       final id = await _channel.invokeMethod<int>('open', {'width': width, 'height': height, 'scale': scale});
+      ShowDebug.note('the stage is open: texture $id, ${instance?.words() ?? 'no library'}');
       if (id != null) {
         _views.add(view);
         _closing?.cancel();
@@ -597,6 +633,8 @@ class _StageSurfaceState extends State<StageSurface> {
 
   String get _name => widget.preview ? 'the booth\'s picture' : 'the stage';
 
+  bool _checked = false;
+
   void _check() {
     final scene = widget.book[widget.feed.state.scene];
     final sceneWhy = NativeStage.whyNotScene(scene) ?? '';
@@ -605,7 +643,8 @@ class _StageSurfaceState extends State<StageSurface> {
     var native = false;
     if (why == null) {
       if (NativeStage.instance == null) {
-        why = 'no libwetowl_stage.so beside the app';
+        why = 'no ${Platform.isWindows ? 'wetowl_stage.dll' : 'libwetowl_stage.so'} beside the app'
+            '${NativeStage.openError == null ? '' : ' (${NativeStage.openError})'}';
       } else if (NativeStage.claim(this, rank: widget.rank)) {
         native = true;
       } else {
@@ -615,9 +654,12 @@ class _StageSurfaceState extends State<StageSurface> {
     if (!native) NativeStage.release(this);
     final whyNow = native ? sceneWhy : (why ?? '');
     final flipped = native != _native;
-    final changed = flipped || drawable != _drawable || whyNow != _why;
+    // The first time says where it starts, native or not, so a log has it.
+    final first = !_checked;
+    _checked = true;
+    final changed = first || flipped || drawable != _drawable || whyNow != _why;
     if (!changed) return;
-    if (flipped || (native && drawable != _drawable)) {
+    if (first || flipped || (native && drawable != _drawable)) {
       final word = native ? (drawable ? 'native' : 'native, parked under the Flutter stage') : 'flutter';
       ShowDebug.note('$_name: $word${whyNow.isEmpty ? '' : ' — $whyNow'}');
     }
@@ -724,6 +766,10 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
   int _ticks = 0;
   int _camSent = -1;
   int? _coverSent;
+
+  /// The helper's MilkDrop frame as the stage's "milk" texture (MilkFeed.rawFrames,
+  /// where the stage has no MilkDrop of its own).
+  void _milkFrame(Uint8List rgba, int w, int h) => NativeStage.instance?.texture('milk', w, h, rgba);
   DateTime? _cameraWantedAt;
   late final _covers = StageCovers(() {});
 
@@ -815,10 +861,19 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
     }
     // MilkDrop, where the scene samples it or the rig has it as the ground: started
     // in the stage, kept awake.
+    final milk = MilkFeed.shared;
     if (st.rig.ground.kind == Ground.milk || scene!.layers.first.samplers.contains('milk')) {
-      final milk = MilkFeed.shared;
-      milk.want(whole: !widget.preview, stage: stage.milk);
+      if (stage.hasMilk) {
+        milk.want(whole: !widget.preview, stage: stage.milk);
+      } else {
+        // No MilkDrop in this stage (Windows): the helper draws it, and its frames
+        // go up here as the stage's picture of it, by name.
+        milk.want(whole: !widget.preview);
+        milk.rawFrames = _milkFrame;
+      }
       if (!milk.running) unawaited(milk.start());
+    } else if (milk.rawFrames == _milkFrame) {
+      milk.rawFrames = null;
     }
     // A stage popped out has the real thing: the preview goes slow.
     stage.rate(widget.slow?.call() == true ? 10 : 60);
@@ -894,6 +949,7 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
 
   @override
   void dispose() {
+    if (MilkFeed.shared.rawFrames == _milkFrame) MilkFeed.shared.rawFrames = null;
     _dance?.dispose();
     _covers.dispose();
     NativeStage.drawing = false;

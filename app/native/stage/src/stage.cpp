@@ -25,11 +25,36 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES3/gl3.h>
+#ifdef WS_MILK
 #include <projectM-4/projectM.h>
-
 #include "milk_core.h"
+#endif
+
 #include "dance.h"
 #include "particles.h"
+
+// ANGLE's EGL tokens (EGL/eglext_angle.h), for an eglext.h without them.
+#ifndef EGL_PLATFORM_ANGLE_ANGLE
+#define EGL_PLATFORM_ANGLE_ANGLE 0x3202
+#endif
+#ifndef EGL_PLATFORM_ANGLE_TYPE_ANGLE
+#define EGL_PLATFORM_ANGLE_TYPE_ANGLE 0x3203
+#endif
+#ifndef EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE
+#define EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE 0x3208
+#endif
+#ifndef EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE
+#define EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE 0x3209
+#endif
+#ifndef EGL_PLATFORM_ANGLE_DEVICE_TYPE_HARDWARE_ANGLE
+#define EGL_PLATFORM_ANGLE_DEVICE_TYPE_HARDWARE_ANGLE 0x320A
+#endif
+#ifndef EGL_PLATFORM_ANGLE_DEVICE_TYPE_D3D_WARP_ANGLE
+#define EGL_PLATFORM_ANGLE_DEVICE_TYPE_D3D_WARP_ANGLE 0x320B
+#endif
+#ifndef EGL_D3D_TEXTURE_2D_SHARE_HANDLE_ANGLE
+#define EGL_D3D_TEXTURE_2D_SHARE_HANDLE_ANGLE 0x3200
+#endif
 
 #include <atomic>
 #include <deque>
@@ -39,10 +64,27 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstring>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
+
+#ifndef WS_MILK
+namespace milk {
+// No MilkDrop in this build of the stage (Windows: projectM is the helper's there,
+// and its frames come up as the texture named "milk", ws_dance_texture). The same
+// shape as milk_core.h's, so the stage reads the same.
+struct Core {
+  std::function<void(const std::string&)> say = [](const std::string&) {};
+  GLuint tex = 0;
+  bool open(int, int, int, const std::string&) { return false; }
+  void close() {}
+  bool command(const std::string&, const std::vector<uint8_t>&) { return false; }
+  void render() {}
+};
+}  // namespace milk
+#endif
 
 namespace ws {
 
@@ -253,6 +295,19 @@ struct Stage {
   EGLDisplay display = EGL_NO_DISPLAY;
   EGLContext context = EGL_NO_CONTEXT;
   bool headless = false;
+  // Windows (ws_attach_shared): the frames go to the view as Direct3D textures
+  // shared by handle, one surface of ANGLE's per output slot — or, where the card
+  // will not share, as pixels, two buffers turn and turn about.
+  bool shared = false, readback = false, warp = false;
+  EGLConfig config = nullptr;
+  EGLSurface current = EGL_NO_SURFACE;
+  EGLSurface shares[3] = {EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_SURFACE};
+  void* shareHandles[3] = {nullptr, nullptr, nullptr};
+  int shareW[3] = {0, 0, 0}, shareH[3] = {0, 0, 0};
+  std::mutex pixLock;
+  std::vector<uint8_t> pixels[2];
+  int pixelFront = 0, pixelW = 0, pixelH = 0;
+  bool pixHeld = false;
   std::string shaderDir = ".";
   std::string error;
   // the thread
@@ -487,7 +542,9 @@ void frame(int slot) {
     glDisable(GL_SCISSOR_TEST);
     glDisable(GL_CULL_FACE);
   }
-  const GLuint milkTex = milkNow ? S->milk.tex : 0;
+  // Without MilkDrop in this build, its picture is the helper's, uploaded by name.
+  const bool milkWanted = samplesMilk(p) || samplesMilk(leaving) || groundMilk;
+  const GLuint milkTex = milkNow ? S->milk.tex : milkWanted && !S->milkOpen ? S->dance.texture("milk") : 0;
 
   // 0. the ground, into its own picture
   if (blendNow) {
@@ -774,8 +831,85 @@ void tearDown() {
   glFinish();
 }
 
+// The frame's work done on the GPU before anyone else reads the picture.
+void finishOnGpu() {
+  GLsync f = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+  glFlush();
+  glClientWaitSync(f, GL_SYNC_FLUSH_COMMANDS_BIT, 200'000'000);
+  glDeleteSync(f);
+}
+
+// A pbuffer of ANGLE's, backed by a Direct3D texture that can be shared, and its
+// handle; EGL_NO_SURFACE (and the error said) where there is no such thing here.
+EGLSurface sharedSurface(int w, int h, void** handle) {
+  const EGLint attrs[] = {EGL_WIDTH, w, EGL_HEIGHT, h, EGL_TEXTURE_TARGET, EGL_TEXTURE_2D, EGL_TEXTURE_FORMAT, EGL_TEXTURE_RGBA, EGL_NONE};
+  EGLSurface s = eglCreatePbufferSurface(S->display, S->config, attrs);
+  if (s == EGL_NO_SURFACE) {
+    const EGLint plain[] = {EGL_WIDTH, w, EGL_HEIGHT, h, EGL_NONE};
+    s = eglCreatePbufferSurface(S->display, S->config, plain);
+  }
+  if (s == EGL_NO_SURFACE) { S->error = "no surface to share"; return EGL_NO_SURFACE; }
+  using Query = EGLBoolean(EGLAPIENTRY*)(EGLDisplay, EGLSurface, EGLint, void**);
+  auto query = (Query)eglGetProcAddress("eglQuerySurfacePointerANGLE");
+  void* got = nullptr;
+  if (!query || !query(S->display, s, EGL_D3D_TEXTURE_2D_SHARE_HANDLE_ANGLE, &got) || !got) {
+    eglDestroySurface(S->display, s);
+    S->error = "the surface has no Direct3D handle to share";
+    return EGL_NO_SURFACE;
+  }
+  *handle = got;
+  return s;
+}
+
+// Windows: the finished picture into the slot's shared surface — a Direct3D texture
+// of ANGLE's making, whose handle the view's Direct3D opens (ws_share) — and waited
+// for here, so the view never reads a frame half drawn (two Direct3D devices share
+// a texture, not a queue).
+void shareOut(int slot) {
+  Target& o = S->out[slot];
+  if (S->shares[slot] != EGL_NO_SURFACE && (S->shareW[slot] != o.w || S->shareH[slot] != o.h)) {
+    eglDestroySurface(S->display, S->shares[slot]);
+    S->shares[slot] = EGL_NO_SURFACE;
+    S->shareHandles[slot] = nullptr;
+  }
+  if (S->shares[slot] == EGL_NO_SURFACE) {
+    void* handle = nullptr;
+    EGLSurface s = sharedSurface(o.w, o.h, &handle);
+    if (s == EGL_NO_SURFACE) return;
+    S->shares[slot] = s;
+    S->shareHandles[slot] = handle;
+    S->shareW[slot] = o.w;
+    S->shareH[slot] = o.h;
+  }
+  if (!eglMakeCurrent(S->display, S->shares[slot], S->shares[slot], S->context)) {
+    S->error = "the shared surface would not be made current";
+    return;
+  }
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, o.fbo);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+  glBlitFramebuffer(0, 0, o.w, o.h, 0, 0, o.w, o.h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  finishOnGpu();
+  eglMakeCurrent(S->display, S->current, S->current, S->context);
+}
+
+// Where the card will not share: the finished picture read back as pixels (top row
+// first — the finish turned it over), into the buffer the view is not reading.
+void readBack(int slot) {
+  Target& o = S->out[slot];
+  finishOnGpu();
+  std::vector<uint8_t>& back = S->pixels[1 - S->pixelFront];
+  back.resize((size_t)o.w * o.h * 4);
+  glBindFramebuffer(GL_FRAMEBUFFER, o.fbo);
+  glReadPixels(0, 0, o.w, o.h, GL_RGBA, GL_UNSIGNED_BYTE, back.data());
+  std::lock_guard<std::mutex> g(S->pixLock);
+  S->pixelFront = 1 - S->pixelFront;
+  S->pixelW = o.w;
+  S->pixelH = o.h;
+}
+
 void run() {
-  if (!eglMakeCurrent(S->display, EGL_NO_SURFACE, EGL_NO_SURFACE, S->context)) {
+  if (!eglMakeCurrent(S->display, S->current, S->current, S->context)) {
     S->error = "the stage's context would not be made current";
     S->running = false;
     return;
@@ -820,6 +954,8 @@ void run() {
     lastBegan = began;
     const int slot = freeSlot();
     frame(slot);
+    if (S->shared) shareOut(slot);
+    else if (S->readback) readBack(slot);
     lastFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
     publish(slot);
     count(std::chrono::duration<double, std::milli>(Clock::now() - began).count());
@@ -908,6 +1044,82 @@ WS_API int ws_attach_headless(int device) {
   return 0;
 }
 
+WS_API int ws_attach_shared(void) {
+  if (!S) S = new Stage();
+#ifndef _WIN32
+  S->error = "frames are shared by Direct3D handle on Windows only";
+  return 5;
+#else
+  if (S->running) return 0;
+  if (S->display == EGL_NO_DISPLAY) {
+    // ANGLE on Direct3D 11: the card; failing that (or with WETOWL_STAGE_WARP=1),
+    // Windows' own software rasteriser, which draws the same picture, slowly.
+    auto platformDisplay = (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
+    const char* warpEnv = std::getenv("WETOWL_STAGE_WARP");
+    const bool warpOnly = warpEnv && warpEnv[0] == '1';
+    EGLDisplay d = EGL_NO_DISPLAY;
+    for (int device = warpOnly ? 1 : 0; device < 2 && d == EGL_NO_DISPLAY; device++) {
+      const EGLint attrs[] = {EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE,
+                              EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE,
+                              device == 0 ? EGL_PLATFORM_ANGLE_DEVICE_TYPE_HARDWARE_ANGLE : EGL_PLATFORM_ANGLE_DEVICE_TYPE_D3D_WARP_ANGLE,
+                              EGL_NONE};
+      EGLDisplay c = platformDisplay ? platformDisplay(EGL_PLATFORM_ANGLE_ANGLE, EGL_DEFAULT_DISPLAY, attrs) : EGL_NO_DISPLAY;
+      if (c != EGL_NO_DISPLAY && eglInitialize(c, nullptr, nullptr)) {
+        d = c;
+        S->warp = device == 1;
+      }
+    }
+    if (d == EGL_NO_DISPLAY) {
+      d = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+      if (d == EGL_NO_DISPLAY || !eglInitialize(d, nullptr, nullptr)) { S->error = "no EGL display from ANGLE"; return 1; }
+    }
+    S->display = d;
+  }
+  eglBindAPI(EGL_OPENGL_ES_API);
+  const EGLint want[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+                         EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_NONE};
+  EGLConfig config = nullptr;
+  EGLint n = 0;
+  if (!eglChooseConfig(S->display, want, &config, 1, &n) || n < 1) { S->error = "no GLES 3 config from ANGLE"; return 2; }
+  S->config = config;
+  S->context = makeContext(S->display, config, EGL_NO_CONTEXT);
+  if (S->context == EGL_NO_CONTEXT) { S->error = "no GLES 3 context from ANGLE"; return 3; }
+  // Something to be current on: a surface of one pixel (a surfaceless context is
+  // not every driver's).
+  if (S->current == EGL_NO_SURFACE) {
+    const EGLint one[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
+    S->current = eglCreatePbufferSurface(S->display, config, one);
+  }
+  // Can this card share? Tried once, on a surface of eight pixels.
+  void* handle = nullptr;
+  EGLSurface probe = sharedSurface(8, 8, &handle);
+  S->shared = probe != EGL_NO_SURFACE;
+  if (probe != EGL_NO_SURFACE) eglDestroySurface(S->display, probe);
+  S->readback = !S->shared;
+  S->error.clear();
+  // The view reads the texture's first row as its top, shared or as pixels, as
+  // Flutter's Linux view does (the blit into ANGLE's surface keeps the rows as they
+  // are: the first build hung the dancers from the ceiling), so the finish turns
+  // the picture over; WETOWL_STAGE_FLIP=0 says otherwise, for a card that does not
+  // agree.
+  S->flipY = 1;
+  S->headless = false;
+  S->running = true;
+  S->thread = std::thread(run);
+  return 0;
+#endif
+}
+
+WS_API int ws_features(void) {
+  int f = 0;
+#ifdef WS_MILK
+  f |= 1;
+#endif
+  if (S && S->shared) f |= 2;
+  if (S && S->readback) f |= 4;
+  return f;
+}
+
 WS_API const char* ws_error(void) { return S ? S->error.c_str() : ""; }
 
 WS_API void ws_stop(void) {
@@ -920,6 +1132,23 @@ WS_API void ws_stop(void) {
     if (!S->headless && S->context != EGL_NO_CONTEXT) {
       eglDestroyContext(S->display, S->context);
       S->context = EGL_NO_CONTEXT;
+    }
+    if (S->shared || S->readback) {
+      // The shared surfaces and the pixels go too: the next attach makes its own.
+      // Under the lock the view reads the handles by.
+      std::lock_guard<std::mutex> out(S->outLock);
+      for (int i = 0; i < 3; i++) {
+        if (S->shares[i] != EGL_NO_SURFACE) eglDestroySurface(S->display, S->shares[i]);
+        S->shares[i] = EGL_NO_SURFACE;
+        S->shareHandles[i] = nullptr;
+        S->shareW[i] = S->shareH[i] = 0;
+      }
+      if (S->current != EGL_NO_SURFACE) {
+        eglDestroySurface(S->display, S->current);
+        S->current = EGL_NO_SURFACE;
+      }
+      std::lock_guard<std::mutex> g(S->pixLock);
+      S->pixelW = S->pixelH = 0;
     }
   }
 }
@@ -1067,6 +1296,35 @@ WS_API uint32_t ws_latest(int* width, int* height) {
   if (width) *width = t.w;
   if (height) *height = t.h;
   return t.tex;
+}
+
+WS_API void* ws_share(int* width, int* height) {
+  if (!S || !S->shared) return nullptr;
+  std::lock_guard<std::mutex> g(S->outLock);
+  if (S->published < 0 || !S->shareHandles[S->published]) return nullptr;
+  S->shown = S->published;
+  if (width) *width = S->shareW[S->shown];
+  if (height) *height = S->shareH[S->shown];
+  return S->shareHandles[S->shown];
+}
+
+WS_API const uint8_t* ws_pixels(int* width, int* height) {
+  if (!S || !S->readback || S->pixHeld) return nullptr;
+  S->pixLock.lock();
+  if (S->pixelW == 0) {
+    S->pixLock.unlock();
+    return nullptr;
+  }
+  S->pixHeld = true;
+  if (width) *width = S->pixelW;
+  if (height) *height = S->pixelH;
+  return S->pixels[S->pixelFront].data();
+}
+
+WS_API void ws_pixels_done(void) {
+  if (!S || !S->pixHeld) return;
+  S->pixHeld = false;
+  S->pixLock.unlock();
 }
 
 WS_API void ws_on_frame(void (*callback)(void*), void* user) {
