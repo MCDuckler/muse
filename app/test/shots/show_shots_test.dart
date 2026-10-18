@@ -49,7 +49,7 @@ void main() {
   });
 
   test('every scene file loads, with its shader', () {
-    expect(kit.book.scenes.keys, containsAll(['drift', 'fluid', 'veins', 'toon', 'flash', 'echo', 'fold', 'blocks', 'kinetic', 'glide', 'siebenschlaefer', 'turntable', 'dance-disco', 'dance-neon', 'dance-shadow', 'dance-art']));
+    expect(kit.book.scenes.keys, containsAll(['drift', 'fluid', 'veins', 'flash', 'echo', 'fold', 'blocks', 'kinetic', 'glide', 'siebenschlaefer', 'turntable', 'dance-disco', 'dance-neon', 'dance-shadow', 'dance-art', 'flock']));
     for (final s in kit.book.scenes.values) {
       for (final sh in s.shaders) {
         expect(kit.programs.scenes.containsKey(sh), isTrue, reason: '${s.id} wants $sh');
@@ -72,7 +72,6 @@ void main() {
     ('drift', Duration(seconds: 5)),
     ('fluid', Duration(seconds: 34)),
     ('veins', Duration(seconds: 66)),
-    ('toon', Duration(seconds: 50)),
     ('flash', Duration(seconds: 40)),
     ('echo', Duration(seconds: 42)),
     ('fold', Duration(seconds: 44)),
@@ -81,6 +80,7 @@ void main() {
     ('glide', Duration(seconds: 38)),
     ('siebenschlaefer', Duration(seconds: 40)),
     ('turntable', Duration(seconds: 40)),
+    ('flock', Duration(seconds: 40)),
   ]) {
     testWidgets('the stage: $scene', (tester) async {
       tester.view.physicalSize = const Size(1280, 720);

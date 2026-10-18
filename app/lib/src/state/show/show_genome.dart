@@ -68,7 +68,7 @@ class Genome {
       'glide.salt': range(0.0, 1.0),
       'palette.sat': range(0.85, 1.1),
       // How much the director leans towards each scene (1 is neutral).
-      for (final scene in const ['drift', 'build', 'tunnel', 'kaleido', 'type', 'grid', 'fluid', 'veins', 'toon', 'flash', 'echo', 'fold', 'blocks', 'kinetic', 'glide'])
+      for (final scene in const ['drift', 'build', 'tunnel', 'kaleido', 'type', 'grid', 'fluid', 'veins', 'flash', 'echo', 'fold', 'blocks', 'kinetic', 'glide'])
         'scene.$scene': pick([0.4, 0.7, 1.0, 1.0, 1.3, 1.8]),
     };
     return Genome(g);
