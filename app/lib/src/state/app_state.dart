@@ -12,6 +12,7 @@ import 'library_query.dart';
 import '../api/client.dart';
 import '../api/connection.dart';
 import '../worker/door_here.dart' show doorPulledPath, shutDoorHere;
+import '../worker/splitter.dart' show Splitter;
 import '../worker/this_computer.dart' show fetchedHerePath, stopFetching;
 import '../api/models.dart';
 import 'eq_engines.dart';
@@ -57,7 +58,10 @@ abstract final class Tabs {
 }
 
 class AppState extends ChangeNotifier {
-  AppState();
+  AppState() {
+    // A split for the pool runs behind the booth: two threads while it plays.
+    Splitter.live = () => _booth?.live ?? false;
+  }
 
   late ApiClient api;
   PlayerService? player;
@@ -1340,6 +1344,18 @@ class AppState extends ChangeNotifier {
     queues = await api.queues();      // a queue created just now must show in the chips
     await player?.loadQueue(activeQueue!);
     _rememberQueue(activeQueue!.id);
+    notifyListeners();
+  }
+
+  /// [tracks] onto [q] — any queue of yours, not only the one playing — at its end
+  /// or as the next ([mode]). The one playing goes through [addTracks] (the player
+  /// reloads); another is only written and the list of queues re-read.
+  Future<void> addTracksTo(Queue q, List<Track> tracks, {String mode = 'end'}) async {
+    if (tracks.isEmpty) return;
+    if (activeQueue?.id == q.id) return addTracks(tracks, mode: mode);
+    _removedTracks.removeAll([for (final t in tracks) t.id]);
+    await api.addToQueue(q.id, [for (final t in tracks) t.id], mode: mode);
+    queues = await api.queues();
     notifyListeners();
   }
 

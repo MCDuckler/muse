@@ -303,8 +303,16 @@ Future<void> fetchKitFile(Uri from, KitFile f, File into,
 /// How many threads to give it: a little under half the machine, and never more than
 /// six. Past eight it is no faster (measured), and with the booth playing, the room it
 /// leaves is the difference between two decks held on the beat and a glitch: on the
-/// real engine, a split running beside a mix at eight threads cost one beat 140 ms.
-int separatorThreads() => (Platform.numberOfProcessors ~/ 2 - 1).clamp(1, 6);
+/// real engine, a split running beside a mix at eight threads cost one beat 140 ms,
+/// and at six, with the stems' encoders beside it, 260 late callbacks in half a minute
+/// (2026-10-18). So while the booth is [live], two at most.
+int separatorThreads({bool live = false}) => live ? (Platform.numberOfProcessors ~/ 4).clamp(1, 2) : (Platform.numberOfProcessors ~/ 2 - 1).clamp(1, 6);
+
+Future<void> _quiet(Future<Object?> Function() f) async {
+  try {
+    await f();
+  } catch (_) {}
+}
 
 /// Take [audio] apart with [s], writing the parts named in [into] (part → file).
 ///
@@ -319,14 +327,15 @@ Future<void> runSeparator(Separator s,
     String? beats,
     void Function(double)? progress,
     void Function(String device)? device,
-    void Function(Process)? started}) async {
+    void Function(Process)? started,
+    int? threads}) async {
   final args = [
     '--ort', s.runtime,
     '--model', s.model,
     '--ffmpeg', ffmpeg,
     '--in', audio,
     '--seconds', '$upToSeconds',
-    '--threads', '${separatorThreads()}',
+    '--threads', '${threads ?? separatorThreads()}',
     if (s.gpu) ...['--gpu', 'cuda'],
     for (final e in into.entries) ...['--${e.key}', e.value],
     // Its beats and bars too, where the tracker's files are here and they are wanted.
@@ -347,6 +356,13 @@ Future<void> runSeparator(Separator s,
           environment: _environment)
       : await Process.start(s.program, args, environment: _environment);
   started?.call(p);
+  // `nice -n 19` is relative: from an app run at -12 (the audio group's leave) it
+  // lands at +7, ahead of half the desktop. Put at the very back, and off the disk's
+  // queue too; its encoders, started after, inherit both.
+  if (Platform.isLinux) {
+    unawaited(_quiet(() => Process.run('renice', ['-n', '19', '-p', '${p.pid}'])));
+    unawaited(_quiet(() => Process.run('ionice', ['-c', '3', '-p', '${p.pid}'])));
+  }
   final said = StringBuffer();
   final watching = Future.wait([
     p.stdout.transform(utf8.decoder).transform(const LineSplitter()).forEach((line) {

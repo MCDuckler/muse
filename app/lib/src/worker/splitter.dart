@@ -103,6 +103,10 @@ class Splitter extends Told {
   /// The separator program; found beside the running one when not given.
   final String? program;
 
+  /// Whether the booth is playing or mixing right now (set by the app): a split
+  /// then runs on two threads, behind everything, so the decks stay on the beat.
+  static bool Function() live = () => false;
+
   SplitterState state = SplitterState.off;
   String? problem;
   InSplit? now;
@@ -345,6 +349,7 @@ class Splitter extends Told {
                 into: into,
                 upToSeconds: 12 * 60,
                 beats: beatsAt,
+                threads: separatorThreads(live: live()),
                 progress: (f) {
                   flight.percent = f;
                   notifyListeners();
