@@ -1,0 +1,41 @@
+{
+  "id": "lyrics",
+  "name": "Lyrics",
+  "energy": [
+    0.0,
+    0.92
+  ],
+  "sections": [
+    "verse",
+    "chorus",
+    "intro",
+    "breakdown",
+    "build",
+    "outro",
+    "on"
+  ],
+  "needs": [
+    "words"
+  ],
+  "priority": 1.4,
+  "instant": true,
+  "layers": [
+    {
+      "sim": "words"
+    }
+  ],
+  "particles": [],
+  "text": {
+    "title": false,
+    "lyrics": false
+  },
+  "post": {
+    "trails": 0.0,
+    "bloom": 0.3,
+    "fringe": 0.003,
+    "vignette": 0.4,
+    "grain": 0.22,
+    "recipe": 0.0,
+    "tone": 0.55
+  }
+}
