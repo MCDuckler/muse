@@ -1,7 +1,9 @@
 // The dancer: the shipped rig reads and poses into a body standing on the floor; a
-// move loops without a jump; poses blend; the choreography's arithmetic — tempo,
-// tiers, the record's flavour, the pool, the troupe, the camera and the stylised renderings — is the same for
-// the same record and slot.
+// move loops without a jump; poses blend, and a step into a new move carries the old
+// one's pose and motion out smoothly; duets come in couples; the choreography's
+// arithmetic — tempo, tiers, the record's flavour, the pool, the troupe, couples,
+// routines, formations, the camera and the stylised renderings — is the same for the
+// same record and slot.
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -114,6 +116,85 @@ void main() {
     expect(DanceRig.poseDistance(jb, rig.keyJoints(c)), closeTo(0, 1e-9));
   });
 
+  test('a step into a new move starts in the old pose, carries its motion, and ends in the new move', () {
+    final from = DancePose(rig.bones), fromWas = DancePose(rig.bones), to = DancePose(rig.bones), toWas = DancePose(rig.bones);
+    final a = rig.moves.first, b = rig.moves[rig.moves.length ~/ 2];
+    rig.sample(a, 3, from);
+    rig.sample(a, 3 - 1 / 16, fromWas);
+    rig.sample(b, 0, to);
+    rig.sample(b, -1 / 16, toWas);
+    final carry = DanceCarry(rig.bones)..start(from, fromWas, to, toWas, 1 / 16, 1.5);
+    final p = DancePose(rig.bones);
+    DancePose at(double t) {
+      rig.sample(b, t, p);
+      carry.apply(p, t);
+      return p;
+    }
+
+    final jFrom = rig.keyJoints(from);
+    expect(DanceRig.poseDistance(rig.keyJoints(at(0)), jFrom), lessThan(1e-6));
+    // Its first moment moves the way the old move was moving.
+    final j1 = rig.keyJoints(at(0.02));
+    rig.sample(a, 3.02, p);
+    expect(DanceRig.poseDistance(j1, rig.keyJoints(p)), lessThan(0.02));
+    // Whole at the end, and no jolt on the way.
+    rig.sample(b, 1.5, p);
+    final jEnd = rig.keyJoints(p);
+    expect(DanceRig.poseDistance(rig.keyJoints(at(1.5)), jEnd), lessThan(1e-9));
+    expect(DanceRig.poseDistance(rig.keyJoints(at(1.499)), jEnd), lessThan(0.01));
+    var last = rig.keyJoints(at(0));
+    for (var t = 0.05; t <= 1.5; t += 0.05) {
+      final j = rig.keyJoints(at(t));
+      expect(DanceRig.poseDistance(j, last), lessThan(0.12), reason: 'at $t');
+      last = j;
+    }
+  });
+
+  test('duets: two halves of one couple, standing apart, danced only as a couple', () {
+    final duets = rig.moves.where((m) => m.duo != null).toList();
+    expect(duets, isNotEmpty);
+    expect(rig.hasDuets, isTrue);
+    final a = DancePose(rig.bones), b = DancePose(rig.bones);
+    for (final m in duets.where((m) => m.part == 0)) {
+      final p = rig.partnerOf(m);
+      expect(p.duo, m.duo);
+      expect(p.part, 1);
+      expect(rig.partnerOf(p), same(m));
+      expect(p.beats, m.beats);
+      var apart = 0.0;
+      for (var t = 0.0; t < m.beats; t += 0.5) {
+        rig.sample(m, t, a);
+        rig.sample(p, t, b);
+        apart = math.max(apart, math.sqrt(math.pow(a.hips[0] - b.hips[0], 2) + math.pow(a.hips[1] - b.hips[1], 2)));
+      }
+      expect(apart, inInclusiveRange(0.25, 2.2), reason: m.id);
+    }
+    final solo = rig.moves.firstWhere((m) => m.duo == null);
+    expect(rig.partnerOf(solo), same(solo));
+    final fl = DanceClock.flavour(3, 110, MemeMood.vibe);
+    expect(DanceClock.pool(rig.moves, DanceTier.high, fl, 110).where((e) => e.$1.duo != null), isEmpty);
+    final duo = DanceClock.pool(rig.moves, DanceTier.high, fl, 110, duo: true);
+    expect(duo, isNotEmpty);
+    expect(duo.every((e) => e.$1.duo != null && e.$1.part == 0), isTrue);
+  });
+
+  test('couples now and then, never asleep; routines and formations the same for the same slot', () {
+    final latin = DanceClock.flavour(3, 100, MemeMood.vibe)..[DanceStyle.latin] = 6;
+    final paired = [for (var n = 0; n < 200; n++) DanceClock.paired(DanceTroupe.duo, MemeMood.vibe, latin, 3, n)];
+    expect(paired.where((t) => t == DanceTroupe.couple).length, greaterThan(60));
+    expect({for (var n = 0; n < 50; n++) DanceClock.paired(DanceTroupe.duo, MemeMood.sleep, latin, 3, n)}, {DanceTroupe.duo});
+    expect(DanceClock.paired(DanceTroupe.solo, MemeMood.rage, latin, 3, 1), DanceTroupe.solo);
+    final routines = {for (var n = 0; n < 100; n++) DanceClock.routine(DanceTroupe.line, 3, n)};
+    expect(routines, DanceRoutine.values.toSet());
+    expect({for (var n = 0; n < 50; n++) DanceClock.routine(DanceTroupe.couple, 3, n)}, {DanceRoutine.unison});
+    expect(DanceClock.routine(DanceTroupe.grid, 3, 7), DanceClock.routine(DanceTroupe.grid, 3, 7));
+    final forms = [for (var n = 0; n < 100; n++) DanceClock.formation(DanceTroupe.line, 3, n)];
+    expect(forms.toSet().length, greaterThan(2));
+    // A formation holds for two slots at least.
+    expect(DanceClock.formation(DanceTroupe.line, 3, 10), DanceClock.formation(DanceTroupe.line, 3, 11));
+    expect(DanceClock.formation(DanceTroupe.grid, 3, 10), 0);
+  });
+
   test('half time off a fast record, double off a slow one, half again asleep; the true tempo fits best', () {
     expect(DanceClock.rate(186, 93), 0.5);
     expect(DanceClock.rate(128, 93), 1);
@@ -157,6 +238,18 @@ void main() {
       expect(DanceFrame.of(shot, DanceTroupe.solo).yaw.abs(), lessThan(0.35));
     }
     expect(DanceClock.hold(MemeMood.sleep), greaterThan(DanceClock.hold(MemeMood.rage)));
+    // The stylised stage's extreme wide angles: often in a drop, never asleep, never
+    // elsewhere; a lens far wider than the others, close in.
+    const extremes = {DanceShot.extremeLow, DanceShot.extremeHigh, DanceShot.extremeFront, DanceShot.fisheye, DanceShot.fisheyeLow};
+    final drop = [for (var n = 0; n < 200; n++) DanceClock.shot(MemeMood.rage, 9, n, DanceTroupe.solo, art: true)];
+    expect(drop.where(extremes.contains).length, inInclusiveRange(50, 130));
+    expect([for (var n = 0; n < 100; n++) DanceClock.shot(MemeMood.sleep, 9, n, DanceTroupe.solo, art: true)].where(extremes.contains), isEmpty);
+    expect([for (var n = 0; n < 100; n++) DanceClock.shot(MemeMood.rage, 9, n, DanceTroupe.solo)].where(extremes.contains), isEmpty);
+    for (final e in extremes) {
+      final f = DanceFrame.of(e, DanceTroupe.grid);
+      expect(f.fov, greaterThan(1.8));
+      expect(f.dist, lessThan(1.0));
+    }
     // The stylised stage: a rendering a section, never the same twice running.
     for (var n = 0; n < 30; n++) {
       final a = DanceClock.art(MemeMood.vibe, 5, n);
@@ -167,29 +260,26 @@ void main() {
   });
 
   test('dancers switched off: never in a mix, a chosen one still dances, all off is none off', () {
-    const off = ['chris', 'banana', 'hotdog', 'stickbug'];
+    const off = ['chris'];
     for (var salt = 0; salt < 400; salt++) {
-      final lead = DanceModels.lead(DanceModels.mix, salt, off);
-      expect(off, isNot(contains(lead)));
+      expect(DanceModels.lead(DanceModels.mix, salt, off), 'joe');
       for (var i = 0; i < 6; i++) {
-        final m = DanceModels.member(DanceModels.mix, salt, i, off);
-        expect(off, isNot(contains(m)));
-        expect(m, isNot(lead));
+        expect(DanceModels.member(DanceModels.mix, salt, i, off), 'joe');
       }
+      // Both on: each record one of them leads, the other dances with it.
+      final lead = DanceModels.lead(DanceModels.mix, salt);
+      expect(DanceModels.member(DanceModels.mix, salt, 0), isNot(lead));
     }
-    expect(DanceModels.lead('banana', 7, off), 'banana');
+    expect(DanceModels.lead('chris', 7, off), 'chris');
     final every = [for (final m in DanceModels.all) m.$1];
+    expect(every, ['chris', 'joe']);
     expect(DanceModels.pool(every), every);
-    // One left on: the troupe is all of them.
-    final one = [for (final m in every) if (m != 'joe') m];
-    expect(DanceModels.lead(DanceModels.mix, 3, one), 'joe');
-    expect(DanceModels.member(DanceModels.mix, 3, 2, one), 'joe');
   });
 
   test('the switches travel to a stage in another window', () {
-    const m = ShowMacros(dancer: 'mix', dancersOff: ['chris', 'doge']);
+    const m = ShowMacros(dancer: 'mix', dancersOff: ['chris']);
     final back = ShowMacros.fromJson(jsonDecode(jsonEncode(m.toJson())) as Map<String, dynamic>);
-    expect(back.dancersOff, ['chris', 'doge']);
+    expect(back.dancersOff, ['chris']);
     expect(ShowMacros.fromJson(const {}).dancersOff, isEmpty);
   });
 }

@@ -35,6 +35,9 @@ if not MODEL:
         dst.actions = [a for a in src.actions if a not in ("dance",)]
     for a in dst.actions:
         if a.name.endswith(".001"): a.name = a.name[:-4]
+    if os.path.exists(f"{HOME}/dance2/rigs_duo.blend"):
+        with bpy.data.libraries.load(f"{HOME}/dance2/rigs_duo.blend") as (src, dst):
+            dst.actions = list(src.actions)
 else:
     # the model's skin: its material's picture, at 1024
     img = next((n.image for m in scan.data.materials if m and m.use_nodes for n in m.node_tree.nodes if n.type == "TEX_IMAGE" and n.image), None)
@@ -120,6 +123,17 @@ for style, ms in picks.items():
         m = cands_new[(c, beat, L)]
         moves.append(dict(id=f"{c}_{beat}", action=c, beats=B_new[c]["beats"][beat:beat + L + 1], off=offs[c],
                           style=style, energy=m["energy"], handsUp=m["hands_up"]))
+# The duets: a couple's two parts, a move each (<lead>x<partner>_<beat> a and b), on the
+# lead's beats, from the same capture frames.
+duets = json.load(open(f"{HOME}/dance2/duets.json")) if os.path.exists(f"{HOME}/dance2/duets.json") else []
+duo_offs = json.load(open(f"{HOME}/dance2/duo_offsets.json")) if duets else {}
+for du in duets:
+    a, b, beat, L = du["a"], du["b"], du["beat"], du["beats"]
+    m = cands_new[(a, beat, L)]
+    did = f"{a}x{b}_{beat}"
+    for part, c in enumerate((a, b)):
+        moves.append(dict(id=did + "ab"[part], action="duo_" + c, beats=B_new[a]["beats"][beat:beat + L + 1], off=duo_offs["duo_" + c],
+                          style=du["style"], energy=m["energy"], handsUp=m["hands_up"], duo=did, part=part, clip=c, legs=du["legs"]))
 
 pbs = rig.pose.bones
 def sample(t):
@@ -136,25 +150,44 @@ def time_at(beats, x):
     b0, b1 = beats[k], beats[k + 1]
     return 1 + b0 + (b1 - b0) * (x - k)
 
-frames = []
-for mv in moves:
+# A couple's places: each partner's hips over the floor from its capture's joints
+# (bvh_joints.py, each scaled by its own legs, so put back to one scale), in the rig's
+# size — the retarget starts every take from where its own hips were.
+rleg = ((rig.data.bones["UpperLeg_L"].head_local - rig.data.bones["LowerLeg_L"].head_local).length
+        + (rig.data.bones["LowerLeg_L"].head_local - rig.data.bones["Foot_L"].head_local).length) * W.to_scale().x
+_floor = {}
+def floor_xy(mv, t):
+    """Where on the floor a duet part's hips are at scene frame t (the rig's world)."""
+    if mv["clip"] not in _floor:
+        z = np.load(f"{HOME}/dance2/joints/{mv['clip']}.npz")
+        _floor[mv["clip"]] = z["P"][:, 0, :2] * float(z["leg"]) / 0.85 * rleg / (sum(mv["legs"]) / 2)
+    P = _floor[mv["clip"]]
+    c = min(max(t - 1 + mv["off"], 0), len(P) - 1.001)
+    i = int(math.floor(c)); f = c - i
+    return P[i] * (1 - f) + P[i + 1] * f
+
+def take(mv):
+    """A move's samples on its beat and the half beat before it."""
     rig.animation_data.action = bpy.data.actions[mv["action"]]
     L = len(mv["beats"]) - 1; N = L * FPB; H = FPB // 2
-    S = [sample(time_at(mv["beats"], j / FPB) - mv["off"]) for j in range(N + 1)]
-    pre = [sample(time_at(mv["beats"], (j - H) / FPB) - mv["off"]) for j in range(H)]  # the half beat before
-    # facing to -Y: facing = side x up
-    ang = [math.atan2(*(lambda f: (f.y, f.x))(s[2].cross(Vector((0, 0, 1))))) for s in S]
-    yaw = math.atan2(sum(math.sin(a) for a in ang), sum(math.cos(a) for a in ang))
-    Rz = Matrix.Rotation(-math.pi / 2 - yaw, 4, "Z"); qz = Rz.to_quaternion()
-    p0 = S[0][1].copy(); p0.z = 0
-    drift = S[N][1] - S[0][1]; drift.z = 0
+    ts = [time_at(mv["beats"], j / FPB) - mv["off"] for j in range(N + 1)]
+    tp = [time_at(mv["beats"], (j - H) / FPB) - mv["off"] for j in range(H)]  # the half beat before
+    S = [sample(t) for t in ts]; pre = [sample(t) for t in tp]
+    if "duo" in mv:
+        for s, t in zip(S + pre, ts + tp):
+            s[1].x, s[1].y = floor_xy(mv, t)
+    return S, pre, N, H
+
+def bake(S, pre, N, H, Rz, p0, drift, mean=None):
+    qz = Rz.to_quaternion()
     def fix(s, j):
         q, p, _ = s
         p = Rz.to_3x3() @ (p - p0 - drift * (j / N))
         return [qz @ q[0]] + q[1:], p
     F = [fix(s, j) for j, s in enumerate(S)]
     P_pre = [fix(s, j - H) for j, s in enumerate(pre)]
-    mean = sum((f[1] for f in F[:N]), Vector()) / N; mean.z = 0
+    if mean is None:
+        mean = sum((f[1] for f in F[:N]), Vector()) / N; mean.z = 0
     F = [(q, p - mean) for q, p in F]; P_pre = [(q, p - mean) for q, p in P_pre]
     # the seam: the last half beat eased into the half beat that led into the start
     for j in range(N - H, N + 1):
@@ -169,18 +202,57 @@ for mv in moves:
             if x.w < 0: x = -x
             blob += struct.pack("<4h", *[int(round(c * 32767)) for c in (x.w, x.x, x.y, x.z)])
         blob += struct.pack("<3h", *[int(round(c * 1000)) for c in p])
-    mv["offset"] = sum(len(f) for f in frames); frames.append(bytes(blob))
+    return bytes(blob)
+
+def facing(S):
+    # facing = side x up
+    ang = [math.atan2(*(lambda f: (f.y, f.x))(s[2].cross(Vector((0, 0, 1))))) for s in S]
+    return math.atan2(sum(math.sin(a) for a in ang), sum(math.cos(a) for a in ang))
+
+frames = []
+blobs = {}
+for k, mv in enumerate(moves):
+    if mv.get("part") == 1: continue
+    if "duo" not in mv:
+        S, pre, N, H = take(mv)
+        # facing to -Y
+        Rz = Matrix.Rotation(-math.pi / 2 - facing(S), 4, "Z")
+        p0 = S[0][1].copy(); p0.z = 0
+        drift = S[N][1] - S[0][1]; drift.z = 0
+        blobs[mv["id"]] = bake(S, pre, N, H, Rz, p0, drift)
+        continue
+    # A couple, turned together: across the picture (the lead on the left), facing us
+    # on average; their middle, their drift and their mean place taken out together.
+    mb = moves[k + 1]
+    (Sa, pa, N, H), (Sb, pb, _, _) = take(mv), take(mb)
+    axis = sum(((sb[1] - sa[1]) for sa, sb in zip(Sa, Sb)), Vector()); axis.z = 0
+    fa, fb = facing(Sa), facing(Sb)
+    fx, fy = math.cos(fa) + math.cos(fb), math.sin(fa) + math.sin(fb)
+    th = math.atan2(axis.y, axis.x) if axis.length / (N + 1) > 0.25 else math.atan2(fy, fx) + math.pi / 2
+    if math.sin(math.atan2(fy, fx) - th) > 0 and math.hypot(fx, fy) > 0.2: th += math.pi
+    Rz = Matrix.Rotation(-th, 4, "Z")
+    p0 = (Sa[0][1] + Sb[0][1]) / 2; p0.z = 0
+    drift = ((Sa[N][1] - Sa[0][1]) + (Sb[N][1] - Sb[0][1])) / 2; drift.z = 0
+    mean = Vector()
+    for S in (Sa, Sb):
+        mean += sum((Rz.to_3x3() @ (s[1] - p0 - drift * (j / N)) for j, s in enumerate(S[:N])), Vector()) / (2 * N)
+    mean.z = 0
+    blobs[mv["id"]] = bake(Sa, pa, N, H, Rz, p0, drift, mean)
+    blobs[mb["id"]] = bake(Sb, pb, N, H, Rz, p0, drift, mean)
+for mv in moves:
+    mv["offset"] = sum(len(f) for f in frames); frames.append(blobs[mv["id"]])
     ivs = np.diff(mv["beats"]) / 30.0
     mv["bpm"] = round(60 / float(np.mean(ivs)), 2)
-    print("MOVE", mv["id"], mv["style"], L, "beats", mv["bpm"], "bpm", flush=True)
+    print("MOVE", mv["id"], mv["style"], len(mv["beats"]) - 1, "beats", mv["bpm"], "bpm", flush=True)
 open(f"{OUT}/moves.bin", "wb").write(b"".join(frames))
 
-en = sorted(m["energy"] for m in moves)
-lo, hi = en[int(len(en) * 0.3)], en[int(len(en) * 0.66)]
+# Tier cut-offs: the 30th and 66th energy percentiles of the first 74-move table, kept fixed so
+# adding moves doesn't re-tier the ones already there.
+lo, hi = 10.405, 18.105
 out = {"dancer": "chris", "fpb": FPB, "bones": skel, "meshes": meshes, "skin": "skin.webp",
        "sample": {"quats": len(bones), "bytes": len(bones) * 8 + 6},
        "moves": [{"id": m["id"], "style": m["style"], "tier": "low" if m["energy"] < lo else ("mid" if m["energy"] < hi else "high"),
                   "energy": round(m["energy"], 2), "bpm": m["bpm"], "beats": len(m["beats"]) - 1, "handsUp": round(m["handsUp"], 2),
-                  "offset": m["offset"]} for m in moves]}
+                  "offset": m["offset"], **({"duo": m["duo"], "part": m["part"]} if "duo" in m else {})} for m in moves]}
 json.dump(out, open(f"{OUT}/dancer.json", "w"), separators=(",", ":"))
 print("moves", len(moves), "bytes", sum(len(f) for f in frames))

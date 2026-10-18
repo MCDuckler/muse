@@ -22,6 +22,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/painting.dart';
 
 import 'show_dance_rig.dart';
+import 'show_dance_surface.dart';
 
 class V3 {
   const V3(this.x, this.y, this.z);
@@ -43,7 +44,7 @@ class V3 {
 /// A camera: where it is, what it looks at, how wide, on a [size] picture. A roll
 /// tips the horizon (a handheld lean, a whip's tilt).
 class DanceCam {
-  DanceCam({required this.eye, required this.target, required this.size, this.fov = 0.62, this.roll = 0, this.shift = Offset.zero}) {
+  DanceCam({required this.eye, required this.target, required this.size, this.fov = 0.62, this.roll = 0, this.shift = Offset.zero, this.fisheye = 0}) {
     f = (target - eye).unit;
     var r = f.cross(const V3(0, 0, 1));
     if (r.length < 1e-6) r = const V3(1, 0, 0);
@@ -57,7 +58,8 @@ class DanceCam {
     }
     right = r;
     up = u;
-    focal = size.height / 2 / math.tan(fov / 2);
+    // A fisheye's focal puts the lens's half-angle at the picture's half height.
+    focal = fisheye > 0.5 ? size.height / fov : size.height / 2 / math.tan(fov / 2);
     cx = size.width / 2 + shift.dx * size.width;
     cy = size.height / 2 + shift.dy * size.height;
   }
@@ -69,6 +71,11 @@ class DanceCam {
 
   /// The picture's centre moved off the middle, as a share of the size.
   final Offset shift;
+
+  /// How much of a fisheye the lens is, 0..1: at 1 a point's distance from the
+  /// middle is its angle off the axis (equidistant), so [fov] may go past 180°; at 0 a
+  /// straight lens. (The flock's crazy shots; the dancer bends its picture after.)
+  final double fisheye;
   late final V3 f, right, up;
   late final double focal, cx, cy;
   static const near = 0.05;
@@ -77,6 +84,15 @@ class DanceCam {
   (double, double, double) project(V3 p) {
     final dx = p.x - eye.x, dy = p.y - eye.y, dz = p.z - eye.z;
     final z = dx * f.x + dy * f.y + dz * f.z;
+    if (fisheye > 0) {
+      final x = dx * right.x + dy * right.y + dz * right.z, y = dx * up.x + dy * up.y + dz * up.z;
+      final rho = math.sqrt(x * x + y * y);
+      final theta = math.atan2(rho, z);
+      final r = focal * ((1 - fisheye) * math.tan(math.min(theta, 1.3)) + fisheye * theta);
+      final k = rho < 1e-9 ? 0.0 : r / rho;
+      // The depth is the distance (a fisheye sees to the side); behind the lens, none.
+      return (cx + k * x, cy - k * y, z > near ? math.sqrt(rho * rho + z * z) : near * 0.5);
+    }
     final iz = 1 / math.max(z, near);
     return (cx + focal * (dx * right.x + dy * right.y + dz * right.z) * iz, cy - focal * (dx * up.x + dy * up.y + dz * up.z) * iz, z);
   }
@@ -117,7 +133,13 @@ class DanceLook3 {
     this.dim = 1,
     this.shadeFlat = true,
     this.matcap = false,
+    this.chrome = false,
   });
+
+  /// Polished metal: what the surface reflects of a studio round it — a bright
+  /// sky, the hot line of the horizon, a dark floor, two softboxes — rather than how
+  /// it is lit. Tinted by [keyColor] (white for plain chrome), the rim at the edges.
+  final bool chrome;
 
   /// Shaded by where the normal points on the screen, a studio's lights fixed to the
   /// camera (keyColor the light, fill the shadow, rim the edge), rather than by
@@ -146,7 +168,10 @@ class DanceLook3 {
 
 /// The scratch of one mesh's drawing, kept between frames.
 class DanceBody {
-  DanceBody(this.mesh, ui.Image skin)
+  /// [gpu]: drawn by the native stage, which skins it itself — posing works out the
+  /// skinning matrices only, placing keeps the spot; nothing is deformed or projected
+  /// here.
+  DanceBody(this.mesh, ui.Image skin, {this.gpu = false})
       : _local = Float32List(mesh.positions * 3),
         _localN = Float32List(mesh.positions * 3),
         _wp = Float32List(mesh.positions * 3),
@@ -163,6 +188,19 @@ class DanceBody {
   }
 
   final DanceMesh mesh;
+  final bool gpu;
+
+  /// Counts every posing and placing: the native surface poses a body again when it
+  /// has moved since.
+  int version = 0;
+
+  /// Where it was last placed, and the skeleton's size and skinning of the last pose.
+  DanceSpot spot = const DanceSpot();
+  int bones = 0;
+  Float64List get skinMatrices => _skinM;
+  bool get hasSkin => _skin != null;
+  ui.Image? get skinImage => _skin;
+
   // per position: skinned, placed, projected, lit; per corner: what is drawn
   final Float32List _local, _localN, _wp, _wn, _ps, _depth, _screen, _uv;
   final Int32List _pc, _colors, _keys;
@@ -183,11 +221,43 @@ class DanceBody {
     _shader = ui.ImageShader(skin, TileMode.clamp, TileMode.clamp, Float64List.fromList(const [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]));
   }
 
+  /// Where joint [bone] is in the world, [tip] metres along it: the last pose, at the
+  /// last spot. Null before the body is posed, or where its skeleton has no such bone.
+  V3? jointWorld(String bone, double tip) {
+    final rig = _rig;
+    if (rig == null) return null;
+    final i = rig.bone(bone);
+    if (i < 0) return null;
+    final p = Float64List(3);
+    DanceRig.jointAt(_worldM, i, tip, p);
+    final s = spot;
+    var x = p[0];
+    if (s.mirror) x = -x;
+    final c = math.cos(s.yaw), sn = math.sin(s.yaw), k = s.scale;
+    return V3(s.x + (c * x - sn * p[1]) * k, s.y + (sn * x + c * p[1]) * k, s.lift + p[2] * k);
+  }
+
+  DanceRig? _rig;
+
+  /// [o]'s last pose taken as this body's own (the same model dancing the same line):
+  /// the skinning not worked out again. For a GPU body only — nothing is deformed.
+  void copyPose(DanceBody o) {
+    _rig = o._rig;
+    bones = o.bones;
+    facing = o.facing;
+    _worldM.setAll(0, o._worldM);
+    _skinM.setAll(0, o._skinM);
+    version++;
+  }
+
   /// The body put in [pose] (in the capture's place, before any spot).
   void pose(DanceRig rig, DancePose pose) {
+    _rig = rig;
     rig.solve(pose, _worldM);
     rig.skinning(_worldM, _skinM);
-    DanceRig.deform(mesh, _skinM, _local, _localN);
+    bones = rig.bones;
+    version++;
+    if (!gpu) DanceRig.deform(mesh, _skinM, _local, _localN);
     final l = rig.bone('UpperLeg_L') * 12, r = rig.bone('UpperLeg_R') * 12;
     // facing = side × up, side = left hip − right hip
     final sx = _worldM[l + 3] - _worldM[r + 3], sy = _worldM[l + 7] - _worldM[r + 7];
@@ -202,6 +272,10 @@ class DanceBody {
 
   /// The posed body moved to [spot] in the world.
   void place(DanceSpot s) {
+    spot = s;
+    version++;
+    _mirrored = s.mirror;
+    if (gpu) return;
     final c = math.cos(s.yaw), sn = math.sin(s.yaw), k = s.scale;
     final n = mesh.positions;
     for (var v = 0; v < n; v++) {
@@ -489,6 +563,34 @@ class DanceBody {
     }
   }
 
+  /// Chrome: each position's colour is the studio it reflects, as the camera sees it
+  /// (the view is taken as straight on, which a body's size forgives): the reflected
+  /// ray's height picks sky, horizon or floor; its direction finds the softboxes; the
+  /// edges reflect more (Fresnel). Times [DanceLook3.dim].
+  void _chrome(DanceCam cam, DanceLook3 look, {bool flipZ = false}) {
+    final n = mesh.positions;
+    final r = cam.right, u = cam.up, f = cam.f;
+    final tint = look.keyColor, rc = look.rim;
+    final dim = look.dim, rimK = look.rimK;
+    final a = (look.alpha.clamp(0.0, 1.0) * 255).round();
+    for (var v = 0; v < n; v++) {
+      final nx = _wn[v * 3], ny = _wn[v * 3 + 1];
+      final nz = flipZ ? -_wn[v * 3 + 2] : _wn[v * 3 + 2];
+      // The normal in the camera's space (z toward the eye), and the view ray
+      // (0, 0, -1) reflected in it.
+      final vx = nx * r.x + ny * r.y + nz * r.z, vy = nx * u.x + ny * u.y + nz * u.z, vz = -(nx * f.x + ny * f.y + nz * f.z);
+      final (er, eg, eb) = chromeEnv(2 * vz * vx, 2 * vz * vy, -1 + 2 * vz * vz);
+      // Fresnel: metal reflects at every angle, more at a grazing one.
+      final edge = 1 - vz.abs();
+      final fres = 0.78 + 0.22 * edge * edge;
+      final rim = edge * edge * edge * rimK;
+      final rr = (er * fres * tint.r + rc.r * rim) * dim;
+      final gg = (eg * fres * tint.g + rc.g * rim) * dim;
+      final bb = (eb * fres * tint.b + rc.b * rim) * dim;
+      _pc[v] = (a << 24) | (_c(rr) << 16) | (_c(gg) << 8) | _c(bb);
+    }
+  }
+
   /// Vertex colours for [look], the rim in them where [rimIn].
   void _light(DanceCam cam, DanceLook3 look, {bool flipZ = false, bool rimIn = true}) {
     final n = mesh.positions;
@@ -501,6 +603,7 @@ class DanceBody {
     final a = (look.alpha.clamp(0.0, 1.0) * 255).round();
     final e = cam.eye;
     final toon = look.toon;
+    if (look.chrome) return _chrome(cam, look, flipZ: flipZ);
     if (look.matcap) return _matcap(cam, look, flipZ: flipZ);
     for (var v = 0; v < n; v++) {
       final nx = _wn[v * 3], ny = _wn[v * 3 + 1];
@@ -537,15 +640,39 @@ class DanceBody {
   }
 }
 
-/// Draws [v] and lets it go at once: the picture keeps its own hold on the data, and
-/// a few dozen of these a frame left to the collector are native memory piling up
-/// between its rounds — and long rounds when it comes.
-void _vertices(Canvas c, ui.Vertices v, BlendMode mode, Paint paint) {
-  c.drawVertices(v, mode, paint);
-  v.dispose();
-}
-
 int _c(double x) => x <= 0 ? 0 : (x >= 1 ? 255 : (x * 255).round());
+
+/// The studio a chrome body reflects, for a reflected ray (camera space: x right, y
+/// up, z toward the eye): a sky brightening toward the horizon, the horizon's hot
+/// line, a floor almost black with a dim band of the room's far wall, and two
+/// softboxes, up left in front and to the right behind.
+(double, double, double) chromeEnv(double rx, double ry, double rz) {
+  double s(double e0, double e1, double x) {
+    final t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+    return t * t * (3 - 2 * t);
+  }
+
+  double r, g, b;
+  if (ry >= 0) {
+    // sky: from the horizon's white to a darker, cooler top
+    final k = s(0.0, 0.85, ry);
+    r = 1.0 - 0.62 * k;
+    g = 1.0 - 0.58 * k;
+    b = 1.0 - 0.48 * k;
+  } else {
+    // floor: dark, with a lighter band of the far wall just under the horizon
+    final k = s(0.0, -0.35, ry);
+    final band = math.exp(-((ry + 0.12) * (ry + 0.12)) / 0.002) * 0.25;
+    r = g = b = 0.05 + 0.5 * (1 - k) * (1 - k) + band;
+  }
+  // the horizon's line: thin and hot
+  final line = math.exp(-(ry * ry) / 0.0009) * 0.6;
+  // softboxes: up left in front, and a strip to the right behind
+  final l1 = rx * -0.45 + ry * 0.55 + rz * 0.70;
+  final l2 = rx * 0.85 + ry * 0.15 + rz * -0.50;
+  final soft = s(0.93, 0.975, l1) * 1.4 + s(0.9, 0.96, l2) * 0.9;
+  return (r + line + soft, g + line + soft, b + line + soft);
+}
 int _argb(Color c) => ((c.a * 255).round() << 24) | ((c.r * 255).round() << 16) | ((c.g * 255).round() << 8) | (c.b * 255).round();
 
 /// The skeleton's size, for scratch.
@@ -575,10 +702,9 @@ class DanceQuads {
 
   bool get isEmpty => _pos.isEmpty;
 
-  void draw(Canvas c, {BlendMode blend = BlendMode.srcOver}) {
+  void draw(DanceSurface c, {BlendMode blend = BlendMode.srcOver}) {
     if (_pos.isEmpty) return;
-    _vertices(c, ui.Vertices.raw(ui.VertexMode.triangles, Float32List.fromList(_pos), colors: Int32List.fromList(_col)), BlendMode.dst,
-        Paint()..blendMode = blend);
+    c.tris(Float32List.fromList(_pos), Int32List.fromList(_col), blend: blend);
     _pos.clear();
     _col.clear();
   }

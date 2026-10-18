@@ -2,7 +2,7 @@
 #   blender -b --python dance_model.py -- <model.glb|.vrm|scan rig .blend> <out.blend>
 # Its bones renamed to the Bandai-Namco names the rig uses (skel.MIXAMO), the bones
 # outside that chain folded into their nearest kept ancestor (their weights too),
-# and every capture the scan's rig dances (long, short, the CMU takes) retarget onto
+# and every capture the scan's rig dances (long, short, the CMU takes, the duets) retarget onto
 # it frame for frame from the scan's own rig, so the move tables (beats, offsets) hold.
 import bpy, sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -89,6 +89,9 @@ with bpy.data.libraries.load(f"{HOME}/dance_bank/rig_short.blend") as (s, d):
 d.actions[0].name = "short"
 with bpy.data.libraries.load(f"{HOME}/dance2/rigs_cmu.blend") as (s, d):
     d.actions = [x for x in s.actions if x != "dance"]
+if os.path.exists(f"{HOME}/dance2/rigs_duo.blend"):
+    with bpy.data.libraries.load(f"{HOME}/dance2/rigs_duo.blend") as (s, d):
+        d.actions = list(s.actions)
 srcs = [x for x in bpy.data.actions if not x.name.startswith("m_")]
 for act in srcs:
     scan_rig.animation_data.action = act

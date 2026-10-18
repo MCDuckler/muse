@@ -30,6 +30,8 @@ class DanceMove {
     this.beats = 8,
     this.handsUp = 0,
     this.offset = 0,
+    this.duo,
+    this.part = 0,
   });
   final String id;
   final DanceStyle style;
@@ -45,6 +47,12 @@ class DanceMove {
   /// Where its samples start in moves.bin.
   final int offset;
 
+  /// A duet's: the couple it is half of (two people captured dancing together), and
+  /// which half — 0 the lead, 1 the partner. Both halves stand where they stood in
+  /// the capture, round the couple's middle; neither is danced alone.
+  final String? duo;
+  final int part;
+
   /// How much it pumps on the beat, 0..1: the hips' rise and fall once a beat,
   /// against all their rising and falling (DanceRig works it out on loading).
   double pulse = 0;
@@ -58,6 +66,8 @@ class DanceMove {
         beats: (j['beats'] as num?)?.toInt() ?? 8,
         handsUp: (j['handsUp'] as num?)?.toDouble() ?? 0,
         offset: (j['offset'] as num?)?.toInt() ?? 0,
+        duo: j['duo'] as String?,
+        part: (j['part'] as num?)?.toInt() ?? 0,
       );
 }
 
@@ -133,6 +143,9 @@ class DanceRig {
     _hipsIx = names.indexOf('Hips');
     _byId = {for (final m in moves) m.id: m};
     for (final m in moves) {
+      if (m.duo != null) (_duos[m.duo!] ??= [m, m])[m.part.clamp(0, 1)] = m;
+    }
+    for (final m in moves) {
       m.pulse = _pulse(m);
     }
     for (final m in meshes) {
@@ -167,6 +180,16 @@ class DanceRig {
 
   /// This rig's own [id] move (every model dances the same table).
   DanceMove? move(String id) => _byId[id];
+
+  final _duos = <String, List<DanceMove>>{};
+
+  /// The other half of [m]'s duet (itself when it is not one).
+  DanceMove partnerOf(DanceMove m) {
+    final d = m.duo == null ? null : _duos[m.duo!];
+    return d == null ? m : d[1 - m.part.clamp(0, 1)];
+  }
+
+  bool get hasDuets => _duos.isNotEmpty;
 
   /// How tall the body stands at rest, metres.
   double height = 0;
@@ -420,8 +443,130 @@ class DanceRig {
     return s / (a.length / 3);
   }
 
+  /// How differently two poses' key joints are moving: [a] and [aWas] a moment
+  /// apart, [b] and [bWas] the same moment apart — the mean distance between the
+  /// joints' two displacements, metres.
+  static double motionDistance(Float64List a, Float64List aWas, Float64List b, Float64List bWas) {
+    var s = 0.0;
+    for (var i = 0; i < a.length; i += 3) {
+      final dx = (a[i] - aWas[i]) - (b[i] - bWas[i]);
+      final dy = (a[i + 1] - aWas[i + 1]) - (b[i + 1] - bWas[i + 1]);
+      final dz = (a[i + 2] - aWas[i + 2]) - (b[i + 2] - bWas[i + 2]);
+      s += math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+    return s / (a.length / 3);
+  }
+
   @visibleForTesting
   static void mul34(Float64List a, int ao, Float64List b, int bo, Float64List out, int oo) => _mul(a, ao, b, bo, out, oo);
+}
+
+/// What is left of the pose a dancer was in when it stepped into a new move: per bone
+/// the turn from the new move's rotation to the old one (as an axis times an angle)
+/// and the hips' shift, each with how fast it was changing, faded to nothing over a
+/// few beats on a quintic that leaves no kink (inertialisation, Bollo 2016). The new
+/// move plays whole underneath — its own timing, its own steps — rather than two
+/// moves dissolving into each other, and the body carries its momentum across.
+class DanceCarry {
+  DanceCarry(int bones)
+      : _x = Float64List(bones * 3 + 3),
+        _a = Float64List(bones * 3 + 3),
+        _b = Float64List(bones * 3 + 3),
+        _c = Float64List(bones * 3 + 3),
+        _d = Float64List(bones * 3 + 3),
+        _v = Float64List(bones * 3 + 3);
+  final Float64List _x, _v, _a, _b, _c, _d;
+
+  /// Beats it fades over; 0 none.
+  double len = 0;
+
+  /// From [from] (the old pose now) and [fromWas] (it [h] beats ago) to [to] and
+  /// [toWas] (the new move at its entry, and [h] before it).
+  void start(DancePose from, DancePose fromWas, DancePose to, DancePose toWas, double h, double len) {
+    this.len = len;
+    if (len <= 0) return;
+    final n = from.bones;
+    final r0 = Float64List(3), r1 = Float64List(3);
+    for (var b = 0; b < n; b++) {
+      _logDiff(from.q, to.q, b * 4, r0);
+      _logDiff(fromWas.q, toWas.q, b * 4, r1);
+      for (var k = 0; k < 3; k++) {
+        _x[b * 3 + k] = r0[k];
+        _v[b * 3 + k] = (r0[k] - r1[k]) / h;
+      }
+    }
+    for (var k = 0; k < 3; k++) {
+      final x0 = from.hips[k] - to.hips[k], x1 = fromWas.hips[k] - toWas.hips[k];
+      _x[n * 3 + k] = x0;
+      _v[n * 3 + k] = (x0 - x1) / h;
+    }
+    // The fade's coefficients, a quintic each: from x0 at speed v0 to rest at len. A
+    // speed far beyond what the gap explains (a fast swing met at a near pose) is held
+    // in, or the offset would overshoot past the new move.
+    final t1 = len;
+    for (var i = 0; i < _x.length; i++) {
+      final x0 = _x[i];
+      final cap = 4 * x0.abs() / t1 + 0.6;
+      final v0 = _v[i].clamp(-cap, cap);
+      _v[i] = v0;
+      final a0 = (-8 * v0 * t1 - 20 * x0) / (t1 * t1);
+      _a[i] = -(a0 * t1 * t1 + 6 * v0 * t1 + 12 * x0) / (2 * math.pow(t1, 5));
+      _b[i] = (3 * a0 * t1 * t1 + 16 * v0 * t1 + 30 * x0) / (2 * math.pow(t1, 4));
+      _c[i] = -(3 * a0 * t1 * t1 + 12 * v0 * t1 + 20 * x0) / (2 * t1 * t1 * t1);
+      _d[i] = a0 / 2;
+    }
+  }
+
+  /// [pose] (the new move's) with what is left of the old one [t] beats after the step.
+  void apply(DancePose pose, double t) {
+    if (len <= 0 || t >= len || t < 0) return;
+    final n = pose.bones;
+    final t2 = t * t, t3 = t2 * t, t4 = t3 * t, t5 = t4 * t;
+    double at(int i) => _a[i] * t5 + _b[i] * t4 + _c[i] * t3 + _d[i] * t2 + _v[i] * t + _x[i];
+    for (var b = 0; b < n; b++) {
+      final x = at(b * 3), y = at(b * 3 + 1), z = at(b * 3 + 2);
+      final ang = math.sqrt(x * x + y * y + z * z);
+      if (ang < 1e-6) continue;
+      final s = math.sin(ang / 2) / ang;
+      final dw = math.cos(ang / 2), dx = x * s, dy = y * s, dz = z * s;
+      final o = b * 4;
+      final w = pose.q[o], qx = pose.q[o + 1], qy = pose.q[o + 2], qz = pose.q[o + 3];
+      // d · q
+      pose.q[o] = dw * w - dx * qx - dy * qy - dz * qz;
+      pose.q[o + 1] = dw * qx + dx * w + dy * qz - dz * qy;
+      pose.q[o + 2] = dw * qy - dx * qz + dy * w + dz * qx;
+      pose.q[o + 3] = dw * qz + dx * qy - dy * qx + dz * w;
+    }
+    for (var k = 0; k < 3; k++) {
+      pose.hips[k] += at(n * 3 + k);
+    }
+  }
+
+  /// The turn taking bone [o]'s rotation in [b] to its rotation in [a] (a · b⁻¹, the
+  /// short way), as an axis times its angle, into [out].
+  static void _logDiff(Float64List a, Float64List b, int o, Float64List out) {
+    final aw = a[o], ax = a[o + 1], ay = a[o + 2], az = a[o + 3];
+    final bw = b[o], bx = -b[o + 1], by = -b[o + 2], bz = -b[o + 3];
+    var w = aw * bw - ax * bx - ay * by - az * bz;
+    var x = aw * bx + ax * bw + ay * bz - az * by;
+    var y = aw * by - ax * bz + ay * bw + az * bx;
+    var z = aw * bz + ax * by - ay * bx + az * bw;
+    if (w < 0) {
+      w = -w;
+      x = -x;
+      y = -y;
+      z = -z;
+    }
+    final sn = math.sqrt(x * x + y * y + z * z);
+    if (sn < 1e-9) {
+      out[0] = out[1] = out[2] = 0;
+      return;
+    }
+    final ang = 2 * math.atan2(sn, w);
+    out[0] = x / sn * ang;
+    out[1] = y / sn * ang;
+    out[2] = z / sn * ang;
+  }
 }
 
 void _identity(Float64List m, int o) {

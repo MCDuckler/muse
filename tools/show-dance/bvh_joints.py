@@ -1,6 +1,7 @@
 # blender -b --python bvh_joints.py -- <in.bvh> <out.npz>
 # World joint positions per frame at 30 fps, under the Bandai-Namco names (skel.py),
-# scaled so the legs are 0.85 m long whatever the capture's units.
+# scaled so the legs are 0.85 m long whatever the capture's units (the capture's own
+# leg length kept as `leg`, so two people captured together can be put back side by side).
 import bpy, sys, os, numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import skel, retarget
@@ -23,5 +24,5 @@ iu, il, ifo = names.index("UpperLeg_L"), names.index("LowerLeg_L"), names.index(
 leg = np.median(np.linalg.norm(P[:, iu] - P[:, il], axis=1) + np.linalg.norm(P[:, il] - P[:, ifo], axis=1))
 P *= 0.85 / leg
 P[..., 2] -= np.percentile(np.minimum(P[:, names.index("Toes_L"), 2], P[:, names.index("Toes_R"), 2]), 5)
-np.savez(a[1], P=P, names=np.array(names), fps=30.0, f0=f0, step=step)
+np.savez(a[1], P=P, names=np.array(names), fps=30.0, f0=f0, step=step, leg=leg)
 print("saved", a[1], P.shape, "step", step, "leg", leg, flush=True)

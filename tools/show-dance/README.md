@@ -22,12 +22,21 @@ Database (free for any use), both as BVH. `skel.py` maps CMU joint names onto th
    choices go in picks.json, by style: groove, party, toon, swing, latin, folk, calm.
 5. `blender -b rig_long.blend --python dance_rig2.py -- <dir> <bvh dir> <dir>/rigs_cmu.blend`: every picked
    take retargeted onto the rig, an action per take.
+5b. Duets (two people captured dancing together: CMU 60/61 are one salsa couple take for take, 18_15/19_15
+   and 20_01/21_01 a chicken dance side by side): `python dance_duets.py <dir>` puts each couple's 8-beat
+   moves back where the two stood (bvh_joints.py keeps each capture's leg length for that) and draws
+   sheets/duet_NN.png; the choices go in duets.json. Then
+   `blender -b rig_long.blend --python dance_duo.py -- <dir> <bvh dir> <dir>/rigs_duo.blend` retargets both
+   halves of every couple over the same capture frames (actions duo_<take>).
 6. `blender -b rig_long.blend --python dance_export3d.py -- <out>`: the bank.
    - dancer.json: the skeleton and the moves.
    - dancer.bin: a 9k-triangle and a 2k-triangle mesh, skinned per position, drawn per corner.
    - moves.bin: each move's poses eight times a beat as int16, with the hips in the world and every other
      bone against its parent. Each move is turned to face −y on average, its drift is taken out, and its
-     last half beat is blended into the lead-in so it loops.
+     last half beat is blended into the lead-in so it loops. A duet's two halves (moves `<a>x<b>_<beat>a`
+     and `…b`, marked `duo` and `part` in dancer.json) are turned, centred and steadied together, so they
+     keep their places round the couple's middle (the lead on the left, facing the camera on average).
+     The tiers' energy cut-offs are fixed (the first table's), so adding moves doesn't re-tier the rest.
    - skin.webp: the scan's texture at 1024.
 7. `python dance3d_check.py <out> <move ids…>`: the bank drawn the way the app draws it, one pose a beat,
    into check/.
