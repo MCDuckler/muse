@@ -106,6 +106,7 @@ flutter:
     - assets/controllers/
     # The stage's scenes: one JSON per look. See lib/src/ui/show/scene.dart.
     - assets/show/scenes/
+    - assets/show/thumbs/
     # The Siebenschläfer scene's bank: photographs, cut-outs, captions, and who took
     # the pictures (CREDITS.md). See lib/src/ui/show/show_meme.dart.
     - assets/show/siebenschlaefer/
@@ -113,16 +114,10 @@ flutter:
     - assets/show/siebenschlaefer/stickers/
     - assets/show/siebenschlaefer/clips/climb/
     - assets/show/siebenschlaefer/clips/tree/
+    - assets/show/flock/pigeon/
     - assets/show/dance/
     - assets/show/dance/chris/
-    - assets/show/dance/chris2/
     - assets/show/dance/joe/
-    - assets/show/dance/banana/
-    - assets/show/dance/hotdog/
-    - assets/show/dance/stickbug/
-    - assets/show/dance/stonks/
-    - assets/show/dance/alien/
-    - assets/show/dance/doge/
     # MilkDrop's own presets, written out to the data folder on first run (the
     # wetowl-milk helper reads files). See lib/src/state/show/milk_library.dart.
     - assets/milk/presets/
@@ -147,12 +142,12 @@ flutter:
     - shaders/show/build.frag
     - shaders/show/kaleido.frag
     - shaders/show/grid.frag
-    - shaders/show/toon.frag
     - shaders/show/flash.frag
     - shaders/show/echo.frag
     - shaders/show/fold.frag
     - shaders/show/blocks.frag
     - shaders/show/kinetic.frag
+    - shaders/show/pulse.frag
     - shaders/show/glide.frag
     - shaders/show/milk.frag
     - shaders/show/under.frag
@@ -163,6 +158,8 @@ flutter:
     - shaders/show/sim/fluid_look.frag
     - shaders/show/sim/meme_fx.frag
     - shaders/show/sim/dance_fx.frag
+    - shaders/show/sim/flock_fx.frag
+    - shaders/show/sim/words_fx.frag
 
   fonts:
     - family: Manrope

@@ -7,6 +7,7 @@
 // energy. The director runs over it as it would over a set, so what it shows is the
 // show, not a demo of the shaders.
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -19,16 +20,33 @@ import 'show_events.dart';
 import 'show_feed.dart';
 import 'show_genome.dart';
 import 'show_palette.dart';
+import 'show_rig.dart';
 import 'show_state.dart';
 
 class DemoShowFeed extends ChangeNotifier implements ShowFeed {
-  DemoShowFeed({this.bpm = 128, int seed = 3, List<SceneMeta> scenes = const []})
+  DemoShowFeed({this.bpm = 128, int seed = 3, List<SceneMeta> scenes = const [], this.looks = const {}})
       : director = ShowDirector(scenes: scenes, seed: seed) {
     _state = _blank(DateTime.now());
   }
 
   final double bpm;
   final ShowDirector director;
+
+  /// The looks, by id, for the frame's rig (as the engine's).
+  final Map<String, Look> looks;
+
+  static final RigGround? _forcedGround = () {
+    try {
+      final v = Platform.environment['WETOWL_SHOW_GROUND'];
+      if (v == null || v.isEmpty) return null;
+      final parts = v.split(':');
+      final kind = Ground.values.where((g) => g.name == parts.first).firstOrNull;
+      if (kind == null) return null;
+      return RigGround(kind: kind, field: parts.length > 1 ? parts[1] : null, dim: kind == Ground.cover || kind == Ground.field ? 0.7 : 1);
+    } catch (_) {
+      return null;
+    }
+  }();
   late ShowState _state;
   @override
   ShowState get state => _state;
@@ -203,7 +221,21 @@ class DemoShowFeed extends ChangeNotifier implements ShowFeed {
       m = m.copyWith(hit: (hit - dt / 0.35).clamp(0.0, 1.0));
     }
     macros = m;
-    st = st.copyWith(scene: d.scene, sceneFrom: d.from, sceneK: d.k, clearSceneFrom: d.from == null, macros: m);
+    final look = looks[d.scene], leaving = looks[d.from];
+    var rig = look == null ? ShowRig.none : rigWithMacros(look.rig, m);
+    // A ground asked for from outside, for a look at one on the demo:
+    // WETOWL_SHOW_GROUND=wash|milk|camera|cover|pulse:rays|field:drift.
+    final forced = _forcedGround;
+    if (forced != null) rig = rig.copyWith(ground: forced, blend: rig.blend.copyWith(ground: GroundMode.contrast));
+    st = st.copyWith(
+      scene: d.scene,
+      sceneFrom: d.from,
+      sceneK: d.k,
+      clearSceneFrom: d.from == null,
+      rig: rig,
+      rigFrom: leaving == null ? null : rigWithMacros(leaving.rig, m),
+      macros: m,
+    );
     _state = st;
     notifyListeners();
     for (final e in said) {

@@ -136,17 +136,23 @@ class BoardLinkServer extends BoardLinkBase {
     });
     ws.listen(
       (data) {
-        if (data is String && data.startsWith('{"t":"ping"')) ws.add(data.replaceFirst('"ping"', '"pong"'));
+        if (data is String && data.startsWith('{"t":"ping"')) {
+          ws.add(data.replaceFirst('"ping"', '"pong"'));
+        } else if (data is List<int>) {
+          // The stage's small picture, for the booth to show instead of its own.
+          final t = parseStageThumb(data);
+          if (t != null) stageThumb.value = t;
+        }
       },
-      onDone: () {
-        wire.close();
-        _stages.remove(ws);
-      },
-      onError: (Object _) {
-        wire.close();
-        _stages.remove(ws);
-      },
+      onDone: () => _stageGone(ws, wire),
+      onError: (Object _) => _stageGone(ws, wire),
     );
+  }
+
+  void _stageGone(WebSocket ws, ShowWire wire) {
+    wire.close();
+    _stages.remove(ws);
+    if (_stages.isEmpty) stageThumb.value = null;
   }
 
   /// How many stages are reading the show.

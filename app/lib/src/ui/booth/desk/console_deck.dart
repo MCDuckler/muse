@@ -394,7 +394,9 @@ class _ConsoleDeckState extends State<ConsoleDeck> with TickerProviderStateMixin
     final group = _left ? small : [small[0], small[2], small[1], small[3]];
     final row = <Widget>[
       play,
-      const SizedBox(width: 12),
+      // Eight, not twelve: the show's tab on the page's edge took four pixels off
+      // each deck, and the row was cut that close.
+      const SizedBox(width: 8),
       for (final (i, p) in group.indexed) ...[if (i > 0) const SizedBox(width: 6), p],
       const Spacer(),
       _syncPad(),

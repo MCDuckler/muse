@@ -481,10 +481,13 @@ enum TabSide { left, right }
 /// The tab at the room's edge: BOARD ▸ beside the decks, ◂ DECKS beside the board.
 /// Lit in the colour of the pad sounding, so the board is seen from the decks.
 class BoardTab extends StatefulWidget {
-  const BoardTab({super.key, required this.side, required this.label, required this.onTap, this.face});
+  const BoardTab({super.key, required this.side, required this.label, required this.onTap, this.face, this.tip});
   final TabSide side;
   final String label;
   final VoidCallback onTap;
+
+  /// What the tab says on a hover; the board's and the decks' own words otherwise.
+  final String? tip;
 
   /// The board, for the light; null on the board's own side.
   final BoardFace? face;
@@ -534,7 +537,7 @@ class _BoardTabState extends State<BoardTab> {
           if ((right && v < -100) || (!right && v > 100)) widget.onTap();
         },
         child: Tooltip(
-          message: right ? 'The board (B, or scroll sideways)' : 'The decks (B, or scroll sideways)',
+          message: widget.tip ?? (right ? 'The board (B, or scroll sideways)' : 'The decks (B, or scroll sideways)'),
           waitDuration: const Duration(milliseconds: 600),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 160),

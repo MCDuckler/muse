@@ -19,6 +19,7 @@ import 'mixer_native.dart';
 import 'parts.dart';
 import 'session.dart';
 import '../show/show_engine.dart';
+import '../show/show_store.dart';
 
 /// How one record gives way to the next.
 enum Transition {
@@ -383,7 +384,9 @@ class Booth extends ChangeNotifier {
     Soundboard Function(Booth)? board,
     Deck? a,
     Deck? b,
-  })  : mixer = mixer ?? Mixer.forThisDevice(),
+    ShowStore? showStore,
+  })  : _showStore = showStore,
+        mixer = mixer ?? Mixer.forThisDevice(),
         fx = fx ?? FxChannel(),
         timing = timing ?? TimingStore(api),
         parts = PartsStore(api, offlinePath: offlinePath) {
@@ -481,6 +484,10 @@ class Booth extends ChangeNotifier {
   /// Where the voice is in each record and what it sings: what the automix plans its
   /// vocal moves by.
   late final VocalStore vocals = VocalStore(api);
+
+  /// Each record's tempo and key as the house has them on file: what a crate shows
+  /// before (or without) the record's whole analysis.
+  late final FactsStore facts = FactsStore(api);
 
   /// Where the parts of a record come from. See PartsStore.
   final PartsStore parts;
@@ -794,7 +801,10 @@ class Booth extends ChangeNotifier {
 
   /// The show's engine on this booth: what the stage and the lights read. Started
   /// by the room's clock (BoothClock) while the booth is open.
-  late final ShowEngine show = ShowEngine(this);
+  late final ShowEngine show = ShowEngine(this, store: _showStore);
+
+  /// Where the show keeps its document (a test's, which forgets).
+  final ShowStore? _showStore;
 
   /// How far the decks are held down while a pad that ducks them sounds, 0..1:
   /// 1 is not at all. The board's, never a hand's, and never the master.

@@ -14,6 +14,7 @@ import 'artwork.dart';
 import 'booth/booth_clock.dart';
 import 'booth/board/board_room.dart';
 import 'booth/board/pop_out_none.dart' if (dart.library.io) 'booth/board/pop_out_io.dart';
+import 'show/show_room.dart' show showRoomToggles;
 import 'show/show_tile.dart' show showViewToggles;
 import 'show/stage_page.dart' show openStagePage;
 import 'show/stage_pop_out_none.dart' if (dart.library.io) 'show/stage_pop_out_io.dart';
@@ -96,6 +97,7 @@ class _BoothPageState extends State<BoothPage> {
     ('⇧ B', 'A row of the board pinned under the decks, or let go'),
     ('⌥ B', 'The board in a window of its own'),
     ('V', 'The show, and back to the waveforms'),
+    ('K', 'The show\'s rig — its layers and its pool — and back to the decks'),
     ('⇧ V', 'The stage over this window (Esc comes back)'),
     ('⌥ V', 'The stage in a window of its own, for the other screen'),
     ('R', 'Auto DJ: hear the last mix again'),
@@ -188,6 +190,8 @@ class _BoothPageState extends State<BoothPage> {
       } else {
         showViewToggles.value++;
       }
+    } else if (k == LogicalKeyboardKey.keyK) {
+      showRoomToggles.value++;
     } else if (k == LogicalKeyboardKey.keyB) {
       if (HardwareKeyboard.instance.isAltPressed) {
         unawaited(popOutBoard(context.read<AppState>().boardLink));

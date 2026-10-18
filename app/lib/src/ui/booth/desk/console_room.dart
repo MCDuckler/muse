@@ -25,6 +25,7 @@ import 'console_log.dart';
 import 'console_mixer.dart';
 import 'console_plan.dart';
 import 'console_set.dart';
+import '../../show/show_room.dart';
 import '../../show/show_tile.dart';
 import 'console_waves.dart';
 import '../look.dart';
@@ -62,9 +63,11 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
   /// What the middle of the booth shows: the waveforms, the set, or the plan.
   BoothView _view = BoothView.waves;
 
-  /// Which page of the room: the decks (0) or the board (1).
-  int _page = 0;
-  final _pages = PageController();
+  /// Which page of the room: the show (0), the decks (1) or the board (2).
+  int _page = decksPage;
+  final _pages = PageController(initialPage: decksPage);
+
+  static const showPage = 0, decksPage = 1, boardPage = 2;
 
   static const _kWidth = 'muse.booth.crateWidth';
   static const _kWide = 'muse.booth.crateWide';
@@ -84,6 +87,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
     _app.addListener(_queueMoved);
     planViewToggles.addListener(_togglePlan);
     showViewToggles.addListener(_toggleShow);
+    showRoomToggles.addListener(_toggleShowRoom);
     boardToggles.addListener(_toggleBoard);
     planPair.addListener(_pairAsked);
   }
@@ -110,10 +114,12 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
       _wide = prefs.getBool(_kWide) ?? false;
       _logFolded = prefs.getBool(_kLog) ?? false;
       _view = BoothView.values.asNameMap()[prefs.getString(_kView) ?? ''] ?? BoothView.waves;
-      // Back on the board only if something was still sounding there.
-      _page = (prefs.getInt(_kPage) ?? 0) == 1 && _b.board.anySounding ? 1 : 0;
+      // Back on the board only if something was still sounding there; back on the
+      // show's page whenever it was left open.
+      final was = prefs.getInt(_kPage) ?? decksPage;
+      _page = was == boardPage && _b.board.anySounding ? boardPage : (was == showPage ? showPage : decksPage);
     });
-    if (_page == 1 && _pages.hasClients) _pages.jumpToPage(1);
+    if (_page != decksPage && _pages.hasClients) _pages.jumpToPage(_page);
   }
 
   Future<void> _keepLayout() async {
@@ -138,6 +144,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
     _app.removeListener(_queueMoved);
     planViewToggles.removeListener(_togglePlan);
     showViewToggles.removeListener(_toggleShow);
+    showRoomToggles.removeListener(_toggleShowRoom);
     boardToggles.removeListener(_toggleBoard);
     planPair.removeListener(_pairAsked);
     _pages.dispose();
@@ -194,12 +201,12 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
     );
   }
 
-  // ------------------------------------------------------------------ the two pages
-  /// The room is two pages side by side — the decks, and the board — and slides
-  /// between them. Never by dragging the page itself: a drag is a knob's or a
-  /// fader's, and a room that slid under a hand on the crossfader would be a bad
-  /// room. It slides on the tabs at the edges, the B key, the bar's light, and a
-  /// sideways wheel or two fingers across a trackpad.
+  // ------------------------------------------------------------------ the three pages
+  /// The room is three pages side by side — the show, the decks, and the board —
+  /// and slides between them. Never by dragging the page itself: a drag is a knob's
+  /// or a fader's, and a room that slid under a hand on the crossfader would be a bad
+  /// room. It slides on the tabs at the edges, the K and B keys, the bar's lights,
+  /// and a sideways wheel or two fingers across a trackpad.
   Widget _pagesOfTheRoom(BuildContext context) => Listener(
         onPointerSignal: _wheel,
         child: PageView(
@@ -212,8 +219,19 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  Expanded(child: ShowRoom(booth: _b)),
+                  BoardTab(side: TabSide.right, label: 'DECKS', tip: 'The decks (K, or scroll sideways)', onTap: () => _slideTo(decksPage)),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(0, 0, 0, 12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  BoardTab(side: TabSide.left, label: 'SHOW', tip: 'The show\'s rig (K, or scroll sideways)', onTap: () => _slideTo(showPage)),
                   Expanded(child: _decksPage(context)),
-                  BoardTab(side: TabSide.right, label: 'BOARD', face: _b.board, onTap: () => _slideTo(1)),
+                  BoardTab(side: TabSide.right, label: 'BOARD', face: _b.board, onTap: () => _slideTo(boardPage)),
                 ],
               ),
             ),
@@ -222,7 +240,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  BoardTab(side: TabSide.left, label: 'DECKS', onTap: () => _slideTo(0)),
+                  BoardTab(side: TabSide.left, label: 'DECKS', onTap: () => _slideTo(decksPage)),
                   Expanded(
                     child: BoardRoom(
                       face: _b.board,
@@ -256,10 +274,10 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
     _wheelDx += dx;
     if (_wheelDx > 120) {
       _wheelDx = 0;
-      _slideTo(1);
+      _slideTo((_page + 1).clamp(showPage, boardPage));
     } else if (_wheelDx < -120) {
       _wheelDx = 0;
-      _slideTo(0);
+      _slideTo((_page - 1).clamp(showPage, boardPage));
     }
   }
 
@@ -271,7 +289,10 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
     unawaited(_keepLayout());
   }
 
-  void _toggleBoard() => _slideTo(_page == 0 ? 1 : 0);
+  void _toggleBoard() => _slideTo(_page == boardPage ? decksPage : boardPage);
+
+  /// K: the show's page, or back to the decks.
+  void _toggleShowRoom() => _slideTo(_page == showPage ? decksPage : showPage);
 
   Widget _decksPage(BuildContext context) => Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -354,7 +375,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
                       BoothView.waves => BoothPanel(child: ConsoleWaves(booth: _b)),
                       BoothView.set => BoothPanel(child: ConsoleSetView(booth: _b)),
                       BoothView.plan => BoothPanel(child: ConsolePlan(booth: _b)),
-                      BoothView.show => BoothPanel(child: ShowTile(booth: _b)),
+                      BoothView.show => BoothPanel(child: ShowTile(booth: _b, onRig: () => _slideTo(showPage))),
                     },
                   ),
                 ],
@@ -388,7 +409,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
                       padding: const EdgeInsets.only(top: 10),
                       child: SizedBox(
                         height: BoardStrip.height,
-                        child: BoothPanel(child: BoardStrip(face: _b.board, onBoard: () => _slideTo(1))),
+                        child: BoothPanel(child: BoardStrip(face: _b.board, onBoard: () => _slideTo(boardPage))),
                       ),
                     ),
             ),
@@ -422,7 +443,7 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
               ),
             const ControllerLight(),
             const RemoteBoardButton(),
-            BoardLight(face: _b.board, onTap: () => _slideTo(_page == 0 ? 1 : 0)),
+            BoardLight(face: _b.board, onTap: _toggleBoard),
             if (_b.taken.isNotEmpty)
               IconButton(
                 icon: Icon(Icons.bookmark_add_outlined, color: Console.quiet),

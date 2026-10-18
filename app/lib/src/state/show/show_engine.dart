@@ -9,11 +9,15 @@
 // the frame on. Everything downstream — the stage, the lights, a recording — reads
 // [state] and [events] and nothing else.
 import 'dart:async';
+import 'dart:io' show Platform;
+import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
 
 import '../../api/models.dart';
+import '../../audio/engine.dart';
 import '../booth/booth.dart';
 import '../booth/deck.dart';
 import 'show_deck.dart';
@@ -24,11 +28,15 @@ import 'camera_feed.dart';
 import 'milk_feed.dart';
 import 'show_feed.dart';
 import 'show_genome.dart';
+import 'show_heard.dart';
 import 'show_palette.dart';
+import 'show_pool.dart';
+import 'show_rig.dart';
 import 'show_state.dart';
+import 'show_store.dart';
 
 class ShowEngine extends ChangeNotifier implements ShowFeed {
-  ShowEngine(this.booth) {
+  ShowEngine(this.booth, {ShowStore? store}) : store = store ?? ShowStore.forThisDevice() {
     booth.stepApplied.addListener(_stepSaid);
     booth.fxFired.addListener(_fxSaid);
     _state = _blank(DateTime.now());
@@ -40,9 +48,246 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
       if (track == null) return null;
       return (url: booth.api.streamUrl(track), headers: booth.api.streamHeaders);
     };
+    // Or, where the booth plays on its own engine, what the room hears.
+    MilkFeed.shared.pcm.heard = _heardPcm;
   }
 
   final Booth booth;
+
+  // ------------------------------------------------------------------ the document
+  /// Where the show's own document is kept (show_store.dart): the pool, the hands'
+  /// looks, the rig to start on.
+  final ShowStore store;
+  ShowDoc _doc = ShowDoc.none;
+  ShowDoc get doc => _doc;
+
+  /// What the director may reach for, and the hands' switches (show_pool.dart).
+  ShowPool get pool => _doc.pool;
+
+  /// The looks there are, by id: handed in by whoever loaded the scene files, with
+  /// the director's scenes. The frame carries the look on as its rig.
+  Map<String, Look> get looks => _looks;
+  Map<String, Look> _looks = const {};
+  set looks(Map<String, Look> v) {
+    _looks = v;
+    director.families = {for (final l in v.values) l.id: familyOf(l.rig.figure.kind, l.rig.ground.kind)};
+    director.grounds = _groundPool;
+  }
+
+  /// The family a look belongs to, for the director's turns: geometric shapes,
+  /// figures in a space, organic simulations, media.
+  static String familyOf(Figure f, Ground g) => switch (f) {
+        Figure.kinetic || Figure.blocks || Figure.flash || Figure.glide => 'geometric',
+        Figure.dancers || Figure.birds || Figure.turntable => 'figurative',
+        Figure.fluid || Figure.veins => 'organic',
+        Figure.meme || Figure.words => 'media',
+        Figure.none => g == Ground.camera ? 'media' : 'organic',
+      };
+
+  /// The grounds the director may put under a scene, weighted: MilkDrop most of the
+  /// time (the booth's way), the rest sharing what is left; none where MilkDrop is
+  /// switched off by the hands (then it is black, as it was), nor the room without
+  /// a camera on.
+  List<(RigGround, double)> _groundPool() {
+    if (!_macros.milkUnder) return const [];
+    final p = pool;
+    final out = <(RigGround, double)>[];
+    if (p.isOn('ground.milk')) out.add((RigGround.milk, 7));
+    if (p.isOn('ground.wash')) out.add((const RigGround(kind: Ground.wash), 1));
+    if (p.isOn('ground.pulse')) {
+      for (final v in pulseVariants) {
+        out.add((RigGround(kind: Ground.pulse, field: v), 0.45));
+      }
+    }
+    if (p.isOn('ground.cover')) out.add((const RigGround(kind: Ground.cover, dim: 0.6), 0.6));
+    if (p.isOn('ground.field')) out.add((const RigGround(kind: Ground.field, field: 'drift', dim: 0.6), 0.6));
+    if (p.isOn('ground.camera') && (_state['cam.on']) > 0.5) out.add((const RigGround(kind: Ground.camera, dim: 0.8), 1));
+    return out;
+  }
+
+  Future<void>? _ready;
+  bool _isReady = false;
+
+  /// The document read, once; where there is none yet, the preferences the show
+  /// kept before it had one are taken in and the document written. (Done is kept
+  /// as a fact, not as the future that did it: a future made in one zone never
+  /// delivers to another — a test's fake clock, mostly.)
+  Future<void> ready() {
+    if (_isReady) return Future.value();
+    return _ready ??= () async {
+      var doc = await store.load();
+      if (doc == null) {
+        doc = await migratedShowDoc();
+        await store.save(doc);
+      }
+      _apply(doc);
+      _isReady = true;
+    }();
+  }
+
+  void _apply(ShowDoc doc) {
+    _doc = doc;
+    director.off = doc.pool.looksOff;
+    director.bias = doc.pool.bias;
+    MovePool.from(doc.pool);
+    StylePool.from(doc.pool);
+    QualityPool.from(doc.pool);
+    director.allowed = _allowed;
+    director.grounds = _groundPool;
+    // The dancers still read who dances off the hands' macros.
+    _macros = _macros.copyWith(dancer: doc.pool.dancer ?? 'mix', dancersOff: doc.pool.dancersOff);
+    if (!running) tick(DateTime.now());
+    notifyListeners();
+  }
+
+  Timer? _saving;
+
+  /// The hands changed the pool: applied now, kept a moment later.
+  void setPool(ShowPool p) => setDoc(_doc.copyWith(pool: p));
+
+  void setDoc(ShowDoc d) {
+    _apply(d);
+    _saving?.cancel();
+    _saving = Timer(const Duration(milliseconds: 300), () {
+      _saving = null;
+      unawaited(store.save(_doc));
+    });
+  }
+
+  // ------------------------------------------------------------------ the hands' rig
+  /// The hands' own layers (show_rig.dart), taken where locked: the ground, the
+  /// blend and the finish over whatever look the director has on. The figure's lock
+  /// is the director's hold (holdScene).
+  ShowRig _hands = ShowRig.none;
+  ShowRig get hands => _hands;
+  bool locked(RigSlot slot) => slot == RigSlot.figure ? director.locked : _hands.locked(slot);
+
+  /// The hands' ground, locked (the director leaves it) unless [lock] is false.
+  void setGround(RigGround g, {bool lock = true}) => _setHands(_hands.copyWith(ground: g).withLock(RigSlot.ground, lock));
+
+  /// The hands' blend; unlocked, the look's and the pool's table decide again.
+  void setBlend(RigBlend b, {bool lock = true}) => _setHands(_hands.copyWith(blend: b.copyWith(auto: !lock)).withLock(RigSlot.blend, lock));
+
+  void setFinish(RigFinish f, {bool lock = true}) => _setHands(_hands.copyWith(finish: f).withLock(RigSlot.finish, lock));
+
+  /// A layer locked takes the rig as it is now and keeps it; unlocked, the director
+  /// and the look have it again.
+  void lock(RigSlot slot, bool on) {
+    if (slot == RigSlot.figure) return holdScene(on);
+    var h = _hands;
+    if (on && !h.locked(slot)) {
+      final r = _state.rig;
+      h = switch (slot) {
+        RigSlot.ground => h.copyWith(ground: r.ground),
+        RigSlot.blend => h.copyWith(blend: r.blend.copyWith(auto: false)),
+        RigSlot.finish => h.copyWith(finish: r.finish),
+        RigSlot.figure => h,
+      };
+    }
+    _setHands(h.withLock(slot, on));
+  }
+
+  void _setHands(ShowRig h) {
+    _hands = h;
+    if (!running) tick(DateTime.now());
+    notifyListeners();
+  }
+
+  /// The figure's own named look the hands asked for (a dancer's art, a flock's
+  /// look), for figures of [forKind]; null lets the figure's clock choose again.
+  String? _style;
+  Figure? _styleFor;
+  String? get style => _style;
+  Figure? get styleFor => _styleFor;
+  void setStyle(String? style, {Figure? forKind}) {
+    _style = style;
+    _styleFor = style == null ? null : forKind;
+    if (!running) tick(DateTime.now());
+    notifyListeners();
+  }
+
+  /// A move asked for by hand: the lead dances it at the next slot.
+  void audition(String moveId) {
+    MovePool.audition = moveId;
+    notifyListeners();
+  }
+
+  /// [rig] with the hands' layers where they are locked, and their style; the
+  /// director's ground where the hands have none and the look has MilkDrop (the
+  /// macros' way), as the director rotates the pool's grounds under the scenes.
+  ShowRig _withHands(ShowRig rig) {
+    final ground = _hands.locked(RigSlot.ground)
+        ? _hands.ground
+        : (director.ground != null && rig.ground.kind == Ground.milk ? director.ground! : rig.ground);
+    final figure = _style != null && rig.figure.kind == _styleFor ? rig.figure.copyWith(style: _style) : rig.figure;
+    // The blend: the hands' where locked; else the rules' for this figure on this
+    // ground (contrast is MilkDrop's way; a shape on the pulse adds, and so on).
+    final blend = _hands.locked(RigSlot.blend)
+        ? _hands.blend
+        : (figure.kind == Figure.none ? rig.blend : pool.blendFor(figure, ground.kind, from: rig.blend));
+    return rig.copyWith(
+      ground: ground,
+      figure: figure,
+      blend: blend,
+      finish: _hands.locked(RigSlot.finish) ? _hands.finish : rig.finish,
+      locks: {..._hands.locks, if (director.locked) RigSlot.figure},
+    );
+  }
+
+  /// The ground a look would have now, with the hands over it.
+  Ground _groundFor(Look look) => _withHands(rigWithMacros(look.rig, _macros)).ground.kind;
+
+  /// Whether the pool's table lets [id]'s figure go on the ground it would have.
+  bool _allowed(String id) {
+    final look = looks[id];
+    if (look == null) return true;
+    return pool.together(look.rig.figure, _groundFor(look));
+  }
+
+  // ------------------------------------------------------------------ launches
+  /// A look the hands asked for, landing on the next beat, bar or phrase of the
+  /// master (the pool's quantise, or [at]) — or now, and now when nothing plays.
+  ({String look, Quantise at, DateTime asked})? _launch;
+  String? get pendingLook => _launch?.look;
+  Quantise? get pendingAt => _launch?.at;
+
+  void launch(String id, {Quantise? at}) {
+    if (!looks.containsKey(id) && !director.scenes.any((s) => s.id == id)) return;
+    final q = at ?? pool.quantise;
+    if (q == Quantise.now || !_state.master.playing) {
+      director.choose(id, how: SceneChange.cut);
+      _launch = null;
+    } else {
+      _launch = (look: id, at: q, asked: DateTime.now());
+    }
+    if (!running) tick(DateTime.now());
+    notifyListeners();
+  }
+
+  void cancelLaunch() {
+    _launch = null;
+    notifyListeners();
+  }
+
+  /// How long a launch waits for its moment before it lands anyway (a record with
+  /// no grid, a deck stopped meanwhile).
+  static const launchPatience = Duration(seconds: 20);
+
+  void _land(List<ShowEvent> said, DateTime now) {
+    final l = _launch;
+    if (l == null) return;
+    final due = said.any((e) =>
+        e.onMaster &&
+        switch (l.at) {
+          Quantise.beat => e.kind == ShowEventKind.beat || e.kind == ShowEventKind.bar || e.kind == ShowEventKind.phrase,
+          Quantise.bar => e.kind == ShowEventKind.bar || e.kind == ShowEventKind.phrase,
+          Quantise.phrase => e.kind == ShowEventKind.phrase,
+          Quantise.now => true,
+        });
+    if (!due && now.difference(l.asked) < launchPatience) return;
+    director.choose(l.look, how: SceneChange.cut);
+    _launch = null;
+  }
 
   /// The performer's offset, in milliseconds: how much later than the deck's clock
   /// the picture should run, to land on the ear. Positive draws later. Measured once
@@ -78,6 +323,39 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   String _masterName = 'A';
   Genome _genome = Genome.none;
   int? _genomeTrack;
+
+  /// WETOWL_SHOW_SOUND=pulse: the house's pulse through the mixer model even where
+  /// the engine could say what is heard (to compare the two).
+  static final _pulseOnly = !kIsWeb && Platform.environment['WETOWL_SHOW_SOUND'] == 'pulse';
+
+  /// What the engine hears, where the booth plays on it (show_heard.dart).
+  ShowHeard? _heard;
+  ShowHeard? get _heardNow {
+    final e = Engine.started;
+    if (e == null || _pulseOnly) return _heard = null;
+    if (_heard?.engine != e) _heard = ShowHeard(e);
+    return _heard;
+  }
+
+  /// MilkDrop's sound off the engine: the master's samples since the last tick.
+  double? _pcmAt;
+  Int16List? _heardPcm() {
+    final e = Engine.started;
+    if (e == null || _pulseOnly || !(booth.a.onEngine || booth.b.onEngine)) return null;
+    final at = e.now() + math.min(e.latency, ShowHeard.maxLead);
+    var from = _pcmAt;
+    if (from == null || from > at || at - from > 0.25) from = at - 1 / 60;
+    final n = ((at - from) * e.rate).round();
+    if (n <= 0) return null;
+    _pcmAt = from + n / e.rate;
+    final x = e.scope(Engine.master, _pcmAt!, n);
+    if (x == null) return null;
+    final out = Int16List(n);
+    for (var i = 0; i < n; i++) {
+      out[i] = (x[i] * 32767).round().clamp(-32768, 32767);
+    }
+    return out;
+  }
 
   /// Said by the booth between frames, told on the next.
   final _pending = <ShowEvent>[];
@@ -164,8 +442,30 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
     final prev = _state;
 
     final levels = booth.levels;
-    final a = _deck(booth.a, now, levels.a);
-    final b = _deck(booth.b, now, levels.b);
+    var a = _deck(booth.a, now, levels.a);
+    var b = _deck(booth.b, now, levels.b);
+
+    // The sound as heard, where the decks play on the engine: each deck's own, and
+    // the room's; the stems' levels stay the pulse's.
+    var audio = a.audio + b.audio;
+    final live = <String, double>{};
+    final heardBy = _heardNow;
+    final ai = booth.a.engineIndex, bi = booth.b.engineIndex;
+    if (heardBy != null && (ai != null || bi != null)) {
+      final h = heardBy.read([if (ai != null) ai, if (bi != null) bi]);
+      if (h != null) {
+        if (h.decks[ai] case final ha?) a = a.withAudio(ShowHeard.over(ha, a.audio));
+        if (h.decks[bi] case final hb?) b = b.withAudio(ShowHeard.over(hb, b.audio));
+        audio = ShowHeard.over(h.master, audio);
+        live['live.on'] = 1;
+        final spec = h.spectrum;
+        if (spec != null) {
+          for (var i = 0; i < spec.length; i++) {
+            live['spec.$i'] = spec[i];
+          }
+        }
+      }
+    }
 
     // Which deck has the room: the louder channel, and it keeps it until the other
     // is clearly louder — a fader at the middle must not flip the show every frame.
@@ -207,6 +507,10 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
         ? 0.0
         : (1 - now.difference(hitAt).inMicroseconds / hitFade.inMicroseconds).clamp(0.0, 1.0);
     if (hit != _macros.hit) _macros = _macros.copyWith(hit: hit);
+    // The beat before the drop, black (the pool's say): in the frame, not the hands.
+    final away = master.dropBeatsAway;
+    final dark = pool.darkBeat && master.playing && away != null && away > 0 && away <= 1;
+    final frameMacros = dark && !_macros.blackout ? _macros.copyWith(blackout: true) : _macros;
 
     _state = ShowState(
       now: now,
@@ -214,32 +518,43 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
       a: a,
       b: b,
       masterName: _masterName,
-      audio: a.audio + b.audio,
+      audio: audio,
       mix: mix,
       palette: _palette,
-      macros: _macros,
+      macros: frameMacros,
       genome: _genome,
     );
-    _state = _state.copyWith(dyn: {...dynamics.frame(_state, dt), ...CameraFeed.shared.numbers, ...MilkFeed.shared.numbers});
+    _state = _state.copyWith(dyn: {
+      ...dynamics.frame(_state, dt, heard: live.isNotEmpty),
+      ...live,
+      ...CameraFeed.shared.numbers,
+      ...MilkFeed.shared.numbers,
+    });
 
     final said = eventsBetween(prev, _state);
     if (_pending.isNotEmpty) {
       said.addAll(_pending);
       _pending.clear();
     }
-    // The director's word on the scene, and its hit where it cut on a drop.
+    // A launch landing on its moment; then the director's word on the scene, and
+    // its hit where it cut on a drop.
+    _land(said, now);
     final d = director.direct(_state, said);
     if (director.takeHit()) {
       _hitAt = now;
       _macros = _macros.copyWith(hit: 1);
       said.add(ShowEvent(ShowEventKind.hit, now, data: const {'by': 'director'}));
     }
+    // The look on, as layers, with the hands over it; and the one being left.
+    final look = looks[d.scene], leaving = looks[d.from];
     _state = _state.copyWith(
       scene: d.scene,
       sceneFrom: d.from,
       sceneK: d.k,
       clearSceneFrom: d.from == null,
-      macros: _macros,
+      rig: look == null ? _withHands(ShowRig.none) : _withHands(rigWithMacros(look.rig, _macros)),
+      rigFrom: leaving == null ? null : _withHands(rigWithMacros(leaving.rig, _macros)),
+      macros: dark && !_macros.blackout ? _macros.copyWith(blackout: true) : _macros,
     );
     // MilkDrop, where it is on: the numbers and the sound, and its director's cuts;
     // the preset on goes over the wire, so a stage in another process shows the same.
@@ -298,6 +613,11 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   @override
   void dispose() {
     stop();
+    if (_saving != null) {
+      _saving!.cancel();
+      _saving = null;
+      unawaited(store.save(_doc));
+    }
     booth.stepApplied.removeListener(_stepSaid);
     booth.fxFired.removeListener(_fxSaid);
     unawaited(_events.close());

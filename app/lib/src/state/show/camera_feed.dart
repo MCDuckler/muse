@@ -48,6 +48,11 @@ class CameraFeed extends ChangeNotifier {
 
   final _buf = BytesBuilder(copy: false);
   Uint8List? _last;
+
+  /// The latest frame's pixels (RGBA, top row first, [width]×[height]), for a stage
+  /// that uploads them itself; and how many have been taken, to know a new one.
+  Uint8List? get rgba => _last;
+  int taken = 0;
   bool _decoding = false;
   StreamSubscription<List<int>>? _sub;
 
@@ -135,6 +140,7 @@ class CameraFeed extends ChangeNotifier {
   }
 
   void _take(Uint8List rgba) {
+    taken++;
     final was = _last;
     _last = rgba;
     _measure(rgba, was);

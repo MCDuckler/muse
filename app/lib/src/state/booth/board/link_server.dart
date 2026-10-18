@@ -313,6 +313,11 @@ class BoardLinkBase extends ControllerTransport {
   /// this link serves none.
   int get stages => 0;
 
+  /// The picture a stage in a window of its own sends back, small, a few times a
+  /// second — what the booth shows instead of drawing the show a second time. Null
+  /// while no stage is popped out.
+  final stageThumb = ValueNotifier<StageThumb?>(null);
+
   /// The network can change under a desk: looked at again now and then.
   Future<void> refreshAddresses() async {}
 
@@ -331,4 +336,27 @@ class BoardLinkBase extends ControllerTransport {
   void changed() {
     if (!_changes.isClosed) _changes.add(null);
   }
+}
+
+/// A stage's small picture: RGBA, top row first.
+typedef StageThumb = ({int width, int height, Uint8List rgba});
+
+/// The bytes a stage sends: a header of four — the width and the height, two each,
+/// little-endian — then the pixels. Null for anything else.
+StageThumb? parseStageThumb(List<int> bytes) {
+  if (bytes.length < 4) return null;
+  final b = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
+  final w = b[0] | (b[1] << 8), h = b[2] | (b[3] << 8);
+  if (w <= 0 || h <= 0 || w > 1024 || h > 1024 || b.length != 4 + w * h * 4) return null;
+  return (width: w, height: h, rgba: Uint8List.sublistView(b, 4));
+}
+
+Uint8List encodeStageThumb(int width, int height, Uint8List rgba) {
+  final out = Uint8List(4 + rgba.length);
+  out[0] = width & 0xff;
+  out[1] = (width >> 8) & 0xff;
+  out[2] = height & 0xff;
+  out[3] = (height >> 8) & 0xff;
+  out.setRange(4, out.length, rgba);
+  return out;
 }

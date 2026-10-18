@@ -11,6 +11,7 @@ import 'dart:math' as math;
 import 'package:flutter/painting.dart' show Color, HSLColor;
 
 import 'show_genome.dart';
+import 'show_rig.dart';
 
 /// The record's sound at the needle, 0 to 1 each: five bands, the kick, the onsets,
 /// and the three stems where the record is in parts.
@@ -22,6 +23,8 @@ class ShowAudio {
     this.high = 0,
     this.air = 0,
     this.kick = 0,
+    this.snare = 0,
+    this.hat = 0,
     this.onset = 0,
     this.drums = 0,
     this.rest = 0,
@@ -29,6 +32,10 @@ class ShowAudio {
   });
 
   final double sub, low, mid, high, air, kick, onset, drums, rest, vocals;
+
+  /// The snare's and the hats' onsets: only where the sound is measured as it is
+  /// heard (show_heard.dart); the house's pulse has neither, and leaves them 0.
+  final double snare, hat;
 
   static const silence = ShowAudio();
 
@@ -42,6 +49,8 @@ class ShowAudio {
         high: high * k,
         air: air * k,
         kick: kick * k,
+        snare: snare * k,
+        hat: hat * k,
         onset: onset * k,
         drums: drums * k,
         rest: rest * k,
@@ -55,6 +64,8 @@ class ShowAudio {
         high: _cap(high + o.high),
         air: _cap(air + o.air),
         kick: _cap(kick + o.kick),
+        snare: _cap(snare + o.snare),
+        hat: _cap(hat + o.hat),
         onset: _cap(onset + o.onset),
         drums: _cap(drums + o.drums),
         rest: _cap(rest + o.rest),
@@ -70,6 +81,8 @@ class ShowAudio {
     m['$at.high'] = high;
     m['$at.air'] = air;
     m['$at.kick'] = kick;
+    m['$at.snare'] = snare;
+    m['$at.hat'] = hat;
     m['$at.onset'] = onset;
     m['$at.drums'] = drums;
     m['$at.rest'] = rest;
@@ -79,12 +92,12 @@ class ShowAudio {
 
   Map<String, dynamic> toJson() => {
         'sub': sub, 'low': low, 'mid': mid, 'high': high, 'air': air,
-        'kick': kick, 'onset': onset, 'drums': drums, 'rest': rest, 'vocals': vocals,
+        'kick': kick, 'snare': snare, 'hat': hat, 'onset': onset, 'drums': drums, 'rest': rest, 'vocals': vocals,
       };
 
   factory ShowAudio.fromJson(Map<String, dynamic> j) => ShowAudio(
         sub: _d(j['sub']), low: _d(j['low']), mid: _d(j['mid']), high: _d(j['high']),
-        air: _d(j['air']), kick: _d(j['kick']), onset: _d(j['onset']),
+        air: _d(j['air']), kick: _d(j['kick']), snare: _d(j['snare']), hat: _d(j['hat']), onset: _d(j['onset']),
         drums: _d(j['drums']), rest: _d(j['rest']), vocals: _d(j['vocals']),
       );
 }
@@ -219,49 +232,77 @@ class ShowDeck {
     final inBar = beatInBar == null ? null : (beatInBar! + wholeBeats) % 4;
     final bar = barPhase + beats / 4;
     final phrase = phrasePhase + beats / 16;
-    return ShowDeck(
-      name: name,
-      trackId: trackId,
-      title: title,
-      artist: artist,
-      playing: playing,
+    return _copy(
       position: position + Duration(microseconds: (dt * 1e6).round()),
-      bpm: bpm,
       beatIndex: beatIndex == null ? null : beatIndex! + wholeBeats,
       beatPhase: beat - wholeBeats,
       beatInBar: inBar,
       barIndex: barIndex == null ? null : barIndex! + bar.floor(),
       barPhase: bar - bar.floor(),
-      phraseBar: phraseBar,
       phrasePhase: phrase - phrase.floor(),
-      section: section,
-      sectionK: sectionK,
       sectionBarsLeft: sectionBarsLeft == null ? null : sectionBarsLeft! - beats / 4,
       dropBeatsAway: dropBeatsAway == null ? null : dropBeatsAway! - beats,
-      breakdown: breakdown,
-      buildK: buildK,
-      energy: energy,
-      vocal: vocal,
-      lyric: lyric,
-      lyricK: lyricK,
-      hook: hook,
-      key: key,
-      camelot: camelot,
-      keyHue: keyHue,
-      coverColor: coverColor,
-      coverUrl: coverUrl,
-      level: level,
-      eqLow: eqLow,
-      eqMid: eqMid,
-      eqHigh: eqHigh,
-      filter: filter,
-      stemDrums: stemDrums,
-      stemRest: stemRest,
-      stemVocals: stemVocals,
-      looping: looping,
-      audio: audio,
     );
   }
+
+  /// This deck with [audio] for its sound: what the engine heard of it, say.
+  ShowDeck withAudio(ShowAudio audio) => _copy(audio: audio);
+
+  ShowDeck _copy({
+    Duration? position,
+    int? beatIndex,
+    double? beatPhase,
+    int? beatInBar,
+    int? barIndex,
+    double? barPhase,
+    double? phrasePhase,
+    double? sectionBarsLeft,
+    double? dropBeatsAway,
+    ShowAudio? audio,
+  }) =>
+      ShowDeck(
+        name: name,
+        trackId: trackId,
+        title: title,
+        artist: artist,
+        playing: playing,
+        position: position ?? this.position,
+        bpm: bpm,
+        beatIndex: beatIndex ?? this.beatIndex,
+        beatPhase: beatPhase ?? this.beatPhase,
+        beatInBar: beatInBar ?? this.beatInBar,
+        barIndex: barIndex ?? this.barIndex,
+        barPhase: barPhase ?? this.barPhase,
+        phraseBar: phraseBar,
+        phrasePhase: phrasePhase ?? this.phrasePhase,
+        section: section,
+        sectionK: sectionK,
+        sectionBarsLeft: sectionBarsLeft ?? this.sectionBarsLeft,
+        dropBeatsAway: dropBeatsAway ?? this.dropBeatsAway,
+        breakdown: breakdown,
+        buildK: buildK,
+        energy: energy,
+        vocal: vocal,
+        lyric: lyric,
+        lyricK: lyricK,
+        hook: hook,
+        key: key,
+        camelot: camelot,
+        keyHue: keyHue,
+        coverColor: coverColor,
+        coverUrl: coverUrl,
+        streamUrl: streamUrl,
+        level: level,
+        eqLow: eqLow,
+        eqMid: eqMid,
+        eqHigh: eqHigh,
+        filter: filter,
+        stemDrums: stemDrums,
+        stemRest: stemRest,
+        stemVocals: stemVocals,
+        looping: looping,
+        audio: audio ?? this.audio,
+      );
 
   void flatInto(Map<String, double> m, String at) {
     m['$at.playing'] = playing ? 1 : 0;
@@ -505,8 +546,8 @@ class ShowMacros {
     this.blackout = false,
     this.freeze = false,
     this.hit = 0,
-    this.milkUnder = false,
-    this.milkMix = 0,
+    this.milkUnder = true,
+    this.milkMix = contrast,
     this.milkPreset,
     this.dancer,
     this.dancersOff = const [],
@@ -552,6 +593,10 @@ class ShowMacros {
   final List<double> macros;
 
   static const none = ShowMacros();
+
+  /// The way a scene sits on MilkDrop to start with: their difference, so where they
+  /// agree is dark and each shows through the other (milkMixes' "contrast").
+  static const contrast = 9;
 
   ShowMacros copyWith({
     double? intensity,
@@ -613,8 +658,8 @@ class ShowMacros {
         strobe: _d(j['strobe']),
         blackout: j['blackout'] == true,
         freeze: j['freeze'] == true,
-        milkUnder: j['milkUnder'] == true,
-        milkMix: (j['milkMix'] as num?)?.toInt() ?? 0,
+        milkUnder: j['milkUnder'] as bool? ?? true,
+        milkMix: (j['milkMix'] as num?)?.toInt() ?? contrast,
         milkPreset: j['milkPreset'] as String?,
         dancer: j['dancer'] as String?,
         dancersOff: [for (final v in (j['dancersOff'] as List? ?? const [])) '$v'],
@@ -640,6 +685,8 @@ class ShowState {
     this.scene,
     this.sceneFrom,
     this.sceneK = 1,
+    this.rig = ShowRig.none,
+    this.rigFrom,
     this.genome = Genome.none,
     this.dyn = const {},
   }) : palette = palette ?? ShowPalette.house;
@@ -665,6 +712,12 @@ class ShowState {
   /// (1: wholly on [scene]).
   final String? scene, sceneFrom;
   final double sceneK;
+
+  /// What the stage draws, as layers (show_rig.dart): the look on, and the one being
+  /// left under the same crossfade ([sceneK]). The scene names above are the looks'
+  /// ids, kept while the stages still read scenes.
+  final ShowRig rig;
+  final ShowRig? rigFrom;
 
   /// The record's own numbers (show_genome.dart), as `gene.*` in [flat].
   final Genome genome;
@@ -697,6 +750,7 @@ class ShowState {
     m['set.k'] = setK;
     m['set.energy'] = setEnergy;
     m['show.scene.k'] = sceneK;
+    rig.flatInto(m);
     genome.flatInto(m);
     m.addAll(dyn);
     // What a scene mostly wants: how much is going on, all told, with the hands over it.
@@ -713,6 +767,8 @@ class ShowState {
     String? sceneFrom,
     double? sceneK,
     bool clearSceneFrom = false,
+    ShowRig? rig,
+    ShowRig? rigFrom,
     Genome? genome,
     Map<String, double>? dyn,
   }) =>
@@ -731,6 +787,8 @@ class ShowState {
         scene: scene ?? this.scene,
         sceneFrom: clearSceneFrom ? null : (sceneFrom ?? this.sceneFrom),
         sceneK: sceneK ?? this.sceneK,
+        rig: rig ?? this.rig,
+        rigFrom: clearSceneFrom ? null : (rigFrom ?? this.rigFrom),
         genome: genome ?? this.genome,
         dyn: dyn ?? this.dyn,
       );
@@ -751,6 +809,8 @@ class ShowState {
         scene: scene,
         sceneFrom: sceneFrom,
         sceneK: sceneK,
+        rig: rig,
+        rigFrom: rigFrom,
         genome: genome,
         dyn: dyn,
       );
@@ -770,6 +830,8 @@ class ShowState {
         'scene': scene,
         'sceneFrom': sceneFrom,
         'sceneK': sceneK,
+        'rig': rig.toJson(),
+        if (rigFrom != null) 'rigFrom': rigFrom!.toJson(),
         'genome': genome.toJson(),
         'dyn': dyn,
       };
@@ -789,7 +851,21 @@ class ShowState {
         scene: j['scene'] as String?,
         sceneFrom: j['sceneFrom'] as String?,
         sceneK: j['sceneK'] is num ? _d(j['sceneK']) : 1,
+        rig: j['rig'] is Map ? ShowRig.fromJson((j['rig'] as Map).cast()) : ShowRig.none,
+        rigFrom: j['rigFrom'] is Map ? ShowRig.fromJson((j['rigFrom'] as Map).cast()) : null,
         genome: j['genome'] is Map ? Genome.fromJson((j['genome'] as Map).cast()) : Genome.none,
         dyn: j['dyn'] is Map ? {for (final e in (j['dyn'] as Map).entries) '${e.key}': _d(e.value)} : const {},
       );
+}
+
+/// [rig] with the hands over it, as the show plays today: MilkDrop under the figure
+/// (ShowMacros.milkUnder) the way the hands asked (milkMix), or the look's own ground
+/// where they asked for none. A look that samples MilkDrop itself keeps its ground.
+ShowRig rigWithMacros(ShowRig rig, ShowMacros m) {
+  if (rig.ground.kind == Ground.milk && rig.figure.kind == Figure.none) return rig;
+  if (!m.milkUnder) return rig.ground.kind == Ground.milk ? rig.copyWith(ground: RigGround.black, blend: rig.blend.copyWith(ground: GroundMode.over)) : rig;
+  return rig.copyWith(
+    ground: RigGround.milk,
+    blend: rig.blend.copyWith(ground: GroundModeMilk.ofMilkMix(m.milkMix), auto: true),
+  );
 }

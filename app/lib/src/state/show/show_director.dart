@@ -9,6 +9,7 @@
 import 'dart:math' as math;
 
 import 'show_events.dart';
+import 'show_rig.dart';
 import 'show_state.dart';
 
 /// What the director needs to know of a scene, read off its file.
@@ -82,20 +83,59 @@ class ShowDirector {
   /// Held on one scene for good (a demo of it, a test): the rules stay out of it.
   bool locked = false;
 
-  /// The performer's choice: on until the section turns.
-  void choose(String id) {
+  /// The performer's choice: on until the section turns — on a dissolve, or [how].
+  void choose(String id, {SceneChange how = SceneChange.dissolve}) {
     if (!scenes.any((s) => s.id == id)) return;
     _heldBy = id;
-    _go(id, SceneChange.dissolve);
+    _go(id, how);
   }
 
   /// Scenes turned off by hand, by id: the director never reaches for one and the
   /// arrows step past it. Chosen by name, one still goes on.
   Set<String> off = {};
 
-  /// The scenes not turned off — all of them, if every one is.
+  /// Whether a scene may go on now by the pool's rules (its figure on the ground
+  /// that is on): asked of every scene the director weighs; the hands may still
+  /// choose one by name.
+  bool Function(String id)? allowed;
+
+  // ---------------------------------------------------------------- memory
+  /// The family a scene belongs to (`geometric`, `figurative`, `organic`, `media`),
+  /// by id: the director turns from one family to another over an evening rather
+  /// than from one scene to the next of the same kind.
+  Map<String, String> families = const {};
+
+  /// How much each scene has been on, in seconds, fading with a twenty-minute
+  /// half-life: what was on a lot lately scores less.
+  final Map<String, double> fatigue = {};
+  static const fatigueHalfLife = 20 * 60.0;
+
+  /// The director's bias, calm (-1) to busy (+1): the energy a scene is matched
+  /// against is moved by a quarter either way.
+  double bias = 0;
+
+  /// The ground under the scenes, chosen every so many phrases from [grounds] (the
+  /// pool's, weighted; empty is none chosen: the hands' and the macros' way), held
+  /// at least [groundHoldBars].
+  List<(RigGround, double)> Function()? grounds;
+  RigGround? ground;
+  int _groundSinceBar = 0;
+  static const groundHoldBars = 32;
+
+  void _tire(ShowState s) {
+    final dt = s.dt;
+    if (dt <= 0) return;
+    final k = math.pow(0.5, dt / fatigueHalfLife).toDouble();
+    for (final e in fatigue.entries.toList()) {
+      fatigue[e.key] = e.value * k;
+    }
+    final on = _scene;
+    if (on != null) fatigue[on] = (fatigue[on] ?? 0) + dt;
+  }
+
+  /// The scenes not turned off, nor ruled out — all of them, if every one is.
   List<SceneMeta> get on {
-    final on = [for (final s in scenes) if (!off.contains(s.id)) s];
+    final on = [for (final s in scenes) if (!off.contains(s.id) && (allowed?.call(s.id) ?? true)) s];
     return on.isEmpty ? scenes : on;
   }
 
@@ -120,7 +160,8 @@ class ShowDirector {
   /// The scenes that suit the frame, best first.
   List<SceneMeta> fitting(ShowState s) {
     final m = s.master;
-    final energy = (m.energy * (0.5 + 0.5 * m.level)).clamp(0.0, 1.0);
+    final energy = (m.energy * (0.5 + 0.5 * m.level) + bias * 0.25).clamp(0.0, 1.0);
+    final family = _scene == null ? null : families[_scene];
     final section = m.section;
     final hasCover = m.coverUrl != null;
     final hasWords = m.lyric != null || m.vocal > 0.4;
@@ -152,6 +193,10 @@ class ShowDirector {
       final lean = s.genome.genes['scene.${sc.id}'];
       if (lean != null) score += (lean - 1) * 1.0;
       score += sc.priority;
+      // What has been on a lot lately scores less (a minute on costs a point, fading);
+      // another family than the one on scores a little more.
+      score -= (fatigue[sc.id] ?? 0) / 60;
+      if (family != null && sc.id != _scene && families[sc.id] != null && families[sc.id] != family) score += 0.6;
       out.add((score, sc));
     }
     out.sort((a, b) => b.$1.compareTo(a.$1));
@@ -178,10 +223,34 @@ class ShowDirector {
           break;
       }
     }
-    if (bar) _sinceBar++;
+    if (bar) {
+      _sinceBar++;
+      _groundSinceBar++;
+    }
     if (section && m.section != _lastSection) {
       _lastSection = m.section;
       _heldBy = null;
+    }
+    _tire(s);
+    // The ground: another every so many phrases, from the pool's.
+    final pool = grounds?.call();
+    if (pool == null || pool.isEmpty) {
+      ground = null;
+    } else if (ground == null || !pool.any((g) => g.$1 == ground) || (phrase && _groundSinceBar >= groundHoldBars && _rng.nextDouble() < 0.5)) {
+      final total = pool.fold<double>(0, (a, g) => a + g.$2);
+      var x = _rng.nextDouble() * total;
+      var pick = pool.last.$1;
+      for (final (g, w) in pool) {
+        x -= w;
+        if (x <= 0) {
+          pick = g;
+          break;
+        }
+      }
+      if (ground == null || pick != ground) {
+        ground = pick;
+        _groundSinceBar = 0;
+      }
     }
 
     var fits = fitting(s);
@@ -203,7 +272,13 @@ class ShowDirector {
       } else if (phrase && _sinceBar >= _keepBars && (!suits || _rng.nextDouble() < 0.35)) {
         // On a phrase, after a while: a change for variety among what suits.
         final pool = fits.take(3).where((f) => f.id != _scene).toList();
-        if (pool.isNotEmpty) _go(pool[_rng.nextInt(pool.length)].id, SceneChange.dissolve);
+        // After the dancer, more often than not, the birds: the flock seeds itself
+        // from her pose, so she turns into them.
+        if ((_scene?.startsWith('dance-') ?? false) && fits.any((f) => f.id == 'flock') && _rng.nextDouble() < 0.6) {
+          _go('flock', SceneChange.dissolve);
+        } else if (pool.isNotEmpty) {
+          _go(pool[_rng.nextInt(pool.length)].id, SceneChange.dissolve);
+        }
       }
     }
 
