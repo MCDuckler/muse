@@ -126,5 +126,34 @@ void main() {
       expect(q.name, 'plain');
       expect(q.fullName, 'plain');
     });
+
+    MilkLibrary three() => MilkLibrary()
+      ..presets.addAll([
+        MilkPreset.of('/x/A - one.milk', 'shipped', rating: 4),
+        MilkPreset.of('/x/B - two.milk', 'shipped', rating: 4),
+        MilkPreset.of('/x/C - three.milk', 'shipped', rating: 4),
+      ]);
+
+    test('a preset switched off is never in the pool, but still listed', () {
+      final lib = three();
+      final two = lib.byName('B - two')!;
+      lib.off.add(two.fullName);
+      expect(lib.isOff(two), isTrue);
+      expect([for (final p in lib.pool()) p.name], ['one', 'three']);
+      expect([for (final p in lib.pool(favouritesOnly: true)) p.name], ['one', 'three']);
+      lib.favourites.add(two.fullName);
+      expect([for (final p in lib.pool(favouritesOnly: true)) p.name], ['one', 'three'], reason: 'a favourite switched off is still off');
+      expect(lib.search('').length, 3);
+      expect([for (final p in lib.search('', hideOff: true)) p.name], ['one', 'three']);
+      expect([for (final p in lib.search('', offOnly: true)) p.name], ['two']);
+    });
+
+    test('all of them off is none off', () {
+      final lib = three();
+      for (final p in lib.presets) {
+        lib.off.add(p.fullName);
+      }
+      expect(lib.pool().length, 3);
+    });
   });
 }

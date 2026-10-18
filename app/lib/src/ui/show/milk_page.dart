@@ -35,6 +35,7 @@ class _MilkPageState extends State<MilkPage> {
   final _query = TextEditingController();
   String? _collection;
   bool _favouritesOnly = false;
+  bool _offOnly = false;
   bool _ratedOnly = true;
   bool _wasPinned = false;
 
@@ -152,7 +153,13 @@ class _MilkPageState extends State<MilkPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               SizedBox(width: 380, child: list),
-              Expanded(child: Padding(padding: const EdgeInsets.fromLTRB(0, 12, 16, 12), child: side)),
+              // The picture is as wide as what is left, and tall with it: the switches
+              // and the note below scroll under it on a short screen.
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Padding(padding: const EdgeInsets.fromLTRB(0, 12, 16, 12), child: side),
+                ),
+              ),
             ],
           );
         },
@@ -198,6 +205,14 @@ class _MilkPageState extends State<MilkPage> {
                     colour: const Color(0xffe8b84a),
                     tooltip: 'A favourite',
                     onTap: feed.preset == null ? () {} : () => setState(() => library.toggleFavourite(feed.preset!)),
+                  ),
+                  Pad(
+                    icon: Icons.block,
+                    width: 34,
+                    lit: feed.preset != null && library.isOff(feed.preset!),
+                    colour: const Color(0xffe0302a),
+                    tooltip: 'Switch this one off: never put on again by itself',
+                    onTap: () => setState(d.switchOff),
                   ),
                   const SizedBox(width: 10),
                   Text('every', style: TextStyle(color: Console.quiet, fontSize: 12)),
@@ -268,7 +283,7 @@ class _MilkPageState extends State<MilkPage> {
               const SizedBox(height: 10),
               Text(
                 'A hit or a drop cuts to another preset; a breakdown or a new record blends into one; '
-                'every so many bars the next comes on a blend. Hold to keep the one that is on. '
+                'every so many bars the next comes on a blend. Hold to keep the one that is on; ⊘ switches it off for good. '
                 'Presets you make here can read the show themselves (docs/milk-presets.md).',
                 style: TextStyle(color: Console.quiet, fontSize: 12, height: 1.4),
               ),
@@ -282,7 +297,7 @@ class _MilkPageState extends State<MilkPage> {
     return ListenableBuilder(
       listenable: library,
       builder: (context, _) {
-        final found = library.search(_query.text, collection: _collection, favouritesOnly: _favouritesOnly, minRating: _ratedOnly ? feed.director.minRating : 0);
+        final found = library.search(_query.text, collection: _collection, favouritesOnly: _favouritesOnly, minRating: _ratedOnly ? feed.director.minRating : 0, offOnly: _offOnly);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -310,14 +325,25 @@ class _MilkPageState extends State<MilkPage> {
                 spacing: 6,
                 runSpacing: 4,
                 children: [
-                  ChoiceChip(label: Text('all ${library.presets.length}'), selected: _collection == null && !_favouritesOnly, onSelected: (_) => setState(() {
-                        _collection = null;
-                        _favouritesOnly = false;
-                      })),
+                  ChoiceChip(
+                      label: Text('all ${library.presets.length}'),
+                      selected: _collection == null && !_favouritesOnly && !_offOnly,
+                      onSelected: (_) => setState(() {
+                            _collection = null;
+                            _favouritesOnly = false;
+                            _offOnly = false;
+                          })),
                   ChoiceChip(
                     label: Text('★ ${library.favourites.length}'),
                     selected: _favouritesOnly,
                     onSelected: (_) => setState(() => _favouritesOnly = !_favouritesOnly),
+                  ),
+                  ChoiceChip(
+                    avatar: const Icon(Icons.block, size: 14),
+                    label: Text('off ${library.off.length}'),
+                    tooltip: 'The presets switched off',
+                    selected: _offOnly,
+                    onSelected: (_) => setState(() => _offOnly = !_offOnly),
                   ),
                   ChoiceChip(
                     label: Text('rated ${feed.director.minRating.round()}+'),
@@ -345,6 +371,7 @@ class _MilkPageState extends State<MilkPage> {
                         final p = found[i];
                         final on = feed.preset?.path == p.path;
                         final fav = library.isFavourite(p);
+                        final off = library.isOff(p);
                         return InkWell(
                           onTap: () => setState(() => feed.director.pick(p)),
                           onLongPress: () => _fork(p),
@@ -354,13 +381,20 @@ class _MilkPageState extends State<MilkPage> {
                             child: Row(
                               children: [
                                 Expanded(
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(p.name, style: TextStyle(color: on ? accent : Console.ink, fontSize: 13, fontWeight: on ? FontWeight.w700 : FontWeight.w500), maxLines: 1, overflow: TextOverflow.ellipsis),
-                                      Text([if (p.author.isNotEmpty) p.author, if (p.collection != 'shipped') p.collection, '★' * p.rating.round()].join(' · '), style: TextStyle(color: Console.quiet, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
-                                    ],
+                                  child: Opacity(
+                                    opacity: off ? 0.4 : 1,
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(p.name,
+                                            style: TextStyle(color: on ? accent : Console.ink, fontSize: 13, fontWeight: on ? FontWeight.w700 : FontWeight.w500),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis),
+                                        Text([if (p.author.isNotEmpty) p.author, if (p.collection != 'shipped') p.collection, '★' * p.rating.round(), if (off) 'off'].join(' · '),
+                                            style: TextStyle(color: Console.quiet, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                      ],
+                                    ),
                                   ),
                                 ),
                                 if (p.collection == 'mine')
@@ -370,6 +404,12 @@ class _MilkPageState extends State<MilkPage> {
                                     onPressed: () => _delete(p),
                                     visualDensity: VisualDensity.compact,
                                   ),
+                                IconButton(
+                                  icon: Icon(Icons.block, size: 18, color: off ? const Color(0xffe0302a) : Console.faint),
+                                  tooltip: off ? 'Switched off: tap to let it come on again' : 'Switch it off: never put on by itself',
+                                  onPressed: () => setState(() => on && !off ? feed.director.switchOff() : library.toggleOff(p)),
+                                  visualDensity: VisualDensity.compact,
+                                ),
                                 IconButton(
                                   icon: Icon(fav ? Icons.star : Icons.star_border, size: 18, color: fav ? const Color(0xffe8b84a) : Console.faint),
                                   tooltip: fav ? 'A favourite' : 'Make it a favourite',
@@ -385,7 +425,7 @@ class _MilkPageState extends State<MilkPage> {
             ),
             Padding(
               padding: const EdgeInsets.all(12),
-              child: Text('Tap to put one on; hold to open it in the maker.', style: TextStyle(color: Console.faint, fontSize: 11)),
+              child: Text('Tap to put one on; hold to open it in the maker; ⊘ switches one off: it is never put on by itself.', style: TextStyle(color: Console.faint, fontSize: 11)),
             ),
           ],
         );

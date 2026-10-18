@@ -1,6 +1,7 @@
 // The presets there are: MilkDrop's own (shipped with the app, copied out once so
 // the helper can read them as files), the ones made here, and any folder brought
-// in. Plus what the hands think of them: the favourites, and what was on last.
+// in. Plus what the hands think of them: the favourites, the ones switched off,
+// and what was on last.
 //
 // A preset is a text file (`[preset00]` and key=value lines; see
 // docs/milk-presets.md), named after its author and title the way the MilkDrop
@@ -68,6 +69,9 @@ class MilkLibrary extends ChangeNotifier {
 
   final presets = <MilkPreset>[];
   final favourites = <String>{};
+
+  /// Presets switched off: never put on by the director (the hands still can).
+  final off = <String>{};
   final recent = <String>[];
 
   /// The imported folders, by the name they are listed under.
@@ -127,6 +131,7 @@ class MilkLibrary extends ChangeNotifier {
       final j = jsonDecode(await _notesFile.readAsString());
       if (j is! Map) return;
       favourites.addAll([for (final f in (j['favourites'] as List? ?? const [])) '$f']);
+      off.addAll([for (final f in (j['off'] as List? ?? const [])) '$f']);
       recent.addAll([for (final r in (j['recent'] as List? ?? const [])) '$r']);
       (j['imported'] as Map? ?? const {}).forEach((k, v) => imported['$k'] = '$v');
     } catch (e) {
@@ -138,6 +143,7 @@ class MilkLibrary extends ChangeNotifier {
     try {
       await _notesFile.writeAsString(jsonEncode({
         'favourites': favourites.toList()..sort(),
+        'off': off.toList()..sort(),
         'recent': recent,
         'imported': imported,
       }));
@@ -178,6 +184,14 @@ class MilkLibrary extends ChangeNotifier {
 
   void toggleFavourite(MilkPreset p) {
     if (!favourites.remove(p.fullName)) favourites.add(p.fullName);
+    unawaited(_saveNotes());
+    notifyListeners();
+  }
+
+  bool isOff(MilkPreset p) => off.contains(p.fullName);
+
+  void toggleOff(MilkPreset p) {
+    if (!off.remove(p.fullName)) off.add(p.fullName);
     unawaited(_saveNotes());
     notifyListeners();
   }
@@ -225,22 +239,27 @@ class MilkLibrary extends ChangeNotifier {
   }
 
   /// The pool the director draws from: the favourites where there are enough,
-  /// or everything.
+  /// or everything — never one switched off (all of them off is none off).
   List<MilkPreset> pool({bool favouritesOnly = false, double minRating = 0}) {
+    var on = presets.where((p) => !isOff(p)).toList();
+    if (on.isEmpty) on = presets;
     if (favouritesOnly) {
-      final f = presets.where(isFavourite).toList();
+      final f = on.where(isFavourite).toList();
       if (f.isNotEmpty) return f;
     }
-    final rated = presets.where((p) => p.rating >= minRating || p.collection == 'mine').toList();
-    return rated.isEmpty ? presets : rated;
+    final rated = on.where((p) => p.rating >= minRating || p.collection == 'mine').toList();
+    return rated.isEmpty ? on : rated;
   }
 
-  List<MilkPreset> search(String query, {String? collection, bool favouritesOnly = false, double minRating = 0}) {
+  /// [offOnly] lists just the ones switched off; [hideOff] leaves them out.
+  List<MilkPreset> search(String query, {String? collection, bool favouritesOnly = false, double minRating = 0, bool offOnly = false, bool hideOff = false}) {
     final q = query.trim().toLowerCase();
     return [
       for (final p in presets)
         if ((collection == null || p.collection == collection) &&
             (!favouritesOnly || isFavourite(p)) &&
+            (!offOnly || isOff(p)) &&
+            (!hideOff || !isOff(p)) &&
             (p.rating >= minRating || p.collection == 'mine') &&
             (q.isEmpty || p.fullName.toLowerCase().contains(q)))
           p,

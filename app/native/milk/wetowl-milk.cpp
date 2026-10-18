@@ -61,6 +61,8 @@
 #include <thread>
 #include <vector>
 
+#include "milk_core.h"
+
 #ifdef _WIN32
 // The fast GPU where a laptop has two (NVIDIA Optimus, AMD switchable graphics): the
 // drivers read these from the program itself, and without them its OpenGL is the
@@ -344,19 +346,6 @@ struct Egl {
 
 #endif
 
-std::string presetName(const std::string& path) {
-    auto slash = path.find_last_of('/');
-    auto name = slash == std::string::npos ? path : path.substr(slash + 1);
-    if (name.size() > 5 && name.compare(name.size() - 5, 5, ".milk") == 0) name.resize(name.size() - 5);
-    return name;
-}
-
-std::string g_wanted;  // the preset last asked for, for the failure line
-
-void onSwitchFailed(const char* filename, const char* message, void*) {
-    say(std::string("preset failed ") + presetName(filename ? filename : g_wanted) + ": " + (message ? message : "?"));
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -399,52 +388,16 @@ int main(int argc, char** argv) {
     if (!egl.open() || !egl.resize(width, height)) return 2;
     say("egl " + egl.platform + " " + reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
 
-    projectm_handle pm = projectm_create();
-    if (!pm) {
+    milk::Core core;
+    core.say = say;
+    if (!core.open(width, height, fps, textures)) {
         say("projectm: could not be created");
         return 3;
-    }
-    projectm_set_window_size(pm, width, height);
-    projectm_set_fps(pm, fps);
-    projectm_set_mesh_size(pm, 48, 36);
-    projectm_set_aspect_correction(pm, true);
-    // The booth decides when presets change; projectM's own clock never does.
-    projectm_set_preset_duration(pm, 1e9);
-    projectm_set_hard_cut_enabled(pm, false);
-    projectm_set_soft_cut_duration(pm, 1.2);
-    projectm_set_preset_switch_failed_event_callback(pm, onSwitchFailed, nullptr);
-    if (!textures.empty()) {
-        const char* paths[] = {textures.c_str()};
-        projectm_set_texture_search_paths(pm, paths, 1);
     }
 
     std::thread reader(readerThread);
     reader.detach();
     say("ready");
-
-    // The frame is drawn into a framebuffer of our own, not the context's default
-    // one: a window that is never shown owns no pixels on Windows (what is read
-    // back is whatever was there), and a Mac context without a drawable has none.
-    GLuint fbo = 0, fboTex = 0;
-    auto makeFbo = [&]() {
-        if (fbo) {
-            glDeleteFramebuffers(1, &fbo);
-            glDeleteTextures(1, &fboTex);
-        }
-        glGenTextures(1, &fboTex);
-        glBindTexture(GL_TEXTURE_2D, fboTex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glBindTexture(GL_TEXTURE_2D, 0);
-        glGenFramebuffers(1, &fbo);
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fboTex, 0);
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) say("gl: the framebuffer is not complete");
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        projectm_opengl_set_target_framebuffer(pm, fbo);
-    };
-    makeFbo();
 
     // Two pixel buffers: the frame just drawn is read back while the next draws.
     GLuint pbo[2] = {0, 0};
@@ -463,7 +416,16 @@ int main(int argc, char** argv) {
 
     auto frameTime = std::chrono::microseconds(1000000 / (fps > 0 ? fps : 60));
     auto next = std::chrono::steady_clock::now();
-    std::vector<int16_t> pcm;
+    core.onSize = [&](int w, int h) {
+        width = w;
+        height = h;
+        if (!egl.resize(w, h)) return false;
+        allocPbo();
+        pending = -1;
+        flipped.resize(static_cast<size_t>(w) * h * 4);
+        return true;
+    };
+    core.onFps = [&](int f) { frameTime = std::chrono::microseconds(1000000 / f); };
 
     while (!g_quit) {
         // Everything that arrived since the last frame.
@@ -474,86 +436,9 @@ int main(int argc, char** argv) {
             batch.swap(g_queue);
         }
         for (auto& cmd : batch) {
-            std::istringstream in(cmd.line);
-            std::string word;
-            in >> word;
-            if (word == "quit") {
+            if (!core.command(cmd.line, cmd.payload)) {
                 g_quit = true;
-            } else if (word == "size") {
-                int w = 0, h = 0;
-                in >> w >> h;
-                if (w > 0 && h > 0 && (w != width || h != height)) {
-                    width = w;
-                    height = h;
-                    if (!egl.resize(w, h)) return 2;
-                    projectm_set_window_size(pm, w, h);
-                    makeFbo();
-                    allocPbo();
-                    pending = -1;
-                    flipped.resize(static_cast<size_t>(w) * h * 4);
-                }
-            } else if (word == "fps") {
-                int f = 0;
-                in >> f;
-                if (f > 0) {
-                    projectm_set_fps(pm, f);
-                    frameTime = std::chrono::microseconds(1000000 / f);
-                }
-            } else if (word == "preset" || word == "preset-soft") {
-                std::string path;
-                std::getline(in, path);
-                if (!path.empty() && path[0] == ' ') path.erase(0, 1);
-                g_wanted = path;
-                projectm_load_preset_file(pm, path.c_str(), word == "preset-soft");
-                say("preset ok " + presetName(path));
-            } else if (word == "data" || word == "data-soft") {
-                std::string text(cmd.payload.begin(), cmd.payload.end());
-                g_wanted = "(edited)";
-                projectm_load_preset_data(pm, text.c_str(), word == "data-soft");
-                say("preset ok (edited)");
-            } else if (word == "lock") {
-                int v = 0;
-                in >> v;
-                projectm_set_preset_locked(pm, v != 0);
-            } else if (word == "var") {
-                std::string name;
-                float value = 0;
-                in >> name >> value;
-                projectm_set_custom_variable(pm, name.c_str(), value);
-            } else if (word == "vars") {
-                std::string pair;
-                while (in >> pair) {
-                    auto eq = pair.find('=');
-                    if (eq == std::string::npos) continue;
-                    projectm_set_custom_variable(pm, pair.substr(0, eq).c_str(), std::strtof(pair.c_str() + eq + 1, nullptr));
-                }
-            } else if (word == "pcm") {
-                size_t n = cmd.payload.size() / 2;
-                if (n > 0) {
-                    projectm_pcm_add_int16(pm, reinterpret_cast<const int16_t*>(cmd.payload.data()),
-                                           static_cast<unsigned int>(n), PROJECTM_MONO);
-                }
-            } else if (word == "audio") {
-                std::string first;
-                in >> first;
-                if (first == "off") {
-                    projectm_clear_audio_levels(pm);
-                } else {
-                    float lv[6] = {1, 1, 1, 1, 1, 1};
-                    lv[0] = std::strtof(first.c_str(), nullptr);
-                    for (int i = 1; i < 6; i++) in >> lv[i];
-                    projectm_set_audio_levels(pm, lv[0], lv[1], lv[2], lv[3], lv[4], lv[5]);
-                }
-            } else if (word == "beat") {
-                float s = 1;
-                in >> s;
-                projectm_set_beat_sensitivity(pm, s);
-            } else if (word == "textures") {
-                std::string dir;
-                std::getline(in, dir);
-                if (!dir.empty() && dir[0] == ' ') dir.erase(0, 1);
-                const char* paths[] = {dir.c_str()};
-                projectm_set_texture_search_paths(pm, paths, 1);
+                break;
             }
         }
         if (g_quit) break;
@@ -563,11 +448,9 @@ int main(int argc, char** argv) {
         if (next < now - frameTime * 4) next = now;  // fell behind: do not chase
 
         // Draw, and ask for this frame's pixels; take the frame before's.
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-        glViewport(0, 0, width, height);
-        projectm_opengl_render_frame(pm);
+        core.render();
         int mine = (pending + 1) & 1;
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, core.fbo);
         glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[mine]);
         glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
         if (pending >= 0) {
@@ -592,6 +475,6 @@ int main(int argc, char** argv) {
         pending = mine;
     }
 
-    projectm_destroy(pm);
+    core.close();
     return 0;
 }

@@ -70,10 +70,10 @@ class MilkDirector extends ChangeNotifier {
   }
 
   /// The helper just came up: the preset on last (unless it was on when the
-  /// helper died), or any.
+  /// helper died, or has been switched off since), or any.
   void started() {
     final last = feed.library.last;
-    final p = last != null && !feed.crashed.contains(last.path) ? last : _pick();
+    final p = last != null && !feed.crashed.contains(last.path) && !feed.library.isOff(last) ? last : _pick();
     if (p != null) feed.load(p);
     feed.lock(locked);
   }
@@ -100,6 +100,16 @@ class MilkDirector extends ChangeNotifier {
     feed.load(p);
   }
 
+  /// Switch the preset that is on off, and on to another (a cut; the hands'
+  /// hold, if any, moves to the new one).
+  void switchOff() {
+    final p = feed.preset;
+    if (p == null) return;
+    if (!feed.library.isOff(p)) feed.library.toggleOff(p);
+    final n = _pick(not: p);
+    if (n != null && !feed.library.isOff(n)) feed.load(n);
+  }
+
   void next() => _step(1);
   void previous() => _step(-1);
 
@@ -111,7 +121,7 @@ class MilkDirector extends ChangeNotifier {
   }
 
   void _step(int by) {
-    final list = feed.library.search('', favouritesOnly: favouritesOnly, minRating: minRating);
+    final list = feed.library.search('', favouritesOnly: favouritesOnly, minRating: minRating, hideOff: true);
     if (list.isEmpty) return;
     final cur = feed.preset;
     final i = cur == null ? -1 : list.indexWhere((p) => p.path == cur.path);

@@ -28,8 +28,26 @@ import 'milk_library.dart';
 import 'milk_pipe.dart';
 import 'show_state.dart';
 
+/// Where MilkDrop draws when it is not a helper of its own: the native stage's GL
+/// context (ui/show/native_stage.dart), told the helper's commands in-process.
+class MilkInStage {
+  const MilkInStage({required this.send, required this.said});
+  final void Function(String line, Uint8List? payload) send;
+
+  /// What it said since the last ask, a line each.
+  final String Function() said;
+}
+
 class MilkFeed extends ChangeNotifier {
   MilkFeed._();
+
+  /// Where MilkDrop is drawn while the native stage draws a scene of it: there, in
+  /// its context, and no helper. Its frames are the stage's own — [frame] stays
+  /// empty meanwhile. Chosen by who asks ([want]): the native stage, while it has
+  /// asked within two seconds; the helper otherwise.
+  MilkInStage? inStage;
+  bool _staged = false;
+  DateTime _stageWanted = DateTime.fromMillisecondsSinceEpoch(0);
 
   /// The one feed of this process.
   static final shared = MilkFeed._();
@@ -52,7 +70,7 @@ class MilkFeed extends ChangeNotifier {
 
   /// On, or on its way: a scene asks every frame, and the first start copies the
   /// shipped presets out, which takes a moment — not one helper per frame.
-  bool get running => _helper != null || _starting != null;
+  bool get running => _helper != null || _starting != null || _staged;
 
   /// Kept on whatever is showing: the window was asked for it (`--milk`).
   bool pinned = false;
@@ -90,13 +108,22 @@ class MilkFeed extends ChangeNotifier {
   /// not sixty a second for nobody.
   static const idleFps = 2;
 
-  /// Called by whatever draws MilkDrop, each time it does.
-  void want({required bool whole}) {
+  /// Called by whatever draws MilkDrop, each time it does; [stage] where that is
+  /// the native stage, which draws it in its own context.
+  void want({required bool whole, MilkInStage? stage}) {
     final now = DateTime.now();
+    if (stage != null) _stageWanted = now;
+    final where = stage ?? (now.difference(_stageWanted) < const Duration(seconds: 2) ? inStage : null);
+    if (where != inStage) {
+      // Moved between the helper and the stage: the one on is stopped, and the next
+      // start is the other's.
+      stop();
+      inStage = where;
+    }
     _anyWanted = now;
     if (whole) _wholeWanted = now;
     // Looked at again: back to its rate now, not at the next tick.
-    if (_idle && _helper != null && _ready) _size();
+    if (_idle && (_helper != null || _staged) && _ready) _size();
   }
 
   /// The helper told its size and rate, where who is looking changed.
@@ -138,7 +165,7 @@ class MilkFeed extends ChangeNotifier {
   }
 
   /// Whether there is a helper to run at all.
-  bool get available => helperPath() != null;
+  bool get available => inStage != null || helperPath() != null;
 
   static const _numbersOff = {'milk.ok': 0.0, 'milk.on': 0.0};
 
@@ -162,6 +189,21 @@ class MilkFeed extends ChangeNotifier {
     // Never under a test: see CameraFeed.start.
     if (Platform.environment.containsKey('FLUTTER_TEST')) {
       trouble = 'no MilkDrop in a test';
+      return;
+    }
+    final stage = inStage;
+    if (stage != null) {
+      if (_staged) return;
+      await library.ready();
+      stage.send('open $width $height $fps ${library.texturesDir}', null);
+      _staged = true;
+      _ready = true;
+      _whole = true;
+      _idle = false;
+      _anyWanted = DateTime.now();
+      pcm.reset();
+      director.started();
+      notifyListeners();
       return;
     }
     final path = helperPath();
@@ -199,6 +241,10 @@ class MilkFeed extends ChangeNotifier {
   }
 
   void stop() {
+    if (_staged) {
+      inStage?.send('quit', null);
+      _staged = false;
+    }
     final pipe = _helper;
     _helper = null;
     pipe?.stop();
@@ -251,7 +297,13 @@ class MilkFeed extends ChangeNotifier {
     }
   }
 
-  void _send(String line, [Uint8List? payload]) => _helper?.send(line, payload);
+  void _send(String line, [Uint8List? payload]) {
+    if (_staged) {
+      inStage?.send(line, payload);
+    } else {
+      _helper?.send(line, payload);
+    }
+  }
 
   // ---------------------------------------------------------------- the hands
   /// A preset by file: a cut, or a blend into it.
@@ -275,7 +327,12 @@ class MilkFeed extends ChangeNotifier {
   // ---------------------------------------------------------------- the engine
   /// Every tick of the show's engine: the numbers, the sound.
   void tick(ShowState st) {
-    if (_helper == null || !_ready) return;
+    if ((_helper == null && !_staged) || !_ready) return;
+    if (_staged) {
+      for (final line in inStage?.said().split('\n') ?? const <String>[]) {
+        if (line.isNotEmpty) _said(line);
+      }
+    }
     _size();
     final vars = varsOf(st);
     _send('vars ${vars.entries.map((e) => '${e.key}=${e.value.toStringAsFixed(4)}').join(' ')}');
@@ -392,7 +449,7 @@ class MilkFeed extends ChangeNotifier {
       ? _numbersOff
       : {
           'milk.ok': 1,
-          'milk.on': running && frame != null ? 1 : 0,
+          'milk.on': running && (frame != null || _staged) ? 1 : 0,
         };
 
   @override

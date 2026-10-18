@@ -70,6 +70,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
       expect(find.text('New preset'), findsOneWidget);
       expect(find.text('favourites only'), findsOneWidget);
+      expect(find.text('off 0'), findsOneWidget, reason: 'the switched-off filter');
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 1));
