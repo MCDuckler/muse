@@ -43,6 +43,16 @@ void main() {
     NativeStage.brokenUntil = null;
   });
 
+  test("a scene through a treatment is the Flutter stage's; the dancers' own rendering of one is not", () {
+    const kinetic = RigFigure(kind: Figure.kinetic);
+    expect(NativeStage.whyNotRig(const ShowRig(figure: kinetic)), isNull);
+    expect(NativeStage.whyNotRig(ShowRig(figure: kinetic.copyWith(treatment: Treatment.ascii))), contains('ascii'));
+    const dancers = RigFigure(kind: Figure.dancers, treatment: Treatment.lines, style: 'lines');
+    expect(NativeStage.whyNotRig(const ShowRig(figure: dancers)), isNull, reason: 'they draw it themselves');
+    expect(NativeStage.whyNotRig(ShowRig(figure: dancers.copyWith(style: 'chrono'))), isNotNull, reason: 'chrono through lines is the pass');
+    expect(NativeStage.whyNotRig(ShowRig(figure: kinetic.copyWith(treatment: Treatment.raw))), isNull);
+  });
+
   testWidgets('the debug words say which stage draws, and why', (tester) async {
     SharedPreferences.setMockInitialValues({'muse.show.debug': true});
     final kit = await StageKit.load();

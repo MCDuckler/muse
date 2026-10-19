@@ -40,6 +40,7 @@ import '../../state/show/show_feed.dart';
 import '../../state/show/show_pool.dart' show QualityPool;
 import '../../state/show/show_rig.dart';
 import '../../state/show/show_state.dart';
+import '../../state/show/show_tune.dart' show imageTreatments;
 import 'scene.dart';
 import 'show_canvas.dart';
 import 'show_common.dart';
@@ -239,6 +240,17 @@ class NativeStage {
     final odd = scene.layers.first.samplers.where((s) => s != 'milk').toList();
     if (odd.isNotEmpty) return '${scene.id} samples ${odd.join(', ')}';
     return '${scene.id} is not a shader scene';
+  }
+
+  /// Why it cannot draw [rig] as asked (null when it can): a treatment over a scene's
+  /// picture is the Flutter stage's pass (show_canvas.dart _treated), not yet this
+  /// stage's — those frames are the Flutter stage's. The dancers' and the birds' own
+  /// rendering of one (RigFigure.style its name) it draws.
+  static String? whyNotRig(ShowRig rig) {
+    final f = rig.figure;
+    final t = f.treatment;
+    if (f.kind == Figure.none || !imageTreatments.contains(t) || f.style == t.name) return null;
+    return 'the scene through ${t.name}, which the Flutter stage draws';
   }
 
   static bool isShader(Scene? scene) =>
@@ -637,7 +649,7 @@ class _StageSurfaceState extends State<StageSurface> {
 
   void _check() {
     final scene = widget.book[widget.feed.state.scene];
-    final sceneWhy = NativeStage.whyNotScene(scene) ?? '';
+    final sceneWhy = NativeStage.whyNotScene(scene) ?? NativeStage.whyNotRig(widget.feed.state.rig) ?? '';
     final drawable = sceneWhy.isEmpty;
     String? why = NativeStage.whyNot();
     var native = false;
@@ -789,7 +801,7 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
     if (stage == null) return;
     // Parked: the Flutter stage draws this scene over it; a frame now and then keeps
     // it warm, nothing else is sent.
-    if (!widget.drawable || !NativeStage.canDraw(scene)) {
+    if (!widget.drawable || !NativeStage.canDraw(scene) || NativeStage.whyNotRig(st.rig) != null) {
       if (!_parked) {
         _parked = true;
         NativeStage.drawing = false;
