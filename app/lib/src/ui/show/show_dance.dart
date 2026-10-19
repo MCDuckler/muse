@@ -985,8 +985,18 @@ class DanceSim implements SimLayer {
       _paint(native, size, cam, look, bodies, leadRig, beats, dt);
       if (postNow) {
         final q = _postParams(look, h);
+        final k = fxKnobs(st.macros.tune, _fxName);
         native.post(
-            mode: q.mode, cell: q.cell, ink: q.ink, paper: q.paper, tint: q.tint, glyphs: _ramp.length, pop: look.kick.clamp(0.0, 1.0), popAt: _popAt, time: _t);
+            mode: q.mode,
+            cell: q.cell,
+            ink: q.ink,
+            paper: q.paper,
+            tint: q.tint,
+            glyphs: _ramp.length,
+            pop: look.kick.clamp(0.0, 1.0),
+            popAt: _popAt,
+            time: _t,
+            knobs: [k.weight, k.spacing, k.height, k.gain, k.size]);
       }
       if (DanceFrame.isFisheye(_shot)) {
         native.post(

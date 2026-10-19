@@ -1,7 +1,10 @@
 // The common block every scene shader reads (shaders/show/common.glsl), from the
 // frame: the one list both stages hand their shaders — the Flutter stage
 // (show_canvas.dart) and the native one (native_stage.dart).
+import 'dart:math' as math;
 import 'dart:ui' as ui;
+
+import 'package:flutter/material.dart' show Color, Colors, HSLColor;
 
 import '../../state/show/show_rig.dart';
 import '../../state/show/show_state.dart';
@@ -122,4 +125,28 @@ void setFxKnobs(ui.FragmentShader s, int at, ShowState st, String? treatment) {
     cell: cell * fxKnobs(tune, treatment).cell,
     tint: treatment == 'ascii' ? (tune[tuneKey('ascii', TuneKnob.tint)] ?? tint) : tint,
   );
+}
+
+/// The treatment [rig] puts its figure through, as dance_fx.frag draws it over a
+/// picture [h] high — its mode, its colours from [st]'s palette, its cell and tint
+/// through the knobs — for either stage (show_canvas.dart's pass, the native stage's
+/// ws_treat); null where there is none for a stage to draw: none asked for, or the
+/// figure draws it itself as its own style (the dancers', the birds').
+({Treatment t, int mode, Color ink, Color paper, double cell, double tint})? treatOf(ShowRig rig, ShowState st, int h) {
+  final fig = rig.figure;
+  final t = fig.treatment;
+  if (fig.kind == Figure.none || !imageTreatments.contains(t) || fig.style == t.name) return null;
+  final pal = st.palette;
+  final dark = HSLColor.fromAHSL(1, pal.primary.hue, 0.45, 0.035).toColor();
+  // The looks as the dancers' finish draws them.
+  final (ink, paper, cell, tint) = switch (t) {
+    Treatment.dither => (const Color(0xffeee7d6), HSLColor.fromAHSL(1, pal.primary.hue, 0.4, 0.07).toColor(), math.max(2.0, h / 220), 0.0),
+    Treatment.contour => (pal.accent.withSaturation(0.85).withLightness(0.62).toColor(), dark, 0.0, 0.0),
+    Treatment.halftone => (pal.primary.withSaturation(0.9).withLightness(0.55).toColor(), const Color(0xff050506), math.max(4.0, h / 110), 0.0),
+    Treatment.thermal => (Colors.white, Colors.black, 0.0, 0.0),
+    Treatment.lines => (pal.accent.withSaturation(0.35).withLightness(0.85).toColor(), const Color(0xff030303), math.max(5.0, h / 72), 0.0),
+    _ => (pal.accent.withSaturation(0.55).withLightness(0.78).toColor(), const Color(0xff040404), h / 44, 0.2),
+  };
+  final tuned = tunedCell(st, t.name, cell, tint);
+  return (t: t, mode: treatmentFxMode[t.name] ?? 1, ink: ink, paper: paper, cell: tuned.cell, tint: tuned.tint);
 }

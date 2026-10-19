@@ -51,6 +51,8 @@ void main() {
     expect(NativeStage.whyNotRig(const ShowRig(figure: dancers)), isNull, reason: 'they draw it themselves');
     expect(NativeStage.whyNotRig(ShowRig(figure: dancers.copyWith(style: 'chrono'))), isNotNull, reason: 'chrono through lines is the pass');
     expect(NativeStage.whyNotRig(ShowRig(figure: kinetic.copyWith(treatment: Treatment.raw))), isNull);
+    // A build of the stage with the pass of its own (ws_treat) draws it.
+    expect(NativeStage.whyNotRig(ShowRig(figure: kinetic.copyWith(treatment: Treatment.ascii)), treats: true), isNull);
   });
 
   testWidgets('the debug words say which stage draws, and why', (tester) async {

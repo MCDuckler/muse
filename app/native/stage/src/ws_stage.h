@@ -89,6 +89,13 @@ WS_API void ws_ground(int kind, const char* field, float dim, const float* knobs
 // band, 1 the alpha — the dancers' frame carries its coverage), and how much of the
 // blend (0: none drawn).
 WS_API void ws_blend(int ground, int figure, int coverage, float strength);
+// The treatment the figure goes through before the blend (dance_fx.frag over the
+// scene's picture; lib/src/ui/show/show_canvas.dart _treated), WS_TREAT floats: mode
+// (0 none), cell as a share of the picture's height, ink rgb, paper rgb, tint, glyphs,
+// pop, pop x, pop y, time, and the knobs weight, spacing, height, gain, size (0 is
+// 1). The glyphs are the texture named "glyphs" (ws_dance_texture). ws_features says 8.
+#define WS_TREAT 19
+WS_API void ws_treat(const float* p, int n);
 // The common block for the next frame: values 2.. of it (uTime on), n of them.
 WS_API void ws_inputs(const float* values, int n);
 

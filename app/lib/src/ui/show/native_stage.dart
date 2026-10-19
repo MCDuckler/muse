@@ -40,7 +40,7 @@ import '../../state/show/show_feed.dart';
 import '../../state/show/show_pool.dart' show QualityPool;
 import '../../state/show/show_rig.dart';
 import '../../state/show/show_state.dart';
-import '../../state/show/show_tune.dart' show imageTreatments;
+import '../../state/show/show_tune.dart' show fxKnobs, imageTreatments;
 import 'scene.dart';
 import 'show_canvas.dart';
 import 'show_common.dart';
@@ -243,14 +243,28 @@ class NativeStage {
   }
 
   /// Why it cannot draw [rig] as asked (null when it can): a treatment over a scene's
-  /// picture is the Flutter stage's pass (show_canvas.dart _treated), not yet this
-  /// stage's — those frames are the Flutter stage's. The dancers' and the birds' own
-  /// rendering of one (RigFigure.style its name) it draws.
-  static String? whyNotRig(ShowRig rig) {
+  /// picture, where this build of the stage has no pass for one (ws_treat, [treats])
+  /// — those frames are the Flutter stage's. The dancers' and the birds' own rendering
+  /// of one (RigFigure.style its name) it draws either way.
+  static String? whyNotRig(ShowRig rig, {bool? treats}) {
     final f = rig.figure;
     final t = f.treatment;
     if (f.kind == Figure.none || !imageTreatments.contains(t) || f.style == t.name) return null;
-    return 'the scene through ${t.name}, which the Flutter stage draws';
+    if (treats ?? (_it?.treats ?? false)) return null;
+    return 'the scene through ${t.name}, which this build of the stage cannot draw';
+  }
+
+  /// The ascii's glyphs up to the stage, the first time anything wants them.
+  void _sendGlyphs() {
+    if (_glyphsSent) return;
+    _glyphsSent = true;
+    unawaited(DanceSim.glyphBytes().then((g) {
+      if (g == null) return;
+      final (w, h, bytes) = g;
+      final p = _copy<Uint8>(bytes);
+      _name((n) => _danceTexture(n, w, h, p, 1), 'glyphs');
+      calloc.free(p);
+    }));
   }
 
   static bool isShader(Scene? scene) =>
@@ -292,6 +306,51 @@ class NativeStage {
   final _meshIds = Expando<int>();
   final _skinsSent = <int>{};
   bool _glyphsSent = false;
+
+  /// The treatment over the figure (ws_treat; a library from before it has none).
+  late final void Function(Pointer<Float>, int)? _treatFn = () {
+    try {
+      return _lib.lookupFunction<Void Function(Pointer<Float>, Int32), void Function(Pointer<Float>, int)>('ws_treat');
+    } catch (_) {
+      return null;
+    }
+  }();
+  final Pointer<Float> _treatBuf = calloc<Float>(19);
+  bool _treatOn = false;
+  static final _treatClock = Stopwatch()..start();
+
+  /// Whether this build of the stage draws a treatment over a scene (ws_treat; what
+  /// ws_features says as 8).
+  late final bool treats = _treatFn != null;
+
+  /// The treatment [st]'s rig asks of the stage (show_common.dart treatOf: the same
+  /// pass, colours, cell and knobs as the Flutter stage's), on a working picture [h]
+  /// pixels high; none where it asks for none.
+  void treat(ShowState st, double h) {
+    final fn = _treatFn;
+    if (fn == null) return;
+    final q = treatOf(st.rig, st, h.round().clamp(8, 8192));
+    if (q == null) {
+      if (_treatOn) {
+        _treatBuf[0] = 0;
+        fn(_treatBuf, 19);
+        _treatOn = false;
+      }
+      return;
+    }
+    _sendGlyphs();
+    final k = fxKnobs(st.macros.tune, q.t.name);
+    final v = [
+      q.mode.toDouble(), q.cell / h, q.ink.r, q.ink.g, q.ink.b, q.paper.r, q.paper.g, q.paper.b, q.tint,
+      DanceSim.glyphCount.toDouble(), (st.flat['dyn.hit.kick'] ?? 0).clamp(0.0, 1.0), 0.5, 0.5,
+      _treatClock.elapsedMicroseconds / 1e6, k.weight, k.spacing, k.height, k.gain, k.size,
+    ];
+    for (var i = 0; i < v.length; i++) {
+      _treatBuf[i] = v[i];
+    }
+    fn(_treatBuf, 19);
+    _treatOn = true;
+  }
   Pointer<Float> _cmds = nullptr;
   int _cmdsCap = 0;
 
@@ -341,16 +400,7 @@ class NativeStage {
   /// The dancers' frame: [cmds] (NativeDanceSurface's), and the ascii's glyphs the
   /// first time.
   void dance(Float32List cmds) {
-    if (!_glyphsSent) {
-      _glyphsSent = true;
-      unawaited(DanceSim.glyphBytes().then((g) {
-        if (g == null) return;
-        final (w, h, bytes) = g;
-        final p = _copy<Uint8>(bytes);
-        _name((n) => _danceTexture(n, w, h, p, 1), 'glyphs');
-        calloc.free(p);
-      }));
-    }
+    _sendGlyphs();
     if (cmds.length > _cmdsCap) {
       if (_cmds != nullptr) calloc.free(_cmds);
       _cmdsCap = cmds.length * 2;
@@ -415,6 +465,7 @@ class NativeStage {
       f & 1 != 0 ? 'MilkDrop of its own' : 'MilkDrop from the helper',
       if (f & 2 != 0) 'frames shared by Direct3D handle',
       if (f & 4 != 0) 'frames as pixels',
+      if (f & 8 != 0) 'treatments of its own',
     ].join(', ');
   }
 
@@ -842,6 +893,9 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
         unawaited(NativeStage.resize(px.width.round(), px.height.round(), scale));
       }
     }
+    // The treatment over the figure, where its rig asks for one the figure does not
+    // draw as its own style: the Flutter stage's pass, here.
+    if (stage.treats) stage.treat(st, (_px?.height ?? 720) * _scale);
     // The room as the ground: the camera on, each new frame up to the stage; the
     // cover as the ground: the record's, once.
     final ground = st.rig.ground.kind;

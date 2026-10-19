@@ -427,7 +427,7 @@ class Dance {
         }
         case kPost: {
           post(&c[i], programs, fbo, tex, scratchFbo);
-          i += 14;
+          i += 19;
           break;
         }
         case kFluid: {
@@ -742,7 +742,8 @@ class Dance {
     glDepthMask(GL_TRUE);
   }
 
-  // mode cell ink3 paper3 tint glyphs pop popX popY (dance_fx.frag)
+  // mode cell ink3 paper3 tint glyphs pop popX popY time, and the treatment's knobs
+  // weight spacing height gain size (0 is 1) (dance_fx.frag)
   void post(const float* p, glsl::Programs& programs, GLuint fbo, GLuint srcTex, GLuint scratchFbo) {
     const glsl::Program* fx = programs.get("sim/dance_fx");
     auto atlas = textures_.find("glyphs");
@@ -765,6 +766,11 @@ class Dance {
     set("uPop", p[10]);
     if (const GLint at = fx->loc("uPopAt"); at >= 0) glUniform2f(at, p[11], p[12]);
     set("uTime", p[13]);
+    set("uWeight", p[14]);
+    set("uSpacing", p[15]);
+    set("uHeight", p[16]);
+    set("uGain", p[17]);
+    set("uSize", p[18]);
     // Its alpha the coverage: the glyphs, the dots, the lines are the figure.
     set("uCoverageOut", 1.0f);
     glActiveTexture(GL_TEXTURE0);

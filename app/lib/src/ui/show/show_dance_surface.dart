@@ -130,10 +130,15 @@ class NativeDanceSurface implements DanceSurface {
         cam.size.width, cam.size.height,
       ]);
 
-  /// The ascii or dither finish (dance_fx.frag) over what is drawn so far.
+  /// The ascii or dither finish (dance_fx.frag) over what is drawn so far, with the
+  /// treatment's [knobs] — weight, spacing, height, gain, size (show_tune.dart's
+  /// fxKnobs; none, or 0, is the look as drawn).
   void post({required int mode, required double cell, required Color ink, required Color paper, required double tint, required int glyphs,
-      required double pop, required Offset popAt, required double time}) {
+      required double pop, required Offset popAt, required double time, List<double> knobs = const []}) {
     _out.addAll([_post.toDouble(), mode.toDouble(), cell, ink.r, ink.g, ink.b, paper.r, paper.g, paper.b, tint, glyphs.toDouble(), pop, popAt.dx, popAt.dy, time]);
+    for (var i = 0; i < 5; i++) {
+      _out.add(i < knobs.length ? knobs[i] : 0);
+    }
   }
 
   /// A coloured fluid round [bodies] (which hold it back), pushed by [splats] — x, y,

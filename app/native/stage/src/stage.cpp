@@ -339,6 +339,8 @@ struct Stage {
   float groundDim = 1, groundKnobs[4] = {};
   int blendGround = 1, blendFigure = 0, blendCoverage = 0;
   float blendStrength = 1;
+  // The treatment over the figure (ws_treat): mode 0 none.
+  float treat[WS_TREAT] = {};
   void (*onFrame)(void*) = nullptr;
   void* onFrameUser = nullptr;
   // drawn (the stage's thread)
@@ -489,11 +491,50 @@ void drawScene(const glsl::Program* p, Target& t, const float* common, const flo
   drawQuad();
 }
 
+// The figure in `t` through a treatment (dance_fx.frag; ws_treat's floats), via
+// `via` and back: what the Flutter stage's _treated does, before the blend. Its alpha
+// stays 1, as a scene's is (the blend reads its own coverage as ever).
+void treatPass(const float* q, Target& t, Target& via) {
+  const glsl::Program* fx = S->programs.get("sim/dance_fx");
+  const GLuint atlas = S->dance.texture("glyphs");
+  if (!fx || !atlas) return;
+  via.make(t.w, t.h, S->workFormat);
+  via.bind();
+  glDisable(GL_BLEND);
+  glUseProgram(fx->id);
+  auto set = [&](const char* n, float v) { if (const GLint at = fx->loc(n); at >= 0) glUniform1f(at, v); };
+  if (const GLint at = fx->loc("uResolution"); at >= 0) glUniform2f(at, (float)t.w, (float)t.h);
+  set("wsHeight", (float)t.h);
+  set("uMode", q[0]);
+  set("uCell", q[1] * t.h);
+  if (const GLint at = fx->loc("uInk"); at >= 0) glUniform3f(at, q[2], q[3], q[4]);
+  if (const GLint at = fx->loc("uPaper"); at >= 0) glUniform3f(at, q[5], q[6], q[7]);
+  set("uTint", q[8]);
+  set("uGlyphs", q[9]);
+  set("uPop", q[10]);
+  if (const GLint at = fx->loc("uPopAt"); at >= 0) glUniform2f(at, q[11], q[12]);
+  set("uTime", q[13]);
+  set("uCoverageOut", 0.0f);
+  set("uWeight", q[14]);
+  set("uSpacing", q[15]);
+  set("uHeight", q[16]);
+  set("uGain", q[17]);
+  set("uSize", q[18]);
+  bindTex(fx->id, "uImage", 0, t.tex);
+  bindTex(fx->id, "uAtlas", 1, atlas);
+  drawQuad();
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, via.fbo);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, t.fbo);
+  glBlitFramebuffer(0, 0, t.w, t.h, 0, 0, t.w, t.h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+  glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
+}
+
 // One frame into out[slot].
 void frame(int slot) {
   int W, H; float sc; std::string sceneName, fromName, kinds, groundField; float post[6]; float common[WS_COMMON];
   float fromK, fromKnobs[4], white, black, palette[9], recipe[12], groundDim, groundKnobs[4], blendStrength;
   int groundKind, blendGround, blendFigure, blendCoverage;
+  float treat[WS_TREAT];
   bool freeze, hasRecipe;
   {
     std::lock_guard<std::mutex> g(S->lock);
@@ -508,6 +549,7 @@ void frame(int slot) {
     groundKind = S->groundKind; groundField = S->groundField; groundDim = S->groundDim;
     std::memcpy(groundKnobs, S->groundKnobs, sizeof groundKnobs);
     blendGround = S->blendGround; blendFigure = S->blendFigure; blendCoverage = S->blendCoverage; blendStrength = S->blendStrength;
+    std::memcpy(treat, S->treat, sizeof treat);
   }
   const auto now = Clock::now();
   double dt = S->lastFrame.time_since_epoch().count() == 0 ? 1.0 / 60 : std::chrono::duration<double>(now - S->lastFrame).count();
@@ -633,6 +675,12 @@ void frame(int slot) {
       glBindVertexArray(S->vao);
       glDisable(GL_BLEND);
     }
+  }
+
+  // 1b'. the treatment over the figure, where its rig asks for one (ws_treat)
+  if (treat[0] > 0.5f) {
+    treatPass(treat, S->work, S->scratch);
+    glBindVertexArray(S->vao);
   }
 
   // 1c. the blend: the figure over the ground, its backdrop the rig's way (under.frag);
@@ -1117,6 +1165,7 @@ WS_API int ws_features(void) {
 #endif
   if (S && S->shared) f |= 2;
   if (S && S->readback) f |= 4;
+  f |= 8;  // ws_treat
   return f;
 }
 
@@ -1259,6 +1308,12 @@ WS_API void ws_blend(int ground, int figure, int coverage, float strength) {
   S->blendFigure = std::clamp(figure, 0, 2);
   S->blendCoverage = coverage ? 1 : 0;
   S->blendStrength = std::clamp(strength, 0.0f, 1.0f);
+}
+
+WS_API void ws_treat(const float* p, int n) {
+  if (!S) S = new Stage();
+  std::lock_guard<std::mutex> g(S->lock);
+  for (int i = 0; i < WS_TREAT; i++) S->treat[i] = p && i < n ? p[i] : 0;
 }
 
 WS_API void ws_inputs(const float* values, int n) {
