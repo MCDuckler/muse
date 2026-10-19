@@ -46,20 +46,15 @@ _KERNEL_BARS = 8
 # The four-bar grid: each bar's spectrum in this many bands, from frames this long.
 _GRID_BANDS = 40
 _GRID_FFT = 2048
-# What moving the grid costs, against the changes that vote for where it is (see
-# four_bars): more than any one change is worth (a change scores 3.5 at the most), so
-# it takes two clear ones or three middling ones. And how much the grid counted from
-# the top of the record is believed before anything is heard.
-_GRID_SWITCH = 4.5
+# How much the grid counted from the top of the record is believed before anything is
+# heard (four_bars), against the clear changes that vote for where it is (a change
+# scores 3.5 at the most).
 _GRID_FROM_TOP = 1.0
-# What a drop is worth to the grid: the grid passes through it. A drop is where the
-# record opens up, the one bar a DJ is surest is on a phrase — and measured over the
-# library, 770 of 8,618 drops sat exactly two bars off a marker, in records whose grid
-# never moved: no one change could pay for the move, not even the drop itself (Call Me
-# Maybe's chorus at bar 14 against markers at 12 and 16, with the later ones at 44 and
-# 76 on the grid). More than two moves' worth, so the grid moves onto the drop and
-# stays there until the record itself says otherwise.
-_GRID_ANCHOR = 3.0 * _GRID_SWITCH
+# What a drop is worth to the grid: nearly four of the clearest changes. A drop is where
+# the record opens up, the one bar a DJ is surest is on a phrase — measured over the
+# library, 770 of 8,618 drops once sat exactly two bars off a marker (Call Me Maybe's
+# chorus at bar 14 against markers at 12 and 16).
+_GRID_ANCHOR = 13.5
 
 # A bar has to be this much of the song's loudest to count as the song being "on".
 _ON = 0.6
@@ -81,6 +76,11 @@ _OUTRO_W = tuple(float(v) for v in (os.environ.get("MUSE_OUTRO_W") or "1,0.6,0.8
 # writes; a fifth of the song's range is a step rather than a swell.
 _DROP_SPAN = 8
 _DROP_RISE = 0.2
+# The fewest bars a drop can come after: a record that goes big on bar four drops there.
+_DROP_LEAD = 4
+# How big the step on a marker a bar off has to be, as a share of the sharpest, for
+# the drop to go onto the marker (drops).
+_DROP_SNAP = 0.8
 
 
 # ------------------------------------------------------------------ key
@@ -290,19 +290,18 @@ def four_bars(strength: np.ndarray, anchors: list[int] | None = None) -> list[in
     """The bars the record's four-bar grid is on: the markers a DJ lines two records
     up by, and what the booth mixes on.
 
-    Music is written in fours and its sections start on them — but not always on a
-    grid counted from the first bar: a pickup, an intro of three or six, a break two
-    bars short, and every section after it is a bar or two off a grid counted from the
-    top. So the grid goes where the record's clear changes are. Each bar is on one of
-    four grids; a grid is voted for by every clear change on it (the bars where the
-    sound changes most, each by how much); moving from one grid to another costs more
-    than any one change is worth, so the grid moves only where the record does — a
-    section of odd length, followed by others that agree — and never for one fill a bar
-    early. It moves on a clear change, which is where the new section starts.
-    With nothing to go by, the grid is counted from the top. The best path through the
-    four is found in one pass (Viterbi), and every bar four on from where its grid
-    starts is a marker. The [anchors] — the bars the record drops on — are markers
-    whatever else the record does (_GRID_ANCHOR).
+    One grid for the whole record, every fourth bar from one of the first four: the
+    markers a DJ counts by do not slip a bar in the middle of a song. Which of the four
+    is voted for by every clear change of the record (the bars where the sound changes
+    most, each by how much) and, far more, by its drops ([anchors], _GRID_ANCHOR) —
+    the one bar a DJ is surest is on a phrase. With nothing to go by, counted from the
+    top.
+
+    A record with a section of odd length keeps its grid: a pop song's chorus two
+    bars late after a short bridge is outvoted by the drops on the grid around it.
+    The grid used to move wherever enough clear changes paid for it (a Viterbi over the
+    four), and moved on 154 of 389 records looked at — on a fill, a riser, a pickup
+    bar; one record's first twenty bars sat a bar early with its drop on bar four.
     """
     n = len(strength)
     if n == 0:
@@ -316,29 +315,14 @@ def four_bars(strength: np.ndarray, anchors: list[int] | None = None) -> list[in
     for i in range(2, n - 2):
         if strength[i] >= threshold and strength[i] == strength[max(0, i - 2):i + 3].max():
             votes[i] = strength[i]
-    for a in anchors or []:
-        if 0 <= a < n:
-            votes[a] = max(votes[a], _GRID_ANCHOR)
-    score = np.array([_GRID_FROM_TOP, 0.0, 0.0, 0.0])
-    back = np.zeros((n, 4), dtype=np.int64)
-    for i in range(n):
-        new = np.empty(4)
-        for g in range(4):
-            new[g], back[i, g] = score[g], g
-            # A grid is only moved onto on a clear change on one of its own bars: where
-            # the section it starts begins.
-            if (i - g) % 4 == 0 and votes[i] > 0:
-                other = max((q for q in range(4) if q != g), key=lambda q: score[q])
-                if score[other] - _GRID_SWITCH > new[g]:
-                    new[g], back[i, g] = score[other] - _GRID_SWITCH, other
-                new[g] += votes[i]
-        score = new
+    drops = sorted({a for a in anchors or [] if 0 <= a < n})
+    for a in drops:
+        votes[a] = max(votes[a], _GRID_ANCHOR)
+
+    score = np.array([float(votes[g::4].sum()) for g in range(4)])
+    score[0] += _GRID_FROM_TOP
     g = int(np.argmax(score))
-    on = np.zeros(n, dtype=np.int64)
-    for i in range(n - 1, -1, -1):
-        on[i] = g
-        g = int(back[i, g])
-    return [i for i in range(n) if (i - on[i]) % 4 == 0]
+    return list(range(g, n, 4))
 
 
 def phrases(rows: np.ndarray, markers: list[int] | None = None) -> list[int]:
@@ -379,43 +363,64 @@ def drops(levels: list[int], phrase_bars: list[int], markers: list[int] | None =
     What a DJ is listening for and what makes a mix sound meant rather than merely
     correct — the incoming record's drop landing where the outgoing's phrase turns
     over. Found as the moment the next eight bars are a good deal louder than the
-    eight before, which is what a drop is; snapped to the phrase grid, because that
-    is where they are written.
+    eight before, which is what a drop is — as few as _DROP_LEAD before it at the top
+    of the record, so a record that goes big on bar four has its drop on bar four (it
+    could not be found before bar eight, and was put on bar seven, and the grid with
+    it); then put on the bar the step actually happens on (eight-bar means place it a
+    bar or two early or late: _sharpest); then onto the four-bar grid where the step
+    there is nearly as big, because that is where they are written. ([phrase_bars] is
+    no longer read: a phrase two bars off took the drop with it.)
     """
     n = len(levels)
-    if n < 2 * _DROP_SPAN:
+    if n < _DROP_LEAD + _DROP_SPAN:
         return []
     lv = np.array(levels, dtype=float) / 255.0
+
+    def rise(i: int) -> float:
+        k = min(_DROP_SPAN, i)
+        return float(lv[i:i + _DROP_SPAN].mean() - lv[i - k:i].mean())
+
     found: list[int] = []
-    for b in range(_DROP_SPAN, n - _DROP_SPAN + 1):
-        before = float(lv[b - _DROP_SPAN:b].mean())
+    for b in range(_DROP_LEAD, n - _DROP_SPAN + 1):
         after = float(lv[b:b + _DROP_SPAN].mean())
         # Loud after, and a real step up rather than a slow swell.
-        if after < _ON or after - before < _DROP_RISE:
+        if after < _ON or rise(b) < _DROP_RISE:
             continue
         # The biggest step in its own neighbourhood, so one drop is one bar.
-        rises = [
-            float(lv[i:i + _DROP_SPAN].mean() - lv[i - _DROP_SPAN:i].mean())
-            for i in range(max(_DROP_SPAN, b - 3), min(n - _DROP_SPAN, b + 4))
-        ]
-        if after - before < max(rises) - 1e-9:
+        near = range(max(_DROP_LEAD, b - 3), min(n - _DROP_SPAN, b + 3) + 1)
+        if rise(b) < max(rise(i) for i in near) - 1e-9:
             continue
-        # Onto the phrase it belongs to, where one is within a couple of bars; else
-        # onto the marker within a bar — the grid was anchored on this drop (add), on
-        # the bar near it where the sound changes most.
+        b = _sharpest(lv, b)
+        # Onto the marker within a bar where the step there is nearly as big: a drop is
+        # written on the grid, and a fill or a riser makes the bar before or after it
+        # look like the step. Where the step is clearly a bar off the grid, the drop
+        # stays where it is heard — a drop drawn a bar early is a mix landed a bar wrong.
         at = b
-        for p in phrase_bars:
-            if abs(p - b) <= 2:
-                at = p
-                break
-        else:
-            for m in markers or []:
-                if abs(m - b) <= 1:
+        if markers and b not in markers:
+            near = [m for m in markers if abs(m - b) == 1]
+            if near:
+                m = max(near, key=lambda m: _step(lv, m))
+                if _step(lv, m) >= _DROP_SNAP * _step(lv, b):
                     at = m
-                    break
         if not found or at - found[-1] >= _DROP_SPAN:
             found.append(at)
     return found
+
+
+def _step(lv: np.ndarray, i: int) -> float:
+    """How much the loudness steps up at bar [i]: the two bars after against the two
+    before."""
+    return float(lv[i:i + 2].mean() - lv[max(0, i - 2):i].mean()) if 0 < i < len(lv) else -1.0
+
+
+def _sharpest(lv: np.ndarray, b: int) -> int:
+    """The bar within two of [b] where the loudness steps up most, which is where a
+    drop is heard."""
+    best, at = -1.0, b
+    for i in range(max(1, b - 2), min(len(lv) - 1, b + 2) + 1):
+        if _step(lv, i) > best + 1e-9:
+            best, at = _step(lv, i), i
+    return at
 
 
 def sections(phrase_bars: list[int], levels: list[int], n_bars: int,
@@ -552,12 +557,9 @@ def add(out: dict, x: np.ndarray, beats_ms: list[int], bar_starts_on: int,
     spectra = bar_spectra(x, downbeats)
     out["sound"] = sound_of(spectra, energy_db)
     novelty = changes(spectra, energy_db)
-    # The drops as the energy alone finds them anchor the grid — each put on the bar
-    # within one where the sound changes most, since eight-bar means of the loudness
-    # place a step a bar early or late — and then they are found again, on the phrases
-    # that grid gives.
-    sharp = [max(0, b - 1) + int(np.argmax(novelty[max(0, b - 1):b + 2])) for b in drops(levels, [])
-             if b < len(novelty)]
+    # The drops as the energy alone finds them (each on the bar its step is heard on)
+    # anchor the grid, and then they are found again, on the phrases that grid gives.
+    sharp = [b for b in drops(levels, []) if b < len(novelty)]
     markers = four_bars(novelty, sorted(set(sharp + list(anchors or []))))
     out["four_bars"] = [int(downbeats[b]) for b in markers if b < len(downbeats)]
     phrase_bars = phrases(rows, markers)

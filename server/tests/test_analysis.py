@@ -128,6 +128,27 @@ def test_a_drop_is_found_where_the_song_opens_up(tmp_path):
     assert len(found["drops"]) == 1, "one drop, not one per bar of it"
 
 
+def test_a_record_that_goes_big_on_bar_four_drops_on_bar_four():
+    # Four bars of intro, then everything: the drop is bar four. (It could not be
+    # found before bar eight, and was put on bar seven, and the four-bar grid with it.)
+    levels = [60] * 4 + [240] * 20 + [120] * 8 + [240] * 16
+    found = analysis.drops(levels, [], list(range(0, 48, 4)))
+    assert found[0] == 4
+    assert 32 in found
+
+
+def test_a_drop_is_put_where_its_step_is_heard():
+    # The eight-bar means peak a bar or two from the step; the drop goes on the bar the
+    # loudness actually jumps.
+    levels = [100] * 12 + [170] + [250] * 19
+    assert analysis.drops(levels, []) == [13]
+    # A marker a bar off with nearly the step: onto the marker. A clearly smaller one
+    # (the riser bar before the drop): the drop stays where it is heard.
+    assert analysis.drops(levels, [], [0, 4, 8, 12, 16]) == [12]
+    levels = [100] * 12 + [110] + [250] * 19
+    assert analysis.drops(levels, [], [0, 4, 8, 12, 16]) == [13]
+
+
 def test_a_song_that_never_opens_up_has_no_drop():
     # Flat from end to end: nothing to point at, and none invented.
     assert analysis.drops([200] * 40, [0, 16, 32]) == []
@@ -168,15 +189,28 @@ def test_the_four_bar_markers_follow_the_record_not_its_first_bar(tmp_path):
         "every four bars from bar 2"
 
 
-def test_the_grid_moves_where_the_sections_do():
+def test_the_grid_is_one_grid_even_where_a_section_is_odd():
     # Sections every eight bars from the top, then one of six (from bar 16 to 22), and
-    # every eight bars from there: the markers move with them at bar 22.
+    # every eight bars from there. The markers do not slip a bar in the middle of the
+    # song: one grid, every fourth bar, on whichever of the four the changes vote for
+    # most (here the three after the odd section).
     strength = np.zeros(48)
     for b in (8, 16, 22, 30, 38):
         strength[b] = 3.0
     marks = analysis.four_bars(strength)
-    assert [m for m in marks if m < 22] == [0, 4, 8, 12, 16, 20]
-    assert [m for m in marks if m >= 22] == [22, 26, 30, 34, 38, 42, 46]
+    assert marks == list(range(2, 48, 4))
+
+
+def test_changes_alone_never_move_the_grid_however_many():
+    # The clear changes of a record on two grids: the first half on one, the second on
+    # another. No drop says which is the record's, so the grid stays one.
+    strength = np.zeros(64)
+    for b in (8, 16, 24):
+        strength[b] = 3.0
+    for b in (34, 42, 50, 58):
+        strength[b] = 3.0
+    marks = analysis.four_bars(strength)
+    assert len({m % 4 for m in marks}) == 1
 
 
 def test_one_fill_a_bar_early_does_not_move_the_grid():
@@ -189,18 +223,24 @@ def test_one_fill_a_bar_early_does_not_move_the_grid():
 
 
 def test_the_grid_passes_through_the_drop():
-    # A record counted from the top with a two-bar pre-chorus: the drop at bar 14 is
-    # the one change there is, and alone it could never pay for moving the grid.
+    # A record whose clear changes are on a grid counted from the top, but whose drop
+    # is at bar 14: the drop is the bar a DJ is surest of, and the one grid goes
+    # through it — from the top of the record to its end, not only after it.
     strength = np.zeros(96)
     strength[14] = 3.5
-    for b in (8, 44, 60, 76):
+    for b in (8, 44, 60):
         strength[b] = 3.0
-    assert analysis.four_bars(strength) == list(range(0, 96, 4)), "one change, no move"
+    assert analysis.four_bars(strength) == list(range(0, 96, 4)), "no drop, the changes decide"
     marks = analysis.four_bars(strength, anchors=[14])
-    # (Before the drop the grid is counted back from it — 2, 6, 10 — which is what a
-    # DJ counting in to the drop does too; the one weak change at 8 does not outweigh
-    # that.) Then back onto the old grid where the record's later changes are on it.
-    assert 14 in marks and {44, 60, 76} <= set(marks), "on the drop, then on the sections"
+    assert marks == list(range(2, 96, 4))
+
+
+def test_drops_outvote_a_drop_off_their_grid():
+    # Three drops on the grid from the top and one two bars off it (a chorus late after
+    # an odd bridge): the grid is the three's, and stays one.
+    strength = np.zeros(96)
+    marks = analysis.four_bars(strength + 0.1, anchors=[16, 14 + 32, 48, 80])
+    assert marks == list(range(0, 96, 4))
 
 
 def test_a_grid_that_starts_late_is_found_from_the_start():
