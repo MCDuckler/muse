@@ -91,14 +91,33 @@ class ShowAudio {
   }
 
   Map<String, dynamic> toJson() => {
-        'sub': sub, 'low': low, 'mid': mid, 'high': high, 'air': air,
-        'kick': kick, 'snare': snare, 'hat': hat, 'onset': onset, 'drums': drums, 'rest': rest, 'vocals': vocals,
+        'sub': sub,
+        'low': low,
+        'mid': mid,
+        'high': high,
+        'air': air,
+        'kick': kick,
+        'snare': snare,
+        'hat': hat,
+        'onset': onset,
+        'drums': drums,
+        'rest': rest,
+        'vocals': vocals,
       };
 
   factory ShowAudio.fromJson(Map<String, dynamic> j) => ShowAudio(
-        sub: _d(j['sub']), low: _d(j['low']), mid: _d(j['mid']), high: _d(j['high']),
-        air: _d(j['air']), kick: _d(j['kick']), snare: _d(j['snare']), hat: _d(j['hat']), onset: _d(j['onset']),
-        drums: _d(j['drums']), rest: _d(j['rest']), vocals: _d(j['vocals']),
+        sub: _d(j['sub']),
+        low: _d(j['low']),
+        mid: _d(j['mid']),
+        high: _d(j['high']),
+        air: _d(j['air']),
+        kick: _d(j['kick']),
+        snare: _d(j['snare']),
+        hat: _d(j['hat']),
+        onset: _d(j['onset']),
+        drums: _d(j['drums']),
+        rest: _d(j['rest']),
+        vocals: _d(j['vocals']),
       );
 }
 
@@ -461,7 +480,13 @@ class ShowMix {
   }
 
   Map<String, dynamic> toJson() => {
-        'on': on, 'armed': armed, 'kind': kind, 'from': from, 'to': to, 'bars': bars, 'k': k,
+        'on': on,
+        'armed': armed,
+        'kind': kind,
+        'from': from,
+        'to': to,
+        'bars': bars,
+        'k': k,
         'startsInMs': startsIn?.inMilliseconds,
       };
 
@@ -527,8 +552,7 @@ class ShowPalette {
     return HSLColor.fromAHSL(1, _d(v[0]), _d(v[1]), _d(v[2]));
   }
 
-  Map<String, dynamic> toJson() =>
-      {'primary': _hsl(primary), 'secondary': _hsl(secondary), 'accent': _hsl(accent)};
+  Map<String, dynamic> toJson() => {'primary': _hsl(primary), 'secondary': _hsl(secondary), 'accent': _hsl(accent)};
 
   factory ShowPalette.fromJson(Map<String, dynamic> j) => ShowPalette(
         primary: _fromList(j['primary'], house.primary),
@@ -546,8 +570,6 @@ class ShowMacros {
     this.blackout = false,
     this.freeze = false,
     this.hit = 0,
-    this.milkUnder = true,
-    this.milkMix = contrast,
     this.milkPreset,
     this.dancer,
     this.dancersOff = const [],
@@ -573,35 +595,11 @@ class ShowMacros {
   final double intensity, colour, strobe, hit;
   final bool blackout, freeze;
 
-  /// MilkDrop's picture under every scene (where there is a helper).
-  final bool milkUnder;
-
-  /// The ways a scene can sit on MilkDrop, by milkMix: a name and a word each.
-  static const milkMixes = [
-    ('add', 'the scene\'s light added over MilkDrop'),
-    ('screen', 'screened: neither blows the other out'),
-    ('dim', 'MilkDrop at a third, the scene on top'),
-    ('window', 'MilkDrop shows through the scene\'s bright parts'),
-    ('mask', 'MilkDrop only where the scene is dark'),
-    ('frame', 'the scene in the middle, MilkDrop round it'),
-    ('bands', 'vertical bands by turns, stepping with the beat'),
-    ('flip', 'the scene over MilkDrop; MilkDrop over it on each kick'),
-    ('outline', 'MilkDrop\'s edges only, as lines under the scene'),
-    ('contrast', 'the difference of the two'),
-  ];
-
-  /// How the scene sits on it: see ShowMacros.milkMixes and shaders/show/under.frag.
-  final int milkMix;
-
   /// The MilkDrop preset on, by its full name, for a stage in another process.
   final String? milkPreset;
   final List<double> macros;
 
   static const none = ShowMacros();
-
-  /// The way a scene sits on MilkDrop to start with: their difference, so where they
-  /// agree is dark and each shows through the other (milkMixes' "contrast").
-  static const contrast = 9;
 
   ShowMacros copyWith({
     double? intensity,
@@ -609,8 +607,6 @@ class ShowMacros {
     double? strobe,
     bool? blackout,
     bool? freeze,
-    bool? milkUnder,
-    int? milkMix,
     String? milkPreset,
     bool clearMilkPreset = false,
     String? dancer,
@@ -625,8 +621,6 @@ class ShowMacros {
         strobe: strobe ?? this.strobe,
         blackout: blackout ?? this.blackout,
         freeze: freeze ?? this.freeze,
-        milkUnder: milkUnder ?? this.milkUnder,
-        milkMix: milkMix ?? this.milkMix,
         milkPreset: clearMilkPreset ? null : milkPreset ?? this.milkPreset,
         dancer: dancer ?? this.dancer,
         dancersOff: dancersOff ?? this.dancersOff,
@@ -641,8 +635,6 @@ class ShowMacros {
     m['show.strobe'] = strobe;
     m['show.blackout'] = blackout ? 1 : 0;
     m['show.freeze'] = freeze ? 1 : 0;
-    m['show.milkUnder'] = milkUnder ? 1 : 0;
-    m['show.milkMix'] = milkMix.toDouble();
     m['show.hit'] = hit;
     for (var i = 0; i < macros.length; i++) {
       m['show.macro.${i + 1}'] = macros[i];
@@ -650,11 +642,14 @@ class ShowMacros {
   }
 
   Map<String, dynamic> toJson() => {
-        'intensity': intensity, 'colour': colour, 'strobe': strobe, 'blackout': blackout,
+        'intensity': intensity,
+        'colour': colour,
+        'strobe': strobe,
+        'blackout': blackout,
         'freeze': freeze,
-        'milkUnder': milkUnder,
-        'milkMix': milkMix,
-        if (milkPreset != null) 'milkPreset': milkPreset, 'hit': hit, 'macros': macros,
+        if (milkPreset != null) 'milkPreset': milkPreset,
+        'hit': hit,
+        'macros': macros,
         if (dancer != null) 'dancer': dancer,
         if (dancersOff.isNotEmpty) 'dancersOff': dancersOff,
         if (tune.isNotEmpty) 'tune': tune,
@@ -666,8 +661,6 @@ class ShowMacros {
         strobe: _d(j['strobe']),
         blackout: j['blackout'] == true,
         freeze: j['freeze'] == true,
-        milkUnder: j['milkUnder'] as bool? ?? true,
-        milkMix: (j['milkMix'] as num?)?.toInt() ?? contrast,
         milkPreset: j['milkPreset'] as String?,
         dancer: j['dancer'] as String?,
         dancersOff: [for (final v in (j['dancersOff'] as List? ?? const [])) '$v'],
@@ -723,8 +716,8 @@ class ShowState {
   final double sceneK;
 
   /// What the stage draws, as layers (show_rig.dart): the look on, and the one being
-  /// left under the same crossfade ([sceneK]). The scene names above are the looks'
-  /// ids, kept while the stages still read scenes.
+  /// left under the same crossfade ([sceneK]; its treatment goes with it). The scene
+  /// names above are the looks' ids, which the stages draw from.
   final ShowRig rig;
   final ShowRig? rigFrom;
 
@@ -865,16 +858,4 @@ class ShowState {
         genome: j['genome'] is Map ? Genome.fromJson((j['genome'] as Map).cast()) : Genome.none,
         dyn: j['dyn'] is Map ? {for (final e in (j['dyn'] as Map).entries) '${e.key}': _d(e.value)} : const {},
       );
-}
-
-/// [rig] with the hands over it, as the show plays today: MilkDrop under the figure
-/// (ShowMacros.milkUnder) the way the hands asked (milkMix), or the look's own ground
-/// where they asked for none. A look that samples MilkDrop itself keeps its ground.
-ShowRig rigWithMacros(ShowRig rig, ShowMacros m) {
-  if (rig.ground.kind == Ground.milk && rig.figure.kind == Figure.none) return rig;
-  if (!m.milkUnder) return rig.ground.kind == Ground.milk ? rig.copyWith(ground: RigGround.black, blend: rig.blend.copyWith(ground: GroundMode.over)) : rig;
-  return rig.copyWith(
-    ground: RigGround.milk,
-    blend: rig.blend.copyWith(ground: GroundModeMilk.ofMilkMix(m.milkMix), auto: true),
-  );
 }

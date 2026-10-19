@@ -98,6 +98,13 @@ class MilkDirector extends ChangeNotifier {
   void pick(MilkPreset p) {
     heldByHand = true;
     feed.load(p);
+    notifyListeners();
+  }
+
+  /// Let the director change a preset the hands picked before the next drop.
+  void release() {
+    heldByHand = false;
+    notifyListeners();
   }
 
   /// Switch the preset that is on off, and on to another (a cut; the hands'
@@ -116,8 +123,10 @@ class MilkDirector extends ChangeNotifier {
   void random({bool soft = false, bool byHand = false}) {
     final p = _pick(not: feed.preset);
     if (p == null) return;
+    final was = heldByHand;
     heldByHand = byHand;
     feed.load(p, soft: soft && !byHand);
+    if (was != heldByHand) notifyListeners();
   }
 
   void _step(int by) {

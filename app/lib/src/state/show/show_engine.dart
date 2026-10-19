@@ -45,7 +45,11 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
     MilkFeed.shared.pcm.source = (id) {
       final local = booth.a.offlinePath?.call(id);
       if (local != null) return (url: local, headers: const <String, String>{});
-      final track = booth.a.track?.id == id ? booth.a.track : booth.b.track?.id == id ? booth.b.track : null;
+      final track = booth.a.track?.id == id
+          ? booth.a.track
+          : booth.b.track?.id == id
+              ? booth.b.track
+              : null;
       if (track == null) return null;
       return (url: booth.api.streamUrl(track), headers: booth.api.streamHeaders);
     };
@@ -73,6 +77,7 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
     _looks = v;
     director.families = {for (final l in v.values) l.id: familyOf(l.rig.figure.kind, l.rig.ground.kind)};
     director.grounds = _groundPool;
+    director.allowed = _allowed;
   }
 
   /// The family a look belongs to, for the director's turns: geometric shapes,
@@ -80,17 +85,16 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   static String familyOf(Figure f, Ground g) => switch (f) {
         Figure.kinetic || Figure.blocks || Figure.flash || Figure.glide => 'geometric',
         Figure.dancers || Figure.birds || Figure.turntable => 'figurative',
-        Figure.fluid || Figure.veins => 'organic',
-        Figure.meme || Figure.words => 'media',
-        Figure.none => g == Ground.camera ? 'media' : 'organic',
+        Figure.fluid || Figure.veins || Figure.field => 'organic',
+        Figure.meme || Figure.words || Figure.room => 'media',
+        Figure.none => 'organic',
       };
 
   /// The grounds the director may put under a scene, weighted: MilkDrop most of the
-  /// time (the booth's way), the rest sharing what is left; none where MilkDrop is
-  /// switched off by the hands (then it is black, as it was), nor the room without
-  /// a camera on.
+  /// time (the booth's way), the rest sharing what is left; each one the pool has
+  /// on (show_pool.dart's `ground.*`), the room only with a camera on. None on is
+  /// black under every scene.
   List<(RigGround, double)> _groundPool() {
-    if (!_macros.milkUnder) return const [];
     final p = pool;
     final out = <(RigGround, double)>[];
     if (p.isOn('ground.milk')) out.add((RigGround.milk, 7));
@@ -103,7 +107,8 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
     if (p.isOn('ground.cover')) out.add((const RigGround(kind: Ground.cover, dim: 0.6), 0.6));
     if (p.isOn('ground.field')) out.add((const RigGround(kind: Ground.field, field: 'drift', dim: 0.6), 0.6));
     if (p.isOn('ground.camera') && (_state['cam.on']) > 0.5) out.add((const RigGround(kind: Ground.camera, dim: 0.8), 1));
-    return out;
+    // How often the hands want each: their lean on its weight.
+    return [for (final (g, w) in out) (g, w * p.leanOf('ground.${g.kind.name}'))];
   }
 
   Future<void>? _ready;
@@ -129,6 +134,7 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   void _apply(ShowDoc doc) {
     _doc = doc;
     director.off = doc.pool.looksOff;
+    director.leans = {for (final e in doc.pool.lean.entries) if (e.key.startsWith('look.')) e.key.substring(5): e.value};
     director.bias = doc.pool.bias;
     MovePool.from(doc.pool);
     StylePool.from(doc.pool);
@@ -221,13 +227,12 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   }
 
   /// [rig] with the hands' layers where they are locked, and their style; the
-  /// director's ground where the hands have none and the look has MilkDrop (the
-  /// macros' way), as the director rotates the pool's grounds under the scenes; and
-  /// the treatment the hands put on [look] (the pool's), if any.
+  /// treatment the hands put on [look] (the pool's), or the conductor's. A look that
+  /// is its own whole picture (MilkDrop alone) keeps its ground; any other stands on
+  /// the hands' ground where locked, else the director's (the pool's grounds,
+  /// rotated), else black. A pair the rules call never — the hands' style, or the
+  /// figure's own clock — goes onto black rather than break the rule.
   ShowRig _withHands(ShowRig rig, {String? look}) {
-    final ground = _hands.locked(RigSlot.ground)
-        ? _hands.ground
-        : (director.ground != null && rig.ground.kind == Ground.milk ? director.ground! : rig.ground);
     var figure = _style != null && rig.figure.kind == _styleFor ? rig.figure.copyWith(style: _style) : rig.figure;
     final treat = look == null ? null : _treatFor(look, figure.kind);
     if (treat != null && figure.kind != Figure.none) {
@@ -240,11 +245,21 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
       final own = figure.kind == Figure.birds || (figure.kind == Figure.dancers && look == 'dance-art');
       if (own && imageTreatments.contains(treat) && !(_style != null && figure.kind == _styleFor)) figure = figure.copyWith(style: treat.name);
     }
+    final whole = figure.kind == Figure.none;
+    final handsGround = !whole && _hands.locked(RigSlot.ground);
+    var ground = whole
+        ? rig.ground
+        : handsGround
+            ? _hands.ground
+            : rig.ground.kind != Ground.black
+                ? rig.ground
+                : (director.ground ?? RigGround.black);
+    final looked = ShowPool.lookupFigure(figure);
+    if (!whole && !handsGround && ground.kind != Ground.black && (pool.ruleFor(looked, ground.kind)?.off ?? false)) ground = RigGround.black;
+    StylePool.ground = ground.kind;
     // The blend: the hands' where locked; else the rules' for this figure on this
-    // ground (contrast is MilkDrop's way; a shape on the pulse adds, and so on).
-    final blend = _hands.locked(RigSlot.blend)
-        ? _hands.blend
-        : (figure.kind == Figure.none ? rig.blend : pool.blendFor(figure, ground.kind, from: rig.blend));
+    // ground (contrast under MilkDrop and as the default; a shape on the pulse adds…).
+    final blend = _hands.locked(RigSlot.blend) && !whole ? _hands.blend : (whole ? rig.blend : pool.blendFor(looked, ground.kind, from: rig.blend));
     return rig.copyWith(
       ground: ground,
       figure: figure,
@@ -285,14 +300,20 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   /// How many bars the conductor keeps a treatment on a look.
   static const treatBars = 8;
 
-  /// The ground a look would have now, with the hands over it.
-  Ground _groundFor(Look look) => _withHands(rigWithMacros(look.rig, _macros)).ground.kind;
-
-  /// Whether the pool's table lets [id]'s figure go on the ground it would have.
+  /// Whether the pool lets the director put [id] on: MilkDrop alone only where
+  /// MilkDrop is on and the hands keep no other background; a figure where the
+  /// rules let it stand on the ground it would have.
   bool _allowed(String id) {
     final look = looks[id];
     if (look == null) return true;
-    return pool.together(look.rig.figure, _groundFor(look));
+    final r = look.rig;
+    if (r.figure.kind == Figure.none) {
+      if (r.ground.kind != Ground.milk) return true;
+      return pool.isOn('ground.milk') && !(_hands.locked(RigSlot.ground) && _hands.ground.kind != Ground.milk);
+    }
+    final ground =
+        _hands.locked(RigSlot.ground) ? _hands.ground.kind : (r.ground.kind != Ground.black ? r.ground.kind : (director.ground?.kind ?? Ground.black));
+    return pool.together(ShowPool.lookupFigure(r.figure), ground);
   }
 
   // ------------------------------------------------------------------ launches
@@ -414,6 +435,8 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
 
   void start() {
     if (_ticker != null) return;
+    // The pool and the rules in force from the first frame, whoever starts the show.
+    unawaited(ready());
     _ticker = Ticker(_onTick)..start();
   }
 
@@ -442,32 +465,62 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
 
   DateTime? _hitAt;
 
-  /// The performer's hands on the scenes.
-  void nextScene() => milkOnly ? MilkFeed.shared.director.next() : director.next();
-  void previousScene() => milkOnly ? MilkFeed.shared.director.previous() : director.next(by: -1);
+  /// The performer's hands on the scenes (a launch still waiting is forgotten: the
+  /// newer choice stands). With MilkDrop alone on the stage the arrows step its presets.
+  void nextScene() {
+    if (milkOnly) return MilkFeed.shared.director.next();
+    _launch = null;
+    director.next();
+  }
 
-  /// Nothing but MilkDrop on the stage: the scene held on it, the arrows and the
-  /// pads on its presets instead.
-  bool get milkOnly => director.locked && director.scene == 'milk';
+  void previousScene() {
+    if (milkOnly) return MilkFeed.shared.director.previous();
+    _launch = null;
+    director.next(by: -1);
+  }
+
+  /// The next scene the director may use, whatever is held (a scene just switched
+  /// off steps on to one that is on).
+  void stepOn() {
+    _launch = null;
+    director.next();
+    if (!running) tick(DateTime.now());
+    notifyListeners();
+  }
+
+  /// MilkDrop alone on the stage: the MilkDrop look, held; the arrows and the pads on
+  /// its presets instead. Its own flag: HOLD on another scene is not this.
+  bool _milkOnly = false;
+  bool get milkOnly => _milkOnly && director.scene == 'milk';
   void setMilkOnly(bool on) {
+    _launch = null;
     if (on) {
+      if (!director.scenes.any((s) => s.id == 'milk')) return;
       director
         ..choose('milk')
         ..locked = true;
+      _milkOnly = true;
       unawaited(MilkFeed.shared.start());
     } else {
+      _milkOnly = false;
       director.locked = false;
     }
     if (!running) tick(DateTime.now());
     notifyListeners();
   }
-  void chooseScene(String id) => director.choose(id);
+
+  void chooseScene(String id) {
+    _launch = null;
+    director.choose(id);
+  }
 
   /// The scene on held: the director's rules stay off it until it is let go (the
   /// arrows still move it, and the next one is held instead). One look as a mode.
   bool get sceneHeld => director.locked;
   void holdScene(bool on) {
+    _launch = null;
     director.locked = on;
+    if (!on) _milkOnly = false;
     if (!running) tick(DateTime.now());
     notifyListeners();
   }
@@ -528,9 +581,7 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
     // The record's genome, drawn once per record on the master deck.
     if (master.trackId != _genomeTrack) {
       _genomeTrack = master.trackId;
-      _genome = master.trackId == null
-          ? Genome.none
-          : Genome.of(trackId: master.trackId!, camelot: master.camelot, bpm: master.bpm, cover: master.coverColor);
+      _genome = master.trackId == null ? Genome.none : Genome.of(trackId: master.trackId!, camelot: master.camelot, bpm: master.bpm, cover: master.coverColor);
     }
 
     final m = booth.mixing;
@@ -554,9 +605,7 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
 
     // The hit, fading from when it landed.
     final hitAt = _hitAt;
-    final hit = hitAt == null
-        ? 0.0
-        : (1 - now.difference(hitAt).inMicroseconds / hitFade.inMicroseconds).clamp(0.0, 1.0);
+    final hit = hitAt == null ? 0.0 : (1 - now.difference(hitAt).inMicroseconds / hitFade.inMicroseconds).clamp(0.0, 1.0);
     if (hit != _macros.hit) _macros = _macros.copyWith(hit: hit);
     // The beat before the drop, black (the pool's say): in the frame, not the hands.
     final away = master.dropBeatsAway;
@@ -603,8 +652,8 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
       sceneFrom: d.from,
       sceneK: d.k,
       clearSceneFrom: d.from == null,
-      rig: look == null ? _withHands(ShowRig.none) : _withHands(rigWithMacros(look.rig, _macros), look: look.id),
-      rigFrom: leaving == null ? null : _withHands(rigWithMacros(leaving.rig, _macros), look: leaving.id),
+      rig: _withHands(look?.rig ?? ShowRig.none, look: look?.id),
+      rigFrom: leaving == null ? null : _withHands(leaving.rig, look: leaving.id),
       macros: dark && !_macros.blackout ? _macros.copyWith(blackout: true) : _macros,
     );
     // MilkDrop, where it is on: the numbers and the sound, and its director's cuts;
@@ -658,8 +707,7 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
     );
   }
 
-  static ShowState _blank(DateTime now) =>
-      ShowState(now: now, a: const ShowDeck(name: 'A'), b: const ShowDeck(name: 'B'));
+  static ShowState _blank(DateTime now) => ShowState(now: now, a: const ShowDeck(name: 'A'), b: const ShowDeck(name: 'B'));
 
   @override
   void dispose() {

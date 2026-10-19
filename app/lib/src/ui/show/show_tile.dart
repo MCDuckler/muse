@@ -85,7 +85,7 @@ class _ShowTileState extends State<ShowTile> {
     final show = widget.booth.show;
     show.setPool(show.pool.withOff('look.$id', off));
     // Turned off while it is on: on to the next one now, not at the next section.
-    if (off && show.state.scene == id) show.nextScene();
+    if (off && show.state.scene == id) show.stepOn();
   }
 
   Future<void> _load() async {
@@ -187,7 +187,9 @@ class _ShowTileState extends State<ShowTile> {
                                   children: [
                                     Flexible(
                                       child: Text(scene?.name ?? '—',
-                                          style: TextStyle(color: Console.ink, fontWeight: FontWeight.w700, fontSize: 15), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                          style: TextStyle(color: Console.ink, fontWeight: FontWeight.w700, fontSize: 15),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis),
                                     ),
                                     Icon(Icons.arrow_drop_down, size: 18, color: Console.quiet),
                                   ],
@@ -247,10 +249,18 @@ class _ShowTileState extends State<ShowTile> {
                         height: 26,
                         lit: show.sceneHeld,
                         colour: Console.quiet,
-                        tooltip: show.sceneHeld ? 'This scene is held — let the director choose again' : 'Hold this scene: the stage stays on it, the arrows still change it',
+                        tooltip: show.sceneHeld
+                            ? 'This scene is held — let the director choose again'
+                            : 'Hold this scene: the stage stays on it, the arrows still change it',
                         onTap: () => show.holdScene(!show.sceneHeld),
                       ),
-                      Pad(icon: Icons.timer_outlined, width: 26, height: 26, colour: Console.quiet, tooltip: 'The picture against the sound', onTap: () => _offset(context)),
+                      Pad(
+                          icon: Icons.timer_outlined,
+                          width: 26,
+                          height: 26,
+                          colour: Console.quiet,
+                          tooltip: 'The picture against the sound',
+                          onTap: () => _offset(context)),
                     ],
                   ),
                   const SizedBox(height: 2),
@@ -295,7 +305,7 @@ class _ShowTileState extends State<ShowTile> {
                               height: 22,
                               lit: only,
                               colour: Console.quiet,
-                              tooltip: only ? 'Only MilkDrop — back to the scenes' : 'Only MilkDrop: the stage held on it, ‹ › on its presets',
+                              tooltip: only ? 'MilkDrop alone — back to the scenes' : 'MilkDrop alone on the stage: held on it, ‹ › step its presets',
                               onTap: () => show.setMilkOnly(!only),
                             ),
                             const SizedBox(width: 2),
@@ -303,29 +313,26 @@ class _ShowTileState extends State<ShowTile> {
                               icon: Icons.layers_outlined,
                               width: 22,
                               height: 22,
-                              lit: st.macros.milkUnder,
+                              lit: show.pool.isOn('ground.milk'),
                               colour: Console.quiet,
-                              tooltip: st.macros.milkUnder
-                                  ? 'MilkDrop under the scenes, ${ShowMacros.milkMixes[st.macros.milkMix % ShowMacros.milkMixes.length].$1} — off; hold for the next way'
-                                  : 'MilkDrop under every scene',
-                              onTap: () => show.setMacros(show.macros.copyWith(milkUnder: !show.macros.milkUnder)),
-                              onLongPress: () => show.setMacros(show.macros.copyWith(milkUnder: true, milkMix: (show.macros.milkMix + 1) % ShowMacros.milkMixes.length)),
+                              tooltip: show.pool.isOn('ground.milk')
+                                  ? 'The director puts MilkDrop under the scenes — tap and it never does (how it blends: the SHOW page)'
+                                  : 'The director never puts MilkDrop under a scene — tap to let it again',
+                              onTap: () => show.setPool(show.pool.withOff('ground.milk', show.pool.isOn('ground.milk'))),
                             ),
-                            const SizedBox(width: 2),
-                            Pad(icon: Icons.casino_outlined, width: 22, height: 22, colour: Console.quiet, tooltip: 'Another preset', onTap: () {
-                              if (!milk.running) unawaited(milk.start());
-                              d.random(byHand: true);
-                            }),
                             const SizedBox(width: 2),
                             Pad(
-                              icon: d.locked ? Icons.lock : Icons.lock_open,
-                              width: 22,
-                              height: 22,
-                              lit: d.locked,
-                              colour: Console.quiet,
-                              tooltip: d.locked ? 'Held' : 'Hold this preset',
-                              onTap: () => d.set(locked: !d.locked),
-                            ),
+                                icon: Icons.casino_outlined,
+                                width: 22,
+                                height: 22,
+                                colour: Console.quiet,
+                                tooltip: 'Another preset',
+                                onTap: () {
+                                  if (!milk.running) unawaited(milk.start());
+                                  d.random(byHand: true);
+                                }),
+                            const SizedBox(width: 2),
+                            const MilkHoldPad(size: 22),
                           ],
                         );
                       },
@@ -421,7 +428,8 @@ class _ShowTileState extends State<ShowTile> {
                   if (widget.onRig != null)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 4),
-                      child: _Button(icon: Icons.tune, label: 'The rig', tip: 'The show\'s own page: its layers, its pool, the dancers (K)', onTap: widget.onRig),
+                      child:
+                          _Button(icon: Icons.tune, label: 'The rig', tip: 'The show\'s own page: its layers, its pool, the dancers (K)', onTap: widget.onRig),
                     ),
                   Row(
                     children: [
@@ -520,4 +528,3 @@ Future<void> showTileOffsetDialog(BuildContext context, Booth booth) async {
     await prefs.setInt(kOffset, ms);
   }
 }
-

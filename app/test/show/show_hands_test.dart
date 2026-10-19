@@ -99,7 +99,8 @@ void main() {
     expect(show.state.rig.ground.kind, Ground.milk, reason: 'milk under every scene is the default');
     expect(show.state.rig.blend.ground, GroundMode.contrast);
     expect(show.state.rig.finish.trails, 0.35);
-    show.setMacros(show.macros.copyWith(milkUnder: false));
+    // Every background switched off: black, plainly.
+    show.setPool(show.pool.copyWith(off: {...show.pool.off, for (final g in Ground.values) 'ground.${g.name}'}));
     show.tick(t.add(const Duration(milliseconds: 16)));
     expect(show.state.rig.ground.kind, Ground.black);
     expect(show.state.rig.blend.ground, GroundMode.over);
@@ -204,9 +205,10 @@ void main() {
     expect(show.director.on.map((s) => s.id), contains('flash'));
     show.setPool(show.pool.withCombo('figure.flash|ground.milk', ComboRule.never));
     expect(show.director.on.map((s) => s.id), isNot(contains('flash')));
-    // No milk under: together again.
-    show.setMacros(show.macros.copyWith(milkUnder: false));
+    // On a background of the hands' own (the wash: the shapes add over it): together again.
+    show.setGround(const RigGround(kind: Ground.wash));
     expect(show.director.on.map((s) => s.id), contains('flash'));
+    show.lock(RigSlot.ground, false);
     // The moves: the pool's switches and stars reach the dancers' statics.
     show.setPool(show.pool.withOff('move.long22', true).withLean('move.long30', 2));
     expect(MovePool.off, {'long22'});
@@ -233,9 +235,9 @@ void main() {
     show.setGround(const RigGround(kind: Ground.wash));
     show.tick(t.add(const Duration(milliseconds: 32)));
     expect(show.state.rig.ground.kind, Ground.wash);
-    // MilkDrop off by the macros: black, as it was.
+    // Every background off in the pool: black.
     show.lock(RigSlot.ground, false);
-    show.setMacros(show.macros.copyWith(milkUnder: false));
+    show.setPool(show.pool.copyWith(off: {...show.pool.off, for (final g in Ground.values) 'ground.${g.name}'}));
     show.tick(t.add(const Duration(milliseconds: 48)));
     expect(show.state.rig.ground.kind, Ground.black);
   });

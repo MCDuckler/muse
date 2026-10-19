@@ -251,7 +251,7 @@ class _StagePainter extends CustomPainter {
     var i = 0;
     s.setFloat(i++, w.toDouble());
     s.setFloat(i++, h.toDouble());
-    for (final v in commonBlock(st, layer, _clock.elapsedMicroseconds / 1e6)) {
+    for (final v in commonBlock(st, layer, _time)) {
       s.setFloat(i++, v);
     }
     var si = 0;
@@ -344,11 +344,12 @@ class _StagePainter extends CustomPainter {
       ..setFloat(3, f['dyn.beat.decay'] ?? 0)
       ..setFloat(4, f['dyn.bar.saw'] ?? 0)
       ..setFloat(5, f['dyn.hit.kick'] ?? 0)
-      ..setFloat(6, _clock.elapsedMicroseconds / 1e6)
+      ..setFloat(6, _time)
       ..setFloat(7, blend.figure.index.toDouble())
       // Which pixels are the figure: the ones at alpha 254/255 (a canvas keeps no
-      // coverage below 1).
-      ..setFloat(8, 0)
+      // coverage below 1) — or the alpha itself, for the words, whose shader writes
+      // its coverage.
+      ..setFloat(8, scene.layers.any((l) => l.sim == 'words') ? 1 : 0)
       ..setFloat(9, blend.strength)
       ..setFloat(10, ground.fit)
       ..setFloat(11, rig.ground.dim)
@@ -495,7 +496,7 @@ class _StagePainter extends CustomPainter {
         if (!live || particles.isEmpty) return;
         final primary = st.palette.primary.toColor();
         final accent = st.palette.accent.toColor();
-        final t = _clock.elapsedMicroseconds / 1e6;
+        final t = _time;
         for (final kind in particles) {
           final sys = _particles.putIfAbsent(kind, () => ParticleSystem(kind));
           sys.step(st, st.macros.freeze ? 0 : _dt, w, h);
@@ -503,22 +504,27 @@ class _StagePainter extends CustomPainter {
         }
       });
 
-  /// Seconds since the last frame drawn here, for the particles.
+  /// Seconds of the show between the frame drawn last and this one, for the
+  /// simulations and the particles; and the show's own time for the shaders. Both by
+  /// the frames' clock (ShowState.now), not this painter's: a recording played back
+  /// draws the same picture, and a frozen frame holds every shader still.
   double _dt = 1 / 60;
-  Duration? _lastFrameAt;
+  double _time = 0;
+  DateTime? _lastNow;
 
   @override
   void paint(Canvas canvas, Size size) {
     final began = _clock.elapsed;
-    final lastAt = _lastFrameAt;
-    _dt = lastAt == null ? 1 / 60 : ((began - lastAt).inMicroseconds / 1e6).clamp(0.0, 0.25);
-    _lastFrameAt = began;
     var st = feed.state;
     if (st.macros.freeze) {
       st = _frozen ??= st;
     } else {
       _frozen = null;
     }
+    final lastNow = _lastNow;
+    _dt = lastNow == null ? 1 / 60 : (st.now.difference(lastNow).inMicroseconds / 1e6).clamp(0.0, 0.25);
+    _lastNow = st.now;
+    _time += _dt;
     final scene = book[st.scene] ?? book.scenes.values.firstOrNull;
     if (scene == null) {
       canvas.drawRect(Offset.zero & size, Paint()..color = Colors.black);
@@ -556,7 +562,13 @@ class _StagePainter extends CustomPainter {
     //    carried over from another scene.
     final fin = finishOf(scene, st);
     ui.Image current;
-    if (fin.trails > 0) {
+    final held = _history;
+    if (fin.trails > 0 && st.macros.freeze && held != null && held.width == w && held.height == h && _historyScene == scene.id) {
+      // Held still: the trails as they were (fed the same frame again and again, the
+      // feedback would brighten a frozen picture).
+      if (!feedsOnItself) drawn.dispose();
+      current = held;
+    } else if (fin.trails > 0) {
       final prev = _history;
       final usable = prev != null && prev.width == w && prev.height == h && _historyScene == scene.id;
       // The record's recipe, as much of it as the scene takes.
@@ -568,7 +580,7 @@ class _StagePainter extends CustomPainter {
         _feedback.setFloat(2 + i, r[i]);
       }
       _feedback
-        ..setFloat(14, _clock.elapsedMicroseconds / 1e6)
+        ..setFloat(14, _time)
         ..setImageSampler(0, usable ? prev : drawn)
         ..setImageSampler(1, drawn);
       current = _pass(w, h, (c) => c.drawRect(Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()), Paint()..shader = _feedback));
@@ -618,7 +630,7 @@ class _StagePainter extends CustomPainter {
       ..setFloat(5, fin.vignette)
       ..setFloat(6, fin.bloom)
       ..setFloat(7, leaving == null ? 0 : st.sceneK)
-      ..setFloat(8, _clock.elapsedMicroseconds / 1e6)
+      ..setFloat(8, _time)
       ..setFloat(9, fin.grain)
       ..setFloat(10, fin.tone)
       ..setImageSampler(0, leaving ?? current)

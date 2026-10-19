@@ -83,8 +83,22 @@ List<ShowEvent> eventsBetween(ShowState? prev, ShowState next) {
     if (was != null && was.playing != deck.playing) {
       out.add(ShowEvent(deck.playing ? ShowEventKind.play : ShowEventKind.pause, at, deck: deck.name, data: d));
     }
-    if (!deck.playing || deck.beatIndex == null) continue;
+    if (!deck.playing) continue;
     final sameRecord = was != null && was.trackId == deck.trackId && was.playing;
+    if (deck.beatIndex == null) {
+      // No grid (not read yet, or never): bars and phrases by the clock, at the
+      // record's tempo or 120, so the director and the launches still move — no
+      // beats, nothing to pulse to.
+      if (sameRecord && was.beatIndex == null) {
+        final barMs = 240000 / (deck.bpm ?? 120);
+        final barWas = (was.position.inMilliseconds / barMs).floor(), barNow = (deck.position.inMilliseconds / barMs).floor();
+        if (barNow > barWas && barNow - barWas < 4) {
+          out.add(ShowEvent(ShowEventKind.bar, at, deck: deck.name, data: {...d, 'bar': barNow, 'guessed': true}));
+          if (barNow % 8 == 0) out.add(ShowEvent(ShowEventKind.phrase, at, deck: deck.name, data: {...d, 'guessed': true}));
+        }
+      }
+      continue;
+    }
     // A beat passed: the index moved on (by one, or a few if a frame was skipped — one
     // beat is said, not each). A seek back is a new place, not a beat.
     if (sameRecord && was.beatIndex != null && deck.beatIndex! > was.beatIndex! && deck.beatIndex! - was.beatIndex! < 8) {

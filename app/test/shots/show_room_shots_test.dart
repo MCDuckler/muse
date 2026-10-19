@@ -81,12 +81,18 @@ void main() {
       addTearDown(tester.view.reset);
       FlutterErrorDetails? err;
       final was = FlutterError.onError;
-      FlutterError.onError = (d) => err ??= d;
+      FlutterError.onError = (d) {
+        // Said at once: a failing expect() under an override hides it otherwise.
+        debugPrint('show page shot: ${d.exceptionAsString()}\n${d.stack}');
+        err ??= d;
+      };
       await tester.pumpWidget(MaterialApp(
         theme: ThemeData.dark(useMaterial3: true),
-        home: RepaintBoundary(key: const ValueKey('shot'), child: Scaffold(body: ShowRoom(booth: booth))),
+        // The whole app in the shot, so a card (a dialog over the page) is in it too.
+        builder: (context, child) => RepaintBoundary(key: const ValueKey('shot'), child: child),
+        home: Scaffold(body: ShowRoom(booth: booth)),
       ));
-      for (var i = 0; i < 20 && find.text('GROUND').evaluate().isEmpty; i++) {
+      for (var i = 0; i < 20 && find.text('BACKGROUND').evaluate().isEmpty; i++) {
         await tester.pump(const Duration(milliseconds: 100));
       }
       await tester.pump(const Duration(milliseconds: 300));
@@ -100,6 +106,34 @@ void main() {
         });
       }
       await shot('show-room-${w.round()}');
+      // The rules: the table, the exceptions, the director.
+      await tester.tap(find.text('RULES'));
+      await tester.pump(const Duration(milliseconds: 300));
+      // The twelve rules, by character; the exceptions in words.
+      expect(find.text('THE RULES'), findsOneWidget);
+      expect(find.text('Ink on paper'), findsOneWidget);
+      await shot('show-room-${w.round()}-rules');
+      // A card: the dancer chip held.
+      // The rig's chip (down the right, after the tabs' lists in the tree).
+      await tester.longPress(find.text('Dancer').last, warnIfMissed: false);
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('GOES WITH'), findsOneWidget);
+      expect(find.text('HOW OFTEN'), findsOneWidget);
+      await shot('show-room-${w.round()}-card');
+      Navigator.of(tester.element(find.text('GOES WITH'))).pop();
+      await tester.pump(const Duration(milliseconds: 300));
+      // Everything: scenes, styles, backgrounds, each with how often.
+      await tester.tap(find.text('EVERYTHING'));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('how often the director puts each on'), findsOneWidget);
+      await shot('show-room-${w.round()}-everything');
+      // MilkDrop, in the page: the panel with no helper (a test has none).
+      await tester.tap(find.text('MILKDROP').first, warnIfMissed: false); // the tab (the rules' chip says it too)
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 300)));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('New preset'), findsOneWidget);
+      await shot('show-room-${w.round()}-milk');
       // The dancers' tab, with the moves browser (the bank read in this zone).
       await tester.runAsync(() => DanceAssets.of('chris').loaded);
       await tester.tap(find.text('DANCERS'));

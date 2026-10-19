@@ -87,12 +87,16 @@ class ShowDirector {
   void choose(String id, {SceneChange how = SceneChange.dissolve}) {
     if (!scenes.any((s) => s.id == id)) return;
     _heldBy = id;
-    _go(id, how);
+    _go(id, how, why: 'you chose it');
   }
 
   /// Scenes turned off by hand, by id: the director never reaches for one and the
   /// arrows step past it. Chosen by name, one still goes on.
   Set<String> off = {};
+
+  /// How much the hands lean on a scene, by id (how often: 0.4 rarely, 2 often);
+  /// absent is as any other.
+  Map<String, double> leans = const {};
 
   /// Whether a scene may go on now by the pool's rules (its figure on the ground
   /// that is on): asked of every scene the director weighs; the hands may still
@@ -120,6 +124,9 @@ class ShowDirector {
   List<(RigGround, double)> Function()? grounds;
   RigGround? ground;
   int _groundSinceBar = 0;
+
+  /// How many bars the director's background has been on.
+  int get groundBars => _groundSinceBar;
   static const groundHoldBars = 32;
 
   void _tire(ShowState s) {
@@ -133,9 +140,22 @@ class ShowDirector {
     if (on != null) fatigue[on] = (fatigue[on] ?? 0) + dt;
   }
 
+  /// [fatigue] summed by family.
+  Map<String, double> get familyFatigue {
+    final out = <String, double>{};
+    for (final e in fatigue.entries) {
+      final f = families[e.key];
+      if (f != null) out[f] = (out[f] ?? 0) + e.value;
+    }
+    return out;
+  }
+
   /// The scenes not turned off, nor ruled out — all of them, if every one is.
   List<SceneMeta> get on {
-    final on = [for (final s in scenes) if (!off.contains(s.id) && (allowed?.call(s.id) ?? true)) s];
+    final on = [
+      for (final s in scenes)
+        if (!off.contains(s.id) && (allowed?.call(s.id) ?? true)) s
+    ];
     return on.isEmpty ? scenes : on;
   }
 
@@ -147,8 +167,14 @@ class ShowDirector {
     choose(on[n].id);
   }
 
-  void _go(String id, SceneChange how) {
+  /// Why the scene on is on, in words (the SHOW page's SCENE row says it), and how
+  /// many bars ago it came.
+  String why = '';
+  int get barsOn => _sinceBar;
+
+  void _go(String id, SceneChange how, {String why = ''}) {
     if (id == _scene) return;
+    this.why = why;
     _from = _scene;
     _scene = id;
     _how = how;
@@ -164,8 +190,11 @@ class ShowDirector {
     final family = _scene == null ? null : families[_scene];
     final section = m.section;
     final hasCover = m.coverUrl != null;
-    final hasWords = m.lyric != null || m.vocal > 0.4;
+    // Words: a line being sung (timed lyrics), not a voice alone — the words figure
+    // would set nothing.
+    final hasWords = m.lyric != null;
     final out = <(double, SceneMeta)>[];
+    final tired = familyFatigue;
     final camOn = (s['cam.on']) > 0.5 && (s['cam.light']) > 0.08;
     final camMotion = s['cam.motion'];
     for (final sc in on) {
@@ -187,16 +216,26 @@ class ShowDirector {
           score += 3;
         } else if (sc.sections.isNotEmpty) {
           score -= 1;
+        } else {
+          // No sections listed: any of them, a little less than one named for it.
+          score += 2.5;
         }
       }
       // The record's own lean towards this scene (1 is neutral), and the scene's own.
       final lean = s.genome.genes['scene.${sc.id}'];
       if (lean != null) score += (lean - 1) * 1.0;
       score += sc.priority;
+      // How often the hands want it: two points either way.
+      final hands = leans[sc.id];
+      if (hands != null && hands > 0) score += (math.log(hands) / math.ln2).clamp(-1.4, 1.2) * 1.5;
       // What has been on a lot lately scores less (a minute on costs a point, fading);
       // another family than the one on scores a little more.
       score -= (fatigue[sc.id] ?? 0) / 60;
-      if (family != null && sc.id != _scene && families[sc.id] != null && families[sc.id] != family) score += 0.6;
+      // And a family on a lot lately tires as a whole (two minutes of shapes cost
+      // every shape a point), so the evening turns from shapes to bodies to flow.
+      final fam = families[sc.id];
+      if (fam != null) score -= (tired[fam] ?? 0) / 120;
+      if (family != null && sc.id != _scene && fam != null && fam != family) score += 0.6;
       out.add((score, sc));
     }
     out.sort((a, b) => b.$1.compareTo(a.$1));
@@ -229,7 +268,9 @@ class ShowDirector {
     }
     if (section && m.section != _lastSection) {
       _lastSection = m.section;
-      _heldBy = null;
+      // The hands' choice lasts until the section turns — not the turn it landed on
+      // (a launch on the bar a section starts on, the section said a frame later).
+      if (_sinceBar > 2) _heldBy = null;
     }
     _tire(s);
     // The ground: another every so many phrases, from the pool's.
@@ -258,7 +299,7 @@ class ShowDirector {
     // here): any that is on, rather than none.
     if (fits.isEmpty) fits = on;
     if (_scene == null) {
-      _go(fits.first.id, SceneChange.cut);
+      _go(fits.first.id, SceneChange.cut, why: 'the best fit for the start');
     } else if (_heldBy == null && !locked) {
       final current = fits.indexWhere((f) => f.id == _scene);
       final suits = current >= 0 && current < 2;
@@ -266,18 +307,18 @@ class ShowDirector {
         // A drop: a scene that suits it and is full the moment it is on, cut on it,
         // with a hit. Never a simulation, which would be a black frame on the drop.
         final pick = fits.firstWhere((f) => f.instant, orElse: () => fits.first).id;
-        if (pick != _scene) _go(pick, SceneChange.hit);
+        if (pick != _scene) _go(pick, SceneChange.hit, why: 'the drop: the best fit that is full at once');
       } else if (section && !suits) {
-        _go(fits.first.id, m.breakdown ? SceneChange.dissolve : SceneChange.cut);
+        _go(fits.first.id, m.breakdown ? SceneChange.dissolve : SceneChange.cut, why: 'the section turned${m.section != null ? ' to the ${m.section}' : ''}: the best fit');
       } else if (phrase && _sinceBar >= _keepBars && (!suits || _rng.nextDouble() < 0.35)) {
         // On a phrase, after a while: a change for variety among what suits.
         final pool = fits.take(3).where((f) => f.id != _scene).toList();
         // After the dancer, more often than not, the birds: the flock seeds itself
         // from her pose, so she turns into them.
         if ((_scene?.startsWith('dance-') ?? false) && fits.any((f) => f.id == 'flock') && _rng.nextDouble() < 0.6) {
-          _go('flock', SceneChange.dissolve);
+          _go('flock', SceneChange.dissolve, why: 'after the dancers, the birds');
         } else if (pool.isNotEmpty) {
-          _go(pool[_rng.nextInt(pool.length)].id, SceneChange.dissolve);
+          _go(pool[_rng.nextInt(pool.length)].id, SceneChange.dissolve, why: 'a new phrase: another of the three that fit best');
         }
       }
     }

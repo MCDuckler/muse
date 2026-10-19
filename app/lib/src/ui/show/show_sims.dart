@@ -52,7 +52,7 @@ abstract class SimLayer {
         'physarum' => PhysarumSim(),
         'siebenschlaefer' => MemeEdit(kind),
         'turntable' => TurntableSim(),
-        'dance.disco' || 'dance.neon' || 'dance.shadow' || 'dance.art' => DanceSim(kind),
+        'dance.disco' || 'dance.neon' || 'dance.shadow' || 'dance.art' => DanceSim('dance.art'),
         'flock' => FlockSim(kind),
         'words' => WordsSim(),
         _ => null,

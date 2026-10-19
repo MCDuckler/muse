@@ -1,7 +1,11 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muse/src/ui/show/show_words.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('the score', () {
     test('a new line comes with the words, and the same words started again', () {
       final s = LyricScore();
@@ -76,7 +80,7 @@ void main() {
   });
 
   group('the clock', () {
-    test('the same record and slot pick the same style; another slot may not', () {
+    test('the same record and slot pick the same face; another slot may not', () {
       final a = WordsClock.style('verse', 0.5, 7, 3);
       final b = WordsClock.style('verse', 0.5, 7, 3);
       expect(a, b);
@@ -93,27 +97,59 @@ void main() {
       }
     });
 
-    test('styles switched off are passed by', () {
+    test('faces switched off are passed by', () {
       for (var i = 0; i < 20; i++) {
-        expect(WordsClock.style('chorus', 0.5, 2, i, off: [WordsStyle.stencil, WordsStyle.ribbon]), isIn([WordsStyle.poster, WordsStyle.kinetic]));
+        expect(WordsClock.style('chorus', 0.5, 2, i, off: [WordsStyle.marker, WordsStyle.serif]), isIn([WordsStyle.poster, WordsStyle.grotesk]));
       }
       // Every one off: any.
       expect(WordsStyle.values, contains(WordsClock.style('chorus', 0.5, 2, 1, off: WordsStyle.values)));
     });
   });
 
-  group('the stencil rows', () {
-    test('the words are packed into rows of about the same length, in order', () {
-      final rows = WordsSim.packRows('nothing left to learn tonight my friend'.split(' '), 3);
-      expect(rows.length, 3);
-      expect(rows.expand((r) => r).join(' '), 'nothing left to learn tonight my friend');
-      final lens = [for (final r in rows) r.join(' ').length];
-      expect(lens.reduce((a, b) => a > b ? a : b) - lens.reduce((a, b) => a < b ? a : b), lessThan(10));
+  group('the shader', () {
+    test('its floats are the ones WordsParams names, in its order', () {
+      final src = File('shaders/show/sim/words_fx.frag').readAsStringSync();
+      final decl = RegExp(r'uniform\s+(float|vec2|vec3|vec4)\s+(\w+)\s*;');
+      final inFile = [
+        for (final m in decl.allMatches(src)) (m.group(2)!, switch (m.group(1)) { 'float' => 1, 'vec2' => 2, 'vec3' => 3, _ => 4 })
+      ];
+      expect(inFile, WordsParams.uniforms);
+      expect(WordsParams.length, inFile.fold(0, (a, u) => a + u.$2));
+      expect(WordsParams.at['uResolution'], 0);
+      expect(WordsParams.at['uPremul'], WordsParams.length - 1);
+      // The pictures, as the native stage binds them by name (words.t0, words.t1).
+      expect(RegExp(r'uniform\s+sampler2D\s+(\w+)\s*;').allMatches(src).map((m) => m.group(1)).toList(), ['uT0', 'uT1']);
+    });
+  });
+
+  group('setting a line', () {
+    LyricLineOn line(String text) => LyricLineOn(text, 1, atSeconds: 0, atBeats: 0);
+
+    test('every face sets a line within the stage, in its rows, and its picture is sized to the block', () {
+      for (final style in WordsStyle.values) {
+        final set = layoutWords(line('hold the night a little longer than it wants to be held'), style, 1280, 720, slot: 1);
+        addTearDown(set.dispose);
+        expect(set.rect.left, greaterThanOrEqualTo(-0.01), reason: style.name);
+        expect(set.rect.right, lessThanOrEqualTo(1.01), reason: style.name);
+        expect(set.rect.top, greaterThanOrEqualTo(-0.05), reason: style.name);
+        expect(set.rect.bottom, lessThanOrEqualTo(1.05), reason: style.name);
+        expect(set.rows, inInclusiveRange(1, 6), reason: style.name);
+        expect(set.image.width, closeTo(set.rect.width * 1280, 1.5), reason: style.name);
+        expect(set.image.height, closeTo(set.rect.height * 720, 1.5), reason: style.name);
+        expect(set.slot, 1);
+        expect(set.texName, 'words.t1');
+      }
     });
 
-    test('fewer words than rows: a row a word; none: nothing', () {
-      expect(WordsSim.packRows(['oh'], 3), [['oh']]);
-      expect(WordsSim.packRows(const [], 2), isEmpty);
+    test('a word alone fills a row; a wide face stacks every word', () {
+      final one = layoutWords(line('gone'), WordsStyle.poster, 1280, 720);
+      addTearDown(one.dispose);
+      expect(one.rows, 1);
+      expect(one.rect.width, greaterThan(0.2));
+      final stack = layoutWords(line('every window open'), WordsStyle.wide, 1280, 720);
+      addTearDown(stack.dispose);
+      expect(stack.rows, 3);
+      expect(stack.rect.width, closeTo(0.9 + 2 * 0.04 * 720 / 1280, 0.01));
     });
   });
 }

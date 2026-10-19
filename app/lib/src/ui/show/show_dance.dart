@@ -56,7 +56,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../../state/show/show_pool.dart' show MovePool, QualityPool, StylePool;
+import '../../state/show/show_pool.dart' show MovePool, QualityPool, ShowPool, StylePool;
+import '../../state/show/show_rig.dart' show Figure;
 import '../../state/show/show_state.dart';
 import '../../state/show/show_tune.dart';
 import 'show_canvas.dart' show StagePrograms;
@@ -97,10 +98,7 @@ enum DanceRoutine { unison, wave, canon, split, answer }
 /// (dance_fx.frag's mode 7) — face on, close, and from the floor.
 enum DanceShot { full, front, medium, close, wide, extremeLow, extremeHigh, extremeFront, fisheye, fisheyeLow }
 
-/// The stage a scene puts the dancer on.
-enum DanceStage { disco, neon, shadow, art }
-
-/// How the stylised stage (dance.art) renders the dancer, a section at a time:
+/// How the dancer scene (dance.art) renders the dancers, a section at a time:
 ///
 ///   mono     a silhouette, black on white — the shadow-play of the Bad Apple
 ///            video — turning to white on black by the bar in a drop, a chorus line
@@ -121,9 +119,12 @@ enum DanceStage { disco, neon, shadow, art }
 ///            model dancing the same moves, the selection stepping on the beat (the
 ///            native stage only);
 ///   plain    the models as they are: textured, in a plain light, on white — no
-///            stage, no floor, no rendering style at all.
+///            stage, no floor, no rendering style at all;
+///   disco    an LED floor that plays the record: every step lights the tile it
+///            lands on, a kick rings out from the lead, a snare scatters sparks, the
+///            bass breathes the floor and the wall; a pattern a section under it.
 /// The figures are chrome throughout (the "clay" ones were porcelain).
-enum DanceArt { mono, trails, ascii, dither, chrono, contour, halftone, thermal, lines, fluid, viewports, plain }
+enum DanceArt { mono, trails, ascii, dither, chrono, contour, halftone, thermal, lines, fluid, viewports, plain, disco }
 
 /// The renderings finished by dance_fx.frag, and its mode for each.
 const danceFxMode = {DanceArt.ascii: 1, DanceArt.dither: 2, DanceArt.contour: 3, DanceArt.halftone: 4, DanceArt.thermal: 5, DanceArt.lines: 6};
@@ -361,19 +362,21 @@ class DanceClock {
     final pool = [
       for (final a in switch (mood) {
         MemeMood.sleep => [DanceArt.mono, DanceArt.ascii, DanceArt.dither, DanceArt.contour, DanceArt.lines, DanceArt.fluid, DanceArt.plain],
-        MemeMood.wake => [DanceArt.ascii, DanceArt.dither, DanceArt.trails, DanceArt.mono, DanceArt.halftone, DanceArt.thermal, DanceArt.lines, DanceArt.viewports, DanceArt.plain],
-        MemeMood.rage => [DanceArt.trails, DanceArt.chrono, DanceArt.mono, DanceArt.thermal, DanceArt.halftone, DanceArt.fluid, DanceArt.viewports, DanceArt.plain],
+        MemeMood.wake => [DanceArt.ascii, DanceArt.dither, DanceArt.trails, DanceArt.mono, DanceArt.halftone, DanceArt.thermal, DanceArt.lines, DanceArt.viewports, DanceArt.plain, DanceArt.disco],
+        MemeMood.rage => [DanceArt.trails, DanceArt.chrono, DanceArt.mono, DanceArt.thermal, DanceArt.halftone, DanceArt.fluid, DanceArt.viewports, DanceArt.plain, DanceArt.disco],
         MemeMood.vibe => DanceArt.values,
       })
         // The image treatments (ascii, dither, halftone, thermal, lines, contour) are
         // the conductor's (the frame's rig's treatment, state/show/show_engine.dart),
-        // as for every scene: this clock picks the stage's own. The styles the pool
-        // switched off are out; the GPU-only ones where there is no GPU.
-        if (!treatmentFxMode.containsKey(a.name) && !StylePool.off.contains(a.name) && (gpu || (a != DanceArt.fluid && a != DanceArt.viewports))) a,
+        // as for every scene: this clock picks the stage's own — those switched on,
+        // and that the rules let stand on the ground on now; the GPU-only ones where
+        // there is no GPU.
+        if (!treatmentFxMode.containsKey(a.name) && StylePool.allows(Figure.dancers, a.name) && (gpu || (a != DanceArt.fluid && a != DanceArt.viewports))) a,
     ];
     if (pool.isEmpty) return not ?? DanceArt.plain;
     final d = memeHash(salt % 9973, n, 97);
-    var a = pool[(d * pool.length).floor() % pool.length];
+    // As likely as the hands want each (how often: rarely, normal, often).
+    var a = ShowPool.pickWeighted(pool, d, (x) => StylePool.weight(Figure.dancers, x.name))!;
     if (a == not && pool.length > 1) a = pool[(pool.indexOf(a) + 1) % pool.length];
     return a;
   }
@@ -642,14 +645,7 @@ class _Member {
 }
 
 class DanceSim implements SimLayer {
-  DanceSim(this.kind, {this.gpu = false})
-      : stage = switch (kind) {
-          'dance.neon' => DanceStage.neon,
-          'dance.shadow' => DanceStage.shadow,
-          'dance.art' => DanceStage.art,
-          _ => DanceStage.disco,
-        },
-        assets = DanceAssets.of('chris') {
+  DanceSim(this.kind, {this.gpu = false}) : assets = DanceAssets.of('chris') {
     for (final m in DanceModels.all) {
       DanceAssets.of(m.$1);
     }
@@ -676,7 +672,6 @@ class DanceSim implements SimLayer {
   String? _forcedModel;
   @override
   final String kind;
-  final DanceStage stage;
 
   /// Drawn by the native stage: its bodies skinned there (DanceBody.gpu), the frame a
   /// list of commands ([record]) rather than a picture.
@@ -706,7 +701,6 @@ class DanceSim implements SimLayer {
   final _members = <_Member>[];
   DanceShot _shot = DanceShot.full;
   DanceArt? _art;
-  int _artN = 0;
   ui.FragmentShader? _fx;
   static ui.Image? _glyphs;
 
@@ -816,16 +810,25 @@ class DanceSim implements SimLayer {
     final sleep = mood == MemeMood.sleep;
     // The stage's own rendering a section at a time — and at once when one from the
     // frame (the hands', the conductor's treatment) is let go, so it does not linger.
+    // By the slot it turns on, not a count of this stage's own: every stage on the
+    // record (the booth's preview, a window) picks the same, and a seek back too.
     final styled = st.rig.figure.style;
     final letGo = styled == null && _styledWas != null;
     _styledWas = styled;
-    if (stage == DanceStage.art && (_art == null || dropNow || sectionNow || letGo)) {
-      _art = _forcedArt ?? DanceClock.art(mood, salt, _artN++, not: letGo ? null : _art, gpu: gpu);
+    if (_art == null || dropNow || sectionNow || letGo) {
+      _art = _forcedArt ?? DanceClock.art(mood, salt, n, not: letGo ? null : _art, gpu: gpu);
     }
     // The hands' own rendering, from the frame (the show's rig): on at once.
-    if (stage == DanceStage.art && styled != null) {
+    if (styled != null) {
       final want = DanceArt.values.where((a) => a.name == styled).firstOrNull;
       if (want != null && (gpu || (want != DanceArt.fluid && want != DanceArt.viewports))) _art = want;
+    }
+    // Told back, so the rules for one look of the dancers (the plain ones over
+    // MilkDrop, the silhouettes a keyhole onto it) apply as the clock turns.
+    if (_art != null) {
+      StylePool.now[Figure.dancers] = _art!.name;
+    } else {
+      StylePool.now.remove(Figure.dancers);
     }
     if (_lead.move == null || n != _slot || dropNow || sectionNow) {
       if (sectionNow) _sectionSlot = n;
@@ -833,18 +836,16 @@ class DanceSim implements SimLayer {
       final tier = DanceClock.tier(mood, wakeK: wakeK, energy: m.energy, dice: memeHash(salt % 9973, n, 3));
       final techno = DanceClock.techno(bpm, m.vocal);
       final flavour = DanceClock.flavour(salt, bpm, mood, hook: m.hook && m.vocal > 0.3, techno: techno);
-      final big = gpu && stage == DanceStage.art && QualityPool.bigTroupes;
+      final big = gpu && QualityPool.bigTroupes;
       var troupe = dropNow ? DanceClock.troupe(MemeMood.rage, salt, n + 1, big: big) : DanceClock.troupe(mood, salt, n, heat: heat, big: big);
       // The stylised stage on a canvas dances alone, but for a line of silhouettes in
       // a drop; on the GPU it takes any company (the chronophotograph alone).
-      if (stage == DanceStage.art) {
-        troupe = switch (_art) {
-          DanceArt.chrono || DanceArt.viewports => DanceTroupe.solo,
-          DanceArt.mono => troupe,
-          _ when big => troupe,
-          _ => troupe == DanceTroupe.crowd || troupe == DanceTroupe.line ? DanceTroupe.trio : troupe,
-        };
-      }
+      troupe = switch (_art) {
+        DanceArt.chrono || DanceArt.viewports => DanceTroupe.solo,
+        DanceArt.mono => troupe,
+        _ when big => troupe,
+        _ => troupe == DanceTroupe.crowd || troupe == DanceTroupe.line ? DanceTroupe.trio : troupe,
+      };
       if (!keep) troupe = DanceClock.paired(troupe, mood, flavour, salt, n);
       // A section come round again: as it was danced before (its first eight slots).
       if (_bookSalt != salt) {
@@ -897,7 +898,7 @@ class DanceSim implements SimLayer {
       _cut = cutN;
       _shot = _forcedShot ?? DanceClock.shot(mood, salt, cutN, _troupe, art: true);
       // The silhouettes, the text and the dots read best square on.
-      if (stage == DanceStage.art && _shot == DanceShot.full) _shot = DanceShot.front;
+      if (_shot == DanceShot.full) _shot = DanceShot.front;
     }
     final frame = DanceFrame.of(_shot, _troupe);
     final sizeNow = Size(w.toDouble(), h.toDouble());
@@ -978,8 +979,8 @@ class DanceSim implements SimLayer {
     DanceHandoff.note(bodies, leadRig, cam);
 
     // ---- the picture
-    final look = _Look(st, f, mood, beats, since, heat, wakeK, kick, stage);
-    final postNow = stage == DanceStage.art && danceFxMode.containsKey(_art);
+    final look = _Look(st, f, mood, beats, since, heat, wakeK, kick);
+    final postNow = danceFxMode.containsKey(_art);
     if (native != null) {
       native.camera(cam);
       _paint(native, size, cam, look, bodies, leadRig, beats, dt);
@@ -1027,18 +1028,8 @@ class DanceSim implements SimLayer {
 
   /// The stage and the bodies on it, onto [c].
   void _paint(DanceSurface c, Size size, DanceCam cam, _Look look, List<(DanceBody, DanceSpot, double)> bodies, DanceRig leadRig, double beats, double dt) {
-    switch (stage) {
-      case DanceStage.disco:
-        _disco(c, size, cam, look, bodies);
-      case DanceStage.neon:
-        _neon(c, size, cam, look, bodies, leadRig, beats);
-      case DanceStage.shadow:
-        _shadowStage(c, size, cam, look, bodies, beats);
-      case DanceStage.art:
-        _artStage(c, size, cam, look, bodies, leadRig, beats);
-    }
-    // The stylised stage keeps its drop to its own rendering (mono turns over).
-    if (stage != DanceStage.art) _finish(c, size, look, dt);
+    _dtNow = dt;
+    _artStage(c, size, cam, look, bodies, leadRig, beats);
   }
 
   /// A member's pose for line [l] at [beats], into [out]. In call and answer a turn
@@ -1412,7 +1403,7 @@ class DanceSim implements SimLayer {
   }
 
   /// The body lit for the room: the key warm from the front left, the rim the light's.
-  DanceLook3 _lit(_Look l, Color light, {double dim = 1, bool lead = true}) {
+  DanceLook3 _lit(_Look l, Color light, {double dim = 1, bool lead = true, double alpha = 1}) {
     final pal = l.st.palette;
     return DanceLook3(
       keyColor: Color.lerp(const Color(0xfffff2e6), light, 0.25)!,
@@ -1423,56 +1414,8 @@ class DanceSim implements SimLayer {
       rim: light,
       rimK: dim < 1 || !lead ? 0 : (0.55 + 0.5 * l.kick * (l.rage ? 1 : 0.4)),
       dim: dim,
+      alpha: alpha,
     );
-  }
-
-  void _disco(DanceSurface c, Size s, DanceCam cam, _Look l, List<(DanceBody, DanceSpot, double)> bodies) {
-    final pal = l.st.palette;
-    final cols = [pal.primary.withLightness(0.55).toColor(), pal.secondary.withLightness(0.55).toColor(), pal.accent.withLightness(0.6).toColor()];
-    _wash(c, s, const Color(0xff050308), Color.lerp(cols[0], Colors.black, 0.86)!);
-    c.body(_hero!, cam, _lit(l, cols[2], dim: 0.4), underFloor: true);
-    // The tiles: a pattern for the bar, stepped by the beat — a chase round the
-    // floor, a checker swapping, a ripple out from the dancer on the kick.
-    final q = DanceQuads();
-    const nT = 11, tile = 0.7;
-    final beatN = l.beats.floor();
-    final pattern = l.rage ? (beatN ~/ 8) % 3 : (l.sleep ? 3 : (beatN ~/ 16) % 3);
-    for (var i = 0; i < nT; i++) {
-      for (var j = 0; j < nT; j++) {
-        final x0 = (i - nT / 2) * tile, y0 = (j - nT / 2) * tile;
-        final cx = i - nT ~/ 2, cy = j - nT ~/ 2;
-        final r = math.sqrt((cx * cx + cy * cy).toDouble());
-        double on;
-        switch (pattern) {
-          case 0:
-            on = ((i + j + beatN) % 3 == 0) ? 1 : 0.12;
-          case 1:
-            on = ((i + j) % 2 == beatN % 2) ? 0.9 : 0.1;
-          case 2:
-            final front = (l.beats % 1) * 7;
-            on = (r - front).abs() < 1.1 ? 1 : 0.1;
-          default:
-            on = 0.15 + 0.1 * math.sin(l.beats * 0.5 + r);
-        }
-        final fade = (1 - r / (nT * 0.75)).clamp(0.0, 1.0);
-        final col = cols[(i * 3 + j * 5 + (beatN ~/ 4)) % 3];
-        final k = (on * (0.55 + 0.45 * l.beat) * fade).clamp(0.0, 1.0);
-        final cc = Color.lerp(const Color(0xff07060a), col, k)!.withValues(alpha: 0.86);
-        const g = 0.03;
-        q.quad(cam, V3(x0 + g, y0 + g, 0), V3(x0 + tile - g, y0 + g, 0), V3(x0 + tile - g, y0 + tile - g, 0), V3(x0 + g, y0 + tile - g, 0), cc);
-      }
-    }
-    q.draw(c);
-    for (final (b, _, _) in bodies) {
-      c.floorShadow(b, cam, const V3(-0.2, -0.3, 1), const Color(0xff020203));
-    }
-    // The mirror ball, faceted, and its flecks thrown round the room.
-    _ball(c, cam, l, cols);
-    if (l.rage) _beams(c, cam, l, cols, 0.5 + 0.5 * l.kick);
-    _rings(c, cam, l, cols[2]);
-    for (final (b, _, _) in bodies) {
-      c.body(b, cam, _lit(l, cols[(l.beats ~/ 4) % 3], lead: identical(b, _hero)));
-    }
   }
 
   void _ball(DanceSurface c, DanceCam cam, _Look l, List<Color> cols) {
@@ -1490,132 +1433,214 @@ class DanceSim implements SimLayer {
         final mid = at((t0 + t1) / 2, (p0 + p1) / 2);
         if ((mid - centre).dot(cam.eye - centre) < 0) continue;
         final glint = memeHash(i, j + (l.t * 4).floor(), 3);
-        final g = glint > 0.9 ? Colors.white : Color.lerp(const Color(0xff303038), const Color(0xffa0a0b0), glint)!;
+        final g = glint > 0.9 - 0.2 * l.top ? Colors.white : Color.lerp(const Color(0xff303038), const Color(0xffa0a0b0), glint)!;
         q.quad(cam, at(t0, p0), at(t0, p1), at(t1, p1), at(t1, p0), g);
       }
     }
     q.draw(c);
-    // Flecks: points on a sphere round the ball, turning with it, where they fall.
-    final pts = <double>[];
-    final colsOut = <Color>[];
-    for (var i = 0; i < 90; i++) {
-      final u = memeHash(i, 1, 9) * 2 - 1, a = memeHash(i, 2, 9) * math.pi * 2 + spin;
-      final rr = math.sqrt(1 - u * u);
-      final dir = V3(rr * math.cos(a), rr * math.sin(a), u * 0.6 - 0.35);
-      // out to the floor (z = 0) or a far wall
-      final tz = dir.z < -0.05 ? -centre.z / dir.z : 9.0;
-      final p = centre + dir * math.min(tz, 9.0);
-      final (sx, sy, d) = cam.project(p);
-      if (d < DanceCam.near) continue;
-      pts..add(sx)..add(sy);
-      colsOut.add(cols[i % 3]);
-    }
-    if (pts.isNotEmpty) {
-      final k = 0.5 + 0.5 * l.beat;
-      c.points(Float32List.fromList(pts), cam.size.height * 0.007, Colors.white.withValues(alpha: 0.7 * k));
-    }
   }
 
-  void _neon(DanceSurface c, Size s, DanceCam cam, _Look l, List<(DanceBody, DanceSpot, double)> bodies, DanceRig rig, double beats) {
+  // ------------------------------------------------------------------ the disco floor
+
+  /// The floor's tiles: [_tilesX] across, [_tilesY] back, [_tileM] metres each,
+  /// round the middle of the stage.
+  static const _tilesX = 15, _tilesY = 11, _tileM = 0.56;
+
+  /// How lit each tile is from what has happened — a step on it, a snare's spark —
+  /// carried from frame to frame so it fades rather than blinks; and the kicks'
+  /// rings (the beat each was born on, and where).
+  final _floorLit = Float32List(_tilesX * _tilesY), _floorSpark = Float32List(_tilesX * _tilesY);
+  final _floorRings = <(double, double, double)>[];
+  double _kickWas = 0, _snareWas = 0, _dtNow = 1 / 60;
+  int _sparks = 0;
+
+  /// The tile under a point of the floor, as its index, or -1 off the floor.
+  static int _tileAt(double x, double y) {
+    final i = (x / _tileM + _tilesX / 2).floor(), j = (y / _tileM + _tilesY / 2).floor();
+    return i < 0 || j < 0 || i >= _tilesX || j >= _tilesY ? -1 : j * _tilesX + i;
+  }
+
+  /// The disco: an LED floor that plays the record. Every step lights the tile it
+  /// lands on; every kick sends a ring out from the lead; a snare scatters sparks;
+  /// the bass breathes the floor and the wall behind it. Under that, a pattern for
+  /// the section: a slow wave asleep, a chase stepping on the beat awake, the bands
+  /// as an equaliser in the heat, the rows running at the camera through a build; a
+  /// drop lands white. The dancers stand in its light, reflected in its glass.
+  void _discoStage(DanceSurface c, Size s, DanceCam cam, _Look l, List<(DanceBody, DanceSpot, double)> bodies) {
     final pal = l.st.palette;
-    final a = pal.accent.withSaturation(1).withLightness(0.6).toColor();
-    final b = pal.secondary.withSaturation(1).withLightness(0.62).toColor();
-    c.fill(Offset.zero & s, const Color(0xff040208));
-    // The sun on the horizon, far behind.
-    final (sx, sy, sd) = cam.project(const V3(0, 80, 9));
-    if (sd > DanceCam.near) {
-      final r = cam.scaleAt(sd) * 14;
-      final top = pal.accent.withLightness(0.65).toColor(), bottom = pal.primary.withLightness(0.45).toColor();
-      c.clip(Rect.fromLTRB(0, 0, s.width, sy + r * 0.2));
+    final dt = _dtNow;
+    final beatN = l.beats.floor(), barN = beatN ~/ 4;
+    final hues = [pal.primary, pal.secondary, pal.accent];
+    Color hue(int i, [double light = 0.56]) => hues[i % 3].withSaturation(0.95).withLightness(light).toColor();
+    final since = l.since;
+    final dropK = since != null && since >= 0 && since < 2 ? (1 - since / 2) * (1 - since / 2) : 0.0;
+    final native = c is NativeDanceSurface;
+
+    // 1. The room: near black, the back wall lit low in the bar's colour, breathing
+    //    with the bass and the beat.
+    c.fill(Offset.zero & s, const Color(0xff030205));
+    final (wx, wy, wd) = cam.project(const V3(0, _tilesY * _tileM / 2 + 1.6, 0.5));
+    if (wd > DanceCam.near) {
+      final at = Offset(wx, wy), r = s.width * 0.8;
+      final inner = hue(barN, 0.5).withValues(alpha: (0.14 + 0.36 * l.low + 0.18 * l.beat + 0.4 * dropK).clamp(0.0, 1.0));
+      final outer = inner.withValues(alpha: 0);
       final q = DanceQuads();
-      const slices = 24;
-      for (var i = 0; i < slices; i++) {
-        final y0 = -1 + 2 * i / slices, y1 = -1 + 2 * (i + 1) / slices;
-        final w0 = math.sqrt(math.max(0.0, 1 - y0 * y0)) * r, w1 = math.sqrt(math.max(0.0, 1 - y1 * y1)) * r;
-        final c0 = Color.lerp(top, bottom, i / slices)!, c1 = Color.lerp(top, bottom, (i + 1) / slices)!;
-        final a0 = Offset(sx - w0, sy + y0 * r), b0 = Offset(sx + w0, sy + y0 * r), a1 = Offset(sx - w1, sy + y1 * r), b1 = Offset(sx + w1, sy + y1 * r);
-        q
-          ..tri(a0, b0, b1, c0, c0, c1)
-          ..tri(a0, b1, a1, c0, c1, c1);
+      const seg = 28;
+      for (var i = 0; i < seg; i++) {
+        final a0 = i / seg * math.pi * 2, a1 = (i + 1) / seg * math.pi * 2;
+        q.tri(at, at + Offset(math.cos(a0) * r, math.sin(a0) * r * 0.42), at + Offset(math.cos(a1) * r, math.sin(a1) * r * 0.42), inner, outer, outer);
       }
-      q.draw(c);
-      // its stripes
-      for (var i = 0; i < 6; i++) {
-        final y = sy - r * 0.1 + i * r * 0.16;
-        c.fill(Rect.fromLTWH(sx - r, y, r * 2, r * 0.04 * (1 + i * 0.6)), const Color(0xff040208));
-      }
-      c.clip(null);
+      q.draw(c, blend: BlendMode.plus);
     }
-    // The grid, rolling toward us a line a beat.
-    final q = DanceQuads();
-    final roll = (l.beats % 1) * 1.0;
-    final gk = 0.55 + 0.45 * l.beat;
-    for (var i = -12; i <= 12; i++) {
-      final x = i * 1.0;
-      q.quad(cam, V3(x - 0.035, -10, 0), V3(x + 0.035, -10, 0), V3(x + 0.035, 40, 0), V3(x - 0.035, 40, 0), b.withValues(alpha: gk), null,
-          b.withValues(alpha: 0), b.withValues(alpha: 0));
-    }
-    for (var j = -10; j < 40; j++) {
-      final y = j * 1.0 - roll;
-      final fade = (1 - (y + 10) / 50).clamp(0.0, 1.0);
-      q.quad(cam, V3(-12, y - 0.035, 0), V3(12, y - 0.035, 0), V3(12, y + 0.035, 0), V3(-12, y + 0.035, 0), b.withValues(alpha: gk * fade));
-    }
-    q.draw(c, blend: BlendMode.plus);
-    // On the drop: ghosts of the dancer a moment ago, fading, in the other colour.
-    if (l.rage && l.heat > 0.6) {
-      final pose = _pose!;
-      for (var g = 0; g < 3; g++) {
-        final ghost = _ghost(rig, g);
-        _lead.pose(rig, beats - 0.18 * (g + 1), pose);
-        ghost.pose(rig, pose);
-        ghost.place(DanceSpot(scale: _heroScale));
-        c.outline(ghost, cam, 0.012, Color.lerp(b, a, g / 3)!.withValues(alpha: 0.5 - 0.13 * g), blend: BlendMode.plus);
-      }
-    }
-    final width = 0.014 + 0.01 * l.kick * (l.rage ? 1 : 0.3);
-    for (final (body, _, _) in bodies) {
-      // Glow: a wide faint line under a narrow bright one; the body black inside, its rim lit.
-      c.outline(body, cam, width * 2.6, a.withValues(alpha: 0.18), blend: BlendMode.plus);
-      c.outline(body, cam, width, a);
-      c.body(body, cam, DanceLook3(flat: const Color(0xff020104), textured: false, rim: a, rimK: 0.9, rimPower: 3));
-    }
-  }
 
-  void _shadowStage(DanceSurface c, Size s, DanceCam cam, _Look l, List<(DanceBody, DanceSpot, double)> bodies, double beats) {
-    final pal = l.st.palette;
-    const wallY = 2.6;
-    final warm = HSLColor.fromAHSL(1, pal.accent.hue, 0.35, 0.78).toColor();
-    // The lamps: one low in front, swaying with the bar; three coloured ones on the drop.
-    final sway = math.sin(beats * math.pi / 8) * 1.2;
-    final lamps = l.rage
-        ? [
-            (V3(-1.6 + sway * 0.3, -3.2, 0.5), pal.primary.withSaturation(1).withLightness(0.55).toColor()),
-            (V3(0, -3.4, 0.35), pal.secondary.withSaturation(1).withLightness(0.55).toColor()),
-            (V3(1.6 - sway * 0.3, -3.2, 0.5), pal.accent.withSaturation(1).withLightness(0.55).toColor()),
-          ]
-        : [(V3(sway, -3.0, 0.45 + 0.15 * l.beat), warm)];
-    // The backdrop: one even colour, the lamps' light all over it (no pool, no
-    // floor), so nothing competes with the shadows on it.
-    final wallK = l.sleep ? 0.7 : 0.85 + 0.15 * l.beat;
-    var br = 0.0, bg = 0.0, bb = 0.0;
-    for (final (_, col) in lamps) {
-      br += col.r;
-      bg += col.g;
-      bb += col.b;
-    }
-    final k = wallK * (l.rage ? 0.5 : 1.0);
-    c.fill(Offset.zero & s, Color.from(alpha: 1, red: (br * k).clamp(0.0, 1.0), green: (bg * k).clamp(0.0, 1.0), blue: (bb * k).clamp(0.0, 1.0)));
-    // Each lamp's shadow: where its light is stopped, the wall without that colour.
-    for (final (lamp, col) in lamps) {
-      final shade = lamps.length == 1
-          ? const Color(0xff0a0806)
-          : Color.from(alpha: 1, red: (1 - col.r) * 0.55, green: (1 - col.g) * 0.55, blue: (1 - col.b) * 0.55);
-      for (final (b, _, _) in bodies) {
-        c.wallShadow(b, cam, lamp, wallY, shade);
-      }
+    // 2. What happened since the last frame: the steps, the kicks, the snares.
+    final fade = math.exp(-dt / 0.5), sparkFade = math.exp(-dt / 0.16);
+    for (var i = 0; i < _floorLit.length; i++) {
+      _floorLit[i] *= fade;
+      _floorSpark[i] *= sparkFade;
     }
     for (final (b, _, _) in bodies) {
-      c.body(b, cam, DanceLook3(key: lamps.first.$1, keyColor: lamps.first.$2, keyK: 0.75, ambient: 0.3, fillK: 0.1, rim: warm, rimK: 0.5));
+      final lead = identical(b, _hero);
+      for (final foot in const ['Foot_L', 'Foot_R']) {
+        final p = b.jointWorld(foot, 0.6);
+        if (p == null || p.z > 0.22) continue;
+        final at = _tileAt(p.x, p.y);
+        if (at < 0) continue;
+        final k = (1 - p.z / 0.22) * (lead ? 1.0 : 0.7);
+        if (_floorLit[at] < k) _floorLit[at] = k;
+      }
+    }
+    final from = _hero?.spot;
+    if (l.kick > 0.55 && _kickWas < 0.35) _floorRings.add((l.beats, from?.x ?? 0, from?.y ?? 0));
+    _kickWas = l.kick;
+    _floorRings.removeWhere((r) => l.beats - r.$1 > 1.6 || l.beats < r.$1);
+    if (l.snare > 0.5 && _snareWas < 0.3) {
+      _sparks++;
+      for (var n = 0, many = 4 + (8 * l.energy).round(); n < many; n++) {
+        _floorSpark[(memeHash(_sparks, n, 41) * _floorSpark.length).floor() % _floorSpark.length] = 1;
+      }
+    }
+    _snareWas = l.snare;
+
+    // 3. The lead's light: the floor's colour on the dancers, and their steps'.
+    final rim = Color.lerp(hue(barN + 1, 0.62), Colors.white, dropK)!;
+
+    // 4. The tiles: the section's pattern, the steps, the rings, the sparks; each a
+    //    lit glass square, brighter at its middle, with a halo where it is lit.
+    final pattern = l.rage ? 2 : (l.build > 0.25 ? 3 : (l.sleep ? 0 : 1));
+    final grout = DanceQuads(), faces = DanceQuads(), halos = DanceQuads();
+    const gap = 0.045, dark = Color(0xff07060b);
+    for (var j = 0; j < _tilesY; j++) {
+      for (var i = 0; i < _tilesX; i++) {
+        final x0 = (i - _tilesX / 2) * _tileM, y0 = (j - _tilesY / 2) * _tileM;
+        final cx = x0 + _tileM / 2, cy = y0 + _tileM / 2;
+        final p00 = cam.project(V3(x0 + gap, y0 + gap, 0)), p10 = cam.project(V3(x0 + _tileM - gap, y0 + gap, 0));
+        final p11 = cam.project(V3(x0 + _tileM - gap, y0 + _tileM - gap, 0)), p01 = cam.project(V3(x0 + gap, y0 + _tileM - gap, 0));
+        if (p00.$3 < DanceCam.near || p10.$3 < DanceCam.near || p11.$3 < DanceCam.near || p01.$3 < DanceCam.near) continue;
+        final r = math.sqrt(cx * cx + cy * cy);
+        // Into the dark at the edges and the back: the floor is lit round the dancers.
+        final away = (1 - r / 5.4).clamp(0.12, 1.0);
+        double base;
+        var baseCol = Color.lerp(hue(barN), hue(barN + 1), i / (_tilesX - 1))!;
+        switch (pattern) {
+          case 0:
+            // Asleep: a slow wave out from the middle, as deep as the bass.
+            base = 0.02 + 0.3 * math.pow(0.5 + 0.5 * math.sin(l.beats * math.pi / 4 - r * 1.3), 3) * (0.35 + 0.65 * l.low);
+          case 1:
+            // Awake: a chase stepping on the beat, the bass glowing under it.
+            final on = (i + 2 * j + beatN) % 5 == 0;
+            base = 0.02 + (on ? 0.25 + 0.55 * l.beat : 0.06 * l.low);
+          case 2:
+            // The heat: the bands as an equaliser, the lows in the middle and the
+            // highs at the sides, each column as tall as its band, hotter at its top.
+            final side = (i - (_tilesX - 1) / 2).abs() / ((_tilesX - 1) / 2);
+            final band = side < 0.5 ? l.low + (l.mid - l.low) * side * 2 : l.mid + (l.high - l.mid) * (side - 0.5) * 2;
+            final tall = math.pow(band.clamp(0.0, 1.0), 1.5) * 0.9 * _tilesY;
+            base = j < tall ? 0.35 + 0.55 * (j + 1) / math.max(tall, 1) : 0.02;
+            baseCol = Color.lerp(hue(barN), hue(barN + 2), (j / _tilesY).clamp(0.0, 1.0))!;
+          default:
+            // A build: the rows running at the camera, faster and brighter as it builds.
+            final row = _tilesY - 1 - (l.beats * (1 + 3 * l.build)) % _tilesY;
+            base = 0.02 + 0.85 * math.max(0.0, 1 - (j - row).abs() / 1.2) * (0.35 + 0.65 * l.build);
+        }
+        if (pattern != 2) base *= away;
+        var ring = 0.0;
+        for (final (born, rx, ry) in _floorRings) {
+          final age = l.beats - born, w = math.sqrt((cx - rx) * (cx - rx) + (cy - ry) * (cy - ry)) - age * 4.5;
+          ring = math.max(ring, math.exp(-w * w / 0.1) * (1 - age / 1.6) * away);
+        }
+        final at = j * _tilesX + i;
+        final step = _floorLit[at], spark = _floorSpark[at];
+        // Each thing that lights a tile lights it its own colour: the section's pattern
+        // the bar's two, a step the lead's light, a kick's ring the third, a snare's
+        // spark and a drop white.
+        final sum = base + step + ring + spark + dropK;
+        final k = math.pow(sum.clamp(0.0, 1.0), 1.25).toDouble();
+        final w = math.max(sum, 1e-4);
+        Color mixIn(Color a, Color b, double t) => Color.lerp(a, b, t.clamp(0.0, 1.0))!;
+        var col = baseCol;
+        col = mixIn(col, rim, step / w);
+        col = mixIn(col, hue(barN + 2, 0.6), ring / (base + step + ring).clamp(1e-4, 9));
+        col = mixIn(col, Colors.white, (spark + dropK) / w + (k > 0.9 ? (k - 0.9) * 4 : 0));
+        final lit = k;
+        final centre = Color.lerp(dark, col, lit)!.withValues(alpha: 0.7 + 0.28 * lit);
+        final edge = Color.lerp(dark, col, lit * 0.45)!.withValues(alpha: 0.6 + 0.3 * lit);
+        // The grout: the whole tile dark, so nothing behind the floor shows between them.
+        final g00 = cam.project(V3(x0, y0, 0)), g10 = cam.project(V3(x0 + _tileM, y0, 0));
+        final g11 = cam.project(V3(x0 + _tileM, y0 + _tileM, 0)), g01 = cam.project(V3(x0, y0 + _tileM, 0));
+        if (g00.$3 > DanceCam.near && g10.$3 > DanceCam.near && g11.$3 > DanceCam.near && g01.$3 > DanceCam.near) {
+          const groutCol = Color(0xff040307);
+          grout
+            ..tri(Offset(g00.$1, g00.$2), Offset(g10.$1, g10.$2), Offset(g11.$1, g11.$2), groutCol)
+            ..tri(Offset(g00.$1, g00.$2), Offset(g11.$1, g11.$2), Offset(g01.$1, g01.$2), groutCol);
+        }
+        final pc = cam.project(V3(cx, cy, 0));
+        final o = Offset(pc.$1, pc.$2), a = Offset(p00.$1, p00.$2), b = Offset(p10.$1, p10.$2), cc = Offset(p11.$1, p11.$2), d = Offset(p01.$1, p01.$2);
+        faces
+          ..tri(o, a, b, centre, edge, edge)
+          ..tri(o, b, cc, centre, edge, edge)
+          ..tri(o, cc, d, centre, edge, edge)
+          ..tri(o, d, a, centre, edge, edge);
+        if (lit > 0.3) {
+          // The halo: the light spilling past the tile's edge onto its neighbours.
+          const spill = 0.5;
+          Offset out(double x, double y) {
+            final p = cam.project(V3(x, y, 0));
+            return Offset(p.$1, p.$2);
+          }
+          final e0 = out(x0 - _tileM * spill, y0 - _tileM * spill), e1 = out(x0 + _tileM * (1 + spill), y0 - _tileM * spill);
+          final e2 = out(x0 + _tileM * (1 + spill), y0 + _tileM * (1 + spill)), e3 = out(x0 - _tileM * spill, y0 + _tileM * (1 + spill));
+          final hot = col.withValues(alpha: 0.38 * lit * lit), none = col.withValues(alpha: 0);
+          halos
+            ..tri(o, e0, e1, hot, none, none)
+            ..tri(o, e1, e2, hot, none, none)
+            ..tri(o, e2, e3, hot, none, none)
+            ..tri(o, e3, e0, hot, none, none);
+        }
+      }
+    }
+    grout.draw(c);
+    // The reflections in the glass: on the grout, under the lit tiles.
+    for (final (b, _, _) in bodies) {
+      if (bodies.length > 4 && !identical(b, _hero)) continue;
+      c.body(b, cam, _lit(l, rim, dim: 0.3, lead: false), underFloor: true);
+    }
+    faces.draw(c);
+    halos.draw(c, blend: BlendMode.plus);
+    for (final (b, _, _) in bodies) {
+      c.floorShadow(b, cam, const V3(-0.2, -0.3, 1), const Color(0xff020203));
+    }
+
+    // 5. Over it: the mirror ball's glints, the beams in the heat and through a
+    //    build, a drop's rings; then the dancers, lit by the floor.
+    final cols = [hue(0, 0.6), hue(1, 0.6), hue(2, 0.62)];
+    _ball(c, cam, l, cols);
+    if (l.rage || l.build > 0.5) _beams(c, cam, l, cols, l.rage ? 0.5 + 0.5 * l.kick : l.build);
+    _rings(c, cam, l, cols[2]);
+    // On a canvas the bodies are marked (alpha 254/255, replacing), so the blend knows
+    // them from the floor; the native stage has their coverage itself.
+    for (final (b, _, _) in bodies) {
+      c.body(b, cam, _lit(l, rim, lead: identical(b, _hero), alpha: native ? 1 : 254 / 255), blend: native ? BlendMode.srcOver : BlendMode.src);
     }
   }
 
@@ -1629,6 +1654,8 @@ class DanceSim implements SimLayer {
     final mid = cam.at(const V3(0, 0, 1.15));
     _popAt = Offset(mid.dx / s.width, mid.dy / s.height);
     switch (_art ?? DanceArt.mono) {
+      case DanceArt.disco:
+        _discoStage(c, s, cam, l, bodies);
       case DanceArt.mono:
         // Black on white; in a drop, white on black by the bar — the cut on the downbeat.
         final inverted = l.rage && (beats / 4).floor().isOdd;
@@ -1637,8 +1664,12 @@ class DanceSim implements SimLayer {
         c.fill(Offset.zero & s, paper);
         // The kick: the figure a hair bigger for a moment.
         _hero!.place(DanceSpot(scale: _heroScale * (1 + 0.018 * l.kick)));
+        // On a canvas the bodies are marked (alpha 254/255, replacing), as the plain
+        // look's are, so the blend knows them: the keyhole onto the background goes
+        // through them. The native stage has their coverage itself.
+        final native = c is NativeDanceSurface;
         for (final (b, _, _) in bodies) {
-          c.body(b, cam, DanceLook3(flat: ink, textured: false, shadeFlat: false), twoSided: true);
+          c.body(b, cam, DanceLook3(flat: ink, textured: false, shadeFlat: false, alpha: native ? 1 : 254 / 255), twoSided: true, blend: native ? BlendMode.srcOver : BlendMode.src);
         }
       case DanceArt.trails:
         final deep = HSLColor.fromAHSL(1, pal.primary.hue, 0.35, 0.035).toColor();
@@ -1987,7 +2018,9 @@ class DanceSim implements SimLayer {
       ..setFloat(13, _popAt.dx)
       ..setFloat(14, _popAt.dy)
       ..setFloat(15, _t)
-      ..setFloat(16, 0)
+      // The figure's coverage out (uCoverageOut): the lens passes the marks through;
+      // a treatment marks its glyphs, dots and lines, so a window or a keyhole knows them.
+      ..setFloat(16, lens ? 1 : 2)
       ..setImageSampler(0, img)
       ..setImageSampler(1, glyphs);
     setFxKnobs(fx, 17, l.st, lens ? null : _fxName);
@@ -2060,11 +2093,6 @@ class DanceSim implements SimLayer {
   }
 
   /// Over it all: the drop's flash, brief.
-  void _finish(DanceSurface c, Size s, _Look l, double dt) {
-    final since = l.since;
-    if (since != null && since >= 0 && since < 0.5) c.fill(Offset.zero & s, Colors.white.withValues(alpha: 0.4 * (1 - since * 2)));
-  }
-
   @override
   void dispose() {
     for (final b in [..._bodies.values, ..._ghosts]) {
@@ -2125,14 +2153,24 @@ class DanceHandoff {
 
 /// The frame's facts the stages read.
 class _Look {
-  _Look(this.st, Map<String, double> f, this.mood, this.beats, this.since, this.heat, this.wakeK, this.kick, this.stage)
+  _Look(this.st, Map<String, double> f, this.mood, this.beats, this.since, this.heat, this.wakeK, this.kick)
       : beat = f['dyn.beat.decay'] ?? 0,
+        snare = f['dyn.hit.snare'] ?? 0,
+        top = f['dyn.hit.top'] ?? 0,
+        low = f['dyn.band.low'] ?? 0,
+        mid = f['dyn.band.mid'] ?? 0,
+        high = f['dyn.band.high'] ?? 0,
+        build = f['master.build.k'] ?? 0,
+        energy = f['dyn.energy'] ?? 0,
         t = st.now.millisecondsSinceEpoch / 1000 % 10000;
   final ShowState st;
   final MemeMood mood;
   final double beats, heat, wakeK, kick, beat, t;
+
+  /// The snare's and the top's hits, the bands' levels (0..1, each against its own
+  /// recent range), how far into a build, the energy.
+  final double snare, top, low, mid, high, build, energy;
   final double? since;
-  final DanceStage stage;
   bool get rage => mood == MemeMood.rage;
   bool get sleep => mood == MemeMood.sleep;
 }

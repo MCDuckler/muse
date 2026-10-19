@@ -44,7 +44,8 @@ ui.Image get particleSprite => _shared ??= _sprite();
 const _spriteSize = 48.0;
 
 class ParticleSystem {
-  ParticleSystem(this.kind, {int seed = 11}) : _rng = math.Random(seed);
+  // Seeded by its kind unless told: two kinds on one stage never fall in step.
+  ParticleSystem(this.kind, {int? seed}) : _rng = math.Random(seed ?? kind.toString().codeUnits.fold<int>(11, (a, c) => (a * 31 + c) & 0x7fffffff));
 
   final String kind;
   final math.Random _rng;

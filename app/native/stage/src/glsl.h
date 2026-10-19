@@ -108,11 +108,34 @@ struct Program {
   GLuint id = 0;
   std::map<std::string, GLint> locs;
   std::vector<std::string> samplers;   // in the order the file declares them
+  // The float uniforms (float, vec2, vec3, vec4; no arrays) in the order the file
+  // declares them, each with its count of floats: Flutter's setFloat(i) numbers a
+  // shader's floats this way, so a sim's frame can be handed over as one list.
+  std::vector<std::pair<std::string, int>> floats;
   GLint loc(const char* name) const {
     auto it = locs.find(name);
     return it == locs.end() ? -1 : it->second;
   }
 };
+
+// The program's floats from `v` in the file's order, as Flutter's setFloat(i) would:
+// n floats; the ones past n stay as they are.
+inline void setFloats(const Program& p, const float* v, int n) {
+  int at = 0;
+  for (const auto& [name, comps] : p.floats) {
+    if (at + comps > n) break;
+    const GLint loc = p.loc(name.c_str());
+    if (loc >= 0) {
+      switch (comps) {
+        case 1: glUniform1fv(loc, 1, v + at); break;
+        case 2: glUniform2fv(loc, 1, v + at); break;
+        case 3: glUniform3fv(loc, 1, v + at); break;
+        default: glUniform4fv(loc, 1, v + at); break;
+      }
+    }
+    at += comps;
+  }
+}
 
 class Programs {
  public:
@@ -156,6 +179,11 @@ class Programs {
     static const std::regex sampler(R"(uniform\s+sampler2D\s+(\w+)\s*;)");
     for (auto it = std::sregex_iterator(src.begin(), src.end(), sampler); it != std::sregex_iterator(); ++it) {
       p->samplers.push_back((*it)[1].str());
+    }
+    static const std::regex floats(R"(uniform\s+(float|vec2|vec3|vec4)\s+(\w+)\s*;)");
+    for (auto it = std::sregex_iterator(src.begin(), src.end(), floats); it != std::sregex_iterator(); ++it) {
+      const std::string type = (*it)[1].str();
+      p->floats.emplace_back((*it)[2].str(), type == "float" ? 1 : type == "vec2" ? 2 : type == "vec3" ? 3 : 4);
     }
     if (e.program) glDeleteProgram(e.program->id);
     e.program = std::move(p);

@@ -14,12 +14,22 @@ class FileShowStore implements ShowStore {
 
   @override
   Future<ShowDoc?> load() async {
+    File? f;
     try {
-      final f = await _file();
+      f = await _file();
       if (!f.existsSync()) return null;
       return ShowDoc.fromJson(jsonDecode(await f.readAsString()) as Map<String, dynamic>);
     } catch (e) {
+      // Kept aside rather than written over: the rules and the switches in it are the
+      // hands' work, and a fresh document is about to take its place.
       debugPrint('show: its document could not be read — $e');
+      try {
+        if (f != null && f.existsSync()) {
+          final aside = '${f.path}.unreadable-${DateTime.now().millisecondsSinceEpoch}';
+          await f.copy(aside);
+          debugPrint('show: the unreadable document is kept as $aside');
+        }
+      } catch (_) {}
       return null;
     }
   }

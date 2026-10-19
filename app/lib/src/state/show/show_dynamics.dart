@@ -86,9 +86,7 @@ class ShowDynamics {
     // the middle (or its own onsets, where heard); the top's from the air and the
     // highs (or the hats').
     final kickHit = math.max(_kick.hit, math.min(_sub.hit, _low.hit) * 0.8);
-    final snareHit = heard
-        ? math.max(_snare.hit, _mid.hit * 0.5) * (1 - kickHit * 0.5)
-        : math.max(_mid.hit, _onset.hit * 0.7) * (1 - kickHit * 0.5);
+    final snareHit = heard ? math.max(_snare.hit, _mid.hit * 0.5) * (1 - kickHit * 0.5) : math.max(_mid.hit, _onset.hit * 0.7) * (1 - kickHit * 0.5);
     final topHit = heard ? math.max(_hat.hit, _air.hit * 0.8) : math.max(_air.hit, _high.hit * 0.8);
 
     // The loudness, and an exposure that follows it: up in a third of a second,
@@ -106,6 +104,9 @@ class ShowDynamics {
     // The grid's own ramps and decays: exact.
     final beat = m.beatPhase, bar = m.barPhase, phrase = m.phrasePhase;
     final inBar = m.beatInBar ?? 0;
+    // Pulses only where there is a grid to pulse to: a record not read yet has its
+    // phases at nought, which would hold every decay at one.
+    final gridded = m.playing && m.beatIndex != null;
     return {
       'dyn.hit.kick': kickHit,
       'dyn.hit.snare': snareHit,
@@ -120,14 +121,14 @@ class ShowDynamics {
       'dyn.exposure': _exposure,
       'dyn.energy': _energy,
       'dyn.beat.saw': beat,
-      'dyn.beat.decay': m.playing ? math.exp(-beat * 6) : 0,
-      'dyn.beat.pulse': m.playing ? math.pow(math.max(0, math.cos(beat * math.pi)), 3).toDouble() : 0,
+      'dyn.beat.decay': gridded ? math.exp(-beat * 6) : 0,
+      'dyn.beat.pulse': gridded ? math.pow(math.max(0, math.cos(beat * math.pi)), 3).toDouble() : 0,
       'dyn.half.saw': ((inBar % 2) + beat) / 2,
       'dyn.bar.saw': bar,
-      'dyn.bar.decay': m.playing ? math.exp(-bar * 5) : 0,
+      'dyn.bar.decay': gridded ? math.exp(-bar * 5) : 0,
       'dyn.phrase.saw': phrase,
-      'dyn.phrase.decay': m.playing ? math.exp(-phrase * 4) : 0,
-      'dyn.downbeat': m.playing && inBar == 0 ? math.exp(-beat * 6) : 0,
+      'dyn.phrase.decay': gridded ? math.exp(-phrase * 4) : 0,
+      'dyn.downbeat': gridded && inBar == 0 ? math.exp(-beat * 6) : 0,
     };
   }
 }

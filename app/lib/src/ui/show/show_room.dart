@@ -4,14 +4,17 @@
 // BACKGROUND, the SCENE over it (with its style and its treatment), how the two
 // BLEND, and the FINISH over both. A chip is a choice,
 // with a picture where there is one; the chip lit is what the stage shows now; a
-// dimmed chip is one the director may not use. Each row has a lock: locked, it is
-// the hands' until let go; unlocked, the director and the look choose.
+// dimmed chip is one the director may not use. Each row says whose it is: DIRECTOR
+// (the director's and the scene's) or YOURS (locked: the hands' until let go).
 //
-// Under the hands the tabs: every scene with the director's switches, the RULES
-// (what goes with what, and how), the DANCERS (who, and every move), MILKDROP's
-// director, and the PERF numbers. Plan: ~/.claude/plans/wetowl-show-layers.md, §3.
+// Under the hands the tabs: EVERYTHING (every scene, style and background, each
+// with its card), the RULES (characters, the twelve rules, the exceptions), the
+// DANCERS (who, and every move), MILKDROP (the presets, the director and the maker),
+// and the PERF numbers. Hold or right-click any chip for its card. Plan:
+// ~/.claude/plans/wetowl-show-layers.md, §3.
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -19,6 +22,7 @@ import 'package:provider/provider.dart';
 import '../../state/app_state.dart';
 import '../../state/booth/booth.dart';
 import '../../state/show/milk_feed.dart';
+import '../../state/show/show_director.dart' show ShowDirector;
 import '../../state/show/show_engine.dart';
 import '../../state/show/show_pool.dart';
 import '../../state/show/show_rig.dart';
@@ -40,22 +44,94 @@ import 'stage_preview.dart';
 import 'stage_page.dart';
 import 'stage_pop_out_none.dart' if (dart.library.io) 'stage_pop_out_io.dart';
 
+part 'show_room_rules.dart';
+
 /// Bumped by the K key: the room slides to the show's page, or back.
 final showRoomToggles = ValueNotifier<int>(0);
 
 enum ShowTab { scenes, rules, dancers, milkdrop, perf }
 
-/// The dancer looks, as one family on the SCENE row: the stage dressings.
-const _dancerLooks = ['dance-disco', 'dance-neon', 'dance-shadow', 'dance-art'];
-
 /// A chip's picture: the look's thumbnail (`assets/show/thumbs/<id>.webp`), where there is one.
 const _thumbs = {
-  'blocks', 'drift', 'echo', 'flash', 'flock', 'fluid', 'fold', 'glide', 'kinetic', 'siebenschlaefer', 'turntable', 'veins',
-  'dance-disco', 'dance-neon', 'dance-shadow', 'dance-art', 'milk', 'pulse-grid', 'pulse-rays', 'pulse-smoke', 'pulse-stars',
+  'blocks',
+  'drift',
+  'echo',
+  'flash',
+  'flock',
+  'fluid',
+  'fold',
+  'glide',
+  'kinetic',
+  'siebenschlaefer',
+  'turntable',
+  'veins',
+  'dance-art',
+  'milk',
+  'pulse-grid',
+  'pulse-rays',
+  'pulse-smoke',
+  'pulse-stars',
   'lyrics',
 };
 
 String? thumbOf(String lookId) => _thumbs.contains(lookId) ? 'assets/show/thumbs/$lookId.webp' : null;
+
+/// The families the scenes fall into, on the SCENE row and in the SCENES tab: what a
+/// scene puts on the background — or nothing, the background alone.
+enum _Family { bodies, shapes, flow, words, pictures, alone }
+
+_Family _familyOf(Scene s) => switch (s.look.rig.figure.kind) {
+      Figure.none => _Family.alone,
+      Figure.dancers || Figure.birds || Figure.turntable => _Family.bodies,
+      Figure.kinetic || Figure.blocks || Figure.flash || Figure.glide => _Family.shapes,
+      Figure.fluid || Figure.veins || Figure.field => _Family.flow,
+      Figure.words => _Family.words,
+      Figure.meme || Figure.room => _Family.pictures,
+    };
+
+String _familyWord(_Family f) => switch (f) {
+      _Family.bodies => 'BODIES',
+      _Family.shapes => 'SHAPES',
+      _Family.flow => 'FLOW',
+      _Family.words => 'WORDS',
+      _Family.pictures => 'PICTURES',
+      _Family.alone => 'ALONE',
+    };
+
+String _groundWord(Ground g) => switch (g) {
+      Ground.milk => 'MilkDrop',
+      Ground.black => 'Black',
+      Ground.wash => 'Wash',
+      Ground.camera => 'Camera',
+      Ground.field => 'Field',
+      Ground.cover => 'Cover',
+      Ground.pulse => 'Pulse',
+    };
+
+/// Each way the scene's backdrop can sit on the background, in a line.
+const _modeWords = {
+  GroundMode.through: 'the scene\'s own backdrop dropped: the background shows there',
+  GroundMode.over: 'the scene as drawn; the background hidden',
+  GroundMode.add: 'the scene\'s light added over the background',
+  GroundMode.screen: 'screened: neither blows the other out',
+  GroundMode.dim: 'the background at a third, the scene on top',
+  GroundMode.window: 'the background shows through the scene\'s bright parts',
+  GroundMode.mask: 'the background only where the scene is dark',
+  GroundMode.frame: 'the scene in the middle, the background round it',
+  GroundMode.bands: 'vertical bands by turns, stepping with the beat',
+  GroundMode.flip: 'the scene over the background; the background over it on each kick',
+  GroundMode.outline: 'the background\'s edges only, as lines under the scene',
+  GroundMode.contrast: 'the difference of the two: where they agree is dark (the booth\'s way)',
+  GroundMode.keyhole:
+      'the figure is a window onto the background, everything else black — the dancers and the lyrics cut it; shapes and birds have no figure to cut, so black',
+};
+
+/// What the page's parts ask of each other: a tab to open; a thing's card.
+class _Links {
+  const _Links({required this.tab, required this.card});
+  final void Function(ShowTab) tab;
+  final void Function(_Thing) card;
+}
 
 class ShowRoom extends StatefulWidget {
   const ShowRoom({super.key, required this.booth});
@@ -70,6 +146,7 @@ class _ShowRoomState extends State<ShowRoom> {
   String? _trouble;
   ShowTab _tab = ShowTab.scenes;
   final _info = ValueNotifier<StageInfo>(StageInfo.none);
+  late final _links = _Links(tab: _pickTab, card: _card);
 
   ShowEngine get show => widget.booth.show;
 
@@ -96,7 +173,8 @@ class _ShowRoomState extends State<ShowRoom> {
       await ShowDebug.load();
       await show.ready();
       final t = show.doc.panel['tab'];
-      if (t is String) _tab = ShowTab.values.asNameMap()[t] ?? _tab;
+      // Not MILKDROP on a fresh start: its panel starts the helper.
+      if (t is String && t != ShowTab.milkdrop.name) _tab = ShowTab.values.asNameMap()[t] ?? _tab;
       _split = _panelNum('split', _split, 0.3, 0.8);
       _splitNarrow = _panelNum('splitNarrow', _splitNarrow, 0.25, 0.8);
       _previewK = _panelNum('preview', _previewK, 0.12, 0.75);
@@ -120,6 +198,11 @@ class _ShowRoomState extends State<ShowRoom> {
     show.setDoc(show.doc.copyWith(panel: {...show.doc.panel, 'tab': t.name}));
   }
 
+  void _card(_Thing t) {
+    final kit = _kit;
+    if (kit != null) unawaited(_openCard(context, show, kit.book, t));
+  }
+
   @override
   Widget build(BuildContext context) {
     final kit = _kit;
@@ -138,11 +221,11 @@ class _ShowRoomState extends State<ShowRoom> {
           ),
           _Hands(show: show, kit: kit),
           const SizedBox(height: 8),
-          Expanded(child: _Tabs(tab: _tab, onPick: _pickTab, show: show, kit: kit, info: _info, booth: widget.booth)),
+          Expanded(child: _Tabs(tab: _tab, show: show, kit: kit, info: _info, booth: widget.booth, links: _links)),
         ],
       );
       // The rig down the right, the whole height: its rows are what is worked.
-      final right = kit == null ? const SizedBox.shrink() : _RigStack(show: show, book: kit.book, booth: widget.booth);
+      final right = kit == null ? const SizedBox.shrink() : _RigStack(show: show, book: kit.book, booth: widget.booth, links: _links);
       if (narrow) {
         final room = math.max(1.0, c.maxHeight - _Seam.reach);
         return Column(children: [
@@ -283,13 +366,20 @@ class _Preview extends StatelessWidget {
                   final m = st.master;
                   final pending = show.pendingLook;
                   final rig = st.rig;
+                  final sceneName = kit?.book[st.scene]?.name ?? st.scene ?? '—';
+                  final style = ShowPool.lookupFigure(rig.figure).style;
+                  final blendWord = rig.figure.kind == Figure.none
+                      ? null
+                      : '${rig.blend.ground == GroundMode.over ? 'plainly' : rig.blend.ground.name} ${rig.blend.auto ? 'by the rules' : '(yours)'}';
                   return Row(children: [
+                    Text('NOW', style: Console.label(9, color: Console.a)),
+                    const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         [
-                          'NOW: ${kit?.book[st.scene]?.name ?? st.scene ?? '—'}${rig.figure.style != null ? ' · ${rig.figure.style}' : ''}',
-                          'on ${rig.ground.label}',
-                          rig.blend.ground == GroundMode.over ? 'plainly' : rig.blend.ground.name,
+                          '$sceneName${style != null ? ' · $style' : ''}',
+                          'on ${_groundWord(rig.ground.kind)}${rig.ground.kind == Ground.field || rig.ground.kind == Ground.pulse ? ' ${rig.ground.field ?? ''}' : ''}',
+                          if (blendWord != null) blendWord,
                           if (m.section != null) m.section!,
                           if (m.dropBeatsAway != null && m.dropBeatsAway! > 0) 'drop in ${m.dropBeatsAway!.ceil()}',
                           if (pending != null) '→ ${kit?.book[pending]?.name ?? pending} on the ${show.pendingAt?.name}',
@@ -299,7 +389,18 @@ class _Preview extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    Text('${i.word}${i.parked ? ' parked' : ''}${i.fps > 0 ? ' ${i.fps.round()} fps' : ''}', style: TextStyle(color: Console.quiet, fontSize: 11)),
+                    if (pending != null) ...[
+                      Pad(
+                          icon: Icons.close,
+                          width: 22,
+                          height: 22,
+                          colour: Console.quiet,
+                          tooltip: 'Do not land ${kit?.book[pending]?.name ?? pending}',
+                          onTap: show.cancelLaunch),
+                      const SizedBox(width: 6),
+                    ],
+                    Text('${i.word}${i.parked ? ' parked' : ''}${i.fps > 0 ? ' ${i.fps.round()} fps' : ''}',
+                        style: TextStyle(color: Console.quiet, fontSize: 11)),
                   ]);
                 },
               ),
@@ -326,7 +427,7 @@ class _Hands extends StatelessWidget {
           return BoothPanel(
             child: Plate(
               padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
-              child: _Line(children: [
+              child: _Flow(children: [
                 Pad(icon: Icons.chevron_left, width: 30, height: 30, colour: Console.ink, tooltip: 'The scene before', onTap: show.previousScene),
                 const SizedBox(width: 4),
                 Pad(icon: Icons.chevron_right, width: 30, height: 30, colour: Console.ink, tooltip: 'The next scene', onTap: show.nextScene),
@@ -336,7 +437,9 @@ class _Hands extends StatelessWidget {
                   height: 30,
                   lit: held,
                   colour: Console.a,
-                  tooltip: held ? 'The scene is held — let the director choose again' : 'Hold this scene: the director leaves it (the arrows still change it)',
+                  tooltip: held
+                      ? 'The scene is held — let the director choose again'
+                      : 'Hold this scene: the director leaves it (the arrows still change it; with MilkDrop alone they step its presets)',
                   onTap: () => show.holdScene(!held),
                 ),
                 const SizedBox(width: 10),
@@ -347,14 +450,14 @@ class _Hands extends StatelessWidget {
                   height: 30,
                   lit: m.blackout,
                   colour: Console.ink,
-                  tooltip: 'Blackout (B)',
+                  tooltip: 'Blackout (B on the stage page)',
                   onTap: () => show.setMacros(show.macros.copyWith(blackout: !show.macros.blackout)),
                 ),
                 const SizedBox(width: 4),
                 _Held(
                   label: 'STROBE',
                   lit: m.strobe > 0,
-                  tooltip: 'Strobe while held (S)',
+                  tooltip: 'Strobe while held (S on the stage page)',
                   onDown: () => show.setMacros(show.macros.copyWith(strobe: 1)),
                   onUp: () => show.setMacros(show.macros.copyWith(strobe: 0)),
                 ),
@@ -364,7 +467,7 @@ class _Hands extends StatelessWidget {
                   height: 30,
                   lit: m.freeze,
                   colour: Console.ink,
-                  tooltip: 'The picture held still (F)',
+                  tooltip: 'The picture held still (F on the stage page)',
                   onTap: () => show.setMacros(show.macros.copyWith(freeze: !show.macros.freeze)),
                 ),
                 const SizedBox(width: 14),
@@ -392,7 +495,10 @@ class _Hands extends StatelessWidget {
                   onChanged: (v) => show.setMacros(show.macros.copyWith(colour: v)),
                 ),
                 const SizedBox(width: 14),
-                Text('LAND', style: Console.label(9)),
+                Tooltip(
+                  message: 'When a scene you tap lands on the stage; a background, a blend or the finish changes at once',
+                  child: Text('LAND ON', style: Console.label(9)),
+                ),
                 const SizedBox(width: 4),
                 for (final q in Quantise.values) ...[
                   Pad(
@@ -400,7 +506,12 @@ class _Hands extends StatelessWidget {
                     height: 26,
                     lit: show.pool.quantise == q,
                     colour: Console.quiet,
-                    tooltip: 'A scene you pick lands ${switch (q) { Quantise.now => 'at once', Quantise.beat => 'on the next beat', Quantise.bar => 'on the next bar', Quantise.phrase => 'on the next phrase' }}',
+                    tooltip: 'A scene you pick lands ${switch (q) {
+                      Quantise.now => 'at once',
+                      Quantise.beat => 'on the next beat',
+                      Quantise.bar => 'on the next bar',
+                      Quantise.phrase => 'on the next phrase'
+                    }}',
                     onTap: () => show.setPool(show.pool.copyWith(quantise: q)),
                   ),
                   const SizedBox(width: 2),
@@ -441,12 +552,40 @@ class _Line extends StatelessWidget {
       );
 }
 
+/// Pads that wrap onto a second line where the column is narrow (each takes its
+/// own width, as in a row), rather than scrolling the last of them out of sight.
+class _Flow extends StatelessWidget {
+  const _Flow({required this.children});
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        runSpacing: 4,
+        children: [for (final c in children) c is SizedBox ? c : IntrinsicWidth(child: c)],
+      );
+}
+
+/// A line under a row for one axis of it: its word, then its choices.
+class _Axis extends StatelessWidget {
+  const _Axis({required this.word, required this.children});
+  final String word;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => Row(children: [
+        SizedBox(width: 54, child: Text(word, style: Console.label(9))),
+        Expanded(child: _Line(children: children)),
+      ]);
+}
+
 // ------------------------------------------------------------------ the rig
 class _RigStack extends StatelessWidget {
-  const _RigStack({required this.show, required this.book, required this.booth});
+  const _RigStack({required this.show, required this.book, required this.booth, required this.links});
   final ShowEngine show;
   final SceneBook book;
   final Booth booth;
+  final _Links links;
 
   @override
   Widget build(BuildContext context) => BoothPanel(
@@ -462,16 +601,19 @@ class _RigStack extends StatelessWidget {
                     Text('THE RIG', style: Console.label(10, color: Console.ink)),
                     const SizedBox(width: 10),
                     Expanded(
-                      child: Text('what is under, what is on it, how they blend, how it is finished — the lit chip is on; lock a row to keep it',
-                          style: TextStyle(fontSize: 10, color: Console.faint), maxLines: 1, overflow: TextOverflow.ellipsis),
+                      child: Text(
+                          'four layers, bottom up — the lit chip is on the stage; a row marked DIRECTOR is the director\'s, YOURS stays as you set it; hold or right-click a chip for its card',
+                          style: TextStyle(fontSize: 10, color: Console.faint),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis),
                     ),
                   ]),
                   const SizedBox(height: 8),
-                  _GroundRow(show: show, rig: rig, booth: booth, book: book),
+                  _GroundRow(show: show, rig: rig, booth: booth, book: book, links: links),
                   const Divider(height: 16),
-                  _SceneRow(show: show, book: book, rig: rig),
+                  _SceneRow(show: show, book: book, rig: rig, links: links),
                   const Divider(height: 16),
-                  _BlendRow(show: show, rig: rig),
+                  _BlendRow(show: show, rig: rig, book: book, links: links),
                   const Divider(height: 16),
                   _FinishRow(show: show, rig: rig),
                 ],
@@ -482,15 +624,28 @@ class _RigStack extends StatelessWidget {
       );
 }
 
-/// A layer's row: its name and a word on it, its chips, its lock, and a line under
-/// for what the chip chosen has to say.
+/// A layer's row: its name and a word on it, its chips, whose it is (the lock, with
+/// DIRECTOR or YOURS under it), and a line under for what the chip chosen has to say.
 class _LayerRow extends StatelessWidget {
-  const _LayerRow({required this.name, required this.word, required this.locked, required this.onLock, required this.lockTip, required this.child, this.below});
-  final String name, word, lockTip;
+  const _LayerRow({
+    required this.name,
+    required this.word,
+    required this.locked,
+    required this.onLock,
+    required this.lockTip,
+    required this.child,
+    this.below,
+    this.why,
+    this.heldWord = 'YOURS',
+  });
+  final String name, word, lockTip, heldWord;
   final bool locked;
   final void Function(bool) onLock;
   final Widget child;
   final Widget? below;
+
+  /// Why the row is as it is now: whose it is, and since when.
+  final String? why;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -512,25 +667,45 @@ class _LayerRow extends StatelessWidget {
               ),
               Expanded(child: child),
               const SizedBox(width: 6),
-              Pad(
-                icon: locked ? Icons.lock : Icons.lock_open,
-                width: 26,
-                height: 26,
-                lit: locked,
-                colour: Console.a,
-                tooltip: lockTip,
-                onTap: () => onLock(!locked),
+              SizedBox(
+                width: 60,
+                child: Column(children: [
+                  Pad(
+                    icon: locked ? Icons.lock : Icons.lock_open,
+                    width: 30,
+                    height: 26,
+                    lit: locked,
+                    colour: Console.a,
+                    tooltip: lockTip,
+                    onTap: () => onLock(!locked),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(locked ? heldWord : 'DIRECTOR',
+                      maxLines: 1, softWrap: false, overflow: TextOverflow.clip, style: Console.label(6.5, color: locked ? Console.a : Console.faint)),
+                ]),
               ),
             ],
           ),
-          if (below != null) Padding(padding: const EdgeInsets.only(left: 110, top: 4), child: below),
+          if (below != null) Padding(padding: const EdgeInsets.only(left: 110, top: 4, right: 66), child: below),
+          if (why != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 110, top: 3, right: 66),
+              child: Text.rich(
+                TextSpan(children: [
+                  TextSpan(text: 'WHY  ', style: Console.label(8, color: Console.faint)),
+                  TextSpan(text: why, style: TextStyle(fontSize: 10, color: Console.quiet)),
+                ]),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
         ],
       );
 }
 
-/// A chip: one choice of a row — its picture (or a colour), its name — lit when it is
-/// what the stage shows, dimmed when the director may not use it, marked when it is
-/// about to land.
+/// A chip: one choice of a row — its picture (an asset, a painted colour, or a
+/// widget), its name — lit when it is what the stage shows, dimmed when the director
+/// may not use it, marked when it is about to land.
 class _Chip extends StatelessWidget {
   const _Chip({
     required this.label,
@@ -541,21 +716,29 @@ class _Chip extends StatelessWidget {
     this.tooltip,
     this.thumb,
     this.swatch,
+    this.picture,
+    this.pictureSize = const Size(64, 36),
+    this.onHold,
   });
+
+  /// Held, or right-clicked: the thing's card.
+  final VoidCallback? onHold;
   final String label;
   final bool lit, off, pending;
   final String? tooltip;
   final VoidCallback onTap;
 
-  /// A picture for the chip (an asset), or a painted colour.
+  /// A picture for the chip (an asset), a painted colour, or a widget of its own.
   final String? thumb;
   final Color? swatch;
+  final Widget? picture;
+  final Size pictureSize;
 
   @override
   Widget build(BuildContext context) {
     final border = lit ? Console.a : (pending ? Console.b : Console.line);
     final fg = off ? Console.faint : Console.ink;
-    final pictured = thumb != null || swatch != null;
+    final pictured = thumb != null || swatch != null || picture != null;
     final face = AnimatedContainer(
       duration: const Duration(milliseconds: 120),
       decoration: BoxDecoration(
@@ -572,11 +755,15 @@ class _Chip extends StatelessWidget {
             child: Opacity(
               opacity: off ? 0.4 : 1,
               child: SizedBox(
-                width: 64,
-                height: 36,
-                child: thumb != null
-                    ? Image.asset(thumb!, fit: BoxFit.cover, filterQuality: FilterQuality.medium, errorBuilder: (context, _, __) => ColoredBox(color: swatch ?? Console.ground))
-                    : ColoredBox(color: swatch!),
+                width: pictureSize.width,
+                height: pictureSize.height,
+                child: picture ??
+                    (thumb != null
+                        ? Image.asset(thumb!,
+                            fit: BoxFit.cover,
+                            filterQuality: FilterQuality.medium,
+                            errorBuilder: (context, _, __) => ColoredBox(color: swatch ?? Console.ground))
+                        : ColoredBox(color: swatch!)),
               ),
             ),
           ),
@@ -600,7 +787,10 @@ class _Chip extends StatelessWidget {
               feel(Feel.pick);
               onTap();
             },
-            child: tooltip == null ? face : Tooltip(message: tooltip!, waitDuration: const Duration(milliseconds: 500), child: face),
+            onLongPress: onHold,
+            onSecondaryTap: onHold,
+            // Hover only: a hold is the card's.
+            child: tooltip == null ? face : Tooltip(message: tooltip!, waitDuration: const Duration(milliseconds: 500), triggerMode: TooltipTriggerMode.manual, child: face),
           ),
         ),
       ),
@@ -608,13 +798,32 @@ class _Chip extends StatelessWidget {
   }
 }
 
+/// A family of chips with its word over them.
+class _Group extends StatelessWidget {
+  const _Group({required this.word, required this.chips});
+  final String word;
+  final List<Widget> chips;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Padding(padding: const EdgeInsets.only(left: 1, bottom: 2), child: Text(word, style: Console.label(7, color: Console.faint))),
+          Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: chips),
+        ]),
+      );
+}
+
 /// A plain word chip (no picture), for a mode or a style.
 class _Word extends StatelessWidget {
-  const _Word({required this.label, required this.lit, required this.onTap, this.off = false, this.tooltip});
+  const _Word({required this.label, required this.lit, required this.onTap, this.off = false, this.tooltip, this.onHold});
   final String label;
   final bool lit, off;
   final String? tooltip;
   final VoidCallback onTap;
+
+  /// Held, or right-clicked: the thing's card.
+  final VoidCallback? onHold;
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -628,18 +837,35 @@ class _Word extends StatelessWidget {
             colour: lit ? Console.a : (off ? Console.faint : Console.ink),
             tooltip: tooltip,
             onTap: onTap,
+            onLongPress: onHold,
           ),
         ),
       );
 }
 
+/// A slider for how much of a background shows.
+class _HowMuch extends StatelessWidget {
+  const _HowMuch({required this.value, required this.onChanged});
+  final double value;
+  final void Function(double) onChanged;
+
+  @override
+  Widget build(BuildContext context) => Row(children: [
+        SizedBox(width: 54, child: Text('how much', style: Console.label(9))),
+        SizedBox(width: 160, child: Slider(value: value, onChanged: onChanged, padding: EdgeInsets.zero)),
+        const SizedBox(width: 6),
+        Text('${(value * 100).round()} %', style: Console.label(9)),
+      ]);
+}
+
 // ---------------------------------------------------------------- BACKGROUND
 class _GroundRow extends StatelessWidget {
-  const _GroundRow({required this.show, required this.rig, required this.booth, required this.book});
+  const _GroundRow({required this.show, required this.rig, required this.booth, required this.book, required this.links});
   final ShowEngine show;
   final ShowRig rig;
   final Booth booth;
   final SceneBook book;
+  final _Links links;
 
   static const _fields = ['drift', 'glide', 'kinetic', 'blocks', 'flash'];
 
@@ -647,24 +873,53 @@ class _GroundRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final g = rig.ground;
     final pool = show.pool;
-    bool on(RigGround x) => x.kind == g.kind && (x.kind != Ground.field || x.field == g.field);
+    final panel = show.doc.panel;
+    final fields = [
+      for (final f in _fields)
+        if (book.shaders.contains(f)) f
+    ];
+    // The field and the pulse are families: their chip is the one on, or the one last on.
+    final field = g.kind == Ground.field ? (g.field ?? fields.firstOrNull ?? 'drift') : (panel['field'] as String? ?? fields.firstOrNull ?? 'drift');
+    final pulse = g.kind == Ground.pulse ? (g.field ?? 'grid') : (panel['pulse'] as String? ?? 'grid');
+    void pickField(String f) {
+      show.setGround(RigGround(kind: Ground.field, field: f, dim: g.kind == Ground.field ? g.dim : 0.6));
+      show.setDoc(show.doc.copyWith(panel: {...panel, 'field': f}));
+    }
+
+    void pickPulse(String v) {
+      show.setGround(RigGround(kind: Ground.pulse, field: v));
+      show.setDoc(show.doc.copyWith(panel: {...panel, 'pulse': v}));
+    }
+
     final chips = <Widget>[
-      for (final (label, ground, tip, thumb, swatch) in [
-        ('Black', RigGround.black, 'Nothing under the scene', null, const Color(0xff050505)),
-        ('Wash', const RigGround(kind: Ground.wash), 'A slow wash of the record\'s colours', null, const Color(0xff2a2238)),
-        ('MilkDrop', RigGround.milk, 'MilkDrop\'s preset under the scene (the booth\'s way)', 'assets/show/thumbs/milk.webp', const Color(0xff402060)),
-        for (final f in _fields)
-          if (book.shaders.contains(f)) ('Field · ${book[f]?.name ?? f}', RigGround(kind: Ground.field, field: f, dim: 0.6), 'The ${book[f]?.name ?? f} shader as a quiet backdrop', 'assets/show/thumbs/$f.webp', null),
-      ])
-        _Chip(
-          label: label,
-          lit: on(ground),
-          off: !pool.isOn('ground.${ground.kind.name}'),
-          tooltip: tip,
-          thumb: thumb,
-          swatch: swatch,
-          onTap: () => show.setGround(ground),
-        ),
+      _Chip(
+        label: 'Black',
+        lit: g.kind == Ground.black,
+        off: !pool.isOn('ground.black'),
+        tooltip: 'Nothing under the scene',
+        swatch: const Color(0xff050505),
+        onTap: () => show.setGround(RigGround.black),
+        onHold: () => links.card(const _GroundThing(Ground.black)),
+      ),
+      _Chip(
+        label: 'Wash',
+        lit: g.kind == Ground.wash,
+        off: !pool.isOn('ground.wash'),
+        tooltip: 'A slow wash of the record\'s colours',
+        swatch: const Color(0xff2a2238),
+        onTap: () => show.setGround(const RigGround(kind: Ground.wash)),
+        onHold: () => links.card(const _GroundThing(Ground.wash)),
+      ),
+      _Chip(
+        label: 'MilkDrop',
+        lit: g.kind == Ground.milk,
+        off: !pool.isOn('ground.milk'),
+        tooltip: 'MilkDrop\'s preset under the scene (the booth\'s way) — the presets are on the MILKDROP tab',
+        thumb: 'assets/show/thumbs/milk.webp',
+        swatch: const Color(0xff402060),
+        onTap: () => show.setGround(RigGround.milk),
+        onHold: () => links.card(const _GroundThing(Ground.milk)),
+      ),
       _Chip(
         label: 'Camera',
         lit: g.kind == Ground.camera,
@@ -672,6 +927,7 @@ class _GroundRow extends StatelessWidget {
         tooltip: 'The room\'s camera under the scene (started as needed)',
         swatch: const Color(0xff203028),
         onTap: () => show.setGround(const RigGround(kind: Ground.camera, dim: 0.8)),
+        onHold: () => links.card(const _GroundThing(Ground.camera)),
       ),
       _Chip(
         label: 'Cover',
@@ -680,73 +936,118 @@ class _GroundRow extends StatelessWidget {
         tooltip: 'The record\'s cover under the scene',
         swatch: const Color(0xff303040),
         onTap: () => show.setGround(const RigGround(kind: Ground.cover, dim: 0.6)),
+        onHold: () => links.card(const _GroundThing(Ground.cover)),
       ),
-      for (final v in pulseVariants)
+      if (fields.isNotEmpty)
         _Chip(
-          label: 'Pulse · $v',
-          lit: g.kind == Ground.pulse && pulseVariant(g.field) == pulseVariant(v),
-          off: !pool.isOn('ground.pulse'),
-          tooltip: 'A quiet field moving with the record\'s bands: ${switch (v) { 'grid' => 'a floor and a ceiling of thin lines', 'rays' => 'soft rays turning with the bar', 'smoke' => 'slow curls in two of the palette\'s hues', _ => 'a starfield drifting in' }}',
-          thumb: 'assets/show/thumbs/pulse-$v.webp',
+          label: 'Field · ${book[field]?.name ?? field}',
+          lit: g.kind == Ground.field,
+          off: !pool.isOn('ground.field'),
+          tooltip: 'A shader as a quiet backdrop — which one, and how much, under',
+          thumb: 'assets/show/thumbs/$field.webp',
           swatch: const Color(0xff101418),
-          onTap: () => show.setGround(RigGround(kind: Ground.pulse, field: v)),
+          onTap: () => pickField(field),
+          onHold: () => links.card(const _GroundThing(Ground.field)),
         ),
+      _Chip(
+        label: 'Pulse · $pulse',
+        lit: g.kind == Ground.pulse,
+        off: !pool.isOn('ground.pulse'),
+        tooltip: 'A dark field moving with the record\'s bands — which one, under',
+        thumb: 'assets/show/thumbs/pulse-$pulse.webp',
+        swatch: const Color(0xff101418),
+        onTap: () => pickPulse(pulse),
+        onHold: () => links.card(const _GroundThing(Ground.pulse)),
+      ),
     ];
     final milk = MilkFeed.shared;
+    Widget? below;
+    switch (g.kind) {
+      case Ground.milk:
+        if (milk.available) {
+          below = ListenableBuilder(
+            listenable: Listenable.merge([milk, milk.director]),
+            builder: (context, _) {
+              final d = milk.director;
+              return _Line(children: [
+                Icon(Icons.blur_on, size: 14, color: Console.quiet),
+                const SizedBox(width: 6),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 260),
+                  child: Text(milk.running ? (milk.presetName ?? 'MilkDrop…') : 'MilkDrop off',
+                      style: TextStyle(color: milk.running ? Console.ink : Console.quiet, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+                ),
+                const SizedBox(width: 8),
+                Pad(icon: Icons.chevron_left, width: 24, height: 24, colour: Console.quiet, tooltip: 'The preset before', onTap: d.previous),
+                const SizedBox(width: 2),
+                Pad(icon: Icons.chevron_right, width: 24, height: 24, colour: Console.quiet, tooltip: 'The next preset', onTap: d.next),
+                const SizedBox(width: 2),
+                Pad(
+                    icon: Icons.casino_outlined,
+                    width: 24,
+                    height: 24,
+                    colour: Console.quiet,
+                    tooltip: 'Another preset',
+                    onTap: () {
+                      if (!milk.running) unawaited(milk.start());
+                      d.random(byHand: true);
+                    }),
+                const SizedBox(width: 2),
+                const MilkHoldPad(),
+                const SizedBox(width: 8),
+                Pad(
+                    label: 'PRESETS ▸',
+                    height: 24,
+                    colour: Console.quiet,
+                    tooltip: 'Every preset, the favourites, the director, the maker: the MILKDROP tab',
+                    onTap: () => links.tab(ShowTab.milkdrop)),
+              ]);
+            },
+          );
+        }
+      case Ground.field:
+        below = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _Axis(word: 'which', children: [
+            for (final f in fields)
+              _Word(
+                  label: (book[f]?.name ?? f).toUpperCase(),
+                  lit: g.field == f,
+                  tooltip: 'The ${book[f]?.name ?? f} shader, quiet, under the scene',
+                  onTap: () => pickField(f)),
+          ]),
+          _HowMuch(value: g.dim, onChanged: (v) => show.setGround(g.copyWith(dim: v))),
+        ]);
+      case Ground.pulse:
+        below = _Axis(word: 'which', children: [
+          for (final v in pulseVariants)
+            _Word(
+              label: v.toUpperCase(),
+              lit: pulseVariant(g.field) == pulseVariant(v),
+              tooltip: switch (v) {
+                'grid' => 'a floor and a ceiling of thin lines',
+                'rays' => 'soft rays turning with the bar',
+                'smoke' => 'slow curls in two of the palette\'s hues',
+                _ => 'a starfield drifting in'
+              },
+              onTap: () => pickPulse(v),
+            ),
+        ]);
+      case Ground.camera:
+      case Ground.cover:
+        below = _HowMuch(value: g.dim, onChanged: (v) => show.setGround(g.copyWith(dim: v)));
+      case Ground.black:
+      case Ground.wash:
+        below = null;
+    }
     return _LayerRow(
       name: 'BACKGROUND',
       word: 'what lies under the scene',
+      why: _groundWhy(show, book),
       locked: show.locked(RigSlot.ground),
-      lockTip: show.locked(RigSlot.ground) ? 'The background is yours — let the scene and the director have it' : 'Keep this background whatever the director does',
+      lockTip:
+          show.locked(RigSlot.ground) ? 'The background is yours — let the scene and the director have it' : 'Keep this background whatever the director does',
       onLock: (v) => show.lock(RigSlot.ground, v),
-      below: g.kind == Ground.milk && milk.available
-          ? ListenableBuilder(
-              listenable: milk,
-              builder: (context, _) {
-                final d = milk.director;
-                return _Line(children: [
-                  Icon(Icons.blur_on, size: 14, color: Console.quiet),
-                  const SizedBox(width: 6),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 260),
-                    child: Text(milk.running ? (milk.presetName ?? 'MilkDrop…') : 'MilkDrop off',
-                        style: TextStyle(color: milk.running ? Console.ink : Console.quiet, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
-                  ),
-                  const SizedBox(width: 8),
-                  Pad(icon: Icons.chevron_left, width: 24, height: 24, colour: Console.quiet, tooltip: 'The preset before', onTap: d.previous),
-                  const SizedBox(width: 2),
-                  Pad(icon: Icons.chevron_right, width: 24, height: 24, colour: Console.quiet, tooltip: 'The next preset', onTap: d.next),
-                  const SizedBox(width: 2),
-                  Pad(icon: Icons.casino_outlined, width: 24, height: 24, colour: Console.quiet, tooltip: 'Another preset', onTap: () {
-                    if (!milk.running) unawaited(milk.start());
-                    d.random(byHand: true);
-                  }),
-                  const SizedBox(width: 2),
-                  Pad(
-                    icon: d.locked ? Icons.lock : Icons.lock_open,
-                    width: 24,
-                    height: 24,
-                    lit: d.locked,
-                    colour: Console.a,
-                    tooltip: d.locked ? 'The preset is held — let MilkDrop\'s director change it again' : 'Hold this preset',
-                    onTap: () => d.set(locked: !d.locked),
-                  ),
-                  const SizedBox(width: 8),
-                  Pad(label: 'PRESETS…', height: 24, colour: Console.quiet, tooltip: 'Browse, favourite, make and edit MilkDrop presets', onTap: () => openMilkPage(context, booth)),
-                ]);
-              },
-            )
-          : g.kind == Ground.field || g.kind == Ground.cover || g.kind == Ground.camera
-              ? Row(children: [
-                  Text('how much of it', style: Console.label(9)),
-                  const SizedBox(width: 6),
-                  SizedBox(
-                    width: 160,
-                    child: Slider(value: g.dim, onChanged: (v) => show.setGround(g.copyWith(dim: v)), padding: EdgeInsets.zero),
-                  ),
-                  Text('${(g.dim * 100).round()} %', style: Console.label(9)),
-                ])
-              : null,
+      below: below,
       child: Wrap(children: chips),
     );
   }
@@ -754,126 +1055,98 @@ class _GroundRow extends StatelessWidget {
 
 // ---------------------------------------------------------------- SCENE
 class _SceneRow extends StatelessWidget {
-  const _SceneRow({required this.show, required this.book, required this.rig});
+  const _SceneRow({required this.show, required this.book, required this.rig, required this.links});
   final ShowEngine show;
   final SceneBook book;
   final ShowRig rig;
+  final _Links links;
 
   @override
   Widget build(BuildContext context) {
     final st = show.state;
     final pool = show.pool;
     final pending = show.pendingLook;
-    final dancersOn = _dancerLooks.contains(st.scene);
-    final dancersPending = _dancerLooks.contains(pending);
-    // The dancer family's chip launches the dressing last on (the stylized one to start).
-    final dancerLast = dancersOn ? st.scene! : (show.doc.panel['dancerLook'] as String? ?? 'dance-art');
-    final others = book.scenes.values.where((s) => !_dancerLooks.contains(s.id)).toList()..sort((a, b) => a.name.compareTo(b.name));
-    void launch(String id) {
-      if (pending == id) {
-        show.launch(id, at: Quantise.now);
-      } else {
-        show.launch(id);
-      }
-      if (_dancerLooks.contains(id)) show.setDoc(show.doc.copyWith(panel: {...show.doc.panel, 'dancerLook': id}));
-    }
+    final dancersOn = st.scene == 'dance-art';
+    final scenes = book.scenes.values.toList()..sort((a, b) => a.name.compareTo(b.name));
+    void launch(String id) => show.launch(id, at: pending == id ? Quantise.now : null);
 
-    final chips = <Widget>[
-      _Chip(
-        label: 'Dancers',
-        lit: dancersOn,
-        pending: !dancersOn && dancersPending,
-        off: _dancerLooks.every((id) => !pool.isOn('look.$id')),
-        thumb: thumbOf(dancerLast),
-        tooltip: 'The dancers — ${book[dancerLast]?.name ?? dancerLast}; the dressing and the style under',
-        onTap: () => launch(dancerLast),
-      ),
-      for (final s in others)
-        _Chip(
-          label: s.name,
-          lit: s.id == st.scene,
-          pending: s.id == pending,
-          off: !pool.isOn('look.${s.id}'),
-          thumb: thumbOf(s.id),
-          swatch: Console.ground,
-          tooltip: '${s.name}${s.meta.needs.contains('camera') ? ' (needs the camera)' : ''}${s.meta.needs.contains('milk') ? ' (MilkDrop as the scene)' : ''}',
-          onTap: () => launch(s.id),
-        ),
-    ];
-    // The style line: the dancers' dressing and art, or the birds' look.
+    // The chips, by family.
+    final chipsBy = <_Family, List<Widget>>{};
+    for (final s in scenes) {
+      final family = _familyOf(s);
+      const wholeWords = 'MilkDrop alone, nothing on it: its own whole picture';
+      chipsBy.putIfAbsent(family, () => []).add(_Chip(
+            label: s.name,
+            lit: s.id == st.scene,
+            pending: s.id == pending,
+            off: !pool.isOn('look.${s.id}'),
+            thumb: thumbOf(s.id),
+            swatch: Console.ground,
+            tooltip: family == _Family.alone
+                ? wholeWords
+                : s.id == 'dance-art'
+                    ? 'The dancers — their style under, a section at a time or held'
+                    : '${s.name}${s.meta.needs.contains('camera') ? ' (needs the camera)' : ''}',
+            onTap: () => launch(s.id),
+            onHold: () => links.card(_SceneThing(s.id)),
+          ));
+    }
+    // The style line: the dancers' style, the birds' look, the words' face.
     Widget? below;
     if (dancersOn) {
-      final isArt = st.scene == 'dance-art';
-      below = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          SizedBox(width: 70, child: Text('dressing', style: Console.label(9))),
-          Expanded(
-            child: _Line(children: [
-              for (final id in _dancerLooks)
-                _Word(
-                  label: (book[id]?.name ?? id).replaceFirst('Dancer · ', '').toUpperCase(),
-                  lit: st.scene == id,
-                  off: !pool.isOn('look.$id'),
-                  tooltip: book[id]?.name,
-                  onTap: () => launch(id),
-                ),
-            ]),
-          ),
-        ]),
-        if (isArt)
-          Row(children: [
-            SizedBox(width: 70, child: Text('style', style: Console.label(9))),
-            Expanded(
-              child: _Line(children: [
-                _Word(
-                  label: 'AUTO',
-                  lit: show.style == null,
-                  tooltip: 'The dancers\' own clock picks a style a section at a time, from the pool',
-                  onTap: () => show.setStyle(null),
-                ),
-                // The image treatments are on the treatment line, for every scene.
-                for (final a in DanceArt.values)
-                  if (!treatmentFxMode.containsKey(a.name))
-                    _Word(
-                      label: a.name.toUpperCase(),
-                      lit: show.style == a.name && show.styleFor == Figure.dancers,
-                      off: !pool.isOn('treatment.${a.name}') && Treatment.values.any((t) => t.name == a.name),
-                      tooltip: _artWords[a],
-                      onTap: () => show.setStyle(a.name, forKind: Figure.dancers),
-                    ),
-              ]),
+      below = _Axis(word: 'style', children: [
+        _Word(
+          label: 'AUTO',
+          lit: show.style == null || show.styleFor != Figure.dancers,
+          tooltip: 'The dancers\' own clock picks a style a section at a time, from the ones switched on (RULES)',
+          onTap: () => show.setStyle(null),
+        ),
+        // The image treatments are on the treatment line, for every scene.
+        for (final a in DanceArt.values)
+          if (!treatmentFxMode.containsKey(a.name) && (a != DanceArt.contour || pool.styleOn(Figure.dancers, 'contour')))
+            _Word(
+              label: a.name.toUpperCase(),
+              lit: show.style == a.name && show.styleFor == Figure.dancers,
+              off: !pool.styleOn(Figure.dancers, a.name),
+              tooltip: _artWords[a],
+              onTap: () => show.setStyle(a.name, forKind: Figure.dancers),
+              onHold: () => links.card(_StyleThing(Figure.dancers, a.name)),
             ),
-          ]),
       ]);
     } else if (st.scene == 'flock') {
-      below = Row(children: [
-        SizedBox(width: 70, child: Text('look', style: Console.label(9))),
-        Expanded(
-          child: _Line(children: [
-            _Word(label: 'AUTO', lit: show.style == null, tooltip: 'The flock\'s own clock picks a look a section at a time', onTap: () => show.setStyle(null)),
-            for (final l in FlockLook.values)
-              if (!treatmentFxMode.containsKey(l.name))
-              _Word(
-                label: l.name.toUpperCase(),
-                lit: show.style == l.name && show.styleFor == Figure.birds,
-                off: !pool.isOn('treatment.${l.name}') && Treatment.values.any((t) => t.name == l.name),
-                onTap: () => show.setStyle(l.name, forKind: Figure.birds),
-              ),
-          ]),
-        ),
+      below = _Axis(word: 'look', children: [
+        _Word(
+            label: 'AUTO',
+            lit: show.style == null || show.styleFor != Figure.birds,
+            tooltip: 'The flock\'s own clock picks a look a section at a time',
+            onTap: () => show.setStyle(null)),
+        for (final l in FlockLook.values)
+          if (!treatmentFxMode.containsKey(l.name))
+          _Word(
+            label: l.name.toUpperCase(),
+            lit: show.style == l.name && show.styleFor == Figure.birds,
+            off: !pool.styleOn(Figure.birds, l.name),
+            onTap: () => show.setStyle(l.name, forKind: Figure.birds),
+            onHold: () => links.card(_StyleThing(Figure.birds, l.name)),
+          ),
       ]);
     } else if (st.scene == 'lyrics') {
       below = Row(children: [
         SizedBox(width: 70, child: Text('style', style: Console.label(9))),
         Expanded(
           child: _Line(children: [
-            _Word(label: 'AUTO', lit: show.style == null, tooltip: 'The words\' own clock picks a style a section at a time (the hook in the stencil)', onTap: () => show.setStyle(null)),
+            _Word(
+                label: 'AUTO',
+                lit: show.style == null || show.styleFor != Figure.words,
+                tooltip: 'The words\' own clock picks a face a section at a time: calm ones in the quiet, bold ones in the heat',
+                onTap: () => show.setStyle(null)),
             for (final s in WordsStyle.values)
               _Word(
                 label: s.name.toUpperCase(),
                 lit: show.style == s.name && show.styleFor == Figure.words,
                 tooltip: wordsStyleWords[s],
                 onTap: () => show.setStyle(s.name, forKind: Figure.words),
+                onHold: () => links.card(_StyleThing(Figure.words, s.name)),
               ),
           ]),
         ),
@@ -937,14 +1210,28 @@ class _SceneRow extends StatelessWidget {
         if (knobs != null) knobs,
       ]);
     }
+    final styleNow = ShowPool.lookupFigure(rig.figure).style;
+    final styleWhy = styleNow == null
+        ? ''
+        : show.style == styleNow && show.styleFor == rig.figure.kind
+            ? ' Style $styleNow: yours, held.'
+            : ' Style $styleNow: its clock\'s, for this section.';
+    final pendingWhy = show.pendingLook == null ? '' : ' Next: ${book[show.pendingLook]?.name ?? show.pendingLook}, on the ${show.pendingAt?.name}.';
     return _LayerRow(
+      why: '${_sceneWhy(show)}$styleWhy$pendingWhy',
       name: 'SCENE',
-      word: 'what stands on it — a tap lands it as the hands say',
+      word: 'what stands on it — a tap lands it as LAND ON says',
       locked: show.sceneHeld,
+      heldWord: 'HELD',
       lockTip: show.sceneHeld ? 'The scene is held — let the director choose again' : 'Hold this scene: the director leaves it',
       onLock: (v) => show.holdScene(v),
       below: below,
-      child: Wrap(children: chips),
+      child: Wrap(
+        children: [
+          for (final f in _Family.values)
+            if (chipsBy[f] case final chips?) _Group(word: _familyWord(f), chips: chips),
+        ],
+      ),
     );
   }
 
@@ -970,6 +1257,7 @@ class _SceneRow extends StatelessWidget {
     DanceArt.fluid: 'chrome figures in a coloured fluid (native stage)',
     DanceArt.viewports: 'a model editor\'s grid of viewports (native stage)',
     DanceArt.plain: 'the scans as they are, on white: over MilkDrop, not blended',
+    DanceArt.disco: 'an LED floor that plays the record: lit where they step, rings on the kick, sparks on the snare',
   };
 }
 
@@ -1027,51 +1315,194 @@ class _TuneLine extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------- BLEND
+/// A little picture of a blend: a preset-like wash as the background, a scene's
+/// backdrop (dark, with a bright band) and a figure (a white disc) on it, put
+/// together the way the mode says.
+class _BlendSwatch extends StatelessWidget {
+  const _BlendSwatch(this.mode, {this.width = 54, this.height = 30});
+  final GroundMode mode;
+  final double width, height;
+
+  @override
+  Widget build(BuildContext context) => CustomPaint(size: Size(width, height), painter: _BlendPainter(mode));
+}
+
+class _BlendPainter extends CustomPainter {
+  const _BlendPainter(this.mode);
+  final GroundMode mode;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final r = Offset.zero & size;
+    final w = size.width, h = size.height;
+    final band = Path()
+      ..moveTo(w * 0.28, h)
+      ..lineTo(w * 0.52, 0)
+      ..lineTo(w * 0.7, 0)
+      ..lineTo(w * 0.46, h)
+      ..close();
+    void ground({BlendMode blend = BlendMode.srcOver, double alpha = 1, Path? within}) {
+      canvas.save();
+      if (within != null) canvas.clipPath(within);
+      canvas.drawRect(
+        r,
+        Paint()
+          ..blendMode = blend
+          ..shader = ui.Gradient.linear(r.topLeft, r.bottomRight, [
+            const Color(0xff6a2fb8).withValues(alpha: alpha),
+            const Color(0xffe8b23a).withValues(alpha: alpha),
+          ]),
+      );
+      canvas.restore();
+    }
+
+    void paper({BlendMode blend = BlendMode.srcOver, double alpha = 1, Rect? within}) {
+      canvas.save();
+      if (within != null) canvas.clipRect(within);
+      canvas.drawRect(
+          r,
+          Paint()
+            ..blendMode = blend
+            ..color = const Color(0xff23272e).withValues(alpha: alpha));
+      canvas.drawPath(
+          band,
+          Paint()
+            ..blendMode = blend
+            ..color = const Color(0xff9aa1ab).withValues(alpha: alpha));
+      canvas.restore();
+    }
+
+    final disc = Offset(w * 0.78, h * 0.5);
+    void figure() => canvas.drawCircle(disc, h * 0.24, Paint()..color = Colors.white);
+    final whole = Path()..addRect(r);
+    switch (mode) {
+      case GroundMode.keyhole:
+        canvas.drawRect(r, Paint()..color = Colors.black);
+        ground(within: Path()..addOval(Rect.fromCircle(center: disc, radius: h * 0.3)));
+        ground(within: Path()..addOval(Rect.fromCircle(center: Offset(w * 0.3, h * 0.55), radius: h * 0.22)));
+        return;
+      case GroundMode.through:
+        ground();
+      case GroundMode.over:
+        paper();
+      case GroundMode.add:
+        ground();
+        paper(blend: BlendMode.plus);
+      case GroundMode.screen:
+        ground();
+        paper(blend: BlendMode.screen);
+      case GroundMode.dim:
+        canvas.drawRect(r, Paint()..color = Colors.black);
+        ground(alpha: 0.38);
+        paper(alpha: 0.7);
+      case GroundMode.window:
+        paper();
+        ground(within: band);
+      case GroundMode.mask:
+        paper();
+        ground(within: Path.combine(PathOperation.difference, whole, band));
+      case GroundMode.frame:
+        ground();
+        paper(within: r.deflate(h * 0.2));
+      case GroundMode.bands:
+        ground();
+        for (var i = 0; i < 6; i += 2) {
+          paper(within: Rect.fromLTWH(w * i / 6, 0, w / 6, h));
+        }
+      case GroundMode.flip:
+        paper(within: Rect.fromLTWH(0, 0, w * 0.5, h));
+        ground(within: Path()..addRect(Rect.fromLTWH(w * 0.5, 0, w * 0.5, h)));
+      case GroundMode.outline:
+        paper();
+        final line = Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2
+          ..color = const Color(0xffe8b23a);
+        canvas.drawPath(
+            Path()
+              ..moveTo(0, h * 0.75)
+              ..quadraticBezierTo(w * 0.3, h * 0.1, w * 0.6, h * 0.55)
+              ..quadraticBezierTo(w * 0.8, h * 0.85, w, h * 0.3),
+            line);
+        canvas.drawPath(
+            Path()
+              ..moveTo(0, h * 0.3)
+              ..quadraticBezierTo(w * 0.25, h * 0.9, w * 0.5, h * 0.2),
+            line..color = const Color(0xff9d6fe0));
+      case GroundMode.contrast:
+        ground();
+        paper(blend: BlendMode.difference);
+    }
+    figure();
+  }
+
+  @override
+  bool shouldRepaint(_BlendPainter old) => old.mode != mode;
+}
+
 class _BlendRow extends StatelessWidget {
-  const _BlendRow({required this.show, required this.rig});
+  const _BlendRow({required this.show, required this.rig, required this.book, required this.links});
   final ShowEngine show;
   final ShowRig rig;
-
-  static const words = {
-    GroundMode.through: 'the scene\'s own backdrop dropped: the background shows there',
-    GroundMode.over: 'the scene as drawn; the background hidden',
-    GroundMode.add: 'the scene\'s light added over the background',
-    GroundMode.screen: 'screened: neither blows the other out',
-    GroundMode.dim: 'the background at a third, the scene on top',
-    GroundMode.window: 'the background shows through the scene\'s bright parts',
-    GroundMode.mask: 'the background only where the scene is dark',
-    GroundMode.frame: 'the scene in the middle, the background round it',
-    GroundMode.bands: 'vertical bands by turns, stepping with the beat',
-    GroundMode.flip: 'the scene over the background; the background over it on each kick',
-    GroundMode.outline: 'the background\'s edges only, as lines under the scene',
-    GroundMode.contrast: 'the difference of the two: where they agree is dark (the booth\'s way)',
-  };
+  final SceneBook book;
+  final _Links links;
 
   @override
   Widget build(BuildContext context) {
     final b = rig.blend;
     final locked = show.locked(RigSlot.blend);
     final figuresOver = b.figure == FigureMode.over;
+    final pool = show.pool;
+    final figure = ShowPool.lookupFigure(rig.figure);
+    final ground = rig.ground.kind;
+    final alone = figure.kind == Figure.none;
+    // What the rules answer for this pair, and where the answer came from.
+    final ruled = alone ? rig.blend : pool.blendFor(figure, ground, from: rig.blend);
+    final answer = alone ? null : pool.answer(figure, ground);
+    final thing = alone ? null : (figure.style != null ? _StyleThing(figure.kind, figure.style!) : (show.state.scene != null ? _SceneThing(show.state.scene!) : null));
+    final sceneName = book[show.state.scene]?.name ?? figure.kind.name;
+    final pairWords = '$sceneName${figure.style != null ? ' · ${figure.style}' : ''} on ${_groundWord(ground)}';
+    final String caption;
+    if (alone) {
+      caption = 'MilkDrop alone: its own whole picture, nothing to blend';
+    } else if (b.auto) {
+      caption = 'WHY  $pairWords: ${_answerWords(answer!)}';
+    } else {
+      caption = 'WHY  yours — ${b.ground.name}: ${_modeWords[b.ground]}';
+    }
     return _LayerRow(
       name: 'BLEND',
-      word: 'how the scene sits on the background',
+      word: 'how the scene sits on the background — a way or the strength chosen keeps it yours',
       locked: locked,
       lockTip: locked ? 'The blend is yours — let the rules decide again' : 'Keep this blend whatever the scene',
       onLock: (v) => show.lock(RigSlot.blend, v),
       below: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('${b.ground.name}: ${words[b.ground]}${b.auto ? ' · by the rules' : ''}', style: TextStyle(fontSize: 10, color: Console.quiet), maxLines: 1, overflow: TextOverflow.ellipsis),
+        Row(children: [
+          Expanded(
+              child: Text(caption, style: TextStyle(fontSize: 10, color: b.auto ? Console.quiet : Console.a), maxLines: 2, overflow: TextOverflow.ellipsis)),
+          if (thing != null) ...[
+            const SizedBox(width: 6),
+            Pad(
+              label: b.auto ? 'ITS CARD' : 'BACK TO THE RULES',
+              height: 22,
+              colour: Console.quiet,
+              tooltip: b.auto ? 'What $sceneName${figure.style != null ? ' · ${figure.style}' : ''} goes with, and why' : 'Let the rules decide this blend again',
+              onTap: () => b.auto ? links.card(thing) : show.lock(RigSlot.blend, false),
+            ),
+          ],
+        ]),
         const SizedBox(height: 4),
         _Line(children: [
-          Text('the figures', style: Console.label(9)),
+          Text('the bodies & shapes', style: Console.label(9)),
           const SizedBox(width: 6),
           _Word(
-            label: 'OVER',
+            label: 'ON TOP',
             lit: figuresOver && !b.auto,
-            tooltip: 'The bodies, the glyphs, the shapes go over the background as drawn',
+            tooltip: 'The bodies, the glyphs, the shapes go over the background as drawn; only the scene\'s backdrop is blended',
             onTap: () => show.setBlend(b.copyWith(figure: FigureMode.over)),
           ),
           _Word(
-            label: 'BLEND TOO',
+            label: 'BLENDED TOO',
             lit: !figuresOver && !b.auto,
             tooltip: 'The figures are blended like the scene\'s backdrop',
             onTap: () => show.setBlend(b.copyWith(figure: FigureMode.same)),
@@ -1079,7 +1510,7 @@ class _BlendRow extends StatelessWidget {
           _Word(
             label: 'AS THE SCENE ASKS',
             lit: b.auto,
-            tooltip: 'The plain dancers over; the rest blended (today\'s picture)',
+            tooltip: 'The plain dancers on top; the rest blended (the rules\' way)',
             onTap: () => show.lock(RigSlot.blend, false),
           ),
           const SizedBox(width: 12),
@@ -1093,12 +1524,21 @@ class _BlendRow extends StatelessWidget {
         ]),
       ]),
       child: Wrap(children: [
-        _Word(label: 'AUTO', lit: b.auto, tooltip: 'The rules decide: the booth\'s way is contrast under MilkDrop', onTap: () => show.lock(RigSlot.blend, false)),
+        _Chip(
+          label: 'BY THE RULES',
+          lit: b.auto,
+          tooltip: 'The RULES tab decides for each scene on each background — ${ruled.ground.name} here',
+          picture: _BlendSwatch(ruled.ground),
+          pictureSize: const Size(54, 30),
+          onTap: () => show.lock(RigSlot.blend, false),
+        ),
         for (final m in GroundMode.values)
-          _Word(
+          _Chip(
             label: m.name.toUpperCase(),
             lit: b.ground == m && !b.auto,
-            tooltip: words[m],
+            tooltip: _modeWords[m],
+            picture: _BlendSwatch(m),
+            pictureSize: const Size(54, 30),
             onTap: () => show.setBlend(b.copyWith(ground: m)),
           ),
       ]),
@@ -1118,11 +1558,21 @@ class _FinishRow extends StatelessWidget {
     final locked = show.locked(RigSlot.finish);
     Widget knob(String label, double v, double max, String tip, RigFinish Function(double) set) => Padding(
           padding: const EdgeInsets.only(right: 12),
-          child: Knob(value: v, min: 0, max: max, rest: 0, bipolar: false, size: 30, label: label, tooltip: '$tip: ${(v / max * 100).round()} %', onChanged: (x) => show.setFinish(set(x))),
+          child: Knob(
+              value: v,
+              min: 0,
+              max: max,
+              rest: 0,
+              bipolar: false,
+              size: 30,
+              label: label,
+              tooltip: '$tip: ${(v / max * 100).round()} %',
+              onChanged: (x) => show.setFinish(set(x))),
         );
     return _LayerRow(
       name: 'FINISH',
-      word: 'over everything',
+      word: 'over everything — a knob turned keeps the whole finish yours',
+      why: locked ? 'Yours: the scenes\' own finishes wait until you let it go.' : 'The scene\'s own finish (its trails, its bloom, its grain); a knob turned makes it yours.',
       locked: locked,
       lockTip: locked ? 'The finish is yours — let the scene have its own again' : 'Keep this finish whatever the scene',
       onLock: (v) => show.lock(RigSlot.finish, v),
@@ -1133,9 +1583,9 @@ class _FinishRow extends StatelessWidget {
         knob('GRAIN', f.grain, 1, 'Film grain', (x) => f.copyWith(grain: x)),
         knob('VIGNETTE', f.vignette, 1, 'The corners darkened', (x) => f.copyWith(vignette: x)),
         _Word(
-          label: 'WORDS',
+          label: 'TITLE & LYRICS',
           lit: f.title || f.lyrics,
-          tooltip: 'The record\'s title and the line being sung over the stage',
+          tooltip: 'The record\'s title and the line being sung, over the stage',
           onTap: () => show.setFinish(f.copyWith(title: !(f.title || f.lyrics), lyrics: !(f.title || f.lyrics))),
         ),
       ]),
@@ -1145,13 +1595,22 @@ class _FinishRow extends StatelessWidget {
 
 // ------------------------------------------------------------------ the tabs
 class _Tabs extends StatelessWidget {
-  const _Tabs({required this.tab, required this.onPick, required this.show, required this.kit, required this.info, required this.booth});
+  const _Tabs(
+      {required this.tab, required this.show, required this.kit, required this.info, required this.booth, required this.links});
   final ShowTab tab;
-  final void Function(ShowTab) onPick;
   final ShowEngine show;
   final StageKit? kit;
   final ValueNotifier<StageInfo> info;
   final Booth booth;
+  final _Links links;
+
+  static const _tips = {
+    ShowTab.scenes: 'Every scene, and which the director may pick',
+    ShowTab.rules: 'What goes on what, and how it blends',
+    ShowTab.dancers: 'Who dances, and every move',
+    ShowTab.milkdrop: 'The presets, their director, the maker',
+    ShowTab.perf: 'The stage\'s numbers and quality',
+  };
 
   @override
   Widget build(BuildContext context) => BoothPanel(
@@ -1163,16 +1622,23 @@ class _Tabs extends StatelessWidget {
               _Line(children: [
                 for (final t in ShowTab.values) ...[
                   Pad(
-                    label: t.name.toUpperCase(),
+                    label: t == ShowTab.scenes ? 'EVERYTHING' : t.name.toUpperCase(),
                     height: 26,
                     lit: t == tab,
                     colour: Console.ink,
-                    onTap: () => onPick(t),
+                    tooltip: _tips[t],
+                    onTap: () => links.tab(t),
                   ),
                   const SizedBox(width: 4),
                 ],
                 const SizedBox(width: 8),
-                Pad(icon: Icons.fullscreen, width: 26, height: 26, colour: Console.quiet, tooltip: 'The stage over this window (⇧V)', onTap: kit == null ? null : () => openStagePage(context, booth)),
+                Pad(
+                    icon: Icons.fullscreen,
+                    width: 26,
+                    height: 26,
+                    colour: Console.quiet,
+                    tooltip: 'The stage over this window (⇧V)',
+                    onTap: kit == null ? null : () => openStagePage(context, booth)),
                 const SizedBox(width: 4),
                 Pad(
                   icon: Icons.open_in_new,
@@ -1190,13 +1656,13 @@ class _Tabs extends StatelessWidget {
                 // panel has less (the moves' viewer and its list want the most).
                 child: LayoutBuilder(builder: (context, c) {
                   final body = switch (tab) {
-                    ShowTab.scenes => _ScenesTab(show: show, kit: kit) as Widget,
-                    ShowTab.rules => _RulesTab(show: show, kit: kit),
+                    ShowTab.scenes => _EverythingTab(show: show, kit: kit, links: links) as Widget,
+                    ShowTab.rules => _RulesTab(show: show, kit: kit, links: links),
                     ShowTab.dancers => _DancersTab(show: show),
-                    ShowTab.milkdrop => _MilkTab(show: show, booth: booth),
+                    ShowTab.milkdrop => MilkPanel(booth: booth),
                     ShowTab.perf => _PerfTab(show: show, info: info, booth: booth),
                   };
-                  final least = tab == ShowTab.dancers ? 560.0 : 300.0;
+                  final least = tab == ShowTab.dancers || tab == ShowTab.milkdrop ? 560.0 : 300.0;
                   if (c.maxHeight >= least) return body;
                   return SingleChildScrollView(child: SizedBox(height: least, child: body));
                 }),
@@ -1207,249 +1673,21 @@ class _Tabs extends StatelessWidget {
       );
 }
 
-class _ScenesTab extends StatelessWidget {
-  const _ScenesTab({required this.show, required this.kit});
-  final ShowEngine show;
-  final StageKit? kit;
+class _Legend extends StatelessWidget {
+  const _Legend({required this.colour, required this.border, required this.word, this.faint = false});
+  final Color colour, border;
+  final String word;
+  final bool faint;
 
   @override
-  Widget build(BuildContext context) {
-    final book = kit?.book;
-    if (book == null) return const SizedBox.shrink();
-    final looks = book.scenes.values.toList()..sort((a, b) => a.name.compareTo(b.name));
-    return ListenableBuilder(
-      listenable: show,
-      builder: (context, _) {
-        final st = show.state;
-        final pool = show.pool;
-        return ListView(
-          children: [
-            Text('Every scene. A name puts it on (landing as the hands say); the switch is the director\'s: off, it never reaches for it.',
-                style: TextStyle(fontSize: 11, color: Console.quiet)),
-            const SizedBox(height: 6),
-            for (final s in looks)
-              Row(children: [
-                SizedBox(
-                  width: 64,
-                  height: 36,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(3),
-                    child: thumbOf(s.id) != null ? Image.asset(thumbOf(s.id)!, fit: BoxFit.cover, errorBuilder: (c, _, __) => ColoredBox(color: Console.ground)) : ColoredBox(color: Console.ground),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: InkWell(
-                    onTap: () => show.launch(s.id),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 6),
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Row(children: [
-                          if (s.id == st.scene) Icon(Icons.play_arrow, size: 14, color: Console.a),
-                          if (s.id == st.scene) const SizedBox(width: 3),
-                          Text(s.name, style: TextStyle(color: pool.isOn('look.${s.id}') ? Console.ink : Console.faint, fontSize: 13)),
-                        ]),
-                        Text(
-                          '${s.look.rig.figure.kind == Figure.none ? s.look.rig.ground.label : s.look.rig.figure.label} · energy ${(s.meta.energy.$1 * 10).round()}–${(s.meta.energy.$2 * 10).round()}${s.meta.sections.isEmpty ? '' : ' · ${s.meta.sections.join(' ')}'}',
-                          style: TextStyle(color: Console.quiet, fontSize: 10),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ]),
-                    ),
-                  ),
-                ),
-                Tooltip(
-                  message: pool.isOn('look.${s.id}') ? 'On: the director may choose it' : 'Off: the director passes it by (a tap still puts it on)',
-                  child: Switch(
-                    value: pool.isOn('look.${s.id}'),
-                    onChanged: (v) {
-                      show.setPool(pool.withOff('look.${s.id}', !v));
-                      if (!v && st.scene == s.id) show.nextScene();
-                    },
-                  ),
-                ),
-              ]),
-          ],
-        );
-      },
-    );
-  }
-}
-
-// ---------------------------------------------------------------- RULES
-/// What goes with what: the scenes down the side, the backgrounds across, a cell for
-/// each pair — together (the rules' blend), never, or a blend of the hands' own.
-class _RulesTab extends StatelessWidget {
-  const _RulesTab({required this.show, required this.kit});
-  final ShowEngine show;
-  final StageKit? kit;
-
-  static const _grounds = [Ground.black, Ground.wash, Ground.milk, Ground.field, Ground.camera, Ground.cover, Ground.pulse];
-
-  /// The rows: each figure kind once (its scene's name), and the dancers' plain and
-  /// silhouette shades, which the table treats on their own.
-  List<(String, RigFigure)> _rows(SceneBook book) {
-    final out = <(String, RigFigure)>[];
-    final seen = <Figure>{};
-    for (final s in book.scenes.values.toList()..sort((a, b) => a.name.compareTo(b.name))) {
-      final f = s.look.rig.figure;
-      if (f.kind == Figure.none || !seen.add(f.kind)) continue;
-      final name = f.kind == Figure.dancers ? 'Dancers' : s.name;
-      if (f.kind == Figure.dancers) {
-        out.add(('Dancers · plain', const RigFigure(kind: Figure.dancers, shade: Shade.textured)));
-        out.add(('Dancers · silhouette', const RigFigure(kind: Figure.dancers, shade: Shade.silhouette)));
-        out.add(('Dancers · the rest', const RigFigure(kind: Figure.dancers)));
-      } else {
-        out.add((name, RigFigure(kind: f.kind)));
-      }
-    }
-    return out;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final book = kit?.book;
-    if (book == null) return const SizedBox.shrink();
-    return ListenableBuilder(
-      listenable: show,
-      builder: (context, _) {
-        final pool = show.pool;
-        final rows = _rows(book);
-        return ListView(
-          children: [
-            Text('What goes with what. A cell is a scene on a background: ✓ together (blended by the rules — contrast under MilkDrop), ✗ never, or a blend of your own. '
-                'A tap steps ✓ → ✗ → back; a long press picks a blend. The director keeps to the table; your own taps on the rig do not.',
-                style: TextStyle(fontSize: 11, color: Console.quiet)),
-            const SizedBox(height: 8),
-            Table(
-              defaultColumnWidth: const FixedColumnWidth(54),
-              columnWidths: const {0: FlexColumnWidth()},
-              defaultVerticalAlignment: TableCellVerticalAlignment.middle,
-              children: [
-                TableRow(children: [
-                  const SizedBox.shrink(),
-                  for (final g in _grounds)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 4),
-                      child: Text(g.name, textAlign: TextAlign.center, style: Console.label(8, color: pool.isOn('ground.${g.name}') ? Console.ink : Console.faint)),
-                    ),
-                ]),
-                for (final (name, fig) in rows)
-                  TableRow(children: [
-                    Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Text(name, style: TextStyle(fontSize: 11, color: Console.ink))),
-                    for (final g in _grounds) _RuleCell(show: show, figure: fig, ground: g),
-                  ]),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(children: [
-              Expanded(child: Text('BACKGROUNDS the director may use', style: Console.label(10, color: Console.ink))),
-              TextButton(
-                onPressed: () => show.setPool(pool.copyWith(combos: const {})),
-                child: Text('table as shipped', style: TextStyle(fontSize: 11, color: Console.quiet)),
-              ),
-            ]),
-            Wrap(children: [
-              for (final g in _grounds)
-                _Word(
-                  label: g.name.toUpperCase(),
-                  lit: pool.isOn('ground.${g.name}'),
-                  off: !pool.isOn('ground.${g.name}'),
-                  tooltip: pool.isOn('ground.${g.name}') ? 'On' : 'Off: the director never puts it under a scene',
-                  onTap: () => show.setPool(pool.withOff('ground.${g.name}', pool.isOn('ground.${g.name}'))),
-                ),
-            ]),
-            const SizedBox(height: 8),
-            Text("STYLES the dancers and the birds may wear (the treatments' mix is on the SCENE row)", style: Console.label(10, color: Console.ink)),
-            const SizedBox(height: 4),
-            Wrap(children: [
-              for (final t in Treatment.values)
-                if (t != Treatment.auto && t != Treatment.raw && !imageTreatments.contains(t))
-                  _Word(
-                    label: t.name.toUpperCase(),
-                    lit: pool.isOn('treatment.${t.name}'),
-                    off: !pool.isOn('treatment.${t.name}'),
-                    tooltip: pool.isOn('treatment.${t.name}') ? 'On' : 'Off: their clocks never pick it (a tap on the style row still can)',
-                    onTap: () => show.setPool(pool.withOff('treatment.${t.name}', pool.isOn('treatment.${t.name}'))),
-                  ),
-            ]),
-            const SizedBox(height: 10),
-            Row(children: [
-              Text('DIRECTOR', style: Console.label(10, color: Console.ink)),
-              const SizedBox(width: 10),
-              Text('calm', style: Console.label(9)),
-              Expanded(child: Slider(value: pool.bias, min: -1, max: 1, onChanged: (v) => show.setPool(pool.copyWith(bias: v)))),
-              Text('busy', style: Console.label(9)),
-            ]),
-            Text('calm leans to the quieter scenes, busy to the louder', style: TextStyle(fontSize: 10, color: Console.faint)),
-            const SizedBox(height: 6),
-            Row(children: [
-              Expanded(child: Text('the beat before a drop goes black', style: TextStyle(fontSize: 12, color: Console.ink))),
-              Switch(value: pool.darkBeat, onChanged: (v) => show.setPool(pool.copyWith(darkBeat: v))),
-            ]),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _RuleCell extends StatelessWidget {
-  const _RuleCell({required this.show, required this.figure, required this.ground});
-  final ShowEngine show;
-  final RigFigure figure;
-  final Ground ground;
-
-  @override
-  Widget build(BuildContext context) {
-    final pool = show.pool;
-    final key = ShowPool.comboKey(figure, ground);
-    final mine = pool.combos[key];
-    final rule = pool.ruleFor(figure, ground);
-    final off = rule?.off ?? false;
-    final mode = rule?.ground;
-    final word = off ? '✗' : (mode == null || mode == GroundMode.over || mode == GroundMode.contrast && ground == Ground.milk ? '✓' : mode.name);
-    final tip = off
-        ? 'Never together'
-        : 'Together${mode == null ? '' : ', ${mode.name}'}${rule?.figure == FigureMode.over ? ', the figures over' : ''}${mine != null ? ' (yours)' : ''}';
-    return Padding(
-      padding: const EdgeInsets.all(2),
-      child: Tooltip(
-        message: '$tip — tap: ✓ → ✗ → as shipped; long press: a blend',
-        child: GestureDetector(
-          onTap: () {
-            feel(Feel.pick);
-            final next = off ? null : ComboRule.never;
-            if (off && mine == null) {
-              // Shipped as never: the hands make it together.
-              show.setPool(pool.withCombo(key, const ComboRule()));
-            } else {
-              show.setPool(pool.withCombo(key, next));
-            }
-          },
-          onLongPress: () async {
-            final picked = await showMenu<GroundMode>(
-              context: context,
-              position: RelativeRect.fill,
-              items: [for (final m in GroundMode.values) PopupMenuItem(value: m, child: Text('${m.name} — ${_BlendRow.words[m]}', style: const TextStyle(fontSize: 12)))],
-            );
-            if (picked != null) show.setPool(pool.withCombo(key, ComboRule(ground: picked)));
-          },
-          child: Container(
-            height: 24,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: off ? Console.ground : (mine != null ? Console.a.withValues(alpha: 0.15) : Console.raised),
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: mine != null ? Console.a : Console.line),
-            ),
-            child: Text(word, style: TextStyle(fontSize: 10, color: off ? Console.faint : Console.ink)),
-          ),
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(right: 10),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Container(width: 12, height: 10, decoration: BoxDecoration(color: colour, borderRadius: BorderRadius.circular(2), border: Border.all(color: border))),
+          const SizedBox(width: 4),
+          Text(word, style: TextStyle(fontSize: 9, color: faint ? Console.faint : Console.quiet)),
+        ]),
+      );
 }
 
 // ---------------------------------------------------------------- DANCERS
@@ -1469,10 +1707,19 @@ class _DancersTab extends StatelessWidget {
               Text('WHO DANCES · a name dances alone, a switch off keeps them out of the mix', style: Console.label(9, color: Console.ink)),
               const SizedBox(height: 4),
               _Line(children: [
-                _Word(label: 'A MIX', lit: lead == null, tooltip: 'Each record its own lead, the others in the troupe', onTap: () => show.setPool(pool.copyWith(clearDancer: true))),
+                _Word(
+                    label: 'A MIX',
+                    lit: lead == null,
+                    tooltip: 'Each record its own lead, the others in the troupe',
+                    onTap: () => show.setPool(pool.copyWith(clearDancer: true))),
                 const SizedBox(width: 6),
                 for (final (id, name) in DanceModels.all) ...[
-                  _Word(label: name.toUpperCase(), lit: lead == id, off: !pool.isOn('dancer.$id'), tooltip: 'Only $name dances', onTap: () => show.setPool(pool.copyWith(dancer: id))),
+                  _Word(
+                      label: name.toUpperCase(),
+                      lit: lead == id,
+                      off: !pool.isOn('dancer.$id'),
+                      tooltip: 'Only $name dances',
+                      onTap: () => show.setPool(pool.withOff('dancer.$id', false).copyWith(dancer: id))),
                   Tooltip(
                     message: pool.isOn('dancer.$id') ? 'On: may dance in the mix' : 'Off: never in the mix',
                     child: Switch(
@@ -1495,69 +1742,6 @@ class _DancersTab extends StatelessWidget {
       );
 }
 
-// ---------------------------------------------------------------- MILKDROP
-class _MilkTab extends StatelessWidget {
-  const _MilkTab({required this.show, required this.booth});
-  final ShowEngine show;
-  final Booth booth;
-
-  @override
-  Widget build(BuildContext context) {
-    final milk = MilkFeed.shared;
-    if (!milk.available) return Text('MilkDrop is not here (no helper beside the app).', style: TextStyle(color: Console.quiet));
-    return ListenableBuilder(
-      listenable: Listenable.merge([milk, milk.director]),
-      builder: (context, _) {
-        final d = milk.director;
-        return ListView(
-          children: [
-            Text('MILKDROP\'S DIRECTOR', style: Console.label(10, color: Console.ink)),
-            const SizedBox(height: 4),
-            Text('Which preset is on, and when it changes — the record decides, not a clock: a hit or a drop cuts, a breakdown blends.', style: TextStyle(fontSize: 11, color: Console.quiet)),
-            const SizedBox(height: 8),
-            Row(children: [
-              Expanded(child: Text(milk.running ? (milk.presetName ?? 'MilkDrop…') : 'MilkDrop off', style: TextStyle(color: milk.running ? Console.ink : Console.quiet, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis)),
-              Pad(icon: Icons.chevron_left, width: 24, height: 24, colour: Console.quiet, tooltip: 'The preset before', onTap: d.previous),
-              const SizedBox(width: 2),
-              Pad(icon: Icons.chevron_right, width: 24, height: 24, colour: Console.quiet, tooltip: 'The next preset', onTap: d.next),
-              const SizedBox(width: 2),
-              Pad(icon: Icons.casino_outlined, width: 24, height: 24, colour: Console.quiet, tooltip: 'Another preset', onTap: () {
-                if (!milk.running) unawaited(milk.start());
-                d.random(byHand: true);
-              }),
-              const SizedBox(width: 2),
-              Pad(icon: d.locked ? Icons.lock : Icons.lock_open, width: 24, height: 24, lit: d.locked, colour: Console.a, tooltip: d.locked ? 'Held' : 'Hold this preset', onTap: () => d.set(locked: !d.locked)),
-            ]),
-            const SizedBox(height: 10),
-            Row(children: [
-              SizedBox(width: 150, child: Text('a new preset every', style: TextStyle(fontSize: 12, color: Console.ink))),
-              Expanded(
-                child: Slider(
-                  value: d.everyBars.toDouble().clamp(0, 64),
-                  min: 0,
-                  max: 64,
-                  divisions: 16,
-                  onChanged: (v) => d.set(everyBars: (v / 4).round() * 4),
-                ),
-              ),
-              SizedBox(width: 70, child: Text(d.everyBars == 0 ? 'never by the clock' : '${d.everyBars} bars', style: TextStyle(fontSize: 11, color: Console.quiet))),
-            ]),
-            SwitchListTile(dense: true, title: const Text('cut on a drop, and on a hit', style: TextStyle(fontSize: 12)), value: d.cutOnDrop, onChanged: (v) => d.set(cutOnDrop: v)),
-            SwitchListTile(dense: true, title: const Text('favourites only', style: TextStyle(fontSize: 12)), value: d.favouritesOnly, onChanged: (v) => d.set(favouritesOnly: v)),
-            Row(children: [
-              SizedBox(width: 150, child: Text('the least rating', style: TextStyle(fontSize: 12, color: Console.ink))),
-              Expanded(child: Slider(value: d.minRating.clamp(0, 5), min: 0, max: 5, divisions: 5, onChanged: (v) => d.set(minRating: v))),
-              SizedBox(width: 70, child: Text(d.minRating == 0 ? 'any' : '${d.minRating.round()} of 5', style: TextStyle(fontSize: 11, color: Console.quiet))),
-            ]),
-            const SizedBox(height: 8),
-            Pad(label: 'BROWSE, FAVOURITE, MAKE PRESETS…', height: 28, colour: Console.ink, tooltip: 'The preset library and the maker', onTap: () => openMilkPage(context, booth)),
-          ],
-        );
-      },
-    );
-  }
-}
-
 // ---------------------------------------------------------------- PERF
 class _PerfTab extends StatelessWidget {
   const _PerfTab({required this.show, required this.info, required this.booth});
@@ -1572,20 +1756,22 @@ class _PerfTab extends StatelessWidget {
           valueListenable: ShowDebug.flips,
           builder: (context, flips, _) => ListView(
             children: [
-              Text('THIS PICTURE', style: Console.label(10, color: Console.ink)),
+              Text('THIS PAGE\'S PICTURE', style: Console.label(10, color: Console.ink)),
               const SizedBox(height: 4),
               Text(
                 [
                   'renderer: ${i.word}${i.parked ? ' (parked under the Flutter stage)' : ''}',
-                  if (i.fps > 0) '${i.fps.toStringAsFixed(1)} fps${i.native ? ' · ${i.ms.toStringAsFixed(1)} ms a frame, worst ${i.worstMs.toStringAsFixed(1)}' : ''}',
-                  if (i.width > 0) '${i.width}×${i.height}${i.native && i.workWidth > 0 ? ' → work ${i.workWidth}×${i.workHeight} (auto ×${i.autoScale.toStringAsFixed(2)})' : ''}',
+                  if (i.fps > 0)
+                    '${i.fps.toStringAsFixed(1)} fps${i.native ? ' · ${i.ms.toStringAsFixed(1)} ms a frame, worst ${i.worstMs.toStringAsFixed(1)}' : ''}',
+                  if (i.width > 0)
+                    '${i.width}×${i.height}${i.native && i.workWidth > 0 ? ' → work ${i.workWidth}×${i.workHeight} (auto ×${i.autoScale.toStringAsFixed(2)})' : ''}',
                   if (i.native) i.float ? 'float targets' : '8-bit targets',
                   if (i.why.isNotEmpty) 'why not native: ${i.why}',
                 ].join('\n'),
                 style: Mag.typewriter(11, color: Console.ink),
               ),
               const SizedBox(height: 10),
-              Text('CHANGES OF HANDS', style: Console.label(10, color: Console.ink)),
+              Text('STAGE LOG', style: Console.label(10, color: Console.ink)),
               const SizedBox(height: 4),
               Text(flips.isEmpty ? 'none yet' : flips.join('\n'), style: Mag.typewriter(11, color: Console.quiet)),
               const SizedBox(height: 10),
@@ -1597,7 +1783,12 @@ class _PerfTab extends StatelessWidget {
                 ]),
               ),
               const SizedBox(height: 6),
-              Pad(label: 'THE PICTURE AGAINST THE SOUND…', height: 26, colour: Console.quiet, tooltip: 'The performer\'s offset for this screen', onTap: () => showTileOffsetDialog(context, booth)),
+              Pad(
+                  label: 'THE PICTURE AGAINST THE SOUND…',
+                  height: 26,
+                  colour: Console.quiet,
+                  tooltip: 'The performer\'s offset for this screen',
+                  onTap: () => showTileOffsetDialog(context, booth)),
               const SizedBox(height: 10),
               Text('QUALITY', style: Console.label(10, color: Console.ink)),
               const SizedBox(height: 4),
@@ -1612,13 +1803,14 @@ class _PerfTab extends StatelessWidget {
                         'low' => 'A slow machine: the picture at 60 %, fewer birds, no big companies',
                         'mid' => 'The picture at 80 %, three quarters of the birds',
                         'high' => 'Everything, at full size',
-                        _ => 'As the stage finds it can: full size, scaled down on its own when frames run late',
+                        _ => 'As the stage finds it can: full size (the native stage scales itself down when frames run late)',
                       },
                       onTap: () => show.setPool(show.pool.copyWith(tier: t)),
                     ),
                 ]),
               ),
-              Text('The tier takes effect on the next frames; the stage still scales itself down when frames run late.', style: TextStyle(fontSize: 10, color: Console.faint)),
+              Text('The tier takes effect on the next frames; the stage still scales itself down when frames run late.',
+                  style: TextStyle(fontSize: 10, color: Console.faint)),
             ],
           ),
         ),

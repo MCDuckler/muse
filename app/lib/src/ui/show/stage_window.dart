@@ -35,9 +35,9 @@ import '../../state/app_state.dart' show AppState;
 import '../../state/booth/board/link_server.dart' show encodeStageThumb;
 import '../../state/booth/booth.dart';
 import '../../state/playback_log.dart';
+import '../../state/show/show_rig.dart';
 import '../../state/show/camera_feed.dart';
 import '../../state/show/milk_feed.dart';
-import '../../state/show/show_state.dart' show ShowMacros;
 import '../../state/player.dart' show PlayerService;
 import '../../state/show/show_demo.dart';
 import '../../state/show/show_feed.dart';
@@ -113,6 +113,7 @@ class _StageWindowState extends State<_StageWindow> {
 
   int _frames = 0, _raster = 0, _worst = 0, _build = 0, _buildWorst = 0, _milkWas = 0;
   Timer? _saying, _counting;
+
   /// WETOWL_FRAME_TRACE=1: every gap of over 40 ms between two frames reaching the
   /// screen said, with when — for a hitch that comes back on a rhythm (what it lines
   /// up with says what it is). Read off the raster finishing: the embedder's vsync
@@ -273,12 +274,15 @@ class _StageWindowState extends State<_StageWindow> {
           ..choose(widget.args[sc + 1])
           ..locked = true;
       }
-      // MilkDrop is under every scene unless asked not to be (the bench's plain look).
-      if (widget.args.contains('--no-milk-under')) booth.show.setMacros(booth.show.macros.copyWith(milkUnder: false));
+      // The director's backgrounds under every scene unless asked otherwise (the
+      // bench's plain look): held by the hands, not saved, as this window keeps nothing.
+      if (widget.args.contains('--no-milk-under')) booth.show.setGround(RigGround.black);
       if (widget.args.contains('--milk-under')) {
+        booth.show.setGround(RigGround.milk);
+        // A blend of its own: --milk-mix N is the old number (0 add … 9 contrast).
         final mm = widget.args.indexOf('--milk-mix');
-        final mix = mm >= 0 && mm + 1 < widget.args.length ? int.tryParse(widget.args[mm + 1]) ?? ShowMacros.contrast : ShowMacros.contrast;
-        booth.show.setMacros(booth.show.macros.copyWith(milkUnder: true, milkMix: mix));
+        final mix = mm >= 0 && mm + 1 < widget.args.length ? int.tryParse(widget.args[mm + 1]) : null;
+        if (mix != null && mix >= 0 && mix + 2 < GroundMode.values.length) booth.show.setBlend(RigBlend(ground: GroundMode.values[mix + 2]));
       }
       booth.show.start();
       await booth.play(booth.a);
@@ -413,14 +417,14 @@ class _StageWindowState extends State<_StageWindow> {
     final hands = booth != null
         ? StageHands.ofEngine(booth)
         : demo == null
-        ? StageHands.none
-        : StageHands(
-            next: demo.director.next,
-            previous: () => demo.director.next(by: -1),
-            hit: () => demo.macros = demo.macros.copyWith(hit: 1),
-            macros: () => demo.macros,
-            setMacros: (m) => demo.macros = m,
-          );
+            ? StageHands.none
+            : StageHands(
+                next: demo.director.next,
+                previous: () => demo.director.next(by: -1),
+                hit: () => demo.macros = demo.macros.copyWith(hit: 1),
+                macros: () => demo.macros,
+                setMacros: (m) => demo.macros = m,
+              );
     return Focus(
       focusNode: _focus,
       autofocus: true,

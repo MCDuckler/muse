@@ -16,6 +16,9 @@ bool get canPopOutStage =>
 /// off the desk's link over the loopback — the board's way (board/pop_out_io.dart).
 Future<bool> popOutStage(BoardLinkBase? link) async {
   if (!canPopOutStage || link is! BoardLinkServer) return false;
+  // One window is the show; another press would start a second (a second MilkDrop,
+  // a second set of dancers) behind the first.
+  if (link.stages > 0) return false;
   await link.scan();
   final port = link.port, token = link.token;
   if (port == null || token == null) return false;

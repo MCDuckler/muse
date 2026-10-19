@@ -618,7 +618,10 @@ class TurntableSim implements SimLayer {
   static const slots = 7, radius = 3.4, lift = 1.15;
 
   final _bank = TurntableBank.shared;
-  final _rng = math.Random();
+  // Seeded by the record (frame): the same shapes and the same tears every time it
+  // plays, a recording played back included.
+  var _rng = math.Random(17);
+  int? _rngFor;
   final _ring = List<TurntableModel?>.filled(slots, null);
 
   /// Each slot's size, springing up from nothing when a new shape is put in it.
@@ -692,6 +695,11 @@ class TurntableSim implements SimLayer {
 
   @override
   ui.Image? frame(ShowState st, double dt, int w, int h, StagePrograms p) {
+    final record = st.master.trackId ?? 0;
+    if (_rngFor != record) {
+      _rngFor = record;
+      _rng = math.Random(record * 7919 + 17);
+    }
     for (var s = 0; s < slots; s++) {
       _ring[s] ??= _pick();
     }

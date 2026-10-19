@@ -68,8 +68,26 @@ class Genome {
       'glide.salt': range(0.0, 1.0),
       'palette.sat': range(0.85, 1.1),
       // How much the director leans towards each scene (1 is neutral).
-      for (final scene in const ['drift', 'build', 'tunnel', 'kaleido', 'type', 'grid', 'fluid', 'veins', 'flash', 'echo', 'fold', 'blocks', 'kinetic', 'glide'])
+      for (final scene in const [
+        'drift',
+        'build',
+        'tunnel',
+        'kaleido',
+        'type',
+        'grid',
+        'fluid',
+        'veins',
+        'flash',
+        'echo',
+        'fold',
+        'blocks',
+        'kinetic',
+        'glide'
+      ])
         'scene.$scene': pick([0.4, 0.7, 1.0, 1.0, 1.3, 1.8]),
+      // The scenes added since (after the rest, so every earlier gene of a record stays).
+      for (final scene in const ['dance-art', 'dance-disco', 'dance-neon', 'dance-shadow', 'flock', 'turntable', 'lyrics', 'siebenschlaefer', 'milk'])
+        'scene.$scene': pick([0.7, 1.0, 1.0, 1.0, 1.3, 1.5]),
     };
     return Genome(g);
   }
@@ -82,6 +100,5 @@ class Genome {
 
   Map<String, dynamic> toJson() => genes;
 
-  factory Genome.fromJson(Map<String, dynamic> j) =>
-      Genome({for (final e in j.entries) e.key: (e.value as num).toDouble()});
+  factory Genome.fromJson(Map<String, dynamic> j) => Genome({for (final e in j.entries) e.key: (e.value as num).toDouble()});
 }

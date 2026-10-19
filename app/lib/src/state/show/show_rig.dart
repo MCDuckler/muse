@@ -35,8 +35,10 @@ enum Ground {
   pulse,
 }
 
-/// What stands in the middle.
-enum Figure { none, dancers, birds, kinetic, blocks, flash, glide, turntable, fluid, veins, meme, words }
+/// What stands in the middle. [none] is a look that is its own whole picture
+/// (MilkDrop alone); [field] a shader drawn whole (drift), [room] the camera through
+/// a shader (echo, fold) — both blended with the ground like any figure.
+enum Figure { none, dancers, birds, kinetic, blocks, flash, glide, turntable, fluid, veins, meme, words, field, room }
 
 /// How a 3D figure's surface is shaded. [auto] is the figure's own clock choosing
 /// from the pool, as it does today.
@@ -49,9 +51,10 @@ enum Dressing { auto, none, disco, neon, shadow, studio, sky }
 enum Treatment { auto, raw, ascii, dither, halftone, thermal, lines, contour, chrono, trails, fluid, viewports, radar }
 
 /// How the figure layer's own backdrop pixels (its paper, floor, wash) sit on the
-/// ground: dropped so the ground shows ([through]), replacing it ([over]), or one of
-/// the ways MilkDrop has gone under a scene (shaders/show/under.frag, in its order).
-enum GroundMode { through, over, add, screen, dim, window, mask, frame, bands, flip, outline, contrast }
+/// ground: dropped so the ground shows ([through]), replacing it ([over]), one of
+/// the ways MilkDrop has gone under a scene (shaders/show/under.frag, in its order),
+/// or [keyhole]: the figure itself a window onto the ground, everything else black.
+enum GroundMode { through, over, add, screen, dim, window, mask, frame, bands, flip, outline, contrast, keyhole }
 
 /// How the figure's own pixels sit on the ground: over it, or blended the same way
 /// as its backdrop.
@@ -73,8 +76,12 @@ T _enumOf<T extends Enum>(List<T> values, Object? name, T fallback) {
 
 double _d(Object? v, double or) => v is num ? v.toDouble() : or;
 
-Map<String, double> _knobs(Object? j) =>
-    j is Map ? {for (final e in j.entries) '${e.key}': (e.value as num).toDouble()} : const {};
+Map<String, double> _knobs(Object? j) => j is Map
+    ? {
+        for (final e in j.entries)
+          if (e.value is num) '${e.key}': (e.value as num).toDouble()
+      }
+    : const {};
 
 /// The pulse field's variants (shaders/show/pulse.frag, by uM1), by name.
 const pulseVariants = ['grid', 'rays', 'smoke', 'stars'];
@@ -83,29 +90,14 @@ int pulseVariant(String? name) {
   return i < 0 ? 0 : i;
 }
 
-extension GroundModeMilk on GroundMode {
-  /// The way MilkDrop goes under a scene by its number (ShowMacros.milkMixes, which
-  /// under.frag reads as uMode); [through] and [over] are not among them.
-  static GroundMode ofMilkMix(int mix) {
-    final i = mix + 2;
-    return i >= 2 && i < GroundMode.values.length ? GroundMode.values[i] : GroundMode.contrast;
-  }
-
-  /// under.frag's number for this way, or -1 for [GroundMode.through] and [GroundMode.over].
-  int get milkMix => index >= 2 ? index - 2 : -1;
-}
-
 class RigGround {
-  const RigGround({this.kind = Ground.black, this.field, this.treatment = 'raw', this.dim = 1, this.knobs = const {}});
+  const RigGround({this.kind = Ground.black, this.field, this.dim = 1, this.knobs = const {}});
 
   final Ground kind;
 
   /// For [Ground.field]: the shader or simulation drawn (`drift`, `glide`, `fluid`,
   /// `veins`…); for [Ground.pulse]: its variant (`grid`, `rays`, `smoke`, `stars`).
   final String? field;
-
-  /// For [Ground.camera]: `raw`, `echo` or `fold`.
-  final String treatment;
 
   /// How much of it, 0..1.
   final double dim;
@@ -120,14 +112,12 @@ class RigGround {
   String get label => switch (kind) {
         Ground.field => 'field ${field ?? '?'}',
         Ground.pulse => 'pulse ${field ?? 'grid'}',
-        Ground.camera => treatment == 'raw' ? 'camera' : 'camera $treatment',
         _ => kind.name,
       };
 
-  RigGround copyWith({Ground? kind, String? field, String? treatment, double? dim, Map<String, double>? knobs}) => RigGround(
+  RigGround copyWith({Ground? kind, String? field, double? dim, Map<String, double>? knobs}) => RigGround(
         kind: kind ?? this.kind,
         field: field ?? this.field,
-        treatment: treatment ?? this.treatment,
         dim: dim ?? this.dim,
         knobs: knobs ?? this.knobs,
       );
@@ -135,7 +125,6 @@ class RigGround {
   Map<String, dynamic> toJson() => {
         'kind': kind.name,
         if (field != null) 'field': field,
-        if (treatment != 'raw') 'treatment': treatment,
         if (dim != 1) 'dim': dim,
         if (knobs.isNotEmpty) 'knobs': knobs,
       };
@@ -143,16 +132,14 @@ class RigGround {
   factory RigGround.fromJson(Map<String, dynamic> j) => RigGround(
         kind: _enumOf(Ground.values, j['kind'], Ground.black),
         field: j['field'] as String?,
-        treatment: '${j['treatment'] ?? 'raw'}',
         dim: _d(j['dim'], 1).clamp(0.0, 1.0),
         knobs: _knobs(j['knobs']),
       );
 
   @override
-  bool operator ==(Object other) =>
-      other is RigGround && other.kind == kind && other.field == field && other.treatment == treatment && other.dim == dim && _sameKnobs(other.knobs, knobs);
+  bool operator ==(Object other) => other is RigGround && other.kind == kind && other.field == field && other.dim == dim && _sameKnobs(other.knobs, knobs);
   @override
-  int get hashCode => Object.hash(kind, field, treatment, dim, knobs.length);
+  int get hashCode => Object.hash(kind, field, dim, knobs.length);
 }
 
 bool _sameKnobs(Map<String, double> a, Map<String, double> b) {
@@ -169,8 +156,6 @@ class RigFigure {
     this.shade = Shade.auto,
     this.dressing = Dressing.auto,
     this.treatment = Treatment.auto,
-    this.camera = 'auto',
-    this.company = 'auto',
     this.style,
     this.knobs = const {},
   });
@@ -185,13 +170,6 @@ class RigFigure {
   /// the hands; null is the figure's own clock choosing.
   final String? style;
 
-  /// The camera: `auto` (the figure's own shot pool), or one shot held (a DanceShot
-  /// or FlockShot by name).
-  final String camera;
-
-  /// The company: `auto`, or one troupe (dancers) or flight (birds) held, by name.
-  final String company;
-
   /// uM1..uM4 for a shader figure.
   final Map<String, double> knobs;
 
@@ -204,7 +182,14 @@ class RigFigure {
   bool get isShader => kind == Figure.kinetic || kind == Figure.blocks || kind == Figure.flash || kind == Figure.glide;
 
   /// A simulation (ui/show/show_sims.dart's kinds): the picture it keeps between frames.
-  bool get isSim => kind == Figure.dancers || kind == Figure.birds || kind == Figure.turntable || kind == Figure.fluid || kind == Figure.veins || kind == Figure.meme || kind == Figure.words;
+  bool get isSim =>
+      kind == Figure.dancers ||
+      kind == Figure.birds ||
+      kind == Figure.turntable ||
+      kind == Figure.fluid ||
+      kind == Figure.veins ||
+      kind == Figure.meme ||
+      kind == Figure.words;
 
   /// A word for a chip or a line: `dancers`, `dancers chrome ascii`, `kinetic`.
   String get label => [
@@ -216,14 +201,12 @@ class RigFigure {
       ].join(' ');
 
   RigFigure copyWith(
-          {Figure? kind, Shade? shade, Dressing? dressing, Treatment? treatment, String? camera, String? company, String? style, bool clearStyle = false, Map<String, double>? knobs}) =>
+          {Figure? kind, Shade? shade, Dressing? dressing, Treatment? treatment, String? style, bool clearStyle = false, Map<String, double>? knobs}) =>
       RigFigure(
         kind: kind ?? this.kind,
         shade: shade ?? this.shade,
         dressing: dressing ?? this.dressing,
         treatment: treatment ?? this.treatment,
-        camera: camera ?? this.camera,
-        company: company ?? this.company,
         style: clearStyle ? null : style ?? this.style,
         knobs: knobs ?? this.knobs,
       );
@@ -233,8 +216,6 @@ class RigFigure {
         if (shade != Shade.auto) 'shade': shade.name,
         if (dressing != Dressing.auto) 'dressing': dressing.name,
         if (treatment != Treatment.auto) 'treatment': treatment.name,
-        if (camera != 'auto') 'camera': camera,
-        if (company != 'auto') 'company': company,
         if (style != null) 'style': style,
         if (knobs.isNotEmpty) 'knobs': knobs,
       };
@@ -244,8 +225,6 @@ class RigFigure {
         shade: _enumOf(Shade.values, j['shade'], Shade.auto),
         dressing: _enumOf(Dressing.values, j['dressing'], Dressing.auto),
         treatment: _enumOf(Treatment.values, j['treatment'], Treatment.auto),
-        camera: '${j['camera'] ?? 'auto'}',
-        company: '${j['company'] ?? 'auto'}',
         style: j['style'] as String?,
         knobs: _knobs(j['knobs']),
       );
@@ -257,12 +236,10 @@ class RigFigure {
       other.shade == shade &&
       other.dressing == dressing &&
       other.treatment == treatment &&
-      other.camera == camera &&
-      other.company == company &&
       other.style == style &&
       _sameKnobs(other.knobs, knobs);
   @override
-  int get hashCode => Object.hash(kind, shade, dressing, treatment, camera, company, style, knobs.length);
+  int get hashCode => Object.hash(kind, shade, dressing, treatment, style, knobs.length);
 }
 
 class RigBlend {
@@ -439,7 +416,13 @@ class ShowRig {
         locks: locks ?? this.locks,
       );
 
-  ShowRig withLock(RigSlot slot, bool on) => copyWith(locks: on ? {...locks, slot} : {for (final l in locks) if (l != slot) l});
+  ShowRig withLock(RigSlot slot, bool on) => copyWith(
+      locks: on
+          ? {...locks, slot}
+          : {
+              for (final l in locks)
+                if (l != slot) l
+            });
 
   /// The numbers a shader or a light can bind to, by dotted name.
   void flatInto(Map<String, double> m) {
@@ -469,12 +452,21 @@ class ShowRig {
         figure: j['figure'] is Map ? RigFigure.fromJson((j['figure'] as Map).cast()) : RigFigure.none,
         blend: j['blend'] is Map ? RigBlend.fromJson((j['blend'] as Map).cast()) : RigBlend.over,
         finish: j['finish'] is Map ? RigFinish.fromJson((j['finish'] as Map).cast()) : RigFinish.plain,
-        locks: {for (final l in (j['locks'] as List? ?? const [])) _enumOf(RigSlot.values, l, RigSlot.ground)},
+        locks: {
+          for (final l in (j['locks'] as List? ?? const []))
+            if (RigSlot.values.any((s) => s.name == l)) _enumOf(RigSlot.values, l, RigSlot.ground)
+        },
       );
 
   @override
   bool operator ==(Object other) =>
-      other is ShowRig && other.ground == ground && other.figure == figure && other.blend == blend && other.finish == finish && other.locks.length == locks.length && other.locks.containsAll(locks);
+      other is ShowRig &&
+      other.ground == ground &&
+      other.figure == figure &&
+      other.blend == blend &&
+      other.finish == finish &&
+      other.locks.length == locks.length &&
+      other.locks.containsAll(locks);
   @override
   int get hashCode => Object.hash(ground, figure, blend, finish, locks.length);
 }

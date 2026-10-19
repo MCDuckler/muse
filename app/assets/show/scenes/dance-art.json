@@ -1,12 +1,12 @@
 {
   "id": "dance-art",
-  "name": "Dancer · Stylized",
+  "name": "Dancer",
   "energy": [
     0.0,
     1.0
   ],
   "sections": [],
-  "priority": 0.3,
+  "priority": 1.6,
   "instant": true,
   "layers": [
     {

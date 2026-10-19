@@ -1,12 +1,13 @@
 // The rig and the look: round trips, the hands over a look, the words.
 import 'package:flutter_test/flutter_test.dart';
+import 'package:muse/src/state/show/show_pool.dart';
 import 'package:muse/src/state/show/show_rig.dart';
 import 'package:muse/src/state/show/show_state.dart';
 
 void main() {
   const rig = ShowRig(
     ground: RigGround(kind: Ground.field, field: 'drift', dim: 0.5, knobs: {'m1': 0.3}),
-    figure: RigFigure(kind: Figure.dancers, shade: Shade.chrome, dressing: Dressing.none, treatment: Treatment.ascii, camera: 'front', company: 'trio', knobs: {'m2': 1}),
+    figure: RigFigure(kind: Figure.dancers, shade: Shade.chrome, dressing: Dressing.none, treatment: Treatment.ascii, style: 'ascii', knobs: {'m2': 1}),
     blend: RigBlend(ground: GroundMode.window, figure: FigureMode.same, strength: 0.7, auto: false),
     finish: RigFinish(trails: 0.3, bloom: 0.9, tone: 0, title: true, where: 'big', particles: ['sparks', 'dust']),
     locks: {RigSlot.ground, RigSlot.finish},
@@ -16,7 +17,7 @@ void main() {
     final back = ShowRig.fromJson(rig.toJson());
     expect(back, rig);
     expect(back.ground.knobs['m1'], 0.3);
-    expect(back.figure.company, 'trio');
+    expect(back.figure.style, 'ascii');
     expect(back.locks, {RigSlot.ground, RigSlot.finish});
     expect(back.finish.particles, ['sparks', 'dust']);
   });
@@ -30,30 +31,28 @@ void main() {
     expect(back.ground.kind, Ground.black);
   });
 
-  test('the ways MilkDrop goes under a scene keep their numbers', () {
-    expect(GroundModeMilk.ofMilkMix(ShowMacros.contrast), GroundMode.contrast);
-    expect(GroundModeMilk.ofMilkMix(0), GroundMode.add);
-    expect(GroundMode.contrast.milkMix, ShowMacros.contrast);
-    expect(GroundMode.over.milkMix, -1);
-    for (var i = 0; i < ShowMacros.milkMixes.length; i++) {
-      expect(GroundModeMilk.ofMilkMix(i).name, ShowMacros.milkMixes[i].$1);
-    }
+  test('the blend modes keep their numbers (under.frag\'s uMode, ws_blend)', () {
+    expect(GroundMode.through.index, 0);
+    expect(GroundMode.over.index, 1);
+    expect(GroundMode.add.index, 2);
+    expect(GroundMode.contrast.index, 11);
+    expect(GroundMode.keyhole.index, 12);
+    expect(GroundMode.values.length, 13, reason: 'a new mode goes at the end, and into under.frag and stage.cpp\'s clamp');
   });
 
-  test('the hands put MilkDrop under a look the way they asked, or take it away', () {
-    const look = ShowRig(figure: RigFigure(kind: Figure.kinetic));
-    final under = rigWithMacros(look, const ShowMacros(milkUnder: true, milkMix: 3));
-    expect(under.ground.kind, Ground.milk);
-    expect(under.blend.ground, GroundMode.window);
-    final bare = rigWithMacros(look, const ShowMacros(milkUnder: false));
-    expect(bare.ground.kind, Ground.black);
-    // A look of MilkDrop itself is left alone.
-    const milk = ShowRig(ground: RigGround.milk);
-    expect(rigWithMacros(milk, const ShowMacros(milkUnder: false)).ground.kind, Ground.milk);
+  test('the blend comes from the answer: as drawn on black, the rule\'s way and its figures elsewhere', () {
+    const p = ShowPool.none;
+    const turntable = RigFigure(kind: Figure.turntable); // lights in the dark
+    expect(p.blendFor(turntable, Ground.black).ground, GroundMode.over);
+    expect(p.blendFor(turntable, Ground.cover).ground, GroundMode.dim, reason: 'lights on a picture: the picture dimmed');
+    expect(p.blendFor(turntable, Ground.cover).figure, FigureMode.over);
+    expect(p.blendFor(const RigFigure(kind: Figure.kinetic), Ground.wash).figure, FigureMode.same, reason: 'a full frame\'s rule says nothing of figures: its own way');
+    // The strength the look had stays.
+    expect(p.blendFor(turntable, Ground.cover, from: const RigBlend(strength: 0.4)).strength, 0.4);
   });
 
   test('the words', () {
-    expect(rig.word, 'field drift / dancers chrome none ascii · window');
+    expect(rig.word, 'field drift / dancers ascii chrome none ascii · window');
     expect(const ShowRig(ground: RigGround.milk, figure: RigFigure(kind: Figure.birds)).word, 'milk / birds');
     expect(rig.withLock(RigSlot.ground, false).locks, {RigSlot.finish});
   });
@@ -84,6 +83,5 @@ void main() {
     expect(st['rig.blend.ground'], GroundMode.window.index);
     final back = ShowState.fromJson(st.toJson());
     expect(back.rig, rig);
-    expect(back.rigFrom, isNull);
   });
 }

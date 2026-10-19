@@ -84,7 +84,7 @@ void main() {
     expect(show.state.rig.blend.ground, GroundMode.window);
     expect(show.locked(RigSlot.blend), isTrue);
     expect(show.state.rig.blend.auto, isFalse);
-    await tapWord('BLEND TOO');
+    await tapWord('BLENDED TOO');
     expect(show.state.rig.blend.figure, FigureMode.same);
     // Back to the rules.
     await tapWord('AS THE SCENE ASKS');
@@ -99,7 +99,8 @@ void main() {
     expect(show.looks, isNotEmpty);
     // The chips are a strip scrolled sideways: a chip past its edge is brought in first.
     Future<void> chip(String name) async {
-      final f = find.text(name).first;
+      // The rig's chip (down the right, after the tabs' lists in the tree).
+      final f = find.text(name).last;
       await tester.ensureVisible(f);
       await tester.pump();
       await tester.tap(f);
@@ -110,10 +111,13 @@ void main() {
     expect(show.pendingLook, isNull, reason: 'nothing plays: landed now');
     await chip('Kinetic');
     expect(show.state.scene, 'kinetic');
-    // The dancers' chip lands the stylized dancers; their style row appears; a style holds.
-    await chip('Dancers');
+    // The dancer chip lands the dancers; their style row appears (the disco among
+    // the styles); a style holds.
+    await chip('Dancer');
     expect(show.state.scene, 'dance-art');
-    // The treatment off, so the conductor's mix does not dress them meanwhile.
+    // The treatment off, so the conductor's mix does not dress them meanwhile; the
+    // disco among their own styles.
+    expect(find.text('DISCO'), findsOneWidget);
     await tester.tap(find.text('OFF'), warnIfMissed: false);
     await tester.pump();
     expect(show.pool.treat['dance-art'], 'raw');

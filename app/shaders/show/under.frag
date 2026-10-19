@@ -22,6 +22,9 @@
 //   9 flip      the layer over the ground — and the ground over the layer on each kick
 //  10 outline   the ground's edges only, as lines under the layer
 //  11 contrast  the difference of the two: where they agree is dark
+//  12 keyhole   the figure is a window onto the ground: the ground where the figure
+//               is, black everywhere else (needs the figure's coverage: exact on the
+//               native stage, the marked bodies on a canvas)
 //
 // uFigureMode: 0 the figure's own pixels go over the ground as drawn; 1 they are
 // blended like the backdrop.
@@ -115,6 +118,12 @@ void main() {
   float cov = uCoverage > 0.5 ? (sa.a >= 0.98 ? 1.0 : clamp(sa.a, 0.0, 1.0)) : step(0.98, sa.a) * step(sa.a, 0.9985);
   vec3 m = ground(uv);
   int mode = int(uMode + 0.5);
+  if (mode == 12) {
+    // The keyhole: the ground through the figure, black round it; the strength eases
+    // the figure's own picture back in.
+    fragColor = vec4(mix(s, m * cov, uStrength), 1.0);
+    return;
+  }
   vec3 back = blendOf(mode, s, m, uv);
   vec3 fig = uFigureMode > 0.5 ? back : s;
   vec3 col = mix(back, fig, cov);

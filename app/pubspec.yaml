@@ -137,11 +137,7 @@ flutter:
     - shaders/show/blur.frag
     - shaders/show/composite.frag
     - shaders/show/finish.frag
-    - shaders/show/tunnel.frag
     - shaders/show/drift.frag
-    - shaders/show/build.frag
-    - shaders/show/kaleido.frag
-    - shaders/show/grid.frag
     - shaders/show/flash.frag
     - shaders/show/echo.frag
     - shaders/show/fold.frag
@@ -180,3 +176,17 @@ flutter:
     - family: PermanentMarker
       fonts:
         - asset: assets/fonts/PermanentMarker.ttf
+    # The words' faces (ui/show/show_words.dart), all OFL: a tall poster face, an
+    # editorial italic serif, a wide geometric; Archivo, Courier Prime, Permanent
+    # Marker and Manrope above serve the other styles.
+    - family: BebasNeue
+      fonts:
+        - asset: assets/fonts/BebasNeue-Regular.ttf
+    - family: InstrumentSerif
+      fonts:
+        - asset: assets/fonts/InstrumentSerif-Regular.ttf
+        - asset: assets/fonts/InstrumentSerif-Italic.ttf
+          style: italic
+    - family: Syne
+      fonts:
+        - asset: assets/fonts/Syne.ttf

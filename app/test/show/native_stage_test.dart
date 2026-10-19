@@ -85,13 +85,13 @@ void main() {
     expect(looks['milk']!.rig.ground.kind, equals(Ground.milk));
     expect(looks['milk']!.rig.figure.kind, Figure.none);
     expect(looks['kinetic']!.rig.figure.kind, Figure.kinetic);
-    expect(looks['drift']!.rig.ground.kind, Ground.field);
-    expect(looks['drift']!.rig.ground.field, 'drift');
-    expect(looks['echo']!.rig.ground.kind, Ground.camera);
-    expect(looks['echo']!.rig.ground.treatment, 'echo');
+    // A shader drawn whole is a figure (blended with the director's ground like any);
+    // the room through a shader too. MilkDrop alone keeps its own ground.
+    expect(looks['drift']!.rig.figure.kind, Figure.field);
+    expect(looks['drift']!.rig.ground.kind, Ground.black);
+    expect(looks['echo']!.rig.figure.kind, Figure.room);
+    expect(looks['fold']!.rig.figure.kind, Figure.room);
     expect(looks['dance-art']!.rig.figure.kind, Figure.dancers);
-    expect(looks['dance-art']!.rig.figure.dressing, Dressing.none);
-    expect(looks['dance-disco']!.rig.figure.dressing, Dressing.disco);
     expect(looks['flock']!.rig.figure.kind, Figure.birds);
     expect(looks['veins']!.rig.figure.kind, Figure.veins);
     expect(looks['siebenschlaefer']!.rig.figure.kind, Figure.meme);

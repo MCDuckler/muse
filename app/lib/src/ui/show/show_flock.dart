@@ -64,7 +64,8 @@ import 'show_flock_bird.dart';
 import 'show_meme.dart' show MemeClock;
 import 'show_meme_bank.dart' show MemeMood, memeHash;
 import 'show_particles.dart' show particleSprite;
-import '../../state/show/show_pool.dart' show QualityPool, StylePool;
+import '../../state/show/show_pool.dart' show QualityPool, ShowPool, StylePool;
+import '../../state/show/show_rig.dart' show Figure;
 import 'show_sims.dart';
 
 /// Where the flock is going, four bars at a time.
@@ -120,11 +121,16 @@ class FlockClock {
       MemeMood.vibe => FlockLook.values,
     };
     // The image treatments are the conductor's (the frame's rig's treatment), as
-    // for every scene: this clock picks the flock's own. The looks the pool switched
-    // off are out.
-    final pool = [for (final l in all) if (!treatmentFxMode.containsKey(l.name) && !StylePool.off.contains(l.name)) l];
+    // for every scene: this clock picks the flock's own — those switched on, and
+    // that the rules let stand on the ground on now (the white paper and the sky off
+    // MilkDrop).
+    final pool = [for (final l in all) if (!treatmentFxMode.containsKey(l.name) && StylePool.allows(Figure.birds, l.name)) l];
     if (pool.isEmpty) return not ?? FlockLook.ink;
-    return _pick(pool, memeHash(salt % 9973, n, 127), not);
+    // As likely as the hands want each (how often).
+    final d = memeHash(salt % 9973, n, 127);
+    var l = ShowPool.pickWeighted(pool, d, (x) => StylePool.weight(Figure.birds, x.name))!;
+    if (l == not && pool.length > 1) l = pool[(pool.indexOf(l) + 1) % pool.length];
+    return l;
   }
 
   static T _pick<T>(List<T> pool, double d, T? not) {
@@ -326,7 +332,8 @@ class FlockSteer {
 /// The flock's rules and numbers: the birds' places, speeds and wingbeats, moved on
 /// a frame at a time. Nothing drawn.
 class FlockModel {
-  FlockModel({int seed = 5}) : _rng = math.Random(seed) {
+  // Its own seed: not the fluid's (5), so the two never move in step.
+  FlockModel({int seed = 23}) : _rng = math.Random(seed) {
     for (var i = 0; i < most; i++) {
       seedOf[i] = _rng.nextDouble();
       size[i] = 0.8 + 0.4 * _rng.nextDouble();
@@ -917,7 +924,7 @@ class FlockSim implements SimLayer {
   double _t = 0;
   double? _dropAt, _awayWas;
   String? _sectionWas;
-  int _flightSlot = -999, _sectionSlot = -1, _cut = -999, _lookN = 0;
+  int _flightSlot = -999, _sectionSlot = -1, _cut = -999;
   Flight _flight = Flight.murmur;
   Flight? _flightWas;
   double _flightAt = -99;
@@ -1028,12 +1035,13 @@ class FlockSim implements SimLayer {
     if (flightK >= 1) _flightWas = null;
 
     // ---- the look: a section at a time — and at once when a look from the frame
-    // (the hands', the conductor's treatment) is let go, so it does not linger.
+    // (the hands', the conductor's treatment) is let go, so it does not linger. By
+    // the slot, as the dancers': the same on every stage, and after a seek.
     final styled = st.rig.figure.style;
     final letGo = styled == null && _styledWas != null;
     _styledWas = styled;
     if (_look == null || dropNow || sectionNow || letGo) {
-      _look = _forcedLook ?? FlockClock.look(mood, salt, _lookN++, not: letGo ? null : _look);
+      _look = _forcedLook ?? FlockClock.look(mood, salt, n, not: letGo ? null : _look);
       if (letGo) _want = FlockClock.count(_flight, mood, energy, look: _look);
     }
     // The hands' own look, from the frame (the show's rig): on at once.
@@ -1042,6 +1050,8 @@ class FlockSim implements SimLayer {
       if (want != null) _look = want;
       _want = FlockClock.count(_flight, dropNow ? MemeMood.rage : mood, energy, look: _look);
     }
+    // Told back, so the rules for one look of the flock apply (show_pool.dart).
+    if (_look != null) StylePool.now[Figure.birds] = _look!.name;
     final look = _look!;
 
     // ---- the dancer's handoff: on the first frame after her, the birds take her

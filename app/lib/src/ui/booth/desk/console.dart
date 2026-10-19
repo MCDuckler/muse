@@ -305,7 +305,12 @@ class _PadState extends State<Pad> {
     );
     return widget.tooltip == null
         ? face
-        : Tooltip(message: widget.tooltip!, waitDuration: const Duration(milliseconds: 500), child: face);
+        // A pad with a hold of its own keeps the hold: its tooltip is hover only.
+        : Tooltip(
+            message: widget.tooltip!,
+            waitDuration: const Duration(milliseconds: 500),
+            triggerMode: widget.onLongPress != null ? TooltipTriggerMode.manual : null,
+            child: face);
   }
 }
 

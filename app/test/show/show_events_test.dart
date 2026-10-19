@@ -102,4 +102,24 @@ void main() {
     expect(back.onMaster, isTrue);
     expect(back.at.millisecondsSinceEpoch, 1234);
   });
+
+  test('a record with no grid still turns bars and phrases, by the clock', () {
+    ShowState at(int ms) => ShowState(
+          now: DateTime(2026).add(Duration(milliseconds: ms)),
+          a: ShowDeck(name: 'A', trackId: 7, playing: true, position: Duration(milliseconds: ms)),
+          b: const ShowDeck(name: 'B'),
+        );
+    // 120 to the minute: a bar every two seconds, a phrase every eight bars.
+    final bars = <ShowEvent>[];
+    ShowState? prev;
+    for (var ms = 0; ms <= 32000; ms += 100) {
+      final next = at(ms);
+      bars.addAll(eventsBetween(prev, next).where((e) => e.kind == ShowEventKind.bar || e.kind == ShowEventKind.phrase));
+      prev = next;
+    }
+    expect(bars.where((e) => e.kind == ShowEventKind.bar).length, 16);
+    expect(bars.where((e) => e.kind == ShowEventKind.phrase).length, 2);
+    expect(bars.first.data['guessed'], isTrue);
+    // No beats said: nothing to pulse to.
+  });
 }

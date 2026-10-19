@@ -78,13 +78,18 @@ WS_API int ws_dance_mesh(int positions, const float* pos, const float* nrm, cons
 WS_API void ws_dance_skin(int mesh, int width, int height, const uint8_t* rgba);
 WS_API void ws_dance_texture(const char* name, int width, int height, const uint8_t* rgba, int flipRows);
 WS_API void ws_dance_frame(const float* commands, int n);
+// The words (lib/src/ui/show/show_words.dart), drawn where the scene is "@words":
+// the line's picture goes up by name (ws_dance_texture "words.t0"/"words.t1") and
+// the frame's numbers come here — the floats of shaders/show/sim/words_fx.frag in the
+// order the file declares them, as Flutter's setFloat(i) numbers them.
+WS_API void ws_words(const float* values, int n);
 // The ground under the figure (lib/src/state/show/show_rig.dart's RigGround): its
 // kind (0 black 1 wash 2 milk 3 camera 4 field 5 cover 6 pulse), a field's shader by
 // name (else null), how much of it, and uM1..4 for the field. MilkDrop must be open
 // for a milk ground.
 WS_API void ws_ground(int kind, const char* field, float dim, const float* knobs4);
 // The blend (RigBlend; shaders/show/under.frag): the backdrop's way (GroundMode
-// 0..11), the figure's (0 over, 1 the same, 2 as the figure asks: over for the plain
+// 0..12, 12 the keyhole), the figure's (0 over, 1 the same, 2 as the figure asks: over for the plain
 // dancers, the same for the rest), which pixels are the figure (0 the alpha 254/255
 // band, 1 the alpha — the dancers' frame carries its coverage), and how much of the
 // blend (0: none drawn).

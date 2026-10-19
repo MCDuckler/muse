@@ -20,12 +20,12 @@ import 'show_events.dart';
 import 'show_feed.dart';
 import 'show_genome.dart';
 import 'show_palette.dart';
+import 'show_pool.dart';
 import 'show_rig.dart';
 import 'show_state.dart';
 
 class DemoShowFeed extends ChangeNotifier implements ShowFeed {
-  DemoShowFeed({this.bpm = 128, int seed = 3, List<SceneMeta> scenes = const [], this.looks = const {}})
-      : director = ShowDirector(scenes: scenes, seed: seed) {
+  DemoShowFeed({this.bpm = 128, int seed = 3, List<SceneMeta> scenes = const [], this.looks = const {}}) : director = ShowDirector(scenes: scenes, seed: seed) {
     _state = _blank(DateTime.now());
   }
 
@@ -76,7 +76,21 @@ class DemoShowFeed extends ChangeNotifier implements ShowFeed {
     'and the room began to turn',
     'this is where we meet',
     'nothing left to learn',
+    'hold the night a little longer than it wants to be held',
+    'every window open',
+    'say it once and say it like you mean it',
+    'gone',
   ];
+
+  /// WETOWL_DEMO_SING=1: the record sings in every section but the intro (for trying
+  /// the words without waiting for the breakdown).
+  static bool singAll = () {
+    try {
+      return Platform.environment['WETOWL_DEMO_SING'] == '1';
+    } catch (_) {
+      return false;
+    }
+  }();
 
   /// The sections of the sixty-four-bar form, with the energy of each.
   static const _form = [
@@ -116,7 +130,8 @@ class DemoShowFeed extends ChangeNotifier implements ShowFeed {
     final barPhase = (beatInBar + beatPhase) / 4;
     final formBar = barIndex % 64;
     final sec = _form.firstWhere((s) => formBar >= s.$2 && formBar < s.$3);
-    final (label, from, to, energy, sung) = sec;
+    final (label, from, to, energy, sungHere) = sec;
+    final sung = sungHere || (singAll && label != 'intro');
     final sectionK = ((formBar - from) + barPhase) / (to - from);
     final barsLeft = (to - from) - ((formBar - from) + barPhase);
     // The next drop: the next section called drop, in beats.
@@ -198,7 +213,12 @@ class DemoShowFeed extends ChangeNotifier implements ShowFeed {
       level: 1,
       audio: audio,
     );
-    final palette = paletteFor(coverColor: Color(rec.$4), keyHue: hue, section: label, colourTurn: macros.colour + _genome['palette.turn'], apart: _genome.isEmpty ? null : _genome['palette.apart']);
+    final palette = paletteFor(
+        coverColor: Color(rec.$4),
+        keyHue: hue,
+        section: label,
+        colourTurn: macros.colour + _genome['palette.turn'],
+        apart: _genome.isEmpty ? null : _genome['palette.apart']);
     final hit = macros.hit;
     var st = ShowState(
       now: now,
@@ -221,19 +241,22 @@ class DemoShowFeed extends ChangeNotifier implements ShowFeed {
       m = m.copyWith(hit: (hit - dt / 0.35).clamp(0.0, 1.0));
     }
     macros = m;
-    final look = looks[d.scene], leaving = looks[d.from];
-    var rig = look == null ? ShowRig.none : rigWithMacros(look.rig, m);
-    // A ground asked for from outside, for a look at one on the demo:
-    // WETOWL_SHOW_GROUND=wash|milk|camera|cover|pulse:rays|field:drift.
-    final forced = _forcedGround;
-    if (forced != null) rig = rig.copyWith(ground: forced, blend: rig.blend.copyWith(ground: GroundMode.contrast));
+    final look = looks[d.scene];
+    var rig = look?.rig ?? ShowRig.none;
+    // The ground: MilkDrop under every figure, as the booth's director mostly has
+    // it, or one asked for from outside, for a look at one on the demo:
+    // WETOWL_SHOW_GROUND=wash|milk|camera|cover|pulse:rays|field:drift. Blended by
+    // the shipped rules.
+    if (rig.figure.kind != Figure.none) {
+      final ground = _forcedGround ?? (rig.ground.kind == Ground.black ? RigGround.milk : rig.ground);
+      rig = rig.copyWith(ground: ground, blend: ShowPool.none.blendFor(ShowPool.lookupFigure(rig.figure), ground.kind, from: rig.blend));
+    }
     st = st.copyWith(
       scene: d.scene,
       sceneFrom: d.from,
       sceneK: d.k,
       clearSceneFrom: d.from == null,
       rig: rig,
-      rigFrom: leaving == null ? null : rigWithMacros(leaving.rig, m),
       macros: m,
     );
     _state = st;
@@ -243,8 +266,7 @@ class DemoShowFeed extends ChangeNotifier implements ShowFeed {
     }
   }
 
-  static ShowState _blank(DateTime now) =>
-      ShowState(now: now, a: const ShowDeck(name: 'A'), b: const ShowDeck(name: 'B'));
+  static ShowState _blank(DateTime now) => ShowState(now: now, a: const ShowDeck(name: 'A'), b: const ShowDeck(name: 'B'));
 
   @override
   void dispose() {

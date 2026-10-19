@@ -49,6 +49,7 @@ import 'show_dance_draw.dart';
 import 'show_dance_surface.dart';
 import 'show_debug.dart';
 import 'show_sims.dart';
+import 'show_words.dart';
 
 final class _Stats extends Struct {
   @Int64()
@@ -227,8 +228,8 @@ class NativeStage {
   static String? openError;
 
   /// What it can draw: one shader, sampling nothing but MilkDrop (which it draws
-  /// itself, in its own context); or the dancers.
-  static bool canDraw(Scene? scene) => isShader(scene) || isDance(scene);
+  /// itself, in its own context); the dancers; the words.
+  static bool canDraw(Scene? scene) => isShader(scene) || isDance(scene) || isWords(scene);
 
   /// Why it cannot draw [scene] (null when it can).
   static String? whyNotScene(Scene? scene) {
@@ -276,6 +277,10 @@ class NativeStage {
   static bool isDance(Scene? scene) =>
       scene != null && scene.layers.length == 1 && (scene.layers.first.sim?.startsWith('dance.') ?? false);
 
+  /// The words (show_words.dart): the line's pictures go up as textures, the frame is
+  /// the sim shader's floats (ws_words).
+  static bool isWords(Scene? scene) => scene != null && scene.layers.length == 1 && scene.layers.first.sim == 'words';
+
   static const _channel = MethodChannel('wetowl/stage');
 
   final DynamicLibrary _lib;
@@ -292,7 +297,17 @@ class NativeStage {
   late final _trails = _lib.lookupFunction<Void Function(Pointer<Float>, Int32), void Function(Pointer<Float>, int)>('ws_trails');
   late final _ground = _lib.lookupFunction<Void Function(Int32, Pointer<Utf8>, Float, Pointer<Float>), void Function(int, Pointer<Utf8>, double, Pointer<Float>)>('ws_ground');
   late final _blend = _lib.lookupFunction<Void Function(Int32, Int32, Int32, Float), void Function(int, int, int, double)>('ws_blend');
-  String? _groundOn;
+  late final _errorFn = _lib.lookupFunction<Pointer<Utf8> Function(), Pointer<Utf8> Function()>('ws_error');
+
+  /// What the stage last said went wrong (a context, a shader, MilkDrop), or ''.
+  String get error {
+    try {
+      return _errorFn().toDartString();
+    } catch (_) {
+      return '';
+    }
+  }
+  (RigGround, String, int?)? _groundOn;
   (RigBlend, bool)? _blendOn;
   final Pointer<Float> _scratch = calloc<Float>(16);
   late final _danceMesh = _lib.lookupFunction<
@@ -303,6 +318,8 @@ class NativeStage {
   late final _danceTexture = _lib.lookupFunction<Void Function(Pointer<Utf8>, Int32, Int32, Pointer<Uint8>, Int32),
       void Function(Pointer<Utf8>, int, int, Pointer<Uint8>, int)>('ws_dance_texture');
   late final _danceFrame = _lib.lookupFunction<Void Function(Pointer<Float>, Int32), void Function(Pointer<Float>, int)>('ws_dance_frame');
+  late final _wordsFn = _lib.lookupFunction<Void Function(Pointer<Float>, Int32), void Function(Pointer<Float>, int)>('ws_words');
+  final Pointer<Float> _wordsBuf = calloc<Float>(512);
   final _meshIds = Expando<int>();
   final _skinsSent = <int>{};
   bool _glyphsSent = false;
@@ -409,6 +426,13 @@ class NativeStage {
     _cmds.asTypedList(cmds.length).setAll(0, cmds);
     _danceFrame(_cmds, cmds.length);
   }
+  /// The words' frame: the sim shader's floats in the file's order (WordsParams).
+  void wordsFrame(Float32List v) {
+    final n = math.min(v.length, 512);
+    _wordsBuf.asTypedList(n).setAll(0, v.sublist(0, n));
+    _wordsFn(_wordsBuf, n);
+  }
+
   String? _fromOn, _particlesOn;
   double? _rateOn;
 
@@ -533,7 +557,7 @@ class NativeStage {
     _flash(stageWhite(st), st.macros.blackout ? 1 : 0, freeze ? 1 : 0);
     if (freeze) return;
     final layer = scene.layers.first;
-    final name = isDance(scene) ? '@dance' : layer.shader!;
+    final name = isDance(scene) ? '@dance' : isWords(scene) ? '@words' : layer.shader!;
     if (name != _sceneOn) {
       _name(_scene, name);
       _sceneOn = name;
@@ -575,25 +599,31 @@ class NativeStage {
       Ground.pulse => 'pulse',
       _ => '',
     };
-    final groundKey = '${g.kind.index}|$field|${g.field}|${g.dim}|${g.knobs}';
+    // By value (the record's own knobs come with the record), not a string a tick.
+    final groundKey = (g, field, st.master.trackId);
     if (groundKey != _groundOn) {
       _groundOn = groundKey;
+      // A field's knobs as the Flutter stage reads them: the record's genome where the
+      // shader takes it (the salts), the look's otherwise.
+      final fieldLayer = field.isEmpty ? null : SceneLayer(shader: field, knobs: g.knobs);
       for (var k = 1; k <= 4; k++) {
-        _scratch[k - 1] = g.knobs['m$k'] ?? 0;
+        _scratch[k - 1] = fieldLayer != null ? layerKnob(fieldLayer, k, st) : (g.knobs['m$k'] ?? 0);
       }
       if (g.kind == Ground.pulse) _scratch[0] = pulseVariant(g.field).toDouble();
       final n = field.toNativeUtf8();
       _ground(g.kind.index, n, g.dim, _scratch);
       calloc.free(n);
     }
-    // The figure's way: the hands' (locked), or as the figure asks (2: the plain
-    // dancers over the ground whole, the rest the way their backdrop goes). The
-    // dancers' frame carries its coverage in its alpha (dance.h); a shader's does not.
+    // The figure's way, as the rules or the hands decided it (show_pool.dart's
+    // figureModeFor: the plain dancers and the words over, the rest blended) — the
+    // same number the Flutter stage is sent. The dancers' frame carries its coverage
+    // in its alpha (dance.h); a shader's does not.
     final dance = isDance(scene);
-    final blendKey = (rig.blend, dance);
+    final coverage = dance || isWords(scene);
+    final blendKey = (rig.blend, coverage);
     if (blendKey != _blendOn) {
       _blendOn = blendKey;
-      _blend(rig.blend.ground.index, rig.blend.auto ? 2 : rig.blend.figure.index, dance ? 1 : 0, rig.blend.strength);
+      _blend(rig.blend.ground.index, rig.blend.figure.index, coverage ? 1 : 0, rig.blend.strength);
     }
     final pal = st.palette;
     var i = 0;
@@ -822,6 +852,7 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
   Size? _px;
   bool _opening = false;
   DanceSim? _dance;
+  WordsSim? _words;
   Duration? _lastTick;
   double _scale = 1;
   bool _parked = false;
@@ -896,6 +927,18 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
     // The treatment over the figure, where its rig asks for one the figure does not
     // draw as its own style: the Flutter stage's pass, here.
     if (stage.treats) stage.treat(st, (_px?.height ?? 720) * _scale);
+    // The words: the line set here, its picture up to the stage once, the frame's
+    // numbers every tick.
+    if (NativeStage.isWords(scene)) {
+      final px = _px;
+      if (px != null) {
+        final ws = _words ??= WordsSim(upload: (name, w, h, rgba) => NativeStage.instance?.texture(name, w, h, rgba));
+        stage.wordsFrame(ws.native(st, st.macros.freeze ? 0 : dt, px.width.round(), px.height.round()));
+      }
+    } else if (_words != null) {
+      _words!.dispose();
+      _words = null;
+    }
     // The room as the ground: the camera on, each new frame up to the stage; the
     // cover as the ground: the record's, once.
     final ground = st.rig.ground.kind;
@@ -987,11 +1030,20 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
       if (id == null) return _giveUp('it would not open');
       setState(() => _texture = id);
       // A stage that draws nothing (no context to share, a driver that will not, a
-      // window hidden so the texture is never asked for) is given up for a while
-      // rather than left black.
-      _watch = Timer(watchFor, () {
-        final s = NativeStage.instance?.stats();
-        if (s == null || s.frames == _framesAtOpen) _giveUp('no frame in ${watchFor.inSeconds} s');
+      // window hidden so the texture is never asked for, a thread that stopped later)
+      // is given up for a while rather than left black: its frames must move on every
+      // [watchFor], parked or not (parked is half a frame a second).
+      var seen = _framesAtOpen;
+      _watch = Timer.periodic(watchFor, (t) {
+        final stage = NativeStage.instance;
+        final s = stage?.stats();
+        if (s == null || s.frames == seen) {
+          t.cancel();
+          final said = stage?.error ?? '';
+          _giveUp('no frame in ${watchFor.inSeconds} s${said.isEmpty ? '' : ': $said'}');
+          return;
+        }
+        seen = s.frames;
       });
       final size = _px;
       if (size != null && size != px) unawaited(NativeStage.resize(size.width.round(), size.height.round(), 1));
@@ -1017,6 +1069,7 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
   void dispose() {
     if (MilkFeed.shared.rawFrames == _milkFrame) MilkFeed.shared.rawFrames = null;
     _dance?.dispose();
+    _words?.dispose();
     _covers.dispose();
     NativeStage.drawing = false;
     _watch?.cancel();

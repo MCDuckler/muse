@@ -57,6 +57,7 @@
 #endif
 
 #include <atomic>
+#include <cctype>
 #include <deque>
 #include <map>
 #include <memory>
@@ -313,6 +314,9 @@ struct Stage {
   // the thread
   std::thread thread;
   std::atomic<bool> running{false};
+  // The loop's nap between frames, cut short by ws_stop.
+  std::mutex napLock;
+  std::condition_variable nap;
   // asked for (any thread)
   std::mutex lock;
   int width = 1280, height = 720;
@@ -341,6 +345,8 @@ struct Stage {
   float blendStrength = 1;
   // The treatment over the figure (ws_treat): mode 0 none.
   float treat[WS_TREAT] = {};
+  // The words' frame (ws_words): the sim shader's floats in the file's order.
+  std::vector<float> words;
   void (*onFrame)(void*) = nullptr;
   void* onFrameUser = nullptr;
   // drawn (the stage's thread)
@@ -359,7 +365,6 @@ struct Stage {
   // the working size the thread chose, against the frames it manages
   float autoScale = 1;
   int late = 0, onTime = 0;
-  bool trailFresh = true;
   std::string trailScene;
   GLenum workFormat = GL_RGBA8;
   bool floatTargets = false;
@@ -529,6 +534,42 @@ void treatPass(const float* q, Target& t, Target& via) {
   glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
 }
 
+// The words (ui/show/show_words.dart): the record's line set in type, rasterised by
+// Dart into a picture per line and sent up by name ("words.t0", "words.t1"), drawn
+// through the Flutter stage's own sim shader (shaders/show/sim/words_fx.frag) with
+// its floats in the order the file declares them — what Dart's setFloat(i) does on
+// the Flutter stage, so the two draw the same frame from the same numbers. A sampler
+// uX is the texture "words.x" (lower case); uGround is the ground's picture.
+void drawWords(Target& t, const std::vector<float>& v, GLuint groundTex) {
+  const glsl::Program* p = S->programs.get("sim/words_fx");
+  t.bind();
+  if (!p) {
+    glClearColor(0, 0, 0, 0);
+    glClear(GL_COLOR_BUFFER_BIT);
+    return;
+  }
+  glUseProgram(p->id);
+  glsl::setFloats(*p, v.data(), (int)v.size());
+  if (const GLint at = p->loc("uResolution"); at >= 0) glUniform2f(at, (float)t.w, (float)t.h);
+  // Straight colour for the blend's mix by the coverage; premultiplied where the layer
+  // goes out whole (no blend: the finish reads the colour alone).
+  if (const GLint at = p->loc("uPremul"); at >= 0) glUniform1f(at, groundTex ? 0.0f : 1.0f);
+  if (const GLint at = p->loc("wsHeight"); at >= 0) glUniform1f(at, (float)t.h);
+  int unit = 0;
+  for (const auto& name : p->samplers) {
+    GLuint tex = 0;
+    if (name == "uGround") {
+      tex = groundTex;
+    } else if (name.size() > 1 && name[0] == 'u') {
+      std::string key = "words." + name.substr(1);
+      for (auto& ch : key) ch = (char)std::tolower((unsigned char)ch);
+      tex = S->dance.texture(key);
+    }
+    bindTex(p->id, name.c_str(), unit++, tex ? tex : S->black);
+  }
+  drawQuad();
+}
+
 // One frame into out[slot].
 void frame(int slot) {
   int W, H; float sc; std::string sceneName, fromName, kinds, groundField; float post[6]; float common[WS_COMMON];
@@ -536,6 +577,7 @@ void frame(int slot) {
   int groundKind, blendGround, blendFigure, blendCoverage;
   float treat[WS_TREAT];
   bool freeze, hasRecipe;
+  std::vector<float> wordsV;
   {
     std::lock_guard<std::mutex> g(S->lock);
     W = S->width; H = S->height; sc = S->scale * S->autoScale; sceneName = S->scene;
@@ -550,7 +592,9 @@ void frame(int slot) {
     std::memcpy(groundKnobs, S->groundKnobs, sizeof groundKnobs);
     blendGround = S->blendGround; blendFigure = S->blendFigure; blendCoverage = S->blendCoverage; blendStrength = S->blendStrength;
     std::memcpy(treat, S->treat, sizeof treat);
+    wordsV = S->words;
   }
+  const bool wordsScene = sceneName == "@words";
   const auto now = Clock::now();
   double dt = S->lastFrame.time_since_epoch().count() == 0 ? 1.0 / 60 : std::chrono::duration<double>(now - S->lastFrame).count();
   S->lastFrame = now;
@@ -561,7 +605,7 @@ void frame(int slot) {
   glDisable(GL_DEPTH_TEST);
 
   // 0. MilkDrop, where a scene samples it: its commands, then its frame.
-  const glsl::Program* p = sceneName == "@dance" ? nullptr : S->programs.get(sceneName);
+  const glsl::Program* p = sceneName == "@dance" || wordsScene ? nullptr : S->programs.get(sceneName);
   const glsl::Program* leaving = fromName.empty() || fromK >= 1 ? nullptr : S->programs.get(fromName);
   milkCommands();
   auto samplesMilk = [](const glsl::Program* q) {
@@ -634,6 +678,8 @@ void frame(int slot) {
     S->scratch.make(w, h, S->workFormat);
     S->dance.draw(S->work.fbo, S->work.tex, w, h, S->programs, S->scratch.fbo);
     glBindVertexArray(S->vao);
+  } else if (wordsScene) {
+    drawWords(S->work, wordsV, blendNow ? S->ground.tex : 0);
   } else {
     drawScene(p, S->work, common, nullptr, milkTex);
   }
@@ -645,7 +691,8 @@ void frame(int slot) {
   // 1b. the particles, added to the scene's light; a new scene starts them afresh
   if (S->particleScene != sceneName) { S->particles.clear(); S->particleScene = sceneName; }
   if (!kinds.empty()) {
-    ParticleInputs in{common[9], common[7], common[18], common[17], common[13],
+    // common[i + 1] holds kCommon[i]: uKick 7, uEnergy 5, uBuild 16, uDropNear 15, uHigh 10.
+    ParticleInputs in{common[8], common[6], common[17], common[16], common[11],
                       {palette[0], palette[1], palette[2]}, {palette[6], palette[7], palette[8]}, common[2]};
     S->particleData.clear();
     size_t at = 0;
@@ -701,7 +748,7 @@ void frame(int slot) {
       set("uTime", common[2]);
       // The figure's way asked for, or as the figure asks (2): the plain dancers go
       // over the ground whole, every other figure the way its backdrop does.
-      const int figureMode = blendFigure == 2 ? (sceneName == "@dance" && S->dance.plainThisFrame() ? 0 : 1) : blendFigure;
+      const int figureMode = blendFigure == 2 ? ((sceneName == "@dance" && S->dance.plainThisFrame()) || wordsScene ? 0 : 1) : blendFigure;
       set("uFigureMode", (float)figureMode);
       set("uCoverage", (float)blendCoverage);
       set("uStrength", blendStrength);
@@ -720,7 +767,11 @@ void frame(int slot) {
   // 2. the trails, with the record's recipe where the scene takes it
   Target* current = &S->work;
   const float trails = post[0];
-  if (trails > 0) {
+  if (trails > 0 && freeze && S->trailScene == sceneName && S->trailA.tex && S->trailA.w == w && S->trailA.h == h) {
+    // Held still: the last trails as they were (fed the same frame again and again,
+    // the feedback would brighten a frozen picture).
+    current = &S->trailA;
+  } else if (trails > 0) {
     const glsl::Program* fb = S->programs.get("feedback");
     if (fb) {
       const bool fresh = S->trailScene != sceneName || S->trailA.w != w || S->trailA.h != h;
@@ -869,7 +920,6 @@ void tearDown() {
     }
     S->published = S->shown = -1;
   }
-  S->trailFresh = true;
   S->trailScene.clear();
   if (S->milkOpen) {
     S->milk.close();
@@ -1015,7 +1065,10 @@ void run() {
       next += std::chrono::microseconds((int64_t)(1e6 / fps));
       const auto now = Clock::now();
       if (next < now) next = now;
-      std::this_thread::sleep_until(next);
+      // Until the next frame, or a stop (parked at half a frame a second, a plain
+      // sleep held ws_stop — and the thread that called it — for up to two seconds).
+      std::unique_lock<std::mutex> nap(S->napLock);
+      S->nap.wait_until(nap, next, [] { return !S->running.load(); });
     }
   }
   tearDown();
@@ -1173,7 +1226,11 @@ WS_API const char* ws_error(void) { return S ? S->error.c_str() : ""; }
 
 WS_API void ws_stop(void) {
   if (!S) return;
-  S->running = false;
+  {
+    std::lock_guard<std::mutex> g(S->napLock);
+    S->running = false;
+  }
+  S->nap.notify_all();
   if (S->thread.joinable()) {
     S->thread.join();
     // The thread let go of everything it made (tearDown); the context goes with it.
@@ -1292,6 +1349,13 @@ WS_API void ws_dance_frame(const float* commands, int n) {
   S->dance.setCommands(commands, n);
 }
 
+WS_API void ws_words(const float* values, int n) {
+  if (!S) S = new Stage();
+  std::lock_guard<std::mutex> g(S->lock);
+  if (!values || n <= 0) S->words.clear();
+  else S->words.assign(values, values + std::min(n, 512));
+}
+
 WS_API void ws_ground(int kind, const char* field, float dim, const float* knobs4) {
   if (!S) S = new Stage();
   std::lock_guard<std::mutex> g(S->lock);
@@ -1304,7 +1368,8 @@ WS_API void ws_ground(int kind, const char* field, float dim, const float* knobs
 WS_API void ws_blend(int ground, int figure, int coverage, float strength) {
   if (!S) S = new Stage();
   std::lock_guard<std::mutex> g(S->lock);
-  S->blendGround = std::clamp(ground, 0, 11);
+  // GroundMode's index (lib/src/state/show/show_rig.dart): 0 through … 11 contrast, 12 keyhole.
+  S->blendGround = std::clamp(ground, 0, 12);
   S->blendFigure = std::clamp(figure, 0, 2);
   S->blendCoverage = coverage ? 1 : 0;
   S->blendStrength = std::clamp(strength, 0.0f, 1.0f);

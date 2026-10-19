@@ -255,7 +255,9 @@ void main() {
       final a = DanceClock.art(MemeMood.vibe, 5, n);
       expect(DanceClock.art(MemeMood.vibe, 5, n + 1, not: a), isNot(a));
     }
-    expect([DanceArt.trails, DanceArt.chrono, DanceArt.mono], contains(DanceClock.art(MemeMood.rage, 5, 2)));
+    expect([DanceArt.trails, DanceArt.chrono, DanceArt.mono, DanceArt.thermal, DanceArt.halftone, DanceArt.plain, DanceArt.disco], contains(DanceClock.art(MemeMood.rage, 5, 2)));
+    // The disco is a style of the dancer, picked awake and in the heat.
+    expect({for (var n = 0; n < 60; n++) DanceClock.art(MemeMood.rage, 5, n)}, contains(DanceArt.disco));
     expect(DanceClock.entries(move('x', DanceTier.mid)), [0, 2, 4, 6]);
   });
 

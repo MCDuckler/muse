@@ -108,6 +108,10 @@ class _StagePageState extends State<StagePage> {
 
   @override
   void dispose() {
+    // A strobe held as the page went (Esc with S down: the key-up lands elsewhere)
+    // would strobe on and on.
+    final hands = widget.onKey;
+    if (hands.macros().strobe > 0) hands.setMacros(hands.macros().copyWith(strobe: 0));
     _focus.dispose();
     super.dispose();
   }
