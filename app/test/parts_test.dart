@@ -209,7 +209,8 @@ void main() {
     final started = <int>[];
     final hold = Completer<void>();
     renderer = (audio, name, into) async {
-      started.add(int.parse(into.values.first.split('/').last.split('-').first));
+      // (Either slash: the paths are the desk's own, '\' on Windows.)
+      started.add(int.parse(into.values.first.split(RegExp(r'[\\/]')).last.split('-').first));
       await hold.future;
     };
     await parts.want(song(1), 'drums'); // in hand

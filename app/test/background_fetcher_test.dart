@@ -99,7 +99,8 @@ void main() {
       final bg = fetcher();
       final entry = bg.autostartEntry(windows: false, mac: false);
       expect(entry, startsWith('[Desktop Entry]\n'));
-      expect(entry, contains('Exec="/opt/wet owl/wetowl-fetch" --config "${files.config.path}"\n'));
+      // (A backslash is escaped, as the spec says: the test's own folder has them on Windows.)
+      expect(entry, contains('Exec="/opt/wet owl/wetowl-fetch" --config "${files.config.path.replaceAll(r'\', r'\\')}"\n'));
       expect(entry, contains('Terminal=false'));
     });
 

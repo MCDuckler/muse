@@ -772,7 +772,9 @@ void main() {
 
     expect(player.current?.id, 2, reason: 'deep into a song, previous restarts it');
     expect(audio.only.calls, contains('seek 0s'));
-    expect(written.last, 0, reason: 'and the cursor is written at the top of it');
+    // (Within a hair of 0: the fake engine plays on in real time, so on a busy desk it
+    // is a millisecond or two in by the time the cursor is written.)
+    expect(written.last, inInclusiveRange(0, 100), reason: 'and the cursor is written at the top of it');
 
     await player.previous();
     await settle();

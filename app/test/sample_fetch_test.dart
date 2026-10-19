@@ -23,7 +23,9 @@ void main() {
     Directory('${support.path}/samples').createSync();
     File('${support.path}/samples/7.audio').writeAsBytesSync([1, 2, 3]);
     final fetch = sampleFetcher(ApiClient(baseUrl: 'http://example.invalid'));
-    final want = '${support.path}/samples/7.audio';
+    // The path as the desk writes one ('\' on Windows).
+    final sep = Platform.pathSeparator;
+    final want = '${support.path}${sep}samples${sep}7.audio';
     expect(await fetch(7).timeout(const Duration(seconds: 2)), want);
     expect(await fetch(7).timeout(const Duration(seconds: 2)), want, reason: 'and the second time');
     final both = await Future.wait([fetch(7), fetch(7)]).timeout(const Duration(seconds: 2));

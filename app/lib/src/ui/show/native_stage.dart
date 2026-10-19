@@ -140,10 +140,10 @@ class NativeStage {
   /// Why the native stage is not to be had here now, or null when it is.
   static String? whyNot() {
     if (kIsWeb) return 'the web';
+    // Never under a test: no runner, no channel — said first, on any desk.
+    if (Platform.environment.containsKey('FLUTTER_TEST')) return 'a test';
     if (!Platform.isLinux && !Platform.isWindows) return 'the native stage is Linux and Windows only so far';
     if (Platform.environment['WETOWL_STAGE'] == 'flutter') return 'WETOWL_STAGE=flutter';
-    // Never under a test: no runner, no channel.
-    if (Platform.environment.containsKey('FLUTTER_TEST')) return 'a test';
     final until = brokenUntil;
     if (until != null) {
       final left = until.difference(DateTime.now());

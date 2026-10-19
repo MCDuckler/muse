@@ -34,7 +34,9 @@ class MilkPreset {
 
   /// Author and title off a file name, by the convention "Author - Title.milk".
   static MilkPreset of(String path, String collection, {double rating = 3}) {
-    var base = path.split(Platform.pathSeparator).last;
+    // Windows takes either slash in a path (a folder joined with '/' and listed with
+    // '\'); elsewhere a backslash is a letter of the name.
+    var base = path.split(Platform.isWindows ? RegExp(r'[\\/]') : '/').last;
     if (base.toLowerCase().endsWith('.milk')) base = base.substring(0, base.length - 5);
     final dash = base.indexOf(' - ');
     return MilkPreset(

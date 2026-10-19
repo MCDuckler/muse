@@ -125,7 +125,8 @@ class Tools {
     final env = environment ?? Platform.environment;
     final dirs = [
       if (environment == null && Platform.isWindows) File(Platform.resolvedExecutable).parent.path,
-      ...(env['PATH'] ?? '').split(Platform.isWindows ? ';' : ':').where((d) => d.isNotEmpty),
+      // A Mac's PATH (asked for by name, as a test on any desk does) is split the Mac's way.
+      ...(env['PATH'] ?? '').split(Platform.isWindows && !(mac ?? false) ? ';' : ':').where((d) => d.isNotEmpty),
     ];
     if (mac ?? Platform.isMacOS) {
       for (final d in macPlaces(env)) {
