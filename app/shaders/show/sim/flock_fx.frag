@@ -39,12 +39,19 @@ uniform float uPop;    // 0..1, the kick's decay
 uniform vec2 uPopAt;   // the flock's middle, 0..1
 uniform float uTime;   // seconds
 uniform float uSweep;  // the bar, 0..1
+uniform float uWeight;  // the treatment's knobs (state/show/show_tune.dart), each a
+uniform float uSpacing; // multiplier on the look as drawn; 0 is 1 (a stage that does
+uniform float uHeight;  // not set them draws as it always has)
+uniform float uGain;
+uniform float uSize;
 uniform sampler2D uImage;
 uniform sampler2D uAtlas;
 
 out vec4 fragColor;
 
 float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+
+float knob(float v) { return v > 0.0 ? v : 1.0; }
 
 float bayer2(vec2 a) {
   a = floor(a);
@@ -53,7 +60,8 @@ float bayer2(vec2 a) {
 float bayer4(vec2 a) { return bayer2(0.5 * a) * 0.25 + bayer2(a); }
 float bayer8(vec2 a) { return bayer4(0.5 * a) * 0.25 + bayer2(a); }
 
-vec3 at(vec2 px) { return texture(uImage, px / uResolution).rgb; }
+// The picture's light at px, through the gain knob.
+vec3 at(vec2 px) { return texture(uImage, px / uResolution).rgb * knob(uGain); }
 
 // The light round px, softened over a few pixels.
 float soft(vec2 px, float r) {
@@ -69,11 +77,11 @@ vec3 thermal(float t) {
   return mix(c, vec3(1.0, 0.98, 0.85), smoothstep(0.68, 0.95, t));
 }
 
-float screenDot(vec2 px, float cell, float a, float l) {
+float screenDot(vec2 px, float cell, float a, float l, float size) {
   mat2 r = mat2(cos(a), -sin(a), sin(a), cos(a));
   vec2 q = r * px / cell;
   vec2 f = fract(q) - 0.5;
-  float rad = sqrt(clamp(l, 0.0, 1.0)) * 0.62;
+  float rad = sqrt(clamp(l, 0.0, 1.0)) * 0.62 * size;
   float d = length(f);
   float aa = 0.75 / cell;
   return 1.0 - smoothstep(rad - aa, rad + aa, d);
@@ -137,11 +145,11 @@ void main() {
     if (mode == 3) {
       // contour
       float l = soft(fc, 2.0);
-      float bands = 12.0;
+      float bands = 12.0 / knob(uSpacing);
       float h = l * bands - uTime * 0.25;
       float d = abs(fract(h) - 0.5);
       float gx = soft(fc + vec2(1.0, 0.0), 2.0) - l, gy = soft(fc + vec2(0.0, 1.0), 2.0) - l;
-      float w = clamp(length(vec2(gx, gy)) * bands, 0.004, 0.25) * (1.1 + 1.6 * uPop);
+      float w = clamp(length(vec2(gx, gy)) * bands, 0.004, 0.25) * (1.1 + 1.6 * uPop) * knob(uWeight);
       float line = smoothstep(0.5 - w * 1.5, 0.5, d) * step(0.012, l);
       vec3 echo = vec3(uInk.b, uInk.r, uInk.g);
       vec3 ink = mix(uInk, echo, fract(floor(l * bands) * 0.37));
@@ -152,31 +160,35 @@ void main() {
       vec2 off = vec2(1.0, -0.6) * uPop * cell * 0.6;
       float la = lum(at(fc));
       float lb = lum(at(fc - off));
-      float a = screenDot(fc, cell, 0.26, la);
-      float b = screenDot(fc - off, cell, 1.31, lb * 0.9);
+      float a = screenDot(fc, cell, 0.26, la, knob(uWeight));
+      float b = screenDot(fc - off, cell, 1.31, lb * 0.9, knob(uWeight));
       vec3 inkB = vec3(uInk.g, uInk.b, uInk.r) * 0.9;
       vec3 col = uPaper + uInk * a + inkB * b * (1.0 - 0.5 * a);
       fragColor = vec4(col, 1.0);
     } else if (mode == 5) {
       // thermal
       float l = soft(fc, 1.5);
-      float halo = (soft(fc, 9.0) + soft(fc, 18.0)) * 0.5;
+      float halo = (soft(fc, 9.0 * knob(uSize)) + soft(fc, 18.0 * knob(uSize))) * 0.5;
       float t = l * 0.85 + halo * 0.45 + uPop * 0.08;
       float scan = 0.94 + 0.06 * sin(fc.y * 1.7 + uTime * 30.0);
       fragColor = vec4(thermal(t) * scan, 1.0);
     } else {
       // ridgelines, nearest first
       float gap = max(4.0, uCell);
-      float amp = gap * 7.0;
+      float amp = gap * 7.0 * knob(uHeight);
+      // as many lines below as can rise to here
+      int n = int(min(24.0, ceil(amp * 1.25 / gap) + 3.0));
+      float wt = knob(uWeight);
       float base0 = ceil(fc.y / gap) * gap;
       vec3 col = uPaper;
       float hidden = 0.0;
-      for (int i = 9; i >= 0; i--) {
+      for (int i = 23; i >= 0; i--) {
+        if (i >= n) continue;
         float base = base0 + float(i) * gap;
         float l = (lum(at(vec2(fc.x, base))) + lum(at(vec2(fc.x - 2.0, base))) + lum(at(vec2(fc.x + 2.0, base)))) / 3.0;
         float ridge = base - amp * l * (1.0 + 0.25 * uPop);
         float d = abs(fc.y - ridge);
-        float on = (1.0 - smoothstep(0.6, 1.6 + uPop, d)) * (1.0 - hidden);
+        float on = (1.0 - smoothstep(0.6 * wt, (1.6 + uPop) * wt, d)) * (1.0 - hidden);
         col = mix(col, uInk * (0.55 + 0.6 * l), on);
         if (fc.y > ridge - 0.5) hidden = 1.0;
       }
@@ -185,19 +197,21 @@ void main() {
     return;
   }
   if (mode == 1) {
-    vec2 cell = vec2(uCell * 0.6, uCell);
+    // a letter's box, and the pitch they are set at (the spacing knob: room between)
+    float sp = knob(uSpacing);
+    vec2 cell = vec2(uCell * 0.6, uCell) * sp;
     vec2 c = floor(fc / cell);
     vec3 col = texture(uImage, (c + vec2(0.25, 0.25)) * cell / uResolution).rgb;
     col += texture(uImage, (c + vec2(0.75, 0.25)) * cell / uResolution).rgb;
     col += texture(uImage, (c + vec2(0.25, 0.75)) * cell / uResolution).rgb;
     col += texture(uImage, (c + vec2(0.75, 0.75)) * cell / uResolution).rgb;
-    col *= 0.25;
+    col *= 0.25 * knob(uGain);
     float l = lum(col);
     vec2 d = ((c + 0.5) * cell / uResolution - uPopAt) * vec2(uResolution.x / uResolution.y, 1.0);
     float pop = uPop * clamp(1.0 - length(d) * 1.4, 0.0, 1.0);
     float on = step(0.02, l);
     float idx = floor(clamp(l * 1.1 + pop * 0.12 * on, 0.0, 0.999) * uGlyphs);
-    vec2 f = (fract(fc / cell) - 0.5) / (1.0 + 0.22 * pop * on) + 0.5;
+    vec2 f = (fract(fc / cell) - 0.5) * sp / (1.0 + 0.22 * pop * on) + 0.5;
     float inside = step(0.0, f.x) * step(f.x, 1.0) * step(0.0, f.y) * step(f.y, 1.0);
     float g = texture(uAtlas, vec2((idx + clamp(f.x, 0.0, 1.0)) / uGlyphs, clamp(f.y, 0.0, 1.0))).a * inside;
     vec3 own = col / max(l, 0.25) * 0.85;
@@ -207,7 +221,7 @@ void main() {
     float px = max(1.0, uCell);
     vec2 b = floor(fc / px);
     vec3 col = texture(uImage, (b + 0.5) * px / uResolution).rgb;
-    float l = lum(col) * (1.0 + 0.12 * uPop);
+    float l = lum(col) * knob(uGain) * (1.0 + 0.12 * uPop);
     float t = bayer8(b);
     fragColor = vec4(mix(uPaper, uInk, step(t * 0.92 + 0.04, l)), 1.0);
   }

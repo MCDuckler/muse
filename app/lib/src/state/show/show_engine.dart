@@ -32,6 +32,7 @@ import 'show_heard.dart';
 import 'show_palette.dart';
 import 'show_pool.dart';
 import 'show_rig.dart';
+import 'show_tune.dart';
 import 'show_state.dart';
 import 'show_store.dart';
 
@@ -135,7 +136,7 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
     director.allowed = _allowed;
     director.grounds = _groundPool;
     // The dancers still read who dances off the hands' macros.
-    _macros = _macros.copyWith(dancer: doc.pool.dancer ?? 'mix', dancersOff: doc.pool.dancersOff);
+    _macros = _macros.copyWith(dancer: doc.pool.dancer ?? 'mix', dancersOff: doc.pool.dancersOff, tune: doc.pool.tune);
     if (!running) tick(DateTime.now());
     notifyListeners();
   }
@@ -206,6 +207,13 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
     notifyListeners();
   }
 
+  /// [look] put through [treatment] whenever it is on (`raw`: none; null: the
+  /// conductor's mix), kept.
+  void setTreat(String look, String? treatment) => setPool(pool.withTreat(look, treatment));
+
+  /// A treatment's knob, kept (null: back to its rest).
+  void setTune(String treatment, TuneKnob k, double? v) => setPool(pool.withTune(tuneKey(treatment, k), v));
+
   /// A move asked for by hand: the lead dances it at the next slot.
   void audition(String moveId) {
     MovePool.audition = moveId;
@@ -214,12 +222,24 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
 
   /// [rig] with the hands' layers where they are locked, and their style; the
   /// director's ground where the hands have none and the look has MilkDrop (the
-  /// macros' way), as the director rotates the pool's grounds under the scenes.
-  ShowRig _withHands(ShowRig rig) {
+  /// macros' way), as the director rotates the pool's grounds under the scenes; and
+  /// the treatment the hands put on [look] (the pool's), if any.
+  ShowRig _withHands(ShowRig rig, {String? look}) {
     final ground = _hands.locked(RigSlot.ground)
         ? _hands.ground
         : (director.ground != null && rig.ground.kind == Ground.milk ? director.ground! : rig.ground);
-    final figure = _style != null && rig.figure.kind == _styleFor ? rig.figure.copyWith(style: _style) : rig.figure;
+    var figure = _style != null && rig.figure.kind == _styleFor ? rig.figure.copyWith(style: _style) : rig.figure;
+    final treat = look == null ? null : _treatFor(look, figure.kind);
+    if (treat != null && figure.kind != Figure.none) {
+      figure = figure.copyWith(treatment: treat);
+      // The birds, and the dancers on their stylised stage, have the image
+      // treatments as styles of their own, drawn better than a pass over the frame
+      // can (the figure lit for it, the glyphs popping from its middle): theirs,
+      // unless the hands picked them a style already. The rest go through the
+      // stage's pass (ui/show/show_canvas.dart).
+      final own = figure.kind == Figure.birds || (figure.kind == Figure.dancers && look == 'dance-art');
+      if (own && imageTreatments.contains(treat) && !(_style != null && figure.kind == _styleFor)) figure = figure.copyWith(style: treat.name);
+    }
     // The blend: the hands' where locked; else the rules' for this figure on this
     // ground (contrast is MilkDrop's way; a shape on the pulse adds, and so on).
     final blend = _hands.locked(RigSlot.blend)
@@ -233,6 +253,37 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
       locks: {..._hands.locks, if (director.locked) RigSlot.figure},
     );
   }
+
+  /// The treatment [look] goes through now: the one the hands put on it, none where
+  /// they said off, and where they left it to the mix (as every look starts), the
+  /// conductor's — one of the treatments in that look's own mix (or the look as
+  /// drawn, which counts twice), chosen afresh every [treatBars] bars of the record,
+  /// the same for the same record, look and bars. Words and memes are left as they
+  /// are by the mix (the hands can still put them through one).
+  Treatment? _treatFor(String look, Figure kind) {
+    final say = pool.treat[look];
+    if (say == 'raw') return null;
+    if (say != null && say != 'mix') return Treatment.values.asNameMap()[say];
+    if (kind == Figure.none || kind == Figure.words || kind == Figure.meme) return null;
+    final options = treatMix(pool, look);
+    if (options.isEmpty) return null;
+    final m = _state.master;
+    final slot = (m.barIndex ?? 0) ~/ treatBars;
+    var h = 0x811c9dc5;
+    for (final c in '$look:${m.trackId ?? 0}:$slot'.codeUnits) {
+      h = ((h ^ c) * 0x01000193) & 0x7fffffff;
+    }
+    final total = options.fold<double>(0, (a, o) => a + o.$2);
+    var at = (h % 10007) / 10007 * total;
+    for (final (t, w) in options) {
+      at -= w;
+      if (at < 0) return t == Treatment.raw ? null : t;
+    }
+    return null;
+  }
+
+  /// How many bars the conductor keeps a treatment on a look.
+  static const treatBars = 8;
 
   /// The ground a look would have now, with the hands over it.
   Ground _groundFor(Look look) => _withHands(rigWithMacros(look.rig, _macros)).ground.kind;
@@ -552,8 +603,8 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
       sceneFrom: d.from,
       sceneK: d.k,
       clearSceneFrom: d.from == null,
-      rig: look == null ? _withHands(ShowRig.none) : _withHands(rigWithMacros(look.rig, _macros)),
-      rigFrom: leaving == null ? null : _withHands(rigWithMacros(leaving.rig, _macros)),
+      rig: look == null ? _withHands(ShowRig.none) : _withHands(rigWithMacros(look.rig, _macros), look: look.id),
+      rigFrom: leaving == null ? null : _withHands(rigWithMacros(leaving.rig, _macros), look: leaving.id),
       macros: dark && !_macros.blackout ? _macros.copyWith(blackout: true) : _macros,
     );
     // MilkDrop, where it is on: the numbers and the sound, and its director's cuts;

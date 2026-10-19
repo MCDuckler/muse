@@ -113,13 +113,23 @@ void main() {
     // The dancers' chip lands the stylized dancers; their style row appears; a style holds.
     await chip('Dancers');
     expect(show.state.scene, 'dance-art');
-    expect(find.text('ASCII'), findsOneWidget);
-    await tester.tap(find.text('ASCII'), warnIfMissed: false);
+    // The treatment off, so the conductor's mix does not dress them meanwhile.
+    await tester.tap(find.text('OFF'), warnIfMissed: false);
     await tester.pump();
-    expect(show.state.rig.figure.style, 'ascii');
+    expect(show.pool.treat['dance-art'], 'raw');
+    // Their own styles on the style row; the image treatments only once, on the
+    // treatment line, where the dancers take one as their own style.
+    await tester.tap(find.text('CHRONO'), warnIfMissed: false);
+    await tester.pump();
+    expect(show.state.rig.figure.style, 'chrono');
     await tester.tap(find.text('AUTO').first, warnIfMissed: false);
     await tester.pump();
     expect(show.state.rig.figure.style, isNull);
+    expect(find.text('ASCII'), findsOneWidget);
+    await tester.tap(find.text('ASCII'), warnIfMissed: false);
+    await tester.pump();
+    expect(show.state.rig.figure.treatment, Treatment.ascii);
+    expect(show.state.rig.figure.style, 'ascii');
     await tester.tap(find.text('PERF'));
     await tester.pump();
     expect(find.textContaining('renderer:'), findsOneWidget);

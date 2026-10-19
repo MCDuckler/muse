@@ -6,6 +6,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:muse/src/state/show/show_tune.dart' show treatmentFxMode;
 import 'package:muse/src/ui/show/show_flock.dart';
 import 'package:muse/src/ui/show/show_meme_bank.dart' show MemeMood;
 
@@ -91,7 +92,8 @@ void main() {
     expect(sleepLooks, isNot(contains(FlockLook.chrono)));
     expect(sleepLooks, contains(FlockLook.sky));
     // Every look is reachable somewhere.
-    expect({for (var n = 0; n < 200; n++) FlockClock.look(MemeMood.vibe, 3, n)}, FlockLook.values.toSet());
+    // Every look of the flock's own; the image treatments are the conductor's.
+    expect({for (var n = 0; n < 200; n++) FlockClock.look(MemeMood.vibe, 3, n)}, {for (final l in FlockLook.values) if (!treatmentFxMode.containsKey(l.name)) l});
   });
 
   test('the camera: the sky from below or wide, the radar from above, the rest in front; held long', () {
@@ -238,5 +240,18 @@ void main() {
     }
     final w = m.wing(0, 1.25, 1, 0.75, false);
     expect(w, inInclusiveRange(-1.1, 0.5));
+  });
+  test('the beat pushes the flock along its way and it drifts before the next, as far in all', () {
+    for (final mood in MemeMood.values) {
+      var sum = 0.0;
+      const n = 1000;
+      for (var i = 0; i < n; i++) {
+        sum += FlockClock.surge(mood, (i + 0.5) / n);
+      }
+      expect(sum / n, closeTo(1, 0.01), reason: '$mood: no further than without it');
+      expect(FlockClock.surge(mood, 0), greaterThan(1.3));
+      expect(FlockClock.surge(mood, 0.9), lessThan(1));
+      expect(FlockClock.surge(mood, 0.9), greaterThan(0.4));
+    }
   });
 }

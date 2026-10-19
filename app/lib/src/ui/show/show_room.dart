@@ -1,15 +1,17 @@
 // The show's own page of the booth: the room slid left of the decks (the board's
 // twin on the other side), where the show is put together — the stage's picture
-// big, the hands under it, and the rig as rows: the BACKGROUND, the SCENE over it
-// (with its style), how the two BLEND, and the FINISH over both. A chip is a choice,
+// big, the hands and the tabs under it, and down the right the rig as rows: the
+// BACKGROUND, the SCENE over it (with its style and its treatment), how the two
+// BLEND, and the FINISH over both. A chip is a choice,
 // with a picture where there is one; the chip lit is what the stage shows now; a
 // dimmed chip is one the director may not use. Each row has a lock: locked, it is
 // the hands' until let go; unlocked, the director and the look choose.
 //
-// Down the right the tabs: every scene with the director's switches, the RULES
+// Under the hands the tabs: every scene with the director's switches, the RULES
 // (what goes with what, and how), the DANCERS (who, and every move), MILKDROP's
 // director, and the PERF numbers. Plan: ~/.claude/plans/wetowl-show-layers.md, §3.
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -20,6 +22,7 @@ import '../../state/show/milk_feed.dart';
 import '../../state/show/show_engine.dart';
 import '../../state/show/show_pool.dart';
 import '../../state/show/show_rig.dart';
+import '../../state/show/show_tune.dart';
 import '../booth/desk/console.dart';
 import '../feel.dart';
 import '../mag.dart';
@@ -70,6 +73,18 @@ class _ShowRoomState extends State<ShowRoom> {
 
   ShowEngine get show => widget.booth.show;
 
+  /// The lines between the page's parts, dragged like the crate's edge and kept in
+  /// show.json: the picture and the rig's share of the width (or, narrow, of the
+  /// height), and how tall the picture is, as shares of the screen.
+  double _split = 0.58, _splitNarrow = 0.6, _previewK = 0.34;
+
+  double _panelNum(String key, double or, double lo, double hi) {
+    final v = show.doc.panel[key];
+    return v is num ? v.toDouble().clamp(lo, hi) : or;
+  }
+
+  void _keepLayout() => show.setDoc(show.doc.copyWith(panel: {...show.doc.panel, 'split': _split, 'splitNarrow': _splitNarrow, 'preview': _previewK}));
+
   @override
   void initState() {
     super.initState();
@@ -82,6 +97,9 @@ class _ShowRoomState extends State<ShowRoom> {
       await show.ready();
       final t = show.doc.panel['tab'];
       if (t is String) _tab = ShowTab.values.asNameMap()[t] ?? _tab;
+      _split = _panelNum('split', _split, 0.3, 0.8);
+      _splitNarrow = _panelNum('splitNarrow', _splitNarrow, 0.25, 0.8);
+      _previewK = _panelNum('preview', _previewK, 0.12, 0.75);
       final kit = await StageKit.load();
       show.director.scenes = kit.book.metas;
       show.looks = kit.book.looks;
@@ -107,40 +125,120 @@ class _ShowRoomState extends State<ShowRoom> {
     final kit = _kit;
     return LayoutBuilder(builder: (context, c) {
       final narrow = c.maxWidth < 1100;
+      final screenH = MediaQuery.sizeOf(context).height;
       final left = Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _Preview(booth: widget.booth, kit: kit, trouble: _trouble, info: _info),
-          const SizedBox(height: 8),
+          _Preview(booth: widget.booth, kit: kit, trouble: _trouble, info: _info, maxHeight: (screenH * _previewK).clamp(100.0, 900.0)),
+          _Seam(
+            vertical: true,
+            tip: 'Drag: the picture taller or shorter',
+            onDrag: (dy) => setState(() => _previewK = (_previewK + dy / screenH).clamp(0.12, 0.75)),
+            onDone: _keepLayout,
+          ),
           _Hands(show: show, kit: kit),
           const SizedBox(height: 8),
-          Expanded(child: kit == null ? const SizedBox.shrink() : _RigStack(show: show, book: kit.book, booth: widget.booth)),
+          Expanded(child: _Tabs(tab: _tab, onPick: _pickTab, show: show, kit: kit, info: _info, booth: widget.booth)),
         ],
       );
-      final right = _Tabs(tab: _tab, onPick: _pickTab, show: show, kit: kit, info: _info, booth: widget.booth);
+      // The rig down the right, the whole height: its rows are what is worked.
+      final right = kit == null ? const SizedBox.shrink() : _RigStack(show: show, book: kit.book, booth: widget.booth);
       if (narrow) {
+        final room = math.max(1.0, c.maxHeight - _Seam.reach);
         return Column(children: [
-          Expanded(flex: 3, child: left),
-          const SizedBox(height: 10),
-          Expanded(flex: 2, child: right),
+          SizedBox(height: room * _splitNarrow, child: left),
+          _Seam(
+            vertical: true,
+            tip: 'Drag: more of the picture and the tabs, or more of the rig',
+            onDrag: (dy) => setState(() => _splitNarrow = (_splitNarrow + dy / room).clamp(0.25, 0.8)),
+            onDone: _keepLayout,
+          ),
+          Expanded(child: right),
         ]);
       }
+      final room = math.max(1.0, c.maxWidth - _Seam.reach);
       return Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(flex: 58, child: left),
-          const SizedBox(width: 10),
-          Expanded(flex: 42, child: right),
+          SizedBox(width: room * _split, child: left),
+          _Seam(
+            vertical: false,
+            tip: 'Drag: more of the picture and the tabs, or more of the rig',
+            onDrag: (dx) => setState(() => _split = (_split + dx / room).clamp(0.3, 0.8)),
+            onDone: _keepLayout,
+          ),
+          Expanded(child: right),
         ],
       );
     });
   }
 }
 
+/// A line between two parts of the page, taken hold of and dragged (the crate's
+/// edge, either way): [vertical] for a line across, dragged up and down.
+class _Seam extends StatefulWidget {
+  const _Seam({required this.vertical, required this.onDrag, required this.onDone, this.tip});
+  final bool vertical;
+  final void Function(double delta) onDrag;
+  final VoidCallback onDone;
+  final String? tip;
+
+  /// How much room the line takes: a hand's reach round a thin mark.
+  static const reach = 10.0;
+
+  @override
+  State<_Seam> createState() => _SeamState();
+}
+
+class _SeamState extends State<_Seam> {
+  bool _over = false, _held = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final v = widget.vertical;
+    final lit = _over || _held;
+    Widget seam = MouseRegion(
+      cursor: v ? SystemMouseCursors.resizeRow : SystemMouseCursors.resizeColumn,
+      onEnter: (_) => setState(() => _over = true),
+      onExit: (_) => setState(() => _over = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onVerticalDragStart: v ? (_) => setState(() => _held = true) : null,
+        onVerticalDragUpdate: v ? (d) => widget.onDrag(d.delta.dy) : null,
+        onVerticalDragEnd: v ? (_) => _done() : null,
+        onHorizontalDragStart: v ? null : (_) => setState(() => _held = true),
+        onHorizontalDragUpdate: v ? null : (d) => widget.onDrag(d.delta.dx),
+        onHorizontalDragEnd: v ? null : (_) => _done(),
+        child: SizedBox(
+          width: v ? double.infinity : _Seam.reach,
+          height: v ? _Seam.reach : double.infinity,
+          child: Center(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 120),
+              width: v ? 48 : 2,
+              height: v ? 2 : 48,
+              decoration: BoxDecoration(color: lit ? Console.quiet : Console.line, borderRadius: BorderRadius.circular(1)),
+            ),
+          ),
+        ),
+      ),
+    );
+    final tip = widget.tip;
+    if (tip != null) seam = Tooltip(message: tip, waitDuration: const Duration(milliseconds: 900), child: seam);
+    return seam;
+  }
+
+  void _done() {
+    setState(() => _held = false);
+    widget.onDone();
+  }
+}
+
 // ------------------------------------------------------------------ the picture
 class _Preview extends StatelessWidget {
-  const _Preview({required this.booth, required this.kit, required this.trouble, required this.info});
+  const _Preview({required this.booth, required this.kit, required this.trouble, required this.info, required this.maxHeight});
   final Booth booth;
+  final double maxHeight;
   final StageKit? kit;
   final String? trouble;
   final ValueNotifier<StageInfo> info;
@@ -154,10 +252,11 @@ class _Preview extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // No taller than a third of the page: the rig's rows want the room.
+            // As tall as the line under it says (a third of the screen to start):
+            // the rig's rows want the room.
             Center(
               child: ConstrainedBox(
-                constraints: BoxConstraints(maxHeight: (MediaQuery.sizeOf(context).height * 0.34).clamp(160.0, 600.0)),
+                constraints: BoxConstraints(maxHeight: maxHeight),
                 child: AspectRatio(
                   aspectRatio: 16 / 9,
                   child: ClipRRect(
@@ -707,7 +806,7 @@ class _SceneRow extends StatelessWidget {
       final isArt = st.scene == 'dance-art';
       below = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          SizedBox(width: 54, child: Text('dressing', style: Console.label(9))),
+          SizedBox(width: 70, child: Text('dressing', style: Console.label(9))),
           Expanded(
             child: _Line(children: [
               for (final id in _dancerLooks)
@@ -723,7 +822,7 @@ class _SceneRow extends StatelessWidget {
         ]),
         if (isArt)
           Row(children: [
-            SizedBox(width: 54, child: Text('style', style: Console.label(9))),
+            SizedBox(width: 70, child: Text('style', style: Console.label(9))),
             Expanded(
               child: _Line(children: [
                 _Word(
@@ -732,8 +831,9 @@ class _SceneRow extends StatelessWidget {
                   tooltip: 'The dancers\' own clock picks a style a section at a time, from the pool',
                   onTap: () => show.setStyle(null),
                 ),
+                // The image treatments are on the treatment line, for every scene.
                 for (final a in DanceArt.values)
-                  if (a != DanceArt.contour || pool.isOn('treatment.contour'))
+                  if (!treatmentFxMode.containsKey(a.name))
                     _Word(
                       label: a.name.toUpperCase(),
                       lit: show.style == a.name && show.styleFor == Figure.dancers,
@@ -747,11 +847,12 @@ class _SceneRow extends StatelessWidget {
       ]);
     } else if (st.scene == 'flock') {
       below = Row(children: [
-        SizedBox(width: 54, child: Text('look', style: Console.label(9))),
+        SizedBox(width: 70, child: Text('look', style: Console.label(9))),
         Expanded(
           child: _Line(children: [
             _Word(label: 'AUTO', lit: show.style == null, tooltip: 'The flock\'s own clock picks a look a section at a time', onTap: () => show.setStyle(null)),
             for (final l in FlockLook.values)
+              if (!treatmentFxMode.containsKey(l.name))
               _Word(
                 label: l.name.toUpperCase(),
                 lit: show.style == l.name && show.styleFor == Figure.birds,
@@ -763,7 +864,7 @@ class _SceneRow extends StatelessWidget {
       ]);
     } else if (st.scene == 'lyrics') {
       below = Row(children: [
-        SizedBox(width: 54, child: Text('style', style: Console.label(9))),
+        SizedBox(width: 70, child: Text('style', style: Console.label(9))),
         Expanded(
           child: _Line(children: [
             _Word(label: 'AUTO', lit: show.style == null, tooltip: 'The words\' own clock picks a style a section at a time (the hook in the stencil)', onTap: () => show.setStyle(null)),
@@ -778,6 +879,64 @@ class _SceneRow extends StatelessWidget {
         ),
       ]);
     }
+    // Any scene through a treatment, kept for that scene: none, the conductor's mix
+    // (as every scene starts), or one held; what is in the mix (for every scene on
+    // it); and the knobs of the treatment on now.
+    final scene = st.scene;
+    if (scene != null) {
+      final say = pool.treat[scene];
+      final mix = say == null || say == 'mix';
+      final now = imageTreatments.contains(rig.figure.treatment) ? rig.figure.treatment.name : null;
+      final name = book[scene]?.name ?? scene;
+      final treatLine = Row(children: [
+        SizedBox(width: 70, child: Text('treatment', style: Console.label(9))),
+        Expanded(
+          child: _Line(children: [
+            _Word(label: 'OFF', lit: say == 'raw', tooltip: '$name as it draws itself, always', onTap: () => show.setTreat(scene, 'raw')),
+            _Word(
+              label: mix ? 'MIX · ${(now ?? 'as drawn').toUpperCase()}' : 'MIX',
+              lit: mix,
+              tooltip: 'The conductor picks from the mix every ${ShowEngine.treatBars} bars (the look as drawn counts twice)',
+              onTap: () => show.setTreat(scene, null),
+            ),
+            for (final t in imageTreatments)
+              _Word(
+                label: t.name.toUpperCase(),
+                lit: say == t.name,
+                tooltip: '${_treatWords[t]} — held for $name',
+                onTap: () => show.setTreat(scene, say == t.name ? null : t.name),
+              ),
+          ]),
+        ),
+      ]);
+      final mixLine = !mix
+          ? null
+          : Row(children: [
+              SizedBox(width: 70, child: Text('the mix', style: Console.label(9))),
+              Expanded(
+                child: _Line(children: [
+                  for (final t in [Treatment.raw, ...imageTreatments])
+                    if (mixOf(pool, scene).contains(t.name) case final inMix)
+                      _Word(
+                        label: t == Treatment.raw ? 'AS DRAWN' : t.name.toUpperCase(),
+                        lit: inMix,
+                        off: !inMix,
+                        tooltip: inMix
+                            ? "In $name's mix — a tap takes it out (other scenes keep theirs)"
+                            : "Out of $name's mix: the conductor never picks it here (the scene can still hold it)",
+                        onTap: () => show.setPool(withInMix(pool, scene, t.name, !inMix)),
+                      ),
+                ]),
+              ),
+            ]);
+      final knobs = now == null ? null : _TuneLine(show: show, treatment: now);
+      below = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (below != null) below,
+        treatLine,
+        if (mixLine != null) mixLine,
+        if (knobs != null) knobs,
+      ]);
+    }
     return _LayerRow(
       name: 'SCENE',
       word: 'what stands on it — a tap lands it as the hands say',
@@ -788,6 +947,15 @@ class _SceneRow extends StatelessWidget {
       child: Wrap(children: chips),
     );
   }
+
+  static const _treatWords = {
+    Treatment.ascii: 'the picture as text',
+    Treatment.dither: 'one bit: ink and paper',
+    Treatment.halftone: 'two inks screened, a riso print',
+    Treatment.thermal: 'a heat camera',
+    Treatment.lines: 'a ridgeline plot',
+    Treatment.contour: 'a topographic map of the light',
+  };
 
   static const _artWords = {
     DanceArt.mono: 'a silhouette, black on white (Bad Apple)',
@@ -803,6 +971,59 @@ class _SceneRow extends StatelessWidget {
     DanceArt.viewports: 'a model editor\'s grid of viewports (native stage)',
     DanceArt.plain: 'the scans as they are, on white: over MilkDrop, not blended',
   };
+}
+
+/// A treatment's knobs (show_tune.dart), for whatever is drawn through it: turned,
+/// kept in show.json; a double-click puts one back.
+class _TuneLine extends StatelessWidget {
+  const _TuneLine({required this.show, required this.treatment});
+  final ShowEngine show;
+  final String treatment;
+
+  @override
+  Widget build(BuildContext context) {
+    final tune = show.pool.tune;
+    final specs = treatmentTunes[treatment] ?? const <TuneSpec>[];
+    final touched = specs.any((s) => tune.containsKey(tuneKey(treatment, s.knob)));
+    return Padding(
+      padding: const EdgeInsets.only(top: 2, bottom: 2),
+      child: Row(children: [
+        SizedBox(width: 70, child: Text(treatment, style: Console.label(9))),
+        Expanded(
+          child: _Line(children: [
+            for (final s in specs)
+              Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: Knob(
+                  value: tuneOf(tune, treatment, s.knob),
+                  min: s.min,
+                  max: s.max,
+                  rest: s.rest,
+                  bipolar: false,
+                  size: 30,
+                  label: s.label,
+                  tooltip: '${s.tip}: ${s.knob == TuneKnob.tint ? '${(tuneOf(tune, treatment, s.knob) * 100).round()} %' : '× ${tuneOf(tune, treatment, s.knob).toStringAsFixed(2)}'} (double-click: as drawn)',
+                  onChanged: (v) => show.setTune(treatment, s.knob, v == s.rest ? null : v),
+                ),
+              ),
+            if (touched)
+              _Word(
+                label: 'RESET',
+                lit: false,
+                tooltip: 'Every $treatment knob back as drawn',
+                onTap: () {
+                  var p = show.pool;
+                  for (final s in specs) {
+                    p = p.withTune(tuneKey(treatment, s.knob), null);
+                  }
+                  show.setPool(p);
+                },
+              ),
+          ]),
+        ),
+      ]),
+    );
+  }
 }
 
 // ---------------------------------------------------------------- BLEND
@@ -964,13 +1185,21 @@ class _Tabs extends StatelessWidget {
               ]),
               const Divider(height: 14),
               Expanded(
-                child: switch (tab) {
-                  ShowTab.scenes => _ScenesTab(show: show, kit: kit),
-                  ShowTab.rules => _RulesTab(show: show, kit: kit),
-                  ShowTab.dancers => _DancersTab(show: show),
-                  ShowTab.milkdrop => _MilkTab(show: show, booth: booth),
-                  ShowTab.perf => _PerfTab(show: show, info: info, booth: booth),
-                },
+                // Under the picture the tabs may be short (a 1280 x 800 desk): a tab
+                // gets at least the height it is laid out for, scrolled where the
+                // panel has less (the moves' viewer and its list want the most).
+                child: LayoutBuilder(builder: (context, c) {
+                  final body = switch (tab) {
+                    ShowTab.scenes => _ScenesTab(show: show, kit: kit) as Widget,
+                    ShowTab.rules => _RulesTab(show: show, kit: kit),
+                    ShowTab.dancers => _DancersTab(show: show),
+                    ShowTab.milkdrop => _MilkTab(show: show, booth: booth),
+                    ShowTab.perf => _PerfTab(show: show, info: info, booth: booth),
+                  };
+                  final least = tab == ShowTab.dancers ? 560.0 : 300.0;
+                  if (c.maxHeight >= least) return body;
+                  return SingleChildScrollView(child: SizedBox(height: least, child: body));
+                }),
               ),
             ],
           ),
@@ -1132,11 +1361,11 @@ class _RulesTab extends StatelessWidget {
                 ),
             ]),
             const SizedBox(height: 8),
-            Text('STYLES the dancers and the birds may wear', style: Console.label(10, color: Console.ink)),
+            Text("STYLES the dancers and the birds may wear (the treatments' mix is on the SCENE row)", style: Console.label(10, color: Console.ink)),
             const SizedBox(height: 4),
             Wrap(children: [
               for (final t in Treatment.values)
-                if (t != Treatment.auto)
+                if (t != Treatment.auto && t != Treatment.raw && !imageTreatments.contains(t))
                   _Word(
                     label: t.name.toUpperCase(),
                     lit: pool.isOn('treatment.${t.name}'),

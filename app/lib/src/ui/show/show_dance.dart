@@ -58,7 +58,9 @@ import 'package:flutter/services.dart';
 
 import '../../state/show/show_pool.dart' show MovePool, QualityPool, StylePool;
 import '../../state/show/show_state.dart';
+import '../../state/show/show_tune.dart';
 import 'show_canvas.dart' show StagePrograms;
+import 'show_common.dart' show setFxKnobs, tunedCell;
 import 'show_dance_draw.dart';
 import 'show_dance_rig.dart';
 import 'show_dance_surface.dart';
@@ -363,10 +365,11 @@ class DanceClock {
         MemeMood.rage => [DanceArt.trails, DanceArt.chrono, DanceArt.mono, DanceArt.thermal, DanceArt.halftone, DanceArt.fluid, DanceArt.viewports, DanceArt.plain],
         MemeMood.vibe => DanceArt.values,
       })
-        // The topographic map (contour) is out for good: it read as terrain, not a
-        // dancer (the style row can still ask for it). The styles the pool switched
-        // off are out; the GPU-only ones where there is no GPU.
-        if (a != DanceArt.contour && !StylePool.off.contains(a.name) && (gpu || (a != DanceArt.fluid && a != DanceArt.viewports))) a,
+        // The image treatments (ascii, dither, halftone, thermal, lines, contour) are
+        // the conductor's (the frame's rig's treatment, state/show/show_engine.dart),
+        // as for every scene: this clock picks the stage's own. The styles the pool
+        // switched off are out; the GPU-only ones where there is no GPU.
+        if (!treatmentFxMode.containsKey(a.name) && !StylePool.off.contains(a.name) && (gpu || (a != DanceArt.fluid && a != DanceArt.viewports))) a,
     ];
     if (pool.isEmpty) return not ?? DanceArt.plain;
     final d = memeHash(salt % 9973, n, 97);
@@ -706,6 +709,9 @@ class DanceSim implements SimLayer {
   int _artN = 0;
   ui.FragmentShader? _fx;
   static ui.Image? _glyphs;
+
+  /// The rendering the frame asked for last (RigFigure.style), to see it let go.
+  String? _styledWas;
   static const _ramp = ' .:-=+*#%@';
   final _histW = Float64List(DanceRigLimits.bones * 12);
   final _p3 = Float64List(3);
@@ -808,11 +814,15 @@ class DanceSim implements SimLayer {
     final dropNow = since != null && since >= 0 && since < 0.5 && _lead.move?.tier != DanceTier.high;
     final sectionNow = sectionTurned && _sectionSlot != n;
     final sleep = mood == MemeMood.sleep;
-    if (stage == DanceStage.art && (_art == null || dropNow || sectionNow)) {
-      _art = _forcedArt ?? DanceClock.art(mood, salt, _artN++, not: _art, gpu: gpu);
+    // The stage's own rendering a section at a time — and at once when one from the
+    // frame (the hands', the conductor's treatment) is let go, so it does not linger.
+    final styled = st.rig.figure.style;
+    final letGo = styled == null && _styledWas != null;
+    _styledWas = styled;
+    if (stage == DanceStage.art && (_art == null || dropNow || sectionNow || letGo)) {
+      _art = _forcedArt ?? DanceClock.art(mood, salt, _artN++, not: letGo ? null : _art, gpu: gpu);
     }
     // The hands' own rendering, from the frame (the show's rig): on at once.
-    final styled = st.rig.figure.style;
     if (stage == DanceStage.art && styled != null) {
       final want = DanceArt.values.where((a) => a.name == styled).firstOrNull;
       if (want != null && (gpu || (want != DanceArt.fluid && want != DanceArt.viewports))) _art = want;
@@ -1967,8 +1977,10 @@ class DanceSim implements SimLayer {
       ..setFloat(13, _popAt.dx)
       ..setFloat(14, _popAt.dy)
       ..setFloat(15, _t)
+      ..setFloat(16, 0)
       ..setImageSampler(0, img)
       ..setImageSampler(1, glyphs);
+    setFxKnobs(fx, 17, l.st, lens ? null : _fxName);
     final r = ui.PictureRecorder();
     Canvas(r).drawRect(Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()), Paint()..shader = fx);
     final pic = r.endRecording();
@@ -1980,6 +1992,18 @@ class DanceSim implements SimLayer {
 
   /// The ascii's or the dither's colours and cell for a picture [h] high.
   ({int mode, Color ink, Color paper, double cell, double tint}) _postParams(_Look l, int h) {
+    final q = _postDrawn(l, h);
+    // Through the hands' knobs for the treatment (state/show/show_tune.dart).
+    final t = tunedCell(l.st, _fxName, q.cell, q.tint);
+    return (mode: q.mode, ink: q.ink, paper: q.paper, cell: t.cell, tint: t.tint);
+  }
+
+  /// The treatment the finish draws, by name (show_tune.dart's): the ascii where the
+  /// art is none of them.
+  String get _fxName => _art != null && treatmentFxMode.containsKey(_art!.name) ? _art!.name : 'ascii';
+
+  /// The finish's colours and cell as the look draws them, before the knobs.
+  ({int mode, Color ink, Color paper, double cell, double tint}) _postDrawn(_Look l, int h) {
     final pal = l.st.palette;
     final mode = danceFxMode[_art] ?? 1;
     final dark = HSLColor.fromAHSL(1, pal.primary.hue, 0.45, 0.035).toColor();
@@ -2002,6 +2026,9 @@ class DanceSim implements SimLayer {
   }
 
   static int get glyphCount => _ramp.length;
+
+  /// The glyph ramp as an image, for a treatment pass over any scene (show_canvas.dart).
+  static ui.Image get glyphAtlas => _glyphs ??= _makeGlyphs();
 
   /// The glyph ramp, light to dense, white on clear, side by side.
   static ui.Image _makeGlyphs() {

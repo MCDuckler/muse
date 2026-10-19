@@ -23,9 +23,11 @@ import '../../state/show/show_feed.dart';
 import '../../state/show/show_pool.dart' show QualityPool;
 import '../../state/show/show_rig.dart';
 import '../../state/show/show_state.dart';
+import '../../state/show/show_tune.dart';
 import '../mag.dart';
 import 'scene.dart';
 import 'show_common.dart';
+import 'show_dance.dart' show DanceSim;
 import 'show_particles.dart';
 import 'show_sims.dart';
 
@@ -327,7 +329,7 @@ class _StagePainter extends CustomPainter {
   /// with the ground under it, the frame's rig's way (under.frag). Not for a scene
   /// that draws MilkDrop itself, nor where there is nothing to blend.
   ui.Image _scene(Scene scene, ShowState st, int w, int h, {bool live = true}) {
-    final layers = _sceneLayers(scene, st, w, h, live: live);
+    final layers = _treated(_sceneLayers(scene, st, w, h, live: live), live ? st.rig : (st.rigFrom ?? st.rig), st, w, h);
     if (!live || scene.layers.any((l) => l.samplers.contains('milk'))) return layers;
     final rig = st.rig;
     final blend = rig.blend;
@@ -356,6 +358,58 @@ class _StagePainter extends CustomPainter {
     final out = _pass(w, h, (c) => c.drawRect(Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()), Paint()..shader = _under));
     layers.dispose();
     if (ground.own) ground.image.dispose();
+    return out;
+  }
+
+  ui.FragmentShader? _treat;
+
+  /// The figure's picture through the treatment its rig asks for (an ascii, a
+  /// dither, a print, heat, ridgelines, a map: dance_fx.frag's), with the hands'
+  /// knobs — for any scene. Not where the figure drew it itself (the dancers' and
+  /// the birds' own styles, [RigFigure.style] the treatment's name).
+  ui.Image _treated(ui.Image img, ShowRig rig, ShowState st, int w, int h) {
+    final fig = rig.figure;
+    final t = fig.treatment;
+    if (fig.kind == Figure.none || !imageTreatments.contains(t) || fig.style == t.name) return img;
+    final program = p.sims['dance_fx'];
+    if (program == null) return img;
+    final fx = _treat ??= program.fragmentShader();
+    final pal = st.palette;
+    final f = st.flat;
+    final dark = HSLColor.fromAHSL(1, pal.primary.hue, 0.45, 0.035).toColor();
+    // The looks as the dancers' finish draws them, on a picture [h] high.
+    final (ink, paper, cell, tint) = switch (t) {
+      Treatment.dither => (const Color(0xffeee7d6), HSLColor.fromAHSL(1, pal.primary.hue, 0.4, 0.07).toColor(), math.max(2.0, h / 220), 0.0),
+      Treatment.contour => (pal.accent.withSaturation(0.85).withLightness(0.62).toColor(), dark, 0.0, 0.0),
+      Treatment.halftone => (pal.primary.withSaturation(0.9).withLightness(0.55).toColor(), const Color(0xff050506), math.max(4.0, h / 110), 0.0),
+      Treatment.thermal => (Colors.white, Colors.black, 0.0, 0.0),
+      Treatment.lines => (pal.accent.withSaturation(0.35).withLightness(0.85).toColor(), const Color(0xff030303), math.max(5.0, h / 72), 0.0),
+      _ => (pal.accent.withSaturation(0.55).withLightness(0.78).toColor(), const Color(0xff040404), h / 44, 0.2),
+    };
+    final tuned = tunedCell(st, t.name, cell, tint);
+    fx
+      ..setFloat(0, w.toDouble())
+      ..setFloat(1, h.toDouble())
+      ..setFloat(2, (treatmentFxMode[t.name] ?? 1).toDouble())
+      ..setFloat(3, tuned.cell)
+      ..setFloat(4, ink.r)
+      ..setFloat(5, ink.g)
+      ..setFloat(6, ink.b)
+      ..setFloat(7, paper.r)
+      ..setFloat(8, paper.g)
+      ..setFloat(9, paper.b)
+      ..setFloat(10, tuned.tint)
+      ..setFloat(11, DanceSim.glyphCount.toDouble())
+      ..setFloat(12, (f['dyn.hit.kick'] ?? 0).clamp(0.0, 1.0))
+      ..setFloat(13, 0.5)
+      ..setFloat(14, 0.5)
+      ..setFloat(15, _clock.elapsedMicroseconds / 1e6)
+      ..setFloat(16, 0)
+      ..setImageSampler(0, img)
+      ..setImageSampler(1, DanceSim.glyphAtlas);
+    setFxKnobs(fx, 17, st, t.name);
+    final out = _pass(w, h, (c) => c.drawRect(Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()), Paint()..shader = fx));
+    img.dispose();
     return out;
   }
 
@@ -618,6 +672,7 @@ class _StagePainter extends CustomPainter {
     _blurH.dispose();
     _blurV.dispose();
     _finish.dispose();
+    _treat?.dispose();
     for (final s in _layerShaders.values) {
       s.dispose();
     }

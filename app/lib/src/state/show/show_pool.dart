@@ -55,7 +55,23 @@ class ShowPool {
     this.bias = 0,
     this.tier = 'auto',
     this.darkBeat = false,
+    this.tune = const {},
+    this.treat = const {},
+    this.mixes = const {},
   });
+
+  /// What is in each look's mix of treatments, by the look's id: the treatments'
+  /// names (`raw` for the look as drawn). A look with none of its own has the shipped
+  /// mix (show_tune.dart's mixOf: every one but those switched off as `treatment.*`).
+  final Map<String, List<String>> mixes;
+
+  /// The treatments' knobs, by `treatment.knob` (show_tune.dart): `lines.weight`.
+  final Map<String, double> tune;
+
+  /// What treatment a look goes through, by the look's id: one by name (`blocks` →
+  /// `ascii`), `raw` for none, `mix` or absent for the conductor's mix (show_tune.dart's
+  /// treatMix, of the `treatment.*` switched on).
+  final Map<String, String> treat;
 
   /// The quality tier the stage draws at: `auto`, `low`, `mid` or `high` (what the
   /// flock's count, the dancers' company and the working size go by).
@@ -107,7 +123,10 @@ class ShowPool {
           Quantise? quantise,
           double? bias,
           String? tier,
-          bool? darkBeat}) =>
+          bool? darkBeat,
+          Map<String, double>? tune,
+          Map<String, String>? treat,
+          Map<String, List<String>>? mixes}) =>
       ShowPool(
         off: off ?? this.off,
         lean: lean ?? this.lean,
@@ -117,9 +136,23 @@ class ShowPool {
         bias: bias ?? this.bias,
         tier: tier ?? this.tier,
         darkBeat: darkBeat ?? this.darkBeat,
+        tune: tune ?? this.tune,
+        treat: treat ?? this.treat,
+        mixes: mixes ?? this.mixes,
       );
 
   ShowPool withOff(String key, bool isOff) => copyWith(off: isOff ? {...off, key} : {for (final k in off) if (k != key) k});
+
+  /// A treatment's knob set, or back to its rest (null).
+  ShowPool withTune(String key, double? v) =>
+      copyWith(tune: v == null ? {for (final e in tune.entries) if (e.key != key) e.key: e.value} : {...tune, key: v});
+
+  /// [look] put through [treatment] (`raw`: none), or back to the mix (null).
+  ShowPool withTreat(String look, String? treatment) =>
+      copyWith(treat: treatment == null ? {for (final e in treat.entries) if (e.key != look) e.key: e.value} : {...treat, look: treatment});
+
+  /// [look]'s own mix of treatments, by name.
+  ShowPool withMix(String look, List<String> names) => copyWith(mixes: {...mixes, look: names});
 
   ShowPool withLean(String key, double v) => copyWith(lean: {...lean, key: v.clamp(0.0, 2.0)});
 
@@ -235,6 +268,9 @@ class ShowPool {
         if (bias != 0) 'bias': bias,
         if (tier != 'auto') 'tier': tier,
         if (darkBeat) 'darkBeat': true,
+        if (tune.isNotEmpty) 'tune': tune,
+        if (treat.isNotEmpty) 'treat': treat,
+        if (mixes.isNotEmpty) 'mixes': mixes,
       };
 
   factory ShowPool.fromJson(Map<String, dynamic> j) => ShowPool(
@@ -248,6 +284,11 @@ class ShowPool {
         bias: j['bias'] is num ? (j['bias'] as num).toDouble().clamp(-1.0, 1.0) : 0,
         tier: const ['auto', 'low', 'mid', 'high'].contains(j['tier']) ? '${j['tier']}' : 'auto',
         darkBeat: j['darkBeat'] == true,
+        tune: j['tune'] is Map ? {for (final e in (j['tune'] as Map).entries) if (e.value is num) '${e.key}': (e.value as num).toDouble()} : const {},
+        treat: j['treat'] is Map ? {for (final e in (j['treat'] as Map).entries) if (e.value is String) '${e.key}': e.value as String} : const {},
+        mixes: j['mixes'] is Map
+            ? {for (final e in (j['mixes'] as Map).entries) if (e.value is List) '${e.key}': [for (final v in e.value as List) '$v']}
+            : const {},
       );
 
   /// From the preferences the show kept before it had a pool (one time, on the first

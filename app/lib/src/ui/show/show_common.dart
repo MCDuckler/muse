@@ -1,8 +1,11 @@
 // The common block every scene shader reads (shaders/show/common.glsl), from the
 // frame: the one list both stages hand their shaders — the Flutter stage
 // (show_canvas.dart) and the native one (native_stage.dart).
+import 'dart:ui' as ui;
+
 import '../../state/show/show_rig.dart';
 import '../../state/show/show_state.dart';
+import '../../state/show/show_tune.dart';
 import 'scene.dart';
 
 /// The finish for [scene] in [st]: the frame's rig's (the look's, with the hands'
@@ -96,4 +99,27 @@ double stageWhite(ShowState st) {
   final beat = st.flat['master.beat.phase'] ?? 0;
   final strobe = st.macros.strobe > 0 && ((beat * 4).floor() % 2 == 0) ? st.macros.strobe : 0.0;
   return strobe > st.macros.hit * 0.7 ? strobe : st.macros.hit * 0.7;
+}
+
+/// The treatment knobs (uWeight, uSpacing, uHeight, uGain, uSize) of dance_fx.frag
+/// and flock_fx.frag, from [st]'s tune for [treatment], into [s] from float [at].
+/// No treatment (a lens) sets them to 0: the shader's own look.
+void setFxKnobs(ui.FragmentShader s, int at, ShowState st, String? treatment) {
+  final k = treatment == null ? null : fxKnobs(st.macros.tune, treatment);
+  s
+    ..setFloat(at, k?.weight ?? 0)
+    ..setFloat(at + 1, k?.spacing ?? 0)
+    ..setFloat(at + 2, k?.height ?? 0)
+    ..setFloat(at + 3, k?.gain ?? 0)
+    ..setFloat(at + 4, k?.size ?? 0);
+}
+
+/// A treatment's cell (an ascii's letter height, a dither's dot, the ridgelines'
+/// gap…) of [cell] as drawn, through [st]'s knobs; and its tint, where it has one.
+({double cell, double tint}) tunedCell(ShowState st, String treatment, double cell, double tint) {
+  final tune = st.macros.tune;
+  return (
+    cell: cell * fxKnobs(tune, treatment).cell,
+    tint: treatment == 'ascii' ? (tune[tuneKey('ascii', TuneKnob.tint)] ?? tint) : tint,
+  );
 }

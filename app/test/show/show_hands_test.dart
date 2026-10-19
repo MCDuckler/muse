@@ -11,6 +11,8 @@ import 'package:muse/src/state/show/show_director.dart';
 import 'package:muse/src/state/show/show_engine.dart';
 import 'package:muse/src/state/show/show_pool.dart';
 import 'package:muse/src/state/show/show_rig.dart';
+import 'package:muse/src/state/show/show_tune.dart';
+import 'package:muse/src/state/show/show_state.dart' show ShowMacros;
 import 'package:muse/src/state/show/show_store.dart';
 
 import '../fake_audio.dart';
@@ -184,6 +186,8 @@ void main() {
 
   test('a style holds for its figure only, and the rules keep a pair apart', () async {
     final t = DateTime(2026, 1, 1);
+    // No treatment from the conductor's mix meanwhile: the styles alone.
+    show.setTreat('dance-art', 'raw');
     show.chooseScene('dance-art');
     show.setStyle('ascii', forKind: Figure.dancers);
     show.tick(t);
@@ -250,4 +254,65 @@ void main() {
     expect(store.kept?.pool.isOn('dancer.joe'), isFalse);
     expect(store.kept?.pool.isOn('treatment.contour'), isFalse, reason: 'shipped off');
   });
+  test('a scene put through a treatment carries it on its frame, with the knobs; the dancers take it as their style', () {
+    final t = DateTime(2026, 1, 1);
+    show.chooseScene('kinetic');
+    show.setTreat('kinetic', 'lines');
+    show.setTune('lines', TuneKnob.weight, 2);
+    show.tick(t);
+    expect(show.state.rig.figure.treatment, Treatment.lines);
+    expect(show.state.rig.figure.style, isNull, reason: 'kinetic has no style of its own: the stage pass draws it');
+    expect(show.state.macros.tune['lines.weight'], 2);
+    expect(ShowMacros.fromJson(show.state.macros.toJson()).tune['lines.weight'], 2, reason: 'over the wire to a stage of its own');
+    // Another scene, off, is as it draws itself.
+    show.setTreat('flash', 'raw');
+    show.chooseScene('flash');
+    show.tick(t.add(const Duration(milliseconds: 16)));
+    expect(show.state.rig.figure.treatment, Treatment.auto);
+    // The stylised dancers draw it as their own style.
+    show.setTreat('dance-art', 'ascii');
+    show.chooseScene('dance-art');
+    show.tick(t.add(const Duration(milliseconds: 32)));
+    expect(show.state.rig.figure.treatment, Treatment.ascii);
+    expect(show.state.rig.figure.style, 'ascii');
+    // Kept.
+    expect(ShowPool.fromJson(show.pool.toJson()).treat, {'kinetic': 'lines', 'flash': 'raw', 'dance-art': 'ascii'});
+    show.setTune('lines', TuneKnob.weight, null);
+    expect(show.pool.tune, isEmpty);
+    expect(tuneOf(show.pool.tune, 'lines', TuneKnob.weight), 1);
+  });
+  test('left to the mix, a scene goes through what the conductor picks of its own mix, the same for the same bars', () {
+    final t = DateTime(2026, 1, 1);
+    show.chooseScene('kinetic');
+    // Everything out of kinetic's mix but the dither: the dither it is.
+    var p = show.pool;
+    for (final x in [Treatment.raw, ...imageTreatments]) {
+      p = withInMix(p, 'kinetic', x.name, x == Treatment.dither);
+    }
+    show.setPool(p);
+    show.tick(t);
+    expect(show.state.rig.figure.treatment, Treatment.dither);
+    // Kinetic's mix is its own: flash still has the whole shipped one.
+    expect(mixOf(show.pool, 'flash'), containsAll(['raw', 'ascii', 'dither', 'halftone', 'thermal', 'lines']));
+    expect(mixOf(show.pool, 'kinetic'), ['dither']);
+    expect(ShowPool.fromJson(show.pool.toJson()).mixes, {'kinetic': ['dither']}, reason: 'kept');
+    // Only the look as drawn: none.
+    p = withInMix(withInMix(p, 'kinetic', 'dither', false), 'kinetic', 'raw', true);
+    show.setPool(p);
+    show.tick(t.add(const Duration(milliseconds: 16)));
+    expect(show.state.rig.figure.treatment, Treatment.auto);
+    // The whole mix on: what it picks holds from frame to frame.
+    for (final x in imageTreatments) {
+      p = withInMix(p, 'kinetic', x.name, true);
+    }
+    show.setPool(p);
+    show.tick(t.add(const Duration(milliseconds: 32)));
+    final picked = show.state.rig.figure.treatment;
+    for (var i = 3; i < 10; i++) {
+      show.tick(t.add(Duration(milliseconds: 16 * i)));
+      expect(show.state.rig.figure.treatment, picked);
+    }
+    expect(treatMix(p, 'kinetic').first, (Treatment.raw, 2.0), reason: 'as drawn counts twice');
+  });
+
 }

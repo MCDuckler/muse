@@ -55,7 +55,9 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
 import '../../state/show/show_state.dart';
+import '../../state/show/show_tune.dart';
 import 'show_canvas.dart' show StagePrograms;
+import 'show_common.dart' show setFxKnobs, tunedCell;
 import 'show_dance.dart' show DanceHandoff;
 import 'show_dance_draw.dart' show DanceCam, V3;
 import 'show_flock_bird.dart';
@@ -117,8 +119,10 @@ class FlockClock {
       MemeMood.rage => [FlockLook.embers, FlockLook.neon, FlockLook.chrono, FlockLook.thermal, FlockLook.halftone, FlockLook.radar, FlockLook.ink, FlockLook.wire],
       MemeMood.vibe => FlockLook.values,
     };
-    // The looks the pool switched off are out.
-    final pool = [for (final l in all) if (!StylePool.off.contains(l.name)) l];
+    // The image treatments are the conductor's (the frame's rig's treatment), as
+    // for every scene: this clock picks the flock's own. The looks the pool switched
+    // off are out.
+    final pool = [for (final l in all) if (!treatmentFxMode.containsKey(l.name) && !StylePool.off.contains(l.name)) l];
     if (pool.isEmpty) return not ?? FlockLook.ink;
     return _pick(pool, memeHash(salt % 9973, n, 127), not);
   }
@@ -167,6 +171,22 @@ class FlockClock {
         MemeMood.rage => 3.6 + 0.6 * energy,
         MemeMood.vibe => 2.1 + 0.8 * energy,
       };
+
+  /// The pace along the path at [phase] of the beat (0..1), as a share of the
+  /// flock's speed: a push on the beat that eases off to a drift before the next,
+  /// one on average so the flock goes no further than it would. The wings keep
+  /// their own time; only the way through the air is on the beat.
+  static double surge(MemeMood mood, double phase) {
+    final k = switch (mood) {
+      MemeMood.sleep => 0.15,
+      MemeMood.wake => 0.32,
+      MemeMood.vibe => 0.38,
+      MemeMood.rage => 0.5,
+    };
+    // e^-4ph over its own mean over the beat ((1 - e^-4) / 4).
+    final push = math.exp(-4 * phase.clamp(0.0, 1.0)) / 0.24542;
+    return 1 + k * (push - 1);
+  }
 
   /// Wingbeats a track beat: one; two in the drop; a flap every fourth beat asleep,
   /// gliding between.
@@ -261,9 +281,14 @@ class FlockSteer {
     this.linkR = 1.0,
     this.waySalt = 0,
     this.roomK = 1,
+    this.surge = 1,
   });
 
   final double dt, beats, beatsPerSecond, speed;
+
+  /// How far along their way the birds go this step, as a share of their velocity:
+  /// the beat's push (FlockClock.surge). Not their wingbeats.
+  final double surge;
 
   /// How many birds should be flying.
   final int want;
@@ -690,9 +715,9 @@ class FlockModel {
       vx[i] = ux;
       vy[i] = uy;
       vz[i] = uz;
-      x += ux * dt;
-      y += uy * dt;
-      z += uz * dt;
+      x += ux * dt * s.surge;
+      y += uy * dt * s.surge;
+      z += uz * dt * s.surge;
       // Never far through the floor, never out of the room (the room's pull does the
       // rest, softly — birds born at a dancer's feet rise, they do not jump).
       if (z < -0.3) z = -0.3;
@@ -914,6 +939,9 @@ class FlockSim implements SimLayer {
   ui.Image? _out;
   ui.FragmentShader? _fx;
   static ui.Image? _glyphs;
+
+  /// The look the frame asked for last (RigFigure.style), to see it let go.
+  String? _styledWas;
   static const _ramp = ' .:-=+*#%@';
 
   // The birds on the picture: where, how deep, how big (pixels a metre), and their
@@ -999,12 +1027,16 @@ class FlockSim implements SimLayer {
     final flightK = dropNow ? 1.0 : ((beats - _flightAt) / 4).clamp(0.0, 1.0);
     if (flightK >= 1) _flightWas = null;
 
-    // ---- the look: a section at a time.
-    if (_look == null || dropNow || sectionNow) {
-      _look = _forcedLook ?? FlockClock.look(mood, salt, _lookN++, not: _look);
+    // ---- the look: a section at a time — and at once when a look from the frame
+    // (the hands', the conductor's treatment) is let go, so it does not linger.
+    final styled = st.rig.figure.style;
+    final letGo = styled == null && _styledWas != null;
+    _styledWas = styled;
+    if (_look == null || dropNow || sectionNow || letGo) {
+      _look = _forcedLook ?? FlockClock.look(mood, salt, _lookN++, not: letGo ? null : _look);
+      if (letGo) _want = FlockClock.count(_flight, mood, energy, look: _look);
     }
     // The hands' own look, from the frame (the show's rig): on at once.
-    final styled = st.rig.figure.style;
     if (styled != null) {
       final want = FlockLook.values.where((a) => a.name == styled).firstOrNull;
       if (want != null) _look = want;
@@ -1096,6 +1128,8 @@ class FlockSim implements SimLayer {
       glide: cue.sleep,
       linkR: 0.95 + 0.55 * cue.beat,
       waySalt: salt,
+      // Along the path on the beat: pushed on it, drifting before the next.
+      surge: playing ? FlockClock.surge(mood, beats - beats.floorToDouble()) : 1,
     );
     _watch.start();
     _steer = steer;
@@ -1559,6 +1593,7 @@ class FlockSim implements SimLayer {
       ..setFloat(16, l.barSaw)
       ..setImageSampler(0, img)
       ..setImageSampler(1, glyphs);
+    setFxKnobs(fx, 17, l.st, treatmentFxMode.containsKey(look.name) ? look.name : null);
     final r = ui.PictureRecorder();
     Canvas(r).drawRect(Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()), Paint()..shader = fx);
     final pic = r.endRecording();
@@ -1570,6 +1605,15 @@ class FlockSim implements SimLayer {
 
   /// The finish's colours and cell for [look] on a picture [h] high.
   ({int mode, Color ink, Color paper, double cell, double tint}) _postParams(_Cue l, FlockLook look, int h) {
+    final q = _postDrawn(l, look, h);
+    if (!treatmentFxMode.containsKey(look.name)) return q;
+    // Through the hands' knobs for the treatment (state/show/show_tune.dart).
+    final t = tunedCell(l.st, look.name, q.cell, q.tint);
+    return (mode: q.mode, ink: q.ink, paper: q.paper, cell: t.cell, tint: t.tint);
+  }
+
+  /// The finish's colours and cell as the look draws them, before the knobs.
+  ({int mode, Color ink, Color paper, double cell, double tint}) _postDrawn(_Cue l, FlockLook look, int h) {
     final pal = l.st.palette;
     final mode = flockFxMode[look] ?? 1;
     final dark = HSLColor.fromAHSL(1, pal.primary.hue, 0.45, 0.035).toColor();

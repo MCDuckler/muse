@@ -123,8 +123,14 @@ float shape(vec2 c, float style, float w, float aa) {
 }
 
 // The field for the roll of bar [barN]: how lit each point is, 0..1, with the cells'
-// own shading, and the kick's share for the cell there. Returns (field, share).
-vec2 fieldAt(vec2 uv, float barN, float salt, float aspect) {
+// own shading; the kick's share for the shape there; and whether that shape is in
+// the secondary. Returns (field, share, second).
+//
+// The share and the colour go by the shape's own number — its cell, or for the
+// bands, the ring, the stripe or the row it is — counted the way the shape moves,
+// so a ring keeps its colour as it steps outward and a stripe as it slides, and
+// the colours fall on the shapes whatever the grid's size this bar.
+vec3 fieldAt(vec2 uv, float barN, float salt, float aspect) {
   float phraseN = floor(barN / 4.0);
   float comp = floor(hash(vec2(phraseN, 7.0 + salt)) * 8.0);
   float styleA = floor(hash(vec2(phraseN, 13.0 + salt)) * 8.0);
@@ -141,10 +147,10 @@ vec2 fieldAt(vec2 uv, float barN, float salt, float aspect) {
   vec2 f = fract(g);
   float aa = cells / uResolution.y * 2.0;
 
-  // The cell's number (its beats), and which cells take the kick this bar: about
-  // half, fully; the rest a little.
+  // The cell's number (its beats). Which shapes take the kick this bar (about half,
+  // fully; the rest a little) is decided below, by the shape's own number.
   float ci = floor(hash(cell * 4.7 + salt) * 64.0);
-  float kickShare = mix(0.25, 1.0, step(0.45, hash(cell * 4.7 + barN * 1.3 + salt)));
+  vec2 id = cell;
   float lit = 0.0;
   float w = 0.55 + 0.33 * hash(cell + barN + salt);
   bool band = false;
@@ -157,19 +163,25 @@ vec2 fieldAt(vec2 uv, float barN, float salt, float aspect) {
   } else if (comp == 2.0) {
     float ring = floor(max(abs(p.x), abs(p.y)) * cells * 0.5 - floor(uBarSaw * 4.0));
     lit = mod(ring, 2.0);
+    id = vec2(ring, 31.0);
     w = 0.95;
     f = fract(vec2(max(abs(p.x), abs(p.y)) * cells * 0.5));
     band = true;
   } else if (comp == 3.0) {
-    float rows = cells;
-    float along = mod(barN, 2.0) < 1.0 ? uv.y : uv.x;
-    float row = floor(along * rows);
-    float at = floor(uBarSaw * rows);
+    // Rows wiped across the bar (columns on alternate bars), on the grid's own rows
+    // so a row is whole cells: all on, dim, and the row at the scan bright.
+    bool across = mod(barN, 2.0) < 1.0;
+    float row = across ? cell.y : cell.x;
+    float span = across ? cells * 0.5 : ceil(cells * aspect * 0.5);
+    float at = floor(-span + uBarSaw * 2.0 * span);
     lit = (row == at ? 1.0 : 0.45) * step(0.25, hash(vec2(row, barN + salt)));
     w = 0.88;
+    id = vec2(row, across ? 37.0 : 39.0);
   } else if (comp == 4.0) {
-    float s = fract((p.x + p.y) * cells * 0.35 - floor(uBarSaw * 4.0) * 0.25);
+    float sx = (p.x + p.y) * cells * 0.35 - floor(uBarSaw * 4.0) * 0.25;
+    float s = fract(sx);
     lit = step(0.5, s);
+    id = vec2(floor(sx), 41.0);
     w = 0.95;
     f = vec2(fract(s * 2.0));
     band = true;
@@ -181,11 +193,15 @@ vec2 fieldAt(vec2 uv, float barN, float salt, float aspect) {
     lit = smoothstep(0.0, 0.1, uBarSaw - hash(cell * 3.1 + barN + salt));
   } else {
     float d = max(abs(p.x), abs(p.y));
-    float ring = fract(d * 3.0 - uBarSaw * 4.0 * 0.5);
+    float rr = d * 3.0 - uBarSaw * 4.0 * 0.5;
+    float ring = fract(rr);
     lit = smoothstep(0.55, 0.65, ring) * step(0.3, hash(cell + barN + salt));
+    // The squares lit are the ring's as it runs outward: its colour goes with it.
+    id = vec2(floor(rr), 43.0);
     w = 0.88;
   }
 
+  float kickShare = mix(0.25, 1.0, step(0.45, hash(id * 4.7 + barN * 1.3 + salt)));
   vec2 c = (f - 0.5) * 2.0;
   float sh;
   if (band) {
@@ -207,7 +223,9 @@ vec2 fieldAt(vec2 uv, float barN, float salt, float aspect) {
   }
   // A little darker toward a cell's edge: blocks, not a sheet.
   float inner = 1.0 - 0.22 * clamp(max(abs(c.x), abs(c.y)), 0.0, 1.0);
-  return vec2(lit * sh * inner, kickShare);
+  // Some shapes in the secondary, by the phrase (stable over its bars).
+  float second = step(0.68, hash(id * 5.3 + phraseN * 1.7 + salt));
+  return vec3(lit * sh * inner, kickShare, second);
 }
 
 void main() {
@@ -221,17 +239,15 @@ void main() {
   float salt = floor(uM1 * 97.0);
 
   // This bar's roll, cut in on the bar: clear-cut, nothing blended.
-  vec2 now = fieldAt(uv, barN, salt, aspect);
+  vec3 now = fieldAt(uv, barN, salt, aspect);
   float field = now.x;
   float kickShare = now.y;
+  float second = now.z;
 
   // The beat lights the field and lets it dim between the hits, eased both ways.
   float ph = beatPh();
   float pulse = 0.65 + 0.35 * smoothstep(0.0, 0.04, ph) * (1.0 - smoothstep(0.1, 0.9, ph));
   vec3 ink = primary;
-  // Some cells in the secondary, by the phrase (stable over its bars).
-  vec2 pg = (uv - 0.5) * vec2(aspect, 1.0);
-  float second = step(0.7, hash(floor(pg * 6.0) * 5.3 + phraseN + salt));
   ink = mix(ink, secondary, second);
   vec3 col = ink * field * pulse;
 
