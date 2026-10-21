@@ -816,7 +816,8 @@ class DanceSim implements SimLayer {
     final letGo = styled == null && _styledWas != null;
     _styledWas = styled;
     if (_art == null || dropNow || sectionNow || letGo) {
-      _art = _forcedArt ?? DanceClock.art(mood, salt, n, not: letGo ? null : _art, gpu: gpu);
+      // The session's seed with the record's: another night, other styles.
+      _art = _forcedArt ?? DanceClock.art(mood, salt ^ st.macros.seed, n, not: letGo ? null : _art, gpu: gpu);
     }
     // The hands' own rendering, from the frame (the show's rig): on at once.
     if (styled != null) {

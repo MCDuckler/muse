@@ -107,11 +107,12 @@ ShowPool withInMix(ShowPool pool, String look, String name, bool on) {
 
 /// What the conductor may pick for [look], with how much: what is in its mix, the look
 /// as drawn twice over (a scene is itself more often than not), each leaned as the
-/// pool leans `treatment.<name>`.
+/// pool leans `treatment.<name>`; none switched off (gone everywhere).
 List<(Treatment, double)> treatMix(ShowPool pool, String look) {
   final on = mixOf(pool, look);
   return [
     for (final t in [Treatment.raw, ...imageTreatments])
-      if (on.contains(t.name)) (t, (t == Treatment.raw ? 2.0 : 1.0) * pool.leanOf('treatment.${t.name}')),
+      if (on.contains(t.name) && (t == Treatment.raw || pool.isOn('treatment.${t.name}')))
+        (t, (t == Treatment.raw ? 2.0 : 1.0) * pool.leanOf('treatment.${t.name}')),
   ];
 }

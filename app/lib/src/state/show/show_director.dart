@@ -127,7 +127,7 @@ class ShowDirector {
 
   /// How many bars the director's background has been on.
   int get groundBars => _groundSinceBar;
-  static const groundHoldBars = 32;
+  static const groundHoldBars = 16;
 
   void _tire(ShowState s) {
     final dt = s.dt;

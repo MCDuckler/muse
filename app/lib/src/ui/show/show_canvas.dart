@@ -199,6 +199,17 @@ class _Working {
   }
 }
 
+/// The figure's picture each frame, before the blend (the scene's layers, through
+/// its treatment, with the bodies' coverage marks): the rules' grid's stills are
+/// baked from it (test/shots/rule_stills_bake_test.dart). Kept only for the call.
+@visibleForTesting
+void Function(Scene scene, ShowState st, ui.Image figure)? stageFigureTap;
+
+/// The working size held where it is asked for, however late the frames (a bake
+/// under a test's slow clock).
+@visibleForTesting
+bool stageSizeHeld = false;
+
 class _StagePainter extends CustomPainter {
   _StagePainter(this.feed, this.book, this.p, this.covers, Listenable tick, double scale, this.preview)
       : working = _Working(scale),
@@ -329,6 +340,7 @@ class _StagePainter extends CustomPainter {
   /// that draws MilkDrop itself, nor where there is nothing to blend.
   ui.Image _scene(Scene scene, ShowState st, int w, int h, {bool live = true}) {
     final layers = _treated(_sceneLayers(scene, st, w, h, live: live), live ? st.rig : (st.rigFrom ?? st.rig), st, w, h);
+    if (live) stageFigureTap?.call(scene, st, layers);
     if (!live || scene.layers.any((l) => l.samplers.contains('milk'))) return layers;
     final rig = st.rig;
     final blend = rig.blend;
@@ -652,7 +664,7 @@ class _StagePainter extends CustomPainter {
     if (fin.trails <= 0 && !feedsOnItself) current.dispose();
 
     final took = _clock.elapsed - began;
-    working.frameAt(began.inMicroseconds);
+    if (!stageSizeHeld) working.frameAt(began.inMicroseconds);
     onFrame?.call(took);
   }
 

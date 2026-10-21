@@ -2,6 +2,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muse/src/state/show/show_pool.dart';
 import 'package:muse/src/state/show/show_rig.dart';
+import 'package:muse/src/state/show/show_tune.dart';
 
 void main() {
   test('a switch off, and all of them off is none off', () {
@@ -185,24 +186,100 @@ void main() {
     expect(ShowPool.lookupFigure(const RigFigure(kind: Figure.dancers)).style, isNull);
   });
 
-  test('any figure\'s style keys a rule: the flock\'s paper looks stay off MilkDrop, and its clock is told', () {
+  test('any figure\'s style keys a rule: the flock\'s paper looks stay off MilkDrop, and its clock leans away', () {
     const p = ShowPool.none;
     expect(ShowPool.comboKey(const RigFigure(kind: Figure.birds, style: 'ink'), Ground.milk), 'figure.birds.style.ink|ground.milk');
     expect(p.together(const RigFigure(kind: Figure.birds, style: 'ink'), Ground.milk), isFalse);
     expect(p.together(const RigFigure(kind: Figure.birds, style: 'ink'), Ground.wash), isTrue);
     expect(p.together(const RigFigure(kind: Figure.birds, style: 'embers'), Ground.milk), isTrue);
-    // The clocks ask the rules for the ground on now.
+    // The clocks ask the rules for the ground on now: a style kept off it is picked
+    // less (not never: then the stage puts it on another background).
     StylePool.from(p);
     StylePool.ground = Ground.milk;
-    expect(StylePool.allows(Figure.birds, 'ink'), isFalse);
-    expect(StylePool.allows(Figure.birds, 'embers'), isTrue);
-    expect(StylePool.allows(Figure.dancers, 'viewports'), isFalse);
-    StylePool.ground = Ground.wash;
     expect(StylePool.allows(Figure.birds, 'ink'), isTrue);
+    expect(StylePool.weight(Figure.birds, 'ink'), closeTo(0.3, 1e-9));
+    expect(StylePool.weight(Figure.birds, 'embers'), 1);
+    expect(StylePool.weight(Figure.dancers, 'viewports'), closeTo(0.3, 1e-9));
+    StylePool.ground = Ground.wash;
+    expect(StylePool.weight(Figure.birds, 'ink'), 1);
     StylePool.from(p.withOff('treatment.embers', true));
     expect(StylePool.allows(Figure.birds, 'embers'), isFalse, reason: 'switched off');
     StylePool.from(ShowPool.none);
     StylePool.ground = Ground.black;
+  });
+
+  test('together or never in a tap: back to the default where that is what is asked', () {
+    const p = ShowPool.none;
+    const plain = RigFigure(kind: Figure.dancers, style: 'plain');
+    const kinetic = RigFigure(kind: Figure.kinetic);
+    expect(p.together(plain, Ground.milk), isFalse, reason: 'paper on a busy ground');
+    // Together by hand: a word of the hands' (the page as drawn).
+    final a = p.withTogether(plain, Ground.milk, true);
+    expect(a.together(plain, Ground.milk), isTrue);
+    expect(a.combos[ShowPool.comboKey(plain, Ground.milk)], ComboRule.over);
+    // Never again: the default, so no word kept.
+    expect(a.withTogether(plain, Ground.milk, false).combos, isEmpty);
+    // A pair together by default, never by hand, together again: nothing kept.
+    final b = p.withTogether(kinetic, Ground.wash, false);
+    expect(b.together(kinetic, Ground.wash), isFalse);
+    expect(b.withTogether(kinetic, Ground.wash, true).combos, isEmpty);
+    // A shipped exception switched off and on: the exception back.
+    const mono = RigFigure(kind: Figure.dancers, style: 'mono');
+    final c = p.withTogether(mono, Ground.milk, false).withTogether(mono, Ground.milk, true);
+    expect(c.answer(mono, Ground.milk).from, RuleFrom.exception);
+    expect(c.blendFor(mono, Ground.milk).ground, GroundMode.keyhole);
+  });
+
+  test('a shipped rule blends one of its ways by the seed; a word of the hands\' has its one', () {
+    const p = ShowPool.none;
+    const kinetic = RigFigure(kind: Figure.kinetic);
+    final seen = {for (var i = 0; i < 12; i++) p.blendFor(kinetic, Ground.milk, seed: i).ground};
+    expect(seen, shippedWays['full|busy']!.toSet());
+    expect(p.blendFor(kinetic, Ground.milk, seed: 5).ground, p.blendFor(kinetic, Ground.milk, seed: 5).ground, reason: 'the same seed, the same way');
+    final mine = p.withBlend(kinetic, Ground.milk, GroundMode.mask);
+    expect({for (var i = 0; i < 6; i++) mine.blendFor(kinetic, Ground.milk, seed: i).ground}, {GroundMode.mask});
+    // OTHER BLEND steps through the rule's ways first, then the rest; keyhole only
+    // where there is a figure to cut it.
+    final ways = p.blendsFor(kinetic, Ground.milk);
+    expect(ways.take(3), shippedWays['full|busy']);
+    expect(ways, isNot(contains(GroundMode.keyhole)));
+    expect(p.blendsFor(const RigFigure(kind: Figure.dancers), Ground.milk), contains(GroundMode.keyhole));
+    // Never, and black: as drawn, whatever the seed.
+    expect(p.blendFor(const RigFigure(kind: Figure.dancers, style: 'plain'), Ground.milk, seed: 3).ground, GroundMode.over);
+    expect(p.blendFor(kinetic, Ground.black, seed: 3).ground, GroundMode.over);
+  });
+
+  test('a part switched off is gone: a way of blending, a treatment', () {
+    const kinetic = RigFigure(kind: Figure.kinetic);
+    final p = ShowPool.none.withOff('blend.contrast', true).withOff('blend.screen', true);
+    expect(p.blendOn(GroundMode.contrast), isFalse);
+    expect(p.blendOn(GroundMode.over), isTrue, reason: 'as drawn is always there');
+    // full|busy's ways are contrast, screen, dim: only dim is left.
+    expect({for (var i = 0; i < 6; i++) p.blendFor(kinetic, Ground.milk, seed: i).ground}, {GroundMode.dim});
+    // A rule of the hands' in a way switched off: the next way that is on.
+    final mine = p.withBlend(kinetic, Ground.wash, GroundMode.contrast);
+    expect(mine.blendFor(kinetic, Ground.wash).ground, GroundMode.add);
+    expect(p.blendsFor(kinetic, Ground.milk), isNot(contains(GroundMode.contrast)));
+    // A treatment off: out of every scene's mix, even one the hands made.
+    final t = ShowPool.none.withMix('kinetic', ['raw', 'ascii', 'dither']).withOff('treatment.ascii', true);
+    expect([for (final (x, _) in treatMix(t, 'kinetic')) x.name], ['raw', 'dither']);
+  });
+
+  test('a branch set whole: every style never, then every style together', () {
+    const styles = ['plain', 'mono', 'trails', 'viewports'];
+    bool all(ShowPool p, Ground g, bool together) =>
+        styles.every((s) => p.answer(RigFigure(kind: Figure.dancers, style: s), g).never != together) && p.answer(const RigFigure(kind: Figure.dancers), g).never != together;
+    final never = ShowPool.none.withBranch(Figure.dancers, styles, Ground.wash, false);
+    expect(all(never, Ground.wash, false), isTrue);
+    expect(never.combos.length, 1, reason: 'one word on the figure');
+    final together = never.withBranch(Figure.dancers, styles, Ground.wash, true);
+    expect(all(together, Ground.wash, true), isTrue);
+    // The viewports (a world of their own) needed a word of their own; the rest kept theirs.
+    expect(together.combos.keys, ['figure.dancers.style.viewports|ground.wash']);
+    // A style's word over a branch's never: just that style together.
+    final one = never.withTogether(const RigFigure(kind: Figure.dancers, style: 'trails'), Ground.wash, true);
+    expect(one.answer(const RigFigure(kind: Figure.dancers, style: 'trails'), Ground.wash).never, isFalse);
+    expect(one.answer(const RigFigure(kind: Figure.dancers, style: 'plain'), Ground.wash).never, isTrue);
   });
 
   test('json both ways', () {

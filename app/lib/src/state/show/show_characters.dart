@@ -134,7 +134,7 @@ class RuleAnswer {
 /// How often a thing comes on by itself (the director's, a figure's clock's, the
 /// backgrounds' rotation): never, less, as much as any, more.
 enum Often {
-  never('NEVER', 'never by itself (by hand it still goes on)', 0),
+  never('OFF', 'switched off: gone everywhere until switched back on (ON/OFF)', 0),
   rarely('RARELY', 'less than the others', 0.4),
   normal('NORMAL', 'as often as any', 1),
   often('OFTEN', 'more than the others', 2);
@@ -204,6 +204,19 @@ const shippedRules = <String, ComboRule>{
   'world|glow': ComboRule.never,
   'world|busy': ComboRule.never,
   'world|picture': ComboRule.never,
+};
+
+/// The ways each shipped rule may blend, the first its own: the director takes one
+/// per scene, background and record (a session's own), so the same pair is not
+/// always the same picture. A rule of the hands' has its one way.
+const shippedWays = <String, List<GroundMode>>{
+  'lights|glow': [GroundMode.add, GroundMode.screen],
+  'lights|busy': [GroundMode.contrast, GroundMode.screen, GroundMode.add],
+  'lights|picture': [GroundMode.dim, GroundMode.window, GroundMode.add],
+  'paper|glow': [GroundMode.over],
+  'paper|picture': [GroundMode.over, GroundMode.keyhole],
+  'full|glow': [GroundMode.add, GroundMode.screen],
+  'full|busy': [GroundMode.contrast, GroundMode.screen, GroundMode.dim],
 };
 
 const shippedRuleWhy = <String, String>{

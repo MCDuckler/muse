@@ -41,6 +41,7 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
     booth.stepApplied.addListener(_stepSaid);
     booth.fxFired.addListener(_fxSaid);
     _state = _blank(DateTime.now());
+    _macros = _macros.copyWith(seed: seed);
     // MilkDrop's sound: the record's file here, or its stream.
     MilkFeed.shared.pcm.source = (id) {
       final local = booth.a.offlinePath?.call(id);
@@ -97,7 +98,7 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   List<(RigGround, double)> _groundPool() {
     final p = pool;
     final out = <(RigGround, double)>[];
-    if (p.isOn('ground.milk')) out.add((RigGround.milk, 7));
+    if (p.isOn('ground.milk')) out.add((RigGround.milk, 4));
     if (p.isOn('ground.wash')) out.add((const RigGround(kind: Ground.wash), 1));
     if (p.isOn('ground.pulse')) {
       for (final v in pulseVariants) {
@@ -255,11 +256,23 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
                 ? rig.ground
                 : (director.ground ?? RigGround.black);
     final looked = ShowPool.lookupFigure(figure);
-    if (!whole && !handsGround && ground.kind != Ground.black && (pool.ruleFor(looked, ground.kind)?.off ?? false)) ground = RigGround.black;
+    if (!whole && !handsGround && ground.kind != Ground.black && pool.answer(looked, ground.kind).never) {
+      // Never together: the scene on another of the director's backgrounds (the most
+      // likely one it goes with), else on black — it still plays.
+      final others = _groundPool()..sort((a, b) => b.$2.compareTo(a.$2));
+      ground = others.map((o) => o.$1).where((g) => !pool.answer(looked, g.kind).never).firstOrNull ?? RigGround.black;
+    }
     StylePool.ground = ground.kind;
     // The blend: the hands' where locked; else the rules' for this figure on this
     // ground (contrast under MilkDrop and as the default; a shape on the pulse adds…).
-    final blend = _hands.locked(RigSlot.blend) && !whole ? _hands.blend : (whole ? rig.blend : pool.blendFor(looked, ground.kind, from: rig.blend));
+    // A shipped rule's way is picked by the pair, the record and the session.
+    // (A hash of its own: Object.hash is seeded afresh each run.)
+    var blendSeed = 0x811c9dc5;
+    for (final c in '$look|${looked.style}|${ground.kind.name}|${_state.master.trackId}|$seed'.codeUnits) {
+      blendSeed = ((blendSeed ^ c) * 0x01000193) & 0x7fffffff;
+    }
+    final blend =
+        _hands.locked(RigSlot.blend) && !whole ? _hands.blend : (whole ? rig.blend : pool.blendFor(looked, ground.kind, from: rig.blend, seed: blendSeed));
     return rig.copyWith(
       ground: ground,
       figure: figure,
@@ -278,14 +291,22 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   Treatment? _treatFor(String look, Figure kind) {
     final say = pool.treat[look];
     if (say == 'raw') return null;
-    if (say != null && say != 'mix') return Treatment.values.asNameMap()[say];
+    // One the hands put on, unless they switched it off since (gone everywhere).
+    if (say != null && say != 'mix') return pool.isOn('treatment.$say') ? Treatment.values.asNameMap()[say] : null;
     if (kind == Figure.none || kind == Figure.words || kind == Figure.meme) return null;
-    final options = treatMix(pool, look);
+    // A figure whose styles these are (the dancers, the birds): their own how often
+    // over each (never, rarely, often), as their clock reads it.
+    final styled = kind == Figure.dancers || kind == Figure.birds;
+    final options = [
+      for (final (t, w) in treatMix(pool, look))
+        if (!styled || t == Treatment.raw || pool.styleOn(kind, t.name))
+          (t, styled && t != Treatment.raw ? w * pool.leanOf('style.${kind.name}.${t.name}') : w),
+    ];
     if (options.isEmpty) return null;
     final m = _state.master;
     final slot = (m.barIndex ?? 0) ~/ treatBars;
     var h = 0x811c9dc5;
-    for (final c in '$look:${m.trackId ?? 0}:$slot'.codeUnits) {
+    for (final c in '$look:${m.trackId ?? 0}:$slot:$seed'.codeUnits) {
       h = ((h ^ c) * 0x01000193) & 0x7fffffff;
     }
     final total = options.fold<double>(0, (a, o) => a + o.$2);
@@ -311,9 +332,9 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
       if (r.ground.kind != Ground.milk) return true;
       return pool.isOn('ground.milk') && !(_hands.locked(RigSlot.ground) && _hands.ground.kind != Ground.milk);
     }
-    final ground =
-        _hands.locked(RigSlot.ground) ? _hands.ground.kind : (r.ground.kind != Ground.black ? r.ground.kind : (director.ground?.kind ?? Ground.black));
-    return pool.together(ShowPool.lookupFigure(r.figure), ground);
+    // Any other may go on: where the rules keep it off the background, it is put on
+    // another (_withHands), not left out.
+    return true;
   }
 
   // ------------------------------------------------------------------ launches
@@ -385,9 +406,17 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   ShowMacros _macros = ShowMacros.none;
   ShowMacros get macros => _macros;
 
+  /// This session's own number (ShowMacros.seed): the director's turns, the styles,
+  /// the treatments and the blends go by it with the record.
+  final int seed = seedForTests ?? math.Random().nextInt(0x3fffffff) + 1;
+
+  /// A fixed [seed] for the engines made from here on (the tests').
+  @visibleForTesting
+  static int? seedForTests;
+
   /// Which scene is on: see show_director.dart. Its scenes are handed in by whoever
   /// loaded the scene files (the stage, the room's clock).
-  final director = ShowDirector();
+  late final director = ShowDirector(seed: seed);
 
   /// The hits and the exposure: see show_dynamics.dart.
   final dynamics = ShowDynamics();

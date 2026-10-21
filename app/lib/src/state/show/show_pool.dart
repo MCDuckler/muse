@@ -165,13 +165,16 @@ class ShowPool {
   /// axes it means where they are auto: `plain` is the textured shade, `mono` the
   /// silhouette, and `ascii`, `dither`, `chrono`… are treatments.
   static List<String> comboKeys(RigFigure f, Ground g) {
-    final t = f.treatment != Treatment.auto ? f.treatment : (f.kind == Figure.dancers ? treatmentOfStyle(f.style) : null);
+    final t = f.treatment != Treatment.auto ? f.treatment : (f.kind == Figure.dancers || f.kind == Figure.birds ? treatmentOfStyle(f.style) : null);
     final sh = f.shade != Shade.auto ? f.shade : (f.kind == Figure.dancers ? shadeOfStyle(f.style) : null);
     // A dancer's shade or treatment set without a style means the style of that name.
     final style = f.style ?? (f.kind == Figure.dancers ? styleOfShade(f.shade) ?? (f.treatment != Treatment.auto ? f.treatment.name : null) : null);
     return [
       if (style != null) 'figure.${f.kind.name}.style.$style|ground.${g.name}',
       if (t != null) 'figure.${f.kind.name}.treatment.${t.name}|ground.${g.name}',
+      // A word for the treatment on any scene: under one for this scene in it,
+      // over one for the scene as it is.
+      if (t != null && anyTreatments.contains(t)) treatmentKey(t, g),
       if (sh != null) 'figure.${f.kind.name}.shade.${sh.name}|ground.${g.name}',
       'figure.${f.kind.name}|ground.${g.name}',
     ];
@@ -218,6 +221,13 @@ class ShowPool {
       f.kind == Figure.words || (f.kind == Figure.dancers && (f.style == 'plain' || f.shade == Shade.textured)) ? FigureMode.over : FigureMode.same;
 
   static String comboKey(RigFigure f, Ground g) => comboKeys(f, g).first;
+
+  /// The treatments a word may hold for any scene (the image treatments: any scene
+  /// can go through one, and the dancers and the flock have them as styles).
+  static const anyTreatments = {Treatment.ascii, Treatment.dither, Treatment.halftone, Treatment.thermal, Treatment.lines, Treatment.contour};
+
+  /// The key of a word for any scene through [t] on [g]: `treatment.<name>|ground.<g>`.
+  static String treatmentKey(Treatment t, Ground g) => 'treatment.${t.name}|ground.${g.name}';
 
   // ---------------------------------------------------------------- characters and rules
   /// What [f] is like (its style's character, else its figure's), the hands' over
@@ -278,6 +288,12 @@ class ShowPool {
         follow = true;
         break;
       }
+      // A treatment's way for any scene: the way, where the scene goes on the
+      // background at all (its never stands; the treatment's own never is never).
+      if (!mine.off && k.startsWith('treatment.')) {
+        final rest = withCombo(k, null).answer(f, g);
+        if (rest.never) return rest;
+      }
       return RuleAnswer(rule: mine, from: RuleFrom.yourException, character: c, backdrop: b, key: k);
     }
     if (!follow) {
@@ -298,13 +314,90 @@ class ShowPool {
 
   /// The blend for [f] on [g], with [from]'s strength: the answer's way (as drawn on
   /// black), and its figures' way or the figure's own ([figureModeFor]).
-  RigBlend blendFor(RigFigure f, Ground g, {RigBlend from = RigBlend.over}) {
-    final r = answer(f, g).rule;
+  RigBlend blendFor(RigFigure f, Ground g, {RigBlend from = RigBlend.over, int seed = 0}) {
+    final a = answer(f, g);
+    final r = a.rule;
+    // A shipped rule has a few ways; the seed takes one (the pair's, the record's) of
+    // those switched on. A way switched off is never used: the next that is on.
+    final ways = a.from == RuleFrom.rule ? shippedWays[a.key]?.where(blendOn).toList() : null;
+    final want = ways != null && ways.isNotEmpty ? ways[seed.abs() % ways.length] : (r.ground ?? defaultMode);
+    final way = blendOn(want) ? want : anyWay.firstWhere(blendOn);
     return from.copyWith(
-      ground: g == Ground.black || r.off ? GroundMode.over : (r.ground ?? defaultMode),
+      ground: g == Ground.black || r.off ? GroundMode.over : way,
       figure: r.figure ?? figureModeFor(f),
       auto: true,
     );
+  }
+
+  /// Whether a way of blending may be used at all (the hands' switch, `blend.<mode>`):
+  /// switched off it is gone everywhere — the rules, the cells, OTHER BLEND. As drawn
+  /// is always on (a scene on black is drawn so).
+  bool blendOn(GroundMode m) => m == GroundMode.over || isOn('blend.${m.name}');
+
+  /// The ways tried, in turn, where the one asked for is switched off.
+  static const anyWay = [GroundMode.contrast, GroundMode.screen, GroundMode.add, GroundMode.dim, GroundMode.window, GroundMode.mask, GroundMode.over];
+
+  /// What holds for [f] on [g] without the hands' own word on the pair.
+  RuleAnswer asShipped(RigFigure f, Ground g) => copyWith(combos: const {}).answer(f, g);
+
+  /// [f] on [g] together or never, as the hands say: back to what holds without a
+  /// word on this pair where that is what they ask (the shipped rules, or a word on
+  /// the whole figure), else a word of their own — together the shipped way where the
+  /// rules have one for it, as drawn for a page or a world, else the difference.
+  ShowPool withTogether(RigFigure f, Ground g, bool together) {
+    final key = comboKey(f, g);
+    final base = withCombo(key, null).answer(f, g);
+    if (base.never != together) return withCombo(key, null);
+    if (!together) return withCombo(key, ComboRule.never);
+    final shipped = asShipped(f, g);
+    if (!shipped.never) {
+      return withCombo(key, ComboRule(ground: shippedWays[shipped.key]?.first ?? shipped.rule.ground ?? defaultMode, figure: shipped.rule.figure));
+    }
+    final c = base.character;
+    return withCombo(key, ComboRule(ground: c == Character.paper || c == Character.world ? GroundMode.over : GroundMode.contrast));
+  }
+
+  /// A figure and every one of its [styles] on [g], set whole (a branch of the rules'
+  /// grid): never — one word on the figure, the styles' own words gone; together —
+  /// those gone, and a word of its own for the figure and each style the rules would
+  /// still keep off (the others keep their own ways).
+  ShowPool withBranch(Figure kind, List<String> styles, Ground g, bool together) {
+    final fig = RigFigure(kind: kind);
+    var p = withCombo(comboKey(fig, g), null);
+    for (final s in styles) {
+      p = p.withCombo(comboKey(RigFigure(kind: kind, style: s), g), null);
+    }
+    if (!together) return p.withCombo(comboKey(fig, g), ComboRule.never);
+    if (p.answer(fig, g).never) p = p.withTogether(fig, g, true);
+    for (final s in styles) {
+      final f = RigFigure(kind: kind, style: s);
+      if (p.answer(f, g).never) p = p.withTogether(f, g, true);
+    }
+    return p;
+  }
+
+  /// The blends to step through for [f] on [g] (OTHER BLEND): the rule's own ways,
+  /// then the others that suit any pair.
+  List<GroundMode> blendsFor(RigFigure f, Ground g) {
+    final a = asShipped(f, g);
+    final cut = f.kind == Figure.dancers || f.kind == Figure.words;
+    return <GroundMode>{
+      ...?shippedWays[a.key],
+      GroundMode.contrast,
+      GroundMode.screen,
+      GroundMode.add,
+      GroundMode.dim,
+      GroundMode.window,
+      GroundMode.mask,
+      if (cut) GroundMode.keyhole,
+      GroundMode.over,
+    }.where(blendOn).toList();
+  }
+
+  /// [f] on [g] blended as [m], the hands' (its figures as they go now).
+  ShowPool withBlend(RigFigure f, Ground g, GroundMode m) {
+    final now = answer(f, g).rule;
+    return withCombo(comboKey(f, g), ComboRule(ground: m, figure: now.off ? null : now.figure));
   }
 
   /// [c] for the thing kept by [key] (a figure, a style, a background), or the
@@ -468,10 +561,13 @@ class StylePool {
 
   /// Whether a figure's clock may put [style] on now: not switched off, and not a
   /// pair the rules call never with the ground on.
-  static bool allows(Figure kind, String style) => pool.styleOn(kind, style) && !off.contains(style) && !pool.answer(RigFigure(kind: kind, style: style), ground).never;
+  static bool allows(Figure kind, String style) => pool.styleOn(kind, style) && !off.contains(style);
 
-  /// How much a figure's clock leans on [style] (how often: rarely, normal, often).
-  static double weight(Figure kind, String style) => pool.leanOf('style.${kind.name}.$style');
+  /// How much a figure's clock leans on [style]: how often (rarely, normal, often),
+  /// and less where the rules keep it off the ground on now (it is still picked now
+  /// and then — then the stage puts it on another background).
+  static double weight(Figure kind, String style) =>
+      pool.leanOf('style.${kind.name}.$style') * (pool.answer(RigFigure(kind: kind, style: style), ground).never ? 0.3 : 1);
 }
 
 /// What the stages and the simulations read of the quality tier (show_pool.dart's

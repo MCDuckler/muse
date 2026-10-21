@@ -32,6 +32,11 @@ class DemoShowFeed extends ChangeNotifier implements ShowFeed {
   final double bpm;
   final ShowDirector director;
 
+  /// A style and a ground for the figure, held (a still of one style on its own, for
+  /// the rules' grid's bake): none, the director's and the shipped way.
+  String? style;
+  RigGround? ground;
+
   /// The looks, by id, for the frame's rig (as the engine's).
   final Map<String, Look> looks;
 
@@ -248,8 +253,9 @@ class DemoShowFeed extends ChangeNotifier implements ShowFeed {
     // WETOWL_SHOW_GROUND=wash|milk|camera|cover|pulse:rays|field:drift. Blended by
     // the shipped rules.
     if (rig.figure.kind != Figure.none) {
-      final ground = _forcedGround ?? (rig.ground.kind == Ground.black ? RigGround.milk : rig.ground);
-      rig = rig.copyWith(ground: ground, blend: ShowPool.none.blendFor(ShowPool.lookupFigure(rig.figure), ground.kind, from: rig.blend));
+      final ground = this.ground ?? _forcedGround ?? (rig.ground.kind == Ground.black ? RigGround.milk : rig.ground);
+      final figure = style == null ? rig.figure : rig.figure.copyWith(style: style);
+      rig = rig.copyWith(ground: ground, figure: figure, blend: ShowPool.none.blendFor(ShowPool.lookupFigure(figure), ground.kind, from: rig.blend));
     }
     st = st.copyWith(
       scene: d.scene,

@@ -78,6 +78,8 @@ void main() {
   late MemoryShowStore store;
 
   setUp(() async {
+    // One session's number, so the director's turns and the blends' ways are the same each run.
+    ShowEngine.seedForTests = 3;
     JustAudioPlatform.instance = FakeJustAudio();
     store = MemoryShowStore();
     booth = Booth(ApiClient(baseUrl: 'http://example.invalid')..token = 'x', mixer: QuietMixer(), showStore: store);
@@ -97,7 +99,7 @@ void main() {
     expect(show.state.scene, 'kinetic');
     expect(show.state.rig.figure.kind, Figure.kinetic);
     expect(show.state.rig.ground.kind, Ground.milk, reason: 'milk under every scene is the default');
-    expect(show.state.rig.blend.ground, GroundMode.contrast);
+    expect(shippedWays['full|busy'], contains(show.state.rig.blend.ground), reason: 'one of the rule\'s ways');
     expect(show.state.rig.finish.trails, 0.35);
     // Every background switched off: black, plainly.
     show.setPool(show.pool.copyWith(off: {...show.pool.off, for (final g in Ground.values) 'ground.${g.name}'}));
@@ -137,7 +139,7 @@ void main() {
     show.lock(RigSlot.finish, false);
     show.tick(t.add(const Duration(milliseconds: 64)));
     expect(show.state.rig.ground.kind, Ground.milk);
-    expect(show.state.rig.blend.ground, GroundMode.contrast);
+    expect(shippedWays['lights|busy'], contains(show.state.rig.blend.ground), reason: 'flash: lights on a busy ground');
     expect(show.state.rig.finish.bloom, 0.25);
     expect(show.state.rig.locks, isEmpty);
     // The figure's lock is the director's hold.
@@ -200,14 +202,19 @@ void main() {
     show.chooseScene('dance-art');
     show.tick(t.add(const Duration(milliseconds: 32)));
     expect(show.state.rig.figure.style, isNull);
-    // The table: flash never on milk → the director passes flash by, under milk.
+    // The rules: flash never on milk → flash still plays, on another of the
+    // director's backgrounds; on the hands' own (locked) it stays where it is put.
     await show.ready();
-    expect(show.director.on.map((s) => s.id), contains('flash'));
     show.setPool(show.pool.withCombo('figure.flash|ground.milk', ComboRule.never));
-    expect(show.director.on.map((s) => s.id), isNot(contains('flash')));
-    // On a background of the hands' own (the wash: the shapes add over it): together again.
-    show.setGround(const RigGround(kind: Ground.wash));
-    expect(show.director.on.map((s) => s.id), contains('flash'));
+    expect(show.director.on.map((s) => s.id), contains('flash'), reason: 'a never pair moves the scene, it does not drop it');
+    show.chooseScene('flash');
+    show.tick(t.add(const Duration(milliseconds: 48)));
+    expect(show.director.ground?.kind, Ground.milk);
+    expect(show.state.rig.ground.kind, isNot(Ground.milk));
+    expect(show.state.rig.ground.kind, isNot(Ground.black), reason: 'another background, not black');
+    show.setGround(const RigGround(kind: Ground.milk));
+    show.tick(t.add(const Duration(milliseconds: 64)));
+    expect(show.state.rig.ground.kind, Ground.milk, reason: 'the hands\' ground is the hands\'');
     show.lock(RigSlot.ground, false);
     // The moves: the pool's switches and stars reach the dancers' statics.
     show.setPool(show.pool.withOff('move.long22', true).withLean('move.long30', 2));
@@ -224,12 +231,12 @@ void main() {
     show.chooseScene('kinetic');
     show.tick(t);
     expect(show.state.rig.ground.kind, Ground.milk);
-    expect(show.state.rig.blend.ground, GroundMode.contrast);
+    expect(shippedWays['full|busy'], contains(show.state.rig.blend.ground));
     // The pool with MilkDrop off: the director's grounds are the rest; a shape adds.
     show.setPool(show.pool.withOff('ground.milk', true).withOff('ground.cover', true).withOff('ground.field', true).withOff('ground.camera', true).withOff('ground.wash', true));
     show.tick(t.add(const Duration(milliseconds: 16)));
     expect(show.state.rig.ground.kind, Ground.pulse);
-    expect(show.state.rig.blend.ground, GroundMode.add);
+    expect(shippedWays['full|glow'], contains(show.state.rig.blend.ground));
     expect(show.state.rig.blend.auto, isTrue);
     // The hands' ground wins over the director's.
     show.setGround(const RigGround(kind: Ground.wash));

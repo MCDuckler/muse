@@ -33,6 +33,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
+import '../../state/show/show_pool.dart' show StylePool;
 import '../../state/show/show_rig.dart';
 import '../../state/show/show_state.dart';
 import 'show_canvas.dart' show StagePrograms;
@@ -816,7 +817,9 @@ class WordsSim implements SimLayer {
     final slot = (beats / 32).floor();
     if (_styleN == 0 || sectionTurned || slot != _slot) {
       _slot = slot;
-      _style = WordsClock.style(m.section, energy, salt, _styleN, breakdown: m.breakdown, not: _styleN == 0 ? null : _style);
+      // Not a face switched off (the ON/OFF list: gone everywhere).
+      _style = WordsClock.style(m.section, energy, salt ^ st.macros.seed, _styleN,
+          breakdown: m.breakdown, not: _styleN == 0 ? null : _style, off: [for (final w in WordsStyle.values) if (!StylePool.allows(Figure.words, w.name)) w]);
       _styleN++;
     }
     final style = _forced ?? _styleNamed(st.rig.figure.kind == Figure.words ? st.rig.figure.style : null) ?? _style;

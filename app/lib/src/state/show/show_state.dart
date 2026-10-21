@@ -575,7 +575,13 @@ class ShowMacros {
     this.dancersOff = const [],
     this.macros = const [0, 0, 0, 0, 0, 0, 0, 0],
     this.tune = const {},
+    this.seed = 0,
   });
+
+  /// The session's own number: the styles', the treatments' and the blends' picks go
+  /// by it with the record, so the same record looks different another night (and
+  /// the same on every stage of this one).
+  final int seed;
 
   /// The treatments' knobs (state/show/show_tune.dart), the pool's, carried to every
   /// stage with the frame.
@@ -614,6 +620,7 @@ class ShowMacros {
     double? hit,
     List<double>? macros,
     Map<String, double>? tune,
+    int? seed,
   }) =>
       ShowMacros(
         intensity: intensity ?? this.intensity,
@@ -627,6 +634,7 @@ class ShowMacros {
         hit: hit ?? this.hit,
         macros: macros ?? this.macros,
         tune: tune ?? this.tune,
+        seed: seed ?? this.seed,
       );
 
   void flatInto(Map<String, double> m) {
@@ -636,6 +644,7 @@ class ShowMacros {
     m['show.blackout'] = blackout ? 1 : 0;
     m['show.freeze'] = freeze ? 1 : 0;
     m['show.hit'] = hit;
+    m['show.seed'] = seed.toDouble();
     for (var i = 0; i < macros.length; i++) {
       m['show.macro.${i + 1}'] = macros[i];
     }
@@ -653,6 +662,7 @@ class ShowMacros {
         if (dancer != null) 'dancer': dancer,
         if (dancersOff.isNotEmpty) 'dancersOff': dancersOff,
         if (tune.isNotEmpty) 'tune': tune,
+        if (seed != 0) 'seed': seed,
       };
 
   factory ShowMacros.fromJson(Map<String, dynamic> j) => ShowMacros(
@@ -667,6 +677,7 @@ class ShowMacros {
         hit: _d(j['hit']),
         macros: [for (final v in (j['macros'] as List? ?? const [])) _d(v)],
         tune: j['tune'] is Map ? {for (final e in (j['tune'] as Map).entries) '${e.key}': _d(e.value)} : const {},
+        seed: (j['seed'] as num?)?.toInt() ?? 0,
       );
 }
 

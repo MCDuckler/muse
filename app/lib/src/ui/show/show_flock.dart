@@ -1041,7 +1041,7 @@ class FlockSim implements SimLayer {
     final letGo = styled == null && _styledWas != null;
     _styledWas = styled;
     if (_look == null || dropNow || sectionNow || letGo) {
-      _look = _forcedLook ?? FlockClock.look(mood, salt, n, not: letGo ? null : _look);
+      _look = _forcedLook ?? FlockClock.look(mood, salt ^ st.macros.seed, n, not: letGo ? null : _look);
       if (letGo) _want = FlockClock.count(_flight, mood, energy, look: _look);
     }
     // The hands' own look, from the frame (the show's rig): on at once.

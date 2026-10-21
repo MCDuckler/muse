@@ -107,6 +107,7 @@ flutter:
     # The stage's scenes: one JSON per look. See lib/src/ui/show/scene.dart.
     - assets/show/scenes/
     - assets/show/thumbs/
+    - assets/show/stills/
     # The Siebenschläfer scene's bank: photographs, cut-outs, captions, and who took
     # the pictures (CREDITS.md). See lib/src/ui/show/show_meme.dart.
     - assets/show/siebenschlaefer/
