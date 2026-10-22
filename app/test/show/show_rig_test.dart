@@ -1,6 +1,5 @@
 // The rig and the look: round trips, the hands over a look, the words.
 import 'package:flutter_test/flutter_test.dart';
-import 'package:muse/src/state/show/show_pool.dart';
 import 'package:muse/src/state/show/show_rig.dart';
 import 'package:muse/src/state/show/show_state.dart';
 
@@ -8,9 +7,8 @@ void main() {
   const rig = ShowRig(
     ground: RigGround(kind: Ground.field, field: 'drift', dim: 0.5, knobs: {'m1': 0.3}),
     figure: RigFigure(kind: Figure.dancers, shade: Shade.chrome, dressing: Dressing.none, treatment: Treatment.ascii, style: 'ascii', knobs: {'m2': 1}),
-    blend: RigBlend(ground: GroundMode.window, figure: FigureMode.same, strength: 0.7, auto: false),
+    blend: RigBlend(mask: Mask.keyhole, mix: Mix.screen, strength: 0.7),
     finish: RigFinish(trails: 0.3, bloom: 0.9, tone: 0, title: true, where: 'big', particles: ['sparks', 'dust']),
-    locks: {RigSlot.ground, RigSlot.finish},
   );
 
   test('a rig comes back from its json whole', () {
@@ -18,7 +16,6 @@ void main() {
     expect(back, rig);
     expect(back.ground.knobs['m1'], 0.3);
     expect(back.figure.style, 'ascii');
-    expect(back.locks, {RigSlot.ground, RigSlot.finish});
     expect(back.finish.particles, ['sparks', 'dust']);
   });
 
@@ -31,30 +28,19 @@ void main() {
     expect(back.ground.kind, Ground.black);
   });
 
-  test('the blend modes keep their numbers (under.frag\'s uMode, ws_blend)', () {
-    expect(GroundMode.through.index, 0);
-    expect(GroundMode.over.index, 1);
-    expect(GroundMode.add.index, 2);
-    expect(GroundMode.contrast.index, 11);
-    expect(GroundMode.keyhole.index, 12);
-    expect(GroundMode.values.length, 13, reason: 'a new mode goes at the end, and into under.frag and stage.cpp\'s clamp');
-  });
-
-  test('the blend comes from the answer: as drawn on black, the rule\'s way and its figures elsewhere', () {
-    const p = ShowPool.none;
-    const turntable = RigFigure(kind: Figure.turntable); // lights in the dark
-    expect(p.blendFor(turntable, Ground.black).ground, GroundMode.over);
-    expect(p.blendFor(turntable, Ground.cover).ground, GroundMode.dim, reason: 'lights on a picture: the picture dimmed');
-    expect(p.blendFor(turntable, Ground.cover).figure, FigureMode.over);
-    expect(p.blendFor(const RigFigure(kind: Figure.kinetic), Ground.wash).figure, FigureMode.same, reason: 'a full frame\'s rule says nothing of figures: its own way');
-    // The strength the look had stays.
-    expect(p.blendFor(turntable, Ground.cover, from: const RigBlend(strength: 0.4)).strength, 0.4);
+  test('the masks and the blends keep their numbers (under.frag\'s uMask and uMix, ws_blend)', () {
+    expect(Mask.values.map((m) => m.index), [0, 1, 2]);
+    expect(Mix.normal.index, 0);
+    expect(Mix.add.index, 1);
+    expect(Mix.screen.index, 2);
+    expect(Mix.contrast.index, 3);
+    expect(Mix.values.length, 4, reason: 'a new blend goes at the end, and into under.frag and stage.cpp\'s clamp');
+    expect(Ground.white.index, 7, reason: 'stage.cpp\'s ground kind 7');
   });
 
   test('the words', () {
-    expect(rig.word, 'field drift / dancers ascii chrome none ascii · window');
-    expect(const ShowRig(ground: RigGround.milk, figure: RigFigure(kind: Figure.birds)).word, 'milk / birds');
-    expect(rig.withLock(RigSlot.ground, false).locks, {RigSlot.finish});
+    expect(rig.word, 'field drift / dancers ascii chrome none ascii · keyhole · screen');
+    expect(const ShowRig(ground: RigGround.milk, figure: RigFigure(kind: Figure.birds)).word, 'milk / birds · normal');
   });
 
   test('a look keeps its meta and its rig', () {
@@ -80,7 +66,8 @@ void main() {
   test('the frame carries the rig, by name and as numbers', () {
     final st = ShowState(now: DateTime(2026), a: const ShowDeck(name: 'A'), b: const ShowDeck(name: 'B'), rig: rig);
     expect(st['rig.figure'], Figure.dancers.index);
-    expect(st['rig.blend.ground'], GroundMode.window.index);
+    expect(st['rig.blend.mask'], Mask.keyhole.index);
+    expect(st['rig.blend.mix'], Mix.screen.index);
     final back = ShowState.fromJson(st.toJson());
     expect(back.rig, rig);
   });

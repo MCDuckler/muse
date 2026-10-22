@@ -9,6 +9,10 @@
 //   {"t":"hello","v":1}
 //   {"t":"state","s":{...}}
 //   {"t":"event","e":{...}}
+//   {"t":"rules","r":[...],"c":"<combo key>"}   the hands' combination rules and the
+//                                               combination on, as they change: what
+//                                               the figures' clocks weigh their styles
+//                                               and their cameras by (StylePool)
 //   {"t":"ping"} / {"t":"pong"}
 import 'dart:async';
 import 'dart:convert';
@@ -17,6 +21,7 @@ import 'package:flutter/foundation.dart';
 
 import 'show_events.dart';
 import 'show_feed.dart';
+import 'show_pool.dart';
 import 'milk_feed.dart';
 import 'show_state.dart';
 
@@ -42,6 +47,26 @@ class ShowWire {
     if (now.difference(_lastAt) < every) return;
     _lastAt = now;
     say(jsonEncode({'t': 'state', 's': feed.state.toJson()}));
+    _rules();
+  }
+
+  List<ComboRule>? _rulesSent;
+  Combo? _comboSent;
+  bool _sentOnce = false;
+
+  /// The rules and the combination on, where they changed (the booth's StylePool: the
+  /// engine's, in this process).
+  void _rules() {
+    final rules = StylePool.pool.rules, combo = StylePool.combo;
+    if (_sentOnce && identical(rules, _rulesSent) && combo == _comboSent) return;
+    _sentOnce = true;
+    _rulesSent = rules;
+    _comboSent = combo;
+    say(jsonEncode({
+      't': 'rules',
+      'r': [for (final r in rules) r.toJson()],
+      if (combo != null) 'c': combo.key,
+    }));
   }
 
   void _event(ShowEvent e) => say(jsonEncode({'t': 'event', 'e': e.toJson()}));
@@ -107,6 +132,11 @@ class RemoteShowFeed extends ChangeNotifier implements ShowFeed {
       case 'event':
         final e = j['e'];
         if (e is Map) _events.add(ShowEvent.fromJson(e.cast<String, dynamic>()));
+      case 'rules':
+        final r = j['r'];
+        StylePool.from(ShowPool(rules: r is List ? [for (final x in r) ComboRule.fromJson(x)].whereType<ComboRule>().toList() : const []));
+        final c = j['c'];
+        StylePool.combo = c is String ? Combo.fromKey(c) : null;
       default:
         break;
     }

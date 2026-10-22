@@ -1,49 +1,34 @@
 #version 460 core
 #include <flutter/runtime_effect.glsl>
 
-// The blend: the figure layer put together with the ground under it, the rig's way
-// (lib/src/state/show/show_rig.dart, RigBlend). The figure layer has two kinds of
-// pixel — the figure itself (a body, a glyph, a bird) and its own backdrop (the
-// paper, the floor, the wash a scene drew behind it) — and the two may sit on the
-// ground differently.
+// The blend: the figure layer put together with the background under it, the
+// combination's way (lib/src/state/show/show_combos.dart). The figure layer has two
+// kinds of pixel — the figure itself (a body, a glyph, a bird, a shape's light) and
+// what is round it, which is the background's: a scene's own paper or wash is not
+// drawn over the background.
 //
-// uMode, the way the backdrop sits on the ground (GroundMode, in its order):
-//   0 through   dropped: the ground shows there
-//   1 over      as drawn: the ground is hidden
-//   2 add       the figure layer's light added over the ground (the plain way)
-//   3 screen    screened: neither can blow the other out
-//   4 dim       the ground at a third, the layer on top in full
-//   5 window    the layer is a window: the ground shows through its bright parts
-//   6 mask      the ground only where the layer is dark; the layer cuts it out
-//   7 frame     the layer in the middle, the ground as the frame round it, breathing
-//               with the kick
-//   8 bands     the stage in vertical bands, the ground and the layer by turns,
-//               stepping with the beat
-//   9 flip      the layer over the ground — and the ground over the layer on each kick
-//  10 outline   the ground's edges only, as lines under the layer
-//  11 contrast  the difference of the two: where they agree is dark
-//  12 keyhole   the figure is a window onto the ground: the ground where the figure
-//               is, black everywhere else (needs the figure's coverage: exact on the
-//               native stage, the marked bodies on a canvas)
-//
-// uFigureMode: 0 the figure's own pixels go over the ground as drawn; 1 they are
-// blended like the backdrop.
-// uCoverage says which pixels are the figure: 0 — the ones drawn at alpha 254/255
-// (a canvas keeps no coverage under 1, so the plain dancers draw their bodies so);
-// 1 — the alpha is the coverage (a treatment's glyphs, the birds).
+// uMask, where the background shows:
+//   0 none      everywhere
+//   1 keyhole   only inside the figure (black round it)
+//   2 inverted  only round the figure (the figure cut out of it)
+// uMix, how the figure and the background meet:
+//   0 normal    the figure over the background; under a mask, the mask's shape alone
+//   1 add       the two added
+//   2 screen    screened: neither can blow the other out
+//   3 contrast  the difference: where they agree is dark
+// uCoverage, which pixels are the figure: 0 the ones drawn at alpha 254/255 (a canvas
+// keeps no coverage under 1, so the plain dancers and the silhouettes mark their
+// bodies so); 1 the alpha (the native stage's dancers and birds, the words); 2 the
+// light (a shader's picture: bright is figure, dark is the background's).
 // uStrength: how much of the blend, 0..1 (0 is the figure layer as drawn).
-// uGroundFit: the ground picture's own aspect (16/9 for MilkDrop's or the camera's,
-// 1 for a cover) where it is to be filled and cropped to the stage; 0 where it is the
-// stage's own size already.
-// uGroundDim: how much of the ground, 0..1.
+// uGroundFit: the background picture's own aspect (16/9 for MilkDrop's or the
+// camera's, 1 for a cover) where it is to be filled and cropped to the stage; 0 where
+// it is the stage's own size already.
+// uGroundDim: how much of the background, 0..1.
 
 uniform vec2 uResolution;
-uniform float uMode;
-uniform float uBeatDecay;
-uniform float uBarSaw;
-uniform float uHitKick;
-uniform float uTime;
-uniform float uFigureMode;
+uniform float uMix;
+uniform float uMask;
 uniform float uCoverage;
 uniform float uStrength;
 uniform float uGroundFit;
@@ -64,68 +49,37 @@ vec2 groundAt(vec2 uv) {
   return clamp((uv - 0.5) * fit + 0.5, 0.0, 1.0);
 }
 
-vec3 ground(vec2 uv) { return texture(uGround, groundAt(uv)).rgb * uGroundDim; }
-
-// The backdrop's way: [s] the layer's pixel, [m] the ground's.
-vec3 blendOf(int mode, vec3 s, vec3 m, vec2 uv) {
-  float ls = lum(s);
-  if (mode == 0) return m;
-  if (mode == 1) return s;
-  if (mode == 3) return 1.0 - (1.0 - s) * (1.0 - m);
-  if (mode == 4) return s + m * 0.33;
-  if (mode == 5) return m * smoothstep(0.03, 0.5, ls) * 1.3 + s * 0.15;
-  if (mode == 6) return m * (1.0 - smoothstep(0.04, 0.35, ls)) + s;
-  if (mode == 7) {
-    float inset = 0.16 - 0.03 * uHitKick;
-    vec2 d = abs(uv - 0.5);
-    float inside = 1.0 - smoothstep(0.5 - inset - 0.01, 0.5 - inset, max(d.x, d.y));
-    // The layer drawn into the middle, smaller.
-    vec2 inner = (uv - 0.5) / (1.0 - 2.0 * inset) + 0.5;
-    vec3 si = texture(uScene, clamp(inner, 0.0, 1.0)).rgb;
-    return mix(m, si, inside);
-  }
-  if (mode == 8) {
-    float bands = 6.0;
-    float band = floor(uv.x * bands + floor(uBarSaw * 4.0));
-    float which = mod(band, 2.0);
-    // A soft seam between bands.
-    float f = fract(uv.x * bands);
-    float seam = smoothstep(0.0, 0.03, f) * smoothstep(1.0, 0.97, f);
-    return mix(m, s, which) * (0.85 + 0.15 * seam) + mix(s, m, which) * 0.08;
-  }
-  if (mode == 9) {
-    vec3 sceneOver = s + m * 0.3;
-    vec3 milkOver = m + s * 0.3;
-    return mix(sceneOver, milkOver, uHitKick);
-  }
-  if (mode == 10) {
-    vec2 px = 1.5 / uResolution;
-    float l0 = lum(ground(uv + vec2(px.x, 0.0))) - lum(ground(uv - vec2(px.x, 0.0)));
-    float l1 = lum(ground(uv + vec2(0.0, px.y))) - lum(ground(uv - vec2(0.0, px.y)));
-    float edge = clamp(length(vec2(l0, l1)) * 6.0, 0.0, 1.0);
-    vec3 tint = normalize(m + 0.05) * 1.2;
-    return tint * edge * (0.6 + 0.4 * uBeatDecay) + s;
-  }
-  if (mode == 11) return abs(s - m) * 1.2;
-  return s + m;
-}
-
 void main() {
   vec2 uv = FlutterFragCoord().xy / uResolution;
   vec4 sa = texture(uScene, uv);
   vec3 s = sa.rgb;
-  // The figure's coverage: the alpha (a body at 254/255 counts whole), or the band.
-  float cov = uCoverage > 0.5 ? (sa.a >= 0.98 ? 1.0 : clamp(sa.a, 0.0, 1.0)) : step(0.98, sa.a) * step(sa.a, 0.9985);
-  vec3 m = ground(uv);
-  int mode = int(uMode + 0.5);
-  if (mode == 12) {
-    // The keyhole: the ground through the figure, black round it; the strength eases
-    // the figure's own picture back in.
-    fragColor = vec4(mix(s, m * cov, uStrength), 1.0);
-    return;
+  int how = int(uCoverage + 0.5);
+  float cov;
+  vec3 f;
+  if (how == 2) {
+    // The light is the figure; its picture as it is (dark adds nothing).
+    cov = smoothstep(0.02, 0.3, lum(s));
+    f = s;
+  } else {
+    // The alpha (a body at 254/255 counts whole), or the marked band; what is round
+    // the figure is dropped.
+    cov = how == 1 ? (sa.a >= 0.98 ? 1.0 : clamp(sa.a, 0.0, 1.0)) : step(0.98, sa.a) * step(sa.a, 0.9985);
+    f = s * cov;
   }
-  vec3 back = blendOf(mode, s, m, uv);
-  vec3 fig = uFigureMode > 0.5 ? back : s;
-  vec3 col = mix(back, fig, cov);
+  vec3 m = texture(uGround, groundAt(uv)).rgb * uGroundDim;
+  int mask = int(uMask + 0.5);
+  vec3 g = mask == 1 ? m * cov : (mask == 2 ? m * (1.0 - cov) : m);
+  int mix_ = int(uMix + 0.5);
+  vec3 col;
+  if (mix_ == 1) {
+    col = g + f;
+  } else if (mix_ == 2) {
+    col = 1.0 - (1.0 - g) * (1.0 - clamp(f, 0.0, 1.0));
+  } else if (mix_ == 3) {
+    // The figure's light clamped: a glow above white would cancel the difference.
+    col = abs(clamp(f, 0.0, 1.0) - g) * 1.2;
+  } else {
+    col = mask == 0 ? m * (1.0 - cov) + f : g;
+  }
   fragColor = vec4(mix(s, col, uStrength), 1.0);
 }

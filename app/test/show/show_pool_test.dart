@@ -1,301 +1,234 @@
-// The pool: switches, leans, the combo table and what the old preferences become.
+// The pool: the combinations' rules (cards multiply, the most particular exception
+// says the rest), the switches and leans of the rest, and what the old preferences
+// and the old document become.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muse/src/state/show/show_pool.dart';
 import 'package:muse/src/state/show/show_rig.dart';
-import 'package:muse/src/state/show/show_tune.dart';
+import 'package:muse/src/ui/show/show_dance.dart' show DanceArt, DanceShot;
+import 'package:muse/src/ui/show/show_flock.dart' show FlockLook, FlockShot;
+import 'package:muse/src/ui/show/show_words.dart' show WordsStyle;
+
+const _plainOnMilk = Combo(ground: 'milk', scene: 'dance-art', style: 'plain');
 
 void main() {
-  test('a switch off, and all of them off is none off', () {
-    var p = ShowPool.none.withOff('treatment.contour', true);
-    expect(p.isOn('treatment.contour'), isFalse);
-    expect(p.isOn('treatment.ascii'), isTrue);
-    expect(p.on('treatment', Treatment.values, (t) => t.name), isNot(contains(Treatment.contour)));
-    for (final t in Treatment.values) {
-      p = p.withOff('treatment.${t.name}', true);
-    }
-    expect(p.on('treatment', Treatment.values, (t) => t.name), Treatment.values);
-    expect(p.withOff('treatment.contour', false).isOn('treatment.contour'), isTrue);
+  test('a switch off, and a lean kept between nought and two', () {
+    final p = ShowPool.none.withOff('dancer.joe', true).withLean('move.long22', 5);
+    expect(p.isOn('dancer.joe'), isFalse);
+    expect(p.isOn('dancer.chris'), isTrue);
+    expect(p.leanOf('move.long22'), 2);
+    expect(p.leanOf('move.short1'), 1);
   });
 
-  test('a lean is kept between nought and two', () {
-    final p = ShowPool.none.withLean('figure.birds', 5);
-    expect(p.leanOf('figure.birds'), 2);
-    expect(p.leanOf('figure.dancers'), 1);
+  test('nothing said: every combination at 1', () {
+    expect(comboWeight(_plainOnMilk, const []), 1);
+    expect(comboWeight(_plainOnMilk.copyWith(mask: Mask.keyhole, mix: Mix.contrast), const []), 1);
   });
 
-  test('as shipped: the plain dancers are ink on paper, never on MilkDrop; the glyphs light it; the silhouettes a keyhole by exception', () {
+  test('cards multiply; the most particular exception says the rest; a tie, the later', () {
+    const rules = [
+      ComboRule(grounds: {'milk'}, weight: 3),
+      ComboRule(mixes: {Mix.contrast}, weight: 2),
+      ComboRule(scenes: {'dance-art'}, grounds: {'milk'}, weight: 0.5),
+      ComboRule(scenes: {'dance-art'}, grounds: {'milk'}, styles: {'plain'}, weight: 4),
+    ];
+    // Normal on MilkDrop: MilkDrop's card 3 × the most particular exception 4.
+    expect(comboWeight(_plainOnMilk, rules), 12);
+    // Contrast: × 2 more.
+    expect(comboWeight(_plainOnMilk.copyWith(mix: Mix.contrast), rules), 24);
+    // Another style: the less particular exception.
+    expect(comboWeight(_plainOnMilk.copyWith(style: 'mono'), rules), 1.5);
+    // Two exceptions as particular as each other: the later one.
+    const tie = [ComboRule(scenes: {'dance-art'}, grounds: {'milk'}, weight: 0), ComboRule(scenes: {'dance-art'}, styles: {'plain'}, weight: 2)];
+    expect(comboWeight(_plainOnMilk, tie), 2);
+    final why = explainWeight(_plainOnMilk, rules);
+    expect(why.cards, [rules[0]]);
+    expect(why.exception, rules[3]);
+  });
+
+  test('an exception may bring one combination back from a less particular one, never from a card at 0', () {
+    const rules = [ComboRule(grounds: {'white'}, mixes: {Mix.add}, weight: 0), ComboRule(grounds: {'white'}, mixes: {Mix.add}, styles: {'plain'}, weight: 1)];
+    const add = Combo(ground: 'white', scene: 'dance-art', style: 'plain', mix: Mix.add);
+    expect(comboWeight(add, rules), 1);
+    expect(comboWeight(add.copyWith(style: 'mono'), rules), 0);
+    expect(comboWeight(add, [...rules, const ComboRule(scenes: {'dance-art'}, weight: 0)]), 0);
+  });
+
+  test('a batch: a few things of a row in one rule, the narrower of two exceptions the more particular', () {
+    const batch = ComboRule(scenes: {'turntable'}, masks: {Mask.keyhole}, mixes: {Mix.add, Mix.screen}, weight: 0);
+    const tt = Combo(ground: 'milk', scene: 'turntable', style: 'raw', mask: Mask.keyhole, mix: Mix.add);
+    expect(batch.matches(tt), isTrue);
+    expect(batch.matches(tt.copyWith(mix: Mix.screen)), isTrue);
+    expect(batch.matches(tt.copyWith(mix: Mix.contrast)), isFalse);
+    expect(batch.matches(tt.copyWith(mask: Mask.inverted)), isFalse);
+    expect(batch.pattern, '*|turntable|*|keyhole|add,screen');
+    expect(batch.breadth, 2);
+    expect(comboWeight(tt, const [batch]), 0);
+    expect(comboWeight(tt.copyWith(mix: Mix.contrast), const [batch]), 1);
+    // As many things said, the narrower wins whatever the order.
+    const one = ComboRule(scenes: {'turntable'}, masks: {Mask.keyhole}, mixes: {Mix.add}, weight: 2);
+    expect(comboWeight(tt, const [one, batch]), 2);
+    expect(comboWeight(tt, const [batch, one]), 2);
+    expect(comboWeight(tt.copyWith(mix: Mix.screen), const [one, batch]), 0);
+    // A few cards of a row: each of them carries the weight.
+    final p = ShowPool.none.withRule(const ComboRule(mixes: {Mix.add, Mix.screen}), 0.5);
+    expect(p.cardWeight(ComboAxis.mix, 'add'), 0.5);
+    expect(p.cardWeight(ComboAxis.mix, 'screen'), 0.7 * 0.5);
+    expect(p.cardWeight(ComboAxis.mix, 'normal'), 1);
+    // A row said again; none is any.
+    expect(batch.withOn(ComboAxis.mix, {'contrast'}).mixes, {Mix.contrast});
+    expect(batch.withOn(ComboAxis.mix, {}).mixes, isNull);
+    expect(batch.withOn(ComboAxis.ground, {'milk', 'white'}).on(ComboAxis.ground), {'milk', 'white'});
+    // Json: one thing a word, a few a list.
+    expect(batch.toJson(), {'scene': 'turntable', 'mask': 'keyhole', 'mix': ['add', 'screen'], 'weight': 0.0});
+    expect(ComboRule.fromJson(batch.toJson()), batch);
+    expect(ComboRule.fromJson(const {'mix': <String>[], 'weight': 1}), isNull);
+  });
+
+  test('as shipped: plain dancers on white and on MilkDrop are both in the rotation; nothing masked on black; nothing added onto white', () {
     const p = ShowPool.none;
-    const plain = RigFigure(kind: Figure.dancers, shade: Shade.textured);
-    expect(p.characterOf(plain), Character.paper);
-    expect(p.together(plain, Ground.milk), isFalse);
-    expect(p.answer(plain, Ground.milk).from, RuleFrom.rule);
-    expect(p.together(plain, Ground.wash), isTrue, reason: 'the page covers a glow: as drawn');
-    const ascii = RigFigure(kind: Figure.dancers, shade: Shade.chrome, treatment: Treatment.ascii);
-    expect(p.characterOf(ascii), Character.lights);
-    expect(p.blendFor(ascii, Ground.milk).ground, GroundMode.contrast);
-    expect(p.blendFor(ascii, Ground.milk).figure, FigureMode.over);
-    const mono = RigFigure(kind: Figure.dancers, shade: Shade.silhouette);
-    expect(p.together(mono, Ground.milk), isTrue);
-    expect(p.blendFor(mono, Ground.milk).ground, GroundMode.keyhole);
-    expect(p.answer(mono, Ground.milk).from, RuleFrom.exception);
-    expect(p.answer(mono, Ground.milk).why, isNotNull);
-    // On black everything is as drawn.
-    expect(p.blendFor(ascii, Ground.black).ground, GroundMode.over);
-    expect(p.answer(plain, Ground.black).from, RuleFrom.black);
-    expect(p.together(plain, Ground.black), isTrue);
+    expect(p.weightOf(_plainOnMilk), greaterThan(0));
+    expect(p.weightOf(_plainOnMilk.copyWith(ground: 'white')), greaterThan(0));
+    expect(p.weightOf(_plainOnMilk.copyWith(ground: 'black', mask: Mask.keyhole)), 0);
+    expect(p.weightOf(_plainOnMilk.copyWith(ground: 'black', mix: Mix.contrast)), 0);
+    expect(p.weightOf(_plainOnMilk.copyWith(ground: 'white', mix: Mix.add)), 0);
+    // MilkDrop the background most often.
+    expect(p.weightOf(_plainOnMilk), greaterThan(p.weightOf(_plainOnMilk.copyWith(ground: 'wash'))));
+    expect(p.weightOf(_plainOnMilk.copyWith(style: 'contour')), 0);
   });
 
-  test('an answer comes from your exception, the shipped exception, your rule, the shipped rule — in that order', () {
-    const mono = RigFigure(kind: Figure.dancers, style: 'mono');
-    var p = ShowPool.none;
-    expect(p.answer(mono, Ground.milk).from, RuleFrom.exception);
-    // Your rule for ink on paper on busy does not reach past the exception…
-    p = p.withRule(Character.paper, Backdrop.busy, const ComboRule(ground: GroundMode.dim));
-    expect(p.answer(mono, Ground.milk).rule.ground, GroundMode.keyhole);
-    expect(p.answer(mono, Ground.field).from, RuleFrom.yourRule, reason: 'no exception on the field: your rule');
-    expect(p.answer(mono, Ground.field).rule.ground, GroundMode.dim);
-    // …until the exception is switched off: then the rule holds.
-    p = p.withCombo(ShowPool.comboKey(mono, Ground.milk), ComboRule.asTheRule);
-    expect(p.answer(mono, Ground.milk).from, RuleFrom.yourRule);
-    expect(p.answer(mono, Ground.milk).rule.ground, GroundMode.dim);
-    // Your own exception wins over everything.
-    p = p.withCombo(ShowPool.comboKey(mono, Ground.milk), const ComboRule(ground: GroundMode.window));
-    expect(p.answer(mono, Ground.milk).from, RuleFrom.yourException);
-    expect(p.answer(mono, Ground.milk).rule.ground, GroundMode.window);
-    // And gone again: the shipped exception is back.
-    p = p.withCombo(ShowPool.comboKey(mono, Ground.milk), null).withRule(Character.paper, Backdrop.busy, null);
-    expect(p.answer(mono, Ground.milk).from, RuleFrom.exception);
+  test('a rule of the hands\' takes the place of the shipped one for the same pattern, and goes again', () {
+    const milk = ComboRule(grounds: {'milk'});
+    var p = ShowPool.none.withRule(milk, 1);
+    expect(p.cardOf(milk), 1);
+    expect(p.allRules.where((r) => r.pattern == milk.pattern), hasLength(1));
+    p = p.withRule(milk, 0);
+    expect(p.rules, hasLength(1));
+    expect(p.milkOn, isFalse);
+    expect(p.weightOf(_plainOnMilk), 0);
+    p = p.withRule(milk, null);
+    expect(p.cardOf(milk), 3);
+    expect(p.withMilk(false).withMilk(true).rules, isEmpty);
+    expect(p.withScene('flash', false).sceneOn('flash'), isFalse);
   });
 
-  test('a thing\'s character: a style\'s own, else its figure\'s; changed by hand, every pairing follows', () {
-    var p = ShowPool.none;
-    const disco = RigFigure(kind: Figure.dancers, style: 'disco');
-    const trails = RigFigure(kind: Figure.dancers, style: 'trails');
-    expect(p.characterOf(disco), Character.full);
-    expect(p.characterOf(trails), Character.lights, reason: 'no character of its own: the dancers\'');
-    expect(p.characterOfKey(figureKey(Figure.dancers, 'trails')), (Character.lights, false));
-    expect(p.characterOfKey(figureKey(Figure.dancers, 'disco')), (Character.full, true));
-    expect(p.blendFor(disco, Ground.milk).ground, GroundMode.contrast);
-    // The disco made a world of its own: never with a background, on any.
-    p = p.withCharacter(figureKey(Figure.dancers, 'disco'), Character.world.name);
-    expect(p.together(disco, Ground.milk), isFalse);
-    expect(p.together(disco, Ground.wash), isFalse);
-    // The dancers as a whole made ink on paper: their styles without one of their own follow.
-    p = p.withCharacter(figureKey(Figure.dancers), Character.paper.name);
-    expect(p.characterOf(trails), Character.paper);
-    expect(p.characterOf(const RigFigure(kind: Figure.dancers, style: 'mono')), Character.paper);
-    // As shipped again.
-    p = p.withCharacter(figureKey(Figure.dancers), null).withCharacter(figureKey(Figure.dancers, 'disco'), null);
-    expect(p.characterOf(trails), Character.lights);
-    expect(p.characters, isEmpty);
+  test('a world has one combination: its own background, unmasked, as drawn', () {
+    final disco = combosOf('dance-art', Figure.dancers).where((c) => c.style == 'disco').toList();
+    expect(disco, [const Combo(ground: ownGround, scene: 'dance-art', style: 'disco')]);
+    expect(combosOf('milk', Figure.none), [const Combo(ground: ownGround, scene: 'milk', style: 'raw')]);
+    // Every other style: every background, mask and blend.
+    final plain = combosOf('dance-art', Figure.dancers).where((c) => c.style == 'plain');
+    expect(plain, hasLength(comboGrounds.length * Mask.values.length * Mix.values.length));
+    // The backgrounds narrowed to the ones here.
+    expect(combosOf('kinetic', Figure.kinetic, grounds: ['milk']).map((c) => c.ground).toSet(), {'milk'});
   });
 
-  test('a background\'s character decides the rule column; black has none', () {
-    var p = ShowPool.none;
-    expect(p.backdropOf(Ground.black), isNull);
-    expect(p.backdropOf(Ground.milk), Backdrop.busy);
-    expect(p.backdropOf(Ground.field), Backdrop.busy);
-    const kinetic = RigFigure(kind: Figure.kinetic);
-    expect(p.blendFor(kinetic, Ground.field).ground, GroundMode.contrast);
-    p = p.withCharacter(groundKey(Ground.field), Backdrop.glow.name);
-    expect(p.backdropOf(Ground.field), Backdrop.glow);
-    expect(p.blendFor(kinetic, Ground.field).ground, GroundMode.add);
-    expect(p.together(kinetic, Ground.camera), isFalse, reason: 'a full frame on a picture: never');
+  test('the camera: its rules lean the framings, never how often a combination comes', () {
+    expect(shotsOfFigure(Figure.dancers).toSet(), {for (final s in DanceShot.values) if (s != DanceShot.full) 'dancers.${s.name}'});
+    expect(shotsOfFigure(Figure.birds).toSet(), {for (final s in FlockShot.values) 'birds.${s.name}'});
+    expect(shotsOfFigure(Figure.kinetic), isEmpty);
+    const ascii = Combo(ground: 'milk', scene: 'dance-art', style: 'ascii');
+    const rules = [
+      ComboRule(shots: {'dancers.fisheye', 'dancers.fisheyeLow'}, weight: 0.5),
+      ComboRule(styles: {'ascii'}, shots: {'dancers.fisheye', 'dancers.fisheyeLow'}, weight: 0),
+      ComboRule(scenes: {'dance-art'}, shots: {'dancers.close'}, weight: 2),
+    ];
+    // Not a combination's weight.
+    expect(comboWeight(ascii, rules), 1);
+    // The cards multiply, the exception says the rest.
+    expect(shotWeight(ascii, 'dancers.fisheye', rules), 0);
+    expect(shotWeight(ascii.copyWith(style: 'plain'), 'dancers.fisheye', rules), 0.5);
+    expect(shotWeight(ascii, 'dancers.close', rules), 2);
+    expect(shotWeight(ascii, 'dancers.front', rules), 1);
+    // Nothing on: the cards alone.
+    expect(shotWeight(null, 'dancers.fisheye', rules), 0.5);
+    expect(shotWeight(null, 'dancers.close', rules), 1);
+    // The pattern and json say the camera after the five.
+    expect(rules[1].pattern, '*|*|ascii|*|*|dancers.fisheye,dancers.fisheyeLow');
+    expect(rules[0].card, isTrue);
+    expect(ComboRule.fromJson(rules[1].toJson()), rules[1]);
+    expect(rules[1].toJson()['shot'], ['dancers.fisheye', 'dancers.fisheyeLow']);
+    // The clocks' reading: by the combination on.
+    StylePool.from(ShowPool.none.copyWith(rules: rules));
+    StylePool.combo = ascii;
+    expect(StylePool.shot(Figure.dancers, 'fisheye'), 0);
+    StylePool.combo = null;
+    expect(StylePool.shot(Figure.dancers, 'fisheye'), 0.5);
+    StylePool.from(ShowPool.none);
   });
 
-  test('how often: never is off, rarely and often lean, normal is neither', () {
-    var p = ShowPool.none;
-    expect(p.oftenOf('look.flash'), Often.normal);
-    p = p.withOften('look.flash', Often.often);
-    expect(p.oftenOf('look.flash'), Often.often);
-    expect(p.leanOf('look.flash'), 2);
-    p = p.withOften('look.flash', Often.never);
-    expect(p.isOn('look.flash'), isFalse);
-    expect(p.oftenOf('look.flash'), Often.never);
-    p = p.withOften('look.flash', Often.rarely);
-    expect(p.isOn('look.flash'), isTrue);
-    expect(p.oftenOf('look.flash'), Often.rarely);
-    p = p.withOften('look.flash', Often.normal);
-    expect(p.lean.containsKey('look.flash'), isFalse);
-    // A style switched off the old way is never; on again clears that too.
-    p = p.withOff('treatment.ascii', true);
-    expect(p.oftenOf('style.dancers.ascii'), Often.never);
-    p = p.withOften('style.dancers.ascii', Often.often);
-    expect(p.styleOn(Figure.dancers, 'ascii'), isTrue);
+  test('a world is weighed by its scene and its style alone', () {
+    const milk = Combo(ground: ownGround, scene: 'milk', style: 'raw');
+    expect(ShowPool.none.weightOf(milk), 1, reason: 'not "no mask ×2"');
+    expect(ShowPool.none.withRule(const ComboRule(scenes: {'milk'}), 0).weightOf(milk), 0);
+    expect(ShowPool.none.withRule(const ComboRule(masks: {Mask.none}, mixes: {Mix.normal}), 0).weightOf(milk), 1);
+    // The background MilkDrop is another thing than the scene.
+    final asGround = ShowPool.none.withRule(const ComboRule(scenes: {'milk'}), 0);
+    expect(asGround.weightOf(const Combo(ground: 'milk', scene: 'dance-art', style: 'plain')), greaterThan(0));
+  });
+
+  test('the style lists are the figures\' own', () {
+    expect(stylesOfFigure(Figure.dancers).toSet(), {for (final a in DanceArt.values) a.name});
+    expect(stylesOfFigure(Figure.birds).toSet(), {for (final l in FlockLook.values) l.name});
+    expect(stylesOfFigure(Figure.words).toSet(), {for (final w in WordsStyle.values) w.name});
+    expect(stylesOfFigure(Figure.kinetic).first, 'raw');
+  });
+
+  test('a combination\'s key both ways; a background\'s key both ways', () {
+    final c = _plainOnMilk.copyWith(mask: Mask.inverted, mix: Mix.screen);
+    expect(Combo.fromKey(c.key), c);
+    expect(Combo.fromKey('nonsense'), isNull);
+    for (final g in comboGrounds) {
+      expect(keyOfGround(groundOfKey(g)), g);
+    }
+    expect(groundOfKey('white').kind, Ground.white);
+  });
+
+  test('a look in a combination: the background, the style or the treatment, the mask and the blend', () {
+    const dancer = Look(id: 'dance-art', name: 'Dancer', rig: ShowRig(figure: RigFigure(kind: Figure.dancers)));
+    final r = dancer.inCombo(_plainOnMilk.copyWith(mask: Mask.keyhole, mix: Mix.contrast));
+    expect(r.ground.kind, Ground.milk);
+    expect(r.figure.style, 'plain');
+    expect(r.blend, const RigBlend(mask: Mask.keyhole, mix: Mix.contrast));
+    const kinetic = Look(id: 'kinetic', name: 'Kinetic', rig: ShowRig(figure: RigFigure(kind: Figure.kinetic)));
+    final k = kinetic.inCombo(const Combo(ground: 'white', scene: 'kinetic', style: 'ascii'));
+    expect(k.figure.treatment, Treatment.ascii);
+    expect(k.ground.kind, Ground.white);
+    // Another look's combination: the look as it is.
+    expect(kinetic.inCombo(_plainOnMilk), kinetic.rig);
+    const milk = Look(id: 'milk', name: 'MilkDrop', rig: ShowRig(ground: RigGround.milk));
+    expect(milk.inCombo(const Combo(ground: ownGround, scene: 'milk', style: 'raw')).ground.kind, Ground.milk);
   });
 
   test('a weighted pick goes by the weights, and never to a weight of nought', () {
-    final seen = <String, int>{};
-    for (var i = 0; i < 1000; i++) {
-      final v = ShowPool.pickWeighted(['a', 'b', 'c'], i / 1000, (x) => switch (x) { 'a' => 2.0, 'b' => 1.0, _ => 0.0 })!;
-      seen[v] = (seen[v] ?? 0) + 1;
-    }
-    expect(seen['c'], isNull);
-    expect(seen['a']! / seen['b']!, closeTo(2, 0.05));
+    final items = [('a', 0.0), ('b', 1.0), ('c', 3.0)];
+    expect(pickByWeight(items, 0), 'b');
+    expect(pickByWeight(items, 0.3), 'c');
+    expect(pickByWeight(items, 0.999), 'c');
+    expect(pickByWeight([('a', 0.0)], 0.5), isNull);
   });
 
-  test('the characters and your rules are kept', () {
+  test('json both ways; the old document\'s switches are not carried', () {
     final p = ShowPool.none
-        .withCharacter(figureKey(Figure.dancers, 'disco'), Character.world.name)
-        .withCharacter(groundKey(Ground.field), Backdrop.glow.name)
-        .withRule(Character.lights, Backdrop.busy, const ComboRule(ground: GroundMode.screen, figure: FigureMode.over))
-        .withCombo('figure.dancers.style.mono|ground.milk', ComboRule.asTheRule);
-    final back = ShowPool.fromJson(p.toJson());
-    expect(back.characters, p.characters);
-    expect(back.rules, p.rules);
-    expect(back.combos['figure.dancers.style.mono|ground.milk']!.follow, isTrue);
-    // Its exception switched off: ink on paper's shipped rule answers (never).
-    expect(back.answer(const RigFigure(kind: Figure.dancers, style: 'mono'), Ground.milk).from, RuleFrom.rule);
-    expect(back.answer(const RigFigure(kind: Figure.dancers, style: 'ascii'), Ground.milk).from, RuleFrom.yourRule);
-  });
-
-  test('the hands\' rule comes before the shipped one, and goes again', () {
-    const mono = RigFigure(kind: Figure.dancers, shade: Shade.silhouette);
-    final key = ShowPool.comboKey(mono, Ground.milk);
-    // A shade set without a style means the style of that name: the rule is the style's.
-    expect(key, 'figure.dancers.style.mono|ground.milk');
-    final p = ShowPool.none.withCombo(key, const ComboRule(ground: GroundMode.window));
-    expect(p.together(mono, Ground.milk), isTrue);
-    expect(p.blendFor(mono, Ground.milk).ground, GroundMode.window);
-    expect(p.withCombo(key, null).blendFor(mono, Ground.milk).ground, GroundMode.keyhole, reason: 'the shipped rule again');
-    expect(p.withCombo(key, ComboRule.never).together(mono, Ground.milk), isFalse);
-    // A figure switched off is never together with anything.
-    expect(p.withOff('figure.dancers', true).together(mono, Ground.milk), isFalse);
-  });
-
-  test('a dancer\'s style stands in for the axes it means, and the clock\'s art reaches the lookup', () {
-    // The style's own key first, then the axes it means.
-    expect(ShowPool.comboKeys(const RigFigure(kind: Figure.dancers, style: 'mono'), Ground.milk), ['figure.dancers.style.mono|ground.milk', 'figure.dancers.shade.silhouette|ground.milk', 'figure.dancers|ground.milk']);
-    expect(ShowPool.comboKeys(const RigFigure(kind: Figure.dancers, style: 'plain'), Ground.milk)[1], 'figure.dancers.shade.textured|ground.milk');
-    expect(ShowPool.comboKeys(const RigFigure(kind: Figure.dancers, style: 'ascii'), Ground.milk)[1], 'figure.dancers.treatment.ascii|ground.milk');
-    expect(ShowPool.comboKeys(const RigFigure(kind: Figure.dancers, style: 'trails'), Ground.wash)[1], 'figure.dancers.treatment.trails|ground.wash');
-    // A style the axes do not know: its own key, then the figure alone.
-    expect(ShowPool.comboKeys(const RigFigure(kind: Figure.dancers, style: 'nothing-of-the-sort'), Ground.milk).last, 'figure.dancers|ground.milk');
-    // The axes set by hand come before what the style means.
-    expect(ShowPool.comboKeys(const RigFigure(kind: Figure.dancers, shade: Shade.chrome, style: 'mono'), Ground.milk), contains('figure.dancers.shade.chrome|ground.milk'));
-    expect(ShowPool.comboKeys(const RigFigure(kind: Figure.dancers, shade: Shade.chrome, style: 'mono'), Ground.milk), isNot(contains('figure.dancers.shade.silhouette|ground.milk')));
-    const p = ShowPool.none;
-    expect(p.blendFor(const RigFigure(kind: Figure.dancers, style: 'mono'), Ground.milk).ground, GroundMode.keyhole);
-    expect(p.blendFor(const RigFigure(kind: Figure.dancers, style: 'plain'), Ground.milk).figure, FigureMode.over);
-    // The figure's clock's style, where the hands hold none.
-    StylePool.now[Figure.dancers] = 'mono';
-    expect(ShowPool.lookupFigure(const RigFigure(kind: Figure.dancers)).style, 'mono');
-    expect(ShowPool.lookupFigure(const RigFigure(kind: Figure.dancers, style: 'ascii')).style, 'ascii');
-    expect(ShowPool.lookupFigure(const RigFigure(kind: Figure.birds)).style, isNull);
-    StylePool.now.remove(Figure.dancers);
-    expect(ShowPool.lookupFigure(const RigFigure(kind: Figure.dancers)).style, isNull);
-  });
-
-  test('any figure\'s style keys a rule: the flock\'s paper looks stay off MilkDrop, and its clock leans away', () {
-    const p = ShowPool.none;
-    expect(ShowPool.comboKey(const RigFigure(kind: Figure.birds, style: 'ink'), Ground.milk), 'figure.birds.style.ink|ground.milk');
-    expect(p.together(const RigFigure(kind: Figure.birds, style: 'ink'), Ground.milk), isFalse);
-    expect(p.together(const RigFigure(kind: Figure.birds, style: 'ink'), Ground.wash), isTrue);
-    expect(p.together(const RigFigure(kind: Figure.birds, style: 'embers'), Ground.milk), isTrue);
-    // The clocks ask the rules for the ground on now: a style kept off it is picked
-    // less (not never: then the stage puts it on another background).
-    StylePool.from(p);
-    StylePool.ground = Ground.milk;
-    expect(StylePool.allows(Figure.birds, 'ink'), isTrue);
-    expect(StylePool.weight(Figure.birds, 'ink'), closeTo(0.3, 1e-9));
-    expect(StylePool.weight(Figure.birds, 'embers'), 1);
-    expect(StylePool.weight(Figure.dancers, 'viewports'), closeTo(0.3, 1e-9));
-    StylePool.ground = Ground.wash;
-    expect(StylePool.weight(Figure.birds, 'ink'), 1);
-    StylePool.from(p.withOff('treatment.embers', true));
-    expect(StylePool.allows(Figure.birds, 'embers'), isFalse, reason: 'switched off');
-    StylePool.from(ShowPool.none);
-    StylePool.ground = Ground.black;
-  });
-
-  test('together or never in a tap: back to the default where that is what is asked', () {
-    const p = ShowPool.none;
-    const plain = RigFigure(kind: Figure.dancers, style: 'plain');
-    const kinetic = RigFigure(kind: Figure.kinetic);
-    expect(p.together(plain, Ground.milk), isFalse, reason: 'paper on a busy ground');
-    // Together by hand: a word of the hands' (the page as drawn).
-    final a = p.withTogether(plain, Ground.milk, true);
-    expect(a.together(plain, Ground.milk), isTrue);
-    expect(a.combos[ShowPool.comboKey(plain, Ground.milk)], ComboRule.over);
-    // Never again: the default, so no word kept.
-    expect(a.withTogether(plain, Ground.milk, false).combos, isEmpty);
-    // A pair together by default, never by hand, together again: nothing kept.
-    final b = p.withTogether(kinetic, Ground.wash, false);
-    expect(b.together(kinetic, Ground.wash), isFalse);
-    expect(b.withTogether(kinetic, Ground.wash, true).combos, isEmpty);
-    // A shipped exception switched off and on: the exception back.
-    const mono = RigFigure(kind: Figure.dancers, style: 'mono');
-    final c = p.withTogether(mono, Ground.milk, false).withTogether(mono, Ground.milk, true);
-    expect(c.answer(mono, Ground.milk).from, RuleFrom.exception);
-    expect(c.blendFor(mono, Ground.milk).ground, GroundMode.keyhole);
-  });
-
-  test('a shipped rule blends one of its ways by the seed; a word of the hands\' has its one', () {
-    const p = ShowPool.none;
-    const kinetic = RigFigure(kind: Figure.kinetic);
-    final seen = {for (var i = 0; i < 12; i++) p.blendFor(kinetic, Ground.milk, seed: i).ground};
-    expect(seen, shippedWays['full|busy']!.toSet());
-    expect(p.blendFor(kinetic, Ground.milk, seed: 5).ground, p.blendFor(kinetic, Ground.milk, seed: 5).ground, reason: 'the same seed, the same way');
-    final mine = p.withBlend(kinetic, Ground.milk, GroundMode.mask);
-    expect({for (var i = 0; i < 6; i++) mine.blendFor(kinetic, Ground.milk, seed: i).ground}, {GroundMode.mask});
-    // OTHER BLEND steps through the rule's ways first, then the rest; keyhole only
-    // where there is a figure to cut it.
-    final ways = p.blendsFor(kinetic, Ground.milk);
-    expect(ways.take(3), shippedWays['full|busy']);
-    expect(ways, isNot(contains(GroundMode.keyhole)));
-    expect(p.blendsFor(const RigFigure(kind: Figure.dancers), Ground.milk), contains(GroundMode.keyhole));
-    // Never, and black: as drawn, whatever the seed.
-    expect(p.blendFor(const RigFigure(kind: Figure.dancers, style: 'plain'), Ground.milk, seed: 3).ground, GroundMode.over);
-    expect(p.blendFor(kinetic, Ground.black, seed: 3).ground, GroundMode.over);
-  });
-
-  test('a part switched off is gone: a way of blending, a treatment', () {
-    const kinetic = RigFigure(kind: Figure.kinetic);
-    final p = ShowPool.none.withOff('blend.contrast', true).withOff('blend.screen', true);
-    expect(p.blendOn(GroundMode.contrast), isFalse);
-    expect(p.blendOn(GroundMode.over), isTrue, reason: 'as drawn is always there');
-    // full|busy's ways are contrast, screen, dim: only dim is left.
-    expect({for (var i = 0; i < 6; i++) p.blendFor(kinetic, Ground.milk, seed: i).ground}, {GroundMode.dim});
-    // A rule of the hands' in a way switched off: the next way that is on.
-    final mine = p.withBlend(kinetic, Ground.wash, GroundMode.contrast);
-    expect(mine.blendFor(kinetic, Ground.wash).ground, GroundMode.add);
-    expect(p.blendsFor(kinetic, Ground.milk), isNot(contains(GroundMode.contrast)));
-    // A treatment off: out of every scene's mix, even one the hands made.
-    final t = ShowPool.none.withMix('kinetic', ['raw', 'ascii', 'dither']).withOff('treatment.ascii', true);
-    expect([for (final (x, _) in treatMix(t, 'kinetic')) x.name], ['raw', 'dither']);
-  });
-
-  test('a branch set whole: every style never, then every style together', () {
-    const styles = ['plain', 'mono', 'trails', 'viewports'];
-    bool all(ShowPool p, Ground g, bool together) =>
-        styles.every((s) => p.answer(RigFigure(kind: Figure.dancers, style: s), g).never != together) && p.answer(const RigFigure(kind: Figure.dancers), g).never != together;
-    final never = ShowPool.none.withBranch(Figure.dancers, styles, Ground.wash, false);
-    expect(all(never, Ground.wash, false), isTrue);
-    expect(never.combos.length, 1, reason: 'one word on the figure');
-    final together = never.withBranch(Figure.dancers, styles, Ground.wash, true);
-    expect(all(together, Ground.wash, true), isTrue);
-    // The viewports (a world of their own) needed a word of their own; the rest kept theirs.
-    expect(together.combos.keys, ['figure.dancers.style.viewports|ground.wash']);
-    // A style's word over a branch's never: just that style together.
-    final one = never.withTogether(const RigFigure(kind: Figure.dancers, style: 'trails'), Ground.wash, true);
-    expect(one.answer(const RigFigure(kind: Figure.dancers, style: 'trails'), Ground.wash).never, isFalse);
-    expect(one.answer(const RigFigure(kind: Figure.dancers, style: 'plain'), Ground.wash).never, isTrue);
-  });
-
-  test('json both ways', () {
-    final p = ShowPool.none
-        .withOff('look.flash', true)
-        .withLean('figure.birds', 1.5)
-        .withCombo('figure.birds|ground.milk', ComboRule.never)
+        .withOff('dancer.joe', true)
+        .withLean('move.long22', 1.5)
+        .withRule(const ComboRule(grounds: {'milk'}, styles: {'plain'}, masks: {Mask.keyhole}), 2.5)
         .copyWith(dancer: 'joe', quantise: Quantise.phrase, bias: 0.5);
     final back = ShowPool.fromJson(p.toJson());
-    expect(back.off, {'look.flash'});
-    expect(back.leanOf('figure.birds'), 1.5);
-    expect(back.combos['figure.birds|ground.milk'], ComboRule.never);
+    expect(back.off, {'dancer.joe'});
+    expect(back.leanOf('move.long22'), 1.5);
+    expect(back.rules, p.rules);
     expect(back.dancer, 'joe');
     expect(back.quantise, Quantise.phrase);
     expect(back.bias, 0.5);
     expect(ShowPool.fromJson(const {}).quantise, Quantise.bar);
+    final old = ShowPool.fromJson(const {
+      'off': ['look.flash', 'ground.milk', 'treatment.contour', 'dancer.joe'],
+      'lean': {'look.flock': 2, 'move.x': 2},
+      'combos': {'figure.birds|ground.milk': {'off': true}},
+    });
+    expect(old.off, {'dancer.joe'});
+    expect(old.lean.keys, ['move.x']);
+    expect(old.rules, isEmpty);
   });
 
   test('the tier and the dark beat are kept, and reach the statics', () {
@@ -312,12 +245,20 @@ void main() {
     expect(QualityPool.workScale, 1);
   });
 
-  test('the old preferences become switches', () {
+  test('the old preferences become a scene\'s card off and dancers off', () {
     final p = ShowPool.migrated(scenesOff: ['flash', 'veins'], dancersOff: ['joe'], dancer: 'mix');
-    expect(p.looksOff, {'flash', 'veins'});
+    expect(p.sceneOn('flash'), isFalse);
+    expect(p.sceneOn('kinetic'), isTrue);
     expect(p.dancersOff, ['joe']);
     expect(p.dancer, isNull);
-    expect(p.isOn('treatment.contour'), isFalse);
     expect(ShowPool.migrated(dancer: 'chris').dancer, 'chris');
+  });
+
+  test('the clocks read a style\'s card', () {
+    StylePool.from(ShowPool.none.withRule(const ComboRule(styles: {'ink'}), 0));
+    expect(StylePool.allows(Figure.birds, 'ink'), isFalse);
+    expect(StylePool.weight(Figure.birds, 'neon'), 1);
+    expect(StylePool.allows(Figure.dancers, 'contour'), isFalse);
+    StylePool.from(ShowPool.none);
   });
 }

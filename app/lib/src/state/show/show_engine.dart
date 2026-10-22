@@ -16,6 +16,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
 
+import '../../api/client.dart';
 import '../../api/models.dart';
 import '../../audio/engine.dart';
 import '../booth/booth.dart';
@@ -33,6 +34,7 @@ import 'show_palette.dart';
 import 'show_pool.dart';
 import 'show_rig.dart';
 import 'show_tune.dart';
+import 'show_snapshots.dart';
 import 'show_state.dart';
 import 'show_store.dart';
 
@@ -77,8 +79,8 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   set looks(Map<String, Look> v) {
     _looks = v;
     director.families = {for (final l in v.values) l.id: familyOf(l.rig.figure.kind, l.rig.ground.kind)};
-    director.grounds = _groundPool;
-    director.allowed = _allowed;
+    director.kinds = {for (final l in v.values) l.id: l.rig.figure.kind};
+    director.grounds = groundsHere;
   }
 
   /// The family a look belongs to, for the director's turns: geometric shapes,
@@ -91,26 +93,12 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
         Figure.none => 'organic',
       };
 
-  /// The grounds the director may put under a scene, weighted: MilkDrop most of the
-  /// time (the booth's way), the rest sharing what is left; each one the pool has
-  /// on (show_pool.dart's `ground.*`), the room only with a camera on. None on is
-  /// black under every scene.
-  List<(RigGround, double)> _groundPool() {
-    final p = pool;
-    final out = <(RigGround, double)>[];
-    if (p.isOn('ground.milk')) out.add((RigGround.milk, 4));
-    if (p.isOn('ground.wash')) out.add((const RigGround(kind: Ground.wash), 1));
-    if (p.isOn('ground.pulse')) {
-      for (final v in pulseVariants) {
-        out.add((RigGround(kind: Ground.pulse, field: v), 0.45));
-      }
-    }
-    if (p.isOn('ground.cover')) out.add((const RigGround(kind: Ground.cover, dim: 0.6), 0.6));
-    if (p.isOn('ground.field')) out.add((const RigGround(kind: Ground.field, field: 'drift', dim: 0.6), 0.6));
-    if (p.isOn('ground.camera') && (_state['cam.on']) > 0.5) out.add((const RigGround(kind: Ground.camera, dim: 0.8), 1));
-    // How often the hands want each: their lean on its weight.
-    return [for (final (g, w) in out) (g, w * p.leanOf('ground.${g.kind.name}'))];
-  }
+  /// The backgrounds there are now: the camera only with a camera on and light in
+  /// the room, the cover only with a record's cover; the rest always.
+  Set<String> groundsHere() => {
+        for (final g in comboGrounds)
+          if ((g != 'camera' || (_state['cam.on'] > 0.5)) && (g != 'cover' || _state.master.coverUrl != null)) g
+      };
 
   Future<void>? _ready;
   bool _isReady = false;
@@ -134,14 +122,12 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
 
   void _apply(ShowDoc doc) {
     _doc = doc;
-    director.off = doc.pool.looksOff;
-    director.leans = {for (final e in doc.pool.lean.entries) if (e.key.startsWith('look.')) e.key.substring(5): e.value};
+    director.rules = doc.pool.allRules;
     director.bias = doc.pool.bias;
     MovePool.from(doc.pool);
     StylePool.from(doc.pool);
     QualityPool.from(doc.pool);
-    director.allowed = _allowed;
-    director.grounds = _groundPool;
+    director.grounds = groundsHere;
     // The dancers still read who dances off the hands' macros.
     _macros = _macros.copyWith(dancer: doc.pool.dancer ?? 'mix', dancersOff: doc.pool.dancersOff, tune: doc.pool.tune);
     if (!running) tick(DateTime.now());
@@ -149,6 +135,9 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   }
 
   Timer? _saving;
+
+  /// The selector's snapshots: this device's and the shared ones (show_snapshots.dart).
+  late final SnapshotShelf snapshots = SnapshotShelf(_SnapshotHost(this));
 
   /// The hands changed the pool: applied now, kept a moment later.
   void setPool(ShowPool p) => setDoc(_doc.copyWith(pool: p));
@@ -162,61 +151,52 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
     });
   }
 
-  // ------------------------------------------------------------------ the hands' rig
-  /// The hands' own layers (show_rig.dart), taken where locked: the ground, the
-  /// blend and the finish over whatever look the director has on. The figure's lock
-  /// is the director's hold (holdScene).
-  ShowRig _hands = ShowRig.none;
-  ShowRig get hands => _hands;
-  bool locked(RigSlot slot) => slot == RigSlot.figure ? director.locked : _hands.locked(slot);
-
-  /// The hands' ground, locked (the director leaves it) unless [lock] is false.
-  void setGround(RigGround g, {bool lock = true}) => _setHands(_hands.copyWith(ground: g).withLock(RigSlot.ground, lock));
-
-  /// The hands' blend; unlocked, the look's and the pool's table decide again.
-  void setBlend(RigBlend b, {bool lock = true}) => _setHands(_hands.copyWith(blend: b.copyWith(auto: !lock)).withLock(RigSlot.blend, lock));
-
-  void setFinish(RigFinish f, {bool lock = true}) => _setHands(_hands.copyWith(finish: f).withLock(RigSlot.finish, lock));
-
-  /// A layer locked takes the rig as it is now and keeps it; unlocked, the director
-  /// and the look have it again.
-  void lock(RigSlot slot, bool on) {
-    if (slot == RigSlot.figure) return holdScene(on);
-    var h = _hands;
-    if (on && !h.locked(slot)) {
-      final r = _state.rig;
-      h = switch (slot) {
-        RigSlot.ground => h.copyWith(ground: r.ground),
-        RigSlot.blend => h.copyWith(blend: r.blend.copyWith(auto: false)),
-        RigSlot.finish => h.copyWith(finish: r.finish),
-        RigSlot.figure => h,
-      };
-    }
-    _setHands(h.withLock(slot, on));
-  }
-
-  void _setHands(ShowRig h) {
-    _hands = h;
+  // ------------------------------------------------------------------ the hands
+  /// A combination put on as it is, held until let go ([holdScene] false, NEXT).
+  void play(Combo c) {
+    _launch = null;
+    _milkOnly = false;
+    director.play(c);
     if (!running) tick(DateTime.now());
     notifyListeners();
   }
 
-  /// The figure's own named look the hands asked for (a dancer's art, a flock's
-  /// look), for figures of [forKind]; null lets the figure's clock choose again.
-  String? _style;
-  Figure? _styleFor;
-  String? get style => _style;
-  Figure? get styleFor => _styleFor;
-  void setStyle(String? style, {Figure? forKind}) {
-    _style = style;
-    _styleFor = style == null ? null : forKind;
+  /// The combination on (the director's, or the hands').
+  Combo? get combo => director.combo;
+
+  /// The hands' finish over every scene (the trails, the bloom…); null: each look's
+  /// own. And how strong the blend is (1: all of it). Not kept.
+  RigFinish? get finish => _finish;
+  RigFinish? _finish;
+  void setFinish(RigFinish? f) {
+    _finish = f;
     if (!running) tick(DateTime.now());
     notifyListeners();
   }
 
-  /// [look] put through [treatment] whenever it is on (`raw`: none; null: the
-  /// conductor's mix), kept.
-  void setTreat(String look, String? treatment) => setPool(pool.withTreat(look, treatment));
+  double get blendStrength => _strength;
+  double _strength = 1;
+  void setBlendStrength(double v) {
+    _strength = v.clamp(0.0, 1.0);
+    if (!running) tick(DateTime.now());
+    notifyListeners();
+  }
+
+  ShowRig _hands(ShowRig r) {
+    var out = r;
+    if (_finish != null) out = out.copyWith(finish: _finish);
+    if (_strength != 1) out = out.copyWith(blend: out.blend.copyWith(strength: _strength));
+    return out;
+  }
+
+  /// One background held by the hands (MilkDrop under everything, say): the director
+  /// keeps to it; null lets it choose again. Not kept.
+  String? get heldGround => director.heldGround;
+  void holdGround(String? key) {
+    director.heldGround = key;
+    if (!running) tick(DateTime.now());
+    notifyListeners();
+  }
 
   /// A treatment's knob, kept (null: back to its rest).
   void setTune(String treatment, TuneKnob k, double? v) => setPool(pool.withTune(tuneKey(treatment, k), v));
@@ -225,116 +205,6 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   void audition(String moveId) {
     MovePool.audition = moveId;
     notifyListeners();
-  }
-
-  /// [rig] with the hands' layers where they are locked, and their style; the
-  /// treatment the hands put on [look] (the pool's), or the conductor's. A look that
-  /// is its own whole picture (MilkDrop alone) keeps its ground; any other stands on
-  /// the hands' ground where locked, else the director's (the pool's grounds,
-  /// rotated), else black. A pair the rules call never — the hands' style, or the
-  /// figure's own clock — goes onto black rather than break the rule.
-  ShowRig _withHands(ShowRig rig, {String? look}) {
-    var figure = _style != null && rig.figure.kind == _styleFor ? rig.figure.copyWith(style: _style) : rig.figure;
-    final treat = look == null ? null : _treatFor(look, figure.kind);
-    if (treat != null && figure.kind != Figure.none) {
-      figure = figure.copyWith(treatment: treat);
-      // The birds, and the dancers on their stylised stage, have the image
-      // treatments as styles of their own, drawn better than a pass over the frame
-      // can (the figure lit for it, the glyphs popping from its middle): theirs,
-      // unless the hands picked them a style already. The rest go through the
-      // stage's pass (ui/show/show_canvas.dart).
-      final own = figure.kind == Figure.birds || (figure.kind == Figure.dancers && look == 'dance-art');
-      if (own && imageTreatments.contains(treat) && !(_style != null && figure.kind == _styleFor)) figure = figure.copyWith(style: treat.name);
-    }
-    final whole = figure.kind == Figure.none;
-    final handsGround = !whole && _hands.locked(RigSlot.ground);
-    var ground = whole
-        ? rig.ground
-        : handsGround
-            ? _hands.ground
-            : rig.ground.kind != Ground.black
-                ? rig.ground
-                : (director.ground ?? RigGround.black);
-    final looked = ShowPool.lookupFigure(figure);
-    if (!whole && !handsGround && ground.kind != Ground.black && pool.answer(looked, ground.kind).never) {
-      // Never together: the scene on another of the director's backgrounds (the most
-      // likely one it goes with), else on black — it still plays.
-      final others = _groundPool()..sort((a, b) => b.$2.compareTo(a.$2));
-      ground = others.map((o) => o.$1).where((g) => !pool.answer(looked, g.kind).never).firstOrNull ?? RigGround.black;
-    }
-    StylePool.ground = ground.kind;
-    // The blend: the hands' where locked; else the rules' for this figure on this
-    // ground (contrast under MilkDrop and as the default; a shape on the pulse adds…).
-    // A shipped rule's way is picked by the pair, the record and the session.
-    // (A hash of its own: Object.hash is seeded afresh each run.)
-    var blendSeed = 0x811c9dc5;
-    for (final c in '$look|${looked.style}|${ground.kind.name}|${_state.master.trackId}|$seed'.codeUnits) {
-      blendSeed = ((blendSeed ^ c) * 0x01000193) & 0x7fffffff;
-    }
-    final blend =
-        _hands.locked(RigSlot.blend) && !whole ? _hands.blend : (whole ? rig.blend : pool.blendFor(looked, ground.kind, from: rig.blend, seed: blendSeed));
-    return rig.copyWith(
-      ground: ground,
-      figure: figure,
-      blend: blend,
-      finish: _hands.locked(RigSlot.finish) ? _hands.finish : rig.finish,
-      locks: {..._hands.locks, if (director.locked) RigSlot.figure},
-    );
-  }
-
-  /// The treatment [look] goes through now: the one the hands put on it, none where
-  /// they said off, and where they left it to the mix (as every look starts), the
-  /// conductor's — one of the treatments in that look's own mix (or the look as
-  /// drawn, which counts twice), chosen afresh every [treatBars] bars of the record,
-  /// the same for the same record, look and bars. Words and memes are left as they
-  /// are by the mix (the hands can still put them through one).
-  Treatment? _treatFor(String look, Figure kind) {
-    final say = pool.treat[look];
-    if (say == 'raw') return null;
-    // One the hands put on, unless they switched it off since (gone everywhere).
-    if (say != null && say != 'mix') return pool.isOn('treatment.$say') ? Treatment.values.asNameMap()[say] : null;
-    if (kind == Figure.none || kind == Figure.words || kind == Figure.meme) return null;
-    // A figure whose styles these are (the dancers, the birds): their own how often
-    // over each (never, rarely, often), as their clock reads it.
-    final styled = kind == Figure.dancers || kind == Figure.birds;
-    final options = [
-      for (final (t, w) in treatMix(pool, look))
-        if (!styled || t == Treatment.raw || pool.styleOn(kind, t.name))
-          (t, styled && t != Treatment.raw ? w * pool.leanOf('style.${kind.name}.${t.name}') : w),
-    ];
-    if (options.isEmpty) return null;
-    final m = _state.master;
-    final slot = (m.barIndex ?? 0) ~/ treatBars;
-    var h = 0x811c9dc5;
-    for (final c in '$look:${m.trackId ?? 0}:$slot:$seed'.codeUnits) {
-      h = ((h ^ c) * 0x01000193) & 0x7fffffff;
-    }
-    final total = options.fold<double>(0, (a, o) => a + o.$2);
-    var at = (h % 10007) / 10007 * total;
-    for (final (t, w) in options) {
-      at -= w;
-      if (at < 0) return t == Treatment.raw ? null : t;
-    }
-    return null;
-  }
-
-  /// How many bars the conductor keeps a treatment on a look.
-  static const treatBars = 8;
-
-  /// Whether the pool lets the director put [id] on: MilkDrop alone only where
-  /// MilkDrop is on and the hands keep no other background; a figure where the
-  /// rules let it stand on the ground it would have.
-  bool _allowed(String id) {
-    final look = looks[id];
-    if (look == null) return true;
-    final r = look.rig;
-    if (r.figure.kind == Figure.none) {
-      if (r.ground.kind != Ground.milk) return true;
-      return pool.isOn('ground.milk') && !(_hands.locked(RigSlot.ground) && _hands.ground.kind != Ground.milk);
-    }
-    // Any other may go on: where the rules keep it off the background, it is put on
-    // another (_withHands), not left out.
-    return true;
   }
 
   // ------------------------------------------------------------------ launches
@@ -676,13 +546,15 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
     }
     // The look on, as layers, with the hands over it; and the one being left.
     final look = looks[d.scene], leaving = looks[d.from];
+    // The figures' cameras weigh their next framing by the combination on.
+    StylePool.combo = director.combo;
     _state = _state.copyWith(
       scene: d.scene,
       sceneFrom: d.from,
       sceneK: d.k,
       clearSceneFrom: d.from == null,
-      rig: _withHands(look?.rig ?? ShowRig.none, look: look?.id),
-      rigFrom: leaving == null ? null : _withHands(leaving.rig, look: leaving.id),
+      rig: look == null ? ShowRig.none : _hands(look.inCombo(director.combo)),
+      rigFrom: leaving == null ? null : _hands(leaving.inCombo(director.fromCombo)),
       macros: dark && !_macros.blackout ? _macros.copyWith(blackout: true) : _macros,
     );
     // MilkDrop, where it is on: the numbers and the sound, and its director's cuts;
@@ -756,4 +628,26 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
 /// A track's words for the engine, where a test wants to hand them in.
 extension ShowTrackWords on Track {
   String get showArtist => artists.join(', ');
+}
+
+/// The show as the snapshots' shelf sees it: the pool's rules, the document's
+/// snapshots, the booth's server.
+class _SnapshotHost implements SnapshotHost {
+  _SnapshotHost(this.show);
+  final ShowEngine show;
+
+  @override
+  List<ComboRule> get rules => show.pool.rules;
+  @override
+  List<ShowSnapshot> get kept => show.doc.snapshots;
+  @override
+  ShowSnapshot? get taken => show.doc.snapshot;
+  @override
+  ApiClient get api => show.booth.api;
+
+  @override
+  void put({List<ComboRule>? rules, List<ShowSnapshot>? kept, ShowSnapshot? taken, bool clearTaken = false}) {
+    final d = show.doc;
+    show.setDoc(d.copyWith(pool: rules == null ? null : d.pool.copyWith(rules: rules), snapshots: kept, snapshot: taken, clearSnapshot: clearTaken));
+  }
 }

@@ -9,7 +9,7 @@ void main() {
   test('a document comes back whole', () async {
     const rig = ShowRig(ground: RigGround.milk, figure: RigFigure(kind: Figure.birds, treatment: Treatment.ascii));
     final doc = ShowDoc(
-      pool: ShowPool.none.withOff('look.flash', true),
+      pool: ShowPool.none.withScene('flash', false),
       looks: const [Look(id: 'mine', name: 'Mine', rig: rig, hero: true)],
       lastRig: rig,
       panel: const {'tab': 'dancers', 'split': 0.4},
@@ -18,7 +18,7 @@ void main() {
     expect(await store.load(), isNull);
     await store.save(doc);
     final back = (await store.load())!;
-    expect(back.pool.isOn('look.flash'), isFalse);
+    expect(back.pool.sceneOn('flash'), isFalse);
     expect(back.looks.single.id, 'mine');
     expect(back.looks.single.hero, isTrue);
     expect(back.looks.single.rig, rig);
@@ -34,12 +34,12 @@ void main() {
       'muse.show.dancer': 'chris',
     });
     final doc = await migratedShowDoc();
-    expect(doc.pool.looksOff, {'flash', 'veins'});
+    expect(doc.pool.sceneOn('flash'), isFalse);
+    expect(doc.pool.sceneOn('veins'), isFalse);
     expect(doc.pool.dancersOff, ['joe']);
     expect(doc.pool.dancer, 'chris');
-    expect(doc.pool.isOn('treatment.contour'), isFalse);
     SharedPreferences.setMockInitialValues({});
-    expect((await migratedShowDoc()).pool.looksOff, isEmpty);
+    expect((await migratedShowDoc()).pool.rules, isEmpty);
   });
 
   test('an empty document is the shipped state', () {

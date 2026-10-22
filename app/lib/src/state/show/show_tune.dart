@@ -7,7 +7,6 @@
 //
 // Every knob is a multiplier on the look as it was drawn before there were knobs:
 // 1 is that look. The shaders take 0 as 1, so a stage that sets none draws as ever.
-import 'show_pool.dart';
 import 'show_rig.dart';
 
 enum TuneKnob { size, spacing, weight, height, gain, tint }
@@ -88,31 +87,4 @@ double tuneOf(Map<String, double> tune, String treatment, TuneKnob k) {
     // The ridgelines' cell is their gap: the spacing knob sets it; the rest, the size.
     cell: treatment == 'lines' ? k(TuneKnob.spacing) : k(TuneKnob.size),
   );
-}
-
-/// What is in [look]'s mix of treatments, by name (`raw` is the look as drawn): its
-/// own (ShowPool.mixes), or the shipped one — every image treatment and the look as
-/// drawn but those switched off as `treatment.*` (the contour, to start with).
-List<String> mixOf(ShowPool pool, String look) =>
-    pool.mixes[look] ?? [for (final t in [Treatment.raw, ...imageTreatments]) if (pool.isOn('treatment.${t.name}')) t.name];
-
-/// [look]'s mix with [name] put in it or taken out.
-ShowPool withInMix(ShowPool pool, String look, String name, bool on) {
-  final now = mixOf(pool, look);
-  return pool.withMix(look, [
-    for (final t in [Treatment.raw, ...imageTreatments])
-      if (t.name == name ? on : now.contains(t.name)) t.name,
-  ]);
-}
-
-/// What the conductor may pick for [look], with how much: what is in its mix, the look
-/// as drawn twice over (a scene is itself more often than not), each leaned as the
-/// pool leans `treatment.<name>`; none switched off (gone everywhere).
-List<(Treatment, double)> treatMix(ShowPool pool, String look) {
-  final on = mixOf(pool, look);
-  return [
-    for (final t in [Treatment.raw, ...imageTreatments])
-      if (on.contains(t.name) && (t == Treatment.raw || pool.isOn('treatment.${t.name}')))
-        (t, (t == Treatment.raw ? 2.0 : 1.0) * pool.leanOf('treatment.${t.name}')),
-  ];
 }

@@ -1,5 +1,6 @@
-// The hands on the rig: a layer locked is theirs, a launch lands on its moment,
-// the pool's switches reach the director and the dancers.
+// The hands on the show: the director's combination on the frame, one played and
+// held, a background held, a launch landing on its moment, the pool's rules and
+// switches reaching the director and the dancers.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio_platform_interface/just_audio_platform_interface.dart';
 import 'package:muse/src/api/client.dart';
@@ -92,61 +93,54 @@ void main() {
 
   tearDown(() => booth.dispose());
 
-  test('the frame carries the look on as its rig, MilkDrop under it the hands\' way', () {
+  test('the frame carries the look on in the director\'s combination', () {
     final t = DateTime(2026, 1, 1);
     show.chooseScene('kinetic');
     show.tick(t);
     expect(show.state.scene, 'kinetic');
     expect(show.state.rig.figure.kind, Figure.kinetic);
-    expect(show.state.rig.ground.kind, Ground.milk, reason: 'milk under every scene is the default');
-    expect(shippedWays['full|busy'], contains(show.state.rig.blend.ground), reason: 'one of the rule\'s ways');
-    expect(show.state.rig.finish.trails, 0.35);
-    // Every background switched off: black, plainly.
-    show.setPool(show.pool.copyWith(off: {...show.pool.off, for (final g in Ground.values) 'ground.${g.name}'}));
-    show.tick(t.add(const Duration(milliseconds: 16)));
-    expect(show.state.rig.ground.kind, Ground.black);
-    expect(show.state.rig.blend.ground, GroundMode.over);
+    final c = show.combo!;
+    expect(c.scene, 'kinetic');
+    expect(show.state.rig.ground, groundOfKey(c.ground));
+    expect(show.state.rig.blend, RigBlend(mask: c.mask, mix: c.mix));
+    expect(c.ground, isNot('camera'), reason: 'no camera on');
+    expect(c.ground, isNot('cover'), reason: 'no record\'s cover');
+    expect(show.pool.weightOf(c), greaterThan(0));
+    expect(show.state.rig.finish.trails, 0.35, reason: 'the look\'s own finish');
   });
 
-  test('a layer locked is the hands\', and let go is the look\'s again', () {
+  test('a combination played is on as it is and held; a background held; the finish and the strength the hands\'', () {
     final t = DateTime(2026, 1, 1);
-    show.chooseScene('kinetic');
-    show.tick(t);
-    show.setGround(const RigGround(kind: Ground.wash));
-    show.tick(t.add(const Duration(milliseconds: 16)));
-    expect(show.state.rig.ground.kind, Ground.wash);
-    expect(show.state.rig.locked(RigSlot.ground), isTrue);
-    expect(show.locked(RigSlot.ground), isTrue);
-    // The look changes; the ground stays the hands'.
     show.chooseScene('flash');
-    show.tick(t.add(const Duration(milliseconds: 32)));
-    expect(show.state.scene, 'flash');
-    expect(show.state.rig.ground.kind, Ground.wash);
-    expect(show.state.rig.finish.bloom, 0.25, reason: 'the finish is the look\'s');
-    // The blend and the finish locked as they are, then changed.
-    show.lock(RigSlot.finish, true);
-    show.setFinish(show.hands.finish.copyWith(bloom: 1.2));
-    show.setBlend(const RigBlend(ground: GroundMode.window, figure: FigureMode.same));
-    show.tick(t.add(const Duration(milliseconds: 48)));
-    expect(show.state.rig.finish.bloom, 1.2);
-    expect(show.state.rig.blend.ground, GroundMode.window);
-    expect(show.state.rig.blend.figure, FigureMode.same);
-    expect(show.state.rig.blend.auto, isFalse);
-    expect(show.state.rig.locks, {RigSlot.ground, RigSlot.blend, RigSlot.finish});
-    // Let go: the look's and the hands' macros again.
-    show.lock(RigSlot.ground, false);
-    show.lock(RigSlot.blend, false);
-    show.lock(RigSlot.finish, false);
-    show.tick(t.add(const Duration(milliseconds: 64)));
-    expect(show.state.rig.ground.kind, Ground.milk);
-    expect(shippedWays['lights|busy'], contains(show.state.rig.blend.ground), reason: 'flash: lights on a busy ground');
-    expect(show.state.rig.finish.bloom, 0.25);
-    expect(show.state.rig.locks, isEmpty);
-    // The figure's lock is the director's hold.
-    show.lock(RigSlot.figure, true);
-    show.tick(t.add(const Duration(milliseconds: 80)));
+    show.tick(t);
+    const c = Combo(ground: 'white', scene: 'kinetic', style: 'ascii', mask: Mask.inverted, mix: Mix.contrast);
+    show.play(c);
     expect(show.sceneHeld, isTrue);
-    expect(show.state.rig.locked(RigSlot.figure), isTrue);
+    for (var i = 1; i < 20; i++) {
+      show.tick(t.add(Duration(milliseconds: 16 * i)));
+    }
+    expect(show.state.scene, 'kinetic');
+    expect(show.combo, c);
+    expect(show.state.rig.ground.kind, Ground.white);
+    expect(show.state.rig.figure.treatment, Treatment.ascii);
+    expect(show.state.rig.blend, const RigBlend(mask: Mask.inverted, mix: Mix.contrast));
+    // Let go, a background held: the director keeps to it.
+    show.holdScene(false);
+    show.holdGround('wash');
+    show.tick(t.add(const Duration(milliseconds: 400)));
+    expect(show.combo!.ground, 'wash');
+    expect(show.state.rig.ground.kind, Ground.wash);
+    show.holdGround(null);
+    expect(show.heldGround, isNull);
+    // The finish over every scene, and how strong the blend is.
+    show.setFinish(const RigFinish(trails: 0.6));
+    show.setBlendStrength(0.5);
+    show.tick(t.add(const Duration(milliseconds: 416)));
+    expect(show.state.rig.finish.trails, 0.6);
+    expect(show.state.rig.blend.strength, 0.5);
+    show.setFinish(null);
+    show.tick(t.add(const Duration(milliseconds: 432)));
+    expect(show.state.rig.finish.trails, 0.35);
   });
 
   test('a launch lands on the bar, now when nothing plays, and the pool says when', () async {
@@ -187,35 +181,20 @@ void main() {
     expect(show.pendingLook, isNull);
   }, tags: ['wall-clock']);
 
-  test('a style holds for its figure only, and the rules keep a pair apart', () async {
+  test('a style\'s card at 0 is never picked; the moves reach the dancers', () async {
     final t = DateTime(2026, 1, 1);
-    // No treatment from the conductor's mix meanwhile: the styles alone.
-    show.setTreat('dance-art', 'raw');
-    show.chooseScene('dance-art');
-    show.setStyle('ascii', forKind: Figure.dancers);
-    show.tick(t);
-    expect(show.state.rig.figure.style, 'ascii');
-    show.chooseScene('kinetic');
-    show.tick(t.add(const Duration(milliseconds: 16)));
-    expect(show.state.rig.figure.style, isNull, reason: 'kinetic is no dancer');
-    show.setStyle(null);
-    show.chooseScene('dance-art');
-    show.tick(t.add(const Duration(milliseconds: 32)));
-    expect(show.state.rig.figure.style, isNull);
-    // The rules: flash never on milk → flash still plays, on another of the
-    // director's backgrounds; on the hands' own (locked) it stays where it is put.
     await show.ready();
-    show.setPool(show.pool.withCombo('figure.flash|ground.milk', ComboRule.never));
-    expect(show.director.on.map((s) => s.id), contains('flash'), reason: 'a never pair moves the scene, it does not drop it');
-    show.chooseScene('flash');
-    show.tick(t.add(const Duration(milliseconds: 48)));
-    expect(show.director.ground?.kind, Ground.milk);
-    expect(show.state.rig.ground.kind, isNot(Ground.milk));
-    expect(show.state.rig.ground.kind, isNot(Ground.black), reason: 'another background, not black');
-    show.setGround(const RigGround(kind: Ground.milk));
-    show.tick(t.add(const Duration(milliseconds: 64)));
-    expect(show.state.rig.ground.kind, Ground.milk, reason: 'the hands\' ground is the hands\'');
-    show.lock(RigSlot.ground, false);
+    // Every dancer style off but the silhouettes.
+    var p = show.pool;
+    for (final st in stylesOfFigure(Figure.dancers)) {
+      if (st != 'mono') p = p.withRule(ComboRule(styles: {st}), 0);
+    }
+    show.setPool(p);
+    for (var round = 0; round < 6; round++) {
+      show.chooseScene(round.isEven ? 'dance-art' : 'flash');
+      show.tick(t.add(Duration(milliseconds: 16 * round)));
+      if (show.state.scene == 'dance-art') expect(show.state.rig.figure.style, 'mono');
+    }
     // The moves: the pool's switches and stars reach the dancers' statics.
     show.setPool(show.pool.withOff('move.long22', true).withLean('move.long30', 2));
     expect(MovePool.off, {'long22'});
@@ -225,103 +204,41 @@ void main() {
     MovePool.audition = null;
   });
 
-  test('the director\'s ground goes under the look, with the rules\' blend', () async {
-    final t = DateTime(2026, 1, 1);
-    await show.ready();
-    show.chooseScene('kinetic');
-    show.tick(t);
-    expect(show.state.rig.ground.kind, Ground.milk);
-    expect(shippedWays['full|busy'], contains(show.state.rig.blend.ground));
-    // The pool with MilkDrop off: the director's grounds are the rest; a shape adds.
-    show.setPool(show.pool.withOff('ground.milk', true).withOff('ground.cover', true).withOff('ground.field', true).withOff('ground.camera', true).withOff('ground.wash', true));
-    show.tick(t.add(const Duration(milliseconds: 16)));
-    expect(show.state.rig.ground.kind, Ground.pulse);
-    expect(shippedWays['full|glow'], contains(show.state.rig.blend.ground));
-    expect(show.state.rig.blend.auto, isTrue);
-    // The hands' ground wins over the director's.
-    show.setGround(const RigGround(kind: Ground.wash));
-    show.tick(t.add(const Duration(milliseconds: 32)));
-    expect(show.state.rig.ground.kind, Ground.wash);
-    // Every background off in the pool: black.
-    show.lock(RigSlot.ground, false);
-    show.setPool(show.pool.copyWith(off: {...show.pool.off, for (final g in Ground.values) 'ground.${g.name}'}));
-    show.tick(t.add(const Duration(milliseconds: 48)));
-    expect(show.state.rig.ground.kind, Ground.black);
-  });
-
   test('the pool reaches the director and the dancers, and is kept', () async {
     await show.ready();
-    show.setPool(show.pool.withOff('look.flash', true).withOff('dancer.joe', true).copyWith(dancer: 'chris'));
-    expect(show.director.off, {'flash'});
+    show.setPool(show.pool.withScene('flash', false).withOff('dancer.joe', true).copyWith(dancer: 'chris'));
+    expect(show.director.leans['flash'], 0);
+    expect(show.director.on.map((s) => s.id), isNot(contains('flash')));
     expect(show.macros.dancersOff, ['joe']);
     expect(show.macros.dancer, 'chris');
     show.setPool(show.pool.copyWith(clearDancer: true));
     expect(show.macros.dancer, 'mix');
     // Kept a moment later.
     await Future<void>.delayed(const Duration(milliseconds: 400));
-    expect(store.kept?.pool.isOn('look.flash'), isFalse);
+    expect(store.kept?.pool.sceneOn('flash'), isFalse);
     expect(store.kept?.pool.isOn('dancer.joe'), isFalse);
-    expect(store.kept?.pool.isOn('treatment.contour'), isFalse, reason: 'shipped off');
   });
-  test('a scene put through a treatment carries it on its frame, with the knobs; the dancers take it as their style', () {
+
+  test('a scene through a treatment carries it on its frame, with the knobs; the dancers draw theirs as their style', () {
     final t = DateTime(2026, 1, 1);
-    show.chooseScene('kinetic');
-    show.setTreat('kinetic', 'lines');
+    show.play(const Combo(ground: 'milk', scene: 'kinetic', style: 'lines'));
     show.setTune('lines', TuneKnob.weight, 2);
     show.tick(t);
     expect(show.state.rig.figure.treatment, Treatment.lines);
     expect(show.state.rig.figure.style, isNull, reason: 'kinetic has no style of its own: the stage pass draws it');
     expect(show.state.macros.tune['lines.weight'], 2);
     expect(ShowMacros.fromJson(show.state.macros.toJson()).tune['lines.weight'], 2, reason: 'over the wire to a stage of its own');
-    // Another scene, off, is as it draws itself.
-    show.setTreat('flash', 'raw');
-    show.chooseScene('flash');
+    // As drawn: no treatment.
+    show.play(const Combo(ground: 'milk', scene: 'flash', style: 'raw'));
     show.tick(t.add(const Duration(milliseconds: 16)));
     expect(show.state.rig.figure.treatment, Treatment.auto);
-    // The stylised dancers draw it as their own style.
-    show.setTreat('dance-art', 'ascii');
-    show.chooseScene('dance-art');
+    // The dancers draw it as their own style.
+    show.play(const Combo(ground: 'milk', scene: 'dance-art', style: 'ascii'));
     show.tick(t.add(const Duration(milliseconds: 32)));
-    expect(show.state.rig.figure.treatment, Treatment.ascii);
+    expect(show.state.rig.figure.treatment, Treatment.auto);
     expect(show.state.rig.figure.style, 'ascii');
-    // Kept.
-    expect(ShowPool.fromJson(show.pool.toJson()).treat, {'kinetic': 'lines', 'flash': 'raw', 'dance-art': 'ascii'});
     show.setTune('lines', TuneKnob.weight, null);
     expect(show.pool.tune, isEmpty);
     expect(tuneOf(show.pool.tune, 'lines', TuneKnob.weight), 1);
   });
-  test('left to the mix, a scene goes through what the conductor picks of its own mix, the same for the same bars', () {
-    final t = DateTime(2026, 1, 1);
-    show.chooseScene('kinetic');
-    // Everything out of kinetic's mix but the dither: the dither it is.
-    var p = show.pool;
-    for (final x in [Treatment.raw, ...imageTreatments]) {
-      p = withInMix(p, 'kinetic', x.name, x == Treatment.dither);
-    }
-    show.setPool(p);
-    show.tick(t);
-    expect(show.state.rig.figure.treatment, Treatment.dither);
-    // Kinetic's mix is its own: flash still has the whole shipped one.
-    expect(mixOf(show.pool, 'flash'), containsAll(['raw', 'ascii', 'dither', 'halftone', 'thermal', 'lines']));
-    expect(mixOf(show.pool, 'kinetic'), ['dither']);
-    expect(ShowPool.fromJson(show.pool.toJson()).mixes, {'kinetic': ['dither']}, reason: 'kept');
-    // Only the look as drawn: none.
-    p = withInMix(withInMix(p, 'kinetic', 'dither', false), 'kinetic', 'raw', true);
-    show.setPool(p);
-    show.tick(t.add(const Duration(milliseconds: 16)));
-    expect(show.state.rig.figure.treatment, Treatment.auto);
-    // The whole mix on: what it picks holds from frame to frame.
-    for (final x in imageTreatments) {
-      p = withInMix(p, 'kinetic', x.name, true);
-    }
-    show.setPool(p);
-    show.tick(t.add(const Duration(milliseconds: 32)));
-    final picked = show.state.rig.figure.treatment;
-    for (var i = 3; i < 10; i++) {
-      show.tick(t.add(Duration(milliseconds: 16 * i)));
-      expect(show.state.rig.figure.treatment, picked);
-    }
-    expect(treatMix(p, 'kinetic').first, (Treatment.raw, 2.0), reason: 'as drawn counts twice');
-  });
-
 }

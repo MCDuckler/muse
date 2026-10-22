@@ -36,6 +36,7 @@ class DemoShowFeed extends ChangeNotifier implements ShowFeed {
   /// the rules' grid's bake): none, the director's and the shipped way.
   String? style;
   RigGround? ground;
+  RigBlend? blend;
 
   /// The looks, by id, for the frame's rig (as the engine's).
   final Map<String, Look> looks;
@@ -44,10 +45,18 @@ class DemoShowFeed extends ChangeNotifier implements ShowFeed {
     try {
       final v = Platform.environment['WETOWL_SHOW_GROUND'];
       if (v == null || v.isEmpty) return null;
-      final parts = v.split(':');
-      final kind = Ground.values.where((g) => g.name == parts.first).firstOrNull;
-      if (kind == null) return null;
-      return RigGround(kind: kind, field: parts.length > 1 ? parts[1] : null, dim: kind == Ground.cover || kind == Ground.field ? 0.7 : 1);
+      return groundOfKey(v.replaceAll(':', '.'));
+    } catch (_) {
+      return null;
+    }
+  }();
+
+  static final RigBlend? _forcedBlend = () {
+    try {
+      final mask = Mask.values.asNameMap()[Platform.environment['WETOWL_SHOW_MASK']];
+      final mix = Mix.values.asNameMap()[Platform.environment['WETOWL_SHOW_MIX']];
+      if (mask == null && mix == null) return null;
+      return RigBlend(mask: mask ?? Mask.none, mix: mix ?? Mix.normal);
     } catch (_) {
       return null;
     }
@@ -247,15 +256,17 @@ class DemoShowFeed extends ChangeNotifier implements ShowFeed {
     }
     macros = m;
     final look = looks[d.scene];
-    var rig = look?.rig ?? ShowRig.none;
-    // The ground: MilkDrop under every figure, as the booth's director mostly has
-    // it, or one asked for from outside, for a look at one on the demo:
-    // WETOWL_SHOW_GROUND=wash|milk|camera|cover|pulse:rays|field:drift. Blended by
-    // the shipped rules.
+    var rig = look?.inCombo(director.combo) ?? ShowRig.none;
+    // The director's combination — or a background, a style, a mask or a blend asked
+    // for from outside, for a look at one on the demo:
+    // WETOWL_SHOW_GROUND=white|milk|pulse.rays|field.drift…, WETOWL_SHOW_MASK=keyhole,
+    // WETOWL_SHOW_MIX=contrast; held by a bake ([style], [ground], [blend]).
     if (rig.figure.kind != Figure.none) {
-      final ground = this.ground ?? _forcedGround ?? (rig.ground.kind == Ground.black ? RigGround.milk : rig.ground);
-      final figure = style == null ? rig.figure : rig.figure.copyWith(style: style);
-      rig = rig.copyWith(ground: ground, figure: figure, blend: ShowPool.none.blendFor(ShowPool.lookupFigure(figure), ground.kind, from: rig.blend));
+      final ground = this.ground ?? _forcedGround;
+      if (ground != null) rig = rig.copyWith(ground: ground);
+      if (style != null) rig = rig.copyWith(figure: rig.figure.copyWith(style: style));
+      final b = blend ?? _forcedBlend;
+      if (b != null) rig = rig.copyWith(blend: b);
     }
     st = st.copyWith(
       scene: d.scene,

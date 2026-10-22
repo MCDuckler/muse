@@ -1,8 +1,10 @@
-// Scenes turned off in the show's menu: the arrows step past them and the director
-// never reaches for one; chosen by name, one still goes on.
+// The director: scenes turned off (their card at 0) are stepped past and never
+// reached for, though chosen by name one still goes on; the combinations drawn by
+// weight, the background held a while.
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:muse/src/state/show/show_combos.dart';
 import 'package:muse/src/state/show/show_director.dart';
 import 'package:muse/src/state/show/show_engine.dart';
 import 'package:muse/src/state/show/show_events.dart';
@@ -19,7 +21,7 @@ void main() {
       ]);
 
   test('the arrows step past a scene that is off', () {
-    final d = make()..off = {'two'};
+    final d = make()..rules = const [ComboRule(scenes: {'two'}, weight: 0)];
     d.choose('one');
     d.next();
     expect(d.scene, 'three');
@@ -30,20 +32,36 @@ void main() {
   });
 
   test('the director never reaches for one, however well it fits', () {
-    final d = make()..off = {'one'};
+    final d = make()..rules = const [ComboRule(scenes: {'one'}, weight: 0)];
     expect(d.fitting(st).map((s) => s.id), isNot(contains('one')));
     d.direct(st, const []);
     expect(d.scene, isNot('one'));
   });
 
   test('but by name it goes on', () {
-    final d = make()..off = {'one'};
+    final d = make()..rules = const [ComboRule(scenes: {'one'}, weight: 0)];
     d.choose('one');
     expect(d.scene, 'one');
   });
 
+  test('one switched off while it is on goes at once (chosen by hand, at the section turning)', () {
+    final d = make();
+    d.direct(st, const []);
+    expect(d.scene, 'one');
+    d.rules = const [ComboRule(scenes: {'one'}, weight: 0)];
+    // No beat, no phrase, no section: it goes all the same.
+    d.direct(st, const []);
+    expect(d.scene, isNot('one'));
+    d.choose('one');
+    d.direct(st, const []);
+    expect(d.scene, 'one', reason: 'the hands\' choice holds');
+    d.locked = true;
+    d.direct(st, const []);
+    expect(d.scene, 'one');
+  });
+
   test('every one off is none off: the stage is never empty', () {
-    final d = make()..off = {'one', 'two', 'three'};
+    final d = make()..rules = const [ComboRule(scenes: {'one'}, weight: 0), ComboRule(scenes: {'two'}, weight: 0), ComboRule(scenes: {'three'}, weight: 0)];
     expect(d.on.length, 3);
     d.direct(st, const []);
     expect(d.scene, isNotNull);
@@ -75,31 +93,65 @@ void main() {
     expect(d.fitting(mid).first.id, 'busy');
   });
 
-  test('a ground from the pool, held for phrases', () {
+  test('a combination by weight for the scene on, its background held for phrases', () {
     final d = make()
-      ..grounds = () => const [(RigGround.milk, 1), (RigGround(kind: Ground.wash), 1)];
+      ..kinds = const {'one': Figure.kinetic, 'two': Figure.kinetic, 'three': Figure.kinetic}
+      ..rules = const [ComboRule(grounds: {'black'}, weight: 0), ComboRule(mixes: {Mix.add}, weight: 0)]
+      ..grounds = () => const {'black', 'milk', 'wash'};
     final frame = ShowState(now: DateTime(2026), dt: 0.5, a: const ShowDeck(name: 'A', energy: 0.5, level: 1), b: const ShowDeck(name: 'B'));
+    d
+      ..choose('one')
+      ..locked = true;
     d.direct(frame, const []);
-    expect(d.ground, isNotNull);
-    final first = d.ground;
-    // Bars go by, phrases turn: within the hold nothing changes.
+    d.locked = false;
+    final first = d.combo!;
+    expect(first.scene, 'one');
+    expect(['milk', 'wash'], contains(first.ground), reason: 'black is off, the camera is not here');
+    expect(first.mix, isNot(Mix.add));
+    // Bars go by, phrases turn: within the hold the background stays.
     final bar = ShowEvent(ShowEventKind.bar, DateTime(2026), data: const {'master': true});
     final phrase = ShowEvent(ShowEventKind.phrase, DateTime(2026), data: const {'master': true});
-    for (var i = 0; i < 16; i++) {
+    d.locked = true; // the scene; the combination still turns
+    for (var i = 0; i < 15; i++) {
       d.direct(frame, [bar, if (i % 8 == 7) phrase]);
-      expect(d.ground, first);
+      expect(d.combo!.ground, first.ground);
     }
-    // Over many phrases past the hold, the other ground comes round.
+    d.locked = false;
+    // Over many phrases past the hold, the other background comes round.
     var changed = false;
     for (var i = 0; i < 2000 && !changed; i++) {
       d.direct(frame, [bar, if (i % 8 == 7) phrase]);
-      changed = d.ground != first;
+      changed = d.combo!.ground != first.ground;
     }
     expect(changed, isTrue);
-    // No pool: no ground of the director's.
-    d.grounds = () => const [];
+    // A background held by the hands: the only one.
+    d.heldGround = 'white';
     d.direct(frame, const []);
-    expect(d.ground, isNull);
+    expect(d.combo!.ground, 'white');
+  });
+
+  test('the hands play one combination: on as it is, held', () {
+    final d = make()..kinds = const {'one': Figure.kinetic, 'two': Figure.dancers, 'three': Figure.kinetic};
+    d.direct(st, const []);
+    const c = Combo(ground: 'white', scene: 'two', style: 'plain', mask: Mask.inverted, mix: Mix.contrast);
+    d.play(c);
+    expect(d.scene, 'two');
+    expect(d.combo, c);
+    expect(d.locked, isTrue);
+    final phrase = ShowEvent(ShowEventKind.phrase, DateTime(2026), data: const {'master': true});
+    for (var i = 0; i < 200; i++) {
+      d.direct(st, [phrase]);
+    }
+    expect(d.combo, c);
+  });
+
+  test('a scene whose combinations are all off is not reached for', () {
+    final d = make()
+      ..kinds = const {'one': Figure.kinetic, 'two': Figure.kinetic, 'three': Figure.kinetic}
+      ..rules = const [ComboRule(scenes: {'one'}, grounds: {'milk'}, weight: 0), ComboRule(scenes: {'one'}, grounds: {'wash'}, weight: 0)]
+      ..grounds = () => const {'milk', 'wash'};
+    expect(d.leans['one'], 0);
+    expect(d.on.map((s) => s.id), ['two', 'three']);
   });
 
   test('a launch landing on the bar a section turns on is kept for that section', () {

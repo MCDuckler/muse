@@ -26,7 +26,7 @@
 //
 // The looks (FlockLook), one a section, as the stylised dancer's renderings:
 //
-//   ink      silhouettes in ink on paper (white on black by the bar in a drop);
+//   ink      flat silhouettes, light on black (the white background makes the page);
 //   sky      a dusk sky, a low sun that flares on the kick, the birds black against it;
 //   embers   points of light, ribbons of their last moments behind them;
 //   neon     each bird a neon chevron;
@@ -64,7 +64,7 @@ import 'show_flock_bird.dart';
 import 'show_meme.dart' show MemeClock;
 import 'show_meme_bank.dart' show MemeMood, memeHash;
 import 'show_particles.dart' show particleSprite;
-import '../../state/show/show_pool.dart' show QualityPool, ShowPool, StylePool;
+import '../../state/show/show_pool.dart' show QualityPool, StylePool, pickByWeight;
 import '../../state/show/show_rig.dart' show Figure;
 import 'show_sims.dart';
 
@@ -128,7 +128,7 @@ class FlockClock {
     if (pool.isEmpty) return not ?? FlockLook.ink;
     // As likely as the hands want each (how often).
     final d = memeHash(salt % 9973, n, 127);
-    var l = ShowPool.pickWeighted(pool, d, (x) => StylePool.weight(Figure.birds, x.name))!;
+    var l = StylePool.pick(pool, d, (x) => StylePool.weight(Figure.birds, x.name))!;
     if (l == not && pool.length > 1) l = pool[(pool.indexOf(l) + 1) % pool.length];
     return l;
   }
@@ -146,9 +146,12 @@ class FlockClock {
   }
 
   /// The camera for cut [cut] in [mood] on [look]: the sky from below or wide, the
-  /// radar from above (a plan), the rest in front, wide or closer.
-  static FlockShot shot(MemeMood mood, int salt, int cut, FlockLook look) {
+  /// radar from above (a plan), the rest in front, wide or closer. [weight] leans
+  /// each framing (the camera's rules, StylePool.shot); where it has every one the
+  /// look and the mood allow at nought, any other it has not, else wide.
+  static FlockShot shot(MemeMood mood, int salt, int cut, FlockLook look, {double Function(FlockShot)? weight}) {
     final d = memeHash(salt % 9973, cut, 131);
+    double w(FlockShot s) => weight == null ? 1 : weight(s);
     final pick = switch (look) {
       FlockLook.sky => [FlockShot.low, FlockShot.wide, FlockShot.low, FlockShot.front],
       FlockLook.radar => [FlockShot.high, FlockShot.high, FlockShot.wide],
@@ -159,7 +162,7 @@ class FlockClock {
           _ => [FlockShot.wide, FlockShot.front, FlockShot.wide, FlockShot.low, FlockShot.fish, FlockShot.high],
         },
     };
-    return pick[(d * pick.length).floor() % pick.length];
+    return pickByWeight([for (final s in pick) (s, w(s))], d) ?? pickByWeight([for (final s in FlockShot.values) (s, w(s))], d) ?? FlockShot.wide;
   }
 
   /// How many beats a camera holds: long, and shorter in the drop.
@@ -1081,9 +1084,10 @@ class FlockSim implements SimLayer {
     var cut = false;
     if (cutN != _cut || dropNow || sectionNow || size != _sizeWas) {
       _cut = cutN;
-      final shot = _forcedShot ?? FlockClock.shot(mood, salt, cutN, look);
+      final shot = _forcedShot ?? FlockClock.shot(mood, salt, cutN, look, weight: (x) => StylePool.shot(Figure.birds, x.name));
       cut = shot != _shot || size != _sizeWas;
       _shot = shot;
+      StylePool.shotNow[Figure.birds] = shot.name;
       _sizeWas = size;
     }
     if (_handCam != null && !handing) {
@@ -1259,10 +1263,10 @@ class FlockSim implements SimLayer {
     final pal = l.st.palette;
     switch (look) {
       case FlockLook.ink:
-        // Black on white; in a drop, white on black by the bar — the cut on the downbeat.
-        final inverted = l.rage && (l.beats / 4).floor().isOdd;
-        final paper = inverted ? const Color(0xff050505) : const Color(0xfff3f2ee);
-        final ink = inverted ? const Color(0xfff3f2ee) : const Color(0xff050505);
+        // Light on black: the page is the background's (white, and the difference
+        // turns them to ink on it; on MilkDrop a keyhole makes them windows).
+        const paper = Color(0xff000000);
+        const ink = Color(0xfff3f2ee);
         c.drawRect(Offset.zero & s, Paint()..color = paper);
         // Each bird a little see-through: where the flock is thick it is solid, at its
         // edges the single birds show, and the waves of density run through it.

@@ -4,8 +4,8 @@
 //
 //   stage_bench --shaders app/shaders/show --scene flash --size 1920x1080 [--scale 1]
 //               [--device n] [--frames 300] [--trails 0.8] [--ppm out.ppm] [--list]
-//               [--milk preset] [--ground black|wash|milk|field:<name>] [--blend 0..11] [--m1 v]
-//               (with --milk the ground is MilkDrop in contrast unless said otherwise)
+//               [--milk preset] [--ground black|white|wash|milk|field:<name>] [--blend 0..3] [--mask 0..2] [--m1 v]
+//               (with --milk the ground is MilkDrop in contrast unless said otherwise; blend 0 normal 1 add 2 screen 3 contrast, mask 0 none 1 keyhole 2 inverted)
 // A synthetic record plays: 128 BPM, a kick each beat, a snare on two and four.
 #include "ws_stage.h"
 
@@ -23,7 +23,7 @@
 int main(int argc, char** argv) {
   std::string dir = "shaders/show", scene = "flash", ppm, milk;
   std::string ground;
-  int blend = -1;
+  int blend = -1, mask = 0;
   float m1 = 0;
   int W = 1920, H = 1080, frames = 300, device = -1;
   float scale = 1, trails = 0, bloom = 0.6f;
@@ -44,6 +44,7 @@ int main(int argc, char** argv) {
     else if (a == "--milk") milk = next();
     else if (a == "--ground") ground = next();
     else if (a == "--blend") blend = std::atoi(next().c_str());
+    else if (a == "--mask") mask = std::atoi(next().c_str());
     else if (a == "--m1") m1 = (float)std::atof(next().c_str());
   }
   if (list) {
@@ -70,17 +71,20 @@ int main(int argc, char** argv) {
     ws_milk("open 960 540 60", nullptr, 0);
     ws_milk(("preset " + milk).c_str(), nullptr, 0);
     if (ground.empty()) ground = "milk";
-    if (blend < 0) blend = 11;
+    if (blend < 0) blend = 3;
   }
   if (!ground.empty()) {
     int kind = 0;
     std::string field;
     if (ground == "wash") kind = 1;
     else if (ground == "milk") kind = 2;
+    else if (ground == "white") kind = 7;
     else if (ground.rfind("field:", 0) == 0) { kind = 4; field = ground.substr(6); }
     ws_ground(kind, field.empty() ? nullptr : field.c_str(), 1.0f, nullptr);
   }
-  ws_blend(blend < 0 ? 1 : blend, 0, 0, 1.0f);
+  // The blend (0 normal 1 add 2 screen 3 contrast), the mask (0 none 1 keyhole
+  // 2 inverted); a shader scene's figure is its light.
+  ws_blend(blend < 0 ? 0 : blend, mask, 2, 1.0f);
   std::vector<uint8_t> px((size_t)W * H * 4);
   double total = 0, worst = 0;
   int timed = 0;

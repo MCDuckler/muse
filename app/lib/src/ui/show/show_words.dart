@@ -892,7 +892,7 @@ class WordsSim implements SimLayer {
     _set('uShadow', h * 0.006);
     // No shadow where the blend is a keyhole (the letters a window onto the ground):
     // the alpha is the coverage there, and a shadow would cut a dim second window.
-    final keyhole = st.rig.blend.ground == GroundMode.keyhole && st.rig.blend.strength > 0;
+    final keyhole = st.rig.blend.mask == Mask.keyhole && st.rig.blend.strength > 0;
     _set('uShadowK', keyhole ? 0 : face.shadowK);
     _set('uSplit', _split * h * 0.008);
     _set('uGlitch', _glitch);

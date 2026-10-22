@@ -84,16 +84,15 @@ WS_API void ws_dance_frame(const float* commands, int n);
 // order the file declares them, as Flutter's setFloat(i) numbers them.
 WS_API void ws_words(const float* values, int n);
 // The ground under the figure (lib/src/state/show/show_rig.dart's RigGround): its
-// kind (0 black 1 wash 2 milk 3 camera 4 field 5 cover 6 pulse), a field's shader by
-// name (else null), how much of it, and uM1..4 for the field. MilkDrop must be open
-// for a milk ground.
+// kind (0 black 1 wash 2 milk 3 camera 4 field 5 cover 6 pulse 7 white), a field's
+// shader by name (else null), how much of it, and uM1..4 for the field. MilkDrop must
+// be open for a milk ground.
 WS_API void ws_ground(int kind, const char* field, float dim, const float* knobs4);
-// The blend (RigBlend; shaders/show/under.frag): the backdrop's way (GroundMode
-// 0..12, 12 the keyhole), the figure's (0 over, 1 the same, 2 as the figure asks: over for the plain
-// dancers, the same for the rest), which pixels are the figure (0 the alpha 254/255
-// band, 1 the alpha — the dancers' frame carries its coverage), and how much of the
-// blend (0: none drawn).
-WS_API void ws_blend(int ground, int figure, int coverage, float strength);
+// The blend (RigBlend; shaders/show/under.frag): the mix (show_combos.dart's Mix:
+// 0 normal 1 add 2 screen 3 contrast), the mask (0 none 1 keyhole 2 inverted), which
+// pixels are the figure (0 the alpha 254/255 band, 1 the alpha — the dancers' frame
+// carries its coverage — 2 the light), and how much of the blend (0: none drawn).
+WS_API void ws_blend(int mix, int mask, int coverage, float strength);
 // The treatment the figure goes through before the blend (dance_fx.frag over the
 // scene's picture; lib/src/ui/show/show_canvas.dart _treated), WS_TREAT floats: mode
 // (0 none), cell as a share of the picture's height, ink rgb, paper rgb, tint, glyphs,

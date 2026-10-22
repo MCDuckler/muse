@@ -28,6 +28,13 @@ class BoardConflict implements Exception {
   final int rev;
 }
 
+/// A shared show snapshot saved over a copy older than the one kept: the snapshot as
+/// the server has it (show_snapshots.dart reads it).
+class ShowSnapshotConflict implements Exception {
+  ShowSnapshotConflict(this.kept);
+  final Map<String, dynamic> kept;
+}
+
 class ApiException implements Exception {
   final int status;
   final String message;
@@ -1945,6 +1952,34 @@ class ApiClient {
     final d = await _decode(r) as Map<String, dynamic>;
     return (d['rev'] as num).toInt();
   }
+
+  // ------------------------------------------------------------- show snapshots
+  /// The show's shared snapshots, every account's, the newest saved first (each:
+  /// id, name, doc, rev, owner, mine, updated_by, updated_at).
+  Future<List<Map<String, dynamic>>> showSnapshots() async {
+    final d = await _decode(await net.get(_u('/booth/show/snapshots'), headers: _headers)) as Map<String, dynamic>;
+    return [for (final s in d['snapshots'] as List) (s as Map).cast<String, dynamic>()];
+  }
+
+  /// A snapshot shared with everyone: the one kept, as the list has it.
+  Future<Map<String, dynamic>> shareShowSnapshot(String name, Map<String, dynamic> doc) async =>
+      ((await _decode(await net.post(_u('/booth/show/snapshots'), headers: _headers, body: jsonEncode({'name': name, 'doc': doc})))) as Map)
+          .cast<String, dynamic>();
+
+  /// A shared snapshot saved over — if [rev] is still its revision; a stale one
+  /// throws [ShowSnapshotConflict] with the snapshot as kept.
+  Future<Map<String, dynamic>> saveShowSnapshot(int id, Map<String, dynamic> doc, int rev, {String? name}) async {
+    final r = await net.put(_u('/booth/show/snapshots/$id'),
+        headers: _headers, body: jsonEncode({'doc': doc, 'rev': rev, if (name != null) 'name': name}));
+    if (r.statusCode == 409) {
+      final body = jsonDecode(r.body);
+      final detail = body is Map ? body['detail'] : null;
+      if (detail is Map) throw ShowSnapshotConflict(detail.cast<String, dynamic>());
+    }
+    return ((await _decode(r)) as Map).cast<String, dynamic>();
+  }
+
+  Future<void> unshareShowSnapshot(int id) async => await _decode(await net.delete(_u('/booth/show/snapshots/$id'), headers: _headers));
 
   /// The desk's board as it is now, for the screens that follow it by relay.
   Future<void> reportBoard(Map<String, dynamic> line) async =>

@@ -801,6 +801,20 @@ create table if not exists boards (
   updated_at timestamptz not null default now()
 );
 
+-- The show's shared snapshots (routes_show.py): a set of the combination selector's
+-- rules, named, that every account lists and may switch to and save over (with a
+-- revision, as a board); kept by whoever shared it, who alone takes it away.
+create table if not exists show_snapshots (
+  id         serial primary key,
+  user_id    int not null references users(id) on delete cascade,
+  name       text not null,
+  doc        jsonb not null,
+  rev        int not null default 1,
+  updated_by int references users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 -- Discover (discover.py): genres followed beside artists, the news in each, the
 -- lists made for a person overnight, and what the weekly one has offered before so
 -- it does not come round again.

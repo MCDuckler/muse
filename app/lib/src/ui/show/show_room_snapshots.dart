@@ -1,0 +1,204 @@
+// The snapshots, over the selector: the rules as they are named and kept, switched
+// between in a tap (state/show/show_snapshots.dart). Each one a chip — this device's,
+// then the shared ones (every WetOwl account's, a figure of two beside the name) —
+// the one on lit, a dot after its name where the rules have changed since. SAVE puts
+// the rules over the one on (a shared one: over everyone's, unless someone saved it
+// since — then theirs or ours); SAVE AS keeps them as a new one; the menu shares one
+// with everyone, takes it away again, renames and forgets.
+//
+// Switching away from rules not saved puts them aside, with an UNDO.
+part of 'show_room.dart';
+
+class _SnapshotBar extends StatefulWidget {
+  const _SnapshotBar({required this.show});
+  final ShowEngine show;
+
+  @override
+  State<_SnapshotBar> createState() => _SnapshotBarState();
+}
+
+class _SnapshotBarState extends State<_SnapshotBar> {
+  SnapshotShelf get shelf => widget.show.snapshots;
+
+  @override
+  void initState() {
+    super.initState();
+    shelf.hold();
+  }
+
+  @override
+  void dispose() {
+    shelf.release();
+    super.dispose();
+  }
+
+  void _say(String words, {SnackBarAction? action}) => ScaffoldMessenger.of(context).say(snack(Text(words), action: action));
+
+  /// The rules and the snapshot on, as they are: what UNDO goes back to.
+  ({List<ComboRule> rules, ShowSnapshot? on}) get _now => (rules: widget.show.pool.rules, on: shelf.on);
+
+  void _back(({List<ComboRule> rules, ShowSnapshot? on}) was) {
+    final show = widget.show;
+    show.setDoc(show.doc.copyWith(pool: show.pool.copyWith(rules: was.rules), snapshot: was.on, clearSnapshot: was.on == null));
+  }
+
+  void _switch(ShowSnapshot? to) {
+    final was = _now;
+    final lost = shelf.changed;
+    final from = shelf.on?.name;
+    if (to == null) {
+      shelf.useShipped();
+    } else {
+      shelf.use(to);
+    }
+    if (lost) {
+      _say(from == null ? 'Your rules were put aside' : 'Your changes to $from were not saved',
+          action: SnackBarAction(label: 'UNDO', onPressed: () => _back(was)));
+    }
+  }
+
+  Future<void> _saveAs() async {
+    final name = await promptForName(context, 'Save the rules as', '', 'Name', 'A snapshot of the selector: switch back to it in a tap.');
+    if (name == null || name.trim().isEmpty || !mounted) return;
+    shelf.saveAs(name);
+  }
+
+  Future<void> _save({ShowSnapshot? over}) async {
+    try {
+      await shelf.save(over: over);
+    } on SnapshotConflict catch (e) {
+      if (!mounted) return;
+      final theirs = e.theirs;
+      final pick = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('${theirs.name} has changed'),
+          content: Text('${theirs.updatedBy ?? 'Someone'} saved it since you switched to it. Take theirs, or save yours over it?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+            TextButton(onPressed: () => Navigator.pop(context, 'theirs'), child: const Text('Take theirs')),
+            FilledButton(onPressed: () => Navigator.pop(context, 'ours'), child: const Text('Save over it')),
+          ],
+        ),
+      );
+      if (pick == 'theirs') shelf.use(theirs);
+      if (pick == 'ours') await _save(over: theirs);
+    } catch (_) {
+      if (mounted) _say(shelf.trouble ?? 'Could not save it');
+    }
+  }
+
+  Future<void> _menu(String what) async {
+    if (what == 'reload') return shelf.refresh();
+    final s = shelf.on;
+    if (s == null) return;
+    try {
+      switch (what) {
+        case 'rename':
+          final name = await promptForName(context, 'Rename', s.name);
+          if (name != null && name.trim().isNotEmpty) shelf.rename(s, name);
+        case 'share':
+          if (shelf.changed) await _save();
+          final shared = await shelf.share(shelf.on!);
+          _say('${shared.name} is shared: every WetOwl account can switch to it and save over it');
+        case 'unshare':
+          await shelf.unshare(s);
+          _say('${s.name} is no longer shared: kept on this device');
+        case 'forget':
+          final was = (kept: shelf.kept, now: _now);
+          shelf.forget(s);
+          _say('${s.name} forgotten (the rules on stay as they are)',
+              action: SnackBarAction(label: 'UNDO', onPressed: () {
+                final show = widget.show;
+                show.setDoc(show.doc.copyWith(snapshots: was.kept, snapshot: was.now.on));
+              }));
+      }
+    } catch (_) {
+      if (mounted) _say(shelf.trouble ?? 'That did not work');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: Listenable.merge([widget.show, shelf]),
+        builder: (context, _) {
+          final on = shelf.on;
+          final changed = shelf.changed;
+          Widget chip(ShowSnapshot? s) {
+            final lit = s == null ? on == null : on?.id == s.id;
+            final name = s?.name ?? 'As shipped';
+            return Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: IntrinsicWidth(
+                child: Pad(
+                  icon: s != null && s.shared ? Icons.group_outlined : null,
+                  label: '$name${lit && changed ? ' •' : ''}',
+                  height: 24,
+                  lit: lit,
+                  colour: lit ? Console.a : Console.ink,
+                  tooltip: s == null
+                      ? 'No snapshot: only the rules the app came with'
+                      : s.shared
+                          ? 'Shared by ${s.mine ? 'you' : s.owner ?? 'someone'}${s.updatedBy != null ? ', last saved by ${s.updatedBy}' : ''}: '
+                              '${s.rules.length} rules'
+                          : 'On this device: ${s.rules.length} rules',
+                  onTap: lit ? null : () => _switch(s),
+                ),
+              ),
+            );
+          }
+
+          return Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Row(children: [
+              Text('SNAPSHOT', style: Console.label(9)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(children: [
+                    chip(null),
+                    for (final s in shelf.kept) chip(s),
+                    for (final s in shelf.shared) chip(s),
+                    if (shelf.loading) Padding(padding: const EdgeInsets.only(left: 4), child: Text('…', style: Console.label(10))),
+                    if (shelf.trouble != null && !shelf.loading)
+                      Tooltip(message: shelf.trouble!, child: Icon(Icons.cloud_off, size: 14, color: Console.faint)),
+                  ]),
+                ),
+              ),
+              const SizedBox(width: 6),
+              IntrinsicWidth(
+                child: Pad(
+                  label: 'SAVE',
+                  height: 24,
+                  lit: on != null && changed,
+                  colour: Console.a,
+                  tooltip: on == null
+                      ? 'Switch to a snapshot or SAVE AS one first'
+                      : on.shared
+                          ? 'Your rules over ${on.name}, for everyone'
+                          : 'Your rules over ${on.name}',
+                  onTap: on != null && changed ? () => unawaited(_save()) : null,
+                ),
+              ),
+              const SizedBox(width: 4),
+              IntrinsicWidth(
+                child: Pad(label: 'SAVE AS', height: 24, colour: Console.ink, tooltip: 'Keep the rules as they are as a new snapshot', onTap: () => unawaited(_saveAs())),
+              ),
+              PopupMenuButton<String>(
+                tooltip: 'The snapshot on',
+                icon: Icon(Icons.more_vert, size: 18, color: Console.quiet),
+                onSelected: (w) => unawaited(_menu(w)),
+                itemBuilder: (context) => [
+                  if (on != null && !on.shared) const PopupMenuItem(value: 'share', child: Text('Share with everyone')),
+                  if (on != null && on.shared && on.mine) const PopupMenuItem(value: 'unshare', child: Text('Stop sharing (keep it here)')),
+                  if (on != null && !on.shared) const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                  if (on != null && !on.shared) const PopupMenuItem(value: 'forget', child: Text('Forget')),
+                  const PopupMenuItem(value: 'reload', child: Text('List the shared ones again')),
+                ],
+              ),
+            ]),
+          );
+        },
+      );
+}

@@ -335,13 +335,13 @@ struct Stage {
   bool hasRecipe = false;
   // The ground under the figure, and the blend of the two (show_rig.dart's RigGround
   // and RigBlend; under.frag): the ground's kind (0 black 1 wash 2 milk 3 camera
-  // 4 field 5 cover 6 pulse), a field's shader, how much of it, its knobs; the
-  // backdrop's way (GroundMode 0..11), the figure's (0 over, 1 the same), which
-  // pixels are the figure (0 the alpha 254/255 band, 1 the alpha), how much.
+  // 4 field 5 cover 6 pulse 7 white), a field's shader, how much of it, its knobs;
+  // the blend (show_combos.dart's Mix 0..3) and the mask (Mask 0..2), which pixels
+  // are the figure (0 the alpha 254/255 band, 1 the alpha, 2 the light), how much.
   int groundKind = 0;
   std::string groundField;
   float groundDim = 1, groundKnobs[4] = {};
-  int blendGround = 1, blendFigure = 0, blendCoverage = 0;
+  int blendMix = 0, blendMask = 0, blendCoverage = 0;
   float blendStrength = 1;
   // The treatment over the figure (ws_treat): mode 0 none.
   float treat[WS_TREAT] = {};
@@ -574,7 +574,7 @@ void drawWords(Target& t, const std::vector<float>& v, GLuint groundTex) {
 void frame(int slot) {
   int W, H; float sc; std::string sceneName, fromName, kinds, groundField; float post[6]; float common[WS_COMMON];
   float fromK, fromKnobs[4], white, black, palette[9], recipe[12], groundDim, groundKnobs[4], blendStrength;
-  int groundKind, blendGround, blendFigure, blendCoverage;
+  int groundKind, blendMix, blendMask, blendCoverage;
   float treat[WS_TREAT];
   bool freeze, hasRecipe;
   std::vector<float> wordsV;
@@ -590,7 +590,7 @@ void frame(int slot) {
     std::memcpy(recipe, S->recipe, sizeof recipe); hasRecipe = S->hasRecipe;
     groundKind = S->groundKind; groundField = S->groundField; groundDim = S->groundDim;
     std::memcpy(groundKnobs, S->groundKnobs, sizeof groundKnobs);
-    blendGround = S->blendGround; blendFigure = S->blendFigure; blendCoverage = S->blendCoverage; blendStrength = S->blendStrength;
+    blendMix = S->blendMix; blendMask = S->blendMask; blendCoverage = S->blendCoverage; blendStrength = S->blendStrength;
     std::memcpy(treat, S->treat, sizeof treat);
     wordsV = S->words;
   }
@@ -614,9 +614,8 @@ void frame(int slot) {
     return false;
   };
   // The ground and the blend: not under a scene that draws MilkDrop itself (it is
-  // the ground), nor where the figure layer goes over the ground whole (nothing of
-  // the ground would show).
-  const bool blendNow = !samplesMilk(p) && blendStrength > 0 && blendGround != 1;
+  // the ground), nor for a figure plainly on black (the figure as it is drawn).
+  const bool blendNow = !samplesMilk(p) && blendStrength > 0 && !(groundKind == 0 && blendMix == 0 && blendMask == 0);
   const bool groundMilk = blendNow && groundKind == 2;
   const bool milkNow = S->milkOpen && (samplesMilk(p) || samplesMilk(leaving) || groundMilk);
   if (milkNow) {
@@ -662,6 +661,10 @@ void frame(int slot) {
       glUniform1f(glGetUniformLocation(S->copy, "uFit"), groundKind == 3 ? 16.0f / 9.0f : 1.0f);
       bindTex(S->copy, "uSrc", 0, S->dance.texture(groundKind == 3 ? "camera" : "cover"));
       drawQuad();
+    } else if (groundKind == 7) {
+      S->ground.bind();
+      glClearColor(1, 1, 1, 1);
+      glClear(GL_COLOR_BUFFER_BIT);
     } else {
       // Black: a ground whose picture is not here (yet).
       S->ground.bind();
@@ -741,15 +744,8 @@ void frame(int slot) {
       auto set = [&](const char* n, float v) { if (const GLint at = u->loc(n); at >= 0) glUniform1f(at, v); };
       if (const GLint at = u->loc("uResolution"); at >= 0) glUniform2f(at, (float)w, (float)h);
       set("wsHeight", (float)h);
-      set("uMode", (float)blendGround);
-      set("uBeatDecay", common[27]);
-      set("uBarSaw", common[29]);
-      set("uHitKick", common[24]);
-      set("uTime", common[2]);
-      // The figure's way asked for, or as the figure asks (2): the plain dancers go
-      // over the ground whole, every other figure the way its backdrop does.
-      const int figureMode = blendFigure == 2 ? ((sceneName == "@dance" && S->dance.plainThisFrame()) || wordsScene ? 0 : 1) : blendFigure;
-      set("uFigureMode", (float)figureMode);
+      set("uMix", (float)blendMix);
+      set("uMask", (float)blendMask);
       set("uCoverage", (float)blendCoverage);
       set("uStrength", blendStrength);
       set("uGroundFit", 0.0f);
@@ -1365,13 +1361,14 @@ WS_API void ws_ground(int kind, const char* field, float dim, const float* knobs
   for (int i = 0; i < 4; i++) S->groundKnobs[i] = knobs4 ? knobs4[i] : 0;
 }
 
-WS_API void ws_blend(int ground, int figure, int coverage, float strength) {
+WS_API void ws_blend(int mix, int mask, int coverage, float strength) {
   if (!S) S = new Stage();
   std::lock_guard<std::mutex> g(S->lock);
-  // GroundMode's index (lib/src/state/show/show_rig.dart): 0 through … 11 contrast, 12 keyhole.
-  S->blendGround = std::clamp(ground, 0, 12);
-  S->blendFigure = std::clamp(figure, 0, 2);
-  S->blendCoverage = coverage ? 1 : 0;
+  // show_combos.dart's Mix (0 normal 1 add 2 screen 3 contrast) and Mask (0 none
+  // 1 keyhole 2 inverted); the coverage 0 band, 1 alpha, 2 light.
+  S->blendMix = std::clamp(mix, 0, 3);
+  S->blendMask = std::clamp(mask, 0, 2);
+  S->blendCoverage = std::clamp(coverage, 0, 2);
   S->blendStrength = std::clamp(strength, 0.0f, 1.0f);
 }
 

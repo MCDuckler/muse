@@ -207,7 +207,7 @@ class _MilkPanelState extends State<MilkPanel> {
           final p = feed.preset;
           final rig = show.state.rig;
           final under = rig.ground.kind == Ground.milk;
-          final kept = under && show.locked(RigSlot.ground);
+          final kept = show.heldGround == 'milk';
           final alone = show.milkOnly;
           return Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -290,7 +290,7 @@ class _MilkPanelState extends State<MilkPanel> {
                           : under
                               ? 'MilkDrop is the background now — tap to keep it there whatever the director does'
                               : 'Put MilkDrop under the scene, and keep it there',
-                      onTap: () => kept ? show.lock(RigSlot.ground, false) : show.setGround(RigGround.milk),
+                      onTap: () => show.holdGround(kept ? null : 'milk'),
                     )),
                     IntrinsicWidth(
                         child: Pad(
@@ -303,14 +303,14 @@ class _MilkPanelState extends State<MilkPanel> {
                     )),
                     IntrinsicWidth(
                         child: Pad(
-                      label: show.pool.isOn('ground.milk') ? 'THE DIRECTOR\'S' : 'NOT THE DIRECTOR\'S',
+                      label: show.pool.milkOn ? 'THE DIRECTOR\'S' : 'NOT THE DIRECTOR\'S',
                       height: 24,
-                      lit: show.pool.isOn('ground.milk'),
+                      lit: show.pool.milkOn,
                       colour: Console.quiet,
-                      tooltip: show.pool.isOn('ground.milk')
-                          ? 'The director may put MilkDrop under the scenes (most of the time) — tap and it never does (the RULES tab\'s MILKDROP switch)'
+                      tooltip: show.pool.milkOn
+                          ? 'The director may put MilkDrop under the scenes (most of the time) — tap and it never does (MilkDrop\'s card at 0)'
                           : 'The director never puts MilkDrop under a scene — tap to let it again',
-                      onTap: () => show.setPool(show.pool.withOff('ground.milk', show.pool.isOn('ground.milk'))),
+                      onTap: () => show.setPool(show.pool.withMilk(!show.pool.milkOn)),
                     )),
                   ]),
                 ]),

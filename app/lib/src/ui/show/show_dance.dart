@@ -56,8 +56,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../../state/show/show_pool.dart' show MovePool, QualityPool, ShowPool, StylePool;
-import '../../state/show/show_rig.dart' show Figure;
+import '../../state/show/show_pool.dart' show MovePool, QualityPool, StylePool, pickByWeight;
+import '../../state/show/show_rig.dart' show Figure, Ground;
 import '../../state/show/show_state.dart';
 import '../../state/show/show_tune.dart';
 import 'show_canvas.dart' show StagePrograms;
@@ -100,9 +100,9 @@ enum DanceShot { full, front, medium, close, wide, extremeLow, extremeHigh, extr
 
 /// How the dancer scene (dance.art) renders the dancers, a section at a time:
 ///
-///   mono     a silhouette, black on white — the shadow-play of the Bad Apple
-///            video — turning to white on black by the bar in a drop, a chorus line
-///            of them at its height;
+///   mono     a flat silhouette, light on black — the shadow-play of the Bad Apple
+///            video on the white background (by the difference), a window onto
+///            MilkDrop through a keyhole — a chorus line of them at its height;
 ///   trails   a clay figure in the dark, ribbons of light swept behind its hands,
 ///            feet and head over the last beat or two;
 ///   ascii    the figure as text, each cell's brightness a glyph;
@@ -118,8 +118,8 @@ enum DanceShot { full, front, medium, close, wide, extremeLow, extremeHigh, extr
 ///   viewports a model editor's grid of viewports, a dancer front on in each, every
 ///            model dancing the same moves, the selection stepping on the beat (the
 ///            native stage only);
-///   plain    the models as they are: textured, in a plain light, on white — no
-///            stage, no floor, no rendering style at all;
+///   plain    the models as they are: textured, in a plain light, on whatever the
+///            background is (white, MilkDrop…) — no stage, no floor, no style;
 ///   disco    an LED floor that plays the record: every step lights the tile it
 ///            lands on, a kick rings out from the lead, a snare scatters sparks, the
 ///            bass breathes the floor and the wall; a pattern a section under it.
@@ -321,39 +321,55 @@ class DanceClock {
   }
 
   /// The camera for cut [cut] in [mood]: always from the front, framed wider or
-  /// closer; the whole troupe when there is one.
-  static DanceShot shot(MemeMood mood, int salt, int cut, DanceTroupe troupe, {bool art = false}) {
+  /// closer; the whole troupe when there is one. [weight] leans each framing (the
+  /// camera's rules, StylePool.shot); where it has every one the mood and the troupe
+  /// allow at nought, any other it has not, else the front.
+  static DanceShot shot(MemeMood mood, int salt, int cut, DanceTroupe troupe, {bool art = false, double Function(DanceShot)? weight}) {
     final d = memeHash(salt % 9973, cut, 41);
+    // The stylised stage draws `full` as `front`: weighed as it is drawn. (All at 1,
+    // a pick by weight is the plain pick: the hash's place in the list.)
+    double w(DanceShot s) => weight == null ? 1 : weight(art && s == DanceShot.full ? DanceShot.front : s);
     // The stylised stage's extreme wide angles: most in a drop, never asleep.
     if (art) {
       final e = memeHash(salt % 9973, cut, 43);
-      final odds = switch (mood) {
+      if (e < _extremeOdds(mood)) {
+        final x = pickByWeight([for (final s in _extremes) (s, w(s))], d);
+        if (x != null) return x;
+      }
+    }
+    return pickByWeight([for (final s in _candidates(mood, troupe)) (s, w(s))], d) ??
+        pickByWeight([for (final s in const [DanceShot.front, DanceShot.medium, DanceShot.wide, DanceShot.close]) (s, w(s))], d) ??
+        DanceShot.front;
+  }
+
+  static double _extremeOdds(MemeMood mood) => switch (mood) {
         MemeMood.rage => 0.55,
         MemeMood.wake => 0.4,
         MemeMood.vibe => 0.35,
         MemeMood.sleep => 0.0,
       };
-      if (e < odds) {
-        const extremes = [
-          DanceShot.extremeLow,
-          DanceShot.fisheye,
-          DanceShot.extremeFront,
-          DanceShot.fisheyeLow,
-          DanceShot.extremeHigh,
-          DanceShot.fisheye,
-        ];
-        return extremes[(d * extremes.length).floor() % extremes.length];
-      }
+
+  static const _extremes = [
+    DanceShot.extremeLow,
+    DanceShot.fisheye,
+    DanceShot.extremeFront,
+    DanceShot.fisheyeLow,
+    DanceShot.extremeHigh,
+    DanceShot.fisheye,
+  ];
+
+  /// The framings the mood and the troupe allow, as often as each comes.
+  static List<DanceShot> _candidates(MemeMood mood, DanceTroupe troupe) {
+    if (troupe == DanceTroupe.line || troupe == DanceTroupe.crowd || troupe == DanceTroupe.couples) {
+      return const [DanceShot.wide, DanceShot.wide, DanceShot.wide, DanceShot.full];
     }
-    if (troupe == DanceTroupe.line || troupe == DanceTroupe.crowd || troupe == DanceTroupe.couples) return d < 0.75 ? DanceShot.wide : DanceShot.full;
-    if (isBig(troupe)) return d < 0.6 ? DanceShot.front : DanceShot.full;
-    final pick = switch (mood) {
-      MemeMood.sleep => [DanceShot.full, DanceShot.front],
-      MemeMood.wake => [DanceShot.front, DanceShot.medium],
-      MemeMood.rage => [DanceShot.full, DanceShot.front, DanceShot.medium, DanceShot.close],
-      MemeMood.vibe => [DanceShot.full, DanceShot.front, DanceShot.full, DanceShot.medium, DanceShot.close],
+    if (isBig(troupe)) return const [DanceShot.front, DanceShot.front, DanceShot.front, DanceShot.full, DanceShot.full];
+    return switch (mood) {
+      MemeMood.sleep => const [DanceShot.full, DanceShot.front],
+      MemeMood.wake => const [DanceShot.front, DanceShot.medium],
+      MemeMood.rage => const [DanceShot.full, DanceShot.front, DanceShot.medium, DanceShot.close],
+      MemeMood.vibe => const [DanceShot.full, DanceShot.front, DanceShot.full, DanceShot.medium, DanceShot.close],
     };
-    return pick[(d * pick.length).floor() % pick.length];
   }
 
   /// The stylised stage's rendering for its [n]th section in [mood]: the calm ones
@@ -376,7 +392,7 @@ class DanceClock {
     if (pool.isEmpty) return not ?? DanceArt.plain;
     final d = memeHash(salt % 9973, n, 97);
     // As likely as the hands want each (how often: rarely, normal, often).
-    var a = ShowPool.pickWeighted(pool, d, (x) => StylePool.weight(Figure.dancers, x.name))!;
+    var a = StylePool.pick(pool, d, (x) => StylePool.weight(Figure.dancers, x.name))!;
     if (a == not && pool.length > 1) a = pool[(pool.indexOf(a) + 1) % pool.length];
     return a;
   }
@@ -897,9 +913,10 @@ class DanceSim implements SimLayer {
     final shotWas = _shot, troupeWas = _troupeDrawn;
     if (cutN != _cut || dropNow || sectionNow) {
       _cut = cutN;
-      _shot = _forcedShot ?? DanceClock.shot(mood, salt, cutN, _troupe, art: true);
+      _shot = _forcedShot ?? DanceClock.shot(mood, salt, cutN, _troupe, art: true, weight: (x) => StylePool.shot(Figure.dancers, x.name));
       // The silhouettes, the text and the dots read best square on.
       if (_shot == DanceShot.full) _shot = DanceShot.front;
+      StylePool.shotNow[Figure.dancers] = _shot.name;
     }
     final frame = DanceFrame.of(_shot, _troupe);
     final sizeNow = Size(w.toDouble(), h.toDouble());
@@ -1658,10 +1675,10 @@ class DanceSim implements SimLayer {
       case DanceArt.disco:
         _discoStage(c, s, cam, l, bodies);
       case DanceArt.mono:
-        // Black on white; in a drop, white on black by the bar — the cut on the downbeat.
-        final inverted = l.rage && (beats / 4).floor().isOdd;
-        final paper = inverted ? const Color(0xff050505) : const Color(0xfff3f2ee);
-        final ink = inverted ? const Color(0xfff3f2ee) : const Color(0xff050505);
+        // Flat silhouettes, light on black: the page is the background's — on white
+        // the difference makes them ink, on MilkDrop the keyhole makes them windows.
+        const paper = Color(0xff000000);
+        const ink = Color(0xfff3f2ee);
         c.fill(Offset.zero & s, paper);
         // The kick: the figure a hair bigger for a moment.
         _hero!.place(DanceSpot(scale: _heroScale * (1 + 0.018 * l.kick)));
@@ -1673,9 +1690,14 @@ class DanceSim implements SimLayer {
           c.body(b, cam, DanceLook3(flat: ink, textured: false, shadeFlat: false, alpha: native ? 1 : 254 / 255), twoSided: true, blend: native ? BlendMode.srcOver : BlendMode.src);
         }
       case DanceArt.trails:
-        final deep = HSLColor.fromAHSL(1, pal.primary.hue, 0.35, 0.035).toColor();
-        _wash(c, s, deep, const Color(0xff020203));
-        _studioFloor(c, cam, l, bodies, pal.accent.withSaturation(0.3).withLightness(0.7).toColor());
+        // The studio (its wash and its floor) only on black: on any other background
+        // the background is the setting.
+        c.fill(Offset.zero & s, Colors.black);
+        if (l.ownSetting) {
+          final deep = HSLColor.fromAHSL(1, pal.primary.hue, 0.35, 0.035).toColor();
+          _wash(c, s, deep, const Color(0xff020203));
+          _studioFloor(c, cam, l, bodies, pal.accent.withSaturation(0.3).withLightness(0.7).toColor());
+        }
         _ribbons(c, cam, l, rig, beats, [
           pal.accent.withSaturation(0.9).withLightness(0.65).toColor(),
           pal.secondary.withSaturation(0.9).withLightness(0.6).toColor(),
@@ -1692,7 +1714,11 @@ class DanceSim implements SimLayer {
         }
       case DanceArt.dither:
         final top = HSLColor.fromAHSL(1, pal.primary.hue, 0.25, 0.3).toColor();
-        _glow(c, s, Offset(s.width / 2, s.height * 0.42), s.height * 0.9, top, Colors.black);
+        if (l.ownSetting) {
+          _glow(c, s, Offset(s.width / 2, s.height * 0.42), s.height * 0.9, top, Colors.black);
+        } else {
+          c.fill(Offset.zero & s, Colors.black);
+        }
         // The chrome figure: its reflections are what the dots draw.
         for (final (b, _, _) in bodies) {
           c.body(b, cam, _chrome(l, Colors.white), twoSided: true);
@@ -1722,10 +1748,10 @@ class DanceSim implements SimLayer {
         _viewports(c, s, l, beats);
       case DanceArt.plain:
         // The models as they are, and nothing else: the scan's skin under a plain
-        // daylight on white — no floor, no shadow, no studio. Drawn at alpha 254/255
-        // (replacing, not blending): MilkDrop under the scene leaves them as they are
-        // and goes only into the white (under.frag).
-        c.fill(Offset.zero & s, Colors.white);
+        // daylight — no floor, no shadow, no studio, no page: the background is the
+        // page (white, MilkDrop, anything). Drawn at alpha 254/255 (replacing, not
+        // blending) so a canvas knows the bodies (under.frag's band).
+        c.fill(Offset.zero & s, Colors.black);
         for (final (b, _, _) in bodies) {
           c.body(
               b,
@@ -1743,8 +1769,8 @@ class DanceSim implements SimLayer {
               blend: BlendMode.src);
         }
       case DanceArt.chrono:
-        c.fill(Offset.zero & s, const Color(0xff060606));
-        _studioFloor(c, cam, l, bodies, pal.primary.withSaturation(0.3).withLightness(0.7).toColor());
+        c.fill(Offset.zero & s, l.ownSetting ? const Color(0xff060606) : Colors.black);
+        if (l.ownSetting) _studioFloor(c, cam, l, bodies, pal.primary.withSaturation(0.3).withLightness(0.7).toColor());
         _stamps(c, cam, l, rig, beats, pal.primary.withSaturation(0.3).withLightness(0.6).toColor());
         for (final (b, _, _) in bodies) {
           c.body(b, cam, _chrome(l, Colors.white), twoSided: true);
@@ -2166,6 +2192,10 @@ class _Look {
         t = st.now.millisecondsSinceEpoch / 1000 % 10000;
   final ShowState st;
   final MemeMood mood;
+
+  /// On black: the stage draws its own setting (a wash, a floor, a glow); on any
+  /// other background that is the setting, and the figure stands alone on it.
+  bool get ownSetting => st.rig.ground.kind == Ground.black;
   final double beats, heat, wakeK, kick, beat, t;
 
   /// The snare's and the top's hits, the bands' levels (0..1, each against its own

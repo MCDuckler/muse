@@ -1,8 +1,9 @@
-// The rules' grid's stills (ui/show/show_room_grid.dart): one picture of every
-// figure, and of every style of the dancers, the flock and the words, each on its
-// own — the figure's layer as it goes into the blend, coverage marks and all — at
-// the moment of the made-up record (show_demo.dart) the stage shots use. The grid
-// blends each with every background on the spot, with the stage's own blend.
+// The combination selector's stills (ui/show/show_room_kart.dart): one picture of
+// every figure, and of every style of the dancers, the flock and the words, each on
+// its own — the figure's layer as it goes into the blend (on a background, so with no
+// setting of its own), coverage marks and all — at the moment of the made-up record
+// (show_demo.dart) the stage shots use. The selector blends each with the background
+// picked on the spot, with the stage's own blend.
 //
 //   BAKE_STILLS=1 flutter test test/shots/rule_stills_bake_test.dart
 //
@@ -17,6 +18,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:muse/src/state/show/camera_feed.dart';
 import 'package:muse/src/state/show/show_demo.dart';
 import 'package:muse/src/state/show/show_rig.dart';
+import 'package:muse/src/state/show/show_combos.dart';
 import 'package:muse/src/ui/show/scene.dart' show SceneBookLooks;
 import 'package:muse/src/ui/show/show_canvas.dart';
 import 'package:muse/src/ui/show/show_dance.dart' show DanceArt, DanceAssets;
@@ -73,8 +75,9 @@ void main() {
     DemoShowFeed.singAll = true;
   });
 
-  // Every figure by the first of its scenes, and the styles of the three that have
-  // them; MilkDrop alone (no figure) is its own picture, not in the grid.
+  // Every figure by the first of its scenes — the styles of the three that have
+  // them, the figure as drawn for the rest; MilkDrop alone (no figure) is its own
+  // picture.
   const figures = {
     Figure.dancers: 'dance-art',
     Figure.birds: 'flock',
@@ -98,10 +101,8 @@ void main() {
     Figure.words: [for (final w in WordsStyle.values) w.name],
   };
   final jobs = [
-    for (final e in figures.entries) ...[
-      (e.key, e.value, null as String?),
-      for (final s in styles[e.key] ?? const <String>[]) (e.key, e.value, s),
-    ],
+    for (final e in figures.entries)
+      if (styles[e.key] case final own?) ...[for (final s in own) (e.key, e.value, s as String?)] else (e.key, e.value, null as String?),
   ];
 
   for (final (kind, scene, style) in jobs) {
@@ -111,9 +112,7 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
       if (kind == Figure.dancers) await tester.runAsync(() => DanceAssets.of('chris').loaded);
-      final feed = DemoShowFeed(scenes: kit.book.metas, looks: kit.book.looks)
-        ..style = style
-        ..ground = RigGround.black;
+      final feed = DemoShowFeed(scenes: kit.book.metas, looks: kit.book.looks);
       addTearDown(feed.dispose);
       // Into the first drop of the record, the scene held on.
       const at = Duration(seconds: 40);
@@ -121,7 +120,9 @@ void main() {
       for (var i = 0; i < 8; i++) {
         feed.tick(t0.add(Duration(milliseconds: 16 * i)), elapsed: at + Duration(milliseconds: 16 * i));
       }
-      feed.director.choose(scene);
+      // On white (a background: the figure without a setting of its own), as drawn.
+      final st = style ?? 'raw';
+      feed.director.play(Combo(ground: isWorld(scene, kind, st) ? ownGround : 'white', scene: scene, style: st));
       for (var i = 1; i <= 9; i++) {
         feed.tick(t0.add(Duration(milliseconds: 300 * i)), elapsed: at + Duration(milliseconds: 300 * i));
       }

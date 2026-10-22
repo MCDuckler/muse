@@ -35,7 +35,6 @@ import '../../state/app_state.dart' show AppState;
 import '../../state/booth/board/link_server.dart' show encodeStageThumb;
 import '../../state/booth/booth.dart';
 import '../../state/playback_log.dart';
-import '../../state/show/show_rig.dart';
 import '../../state/show/camera_feed.dart';
 import '../../state/show/milk_feed.dart';
 import '../../state/player.dart' show PlayerService;
@@ -276,14 +275,8 @@ class _StageWindowState extends State<_StageWindow> {
       }
       // The director's backgrounds under every scene unless asked otherwise (the
       // bench's plain look): held by the hands, not saved, as this window keeps nothing.
-      if (widget.args.contains('--no-milk-under')) booth.show.setGround(RigGround.black);
-      if (widget.args.contains('--milk-under')) {
-        booth.show.setGround(RigGround.milk);
-        // A blend of its own: --milk-mix N is the old number (0 add … 9 contrast).
-        final mm = widget.args.indexOf('--milk-mix');
-        final mix = mm >= 0 && mm + 1 < widget.args.length ? int.tryParse(widget.args[mm + 1]) : null;
-        if (mix != null && mix >= 0 && mix + 2 < GroundMode.values.length) booth.show.setBlend(RigBlend(ground: GroundMode.values[mix + 2]));
-      }
+      if (widget.args.contains('--no-milk-under')) booth.show.holdGround('black');
+      if (widget.args.contains('--milk-under')) booth.show.holdGround('milk');
       booth.show.start();
       await booth.play(booth.a);
       final t = booth.timing.peek(id);

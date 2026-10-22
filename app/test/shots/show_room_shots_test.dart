@@ -14,8 +14,7 @@ import 'package:muse/src/api/client.dart';
 import 'package:muse/src/state/booth/booth.dart';
 import 'package:muse/src/state/booth/deck.dart';
 import 'package:muse/src/state/booth/mixer.dart';
-import 'package:muse/src/state/show/show_characters.dart';
-import 'package:muse/src/state/show/show_rig.dart';
+import 'package:muse/src/state/show/show_combos.dart';
 import 'package:muse/src/state/show/show_store.dart';
 import 'package:muse/src/ui/show/show_dance.dart' show DanceAssets;
 import 'package:muse/src/ui/show/show_moves.dart';
@@ -108,13 +107,11 @@ void main() {
         });
       }
 
-      // The rules at a glance (the tab it opens on): every scene against every
-      // background, the dancers opened to their styles; your changes under.
+      // The selector, following the stage; the rules tab it opens on.
       expect(find.text('RULES'), findsOneWidget);
-      expect(find.textContaining('Every scene on every background'), findsOneWidget);
       expect(find.text('NEXT'), findsOneWidget);
-      expect(find.text('OTHER BLEND'), findsOneWidget);
-      // The grid's pictures, read off the assets in real time.
+      expect(find.text('HOLD'), findsOneWidget);
+      // The stills, read off the assets in real time.
       Future<void> settle() async {
         for (var i = 0; i < 3; i++) {
           await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));
@@ -122,58 +119,97 @@ void main() {
         }
       }
 
+      // One whole combination picked: the plain dancers on MilkDrop.
+      Future<void> pick(String word) async {
+        final f = find.text(word).last;
+        await tester.ensureVisible(f);
+        await tester.pump();
+        await tester.tap(f);
+        await tester.pump();
+      }
+
+      await pick('Dancer');
       await settle();
+      for (final w in ['plain', 'MilkDrop', 'No mask', 'Normal']) {
+        await pick(w);
+      }
+      await settle();
+      expect(find.text('PLAY IT'), findsOneWidget);
       await shot('show-room-${w.round()}');
-      // The grid over the whole window.
-      await tester.tap(find.byTooltip('The grid over the whole window'));
+      // The same on white.
+      await pick('White');
+      await settle();
+      await shot('show-room-${w.round()}-white');
+      // Silhouettes through the keyhole on MilkDrop, and a shape in contrast on white.
+      for (final w in ['mono', 'MilkDrop', 'Keyhole']) {
+        await pick(w);
+      }
+      await settle();
+      await shot('show-room-${w.round()}-keyhole');
+      for (final w in ['Kinetic', 'As drawn', 'White', 'No mask', 'Contrast']) {
+        await pick(w);
+      }
+      await settle();
+      await shot('show-room-${w.round()}-contrast');
+      // Snapshots: two kept here, one changed since.
+      booth.show.snapshots.saveAs('Calm night');
+      booth.show.setPool(booth.show.pool.withRule(const ComboRule(grounds: {'milk'}), 4));
+      booth.show.snapshots.saveAs('Club, MilkDrop heavy');
+      booth.show.setPool(booth.show.pool.withRule(const ComboRule(scenes: {'flash'}), 0));
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('Club, MilkDrop heavy •'), findsOneWidget);
+      await shot('show-room-${w.round()}-snapshots');
+      // A batch: the turntable, any style, any background, the keyhole, added or
+      // screened — one rule, switched off; and the map of the rotation.
+      for (final w in ['Turntable', 'Keyhole', 'Add']) {
+        await pick(w);
+      }
+      for (final i in [1, 2]) {
+        final any = find.text('ANY').at(i);
+        await tester.ensureVisible(any);
+        await tester.pump();
+        await tester.tap(any);
+        await tester.pump();
+      }
+      await tester.ensureVisible(find.text('Screen').last);
+      await tester.pump();
+      await tester.longPress(find.text('Screen').last);
+      await tester.pump();
+      await settle();
+      expect(find.textContaining('Turntable × any style × any background × Keyhole × Add, Screen'), findsWidgets);
+      await shot('show-room-${w.round()}-batch');
+      await tester.tap(find.text('MAP'));
+      await tester.pump(const Duration(milliseconds: 300));
+      await shot('show-room-${w.round()}-map');
+      await tester.tap(find.byType(Switch).first);
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(booth.show.pool.rules.last.pattern, '*|turntable|*|keyhole|add,screen');
+      await shot('show-room-${w.round()}-map-off');
+      // The camera: the dancers in ascii, never through the fisheyes; the map with the
+      // camera across.
+      for (final w in ['Dancer', 'ascii', 'Fisheye']) {
+        await pick(w);
+      }
+      await tester.ensureVisible(find.text('Fisheye floor').last);
+      await tester.pump();
+      await tester.longPress(find.text('Fisheye floor').last);
+      await tester.pump();
+      await tester.tap(find.byType(Switch).first);
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.text('CAMERA').at(1));
       await tester.pump(const Duration(milliseconds: 300));
       await settle();
-      expect(find.text('DONE'), findsOneWidget);
-      await shot('show-room-${w.round()}-grid');
-      // A pair held: every way of blending it.
-      await tester.longPress(find.byWidgetPredicate((w) => w is Tooltip && (w.message ?? '').startsWith('trails on MilkDrop:')).last);
+      await shot('show-room-${w.round()}-camera');
+      await tester.tap(find.text('RULES'));
       await tester.pump(const Duration(milliseconds: 300));
-      await settle();
-      expect(find.text('EVERY WAY'), findsOneWidget);
-      await shot('show-room-${w.round()}-ways');
-      // Closed one at a time, each gone before the next is tapped (a tap on a
-      // closing dialog lands on the grid under it).
-      await tester.tap(find.text('DONE').last);
-      for (var i = 0; i < 6; i++) {
-        await tester.pump(const Duration(milliseconds: 100));
-      }
-      await tester.tap(find.text('DONE').last);
-      for (var i = 0; i < 6; i++) {
-        await tester.pump(const Duration(milliseconds: 100));
-      }
-      expect(booth.show.pool.combos, isEmpty);
-      // Your changes, under the table: the shipped exception silenced, a pair parted.
-      booth.show.setPool(
-          booth.show.pool.withCombo('figure.dancers.style.mono|ground.milk', ComboRule.asTheRule).withCombo('figure.kinetic|ground.wash', ComboRule.never));
+      // A rule with ANY: every plain-dancer combination on MilkDrop at twice the weight.
+      booth.show.setPool(booth.show.pool
+          .withRule(const ComboRule(grounds: {'milk'}, scenes: {'dance-art'}, styles: {'plain'}), 2)
+          .withRule(const ComboRule(grounds: {'black'}, masks: {Mask.keyhole}), 1));
       await tester.pump();
-      await tester.dragUntilVisible(find.text('BACK TO THE DEFAULTS'), find.byType(ListView).first, const Offset(0, -200));
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(find.text('YOUR CHANGES · 2'), findsOneWidget);
-      await shot('show-room-${w.round()}-changes');
-      // A dancer on: their style strip down the right.
-      await tester.tap(find.text('Dancer').last, warnIfMissed: false);
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(find.text('DANCER STYLE'), findsOneWidget);
-      // A thing held: how often by itself.
-      await tester.longPress(find.text('Dancer').last, warnIfMissed: false);
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(find.text('Off everywhere (ON/OFF has it)'), findsOneWidget);
-      await shot('show-room-${w.round()}-often');
-      await tester.tapAt(const Offset(4, 4));
-      await tester.pump(const Duration(milliseconds: 300));
-      // ON/OFF: every part with its switch; a few off.
-      booth.show.setPool(booth.show.pool.withOff('look.kinetic', true).withOff('blend.contrast', true).withStyle(Figure.dancers, 'disco', false));
-      await tester.tap(find.text('ON/OFF'));
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(find.text('SCENES'), findsOneWidget);
-      await shot('show-room-${w.round()}-onoff');
-      booth.show.setPool(booth.show.pool.copyWith(off: const {}));
-      await tester.pump();
+      expect(find.text('YOURS'), findsOneWidget);
+      await shot('show-room-${w.round()}-rules');
       // The settings: the finish, the director, the stage's numbers.
       await tester.tap(find.text('SETTINGS'));
       await tester.pump(const Duration(milliseconds: 300));

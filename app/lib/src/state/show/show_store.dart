@@ -5,11 +5,21 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'show_pool.dart';
+import 'show_snapshots.dart';
 import 'show_rig.dart';
 import 'show_store_none.dart' if (dart.library.io) 'show_store_io.dart' as device;
 
+export 'show_snapshots.dart' show ShowSnapshot;
+
 class ShowDoc {
-  const ShowDoc({this.v = 1, this.pool = ShowPool.none, this.looks = const [], this.lastRig, this.panel = const {}});
+  const ShowDoc(
+      {this.v = 1,
+      this.pool = ShowPool.none,
+      this.looks = const [],
+      this.lastRig,
+      this.panel = const {},
+      this.snapshots = const [],
+      this.snapshot});
 
   final int v;
   final ShowPool pool;
@@ -23,10 +33,33 @@ class ShowDoc {
   /// The panel's state (its tab, its split), by name.
   final Map<String, Object?> panel;
 
+  /// The selector's snapshots kept on this device (show_snapshots.dart).
+  final List<ShowSnapshot> snapshots;
+
+  /// The snapshot the rules were last switched to or saved as, as it was then (a
+  /// shared one with its revision): what "changed since" is measured against, and
+  /// what a shared one's newer revision is followed from. Null: none.
+  final ShowSnapshot? snapshot;
+
   static const none = ShowDoc();
 
-  ShowDoc copyWith({ShowPool? pool, List<Look>? looks, ShowRig? lastRig, Map<String, Object?>? panel}) =>
-      ShowDoc(v: v, pool: pool ?? this.pool, looks: looks ?? this.looks, lastRig: lastRig ?? this.lastRig, panel: panel ?? this.panel);
+  ShowDoc copyWith(
+          {ShowPool? pool,
+          List<Look>? looks,
+          ShowRig? lastRig,
+          Map<String, Object?>? panel,
+          List<ShowSnapshot>? snapshots,
+          ShowSnapshot? snapshot,
+          bool clearSnapshot = false}) =>
+      ShowDoc(
+        v: v,
+        pool: pool ?? this.pool,
+        looks: looks ?? this.looks,
+        lastRig: lastRig ?? this.lastRig,
+        panel: panel ?? this.panel,
+        snapshots: snapshots ?? this.snapshots,
+        snapshot: clearSnapshot ? null : snapshot ?? this.snapshot,
+      );
 
   Map<String, dynamic> toJson() => {
         'v': v,
@@ -34,6 +67,8 @@ class ShowDoc {
         if (looks.isNotEmpty) 'looks': [for (final l in looks) l.toJson()],
         if (lastRig != null) 'lastRig': lastRig!.toJson(),
         if (panel.isNotEmpty) 'panel': panel,
+        if (snapshots.isNotEmpty) 'snapshots': [for (final s in snapshots) s.toJson()],
+        if (snapshot != null) 'snapshot': snapshot!.toJson(),
       };
 
   factory ShowDoc.fromJson(Map<String, dynamic> j) => ShowDoc(
@@ -42,6 +77,8 @@ class ShowDoc {
         looks: [for (final l in (j['looks'] as List? ?? const [])) if (l is Map) Look.fromJson(l.cast())],
         lastRig: j['lastRig'] is Map ? ShowRig.fromJson((j['lastRig'] as Map).cast()) : null,
         panel: j['panel'] is Map ? (j['panel'] as Map).cast<String, Object?>() : const {},
+        snapshots: [for (final s in (j['snapshots'] as List? ?? const [])) ShowSnapshot.fromJson(s)].whereType<ShowSnapshot>().toList(),
+        snapshot: ShowSnapshot.fromJson(j['snapshot']),
       );
 }
 
@@ -83,6 +120,6 @@ Future<ShowDoc> migratedShowDoc() async {
       ),
     );
   } catch (_) {
-    return const ShowDoc(pool: ShowPool(off: ShowPool.shippedOff));
+    return const ShowDoc();
   }
 }

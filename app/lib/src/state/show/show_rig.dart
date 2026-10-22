@@ -8,7 +8,10 @@
 // frame carries (ShowState.rig), what a look file says, what the panel edits. The
 // stages read it (the Flutter one in ui/show/show_canvas.dart, the native one
 // through ui/show/native_stage.dart); nothing here draws.
+import 'show_combos.dart';
 import 'show_director.dart' show SceneMeta;
+
+export 'show_combos.dart' show Mask, Mix;
 
 /// What lies under the figure.
 enum Ground {
@@ -33,6 +36,9 @@ enum Ground {
   /// A dark, structured, band-driven field: the quiet one (RigGround.field says
   /// which of its variants).
   pulse,
+
+  /// White: the page the plain dancers and the silhouettes stand on.
+  white,
 }
 
 /// What stands in the middle. [none] is a look that is its own whole picture
@@ -49,19 +55,6 @@ enum Dressing { auto, none, disco, neon, shadow, studio, sky }
 
 /// An image-space rendering of the figure, any figure.
 enum Treatment { auto, raw, ascii, dither, halftone, thermal, lines, contour, chrono, trails, fluid, viewports, radar }
-
-/// How the figure layer's own backdrop pixels (its paper, floor, wash) sit on the
-/// ground: dropped so the ground shows ([through]), replacing it ([over]), one of
-/// the ways MilkDrop has gone under a scene (shaders/show/under.frag, in its order),
-/// or [keyhole]: the figure itself a window onto the ground, everything else black.
-enum GroundMode { through, over, add, screen, dim, window, mask, frame, bands, flip, outline, contrast, keyhole }
-
-/// How the figure's own pixels sit on the ground: over it, or blended the same way
-/// as its backdrop.
-enum FigureMode { over, same }
-
-/// The four layers, for a lock.
-enum RigSlot { ground, figure, blend, finish }
 
 /// When a change the hands ask for lands.
 enum Quantise { now, beat, bar, phrase }
@@ -242,44 +235,42 @@ class RigFigure {
   int get hashCode => Object.hash(kind, shade, dressing, treatment, style, knobs.length);
 }
 
+/// How the figure goes onto the ground (show_combos.dart; shaders/show/under.frag):
+/// the mask (where the ground shows) and the blend (how the two meet).
 class RigBlend {
-  const RigBlend({this.ground = GroundMode.over, this.figure = FigureMode.over, this.strength = 1, this.auto = true});
+  const RigBlend({this.mask = Mask.none, this.mix = Mix.normal, this.strength = 1});
 
-  final GroundMode ground;
-  final FigureMode figure;
+  final Mask mask;
+  final Mix mix;
 
-  /// How much of the blend, 0..1 (0 is the figure over the ground, plainly).
+  /// How much of the blend, 0..1 (0 is the figure layer as drawn).
   final double strength;
 
-  /// The pool's table decides the modes for this figure on this ground; the modes
-  /// here are what it decided (or the hands', when false).
-  final bool auto;
+  static const normal = RigBlend();
 
-  static const over = RigBlend();
+  /// Nothing of a black ground would change the figure: drawn as it is.
+  bool get plain => mask == Mask.none && mix == Mix.normal;
 
-  String get label => '${ground.name}${figure == FigureMode.same ? ' (figures too)' : ''}';
+  String get label => [if (mask != Mask.none) mask.name, mix.name].join(' · ');
 
-  RigBlend copyWith({GroundMode? ground, FigureMode? figure, double? strength, bool? auto}) =>
-      RigBlend(ground: ground ?? this.ground, figure: figure ?? this.figure, strength: strength ?? this.strength, auto: auto ?? this.auto);
+  RigBlend copyWith({Mask? mask, Mix? mix, double? strength}) => RigBlend(mask: mask ?? this.mask, mix: mix ?? this.mix, strength: strength ?? this.strength);
 
   Map<String, dynamic> toJson() => {
-        'ground': ground.name,
-        'figure': figure.name,
+        'mask': mask.name,
+        'mix': mix.name,
         if (strength != 1) 'strength': strength,
-        if (!auto) 'auto': false,
       };
 
   factory RigBlend.fromJson(Map<String, dynamic> j) => RigBlend(
-        ground: _enumOf(GroundMode.values, j['ground'], GroundMode.over),
-        figure: _enumOf(FigureMode.values, j['figure'], FigureMode.over),
+        mask: _enumOf(Mask.values, j['mask'], Mask.none),
+        mix: _enumOf(Mix.values, j['mix'], Mix.normal),
         strength: _d(j['strength'], 1).clamp(0.0, 1.0),
-        auto: j['auto'] != false,
       );
 
   @override
-  bool operator ==(Object other) => other is RigBlend && other.ground == ground && other.figure == figure && other.strength == strength && other.auto == auto;
+  bool operator ==(Object other) => other is RigBlend && other.mask == mask && other.mix == mix && other.strength == strength;
   @override
-  int get hashCode => Object.hash(ground, figure, strength, auto);
+  int get hashCode => Object.hash(mask, mix, strength);
 }
 
 /// The finish over everything (a scene file's `post`, `text` and `particles`).
@@ -384,45 +375,31 @@ class RigFinish {
   int get hashCode => Object.hash(trails, bloom, tone, fringe, vignette, grain, recipe, title, lyrics, where, jitter, particles.length);
 }
 
-/// What the stage draws: the four layers, and which of them the hands have locked
-/// (the director leaves a locked layer alone).
+/// What the stage draws: the four layers.
 class ShowRig {
   const ShowRig({
     this.ground = RigGround.black,
     this.figure = RigFigure.none,
-    this.blend = RigBlend.over,
+    this.blend = RigBlend.normal,
     this.finish = RigFinish.plain,
-    this.locks = const {},
   });
 
   final RigGround ground;
   final RigFigure figure;
   final RigBlend blend;
   final RigFinish finish;
-  final Set<RigSlot> locks;
 
   static const none = ShowRig();
 
-  bool locked(RigSlot slot) => locks.contains(slot);
+  /// A line for the status: `milk / dancers plain · keyhole · contrast`.
+  String get word => '${ground.label} / ${figure.label} · ${blend.label}';
 
-  /// A line for the status: `milk / dancers chrome ascii · contrast`.
-  String get word => '${ground.label} / ${figure.label}${blend.ground == GroundMode.over ? '' : ' · ${blend.ground.name}'}';
-
-  ShowRig copyWith({RigGround? ground, RigFigure? figure, RigBlend? blend, RigFinish? finish, Set<RigSlot>? locks}) => ShowRig(
+  ShowRig copyWith({RigGround? ground, RigFigure? figure, RigBlend? blend, RigFinish? finish}) => ShowRig(
         ground: ground ?? this.ground,
         figure: figure ?? this.figure,
         blend: blend ?? this.blend,
         finish: finish ?? this.finish,
-        locks: locks ?? this.locks,
       );
-
-  ShowRig withLock(RigSlot slot, bool on) => copyWith(
-      locks: on
-          ? {...locks, slot}
-          : {
-              for (final l in locks)
-                if (l != slot) l
-            });
 
   /// The numbers a shader or a light can bind to, by dotted name.
   void flatInto(Map<String, double> m) {
@@ -432,8 +409,8 @@ class ShowRig {
     m['rig.shade'] = figure.shade.index.toDouble();
     m['rig.dressing'] = figure.dressing.index.toDouble();
     m['rig.treatment'] = figure.treatment.index.toDouble();
-    m['rig.blend.ground'] = blend.ground.index.toDouble();
-    m['rig.blend.figure'] = blend.figure.index.toDouble();
+    m['rig.blend.mask'] = blend.mask.index.toDouble();
+    m['rig.blend.mix'] = blend.mix.index.toDouble();
     m['rig.blend.strength'] = blend.strength;
     m['rig.finish.trails'] = finish.trails;
     m['rig.finish.bloom'] = finish.bloom;
@@ -444,18 +421,13 @@ class ShowRig {
         'figure': figure.toJson(),
         'blend': blend.toJson(),
         'finish': finish.toJson(),
-        if (locks.isNotEmpty) 'locks': [for (final l in locks) l.name],
       };
 
   factory ShowRig.fromJson(Map<String, dynamic> j) => ShowRig(
         ground: j['ground'] is Map ? RigGround.fromJson((j['ground'] as Map).cast()) : RigGround.black,
         figure: j['figure'] is Map ? RigFigure.fromJson((j['figure'] as Map).cast()) : RigFigure.none,
-        blend: j['blend'] is Map ? RigBlend.fromJson((j['blend'] as Map).cast()) : RigBlend.over,
+        blend: j['blend'] is Map ? RigBlend.fromJson((j['blend'] as Map).cast()) : RigBlend.normal,
         finish: j['finish'] is Map ? RigFinish.fromJson((j['finish'] as Map).cast()) : RigFinish.plain,
-        locks: {
-          for (final l in (j['locks'] as List? ?? const []))
-            if (RigSlot.values.any((s) => s.name == l)) _enumOf(RigSlot.values, l, RigSlot.ground)
-        },
       );
 
   @override
@@ -464,11 +436,9 @@ class ShowRig {
       other.ground == ground &&
       other.figure == figure &&
       other.blend == blend &&
-      other.finish == finish &&
-      other.locks.length == locks.length &&
-      other.locks.containsAll(locks);
+      other.finish == finish;
   @override
-  int get hashCode => Object.hash(ground, figure, blend, finish, locks.length);
+  int get hashCode => Object.hash(ground, figure, blend, finish);
 }
 
 /// A rig with a name: shipped (one for every scene file there was), or the user's own.
@@ -523,4 +493,25 @@ class Look {
         hero: j['hero'] == true,
         thumb: j['thumb'] as String?,
       );
+}
+
+extension LookInCombo on Look {
+  /// This look's rig in combination [c] (show_combos.dart): the background (a world
+  /// keeps its own), the style — the figure's own drawing, or a treatment over the
+  /// frame — and the mask and the blend. Not this look's combination: as it is.
+  ShowRig inCombo(Combo? c) {
+    if (c == null || c.scene != id) return rig;
+    var figure = rig.figure;
+    if (ownStyle(figure.kind)) {
+      figure = figure.copyWith(style: c.style);
+    } else if (c.style != 'raw') {
+      final t = Treatment.values.asNameMap()[c.style];
+      if (t != null) figure = figure.copyWith(treatment: t);
+    }
+    if (c.world) return rig.copyWith(figure: figure, blend: RigBlend.normal);
+    final ground = groundOfKey(c.ground);
+    // The bloom goes over the blend: on a white page it would bloom the whole frame.
+    final finish = ground.kind == Ground.white ? rig.finish.copyWith(bloom: rig.finish.bloom * 0.25) : rig.finish;
+    return rig.copyWith(ground: ground, figure: figure, blend: RigBlend(mask: c.mask, mix: c.mix), finish: finish);
+  }
 }

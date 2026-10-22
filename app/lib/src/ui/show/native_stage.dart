@@ -308,7 +308,7 @@ class NativeStage {
     }
   }
   (RigGround, String, int?)? _groundOn;
-  (RigBlend, bool)? _blendOn;
+  (RigBlend, int)? _blendOn;
   final Pointer<Float> _scratch = calloc<Float>(16);
   late final _danceMesh = _lib.lookupFunction<
       Int32 Function(Int32, Pointer<Float>, Pointer<Float>, Pointer<Uint8>, Pointer<Uint8>, Int32, Pointer<Float>, Pointer<Uint16>, Int32, Pointer<Uint16>),
@@ -614,16 +614,13 @@ class NativeStage {
       _ground(g.kind.index, n, g.dim, _scratch);
       calloc.free(n);
     }
-    // The figure's way, as the rules or the hands decided it (show_pool.dart's
-    // figureModeFor: the plain dancers and the words over, the rest blended) — the
-    // same number the Flutter stage is sent. The dancers' frame carries its coverage
-    // in its alpha (dance.h); a shader's does not.
-    final dance = isDance(scene);
-    final coverage = dance || isWords(scene);
+    // The mask and the blend of the combination on, and which pixels are the figure
+    // (show_canvas.dart's coverageOf) — the same numbers the Flutter stage is sent.
+    final coverage = coverageOf(scene, rig, native: true);
     final blendKey = (rig.blend, coverage);
     if (blendKey != _blendOn) {
       _blendOn = blendKey;
-      _blend(rig.blend.ground.index, rig.blend.figure.index, coverage ? 1 : 0, rig.blend.strength);
+      _blend(rig.blend.mix.index, rig.blend.mask.index, coverage, rig.blend.strength);
     }
     final pal = st.palette;
     var i = 0;

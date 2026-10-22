@@ -103,6 +103,12 @@ void main() {
     }
     expect({for (var c = 0; c < 60; c++) FlockClock.shot(MemeMood.rage, 5, c, FlockLook.embers)}, contains(FlockShot.fish));
     expect({for (var c = 0; c < 60; c++) FlockClock.shot(MemeMood.sleep, 5, c, FlockLook.embers)}, isNot(contains(FlockShot.fish)));
+    // Weighed by the camera's rules: the fisheyes off, never one; every one the look
+    // allows off, another; all off, wide.
+    final fishOff = {for (var c = 0; c < 60; c++) FlockClock.shot(MemeMood.rage, 5, c, FlockLook.embers, weight: (s) => s == FlockShot.fish || s == FlockShot.fishLow ? 0 : 1)};
+    expect(fishOff.intersection({FlockShot.fish, FlockShot.fishLow}), isEmpty);
+    expect(FlockClock.shot(MemeMood.vibe, 5, 3, FlockLook.radar, weight: (s) => s == FlockShot.low ? 1 : 0), FlockShot.low);
+    expect(FlockClock.shot(MemeMood.vibe, 5, 3, FlockLook.embers, weight: (_) => 0), FlockShot.wide);
     expect(FlockClock.hold(MemeMood.rage), lessThan(FlockClock.hold(MemeMood.sleep)));
     expect(FlockClock.speed(MemeMood.sleep), lessThan(FlockClock.speed(MemeMood.rage)));
     expect(FlockClock.speed(MemeMood.wake, wakeK: 1), greaterThan(FlockClock.speed(MemeMood.wake, wakeK: 0)));

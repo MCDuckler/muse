@@ -199,6 +199,21 @@ class _Working {
   }
 }
 
+/// Which pixels of [scene]'s picture are its figure, for the blend (under.frag's
+/// uCoverage): 1 the alpha — the words' shader writes it, and the native stage's
+/// dancers carry it in theirs (unless a treatment pass went over them); 0 the bodies
+/// marked at 254/255 — the plain dancers and the silhouettes on a canvas; 2 the
+/// light — everything else (a shader's picture, a simulation on a canvas).
+int coverageOf(Scene scene, ShowRig rig, {required bool native}) {
+  final layer = scene.layers.length == 1 ? scene.layers.first : null;
+  if (layer?.sim == 'words') return 1;
+  final dance = layer?.sim?.startsWith('dance.') ?? false;
+  if (!dance) return 2;
+  if (native) return 1;
+  final style = rig.figure.style;
+  return style == 'plain' || style == 'mono' ? 0 : 2;
+}
+
 /// The figure's picture each frame, before the blend (the scene's layers, through
 /// its treatment, with the bodies' coverage marks): the rules' grid's stills are
 /// baked from it (test/shots/rule_stills_bake_test.dart). Kept only for the call.
@@ -344,27 +359,19 @@ class _StagePainter extends CustomPainter {
     if (!live || scene.layers.any((l) => l.samplers.contains('milk'))) return layers;
     final rig = st.rig;
     final blend = rig.blend;
-    // The figure layer over the ground whole: nothing of the ground would show.
-    if (blend.strength <= 0 || blend.ground == GroundMode.over) return layers;
+    // A figure plainly on black is the figure as it is drawn.
+    if (blend.strength <= 0 || (rig.ground.kind == Ground.black && blend.plain)) return layers;
     final ground = _ground(rig, st, w, h);
     if (ground == null) return layers;
-    final f = st.flat;
     _under
       ..setFloat(0, w.toDouble())
       ..setFloat(1, h.toDouble())
-      ..setFloat(2, blend.ground.index.toDouble())
-      ..setFloat(3, f['dyn.beat.decay'] ?? 0)
-      ..setFloat(4, f['dyn.bar.saw'] ?? 0)
-      ..setFloat(5, f['dyn.hit.kick'] ?? 0)
-      ..setFloat(6, _time)
-      ..setFloat(7, blend.figure.index.toDouble())
-      // Which pixels are the figure: the ones at alpha 254/255 (a canvas keeps no
-      // coverage below 1) — or the alpha itself, for the words, whose shader writes
-      // its coverage.
-      ..setFloat(8, scene.layers.any((l) => l.sim == 'words') ? 1 : 0)
-      ..setFloat(9, blend.strength)
-      ..setFloat(10, ground.fit)
-      ..setFloat(11, rig.ground.dim)
+      ..setFloat(2, blend.mix.index.toDouble())
+      ..setFloat(3, blend.mask.index.toDouble())
+      ..setFloat(4, coverageOf(scene, rig, native: false).toDouble())
+      ..setFloat(5, blend.strength)
+      ..setFloat(6, ground.fit)
+      ..setFloat(7, rig.ground.dim)
       ..setImageSampler(0, layers)
       ..setImageSampler(1, ground.image);
     final out = _pass(w, h, (c) => c.drawRect(Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()), Paint()..shader = _under));
@@ -456,6 +463,9 @@ class _StagePainter extends CustomPainter {
         final shader = _shaderFor(name!);
         _bind(shader, st, st.flat, w, h, SceneLayer(shader: name, knobs: g.knobs));
         final img = _pass(w, h, (c) => c.drawRect(Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()), Paint()..shader = shader));
+        return (image: img, fit: 0, own: true);
+      case Ground.white:
+        final img = _pass(w, h, (c) => c.drawRect(Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()), Paint()..color = Colors.white));
         return (image: img, fit: 0, own: true);
       default:
         return (image: black, fit: 0, own: false);

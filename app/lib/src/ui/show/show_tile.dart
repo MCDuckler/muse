@@ -80,10 +80,10 @@ class _ShowTileState extends State<ShowTile> {
     show.setPool(pool);
   }
 
-  /// A scene (a look) switched off in the menu: see ShowDirector.off.
+  /// A scene (a look) switched off in the menu: its card at 0 (show_combos.dart).
   void _setSceneOff(String id, bool off) {
     final show = widget.booth.show;
-    show.setPool(show.pool.withOff('look.$id', off));
+    show.setPool(show.pool.withScene(id, !off));
     // Turned off while it is on: on to the next one now, not at the next section.
     if (off && show.state.scene == id) show.stepOn();
   }
@@ -158,7 +158,7 @@ class _ShowTileState extends State<ShowTile> {
                                     PopupMenuItem<String>(
                                       value: s.id,
                                       child: StatefulBuilder(builder: (context, setItem) {
-                                        final isOn = !show.director.off.contains(s.id);
+                                        final isOn = show.pool.sceneOn(s.id);
                                         return Row(
                                           children: [
                                             SizedBox(width: 22, child: s.id == st.scene ? const Icon(Icons.play_arrow, size: 16) : null),
@@ -313,12 +313,12 @@ class _ShowTileState extends State<ShowTile> {
                               icon: Icons.layers_outlined,
                               width: 22,
                               height: 22,
-                              lit: show.pool.isOn('ground.milk'),
+                              lit: show.pool.milkOn,
                               colour: Console.quiet,
-                              tooltip: show.pool.isOn('ground.milk')
-                                  ? 'The director puts MilkDrop under the scenes — tap and it never does (how it blends: the SHOW page)'
+                              tooltip: show.pool.milkOn
+                                  ? 'The director puts MilkDrop under the scenes — tap and it never does (the combinations: the SHOW page)'
                                   : 'The director never puts MilkDrop under a scene — tap to let it again',
-                              onTap: () => show.setPool(show.pool.withOff('ground.milk', show.pool.isOn('ground.milk'))),
+                              onTap: () => show.setPool(show.pool.withMilk(!show.pool.milkOn)),
                             ),
                             const SizedBox(width: 2),
                             Pad(

@@ -1,13 +1,17 @@
-// The director: which scene is on, and when it changes.
+// The director: which scene is on, in which combination (show_combos.dart), and
+// when they change.
 //
 // Reads the frame and the moments and decides, by rule: a scene fits a section
 // and a band of energy (the scene files say which, see ui/show/scene.dart); a
 // change waits for a phrase, or a section turning, or a drop; a drop lands with a
 // cut and a hit, a breakdown goes through a dissolve; and the performer's next/prev
-// override it until the next section. Deterministic from its seed, so a recording
-// plays the same show twice.
+// override it until the next section. The combination — background, style, mask,
+// blend — is drawn by the rules' weights for the scene on: the background kept a
+// while, the rest turned on the sections and the phrases. Deterministic from its
+// seed, so a recording plays the same show twice.
 import 'dart:math' as math;
 
+import 'show_combos.dart';
 import 'show_events.dart';
 import 'show_rig.dart';
 import 'show_state.dart';
@@ -90,18 +94,123 @@ class ShowDirector {
     _go(id, how, why: 'you chose it');
   }
 
-  /// Scenes turned off by hand, by id: the director never reaches for one and the
-  /// arrows step past it. Chosen by name, one still goes on.
-  Set<String> off = {};
+  /// One combination put on by the hands, as it is, held until let go ([locked]).
+  void play(Combo c, {SceneChange how = SceneChange.cut}) {
+    if (!scenes.any((s) => s.id == c.scene)) return;
+    locked = true;
+    if (c.scene != _scene) {
+      _go(c.scene, how, why: 'you put it on');
+    }
+    _setCombo(c);
+    why = 'you put it on';
+  }
 
-  /// How much the hands lean on a scene, by id (how often: 0.4 rarely, 2 often);
-  /// absent is as any other.
-  Map<String, double> leans = const {};
+  // ---------------------------------------------------------------- combinations
+  /// Each scene's figure, by id (the looks'): what styles it has.
+  Map<String, Figure> kinds = const {};
 
-  /// Whether a scene may go on now by the pool's rules (its figure on the ground
-  /// that is on): asked of every scene the director weighs; the hands may still
-  /// choose one by name.
-  bool Function(String id)? allowed;
+  /// The rules in force (the pool's, shipped and the hands').
+  List<ComboRule> get rules => _rules;
+  List<ComboRule> _rules = shippedComboRules;
+  set rules(List<ComboRule> v) {
+    _rules = v;
+    _leans = null;
+  }
+
+  /// The backgrounds there are now (the camera with a camera on, the cover with a
+  /// record's cover…); all of them where none says.
+  Set<String> Function()? grounds;
+
+  Combo? _combo, _fromCombo;
+
+  /// The combination on, and the one being left (during a dissolve).
+  Combo? get combo => _combo;
+  Combo? get fromCombo => _k < 1 ? _fromCombo : null;
+  int _comboSinceBar = 0;
+
+  /// How many bars the background on has been on.
+  int get groundBars => _groundSinceBar;
+  static const groundHoldBars = 16;
+
+  /// How many bars a style, mask and blend are kept at least.
+  static const styleBars = 8;
+
+  /// One background held by the hands: the only one there is, while held.
+  String? heldGround;
+
+  Set<String> get _groundsNow {
+    final held = heldGround;
+    if (held != null) return {held};
+    final g = grounds?.call();
+    return g == null || g.isEmpty ? comboGrounds.toSet() : g;
+  }
+
+  /// The combinations of [scene] with their weights, the backgrounds here now.
+  List<(Combo, double)> weighted(String scene) {
+    final kind = kinds[scene] ?? Figure.none;
+    final here = _groundsNow;
+    return [
+      for (final c in combosOf(scene, kind, grounds: comboGrounds.where(here.contains)))
+        (c, comboWeight(c, _rules)),
+    ];
+  }
+
+  /// Each scene's lean, by id: the mean weight of its combinations that are on (0 —
+  /// none on: never). Kept until the rules or the backgrounds change.
+  Map<String, double> get leans {
+    final here = _groundsNow;
+    final key = (here.toList()..sort()).join(',');
+    if (_leans != null && _leansKey == key) return _leans!;
+    _leansKey = key;
+    return _leans = {
+      for (final sc in scenes)
+        sc.id: () {
+          var n = 0, sum = 0.0;
+          for (final (_, w) in weighted(sc.id)) {
+            if (w <= 0) continue;
+            n++;
+            sum += w;
+          }
+          return n == 0 ? 0.0 : sum / n;
+        }(),
+    };
+  }
+
+  Map<String, double>? _leans;
+  String? _leansKey;
+
+  void _setCombo(Combo c) {
+    if (c.ground != _combo?.ground) _groundSinceBar = 0;
+    _combo = c;
+    _comboSinceBar = 0;
+  }
+
+  /// A combination for the scene on, by weight: keeping the background while it has
+  /// been on less than [groundHoldBars] (and [keepGround]), keeping the style too
+  /// where [keepStyle].
+  void _pickCombo({bool keepGround = true, bool keepStyle = false}) {
+    final scene = _scene;
+    if (scene == null) return;
+    final all = weighted(scene);
+    final now = _combo;
+    List<(Combo, double)> narrow(bool Function(Combo) f) => [
+          for (final o in all)
+            if (o.$2 > 0 && f(o.$1)) o
+        ];
+    var pool = all;
+    if (now != null && keepGround && _groundSinceBar < groundHoldBars) {
+      final same = narrow((c) => c.ground == now.ground || c.world);
+      if (same.isNotEmpty) pool = same;
+    }
+    if (now != null && keepStyle && now.scene == scene) {
+      final same = narrow((c) => c.style == now.style && (c.ground == now.ground || c.world));
+      if (same.isNotEmpty) pool = same;
+    }
+    final pick = pickByWeight(pool, _rng.nextDouble()) ??
+        // Every combination of the scene is off: drawn as it is, on black.
+        Combo(ground: 'black', scene: scene, style: stylesOfFigure(kinds[scene] ?? Figure.none).first);
+    _setCombo(pick);
+  }
 
   // ---------------------------------------------------------------- memory
   /// The family a scene belongs to (`geometric`, `figurative`, `organic`, `media`),
@@ -118,16 +227,7 @@ class ShowDirector {
   /// against is moved by a quarter either way.
   double bias = 0;
 
-  /// The ground under the scenes, chosen every so many phrases from [grounds] (the
-  /// pool's, weighted; empty is none chosen: the hands' and the macros' way), held
-  /// at least [groundHoldBars].
-  List<(RigGround, double)> Function()? grounds;
-  RigGround? ground;
   int _groundSinceBar = 0;
-
-  /// How many bars the director's background has been on.
-  int get groundBars => _groundSinceBar;
-  static const groundHoldBars = 16;
 
   void _tire(ShowState s) {
     final dt = s.dt;
@@ -150,11 +250,12 @@ class ShowDirector {
     return out;
   }
 
-  /// The scenes not turned off, nor ruled out — all of them, if every one is.
+  /// The scenes with a combination on — all of them, if none has.
   List<SceneMeta> get on {
+    final l = leans;
     final on = [
       for (final s in scenes)
-        if (!off.contains(s.id) && (allowed?.call(s.id) ?? true)) s
+        if ((l[s.id] ?? 1) > 0) s
     ];
     return on.isEmpty ? scenes : on;
   }
@@ -176,11 +277,13 @@ class ShowDirector {
     if (id == _scene) return;
     this.why = why;
     _from = _scene;
+    _fromCombo = _combo;
     _scene = id;
     _how = how;
     // A cut and a hit are instant; only a dissolve takes its bar.
     _k = how == SceneChange.dissolve ? 0 : 1;
     _sinceBar = 0;
+    _pickCombo();
   }
 
   /// The scenes that suit the frame, best first.
@@ -225,7 +328,7 @@ class ShowDirector {
       final lean = s.genome.genes['scene.${sc.id}'];
       if (lean != null) score += (lean - 1) * 1.0;
       score += sc.priority;
-      // How often the hands want it: two points either way.
+      // How often the hands want it (its combinations' weights): two points either way.
       final hands = leans[sc.id];
       if (hands != null && hands > 0) score += (math.log(hands) / math.ln2).clamp(-1.4, 1.2) * 1.5;
       // What has been on a lot lately scores less (a minute on costs a point, fading);
@@ -265,34 +368,17 @@ class ShowDirector {
     if (bar) {
       _sinceBar++;
       _groundSinceBar++;
+      _comboSinceBar++;
     }
+    var turned = false;
     if (section && m.section != _lastSection) {
       _lastSection = m.section;
+      turned = true;
       // The hands' choice lasts until the section turns — not the turn it landed on
       // (a launch on the bar a section starts on, the section said a frame later).
       if (_sinceBar > 2) _heldBy = null;
     }
     _tire(s);
-    // The ground: another every so many phrases, from the pool's.
-    final pool = grounds?.call();
-    if (pool == null || pool.isEmpty) {
-      ground = null;
-    } else if (ground == null || !pool.any((g) => g.$1 == ground) || (phrase && _groundSinceBar >= groundHoldBars && _rng.nextDouble() < 0.5)) {
-      final total = pool.fold<double>(0, (a, g) => a + g.$2);
-      var x = _rng.nextDouble() * total;
-      var pick = pool.last.$1;
-      for (final (g, w) in pool) {
-        x -= w;
-        if (x <= 0) {
-          pick = g;
-          break;
-        }
-      }
-      if (ground == null || pick != ground) {
-        ground = pick;
-        _groundSinceBar = 0;
-      }
-    }
 
     var fits = fitting(s);
     // Nothing that suits (every scene that would is turned off, or wants what is not
@@ -303,7 +389,11 @@ class ShowDirector {
     } else if (_heldBy == null && !locked) {
       final current = fits.indexWhere((f) => f.id == _scene);
       final suits = current >= 0 && current < 2;
-      if (drop) {
+      if (!on.any((f) => f.id == _scene)) {
+        // The scene on switched off (none of its combinations in the rotation): off
+        // it now, not at the next turn — a stage with nothing playing has none.
+        _go(fits.first.id, SceneChange.dissolve, why: 'the one on was switched off: the best fit');
+      } else if (drop) {
         // A drop: a scene that suits it and is full the moment it is on, cut on it,
         // with a hit. Never a simulation, which would be a black frame on the drop.
         final pick = fits.firstWhere((f) => f.instant, orElse: () => fits.first).id;
@@ -320,6 +410,23 @@ class ShowDirector {
         } else if (pool.isNotEmpty) {
           _go(pool[_rng.nextInt(pool.length)].id, SceneChange.dissolve, why: 'a new phrase: another of the three that fit best');
         }
+      }
+    }
+
+    // The combination: one for the scene where there is none (or its background went
+    // away, or its weight went to nothing); the background another on a phrase after
+    // a while; the style, the mask and the blend on a section turning, or a phrase
+    // after [styleBars].
+    final c = _combo;
+    if (_scene != null && !locked) {
+      if (c == null || c.scene != _scene) {
+        _pickCombo();
+      } else if ((!c.world && !_groundsNow.contains(c.ground)) || comboWeight(c, _rules) <= 0) {
+        _pickCombo(keepGround: false);
+      } else if (phrase && _groundSinceBar >= groundHoldBars && _rng.nextDouble() < 0.5) {
+        _pickCombo(keepGround: false);
+      } else if ((turned && _comboSinceBar > 2) || (phrase && _comboSinceBar >= styleBars && _rng.nextDouble() < 0.5)) {
+        _pickCombo();
       }
     }
 

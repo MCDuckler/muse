@@ -245,6 +245,21 @@ void main() {
     expect(drop.where(extremes.contains).length, inInclusiveRange(50, 130));
     expect([for (var n = 0; n < 100; n++) DanceClock.shot(MemeMood.sleep, 9, n, DanceTroupe.solo, art: true)].where(extremes.contains), isEmpty);
     expect([for (var n = 0; n < 100; n++) DanceClock.shot(MemeMood.rage, 9, n, DanceTroupe.solo)].where(extremes.contains), isEmpty);
+    // Weighed by the camera's rules: the fisheyes off, never one; every framing off,
+    // the front; the rest as before with every weight at 1.
+    final noFish = [
+      for (var n = 0; n < 200; n++)
+        DanceClock.shot(MemeMood.rage, 9, n, DanceTroupe.solo, art: true, weight: (s) => s == DanceShot.fisheye || s == DanceShot.fisheyeLow ? 0 : 1)
+    ];
+    expect(noFish.where((s) => s == DanceShot.fisheye || s == DanceShot.fisheyeLow), isEmpty);
+    expect(noFish.where(extremes.contains), isNotEmpty, reason: 'the other extremes still');
+    expect({for (var n = 0; n < 50; n++) DanceClock.shot(MemeMood.rage, 9, n, DanceTroupe.solo, art: true, weight: (_) => 0)}, {DanceShot.front});
+    for (var n = 0; n < 100; n++) {
+      expect(DanceClock.shot(MemeMood.vibe, 9, n, DanceTroupe.solo, art: true, weight: (_) => 1), DanceClock.shot(MemeMood.vibe, 9, n, DanceTroupe.solo, art: true));
+    }
+    // Close only, leaned on hard: mostly close.
+    final close = [for (var n = 0; n < 200; n++) DanceClock.shot(MemeMood.vibe, 9, n, DanceTroupe.solo, weight: (s) => s == DanceShot.close ? 10 : 1)];
+    expect(close.where((s) => s == DanceShot.close).length, greaterThan(100));
     for (final e in extremes) {
       final f = DanceFrame.of(e, DanceTroupe.grid);
       expect(f.fov, greaterThan(1.8));
