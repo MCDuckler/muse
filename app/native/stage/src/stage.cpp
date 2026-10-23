@@ -309,7 +309,7 @@ struct Stage {
   // The figure's ghosts (ws_ghosts): under 2 none; and whether the working size
   // follows the frames (ws_adapt).
   int ghostCount = 0;
-  float ghostDiffer = 0.5f;
+  float ghostDiffer = 0.5f, ghostTurn = 0, ghostLine = 0;
   bool adapt = true;
   // The slit-scan as a layer (ws_slit): mode 0 none.
   float slitLayer[WS_TREAT] = {};
@@ -507,9 +507,9 @@ void drawScene(const glsl::Program* p, Target& t, const float* common, const flo
 // The figure in `t` through a treatment (dance_fx.frag; ws_treat's floats), via
 // `via` and back: what the Flutter stage's _treated does, before the blend. Its alpha
 // stays 1, as a scene's is (the blend reads its own coverage as ever).
-// The figure in `t` with its ghosts round it (shaders/show/ghosts.frag), via `via`
-// and back: what the Flutter stage's _ghosted does, between the style and the blend.
-void ghostPass(Target& t, Target& via, int count, float differ, float time, float kick) {
+// The figure in `t` through the kaleidoscope (shaders/show/ghosts.frag), via `via`
+// and back: what the Flutter stage's _ghosted does, before the style.
+void ghostPass(Target& t, Target& via, int count, float differ, float turn, float line) {
   const glsl::Program* g = S->programs.get("ghosts");
   if (!g) return;
   via.make(t.w, t.h, S->workFormat);
@@ -521,8 +521,8 @@ void ghostPass(Target& t, Target& via, int count, float differ, float time, floa
   set("wsHeight", (float)t.h);
   set("uCount", (float)count);
   set("uDiffer", differ);
-  set("uTime", time);
-  set("uKick", kick);
+  set("uTurn", turn);
+  set("uLine", line);
   bindTex(g->id, "uImage", 0, t.tex);
   drawQuad();
   glBindFramebuffer(GL_READ_FRAMEBUFFER, via.fbo);
@@ -642,7 +642,7 @@ void frame(int slot) {
   int groundKind, blendMix, blendMask, blendCoverage;
   float treat[WS_TREAT];
   int ghostCount;
-  float ghostDiffer;
+  float ghostDiffer, ghostTurn, ghostLine;
   float slitLayer[WS_TREAT];
   bool freeze, hasRecipe;
   std::vector<float> wordsV;
@@ -663,7 +663,7 @@ void frame(int slot) {
     std::memcpy(groundKnobs, S->groundKnobs, sizeof groundKnobs);
     blendMix = S->blendMix; blendMask = S->blendMask; blendCoverage = S->blendCoverage; blendStrength = S->blendStrength;
     std::memcpy(treat, S->treat, sizeof treat);
-    ghostCount = S->ghostCount; ghostDiffer = S->ghostDiffer;
+    ghostCount = S->ghostCount; ghostDiffer = S->ghostDiffer; ghostTurn = S->ghostTurn; ghostLine = S->ghostLine;
     std::memcpy(slitLayer, S->slitLayer, sizeof slitLayer);
     wordsV = S->words;
     moshAsk = S->moshAsk; moshSeconds = S->moshSeconds; moshStrength = S->moshStrength;
@@ -819,7 +819,20 @@ void frame(int slot) {
     }
   }
 
-  // 1b'. the treatment over the figure, where its rig asks for one (ws_treat)
+  // 1b'. the transformation, before the style: the slit-scan (one ring of frames: not
+  // where the style is the slit-scan already), then the kaleidoscope (ws_slit,
+  // ws_ghosts)
+  if (slitLayer[0] > 8.5f && !(treat[0] > 8.5f)) {
+    S->scratch.make(w, h, S->workFormat);
+    S->slit.pass(slitLayer, S->work, S->scratch, S->frames, S->vao);
+    glBindVertexArray(S->vao);
+  }
+  if (ghostCount >= 1) {
+    ghostPass(S->work, S->scratch, ghostCount, ghostDiffer, ghostTurn, ghostLine);
+    glBindVertexArray(S->vao);
+  }
+
+  // 1b''. the style over what that made, where its rig asks for one (ws_treat)
   if (treat[0] > 8.5f) {
     // the slit-scan: the figure's own last frames (fx.h)
     S->scratch.make(w, h, S->workFormat);
@@ -827,18 +840,6 @@ void frame(int slot) {
     glBindVertexArray(S->vao);
   } else if (treat[0] > 0.5f) {
     treatPass(treat, S->work, S->scratch);
-    glBindVertexArray(S->vao);
-  }
-
-  // 1b''. the layer over the style: the slit-scan (one ring of frames: not where the
-  // style is the slit-scan already), then the ghosts round it (ws_slit, ws_ghosts)
-  if (slitLayer[0] > 8.5f && !(treat[0] > 8.5f)) {
-    S->scratch.make(w, h, S->workFormat);
-    S->slit.pass(slitLayer, S->work, S->scratch, S->frames, S->vao);
-    glBindVertexArray(S->vao);
-  }
-  if (ghostCount >= 2) {
-    ghostPass(S->work, S->scratch, ghostCount, ghostDiffer, common[2], common[24]);
     glBindVertexArray(S->vao);
   }
 
@@ -1545,11 +1546,13 @@ WS_API void ws_treat(const float* p, int n) {
   for (int i = 0; i < WS_TREAT; i++) S->treat[i] = p && i < n ? p[i] : 0;
 }
 
-WS_API void ws_ghosts(int count, float differ) {
+WS_API void ws_ghosts(int count, float differ, float turn, float line) {
   if (!S) S = new Stage();
   std::lock_guard<std::mutex> g(S->lock);
-  S->ghostCount = std::clamp(count, 0, 12);
+  S->ghostCount = std::clamp(count, 0, 6);
   S->ghostDiffer = std::clamp(differ, 0.0f, 1.0f);
+  S->ghostTurn = turn;
+  S->ghostLine = std::clamp(line, 0.0f, 1.0f);
 }
 
 WS_API void ws_slit(const float* p, int n) {

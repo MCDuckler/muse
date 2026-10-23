@@ -760,6 +760,8 @@ class _KartState extends State<_Kart> {
                       onAdd: () => _add(p, ComboAxis.scene, s.id),
                     ),
                 ]),
+                // The transformation, before the style: the style goes over what it makes.
+                _TransformRow(show: show),
                 _rowHead(p, ComboAxis.style, 'STYLE', one == null ? 'the style of this name, in every scene that has it' : 'how ${book[one]?.name ?? one} is drawn', styles),
                 Wrap(children: [
                   _Any(lit: p.styles == null, what: 'style', onTap: () => _set(_put(p, ComboAxis.style, null))),
@@ -779,7 +781,6 @@ class _KartState extends State<_Kart> {
                 // flock's own look of that kind.
                 if ((p.styles?.length == 1 ? p.styles!.first : (picked == null ? on?.style : null)) case final tuned?)
                   if (treatmentTunes.containsKey(tuned)) _TuneLine(show: show, treatment: tuned),
-                _GhostsRow(show: show),
                 _rowHead(p, ComboAxis.ground, 'BACKGROUND', locked ? 'a world of its own: its own background' : 'what is under it', comboGrounds),
                 if (!locked)
                   Wrap(children: [
@@ -900,67 +901,86 @@ class _KartState extends State<_Kart> {
   }
 }
 
-/// The layer between the style and the background (RigGhosts), the hands' own, over
-/// every combination while on: the slit-scan over any style, and ghosts — copies of
-/// the scene as it is drawn round the middle like a kaleidoscope, under it; how many,
-/// and how far they are from the original.
-class _GhostsRow extends StatelessWidget {
-  const _GhostsRow({required this.show});
+/// The transformation (TransformSet, show_rig.dart), before the style — the style goes
+/// over what it makes: the director's pick, none most of the time, or one held; the
+/// kaleidoscope's copies and how far they differ, the slit-scan's knobs.
+class _TransformRow extends StatelessWidget {
+  const _TransformRow({required this.show});
   final ShowEngine show;
+
+  static const _words = {
+    TransformMode.auto: 'The director picks, once a combination: none most of the time',
+    TransformMode.none: 'No transformation',
+    TransformMode.kaleidoscope: 'Mirrors through the middle: the scene reflected into every wedge, cut at the mirrors, under it',
+    TransformMode.slit: 'Each part of the picture from a frame further back (the native stage: Linux and Windows)',
+    TransformMode.both: 'The slit-scan, then the kaleidoscope of it',
+  };
 
   @override
   Widget build(BuildContext context) {
-    final g = show.pool.ghosts;
-    final count = g.count < 2 ? 6 : g.count;
+    final t = show.pool.transform;
+    final now = show.transformOn;
+    final kaleido = t.mode == TransformMode.auto || t.mode == TransformMode.kaleidoscope || t.mode == TransformMode.both;
+    final slit = t.mode == TransformMode.auto || t.mode == TransformMode.slit || t.mode == TransformMode.both;
+    String name(TransformMode m) => m == TransformMode.slit ? 'SLIT-SCAN' : m.name.toUpperCase();
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      const _Head('LAYER', hint: 'over the style, under the background · yours, over every combination'),
+      const _Head('TRANSFORMATION', hint: 'before the style: the style goes over what it makes · over every combination'),
       _Line(children: [
-        SizedBox(width: 92, child: Text('KALEIDOSCOPE', style: Console.label(9))),
-        _Word(
-          label: g.on ? 'ON' : 'OFF',
-          lit: g.on,
-          tooltip: g.on ? 'Ghosts on: a tap takes them off' : 'No ghosts: a tap puts $count round the scene',
-          onTap: () => show.setGhosts(g.copyWith(count: g.on ? 0 : count)),
-        ),
-        const SizedBox(width: 10),
-        Text('COPIES', style: Console.label(9)),
-        SizedBox(
-          width: 170,
-          child: Slider(
-            value: count.toDouble(),
-            min: 2,
-            max: RigGhosts.most.toDouble(),
-            divisions: RigGhosts.most - 2,
-            onChanged: (v) => show.setGhosts(g.copyWith(count: v.round())),
-            padding: const EdgeInsets.symmetric(horizontal: 10),
+        for (final m in TransformMode.values)
+          _Word(
+            label: m == TransformMode.auto ? 'AUTO · ${name(now)}' : name(m),
+            lit: t.mode == m,
+            tooltip: _words[m],
+            onTap: () => show.setTransform(t.copyWith(mode: m)),
           ),
-        ),
-        SizedBox(width: 26, child: Text('$count', style: Console.label(9, color: g.on ? Console.ink : Console.faint))),
-        const SizedBox(width: 10),
-        Tooltip(
-          message: 'How far the ghosts are from the original: none, they are its twins; all the way, smaller, dimmer, turned in colour and slowly turning. The original stays whole on top.',
-          child: Text('DIFFERS', style: Console.label(9)),
-        ),
-        SizedBox(
-          width: 170,
-          child: Slider(
-            value: g.differ,
-            onChanged: (v) => show.setGhosts(g.copyWith(differ: v)),
-            padding: const EdgeInsets.symmetric(horizontal: 10),
+        if (t.mode == TransformMode.auto) ...[
+          const SizedBox(width: 10),
+          Tooltip(message: 'How many of the director’s combinations get a transformation at all (the rest have none)', child: Text('HOW OFTEN', style: Console.label(9))),
+          SizedBox(
+            width: 150,
+            child: Slider(value: t.often, onChanged: (v) => show.setTransform(t.copyWith(often: v)), padding: const EdgeInsets.symmetric(horizontal: 10)),
           ),
-        ),
-        Text('${(g.differ * 100).round()} %', style: Console.label(9, color: g.on ? Console.ink : Console.faint)),
+          Text('${(t.often * 100).round()} %', style: Console.label(9)),
+        ],
       ]),
-      _Line(children: [
-        SizedBox(width: 92, child: Text('SLIT-SCAN', style: Console.label(9))),
-        _Word(
-          label: g.slit ? 'ON' : 'OFF',
-          lit: g.slit,
-          tooltip: 'Each part of the picture from a frame further back, over whatever style is on (the native stage: Linux and Windows)',
-          onTap: () => show.setGhosts(g.copyWith(slit: !g.slit)),
-        ),
-      ]),
-      if (g.slit) _TuneLine(show: show, treatment: 'slit'),
+      if (kaleido)
+        _Line(children: [
+          SizedBox(width: 92, child: Text('KALEIDOSCOPE', style: Console.label(9))),
+          Tooltip(message: 'How many mirrors (2: one horizontal, one vertical); twice as many wedges', child: Text('MIRRORS', style: Console.label(9))),
+          SizedBox(
+            width: 150,
+            child: Slider(
+              value: t.count.toDouble(),
+              min: 1,
+              max: RigTransform.most.toDouble(),
+              divisions: RigTransform.most - 1,
+              onChanged: (v) => show.setTransform(t.copyWith(count: v.round())),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+            ),
+          ),
+          SizedBox(width: 26, child: Text('${t.count}', style: Console.label(9, color: Console.ink))),
+          const SizedBox(width: 8),
+          for (final (label, value, rest, tip, TransformSet Function(double) set) in [
+            ('TURN', t.turn, 0.0, 'The mirrors turned: ${(t.turn * 180).round()}° (double-click: straight)', (double v) => t.copyWith(turn: v)),
+            ('LINE', t.line, 0.3, 'How much of the mirrors’ edges shows: ${(t.line * 100).round()} %', (double v) => t.copyWith(line: v)),
+            ('DIFFERS', t.differ, 0.3, 'How far the reflections’ light and colour are from the original’s: ${(t.differ * 100).round()} %', (double v) => t.copyWith(differ: v)),
+          ])
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: Knob(
+                value: value,
+                min: 0,
+                max: 1,
+                rest: rest,
+                bipolar: false,
+                size: 30,
+                label: label,
+                tooltip: tip,
+                onChanged: (v) => show.setTransform(set(v)),
+              ),
+            ),
+        ]),
+      if (slit) _TuneLine(show: show, treatment: 'slit'),
     ]);
   }
 }

@@ -61,7 +61,7 @@ import '../../state/show/show_rig.dart' show Figure, Ground;
 import '../../state/show/show_state.dart';
 import '../../state/show/show_tune.dart';
 import 'show_canvas.dart' show StagePrograms;
-import 'show_common.dart' show crtInk, crtPaper, setFxKnobs, tunedCell;
+import 'show_common.dart' show crtInk, crtPaper, setFxKnobs, styleIsStage, tunedCell;
 import 'show_dance_draw.dart';
 import 'show_dance_rig.dart';
 import 'show_dance_surface.dart';
@@ -1070,7 +1070,9 @@ class DanceSim implements SimLayer {
 
     // ---- the picture
     final look = _Look(st, f, mood, beats, since, heat, wakeK, kick);
-    final postNow = danceFxMode.containsKey(_art);
+    // Under a transformation the style's pass is the stage's, over what that made
+    // (show_common.dart styleIsStage): drawn as for it here, its pass left out.
+    final postNow = danceFxMode.containsKey(_art) && !(styleIsStage(st.rig) && _art?.name == st.rig.figure.style);
     if (native != null) {
       native.camera(cam);
       _paint(native, size, cam, look, bodies, leadRig, beats, dt);

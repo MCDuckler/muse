@@ -57,7 +57,7 @@ import 'package:flutter/material.dart';
 import '../../state/show/show_state.dart';
 import '../../state/show/show_tune.dart';
 import 'show_canvas.dart' show StagePrograms;
-import 'show_common.dart' show crtInk, crtPaper, setFxKnobs, tunedCell;
+import 'show_common.dart' show crtInk, crtPaper, setFxKnobs, styleIsStage, tunedCell;
 import 'show_dance.dart' show DanceHandoff;
 import 'show_dance_draw.dart' show DanceCam, V3;
 import 'show_flock_bird.dart';
@@ -1186,7 +1186,10 @@ class FlockSim implements SimLayer {
     final pic = rec.endRecording();
     var img = pic.toImageSync(w, h);
     pic.dispose();
-    if (flockFxMode.containsKey(look)) img = _post(img, w, h, p, cue, look);
+    // Under a transformation an image style's pass is the stage's, over what that made
+    // (show_common.dart styleIsStage); the flock's own scope and sky stay its own.
+    final staged = styleIsStage(st.rig) && look.name == st.rig.figure.style;
+    if (flockFxMode.containsKey(look) && !staged) img = _post(img, w, h, p, cue, look);
     _out?.dispose();
     _out = img;
     _watch.stop();

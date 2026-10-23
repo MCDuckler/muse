@@ -71,14 +71,21 @@ void main() {
     final back = ShowState.fromJson(st.toJson());
     expect(back.rig, rig);
   });
-  test("the ghosts come back from their json, go out with the frame, and are none under two", () {
-    const rig = ShowRig(figure: RigFigure(kind: Figure.blocks), ghosts: RigGhosts(count: 6, differ: 0.3));
+  test("the transformation comes back from its json, goes out with the frame, and is none under two copies", () {
+    const rig = ShowRig(figure: RigFigure(kind: Figure.blocks), transform: RigTransform(count: 3, differ: 0.3, slit: true, turn: 0.2, line: 0.4));
     expect(ShowRig.fromJson(rig.toJson()), rig);
-    expect(ShowRig.fromJson(const ShowRig().toJson()).ghosts, RigGhosts.none);
-    expect(const RigGhosts(count: 1).on, isFalse);
-    expect(RigGhosts.fromJson({'count': 40, 'differ': 3}), const RigGhosts(count: RigGhosts.most, differ: 1));
+    expect(ShowRig.fromJson(const ShowRig().toJson()).transform, RigTransform.none);
+    expect(const RigTransform().on, isFalse);
+    expect(const RigTransform(count: 1).on, isTrue, reason: 'one mirror is a kaleidoscope already');
+    expect(RigTransform.fromJson({'count': 40, 'differ': 3}), const RigTransform(count: RigTransform.most, differ: 1));
+    const set = TransformSet(mode: TransformMode.kaleidoscope, count: 3, differ: 0.2, often: 0.3);
+    expect(TransformSet.fromJson(set.toJson()), set);
+    expect(set.of(TransformMode.none).any, isFalse);
+    expect(set.of(TransformMode.both), const RigTransform(count: 3, differ: 0.2, slit: true, line: 0.3));
+    expect(const RigTransform(count: 4, turn: 0.5).turnRadians, closeTo(1.5708, 1e-3), reason: 'half of up to half a turn');
     // The working size's switch rides with the frame too (a stage in a window of its own).
     expect(ShowMacros.fromJson(const ShowMacros(adapt: false).toJson()).adapt, isFalse);
     expect(ShowMacros.fromJson(const ShowMacros().toJson()).adapt, isTrue);
   });
+
 }

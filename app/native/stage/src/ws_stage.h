@@ -105,12 +105,14 @@ WS_API void ws_blend(int mix, int mask, int coverage, float strength);
 // flips it, the weight knob how far back it reaches, the spacing knob frames a layer.
 #define WS_TREAT 19
 WS_API void ws_treat(const float* p, int n);
-// The figure's ghosts, after its treatment and before the blend (shaders/show/
-// ghosts.frag; show_rig.dart's RigGhosts): `count` the copies and the original
-// together, round the middle like a kaleidoscope (under 2: none); `differ` 0..1 how
-// far the copies are from the original.
-WS_API void ws_ghosts(int count, float differ);
-// The slit-scan as a layer over any style (before the ghosts): ws_treat's floats for
+// The kaleidoscope, before the style (shaders/show/ghosts.frag; show_rig.dart's
+// RigTransform): `count` mirrors (0: none) cutting the stage into twice as many
+// wedges, the one the figure lights most reflected into the rest, under the original;
+// `turn` the mirrors' turn (radians),
+// `line` how much of their edges shows, `differ` 0..1 how far the reflections' light
+// and colour are from the original's.
+WS_API void ws_ghosts(int count, float differ, float turn, float line);
+// The slit-scan as a transformation, before the style and the kaleidoscope: ws_treat's floats for
 // mode 9 (mode 0: none). Where the style is the slit-scan already, it is that.
 WS_API void ws_slit(const float* p, int n);
 // Whether the working size goes down while frames come late, and back up (1, as

@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muse/src/state/show/show_demo.dart';
 import 'package:muse/src/state/show/show_rig.dart';
+import 'package:muse/src/state/show/show_state.dart';
 import 'package:muse/src/ui/show/native_stage.dart';
 import 'package:muse/src/ui/show/scene.dart';
+import 'package:muse/src/ui/show/show_common.dart' show styleIsStage, treatOf;
 import 'package:muse/src/ui/show/show_debug.dart';
 import 'package:muse/src/ui/show/stage_kit.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -51,12 +53,24 @@ void main() {
     expect(NativeStage.whyNotRig(const ShowRig(figure: dancers)), isNull, reason: 'they draw it themselves');
     expect(NativeStage.whyNotRig(ShowRig(figure: dancers.copyWith(style: 'chrono'))), isNotNull, reason: 'chrono through lines is the pass');
     expect(NativeStage.whyNotRig(ShowRig(figure: kinetic.copyWith(treatment: Treatment.raw))), isNull);
-    // Ghosts: the Flutter stage's where the build has no pass for them (ws_ghosts).
-    const blocks = ShowRig(figure: RigFigure(kind: Figure.blocks), ghosts: RigGhosts(count: 5));
-    expect(NativeStage.whyNotRig(blocks, ghosts: false), contains('ghosts'));
-    expect(NativeStage.whyNotRig(blocks, ghosts: true), isNull);
+    // A transformation: the Flutter stage's where the build has no pass for it (ws_ghosts).
+    const blocks = ShowRig(figure: RigFigure(kind: Figure.blocks), transform: RigTransform(count: 2));
+    expect(NativeStage.whyNotRig(blocks, transforms: false), contains('transformed'));
+    expect(NativeStage.whyNotRig(blocks, transforms: true), isNull);
     // A build of the stage with the pass of its own (ws_treat) draws it.
     expect(NativeStage.whyNotRig(ShowRig(figure: kinetic.copyWith(treatment: Treatment.ascii)), treats: true), isNull);
+  });
+
+  test("under a transformation the dancers' own ascii is the stage's, over what the transformation made", () {
+    final st = ShowState(now: DateTime(2026), a: const ShowDeck(name: 'A'), b: const ShowDeck(name: 'B'));
+    const dancers = RigFigure(kind: Figure.dancers, style: 'ascii');
+    expect(treatOf(const ShowRig(figure: dancers), st, 720), isNull, reason: 'their own, drawn by them');
+    expect(styleIsStage(const ShowRig(figure: dancers)), isFalse);
+    const turned = ShowRig(figure: dancers, transform: RigTransform(count: 2));
+    expect(treatOf(turned, st, 720)?.t, Treatment.ascii);
+    expect(styleIsStage(turned), isTrue);
+    // The flock's own scope is its own, transformation or not.
+    expect(styleIsStage(const ShowRig(figure: RigFigure(kind: Figure.birds, style: 'radar'), transform: RigTransform(count: 2))), isFalse);
   });
 
   testWidgets('the debug words say which stage draws, and why', (tester) async {

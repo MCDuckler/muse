@@ -1,35 +1,35 @@
 #version 460 core
 #include <flutter/runtime_effect.glsl>
 
-// Ghosts: the figure as it is drawn (its style with it) copied round the middle of the
-// stage like a kaleidoscope — uCount places a turn apart, every other one mirrored, so
-// the copies meet edge to edge — and the original over them, whole: where the original
-// is lit, it is what is seen; the ghosts fill the dark round it (each pixel the
-// brighter of the original and the brightest copy there, colour and alpha together).
+// The kaleidoscope: uCount mirrors through the middle of the stage (2 and no turn:
+// one horizontal, one vertical), turned by uTurn, cutting it into twice as many
+// wedges. As in a real one, one wedge is what is between the mirrors — here the one
+// the figure lights most (each wedge's middle looked at, the same answer for every
+// pixel of a frame) — and every other wedge shows it reflected, every other one
+// mirrored, cut off at the wedge's edges. As big as the original and still; and
+// always under the original: wherever the original draws anything it is what is
+// seen, whole; the reflections only fill what it leaves dark. uLine draws the mirrors'
+// edges over the reflections.
 //
-// uDiffer is how far the copies are from the original: 0 the same size, light and
-// colour; toward 1 smaller (so the ring of them gathers round the middle), dimmer, each
-// turned a step further round the colour wheel, and the whole ring turning slowly.
+// uDiffer is how far the reflections' light and colour are from the original's: 0 its
+// twins; toward 1 dimmer, each turned a step further round the colour wheel.
 
 uniform vec2 uResolution;
-uniform float uCount;   // the copies and the original together (2..12)
+uniform float uCount;   // the mirrors (1..6)
 uniform float uDiffer;  // 0..1
-uniform float uTime;    // seconds: the ring's slow turn
-uniform float uKick;    // 0..1: the ring breathes out a touch on the kick
+uniform float uTurn;    // the mirrors' turn, radians
+uniform float uLine;    // 0..1: how much of the mirrors' edges is drawn
 uniform sampler2D uImage;
 
 out vec4 fragColor;
 
 const float TAU = 6.2831853;
 
-mat2 rot(float a) {
-  float s = sin(a), c = cos(a);
-  return mat2(c, -s, s, c);
-}
+float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 
 // A colour turned [a] (turns) round the wheel, its lightness kept (YIQ).
 vec3 hueTurn(vec3 c, float a) {
-  float y = dot(c, vec3(0.299, 0.587, 0.114));
+  float y = lum(c);
   float i = dot(c, vec3(0.596, -0.274, -0.322));
   float q = dot(c, vec3(0.211, -0.523, 0.312));
   float h = a * TAU;
@@ -45,33 +45,52 @@ void main() {
   vec4 orig = texture(uImage, uv);
   float aspect = uResolution.x / uResolution.y;
   vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
-  int n = int(clamp(uCount, 0.0, 12.0) + 0.5);
+  float m = floor(clamp(uCount, 1.0, 6.0) + 0.5);
   float d = clamp(uDiffer, 0.0, 1.0);
-  // Smaller as they differ; a breath out on the kick.
-  float scale = (1.0 - 0.45 * d) * (1.0 + 0.04 * uKick);
-  float light = 1.0 - 0.7 * d;
-  float spin = uTime * 0.06 * d;
-  // The brightest copy here, its colour and its alpha together: the stages read the
-  // alpha as which pixels are the figure (a ghost of the figure is figure too).
-  vec4 ghost = vec4(0.0);
-  float best = -1.0;
-  for (int k = 1; k < 12; k++) {
-    if (k >= n) continue;
-    float a = TAU * float(k) / float(n) + spin;
-    vec2 q = rot(-a) * p / scale;
-    // Every other copy mirrored: a kaleidoscope's, not a fan's.
-    if (mod(float(k), 2.0) > 0.5) q.x = -q.x;
-    vec2 s = q / vec2(aspect, 1.0) + 0.5;
-    if (s.x < 0.0 || s.x > 1.0 || s.y < 0.0 || s.y > 1.0) continue;
-    vec4 c = texture(uImage, s);
-    vec3 rgb = max(mix(c.rgb, hueTurn(c.rgb, float(k) * 0.09), d), vec3(0.0)) * light;
-    float l = dot(rgb, vec3(0.299, 0.587, 0.114));
-    if (l > best) {
-      best = l;
-      ghost = vec4(rgb, c.a);
+  float wedge = 3.14159265 / m;
+  float r = length(p);
+  float a = atan(p.y, p.x) - uTurn;
+  float n = 2.0 * m;
+  // The wedge between the mirrors: the one the figure lights most along its middle.
+  float source = 0.0, most = -1.0;
+  for (int k = 0; k < 12; k++) {
+    float fk = float(k);
+    if (fk >= n) continue;
+    float mid = (fk + 0.5) * wedge + uTurn;
+    float lit = 0.0;
+    for (int i = 1; i <= 3; i++) {
+      vec2 t = float(i) * 0.13 * vec2(cos(mid), sin(mid));
+      vec2 tu = t / vec2(aspect, 1.0) + 0.5;
+      if (tu.x >= 0.0 && tu.x <= 1.0 && tu.y >= 0.0 && tu.y <= 1.0) lit += lum(texture(uImage, tu).rgb);
+    }
+    if (lit > most + 1e-4) {
+      most = lit;
+      source = fk;
     }
   }
-  // The original wherever it is the brighter: whole, never under a ghost.
-  float lo = dot(orig.rgb, vec3(0.299, 0.587, 0.114));
-  fragColor = best > lo + 0.004 ? ghost : orig;
+  // This wedge and where in it; the source's point that the mirrors show here: turned
+  // there an even number of wedges away, reflected an odd.
+  float k = floor(a / wedge);
+  float local = a - k * wedge;
+  float apart = mod(source - k, n);
+  float src = source * wedge + (mod(apart, 2.0) > 0.5 ? wedge - local : local);
+  vec2 q = r * vec2(cos(src + uTurn), sin(src + uTurn));
+  vec2 s = q / vec2(aspect, 1.0) + 0.5;
+  float inside = step(0.0, s.x) * step(s.x, 1.0) * step(0.0, s.y) * step(s.y, 1.0);
+  vec4 c = texture(uImage, clamp(s, 0.0, 1.0)) * inside;
+  vec3 rgb = max(mix(c.rgb, hueTurn(c.rgb, apart * 0.09), d), vec3(0.0)) * (1.0 - 0.7 * d);
+  vec4 ghost = vec4(rgb, c.a);
+  float best = lum(rgb);
+  // The mirrors' edges, a pixel or so wide, over the reflections.
+  float edge = r * min(local, wedge - local) * uResolution.y;
+  float line = (1.0 - smoothstep(0.6, 1.8, edge)) * clamp(uLine, 0.0, 1.0) * step(0.004, r);
+  // The original on top wherever it draws anything (its light, or its coverage band:
+  // alpha 254/255 on the Flutter stage, the dancers' coverage on the native one); the
+  // reflections only in its dark, and only where they are brighter than that dark.
+  float lo = lum(orig.rgb);
+  float figure = max(smoothstep(0.02, 0.07, lo), step(0.5, orig.a) * step(orig.a, 0.999));
+  vec4 under = best > lo ? ghost : orig;
+  under.rgb = mix(under.rgb, vec3(0.85), line * 0.8);
+  under.a = max(under.a, line);
+  fragColor = mix(under, orig, figure);
 }

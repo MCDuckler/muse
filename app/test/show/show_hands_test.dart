@@ -143,26 +143,41 @@ void main() {
     expect(show.state.rig.finish.trails, 0.35);
   });
 
-  test("the layer is the hands': on every combination, kept, and the working size's switch with the frame", () {
+  test("the transformation: held by the hands, or the director's — none most of the time — and the working size's switch with the frame", () {
     final t = DateTime(2026, 1, 1);
     show.chooseScene('kinetic');
-    show.setGhosts(const RigGhosts(count: 6, differ: 0.4, slit: true));
+    // Held: what the hands say, over every combination.
+    show.setTransform(const TransformSet(mode: TransformMode.both, count: 3, differ: 0.4, turn: 0.25, line: 0.5));
     show.setAdapt(false);
     show.tick(t);
-    expect(show.state.rig.ghosts, const RigGhosts(count: 6, differ: 0.4, slit: true));
+    expect(show.state.rig.transform, const RigTransform(count: 3, differ: 0.4, slit: true, turn: 0.25, line: 0.5));
     expect(show.state.macros.adapt, isFalse);
     show.chooseScene('flash');
     show.tick(t.add(const Duration(milliseconds: 16)));
-    expect(show.state.rig.ghosts.count, 6, reason: 'over whatever is on');
+    expect(show.state.rig.transform.count, 3, reason: 'over whatever is on');
     final back = ShowPool.fromJson(show.pool.toJson());
-    expect(back.ghosts, show.pool.ghosts);
+    expect(back.transform, show.pool.transform);
     expect(back.adapt, isFalse);
-    show.setGhosts(RigGhosts.none);
-    show.setAdapt(true);
+    // The director's, never: none.
+    show.setTransform(const TransformSet(often: 0));
+    show.chooseScene('kinetic');
     show.tick(t.add(const Duration(milliseconds: 32)));
-    expect(show.state.rig.ghosts.any, isFalse);
-    expect(show.pool.toJson().containsKey('ghosts'), isFalse);
+    expect(show.state.rig.transform.any, isFalse);
+    expect(show.transformOn, TransformMode.none);
+    // The director's, always: one of the two, the same while the combination stays.
+    show.setTransform(const TransformSet(often: 1));
+    show.chooseScene('flash');
+    show.tick(t.add(const Duration(milliseconds: 48)));
+    expect(show.transformOn, isIn([TransformMode.kaleidoscope, TransformMode.slit]));
+    final picked = show.state.rig.transform;
+    expect(picked.any, isTrue);
+    show.tick(t.add(const Duration(milliseconds: 64)));
+    expect(show.state.rig.transform, picked);
+    show.setTransform(TransformSet.standard);
+    show.setAdapt(true);
+    expect(show.pool.toJson().containsKey('transform'), isFalse);
   });
+
 
   test('a launch lands on the bar, now when nothing plays, and the pool says when', () async {
     final t = DateTime(2026, 1, 1);

@@ -250,11 +250,11 @@ class NativeStage {
   /// picture, where this build of the stage has no pass for one (ws_treat, [treats])
   /// — those frames are the Flutter stage's. The dancers' and the birds' own rendering
   /// of one (RigFigure.style its name) it draws either way.
-  static String? whyNotRig(ShowRig rig, {bool? treats, bool? ghosts}) {
+  static String? whyNotRig(ShowRig rig, {bool? treats, bool? transforms}) {
     final f = rig.figure;
-    // The ghosts: a build of the stage from before ws_ghosts has no pass for them.
-    if (rig.ghosts.any && f.kind != Figure.none && !(ghosts ?? (_it?.ghostsToo ?? false))) {
-      return 'the scene with its ghosts, which this build of the stage cannot draw';
+    // The transformation: a build of the stage from before ws_ghosts has no pass for it.
+    if (rig.transform.any && f.kind != Figure.none && !(transforms ?? (_it?.transformsToo ?? false))) {
+      return 'the scene transformed, which this build of the stage cannot draw';
     }
     final t = f.treatment;
     if (f.kind == Figure.none || !imageTreatments.contains(t) || f.style == t.name) return null;
@@ -351,11 +351,12 @@ class NativeStage {
   /// ws_features says as 8).
   late final bool treats = _treatFn != null;
 
-  /// The ghosts (ws_ghosts) and whether the working size follows the frames
+  /// The kaleidoscope (ws_ghosts), the slit-scan as a transformation (ws_slit), and
+  /// whether the working size follows the frames
   /// (ws_adapt): a library from before them has neither.
-  late final void Function(int, double)? _ghostsFn = () {
+  late final void Function(int, double, double, double)? _ghostsFn = () {
     try {
-      return _lib.lookupFunction<Void Function(Int32, Float), void Function(int, double)>('ws_ghosts');
+      return _lib.lookupFunction<Void Function(Int32, Float, Float, Float), void Function(int, double, double, double)>('ws_ghosts');
     } catch (_) {
       return null;
     }
@@ -374,18 +375,18 @@ class NativeStage {
       return null;
     }
   }();
-  late final bool ghostsToo = _ghostsFn != null;
-  RigGhosts? _ghostsSent;
+  late final bool transformsToo = _ghostsFn != null;
+  RigTransform? _ghostsSent;
   bool? _adaptSent;
   final Pointer<Float> _slitBuf = calloc<Float>(19);
   bool _slitOn = false;
 
-  /// The frame's ghosts and its word on the working size, to the stage when they change.
-  void ghostsAndAdapt(ShowState st) {
-    final g = st.rig.figure.kind == Figure.none ? RigGhosts.none : st.rig.ghosts;
+  /// The frame's transformation and its word on the working size, to the stage.
+  void transformAndAdapt(ShowState st) {
+    final g = st.rig.figure.kind == Figure.none ? RigTransform.none : st.rig.transform;
     if (g != _ghostsSent && _ghostsFn != null) {
       _ghostsSent = g;
-      _ghostsFn(g.on ? g.count : 0, g.differ);
+      _ghostsFn(g.on ? g.count : 0, g.differ, g.turnRadians, g.line);
     }
     // The slit-scan as the layer, over whatever style: its shape, the kick, the time and
     // its knobs (reach, slower) — every frame while on.
@@ -606,7 +607,7 @@ class NativeStage {
       if (f & 2 != 0) 'frames shared by Direct3D handle',
       if (f & 4 != 0) 'frames as pixels',
       if (f & 8 != 0) 'treatments of its own',
-      if (f & 256 != 0) 'ghosts of its own',
+      if (f & 256 != 0) 'transformations of its own',
     ].join(', ');
   }
 
@@ -1071,8 +1072,8 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
     // The treatment over the figure, where its rig asks for one the figure does not
     // draw as its own style: the Flutter stage's pass, here.
     if (stage.treats) stage.treat(st, (_px?.height ?? 720) * _scale);
-    // Its ghosts, and whether the working size follows the frames.
-    stage.ghostsAndAdapt(st);
+    // Its transformation, and whether the working size follows the frames.
+    stage.transformAndAdapt(st);
     // The words: the line set here, its picture up to the stage once, the frame's
     // numbers every tick.
     if (NativeStage.isWords(scene)) {

@@ -25,15 +25,16 @@ class ShowPool {
     this.mosh = defaultMosh,
     this.tune = const {},
     this.type3d = TypeSpec.standard,
-    this.ghosts = RigGhosts.none,
+    this.transform = TransformSet.standard,
     this.adapt = true,
   });
 
   /// The treatments' knobs, by `treatment.knob` (show_tune.dart): `lines.weight`.
   final Map<String, double> tune;
 
-  /// The ghosts of the figure, the hands': over every combination while on.
-  final RigGhosts ghosts;
+  /// The transformation's settings: the director's pick or the hands', the
+  /// kaleidoscope's copies, how often (show_rig.dart).
+  final TransformSet transform;
 
   /// The stages lower their working size while frames come late, and raise it back
   /// (the frames over the picture); off, they keep the tier's size whatever.
@@ -97,7 +98,7 @@ class ShowPool {
           double? mosh,
           Map<String, double>? tune,
           TypeSpec? type3d,
-          RigGhosts? ghosts,
+          TransformSet? transform,
           bool? adapt}) =>
       ShowPool(
         off: off ?? this.off,
@@ -111,7 +112,7 @@ class ShowPool {
         mosh: mosh ?? this.mosh,
         tune: tune ?? this.tune,
         type3d: type3d ?? this.type3d,
-        ghosts: ghosts ?? this.ghosts,
+        transform: transform ?? this.transform,
         adapt: adapt ?? this.adapt,
       );
 
@@ -223,7 +224,7 @@ class ShowPool {
         if (mosh != defaultMosh) 'mosh': mosh,
         if (tune.isNotEmpty) 'tune': tune,
         if (type3d != TypeSpec.standard) 'type3d': type3d.toJson(),
-        if (ghosts != RigGhosts.none) 'ghosts': ghosts.toJson(),
+        if (transform != TransformSet.standard) 'transform': transform.toJson(),
         if (!adapt) 'adapt': false,
       };
 
@@ -250,7 +251,7 @@ class ShowPool {
         mosh: j['mosh'] is num ? (j['mosh'] as num).toDouble().clamp(0.0, 1.0) : defaultMosh,
         tune: j['tune'] is Map ? {for (final e in (j['tune'] as Map).entries) if (e.value is num) '${e.key}': (e.value as num).toDouble()} : const {},
         type3d: TypeSpec.fromJson(j['type3d']),
-        ghosts: RigGhosts.fromJson(j['ghosts']),
+        transform: TransformSet.fromJson(j['transform']),
         adapt: j['adapt'] != false,
       );
 

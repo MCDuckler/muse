@@ -395,8 +395,9 @@ class _StagePainter extends CustomPainter {
   /// that draws MilkDrop itself, nor where there is nothing to blend.
   ui.Image _scene(Scene scene, ShowState st, int w, int h, {bool live = true}) {
     final rigOf = live ? st.rig : (st.rigFrom ?? st.rig);
-    // The figure, its style over it, and its ghosts round it: then onto the ground.
-    final layers = _ghosted(_treated(_sceneLayers(scene, st, w, h, live: live), rigOf, st, w, h), rigOf, st, w, h);
+    // The figure, transformed (the kaleidoscope), then its style over that: then onto
+    // the ground.
+    final layers = _treated(_ghosted(_sceneLayers(scene, st, w, h, live: live), rigOf, st, w, h), rigOf, st, w, h);
     if (live) stageFigureTap?.call(scene, st, layers);
     if (!live || scene.layers.any((l) => l.samplers.contains('milk'))) return layers;
     final rig = st.rig;
@@ -430,10 +431,11 @@ class _StagePainter extends CustomPainter {
   /// the birds' own styles, [RigFigure.style] the treatment's name).
   ui.FragmentShader? _ghosts;
 
-  /// The figure's picture with its ghosts round it (shaders/show/ghosts.frag; RigGhosts),
-  /// where the rig asks for them: between the figure, its style drawn, and the ground.
+  /// The figure's picture through the kaleidoscope (shaders/show/ghosts.frag;
+  /// RigTransform), where the rig asks for one: before its style. (The slit-scan is
+  /// the native stage's: here, as drawn.)
   ui.Image _ghosted(ui.Image img, ShowRig rig, ShowState st, int w, int h) {
-    final g = rig.ghosts;
+    final g = rig.transform;
     if (!g.on || rig.figure.kind == Figure.none) return img;
     final program = p.scenes['ghosts'];
     if (program == null) return img;
@@ -443,8 +445,8 @@ class _StagePainter extends CustomPainter {
       ..setFloat(1, h.toDouble())
       ..setFloat(2, g.count.toDouble())
       ..setFloat(3, g.differ)
-      ..setFloat(4, _clock.elapsedMicroseconds / 1e6)
-      ..setFloat(5, (st.flat['dyn.hit.kick'] ?? 0).clamp(0.0, 1.0))
+      ..setFloat(4, g.turnRadians)
+      ..setFloat(5, g.line)
       ..setImageSampler(0, img);
     final out = _pass(w, h, (c) => c.drawRect(Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()), Paint()..shader = fx));
     img.dispose();

@@ -268,8 +268,8 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   }
 
   ShowRig _hands(ShowRig r) {
-    // The ghosts are the hands' alone, over whatever combination is on.
-    var out = r.copyWith(ghosts: pool.ghosts);
+    // The transformation: the hands' held, or the director's for this combination.
+    var out = r.copyWith(transform: _transformNow);
     if (_finish != null) out = out.copyWith(finish: _finish);
     if (_strength != 1) out = out.copyWith(blend: out.blend.copyWith(strength: _strength));
     return out;
@@ -284,8 +284,32 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
     notifyListeners();
   }
 
-  /// The ghosts of the figure (RigGhosts), kept.
-  void setGhosts(RigGhosts g) => setPool(pool.copyWith(ghosts: g));
+  /// The transformation's settings (TransformSet), kept.
+  void setTransform(TransformSet t) => setPool(pool.copyWith(transform: t));
+
+  /// The transformation on: the one the hands hold, or the director's for the
+  /// combination on — one roll a combination, none most of the time (the rest of
+  /// TransformSet.often a kaleidoscope or the slit-scan, as likely each), the same for
+  /// the same night (the session's seed).
+  RigTransform get _transformNow {
+    final t = pool.transform;
+    if (t.mode != TransformMode.auto) return t.of(t.mode);
+    final key = director.combo?.key;
+    if (key != _rolledFor) {
+      _rolledFor = key;
+      _rolls++;
+      final d = math.Random(_macros.seed * 7919 + _rolls).nextDouble();
+      _rolled = d >= t.often ? TransformMode.none : (d < t.often / 2 ? TransformMode.kaleidoscope : TransformMode.slit);
+    }
+    return t.of(_rolled);
+  }
+
+  String? _rolledFor;
+  int _rolls = 0;
+  TransformMode _rolled = TransformMode.none;
+
+  /// What the director put on for the combination on (the hands' mode where held).
+  TransformMode get transformOn => pool.transform.mode == TransformMode.auto ? _rolled : pool.transform.mode;
 
   /// Whether the stages trade the picture's size for their frames, kept.
   void setAdapt(bool on) => setPool(pool.copyWith(adapt: on));

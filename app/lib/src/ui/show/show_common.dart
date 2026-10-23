@@ -145,8 +145,12 @@ void setFxKnobs(ui.FragmentShader s, int at, ShowState st, String? treatment) {
   final fig = rig.figure;
   // The dancers' slit-scan is the stage's pass over what they draw (they cannot draw
   // their own past), where every other style of theirs is their own.
-  final t = fig.style == 'slit' ? Treatment.slit : fig.treatment;
-  if (fig.kind == Figure.none || !imageTreatments.contains(t) || (fig.style == t.name && t != Treatment.slit)) return null;
+  // Under a transformation, a style a figure draws for itself (the dancers' ascii, the
+  // flock's lines) is the stage's too: it goes over what the transformation made, so the
+  // figure leaves it out (danceStyleIsStage, flock likewise).
+  final staged = rig.transform.any && treatmentFxMode.containsKey(fig.style) && fig.style != 'slit';
+  final t = fig.style == 'slit' ? Treatment.slit : (staged ? Treatment.values.byName(fig.style!) : fig.treatment);
+  if (fig.kind == Figure.none || !imageTreatments.contains(t) || (fig.style == t.name && t != Treatment.slit && !staged)) return null;
   if (t == Treatment.slit) {
     final s = slitShapeOf(st);
     return (t: t, mode: 9, ink: Colors.white, paper: Colors.black, cell: s.shape, tint: s.flip);
@@ -169,3 +173,8 @@ void setFxKnobs(ui.FragmentShader s, int at, ShowState st, String? treatment) {
 
 /// The crt's lavender white and its near-black (dance_fx.frag's ramp ends).
 const crtInk = Color(0xfff6dcff), crtPaper = Color(0xff07020f);
+
+/// Whether [rig]'s figure leaves its own style to the stage this frame: under a
+/// transformation its ascii, dither, lines… go over what the transformation made, so
+/// the dancers and the flock draw themselves as for that style but leave its pass out.
+bool styleIsStage(ShowRig rig) => rig.transform.any && treatmentFxMode.containsKey(rig.figure.style) && rig.figure.style != 'slit';

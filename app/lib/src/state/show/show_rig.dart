@@ -274,50 +274,119 @@ class RigBlend {
   int get hashCode => Object.hash(mask, mix, strength);
 }
 
-/// The layer between the figure (its style drawn) and the ground, over any style:
+/// The transformation, between the figure as it draws itself and its style (the
+/// style goes over what it makes): what is on this frame.
 ///
 ///  * the slit-scan ([slit]): each part of the picture from a frame further back
 ///    (the native stage's, native/stage/src/fx.h; its knobs the `slit` treatment's);
-///  * then ghosts: copies of what that made turned round the middle like a
-///    kaleidoscope — every other one mirrored — under the original, which stays whole
-///    on top (shaders/show/ghosts.frag). [count] is the copies and the original
-///    together (under 2: none); [differ] how far the copies are from it: 0 the same
-///    size and light, 1 smaller, dimmer, turned in colour and slowly turning.
-class RigGhosts {
-  const RigGhosts({this.count = 0, this.differ = 0.5, this.slit = false});
+///  * then the kaleidoscope: [count] mirrors through the middle (0: none) cutting the
+///    stage into twice as many wedges, the one the figure lights most reflected into
+///    all the others and cut off at their edges, as big as the original — under the
+///    original, which stays whole on top wherever it draws anything (shaders/show/
+///    ghosts.frag). [turn] turns the mirrors (0..1: up to half a turn; 2 mirrors at 0
+///    are one horizontal and one vertical), [line] how much of their edges is drawn,
+///    [differ] how far the reflections' light and colour are from the original's.
+class RigTransform {
+  const RigTransform({this.count = 0, this.differ = 0.5, this.slit = false, this.turn = 0, this.line = 0});
 
   final int count;
-  final double differ;
+  final double differ, turn, line;
   final bool slit;
 
-  static const none = RigGhosts();
+  static const none = RigTransform();
 
-  /// The most there may be (the shader's loop).
-  static const most = 12;
+  /// The most mirrors there may be.
+  static const most = 6;
 
   /// The kaleidoscope on.
-  bool get on => count >= 2;
+  bool get on => count >= 1;
 
-  /// Anything of the layer on.
+  /// Anything of it on.
   bool get any => on || slit;
 
-  RigGhosts copyWith({int? count, double? differ, bool? slit}) =>
-      RigGhosts(count: count ?? this.count, differ: differ ?? this.differ, slit: slit ?? this.slit);
+  /// The mirrors' turn, in radians (up to half a turn).
+  double get turnRadians => turn * 3.14159265;
 
-  Map<String, dynamic> toJson() => {'count': count, 'differ': differ, if (slit) 'slit': true};
+  RigTransform copyWith({int? count, double? differ, bool? slit, double? turn, double? line}) => RigTransform(
+      count: count ?? this.count, differ: differ ?? this.differ, slit: slit ?? this.slit, turn: turn ?? this.turn, line: line ?? this.line);
 
-  factory RigGhosts.fromJson(Object? j) => j is Map
-      ? RigGhosts(
+  Map<String, dynamic> toJson() => {'count': count, 'differ': differ, if (slit) 'slit': true, if (turn != 0) 'turn': turn, if (line != 0) 'line': line};
+
+  factory RigTransform.fromJson(Object? j) => j is Map
+      ? RigTransform(
           count: (j['count'] is num ? (j['count'] as num).round() : 0).clamp(0, most),
           differ: _d(j['differ'], 0.5).clamp(0.0, 1.0),
           slit: j['slit'] == true,
+          turn: _d(j['turn'], 0).clamp(0.0, 1.0),
+          line: _d(j['line'], 0).clamp(0.0, 1.0),
         )
       : none;
 
   @override
-  bool operator ==(Object other) => other is RigGhosts && other.count == count && other.differ == differ && other.slit == slit;
+  bool operator ==(Object other) =>
+      other is RigTransform && other.count == count && other.differ == differ && other.slit == slit && other.turn == turn && other.line == line;
   @override
-  int get hashCode => Object.hash(count, differ, slit);
+  int get hashCode => Object.hash(count, differ, slit, turn, line);
+}
+
+/// Which transformation is on: the director's pick ([auto]: none most of the time),
+/// or one the hands hold.
+enum TransformMode { auto, none, kaleidoscope, slit, both }
+
+/// The hands' transformation settings (ShowPool.transform, kept in show.json): the
+/// mode, the kaleidoscope's mirrors (how many wedges, their turn, how much of their
+/// edges shows) and how far the reflections differ, and how often the director puts
+/// one on at all (a share of its combinations; the rest have none).
+class TransformSet {
+  const TransformSet({this.mode = TransformMode.auto, this.count = 2, this.differ = 0.3, this.often = 0.15, this.turn = 0, this.line = 0.3});
+
+  final TransformMode mode;
+  final int count;
+  final double differ, often, turn, line;
+
+  static const standard = TransformSet();
+
+  /// What [mode] puts on, with these settings.
+  RigTransform of(TransformMode m) => RigTransform(
+        count: m == TransformMode.kaleidoscope || m == TransformMode.both ? count : 0,
+        differ: differ,
+        slit: m == TransformMode.slit || m == TransformMode.both,
+        turn: turn,
+        line: line,
+      );
+
+  TransformSet copyWith({TransformMode? mode, int? count, double? differ, double? often, double? turn, double? line}) => TransformSet(
+      mode: mode ?? this.mode,
+      count: count ?? this.count,
+      differ: differ ?? this.differ,
+      often: often ?? this.often,
+      turn: turn ?? this.turn,
+      line: line ?? this.line);
+
+  Map<String, dynamic> toJson() => {'mode': mode.name, 'count': count, 'differ': differ, 'often': often, 'turn': turn, 'line': line};
+
+  factory TransformSet.fromJson(Object? j) => j is Map
+      ? TransformSet(
+          mode: _enumOf(TransformMode.values, j['mode'], TransformMode.auto),
+          count: (j['count'] is num ? (j['count'] as num).round() : 2).clamp(1, RigTransform.most),
+          differ: _d(j['differ'], 0.3).clamp(0.0, 1.0),
+          often: _d(j['often'], 0.15).clamp(0.0, 1.0),
+          turn: _d(j['turn'], 0).clamp(0.0, 1.0),
+          line: _d(j['line'], 0.3).clamp(0.0, 1.0),
+        )
+      : standard;
+
+  @override
+  bool operator ==(Object other) =>
+      other is TransformSet &&
+      other.mode == mode &&
+      other.count == count &&
+      other.differ == differ &&
+      other.often == often &&
+      other.turn == turn &&
+      other.line == line;
+  @override
+  int get hashCode => Object.hash(mode, count, differ, often, turn, line);
 }
 
 /// The finish over everything (a scene file's `post`, `text` and `particles`).
@@ -422,34 +491,34 @@ class RigFinish {
   int get hashCode => Object.hash(trails, bloom, tone, fringe, vignette, grain, recipe, title, lyrics, where, jitter, particles.length);
 }
 
-/// What the stage draws: the layers — the ground, the figure's ghosts over it, the
-/// figure, how it meets the ground, and the finish.
+/// What the stage draws: the layers — the ground, the figure (transformed, then its
+/// style), how it meets the ground, and the finish.
 class ShowRig {
   const ShowRig({
     this.ground = RigGround.black,
     this.figure = RigFigure.none,
     this.blend = RigBlend.normal,
     this.finish = RigFinish.plain,
-    this.ghosts = RigGhosts.none,
+    this.transform = RigTransform.none,
   });
 
   final RigGround ground;
   final RigFigure figure;
   final RigBlend blend;
   final RigFinish finish;
-  final RigGhosts ghosts;
+  final RigTransform transform;
 
   static const none = ShowRig();
 
   /// A line for the status: `milk / dancers plain · keyhole · contrast`.
   String get word => '${ground.label} / ${figure.label} · ${blend.label}';
 
-  ShowRig copyWith({RigGround? ground, RigFigure? figure, RigBlend? blend, RigFinish? finish, RigGhosts? ghosts}) => ShowRig(
+  ShowRig copyWith({RigGround? ground, RigFigure? figure, RigBlend? blend, RigFinish? finish, RigTransform? transform}) => ShowRig(
         ground: ground ?? this.ground,
         figure: figure ?? this.figure,
         blend: blend ?? this.blend,
         finish: finish ?? this.finish,
-        ghosts: ghosts ?? this.ghosts,
+        transform: transform ?? this.transform,
       );
 
   /// The numbers a shader or a light can bind to, by dotted name.
@@ -472,11 +541,11 @@ class ShowRig {
         'figure': figure.toJson(),
         'blend': blend.toJson(),
         'finish': finish.toJson(),
-        if (ghosts.any) 'ghosts': ghosts.toJson(),
+        if (transform.any) 'transform': transform.toJson(),
       };
 
   factory ShowRig.fromJson(Map<String, dynamic> j) => ShowRig(
-        ghosts: RigGhosts.fromJson(j['ghosts']),
+        transform: RigTransform.fromJson(j['transform']),
         ground: j['ground'] is Map ? RigGround.fromJson((j['ground'] as Map).cast()) : RigGround.black,
         figure: j['figure'] is Map ? RigFigure.fromJson((j['figure'] as Map).cast()) : RigFigure.none,
         blend: j['blend'] is Map ? RigBlend.fromJson((j['blend'] as Map).cast()) : RigBlend.normal,
@@ -490,9 +559,9 @@ class ShowRig {
       other.figure == figure &&
       other.blend == blend &&
       other.finish == finish &&
-      other.ghosts == ghosts;
+      other.transform == transform;
   @override
-  int get hashCode => Object.hash(ground, figure, blend, finish, ghosts);
+  int get hashCode => Object.hash(ground, figure, blend, finish, transform);
 }
 
 /// A rig with a name: shipped (one for every scene file there was), or the user's own.
