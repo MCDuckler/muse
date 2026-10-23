@@ -133,7 +133,7 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
     QualityPool.from(doc.pool);
     director.grounds = groundsHere;
     // The dancers still read who dances off the hands' macros.
-    _macros = _macros.copyWith(dancer: doc.pool.dancer ?? 'mix', dancersOff: doc.pool.dancersOff, tune: doc.pool.tune, type3d: _faveOn?.type3d ?? doc.pool.type3d);
+    _macros = _macros.copyWith(dancer: doc.pool.dancer ?? 'mix', dancersOff: doc.pool.dancersOff, tune: doc.pool.tune, type3d: _faveOn?.type3d ?? doc.pool.type3d, adapt: doc.pool.adapt);
     if (!running) tick(DateTime.now());
     notifyListeners();
   }
@@ -268,7 +268,8 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   }
 
   ShowRig _hands(ShowRig r) {
-    var out = r;
+    // The ghosts are the hands' alone, over whatever combination is on.
+    var out = r.copyWith(ghosts: pool.ghosts);
     if (_finish != null) out = out.copyWith(finish: _finish);
     if (_strength != 1) out = out.copyWith(blend: out.blend.copyWith(strength: _strength));
     return out;
@@ -282,6 +283,12 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
     if (!running) tick(DateTime.now());
     notifyListeners();
   }
+
+  /// The ghosts of the figure (RigGhosts), kept.
+  void setGhosts(RigGhosts g) => setPool(pool.copyWith(ghosts: g));
+
+  /// Whether the stages trade the picture's size for their frames, kept.
+  void setAdapt(bool on) => setPool(pool.copyWith(adapt: on));
 
   /// A treatment's knob, kept (null: back to its rest).
   void setTune(String treatment, TuneKnob k, double? v) => setPool(pool.withTune(tuneKey(treatment, k), v));

@@ -250,8 +250,12 @@ class NativeStage {
   /// picture, where this build of the stage has no pass for one (ws_treat, [treats])
   /// — those frames are the Flutter stage's. The dancers' and the birds' own rendering
   /// of one (RigFigure.style its name) it draws either way.
-  static String? whyNotRig(ShowRig rig, {bool? treats}) {
+  static String? whyNotRig(ShowRig rig, {bool? treats, bool? ghosts}) {
     final f = rig.figure;
+    // The ghosts: a build of the stage from before ws_ghosts has no pass for them.
+    if (rig.ghosts.any && f.kind != Figure.none && !(ghosts ?? (_it?.ghostsToo ?? false))) {
+      return 'the scene with its ghosts, which this build of the stage cannot draw';
+    }
     final t = f.treatment;
     if (f.kind == Figure.none || !imageTreatments.contains(t) || f.style == t.name) return null;
     if (treats ?? (_it?.treats ?? false)) return null;
@@ -346,6 +350,71 @@ class NativeStage {
   /// Whether this build of the stage draws a treatment over a scene (ws_treat; what
   /// ws_features says as 8).
   late final bool treats = _treatFn != null;
+
+  /// The ghosts (ws_ghosts) and whether the working size follows the frames
+  /// (ws_adapt): a library from before them has neither.
+  late final void Function(int, double)? _ghostsFn = () {
+    try {
+      return _lib.lookupFunction<Void Function(Int32, Float), void Function(int, double)>('ws_ghosts');
+    } catch (_) {
+      return null;
+    }
+  }();
+  late final void Function(int)? _adaptFn = () {
+    try {
+      return _lib.lookupFunction<Void Function(Int32), void Function(int)>('ws_adapt');
+    } catch (_) {
+      return null;
+    }
+  }();
+  late final void Function(Pointer<Float>, int)? _slitFn = () {
+    try {
+      return _lib.lookupFunction<Void Function(Pointer<Float>, Int32), void Function(Pointer<Float>, int)>('ws_slit');
+    } catch (_) {
+      return null;
+    }
+  }();
+  late final bool ghostsToo = _ghostsFn != null;
+  RigGhosts? _ghostsSent;
+  bool? _adaptSent;
+  final Pointer<Float> _slitBuf = calloc<Float>(19);
+  bool _slitOn = false;
+
+  /// The frame's ghosts and its word on the working size, to the stage when they change.
+  void ghostsAndAdapt(ShowState st) {
+    final g = st.rig.figure.kind == Figure.none ? RigGhosts.none : st.rig.ghosts;
+    if (g != _ghostsSent && _ghostsFn != null) {
+      _ghostsSent = g;
+      _ghostsFn(g.on ? g.count : 0, g.differ);
+    }
+    // The slit-scan as the layer, over whatever style: its shape, the kick, the time and
+    // its knobs (reach, slower) — every frame while on.
+    final slit = _slitFn;
+    if (slit != null) {
+      if (g.slit) {
+        final s = slitShapeOf(st);
+        final k = fxKnobs(st.macros.tune, 'slit');
+        final v = [
+          9.0, s.shape, 1, 1, 1, 0, 0, 0, s.flip, 0, (st.flat['dyn.hit.kick'] ?? 0).clamp(0.0, 1.0), 0.5, 0.5,
+          _treatClock.elapsedMicroseconds / 1e6, k.weight, k.spacing, k.height, k.gain, k.size,
+        ];
+        for (var i = 0; i < v.length; i++) {
+          _slitBuf[i] = v[i].toDouble();
+        }
+        slit(_slitBuf, 19);
+        _slitOn = true;
+      } else if (_slitOn) {
+        _slitBuf[0] = 0;
+        slit(_slitBuf, 19);
+        _slitOn = false;
+      }
+    }
+    final a = st.macros.adapt;
+    if (a != _adaptSent && _adaptFn != null) {
+      _adaptSent = a;
+      _adaptFn(a ? 1 : 0);
+    }
+  }
 
   /// The treatment [st]'s rig asks of the stage (show_common.dart treatOf: the same
   /// pass, colours, cell and knobs as the Flutter stage's), on a working picture [h]
@@ -537,6 +606,7 @@ class NativeStage {
       if (f & 2 != 0) 'frames shared by Direct3D handle',
       if (f & 4 != 0) 'frames as pixels',
       if (f & 8 != 0) 'treatments of its own',
+      if (f & 256 != 0) 'ghosts of its own',
     ].join(', ');
   }
 
@@ -853,6 +923,7 @@ class _StageSurfaceState extends State<StageSurface> {
               book: widget.book,
               programs: widget.programs,
               preview: widget.preview,
+              sharpness: widget.preview ? widget.scale.clamp(0.5, 1.0) : 1.0,
               slow: widget.slow,
               drawable: _drawable,
               info: _info,
@@ -891,12 +962,17 @@ class NativeStageView extends StatefulWidget {
     this.drawable = true,
     this.info,
     required this.programs,
+    this.sharpness = 0.5,
   });
   final ShowFeed feed;
   final SceneBook book;
   final StagePrograms programs;
   final bool preview;
   final bool Function()? slow;
+
+  /// A preview's pixels as a share of the screen's (the stage itself is whole): the
+  /// booth's glance at half, the SHOW page's picture whole.
+  final double sharpness;
 
   /// Told when the stage is given up (it drew nothing): the Flutter stage, then.
   final VoidCallback? onBroken;
@@ -995,6 +1071,8 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
     // The treatment over the figure, where its rig asks for one the figure does not
     // draw as its own style: the Flutter stage's pass, here.
     if (stage.treats) stage.treat(st, (_px?.height ?? 720) * _scale);
+    // Its ghosts, and whether the working size follows the frames.
+    stage.ghostsAndAdapt(st);
     // The words: the line set here, its picture up to the stage once, the frame's
     // numbers every tick.
     if (NativeStage.isWords(scene)) {
@@ -1163,8 +1241,8 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
   Widget build(BuildContext context) {
     final dpr = MediaQuery.devicePixelRatioOf(context);
     return LayoutBuilder(builder: (context, c) {
-      // The booth's small picture at a third of its pixels: it is a glance, not the show.
-      final k = widget.preview ? dpr * 0.5 : dpr;
+      // A preview at its share of the screen's pixels (the booth's glance at half).
+      final k = widget.preview ? dpr * widget.sharpness.clamp(0.25, 1.0) : dpr;
       final px = Size((c.maxWidth * k).clamp(16, 7680), (c.maxHeight * k).clamp(16, 4320));
       WidgetsBinding.instance.addPostFrameCallback((_) => _sized(px));
       final id = _texture;

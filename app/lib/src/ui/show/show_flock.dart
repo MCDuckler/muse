@@ -1638,7 +1638,7 @@ class FlockSim implements SimLayer {
       ..setFloat(16, crt ? 0 : l.barSaw)
       ..setImageSampler(0, img)
       ..setImageSampler(1, glyphs);
-    setFxKnobs(fx, 17, l.st, treatmentFxMode.containsKey(look.name) ? look.name : null);
+    setFxKnobs(fx, 17, l.st, treatmentTunes.containsKey(look.name) ? look.name : null);
     final r = ui.PictureRecorder();
     Canvas(r).drawRect(Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()), Paint()..shader = fx);
     final pic = r.endRecording();
@@ -1651,7 +1651,7 @@ class FlockSim implements SimLayer {
   /// The finish's colours and cell for [look] on a picture [h] high.
   ({int mode, Color ink, Color paper, double cell, double tint}) _postParams(_Cue l, FlockLook look, int h) {
     final q = _postDrawn(l, look, h);
-    if (!treatmentFxMode.containsKey(look.name)) return q;
+    if (!treatmentTunes.containsKey(look.name)) return q;
     // Through the hands' knobs for the treatment (state/show/show_tune.dart).
     final t = tunedCell(l.st, look.name, q.cell, q.tint);
     return (mode: q.mode, ink: q.ink, paper: q.paper, cell: t.cell, tint: t.tint);

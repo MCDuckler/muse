@@ -68,6 +68,18 @@ const treatmentTunes = <String, List<TuneSpec>>{
     TuneSpec(TuneKnob.weight, 'REACH', 'How far back in time the far edge is', min: 0.1, max: 1),
     TuneSpec(TuneKnob.spacing, 'SLOWER', 'Frames between the ones kept: longer smears, coarser steps', min: 0.5, max: 2),
   ],
+  // The birds' own looks that are a pass of their shader (flock_fx.frag).
+  'radar': [
+    TuneSpec(TuneKnob.spacing, 'RINGS', "How far apart the scope's rings are", min: 0.5, max: 2.5),
+    TuneSpec(TuneKnob.weight, 'WEIGHT', 'How thick and bright the rings and the cross are', max: 2.5),
+    TuneSpec(TuneKnob.size, 'AFTERGLOW', 'How long the birds stay lit behind the sweep', min: 0.3, max: 3),
+    TuneSpec(TuneKnob.gain, 'GAIN', 'How bright the birds are read'),
+  ],
+  'sky': [
+    TuneSpec(TuneKnob.size, 'SUN', 'How big the sun is', min: 0.3, max: 3),
+    TuneSpec(TuneKnob.height, 'HORIZON', 'Where the horizon sits: lower or higher', min: 0.6, max: 1.25),
+    TuneSpec(TuneKnob.gain, 'GLOW', 'How much the sun glows', min: 0, max: 2.5),
+  ],
   'contour': [
     TuneSpec(TuneKnob.spacing, 'SPACING', 'How far apart the lines of equal light are'),
     TuneSpec(TuneKnob.weight, 'WEIGHT', 'How thick a line is'),

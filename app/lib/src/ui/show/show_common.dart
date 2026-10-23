@@ -133,6 +133,14 @@ void setFxKnobs(ui.FragmentShader s, int at, ShowState st, String? treatment) {
 /// through the knobs — for either stage (show_canvas.dart's pass, the native stage's
 /// ws_treat); null where there is none for a stage to draw: none asked for, or the
 /// figure draws it itself as its own style (the dancers', the birds').
+/// The slit-scan's shape and which way it runs (fx.h's Slit: the cell and the tint
+/// carry them), another every four phrases of the record: the style's and the layer's.
+({double shape, double flip}) slitShapeOf(ShowState st) {
+  final n = ((st.master.barIndex ?? 0) / 16).floor();
+  final salt = (st.master.trackId ?? 0) % 9973;
+  return (shape: (memeHash(salt, n, 41) * 6).floorToDouble().clamp(0.0, 5.0), flip: memeHash(salt, n, 43) < 0.3 ? 1.0 : 0.0);
+}
+
 ({Treatment t, int mode, Color ink, Color paper, double cell, double tint})? treatOf(ShowRig rig, ShowState st, int h) {
   final fig = rig.figure;
   // The dancers' slit-scan is the stage's pass over what they draw (they cannot draw
@@ -140,11 +148,8 @@ void setFxKnobs(ui.FragmentShader s, int at, ShowState st, String? treatment) {
   final t = fig.style == 'slit' ? Treatment.slit : fig.treatment;
   if (fig.kind == Figure.none || !imageTreatments.contains(t) || (fig.style == t.name && t != Treatment.slit)) return null;
   if (t == Treatment.slit) {
-    // Its shape and which way it runs, another every four phrases of the record (the
-    // cell and the tint carry them: fx.h's Slit).
-    final n = ((st.master.barIndex ?? 0) / 16).floor();
-    final salt = (st.master.trackId ?? 0) % 9973;
-    return (t: t, mode: 9, ink: Colors.white, paper: Colors.black, cell: (memeHash(salt, n, 41) * 6).floorToDouble().clamp(0, 5), tint: memeHash(salt, n, 43) < 0.3 ? 1.0 : 0.0);
+    final s = slitShapeOf(st);
+    return (t: t, mode: 9, ink: Colors.white, paper: Colors.black, cell: s.shape, tint: s.flip);
   }
   final pal = st.palette;
   final dark = HSLColor.fromAHSL(1, pal.primary.hue, 0.45, 0.035).toColor();

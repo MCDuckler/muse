@@ -328,9 +328,9 @@ class _StageWindowState extends State<_StageWindow> {
           ws.add('{"t":"ping"}');
         } catch (_) {}
       });
-      // The picture back to the booth, small, so it need not draw the show itself.
+      // The picture back to the booth, so it need not draw the show itself.
       _thumbs?.cancel();
-      _thumbs = Timer.periodic(const Duration(milliseconds: 200), (_) => unawaited(_thumb(ws)));
+      _thumbs = Timer.periodic(const Duration(milliseconds: 100), (_) => unawaited(_thumb(ws)));
       ws.listen(
         (data) {
           if (data is String) _remote?.arrived(data);
@@ -346,14 +346,15 @@ class _StageWindowState extends State<_StageWindow> {
   Timer? _thumbs;
   bool _thumbing = false;
 
-  /// The stage as a 320-wide picture, raw RGBA with a four-byte header, to [ws].
+  /// The stage as a 640-wide picture, raw RGBA with a four-byte header, to [ws], ten
+  /// times a second: the SHOW page's preview, so sharp enough to judge by.
   Future<void> _thumb(WebSocket ws) async {
     if (_thumbing || _closing) return;
     final boundary = _shot.currentContext?.findRenderObject();
     if (boundary is! RenderRepaintBoundary || boundary.size.isEmpty) return;
     _thumbing = true;
     try {
-      final k = 320 / boundary.size.width;
+      final k = 640 / boundary.size.width;
       final image = await boundary.toImage(pixelRatio: k);
       final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
       if (data != null && _ws == ws) {

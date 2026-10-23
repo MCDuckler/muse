@@ -274,6 +274,52 @@ class RigBlend {
   int get hashCode => Object.hash(mask, mix, strength);
 }
 
+/// The layer between the figure (its style drawn) and the ground, over any style:
+///
+///  * the slit-scan ([slit]): each part of the picture from a frame further back
+///    (the native stage's, native/stage/src/fx.h; its knobs the `slit` treatment's);
+///  * then ghosts: copies of what that made turned round the middle like a
+///    kaleidoscope — every other one mirrored — under the original, which stays whole
+///    on top (shaders/show/ghosts.frag). [count] is the copies and the original
+///    together (under 2: none); [differ] how far the copies are from it: 0 the same
+///    size and light, 1 smaller, dimmer, turned in colour and slowly turning.
+class RigGhosts {
+  const RigGhosts({this.count = 0, this.differ = 0.5, this.slit = false});
+
+  final int count;
+  final double differ;
+  final bool slit;
+
+  static const none = RigGhosts();
+
+  /// The most there may be (the shader's loop).
+  static const most = 12;
+
+  /// The kaleidoscope on.
+  bool get on => count >= 2;
+
+  /// Anything of the layer on.
+  bool get any => on || slit;
+
+  RigGhosts copyWith({int? count, double? differ, bool? slit}) =>
+      RigGhosts(count: count ?? this.count, differ: differ ?? this.differ, slit: slit ?? this.slit);
+
+  Map<String, dynamic> toJson() => {'count': count, 'differ': differ, if (slit) 'slit': true};
+
+  factory RigGhosts.fromJson(Object? j) => j is Map
+      ? RigGhosts(
+          count: (j['count'] is num ? (j['count'] as num).round() : 0).clamp(0, most),
+          differ: _d(j['differ'], 0.5).clamp(0.0, 1.0),
+          slit: j['slit'] == true,
+        )
+      : none;
+
+  @override
+  bool operator ==(Object other) => other is RigGhosts && other.count == count && other.differ == differ && other.slit == slit;
+  @override
+  int get hashCode => Object.hash(count, differ, slit);
+}
+
 /// The finish over everything (a scene file's `post`, `text` and `particles`).
 class RigFinish {
   const RigFinish({
@@ -376,30 +422,34 @@ class RigFinish {
   int get hashCode => Object.hash(trails, bloom, tone, fringe, vignette, grain, recipe, title, lyrics, where, jitter, particles.length);
 }
 
-/// What the stage draws: the four layers.
+/// What the stage draws: the layers — the ground, the figure's ghosts over it, the
+/// figure, how it meets the ground, and the finish.
 class ShowRig {
   const ShowRig({
     this.ground = RigGround.black,
     this.figure = RigFigure.none,
     this.blend = RigBlend.normal,
     this.finish = RigFinish.plain,
+    this.ghosts = RigGhosts.none,
   });
 
   final RigGround ground;
   final RigFigure figure;
   final RigBlend blend;
   final RigFinish finish;
+  final RigGhosts ghosts;
 
   static const none = ShowRig();
 
   /// A line for the status: `milk / dancers plain · keyhole · contrast`.
   String get word => '${ground.label} / ${figure.label} · ${blend.label}';
 
-  ShowRig copyWith({RigGround? ground, RigFigure? figure, RigBlend? blend, RigFinish? finish}) => ShowRig(
+  ShowRig copyWith({RigGround? ground, RigFigure? figure, RigBlend? blend, RigFinish? finish, RigGhosts? ghosts}) => ShowRig(
         ground: ground ?? this.ground,
         figure: figure ?? this.figure,
         blend: blend ?? this.blend,
         finish: finish ?? this.finish,
+        ghosts: ghosts ?? this.ghosts,
       );
 
   /// The numbers a shader or a light can bind to, by dotted name.
@@ -422,9 +472,11 @@ class ShowRig {
         'figure': figure.toJson(),
         'blend': blend.toJson(),
         'finish': finish.toJson(),
+        if (ghosts.any) 'ghosts': ghosts.toJson(),
       };
 
   factory ShowRig.fromJson(Map<String, dynamic> j) => ShowRig(
+        ghosts: RigGhosts.fromJson(j['ghosts']),
         ground: j['ground'] is Map ? RigGround.fromJson((j['ground'] as Map).cast()) : RigGround.black,
         figure: j['figure'] is Map ? RigFigure.fromJson((j['figure'] as Map).cast()) : RigFigure.none,
         blend: j['blend'] is Map ? RigBlend.fromJson((j['blend'] as Map).cast()) : RigBlend.normal,
@@ -437,9 +489,10 @@ class ShowRig {
       other.ground == ground &&
       other.figure == figure &&
       other.blend == blend &&
-      other.finish == finish;
+      other.finish == finish &&
+      other.ghosts == ghosts;
   @override
-  int get hashCode => Object.hash(ground, figure, blend, finish);
+  int get hashCode => Object.hash(ground, figure, blend, finish, ghosts);
 }
 
 /// A rig with a name: shipped (one for every scene file there was), or the user's own.

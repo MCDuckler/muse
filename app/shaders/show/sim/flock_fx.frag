@@ -94,7 +94,8 @@ void main() {
     // sky
     vec2 uv = fc / uResolution;
     float aspect = uResolution.x / uResolution.y;
-    float hz = uTint;
+    // the horizon where the look puts it, raised or lowered by the height knob
+    float hz = clamp(uTint * knob(uHeight), 0.15, 0.97);
     vec3 mid = mix(uPaper, uInk, 0.42) * 0.9;
     vec3 ground = uPaper * 0.3;
     vec3 sky;
@@ -107,7 +108,7 @@ void main() {
     vec2 d = (uv - uPopAt) * vec2(aspect, 1.0);
     float r = length(d) / (uCell / uResolution.y);
     vec3 sun = mix(uInk, vec3(1.0), 0.55 + 0.4 * uPop);
-    float glow = exp(-r * 0.6) * (0.3 + 0.3 * uPop) + exp(-r * 0.16) * (0.1 + 0.1 * uPop);
+    float glow = (exp(-r * 0.6) * (0.3 + 0.3 * uPop) + exp(-r * 0.16) * (0.1 + 0.1 * uPop)) * knob(uGain);
     float disc = (1.0 - smoothstep(0.95, 1.05, r)) * (1.0 - smoothstep(hz, hz + 0.004, uv.y));
     sky += sun * glow;
     sky = mix(sky, sun, disc);
@@ -125,19 +126,24 @@ void main() {
     float r = length(d);
     float a = atan(d.y, d.x) / 6.2831853 + 0.5;
     float behind = fract(uSweep - a);
-    float glow = exp(-behind * 4.0);
+    // the afterglow behind the sweep, longer by the size knob; the rings' spacing and
+    // the lines' weight by theirs
+    float glow = exp(-behind * 4.0 / knob(uSize));
+    float gap = 0.16 * knob(uSpacing);
+    float wt = knob(uWeight);
     float l = lum(at(fc));
     float birds = l * (0.14 + 1.4 * glow) * (1.0 + 0.3 * uPop);
     // the rings, every 0.16 of the height, and the cross through the middle
     float ring = 0.0;
-    for (int i = 1; i <= 4; i++) {
-      ring += 1.0 - smoothstep(0.0, 0.003, abs(r - float(i) * 0.16));
+    for (int i = 1; i <= 12; i++) {
+      if (float(i) * gap > 0.66) continue;
+      ring += 1.0 - smoothstep(0.0, 0.003 * wt, abs(r - float(i) * gap));
     }
-    float cross = (1.0 - smoothstep(0.0, 0.002, abs(d.x))) + (1.0 - smoothstep(0.0, 0.002, abs(d.y)));
+    float cross = (1.0 - smoothstep(0.0, 0.002 * wt, abs(d.x))) + (1.0 - smoothstep(0.0, 0.002 * wt, abs(d.y)));
     // the sweep's own line, thin and bright, a faint afterglow behind it
     float line = exp(-behind * 600.0) * smoothstep(0.01, 0.03, r) * (1.0 - smoothstep(0.62, 0.68, r));
     float inside = 1.0 - smoothstep(0.64, 0.7, r);
-    vec3 col = uPaper + uInk * (birds + ring * 0.09 * inside + cross * 0.04 * inside + line * 0.7 + glow * 0.02 * inside);
+    vec3 col = uPaper + uInk * (birds + (ring * 0.09 + cross * 0.04) * inside * min(wt, 2.0) + line * 0.7 + glow * 0.02 * inside);
     fragColor = vec4(col, 1.0);
     return;
   }

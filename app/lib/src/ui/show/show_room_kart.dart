@@ -774,6 +774,12 @@ class _KartState extends State<_Kart> {
                       onAdd: () => _add(p, ComboAxis.style, st),
                     ),
                 ]),
+                // The knobs of the style picked (or on, while following the stage),
+                // where it is one drawn by a shader: a treatment, or a dancer's or a
+                // flock's own look of that kind.
+                if ((p.styles?.length == 1 ? p.styles!.first : (picked == null ? on?.style : null)) case final tuned?)
+                  if (treatmentTunes.containsKey(tuned)) _TuneLine(show: show, treatment: tuned),
+                _GhostsRow(show: show),
                 _rowHead(p, ComboAxis.ground, 'BACKGROUND', locked ? 'a world of its own: its own background' : 'what is under it', comboGrounds),
                 if (!locked)
                   Wrap(children: [
@@ -891,6 +897,71 @@ class _KartState extends State<_Kart> {
     final img = _Stills.shared.figure(kind, style);
     if (img == null) return null;
     return RawImage(image: img, fit: BoxFit.cover);
+  }
+}
+
+/// The layer between the style and the background (RigGhosts), the hands' own, over
+/// every combination while on: the slit-scan over any style, and ghosts — copies of
+/// the scene as it is drawn round the middle like a kaleidoscope, under it; how many,
+/// and how far they are from the original.
+class _GhostsRow extends StatelessWidget {
+  const _GhostsRow({required this.show});
+  final ShowEngine show;
+
+  @override
+  Widget build(BuildContext context) {
+    final g = show.pool.ghosts;
+    final count = g.count < 2 ? 6 : g.count;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      const _Head('LAYER', hint: 'over the style, under the background · yours, over every combination'),
+      _Line(children: [
+        SizedBox(width: 92, child: Text('KALEIDOSCOPE', style: Console.label(9))),
+        _Word(
+          label: g.on ? 'ON' : 'OFF',
+          lit: g.on,
+          tooltip: g.on ? 'Ghosts on: a tap takes them off' : 'No ghosts: a tap puts $count round the scene',
+          onTap: () => show.setGhosts(g.copyWith(count: g.on ? 0 : count)),
+        ),
+        const SizedBox(width: 10),
+        Text('COPIES', style: Console.label(9)),
+        SizedBox(
+          width: 170,
+          child: Slider(
+            value: count.toDouble(),
+            min: 2,
+            max: RigGhosts.most.toDouble(),
+            divisions: RigGhosts.most - 2,
+            onChanged: (v) => show.setGhosts(g.copyWith(count: v.round())),
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+          ),
+        ),
+        SizedBox(width: 26, child: Text('$count', style: Console.label(9, color: g.on ? Console.ink : Console.faint))),
+        const SizedBox(width: 10),
+        Tooltip(
+          message: 'How far the ghosts are from the original: none, they are its twins; all the way, smaller, dimmer, turned in colour and slowly turning. The original stays whole on top.',
+          child: Text('DIFFERS', style: Console.label(9)),
+        ),
+        SizedBox(
+          width: 170,
+          child: Slider(
+            value: g.differ,
+            onChanged: (v) => show.setGhosts(g.copyWith(differ: v)),
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+          ),
+        ),
+        Text('${(g.differ * 100).round()} %', style: Console.label(9, color: g.on ? Console.ink : Console.faint)),
+      ]),
+      _Line(children: [
+        SizedBox(width: 92, child: Text('SLIT-SCAN', style: Console.label(9))),
+        _Word(
+          label: g.slit ? 'ON' : 'OFF',
+          lit: g.slit,
+          tooltip: 'Each part of the picture from a frame further back, over whatever style is on (the native stage: Linux and Windows)',
+          onTap: () => show.setGhosts(g.copyWith(slit: !g.slit)),
+        ),
+      ]),
+      if (g.slit) _TuneLine(show: show, treatment: 'slit'),
+    ]);
   }
 }
 

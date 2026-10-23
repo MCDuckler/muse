@@ -143,6 +143,27 @@ void main() {
     expect(show.state.rig.finish.trails, 0.35);
   });
 
+  test("the layer is the hands': on every combination, kept, and the working size's switch with the frame", () {
+    final t = DateTime(2026, 1, 1);
+    show.chooseScene('kinetic');
+    show.setGhosts(const RigGhosts(count: 6, differ: 0.4, slit: true));
+    show.setAdapt(false);
+    show.tick(t);
+    expect(show.state.rig.ghosts, const RigGhosts(count: 6, differ: 0.4, slit: true));
+    expect(show.state.macros.adapt, isFalse);
+    show.chooseScene('flash');
+    show.tick(t.add(const Duration(milliseconds: 16)));
+    expect(show.state.rig.ghosts.count, 6, reason: 'over whatever is on');
+    final back = ShowPool.fromJson(show.pool.toJson());
+    expect(back.ghosts, show.pool.ghosts);
+    expect(back.adapt, isFalse);
+    show.setGhosts(RigGhosts.none);
+    show.setAdapt(true);
+    show.tick(t.add(const Duration(milliseconds: 32)));
+    expect(show.state.rig.ghosts.any, isFalse);
+    expect(show.pool.toJson().containsKey('ghosts'), isFalse);
+  });
+
   test('a launch lands on the bar, now when nothing plays, and the pool says when', () async {
     final t = DateTime(2026, 1, 1);
     show.chooseScene('kinetic');

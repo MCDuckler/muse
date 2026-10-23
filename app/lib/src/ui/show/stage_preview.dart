@@ -107,7 +107,7 @@ class _ThumbViewState extends State<_ThumbView> {
   @override
   Widget build(BuildContext context) => Stack(fit: StackFit.expand, children: [
         const ColoredBox(color: Colors.black),
-        if (_image != null) RawImage(image: _image, fit: BoxFit.cover, filterQuality: FilterQuality.low),
+        if (_image != null) RawImage(image: _image, fit: BoxFit.cover, filterQuality: FilterQuality.medium),
         Positioned(
           right: 6,
           bottom: 4,

@@ -325,7 +325,7 @@ class _Preview extends StatelessWidget {
                           ? Center(child: Text('The stage could not load.\n$trouble', style: TextStyle(color: Console.quiet)))
                           : kit == null
                               ? const SizedBox.shrink()
-                              : GrabbableStage(child: StagePreview(feed: show, book: kit!.book, programs: kit!.programs, scale: 0.6, rank: 1, info: info)),
+                              : GrabbableStage(child: StagePreview(feed: show, book: kit!.book, programs: kit!.programs, scale: 1.0, rank: 1, info: info)),
                     ),
                   ),
                 ),
@@ -835,7 +835,11 @@ class _SettingsTab extends StatelessWidget {
                     tooltip: '$tip: ${(v / max * 100).round()} %',
                     onChanged: (x) => show.setFinish(set(x))),
               );
-          final treat = imageTreatments.contains(rig.figure.treatment) ? rig.figure.treatment.name : null;
+          // The knobs of what is on: a treatment over the scene, or the dancers' or the
+          // flock's own look where a shader draws it.
+          final treat = imageTreatments.contains(rig.figure.treatment)
+              ? rig.figure.treatment.name
+              : (treatmentTunes.containsKey(rig.figure.style) ? rig.figure.style : null);
           return ListView(children: [
             Row(children: [
               Text('THE FINISH', style: Console.label(10, color: Console.ink)),
@@ -873,7 +877,7 @@ class _SettingsTab extends StatelessWidget {
             ]),
             if (treat != null) ...[
               const SizedBox(height: 6),
-              Text('THE TREATMENT ON NOW', style: Console.label(10, color: Console.ink)),
+              Text('THE STYLE ON NOW', style: Console.label(10, color: Console.ink)),
               _TuneLine(show: show, treatment: treat),
             ],
             const SizedBox(height: 10),
@@ -1027,7 +1031,21 @@ class _StageNumbers extends StatelessWidget {
                     ),
                 ]),
               ),
-              Text('The tier takes effect on the next frames; the stage still scales itself down when frames run late.',
+              ListenableBuilder(
+                listenable: show,
+                builder: (context, _) => Row(children: [
+                  Expanded(
+                    child: Text('lower the quality when frames run late (and raise it back)', style: TextStyle(fontSize: 12, color: Console.ink)),
+                  ),
+                  Tooltip(
+                    message: show.pool.adapt
+                        ? "On: the stages trade the picture's size for their frames, and back"
+                        : "Off: the picture stays at the tier's size whatever the frames — smooth or not",
+                    child: Switch(value: show.pool.adapt, onChanged: show.setAdapt),
+                  ),
+                ]),
+              ),
+              Text('The tier takes effect on the next frames; with the switch on, the stages also scale themselves down while frames run late.',
                   style: TextStyle(fontSize: 10, color: Console.faint)),
             ],
           ),

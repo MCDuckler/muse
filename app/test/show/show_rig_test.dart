@@ -71,4 +71,14 @@ void main() {
     final back = ShowState.fromJson(st.toJson());
     expect(back.rig, rig);
   });
+  test("the ghosts come back from their json, go out with the frame, and are none under two", () {
+    const rig = ShowRig(figure: RigFigure(kind: Figure.blocks), ghosts: RigGhosts(count: 6, differ: 0.3));
+    expect(ShowRig.fromJson(rig.toJson()), rig);
+    expect(ShowRig.fromJson(const ShowRig().toJson()).ghosts, RigGhosts.none);
+    expect(const RigGhosts(count: 1).on, isFalse);
+    expect(RigGhosts.fromJson({'count': 40, 'differ': 3}), const RigGhosts(count: RigGhosts.most, differ: 1));
+    // The working size's switch rides with the frame too (a stage in a window of its own).
+    expect(ShowMacros.fromJson(const ShowMacros(adapt: false).toJson()).adapt, isFalse);
+    expect(ShowMacros.fromJson(const ShowMacros().toJson()).adapt, isTrue);
+  });
 }

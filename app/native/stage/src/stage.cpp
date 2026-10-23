@@ -306,6 +306,13 @@ struct Stage {
   float blendStrength = 1;
   // The treatment over the figure (ws_treat): mode 0 none.
   float treat[WS_TREAT] = {};
+  // The figure's ghosts (ws_ghosts): under 2 none; and whether the working size
+  // follows the frames (ws_adapt).
+  int ghostCount = 0;
+  float ghostDiffer = 0.5f;
+  bool adapt = true;
+  // The slit-scan as a layer (ws_slit): mode 0 none.
+  float slitLayer[WS_TREAT] = {};
   // The words' frame (ws_words): the sim shader's floats in the file's order.
   std::vector<float> words;
   // The datamosh asked for (ws_mosh): a count, and how long and how hard.
@@ -500,6 +507,30 @@ void drawScene(const glsl::Program* p, Target& t, const float* common, const flo
 // The figure in `t` through a treatment (dance_fx.frag; ws_treat's floats), via
 // `via` and back: what the Flutter stage's _treated does, before the blend. Its alpha
 // stays 1, as a scene's is (the blend reads its own coverage as ever).
+// The figure in `t` with its ghosts round it (shaders/show/ghosts.frag), via `via`
+// and back: what the Flutter stage's _ghosted does, between the style and the blend.
+void ghostPass(Target& t, Target& via, int count, float differ, float time, float kick) {
+  const glsl::Program* g = S->programs.get("ghosts");
+  if (!g) return;
+  via.make(t.w, t.h, S->workFormat);
+  via.bind();
+  glDisable(GL_BLEND);
+  glUseProgram(g->id);
+  auto set = [&](const char* n, float v) { if (const GLint at = g->loc(n); at >= 0) glUniform1f(at, v); };
+  if (const GLint at = g->loc("uResolution"); at >= 0) glUniform2f(at, (float)t.w, (float)t.h);
+  set("wsHeight", (float)t.h);
+  set("uCount", (float)count);
+  set("uDiffer", differ);
+  set("uTime", time);
+  set("uKick", kick);
+  bindTex(g->id, "uImage", 0, t.tex);
+  drawQuad();
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, via.fbo);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, t.fbo);
+  glBlitFramebuffer(0, 0, t.w, t.h, 0, 0, t.w, t.h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+  glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
+}
+
 void treatPass(const float* q, Target& t, Target& via) {
   const glsl::Program* fx = S->programs.get("sim/dance_fx");
   const GLuint atlas = S->dance.texture("glyphs");
@@ -610,6 +641,9 @@ void frame(int slot) {
   float fromK, fromKnobs[4], white, black, palette[9], recipe[12], groundDim, groundKnobs[4], blendStrength;
   int groundKind, blendMix, blendMask, blendCoverage;
   float treat[WS_TREAT];
+  int ghostCount;
+  float ghostDiffer;
+  float slitLayer[WS_TREAT];
   bool freeze, hasRecipe;
   std::vector<float> wordsV;
   int moshAsk;
@@ -629,6 +663,8 @@ void frame(int slot) {
     std::memcpy(groundKnobs, S->groundKnobs, sizeof groundKnobs);
     blendMix = S->blendMix; blendMask = S->blendMask; blendCoverage = S->blendCoverage; blendStrength = S->blendStrength;
     std::memcpy(treat, S->treat, sizeof treat);
+    ghostCount = S->ghostCount; ghostDiffer = S->ghostDiffer;
+    std::memcpy(slitLayer, S->slitLayer, sizeof slitLayer);
     wordsV = S->words;
     moshAsk = S->moshAsk; moshSeconds = S->moshSeconds; moshStrength = S->moshStrength;
     dumpPath.swap(S->dumpPath);
@@ -791,6 +827,18 @@ void frame(int slot) {
     glBindVertexArray(S->vao);
   } else if (treat[0] > 0.5f) {
     treatPass(treat, S->work, S->scratch);
+    glBindVertexArray(S->vao);
+  }
+
+  // 1b''. the layer over the style: the slit-scan (one ring of frames: not where the
+  // style is the slit-scan already), then the ghosts round it (ws_slit, ws_ghosts)
+  if (slitLayer[0] > 8.5f && !(treat[0] > 8.5f)) {
+    S->scratch.make(w, h, S->workFormat);
+    S->slit.pass(slitLayer, S->work, S->scratch, S->frames, S->vao);
+    glBindVertexArray(S->vao);
+  }
+  if (ghostCount >= 2) {
+    ghostPass(S->work, S->scratch, ghostCount, ghostDiffer, common[2], common[24]);
     glBindVertexArray(S->vao);
   }
 
@@ -1126,8 +1174,11 @@ void run() {
       glDeleteSync(lastFence);
       lastFence = nullptr;
       float fps;
-      { std::lock_guard<std::mutex> g(S->lock); fps = S->fps; }
-      if (fps >= 30) {
+      bool adapt;
+      { std::lock_guard<std::mutex> g(S->lock); fps = S->fps; adapt = S->adapt; }
+      // Held by the hands (ws_adapt 0): the size asked for, whatever the frames.
+      if (!adapt) { S->autoScale = 1; S->late = S->onTime = 0; }
+      if (fps >= 30 && adapt) {
         const double took = std::chrono::duration<double>(Clock::now() - lastBegan).count();
         const double budget = 1.0 / fps;
         if (took > budget * 0.9) {
@@ -1316,6 +1367,7 @@ WS_API int ws_features(void) {
   f |= 32; // @slime
   f |= 64; // ws_treat mode 9, the slit-scan
   f |= 128; // ws_mosh
+  f |= 256; // ws_ghosts, ws_adapt
   return f;
 }
 
@@ -1491,6 +1543,25 @@ WS_API void ws_treat(const float* p, int n) {
   if (!S) S = new Stage();
   std::lock_guard<std::mutex> g(S->lock);
   for (int i = 0; i < WS_TREAT; i++) S->treat[i] = p && i < n ? p[i] : 0;
+}
+
+WS_API void ws_ghosts(int count, float differ) {
+  if (!S) S = new Stage();
+  std::lock_guard<std::mutex> g(S->lock);
+  S->ghostCount = std::clamp(count, 0, 12);
+  S->ghostDiffer = std::clamp(differ, 0.0f, 1.0f);
+}
+
+WS_API void ws_slit(const float* p, int n) {
+  if (!S) S = new Stage();
+  std::lock_guard<std::mutex> g(S->lock);
+  for (int i = 0; i < WS_TREAT; i++) S->slitLayer[i] = p && i < n ? p[i] : 0;
+}
+
+WS_API void ws_adapt(int on) {
+  if (!S) S = new Stage();
+  std::lock_guard<std::mutex> g(S->lock);
+  S->adapt = on != 0;
 }
 
 WS_API void ws_inputs(const float* values, int n) {

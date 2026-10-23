@@ -43,7 +43,7 @@ class StagePrograms {
   static const simShaders = ['fluid_advect', 'fluid_div', 'fluid_jacobi', 'fluid_project', 'fluid_look', 'meme_fx', 'dance_fx', 'flock_fx', 'words_fx', 'type3d'];
 
   /// Shaders no scene file names: the grounds' own.
-  static const groundShaders = ['pulse'];
+  static const groundShaders = ['pulse', 'ghosts'];
 
   /// Whether the simulations' passes wait until a scene asks for one: on Windows,
   /// where ANGLE hands every shader to Direct3D's compiler on the CPU and the window
@@ -394,7 +394,9 @@ class _StagePainter extends CustomPainter {
   /// with the ground under it, the frame's rig's way (under.frag). Not for a scene
   /// that draws MilkDrop itself, nor where there is nothing to blend.
   ui.Image _scene(Scene scene, ShowState st, int w, int h, {bool live = true}) {
-    final layers = _treated(_sceneLayers(scene, st, w, h, live: live), live ? st.rig : (st.rigFrom ?? st.rig), st, w, h);
+    final rigOf = live ? st.rig : (st.rigFrom ?? st.rig);
+    // The figure, its style over it, and its ghosts round it: then onto the ground.
+    final layers = _ghosted(_treated(_sceneLayers(scene, st, w, h, live: live), rigOf, st, w, h), rigOf, st, w, h);
     if (live) stageFigureTap?.call(scene, st, layers);
     if (!live || scene.layers.any((l) => l.samplers.contains('milk'))) return layers;
     final rig = st.rig;
@@ -426,6 +428,29 @@ class _StagePainter extends CustomPainter {
   /// dither, a print, heat, ridgelines, a map: dance_fx.frag's), with the hands'
   /// knobs — for any scene. Not where the figure drew it itself (the dancers' and
   /// the birds' own styles, [RigFigure.style] the treatment's name).
+  ui.FragmentShader? _ghosts;
+
+  /// The figure's picture with its ghosts round it (shaders/show/ghosts.frag; RigGhosts),
+  /// where the rig asks for them: between the figure, its style drawn, and the ground.
+  ui.Image _ghosted(ui.Image img, ShowRig rig, ShowState st, int w, int h) {
+    final g = rig.ghosts;
+    if (!g.on || rig.figure.kind == Figure.none) return img;
+    final program = p.scenes['ghosts'];
+    if (program == null) return img;
+    final fx = _ghosts ??= program.fragmentShader();
+    fx
+      ..setFloat(0, w.toDouble())
+      ..setFloat(1, h.toDouble())
+      ..setFloat(2, g.count.toDouble())
+      ..setFloat(3, g.differ)
+      ..setFloat(4, _clock.elapsedMicroseconds / 1e6)
+      ..setFloat(5, (st.flat['dyn.hit.kick'] ?? 0).clamp(0.0, 1.0))
+      ..setImageSampler(0, img);
+    final out = _pass(w, h, (c) => c.drawRect(Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()), Paint()..shader = fx));
+    img.dispose();
+    return out;
+  }
+
   ui.Image _treated(ui.Image img, ShowRig rig, ShowState st, int w, int h) {
     final q = treatOf(rig, st, h);
     // The slit-scan keeps frames, which only the native stage does: here, as drawn.
@@ -601,6 +626,8 @@ class _StagePainter extends CustomPainter {
     // The quality tier caps the working size; the stage still goes lower on its own.
     working.top = QualityPool.workScale;
     if (working.scale > working.top) working.scale = working.top;
+    // The hands may keep the picture's size whatever the frames (ShowMacros.adapt).
+    if (!st.macros.adapt) working.scale = working.top;
     final cap = px <= maxWorkingPixels ? 1.0 : math.sqrt(maxWorkingPixels / px);
     final w = math.max(8, (size.width * dpr * cap * working.scale).round());
     final h = math.max(8, (size.height * dpr * cap * working.scale).round());
@@ -715,7 +742,7 @@ class _StagePainter extends CustomPainter {
     if (fin.trails <= 0 && !feedsOnItself) current.dispose();
 
     final took = _clock.elapsed - began;
-    if (!stageSizeHeld) working.frameAt(began.inMicroseconds);
+    if (!stageSizeHeld && st.macros.adapt) working.frameAt(began.inMicroseconds);
     onFrame?.call(took);
   }
 
@@ -735,6 +762,7 @@ class _StagePainter extends CustomPainter {
     _blurV.dispose();
     _finish.dispose();
     _treat?.dispose();
+    _ghosts?.dispose();
     for (final s in _layerShaders.values) {
       s.dispose();
     }

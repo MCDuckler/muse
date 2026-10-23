@@ -47,7 +47,8 @@ WS_API int ws_attach_shared(void);
 // context (ws_milk; without it the helper's frames go up as the texture named
 // "milk", ws_dance_texture); 2 frames shared by Direct3D handle; 4 frames as pixels;
 // 8 ws_treat; 16 sims by name (`@sim:<name>`); 32 the veins (`@slime`, fx.h: their
-// rules a frame through ws_words); 64 the slit-scan (ws_treat mode 9); 128 ws_mosh.
+// rules a frame through ws_words); 64 the slit-scan (ws_treat mode 9); 128 ws_mosh;
+// 256 ws_ghosts, ws_slit and ws_adapt.
 WS_API int ws_features(void);
 WS_API const char* ws_error(void);
 WS_API void ws_stop(void);
@@ -104,6 +105,17 @@ WS_API void ws_blend(int mix, int mask, int coverage, float strength);
 // flips it, the weight knob how far back it reaches, the spacing knob frames a layer.
 #define WS_TREAT 19
 WS_API void ws_treat(const float* p, int n);
+// The figure's ghosts, after its treatment and before the blend (shaders/show/
+// ghosts.frag; show_rig.dart's RigGhosts): `count` the copies and the original
+// together, round the middle like a kaleidoscope (under 2: none); `differ` 0..1 how
+// far the copies are from the original.
+WS_API void ws_ghosts(int count, float differ);
+// The slit-scan as a layer over any style (before the ghosts): ws_treat's floats for
+// mode 9 (mode 0: none). Where the style is the slit-scan already, it is that.
+WS_API void ws_slit(const float* p, int n);
+// Whether the working size goes down while frames come late, and back up (1, as
+// ever), or stays at what ws_size asked (0).
+WS_API void ws_adapt(int on);
 // A datamosh from the picture on now into whatever is drawn next (fx.h): over
 // `seconds`, `strength` 0..2 how far the old picture is dragged.
 WS_API void ws_mosh(float seconds, float strength);

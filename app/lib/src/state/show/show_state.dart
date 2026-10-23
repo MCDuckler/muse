@@ -578,7 +578,12 @@ class ShowMacros {
     this.tune = const {},
     this.type3d = TypeSpec.standard,
     this.seed = 0,
+    this.adapt = true,
   });
+
+  /// The stages lower their working size while frames come late (the pool's
+  /// `adapt`), carried to every stage with the frame; false keeps the tier's size.
+  final bool adapt;
 
   /// The session's own number: the styles', the treatments' and the blends' picks go
   /// by it with the record, so the same record looks different another night (and
@@ -627,6 +632,7 @@ class ShowMacros {
     Map<String, double>? tune,
     TypeSpec? type3d,
     int? seed,
+    bool? adapt,
   }) =>
       ShowMacros(
         intensity: intensity ?? this.intensity,
@@ -642,6 +648,7 @@ class ShowMacros {
         tune: tune ?? this.tune,
         type3d: type3d ?? this.type3d,
         seed: seed ?? this.seed,
+        adapt: adapt ?? this.adapt,
       );
 
   void flatInto(Map<String, double> m) {
@@ -671,6 +678,7 @@ class ShowMacros {
         if (tune.isNotEmpty) 'tune': tune,
         if (type3d != TypeSpec.standard) 'type3d': type3d.toJson(),
         if (seed != 0) 'seed': seed,
+        if (!adapt) 'adapt': false,
       };
 
   factory ShowMacros.fromJson(Map<String, dynamic> j) => ShowMacros(
@@ -687,6 +695,7 @@ class ShowMacros {
         tune: j['tune'] is Map ? {for (final e in (j['tune'] as Map).entries) '${e.key}': _d(e.value)} : const {},
         type3d: TypeSpec.fromJson(j['type3d']),
         seed: (j['seed'] as num?)?.toInt() ?? 0,
+        adapt: j['adapt'] != false,
       );
 }
 

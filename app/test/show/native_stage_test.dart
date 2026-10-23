@@ -51,6 +51,10 @@ void main() {
     expect(NativeStage.whyNotRig(const ShowRig(figure: dancers)), isNull, reason: 'they draw it themselves');
     expect(NativeStage.whyNotRig(ShowRig(figure: dancers.copyWith(style: 'chrono'))), isNotNull, reason: 'chrono through lines is the pass');
     expect(NativeStage.whyNotRig(ShowRig(figure: kinetic.copyWith(treatment: Treatment.raw))), isNull);
+    // Ghosts: the Flutter stage's where the build has no pass for them (ws_ghosts).
+    const blocks = ShowRig(figure: RigFigure(kind: Figure.blocks), ghosts: RigGhosts(count: 5));
+    expect(NativeStage.whyNotRig(blocks, ghosts: false), contains('ghosts'));
+    expect(NativeStage.whyNotRig(blocks, ghosts: true), isNull);
     // A build of the stage with the pass of its own (ws_treat) draws it.
     expect(NativeStage.whyNotRig(ShowRig(figure: kinetic.copyWith(treatment: Treatment.ascii)), treats: true), isNull);
   });

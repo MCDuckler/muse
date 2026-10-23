@@ -25,10 +25,19 @@ class ShowPool {
     this.mosh = defaultMosh,
     this.tune = const {},
     this.type3d = TypeSpec.standard,
+    this.ghosts = RigGhosts.none,
+    this.adapt = true,
   });
 
   /// The treatments' knobs, by `treatment.knob` (show_tune.dart): `lines.weight`.
   final Map<String, double> tune;
+
+  /// The ghosts of the figure, the hands': over every combination while on.
+  final RigGhosts ghosts;
+
+  /// The stages lower their working size while frames come late, and raise it back
+  /// (the frames over the picture); off, they keep the tier's size whatever.
+  final bool adapt;
 
   /// The 3D type's words, face, motions and knobs (show_type3d.dart).
   final TypeSpec type3d;
@@ -87,7 +96,9 @@ class ShowPool {
           bool? darkBeat,
           double? mosh,
           Map<String, double>? tune,
-          TypeSpec? type3d}) =>
+          TypeSpec? type3d,
+          RigGhosts? ghosts,
+          bool? adapt}) =>
       ShowPool(
         off: off ?? this.off,
         lean: lean ?? this.lean,
@@ -100,6 +111,8 @@ class ShowPool {
         mosh: mosh ?? this.mosh,
         tune: tune ?? this.tune,
         type3d: type3d ?? this.type3d,
+        ghosts: ghosts ?? this.ghosts,
+        adapt: adapt ?? this.adapt,
       );
 
   ShowPool withOff(String key, bool isOff) => copyWith(
@@ -210,6 +223,8 @@ class ShowPool {
         if (mosh != defaultMosh) 'mosh': mosh,
         if (tune.isNotEmpty) 'tune': tune,
         if (type3d != TypeSpec.standard) 'type3d': type3d.toJson(),
+        if (ghosts != RigGhosts.none) 'ghosts': ghosts.toJson(),
+        if (!adapt) 'adapt': false,
       };
 
   factory ShowPool.fromJson(Map<String, dynamic> j) => ShowPool(
@@ -235,6 +250,8 @@ class ShowPool {
         mosh: j['mosh'] is num ? (j['mosh'] as num).toDouble().clamp(0.0, 1.0) : defaultMosh,
         tune: j['tune'] is Map ? {for (final e in (j['tune'] as Map).entries) if (e.value is num) '${e.key}': (e.value as num).toDouble()} : const {},
         type3d: TypeSpec.fromJson(j['type3d']),
+        ghosts: RigGhosts.fromJson(j['ghosts']),
+        adapt: j['adapt'] != false,
       );
 
   static const _oldAxes = ['look.', 'ground.', 'style.', 'treatment.', 'blend.', 'figure.'];
