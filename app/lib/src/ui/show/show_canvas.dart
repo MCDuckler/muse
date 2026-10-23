@@ -14,6 +14,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
@@ -36,7 +37,7 @@ class StagePrograms {
   final Map<String, ui.FragmentProgram> scenes;
 
   /// The simulations' passes (shaders/show/sim/), by file name.
-  final Map<String, ui.FragmentProgram> sims;
+  final SimPrograms sims;
   final ui.FragmentProgram feedback, blur, finish, under;
 
   static const simShaders = ['fluid_advect', 'fluid_div', 'fluid_jacobi', 'fluid_project', 'fluid_look', 'meme_fx', 'dance_fx', 'flock_fx', 'words_fx', 'type3d'];
@@ -44,26 +45,65 @@ class StagePrograms {
   /// Shaders no scene file names: the grounds' own.
   static const groundShaders = ['pulse'];
 
+  /// Whether the simulations' passes wait until a scene asks for one: on Windows,
+  /// where ANGLE hands every shader to Direct3D's compiler on the CPU and the window
+  /// draws nothing until it is done (the 3D type's ray march alone is most of a
+  /// minute on a runner) — and the native stage draws most of them itself anyway.
+  static bool get lazySims => defaultTargetPlatform == TargetPlatform.windows;
+
   static Future<StagePrograms> load(SceneBook book) async {
+    final began = DateTime.now();
     final names = {...book.shaders, ...groundShaders}.toList();
+    final eager = lazySims ? const <String>[] : simShaders;
     final loaded = await Future.wait([
       for (final n in names) ui.FragmentProgram.fromAsset('shaders/show/$n.frag'),
-      for (final n in simShaders) ui.FragmentProgram.fromAsset('shaders/show/sim/$n.frag'),
+      for (final n in eager) ui.FragmentProgram.fromAsset('shaders/show/sim/$n.frag'),
       ui.FragmentProgram.fromAsset('shaders/show/feedback.frag'),
       ui.FragmentProgram.fromAsset('shaders/show/blur.frag'),
       ui.FragmentProgram.fromAsset('shaders/show/finish.frag'),
       ui.FragmentProgram.fromAsset('shaders/show/under.frag'),
     ]);
-    final k = names.length + simShaders.length;
+    final k = names.length + eager.length;
+    debugPrint('stage: ${loaded.length} programs loaded in ${DateTime.now().difference(began).inMilliseconds} ms${lazySims ? ' (the sims when asked for)' : ''}');
     return StagePrograms._(
       {for (var i = 0; i < names.length; i++) names[i]: loaded[i]},
-      {for (var i = 0; i < simShaders.length; i++) simShaders[i]: loaded[names.length + i]},
+      SimPrograms({for (var i = 0; i < eager.length; i++) eager[i]: loaded[names.length + i]}),
       loaded[k],
       loaded[k + 1],
       loaded[k + 2],
       loaded[k + 3],
     );
   }
+}
+
+/// The simulations' passes, by file name: loaded with the rest, or — where
+/// [StagePrograms.lazySims] — each the first time a scene asks for it (null until it
+/// is there; a scene draws without it meanwhile). The fluid's five come together.
+class SimPrograms {
+  SimPrograms(this._loaded);
+  final Map<String, ui.FragmentProgram> _loaded;
+  final _asked = <String>{};
+
+  static List<String> _group(String name) =>
+      name.startsWith('fluid_') ? [for (final n in StagePrograms.simShaders) if (n.startsWith('fluid_')) n] : [name];
+
+  ui.FragmentProgram? operator [](String name) {
+    final p = _loaded[name];
+    if (p == null && StagePrograms.simShaders.contains(name)) {
+      for (final n in _group(name)) {
+        if (!_asked.add(n) || _loaded.containsKey(n)) continue;
+        final began = DateTime.now();
+        ui.FragmentProgram.fromAsset('shaders/show/sim/$n.frag').then((x) {
+          _loaded[n] = x;
+          debugPrint('stage: sim/$n loaded in ${DateTime.now().difference(began).inMilliseconds} ms');
+        }, onError: (Object e) => debugPrint('stage: sim/$n: $e'));
+      }
+    }
+    return p;
+  }
+
+  /// Whether [name] (and the rest of its group) is there to draw with.
+  bool containsKey(String name) => _group(name).every((n) => this[n] != null);
 }
 
 /// The stage on screen, reading [feed].
