@@ -81,7 +81,9 @@ void main() {
     const set = TransformSet(mode: TransformMode.kaleidoscope, count: 3, differ: 0.2, often: 0.3);
     expect(TransformSet.fromJson(set.toJson()), set);
     expect(set.of(TransformMode.none).any, isFalse);
-    expect(set.of(TransformMode.both), const RigTransform(count: 3, differ: 0.2, slit: true, line: 0.3));
+    expect(set.of(TransformMode.both), const RigTransform(count: 3, differ: 0.2, slit: true, line: 0.3, blend: Mix.screen, amount: 0.85));
+    const blended = RigTransform(count: 2, blend: Mix.contrast, amount: 0.5);
+    expect(RigTransform.fromJson(blended.toJson()), blended);
     expect(const RigTransform(count: 4, turn: 0.5).turnRadians, closeTo(1.5708, 1e-3), reason: 'half of up to half a turn');
     // The working size's switch rides with the frame too (a stage in a window of its own).
     expect(ShowMacros.fromJson(const ShowMacros(adapt: false).toJson()).adapt, isFalse);

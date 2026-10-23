@@ -110,8 +110,9 @@ WS_API void ws_treat(const float* p, int n);
 // wedges, the one the figure lights most reflected into the rest, under the original;
 // `turn` the mirrors' turn (radians),
 // `line` how much of their edges shows, `differ` 0..1 how far the reflections' light
-// and colour are from the original's.
-WS_API void ws_ghosts(int count, float differ, float turn, float line);
+// and colour are from the original's; `blend` how they meet the original (0 normal:
+// the original on top, 1 add, 2 screen, 3 contrast), `amount` 0..1 how much of them.
+WS_API void ws_ghosts(int count, float differ, float turn, float line, int blend, float amount);
 // The slit-scan as a transformation, before the style and the kaleidoscope: ws_treat's floats for
 // mode 9 (mode 0: none). Where the style is the slit-scan already, it is that.
 WS_API void ws_slit(const float* p, int n);

@@ -354,9 +354,9 @@ class NativeStage {
   /// The kaleidoscope (ws_ghosts), the slit-scan as a transformation (ws_slit), and
   /// whether the working size follows the frames
   /// (ws_adapt): a library from before them has neither.
-  late final void Function(int, double, double, double)? _ghostsFn = () {
+  late final void Function(int, double, double, double, int, double)? _ghostsFn = () {
     try {
-      return _lib.lookupFunction<Void Function(Int32, Float, Float, Float), void Function(int, double, double, double)>('ws_ghosts');
+      return _lib.lookupFunction<Void Function(Int32, Float, Float, Float, Int32, Float), void Function(int, double, double, double, int, double)>('ws_ghosts');
     } catch (_) {
       return null;
     }
@@ -386,7 +386,7 @@ class NativeStage {
     final g = st.rig.figure.kind == Figure.none ? RigTransform.none : st.rig.transform;
     if (g != _ghostsSent && _ghostsFn != null) {
       _ghostsSent = g;
-      _ghostsFn(g.on ? g.count : 0, g.differ, g.turnRadians, g.line);
+      _ghostsFn(g.on ? g.count : 0, g.differ, g.turnRadians, g.line, g.blend.index, g.amount);
     }
     // The slit-scan as the layer, over whatever style: its shape, the kick, the time and
     // its knobs (reach, slower) — every frame while on.

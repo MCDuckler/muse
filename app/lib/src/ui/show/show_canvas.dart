@@ -447,6 +447,8 @@ class _StagePainter extends CustomPainter {
       ..setFloat(3, g.differ)
       ..setFloat(4, g.turnRadians)
       ..setFloat(5, g.line)
+      ..setFloat(6, g.blend.index.toDouble())
+      ..setFloat(7, g.amount)
       ..setImageSampler(0, img);
     final out = _pass(w, h, (c) => c.drawRect(Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()), Paint()..shader = fx));
     img.dispose();

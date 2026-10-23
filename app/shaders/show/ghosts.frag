@@ -6,10 +6,10 @@
 // wedges. As in a real one, one wedge is what is between the mirrors — here the one
 // the figure lights most (each wedge's middle looked at, the same answer for every
 // pixel of a frame) — and every other wedge shows it reflected, every other one
-// mirrored, cut off at the wedge's edges. As big as the original and still; and
-// always under the original: wherever the original draws anything it is what is
-// seen, whole; the reflections only fill what it leaves dark. uLine draws the mirrors'
-// edges over the reflections.
+// mirrored, cut off at the wedge's edges. As big as the original and still; met with
+// the original by uBlend — normal (the original whole on top, the reflections only
+// in its dark), added, screened, or their difference — uAmount of them. uLine draws
+// the mirrors' edges over it all.
 //
 // uDiffer is how far the reflections' light and colour are from the original's: 0 its
 // twins; toward 1 dimmer, each turned a step further round the colour wheel.
@@ -19,6 +19,10 @@ uniform float uCount;   // the mirrors (1..6)
 uniform float uDiffer;  // 0..1
 uniform float uTurn;    // the mirrors' turn, radians
 uniform float uLine;    // 0..1: how much of the mirrors' edges is drawn
+uniform float uBlend;   // how the reflections meet the original: 0 normal (the
+                        // original on top, the reflections in its dark), 1 add,
+                        // 2 screen, 3 contrast (their difference)
+uniform float uAmount;  // 0..1: how much of the reflections
 uniform sampler2D uImage;
 
 out vec4 fragColor;
@@ -84,13 +88,27 @@ void main() {
   // The mirrors' edges, a pixel or so wide, over the reflections.
   float edge = r * min(local, wedge - local) * uResolution.y;
   float line = (1.0 - smoothstep(0.6, 1.8, edge)) * clamp(uLine, 0.0, 1.0) * step(0.004, r);
-  // The original on top wherever it draws anything (its light, or its coverage band:
-  // alpha 254/255 on the Flutter stage, the dancers' coverage on the native one); the
-  // reflections only in its dark, and only where they are brighter than that dark.
-  float lo = lum(orig.rgb);
-  float figure = max(smoothstep(0.02, 0.07, lo), step(0.5, orig.a) * step(orig.a, 0.999));
-  vec4 under = best > lo ? ghost : orig;
-  under.rgb = mix(under.rgb, vec3(0.85), line * 0.8);
-  under.a = max(under.a, line);
-  fragColor = mix(under, orig, figure);
+  float amount = clamp(uAmount, 0.0, 1.0);
+  int blend = int(uBlend + 0.5);
+  vec3 g = ghost.rgb * amount;
+  vec4 col;
+  if (blend == 1) {
+    col = vec4(orig.rgb + g, max(orig.a, ghost.a * amount));
+  } else if (blend == 2) {
+    col = vec4(1.0 - (1.0 - clamp(orig.rgb, 0.0, 1.0)) * (1.0 - clamp(g, 0.0, 1.0)), max(orig.a, ghost.a * amount));
+  } else if (blend == 3) {
+    col = vec4(abs(orig.rgb - g), max(orig.a, ghost.a * amount));
+  } else {
+    // Normal: the original on top wherever it draws anything (its light, or its
+    // coverage band: alpha 254/255 on the Flutter stage, the dancers' coverage on the
+    // native one); the reflections only in its dark, where they are brighter.
+    float lo = lum(orig.rgb);
+    float figure = max(smoothstep(0.02, 0.07, lo), step(0.5, orig.a) * step(orig.a, 0.999));
+    vec4 under = best * amount > lo ? mix(orig, ghost, amount) : orig;
+    col = mix(under, orig, figure);
+  }
+  // The mirrors' edges over it all.
+  col.rgb = mix(col.rgb, vec3(0.85), line * 0.8);
+  col.a = max(col.a, line);
+  fragColor = col;
 }

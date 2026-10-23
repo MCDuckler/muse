@@ -964,6 +964,7 @@ class _TransformRow extends StatelessWidget {
             ('TURN', t.turn, 0.0, 'The mirrors turned: ${(t.turn * 180).round()}° (double-click: straight)', (double v) => t.copyWith(turn: v)),
             ('LINE', t.line, 0.3, 'How much of the mirrors’ edges shows: ${(t.line * 100).round()} %', (double v) => t.copyWith(line: v)),
             ('DIFFERS', t.differ, 0.3, 'How far the reflections’ light and colour are from the original’s: ${(t.differ * 100).round()} %', (double v) => t.copyWith(differ: v)),
+            ('AMOUNT', t.amount, 0.85, 'How much of the reflections: ${(t.amount * 100).round()} %', (double v) => t.copyWith(amount: v)),
           ])
             Padding(
               padding: const EdgeInsets.only(right: 12),
@@ -978,6 +979,24 @@ class _TransformRow extends StatelessWidget {
                 tooltip: tip,
                 onChanged: (v) => show.setTransform(set(v)),
               ),
+            ),
+        ]),
+      if (kaleido)
+        _Line(children: [
+          const SizedBox(width: 92),
+          Text('BLEND', style: Console.label(9)),
+          const SizedBox(width: 6),
+          for (final x in Mix.values)
+            _Word(
+              label: x.name.toUpperCase(),
+              lit: t.blend == x,
+              tooltip: switch (x) {
+                Mix.normal => 'The original whole on top; the reflections only where it is dark',
+                Mix.add => 'The reflections added to the original: light on light',
+                Mix.screen => 'Screened together: neither blows the other out',
+                Mix.contrast => 'Their difference: where they agree is dark',
+              },
+              onTap: () => show.setTransform(t.copyWith(blend: x)),
             ),
         ]),
       if (slit) _TuneLine(show: show, treatment: 'slit'),

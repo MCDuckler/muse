@@ -150,7 +150,7 @@ void main() {
     show.setTransform(const TransformSet(mode: TransformMode.both, count: 3, differ: 0.4, turn: 0.25, line: 0.5));
     show.setAdapt(false);
     show.tick(t);
-    expect(show.state.rig.transform, const RigTransform(count: 3, differ: 0.4, slit: true, turn: 0.25, line: 0.5));
+    expect(show.state.rig.transform, const RigTransform(count: 3, differ: 0.4, slit: true, turn: 0.25, line: 0.5, blend: Mix.screen, amount: 0.85));
     expect(show.state.macros.adapt, isFalse);
     show.chooseScene('flash');
     show.tick(t.add(const Duration(milliseconds: 16)));
