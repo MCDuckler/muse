@@ -952,6 +952,19 @@ void publish(int slot) {
 
 void count(double ms) {
   S->frames++;
+  // A heartbeat on stderr every five seconds: the stage's own thread drawing, whatever
+  // the window it is shown in is doing.
+  {
+    static auto said = std::chrono::steady_clock::now();
+    static long long saidFrames = 0;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - said > std::chrono::seconds(5)) {
+      std::fprintf(stderr, "stage: drawn %lld frames in the last %lld ms\n", (long long)(S->frames - saidFrames),
+                   (long long)std::chrono::duration_cast<std::chrono::milliseconds>(now - said).count());
+      said = now;
+      saidFrames = S->frames;
+    }
+  }
   S->frameMs = S->frameMs * 0.9f + (float)ms * 0.1f;
   S->worstMs = std::max(S->worstMs, (float)ms);
   S->rateFrames++;

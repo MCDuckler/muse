@@ -146,8 +146,8 @@ jobs:
           try { [System.Runtime.InteropServices.NativeLibrary]::Load((Resolve-Path wetowl_stage.dll).Path) | Out-Null; Write-Host "wetowl_stage.dll loads" } catch { Write-Host "wetowl_stage.dll would not load: $_" }
           Pop-Location
           $p = Start-Process -FilePath $exe -ArgumentList "--stage","--demo","--scene","dance-art","--shot","--shot-every","4000","--shot-scale","0.5" -PassThru -NoNewWindow -RedirectStandardOutput stage-smoke.log -RedirectStandardError stage-smoke.err
-          $alive = -not $p.WaitForExit(40000)
-          Write-Host "--- after 40 s: $(if ($alive) { 'still running (stopped now)' } else { "exited, code $($p.ExitCode)" })"
+          $alive = -not $p.WaitForExit(90000)
+          Write-Host "--- after 90 s: $(if ($alive) { 'still running (stopped now)' } else { "exited, code $($p.ExitCode)" })"
           if ($alive) { Stop-Process -Id $p.Id -Force }
           Start-Sleep -Seconds 2
           # Why it went quiet, where it did: a crash's own record, and the app's log.
@@ -162,6 +162,8 @@ jobs:
           Write-Host "--- flash alone: $(if ($qAlive) { 'still running' } else { "exited, code $($q.ExitCode)" })"
           Select-String -Path flash-smoke.log -Pattern "STAGE fps" | Select-Object -First 6 | ForEach-Object { $_.Line }
           Get-Content flash-smoke.err -Tail 10
+          Write-Host "--- the stage's own word (compiles that were slow, its frames)"
+          Get-Content stage-smoke.err -Tail 60
           Write-Host "--- what it said about the stage"
           Select-String -Path stage-smoke.log -Pattern "stage|STAGE" | Select-Object -First 80 | ForEach-Object { $_.Line }
           New-Item -ItemType Directory -Force stage-smoke | Out-Null

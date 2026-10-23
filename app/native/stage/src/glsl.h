@@ -46,6 +46,22 @@ inline GLuint compile(GLenum kind, const std::string& src, std::string& err) {
 }
 
 inline GLuint link(const std::string& vert, const std::string& frag, std::string& err) {
+  // A slow one said, with its first line: on Windows ANGLE hands GLSL to Direct3D's
+  // own compiler, which can take seconds over a shader, every other GL context in
+  // the process (Flutter's too) waiting on it.
+  const auto began = std::chrono::steady_clock::now();
+  struct Said {
+    const std::string& frag;
+    std::chrono::steady_clock::time_point began;
+    ~Said() {
+      const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began).count();
+      if (ms > 250) {
+        const auto nl = frag.find('\n', frag.find("void main") == std::string::npos ? 0 : frag.find("void main") > 400 ? frag.find("void main") - 400 : 0);
+        std::fprintf(stderr, "stage: a shader took %lld ms to compile (%zu bytes, near: %.60s)\n", (long long)ms, frag.size(),
+                     frag.c_str() + (nl == std::string::npos ? 0 : nl + 1));
+      }
+    }
+  } said{frag, began};
   GLuint v = compile(GL_VERTEX_SHADER, vert, err);
   if (!v) return 0;
   GLuint f = compile(GL_FRAGMENT_SHADER, frag, err);
