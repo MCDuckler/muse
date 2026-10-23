@@ -146,8 +146,22 @@ jobs:
           try { [System.Runtime.InteropServices.NativeLibrary]::Load((Resolve-Path wetowl_stage.dll).Path) | Out-Null; Write-Host "wetowl_stage.dll loads" } catch { Write-Host "wetowl_stage.dll would not load: $_" }
           Pop-Location
           $p = Start-Process -FilePath $exe -ArgumentList "--stage","--demo","--scene","dance-art","--shot","--shot-every","4000","--shot-scale","0.5" -PassThru -NoNewWindow -RedirectStandardOutput stage-smoke.log -RedirectStandardError stage-smoke.err
-          if (-not $p.WaitForExit(40000)) { Stop-Process -Id $p.Id -Force }
+          $alive = -not $p.WaitForExit(40000)
+          Write-Host "--- after 40 s: $(if ($alive) { 'still running (stopped now)' } else { "exited, code $($p.ExitCode)" })"
+          if ($alive) { Stop-Process -Id $p.Id -Force }
           Start-Sleep -Seconds 2
+          # Why it went quiet, where it did: a crash's own record, and the app's log.
+          Write-Host "--- Windows' word on crashes"
+          Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2; StartTime=(Get-Date).AddMinutes(-5)} -MaxEvents 6 -ErrorAction SilentlyContinue | ForEach-Object { $_.Message -split "`n" | Select-Object -First 12 }
+          Write-Host "--- the app's log"
+          Get-ChildItem $env:APPDATA -Recurse -Filter wetowl.log -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName; Get-Content $_.FullName -Tail 60 }
+          # The plainest scene, for comparison: one shader, nothing of the dancers'.
+          $q = Start-Process -FilePath $exe -ArgumentList "--stage","--demo","--scene","flash","--shot","--shot-every","4000","--shot-scale","0.5" -PassThru -NoNewWindow -RedirectStandardOutput flash-smoke.log -RedirectStandardError flash-smoke.err
+          $qAlive = -not $q.WaitForExit(25000)
+          if ($qAlive) { Stop-Process -Id $q.Id -Force }
+          Write-Host "--- flash alone: $(if ($qAlive) { 'still running' } else { "exited, code $($q.ExitCode)" })"
+          Select-String -Path flash-smoke.log -Pattern "STAGE fps" | Select-Object -First 6 | ForEach-Object { $_.Line }
+          Get-Content flash-smoke.err -Tail 10
           Write-Host "--- what it said about the stage"
           Select-String -Path stage-smoke.log -Pattern "stage|STAGE" | Select-Object -First 80 | ForEach-Object { $_.Line }
           New-Item -ItemType Directory -Force stage-smoke | Out-Null
