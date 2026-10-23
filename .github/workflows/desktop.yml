@@ -145,7 +145,7 @@ jobs:
           Push-Location build\windows\x64\runner\Release
           try { [System.Runtime.InteropServices.NativeLibrary]::Load((Resolve-Path wetowl_stage.dll).Path) | Out-Null; Write-Host "wetowl_stage.dll loads" } catch { Write-Host "wetowl_stage.dll would not load: $_" }
           Pop-Location
-          $p = Start-Process -FilePath $exe -ArgumentList "--stage","--demo","--scene","dance-disco","--shot","--shot-every","4000","--shot-scale","0.5" -PassThru -NoNewWindow -RedirectStandardOutput stage-smoke.log -RedirectStandardError stage-smoke.err
+          $p = Start-Process -FilePath $exe -ArgumentList "--stage","--demo","--scene","dance-art","--shot","--shot-every","4000","--shot-scale","0.5" -PassThru -NoNewWindow -RedirectStandardOutput stage-smoke.log -RedirectStandardError stage-smoke.err
           if (-not $p.WaitForExit(40000)) { Stop-Process -Id $p.Id -Force }
           Start-Sleep -Seconds 2
           Write-Host "--- what it said about the stage"
