@@ -17,10 +17,7 @@ for style, ms in picks.items():
         need[c] = (min(lo, b[beat]), max(hi, b[beat + L]))
 ranges = {}
 for c, (lo, hi) in need.items():
-    path = f"{bvhdir}/{c}.bvh"
-    fps = skel.bvh_fps(path); step = max(1, round(fps / 30))
-    bpy.ops.import_anim.bvh(filepath=path, axis_forward="-Z", axis_up="Y", global_scale=0.01)
-    bvh = bpy.context.object
+    bvh, fps = skel.load(skel.capture(bvhdir, c)); step = max(1, round(fps / 30))
     a0, a1 = map(int, bvh.animation_data.action.frame_range)
     i0 = max(0, lo - 30); i1 = min((a1 - a0) // step, hi + 30)
     n = retarget.retarget(rig, bvh, a0 + i0 * step, a0 + i1 * step, step=step, action_name=c)

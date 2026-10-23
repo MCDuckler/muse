@@ -1,7 +1,7 @@
 // The show's own page of the booth: the room slid left of the decks (the board's
 // twin on the other side). Made to be used, not studied:
 //
-//   the picture, and under it NEXT and HOLD and the pads to play the light with
+//   the picture, and under it NEXT, HOLD and KEEP and the pads to play the light with
 //   (hit, black, strobe, freeze);
 //
 //   down the right the snapshots (show_room_snapshots.dart: the rules named, kept,
@@ -10,7 +10,10 @@
 //   blended, its switch (in the rotation or never) and its weight, and PLAY IT;
 //
 //   under the pads the tabs: the RULES in force (yours, and the ones that came with
-//   the app), the MAP (the rotation at a glance, show_room_map.dart), the DANCERS, MILKDROP's presets, and SETTINGS (the finish, the
+//   the app), the MAP (the rotation at a glance, show_room_map.dart), what is CUT by
+//   the measuring (show_room_cut.dart), the FAVES
+//   (what was on the stage, kept with KEEP: show_room_faves.dart), the 3D TEXT's
+//   words and ways (show_room_type3d.dart), the DANCERS, MILKDROP's presets, and SETTINGS (the finish, the
 //   director, the quality, the stage's numbers).
 //
 // The model: state/show/show_combos.dart. Plan: ~/.claude/plans/wetowl-show-combos.md.
@@ -25,8 +28,10 @@ import 'package:provider/provider.dart';
 import '../../state/app_state.dart';
 import '../../state/booth/booth.dart';
 import '../../state/show/camera_feed.dart';
+import '../../state/show/combo_scores.dart';
 import '../../state/show/milk_feed.dart';
 import '../../state/show/show_engine.dart';
+import '../../state/show/show_faves.dart';
 import '../../state/show/show_pool.dart';
 import '../../state/show/show_rig.dart';
 import '../../state/show/show_snapshots.dart';
@@ -44,6 +49,7 @@ import 'show_dance.dart' show DanceClock, DanceModels, DanceShot, DanceTroupe;
 import 'show_flock.dart' show FlockClock, FlockLook;
 import 'show_meme_bank.dart' show MemeMood;
 import 'show_debug.dart';
+import 'show_faves.dart';
 import 'show_moves.dart';
 import 'show_tile.dart' show showTileOffsetDialog;
 import 'stage_kit.dart';
@@ -51,14 +57,17 @@ import 'stage_preview.dart';
 import 'stage_page.dart';
 import 'stage_pop_out_none.dart' if (dart.library.io) 'stage_pop_out_io.dart';
 
+part 'show_room_cut.dart';
+part 'show_room_faves.dart';
 part 'show_room_kart.dart';
 part 'show_room_map.dart';
 part 'show_room_snapshots.dart';
+part 'show_room_type3d.dart';
 
 /// Bumped by the K key: the room slides to the show's page, or back.
 final showRoomToggles = ValueNotifier<int>(0);
 
-enum ShowTab { rules, map, dancers, milkdrop, settings }
+enum ShowTab { rules, map, cut, faves, text, dancers, milkdrop, settings }
 
 /// A chip's picture: the look's thumbnail (`assets/show/thumbs/<id>.webp`), where there is one.
 const _thumbs = {
@@ -73,6 +82,7 @@ const _thumbs = {
   'kinetic',
   'siebenschlaefer',
   'turntable',
+  'type3d',
   'veins',
   'dance-art',
   'milk',
@@ -94,7 +104,7 @@ _Family _familyOf(Scene s) => switch (s.look.rig.figure.kind) {
       Figure.dancers || Figure.birds || Figure.turntable => _Family.bodies,
       Figure.kinetic || Figure.blocks || Figure.flash || Figure.glide => _Family.shapes,
       Figure.fluid || Figure.veins || Figure.field => _Family.flow,
-      Figure.words => _Family.words,
+      Figure.words || Figure.type3d => _Family.words,
       Figure.meme || Figure.room => _Family.pictures,
     };
 
@@ -315,7 +325,7 @@ class _Preview extends StatelessWidget {
                           ? Center(child: Text('The stage could not load.\n$trouble', style: TextStyle(color: Console.quiet)))
                           : kit == null
                               ? const SizedBox.shrink()
-                              : StagePreview(feed: show, book: kit!.book, programs: kit!.programs, scale: 0.6, rank: 1, info: info),
+                              : GrabbableStage(child: StagePreview(feed: show, book: kit!.book, programs: kit!.programs, scale: 0.6, rank: 1, info: info)),
                     ),
                   ),
                 ),
@@ -396,11 +406,23 @@ class _Controls extends StatelessWidget {
                 Row(children: [
                   _Big(icon: Icons.skip_next, label: 'NEXT', tip: 'Another scene now (with MilkDrop alone: another preset)', onTap: show.nextScene),
                   _Big(
+                    icon: Icons.blur_linear,
+                    label: 'MOSH',
+                    tip: 'Another scene now, datamoshed into: the picture on dragged by the new one\'s motion until it breaks through (M on the stage page)',
+                    onTap: show.moshNext,
+                  ),
+                  _Big(
                     icon: held ? Icons.lock : Icons.lock_open,
                     label: held ? 'HELD' : 'HOLD',
                     lit: held,
                     tip: held ? 'Let the show change again' : 'Keep the combination on — scene, style, background, mask, blend — until you let go',
                     onTap: () => show.holdScene(!held),
+                  ),
+                  _Big(
+                    icon: Icons.star_border,
+                    label: 'KEEP',
+                    tip: 'Keep what is on the stage as a favourite, as it is — MilkDrop preset, camera and all (P on the stage page)',
+                    onTap: show.combo == null ? null : () => unawaited(_keepFave(context, show, kit)),
                   ),
                   _Big(
                     icon: Icons.blur_on,
@@ -711,7 +733,10 @@ class _Tabs extends StatelessWidget {
 
   static const _tips = {
     ShowTab.rules: 'The rules in force: yours, and the ones that came with the app',
+    ShowTab.text: 'The 3D text: its words, face, motions, looks and knobs',
+    ShowTab.faves: 'Your favourites: what was on the stage, kept as it was — browse, rate, put one back on in a tap',
     ShowTab.map: 'The big picture: how much of the time each scene, style, background, mask and blend gets, and what is off',
+    ShowTab.cut: 'What the measuring keeps out of the rotation, or lets come less — let one come, or never',
     ShowTab.dancers: 'Who dances, and every move',
     ShowTab.milkdrop: 'The presets, their director, the maker',
     ShowTab.settings: 'The finish, the director, the quality, the stage\'s numbers',
@@ -762,11 +787,14 @@ class _Tabs extends StatelessWidget {
                   final body = switch (tab) {
                     ShowTab.rules => _RulesTab(show: show, kit: kit, onPick: onRule) as Widget,
                     ShowTab.map => _MapTab(show: show, kit: kit, picked: picked),
+                    ShowTab.text => _Type3dTab(show: show),
+                    ShowTab.cut => _CutTab(show: show, kit: kit),
+                    ShowTab.faves => _FavesTab(show: show, kit: kit),
                     ShowTab.dancers => _DancersTab(show: show),
                     ShowTab.milkdrop => MilkPanel(booth: booth),
                     ShowTab.settings => _SettingsTab(show: show, info: info, booth: booth),
                   };
-                  final least = tab == ShowTab.dancers || tab == ShowTab.milkdrop || tab == ShowTab.map ? 560.0 : 300.0;
+                  final least = tab == ShowTab.dancers || tab == ShowTab.milkdrop || tab == ShowTab.map || tab == ShowTab.cut || tab == ShowTab.text || tab == ShowTab.faves ? 560.0 : 300.0;
                   if (c.maxHeight >= least) return body;
                   return SingleChildScrollView(child: SizedBox(height: least, child: body));
                 }),
@@ -855,6 +883,18 @@ class _SettingsTab extends StatelessWidget {
               Text('calm', style: Console.label(9)),
               Expanded(child: Slider(value: pool.bias, min: -1, max: 1, onChanged: (v) => show.setPool(pool.copyWith(bias: v)))),
               Text('busy', style: Console.label(9)),
+            ]),
+            Row(children: [
+              Text('DATAMOSH', style: Console.label(10, color: Console.ink)),
+              const SizedBox(width: 10),
+              Text('never', style: Console.label(9)),
+              Expanded(
+                child: Tooltip(
+                  message: 'How many of the changes are datamoshed instead of cut or dissolved (the stage in its own window, or on Linux and Windows)',
+                  child: Slider(value: pool.mosh, onChanged: (v) => show.setPool(pool.copyWith(mosh: v))),
+                ),
+              ),
+              Text('${(pool.mosh * 100).round()} %', style: Console.label(9)),
             ]),
             Row(children: [
               Expanded(child: Text('the beat before a drop goes black', style: TextStyle(fontSize: 12, color: Console.ink))),

@@ -4,11 +4,13 @@
 // are read once into it where there is no document yet.
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'show_faves.dart';
 import 'show_pool.dart';
 import 'show_snapshots.dart';
 import 'show_rig.dart';
 import 'show_store_none.dart' if (dart.library.io) 'show_store_io.dart' as device;
 
+export 'show_faves.dart' show ShowFave;
 export 'show_snapshots.dart' show ShowSnapshot;
 
 class ShowDoc {
@@ -19,7 +21,9 @@ class ShowDoc {
       this.lastRig,
       this.panel = const {},
       this.snapshots = const [],
-      this.snapshot});
+      this.snapshot,
+      this.faves = const [],
+      this.taste = const {}});
 
   final int v;
   final ShowPool pool;
@@ -41,6 +45,13 @@ class ShowDoc {
   /// what a shared one's newer revision is followed from. Null: none.
   final ShowSnapshot? snapshot;
 
+  /// The favourites, newest first (show_faves.dart).
+  final List<ShowFave> faves;
+
+  /// The combinations skipped with NEXT in their first bars, by key, how often
+  /// (show_taste.dart).
+  final Map<String, double> taste;
+
   static const none = ShowDoc();
 
   ShowDoc copyWith(
@@ -50,7 +61,9 @@ class ShowDoc {
           Map<String, Object?>? panel,
           List<ShowSnapshot>? snapshots,
           ShowSnapshot? snapshot,
-          bool clearSnapshot = false}) =>
+          bool clearSnapshot = false,
+          List<ShowFave>? faves,
+          Map<String, double>? taste}) =>
       ShowDoc(
         v: v,
         pool: pool ?? this.pool,
@@ -59,6 +72,8 @@ class ShowDoc {
         panel: panel ?? this.panel,
         snapshots: snapshots ?? this.snapshots,
         snapshot: clearSnapshot ? null : snapshot ?? this.snapshot,
+        faves: faves ?? this.faves,
+        taste: taste ?? this.taste,
       );
 
   Map<String, dynamic> toJson() => {
@@ -69,6 +84,8 @@ class ShowDoc {
         if (panel.isNotEmpty) 'panel': panel,
         if (snapshots.isNotEmpty) 'snapshots': [for (final s in snapshots) s.toJson()],
         if (snapshot != null) 'snapshot': snapshot!.toJson(),
+        if (faves.isNotEmpty) 'faves': [for (final f in faves) f.toJson()],
+        if (taste.isNotEmpty) 'taste': taste,
       };
 
   factory ShowDoc.fromJson(Map<String, dynamic> j) => ShowDoc(
@@ -79,6 +96,12 @@ class ShowDoc {
         panel: j['panel'] is Map ? (j['panel'] as Map).cast<String, Object?>() : const {},
         snapshots: [for (final s in (j['snapshots'] as List? ?? const [])) ShowSnapshot.fromJson(s)].whereType<ShowSnapshot>().toList(),
         snapshot: ShowSnapshot.fromJson(j['snapshot']),
+        faves: [for (final f in (j['faves'] as List? ?? const [])) ShowFave.fromJson(f)].whereType<ShowFave>().toList(),
+        taste: {
+          if (j['taste'] is Map)
+            for (final e in (j['taste'] as Map).entries)
+              if (e.value is num) '${e.key}': (e.value as num).toDouble(),
+        },
       );
 }
 

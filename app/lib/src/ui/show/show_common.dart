@@ -10,6 +10,7 @@ import '../../state/show/show_rig.dart';
 import '../../state/show/show_state.dart';
 import '../../state/show/show_tune.dart';
 import 'scene.dart';
+import 'show_meme_bank.dart' show memeHash;
 
 /// The finish for [scene] in [st]: the frame's rig's (the look's, with the hands'
 /// where locked), or the scene file's own while the frame carries no rig (a feed
@@ -123,7 +124,7 @@ void setFxKnobs(ui.FragmentShader s, int at, ShowState st, String? treatment) {
   final tune = st.macros.tune;
   return (
     cell: cell * fxKnobs(tune, treatment).cell,
-    tint: treatment == 'ascii' ? (tune[tuneKey('ascii', TuneKnob.tint)] ?? tint) : tint,
+    tint: (treatmentTunes[treatment]?.any((s) => s.knob == TuneKnob.tint) ?? false) ? (tune[tuneKey(treatment, TuneKnob.tint)] ?? tint) : tint,
   );
 }
 
@@ -134,8 +135,17 @@ void setFxKnobs(ui.FragmentShader s, int at, ShowState st, String? treatment) {
 /// figure draws it itself as its own style (the dancers', the birds').
 ({Treatment t, int mode, Color ink, Color paper, double cell, double tint})? treatOf(ShowRig rig, ShowState st, int h) {
   final fig = rig.figure;
-  final t = fig.treatment;
-  if (fig.kind == Figure.none || !imageTreatments.contains(t) || fig.style == t.name) return null;
+  // The dancers' slit-scan is the stage's pass over what they draw (they cannot draw
+  // their own past), where every other style of theirs is their own.
+  final t = fig.style == 'slit' ? Treatment.slit : fig.treatment;
+  if (fig.kind == Figure.none || !imageTreatments.contains(t) || (fig.style == t.name && t != Treatment.slit)) return null;
+  if (t == Treatment.slit) {
+    // Its shape and which way it runs, another every four phrases of the record (the
+    // cell and the tint carry them: fx.h's Slit).
+    final n = ((st.master.barIndex ?? 0) / 16).floor();
+    final salt = (st.master.trackId ?? 0) % 9973;
+    return (t: t, mode: 9, ink: Colors.white, paper: Colors.black, cell: (memeHash(salt, n, 41) * 6).floorToDouble().clamp(0, 5), tint: memeHash(salt, n, 43) < 0.3 ? 1.0 : 0.0);
+  }
   final pal = st.palette;
   final dark = HSLColor.fromAHSL(1, pal.primary.hue, 0.45, 0.035).toColor();
   // The looks as the dancers' finish draws them.
@@ -144,9 +154,13 @@ void setFxKnobs(ui.FragmentShader s, int at, ShowState st, String? treatment) {
     Treatment.contour => (pal.accent.withSaturation(0.85).withLightness(0.62).toColor(), dark, 0.0, 0.0),
     Treatment.halftone => (pal.primary.withSaturation(0.9).withLightness(0.55).toColor(), const Color(0xff050506), math.max(4.0, h / 110), 0.0),
     Treatment.thermal => (Colors.white, Colors.black, 0.0, 0.0),
+    Treatment.crt => (crtInk, crtPaper, math.max(3.0, h / 135), 0.2),
     Treatment.lines => (pal.accent.withSaturation(0.35).withLightness(0.85).toColor(), const Color(0xff030303), math.max(5.0, h / 72), 0.0),
     _ => (pal.accent.withSaturation(0.55).withLightness(0.78).toColor(), const Color(0xff040404), h / 44, 0.2),
   };
   final tuned = tunedCell(st, t.name, cell, tint);
   return (t: t, mode: treatmentFxMode[t.name] ?? 1, ink: ink, paper: paper, cell: tuned.cell, tint: tuned.tint);
 }
+
+/// The crt's lavender white and its near-black (dance_fx.frag's ramp ends).
+const crtInk = Color(0xfff6dcff), crtPaper = Color(0xff07020f);

@@ -49,7 +49,9 @@ import 'show_dance_draw.dart';
 import 'show_dance_surface.dart';
 import 'show_debug.dart';
 import 'show_sims.dart';
+import 'show_type3d.dart';
 import 'show_words.dart';
+import 'stage_camera.dart';
 
 final class _Stats extends Struct {
   @Int64()
@@ -228,8 +230,9 @@ class NativeStage {
   static String? openError;
 
   /// What it can draw: one shader, sampling nothing but MilkDrop (which it draws
-  /// itself, in its own context); the dancers; the words.
-  static bool canDraw(Scene? scene) => isShader(scene) || isDance(scene) || isWords(scene);
+  /// itself, in its own context); the dancers; the words; the 3D type (a build with
+  /// sims by name).
+  static bool canDraw(Scene? scene) => isShader(scene) || isDance(scene) || isWords(scene) || (isType3d(scene) && (_it?.sims ?? false));
 
   /// Why it cannot draw [scene] (null when it can).
   static String? whyNotScene(Scene? scene) {
@@ -280,6 +283,10 @@ class NativeStage {
   /// The words (show_words.dart): the line's pictures go up as textures, the frame is
   /// the sim shader's floats (ws_words).
   static bool isWords(Scene? scene) => scene != null && scene.layers.length == 1 && scene.layers.first.sim == 'words';
+
+  /// The 3D type (show_type3d.dart): its field up as a texture, its frame the sim
+  /// shader's floats — the words' way, under the name `@sim:type3d`.
+  static bool isType3d(Scene? scene) => scene != null && scene.layers.length == 1 && scene.layers.first.sim == 'type3d';
 
   static const _channel = MethodChannel('wetowl/stage');
 
@@ -358,7 +365,8 @@ class NativeStage {
     _sendGlyphs();
     final k = fxKnobs(st.macros.tune, q.t.name);
     final v = [
-      q.mode.toDouble(), q.cell / h, q.ink.r, q.ink.g, q.ink.b, q.paper.r, q.paper.g, q.paper.b, q.tint,
+      // The slit-scan's cell is its shape, not a size.
+      q.mode.toDouble(), q.t == Treatment.slit ? q.cell : q.cell / h, q.ink.r, q.ink.g, q.ink.b, q.paper.r, q.paper.g, q.paper.b, q.tint,
       DanceSim.glyphCount.toDouble(), (st.flat['dyn.hit.kick'] ?? 0).clamp(0.0, 1.0), 0.5, 0.5,
       _treatClock.elapsedMicroseconds / 1e6, k.weight, k.spacing, k.height, k.gain, k.size,
     ];
@@ -434,6 +442,41 @@ class NativeStage {
   }
 
   String? _fromOn, _particlesOn;
+
+  /// The datamosh (ws_mosh; a library from before it has none), and the count of
+  /// them last seen (ShowState.mosh), and when a frame was last sent: a mosh starts
+  /// from the stage's last picture, which is no use after the stage was parked.
+  late final void Function(double, double)? _moshFn = () {
+    try {
+      return _lib.lookupFunction<Void Function(Float, Float), void Function(double, double)>('ws_mosh');
+    } catch (_) {
+      return null;
+    }
+  }();
+  int? _moshOn;
+  final _sinceFrame = Stopwatch();
+
+  /// The next frame's layers written out (ws_dump: `<path>.fig/.ground/.out/.json`),
+  /// for the combination audit; false where this library has no dump.
+  bool dump(String path) {
+    final f = _dumpFn;
+    if (f == null) return false;
+    final p = path.toNativeUtf8();
+    try {
+      f(p);
+    } finally {
+      malloc.free(p);
+    }
+    return true;
+  }
+
+  late final void Function(Pointer<Utf8>)? _dumpFn = () {
+    try {
+      return _lib.lookupFunction<Void Function(Pointer<Utf8>), void Function(Pointer<Utf8>)>('ws_dump');
+    } catch (_) {
+      return null;
+    }
+  }();
   double? _rateOn;
 
   /// Frames a second it draws.
@@ -481,6 +524,10 @@ class NativeStage {
   /// Whether MilkDrop draws in the stage's own context; without it (Windows) the
   /// helper's frames go up as the texture named "milk" (NativeStageView).
   bool get hasMilk => features & 1 != 0;
+
+  /// A sim drawn by name (`@sim:name`: its shader sim/name, its textures
+  /// `name.x`), ws_features' 16.
+  bool get sims => features & 16 != 0;
 
   /// What it has, in words, for the debug words and the log.
   String words() {
@@ -557,10 +604,27 @@ class NativeStage {
     _flash(stageWhite(st), st.macros.blackout ? 1 : 0, freeze ? 1 : 0);
     if (freeze) return;
     final layer = scene.layers.first;
-    final name = isDance(scene) ? '@dance' : isWords(scene) ? '@words' : layer.shader!;
+    final name = isDance(scene) ? '@dance' : isWords(scene) ? '@words' : isType3d(scene) ? '@sim:type3d' : layer.shader!;
     if (name != _sceneOn) {
       _name(_scene, name);
       _sceneOn = name;
+    }
+    // A datamosh from the picture on (a cut the director moshed): over a bar and a half,
+    // harder in the loud parts.
+    final fresh = _sinceFrame.isRunning && _sinceFrame.elapsedMilliseconds < 250;
+    _sinceFrame
+      ..reset()
+      ..start();
+    if (st.mosh != _moshOn) {
+      final first = _moshOn == null;
+      _moshOn = st.mosh;
+      final mosh = _moshFn;
+      if (!first && fresh && mosh != null) {
+        final bar = 240 / (st.master.bpm ?? 120);
+        // Long enough for the old picture to melt through (a bar and a half, two
+        // to four seconds).
+        mosh((bar * 1.5).clamp(2.0, 4.0), 0.8 + 0.6 * st.master.energy.clamp(0.0, 1.0));
+      }
     }
     final fin = finishOf(scene, st);
     _post(fin.trails, fin.bloom, fin.vignette, fin.grain, fin.tone, fin.fringe);
@@ -779,27 +843,33 @@ class _StageSurfaceState extends State<StageSurface> {
   Widget build(BuildContext context) {
     final nativeDraws = _native && _drawable;
     final child = Stack(fit: StackFit.expand, children: [
-      if (_native)
-        NativeStageView(
-          feed: widget.feed,
-          book: widget.book,
-          programs: widget.programs,
-          preview: widget.preview,
-          slow: widget.slow,
-          drawable: _drawable,
-          info: _info,
-          onBroken: _check,
-        ),
-      if (!nativeDraws)
-        ShowCanvas(
-          feed: widget.feed,
-          book: widget.book,
-          programs: widget.programs,
-          scale: widget.scale,
-          preview: widget.preview,
-          slow: widget.slow,
-          onFrame: (_) => _flutterFrames++,
-        ),
+      // The picture, moved by the camera with the music in the 3D scenes.
+      StageCameraView(
+        feed: widget.feed,
+        child: Stack(fit: StackFit.expand, children: [
+          if (_native)
+            NativeStageView(
+              feed: widget.feed,
+              book: widget.book,
+              programs: widget.programs,
+              preview: widget.preview,
+              slow: widget.slow,
+              drawable: _drawable,
+              info: _info,
+              onBroken: _check,
+            ),
+          if (!nativeDraws)
+            ShowCanvas(
+              feed: widget.feed,
+              book: widget.book,
+              programs: widget.programs,
+              scale: widget.scale,
+              preview: widget.preview,
+              slow: widget.slow,
+              onFrame: (_) => _flutterFrames++,
+            ),
+        ]),
+      ),
       ValueListenableBuilder<bool>(
         valueListenable: ShowDebug.on,
         builder: (context, on, _) => on ? StageDebugWords(info: _info) : const SizedBox.shrink(),
@@ -850,6 +920,7 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
   bool _opening = false;
   DanceSim? _dance;
   WordsSim? _words;
+  Type3dSim? _type3d;
   Duration? _lastTick;
   double _scale = 1;
   bool _parked = false;
@@ -935,6 +1006,18 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
     } else if (_words != null) {
       _words!.dispose();
       _words = null;
+    }
+    // The 3D type: the line's field up once, the frame's numbers every tick (by the
+    // words' call: one sim at a time is on).
+    if (NativeStage.isType3d(scene)) {
+      final px = _px;
+      if (px != null) {
+        final ts = _type3d ??= Type3dSim(upload: (name, w, h, rgba) => NativeStage.instance?.texture(name, w, h, rgba));
+        stage.wordsFrame(ts.native(st, st.macros.freeze ? 0 : dt, (px.width * _scale).round(), (px.height * _scale).round()));
+      }
+    } else if (_type3d != null) {
+      _type3d!.dispose();
+      _type3d = null;
     }
     // The room as the ground: the camera on, each new frame up to the stage; the
     // cover as the ground: the record's, once.
@@ -1067,6 +1150,7 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
     if (MilkFeed.shared.rawFrames == _milkFrame) MilkFeed.shared.rawFrames = null;
     _dance?.dispose();
     _words?.dispose();
+    _type3d?.dispose();
     _covers.dispose();
     NativeStage.drawing = false;
     _watch?.cancel();

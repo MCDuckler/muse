@@ -3,6 +3,10 @@
 // stage window.
 import 'dart:async';
 
+import 'package:flutter/services.dart';
+
+import '../../state/show/combo_scores.dart';
+
 import 'scene.dart';
 import 'show_canvas.dart';
 import 'show_sims.dart';
@@ -22,6 +26,7 @@ class StageKit {
     if (kit != null) return Future.value(kit);
     return _loading ??= () async {
       final book = await SceneBook.load();
+      await ComboScores.load(rootBundle);
       for (final s in book.scenes.values) {
         for (final l in s.layers) {
           if (l.sim != null) SimLayer.warm(l.sim!);

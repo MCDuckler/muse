@@ -22,7 +22,9 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 
+import 'combo_scores.dart';
 import 'deck_pcm.dart';
+import 'milk_accent.dart';
 import 'milk_director.dart';
 import 'milk_library.dart';
 import 'milk_pipe.dart';
@@ -63,6 +65,17 @@ class MilkFeed extends ChangeNotifier {
 
   final library = MilkLibrary();
   late final director = MilkDirector(this);
+
+  /// The beat put on the preset on (wo_fx_*).
+  final accent = MilkAccent();
+
+  /// How much the preset on moves with the music by itself: as measured; one of the
+  /// hands' own (made here, reading wo_* itself) as if it did, a lot.
+  double? _react() {
+    final p = preset;
+    if (p == null || p.collection == 'mine') return 0.8;
+    return MilkScores.shipped?.react(p.fullName);
+  }
   final pcm = DeckPcm();
 
   MilkPipe? _helper;
@@ -138,7 +151,8 @@ class MilkFeed extends ChangeNotifier {
     final idle = now.difference(_anyWanted) > const Duration(seconds: 2);
     final whole = now.difference(_wholeWanted) < const Duration(seconds: 2);
     if (whole == _whole && idle == _idle) return;
-    if (whole != _whole) _send(whole ? 'size $width $height' : 'size $smallWidth $smallHeight');
+    // In the stage's own context, whole is the stage's own size (0 0: it fits it).
+    if (whole != _whole) _send(whole ? (_staged ? 'size 0 0' : 'size $width $height') : 'size $smallWidth $smallHeight');
     _whole = whole;
     _idle = idle;
     _send('fps ${idle ? idleFps : whole ? fps : smallFps}');
@@ -201,7 +215,8 @@ class MilkFeed extends ChangeNotifier {
     if (stage != null) {
       if (_staged) return;
       await library.ready();
-      stage.send('open $width $height $fps ${library.texturesDir}', null);
+      // At the stage's own size (0 0: it fits it, 16:9, up to 1080 rows).
+      stage.send('open 0 0 $fps ${library.texturesDir}', null);
       _staged = true;
       _ready = true;
       _whole = true;
@@ -313,8 +328,9 @@ class MilkFeed extends ChangeNotifier {
 
   // ---------------------------------------------------------------- the hands
   /// A preset by file: a cut, or a blend into it.
-  void load(MilkPreset preset, {bool soft = false}) {
+  void load(MilkPreset preset, {bool soft = false, double? blend}) {
     this.preset = preset;
+    if (soft && blend != null) _send('blend ${blend.toStringAsFixed(2)}');
     _send('${soft ? 'preset-soft' : 'preset'} ${preset.path}');
     library.noteUsed(preset);
   }
@@ -340,7 +356,7 @@ class MilkFeed extends ChangeNotifier {
       }
     }
     _size();
-    final vars = varsOf(st);
+    final vars = varsOf(st)..addAll(director.accents ? accent.frame(st.master, st.dt, react: _react(), salt: st.master.trackId ?? 0) : MilkAccent.none);
     _send('vars ${vars.entries.map((e) => '${e.key}=${e.value.toStringAsFixed(4)}').join(' ')}');
     // MilkDrop's bass/mid/treb from the show's own hits and bands rather than
     // its FFT: 1 is its "average"; a hit lands at 2 to 3, where presets' thresholds

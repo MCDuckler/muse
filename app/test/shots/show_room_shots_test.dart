@@ -60,6 +60,19 @@ void main() {
     await _font('Archivo', ['$f/Archivo.ttf']);
     await _font('CourierPrime', ['$f/CourierPrime-Regular.ttf', '$f/CourierPrime-Bold.ttf']);
     await _font('PermanentMarker', ['$f/PermanentMarker.ttf']);
+    for (final (family, file) in const [
+      ('BebasNeue', 'BebasNeue-Regular.ttf'),
+      ('Orbitron', 'Orbitron.ttf'),
+      ('Bungee', 'Bungee-Regular.ttf'),
+      ('PressStart2P', 'PressStart2P-Regular.ttf'),
+      ('Monoton', 'Monoton-Regular.ttf'),
+      ('RubikMonoOne', 'RubikMonoOne-Regular.ttf'),
+      ('Righteous', 'Righteous-Regular.ttf'),
+      ('Syne', 'Syne.ttf'),
+      ('InstrumentSerif', 'InstrumentSerif-Regular.ttf'),
+    ]) {
+      await _font(family, ['$f/$file']);
+    }
     await _font('MaterialIcons', ['$m/MaterialIcons-Regular.otf']);
     await _font('Roboto', ['$m/Roboto-Regular.ttf']);
     await StageKit.load();
@@ -210,6 +223,11 @@ void main() {
       await tester.pump();
       expect(find.text('YOURS'), findsOneWidget);
       await shot('show-room-${w.round()}-rules');
+      // The 3D text's tab.
+      await tester.tap(find.text('TEXT'));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('LINES'), findsOneWidget);
+      await shot('show-room-${w.round()}-text');
       // The settings: the finish, the director, the stage's numbers.
       await tester.tap(find.text('SETTINGS'));
       await tester.pump(const Duration(milliseconds: 300));

@@ -50,7 +50,11 @@ endif()
 if(WETOWL_STAGE_MILK)
 target_compile_definitions(wetowl_stage PRIVATE WS_MILK)
 include(ExternalProject)
-set(WS_PM "${CMAKE_CURRENT_BINARY_DIR}/projectm-gles")
+# Kept under the patch's hash, as the helper's is: a changed patch is a fresh fetch
+# (ExternalProject applies a patch once, at the clone).
+file(SHA1 "${CMAKE_CURRENT_SOURCE_DIR}/../milk/projectm-wetowl.patch" WS_PM_PATCH_HASH)
+string(SUBSTRING "${WS_PM_PATCH_HASH}" 0 10 WS_PM_PATCH_HASH)
+set(WS_PM "${CMAKE_CURRENT_BINARY_DIR}/projectm-gles-${WS_PM_PATCH_HASH}")
 set(WS_PM_ARGS
   -DCMAKE_BUILD_TYPE=Release -DENABLE_GLES=ON -DBUILD_SHARED_LIBS=OFF -DENABLE_PLAYLIST=OFF -DENABLE_SDL_UI=OFF
   -DBUILD_TESTING=OFF -DENABLE_INSTALL=ON -DENABLE_SYSTEM_PROJECTM_EVAL=OFF -DENABLE_DEBUG_POSTFIX=OFF
@@ -60,6 +64,7 @@ if(CMAKE_C_COMPILER)
   list(APPEND WS_PM_ARGS -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER})
 endif()
 ExternalProject_Add(projectm_gles
+  PREFIX         "${CMAKE_CURRENT_BINARY_DIR}/projectm_gles-${WS_PM_PATCH_HASH}"
   GIT_REPOSITORY https://github.com/projectM-visualizer/projectm.git
   GIT_TAG        v4.1.6
   GIT_SHALLOW    TRUE

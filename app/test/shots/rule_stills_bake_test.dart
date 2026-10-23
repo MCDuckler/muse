@@ -59,6 +59,7 @@ void main() {
     await _font('BebasNeue', ['$f/BebasNeue-Regular.ttf']);
     await _font('InstrumentSerif', ['$f/InstrumentSerif-Regular.ttf', '$f/InstrumentSerif-Italic.ttf']);
     await _font('Syne', ['$f/Syne.ttf']);
+    await _font('Orbitron', ['$f/Orbitron.ttf']);
     kit = await StageKit.load();
     await MemeBank.of('siebenschlaefer').decodeAll();
     await TurntableBank.shared.warm();
@@ -92,6 +93,7 @@ void main() {
     Figure.field: 'drift',
     Figure.room: 'echo',
     Figure.meme: 'siebenschlaefer',
+    Figure.type3d: 'type3d',
   };
   // The dancers' fluid and their viewports are the native stage's alone: no still
   // (the grid says so).
@@ -151,6 +153,8 @@ void main() {
         await tester.pump(const Duration(milliseconds: 16));
         // The slime mould's picture is decoded off the frame: real time for it.
         if (kind == Figure.veins && i % 20 == 19) await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+        // The 3D type's field is set off the frame.
+        if (kind == Figure.type3d && i % 15 == 0) await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 60)));
       }
       final img = last;
       expect(img, isNotNull, reason: 'the stage drew $scene');

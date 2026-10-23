@@ -9,8 +9,16 @@
 // blend — is drawn by the rules' weights for the scene on: the background kept a
 // while, the rest turned on the sections and the phrases. Deterministic from its
 // seed, so a recording plays the same show twice.
+//
+// How the combinations look is measured (combo_scores.dart): the ugly ones never
+// come by themselves, and the one drawn is as intense as where the record is — dark
+// and spare in an intro or a breakdown, climbing phrase by phrase through a build,
+// the hardest on the drop. A record keeps a look of its own (a few backgrounds and
+// styles it leans on), and a section that comes back (the second chorus, the second
+// drop) brings back its scene and its combination.
 import 'dart:math' as math;
 
+import 'combo_scores.dart';
 import 'show_combos.dart';
 import 'show_events.dart';
 import 'show_rig.dart';
@@ -59,8 +67,10 @@ class SceneMeta {
   }
 }
 
-/// How the director got from one scene to the next.
-enum SceneChange { cut, dissolve, hit }
+/// How the director got from one scene to the next. A mosh is a cut the stage
+/// datamoshes: the scene being left dragged on by the new one's motion
+/// (native/stage/src/fx.h); where the stage cannot, a cut.
+enum SceneChange { cut, dissolve, hit, mosh }
 
 class ShowDirector {
   ShowDirector({this.scenes = const [], int seed = 1}) : _rng = math.Random(seed);
@@ -69,14 +79,47 @@ class ShowDirector {
   List<SceneMeta> scenes;
   final math.Random _rng;
 
-  /// How long a dissolve takes, in bars; a cut takes none.
+  /// How long a dissolve takes, in bars; a cut takes none. Into a calm section
+  /// longer ([dissolveFor]).
   static const dissolveBars = 1.0;
+  double _dissolveBars = dissolveBars;
+
+  /// The sections that are quiet: never moshed into, dissolved into slowly.
+  static const calmSections = {'intro', 'outro', 'breakdown', 'break'};
+
+  /// The loud ones: a change on a phrase is a cut, and moshed more often.
+  static const loudSections = {'drop', 'chorus'};
+
+  /// The section the record is in (a breakdown said as one), as of the last frame.
+  String? _now;
+
+  /// How many bars a dissolve into [section] takes.
+  static double dissolveFor(String? section) => section == 'outro' ? 3 : (calmSections.contains(section) ? 2 : dissolveBars);
+
+  /// How often a change is datamoshed, by where the record is: a drop most of all
+  /// (the build smeared by the drop's motion), the loud sections more than the pool's
+  /// share, a build less, the quiet ones never.
+  static double moshChance(double share, String? section, {bool drop = false}) {
+    if (share <= 0) return 0;
+    if (drop) return math.min(0.9, share * 1.6);
+    if (calmSections.contains(section)) return 0;
+    if (loudSections.contains(section)) return math.min(0.8, share * 1.3);
+    if (section == 'build') return share * 0.5;
+    return share;
+  }
 
   /// A scene is kept at least this long, in bars, unless a drop or the hands say.
   static const _keepBars = 8;
 
   String? _scene, _from;
   double _k = 1;
+
+  /// How many of the cuts and dissolves are datamoshes instead, 0..1 (the pool's
+  /// say); and how many there have been — the stage moshes when it goes up.
+  double moshShare = 0;
+  int moshes = 0;
+  // Its own dice, so the scenes and combinations chosen are as they were without.
+  final _moshRng = math.Random(0x6d6f7368);
   SceneChange _how = SceneChange.cut;
   int _sinceBar = 0;
   String? _heldBy;
@@ -108,6 +151,14 @@ class ShowDirector {
   // ---------------------------------------------------------------- combinations
   /// Each scene's figure, by id (the looks'): what styles it has.
   Map<String, Figure> kinds = const {};
+
+  /// How the combinations look (the audit's table); null: the one the app came with.
+  ComboScores? get scores => _scores ?? ComboScores.shipped;
+  ComboScores? _scores;
+  set scores(ComboScores? v) {
+    _scores = v;
+    _leans = null;
+  }
 
   /// The rules in force (the pool's, shipped and the hands').
   List<ComboRule> get rules => _rules;
@@ -150,9 +201,108 @@ class ShowDirector {
     final kind = kinds[scene] ?? Figure.none;
     final here = _groundsNow;
     return [
-      for (final c in combosOf(scene, kind, grounds: comboGrounds.where(here.contains)))
-        (c, comboWeight(c, _rules)),
+      for (final c in combosOf(scene, kind, grounds: comboGrounds.where(here.contains))) (c, weigh(c)),
     ];
+  }
+
+  /// [c]'s weight: the rules', less as it looks worse (none under ComboScores.floor) —
+  /// but a combination the hands named themselves comes as they said, however it
+  /// measured.
+  double weigh(Combo c) => ComboScores.weigh(c, _rules, scores: scores);
+
+  // ---------------------------------------------------------------- the record
+  /// How intense the picture should be now, 0..1, by where the record is (null: no
+  /// record to say): set every frame.
+  double? target;
+
+  /// What a section asks for, before the bar's energy: spare at the ends and in a
+  /// breakdown, the drop the hardest, a build climbing as it goes.
+  static double sectionIntensity(String? section, double buildK) => switch (section) {
+        'intro' => 0.2,
+        'outro' => 0.18,
+        'breakdown' => 0.15,
+        'break' => 0.22,
+        'verse' => 0.4,
+        'inst' => 0.5,
+        'chorus' => 0.68,
+        'drop' => 0.92,
+        'build' => 0.3 + 0.55 * buildK,
+        _ => 0.3 + 0.5 * buildK,
+      };
+
+  /// The intensity [m] asks for: its section's, moved by the bar's energy (and the
+  /// hands' bias); the last beats before a drop climb towards it.
+  static double intensityFor(ShowDeck m, {double bias = 0}) {
+    final energy = (m.energy * (0.5 + 0.5 * m.level) + bias * 0.25).clamp(0.0, 1.0);
+    var t = 0.65 * sectionIntensity(m.breakdown ? 'breakdown' : m.section, m.buildK) + 0.35 * energy;
+    if (m.section == null && m.buildK <= 0) t = 0.2 + 0.7 * energy;
+    return t.clamp(0.0, 1.0);
+  }
+
+  /// How hard the picture works with the music now, 0 (a quiet part: still) to 1 (a
+  /// drop): [intensityFor] past its middle, eased in. The cameras' (stage_camera.dart)
+  /// and MilkDrop's accents (milk_accent.dart).
+  static double drive(ShowDeck m) {
+    final x = ((intensityFor(m) - 0.45) / 0.45).clamp(0.0, 1.0);
+    return x * x * (3 - 2 * x);
+  }
+
+  /// How far from the [target] a combination may be and still come often.
+  static const intensityWidth = 0.2;
+
+  Object? _record;
+  int? _recordSeed;
+
+  /// Each section's scene and combination the first time it came on this record:
+  /// brought back when the section comes back.
+  final _sceneBook = <String, String>{};
+  final _comboBook = <String, Combo>{};
+
+  static int _hash(String s) {
+    var h = 0x811c9dc5;
+    for (final c in s.codeUnits) {
+      h = ((h ^ c) * 0x01000193) & 0x7fffffff;
+    }
+    return h;
+  }
+
+  /// The record's own look: a third of the backgrounds and two in five of the styles
+  /// leaned on, the same every time it plays.
+  double affinity(Combo c) {
+    final seed = _recordSeed;
+    if (seed == null) return 1;
+    var k = 1.0;
+    if (!c.world && _hash('$seed|g|${c.ground}') % 100 < 35) k *= 2.5;
+    if (_hash('$seed|s|${c.scene}.${c.style}') % 100 < 40) k *= 1.8;
+    return k;
+  }
+
+  /// The hands' taste for a combination (show_taste.dart); none: no lean.
+  double Function(Combo c)? taste;
+
+  /// How many bars the combination on has been on.
+  int get comboBars => _comboSinceBar;
+
+  /// [c]'s weight now: [weigh], times how near it is to the [target], the record's
+  /// own look and the hands' taste.
+  double leanNow(Combo c, double w) {
+    if (w <= 0) return 0;
+    var k = affinity(c) * (taste?.call(c) ?? 1);
+    final t = target, i = scores?.intensity(c);
+    if (t != null && i != null) {
+      final d = i - t;
+      k *= math.exp(-d * d / (2 * intensityWidth * intensityWidth));
+    }
+    return w * k;
+  }
+
+  void _newRecord(ShowDeck m) {
+    final id = m.trackId ?? m.title;
+    if (id == _record) return;
+    _record = id;
+    _recordSeed = id == null ? null : _hash('$id');
+    _sceneBook.clear();
+    _comboBook.clear();
   }
 
   /// Each scene's lean, by id: the mean weight of its combinations that are on (0 —
@@ -206,7 +356,7 @@ class ShowDirector {
       final same = narrow((c) => c.style == now.style && (c.ground == now.ground || c.world));
       if (same.isNotEmpty) pool = same;
     }
-    final pick = pickByWeight(pool, _rng.nextDouble()) ??
+    final pick = pickByWeight([for (final (c, w) in pool) (c, leanNow(c, w))], _rng.nextDouble()) ??
         // Every combination of the scene is off: drawn as it is, on black.
         Combo(ground: 'black', scene: scene, style: stylesOfFigure(kinds[scene] ?? Figure.none).first);
     _setCombo(pick);
@@ -260,12 +410,12 @@ class ShowDirector {
     return on.isEmpty ? scenes : on;
   }
 
-  void next({int by = 1}) {
+  void next({int by = 1, SceneChange how = SceneChange.dissolve}) {
     final on = this.on;
     if (on.isEmpty) return;
     final i = on.indexWhere((s) => s.id == _scene);
     final n = ((i < 0 ? 0 : i + by) % on.length + on.length) % on.length;
-    choose(on[n].id);
+    choose(on[n].id, how: how);
   }
 
   /// Why the scene on is on, in words (the SHOW page's SCENE row says it), and how
@@ -273,8 +423,16 @@ class ShowDirector {
   String why = '';
   int get barsOn => _sinceBar;
 
-  void _go(String id, SceneChange how, {String why = ''}) {
+  void _go(String id, SceneChange how, {String why = '', bool mayMosh = true}) {
     if (id == _scene) return;
+    // A cut or a dissolve (not a drop's hit, nor the first scene) moshed, as often as
+    // the pool says; one asked for, always.
+    if (how == SceneChange.mosh ||
+        (mayMosh && _scene != null && moshShare > 0 && _moshRng.nextDouble() < moshChance(moshShare, _now, drop: how == SceneChange.hit))) {
+      how = SceneChange.mosh;
+      moshes++;
+    }
+    _dissolveBars = dissolveFor(_now);
     this.why = why;
     _from = _scene;
     _fromCombo = _combo;
@@ -370,6 +528,9 @@ class ShowDirector {
       _groundSinceBar++;
       _comboSinceBar++;
     }
+    _newRecord(m);
+    _now = m.breakdown ? 'breakdown' : m.section;
+    target = m.playing || m.bpm != null ? intensityFor(m, bias: bias) : null;
     var turned = false;
     if (section && m.section != _lastSection) {
       _lastSection = m.section;
@@ -398,6 +559,8 @@ class ShowDirector {
         // with a hit. Never a simulation, which would be a black frame on the drop.
         final pick = fits.firstWhere((f) => f.instant, orElse: () => fits.first).id;
         if (pick != _scene) _go(pick, SceneChange.hit, why: 'the drop: the best fit that is full at once');
+      } else if (turned && _booked(m.section, fits) != null) {
+        _go(_booked(m.section, fits)!, m.breakdown ? SceneChange.dissolve : SceneChange.cut, why: 'the ${m.section} again: its scene, as the last time');
       } else if (section && !suits) {
         _go(fits.first.id, m.breakdown ? SceneChange.dissolve : SceneChange.cut, why: 'the section turned${m.section != null ? ' to the ${m.section}' : ''}: the best fit');
       } else if (phrase && _sinceBar >= _keepBars && (!suits || _rng.nextDouble() < 0.35)) {
@@ -406,27 +569,51 @@ class ShowDirector {
         // After the dancer, more often than not, the birds: the flock seeds itself
         // from her pose, so she turns into them.
         if ((_scene?.startsWith('dance-') ?? false) && fits.any((f) => f.id == 'flock') && _rng.nextDouble() < 0.6) {
-          _go('flock', SceneChange.dissolve, why: 'after the dancers, the birds');
+          _go('flock', SceneChange.dissolve, why: 'after the dancers, the birds', mayMosh: false);
         } else if (pool.isNotEmpty) {
-          _go(pool[_rng.nextInt(pool.length)].id, SceneChange.dissolve, why: 'a new phrase: another of the three that fit best');
+          // In a loud section a cut on the phrase; elsewhere a dissolve.
+          _go(pool[_rng.nextInt(pool.length)].id, loudSections.contains(_now) ? SceneChange.cut : SceneChange.dissolve,
+              why: 'a new phrase: another of the three that fit best');
         }
       }
     }
 
     // The combination: one for the scene where there is none (or its background went
-    // away, or its weight went to nothing); the background another on a phrase after
-    // a while; the style, the mask and the blend on a section turning, or a phrase
-    // after [styleBars].
+    // away, or its weight went to nothing); a section that came before, the one it
+    // had; on a drop a new one, the hardest that suits; through a build another every
+    // phrase, each harder than the last; the background another on a phrase after a
+    // while; the style, the mask and the blend on a section turning, or a phrase after
+    // [styleBars].
     final c = _combo;
     if (_scene != null && !locked) {
+      final label = m.breakdown ? 'breakdown' : m.section;
+      final booked = turned && label != null ? _comboBook[label] : null;
       if (c == null || c.scene != _scene) {
         _pickCombo();
-      } else if ((!c.world && !_groundsNow.contains(c.ground)) || comboWeight(c, _rules) <= 0) {
+      } else if ((!c.world && !_groundsNow.contains(c.ground)) || weigh(c) <= 0) {
         _pickCombo(keepGround: false);
+      } else if (booked == c) {
+        // The section back, its combination still on: kept.
+      } else if (booked != null && booked.scene == _scene && weigh(booked) > 0 && _rng.nextDouble() < 0.75) {
+        _setCombo(booked);
+        _moshCombo(c);
+      } else if (drop && _comboSinceBar > 0) {
+        _pickCombo(keepGround: false);
+        _moshCombo(c, drop: true);
+      } else if (phrase && m.buildK > 0.05 && !m.breakdown && _comboSinceBar >= 4) {
+        _pickCombo();
+        _moshCombo(c);
       } else if (phrase && _groundSinceBar >= groundHoldBars && _rng.nextDouble() < 0.5) {
         _pickCombo(keepGround: false);
+        _moshCombo(c);
       } else if ((turned && _comboSinceBar > 2) || (phrase && _comboSinceBar >= styleBars && _rng.nextDouble() < 0.5)) {
         _pickCombo();
+        _moshCombo(c);
+      }
+      if (turned && label != null && _scene != null) {
+        _sceneBook.putIfAbsent(label, () => _scene!);
+        final now = _combo;
+        if (now != null) _comboBook.putIfAbsent(label, () => now);
       }
     }
 
@@ -434,10 +621,25 @@ class ShowDirector {
     if (_k < 1) {
       final bpm = m.bpm ?? 120;
       final barSeconds = 240 / bpm;
-      _k = (_k + s.dt / (barSeconds * dissolveBars)).clamp(0.0, 1.0);
+      _k = (_k + s.dt / (barSeconds * _dissolveBars)).clamp(0.0, 1.0);
       if (_k >= 1) _from = null;
     }
     return (scene: _scene, from: _k < 1 ? _from : null, k: _k);
+  }
+
+  /// The scene [section] had the first time it came on this record, where it still
+  /// fits (among the four best) and is not on already.
+  String? _booked(String? section, List<SceneMeta> fits) {
+    final was = section == null ? null : _sceneBook[section];
+    if (was == null || was == _scene) return null;
+    return fits.take(4).any((f) => f.id == was) ? was : null;
+  }
+
+  /// A new combination on the same scene (another style, background, blend), moshed
+  /// half as often as a change of scene would be where the record is — on a drop as
+  /// often.
+  void _moshCombo(Combo was, {bool drop = false}) {
+    if (_combo != was && moshShare > 0 && _moshRng.nextDouble() < moshChance(moshShare, _now, drop: drop) * (drop ? 1 : 0.5)) moshes++;
   }
 
   /// Whether the last change was a hit: the engine flashes on it.

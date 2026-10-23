@@ -57,6 +57,12 @@ class DanceMove {
   /// against all their rising and falling (DanceRig works it out on loading).
   double pulse = 0;
 
+  /// Where in its beat the capture dips, as the beats to read it ahead by so the dip
+  /// lands on the record's beat (-0.5..0.5; 0 where it does not pump). The captures'
+  /// beats were found from the music they were danced to, and their bounce sits
+  /// anywhere in the beat: danced as they were, most pumped off the kick.
+  double shift = 0;
+
   factory DanceMove.fromJson(Map<String, dynamic> j) => DanceMove(
         id: '${j['id']}',
         style: DanceStyle.values.asNameMap()['${j['style']}'] ?? DanceStyle.groove,
@@ -148,6 +154,10 @@ class DanceRig {
     for (final m in moves) {
       m.pulse = _pulse(m);
     }
+    // A duet's halves dance to the lead's bounce together.
+    for (final d in _duos.values) {
+      d[1].shift = d[0].shift;
+    }
     for (final m in meshes) {
       _smooth(m);
       for (var v = 0; v < m.positions; v++) {
@@ -157,6 +167,9 @@ class DanceRig {
   }
 
   late final Map<String, DanceMove> _byId;
+
+  /// The pump below which a move's bounce is too faint to set its beat by.
+  static const minPulseShift = 0.25;
 
   double _pulse(DanceMove m) {
     final n = m.beats * fpb;
@@ -175,7 +188,14 @@ class DanceRig {
     }
     final amp = 2 / n * math.sqrt(re * re + im * im);
     final share = amp / (math.sqrt(2 * varz) + 0.004);
-    return (share * (amp / 0.025).clamp(0.0, 1.0)).clamp(0.0, 1.0);
+    final pulse = (share * (amp / 0.025).clamp(0.0, 1.0)).clamp(0.0, 1.0);
+    // The rise and fall as amp·cos(2π·beat − φ): highest at φ/2π into the beat, lowest
+    // half a beat on — read that far ahead, the dip is on the beat.
+    if (pulse >= minPulseShift) {
+      final low = math.atan2(im, re) / (2 * math.pi) + 0.5;
+      m.shift = low - (low + 0.5).floorToDouble();
+    }
+    return pulse;
   }
 
   /// This rig's own [id] move (every model dances the same table).
@@ -307,7 +327,7 @@ class DanceRig {
   /// [move]'s pose [beat] capture beats in (wrapping round its loop), into [out].
   void sample(DanceMove move, double beat, DancePose out) {
     final n = move.beats * fpb;
-    var s = (beat % move.beats) * fpb;
+    var s = ((beat + move.shift) % move.beats) * fpb;
     if (s < 0) s += n;
     final i = s.floor().clamp(0, n - 1);
     final f = s - i;

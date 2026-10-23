@@ -51,6 +51,16 @@ class DemoShowFeed extends ChangeNotifier implements ShowFeed {
     }
   }();
 
+  /// WETOWL_SHOW_STYLE=slit: the figure in that style, for a look at one.
+  static final String? _forcedStyle = () {
+    try {
+      final v = Platform.environment['WETOWL_SHOW_STYLE'];
+      return v == null || v.isEmpty ? null : v;
+    } catch (_) {
+      return null;
+    }
+  }();
+
   static final RigBlend? _forcedBlend = () {
     try {
       final mask = Mask.values.asNameMap()[Platform.environment['WETOWL_SHOW_MASK']];
@@ -260,10 +270,12 @@ class DemoShowFeed extends ChangeNotifier implements ShowFeed {
     // The director's combination — or a background, a style, a mask or a blend asked
     // for from outside, for a look at one on the demo:
     // WETOWL_SHOW_GROUND=white|milk|pulse.rays|field.drift…, WETOWL_SHOW_MASK=keyhole,
-    // WETOWL_SHOW_MIX=contrast; held by a bake ([style], [ground], [blend]).
+    // WETOWL_SHOW_MIX=contrast, WETOWL_SHOW_STYLE=slit; held by a bake ([style],
+    // [ground], [blend]).
     if (rig.figure.kind != Figure.none) {
       final ground = this.ground ?? _forcedGround;
       if (ground != null) rig = rig.copyWith(ground: ground);
+      final style = this.style ?? _forcedStyle;
       if (style != null) rig = rig.copyWith(figure: rig.figure.copyWith(style: style));
       final b = blend ?? _forcedBlend;
       if (b != null) rig = rig.copyWith(blend: b);
@@ -272,6 +284,7 @@ class DemoShowFeed extends ChangeNotifier implements ShowFeed {
       scene: d.scene,
       sceneFrom: d.from,
       sceneK: d.k,
+      mosh: director.moshes,
       clearSceneFrom: d.from == null,
       rig: rig,
       macros: m,

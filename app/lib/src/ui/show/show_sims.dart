@@ -35,6 +35,7 @@ import 'show_flock.dart';
 import 'show_flock_bird.dart';
 import 'show_meme.dart';
 import 'show_turntable.dart';
+import 'show_type3d.dart';
 import 'show_words.dart';
 
 abstract class SimLayer {
@@ -55,6 +56,7 @@ abstract class SimLayer {
         'dance.disco' || 'dance.neon' || 'dance.shadow' || 'dance.art' => DanceSim('dance.art'),
         'flock' => FlockSim(kind),
         'words' => WordsSim(),
+        'type3d' => Type3dSim(),
         _ => null,
       };
 

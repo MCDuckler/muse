@@ -466,6 +466,40 @@ class DanceBody {
     }
   }
 
+  /// The body as dust on a canvas (the native stage's kDust, roughly): a point at each
+  /// of its positions, leaving it from the top down as [d] says, drifting up and out
+  /// on the picture.
+  void dust(Canvas c, DanceCam cam, DanceDust d) {
+    _project(cam);
+    final n = mesh.positions;
+    final xy = _dustXY ??= Float32List(n * 2);
+    final reach = cam.size.height;
+    var m = 0;
+    for (var v = 0; v < n; v++) {
+      if (_depth[v] < DanceCam.near) continue;
+      final h1 = _hash(v * 0.1234), h2 = _hash(v * 0.731 + 3.1);
+      final order = (1 - _wp[v * 3 + 2] / 1.9).clamp(0.0, 1.0) * 0.6 + h2 * 0.4;
+      final k = ((d.explode - order * 0.7) / 0.3).clamp(0.0, 1.0);
+      xy[m * 2] = _ps[v * 2] + (h1 - 0.5) * k * reach * 0.35;
+      xy[m * 2 + 1] = _ps[v * 2 + 1] + (h2 - 0.5) * k * reach * 0.25 - d.rise * k * k * reach * 0.2;
+      m++;
+    }
+    c.drawRawPoints(
+        ui.PointMode.points,
+        Float32List.sublistView(xy, 0, m * 2),
+        Paint()
+          ..color = d.a.withValues(alpha: d.alpha)
+          ..strokeWidth = math.max(1.5, reach / 400)
+          ..strokeCap = StrokeCap.round
+          ..blendMode = BlendMode.plus);
+  }
+
+  Float32List? _dustXY;
+  static double _hash(double x) {
+    final s = math.sin(x * 12.9898 + 4.1414) * 43758.5453;
+    return s - s.floorToDouble();
+  }
+
   /// The ink line or the neon tube round the body: its back faces pushed out by
   /// [width] metres, in [color]. Drawn before the body.
   void outline(Canvas c, DanceCam cam, double width, Color color, {BlendMode blend = BlendMode.srcOver}) {

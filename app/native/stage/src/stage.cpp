@@ -31,7 +31,9 @@
 #endif
 
 #include "dance.h"
+#include "fx.h"
 #include "particles.h"
+#include "target.h"
 
 // ANGLE's EGL tokens (EGL/eglext_angle.h), for an eglext.h without them.
 #ifndef EGL_PLATFORM_ANGLE_ANGLE
@@ -56,6 +58,7 @@
 #define EGL_D3D_TEXTURE_2D_SHARE_HANDLE_ANGLE 0x3200
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <deque>
@@ -79,6 +82,7 @@ namespace milk {
 struct Core {
   std::function<void(const std::string&)> say = [](const std::string&) {};
   GLuint tex = 0;
+  int width = 0, height = 0;
   bool open(int, int, int, const std::string&) { return false; }
   void close() {}
   bool command(const std::string&, const std::vector<uint8_t>&) { return false; }
@@ -248,49 +252,6 @@ static const char* kCommon[WS_COMMON] = {
     "uHitKick", "uHitSnare", "uHitTop", "uBeatDecay", "uBarDecay", "uBarSaw", "uPhraseSaw", "uDownbeat",
     "uExposure", "uBandLow", "uBandMid", "uBandHigh", "uBarIndex", nullptr};
 
-struct Target {
-  GLuint tex = 0, fbo = 0, depth = 0;
-  int w = 0, h = 0, depthW = 0, depthH = 0;
-  GLenum internal = 0;
-  // A depth buffer under it (the dancers'), made when first asked for.
-  void withDepth() {
-    if (depth && depthW == w && depthH == h) return;
-    if (!depth) glGenRenderbuffers(1, &depth);
-    glBindRenderbuffer(GL_RENDERBUFFER, depth);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth);
-    depthW = w; depthH = h;
-  }
-  void make(int width, int height, GLenum fmt) {
-    if (tex && w == width && h == height && internal == fmt) return;
-    drop();
-    w = width; h = height; internal = fmt;
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glTexStorage2D(GL_TEXTURE_2D, 1, fmt, w, h);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glGenFramebuffers(1, &fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
-    glClearColor(0, 0, 0, 1);
-    glClear(GL_COLOR_BUFFER_BIT);
-  }
-  void drop() {
-    if (fbo) glDeleteFramebuffers(1, &fbo);
-    if (tex) glDeleteTextures(1, &tex);
-    if (depth) glDeleteRenderbuffers(1, &depth);
-    tex = fbo = depth = 0; w = h = depthW = depthH = 0;
-  }
-  void bind() const {
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glViewport(0, 0, w, h);
-  }
-};
-
 struct Stage {
   // where
   EGLDisplay display = EGL_NO_DISPLAY;
@@ -347,6 +308,11 @@ struct Stage {
   float treat[WS_TREAT] = {};
   // The words' frame (ws_words): the sim shader's floats in the file's order.
   std::vector<float> words;
+  // The datamosh asked for (ws_mosh): a count, and how long and how hard.
+  int moshAsk = 0;
+  // ws_dump: where the next frame's layers go (empty: nowhere).
+  std::string dumpPath;
+  float moshSeconds = 1, moshStrength = 1;
   void (*onFrame)(void*) = nullptr;
   void* onFrameUser = nullptr;
   // drawn (the stage's thread)
@@ -356,6 +322,13 @@ struct Stage {
   Target work, leaving, scratch, ground, trailA, trailB, bloom[6], out[3];
   // the dancers (dance.h): drawn from Dart's list where the scene is "@dance"
   Dance dance;
+  // the stage's own passes that keep pictures (fx.h): the veins, the slit-scan, the
+  // datamosh; which picture the last frame showed (0 work, 1 the trails, 2 the mosh's)
+  Slime slime;
+  Slit slit;
+  Mosh mosh;
+  int moshDone = 0, lastPic = 0;
+  GLenum agentFormat = GL_RGBA16F;
   // particles, the scene they are for, and how they are drawn
   std::map<std::string, std::unique_ptr<Particles>> particles;
   std::string particleScene;
@@ -388,6 +361,9 @@ struct Stage {
   bool milkOpen = false;
   // To open it again on a new context: the line that opened it, and its preset.
   std::string milkOpenLine;
+  // MilkDrop drawn at the stage's own size ("open 0 0 …", "size 0 0"): 16:9, as tall
+  // as the stage's picture, between 360 and 1080 rows; or at the size it was told.
+  bool milkFit = false;
   std::pair<std::string, std::vector<uint8_t>> milkPreset;
   bool milkReopen = false;
 };
@@ -409,6 +385,9 @@ bool setUp() {
   glGenVertexArrays(1, &S->vao);
   S->floatTargets = hasExtension("GL_EXT_color_buffer_float") || hasExtension("GL_EXT_color_buffer_half_float");
   S->workFormat = S->floatTargets ? GL_RGBA16F : GL_RGBA8;
+  // The slime's agents (fx.h): their places in full floats where the GPU can draw
+  // into them, else in halves (half a pixel of a map 960 wide: they step coarser).
+  S->agentFormat = hasExtension("GL_EXT_color_buffer_float") ? GL_RGBA32F : S->workFormat;
   std::string err;
   S->down = glsl::link(kVert, kDown, err);
   S->up = S->down ? glsl::link(kVert, kUp, err) : 0;
@@ -447,6 +426,14 @@ void bindTex(GLuint program, const char* name, int unit, GLuint tex) {
   glUniform1i(glGetUniformLocation(program, name), unit);
 }
 
+// The size MilkDrop is drawn at where it fits the stage: 16:9 (its picture is filled
+// and cropped to the stage as a 16:9 one), as tall as the stage's own picture.
+static void milkFitted(int& w, int& h) {
+  const int rows = S->work.h > 0 ? std::clamp(S->work.h, 360, 1080) : 540;
+  h = rows & ~1;
+  w = (rows * 16 / 9) & ~1;
+}
+
 // MilkDrop's commands since the last frame, on the stage's thread.
 void milkCommands() {
   std::deque<std::pair<std::string, std::vector<uint8_t>>> batch;
@@ -457,6 +444,8 @@ void milkCommands() {
       int w = 960, h = 540, fps = 60;
       char textures[1024] = {0};
       std::sscanf(line.c_str(), "open %d %d %d %1023[^\n]", &w, &h, &fps, textures);
+      S->milkFit = w <= 0 || h <= 0;
+      if (S->milkFit) milkFitted(w, h);
       S->milk.say = [](const std::string& l) {
         std::lock_guard<std::mutex> g(S->milkLock);
         S->milkSaid += l + "\n";
@@ -469,7 +458,19 @@ void milkCommands() {
     if (!S->milkOpen) continue;
     if (line == "quit") { S->milk.close(); S->milkOpen = false; S->milkOpenLine.clear(); S->milkPreset.first.clear(); continue; }
     if (line.rfind("preset", 0) == 0 || line.rfind("data", 0) == 0) S->milkPreset = {line, payload};
+    if (line.rfind("size", 0) == 0) {
+      int w = 0, h = 0;
+      std::sscanf(line.c_str(), "size %d %d", &w, &h);
+      S->milkFit = w <= 0 || h <= 0;
+      if (S->milkFit) continue;  // fitted at the next frame
+    }
     S->milk.command(line, payload);
+  }
+  // Fitted to the stage: drawn again at its new size where the stage's changed.
+  if (S->milkOpen && S->milkFit) {
+    int w = 0, h = 0;
+    milkFitted(w, h);
+    if (w != S->milk.width || h != S->milk.height) S->milk.command("size " + std::to_string(w) + " " + std::to_string(h), {});
   }
 }
 
@@ -534,14 +535,16 @@ void treatPass(const float* q, Target& t, Target& via) {
   glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
 }
 
-// The words (ui/show/show_words.dart): the record's line set in type, rasterised by
-// Dart into a picture per line and sent up by name ("words.t0", "words.t1"), drawn
-// through the Flutter stage's own sim shader (shaders/show/sim/words_fx.frag) with
-// its floats in the order the file declares them — what Dart's setFloat(i) does on
-// the Flutter stage, so the two draw the same frame from the same numbers. A sampler
-// uX is the texture "words.x" (lower case); uGround is the ground's picture.
-void drawWords(Target& t, const std::vector<float>& v, GLuint groundTex) {
-  const glsl::Program* p = S->programs.get("sim/words_fx");
+// A sim drawn by Dart's numbers: the words (ui/show/show_words.dart: the record's line
+// set in type, rasterised by Dart into a picture per line and sent up by name,
+// "words.t0", "words.t1"), the 3D type (show_type3d.dart: its line's distance field,
+// "type3d.sdf"). Drawn through the Flutter stage's own sim shader (shaders/show/sim/
+// words_fx.frag, sim/type3d.frag) with its floats in the order the file declares
+// them — what Dart's setFloat(i) does on the Flutter stage, so the two draw the same
+// frame from the same numbers (ws_words, whichever sim is on). A sampler uX is the
+// texture "<prefix>.x" (lower case); uGround is the ground's picture.
+void drawSim(Target& t, const char* program, const std::string& prefix, const std::vector<float>& v, GLuint groundTex) {
+  const glsl::Program* p = S->programs.get(program);
   t.bind();
   if (!p) {
     glClearColor(0, 0, 0, 0);
@@ -554,6 +557,8 @@ void drawWords(Target& t, const std::vector<float>& v, GLuint groundTex) {
   // Straight colour for the blend's mix by the coverage; premultiplied where the layer
   // goes out whole (no blend: the finish reads the colour alone).
   if (const GLint at = p->loc("uPremul"); at >= 0) glUniform1f(at, groundTex ? 0.0f : 1.0f);
+  // Whether the ground's picture is bound (a sim that looks through itself at it).
+  if (const GLint at = p->loc("uGroundOn"); at >= 0) glUniform1f(at, groundTex ? 1.0f : 0.0f);
   if (const GLint at = p->loc("wsHeight"); at >= 0) glUniform1f(at, (float)t.h);
   int unit = 0;
   for (const auto& name : p->samplers) {
@@ -561,13 +566,42 @@ void drawWords(Target& t, const std::vector<float>& v, GLuint groundTex) {
     if (name == "uGround") {
       tex = groundTex;
     } else if (name.size() > 1 && name[0] == 'u') {
-      std::string key = "words." + name.substr(1);
+      std::string key = prefix + "." + name.substr(1);
       for (auto& ch : key) ch = (char)std::tolower((unsigned char)ch);
       tex = S->dance.texture(key);
     }
     bindTex(p->id, name.c_str(), unit++, tex ? tex : S->black);
   }
   drawQuad();
+}
+
+// A target written out for ws_dump: RGBA as little-endian float32, box-filtered down
+// to at most 320 wide, top row first ([flip]: read bottom row first, as a layer is).
+void dumpTarget(const Target& t, GLenum format, const std::string& file, bool flip) {
+  if (!t.fbo || t.w <= 0 || t.h <= 0) return;
+  const bool isFloat = format == GL_RGBA16F || format == GL_RGBA32F;
+  std::vector<float> px((size_t)t.w * t.h * 4);
+  glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
+  if (isFloat) {
+    glReadPixels(0, 0, t.w, t.h, GL_RGBA, GL_FLOAT, px.data());
+  } else {
+    std::vector<uint8_t> b((size_t)t.w * t.h * 4);
+    glReadPixels(0, 0, t.w, t.h, GL_RGBA, GL_UNSIGNED_BYTE, b.data());
+    for (size_t i = 0; i < b.size(); i++) px[i] = b[i] / 255.0f;
+  }
+  const int f = std::max(1, (t.w + 319) / 320), ow = t.w / f, oh = t.h / f;
+  std::vector<float> o((size_t)ow * oh * 4, 0.0f);
+  for (int y = 0; y < oh * f; y++) {
+    const int oy = flip ? oh - 1 - y / f : y / f;
+    for (int x = 0; x < ow * f; x++)
+      for (int c = 0; c < 4; c++) o[((size_t)oy * ow + x / f) * 4 + c] += px[((size_t)y * t.w + x) * 4 + c] / (f * f);
+  }
+  if (FILE* out = std::fopen(file.c_str(), "wb")) {
+    const int32_t dims[2] = {ow, oh};
+    std::fwrite(dims, sizeof dims, 1, out);
+    std::fwrite(o.data(), sizeof(float), o.size(), out);
+    std::fclose(out);
+  }
 }
 
 // One frame into out[slot].
@@ -578,6 +612,9 @@ void frame(int slot) {
   float treat[WS_TREAT];
   bool freeze, hasRecipe;
   std::vector<float> wordsV;
+  int moshAsk;
+  float moshSeconds, moshStrength;
+  std::string dumpPath;
   {
     std::lock_guard<std::mutex> g(S->lock);
     W = S->width; H = S->height; sc = S->scale * S->autoScale; sceneName = S->scene;
@@ -593,8 +630,14 @@ void frame(int slot) {
     blendMix = S->blendMix; blendMask = S->blendMask; blendCoverage = S->blendCoverage; blendStrength = S->blendStrength;
     std::memcpy(treat, S->treat, sizeof treat);
     wordsV = S->words;
+    moshAsk = S->moshAsk; moshSeconds = S->moshSeconds; moshStrength = S->moshStrength;
+    dumpPath.swap(S->dumpPath);
   }
-  const bool wordsScene = sceneName == "@words";
+  // A sim of Dart's numbers: the words, or one by name (`@sim:type3d`).
+  const bool simByName = sceneName.rfind("@sim:", 0) == 0;
+  const bool wordsScene = sceneName == "@words" || simByName;
+  // The veins (fx.h's Slime): their rules a frame are the words' floats too.
+  const bool slimeScene = sceneName == "@slime";
   const auto now = Clock::now();
   double dt = S->lastFrame.time_since_epoch().count() == 0 ? 1.0 / 60 : std::chrono::duration<double>(now - S->lastFrame).count();
   S->lastFrame = now;
@@ -605,7 +648,7 @@ void frame(int slot) {
   glDisable(GL_DEPTH_TEST);
 
   // 0. MilkDrop, where a scene samples it: its commands, then its frame.
-  const glsl::Program* p = sceneName == "@dance" || wordsScene ? nullptr : S->programs.get(sceneName);
+  const glsl::Program* p = sceneName == "@dance" || wordsScene || slimeScene ? nullptr : S->programs.get(sceneName);
   const glsl::Program* leaving = fromName.empty() || fromK >= 1 ? nullptr : S->programs.get(fromName);
   milkCommands();
   auto samplesMilk = [](const glsl::Program* q) {
@@ -674,6 +717,15 @@ void frame(int slot) {
     glBindVertexArray(S->vao);
   }
 
+  // 0b. a datamosh asked for: the last frame's picture, before anything is drawn over
+  // it, kept for the mosh to start from
+  if (moshAsk != S->moshDone) {
+    S->moshDone = moshAsk;
+    const Target& last = S->lastPic == 2 ? S->mosh.a : S->lastPic == 1 ? S->trailA : S->work;
+    if (last.tex) S->mosh.begin(last, w, h, S->workFormat, moshSeconds, moshStrength);
+    glBindVertexArray(S->vao);
+  }
+
   // 1. the scene, and the one being left (as drawn: no trails, no particles)
   S->work.make(w, h, S->workFormat);
   if (sceneName == "@dance") {
@@ -681,8 +733,12 @@ void frame(int slot) {
     S->scratch.make(w, h, S->workFormat);
     S->dance.draw(S->work.fbo, S->work.tex, w, h, S->programs, S->scratch.fbo);
     glBindVertexArray(S->vao);
+  } else if (slimeScene) {
+    S->slime.draw(S->work, wordsV, dt, S->agentFormat, S->workFormat, S->vao, S->frames);
+    glBindVertexArray(S->vao);
   } else if (wordsScene) {
-    drawWords(S->work, wordsV, blendNow ? S->ground.tex : 0);
+    const std::string sim = simByName ? sceneName.substr(5) : std::string("words");
+    drawSim(S->work, simByName ? ("sim/" + sim).c_str() : "sim/words_fx", sim, wordsV, blendNow ? S->ground.tex : 0);
   } else {
     drawScene(p, S->work, common, nullptr, milkTex);
   }
@@ -728,9 +784,26 @@ void frame(int slot) {
   }
 
   // 1b'. the treatment over the figure, where its rig asks for one (ws_treat)
-  if (treat[0] > 0.5f) {
+  if (treat[0] > 8.5f) {
+    // the slit-scan: the figure's own last frames (fx.h)
+    S->scratch.make(w, h, S->workFormat);
+    S->slit.pass(treat, S->work, S->scratch, S->frames, S->vao);
+    glBindVertexArray(S->vao);
+  } else if (treat[0] > 0.5f) {
     treatPass(treat, S->work, S->scratch);
     glBindVertexArray(S->vao);
+  }
+
+  if (!dumpPath.empty()) {
+    dumpTarget(S->work, S->workFormat, dumpPath + ".fig", true);
+    if (blendNow) dumpTarget(S->ground, S->workFormat, dumpPath + ".ground", true);
+    if (FILE* f = std::fopen((dumpPath + ".json").c_str(), "w")) {
+      std::fprintf(f, "{\"scene\":\"%s\",\"w\":%d,\"h\":%d,\"blend\":%d,\"mix\":%d,\"mask\":%d,\"coverage\":%d,\"strength\":%g,"
+                      "\"groundKind\":%d,\"groundDim\":%g,\"treat\":%g,\"bloom\":%g,\"tone\":%g,\"vignette\":%g}\n",
+                   sceneName.c_str(), w, h, blendNow ? 1 : 0, blendMix, blendMask, blendCoverage, blendStrength, groundKind, groundDim,
+                   treat[0], post[1], post[4], post[2]);
+      std::fclose(f);
+    }
   }
 
   // 1c. the blend: the figure over the ground, its backdrop the rig's way (under.frag);
@@ -761,7 +834,7 @@ void frame(int slot) {
   }
 
   // 2. the trails, with the record's recipe where the scene takes it
-  Target* current = &S->work;
+  const Target* current = &S->work;
   const float trails = post[0];
   if (trails > 0 && freeze && S->trailScene == sceneName && S->trailA.tex && S->trailA.w == w && S->trailA.h == h) {
     // Held still: the last trails as they were (fed the same frame again and again,
@@ -800,6 +873,13 @@ void frame(int slot) {
   } else {
     S->trailScene.clear();
   }
+
+  // 2b. the datamosh under way: the picture being left moved by this one's motion
+  if (S->mosh.active) {
+    current = S->mosh.step(*current, dt, common[24], S->workFormat, S->vao);
+    glBindVertexArray(S->vao);
+  }
+  S->lastPic = current == &S->mosh.a ? 2 : current == &S->trailA ? 1 : 0;
 
   // 3. the bloom: five levels down, back up
   int bw = w, bh = h, levels = 0;
@@ -852,6 +932,7 @@ void frame(int slot) {
   fset("uWhite", white);
   fset("uBlack", black);
   drawQuad();
+  if (!dumpPath.empty()) dumpTarget(o, GL_RGBA8, dumpPath + ".out", false);
 }
 
 int freeSlot() {
@@ -894,6 +975,9 @@ void count(double ms) {
 // the meshes go up again, MilkDrop opens again with its preset).
 void tearDown() {
   S->dance.lost();
+  S->slime.lost();
+  S->slit.lost();
+  S->mosh.lost();
   S->programs.clear();
   for (GLuint* p : {&S->down, &S->up, &S->finish, &S->particleProgram, &S->wash, &S->copy}) {
     if (*p) glDeleteProgram(*p);
@@ -1215,6 +1299,10 @@ WS_API int ws_features(void) {
   if (S && S->shared) f |= 2;
   if (S && S->readback) f |= 4;
   f |= 8;  // ws_treat
+  f |= 16; // @sim:<name>
+  f |= 32; // @slime
+  f |= 64; // ws_treat mode 9, the slit-scan
+  f |= 128; // ws_mosh
   return f;
 }
 
@@ -1350,6 +1438,20 @@ WS_API void ws_words(const float* values, int n) {
   std::lock_guard<std::mutex> g(S->lock);
   if (!values || n <= 0) S->words.clear();
   else S->words.assign(values, values + std::min(n, 512));
+}
+
+WS_API void ws_dump(const char* path) {
+  if (!S) S = new Stage();
+  std::lock_guard<std::mutex> g(S->lock);
+  S->dumpPath = path ? path : "";
+}
+
+WS_API void ws_mosh(float seconds, float strength) {
+  if (!S) S = new Stage();
+  std::lock_guard<std::mutex> g(S->lock);
+  S->moshAsk++;
+  S->moshSeconds = seconds;
+  S->moshStrength = strength;
 }
 
 WS_API void ws_ground(int kind, const char* field, float dim, const float* knobs4) {

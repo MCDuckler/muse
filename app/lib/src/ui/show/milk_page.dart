@@ -362,6 +362,13 @@ class _MilkPanelState extends State<MilkPanel> {
                   onSelected: (v) => d.set(cutOnDrop: v),
                 ),
                 FilterChip(
+                  label: const Text('move with the beat'),
+                  selected: d.accents,
+                  visualDensity: VisualDensity.compact,
+                  tooltip: 'In a loud part the preset\'s own motion is pushed on the kick, the bar or the snare; a build pushes in, a drop bursts. Presets that move with the music by themselves get less',
+                  onSelected: (v) => d.set(accents: v),
+                ),
+                FilterChip(
                   label: const Text('favourites only'),
                   selected: d.favouritesOnly,
                   visualDensity: VisualDensity.compact,

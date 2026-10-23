@@ -1,0 +1,37 @@
+{
+  "id": "type3d",
+  "name": "3D Text",
+  "energy": [
+    0.15,
+    1.0
+  ],
+  "sections": [
+    "drop",
+    "chorus",
+    "build",
+    "inst",
+    "intro",
+    "on"
+  ],
+  "priority": 1.2,
+  "instant": true,
+  "layers": [
+    {
+      "sim": "type3d"
+    }
+  ],
+  "particles": [],
+  "text": {
+    "title": false,
+    "lyrics": false
+  },
+  "post": {
+    "trails": 0.0,
+    "bloom": 0.35,
+    "fringe": 0.004,
+    "vignette": 0.45,
+    "grain": 0.2,
+    "recipe": 0.0,
+    "tone": 0.6
+  }
+}

@@ -68,14 +68,14 @@ String keyOfGround(RigGround g) => switch (g.kind) {
     };
 
 /// The image treatments any scene may go through (dance_fx.frag's), as styles.
-const treatmentStyles = ['ascii', 'dither', 'halftone', 'thermal', 'lines', 'contour'];
+const treatmentStyles = ['ascii', 'dither', 'halftone', 'thermal', 'lines', 'contour', 'crt', 'slit'];
 
 /// The styles of a figure, by name: its own where it has them (kept in step with
 /// show_dance.dart's DanceArt, show_flock.dart's FlockLook, show_words.dart's
 /// WordsStyle — a test says so), else the scene as drawn and the treatments.
 List<String> stylesOfFigure(Figure f) => switch (f) {
-      Figure.dancers => const ['plain', 'mono', 'trails', 'ascii', 'dither', 'chrono', 'contour', 'halftone', 'thermal', 'lines', 'fluid', 'viewports', 'disco'],
-      Figure.birds => const ['ink', 'sky', 'embers', 'neon', 'wire', 'chrono', 'ascii', 'dither', 'contour', 'halftone', 'thermal', 'lines', 'radar'],
+      Figure.dancers => const ['plain', 'mono', 'trails', 'ascii', 'dither', 'chrono', 'contour', 'halftone', 'thermal', 'lines', 'fluid', 'viewports', 'disco', 'crt', 'slit', 'dust'],
+      Figure.birds => const ['ink', 'sky', 'embers', 'neon', 'wire', 'chrono', 'ascii', 'dither', 'contour', 'halftone', 'thermal', 'lines', 'radar', 'crt'],
       Figure.words => const ['poster', 'serif', 'grotesk', 'wide', 'mono', 'marker', 'light'],
       Figure.none || Figure.meme => const ['raw'],
       _ => const ['raw', ...treatmentStyles],

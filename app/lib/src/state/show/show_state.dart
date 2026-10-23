@@ -12,6 +12,7 @@ import 'package:flutter/painting.dart' show Color, HSLColor;
 
 import 'show_genome.dart';
 import 'show_rig.dart';
+import 'show_type3d.dart';
 
 /// The record's sound at the needle, 0 to 1 each: five bands, the kick, the onsets,
 /// and the three stems where the record is in parts.
@@ -575,6 +576,7 @@ class ShowMacros {
     this.dancersOff = const [],
     this.macros = const [0, 0, 0, 0, 0, 0, 0, 0],
     this.tune = const {},
+    this.type3d = TypeSpec.standard,
     this.seed = 0,
   });
 
@@ -586,6 +588,9 @@ class ShowMacros {
   /// The treatments' knobs (state/show/show_tune.dart), the pool's, carried to every
   /// stage with the frame.
   final Map<String, double> tune;
+
+  /// The 3D type's words, face, motions and knobs (show_type3d.dart), the pool's.
+  final TypeSpec type3d;
 
   /// Who dances in the dancer scenes (show_dance.dart's DanceModels), or null / "mix"
   /// for each record its own.
@@ -620,6 +625,7 @@ class ShowMacros {
     double? hit,
     List<double>? macros,
     Map<String, double>? tune,
+    TypeSpec? type3d,
     int? seed,
   }) =>
       ShowMacros(
@@ -634,6 +640,7 @@ class ShowMacros {
         hit: hit ?? this.hit,
         macros: macros ?? this.macros,
         tune: tune ?? this.tune,
+        type3d: type3d ?? this.type3d,
         seed: seed ?? this.seed,
       );
 
@@ -662,6 +669,7 @@ class ShowMacros {
         if (dancer != null) 'dancer': dancer,
         if (dancersOff.isNotEmpty) 'dancersOff': dancersOff,
         if (tune.isNotEmpty) 'tune': tune,
+        if (type3d != TypeSpec.standard) 'type3d': type3d.toJson(),
         if (seed != 0) 'seed': seed,
       };
 
@@ -677,6 +685,7 @@ class ShowMacros {
         hit: _d(j['hit']),
         macros: [for (final v in (j['macros'] as List? ?? const [])) _d(v)],
         tune: j['tune'] is Map ? {for (final e in (j['tune'] as Map).entries) '${e.key}': _d(e.value)} : const {},
+        type3d: TypeSpec.fromJson(j['type3d']),
         seed: (j['seed'] as num?)?.toInt() ?? 0,
       );
 }
@@ -698,6 +707,7 @@ class ShowState {
     this.scene,
     this.sceneFrom,
     this.sceneK = 1,
+    this.mosh = 0,
     this.rig = ShowRig.none,
     this.rigFrom,
     this.genome = Genome.none,
@@ -725,6 +735,10 @@ class ShowState {
   /// (1: wholly on [scene]).
   final String? scene, sceneFrom;
   final double sceneK;
+
+  /// The datamoshes so far (show_director.dart's moshes): the stage moshes from the
+  /// picture on when it goes up.
+  final int mosh;
 
   /// What the stage draws, as layers (show_rig.dart): the look on, and the one being
   /// left under the same crossfade ([sceneK]; its treatment goes with it). The scene
@@ -779,6 +793,7 @@ class ShowState {
     String? scene,
     String? sceneFrom,
     double? sceneK,
+    int? mosh,
     bool clearSceneFrom = false,
     ShowRig? rig,
     ShowRig? rigFrom,
@@ -800,6 +815,7 @@ class ShowState {
         scene: scene ?? this.scene,
         sceneFrom: clearSceneFrom ? null : (sceneFrom ?? this.sceneFrom),
         sceneK: sceneK ?? this.sceneK,
+        mosh: mosh ?? this.mosh,
         rig: rig ?? this.rig,
         rigFrom: clearSceneFrom ? null : (rigFrom ?? this.rigFrom),
         genome: genome ?? this.genome,
@@ -822,6 +838,7 @@ class ShowState {
         scene: scene,
         sceneFrom: sceneFrom,
         sceneK: sceneK,
+        mosh: mosh,
         rig: rig,
         rigFrom: rigFrom,
         genome: genome,
@@ -843,6 +860,7 @@ class ShowState {
         'scene': scene,
         'sceneFrom': sceneFrom,
         'sceneK': sceneK,
+        if (mosh != 0) 'mosh': mosh,
         'rig': rig.toJson(),
         if (rigFrom != null) 'rigFrom': rigFrom!.toJson(),
         'genome': genome.toJson(),
@@ -864,6 +882,7 @@ class ShowState {
         scene: j['scene'] as String?,
         sceneFrom: j['sceneFrom'] as String?,
         sceneK: j['sceneK'] is num ? _d(j['sceneK']) : 1,
+        mosh: j['mosh'] is num ? (j['mosh'] as num).toInt() : 0,
         rig: j['rig'] is Map ? ShowRig.fromJson((j['rig'] as Map).cast()) : ShowRig.none,
         rigFrom: j['rigFrom'] is Map ? ShowRig.fromJson((j['rigFrom'] as Map).cast()) : null,
         genome: j['genome'] is Map ? Genome.fromJson((j['genome'] as Map).cast()) : Genome.none,

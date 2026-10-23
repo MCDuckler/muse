@@ -57,7 +57,7 @@ import 'package:flutter/material.dart';
 import '../../state/show/show_state.dart';
 import '../../state/show/show_tune.dart';
 import 'show_canvas.dart' show StagePrograms;
-import 'show_common.dart' show setFxKnobs, tunedCell;
+import 'show_common.dart' show crtInk, crtPaper, setFxKnobs, tunedCell;
 import 'show_dance.dart' show DanceHandoff;
 import 'show_dance_draw.dart' show DanceCam, V3;
 import 'show_flock_bird.dart';
@@ -67,12 +67,13 @@ import 'show_particles.dart' show particleSprite;
 import '../../state/show/show_pool.dart' show QualityPool, StylePool, pickByWeight;
 import '../../state/show/show_rig.dart' show Figure;
 import 'show_sims.dart';
+import 'stage_camera.dart';
 
 /// Where the flock is going, four bars at a time.
 enum Flight { murmur, vortex, ribbon, vee, sphere, sheet, twin }
 
 /// How the flock is rendered, a section at a time.
-enum FlockLook { ink, sky, embers, neon, wire, chrono, ascii, dither, contour, halftone, thermal, lines, radar }
+enum FlockLook { ink, sky, embers, neon, wire, chrono, ascii, dither, contour, halftone, thermal, lines, radar, crt }
 
 /// Where the camera is: still, in front, framed wide or close, low (looking up at
 /// the sky) or high (looking down on the flock) — or a fisheye inside the flock
@@ -90,6 +91,8 @@ const flockFxMode = {
   FlockLook.lines: 6,
   FlockLook.radar: 7,
   FlockLook.sky: 8,
+  // Not flock_fx's: dance_fx.frag's crt, the one every scene goes through.
+  FlockLook.crt: 8,
 };
 
 /// The flock's arithmetic, apart from any drawing.
@@ -240,7 +243,7 @@ class FlockClock {
 /// A camera placed: round the flock by [yaw] (0 straight in front), at [height],
 /// [dist] from the flock's middle, looking at [aim] high, [fov] wide.
 class FlockFrame {
-  const FlockFrame(this.yaw, this.height, this.dist, this.aim, this.fov, [this.fisheye = 0]);
+  const FlockFrame(this.yaw, this.height, this.dist, this.aim, this.fov, [this.fisheye = 0, this.roll = 0]);
   final double yaw, height, dist, aim, fov;
 
   /// A fisheye lens (DanceCam.fisheye), 0..1.
@@ -257,10 +260,18 @@ class FlockFrame {
         FlockShot.fishLow => const FlockFrame(0.0, 0.3, 0.9, 5.0, 2.9, 1),
       };
 
+  /// Where [s] has taken this framing (CameraSweep): never below the ground.
+  FlockFrame swept(SweepMove s) => s == CameraSweep.none
+      ? this
+      : FlockFrame(yaw + s.yaw, math.max(0.2, height + s.rise * dist), dist * s.dist, aim, fov, fisheye, s.roll);
+
+  /// The horizon tipped (radians).
+  final double roll;
+
   DanceCam cam(Size size) {
     const c = FlockModel.centre;
     final eye = V3(c.x + math.sin(yaw) * dist, c.y - math.cos(yaw) * dist, height);
-    return DanceCam(eye: eye, target: V3(c.x, c.y, aim), size: size, fov: fov, fisheye: fisheye);
+    return DanceCam(eye: eye, target: V3(c.x, c.y, aim), size: size, fov: fov, fisheye: fisheye, roll: roll);
   }
 }
 
@@ -928,11 +939,17 @@ class FlockSim implements SimLayer {
   double? _dropAt, _awayWas;
   String? _sectionWas;
   int _flightSlot = -999, _sectionSlot = -1, _cut = -999;
+
+  /// The framing the hands held at the last cut (StylePool.heldShot): a new one cuts.
+  String? _heldWas;
   Flight _flight = Flight.murmur;
   Flight? _flightWas;
   double _flightAt = -99;
   FlockLook? _look;
   FlockShot _shot = FlockShot.wide;
+
+  /// The shot's travel in a loud part.
+  final _sweep = CameraSweep();
   double _kickWas = 0, _snareWas = 0;
   double _gather = 0;
   double _spin = 1;
@@ -947,7 +964,7 @@ class FlockSim implements SimLayer {
 
   /// The last picture, kept so the stage can show it while a frame is skipped.
   ui.Image? _out;
-  ui.FragmentShader? _fx;
+  ui.FragmentShader? _fx, _crtFx;
   static ui.Image? _glyphs;
 
   /// The look the frame asked for last (RigFigure.style), to see it let go.
@@ -1078,15 +1095,24 @@ class FlockSim implements SimLayer {
     if (_handCam != null && !frozen) _sizeK = 0.3 + 0.7 * ((beats - _releaseAt) / 2.5).clamp(0.0, 1.0);
     final roomK = _handCam == null ? 1.0 : (handing ? 0.0 : ((beats - _handUntil) / 4).clamp(0.0, 1.0));
 
-    // ---- the camera: still; cut after a while, on a drop, on a new section.
-    final hold = FlockClock.hold(mood);
+    // ---- the camera: cut after a while, on a drop, on a new section — faster the more
+    // intense the record (StageCamera.drive). Still in a quiet part; in a loud one each
+    // shot travels (CameraSweep): round the flock, in at it, up past it, into it.
+    final drive = m.playing ? StageCamera.drive(m) : 0.0;
+    final hold = cutHold(FlockClock.hold(mood), drive);
     final cutN = hold * 100000 + (beats / hold).floor();
     var cut = false;
-    if (cutN != _cut || dropNow || sectionNow || size != _sizeWas) {
+    final held = StylePool.held(Figure.birds);
+    if (cutN != _cut || dropNow || sectionNow || size != _sizeWas || held != _heldWas) {
       _cut = cutN;
-      final shot = _forcedShot ?? FlockClock.shot(mood, salt, cutN, look, weight: (x) => StylePool.shot(Figure.birds, x.name));
+      _heldWas = held;
+      final shot = _forcedShot ??
+          FlockShot.values.where((x) => x.name == held).firstOrNull ??
+          FlockClock.shot(mood, salt, cutN, look, weight: (x) => StylePool.shot(Figure.birds, x.name));
       cut = shot != _shot || size != _sizeWas;
       _shot = shot;
+      final inside = shot == FlockShot.fish || shot == FlockShot.fishLow;
+      _sweep.cut(beats, hold, drive, memeHash(salt % 9973, cutN, 337), close: inside, over: !inside && shot != FlockShot.low, drop: dropNow);
       StylePool.shotNow[Figure.birds] = shot.name;
       _sizeWas = size;
     }
@@ -1100,7 +1126,9 @@ class FlockSim implements SimLayer {
       _stamps.clear();
     }
     final hc = _handCam;
-    final cam = hc != null ? DanceCam(eye: hc.eye, target: hc.target, size: size, fov: hc.fov, roll: hc.roll) : FlockFrame.of(_shot).cam(size);
+    final cam = hc != null
+        ? DanceCam(eye: hc.eye, target: hc.target, size: size, fov: hc.fov, roll: hc.roll)
+        : FlockFrame.of(_shot).swept(_sweep.at(beats, drive, dt)).cam(size);
 
     // ---- the moments, as edges.
     final kickEdge = kick > 0.4 && kick > _kickWas + 0.2 ? kick : 0.0;
@@ -1308,6 +1336,7 @@ class FlockSim implements SimLayer {
       case FlockLook.ascii:
       case FlockLook.dither:
       case FlockLook.halftone:
+      case FlockLook.crt:
         c.drawRect(Offset.zero & s, Paint()..color = Colors.black);
         // The birds bright on black; the finish draws them its own way (it reads only
         // their light, so plain lit white, which is cheaper than chrome).
@@ -1582,9 +1611,10 @@ class FlockSim implements SimLayer {
   /// The ascii, dither, contour, halftone, thermal, ridgeline or radar finish over
   /// the flock's light (flock_fx.frag).
   ui.Image _post(ui.Image img, int w, int h, StagePrograms p, _Cue l, FlockLook look) {
-    final program = p.sims['flock_fx'];
+    final crt = look == FlockLook.crt;
+    final program = p.sims[crt ? 'dance_fx' : 'flock_fx'];
     if (program == null) return img;
-    final fx = _fx ??= program.fragmentShader();
+    final fx = crt ? (_crtFx ??= program.fragmentShader()) : (_fx ??= program.fragmentShader());
     final glyphs = _glyphs ??= _makeGlyphs();
     final (:mode, :ink, :paper, :cell, :tint) = _postParams(l, look, h);
     fx
@@ -1604,7 +1634,8 @@ class FlockSim implements SimLayer {
       ..setFloat(13, _popAt.dx)
       ..setFloat(14, _popAt.dy)
       ..setFloat(15, _t)
-      ..setFloat(16, l.barSaw)
+      // dance_fx's 16 is its alpha out (0: whole, as a canvas keeps it).
+      ..setFloat(16, crt ? 0 : l.barSaw)
       ..setImageSampler(0, img)
       ..setImageSampler(1, glyphs);
     setFxKnobs(fx, 17, l.st, treatmentFxMode.containsKey(look.name) ? look.name : null);
@@ -1645,6 +1676,7 @@ class FlockSim implements SimLayer {
           tint: 0.0
         ),
       FlockLook.sky => (mode: mode, ink: _skyHorizon, paper: _skyTop, cell: _sunPx, tint: _horizonK),
+      FlockLook.crt => (mode: mode, ink: crtInk, paper: crtPaper, cell: math.max(3.0, h / (l.rage ? 110 : 135)), tint: 0.2),
       _ => (mode: mode, ink: pal.accent.withSaturation(0.55).withLightness(0.78).toColor(), paper: const Color(0xff040404), cell: h / (l.rage ? 56 : 44), tint: 0.25),
     };
   }
@@ -1673,6 +1705,7 @@ class FlockSim implements SimLayer {
   @override
   void dispose() {
     _fx?.dispose();
+    _crtFx?.dispose();
     _fx = null;
     _out?.dispose();
     _out = null;

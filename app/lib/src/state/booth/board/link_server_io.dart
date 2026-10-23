@@ -138,6 +138,8 @@ class BoardLinkServer extends BoardLinkBase {
       (data) {
         if (data is String && data.startsWith('{"t":"ping"')) {
           ws.add(data.replaceFirst('"ping"', '"pong"'));
+        } else if (data is String && heardStageNow(data)) {
+          // What its cameras and its 3D text show: for a favourite.
         } else if (data is List<int>) {
           // The stage's small picture, for the booth to show instead of its own.
           final t = parseStageThumb(data);

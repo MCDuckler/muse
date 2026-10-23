@@ -10,7 +10,18 @@
   "85_03 6 8",
   "85_12 4 8",
   "55_25 9 8",
-  "55_25 33 8"
+  "55_25 33 8",
+  "mx_ymca 0 4",
+  "mx_macarena 6 4",
+  "mx_chicken 0 8",
+  "mx_popular_k_pop 4 8",
+  "mx_twerk 5 8",
+  "mx_can_can 0 4",
+  "mx_silly_twist 0 4",
+  "mx_twist 0 4",
+  "mx_hokey_pokey 0 8",
+  "mx_f_hh_raise_roof 0 4",
+  "mx_shopping_cart_silly 11 8"
  ],
  "toon": [
   "120_06 7 8",
@@ -24,7 +35,16 @@
   "55_20 59 8",
   "55_20 83 8",
   "55_27 15 8",
-  "55_27 47 8"
+  "55_27 47 8",
+  "mx_thriller_part_1 31 8",
+  "mx_thriller_part_2 7 8",
+  "mx_thriller_part_3 12 8",
+  "mx_robot_hh_v1 18 8",
+  "mx_hh_robot_v2 5 8",
+  "mx_tut_hh_v1 3 8",
+  "mx_tut_hh_v2 6 4",
+  "mx_snake_hh 2 8",
+  "mx_hh_really_twirl 0 8"
  ],
  "swing": [
   "93_05 0 8",
@@ -34,7 +54,13 @@
   "103_03 0 4",
   "103_05 0 8",
   "103_08 0 4",
-  "93_06 0 4"
+  "93_06 0 4",
+  "mx_swing_shim_sham_v1 27 8",
+  "mx_swing_shim_sham_v1 35 8",
+  "mx_swing_shim_sham_v2 0 4",
+  "mx_swing_charleston 22 8",
+  "mx_swing_charleston_v2 22 8",
+  "mx_f_jazz_rockette_kick 1 4"
  ],
  "groove": [
   "15_04 170 8",
@@ -44,7 +70,28 @@
   "15_05 151 8",
   "15_05 183 8",
   "111_05 0 8",
-  "113_04 1 8"
+  "113_04 1 8",
+  "mx_running_man 14 8",
+  "mx_running_man 6 8",
+  "mx_shuffling 2 4",
+  "mx_shuffling 0 8",
+  "mx_f_hh_running_man 0 4",
+  "mx_hh_runningman 2 4",
+  "mx_f_hh_slide_step 0 4",
+  "mx_f_hh_kick_step 3 4",
+  "mx_f_hh_rib_pops 0 4",
+  "mx_house_v3 2 8",
+  "mx_house_v2 0 8",
+  "mx_hh_bboy_v1 2 8",
+  "mx_hh_bboy_v1 10 8",
+  "mx_hh_side_to_side 2 8",
+  "mx_hh_side_to_side 10 8",
+  "mx_hh_with_arms 5 8",
+  "mx_hh_quake_v1 2 8",
+  "mx_wave_hh_v1 5 8",
+  "mx_booty_step_hh 0 4",
+  "mx_f_hh_body_wave 0 4",
+  "mx_f_hh_arm_wave 0 4"
  ],
  "latin": [
   "55_02 11 8",
@@ -71,7 +118,16 @@
   "61_11 2 8",
   "61_12 9 8",
   "61_15 8 8",
-  "61_15 16 8"
+  "61_15 16 8",
+  "mx_afoxe_samba_reggae 15 8",
+  "mx_samba_funky_pocoto_v1 5 8",
+  "mx_samba_funky_pocoto_v1 13 8",
+  "mx_samba_olodum_v2 1 8",
+  "mx_f_fast_samba_enredo_v2 6 8",
+  "mx_f_samba_pagode_v5_loop 10 8",
+  "mx_f_samba_ijexa_break 25 8",
+  "mx_f_salsa 0 4",
+  "mx_salsa_v5 1 8"
  ],
  "folk": [
   "94_01 7 8",
@@ -92,7 +148,12 @@
   "94_12 9 8",
   "94_13 3 8",
   "94_14 40 8",
-  "94_15 10 8"
+  "94_15 10 8",
+  "mx_f_african_noodle 0 8",
+  "mx_f_african_rainbow 0 8",
+  "mx_belly_v3 21 8",
+  "mx_bellydance_v2 8 8",
+  "mx_belly_v1 23 8"
  ],
  "calm": [
   "05_02 3 8",
@@ -101,6 +162,10 @@
   "05_10 0 4",
   "05_13 4 4",
   "05_11 0 4",
-  "49_12 1 8"
+  "49_12 1 8",
+  "mx_timid 2 8",
+  "mx_hh_just_listening_v 5 8",
+  "mx_bellydance_v2 0 8",
+  "mx_wave_hh_v2 7 8"
  ]
 }

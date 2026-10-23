@@ -25,6 +25,13 @@
 //               height's angle in uTint) bent into an equidistant fisheye: uCell the
 //               angle at the top edge (radians), a circle of black past what the
 //               straight lens saw; the kick swells it a touch.
+//   8  crt      an old purple monitor: the picture in big pixels of uCell, each lit
+//               through its phosphor stripes, scanlines across, the glass bulged (the
+//               height knob), a soft glow bleeding round the light (the spacing knob),
+//               the light mapped onto a ramp from deep indigo through violet and
+//               magenta to a lavender white — toward the picture's own colour by uTint
+//               — the ink its brightest, the paper its darkest. A bar of light rolls
+//               down the glass; the kick surges the beam and tears the rows sideways.
 //
 // The picture comes in upright (a toImageSync image).
 
@@ -99,8 +106,86 @@ float screenDot(vec2 px, float cell, float a, float l, float size) {
   return 1.0 - smoothstep(rad - aa, rad + aa, d);
 }
 
+// The crt's ramp: the paper, deep indigo, violet, magenta, the ink.
+vec3 crtRamp(float t) {
+  t = clamp(t, 0.0, 1.0);
+  vec3 c = mix(uPaper, vec3(0.2, 0.05, 0.46), smoothstep(0.0, 0.22, t));
+  c = mix(c, vec3(0.58, 0.18, 1.0), smoothstep(0.15, 0.45, t));
+  c = mix(c, vec3(1.0, 0.3, 0.82), smoothstep(0.4, 0.7, t));
+  return mix(c, uInk, smoothstep(0.66, 0.95, t));
+}
+
+// A cheap hash for the rows' tear.
+float crtHash(float n) { return fract(sin(n * 91.345) * 47453.5453); }
+
+vec4 crt(vec2 fc) {
+  vec2 res = uResolution;
+  // The glass: the picture bulged out from the middle, a black past its rounded edge.
+  vec2 q = fc / res - 0.5;
+  float bulge = 0.12 * knob(uHeight);
+  vec2 qq = q * (1.0 + bulge * dot(q, q) * 2.2);
+  vec2 edge = abs(qq) * 2.0;
+  float corner = length(max(edge - vec2(0.9), 0.0)) / 0.1;
+  float glass = (1.0 - smoothstep(0.85, 1.0, corner)) * step(edge.x, 1.0) * step(edge.y, 1.0);
+  vec2 p = (qq + 0.5) * res;
+  float px = max(3.0, uCell);
+  // The kick tears the rows sideways, each its own way, for the instant it lasts.
+  float row = floor(p.y / px);
+  p.x += (crtHash(row + floor(uTime * 24.0)) - 0.5) * px * 1.6 * uPop * uPop;
+  vec2 b = floor(p / px);
+  vec2 f = p / px - b;
+  vec2 centre = (b + 0.5) * px;
+  // The beam's three guns a little apart: the red read left, the blue right.
+  float split = px * (0.22 + 0.25 * uPop);
+  float r = lum(at(centre - vec2(split, 0.0)));
+  float g = lum(at(centre));
+  float bl = lum(at(centre + vec2(split, 0.0)));
+  vec3 own = at(centre);
+  float l = (r + g + bl) / 3.0;
+  // The glow: the light of the pixels round, softly, bleeding over the black.
+  float gw = px * 1.8 * knob(uSpacing);
+  float glow = (lum(at(centre + vec2(gw, 0.0))) + lum(at(centre - vec2(gw, 0.0))) + lum(at(centre + vec2(0.0, gw))) +
+                lum(at(centre - vec2(0.0, gw)))) * 0.25;
+  glow += (lum(at(centre + vec2(gw, gw) * 1.6)) + lum(at(centre - vec2(gw, gw) * 1.6))) * 0.18;
+  // The colour: the ramp, toward the picture's own by the tint, the guns' split on it.
+  vec3 ramp = crtRamp(l * (1.0 + 0.35 * uPop));
+  vec3 hue = own / max(lum(own), 0.2);
+  vec3 col = mix(ramp, ramp * mix(vec3(1.0), hue, 0.8), uTint);
+  col *= vec3(0.9 + 0.35 * (r - g), 1.0, 0.9 + 0.35 * (bl - g));
+  // The pixel: a lit cell with dark seams, the phosphor's three stripes in it.
+  float w = knob(uWeight);
+  vec2 cellD = abs(f - 0.5);
+  float seam = 1.0 - smoothstep(0.3, 0.5, max(cellD.x, cellD.y * 1.15)) * 0.7 * clamp(w, 0.0, 1.2);
+  float stripe = fract(p.x / px * 3.0);
+  vec3 mask = stripe < 1.0 / 3.0 ? vec3(1.25, 0.8, 0.95) : (stripe < 2.0 / 3.0 ? vec3(0.85, 1.15, 0.9) : vec3(0.95, 0.8, 1.3));
+  col *= mix(vec3(1.0), mask, 0.55 * clamp(w, 0.0, 1.5));
+  // Two scanlines a pixel.
+  float scan = 0.72 + 0.28 * cos(f.y * 6.2831853 * 2.0);
+  col *= mix(1.0, scan, clamp(0.85 * w, 0.0, 1.0));
+  col *= seam;
+  // The bloom of the glow, violet, over everything, the brighter where it is lit.
+  col += vec3(0.42, 0.12, 0.75) * glow * glow * 1.4 * knob(uSpacing) + vec3(0.9, 0.35, 1.0) * l * l * 0.25;
+  // The rolling bar, the flicker, the surge of the beam on the kick.
+  float bar = smoothstep(0.0, 0.08, fract(qq.y + 0.5 - uTime * 0.11)) * (1.0 - smoothstep(0.08, 0.2, fract(qq.y + 0.5 - uTime * 0.11)));
+  col *= (1.0 + 0.1 * bar) * (0.97 + 0.03 * sin(uTime * 59.0)) * (1.0 + 0.45 * uPop);
+  // The glass darker toward its edge.
+  // The glass itself, faintly lit where nothing is: the tube's own violet, its
+  // scanlines and a little static, so the screen's curve shows round the picture.
+  float noise = crtHash(dot(floor(fc), vec2(1.0, 157.0)) + floor(uTime * 30.0) * 13.1);
+  vec3 tube = (uPaper * 2.2 + vec3(0.035, 0.008, 0.06) * scan + vec3(0.03, 0.012, 0.05) * noise * 0.8) * seam;
+  col = max(col, tube);
+  col *= 1.0 - 0.5 * smoothstep(0.25, 1.0, length(q) * 1.45);
+  col = mix(vec3(0.0), col, glass);
+  float cov = smoothstep(0.03, 0.22, max(l, glow * 0.6)) * glass;
+  return vec4(col, covOut(cov));
+}
+
 void main() {
   vec2 fc = FlutterFragCoord().xy;
+  if (uMode > 7.5) {
+    fragColor = crt(fc);
+    return;
+  }
   if (uMode > 6.5) {
     // fisheye: a pixel's distance from the middle is its angle off the axis
     vec2 c = (fc - 0.5 * uResolution) / (0.5 * uResolution.y);

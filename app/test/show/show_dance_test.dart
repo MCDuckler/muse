@@ -59,8 +59,58 @@ void main() {
     final sways = move('s', DanceTier.mid, bpm: 128)..pulse = 0;
     final pool = {for (final (m, w) in DanceClock.pool([pumps, sways], DanceTier.mid, fl, 128, techno: true)) m.id: w};
     expect(pool['p']!, greaterThan(pool['s']! * 3));
+    // A shuffle caught at 100 still dances to a club's 130 when it pumps; a sway that
+    // far off does not.
+    final shuffle = move('sh', DanceTier.mid, bpm: 100)..pulse = 0.8;
+    final slow = move('sl', DanceTier.mid, bpm: 100)..pulse = 0;
+    final club = {for (final (m, w) in DanceClock.pool([pumps, shuffle, slow], DanceTier.mid, fl, 130, techno: true)) m.id: w};
+    expect(club['sh']!, greaterThan(club['p']! * 0.25));
+    expect(club['sl']!, lessThan(club['sh']! * 0.1));
+    // The techno moves: plenty pump on the beat at a club's tempo (Mixamo's running men,
+    // shuffles, house steps among them).
+    expect(rig.moves.where((m) => m.style == DanceStyle.groove && m.pulse >= DanceRig.minPulseShift && m.bpm > 90), hasLength(greaterThan(10)));
     // The shipped moves have a pulse worked out, and some pump.
     expect(rig.moves.where((m) => m.pulse > 0.3), isNotEmpty);
+  });
+
+  test('on the beat: a move stepped into mid-beat counts from the beat; the pumping ones dip on it', () {
+    // Stepped into at 123.4 with its beat 4 on: its beat 5 lands on the record's 124.
+    expect(4 + DanceClock.sinceBeat(123.4, 1) * 1, closeTo(4.4, 1e-9));
+    // At half time from the even beats: at 123.4 it is 1.4 beats on, 0.7 of its own.
+    expect(DanceClock.sinceBeat(123.4, 0.5) * 0.5, closeTo(0.7, 1e-9));
+    expect(DanceClock.sinceBeat(123.4, 2), closeTo(0.4, 1e-9));
+    // The moves that pump read ahead so their hips are lowest on the beat.
+    final p = DancePose(rig.bones);
+    var checked = 0;
+    for (final m in rig.moves) {
+      if (m.pulse < DanceRig.minPulseShift || m.duo != null) continue;
+      expect(m.shift, inInclusiveRange(-0.5, 0.5), reason: m.id);
+      const k = 32;
+      final z = List<double>.filled(k, 0);
+      for (var b = 0; b < m.beats; b++) {
+        for (var j = 0; j < k; j++) {
+          rig.sample(m, b + j / k, p);
+          z[j] += p.hips[2];
+        }
+      }
+      var lo = 0;
+      for (var j = 0; j < k; j++) {
+        if (z[j] < z[lo]) lo = j;
+      }
+      final off = math.min(lo, k - lo) / k;
+      expect(off, lessThanOrEqualTo(0.19), reason: '${m.id} dips ${lo / k} into the beat');
+      checked++;
+    }
+    expect(checked, greaterThan(5));
+  });
+
+  test('a record dances its own few moves, the same each time it plays', () {
+    final fl = DanceClock.flavour(5, 124, MemeMood.vibe);
+    final pool = DanceClock.pool(rig.moves, DanceTier.high, fl, 124);
+    final a = DanceClock.ownMoves(pool, 5), b = DanceClock.ownMoves(pool, 5), c = DanceClock.ownMoves(pool, 77);
+    expect(a, hasLength(DanceClock.vocabulary));
+    expect([for (final e in a) e.$1.id], [for (final e in b) e.$1.id]);
+    expect({for (final e in a) e.$1.id}, isNot({for (final e in c) e.$1.id}));
   });
 
   test('every move poses a body that stands on the floor, the hips at a hip\'s height', () {

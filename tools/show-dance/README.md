@@ -9,7 +9,9 @@ with numpy + Pillow.
 
 Captures: the Bandai Namco Research Motiondataset (CC BY-NC 4.0) and the CMU Graphics Lab Motion Capture
 Database (free for any use), both as BVH. `skel.py` maps CMU joint names onto the Bandai ones;
-`retarget.py` is direction based, so any skeleton's rest pose works.
+`retarget.py` is direction based, so any skeleton's rest pose works. Mixamo dances (the user's own Adobe
+login) come in as FBX exported without skin at 30 fps, linked into the capture dir as `mx_<name>.fbx`;
+`skel.load` reads either kind (a Mixamo skeleton's chest is its Spine2).
 
 1. `blender -b --python bvh_joints.py -- <take>.bvh <dir>/joints/<take>.npz`: joint tracks at 30 fps, legs
    scaled to 0.85 m.

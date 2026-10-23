@@ -61,13 +61,14 @@ import '../../state/show/show_rig.dart' show Figure, Ground;
 import '../../state/show/show_state.dart';
 import '../../state/show/show_tune.dart';
 import 'show_canvas.dart' show StagePrograms;
-import 'show_common.dart' show setFxKnobs, tunedCell;
+import 'show_common.dart' show crtInk, crtPaper, setFxKnobs, tunedCell;
 import 'show_dance_draw.dart';
 import 'show_dance_rig.dart';
 import 'show_dance_surface.dart';
 import 'show_meme.dart' show MemeClock;
 import 'show_meme_bank.dart' show MemeMood, memeHash;
 import 'show_sims.dart';
+import 'stage_camera.dart';
 
 export 'show_dance_rig.dart' show DanceMove, DanceTier, DanceStyle;
 
@@ -124,17 +125,48 @@ enum DanceShot { full, front, medium, close, wide, extremeLow, extremeHigh, extr
 ///            lands on, a kick rings out from the lead, a snare scatters sparks, the
 ///            bass breathes the floor and the wall; a pattern a section under it.
 /// The figures are chrome throughout (the "clay" ones were porcelain).
-enum DanceArt { mono, trails, ascii, dither, chrono, contour, halftone, thermal, lines, fluid, viewports, plain, disco }
+enum DanceArt { mono, trails, ascii, dither, chrono, contour, halftone, thermal, lines, fluid, viewports, plain, disco, crt, slit, dust }
 
 /// The renderings finished by dance_fx.frag, and its mode for each.
-const danceFxMode = {DanceArt.ascii: 1, DanceArt.dither: 2, DanceArt.contour: 3, DanceArt.halftone: 4, DanceArt.thermal: 5, DanceArt.lines: 6};
+const danceFxMode = {DanceArt.ascii: 1, DanceArt.dither: 2, DanceArt.contour: 3, DanceArt.halftone: 4, DanceArt.thermal: 5, DanceArt.lines: 6, DanceArt.crt: 8};
 
 /// The dance's arithmetic, apart from any drawing.
 class DanceClock {
   const DanceClock._();
 
-  /// Track beats in a slot: one choice of move, troupe and shot.
-  static const slotBeats = 8;
+  /// Track beats in a slot: one choice of move, troupe and shot — four bars, the
+  /// move's eight beats twice: a move danced long enough to read as dancing, not a
+  /// reel of them.
+  static const slotBeats = 16;
+
+  /// How far [beats] is past the record's beat a move danced at [rate] counts from:
+  /// the beat, or at half time (and slower) the first of its pair.
+  static double sinceBeat(double beats, double rate) {
+    final period = rate < 1 ? 1 / rate : 1.0;
+    return beats - (beats / period).floorToDouble() * period;
+  }
+
+  /// How many moves of a tier a record dances: its own few, chosen once for it.
+  static const vocabulary = 5;
+
+  /// [pool] narrowed to the record's own [vocabulary] — a weighted draw without
+  /// putting back, by dice that are the record's ([salt]) and the move's: the same
+  /// few every time the record plays, the likelier ones likelier to be among them.
+  static List<(DanceMove, double)> ownMoves(List<(DanceMove, double)> pool, int salt) {
+    if (pool.length <= vocabulary) return pool;
+    final keyed = [
+      for (final (m, w) in pool) (m, w, math.pow(memeHash(salt % 9973, _idHash(m.id) % 99991, 13).clamp(1e-9, 1.0), 1 / w).toDouble()),
+    ]..sort((a, b) => b.$3.compareTo(a.$3));
+    return [for (final (m, w, _) in keyed.take(vocabulary)) (m, w)]..sort((a, b) => b.$2.compareTo(a.$2));
+  }
+
+  static int _idHash(String id) {
+    var h = 0x811c9dc5;
+    for (final c in id.codeUnits) {
+      h = ((h ^ c) * 0x01000193) & 0x7fffffff;
+    }
+    return h;
+  }
 
   /// Capture beats danced per track beat: 1, or half/double time when the record
   /// is far off the capture's tempo. A sleeping record dances at half again.
@@ -146,12 +178,17 @@ class DanceClock {
   }
 
   /// How true [move] dances to a record at [trackBpm], 0..1: 1 where the capture's
-  /// tempo (or its half or double) is the record's, falling off as it is stretched.
-  static double tempoFit(double trackBpm, DanceMove move) {
+  /// tempo (or its half or double) is the record's, falling off as it is stretched
+  /// ([width] in octaves).
+  static double tempoFit(double trackBpm, DanceMove move, {double width = 0.16}) {
     final played = trackBpm * rate(trackBpm, move.bpm);
     final l = math.log(played / move.bpm) / math.ln2;
-    return math.exp(-l * l / (2 * 0.16 * 0.16));
+    return math.exp(-l * l / (2 * width * width));
   }
+
+  /// How far a pumping move may be sped up or slowed on techno: steps danced on the
+  /// beat (a shuffle, a running man caught at 100) still read at a club's 130.
+  static const technoStretch = 0.32;
 
   /// Which tier of moves the mood dances: calm asleep, big in the drop, warming
   /// through a build ([wakeK] 0..1 toward the drop), middle otherwise — a little
@@ -166,7 +203,7 @@ class DanceClock {
   /// A record to dance to as to techno: four to the floor at a club's tempo, few
   /// words. It wants the steady grooves, pumping on the beat, and hardly any of
   /// the party pieces.
-  static bool techno(double bpm, double vocal) => bpm >= 118 && bpm <= 152 && vocal < 0.4;
+  static bool techno(double bpm, double vocal) => bpm >= 118 && bpm <= 160 && vocal < 0.4;
 
   /// How much a record leans on each style. Groove always. On techno, groove all but
   /// alone. Otherwise two more by the record, and the tempo's own (a swing's bounce,
@@ -190,15 +227,16 @@ class DanceClock {
       DanceStyle.latin: 0.45,
       DanceStyle.folk: 0.4,
       DanceStyle.swing: 0.25,
-      DanceStyle.toon: 0.1,
-      DanceStyle.party: hook ? 0.35 : 0.04,
+      DanceStyle.toon: 0.04,
+      DanceStyle.party: hook ? 0.25 : 0.02,
       DanceStyle.calm: calm,
     };
     const leaning = [DanceStyle.latin, DanceStyle.folk, DanceStyle.swing, DanceStyle.groove];
     final a = leaning[(memeHash(salt % 9973, 11, 5) * leaning.length).floor() % leaning.length];
     final b = leaning[(memeHash(salt % 9973, 13, 7) * leaning.length).floor() % leaning.length];
-    w[a] = w[a]! * 2.5;
-    w[b] = w[b]! * 1.8;
+    // A record dances mostly one way: its leaning, and a little of a second.
+    w[a] = w[a]! * 4;
+    w[b] = w[b]! * 1.6;
     if (bpm >= 112 && bpm <= 136) w[DanceStyle.swing] = w[DanceStyle.swing]! * 1.5;
     if (bpm < 110) w[DanceStyle.latin] = w[DanceStyle.latin]! * 1.5;
     if (bpm > 150) w[DanceStyle.folk] = w[DanceStyle.folk]! * 1.4;
@@ -216,8 +254,9 @@ class DanceClock {
     for (final m in moves) {
       if (duo ? (m.duo == null || m.part != 0) : m.duo != null) continue;
       final d = (m.tier.index - tier.index).abs();
-      final fit = tempoFit(bpm, m);
-      var w = (d == 0 ? 1.0 : (d == 1 ? 0.12 : 0.015)) * (flavour[m.style] ?? 0.3) * (techno ? (0.1 + fit) * (0.25 + 1.5 * m.pulse) : 0.2 + fit);
+      final fit = tempoFit(bpm, m, width: techno && m.pulse >= DanceRig.minPulseShift ? technoStretch : 0.16);
+      // On techno the pumping moves most of all: the beat is what is danced.
+      var w = (d == 0 ? 1.0 : (d == 1 ? 0.12 : 0.015)) * (flavour[m.style] ?? 0.3) * (techno ? (0.1 + fit) * (0.15 + 3 * m.pulse * m.pulse) : 0.2 + fit);
       final r = recent.indexOf(m.id);
       if (r >= 0) w *= r == recent.length - 1 ? 0 : 0.15;
       if (w > 0) out.add((m, w));
@@ -291,14 +330,18 @@ class DanceClock {
     final d = memeHash(salt % 9973, slot, 67);
     final pick = switch (t) {
       DanceTroupe.solo || DanceTroupe.couple => const [DanceRoutine.unison],
-      DanceTroupe.duo => const [DanceRoutine.unison, DanceRoutine.unison, DanceRoutine.canon, DanceRoutine.split],
-      DanceTroupe.couples => const [DanceRoutine.unison, DanceRoutine.canon, DanceRoutine.answer, DanceRoutine.unison],
-      DanceTroupe.trio => const [DanceRoutine.unison, DanceRoutine.canon, DanceRoutine.split, DanceRoutine.answer],
-      DanceTroupe.line => const [DanceRoutine.wave, DanceRoutine.unison, DanceRoutine.canon, DanceRoutine.split, DanceRoutine.answer],
-      DanceTroupe.crowd => const [DanceRoutine.split, DanceRoutine.wave, DanceRoutine.unison, DanceRoutine.answer],
+      // Mostly together: a company in step reads as a crew; the canons, the waves,
+      // the split and the answers now and then.
+      DanceTroupe.duo => const [DanceRoutine.unison, DanceRoutine.unison, DanceRoutine.unison, DanceRoutine.canon, DanceRoutine.split],
+      DanceTroupe.couples => const [DanceRoutine.unison, DanceRoutine.unison, DanceRoutine.canon, DanceRoutine.answer, DanceRoutine.unison],
+      DanceTroupe.trio => const [DanceRoutine.unison, DanceRoutine.unison, DanceRoutine.unison, DanceRoutine.canon, DanceRoutine.split, DanceRoutine.answer],
+      DanceTroupe.line => const [DanceRoutine.unison, DanceRoutine.wave, DanceRoutine.unison, DanceRoutine.unison, DanceRoutine.canon, DanceRoutine.split, DanceRoutine.answer],
+      DanceTroupe.crowd => const [DanceRoutine.unison, DanceRoutine.unison, DanceRoutine.split, DanceRoutine.wave, DanceRoutine.unison, DanceRoutine.answer],
       DanceTroupe.grid || DanceTroupe.army || DanceTroupe.ring => const [
           DanceRoutine.unison,
+          DanceRoutine.unison,
           DanceRoutine.wave,
+          DanceRoutine.unison,
           DanceRoutine.split,
           DanceRoutine.answer,
           DanceRoutine.unison
@@ -473,6 +516,11 @@ class DanceFrame {
     return DanceFrame(l(a.yaw, b.yaw), l(a.height, b.height), l(a.dist, b.dist), l(a.aim, b.aim), l(a.fov, b.fov), l(a.roll, b.roll), l(a.ahead, b.ahead));
   }
 
+  /// Where [s] has taken this framing (CameraSweep): never below the floor.
+  DanceFrame swept(SweepMove s) => s == CameraSweep.none
+      ? this
+      : DanceFrame(yaw + s.yaw, math.max(0.08, height + s.rise * dist), dist * s.dist, aim, fov, roll + s.roll, ahead);
+
   DanceFrame turned(double by, {double closer = 1, double roll = 0}) => DanceFrame(yaw + by, height, dist * closer, aim, fov, this.roll + roll, ahead);
 
   DanceCam cam(Size size, {double shake = 0}) {
@@ -572,15 +620,20 @@ class _Track {
     pRate = this.rate;
     move = m;
     at = beats;
-    phase = entry;
+    // On the record's beat: the entry beat is where the record's beat began (at half
+    // time, its pair of beats), not wherever in the beat the change came — else the
+    // move would dance that fraction off the beat until the next.
+    phase = entry + DanceClock.sinceBeat(beats, rate) * rate;
     this.rate = rate;
     blendLen = prev == null ? 0 : blend;
   }
 
-  /// The same move on at a new rate, without a jump.
+  /// The same move on at a new rate, kept on the beat: the nearest place in it that
+  /// is (less than half a beat of it away).
   void retime(double beats, double rate) {
     if (move == null || rate == this.rate) return;
-    phase = beatOf(beats);
+    final into = DanceClock.sinceBeat(beats, rate) * rate;
+    phase = (beatOf(beats) - into).roundToDouble() + into;
     at = beats;
     this.rate = rate;
   }
@@ -711,11 +764,17 @@ class DanceSim implements SimLayer {
   double? _dropAt, _awayWas;
   String? _sectionWas;
   int _slot = -999, _cut = -999;
+
+  /// The framing the hands held at the last cut (StylePool.heldShot): a new one cuts.
+  String? _heldWas;
   final _lead = _Track(), _alt = _Track();
   final _recent = <String>[];
   DanceTroupe _troupe = DanceTroupe.solo;
   final _members = <_Member>[];
   DanceShot _shot = DanceShot.full;
+
+  /// The shot's travel in a loud part.
+  final _sweep = CameraSweep();
   DanceArt? _art;
   ui.FragmentShader? _fx;
   static ui.Image? _glyphs;
@@ -906,30 +965,43 @@ class DanceSim implements SimLayer {
     _lead.retime(beats, DanceClock.rate(bpm, _lead.move!.bpm, sleep: sleep));
     if (_alt.move != null) _alt.retime(beats, DanceClock.rate(bpm, _alt.move!.bpm, sleep: sleep));
 
-    // ---- the camera: still, in front, cut (never moved) to another framing after a
-    // while, on a drop and on a new section.
-    final hold = DanceClock.hold(mood);
+    // ---- the camera: in front, cut to another framing after a while, on a drop and
+    // on a new section — every bar in a drop, every two in a chorus (StageCamera.drive),
+    // where the picture also punches with the music. Still in a quiet part; in a loud
+    // one each shot travels (CameraSweep): round, in, back and up, over the crowd.
+    final drive = StageCamera.drive(m);
+    final hold = cutHold(DanceClock.hold(mood), drive);
     final cutN = hold * 100000 + (beats / hold).floor();
     final shotWas = _shot, troupeWas = _troupeDrawn;
-    if (cutN != _cut || dropNow || sectionNow) {
+    final held = StylePool.held(Figure.dancers);
+    if (cutN != _cut || dropNow || sectionNow || held != _heldWas) {
       _cut = cutN;
-      _shot = _forcedShot ?? DanceClock.shot(mood, salt, cutN, _troupe, art: true, weight: (x) => StylePool.shot(Figure.dancers, x.name));
+      _heldWas = held;
+      _shot = _forcedShot ??
+          DanceShot.values.where((x) => x.name == held).firstOrNull ??
+          DanceClock.shot(mood, salt, cutN, _troupe, art: true, weight: (x) => StylePool.shot(Figure.dancers, x.name));
       // The silhouettes, the text and the dots read best square on.
       if (_shot == DanceShot.full) _shot = DanceShot.front;
       StylePool.shotNow[Figure.dancers] = _shot.name;
+      final close = _shot != DanceShot.front && _shot != DanceShot.wide && _shot != DanceShot.medium;
+      _sweep.cut(beats, hold, playing ? drive : 0, memeHash(salt % 9973, cutN, 331),
+          close: close, over: DanceClock.isBig(_troupe), drop: dropNow);
     }
-    final frame = DanceFrame.of(_shot, _troupe);
+    final frame = DanceFrame.of(_shot, _troupe).swept(_sweep.at(beats, playing ? drive : 0, dt));
     final sizeNow = Size(w.toDouble(), h.toDouble());
-    final still = _shot == shotWas && _troupe == troupeWas && sizeNow == _sizeWas && _art == _artWas;
+    final still = _shot == shotWas && _troupe == troupeWas && sizeNow == _sizeWas && _art == _artWas && !_sweep.moving;
     _troupeDrawn = _troupe;
     _sizeWas = sizeNow;
     _artWas = _art;
     final size = Size(w.toDouble(), h.toDouble());
     final cam = frame.cam(size);
 
-    // ---- the troupe's poses; everyone bobs on the kick (but asleep)
+    // ---- the troupe's poses; everyone bobs on the beat (but asleep): by the grid, so
+    // exactly on it — the kick heard comes a few frames late — as deep as the low end
+    // is loud (a breakdown hardly bobs), deeper on techno.
     final pose = _pose!;
-    final bob = sleep ? 0.0 : 0.022 * kick;
+    final onBeat = playing ? math.exp(-(beats - beats.floorToDouble()) * 7) * ((f['dyn.band.low'] ?? 0) * 1.4).clamp(0.0, 1.0) : kick;
+    final bob = sleep ? 0.0 : (DanceClock.techno(bpm, m.vocal) ? 0.034 : 0.022) * math.max(onBeat, playing ? 0.0 : kick);
     final bodies = <(DanceBody, DanceSpot, double)>[]; // body, spot, depth
     _lead.pose(leadRig, beats, pose);
     pose.hips[2] -= bob / _heroScale;
@@ -1157,7 +1229,12 @@ class DanceSim implements SimLayer {
     // The pool's say: the moves switched off are out, the favourites count for more.
     final offMoves = MovePool.off;
     final moves = offMoves.isEmpty ? rig.moves : [for (final m in rig.moves) if (!offMoves.contains(m.id)) m];
-    var pool = DanceClock.pool(moves.isEmpty ? rig.moves : moves, tier, flavour, bpm, recent: quiet ? [if (track.move != null) track.move!.id] : _recent, techno: techno, duo: duo);
+    final bank = moves.isEmpty ? rig.moves : moves;
+    var pool = DanceClock.pool(bank, tier, flavour, bpm, recent: quiet ? [if (track.move != null) track.move!.id] : _recent, techno: techno, duo: duo);
+    // The record's own few moves (the same whatever was danced last), the company's too.
+    final own = {for (final (m, _) in DanceClock.ownMoves(DanceClock.pool(bank, tier, flavour, bpm, techno: techno, duo: duo), salt)) m.id};
+    final mine = [for (final e in pool) if (own.contains(e.$1.id) || MovePool.favourites.contains(e.$1.id)) e];
+    if (mine.isNotEmpty) pool = mine;
     final stars = MovePool.favourites;
     if (stars.isNotEmpty) pool = [for (final (m, w) in pool) (m, stars.contains(m.id) ? w * 2.5 : w)];
     // A move asked for by hand: the lead dances it now, whatever the dice say.
@@ -1727,6 +1804,7 @@ class DanceSim implements SimLayer {
       case DanceArt.halftone:
       case DanceArt.thermal:
       case DanceArt.lines:
+      case DanceArt.crt:
         // The figures bright on black; the finish draws them its own way.
         c.fill(Offset.zero & s, Colors.black);
         for (final (b, _, _) in bodies) {
@@ -1746,7 +1824,18 @@ class DanceSim implements SimLayer {
         }
       case DanceArt.viewports:
         _viewports(c, s, l, beats);
+      case DanceArt.dust:
+        // The scans as dust: points over their skin that a drop blows off them, which
+        // hang in the air, swirl, and come back to the body.
+        c.fill(Offset.zero & s, Colors.black);
+        final d = _dustNow(l, bodies.length);
+        for (final (b, _, _) in bodies) {
+          c.dust(b, cam, d);
+        }
       case DanceArt.plain:
+      case DanceArt.slit:
+        // (The slit-scan: the plain bodies, which the stage draws out along their
+        // own time — show_common.dart's treatOf, native/stage/src/fx.h.)
         // The models as they are, and nothing else: the scan's skin under a plain
         // daylight — no floor, no shadow, no studio, no page: the background is the
         // page (white, MilkDrop, anything). Drawn at alpha 254/255 (replacing, not
@@ -1776,6 +1865,42 @@ class DanceSim implements SimLayer {
           c.body(b, cam, _chrome(l, Colors.white), twoSided: true);
         }
     }
+  }
+
+  /// The dust as the record has it now: a drop blows it off the bodies (out in a beat,
+  /// held in the air six, back over eight), a phrase now and then the same less far,
+  /// asleep it drifts off and back; the kick shivers it. Coloured by the skin, a light
+  /// of the palette, or the palette up the body — another every sixteen bars.
+  DanceDust _dustNow(_Look l, int bodies) {
+    final pal = l.st.palette;
+    final salt = (l.st.master.trackId ?? 0) % 9973;
+    double burst(double since) => since < 0
+        ? 0
+        : since < 1
+            ? Curves.easeOutCubic.transform(since)
+            : since < 7
+                ? 1
+                : since < 15
+                    ? 1 - Curves.easeInOutCubic.transform((since - 7) / 8)
+                    : 0;
+    var k = l.since == null ? 0.0 : burst(l.since!);
+    final phrase = (l.beats / 32).floor();
+    if (!l.sleep && memeHash(salt, phrase, 59) < 0.35) k = math.max(k, 0.7 * burst(l.beats - phrase * 32));
+    if (l.sleep) k = math.max(k, 0.12 + 0.14 * (0.5 + 0.5 * math.sin(l.beats * math.pi / 16)));
+    final mode = (memeHash(salt, (l.beats / 64).floor(), 61) * 3).floor().clamp(0, 2);
+    return DanceDust(
+      size: 0.0055,
+      explode: k,
+      swirl: 0.6 + 0.8 * l.energy,
+      rise: 0.35 + 0.3 * l.build,
+      time: l.t,
+      mode: mode,
+      a: mode == 0 ? Colors.white : pal.accent.withSaturation(0.45).withLightness(0.85).toColor(),
+      b: pal.primary.withSaturation(0.8).withLightness(0.55).toColor(),
+      alpha: 0.45,
+      density: (1.6 / math.max(1, bodies)).clamp(0.2, 1.0),
+      shimmer: (l.kick + 0.5 * l.snare).clamp(0.0, 1.5),
+    );
   }
 
   /// A model editor's viewports: the picture cut into a grid of panels, each a
@@ -2082,6 +2207,7 @@ class DanceSim implements SimLayer {
       DanceArt.contour => (mode: mode, ink: pal.accent.withSaturation(0.85).withLightness(0.62).toColor(), paper: dark, cell: 0.0, tint: 0.0),
       DanceArt.halftone => (mode: mode, ink: pal.primary.withSaturation(0.9).withLightness(0.55).toColor(), paper: const Color(0xff050506), cell: math.max(4.0, h / (l.rage ? 80 : 110)), tint: 0.0),
       DanceArt.thermal => (mode: mode, ink: Colors.white, paper: Colors.black, cell: 0.0, tint: 0.0),
+      DanceArt.crt => (mode: mode, ink: crtInk, paper: crtPaper, cell: math.max(3.0, h / (l.rage ? 110 : 135)), tint: 0.2),
       DanceArt.lines => (mode: mode, ink: pal.accent.withSaturation(0.35).withLightness(0.85).toColor(), paper: const Color(0xff030303), cell: math.max(5.0, h / 72), tint: 0.0),
       _ => (mode: mode, ink: pal.accent.withSaturation(0.55).withLightness(0.78).toColor(), paper: const Color(0xff040404), cell: h / (l.rage ? 52 : 40), tint: 0.2),
     };

@@ -44,7 +44,7 @@ enum Ground {
 /// What stands in the middle. [none] is a look that is its own whole picture
 /// (MilkDrop alone); [field] a shader drawn whole (drift), [room] the camera through
 /// a shader (echo, fold) — both blended with the ground like any figure.
-enum Figure { none, dancers, birds, kinetic, blocks, flash, glide, turntable, fluid, veins, meme, words, field, room }
+enum Figure { none, dancers, birds, kinetic, blocks, flash, glide, turntable, fluid, veins, meme, words, field, room, type3d }
 
 /// How a 3D figure's surface is shaded. [auto] is the figure's own clock choosing
 /// from the pool, as it does today.
@@ -54,7 +54,7 @@ enum Shade { auto, textured, chrome, silhouette, flat, toon }
 enum Dressing { auto, none, disco, neon, shadow, studio, sky }
 
 /// An image-space rendering of the figure, any figure.
-enum Treatment { auto, raw, ascii, dither, halftone, thermal, lines, contour, chrono, trails, fluid, viewports, radar }
+enum Treatment { auto, raw, ascii, dither, halftone, thermal, lines, contour, chrono, trails, fluid, viewports, radar, crt, slit }
 
 /// When a change the hands ask for lands.
 enum Quantise { now, beat, bar, phrase }
@@ -182,7 +182,8 @@ class RigFigure {
       kind == Figure.fluid ||
       kind == Figure.veins ||
       kind == Figure.meme ||
-      kind == Figure.words;
+      kind == Figure.words ||
+      kind == Figure.type3d;
 
   /// A word for a chip or a line: `dancers`, `dancers chrome ascii`, `kinetic`.
   String get label => [

@@ -8,6 +8,10 @@
 //   wetowl --stage --record <id> [--at <s>] [--scene <id>]   a real record off the house, played
 //                                                           here through the booth's own engine
 //   … --shot [--shot-every <ms>]                             frames to the temp directory
+//   … --audit <dir> | --audit-milk <dir>                    the combination audit's captures
+//                                                           (stage_audit.dart), then quits
+//   … --mosh-every <s>                                       the demo datamoshed into another scene
+//                                                           every so often
 //   … --camera [<device>]                                    the room's camera on (C toggles)
 //   wetowl --stage --spike [--passes n --scale x --shot]     the perf spike
 //   … --fullscreen                                           from the start
@@ -39,10 +43,12 @@ import '../../state/show/camera_feed.dart';
 import '../../state/show/milk_feed.dart';
 import '../../state/player.dart' show PlayerService;
 import '../../state/show/show_demo.dart';
+import '../../state/show/show_director.dart' show SceneChange;
 import '../../state/show/show_feed.dart';
 import '../../state/show/show_wire.dart';
 import 'scene.dart';
 import 'show_spike.dart';
+import 'stage_audit.dart';
 import 'stage_kit.dart';
 import 'stage_page.dart';
 
@@ -226,6 +232,8 @@ class _StageWindowState extends State<_StageWindow> {
     }
   }
 
+  Timer? _moshing;
+
   Future<void> _startDemo() async {
     final kit = await StageKit.load();
     final demo = DemoShowFeed(scenes: kit.book.metas, looks: kit.book.looks)..start();
@@ -236,6 +244,16 @@ class _StageWindowState extends State<_StageWindow> {
         ..choose(widget.args[i + 1])
         ..locked = true;
     }
+    final m = widget.args.indexOf('--mosh-every');
+    final every = m >= 0 && m + 1 < widget.args.length ? double.tryParse(widget.args[m + 1]) : null;
+    if (every != null && every > 0) {
+      _moshing = Timer.periodic(Duration(milliseconds: (every * 1000).round()), (_) => demo.director.next(how: SceneChange.mosh));
+    }
+    // `--audit <dir>`: every scene and background captured for the combination audit.
+    final au = widget.args.indexOf('--audit');
+    if (au >= 0 && au + 1 < widget.args.length) unawaited(runStageAudit(demo, kit.book, widget.args[au + 1]).then((_) => exit(0)));
+    final am = widget.args.indexOf('--audit-milk');
+    if (am >= 0 && am + 1 < widget.args.length) unawaited(runMilkAudit(demo, kit.book, widget.args[am + 1]).then((_) => exit(0)));
     if (!mounted) return;
     setState(() {
       _demo = demo;
@@ -340,6 +358,8 @@ class _StageWindowState extends State<_StageWindow> {
       final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
       if (data != null && _ws == ws) {
         ws.add(encodeStageThumb(image.width, image.height, data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes)));
+        // And what is on it that the booth cannot see in the combination.
+        ws.add(stageNowJson());
       }
       image.dispose();
     } catch (_) {
@@ -365,6 +385,7 @@ class _StageWindowState extends State<_StageWindow> {
     _closing = true;
     SchedulerBinding.instance.removeTimingsCallback(_took);
     _saying?.cancel();
+    _moshing?.cancel();
     _counting?.cancel();
     _ping?.cancel();
     _thumbs?.cancel();
@@ -417,6 +438,7 @@ class _StageWindowState extends State<_StageWindow> {
                 hit: () => demo.macros = demo.macros.copyWith(hit: 1),
                 macros: () => demo.macros,
                 setMacros: (m) => demo.macros = m,
+                mosh: () => demo.director.next(how: SceneChange.mosh),
               );
     return Focus(
       focusNode: _focus,

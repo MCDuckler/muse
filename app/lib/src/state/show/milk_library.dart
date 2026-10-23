@@ -136,6 +136,7 @@ class MilkLibrary extends ChangeNotifier {
       off.addAll([for (final f in (j['off'] as List? ?? const [])) '$f']);
       recent.addAll([for (final r in (j['recent'] as List? ?? const [])) '$r']);
       (j['imported'] as Map? ?? const {}).forEach((k, v) => imported['$k'] = '$v');
+      (j['skips'] as Map? ?? const {}).forEach((k, v) => skips['$k'] = v is num ? v.toInt() : 0);
     } catch (e) {
       debugPrint('milk: notes: $e');
     }
@@ -148,6 +149,7 @@ class MilkLibrary extends ChangeNotifier {
         'off': off.toList()..sort(),
         'recent': recent,
         'imported': imported,
+        'skips': skips,
       }));
     } catch (e) {
       debugPrint('milk: notes: $e');
@@ -191,6 +193,24 @@ class MilkLibrary extends ChangeNotifier {
   }
 
   bool isOff(MilkPreset p) => off.contains(p.fullName);
+
+  /// How often the hands skipped each preset (by full name) soon after the director
+  /// put it on: "not this", learnt rather than asked. The oldest go past [skipsKept].
+  final skips = <String, int>{};
+  static const skipsKept = 300;
+
+  void skipped(MilkPreset p) {
+    final n = (skips.remove(p.fullName) ?? 0) + 1;
+    skips[p.fullName] = n;
+    while (skips.length > skipsKept) {
+      skips.remove(skips.keys.first);
+    }
+    unawaited(_saveNotes());
+  }
+
+  /// How much the director leans on [p] for the hands' skips: 1 never skipped, a half
+  /// once, a third twice…
+  double skipLean(MilkPreset p) => 1 / (1 + (skips[p.fullName] ?? 0));
 
   void toggleOff(MilkPreset p) {
     if (!off.remove(p.fullName)) off.add(p.fullName);

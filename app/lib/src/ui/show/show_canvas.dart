@@ -39,7 +39,7 @@ class StagePrograms {
   final Map<String, ui.FragmentProgram> sims;
   final ui.FragmentProgram feedback, blur, finish, under;
 
-  static const simShaders = ['fluid_advect', 'fluid_div', 'fluid_jacobi', 'fluid_project', 'fluid_look', 'meme_fx', 'dance_fx', 'flock_fx', 'words_fx'];
+  static const simShaders = ['fluid_advect', 'fluid_div', 'fluid_jacobi', 'fluid_project', 'fluid_look', 'meme_fx', 'dance_fx', 'flock_fx', 'words_fx', 'type3d'];
 
   /// Shaders no scene file names: the grounds' own.
   static const groundShaders = ['pulse'];
@@ -206,7 +206,7 @@ class _Working {
 /// light — everything else (a shader's picture, a simulation on a canvas).
 int coverageOf(Scene scene, ShowRig rig, {required bool native}) {
   final layer = scene.layers.length == 1 ? scene.layers.first : null;
-  if (layer?.sim == 'words') return 1;
+  if (layer?.sim == 'words' || layer?.sim == 'type3d') return 1;
   final dance = layer?.sim?.startsWith('dance.') ?? false;
   if (!dance) return 2;
   if (native) return 1;
@@ -388,7 +388,8 @@ class _StagePainter extends CustomPainter {
   /// the birds' own styles, [RigFigure.style] the treatment's name).
   ui.Image _treated(ui.Image img, ShowRig rig, ShowState st, int w, int h) {
     final q = treatOf(rig, st, h);
-    if (q == null) return img;
+    // The slit-scan keeps frames, which only the native stage does: here, as drawn.
+    if (q == null || q.t == Treatment.slit) return img;
     final program = p.sims['dance_fx'];
     if (program == null) return img;
     final fx = _treat ??= program.fragmentShader();

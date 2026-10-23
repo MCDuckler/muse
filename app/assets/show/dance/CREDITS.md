@@ -12,3 +12,7 @@
   60_11–15 61_02–09 61_11–15 85_03 85_12 90_31 90_32 93_03 93_05 93_06 93_08 94_01–05 94_09–15 103_03
   103_05 103_06 103_08 111_05 113_04 120_05–07 120_21 141_12 143_34 143_35. The duets are takes captured
   as couples: 60/61 (salsa, the same couple take for take), 18_15/19_15 and 20_01/21_01 (chicken dance).
+- Mixamo (Adobe), https://www.mixamo.com — animations used under Mixamo's terms (royalty-free in a project, not
+  for redistribution as animation files on their own), baked into the moves here (takes `mx_*`, exported without
+  skin at 30 fps and retargeted like the rest): running man, shuffling, house, hip-hop steps, samba, swing, party
+  and Thriller pieces.

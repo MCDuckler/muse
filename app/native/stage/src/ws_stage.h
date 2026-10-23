@@ -45,7 +45,9 @@ WS_API int ws_attach_headless(int device);
 WS_API int ws_attach_shared(void);
 // What this build and this attach have, as bits: 1 MilkDrop in the stage's own
 // context (ws_milk; without it the helper's frames go up as the texture named
-// "milk", ws_dance_texture); 2 frames shared by Direct3D handle; 4 frames as pixels.
+// "milk", ws_dance_texture); 2 frames shared by Direct3D handle; 4 frames as pixels;
+// 8 ws_treat; 16 sims by name (`@sim:<name>`); 32 the veins (`@slime`, fx.h: their
+// rules a frame through ws_words); 64 the slit-scan (ws_treat mode 9); 128 ws_mosh.
 WS_API int ws_features(void);
 WS_API const char* ws_error(void);
 WS_API void ws_stop(void);
@@ -98,8 +100,19 @@ WS_API void ws_blend(int mix, int mask, int coverage, float strength);
 // (0 none), cell as a share of the picture's height, ink rgb, paper rgb, tint, glyphs,
 // pop, pop x, pop y, time, and the knobs weight, spacing, height, gain, size (0 is
 // 1). The glyphs are the texture named "glyphs" (ws_dance_texture). ws_features says 8.
+// Mode 9 is the slit-scan (fx.h's Slit): no glyphs; the cell is its shape, the tint
+// flips it, the weight knob how far back it reaches, the spacing knob frames a layer.
 #define WS_TREAT 19
 WS_API void ws_treat(const float* p, int n);
+// A datamosh from the picture on now into whatever is drawn next (fx.h): over
+// `seconds`, `strength` 0..2 how far the old picture is dragged.
+WS_API void ws_mosh(float seconds, float strength);
+
+// The next frame's layers written out for the combination audit (tools/show-audit):
+// <path>.fig (the figure, its treatment on, before the blend), <path>.ground (where a
+// blend is on), <path>.out (the finished picture) — each int32 w, h then RGBA float32,
+// top row first, at most 320 wide — and <path>.json (the blend's settings).
+WS_API void ws_dump(const char* path);
 // The common block for the next frame: values 2.. of it (uTime on), n of them.
 WS_API void ws_inputs(const float* values, int n);
 

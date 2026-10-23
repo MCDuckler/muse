@@ -27,8 +27,10 @@ import 'show_dynamics.dart';
 import 'show_events.dart';
 import 'camera_feed.dart';
 import 'milk_feed.dart';
+import 'show_faves.dart';
 import 'show_feed.dart';
 import 'show_genome.dart';
+import 'show_taste.dart';
 import 'show_heard.dart';
 import 'show_palette.dart';
 import 'show_pool.dart';
@@ -89,7 +91,7 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
         Figure.kinetic || Figure.blocks || Figure.flash || Figure.glide => 'geometric',
         Figure.dancers || Figure.birds || Figure.turntable => 'figurative',
         Figure.fluid || Figure.veins || Figure.field => 'organic',
-        Figure.meme || Figure.words || Figure.room => 'media',
+        Figure.meme || Figure.words || Figure.room || Figure.type3d => 'media',
         Figure.none => 'organic',
       };
 
@@ -123,13 +125,15 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   void _apply(ShowDoc doc) {
     _doc = doc;
     director.rules = doc.pool.allRules;
+    director.taste = (c) => ShowTaste.lean(c, doc.taste, doc.faves);
     director.bias = doc.pool.bias;
+    director.moshShare = doc.pool.mosh;
     MovePool.from(doc.pool);
     StylePool.from(doc.pool);
     QualityPool.from(doc.pool);
     director.grounds = groundsHere;
     // The dancers still read who dances off the hands' macros.
-    _macros = _macros.copyWith(dancer: doc.pool.dancer ?? 'mix', dancersOff: doc.pool.dancersOff, tune: doc.pool.tune);
+    _macros = _macros.copyWith(dancer: doc.pool.dancer ?? 'mix', dancersOff: doc.pool.dancersOff, tune: doc.pool.tune, type3d: _faveOn?.type3d ?? doc.pool.type3d);
     if (!running) tick(DateTime.now());
     notifyListeners();
   }
@@ -154,11 +158,92 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   // ------------------------------------------------------------------ the hands
   /// A combination put on as it is, held until let go ([holdScene] false, NEXT).
   void play(Combo c) {
+    _letFave();
+    _play(c);
+  }
+
+  void _play(Combo c) {
     _launch = null;
     _milkOnly = false;
     director.play(c);
     if (!running) tick(DateTime.now());
     notifyListeners();
+  }
+
+  // ------------------------------------------------------------------ favourites
+  /// The favourites, newest first (show_faves.dart).
+  List<ShowFave> get faves => _doc.faves;
+
+  /// What is on the stage now, as a favourite (its picture is the caller's): null
+  /// while nothing is.
+  ShowFave? faveNow({DateTime? at}) {
+    final c = combo;
+    if (c == null) return null;
+    final when = at ?? DateTime.now();
+    final kind = director.kinds[c.scene] ?? Figure.none;
+    final usesMilk = c.ground == 'milk' || c.scene == 'milk';
+    final shot = hasCamera(kind) ? StylePool.shotNow[kind] : null;
+    final typeNow = StylePool.typeNow;
+    return ShowFave(
+      id: ShowFave.newId(when),
+      at: when,
+      combo: c,
+      milk: usesMilk ? MilkFeed.shared.preset?.fullName ?? _macros.milkPreset : null,
+      shot: shot == null ? null : '${kind.name}.$shot',
+      type3d: kind == Figure.type3d && typeNow != null ? narrowedType(_macros.type3d, typeNow) : null,
+    );
+  }
+
+  /// [f] kept, first in the list (one of the same id replaced).
+  void keepFave(ShowFave f) => setDoc(_doc.copyWith(faves: [f, for (final o in faves) if (o.id != f.id) o]));
+
+  /// [f] as it is now (its stars, its name), where it is.
+  void putFave(ShowFave f) => setDoc(_doc.copyWith(faves: [for (final o in faves) o.id == f.id ? f : o]));
+
+  void forgetFave(String id) => setDoc(_doc.copyWith(faves: [for (final o in faves) if (o.id != id) o]));
+
+  /// The favourite on the stage, put on by the hands: held until let go (HOLD, NEXT,
+  /// another combination or scene).
+  ShowFave? get faveOn => _faveOn;
+  ShowFave? _faveOn;
+  bool _faveMilkDone = false;
+
+  /// [f] on the stage as it was kept, whatever the rules say of it: the combination
+  /// held, its MilkDrop preset loaded and held, its framing cut to, its 3D text's
+  /// motion, look and bends.
+  void playFave(ShowFave f) {
+    _faveOn = f;
+    _faveMilkDone = f.milk == null;
+    StylePool.heldShot = f.shot;
+    _macros = _macros.copyWith(type3d: f.type3d ?? pool.type3d);
+    if (f.milk != null) unawaited(MilkFeed.shared.start());
+    _play(f.combo);
+  }
+
+  /// The favourite let go of: the rules' framing, the pool's 3D text, MilkDrop's
+  /// director back on its presets.
+  void _letFave() {
+    final f = _faveOn;
+    if (f == null) return;
+    _faveOn = null;
+    StylePool.heldShot = null;
+    if (f.type3d != null) _macros = _macros.copyWith(type3d: pool.type3d);
+    if (f.milk != null) MilkFeed.shared.director.release();
+  }
+
+  /// The favourite's preset, once MilkDrop is up and its presets are listed (it may
+  /// be starting as the favourite goes on).
+  void _faveMilk(MilkFeed milk) {
+    final want = _faveOn?.milk;
+    if (want == null || _faveMilkDone) return;
+    if (milk.preset?.fullName == want) {
+      _faveMilkDone = true;
+      return;
+    }
+    if (milk.library.presets.isEmpty) return;
+    _faveMilkDone = true;
+    final p = milk.library.byName(want);
+    if (p != null) milk.director.pick(p);
   }
 
   /// The combination on (the director's, or the hands').
@@ -217,6 +302,7 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   void launch(String id, {Quantise? at}) {
     if (!looks.containsKey(id) && !director.scenes.any((s) => s.id == id)) return;
     final q = at ?? pool.quantise;
+    _letFave();
     if (q == Quantise.now || !_state.master.playing) {
       director.choose(id, how: SceneChange.cut);
       _launch = null;
@@ -369,12 +455,32 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   void nextScene() {
     if (milkOnly) return MilkFeed.shared.director.next();
     _launch = null;
+    _skipped();
+    _letFave();
     director.next();
+  }
+
+  /// Another scene now, datamoshed into (the hands' MOSH).
+  void moshNext() {
+    if (milkOnly) return MilkFeed.shared.director.next();
+    _launch = null;
+    _skipped();
+    _letFave();
+    director.next(how: SceneChange.mosh);
+  }
+
+  /// NEXT in a combination's first bars, the director's own choice (not the hands' or
+  /// a favourite): kept as "not this" (show_taste.dart).
+  void _skipped() {
+    final c = director.combo;
+    if (c == null || director.locked || faveOn != null || director.comboBars >= ShowTaste.skipBars) return;
+    setDoc(_doc.copyWith(taste: ShowTaste.skipped(_doc.taste, c)));
   }
 
   void previousScene() {
     if (milkOnly) return MilkFeed.shared.director.previous();
     _launch = null;
+    _letFave();
     director.next(by: -1);
   }
 
@@ -382,6 +488,7 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   /// off steps on to one that is on).
   void stepOn() {
     _launch = null;
+    _letFave();
     director.next();
     if (!running) tick(DateTime.now());
     notifyListeners();
@@ -393,6 +500,7 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   bool get milkOnly => _milkOnly && director.scene == 'milk';
   void setMilkOnly(bool on) {
     _launch = null;
+    _letFave();
     if (on) {
       if (!director.scenes.any((s) => s.id == 'milk')) return;
       director
@@ -410,6 +518,7 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
 
   void chooseScene(String id) {
     _launch = null;
+    _letFave();
     director.choose(id);
   }
 
@@ -418,6 +527,7 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   bool get sceneHeld => director.locked;
   void holdScene(bool on) {
     _launch = null;
+    if (!on) _letFave();
     director.locked = on;
     if (!on) _milkOnly = false;
     if (!running) tick(DateTime.now());
@@ -552,6 +662,7 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
       scene: d.scene,
       sceneFrom: d.from,
       sceneK: d.k,
+      mosh: director.moshes + MilkFeed.shared.director.moshes,
       clearSceneFrom: d.from == null,
       rig: look == null ? ShowRig.none : _hands(look.inCombo(director.combo)),
       rigFrom: leaving == null ? null : _hands(leaving.inCombo(director.fromCombo)),
@@ -562,7 +673,12 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
     final milk = MilkFeed.shared;
     if (milk.running) {
       milk.tick(_state);
-      milk.director.frame(_state, said);
+      // A favourite's preset held: the director's cuts wait until it is let go.
+      if (_faveOn?.milk == null) {
+        milk.director.frame(_state, said);
+      } else {
+        _faveMilk(milk);
+      }
       final on = milk.preset?.fullName;
       if (on != _macros.milkPreset) {
         _macros = _macros.copyWith(milkPreset: on, clearMilkPreset: on == null);

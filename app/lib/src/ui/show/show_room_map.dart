@@ -93,7 +93,7 @@ class _Rotation {
     final leans = <String, double>{};
     for (final s in book.scenes.values) {
       final list = [
-        for (final c in combosOf(s.id, s.look.rig.figure.kind, grounds: comboGrounds.where(grounds.contains))) (c, comboWeight(c, rules)),
+        for (final c in combosOf(s.id, s.look.rig.figure.kind, grounds: comboGrounds.where(grounds.contains))) (c, ComboScores.weigh(c, rules)),
       ];
       byScene[s.id] = list;
       var n = 0, sum = 0.0;

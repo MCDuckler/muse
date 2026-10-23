@@ -108,6 +108,9 @@ flutter:
     - assets/show/scenes/
     - assets/show/thumbs/
     - assets/show/stills/
+    # How every combination looks, measured (tools/show-audit; state/show/combo_scores.dart).
+    - assets/show/combo_scores.json
+    - assets/show/milk_scores.json
     # The Siebenschläfer scene's bank: photographs, cut-outs, captions, and who took
     # the pictures (CREDITS.md). See lib/src/ui/show/show_meme.dart.
     - assets/show/siebenschlaefer/
@@ -157,6 +160,7 @@ flutter:
     - shaders/show/sim/dance_fx.frag
     - shaders/show/sim/flock_fx.frag
     - shaders/show/sim/words_fx.frag
+    - shaders/show/sim/type3d.frag
 
   fonts:
     - family: Manrope
@@ -191,3 +195,24 @@ flutter:
     - family: Syne
       fonts:
         - asset: assets/fonts/Syne.ttf
+    # The 3D type's display faces (ui/show/show_type3d.dart), all OFL (Google Fonts):
+    # a squared sci-fi, a signage block, a pixel face, a neon outline, a heavy rounded
+    # mono, a retro script-like geometric.
+    - family: Orbitron
+      fonts:
+        - asset: assets/fonts/Orbitron.ttf
+    - family: Bungee
+      fonts:
+        - asset: assets/fonts/Bungee-Regular.ttf
+    - family: PressStart2P
+      fonts:
+        - asset: assets/fonts/PressStart2P-Regular.ttf
+    - family: Monoton
+      fonts:
+        - asset: assets/fonts/Monoton-Regular.ttf
+    - family: RubikMonoOne
+      fonts:
+        - asset: assets/fonts/RubikMonoOne-Regular.ttf
+    - family: Righteous
+      fonts:
+        - asset: assets/fonts/Righteous-Regular.ttf

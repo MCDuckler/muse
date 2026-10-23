@@ -7,7 +7,10 @@
 // Nothing is textured: each shape is light. A triangle is as bright as it is edge-on
 // to the eye (a hologram's look: outlines glowing, the middle almost clear), its
 // colour runs round the wheel with its height, its slant, its place on the ring and
-// the bar, and the triangles are added, not stacked, so nothing needs sorting. A
+// the bar, and the triangles are added, not stacked, so nothing needs sorting.
+//
+// In a loud part the camera travels (StageCamera.drive): round the ring and back, up
+// and down past it, in and out, on slow waves out of step; the drop swings it round. A
 // floor grid and the ring's track under them, a beam up into the one in front, scan
 // lines over it all; the snare tears a slice of the shape in front sideways.
 //
@@ -33,6 +36,7 @@ import 'package:flutter/services.dart';
 import '../../state/show/show_state.dart';
 import 'show_canvas.dart' show StagePrograms;
 import 'show_sims.dart';
+import 'stage_camera.dart' show StageCamera;
 
 /// A shape: a soup of triangles, x, y, z of each corner, nine to a triangle. Centred
 /// on the origin, y up, its longest side two units.
@@ -649,6 +653,10 @@ class TurntableSim implements SimLayer {
   double _kickWas = 0, _snareWas = 0, _since = 0;
   bool _dropWas = false;
 
+  /// The camera's travel (how intense the record is, eased to), and the drop's swing
+  /// round the ring, settling, the other way each drop.
+  double _camK = 0, _swing = 0, _swingSide = 1;
+
   int _slot(num i) => ((i.round() % slots) + slots) % slots;
 
   TurntableModel? _pick() {
@@ -727,7 +735,11 @@ class TurntableSim implements SimLayer {
       _advance(1);
       _hueTo += 0.15;
     }
-    if (drop && !_dropWas) _advance(3);
+    if (drop && !_dropWas) {
+      _advance(3);
+      _swing = 1;
+      _swingSide = -_swingSide;
+    }
     _dropWas = drop;
 
     _spring(dt, _at - _target, _atV, 26, 6.5, (x, v) {
@@ -773,8 +785,22 @@ class TurntableSim implements SimLayer {
     final accent = st.palette.accent.withLightness(0.6).toColor();
     final baseHue = st.palette.primary.hue / 360;
 
+    // The camera on the move in a loud part: round the ring and back, up and down past
+    // it, in and out, slow waves out of step (so it never comes round the same way),
+    // as far as the record is intense; a swing round on the drop. Still when quiet.
+    final m = st.master;
+    final playing = m.playing && m.beatIndex != null;
+    final b = playing ? m.beatIndex! + m.beatPhase : _t * 2;
+    _camK += ((playing ? StageCamera.drive(m) : 0.0) - _camK) * math.min(1.0, dt * 0.8);
+    _swing *= math.exp(-dt * 1.2);
+    final k = _camK, tau = math.pi * 2;
+    final camYaw = k * 0.55 * math.sin(tau * b / 32) + _swingSide * 0.9 * _swing * _swing;
+    final camRise = k * 0.22 * math.sin(tau * b / 24 + 1);
+    final camDist = 1 - k * 0.28 * (0.5 + 0.5 * math.sin(tau * b / 16 + 2));
+    final camRoll = k * 0.05 * math.sin(tau * b / 20 + 0.5);
+
     final next = _pass(w, h, (c) {
-      final cam = _Camera(w.toDouble(), h.toDouble());
+      final cam = _Camera(w.toDouble(), h.toDouble(), yaw: camYaw, rise: camRise, dist: camDist, roll: camRoll);
       _backdrop(c, cam, secondary, accent, beatDecay * energy);
       _models(c, cam, baseHue, kick, energy, low, pulse);
       _scan(c, cam, primary, barSaw);
@@ -901,7 +927,7 @@ class TurntableSim implements SimLayer {
     final pos = _pos, col = _col, view = _view;
     final front = _slot(_at);
     final wave = 0.05 + 0.25 * low;
-    final cp = _Camera.cp, sp = _Camera.sp;
+    final cp = cam.cp, sp = cam.sp, oc = cam.cy, os = cam.sy, cr = cam.cr, sr = cam.sr, camY = cam.y, camZ = cam.z;
     final cw = cam.w / 2, ch = cam.h * 0.5, focal = cam.focal;
     var o = 0;
 
@@ -945,9 +971,11 @@ class TurntableSim implements SimLayer {
           tz = x * sn + z * ct;
         }
         final wx = tx * cs - tz * ss + px, wy = y + py, wz = tx * ss + tz * cs + pz;
-        final dy = wy - _Camera.y, dz = wz - _Camera.z;
-        view[i * 3] = wx;
-        view[i * 3 + 1] = dy * cp + dz * sp;
+        final rx = wx * oc - wz * os, rz = wx * os + wz * oc;
+        final dy = wy - camY, dz = rz - camZ;
+        final vy = dy * cp + dz * sp;
+        view[i * 3] = rx * cr - vy * sr;
+        view[i * 3 + 1] = rx * sr + vy * cr;
         view[i * 3 + 2] = dz * cp - dy * sp;
       }
 
@@ -1038,18 +1066,33 @@ class TurntableSim implements SimLayer {
 
 /// Where the ring is seen from: in front of it and a little above, looking down
 /// past the front of it into the middle.
+///
+/// In a loud part it travels (StageCamera.drive): round the ring by [yaw], up or down
+/// by [rise] (a share of its distance), in or out by [dist], its horizon tipped by [roll].
 class _Camera {
-  _Camera(this.w, this.h) : focal = math.min(w, h * 1.6) * 0.9;
-  final double w, h, focal;
-  static const y = 4.4, z = -8.6, lookY = 0.9, lookZ = -1.6;
-  static final _pitch = math.atan2(y - lookY, lookZ - z);
-  static final cp = math.cos(_pitch), sp = math.sin(_pitch);
+  _Camera(this.w, this.h, {double yaw = 0, double rise = 0, double dist = 1, double roll = 0})
+      : focal = math.min(w, h * 1.6) * 0.9,
+        y = lookY + (y0 - lookY) * dist + rise * 7,
+        z = lookZ + (z0 - lookZ) * dist,
+        cy = math.cos(yaw),
+        sy = math.sin(yaw),
+        cr = math.cos(roll),
+        sr = math.sin(roll) {
+    final pitch = math.atan2(y - lookY, lookZ - z);
+    cp = math.cos(pitch);
+    sp = math.sin(pitch);
+  }
+  final double w, h, focal, y, z, cy, sy, cr, sr;
+  late final double cp, sp;
+  static const y0 = 4.4, z0 = -8.6, lookY = 0.9, lookZ = -1.6;
 
   (double, double)? project(double x, double wy, double wz) {
-    final dy = wy - y, dz = wz - z;
+    final rx = x * cy - wz * sy, rz = x * sy + wz * cy;
+    final dy = wy - y, dz = rz - z;
     final vy = dy * cp + dz * sp, vz = dz * cp - dy * sp;
     if (vz < 0.2) return null;
-    return (w / 2 + x * focal / vz, h * 0.5 - vy * focal / vz);
+    final vx = rx * cr - vy * sr, vy2 = rx * sr + vy * cr;
+    return (w / 2 + vx * focal / vz, h * 0.5 - vy2 * focal / vz);
   }
 }
 

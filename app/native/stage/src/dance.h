@@ -31,7 +31,7 @@ namespace ws {
 
 enum DanceOp {
   kFill = 1, kTris = 2, kPoints = 3, kClip = 4, kCamera = 5, kPose = 6, kBody = 7, kOutline = 8,
-  kFloorShadow = 9, kWallShadow = 10, kPost = 11, kClearDepth = 12, kFluid = 13,
+  kFloorShadow = 9, kWallShadow = 10, kPost = 11, kClearDepth = 12, kFluid = 13, kDust = 14,
 };
 enum DanceBlend { kOver = 0, kPlus = 1, kSrc = 2, kDarken = 3 };
 enum DanceShade { kLit = 0, kFlat = 1, kChrome = 3 };
@@ -49,6 +49,10 @@ struct DanceMeshData {
   GLuint vao = 0, vbo = 0, ibo = 0, tex = 0;
   int indices = 0;
   bool uploaded = false;
+  // the dust: points scattered over the surface, as many to an area, in no order
+  // (the first n of them are an even share), drawn through the same skinning
+  GLuint dustVao = 0, dustVbo = 0;
+  int dustN = 0;
 };
 
 static const char* kBodyVert = R"(#version 300 es
@@ -173,6 +177,95 @@ void main() {
 }
 )";
 
+// The dust (kDust): the body as points, skinned as the body is, which leave it — from
+// the top down, a ragged edge — when it bursts, drift, rise and swirl, and come back.
+static const char* kDustVert = R"(#version 300 es
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNrm;
+layout(location = 2) in vec4 aBones;
+layout(location = 3) in vec4 aWeights;
+layout(location = 4) in vec2 aUv;
+uniform vec4 uSkin[96];
+uniform mat4 uModel;
+uniform mat4 uViewProj;
+uniform vec3 uEye;
+uniform float uSize, uFocal, uExplode, uSwirl, uRise, uTime, uShimmer;
+out vec2 vUv;
+out float vLit, vK, vH, vFade;
+float h11(float x) { return fract(sin(x * 12.9898 + 4.1414) * 43758.5453); }
+vec3 flow(vec3 p, float t) {
+  return vec3(sin(p.y * 1.7 + t * 0.9) + sin(p.z * 2.3 - t * 0.7),
+              sin(p.z * 1.9 + t * 0.8) + sin(p.x * 2.1 + t * 1.1),
+              sin(p.x * 1.6 - t * 0.6) + sin(p.y * 2.4 + t * 0.5)) * 0.5;
+}
+void main() {
+  ivec4 b = ivec4(aBones + 0.5);
+  vec4 r0 = vec4(0), r1 = vec4(0), r2 = vec4(0);
+  for (int i = 0; i < 4; i++) {
+    float w = aWeights[i];
+    if (w <= 0.0) continue;
+    r0 += uSkin[b[i] * 3] * w;
+    r1 += uSkin[b[i] * 3 + 1] * w;
+    r2 += uSkin[b[i] * 3 + 2] * w;
+  }
+  vec4 p = vec4(aPos, 1.0);
+  vec3 local = vec3(dot(r0, p), dot(r1, p), dot(r2, p));
+  vec3 n = vec3(dot(r0.xyz, aNrm), dot(r1.xyz, aNrm), dot(r2.xyz, aNrm));
+  vec4 world = uModel * vec4(local, 1.0);
+  vec3 wn = normalize(mat3(uModel) * n);
+  if (dot(wn, uEye - world.xyz) < 0.0) wn = -wn;
+  float id = float(gl_VertexID);
+  float h1 = h11(id * 0.1234), h2 = h11(id * 0.731 + 3.1), h3 = h11(id * 1.917 + 7.7);
+  vec3 rnd = normalize(vec3(h1, h2, h3) - 0.5 + 1e-4);
+  // Which go first: the top of the body, a ragged edge down it.
+  float order = clamp(1.0 - world.z / 1.9, 0.0, 1.0) * 0.6 + h2 * 0.4;
+  float k = smoothstep(order * 0.7, order * 0.7 + 0.3, uExplode);
+  vec3 off = (wn * 0.25 + rnd * 0.5) * k * (0.35 + h3);
+  off.z += uRise * k * k * (0.4 + h1);
+  off += flow(world.xyz * 1.3 + rnd * 2.0, uTime * 0.6) * uSwirl * k * 0.6;
+  off += rnd * uShimmer * 0.012;
+  world.xyz += off;
+  gl_Position = uViewProj * world;
+  float px = uSize * uFocal / max(gl_Position.w, 0.05);
+  gl_PointSize = clamp(px * (1.0 - 0.3 * k), 1.0, 9.0);
+  // Smaller than a pixel they pile up: each the fainter, so a body far off is not a
+  // white blob — but a mote in the air, alone, is not.
+  vFade = mix(clamp(pow(px / 2.4, 1.5), 0.1, 1.0), 1.0, k * 0.8);
+  vLit = max(dot(wn, normalize(vec3(-0.35, -0.8, 0.65))), 0.0);
+  vK = k;
+  vH = clamp(world.z / 1.9, 0.0, 1.0);
+  vUv = aUv;
+}
+)";
+
+static const char* kDustFrag = R"(#version 300 es
+precision highp float;
+in vec2 vUv;
+in float vLit, vK, vH, vFade;
+uniform int uMode;          // 0 the skin, 1 one colour, 2 two up the body
+uniform vec3 uA, uB;
+uniform float uAlpha;
+uniform bool uTextured;
+uniform sampler2D uSkinTex;
+out vec4 fragColor;
+void main() {
+  vec2 q = gl_PointCoord * 2.0 - 1.0;
+  float r2 = dot(q, q);
+  if (r2 > 1.0) discard;
+  float soft = 1.0 - r2 * r2;
+  vec3 col;
+  if (uMode == 0 && uTextured) col = texture(uSkinTex, vUv).rgb * (0.6 + 0.6 * vLit);
+  else if (uMode == 2) col = mix(uA, uB, vH) * (0.55 + 0.6 * vLit);
+  else col = uA * (0.45 + 0.75 * vLit);
+  // A mote in the air cools towards the second colour and dims.
+  col = mix(col, uB * 0.9, vK * 0.55);
+  float a = soft * uAlpha * vFade;
+  // Added up as light; its coverage (the blend's alpha) built up three times as fast,
+  // so where the dust is, the figure is — faint motes and all.
+  fragColor = vec4(col * a, a * 3.0);
+}
+)";
+
 static const char* kFlatVert = R"(#version 300 es
 layout(location = 0) in vec2 aPos;    // pixels of the reference picture, y from the top
 layout(location = 1) in vec4 aColour;
@@ -279,14 +372,17 @@ class Dance {
       if (m.vbo) glDeleteBuffers(1, &m.vbo);
       if (m.ibo) glDeleteBuffers(1, &m.ibo);
       if (m.tex) glDeleteTextures(1, &m.tex);
-      m.vao = m.vbo = m.ibo = m.tex = 0;
+      if (m.dustVao) glDeleteVertexArrays(1, &m.dustVao);
+      if (m.dustVbo) glDeleteBuffers(1, &m.dustVbo);
+      m.vao = m.vbo = m.ibo = m.tex = m.dustVao = m.dustVbo = 0;
+      m.dustN = 0;
       m.uploaded = false;
       m.skinDirty = m.skinW > 0 && !m.skin.empty();
     }
     for (auto& [name, t] : textures_) if (t) glDeleteTextures(1, &t);
     textures_.clear();
     for (auto& [name, t] : pendingTex_) t.dirty = true;
-    for (GLuint* p : {&body_, &flat_, &dot_, &fVel_, &fDye_, &fDiv_, &fJac_, &fProj_, &fShow_}) {
+    for (GLuint* p : {&body_, &flat_, &dot_, &dust_, &fVel_, &fDye_, &fDiv_, &fJac_, &fProj_, &fShow_}) {
       if (*p) glDeleteProgram(*p);
       *p = 0;
     }
@@ -440,6 +536,12 @@ class Dance {
         case kClearDepth:
           glClear(GL_DEPTH_BUFFER_BIT);
           break;
+        case kDust: {
+          firstDraw_ = false;
+          dust(&c[i]);
+          i += 17;
+          break;
+        }
         default:
           i = c.size();  // a list it does not understand: stop rather than misread
       }
@@ -611,6 +713,7 @@ class Dance {
     eye_[0] = ex; eye_[1] = ey; eye_[2] = ez;
     std::memcpy(right_, r, sizeof r); std::memcpy(up_, u, sizeof u); std::memcpy(fwd_, f, sizeof f);
     const float focal = refH_ / 2 / std::tan(fov / 2);
+    focal_ = focal;
     const float cx = refW_ / 2 + shx * refW_, cy = refH_ / 2 + shy * refH_;
     const float n = 0.05f, fa = 200.0f;
     // rows of clip = M · (world − eye): X = right, Y = up, Z = forward (depth)
@@ -740,6 +843,158 @@ class Dance {
     glDisable(GL_CULL_FACE);
     glDrawElements(GL_TRIANGLES, m.indices, GL_UNSIGNED_SHORT, nullptr);
     glDepthMask(GL_TRUE);
+  }
+
+  // The mesh's surface as points: about [kDustPoints] of them by area, each with the
+  // position, normal, skin weights (the corners', by where it lies, the four most) and
+  // texture place where it lies; shuffled, so any first share of them is even.
+  static constexpr int kDustPoints = 160000;
+  static void buildDust(DanceMeshData& m) {
+    const size_t tris = m.tris.size() / 3;
+    if (!tris || m.dustVbo) return;
+    std::vector<float> area(tris);
+    double total = 0;
+    auto P = [&](int corner) { return &m.pos[(size_t)m.src[(size_t)corner] * 3]; };
+    for (size_t t = 0; t < tris; t++) {
+      const float *a = P(m.tris[t * 3]), *b = P(m.tris[t * 3 + 1]), *c = P(m.tris[t * 3 + 2]);
+      const float u[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]}, v[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+      const float x = u[1] * v[2] - u[2] * v[1], y = u[2] * v[0] - u[0] * v[2], z = u[0] * v[1] - u[1] * v[0];
+      area[t] = 0.5f * std::sqrt(x * x + y * y + z * z);
+      total += area[t];
+    }
+    if (total <= 0) return;
+    uint32_t seed = 0x9e3779b9u;
+    auto rnd = [&]() { seed = seed * 1664525u + 1013904223u; return (float)(seed >> 8) / 16777216.0f; };
+    std::vector<uint8_t> buf;
+    buf.reserve((size_t)kDustPoints * 44);
+    for (size_t t = 0; t < tris; t++) {
+      const float want = (float)(area[t] / total * kDustPoints);
+      int k = (int)want + (rnd() < want - std::floor(want) ? 1 : 0);
+      const int cs[3] = {m.tris[t * 3], m.tris[t * 3 + 1], m.tris[t * 3 + 2]};
+      for (int j = 0; j < k; j++) {
+        float bu = rnd(), bv = rnd();
+        if (bu + bv > 1) { bu = 1 - bu; bv = 1 - bv; }
+        const float bw[3] = {1 - bu - bv, bu, bv};
+        float pos[3] = {}, nrm[3] = {}, uv[2] = {};
+        float wsum[256] = {};
+        int used[12], nUsed = 0;
+        for (int q = 0; q < 3; q++) {
+          const size_t pi = m.src[(size_t)cs[q]];
+          for (int d = 0; d < 3; d++) { pos[d] += m.pos[pi * 3 + d] * bw[q]; nrm[d] += m.nrm[pi * 3 + d] * bw[q]; }
+          uv[0] += m.uv[(size_t)cs[q] * 2] * bw[q];
+          uv[1] += m.uv[(size_t)cs[q] * 2 + 1] * bw[q];
+          for (int e = 0; e < 4; e++) {
+            const int bone = m.bone[pi * 4 + e];
+            const float w = m.weight[pi * 4 + e] / 255.0f * bw[q];
+            if (w <= 0) continue;
+            if (wsum[bone] == 0) used[nUsed++] = bone;
+            wsum[bone] += w;
+          }
+        }
+        // the four heaviest, to 255 together
+        uint8_t bones[4] = {}, weights[4] = {};
+        float top[4] = {};
+        for (int u2 = 0; u2 < nUsed; u2++) {
+          const int bone = used[u2];
+          const float w = wsum[bone];
+          for (int s = 0; s < 4; s++) {
+            if (w > top[s]) {
+              for (int r = 3; r > s; r--) { top[r] = top[r - 1]; bones[r] = bones[r - 1]; }
+              top[s] = w; bones[s] = (uint8_t)bone;
+              break;
+            }
+          }
+        }
+        const float sum = top[0] + top[1] + top[2] + top[3];
+        int given = 0;
+        for (int s = 0; s < 4; s++) {
+          weights[s] = (uint8_t)std::lround(sum > 0 ? top[s] / sum * 255 : (s == 0 ? 255 : 0));
+          given += weights[s];
+        }
+        weights[0] = (uint8_t)std::clamp(weights[0] + 255 - given, 0, 255);
+        const float nl = std::sqrt(nrm[0] * nrm[0] + nrm[1] * nrm[1] + nrm[2] * nrm[2]) + 1e-6f;
+        for (float& x : nrm) x /= nl;
+        const size_t at = buf.size();
+        buf.resize(at + 40);
+        uint8_t* o = buf.data() + at;
+        std::memcpy(o, pos, 12);
+        std::memcpy(o + 12, nrm, 12);
+        std::memcpy(o + 24, bones, 4);
+        std::memcpy(o + 28, weights, 4);
+        std::memcpy(o + 32, uv, 8);
+      }
+    }
+    const size_t n = buf.size() / 40;
+    for (size_t a = n; a > 1; a--) {
+      const size_t b = (size_t)(rnd() * a) % a;
+      if (b != a - 1) for (int q = 0; q < 40; q++) std::swap(buf[(a - 1) * 40 + q], buf[b * 40 + q]);
+    }
+    glGenVertexArrays(1, &m.dustVao);
+    glGenBuffers(1, &m.dustVbo);
+    glBindVertexArray(m.dustVao);
+    glBindBuffer(GL_ARRAY_BUFFER, m.dustVbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)buf.size(), buf.data(), GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 40, (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 40, (void*)12);
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_FALSE, 40, (void*)24);
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 4, GL_UNSIGNED_BYTE, GL_TRUE, 40, (void*)28);
+    glEnableVertexAttribArray(4);
+    glVertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, 40, (void*)32);
+    glBindVertexArray(0);
+    m.dustN = (int)n;
+  }
+
+  // slot size(m) explode swirl rise time mode a3 b3 alpha density blend shimmer
+  void dust(const float* d) {
+    const int slot = (int)d[0];
+    auto it = poses_.find(slot);
+    if (it == poses_.end()) return;
+    const Pose& p = it->second;
+    std::lock_guard<std::mutex> g(lock_);
+    if (p.mesh < 0 || p.mesh >= (int)meshes_.size()) return;
+    DanceMeshData& m = *meshes_[(size_t)p.mesh];
+    if (!m.uploaded) return;
+    if (!dust_) {
+      std::string err;
+      dust_ = glsl::link(kDustVert, kDustFrag, err);
+      if (!dust_) { std::fprintf(stderr, "stage: the dust: %s\n", err.c_str()); return; }
+    }
+    buildDust(m);
+    const int n = std::min(m.dustN, (int)std::lround(m.dustN * std::clamp(d[14], 0.02f, 1.0f)));
+    if (n <= 0) return;
+    glUseProgram(dust_);
+    auto set = [&](const char* name, float v) { glUniform1f(glGetUniformLocation(dust_, name), v); };
+    glUniform4fv(glGetUniformLocation(dust_, "uSkin"), 96, p.skin);
+    glUniformMatrix4fv(glGetUniformLocation(dust_, "uModel"), 1, GL_FALSE, p.model);
+    glUniformMatrix4fv(glGetUniformLocation(dust_, "uViewProj"), 1, GL_FALSE, viewProj_);
+    glUniform3fv(glGetUniformLocation(dust_, "uEye"), 1, eye_);
+    set("uSize", d[1]);
+    set("uFocal", focal_ * (float)h_ / refH_);
+    set("uExplode", d[2]);
+    set("uSwirl", d[3]);
+    set("uRise", d[4]);
+    set("uTime", d[5]);
+    set("uShimmer", d[16]);
+    glUniform1i(glGetUniformLocation(dust_, "uMode"), (int)d[6]);
+    glUniform3f(glGetUniformLocation(dust_, "uA"), d[7], d[8], d[9]);
+    glUniform3f(glGetUniformLocation(dust_, "uB"), d[10], d[11], d[12]);
+    set("uAlpha", d[13]);
+    glUniform1i(glGetUniformLocation(dust_, "uTextured"), m.tex ? 1 : 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, m.tex);
+    glUniform1i(glGetUniformLocation(dust_, "uSkinTex"), 0);
+    (void)d[15];  // always added: premultiplied light, coverage alongside
+    glEnable(GL_BLEND);
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFunc(GL_ONE, GL_ONE);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glBindVertexArray(m.dustVao);
+    glDrawArrays(GL_POINTS, 0, n);
   }
 
   // mode cell ink3 paper3 tint glyphs pop popX popY time, and the treatment's knobs
@@ -1131,6 +1386,8 @@ void main() {
   std::map<std::string, GLuint> textures_;
   std::vector<float> commands_;
   std::map<int, Pose> poses_;
+  GLuint dust_ = 0;
+  float focal_ = 1000;
   GLuint body_ = 0, flat_ = 0, dot_ = 0, flatVao_ = 0, flatVbo_ = 0, dotVao_ = 0, dotVbo_ = 0, emptyVao_ = 0;
   float viewProj_[16] = {}, eye_[3] = {}, right_[3] = {}, up_[3] = {}, fwd_[3] = {};
   float refW_ = 1920, refH_ = 1080;

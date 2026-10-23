@@ -55,7 +55,7 @@ struct Core {
         height = h;
         projectm_set_window_size(pm, w, h);
         projectm_set_fps(pm, fps);
-        projectm_set_mesh_size(pm, 48, 36);
+        meshFor(w);
         projectm_set_aspect_correction(pm, true);
         // The booth decides when presets change; projectM's own clock never does.
         projectm_set_preset_duration(pm, 1e9);
@@ -68,6 +68,14 @@ struct Core {
         }
         makeFbo();
         return true;
+    }
+
+    // The warp's mesh: finer on a bigger picture, where 48 by 36 cells show their
+    // straight edges.
+    void meshFor(int w) {
+        if (w >= 1600) projectm_set_mesh_size(pm, 96, 72);
+        else if (w >= 1200) projectm_set_mesh_size(pm, 64, 48);
+        else projectm_set_mesh_size(pm, 48, 36);
     }
 
     void close() {
@@ -117,6 +125,7 @@ struct Core {
                 width = w;
                 height = h;
                 projectm_set_window_size(pm, w, h);
+                meshFor(w);
                 makeFbo();
                 if (!onSize(w, h)) return false;
             }
@@ -139,6 +148,11 @@ struct Core {
             wanted = "(edited)";
             projectm_load_preset_data(pm, text.c_str(), word == "data-soft");
             say("preset ok (edited)");
+        } else if (word == "blend") {
+            // How long the next soft change blends, in seconds.
+            double secs = 0;
+            in >> secs;
+            if (secs > 0) projectm_set_soft_cut_duration(pm, secs);
         } else if (word == "lock") {
             int v = 0;
             in >> v;

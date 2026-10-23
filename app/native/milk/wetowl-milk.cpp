@@ -8,6 +8,7 @@
 //     fps N                 how often a frame is rendered
 //     preset PATH           a preset file, hard cut (preset-soft PATH blends to it)
 //     data N / data-soft N  a preset as text: N bytes follow
+//     blend SECONDS         how long the next soft change blends
 //     lock 0|1              hold the preset (no switching, hard cuts off)
 //     var NAME VALUE        one value preset code reads by name (wo_kick, ...)
 //     vars N=V N=V ...      several at once

@@ -194,6 +194,7 @@ extension SceneLook on Scene {
         'turntable' => const RigFigure(kind: Figure.turntable),
         'flock' => const RigFigure(kind: Figure.birds),
         'words' => const RigFigure(kind: Figure.words),
+        'type3d' => const RigFigure(kind: Figure.type3d),
         // The dancers: one scene, its looks the styles (show_dance.dart's DanceArt);
         // the old stages' names read as it, for a recording made before.
         'dance.art' || 'dance.disco' || 'dance.neon' || 'dance.shadow' => const RigFigure(kind: Figure.dancers),

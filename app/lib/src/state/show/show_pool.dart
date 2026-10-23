@@ -4,10 +4,13 @@
 // switches and leans of the rest, by a dotted key (`dancer.joe`, `move.long22`).
 //
 // Plan: ~/.claude/plans/wetowl-show-combos.md.
+import 'combo_scores.dart';
 import 'show_combos.dart';
 import 'show_rig.dart';
+import 'show_type3d.dart';
 
 export 'show_combos.dart';
+export 'show_type3d.dart';
 
 class ShowPool {
   const ShowPool({
@@ -19,11 +22,16 @@ class ShowPool {
     this.bias = 0,
     this.tier = 'auto',
     this.darkBeat = false,
+    this.mosh = defaultMosh,
     this.tune = const {},
+    this.type3d = TypeSpec.standard,
   });
 
   /// The treatments' knobs, by `treatment.knob` (show_tune.dart): `lines.weight`.
   final Map<String, double> tune;
+
+  /// The 3D type's words, face, motions and knobs (show_type3d.dart).
+  final TypeSpec type3d;
 
   /// The quality tier the stage draws at: `auto`, `low`, `mid` or `high` (what the
   /// flock's count, the dancers' company and the working size go by).
@@ -31,6 +39,11 @@ class ShowPool {
 
   /// The beat before a drop goes black.
   final bool darkBeat;
+
+  /// How many of the changes are datamoshed, 0..1 (show_director.dart's
+  /// SceneChange.mosh).
+  final double mosh;
+  static const defaultMosh = 0.35;
 
   /// The keys switched off: `dancer.joe`, `move.long22`, `shot.fisheye`…
   final Set<String> off;
@@ -72,7 +85,9 @@ class ShowPool {
           double? bias,
           String? tier,
           bool? darkBeat,
-          Map<String, double>? tune}) =>
+          double? mosh,
+          Map<String, double>? tune,
+          TypeSpec? type3d}) =>
       ShowPool(
         off: off ?? this.off,
         lean: lean ?? this.lean,
@@ -82,7 +97,9 @@ class ShowPool {
         bias: bias ?? this.bias,
         tier: tier ?? this.tier,
         darkBeat: darkBeat ?? this.darkBeat,
+        mosh: mosh ?? this.mosh,
         tune: tune ?? this.tune,
+        type3d: type3d ?? this.type3d,
       );
 
   ShowPool withOff(String key, bool isOff) => copyWith(
@@ -111,7 +128,8 @@ class ShowPool {
     ];
   }
 
-  double weightOf(Combo c) => comboWeight(c, allRules);
+  /// [c]'s weight in the rotation: the rules', and how it looks (combo_scores.dart).
+  double weightOf(Combo c) => ComboScores.weigh(c, allRules);
 
   ({double weight, List<ComboRule> cards, ComboRule? exception}) explain(Combo c) => explainWeight(c, allRules);
 
@@ -189,7 +207,9 @@ class ShowPool {
         if (bias != 0) 'bias': bias,
         if (tier != 'auto') 'tier': tier,
         if (darkBeat) 'darkBeat': true,
+        if (mosh != defaultMosh) 'mosh': mosh,
         if (tune.isNotEmpty) 'tune': tune,
+        if (type3d != TypeSpec.standard) 'type3d': type3d.toJson(),
       };
 
   factory ShowPool.fromJson(Map<String, dynamic> j) => ShowPool(
@@ -212,7 +232,9 @@ class ShowPool {
         bias: j['bias'] is num ? (j['bias'] as num).toDouble().clamp(-1.0, 1.0) : 0,
         tier: const ['auto', 'low', 'mid', 'high'].contains(j['tier']) ? '${j['tier']}' : 'auto',
         darkBeat: j['darkBeat'] == true,
+        mosh: j['mosh'] is num ? (j['mosh'] as num).toDouble().clamp(0.0, 1.0) : defaultMosh,
         tune: j['tune'] is Map ? {for (final e in (j['tune'] as Map).entries) if (e.value is num) '${e.key}': (e.value as num).toDouble()} : const {},
+        type3d: TypeSpec.fromJson(j['type3d']),
       );
 
   static const _oldAxes = ['look.', 'ground.', 'style.', 'treatment.', 'blend.', 'figure.'];
@@ -262,6 +284,20 @@ class StylePool {
 
   /// Each figure's framing of the moment, by name, as its clock cut to it.
   static final Map<Figure, String> shotNow = {};
+
+  /// A framing held by the hands (a favourite put on), as `figure.shot`: its figure's
+  /// clock cuts to it at once and keeps it until it is let go. Null: the rules'.
+  static String? heldShot;
+
+  /// [heldShot], where it is [kind]'s: the framing's own name.
+  static String? held(Figure kind) {
+    final h = heldShot, p = '${kind.name}.';
+    return h != null && h.startsWith(p) ? h.substring(p.length) : null;
+  }
+
+  /// The 3D text's motion, look and bends of the moment, as its sim picked them (or,
+  /// with the stage in a window of its own, as that window says).
+  static ({TypeMotion motion, TypeLook look, Set<TypeDeform> bends})? typeNow;
 
   static void from(ShowPool p) => pool = p;
 

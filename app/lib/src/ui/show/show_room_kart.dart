@@ -959,6 +959,7 @@ class _ComboPanel extends StatelessWidget {
     final (n, onN) = _count(pool);
     final card = rulePattern.card;
     final explain = whole == null ? null : pool.explain(whole);
+    final measured = whole == null ? null : ComboScores.shipped?.quality(whole);
     final shot = p.shots?.length == 1 ? p.shots!.first : null;
     final camera = <String>[
       'a camera rule: how the figure is framed at each cut while these are on — never how often they come',
@@ -970,6 +971,11 @@ class _ComboPanel extends StatelessWidget {
     final words = p.camera
         ? camera
         : <String>[
+      if (whole != null && measured != null && explain!.weight > 0)
+        measured < ComboScores.floor
+            ? 'looks ${(measured * 100).round()}/100 measured: out of the rotation unless a rule of yours names it'
+            : 'looks ${(measured * 100).round()}/100 measured${measured < 0.7 ? ', so comes less' : ''} · '
+                'intensity ${((ComboScores.shipped!.intensity(whole) ?? 0) * 100).round()}/100',
       if (whole != null)
         explain!.weight <= 0
             ? 'off: never in the rotation'

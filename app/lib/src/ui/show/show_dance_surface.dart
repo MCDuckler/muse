@@ -33,6 +33,34 @@ abstract class DanceSurface {
   void outline(DanceBody b, DanceCam cam, double width, Color color, {BlendMode blend = BlendMode.srcOver});
   void floorShadow(DanceBody b, DanceCam cam, V3 toLight, Color color);
   void wallShadow(DanceBody b, DanceCam cam, V3 lamp, double wallY, Color color);
+
+  /// The body as dust: points over its surface, which leave it as [d] says.
+  void dust(DanceBody b, DanceCam cam, DanceDust d);
+}
+
+/// How a body is drawn as dust (dance.h's kDust): its points [size] metres across,
+/// how far they have left it ([explode] 0 the body, 1 all of them in the air), how
+/// much they swirl and rise, the clock they swirl by, a little shiver ([shimmer]) on
+/// the kick; coloured by the skin ([mode] 0), one colour [a] (1), or [a] at the feet
+/// to [b] at the head (2) — a mote in the air cooling to [b]; [density] the share of
+/// the points drawn (a crowd draws fewer each).
+class DanceDust {
+  const DanceDust({
+    this.size = 0.006,
+    this.explode = 0,
+    this.swirl = 0.8,
+    this.rise = 0.5,
+    this.time = 0,
+    this.mode = 0,
+    this.a = const Color(0xfff2efe8),
+    this.b = const Color(0xff6a7cff),
+    this.alpha = 0.8,
+    this.density = 1,
+    this.shimmer = 0,
+  });
+  final double size, explode, swirl, rise, time, alpha, density, shimmer;
+  final int mode;
+  final Color a, b;
 }
 
 /// The Flutter stage's: a canvas, the bodies drawn by DanceBody on the CPU.
@@ -94,6 +122,9 @@ class CanvasDanceSurface implements DanceSurface {
 
   @override
   void wallShadow(DanceBody b, DanceCam cam, V3 lamp, double wallY, Color color) => b.wallShadow(c, cam, lamp, wallY, color);
+
+  @override
+  void dust(DanceBody b, DanceCam cam, DanceDust d) => b.dust(c, cam, d);
 }
 
 /// The native stage's: every call a command in a list of floats (dance.h's ops),
@@ -108,7 +139,7 @@ class NativeDanceSurface implements DanceSurface {
   final _slots = <DanceBody, (int, int)>{}; // body → (slot, the version it was posed at)
 
   static const _fill = 1, _tris = 2, _points = 3, _clip = 4, _camera = 5, _pose = 6, _body = 7, _outline = 8;
-  static const _floorShadow = 9, _wallShadow = 10, _post = 11, _fluid = 13;
+  static const _floorShadow = 9, _wallShadow = 10, _post = 11, _fluid = 13, _dust = 14;
 
   static int blendOf(BlendMode b) => switch (b) {
         BlendMode.plus => 1,
@@ -238,6 +269,15 @@ class NativeDanceSurface implements DanceSurface {
     final slot = _slot(b);
     final l = toLight.unit;
     _out.addAll([_floorShadow.toDouble(), slot.toDouble(), l.x, l.y, l.z, color.r, color.g, color.b]);
+  }
+
+  @override
+  void dust(DanceBody b, DanceCam cam, DanceDust d) {
+    final slot = _slot(b);
+    _out.addAll([
+      _dust.toDouble(), slot.toDouble(), d.size, d.explode, d.swirl, d.rise, d.time, d.mode.toDouble(),
+      d.a.r, d.a.g, d.a.b, d.b.r, d.b.g, d.b.b, d.alpha, d.density, blendOf(BlendMode.plus).toDouble(), d.shimmer,
+    ]);
   }
 
   @override

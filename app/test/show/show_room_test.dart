@@ -195,7 +195,7 @@ void main() {
     expect(rule.pattern, '*|dance-art|ascii|*|*|dancers.fisheye,dancers.fisheyeLow');
     expect(rule.off, isTrue);
     // How often a combination comes: as before.
-    expect(show.pool.weightOf(const Combo(ground: 'milk', scene: 'dance-art', style: 'ascii')), greaterThan(0));
+    expect(show.pool.explain(const Combo(ground: 'milk', scene: 'dance-art', style: 'ascii')).weight, greaterThan(0));
     expect(show.pool.shotWeightOf(const Combo(ground: 'milk', scene: 'dance-art', style: 'ascii'), 'dancers.fisheye'), 0);
     expect(show.pool.shotWeightOf(const Combo(ground: 'milk', scene: 'dance-art', style: 'plain'), 'dancers.fisheye'), 1);
     // The scene let go of the camera: none of it left in the pattern.
@@ -245,6 +245,109 @@ void main() {
     expect(show.doc.snapshots.single.rules, hasLength(2));
     expect(find.text('Calm •'), findsNothing);
     await tester.pump(const Duration(seconds: 5));
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('the TEXT tab: the lines typed, a face, a motion more, SHOW IT', (tester) async {
+    await open(tester);
+    final show = booth.show;
+    await tap(tester, find.text('TEXT'));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('LINES'), findsOneWidget);
+    await tester.enterText(find.byType(TextField), 'HELLO\n{artist}');
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(show.pool.type3d.lines, ['HELLO', '{artist}']);
+    // (The tab is in two scrolls, its own and the tab panel's: its chips pressed as
+    // a finger would.)
+    Future<void> press(String word) async {
+      final chip = find.ancestor(of: find.text(word), matching: find.byType(InkWell)).first;
+      tester.widget<InkWell>(chip).onTap!();
+      await tester.pump();
+    }
+
+    await press('Orbitron');
+    expect(show.pool.type3d.font, TypeFont.orbitron);
+    await press('ZOOM');
+    expect(show.pool.type3d.motions, contains(TypeMotion.zoom));
+    // The last motion is never taken away.
+    for (final m in show.pool.type3d.motions.toList()) {
+      await press(m.name.toUpperCase());
+    }
+    expect(show.pool.type3d.motions, hasLength(1));
+    await press('NEON');
+    // The bends: one more, and none at all is a choice.
+    await press('MELT');
+    expect(show.pool.type3d.deforms, contains(TypeDeform.melt));
+    for (final d in show.pool.type3d.deforms.toList()) {
+      await press(d.name.toUpperCase());
+    }
+    expect(show.pool.type3d.deforms, isEmpty);
+    await press('GLITCH');
+    expect(show.pool.type3d.turn, TypeTurn.glitch);
+    await press('EVERY BEAT');
+    expect(show.pool.type3d.change, TypeChange.beat);
+    // (In two scrolls, the tab's and the tab panel's: pressed as the pad would be.)
+    await tester.dragUntilVisible(find.text('SHOW IT'), find.byType(ListView).first, const Offset(0, 300));
+    tester.widget<Pad>(find.ancestor(of: find.text('SHOW IT'), matching: find.byType(Pad))).onTap!();
+    await tester.pump();
+    show.tick(DateTime.now());
+    expect(show.combo?.scene, 'type3d');
+    expect(show.state.macros.type3d.font, TypeFont.orbitron);
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('favourites: KEEP keeps what is on, rated in its message; FAVES puts one back on, held, steps through, filters by stars', (tester) async {
+    await open(tester);
+    final show = booth.show;
+    const combo = Combo(ground: 'milk', scene: 'dance-art', style: 'plain', mix: Mix.screen);
+    show.play(combo);
+    frame(show);
+    StylePool.shotNow[Figure.dancers] = 'fisheye';
+    addTearDown(() {
+      StylePool.shotNow.clear();
+      StylePool.heldShot = null;
+    });
+    await tap(tester, find.text('KEEP'));
+    // (Its picture taken off the stage, outside the test's fake clock.)
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));
+    await tester.pump();
+    expect(show.faves.single.combo, combo);
+    expect(show.faves.single.shot, 'dancers.fisheye');
+    // Rated there and then, in its message.
+    final stars = find.descendant(of: find.byType(SnackBar), matching: find.byIcon(Icons.star_outline_rounded));
+    expect(stars, findsNWidgets(5));
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(stars.at(3));
+    await tester.pump();
+    expect(show.faves.single.stars, 4);
+
+    show.holdScene(false);
+    await tap(tester, find.text('FAVES'));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('FAVOURITES'), findsOneWidget);
+    // A tap on its picture: on the stage, held, its framing too.
+    await tap(tester, find.descendant(of: find.byType(GridView), matching: find.byType(InkWell)).first);
+    frame(show);
+    expect(show.faveOn?.id, show.faves.single.id);
+    expect(show.combo, combo);
+    expect(show.sceneHeld, isTrue);
+    expect(StylePool.heldShot, 'dancers.fisheye');
+    expect(find.textContaining('On the stage, held'), findsOneWidget);
+    await tap(tester, find.text('LET GO'));
+    expect(show.faveOn, isNull);
+    expect(show.sceneHeld, isFalse);
+    expect(StylePool.heldShot, isNull);
+    // The next one, by the arrow; five stars or more: none.
+    await tap(tester, find.byIcon(Icons.chevron_right));
+    expect(show.faveOn, isNotNull);
+    await tap(tester, find.text('★★★★★'));
+    expect(find.text('None with these stars.'), findsOneWidget);
+    await tap(tester, find.text('★★★★+'));
+    // The stars under it: one more.
+    await tap(tester, find.descendant(of: find.byType(GridView), matching: find.byIcon(Icons.star_outline_rounded)));
+    expect(show.faves.single.stars, 5);
+    await tester.pump(const Duration(seconds: 4));
     await tester.pumpWidget(const SizedBox());
   });
 

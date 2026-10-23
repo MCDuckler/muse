@@ -7,10 +7,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import skel, retarget
 a = sys.argv[sys.argv.index("--") + 1:]
 bpy.ops.wm.read_factory_settings(use_empty=True)
-bpy.ops.import_anim.bvh(filepath=a[0], axis_forward="-Z", axis_up="Y", global_scale=0.01)
-ob = bpy.context.object; sc = bpy.context.scene
+ob, fps = skel.load(a[0]); sc = bpy.context.scene
 f0, f1 = map(int, ob.animation_data.action.frame_range)
-fps = skel.bvh_fps(a[0])
 step = max(1, round(fps / 30))
 M = skel.name_map([b.name for b in ob.pose.bones])
 names = retarget.CHAIN
