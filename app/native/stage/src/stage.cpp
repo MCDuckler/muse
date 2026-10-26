@@ -304,6 +304,8 @@ struct Stage {
   float groundDim = 1, groundKnobs[4] = {};
   int blendMix = 0, blendMask = 0, blendCoverage = 0;
   float blendStrength = 1;
+  // The shader scene last drawn: drawn on while the next one's program is compiled.
+  std::string shownScene;
   // The treatment over the figure (ws_treat): mode 0 none.
   float treat[WS_TREAT] = {};
   // The figure's ghosts (ws_ghosts): under 2 none; and whether the working size
@@ -416,6 +418,33 @@ bool setUp() {
   glVertexAttribDivisor(1, 1);
   glBindVertexArray(0);
   S->programs.dir = S->shaderDir;
+  // Compiles in the background where the GPU can (ANGLE can), on as many threads as
+  // it likes; and kept on the disk for this GPU between runs.
+  S->programs.parallel = hasExtension("GL_KHR_parallel_shader_compile");
+  if (S->programs.parallel) {
+    using Threads = void(GL_APIENTRY*)(GLuint);
+    if (auto threads = reinterpret_cast<Threads>(eglGetProcAddress("glMaxShaderCompilerThreadsKHR"))) threads(0xFFFFFFFFu);
+  }
+  {
+    GLint formats = 0;
+    glGetIntegerv(GL_NUM_PROGRAM_BINARY_FORMATS, &formats);
+    const char* renderer = (const char*)glGetString(GL_RENDERER);
+    const char* version = (const char*)glGetString(GL_VERSION);
+    S->programs.renderer = std::string(renderer ? renderer : "") + " | " + (version ? version : "");
+    if (formats > 0) {
+#ifdef _WIN32
+      if (const char* base = std::getenv("LOCALAPPDATA")) S->programs.cacheDir = std::string(base) + "\\WetOwl\\stage-cache";
+#else
+      if (const char* xdg = std::getenv("XDG_CACHE_HOME")) S->programs.cacheDir = std::string(xdg) + "/wetowl/stage";
+      else if (const char* home = std::getenv("HOME")) S->programs.cacheDir = std::string(home) + "/.cache/wetowl/stage";
+#endif
+    }
+    std::fprintf(stderr, "stage: programs compiled %s, kept in %s\n", S->programs.parallel ? "in the background" : "where asked for",
+                 S->programs.cacheDir.empty() ? "no cache" : S->programs.cacheDir.c_str());
+  }
+  // Every scene's program started now, so none waits for its compile when it is first
+  // put on (a drop, mostly).
+  S->programs.prewarm();
   // A black picture for a sampler that has nothing (a cover not yet here).
   glGenTextures(1, &S->black);
   glBindTexture(GL_TEXTURE_2D, S->black);
@@ -688,7 +717,15 @@ void frame(int slot) {
   glDisable(GL_DEPTH_TEST);
 
   // 0. MilkDrop, where a scene samples it: its commands, then its frame.
+  S->programs.poll();
   const glsl::Program* p = sceneName == "@dance" || wordsScene || slimeScene ? nullptr : S->programs.get(sceneName);
+  // A scene whose program is still being compiled (in the background): the one drawn
+  // before it, as it was, until it is ready, rather than nothing.
+  if (!p && !sceneName.empty() && sceneName[0] != '@') {
+    if (S->programs.waiting(sceneName) && !S->shownScene.empty() && S->shownScene != sceneName) p = S->programs.had(S->shownScene);
+  } else if (p) {
+    S->shownScene = sceneName;
+  }
   const glsl::Program* leaving = fromName.empty() || fromK >= 1 ? nullptr : S->programs.get(fromName);
   milkCommands();
   auto samplesMilk = [](const glsl::Program* q) {
@@ -780,7 +817,15 @@ void frame(int slot) {
     const std::string sim = simByName ? sceneName.substr(5) : std::string("words");
     drawSim(S->work, simByName ? ("sim/" + sim).c_str() : "sim/words_fx", sim, wordsV, blendNow ? S->ground.tex : 0);
   } else {
-    drawScene(p, S->work, common, nullptr, milkTex);
+    if (!p && S->programs.waiting(sceneName)) {
+      // The first scene's program not compiled yet, and nothing before it: black, not
+      // the red of a program that does not compile.
+      S->work.bind();
+      glClearColor(0, 0, 0, 1);
+      glClear(GL_COLOR_BUFFER_BIT);
+    } else {
+      drawScene(p, S->work, common, nullptr, milkTex);
+    }
   }
   if (leaving) {
     S->leaving.make(w, h, S->workFormat);
