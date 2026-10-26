@@ -730,7 +730,7 @@ class NativeStage {
     final rig = st.rig;
     final g = rig.ground;
     final field = switch (g.kind) {
-      Ground.field => g.field != null && programs.scenes.containsKey(g.field) ? g.field! : '',
+      Ground.field => g.field != null && programs.scenes.containsKey(g.field!) ? g.field! : '',
       Ground.pulse => 'pulse',
       _ => '',
     };

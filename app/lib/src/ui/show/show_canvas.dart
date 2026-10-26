@@ -34,7 +34,10 @@ import 'show_sims.dart';
 /// Every program the stage draws with, loaded once.
 class StagePrograms {
   StagePrograms._(this.scenes, this.sims, this.feedback, this.blur, this.finish, this.under);
-  final Map<String, ui.FragmentProgram> scenes;
+
+  /// The scenes' and the grounds' shaders, by name: loaded with the rest, or — where
+  /// [lazyScenes] — each the first time the Flutter stage asks for it.
+  final ScenePrograms scenes;
 
   /// The simulations' passes (shaders/show/sim/), by file name.
   final SimPrograms sims;
@@ -51,9 +54,17 @@ class StagePrograms {
   /// minute on a runner) — and the native stage draws most of them itself anyway.
   static bool get lazySims => defaultTargetPlatform == TargetPlatform.windows;
 
+  /// Whether the scenes' shaders wait until the Flutter stage asks for one: where the
+  /// native stage draws the show (Windows, Linux) the Flutter stage seldom draws at
+  /// all, and on Windows loading every one at once held the SHOW page for forty
+  /// seconds (ANGLE hands each to Direct3D's compiler on the CPU, on the thread the
+  /// window draws on; kinetic's alone is seven seconds).
+  static bool get lazyScenes => defaultTargetPlatform == TargetPlatform.windows || defaultTargetPlatform == TargetPlatform.linux;
+
   static Future<StagePrograms> load(SceneBook book) async {
     final began = DateTime.now();
-    final names = {...book.shaders, ...groundShaders}.toList();
+    final all = {...book.shaders, ...groundShaders};
+    final names = lazyScenes ? const <String>[] : all.toList();
     final eager = lazySims ? const <String>[] : simShaders;
     final loaded = await Future.wait([
       for (final n in names) ui.FragmentProgram.fromAsset('shaders/show/$n.frag'),
@@ -64,9 +75,10 @@ class StagePrograms {
       ui.FragmentProgram.fromAsset('shaders/show/under.frag'),
     ]);
     final k = names.length + eager.length;
-    debugPrint('stage: ${loaded.length} programs loaded in ${DateTime.now().difference(began).inMilliseconds} ms${lazySims ? ' (the sims when asked for)' : ''}');
+    debugPrint('stage: ${loaded.length} programs loaded in ${DateTime.now().difference(began).inMilliseconds} ms'
+        '${lazyScenes ? ' (the scenes when asked for)' : ''}${lazySims ? ' (the sims when asked for)' : ''}');
     return StagePrograms._(
-      {for (var i = 0; i < names.length; i++) names[i]: loaded[i]},
+      ScenePrograms(all, {for (var i = 0; i < names.length; i++) names[i]: loaded[i]}),
       SimPrograms({for (var i = 0; i < eager.length; i++) eager[i]: loaded[names.length + i]}),
       loaded[k],
       loaded[k + 1],
@@ -74,6 +86,31 @@ class StagePrograms {
       loaded[k + 3],
     );
   }
+}
+
+/// The scenes' and the grounds' shaders, by name: loaded with the rest, or — where
+/// [StagePrograms.lazyScenes] — each the first time it is asked for (null until it
+/// is: the Flutter stage draws nothing of it meanwhile).
+class ScenePrograms {
+  ScenePrograms(this._names, this._loaded);
+  final Set<String> _names;
+  final Map<String, ui.FragmentProgram> _loaded;
+  final _asked = <String>{};
+
+  ui.FragmentProgram? operator [](String name) {
+    final p = _loaded[name];
+    if (p == null && _names.contains(name) && _asked.add(name)) {
+      final began = DateTime.now();
+      ui.FragmentProgram.fromAsset('shaders/show/$name.frag').then((x) {
+        _loaded[name] = x;
+        debugPrint('stage: $name loaded in ${DateTime.now().difference(began).inMilliseconds} ms');
+      }, onError: (Object e) => debugPrint('stage: $name: $e'));
+    }
+    return p;
+  }
+
+  /// Whether there is a shader by this name (loaded yet or not).
+  bool containsKey(String name) => _names.contains(name);
 }
 
 /// The simulations' passes, by file name: loaded with the rest, or — where
