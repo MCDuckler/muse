@@ -248,12 +248,20 @@ class NativeStage {
   /// Why the library would not open, where it would not (the debug words, the log).
   static String? openError;
 
-  /// What it can draw: one shader, sampling nothing but MilkDrop (which it draws
-  /// itself, in its own context); the dancers; the words; the 3D type (a build with
-  /// sims by name).
+  /// What it can draw: one shader (sampling MilkDrop, the camera and its motion, the
+  /// cover, its own last picture); the dancers, the turntable, the words; and, in a
+  /// build that has them (ws_features), the 3D type, the meme edit, the birds, the
+  /// veins and the fluid — every scene there is.
   static bool canDraw(Scene? scene) =>
-      isShader(scene) || isDance(scene) || isTurntable(scene) || (isMeme(scene) && (_it?.sims ?? false)) || (isFlock(scene) && (_it?.flock ?? false)) || isWords(scene) || (isType3d(scene) && (_it?.sims ?? false)) || (isVeins(scene) && (_it?.veins ?? false)) ||
-      (isFluid(scene) && (_it?.fluid ?? false));
+      isShader(scene) ||
+      isDance(scene) ||
+      isTurntable(scene) ||
+      isWords(scene) ||
+      (isMeme(scene) && (instance?.sims ?? false)) ||
+      (isFlock(scene) && (instance?.flock ?? false)) ||
+      (isType3d(scene) && (instance?.sims ?? false)) ||
+      (isVeins(scene) && (instance?.veins ?? false)) ||
+      (isFluid(scene) && (instance?.fluid ?? false));
 
   /// Why it cannot draw [scene] (null when it can).
   static String? whyNotScene(Scene? scene) {
