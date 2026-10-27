@@ -53,6 +53,11 @@ class CameraFeed extends ChangeNotifier {
   /// that uploads them itself; and how many have been taken, to know a new one.
   Uint8List? get rgba => _last;
   int taken = 0;
+
+  /// The motion map's pixels (RGBA, [motionWidth]×[motionHeight]), for a stage that
+  /// uploads them itself, new with every frame taken.
+  Uint8List? motionRgba;
+  static const motionWidth = _motionW, motionHeight = _motionH;
   bool _decoding = false;
   StreamSubscription<List<int>>? _sub;
 
@@ -190,6 +195,7 @@ class CameraFeed extends ChangeNotifier {
       motionX += (wx / sum / _motionW - motionX) * 0.3;
       motionY += (wy / sum / _motionH - motionY) * 0.3;
     }
+    motionRgba = map;
     ui.decodeImageFromPixels(map, _motionW, _motionH, ui.PixelFormat.rgba8888, (img) {
       motion?.dispose();
       motion = img;

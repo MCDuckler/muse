@@ -20,6 +20,7 @@ import 'package:flutter/painting.dart';
 import 'package:flutter/services.dart';
 
 import 'show_dance_draw.dart' show DanceCam, chromeEnv;
+import 'show_flock_surface.dart';
 
 /// One level of detail of the bird.
 class BirdLod {
@@ -199,7 +200,6 @@ class BirdBatch {
   final Uint16List _idx;
   int _nv = 0, _ni = 0;
   bool _textured = false;
-  ui.ImageShader? _shader;
   ui.Image? _skin;
   double _skinW = 1, _skinH = 1;
   BlendMode _blend = BlendMode.srcOver;
@@ -215,7 +215,7 @@ class BirdBatch {
     _recording = BirdStamp._();
   }
 
-  BirdStamp endStamp(Canvas c) {
+  BirdStamp endStamp(FlockSurface c) {
     flush(c);
     final s = _recording!;
     _recording = null;
@@ -226,7 +226,6 @@ class BirdBatch {
   void setSkin(ui.Image? skin) {
     if (identical(skin, _skin)) return;
     _skin = skin;
-    _shader = skin == null ? null : ui.ImageShader(skin, TileMode.clamp, TileMode.clamp, Float64List.fromList(const [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]));
     _skinW = skin?.width.toDouble() ?? 1;
     _skinH = skin?.height.toDouble() ?? 1;
   }
@@ -240,7 +239,7 @@ class BirdBatch {
   }
 
   /// What is buffered, drawn — or kept, while recording a stamp.
-  void flush(Canvas c) {
+  void flush(FlockSurface c) {
     if (_ni == 0) {
       _nv = 0;
       return;
@@ -252,20 +251,12 @@ class BirdBatch {
       _ni = 0;
       return;
     }
-    final textured = _textured && _shader != null;
-    final v = ui.Vertices.raw(
-      ui.VertexMode.triangles,
-      Float32List.sublistView(_pos, 0, _nv * 2),
-      textureCoordinates: textured ? Float32List.sublistView(_uv, 0, _nv * 2) : null,
-      colors: Int32List.sublistView(_col, 0, _nv),
-      indices: Uint16List.sublistView(_idx, 0, _ni),
-    );
-    final paint = Paint()
-      ..blendMode = _blend
-      ..filterQuality = FilterQuality.low;
-    if (textured) paint.shader = _shader;
-    c.drawVertices(v, textured ? BlendMode.modulate : BlendMode.dst, paint);
-    v.dispose();
+    final textured = _textured && _skin != null;
+    c.vertices(Float32List.sublistView(_pos, 0, _nv * 2), Int32List.sublistView(_col, 0, _nv),
+        indices: Uint16List.sublistView(_idx, 0, _ni),
+        texture: textured ? _skin : null,
+        uv: textured ? Float32List.sublistView(_uv, 0, _nv * 2) : null,
+        blend: _blend);
     _nv = 0;
     _ni = 0;
   }
@@ -279,12 +270,12 @@ class BirdBatch {
   /// times its size, its wings at [flap] radians (up positive), coloured by [shade]
   /// and [light], seen by [cam], drawn with [blend]. [textured] draws the skin where
   /// the level has one (the nearest).
-  void bird(Canvas c, BirdMesh mesh, BirdLod lod, DanceCam cam, double x, double y, double z, double fx, double fy, double fz, double scale, double flap,
+  void bird(FlockSurface c, BirdMesh mesh, BirdLod lod, DanceCam cam, double x, double y, double z, double fx, double fy, double fz, double scale, double flap,
       BirdShade shade, BirdLight light,
       {bool textured = false, BlendMode blend = BlendMode.srcOver, double roll = 0, double? alpha}) {
     final n = lod.verts;
     if (n > 4096) return;
-    final wantTex = textured && identical(lod, mesh.near) && _shader != null;
+    final wantTex = textured && identical(lod, mesh.near) && _skin != null;
     if (_nv + n > maxVerts || _ni + lod.tris.length > maxIndices || wantTex != _textured || blend != _blend) flush(c);
     _textured = wantTex;
     _blend = blend;
@@ -492,14 +483,12 @@ class BirdStamp {
   BirdStamp._();
   final _parts = <(Float32List, Uint16List)>[];
 
-  void draw(Canvas c, Color color, {BlendMode blend = BlendMode.plus}) {
+  void draw(FlockSurface c, Color color, {BlendMode blend = BlendMode.plus}) {
     final argb = color.toARGB32();
     for (final (pos, idx) in _parts) {
       final cols = Int32List(pos.length ~/ 2);
       cols.fillRange(0, cols.length, argb);
-      final v = ui.Vertices.raw(ui.VertexMode.triangles, pos, colors: cols, indices: idx);
-      c.drawVertices(v, BlendMode.dst, Paint()..blendMode = blend);
-      v.dispose();
+      c.vertices(pos, cols, indices: idx, blend: blend);
     }
   }
 }

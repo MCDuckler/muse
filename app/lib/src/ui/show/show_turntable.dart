@@ -24,7 +24,9 @@
 // gear), and every .glb and .obj under assets/show/models/ — any model off the web,
 // read for its shape alone.
 //
-// All on the CPU and drawn with one drawVertices: one pass on Impeller.
+// All on the CPU, drawn as coloured triangles on a DanceSurface: a canvas's
+// drawVertices on the Flutter stage (one pass on Impeller), the dancers' command list
+// on the native one (dance.h), the lines as thin quads on both.
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -35,6 +37,8 @@ import 'package:flutter/services.dart';
 
 import '../../state/show/show_state.dart';
 import 'show_canvas.dart' show StagePrograms;
+import 'show_dance_draw.dart' show DanceCam, V3;
+import 'show_dance_surface.dart';
 import 'show_sims.dart';
 import 'stage_camera.dart' show StageCamera;
 
@@ -703,6 +707,36 @@ class TurntableSim implements SimLayer {
 
   @override
   ui.Image? frame(ShowState st, double dt, int w, int h, StagePrograms p) {
+    _step(st, dt);
+    final next = _pass(w, h, (c) => _draw(CanvasDanceSurface(c), w, h));
+    _picture?.dispose();
+    _picture = next;
+    return next;
+  }
+
+  /// The native stage's frame: the same moved on by [dt], as [s]'s command list.
+  Float32List record(ShowState st, double dt, int w, int h, NativeDanceSurface s) {
+    _step(st, dt);
+    // No bodies: the camera command only gives the list its picture's size.
+    s.camera(DanceCam(eye: const V3(0, -1, 0), target: const V3(0, 0, 0), size: Size(w.toDouble(), h.toDouble())));
+    _draw(s, w, h);
+    return s.finish();
+  }
+
+  // What the frame is drawn with, worked out by _step.
+  double _kick = 0, _energy = 0, _low = 0, _pulse = 0, _flash = 0, _barSaw = 0, _baseHue = 0;
+  double _camYaw = 0, _camRise = 0, _camDist = 1, _camRoll = 0;
+  Color _primary = Colors.white, _secondary = Colors.white, _accent = Colors.white;
+
+  void _draw(DanceSurface c, int w, int h) {
+    final cam = _Camera(w.toDouble(), h.toDouble(), yaw: _camYaw, rise: _camRise, dist: _camDist, roll: _camRoll);
+    _backdrop(c, cam, _secondary, _accent, _flash);
+    _models(c, cam, _baseHue, _kick, _energy, _low, _pulse);
+    _scan(c, cam, _primary, _barSaw);
+  }
+
+  /// The ring, the springs, the camera moved on by [dt].
+  void _step(ShowState st, double dt) {
     final record = st.master.trackId ?? 0;
     if (_rngFor != record) {
       _rngFor = record;
@@ -799,22 +833,27 @@ class TurntableSim implements SimLayer {
     final camDist = 1 - k * 0.28 * (0.5 + 0.5 * math.sin(tau * b / 16 + 2));
     final camRoll = k * 0.05 * math.sin(tau * b / 20 + 0.5);
 
-    final next = _pass(w, h, (c) {
-      final cam = _Camera(w.toDouble(), h.toDouble(), yaw: camYaw, rise: camRise, dist: camDist, roll: camRoll);
-      _backdrop(c, cam, secondary, accent, beatDecay * energy);
-      _models(c, cam, baseHue, kick, energy, low, pulse);
-      _scan(c, cam, primary, barSaw);
-    });
-    _picture?.dispose();
-    _picture = next;
-    return next;
+    _kick = kick;
+    _energy = energy;
+    _low = low;
+    _pulse = pulse;
+    _flash = beatDecay * energy;
+    _barSaw = barSaw;
+    _baseHue = baseHue;
+    _primary = primary;
+    _secondary = secondary;
+    _accent = accent;
+    _camYaw = camYaw;
+    _camRise = camRise;
+    _camDist = camDist;
+    _camRoll = camRoll;
   }
 
   /// The dark, a glow in the record's colour, the floor's grid, the ring's track and
   /// the beam up into the one in front.
-  void _backdrop(Canvas c, _Camera cam, Color glow, Color accent, double flash) {
+  void _backdrop(DanceSurface c, _Camera cam, Color glow, Color accent, double flash) {
     final w = cam.w, h = cam.h;
-    c.drawRect(Rect.fromLTWH(0, 0, w, h), Paint()..color = const Color(0xff040409));
+    c.fill(Rect.fromLTWH(0, 0, w, h), const Color(0xff040409));
     // The glow: a fan of coloured triangles, not a gradient (three passes on Impeller).
     const n = 40;
     final cx = w / 2, cy = h * 0.42, r = math.max(w, h) * 0.75;
@@ -827,7 +866,7 @@ class TurntableSim implements SimLayer {
       fan.setAll(i * 6, [cx, cy, cx + math.cos(a0) * r, cy + math.sin(a0) * r * 0.8, cx + math.cos(a1) * r, cy + math.sin(a1) * r * 0.8]);
       fanCol.setAll(i * 3, [centre, edge, edge]);
     }
-    c.drawVertices(ui.Vertices.raw(ui.VertexMode.triangles, fan, colors: fanCol), BlendMode.modulate, Paint()..color = Colors.white);
+    c.tris(fan, fanCol);
 
     // The floor: a grid of lines on y = 0, one draw.
     final grid = <double>[];
@@ -843,34 +882,20 @@ class TurntableSim implements SimLayer {
     for (var z = -7.0; z <= 14; z += 1.5) {
       line(-12, z, 12, z);
     }
-    c.drawRawPoints(
-        ui.PointMode.lines,
-        Float32List.fromList(grid),
-        Paint()
-          ..color = accent.withValues(alpha: 0.13)
-          ..strokeWidth = 1);
+    _lines(c, grid, 1, accent.withValues(alpha: 0.13));
 
     // The ring's track, and a fainter one outside it.
     for (final (rr, a) in const [(radius, 0.45), (radius + 0.35, 0.18)]) {
-      final path = Path();
-      var first = true;
+      final track = <double>[];
+      (double, double)? was;
       for (var i = 0; i <= 72; i++) {
         final an = i / 72 * math.pi * 2;
         final pt = cam.project(math.sin(an) * rr, 0, -math.cos(an) * rr);
         if (pt == null) continue;
-        if (first) {
-          path.moveTo(pt.$1, pt.$2);
-          first = false;
-        } else {
-          path.lineTo(pt.$1, pt.$2);
-        }
+        if (was != null) track.addAll([was.$1, was.$2, pt.$1, pt.$2]);
+        was = pt;
       }
-      c.drawPath(
-          path,
-          Paint()
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.5
-            ..color = accent.withValues(alpha: a));
+      _lines(c, track, 1.5, accent.withValues(alpha: a));
     }
 
     // The beam: from the floor under the front up into it, fading as it rises.
@@ -890,19 +915,13 @@ class TurntableSim implements SimLayer {
         m++;
       }
       if (m > 0) {
-        c.drawVertices(
-          ui.Vertices.raw(ui.VertexMode.triangles, Float32List.sublistView(beam, 0, m * 6), colors: Int32List.sublistView(beamCol, 0, m * 3)),
-          BlendMode.modulate,
-          Paint()
-            ..color = Colors.white
-            ..blendMode = BlendMode.plus,
-        );
+        c.tris(Float32List.sublistView(beam, 0, m * 6), Int32List.sublistView(beamCol, 0, m * 3), blend: BlendMode.plus);
       }
     }
   }
 
   /// The shapes round the ring, as light.
-  void _models(Canvas c, _Camera cam, double baseHue, double kick, double energy, double low, double pulse) {
+  void _models(DanceSurface c, _Camera cam, double baseHue, double kick, double energy, double low, double pulse) {
     var total = 0, most = 0;
     final meshes = List<TurntableMesh?>.filled(slots, null);
     final angles = List<double>.filled(slots, 0);
@@ -1020,41 +1039,29 @@ class TurntableSim implements SimLayer {
       }
     }
     if (o == 0) return;
-    c.drawVertices(
-      ui.Vertices.raw(ui.VertexMode.triangles, Float32List.sublistView(pos, 0, o * 6), colors: Int32List.sublistView(col, 0, o * 3)),
-      BlendMode.modulate,
-      Paint()
-        ..color = Colors.white
-        ..blendMode = BlendMode.plus,
-    );
+    c.tris(Float32List.sublistView(pos, 0, o * 6), Int32List.sublistView(col, 0, o * 3), blend: BlendMode.plus);
   }
 
   Float32List _scanLines = Float32List(0);
+  Int32List _scanCol = Int32List(0);
   double _scanW = 0;
 
   /// Scan lines over it all, and a brighter band rolling down once a bar.
-  void _scan(Canvas c, _Camera cam, Color tint, double barSaw) {
-    // One draw of lines, not a path of rectangles tessellated anew every frame.
+  void _scan(DanceSurface c, _Camera cam, Color tint, double barSaw) {
+    // One draw of rows a pixel high, kept while the size is.
     final n = (cam.h / 3).ceil();
-    if (_scanLines.length != n * 4 || _scanW != cam.w) {
+    if (_scanLines.length != n * 12 || _scanW != cam.w) {
       _scanW = cam.w;
-      _scanLines = Float32List(n * 4);
+      _scanLines = Float32List(n * 12);
+      _scanCol = Int32List(n * 6)..fillRange(0, n * 6, 0x48000000);
       for (var i = 0; i < n; i++) {
-        _scanLines.setAll(i * 4, [0, i * 3 + 0.5, cam.w, i * 3 + 0.5]);
+        final y0 = i * 3.0, y1 = y0 + 1;
+        _scanLines.setAll(i * 12, [0, y0, cam.w, y0, cam.w, y1, 0, y0, cam.w, y1, 0, y1]);
       }
     }
-    c.drawRawPoints(
-        ui.PointMode.lines,
-        _scanLines,
-        Paint()
-          ..color = const Color(0x48000000)
-          ..strokeWidth = 1);
+    c.tris(_scanLines, _scanCol);
     final y = barSaw * cam.h * 1.2 - cam.h * 0.1;
-    c.drawRect(
-        Rect.fromLTWH(0, y, cam.w, cam.h * 0.035),
-        Paint()
-          ..color = tint.withValues(alpha: 0.07)
-          ..blendMode = BlendMode.plus);
+    c.fill(Rect.fromLTWH(0, y, cam.w, cam.h * 0.035), tint.withValues(alpha: 0.07), blend: BlendMode.plus);
   }
 
   @override
@@ -1094,6 +1101,23 @@ class _Camera {
     final vx = rx * cr - vy * sr, vy2 = rx * sr + vy * cr;
     return (w / 2 + vx * focal / vz, h * 0.5 - vy2 * focal / vz);
   }
+}
+
+/// Lines — x0, y0, x1, y1 each in [seg] — as quads [width] across, in one colour: a
+/// surface draws triangles, not strokes.
+void _lines(DanceSurface s, List<double> seg, double width, Color color, {BlendMode blend = BlendMode.srcOver}) {
+  final n = seg.length ~/ 4;
+  if (n == 0) return;
+  final pos = Float32List(n * 12), col = Int32List(n * 6)..fillRange(0, n * 6, color.toARGB32());
+  final hw = width / 2;
+  for (var i = 0; i < n; i++) {
+    final x0 = seg[i * 4], y0 = seg[i * 4 + 1], x1 = seg[i * 4 + 2], y1 = seg[i * 4 + 3];
+    final dx = x1 - x0, dy = y1 - y0, l = math.sqrt(dx * dx + dy * dy);
+    if (l < 1e-6) continue; // left at nothing: two triangles of no size
+    final nx = -dy / l * hw, ny = dx / l * hw;
+    pos.setAll(i * 12, [x0 + nx, y0 + ny, x1 + nx, y1 + ny, x1 - nx, y1 - ny, x0 + nx, y0 + ny, x1 - nx, y1 - ny, x0 - nx, y0 - ny]);
+  }
+  s.tris(pos, col, blend: blend);
 }
 
 ui.Image _pass(int w, int h, void Function(Canvas c) draw) {

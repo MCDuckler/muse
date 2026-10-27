@@ -32,6 +32,7 @@ namespace ws {
 enum DanceOp {
   kFill = 1, kTris = 2, kPoints = 3, kClip = 4, kCamera = 5, kPose = 6, kBody = 7, kOutline = 8,
   kFloorShadow = 9, kWallShadow = 10, kPost = 11, kClearDepth = 12, kFluid = 13, kDust = 14,
+  kMesh = 15, kPostFx = 16,
 };
 enum DanceBlend { kOver = 0, kPlus = 1, kSrc = 2, kDarken = 3 };
 enum DanceShade { kLit = 0, kFlat = 1, kChrome = 3 };
@@ -285,6 +286,34 @@ out vec4 fragColor;
 void main() { fragColor = vColour; }
 )";
 
+// A mesh (the murmuration's birds, its sprites): a colour per corner, multiplying a
+// picture where it has one (the pigeon's skin, the soft sprite), indexed or not.
+static const char* kMeshVert = R"(#version 300 es
+layout(location = 0) in vec2 aPos;    // pixels of the reference picture, y from the top
+layout(location = 1) in vec2 aUv;     // 0..1 over the picture, from its top row
+layout(location = 2) in vec4 aColour;
+uniform vec2 uRef;
+out vec2 vUv;
+out vec4 vColour;
+void main() {
+  vUv = aUv;
+  vColour = aColour;
+  vec2 ndc = aPos / uRef * 2.0 - 1.0;
+  gl_Position = vec4(ndc.x, -ndc.y, 0.0, 1.0);
+}
+)";
+
+static const char* kMeshFrag = R"(#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform float uTextured;
+in vec2 vUv;
+in vec4 vColour;
+out vec4 fragColor;
+// The picture went up bottom row first (setTexture's flip), as GL keeps one.
+void main() { fragColor = uTextured > 0.5 ? texture(uTex, vec2(vUv.x, 1.0 - vUv.y)) * vColour : vColour; }
+)";
+
 // Soft round points (the mirror ball's flecks): a quad each, instanced.
 static const char* kDotVert = R"(#version 300 es
 layout(location = 0) in vec2 aAt;
@@ -382,15 +411,15 @@ class Dance {
     for (auto& [name, t] : textures_) if (t) glDeleteTextures(1, &t);
     textures_.clear();
     for (auto& [name, t] : pendingTex_) t.dirty = true;
-    for (GLuint* p : {&body_, &flat_, &dot_, &dust_, &fVel_, &fDye_, &fDiv_, &fJac_, &fProj_, &fShow_}) {
+    for (GLuint* p : {&body_, &flat_, &dot_, &mesh_, &dust_, &fVel_, &fDye_, &fDiv_, &fJac_, &fProj_, &fShow_}) {
       if (*p) glDeleteProgram(*p);
       *p = 0;
     }
-    for (GLuint* v : {&flatVao_, &dotVao_, &emptyVao_}) {
+    for (GLuint* v : {&flatVao_, &dotVao_, &meshVao_, &emptyVao_}) {
       if (*v) glDeleteVertexArrays(1, v);
       *v = 0;
     }
-    for (GLuint* b : {&flatVbo_, &dotVbo_}) {
+    for (GLuint* b : {&flatVbo_, &dotVbo_, &meshVbo_, &meshIbo_}) {
       if (*b) glDeleteBuffers(1, b);
       *b = 0;
     }
@@ -542,6 +571,30 @@ class Dance {
           i += 17;
           break;
         }
+        case kMesh: {
+          firstDraw_ = false;
+          const int nv = (int)c[i], ni = (int)c[i + 1], blend = (int)c[i + 2], texId = (int)c[i + 3];
+          i += 4;
+          const size_t need = (size_t)std::max(0, nv) * 8 + (size_t)std::max(0, ni);
+          if (nv < 0 || ni < 0 || i + need > c.size()) { i = c.size(); break; }
+          mesh(c.data() + i, nv, c.data() + i + (size_t)nv * 8, ni, blend, texId);
+          i += need;
+          break;
+        }
+        case kPostFx: {
+          // which finish (0 dance_fx, 1 flock_fx), its glyphs (mesh.<n>, -1 the
+          // dancers'), its alpha out, flock_fx's sweep, then as kPost's.
+          if (i + 23 > c.size()) { i = c.size(); break; }
+          const int which = (int)c[i], atlas = (int)c[i + 1];
+          GLuint atlasTex = 0;
+          if (atlas >= 0) {
+            auto it = textures_.find("mesh." + std::to_string(atlas));
+            if (it != textures_.end()) atlasTex = it->second;
+          }
+          if (atlas < 0 || atlasTex) post(&c[i + 4], programs, fbo, tex, scratchFbo, which == 1 ? "sim/flock_fx" : "sim/dance_fx", atlasTex, c[i + 2], c[i + 3]);
+          i += 23;
+          break;
+        }
         default:
           i = c.size();  // a list it does not understand: stop rather than misread
       }
@@ -569,7 +622,8 @@ class Dance {
     body_ = glsl::link(kBodyVert, kBodyFrag, err);
     flat_ = body_ ? glsl::link(kFlatVert, kFlatFrag, err) : 0;
     dot_ = flat_ ? glsl::link(kDotVert, kDotFrag, err) : 0;
-    if (!dot_) {
+    mesh_ = dot_ ? glsl::link(kMeshVert, kMeshFrag, err) : 0;
+    if (!mesh_) {
       std::fprintf(stderr, "stage: the dancers' shaders: %s\n", err.c_str());
       body_ = flat_ = 0;
       return false;
@@ -590,6 +644,17 @@ class Dance {
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
     glVertexAttribDivisor(0, 1);
+    glGenVertexArrays(1, &meshVao_);
+    glGenBuffers(1, &meshVbo_);
+    glGenBuffers(1, &meshIbo_);
+    glBindVertexArray(meshVao_);
+    glBindBuffer(GL_ARRAY_BUFFER, meshVbo_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(2 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(4 * sizeof(float)));
     glBindVertexArray(0);
     return true;
   }
@@ -675,6 +740,35 @@ class Dance {
     glBindBuffer(GL_ARRAY_BUFFER, flatVbo_);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)n * 6 * sizeof(float), v, GL_STREAM_DRAW);
     glDrawArrays(GL_TRIANGLES, 0, n);
+  }
+
+  void mesh(const float* v, int nv, const float* idx, int ni, int blend, int texId) {
+    if (nv <= 0) return;
+    GLuint t = 0;
+    if (texId >= 0) {
+      auto it = textures_.find("mesh." + std::to_string(texId));
+      if (it != textures_.end()) t = it->second;
+    }
+    glDisable(GL_DEPTH_TEST);
+    blendFor(blend);
+    glUseProgram(mesh_);
+    glUniform2f(glGetUniformLocation(mesh_, "uRef"), refW_, refH_);
+    glUniform1f(glGetUniformLocation(mesh_, "uTextured"), t ? 1.0f : 0.0f);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, t);
+    glUniform1i(glGetUniformLocation(mesh_, "uTex"), 0);
+    glBindVertexArray(meshVao_);
+    glBindBuffer(GL_ARRAY_BUFFER, meshVbo_);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)nv * 8 * sizeof(float), v, GL_STREAM_DRAW);
+    if (ni > 0) {
+      meshIdx_.resize((size_t)ni);
+      for (int k = 0; k < ni; k++) meshIdx_[(size_t)k] = (GLuint)std::clamp((int)idx[k], 0, nv - 1);
+      glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, meshIbo_);
+      glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)ni * sizeof(GLuint), meshIdx_.data(), GL_STREAM_DRAW);
+      glDrawElements(GL_TRIANGLES, ni, GL_UNSIGNED_INT, nullptr);
+    } else {
+      glDrawArrays(GL_TRIANGLES, 0, nv);
+    }
   }
 
   void points(const float* at, int n, float radius, const float* col, int blend) {
@@ -999,10 +1093,17 @@ class Dance {
 
   // mode cell ink3 paper3 tint glyphs pop popX popY time, and the treatment's knobs
   // weight spacing height gain size (0 is 1) (dance_fx.frag)
-  void post(const float* p, glsl::Programs& programs, GLuint fbo, GLuint srcTex, GLuint scratchFbo) {
-    const glsl::Program* fx = programs.get("sim/dance_fx");
-    auto atlas = textures_.find("glyphs");
-    if (!fx || atlas == textures_.end()) return;
+  // [program] the finish's shader (sim/dance_fx, or the birds' sim/flock_fx), its
+  // glyphs [atlasTex] (0: the dancers'), its alpha out the coverage where
+  // [coverageOut] is 1, [sweep] flock_fx's bar.
+  void post(const float* p, glsl::Programs& programs, GLuint fbo, GLuint srcTex, GLuint scratchFbo, const char* program = "sim/dance_fx",
+            GLuint atlasTex = 0, float coverageOut = 1, float sweep = 0) {
+    const glsl::Program* fx = programs.get(program);
+    if (!atlasTex) {
+      auto atlas = textures_.find("glyphs");
+      if (atlas != textures_.end()) atlasTex = atlas->second;
+    }
+    if (!fx || !atlasTex) return;
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
     glDisable(GL_SCISSOR_TEST);
@@ -1026,13 +1127,15 @@ class Dance {
     set("uHeight", p[16]);
     set("uGain", p[17]);
     set("uSize", p[18]);
-    // Its alpha the coverage: the glyphs, the dots, the lines are the figure.
-    set("uCoverageOut", 1.0f);
+    // Its alpha the coverage (the dancers': the glyphs, the dots, the lines are the
+    // figure), or whole (the birds', blended by their light).
+    set("uCoverageOut", coverageOut);
+    set("uSweep", sweep);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, srcTex);
     glUniform1i(fx->loc("uImage"), 0);
     glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, atlas->second);
+    glBindTexture(GL_TEXTURE_2D, atlasTex);
     glUniform1i(fx->loc("uAtlas"), 1);
     glBindVertexArray(emptyVao_);
     glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -1389,6 +1492,8 @@ void main() {
   GLuint dust_ = 0;
   float focal_ = 1000;
   GLuint body_ = 0, flat_ = 0, dot_ = 0, flatVao_ = 0, flatVbo_ = 0, dotVao_ = 0, dotVbo_ = 0, emptyVao_ = 0;
+  GLuint mesh_ = 0, meshVao_ = 0, meshVbo_ = 0, meshIbo_ = 0;
+  std::vector<GLuint> meshIdx_;
   float viewProj_[16] = {}, eye_[3] = {}, right_[3] = {}, up_[3] = {}, fwd_[3] = {};
   float refW_ = 1920, refH_ = 1080;
   int w_ = 0, h_ = 0;

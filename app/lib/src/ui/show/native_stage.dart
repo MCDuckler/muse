@@ -48,7 +48,12 @@ import 'show_dance.dart';
 import 'show_dance_draw.dart';
 import 'show_dance_surface.dart';
 import 'show_debug.dart';
+import 'show_flock.dart' show FlockSim;
+import 'show_flock_surface.dart';
+import 'show_meme.dart' show MemeEdit;
 import 'show_sims.dart';
+import 'show_veins.dart';
+import 'show_turntable.dart';
 import 'show_type3d.dart';
 import 'show_words.dart';
 import 'stage_camera.dart';
@@ -141,6 +146,20 @@ class NativeStage {
   /// given up): [whyNot] says which.
   static bool get wanted => whyNot() == null;
 
+  /// Where the native stage is the only one (Windows, Linux): the Flutter stage is
+  /// never drawn there. A scene it cannot draw, or a stage that will not open, is
+  /// black until it can — another try every [retryAfter]. WETOWL_STAGE=flutter still
+  /// asks for the Flutter stage, for a look at it; the Mac has only that so far.
+  static bool get only =>
+      !kIsWeb &&
+      !Platform.environment.containsKey('FLUTTER_TEST') &&
+      (Platform.isWindows || Platform.isLinux) &&
+      Platform.environment['WETOWL_STAGE'] != 'flutter';
+
+  /// The stage's picture now (the runner's one texture) and the show it draws, for a
+  /// view of the same show that does not have the stage: it shows that picture.
+  static final shown = ValueNotifier<(int, Object)?>(null);
+
   /// Why the native stage is not to be had here now, or null when it is.
   static String? whyNot() {
     if (kIsWeb) return 'the web';
@@ -232,7 +251,9 @@ class NativeStage {
   /// What it can draw: one shader, sampling nothing but MilkDrop (which it draws
   /// itself, in its own context); the dancers; the words; the 3D type (a build with
   /// sims by name).
-  static bool canDraw(Scene? scene) => isShader(scene) || isDance(scene) || isWords(scene) || (isType3d(scene) && (_it?.sims ?? false));
+  static bool canDraw(Scene? scene) =>
+      isShader(scene) || isDance(scene) || isTurntable(scene) || (isMeme(scene) && (_it?.sims ?? false)) || (isFlock(scene) && (_it?.flock ?? false)) || isWords(scene) || (isType3d(scene) && (_it?.sims ?? false)) || (isVeins(scene) && (_it?.veins ?? false)) ||
+      (isFluid(scene) && (_it?.fluid ?? false));
 
   /// Why it cannot draw [scene] (null when it can).
   static String? whyNotScene(Scene? scene) {
@@ -241,7 +262,7 @@ class NativeStage {
     final sim = scene.layers.firstOrNull?.sim;
     if (sim != null) return '${scene.id} is a simulation ($sim) the native stage does not draw yet';
     if (scene.layers.length != 1) return '${scene.id} has ${scene.layers.length} layers';
-    final odd = scene.layers.first.samplers.where((s) => s != 'milk').toList();
+    final odd = scene.layers.first.samplers.where((s) => !_samplersHere.contains(s)).toList();
     if (odd.isNotEmpty) return '${scene.id} samples ${odd.join(', ')}';
     return '${scene.id} is not a shader scene';
   }
@@ -279,7 +300,34 @@ class NativeStage {
       scene != null &&
       scene.layers.length == 1 &&
       scene.layers.first.shader != null &&
-      scene.layers.first.samplers.every((s) => s == 'milk');
+      scene.layers.first.samplers.every(_samplersHere.contains);
+
+  /// What a scene's shader may sample here: MilkDrop (its own, or the helper's), the
+  /// room's camera and its motion map (uploaded as they come), the record's cover, and
+  /// the scene's own last picture (the stage's).
+  static const _samplersHere = {'milk', 'camera', 'motion', 'cover', 'history'};
+
+  /// A scene that samples the room: the camera is started for it, its frames up.
+  static bool needsCamera(Scene? scene) =>
+      scene != null && scene.layers.any((l) => l.samplers.contains('camera') || l.samplers.contains('motion'));
+
+  /// The fluid (show_sims.dart's FluidSim): its passes the Flutter stage's shaders,
+  /// run by the stage on Dart's numbers (ws_words).
+  static bool isFluid(Scene? scene) => scene != null && scene.layers.length == 1 && scene.layers.first.sim == 'fluid';
+
+  /// The meme edit: its picture drawn by Dart's canvas (photographs, clips, type) and
+  /// sent up, its finish (meme_fx.frag) the stage's (`@sim:meme_fx`), its words over
+  /// it here at the screen's size ([_Words]).
+  static bool isMeme(Scene? scene) => scene != null && scene.layers.length == 1 && scene.layers.first.sim == 'siebenschlaefer';
+
+  /// The murmuration: its birds a command list as the dancers' are (show_flock.dart's
+  /// FlockSim.record, on show_flock_surface.dart's NativeFlockSurface), its finish
+  /// the stage's.
+  static bool isFlock(Scene? scene) => scene != null && scene.layers.length == 1 && scene.layers.first.sim == 'flock';
+
+  /// The turntable's holograms: its triangles a command list as the dancers' stage
+  /// art is (show_turntable.dart), drawn by the dancers' surface.
+  static bool isTurntable(Scene? scene) => scene != null && scene.layers.length == 1 && scene.layers.first.sim == 'turntable';
 
   static bool isDance(Scene? scene) =>
       scene != null && scene.layers.length == 1 && (scene.layers.first.sim?.startsWith('dance.') ?? false);
@@ -291,6 +339,10 @@ class NativeStage {
   /// The 3D type (show_type3d.dart): its field up as a texture, its frame the sim
   /// shader's floats — the words' way, under the name `@sim:type3d`.
   static bool isType3d(Scene? scene) => scene != null && scene.layers.length == 1 && scene.layers.first.sim == 'type3d';
+
+  /// The veins (the physarum sim): the stage's own slime mould (fx.h's Slime, `@slime`),
+  /// its rules a frame from show_veins.dart (ws_words).
+  static bool isVeins(Scene? scene) => scene != null && scene.layers.length == 1 && scene.layers.first.sim == 'physarum';
 
   static const _channel = MethodChannel('wetowl/stage');
 
@@ -599,6 +651,15 @@ class NativeStage {
   /// `name.x`), ws_features' 16.
   bool get sims => features & 16 != 0;
 
+  /// The slime mould of its own (`@slime`): the veins.
+  bool get veins => features & 32 != 0;
+
+  /// The fluid of its own (`@fluid`).
+  bool get fluid => features & 512 != 0;
+
+  /// The dancers' list with meshes and any finish (kMesh, kPostFx): the birds.
+  bool get flock => features & 2048 != 0;
+
   /// What it has, in words, for the debug words and the log.
   String words() {
     final f = features;
@@ -656,7 +717,10 @@ class NativeStage {
     _closing?.cancel();
     _closing = Timer(closeGrace, () {
       _closing = null;
-      if (_views.isEmpty) unawaited(_channel.invokeMethod('close'));
+      if (_views.isEmpty) {
+        shown.value = null;
+        unawaited(_channel.invokeMethod('close'));
+      }
     });
   }
 
@@ -675,7 +739,7 @@ class NativeStage {
     _flash(stageWhite(st), st.macros.blackout ? 1 : 0, freeze ? 1 : 0);
     if (freeze) return;
     final layer = scene.layers.first;
-    final name = isDance(scene) ? '@dance' : isWords(scene) ? '@words' : isType3d(scene) ? '@sim:type3d' : layer.shader!;
+    final name = isDance(scene) || isTurntable(scene) || isFlock(scene) ? '@dance' : isWords(scene) ? '@words' : isType3d(scene) ? '@sim:type3d' : isMeme(scene) ? '@sim:meme_fx' : isVeins(scene) ? '@slime' : isFluid(scene) ? '@fluid' : layer.shader!;
     if (name != _sceneOn) {
       _name(_scene, name);
       _sceneOn = name;
@@ -792,6 +856,10 @@ class NativeStage {
 
 /// The stage on screen: native where it can draw the scene on, the Flutter stage
 /// where it cannot (or where it is not asked for) — over the native one, parked.
+/// Where the native stage is the only one ([NativeStage.only]: Windows, Linux) there
+/// is no Flutter stage: black where the native one does not draw this surface, or
+/// the picture it draws for another view of the same show (the stage page's, under
+/// the booth's glance).
 class StageSurface extends StatefulWidget {
   const StageSurface({
     super.key,
@@ -885,7 +953,9 @@ class _StageSurfaceState extends State<StageSurface> {
     final changed = first || flipped || drawable != _drawable || whyNow != _why;
     if (!changed) return;
     if (first || flipped || (native && drawable != _drawable)) {
-      final word = native ? (drawable ? 'native' : 'native, parked under the Flutter stage') : 'flutter';
+      final word = native
+          ? (drawable ? 'native' : (NativeStage.only ? 'native, black (it cannot draw this)' : 'native, parked under the Flutter stage'))
+          : (NativeStage.only ? 'black, or the stage another view has' : 'flutter');
       ShowDebug.note('$_name: $word${whyNow.isEmpty ? '' : ' — $whyNow'}');
     }
     _native = native;
@@ -913,6 +983,7 @@ class _StageSurfaceState extends State<StageSurface> {
   @override
   Widget build(BuildContext context) {
     final nativeDraws = _native && _drawable;
+    final only = NativeStage.only;
     final child = Stack(fit: StackFit.expand, children: [
       // The picture, moved by the camera with the music in the 3D scenes.
       StageCameraView(
@@ -930,7 +1001,14 @@ class _StageSurfaceState extends State<StageSurface> {
               info: _info,
               onBroken: _check,
             ),
-          if (!nativeDraws)
+          if (!nativeDraws && only)
+            ValueListenableBuilder<(int, Object)?>(
+              valueListenable: NativeStage.shown,
+              builder: (context, shown, _) => !_native && shown != null && identical(shown.$2, widget.feed)
+                  ? Texture(textureId: shown.$1, filterQuality: FilterQuality.low)
+                  : const ColoredBox(color: Colors.black),
+            ),
+          if (!nativeDraws && !only)
             ShowCanvas(
               feed: widget.feed,
               book: widget.book,
@@ -996,6 +1074,10 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
   Size? _px;
   bool _opening = false;
   DanceSim? _dance;
+  TurntableSim? _turntable;
+  FlockSim? _flock;
+  MemeEdit? _meme;
+  FluidSim? _fluid;
   WordsSim? _words;
   Type3dSim? _type3d;
   Duration? _lastTick;
@@ -1063,6 +1145,22 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
         _dance = null;
       }
       final px = _px;
+      if (NativeStage.isTurntable(scene) && px != null) {
+        final tt = _turntable ??= TurntableSim();
+        stage.dance(tt.record(st, st.macros.freeze ? 0 : dt, px.width.round(), px.height.round(), NativeDanceSurface(stage.danceMesh)));
+      }
+      if (!NativeStage.isTurntable(scene) && _turntable != null) {
+        _turntable!.dispose();
+        _turntable = null;
+      }
+      if (NativeStage.isFlock(scene) && px != null) {
+        final fl = _flock ??= FlockSim(scene!.layers.first.sim!);
+        final s = NativeFlockSurface(NativeDanceSurface(stage.danceMesh), (name, w, h, rgba) => NativeStage.instance?.texture(name, w, h, rgba));
+        stage.dance(fl.record(st, st.macros.freeze ? 0 : dt, px.width.round(), px.height.round(), s));
+      } else if (_flock != null) {
+        _flock!.dispose();
+        _flock = null;
+      }
       final scale = QualityPool.workScale;
       if (_scale != scale && px != null) {
         _scale = scale;
@@ -1086,6 +1184,30 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
       _words!.dispose();
       _words = null;
     }
+    // The veins: their rules every tick, by the words' call (one sim at a time is on).
+    if (NativeStage.isVeins(scene)) stage.wordsFrame(VeinsParams.native(st));
+    // The meme edit: its picture up, its finish's numbers every tick, by the same call.
+    if (NativeStage.isMeme(scene) && _px != null) {
+      final kind = scene!.layers.first.sim!;
+      if (_meme?.kind != kind) {
+        _meme?.dispose();
+        _meme = MemeEdit(kind);
+      }
+      final q = _meme!.native(st, st.macros.freeze ? 0 : dt, (_px!.width * _scale).round(), (_px!.height * _scale).round(),
+          (name, w, h, rgba) => NativeStage.instance?.texture(name, w, h, rgba));
+      if (q != null) stage.wordsFrame(q);
+    } else if (_meme != null) {
+      _meme!.dispose();
+      _meme = null;
+    }
+    // The fluid: its passes' numbers every tick, by the same call.
+    if (NativeStage.isFluid(scene) && _px != null) {
+      final fl = _fluid ??= FluidSim();
+      stage.wordsFrame(fl.native(st, st.macros.freeze ? 0 : dt, (_px!.width * _scale).round(), (_px!.height * _scale).round()));
+    } else if (_fluid != null) {
+      _fluid!.dispose();
+      _fluid = null;
+    }
     // The 3D type: the line's field up once, the frame's numbers every tick (by the
     // words' call: one sim at a time is on).
     if (NativeStage.isType3d(scene)) {
@@ -1102,13 +1224,16 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
     // cover as the ground: the record's, once.
     final ground = st.rig.ground.kind;
     final cam = CameraFeed.shared;
-    if (ground == Ground.camera) {
+    if (ground == Ground.camera || NativeStage.needsCamera(scene)) {
       _cameraWantedAt = DateTime.now();
       if (!cam.running) unawaited(cam.start());
       final rgba = cam.rgba;
       if (rgba != null && cam.taken != _camSent) {
         _camSent = cam.taken;
         stage.texture('camera', CameraFeed.width, CameraFeed.height, rgba);
+        // And what moved in it, for a scene that reads that (fold).
+        final motion = cam.motionRgba;
+        if (motion != null) stage.texture('motion', CameraFeed.motionWidth, CameraFeed.motionHeight, motion);
       }
     } else if (cam.running && !cam.pinned) {
       final last = _cameraWantedAt;
@@ -1117,7 +1242,7 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
         _cameraWantedAt = null;
       }
     }
-    if (ground == Ground.cover) {
+    if (ground == Ground.cover || (scene?.layers.any((l) => l.samplers.contains('cover')) ?? false)) {
       final id = st.master.trackId;
       final img = _covers.of(id, st.master.coverUrl);
       if (img != null && id != _coverSent) {
@@ -1188,6 +1313,7 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
       }
       if (id == null) return _giveUp('it would not open');
       setState(() => _texture = id);
+      NativeStage.shown.value = (id, widget.feed);
       // A stage that draws nothing (no context to share, a driver that will not, a
       // window hidden so the texture is never asked for, a thread that stopped later)
       // is given up for a while rather than left black: its frames must move on every
@@ -1251,16 +1377,19 @@ class _NativeStageViewState extends State<NativeStageView> with SingleTickerProv
         const ColoredBox(color: Colors.black),
         if (id != null) Texture(textureId: id, filterQuality: FilterQuality.low),
         if (!widget.preview && widget.drawable)
-          CustomPaint(painter: _Words(widget.feed, widget.book, _tick)),
+          CustomPaint(painter: _Words(widget.feed, widget.book, _tick, () => _meme)),
       ]);
     });
   }
 }
 
 class _Words extends CustomPainter {
-  _Words(this.feed, this.book, Listenable tick) : super(repaint: tick);
+  _Words(this.feed, this.book, Listenable tick, this.overlay) : super(repaint: tick);
   final ShowFeed feed;
   final SceneBook book;
+
+  /// The scene's own words over the whole stage (the meme edit's), where it has them.
+  final SimOverlay? Function() overlay;
   final _rng = math.Random(7);
 
   @override
@@ -1268,6 +1397,7 @@ class _Words extends CustomPainter {
     final st = feed.state;
     final scene = book[st.scene];
     if (scene == null || st.macros.blackout) return;
+    overlay()?.paintOver(canvas, size, st, 1);
     paintStageWords(canvas, size, scene, st, _rng);
   }
 

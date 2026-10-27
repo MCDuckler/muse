@@ -62,6 +62,7 @@
 #include <atomic>
 #include <cctype>
 #include <deque>
+#include <initializer_list>
 #include <map>
 #include <memory>
 #include <chrono>
@@ -330,6 +331,12 @@ struct Stage {
   glsl::Programs programs;
   GLuint down = 0, up = 0, finish = 0, wash = 0, copy = 0;
   Target work, leaving, scratch, ground, trailA, trailB, bloom[6], out[3];
+  // The scene's own last picture (as drawn, before the figure and the trails), for a
+  // scene that samples uHistory.
+  Target history;
+  // The fluid's fields (drawFluid), at a quarter of the working size.
+  Target fluidVel, fluidVel1, fluidDiv, fluidPres, fluidPresB, fluidDye, fluidDyeB, fluidLook;
+  std::string historyScene;
   // the dancers (dance.h): drawn from Dart's list where the scene is "@dance"
   Dance dance;
   // the stage's own passes that keep pictures (fx.h): the veins, the slit-scan, the
@@ -511,6 +518,26 @@ void milkCommands() {
   }
 }
 
+// What a scene's sampler reads, by its name: MilkDrop, the room's camera and its motion
+// map, the record's cover (uploaded as they come, by name), the scene's own last picture;
+// black for anything not here (yet).
+GLuint samplerTex(const std::string& name, GLuint milkTex) {
+  GLuint t = 0;
+  if (name == "uMilk") t = milkTex;
+  else if (name == "uCamera") t = S->dance.texture("camera");
+  else if (name == "uMotion") t = S->dance.texture("motion");
+  else if (name == "uCover") t = S->dance.texture("cover");
+  else if (name == "uHistory") t = S->history.tex;
+  return t ? t : S->black;
+}
+
+// Whether a program reads the scene's own last picture.
+bool samplesHistory(const glsl::Program* p) {
+  if (!p) return false;
+  for (const auto& n : p->samplers) if (n == "uHistory") return true;
+  return false;
+}
+
 // A scene's shader into `t`: the common block, [knobs] for uM1..4 where given.
 void drawScene(const glsl::Program* p, Target& t, const float* common, const float* knobs, GLuint milkTex) {
   t.bind();
@@ -530,7 +557,7 @@ void drawScene(const glsl::Program* p, Target& t, const float* common, const flo
   if (const GLint at = p->loc("uResolution"); at >= 0) glUniform2f(at, (float)t.w, (float)t.h);
   if (const GLint at = p->loc("wsHeight"); at >= 0) glUniform1f(at, (float)t.h);
   int unit = 0;
-  for (const auto& name : p->samplers) bindTex(p->id, name.c_str(), unit++, name == "uMilk" && milkTex ? milkTex : S->black);
+  for (const auto& name : p->samplers) bindTex(p->id, name.c_str(), unit++, samplerTex(name, milkTex));
   drawQuad();
 }
 
@@ -638,6 +665,81 @@ void drawSim(Target& t, const char* program, const std::string& prefix, const st
   drawQuad();
 }
 
+// The fluid (ui/show/show_sims.dart's FluidSim): the Flutter stage's own passes
+// (shaders/show/sim/fluid_*.frag) on Dart's numbers a frame (ws_words: the pressure's
+// rounds, then each pass's floats in the order its file declares them) — the
+// velocity advected and pushed, its divergence, the pressure relaxed, the gradient
+// taken off, the dye carried, then as light, which goes onto `out` filtered up. The
+// fields packed into RGBA8 as there (the passes filter by hand, so read nearest), at
+// a quarter of the working size; afresh at a new size.
+bool fluidPass(const glsl::Program* p, Target& t, const float* f, int n, std::initializer_list<GLuint> texs) {
+  t.bind();
+  glUseProgram(p->id);
+  glsl::setFloats(*p, f, n);
+  if (const GLint at = p->loc("uResolution"); at >= 0) glUniform2f(at, (float)t.w, (float)t.h);
+  if (const GLint at = p->loc("wsHeight"); at >= 0) glUniform1f(at, (float)t.h);
+  int unit = 0;
+  auto it = texs.begin();
+  for (const auto& name : p->samplers) bindTex(p->id, name.c_str(), unit++, it != texs.end() ? *it++ : S->black);
+  drawQuad();
+  return true;
+}
+
+void drawFluid(Target& out, const std::vector<float>& v) {
+  enum { kRounds = 0, kVel = 1, kDiv = kVel + 17, kJac = kDiv + 3, kProj = kJac + 2, kDye = kProj + 3, kLook = kDye + 17, kAll = kLook + 7 };
+  const glsl::Program* advect = S->programs.get("sim/fluid_advect");
+  const glsl::Program* div = S->programs.get("sim/fluid_div");
+  const glsl::Program* jacobi = S->programs.get("sim/fluid_jacobi");
+  const glsl::Program* project = S->programs.get("sim/fluid_project");
+  const glsl::Program* look = S->programs.get("sim/fluid_look");
+  if ((int)v.size() < kAll || !advect || !div || !jacobi || !project || !look) {
+    out.bind();
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    return;
+  }
+  const int fw = std::max(64, out.w / 4), fh = std::max(36, out.h / 4);
+  if (S->fluidVel.w != fw || S->fluidVel.h != fh) {
+    // Nought, packed (pack.glsl): (0.5, 0.5) in twelve bits each; 0.5 in twenty-four.
+    auto fresh = [&](Target& t, float r, float g, float b) {
+      t.make(fw, fh, GL_RGBA8);
+      glBindTexture(GL_TEXTURE_2D, t.tex);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      t.bind();
+      glClearColor(r, g, b, 1);
+      glClear(GL_COLOR_BUFFER_BIT);
+    };
+    for (Target* t : {&S->fluidVel, &S->fluidVel1}) fresh(*t, 0x7f / 255.0f, 0xf7 / 255.0f, 0xff / 255.0f);
+    for (Target* t : {&S->fluidPres, &S->fluidPresB, &S->fluidDiv}) fresh(*t, 0x7f / 255.0f, 1, 1);
+    for (Target* t : {&S->fluidDye, &S->fluidDyeB}) fresh(*t, 0, 0, 0);
+    fresh(S->fluidLook, 0, 0, 0);
+  }
+  glDisable(GL_BLEND);
+  const float* f = v.data();
+  fluidPass(advect, S->fluidVel1, f + kVel, 17, {S->fluidVel.tex, S->fluidVel.tex});
+  fluidPass(div, S->fluidDiv, f + kDiv, 3, {S->fluidVel1.tex});
+  const int rounds = std::clamp((int)f[kRounds], 1, 16);
+  for (int i = 0; i < rounds; i++) {
+    fluidPass(jacobi, S->fluidPresB, f + kJac, 2, {S->fluidPres.tex, S->fluidDiv.tex});
+    std::swap(S->fluidPres, S->fluidPresB);
+  }
+  fluidPass(project, S->fluidVel, f + kProj, 3, {S->fluidVel1.tex, S->fluidPres.tex});
+  fluidPass(advect, S->fluidDyeB, f + kDye, 17, {S->fluidVel.tex, S->fluidDye.tex});
+  std::swap(S->fluidDye, S->fluidDyeB);
+  fluidPass(look, S->fluidLook, f + kLook, 7, {S->fluidDye.tex, S->fluidVel.tex});
+  // Up to the stage's size, filtered (the look's own taps keep it smooth).
+  glBindTexture(GL_TEXTURE_2D, S->fluidLook.tex);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  out.bind();
+  glUseProgram(S->copy);
+  glUniform2f(glGetUniformLocation(S->copy, "uResolution"), (float)out.w, (float)out.h);
+  glUniform1f(glGetUniformLocation(S->copy, "uFit"), 0.0f);
+  bindTex(S->copy, "uSrc", 0, S->fluidLook.tex);
+  drawQuad();
+}
+
 // A target written out for ws_dump: RGBA as little-endian float32, box-filtered down
 // to at most 320 wide, top row first ([flip]: read bottom row first, as a layer is).
 void dumpTarget(const Target& t, GLenum format, const std::string& file, bool flip) {
@@ -707,6 +809,8 @@ void frame(int slot) {
   const bool wordsScene = sceneName == "@words" || simByName;
   // The veins (fx.h's Slime): their rules a frame are the words' floats too.
   const bool slimeScene = sceneName == "@slime";
+  // The fluid: its passes' numbers are the words' floats too.
+  const bool fluidScene = sceneName == "@fluid";
   const auto now = Clock::now();
   double dt = S->lastFrame.time_since_epoch().count() == 0 ? 1.0 / 60 : std::chrono::duration<double>(now - S->lastFrame).count();
   S->lastFrame = now;
@@ -718,7 +822,7 @@ void frame(int slot) {
 
   // 0. MilkDrop, where a scene samples it: its commands, then its frame.
   S->programs.poll();
-  const glsl::Program* p = sceneName == "@dance" || wordsScene || slimeScene ? nullptr : S->programs.get(sceneName);
+  const glsl::Program* p = sceneName == "@dance" || wordsScene || slimeScene || fluidScene ? nullptr : S->programs.get(sceneName);
   // A scene whose program is still being compiled (in the background): the one drawn
   // before it, as it was, until it is ready, rather than nothing.
   if (!p && !sceneName.empty() && sceneName[0] != '@') {
@@ -813,6 +917,8 @@ void frame(int slot) {
   } else if (slimeScene) {
     S->slime.draw(S->work, wordsV, dt, S->agentFormat, S->workFormat, S->vao, S->frames);
     glBindVertexArray(S->vao);
+  } else if (fluidScene) {
+    drawFluid(S->work, wordsV);
   } else if (wordsScene) {
     const std::string sim = simByName ? sceneName.substr(5) : std::string("words");
     drawSim(S->work, simByName ? ("sim/" + sim).c_str() : "sim/words_fx", sim, wordsV, blendNow ? S->ground.tex : 0);
@@ -827,6 +933,25 @@ void frame(int slot) {
       drawScene(p, S->work, common, nullptr, milkTex);
     }
   }
+  // 1'. the scene's own picture kept (before the figure, the trails), for a scene
+  // that reads its last one (echo): afresh on a new scene or size.
+  if (samplesHistory(p)) {
+    if (S->historyScene != sceneName || S->history.w != w || S->history.h != h) {
+      S->history.make(w, h, S->workFormat);
+      S->history.bind();
+      glClearColor(0, 0, 0, 1);
+      glClear(GL_COLOR_BUFFER_BIT);
+      S->historyScene = sceneName;
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, S->work.fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, S->history.fbo);
+    glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, S->work.fbo);
+  } else if (!S->historyScene.empty()) {
+    S->history.drop();
+    S->historyScene.clear();
+  }
+
   if (leaving) {
     S->leaving.make(w, h, S->workFormat);
     drawScene(leaving, S->leaving, common, fromKnobs, milkTex);
@@ -1418,6 +1543,9 @@ WS_API int ws_features(void) {
   f |= 64; // ws_treat mode 9, the slit-scan
   f |= 128; // ws_mosh
   f |= 256; // ws_ghosts, ws_adapt
+  f |= 512; // @fluid
+  f |= 1024; // scenes sampling the camera, its motion, the cover, their own last picture
+  f |= 2048; // the dancers' list's kMesh, kPostFx: the birds
   return f;
 }
 

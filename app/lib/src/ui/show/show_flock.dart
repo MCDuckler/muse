@@ -61,6 +61,7 @@ import 'show_common.dart' show crtInk, crtPaper, setFxKnobs, styleIsStage, tuned
 import 'show_dance.dart' show DanceHandoff;
 import 'show_dance_draw.dart' show DanceCam, V3;
 import 'show_flock_bird.dart';
+import 'show_flock_surface.dart';
 import 'show_meme.dart' show MemeClock;
 import 'show_meme_bank.dart' show MemeMood, memeHash;
 import 'show_particles.dart' show particleSprite;
@@ -1002,6 +1003,51 @@ class FlockSim implements SimLayer {
 
   @override
   ui.Image? frame(ShowState st, double dt, int w, int h, StagePrograms p) {
+    _watch.start();
+    final (cam, cue, look) = _step(st, dt, w, h);
+    final rec = ui.PictureRecorder();
+    _draw(CanvasFlockSurface(Canvas(rec)), Size(w.toDouble(), h.toDouble()), cam, cue, look);
+    final pic = rec.endRecording();
+    var img = pic.toImageSync(w, h);
+    pic.dispose();
+    if (_ownFinish(st, look)) img = _post(img, w, h, p, cue, look);
+    _out?.dispose();
+    _out = img;
+    _watch.stop();
+    _cost(look);
+    return img;
+  }
+
+  /// The native stage's frame: the same moved on by [dt], as [s]'s commands — the
+  /// finish the stage's too (dance.h's kPostFx, the same shaders).
+  Float32List record(ShowState st, double dt, int w, int h, NativeFlockSurface s) {
+    _watch.start();
+    final (cam, cue, look) = _step(st, dt, w, h);
+    s.d.camera(cam);
+    _draw(s, Size(w.toDouble(), h.toDouble()), cam, cue, look);
+    if (_ownFinish(st, look)) _postNative(s, h, cue, look);
+    _watch.stop();
+    _cost(look);
+    return s.d.finish();
+  }
+
+  /// Whether the look's finish is the flock's to draw: under a transformation an
+  /// image style's pass is the stage's, over what that made (show_common.dart
+  /// styleIsStage); the flock's own scope and sky stay its own.
+  bool _ownFinish(ShowState st, FlockLook look) =>
+      flockFxMode.containsKey(look) && !(styleIsStage(st.rig) && look.name == st.rig.figure.style);
+
+  void _cost(FlockLook look) {
+    if (++_frames % 300 == 0) {
+      // ignore: avoid_print
+      print('FLOCK ${(_watch.elapsedMicroseconds / 300 / 1000).toStringAsFixed(1)} ms a frame, ${model.flying} birds, ${_batch.vertsDrawn} vertices, ${look.name} / ${_flight.name}');
+      _watch.reset();
+    }
+  }
+
+  /// The flock moved on by [dt] for a picture [w]×[h]: the flight, the look, the
+  /// camera, the birds' rules and their places on the picture.
+  (DanceCam, _Cue, FlockLook) _step(ShowState st, double dt, int w, int h) {
     _t += dt;
     final m = st.master;
     final f = st.flat;
@@ -1173,32 +1219,13 @@ class FlockSim implements SimLayer {
       // Along the path on the beat: pushed on it, drifting before the next.
       surge: playing ? FlockClock.surge(mood, beats - beats.floorToDouble()) : 1,
     );
-    _watch.start();
     _steer = steer;
     model.step(steer);
 
-    // ---- the picture.
+    // ---- onto the picture.
     _project(cam, steer);
-    final rec = ui.PictureRecorder();
-    final c = Canvas(rec);
     _popAt = _mid;
-    _draw(c, size, cam, cue, look);
-    final pic = rec.endRecording();
-    var img = pic.toImageSync(w, h);
-    pic.dispose();
-    // Under a transformation an image style's pass is the stage's, over what that made
-    // (show_common.dart styleIsStage); the flock's own scope and sky stay its own.
-    final staged = styleIsStage(st.rig) && look.name == st.rig.figure.style;
-    if (flockFxMode.containsKey(look) && !staged) img = _post(img, w, h, p, cue, look);
-    _out?.dispose();
-    _out = img;
-    _watch.stop();
-    if (++_frames % 300 == 0) {
-      // ignore: avoid_print
-      print('FLOCK ${(_watch.elapsedMicroseconds / 300 / 1000).toStringAsFixed(1)} ms a frame, ${model.flying} birds, ${_batch.vertsDrawn} vertices, ${look.name} / ${_flight.name}');
-      _watch.reset();
-    }
-    return img;
+    return (cam, cue, look);
   }
 
   final _watch = Stopwatch();
@@ -1290,7 +1317,7 @@ class FlockSim implements SimLayer {
 
   // ------------------------------------------------------------------ the looks
 
-  void _draw(Canvas c, Size s, DanceCam cam, _Cue l, FlockLook look) {
+  void _draw(FlockSurface c, Size s, DanceCam cam, _Cue l, FlockLook look) {
     final pal = l.st.palette;
     switch (look) {
       case FlockLook.ink:
@@ -1298,7 +1325,7 @@ class FlockSim implements SimLayer {
         // turns them to ink on it; on MilkDrop a keyhole makes them windows).
         const paper = Color(0xff000000);
         const ink = Color(0xfff3f2ee);
-        c.drawRect(Offset.zero & s, Paint()..color = paper);
+        c.fill(Offset.zero & s, paper);
         // Each bird a little see-through: where the flock is thick it is solid, at its
         // edges the single birds show, and the waves of density run through it.
         _pigeons(c, cam, BirdShade.flat, BirdLight(flat: ink), alphaK: 0.8);
@@ -1306,7 +1333,7 @@ class FlockSim implements SimLayer {
         _sky(c, s, cam, l);
       case FlockLook.embers:
         final deep = HSLColor.fromAHSL(1, pal.primary.hue, 0.45, 0.03).toColor();
-        c.drawRect(Offset.zero & s, Paint()..color = deep);
+        c.fill(Offset.zero & s, deep);
         final a = pal.primary.withSaturation(0.9).withLightness(0.62).toColor();
         final b = pal.accent.withSaturation(0.95).withLightness(0.66).toColor();
         _ribbons(c, s, l, a, b, width: 0.03, glow: 0.32 + 0.28 * l.beat, len: 9);
@@ -1314,7 +1341,7 @@ class FlockSim implements SimLayer {
         // The birds in chrome, the room's warmth in their surface, the accent at their edges.
         _pigeons(c, cam, BirdShade.chrome, BirdLight(tint: Color.lerp(Colors.white, pal.secondary.withSaturation(0.6).withLightness(0.75).toColor(), 0.18)!, rim: b, rimK: 0.3 + 0.25 * l.beat));
       case FlockLook.neon:
-        c.drawRect(Offset.zero & s, Paint()..color = const Color(0xff040208));
+        c.fill(Offset.zero & s, const Color(0xff040208));
         final a = pal.accent.withSaturation(1).withLightness(0.6).toColor();
         final b = pal.secondary.withSaturation(1).withLightness(0.62).toColor();
         // Each bird black with its edges lit in neon; a soft glow of its colour behind.
@@ -1323,33 +1350,33 @@ class FlockSim implements SimLayer {
             rimBy: (i) => model.group[i] == 0 ? a : b);
       case FlockLook.wire:
         final deep = HSLColor.fromAHSL(1, pal.secondary.hue, 0.35, 0.035).toColor();
-        c.drawRect(Offset.zero & s, Paint()..color = deep);
+        c.fill(Offset.zero & s, deep);
         _wire(c, s, l, pal.primary.withSaturation(0.8).withLightness(0.62).toColor(), pal.accent.withSaturation(0.9).withLightness(0.7).toColor());
         _pigeons(c, cam, BirdShade.lit, BirdLight(tint: pal.accent.withSaturation(0.4).withLightness(0.88).toColor(), ambient: 0.5, keyK: 0.7), textured: false);
       case FlockLook.chrono:
-        c.drawRect(Offset.zero & s, Paint()..color = const Color(0xff060606));
+        c.fill(Offset.zero & s, const Color(0xff060606));
         _chrono(c, cam, l, pal.primary.withSaturation(0.35).withLightness(0.62).toColor());
         _pigeons(c, cam, BirdShade.chrome, BirdLight(tint: Colors.white, rim: pal.accent.withLightness(0.75).toColor(), rimK: 0.3));
       case FlockLook.contour:
       case FlockLook.thermal:
         // The flock as a cloud of light: each bird a wide soft glow, so where they are
         // thick it is bright — the finish draws the heights of it.
-        c.drawRect(Offset.zero & s, Paint()..color = Colors.black);
+        c.fill(Offset.zero & s, Colors.black);
         _sprites(c, s, (i) => Colors.white, sizeK: 0.5, flapGlow: 0.0, alphaK: look == FlockLook.thermal ? 0.09 : 0.14);
       case FlockLook.ascii:
       case FlockLook.dither:
       case FlockLook.halftone:
       case FlockLook.crt:
-        c.drawRect(Offset.zero & s, Paint()..color = Colors.black);
+        c.fill(Offset.zero & s, Colors.black);
         // The birds bright on black; the finish draws them its own way (it reads only
         // their light, so plain lit white, which is cheaper than chrome).
         _pigeons(c, cam, BirdShade.lit, const BirdLight(tint: Colors.white, ambient: 0.45, keyK: 0.75, rim: Colors.white, rimK: 0.5), textured: false);
       case FlockLook.lines:
         // The ridgelines want smooth heights: each bird a soft point of light.
-        c.drawRect(Offset.zero & s, Paint()..color = Colors.black);
+        c.fill(Offset.zero & s, Colors.black);
         _sprites(c, s, (i) => Colors.white, sizeK: 0.3, flapGlow: 0.4, alphaK: 0.5);
       case FlockLook.radar:
-        c.drawRect(Offset.zero & s, Paint()..color = Colors.black);
+        c.fill(Offset.zero & s, Colors.black);
         _ribbons(c, s, l, Colors.white, Colors.white, width: 0.02, glow: 0.5, len: 6);
         _sprites(c, s, (i) => Colors.white, sizeK: 0.12, flapGlow: 0.0, alphaK: 1);
     }
@@ -1357,7 +1384,7 @@ class FlockSim implements SimLayer {
 
   /// The wings as ink: every flying bird's two triangles, coloured by [colour] and
   /// its own alpha.
-  void _wings(Canvas c, Color Function(int i) colour, {double alphaK = 1, BlendMode blend = BlendMode.srcOver}) {
+  void _wings(FlockSurface c, Color Function(int i) colour, {double alphaK = 1, BlendMode blend = BlendMode.srcOver}) {
     if (_triN == 0) return;
     for (var k = 0; k < _triN; k++) {
       final i = _triBird[k];
@@ -1366,14 +1393,12 @@ class FlockSim implements SimLayer {
       final o = k * 6;
       _triCol[o] = _triCol[o + 1] = _triCol[o + 2] = _triCol[o + 3] = _triCol[o + 4] = _triCol[o + 5] = col;
     }
-    final v = ui.Vertices.raw(ui.VertexMode.triangles, Float32List.sublistView(_tri, 0, _triN * 12), colors: Int32List.sublistView(_triCol, 0, _triN * 6));
-    c.drawVertices(v, BlendMode.dst, Paint()..blendMode = blend);
-    v.dispose();
+    c.vertices(Float32List.sublistView(_tri, 0, _triN * 12), Int32List.sublistView(_triCol, 0, _triN * 6), blend: blend);
   }
 
   /// Every flying bird as a soft point of light, [sizeK] metres across (scaled by its
   /// depth), brighter as its wings beat ([flapGlow]), added.
-  void _sprites(Canvas c, Size s, Color Function(int i) colour, {required double sizeK, required double flapGlow, required double alphaK}) {
+  void _sprites(FlockSurface c, Size s, Color Function(int i) colour, {required double sizeK, required double flapGlow, required double alphaK}) {
     final transforms = <RSTransform>[];
     final rects = <Rect>[];
     final colors = <Color>[];
@@ -1394,12 +1419,12 @@ class FlockSim implements SimLayer {
       colors.add(colour(i).withValues(alpha: a.clamp(0.0, 1.0)));
     }
     if (transforms.isEmpty) return;
-    c.drawAtlas(particleSprite, transforms, rects, colors, BlendMode.modulate, null, Paint()..blendMode = BlendMode.plus);
+    c.sprites(particleSprite, transforms, rects, colors);
   }
 
   /// Ribbons: where each bird was over the last frames, thinning and fading into the
   /// past, in a colour of its own between [a] and [b], added.
-  void _ribbons(Canvas c, Size s, _Cue l, Color a, Color b, {required double width, required double glow, int? len}) {
+  void _ribbons(FlockSurface c, Size s, _Cue l, Color a, Color b, {required double width, required double glow, int? len}) {
     final n = math.min(len ?? _histLen, _histN);
     if (n < 2) return;
     final m = model;
@@ -1451,14 +1476,12 @@ class FlockSim implements SimLayer {
       }
     }
     if (q == 0) return;
-    final v = ui.Vertices.raw(ui.VertexMode.triangles, Float32List.sublistView(_ribbonPos, 0, q * 12), colors: Int32List.sublistView(_ribbonCol, 0, q * 6));
-    c.drawVertices(v, BlendMode.dst, Paint()..blendMode = BlendMode.plus);
-    v.dispose();
+    c.vertices(Float32List.sublistView(_ribbonPos, 0, q * 12), Int32List.sublistView(_ribbonCol, 0, q * 6), blend: BlendMode.plus);
   }
 
   /// A plexus: every bird a dot, lines to its nearest neighbours where they are
   /// close, the closer the brighter, in three strengths.
-  void _wire(Canvas c, Size s, _Cue l, Color line, Color dot) {
+  void _wire(FlockSurface c, Size s, _Cue l, Color line, Color dot) {
     if (_triN == 0) return;
     final m = model;
     final strong = <double>[], mid = <double>[], faint = <double>[], dots = <double>[];
@@ -1480,30 +1503,17 @@ class FlockSim implements SimLayer {
     final glow = 0.75 + 0.25 * l.beat;
     for (final (pts, alpha) in [(faint, 0.28), (mid, 0.6), (strong, 1.0)]) {
       if (pts.isEmpty) continue;
-      c.drawRawPoints(
-          ui.PointMode.lines,
-          Float32List.fromList(pts),
-          Paint()
-            ..color = line.withValues(alpha: alpha * glow)
-            ..strokeWidth = (s.height * 0.0018).clamp(1.0, 2.5)
-            ..blendMode = BlendMode.plus);
+      c.lines(Float32List.fromList(pts), (s.height * 0.0018).clamp(1.0, 2.5), line.withValues(alpha: alpha * glow), blend: BlendMode.plus);
     }
     // The birds themselves are the net's knots; a dot only while the scan is not in.
     if (dots.isNotEmpty && !birds.ready) {
-      c.drawRawPoints(
-          ui.PointMode.points,
-          Float32List.fromList(dots),
-          Paint()
-            ..color = dot
-            ..strokeWidth = (s.height * 0.0045).clamp(2.0, 6.0)
-            ..strokeCap = StrokeCap.round
-            ..blendMode = BlendMode.plus);
+      c.dots(Float32List.fromList(dots), (s.height * 0.0045).clamp(2.0, 6.0), dot);
     }
   }
 
   /// The chronophotograph's stamps: the flock's shapes every half beat (a quarter in
   /// a drop), added, the older dimmer — the roughest level of detail, a silhouette.
-  void _chrono(Canvas c, DanceCam cam, _Cue l, Color tint) {
+  void _chrono(FlockSurface c, DanceCam cam, _Cue l, Color tint) {
     final step = l.rage ? 0.25 : 0.5;
     final count = l.rage ? 8 : 6;
     final last = (l.beats / step).floor() * step;
@@ -1536,7 +1546,7 @@ class FlockSim implements SimLayer {
   /// a wash from a deep top to a warm horizon, dithered so it does not band, and a
   /// low sun that flares on the kick), the far ones paler in the haze. Drawn on
   /// nothing, so the finish lays them over its sky.
-  void _sky(Canvas c, Size s, DanceCam cam, _Cue l) {
+  void _sky(FlockSurface c, Size s, DanceCam cam, _Cue l) {
     final pal = l.st.palette;
     _skyTop = HSLColor.fromAHSL(1, pal.primary.hue, 0.5, 0.09).toColor();
     _skyHorizon = HSLColor.fromAHSL(1, pal.accent.hue, 0.7, 0.5 * (0.85 + 0.15 * l.beat)).toColor();
@@ -1569,7 +1579,7 @@ class FlockSim implements SimLayer {
   /// The flock as pigeons: every flying bird on the picture, far to near, the nearest
   /// at full detail, in [shade] under [light]. Until the scan is in, chevrons in the
   /// light's flat colour (or tint).
-  void _pigeons(Canvas c, DanceCam cam, BirdShade shade, BirdLight light,
+  void _pigeons(FlockSurface c, DanceCam cam, BirdShade shade, BirdLight light,
       {bool textured = true, double alphaK = 1, BlendMode blend = BlendMode.srcOver, Color Function(int i)? rimBy}) {
     final mesh = birds.mesh, skin = birds.skin, steer = _steer;
     if (mesh == null || skin == null || steer == null) {
@@ -1649,6 +1659,33 @@ class FlockSim implements SimLayer {
     pic.dispose();
     img.dispose();
     return out;
+  }
+
+  /// The same finish on the native stage, over what the list drew so far.
+  void _postNative(NativeFlockSurface s, int h, _Cue l, FlockLook look) {
+    final crt = look == FlockLook.crt;
+    final glyphs = s.texture(_glyphs ??= _makeGlyphs());
+    if (glyphs == null) return;
+    final (:mode, :ink, :paper, :cell, :tint) = _postParams(l, look, h);
+    final name = treatmentTunes.containsKey(look.name) ? look.name : null;
+    final k = name == null ? null : fxKnobs(l.st.macros.tune, name);
+    s.d.postFx(
+      program: crt ? 0 : 1,
+      atlas: glyphs,
+      // dance_fx's alpha out: whole, as a canvas keeps it.
+      coverageOut: 0,
+      sweep: crt ? 0 : l.barSaw,
+      mode: mode,
+      cell: cell,
+      ink: ink,
+      paper: paper,
+      tint: tint,
+      glyphs: _ramp.length,
+      pop: l.kick.clamp(0.0, 1.0),
+      popAt: _popAt,
+      time: _t,
+      knobs: k == null ? const [] : [k.weight, k.spacing, k.height, k.gain, k.size],
+    );
   }
 
   /// The finish's colours and cell for [look] on a picture [h] high.

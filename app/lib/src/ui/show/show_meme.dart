@@ -40,10 +40,13 @@
 // The photographs, the cut-outs, the clip and the captions are a bank in
 // assets/show/<bank>/ (bank.json; who took the pictures, and under which licence,
 // in CREDITS.md there). The picture is drawn at the stage's working size and
-// finished by shaders/show/sim/meme_fx.frag; the words go over the whole stage at
+// finished by shaders/show/sim/meme_fx.frag — on the native stage too, the picture
+// sent up to it ([native]) and finished there; the words go over the whole stage at
 // the screen's own size ([paintOver]), so they stay sharp.
+import 'dart:async';
 import 'dart:io' show Platform;
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -339,11 +342,58 @@ class MemeEdit implements SimLayer, SimOverlay {
 
   @override
   ui.Image? frame(ShowState st, double dt, int w, int h, StagePrograms p) {
-    bank.tick();
-    if (!bank.ready) return null;
     final program = p.sims['meme_fx'];
     if (program == null) return null;
+    final made = _compose(st, dt, w, h);
+    if (made == null) return null;
+    final (base, floats) = made;
     final fx = _fx ??= program.fragmentShader();
+    for (var i = 0; i < floats.length; i++) {
+      fx.setFloat(i, floats[i]);
+    }
+    fx.setImageSampler(0, base);
+    final r2 = ui.PictureRecorder();
+    Canvas(r2).drawRect(Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()), Paint()..shader = fx);
+    final pic2 = r2.endRecording();
+    final out = pic2.toImageSync(w, h);
+    pic2.dispose();
+    base.dispose();
+    _out?.dispose();
+    _out = out;
+    return out;
+  }
+
+  bool _sending = false;
+
+  /// The native stage's frame (`@sim:meme_fx`): the picture drawn here — a canvas's
+  /// work, the photographs, the bits, the type — sent up as `meme_fx.image` through
+  /// [upload] (one at a time: a frame drawn while the last is still on its way is
+  /// let go), and the finish's numbers, meme_fx.frag's floats in its order, for the
+  /// stage's own pass.
+  Float32List? native(ShowState st, double dt, int w, int h, void Function(String name, int w, int h, Uint8List rgba) upload) {
+    final made = _compose(st, dt, w, h);
+    if (made == null) return null;
+    final (base, floats) = made;
+    if (_sending) {
+      base.dispose();
+    } else {
+      _sending = true;
+      unawaited(base.toByteData(format: ui.ImageByteFormat.rawRgba).then((b) {
+        if (b != null) upload('meme_fx.image', base.width, base.height, b.buffer.asUint8List(b.offsetInBytes, b.lengthInBytes));
+      }, onError: (Object _) {}).whenComplete(() {
+        _sending = false;
+        base.dispose();
+      }));
+    }
+    return Float32List.fromList(floats);
+  }
+
+  /// The edit moved on by [dt]: the picture at [w]×[h] before the finish, and the
+  /// finish's numbers (meme_fx.frag's floats, in its order). Null while the bank is
+  /// not in.
+  (ui.Image, List<double>)? _compose(ShowState st, double dt, int w, int h) {
+    bank.tick();
+    if (!bank.ready) return null;
     _t += dt;
     _st = st;
     final m = st.master;
@@ -739,8 +789,8 @@ class MemeEdit implements SimLayer, SimOverlay {
     final scan = look.scan * (mood == MemeMood.sleep ? 0.3 : 1) + (look.style == MemeStyle.phonk ? 0.3 * snare : 0);
     pixel = math.max(pixel, look.pixel * day * (fw / 1280));
 
-    var i = 0;
-    void set(double v) => fx.setFloat(i++, v);
+    final q = <double>[];
+    void set(double v) => q.add(v);
     set(fw);
     set(fh);
     set(_t);
@@ -765,16 +815,7 @@ class MemeEdit implements SimLayer, SimOverlay {
     set(pastel.clamp(0.0, 1.0));
     set(scan.clamp(0.0, 1.0));
     set(_glitch.clamp(0.0, 1.0));
-    fx.setImageSampler(0, base);
-    final r2 = ui.PictureRecorder();
-    Canvas(r2).drawRect(Rect.fromLTWH(0, 0, fw, fh), Paint()..shader = fx);
-    final pic2 = r2.endRecording();
-    final out = pic2.toImageSync(w, h);
-    pic2.dispose();
-    base.dispose();
-    _out?.dispose();
-    _out = out;
-    return out;
+    return (base, q);
   }
 
   /// The cut's photograph, with the one before going out under it for the first

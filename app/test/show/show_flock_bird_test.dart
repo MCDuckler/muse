@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muse/src/ui/show/show_dance_draw.dart';
 import 'package:muse/src/ui/show/show_flock_bird.dart';
+import 'package:muse/src/ui/show/show_flock_surface.dart';
 
 BirdMesh shipped() {
   final j = jsonDecode(File('assets/show/flock/pigeon/pigeon.json').readAsStringSync()) as Map<String, dynamic>;
@@ -70,7 +71,7 @@ void main() {
     final zs = [for (var i = 0; i < n; i++) rng.nextDouble() * 4 + 1];
     void frame(BirdShade shade, {bool textured = true}) {
       final r = ui.PictureRecorder();
-      final c = Canvas(r);
+      final c = CanvasFlockSurface(Canvas(r));
       batch.begin();
       for (var i = 0; i < n; i++) {
         final lod = mesh.pick(60, i);
@@ -99,7 +100,7 @@ void main() {
     expect(sw.elapsedMilliseconds / 30, lessThan(40));
     // a stamp keeps the shapes
     final r = ui.PictureRecorder();
-    final c = Canvas(r);
+    final c = CanvasFlockSurface(Canvas(r));
     batch.begin();
     batch.beginStamp();
     for (var i = 0; i < 50; i++) {

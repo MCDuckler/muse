@@ -135,11 +135,11 @@ class NativeDanceSurface implements DanceSurface {
   NativeDanceSurface(this.meshId);
   final int Function(DanceBody body) meshId;
 
-  final _out = <double>[];
+  final _out = _Floats();
   final _slots = <DanceBody, (int, int)>{}; // body → (slot, the version it was posed at)
 
   static const _fill = 1, _tris = 2, _points = 3, _clip = 4, _camera = 5, _pose = 6, _body = 7, _outline = 8;
-  static const _floorShadow = 9, _wallShadow = 10, _post = 11, _fluid = 13, _dust = 14;
+  static const _floorShadow = 9, _wallShadow = 10, _post = 11, _fluid = 13, _dust = 14, _mesh = 15, _postFx = 16;
 
   static int blendOf(BlendMode b) => switch (b) {
         BlendMode.plus => 1,
@@ -172,6 +172,47 @@ class NativeDanceSurface implements DanceSurface {
     }
   }
 
+  /// A finish of [program]'s (0 dance_fx, 1 flock_fx) over what is drawn so far, as
+  /// [post]; its glyphs the stage's picture [atlas] (`mesh.<n>`, -1 the dancers'),
+  /// its alpha out the coverage where [coverageOut] is 1, [sweep] flock_fx's bar.
+  void postFx({required int program, required int atlas, required double coverageOut, required double sweep, required int mode, required double cell,
+      required Color ink, required Color paper, required double tint, required int glyphs, required double pop, required Offset popAt, required double time,
+      List<double> knobs = const []}) {
+    _out.addAll([_postFx.toDouble(), program.toDouble(), atlas.toDouble(), coverageOut, sweep]);
+    _out.addAll([mode.toDouble(), cell, ink.r, ink.g, ink.b, paper.r, paper.g, paper.b, tint, glyphs.toDouble(), pop, popAt.dx, popAt.dy, time]);
+    for (var i = 0; i < 5; i++) {
+      _out.add(i < knobs.length ? knobs[i] : 0);
+    }
+  }
+
+  /// Triangles with a colour per corner, [indices] into the corners where given,
+  /// textured by the stage's picture [texture] (`mesh.<n>`, -1 none) at [uv] (0..1,
+  /// from the top), the colour multiplying it.
+  void mesh(Float32List pos, Int32List argb, {Uint16List? indices, int texture = -1, Float32List? uv, BlendMode blend = BlendMode.srcOver}) {
+    final n = argb.length, ni = indices?.length ?? 0;
+    if (n == 0) return;
+    _out.addAll([_mesh.toDouble(), n.toDouble(), ni.toDouble(), blendOf(blend).toDouble(), uv == null ? -1 : texture.toDouble()]);
+    final o = _out.room(n * 8);
+    final b = _out.buf;
+    for (var i = 0; i < n; i++) {
+      final c = argb[i], k = o + i * 8;
+      b[k] = pos[i * 2];
+      b[k + 1] = pos[i * 2 + 1];
+      b[k + 2] = uv == null ? 0 : uv[i * 2];
+      b[k + 3] = uv == null ? 0 : uv[i * 2 + 1];
+      b[k + 4] = ((c >> 16) & 0xff) / 255;
+      b[k + 5] = ((c >> 8) & 0xff) / 255;
+      b[k + 6] = (c & 0xff) / 255;
+      b[k + 7] = ((c >> 24) & 0xff) / 255;
+    }
+    if (indices != null) {
+      final at = _out.room(ni);
+      for (var i = 0; i < ni; i++) {
+        _out.buf[at + i] = indices[i].toDouble();
+      }
+    }
+  }
+
   /// A coloured fluid round [bodies] (which hold it back), pushed by [splats] — x, y,
   /// velocity x, y (pixels a second), radius — dyed by [dye]'s three colours; [kick]
   /// a burst, [strength] how much it moves.
@@ -189,7 +230,7 @@ class NativeDanceSurface implements DanceSurface {
     }
   }
 
-  Float32List finish() => Float32List.fromList(_out);
+  Float32List finish() => _out.done();
 
   @override
   void fill(Rect r, Color color, {BlendMode blend = BlendMode.srcOver}) {
@@ -202,9 +243,16 @@ class NativeDanceSurface implements DanceSurface {
   void tris(Float32List pos, Int32List argb, {BlendMode blend = BlendMode.srcOver}) {
     final n = argb.length;
     _out.addAll([_tris.toDouble(), n.toDouble(), blendOf(blend).toDouble()]);
+    final o = _out.room(n * 6);
+    final b = _out.buf;
     for (var i = 0; i < n; i++) {
-      final c = argb[i];
-      _out.addAll([pos[i * 2], pos[i * 2 + 1], ((c >> 16) & 0xff) / 255, ((c >> 8) & 0xff) / 255, (c & 0xff) / 255, ((c >> 24) & 0xff) / 255]);
+      final c = argb[i], k = o + i * 6;
+      b[k] = pos[i * 2];
+      b[k + 1] = pos[i * 2 + 1];
+      b[k + 2] = ((c >> 16) & 0xff) / 255;
+      b[k + 3] = ((c >> 8) & 0xff) / 255;
+      b[k + 4] = (c & 0xff) / 255;
+      b[k + 5] = ((c >> 24) & 0xff) / 255;
     }
   }
 
@@ -285,4 +333,40 @@ class NativeDanceSurface implements DanceSurface {
     final slot = _slot(b);
     _out.addAll([_wallShadow.toDouble(), slot.toDouble(), lamp.x, lamp.y, lamp.z, wallY, color.r, color.g, color.b]);
   }
+}
+
+/// The command list's floats as they are written: unboxed, grown by doubling (a
+/// frame of the turntable's holograms is a few hundred thousand).
+class _Floats {
+  Float32List buf = Float32List(4096);
+  int length = 0;
+
+  /// Room for [n] more, at the index returned (and counted as written).
+  int room(int n) {
+    if (length + n > buf.length) {
+      var size = buf.length * 2;
+      while (size < length + n) {
+        size *= 2;
+      }
+      buf = Float32List(size)..setRange(0, length, buf);
+    }
+    final at = length;
+    length += n;
+    return at;
+  }
+
+  void add(double v) => buf[room(1)] = v;
+
+  void addAll(Iterable<double> vs) {
+    if (vs is List<double>) {
+      final at = room(vs.length);
+      buf.setRange(at, at + vs.length, vs);
+    } else {
+      for (final v in vs) {
+        add(v);
+      }
+    }
+  }
+
+  Float32List done() => Float32List.sublistView(buf, 0, length);
 }

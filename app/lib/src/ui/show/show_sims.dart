@@ -134,11 +134,12 @@ class FluidSim implements SimLayer {
     _pressure = _flat(sw, sh, const Color(0xff7fffff));
   }
 
-  @override
-  ui.Image? frame(ShowState st, double dt, int w, int h, StagePrograms p) {
-    if (!p.sims.containsKey('fluid_advect')) return null;
-    _shaders(p);
-    _size(w, h);
+  /// The frame's numbers for each pass, in the order its shader declares them (what
+  /// setFloat(i) takes): the velocity's advection, the divergence, the pressure's
+  /// relaxing, the projection, the dye's advection, the look — the Flutter stage's
+  /// and the native one's (the fluid's passes on the GPU, [native]) the same.
+  ({List<double> vel, List<double> div, List<double> jacobi, List<double> project, List<double> dye, List<double> look}) _numbers(
+      ShowState st, double dt, double sw, double sh) {
     dt = dt.clamp(1 / 120, 1 / 30);
     final f = st.flat;
     // The kick's hit (show_dynamics.dart), not the raw kick: a leap above the floor,
@@ -148,7 +149,6 @@ class FluidSim implements SimLayer {
     final energy = f['dyn.energy'] ?? f['master.energy'] ?? 0;
     final low = f['dyn.band.low'] ?? f['audio.low'] ?? 0;
     final breakdown = (f['master.breakdown'] ?? 0) > 0.5;
-    final sw = _w.toDouble(), sh = _h.toDouble();
     const vmax = 220.0;
     final g = st.genome;
     final swirlGene = g.isEmpty ? 1.0 : g['fluid.swirl'];
@@ -182,44 +182,67 @@ class FluidSim implements SimLayer {
     final secondary = st.palette.secondary.withSaturation(0.9).withLightness(0.45).toColor();
     // The dye poured in alternates between the palette's colours per push.
     final ink = [primary, secondary][(_walk * 7).floor() % 2];
+    return (
+      // 1. velocity advected, pushed, swirled.
+      vel: [
+        sw, sh, dt, breakdown ? 0.97 : 0.995, 0, vmax, _pushX, _pushY, _pushDX, _pushDY, 0.05 + 0.03 * energy, _pushK,
+        (8.0 + 40.0 * low + 30.0 * snare) * swirlGene, st.now.millisecondsSinceEpoch / 1000 % 10000, 0, 0, 0,
+      ],
+      // 2. divergence.
+      div: [sw, sh, vmax],
+      // 3. pressure, relaxed.
+      jacobi: [sw, sh],
+      // 4. the gradient taken off.
+      project: [sw, sh, vmax],
+      // 5. the dye carried along, more poured in at the push. A breakdown keeps its
+      // dye longer (the pushes are weaker there), so the room is not empty between kicks.
+      dye: [
+        sw, sh, dt, breakdown ? math.min(0.992, fadeGene + 0.01) : fadeGene, 1, vmax, _pushX, _pushY, 0, 0, 0.035 + 0.02 * energy,
+        _pushK * 0.7, 0, 0, ink.r, ink.g, ink.b,
+      ],
+      // 6. as light.
+      look: [sw, sh, (0.55 + 0.35 * energy) * (f['dyn.exposure'] ?? 0.8) * 1.2, vmax, secondary.r, secondary.g, secondary.b],
+    );
+  }
+
+  /// The native stage's frame (`@fluid`, ws_words): the pressure's rounds, then each
+  /// pass's numbers in turn, at the size the Flutter stage's would be — the stage
+  /// puts its own (a quarter of its working size) in each pass's uResolution.
+  Float32List native(ShowState st, double dt, int w, int h) {
+    final n = _numbers(st, dt, math.max(64, w ~/ 4).toDouble(), math.max(36, h ~/ 4).toDouble());
+    return Float32List.fromList([_jacobiRounds.toDouble(), ...n.vel, ...n.div, ...n.jacobi, ...n.project, ...n.dye, ...n.look]);
+  }
+
+  static void _set(ui.FragmentShader s, List<double> v) {
+    for (var i = 0; i < v.length; i++) {
+      s.setFloat(i, v[i]);
+    }
+  }
+
+  @override
+  ui.Image? frame(ShowState st, double dt, int w, int h, StagePrograms p) {
+    if (!p.sims.containsKey('fluid_advect')) return null;
+    _shaders(p);
+    _size(w, h);
+    final n = _numbers(st, dt, _w.toDouble(), _h.toDouble());
 
     // 1. velocity advected, pushed, swirled.
+    _set(_advect!, n.vel);
     _advect!
-      ..setFloat(0, sw)
-      ..setFloat(1, sh)
-      ..setFloat(2, dt)
-      ..setFloat(3, breakdown ? 0.97 : 0.995)
-      ..setFloat(4, 0)
-      ..setFloat(5, vmax)
-      ..setFloat(6, _pushX)
-      ..setFloat(7, _pushY)
-      ..setFloat(8, _pushDX)
-      ..setFloat(9, _pushDY)
-      ..setFloat(10, 0.05 + 0.03 * energy)
-      ..setFloat(11, _pushK)
-      ..setFloat(12, (8.0 + 40.0 * low + 30.0 * snare) * swirlGene)
-      ..setFloat(13, st.now.millisecondsSinceEpoch / 1000 % 10000)
-      ..setFloat(14, 0)
-      ..setFloat(15, 0)
-      ..setFloat(16, 0)
       ..setImageSampler(0, _vel!)
       ..setImageSampler(1, _vel!);
     final vel1 = _shaded(_w, _h, _advect!);
 
     // 2. divergence.
-    _div!
-      ..setFloat(0, sw)
-      ..setFloat(1, sh)
-      ..setFloat(2, vmax)
-      ..setImageSampler(0, vel1);
+    _set(_div!, n.div);
+    _div!.setImageSampler(0, vel1);
     final div = _shaded(_w, _h, _div!);
 
     // 3. pressure, relaxed.
     var pressure = _pressure!;
     for (var i = 0; i < _jacobiRounds; i++) {
+      _set(_jacobi!, n.jacobi);
       _jacobi!
-        ..setFloat(0, sw)
-        ..setFloat(1, sh)
         ..setImageSampler(0, pressure)
         ..setImageSampler(1, div);
       final next = _shaded(_w, _h, _jacobi!);
@@ -231,10 +254,8 @@ class FluidSim implements SimLayer {
     div.dispose();
 
     // 4. the gradient taken off.
+    _set(_project!, n.project);
     _project!
-      ..setFloat(0, sw)
-      ..setFloat(1, sh)
-      ..setFloat(2, vmax)
       ..setImageSampler(0, vel1)
       ..setImageSampler(1, _pressure!);
     final vel2 = _shaded(_w, _h, _project!);
@@ -243,26 +264,8 @@ class FluidSim implements SimLayer {
     _vel = vel2;
 
     // 5. the dye carried along, more poured in at the push.
+    _set(_advect!, n.dye);
     _advect!
-      ..setFloat(0, sw)
-      ..setFloat(1, sh)
-      ..setFloat(2, dt)
-      // A breakdown keeps its dye longer (the pushes are weaker there), so the
-      // room is not empty between kicks.
-      ..setFloat(3, breakdown ? math.min(0.992, fadeGene + 0.01) : fadeGene)
-      ..setFloat(4, 1)
-      ..setFloat(5, vmax)
-      ..setFloat(6, _pushX)
-      ..setFloat(7, _pushY)
-      ..setFloat(8, 0)
-      ..setFloat(9, 0)
-      ..setFloat(10, 0.035 + 0.02 * energy)
-      ..setFloat(11, _pushK * 0.7)
-      ..setFloat(12, 0)
-      ..setFloat(13, 0)
-      ..setFloat(14, ink.r)
-      ..setFloat(15, ink.g)
-      ..setFloat(16, ink.b)
       ..setImageSampler(0, _vel!)
       ..setImageSampler(1, _dye!);
     final dye = _shaded(_w, _h, _advect!);
@@ -270,14 +273,8 @@ class FluidSim implements SimLayer {
     _dye = dye;
 
     // 6. as light.
+    _set(_look!, n.look);
     _look!
-      ..setFloat(0, sw)
-      ..setFloat(1, sh)
-      ..setFloat(2, (0.55 + 0.35 * energy) * (f['dyn.exposure'] ?? 0.8) * 1.2)
-      ..setFloat(3, vmax)
-      ..setFloat(4, secondary.r)
-      ..setFloat(5, secondary.g)
-      ..setFloat(6, secondary.b)
       ..setImageSampler(0, _dye!)
       ..setImageSampler(1, _vel!);
     return _shaded(_w, _h, _look!);
