@@ -9,3 +9,4 @@ description = "WetOwl Desk: the booth (egui)"
 [dependencies]
 eframe = { version = "0.37.0", features = ["glow"] }
 wo-deskcore.workspace = true
+wo-house = { version = "0.1.0", path = "../../crates/wo-house" }

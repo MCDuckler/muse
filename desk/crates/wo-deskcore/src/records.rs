@@ -23,9 +23,24 @@ pub enum Audio {
     File { path: PathBuf, beats: Vec<f64>, bar_one: usize },
     /// Made here: a techno loop at a tempo, its grid exact.
     Synth { seed: u32 },
+    /// On the house: its analysis and audio fetched when it goes on a deck.
+    House { id: i64 },
 }
 
 impl Record {
+    /// A house record (its key comes with the analysis, when it is loaded).
+    pub fn from_house(t: &wo_house::Track) -> Record {
+        Record {
+            id: t.id,
+            title: t.title.clone(),
+            artist: t.artist(),
+            bpm: t.bpm.unwrap_or(0.0),
+            key: String::new(),
+            seconds: (t.duration_ms.unwrap_or(0).max(0) / 1000) as u32,
+            audio: if t.ready() { Audio::House { id: t.id } } else { Audio::None },
+        }
+    }
+
     pub fn playable(&self) -> bool {
         !matches!(self.audio, Audio::None)
     }

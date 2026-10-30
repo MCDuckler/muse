@@ -25,6 +25,13 @@ pub(crate) struct App {
     cue_held: [bool; 2],
     /// The nudge held, per deck.
     nudge_held: [i8; 2],
+    /// The search as typed, when typing last changed it, what the house was last asked.
+    search_at: Option<std::time::Instant>,
+    searched: String,
+    /// The sign-in form: house address, name, password; and whether the WetOwl app's
+    /// sign-in is here to use.
+    form: (String, String, String),
+    app_sign_in: bool,
 }
 
 impl App {
@@ -43,6 +50,10 @@ impl App {
             shot: None,
             cue_held: [false; 2],
             nudge_held: [0; 2],
+            search_at: None,
+            searched: String::new(),
+            form: (wo_house::DEFAULT_SERVER.to_owned(), String::new(), String::new()),
+            app_sign_in: Desk::app_sign_in_here(),
         }
     }
 

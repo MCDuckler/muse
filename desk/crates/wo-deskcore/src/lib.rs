@@ -2,7 +2,7 @@
 //! the crate, the waveforms and the glass backdrop. Both bake-off UIs (egui, Slint)
 //! drive one [`Desk`] the same way: [`Desk::tick`] and [`Desk::snapshot`] once a
 //! frame, the controls when a hand moves one. Nothing here knows how it is drawn.
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -11,11 +11,13 @@ use wo_wave::{Analyser, Tee, Wave};
 
 pub mod backdrop;
 pub mod bench;
+pub mod library;
 pub mod records;
 pub mod synth;
 pub mod theme;
 
 pub use backdrop::Backdrop;
+pub use library::{Library, Shelf};
 pub use records::{Audio, Record};
 pub use wo_booth::{Grid, Hands, Pad, PadKind, RANGES, Transport};
 pub use wo_engine::Load;
@@ -132,6 +134,14 @@ pub struct Desk {
     started: Instant,
     auto: bool,
     _pacer: Option<Pacer>,
+    /// The house, when signed in; what its workers hand back.
+    house: Option<wo_house::House>,
+    done_tx: mpsc::Sender<library::Done>,
+    done_rx: mpsc::Receiver<library::Done>,
+    library: Library,
+    shelf_gen: u64,
+    /// Each deck's load, counted: an answer for a record since replaced is dropped.
+    load_gen: [u64; 2],
 }
 
 /// An offline engine rendered in real time on its own thread: a computer with no
@@ -198,6 +208,7 @@ impl Desk {
             fader: 0.85,
             keylock: true,
         };
+        let (done_tx, done_rx) = mpsc::channel();
         let mut desk = Desk {
             engine,
             slots: [empty(), empty()],
@@ -211,7 +222,19 @@ impl Desk {
             started: Instant::now(),
             auto: true,
             _pacer: pacer,
+            house: None,
+            done_tx,
+            done_rx,
+            library: Library::default(),
+            shelf_gen: 0,
+            load_gen: [0; 2],
         };
+        // the Desk's own saved sign-in; WO_APP_SIGN_IN=1 borrows the WetOwl app's for
+        // this run only (development, screenshots)
+        let borrowed = (std::env::var("WO_APP_SIGN_IN").as_deref() == Ok("1")).then(wo_house::Session::from_wetowl_app).flatten();
+        if let Some(session) = wo_house::Session::saved().or(borrowed) {
+            desk.signed_in(wo_house::House::new(session));
+        }
         let (a, b) = (desk.take_next(), desk.take_next());
         desk.load(0, a);
         desk.load(1, b);
@@ -226,7 +249,20 @@ impl Desk {
         desk
     }
 
+    /// The Auto DJ's next record: the best fit to the master's on the house's shelf (what
+    /// Up next shows first), else the local queue's next.
     fn take_next(&mut self) -> Record {
+        let playing: Vec<i64> = self.slots.iter().map(|s| s.record.id).collect();
+        let m = &self.slots[self.master].record;
+        let best = self
+            .library
+            .rows
+            .iter()
+            .filter(|r| r.playable() && !playing.contains(&r.id))
+            .max_by_key(|r| records::fits(r, m.bpm, &m.key));
+        if let Some(r) = best {
+            return r.clone();
+        }
         let r = self.queue[self.next % self.queue.len()].clone();
         self.next += 1;
         r
@@ -248,8 +284,10 @@ impl Desk {
                 let spb = 60.0 / record.bpm;
                 ((0..(synth::seconds(record.bpm) / spb) as usize).map(|b| b as f64 * spb).collect(), 0)
             }
-            Audio::None => (vec![], 0),
+            Audio::House { .. } | Audio::None => (vec![], 0),
         };
+        self.load_gen[slot] += 1;
+        let turn = self.load_gen[slot];
         let mut source = self.engine.new_source(Channels::Stereo, RATE as i64 * record.seconds.max(60) as i64).expect("a source");
         deck.set_source(0, &source);
         deck.set_gains(0, Gains::FULL, 0.0);
@@ -259,8 +297,31 @@ impl Desk {
         let wave = analyser.wave();
         let audio = record.audio.clone();
         let bpm = record.bpm;
+        let (house, tx) = (self.house.clone(), self.done_tx.clone());
         let loader = thread::spawn(move || {
             match audio {
+                Audio::House { id } => match house {
+                    Some(house) => {
+                        let result = library::analyse(&house, id);
+                        let ok = result.is_ok();
+                        let _ = tx.send(library::Done::Analysed { slot, turn, result });
+                        match house.audio(id) {
+                            Ok(path) if ok => {
+                                let mut tee = Tee { sink: &mut source, analyser: &mut analyser };
+                                if let Err(e) = wo_decode::decode(&path, RATE, &mut tee) {
+                                    let _ = tx.send(library::Done::LoadFailed { slot, turn, why: e.to_string() });
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                let _ = tx.send(library::Done::LoadFailed { slot, turn, why: e.to_string() });
+                            }
+                        }
+                    }
+                    None => {
+                        let _ = tx.send(library::Done::LoadFailed { slot, turn, why: "not signed in to the house".into() });
+                    }
+                },
                 Audio::File { path, .. } => {
                     let mut tee = Tee { sink: &mut source, analyser: &mut analyser };
                     if let Err(e) = wo_decode::decode(&path, RATE, &mut tee) {
@@ -311,6 +372,9 @@ impl Desk {
 
     /// Advances the Auto DJ. Call once a frame.
     pub fn tick(&mut self) {
+        while let Ok(done) = self.done_rx.try_recv() {
+            self.handle(done);
+        }
         if !self.auto {
             return;
         }
@@ -371,8 +435,9 @@ impl Desk {
                 record: s.record.clone(),
                 heard: self.engine.deck(DeckId::new(i).unwrap()).position(),
                 length,
-                rate: st.rate,
-                bpm: self.base_bpm(i) * st.rate,
+                // a parked deck has no rate in the engine: the pitch fader's, then
+                rate: if st.rate > 0.0 { st.rate } else { s.hands.rate() },
+                bpm: self.base_bpm(i) * if st.rate > 0.0 { st.rate } else { s.hands.rate() },
                 playing: st.playing,
                 synced: st.synced,
                 master: i == self.master,
@@ -396,7 +461,10 @@ impl Desk {
         let decks = [view(0), view(1)];
         let master_bpm = decks[self.master].bpm;
         let key = decks[self.master].record.key.clone();
-        let mut up: Vec<&Record> = self.queue.iter().filter(|r| r.id != decks[0].record.id && r.id != decks[1].record.id).collect();
+        // the house's shelf when signed in (the Auto DJ takes from it), else the local queue
+        let pool = if self.library.rows.iter().any(Record::playable) { &self.library.rows } else { &self.queue };
+        let mut up: Vec<&Record> =
+            pool.iter().filter(|r| r.playable() && r.id != decks[0].record.id && r.id != decks[1].record.id).collect();
         up.sort_by_key(|r| std::cmp::Reverse(records::fits(r, master_bpm, &key)));
         Snapshot {
             master_bpm,
@@ -414,9 +482,9 @@ impl Desk {
     /// the decks' records first, then by fit to the master deck.
     pub fn rows(&self, filter: &str, master_bpm: f64) -> Vec<Row> {
         let key = self.slots[self.master].record.key.clone();
-        let f = filter.to_lowercase();
-        let mut rows: Vec<Row> = self
-            .rows
+        // signed in: the house's shelf as it came (its search is the house's own)
+        let (source, f) = if self.house.is_some() { (&self.library.rows, String::new()) } else { (&self.rows, filter.to_lowercase()) };
+        let mut rows: Vec<Row> = source
             .iter()
             .filter(|r| f.is_empty() || r.title.to_lowercase().contains(&f) || r.artist.to_lowercase().contains(&f))
             .map(|r| Row {
@@ -593,6 +661,124 @@ impl Desk {
 
     pub fn brake(&mut self, d: usize) {
         self.hands(d, |h, t| h.brake(t));
+    }
+
+    // ---- the house
+
+    /// The library as the crate shows it.
+    pub fn library(&self) -> &Library {
+        &self.library
+    }
+
+    /// Who is signed in, and where: (server, user).
+    pub fn house(&self) -> Option<(&str, Option<&str>)> {
+        self.house.as_ref().map(|h| (h.session.server.as_str(), h.session.user.as_deref()))
+    }
+
+    /// Signs in (on a worker); the library fills when it is done.
+    pub fn sign_in(&mut self, server: &str, user: &str, password: &str) {
+        self.library.signing_in = true;
+        self.library.error = None;
+        library::sign_in(&self.done_tx, server.to_owned(), user.to_owned(), password.to_owned());
+    }
+
+    /// Whether the WetOwl app on this computer is signed in, to use its sign-in.
+    pub fn app_sign_in_here() -> bool {
+        wo_house::Session::from_wetowl_app().is_some()
+    }
+
+    pub fn use_app_sign_in(&mut self) {
+        if let Some(s) = wo_house::Session::from_wetowl_app() {
+            let _ = s.save();
+            self.use_session(s);
+        }
+    }
+
+    /// Signed in with `s` for this run (not saved).
+    pub fn use_session(&mut self, s: wo_house::Session) {
+        self.signed_in(wo_house::House::new(s));
+    }
+
+    pub fn sign_out(&mut self) {
+        wo_house::Session::forget();
+        self.house = None;
+        self.library = Library::default();
+    }
+
+    /// Shows a shelf: everything, a playlist, a search (an empty search is everything).
+    pub fn open_shelf(&mut self, shelf: Shelf) {
+        let shelf = match shelf {
+            Shelf::Search(q) if q.trim().is_empty() => Shelf::All,
+            s => s,
+        };
+        let Some(house) = &self.house else { return };
+        self.shelf_gen += 1;
+        self.library.shelf = shelf.clone();
+        self.library.loading = true;
+        library::fetch_shelf(&self.done_tx, house, shelf, self.shelf_gen);
+    }
+
+    fn signed_in(&mut self, house: wo_house::House) {
+        library::fetch_playlists(&self.done_tx, &house);
+        self.house = Some(house);
+        self.open_shelf(Shelf::All);
+    }
+
+    fn handle(&mut self, done: library::Done) {
+        use library::Done;
+        match done {
+            Done::SignedIn(Ok(house)) => {
+                self.library.signing_in = false;
+                self.signed_in(house);
+            }
+            Done::SignedIn(Err(e)) => {
+                self.library.signing_in = false;
+                self.library.error = Some(e);
+            }
+            Done::Shelf { turn, rows } if turn == self.shelf_gen => {
+                self.library.loading = false;
+                match rows {
+                    Ok((rows, total)) => {
+                        self.library.rows = rows;
+                        self.library.total = total;
+                        self.library.error = None;
+                    }
+                    Err(e) => self.library.error = Some(e),
+                }
+            }
+            Done::Shelf { .. } => {}
+            Done::Playlists(Ok(lists)) => self.library.playlists = lists,
+            Done::Playlists(Err(e)) => self.library.error = Some(e),
+            Done::Analysed { slot, turn, result } if turn == self.load_gen[slot] => match result {
+                Ok(a) => {
+                    let deck = self.engine.deck(DeckId::new(slot).unwrap());
+                    deck.set_beats(&a.grid.beats);
+                    deck.set_bar_one(a.grid.bar_one);
+                    let mut hands = Hands::new(a.grid);
+                    for &(n, at) in &a.hand {
+                        match at {
+                            Some(at) => hands.pads[n] = Some(Pad { at, auto: None }),
+                            None => hands.clear_pad(n),
+                        }
+                    }
+                    hands.place_auto(&a.auto);
+                    let s = &mut self.slots[slot];
+                    s.hands = hands;
+                    if let Some(k) = a.camelot {
+                        s.record.key = k;
+                    }
+                    if let Some(b) = a.bpm {
+                        s.record.bpm = b;
+                    }
+                }
+                Err(e) => self.library.error = Some(format!("{}: {e}", self.slots[slot].record.title)),
+            },
+            Done::Analysed { .. } => {}
+            Done::LoadFailed { slot, turn, why } if turn == self.load_gen[slot] => {
+                self.library.error = Some(format!("{}: {why}", self.slots[slot].record.title));
+            }
+            Done::LoadFailed { .. } => {}
+        }
     }
 
     pub fn set_auto(&mut self, on: bool) {

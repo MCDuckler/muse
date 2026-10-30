@@ -2,7 +2,7 @@
 //! and where each sits.
 use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Mesh, Painter, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use wo_deskcore::theme;
-use wo_deskcore::{MIX_BARS, SWAP_BAR, Snapshot};
+use wo_deskcore::{MIX_BARS, SWAP_BAR, Shelf, Snapshot};
 
 use crate::App;
 use crate::paint::*;
@@ -121,7 +121,7 @@ impl App {
             }
             clip.rect_filled(Rect::from_center_size(pos2(w.center().x, mid), vec2(2.0, w.height())), CornerRadius::ZERO, Color32::WHITE);
             let t = text(p, pos2(w.left() + 12.0, w.top() + 8.0), Align2::LEFT_TOP, ["A", "B"][d], 12.0, "mono-semi", col(theme::DECKS[d]));
-            let state = if v.master { "Master · playing" } else if v.synced { "Sync · in step" } else if v.playing { "Playing" } else { "Parked" };
+            let state = if v.decoded <= 0.0 { "Loading…" } else if v.master { "Master · playing" } else if v.synced { "Sync · in step" } else if v.playing { "Playing" } else { "Parked" };
             label(p, pos2(t.right() + 8.0, w.top() + 9.0), Align2::LEFT_TOP, state, col(theme::SOFT));
         }
         if let Some(f) = s.decks.iter().find(|d| d.synced) {
@@ -353,46 +353,52 @@ impl App {
         panel(p, r, true);
         let tree = Rect::from_min_max(r.min, pos2(r.left() + 230.0, r.bottom()));
         p.line_segment([pos2(tree.right(), r.top()), pos2(tree.right(), r.bottom())], Stroke::new(1.0, white(0.06)));
-        label(p, pos2(tree.left() + 18.0, tree.top() + 14.0), Align2::LEFT_TOP, "Library", col(theme::FAINT_ON_GLASS));
-        let items = [
-            ("All records", "27,457"), ("Liked Songs", "13,820"), ("Fetched here", "40"), ("", ""), ("Techno · Hard & Rave", "47"),
-            ("Techno · Now (2025–26)", "43"), ("Techno · Peak-Time Main Room", "40"), ("Techno · Berlin Hypnotic", "39"), ("80s", "50"), ("vvv favs", "229"),
-        ];
-        let mut y = tree.top() + 34.0;
-        for (i, (name, n)) in items.iter().enumerate() {
-            if name.is_empty() {
-                label(p, pos2(tree.left() + 18.0, y + 10.0), Align2::LEFT_TOP, "Crates", col(theme::FAINT_ON_GLASS));
-                y += 30.0;
-                continue;
-            }
-            let row = Rect::from_min_size(pos2(tree.left() + 10.0, y), vec2(210.0, 28.0));
-            if i == 2 {
-                p.rect_filled(row, CornerRadius::same(6), white(0.07));
-            }
-            let ink = if i == 2 { col(theme::TEXT) } else { Color32::from_rgb(0xB9, 0xBC, 0xC4) };
-            clip_text(p, pos2(row.left() + 8.0, row.center().y), name, 13.0, ink, 150.0);
-            text(p, pos2(row.right() - 8.0, row.center().y), Align2::RIGHT_CENTER, n, 11.0, "mono", col(theme::FAINT));
-            y += 30.0;
-        }
+        self.shelves(ui, p, tree);
         // search + sort
         let main = Rect::from_min_max(pos2(tree.right(), r.top()), r.max);
         let field = Rect::from_min_size(pos2(main.left() + 14.0, main.top() + 8.0), vec2(360.0, 32.0));
         p.rect(field, CornerRadius::same(7), white(0.03), Stroke::new(1.0, col(theme::EDGE)), StrokeKind::Inside);
         let edit = Rect::from_min_max(pos2(field.left() + 32.0, field.top() + 7.0), pos2(field.right() - 8.0, field.bottom() - 6.0));
         p.circle_stroke(pos2(field.left() + 16.0, field.center().y - 1.0), 5.5, Stroke::new(1.8, col(theme::FAINT)));
-        ui.put(
+        let hint = if self.desk.house().is_some() { "Search the house" } else { "Search these records" };
+        let typed = ui.put(
             edit,
             egui::TextEdit::singleline(&mut self.search)
-                .hint_text("Search everything — library, YouTube, Bandcamp")
+                .hint_text(hint)
                 .frame(egui::Frame::NONE)
                 .font(FontId::new(13.0, family("")))
                 .text_color(col(theme::TEXT)),
         );
-        let mut bx = main.right() - 14.0;
-        for b in ["Key", "BPM", "Fits"].iter() {
-            let br = Rect::from_min_size(pos2(bx - 60.0, field.top() + 2.0), vec2(60.0, 28.0));
-            button(ui, p, br, b, Lit::No, ("sort", *b));
-            bx -= 68.0;
+        // the house is asked once typing pauses (or on Enter), not on every key
+        if typed.changed() {
+            self.search_at = Some(std::time::Instant::now());
+        }
+        let enter = typed.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let paused = self.search_at.is_some_and(|t| t.elapsed().as_millis() > 350);
+        if self.desk.house().is_some() && (enter || paused) && self.search != self.searched {
+            self.searched = self.search.clone();
+            self.desk.open_shelf(Shelf::Search(self.search.clone()));
+            self.search_at = None;
+        }
+        // what the list is: the shelf and its count, or what went wrong
+        let lib = self.desk.library();
+        let status = match (&lib.error, self.desk.house().is_some()) {
+            (Some(e), _) => Some((e.clone(), col(theme::HOT))),
+            (None, true) => {
+                let name = match &lib.shelf {
+                    Shelf::All => "All records".to_owned(),
+                    Shelf::Playlist { name, .. } => name.clone(),
+                    Shelf::Search(q) => format!("“{q}”"),
+                };
+                let n = if lib.loading { "…".to_owned() } else { thousands(lib.total) };
+                Some((format!("{name} · {n}"), col(theme::MUTED)))
+            }
+            (None, false) => Some(("Records on this computer".to_owned(), col(theme::MUTED))),
+        };
+        if let Some((words, ink)) = status {
+            let room = main.right() - field.right() - 40.0;
+            let g = p.layout(words, FontId::new(13.0, family("")), ink, room);
+            p.galley(pos2(main.right() - 14.0 - g.size().x.min(room), field.center().y - 8.0), g, ink);
         }
         // header + rows
         let cols = |w: f32| -> [f32; 8] {
@@ -466,6 +472,105 @@ impl App {
             }
     }
 
+    /// The crate's left column: the house's shelves, or the sign-in.
+    fn shelves(&mut self, ui: &mut egui::Ui, p: &Painter, tree: Rect) {
+        let Some((server, user)) = self.desk.house().map(|(s, u)| (s.to_owned(), u.map(str::to_owned))) else {
+            return self.sign_in(ui, p, tree);
+        };
+        let lib = self.desk.library();
+        let (shelf, total, lists) = (lib.shelf.clone(), lib.total, lib.playlists.clone());
+        let mut open = None;
+        label(p, pos2(tree.left() + 18.0, tree.top() + 14.0), Align2::LEFT_TOP, "Library", col(theme::FAINT_ON_GLASS));
+        // painted with the ui's own painter, so rows in the scrolling list are clipped by it
+        let row = |ui: &mut egui::Ui, y: f32, name: &str, n: String, on: bool, id: i64| -> bool {
+            let p = ui.painter().clone();
+            let p = &p;
+            let rr = Rect::from_min_size(pos2(tree.left() + 10.0, y), vec2(210.0, 28.0));
+            let resp = ui.interact(rr, ui.scope_id().with(("shelf", id)), Sense::click());
+            if on || resp.hovered() {
+                p.rect_filled(rr, CornerRadius::same(6), white(if on { 0.08 } else { 0.04 }));
+            }
+            let ink = if on { col(theme::TEXT) } else { Color32::from_rgb(0xB9, 0xBC, 0xC4) };
+            clip_text(p, pos2(rr.left() + 8.0, rr.center().y), name, 13.0, ink, 150.0);
+            text(p, pos2(rr.right() - 8.0, rr.center().y), Align2::RIGHT_CENTER, &n, 11.0, "mono", col(theme::FAINT));
+            resp.clicked()
+        };
+        let all_n = if shelf == Shelf::All { thousands(total) } else { String::new() };
+        if row(ui, tree.top() + 34.0, "All records", all_n, shelf == Shelf::All, -1) {
+            open = Some(Shelf::All);
+        }
+        label(p, pos2(tree.left() + 18.0, tree.top() + 74.0), Align2::LEFT_TOP, "Playlists", col(theme::FAINT_ON_GLASS));
+        let list = Rect::from_min_max(pos2(tree.left(), tree.top() + 94.0), pos2(tree.right(), tree.bottom() - 40.0));
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list));
+        egui::ScrollArea::vertical().id_salt("playlists").auto_shrink([false, false]).show_rows(&mut child, 30.0, lists.len(), |ui, range| {
+            for i in range {
+                let l = &lists[i];
+                let (rr, _) = ui.allocate_exact_size(vec2(list.width(), 30.0), Sense::hover());
+                let on = matches!(&shelf, Shelf::Playlist { id, .. } if *id == l.id);
+                if row(ui, rr.top(), &l.name, l.items.to_string(), on, l.id) {
+                    open = Some(Shelf::Playlist { id: l.id, name: l.name.clone() });
+                }
+            }
+        });
+        let who = user.map(|u| format!("{u} · ")).unwrap_or_default() + server.trim_start_matches("https://");
+        clip_text(p, pos2(tree.left() + 18.0, tree.bottom() - 20.0), &who, 11.0, col(theme::FAINT), 120.0);
+        let out = Rect::from_min_size(pos2(tree.right() - 82.0, tree.bottom() - 33.0), vec2(72.0, 26.0));
+        if button(ui, p, out, "Sign out", Lit::No, "sign-out").clicked() {
+            self.desk.sign_out();
+        }
+        if let Some(s) = open {
+            self.search.clear();
+            self.searched.clear();
+            self.desk.open_shelf(s);
+        }
+    }
+
+    /// Signing in to the house: its address, a name, a password — or the WetOwl app's own
+    /// sign-in where this computer has one.
+    fn sign_in(&mut self, ui: &mut egui::Ui, p: &Painter, tree: Rect) {
+        let x = tree.left() + 18.0;
+        label(p, pos2(x, tree.top() + 14.0), Align2::LEFT_TOP, "The house", col(theme::FAINT_ON_GLASS));
+        let mut y = tree.top() + 36.0;
+        for (hint, which) in [("House address", 0), ("Name", 1), ("Password", 2)] {
+            let fr = Rect::from_min_size(pos2(x - 8.0, y), vec2(204.0, 28.0));
+            p.rect(fr, CornerRadius::same(6), white(0.03), Stroke::new(1.0, col(theme::EDGE)), StrokeKind::Inside);
+            let value = match which {
+                0 => &mut self.form.0,
+                1 => &mut self.form.1,
+                _ => &mut self.form.2,
+            };
+            ui.put(
+                fr.shrink2(vec2(8.0, 5.0)),
+                egui::TextEdit::singleline(value)
+                    .hint_text(hint)
+                    .password(which == 2)
+                    .frame(egui::Frame::NONE)
+                    .font(FontId::new(13.0, family("")))
+                    .text_color(col(theme::TEXT)),
+            );
+            y += 34.0;
+        }
+        let lib = self.desk.library();
+        let (busy, error) = (lib.signing_in, lib.error.clone());
+        let go = Rect::from_min_size(pos2(x - 8.0, y + 2.0), vec2(204.0, 30.0));
+        if button(ui, p, go, if busy { "Signing in…" } else { "Sign in" }, Lit::Ok, "sign-in").clicked() && !busy {
+            let (server, user, pass) = self.form.clone();
+            self.desk.sign_in(&server, &user, &pass);
+        }
+        y += 40.0;
+        if self.app_sign_in {
+            let app = Rect::from_min_size(pos2(x - 8.0, y), vec2(204.0, 30.0));
+            if button(ui, p, app, "Use the WetOwl app's", Lit::No, "app-sign-in").clicked() {
+                self.desk.use_app_sign_in();
+            }
+            y += 40.0;
+        }
+        if let Some(e) = error {
+            let g = p.layout(e, FontId::new(12.0, family("")), col(theme::HOT), 200.0);
+            p.galley(pos2(x - 8.0, y), g, col(theme::HOT));
+        }
+    }
+
     fn auto_dj(&mut self, ui: &mut egui::Ui, p: &Painter, r: Rect, s: &Snapshot) {
         panel(p, r, false);
         let inner = r.shrink(14.0);
@@ -511,7 +616,7 @@ impl App {
             let sl = Rect::from_min_size(pos2(inner.left(), y), vec2(36.0, 36.0));
             p.rect_filled(sl, CornerRadius::same(4), col(theme::sleeve(rec.id)));
             text(p, sl.center(), Align2::CENTER_CENTER, &rec.initials(), 13.0, "mark", white(0.86));
-            let meta = format!("{:.0} · {}", rec.bpm, rec.key);
+            let meta = if rec.key.is_empty() { format!("{:.0}", rec.bpm) } else { format!("{:.0} · {}", rec.bpm, rec.key) };
             let m = text(p, pos2(inner.right(), y + 18.0), Align2::RIGHT_CENTER, &meta, 11.0, "mono", col(theme::MUTED));
             clip_text(p, pos2(sl.right() + 10.0, y + 10.0), &rec.title, 13.0, col(theme::TEXT), m.left() - sl.right() - 20.0);
             clip_text(p, pos2(sl.right() + 10.0, y + 27.0), &rec.artist, 12.0, col(theme::MUTED), m.left() - sl.right() - 20.0);
@@ -557,4 +662,17 @@ fn layout(full: Rect) -> Layout {
     let crate_ = Rect::from_min_max(rest.min, pos2(rest.right() - 410.0, rest.bottom()));
     let auto = Rect::from_min_max(pos2(rest.right() - 400.0, rest.top()), rest.max);
     Layout { top, overview, waves, decks, mixer, crate_, auto }
+}
+
+/// 12774 → "12,774".
+fn thousands(n: i64) -> String {
+    let s = n.abs().to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if n < 0 { format!("-{out}") } else { out }
 }

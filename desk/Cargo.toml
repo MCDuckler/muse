@@ -15,6 +15,7 @@ wo-decode = { path = "crates/wo-decode" }
 wo-wave = { path = "crates/wo-wave" }
 wo-deskcore = { path = "crates/wo-deskcore" }
 wo-booth = { path = "crates/wo-booth" }
+wo-house = { path = "crates/wo-house" }
 
 # Decoding and resampling are far too slow unoptimised; a debug build of the app
 # still plays records in real time.
