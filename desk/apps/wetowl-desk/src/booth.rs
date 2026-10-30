@@ -1,192 +1,25 @@
-//! The bake-off's egui Desk: the glass booth of the Look board, painted by hand over
-//! one blurred stage, driven by wo-deskcore. `--bench 30 [--out DIR]` measures it.
-use std::sync::{Arc, mpsc};
-use std::time::Instant;
+//! The booth's panels — top bar, overviews, waveforms, decks, mixer, crate, Auto DJ —
+//! and where each sits.
+use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Mesh, Painter, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use wo_deskcore::theme;
+use wo_deskcore::{MIX_BARS, SWAP_BAR, Snapshot};
 
-use eframe::egui::{
-    self, Align2, Color32, ColorImage, CornerRadius, FontFamily, FontId, Mesh, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, TextFormat,
-    TextureHandle, TextureOptions, pos2, text::LayoutJob, vec2,
-};
-use wo_deskcore::bench::Bench;
-use wo_deskcore::theme::{self, Rgba};
-use wo_deskcore::{Desk, MIX_BARS, PadKind, SWAP_BAR, Snapshot};
-
-fn col(v: Rgba) -> Color32 {
-    Color32::from_rgba_unmultiplied(v[0], v[1], v[2], v[3])
-}
-
-fn alpha(v: Rgba, a: f32) -> Color32 {
-    Color32::from_rgba_unmultiplied(v[0], v[1], v[2], (a * 255.0) as u8)
-}
-
-fn white(a: f32) -> Color32 {
-    Color32::from_white_alpha((a * 255.0) as u8)
-}
-
-fn family(name: &str) -> FontFamily {
-    match name {
-        "" => FontFamily::Proportional,
-        "mono" => FontFamily::Monospace,
-        n => FontFamily::Name(n.into()),
-    }
-}
-
-fn fonts(ctx: &egui::Context) {
-    let mut f = egui::FontDefinitions::default();
-    for (name, bytes) in [
-        ("inter", theme::fonts::INTER),
-        ("inter-semi", theme::fonts::INTER_SEMI),
-        ("mono", theme::fonts::MONO),
-        ("mono-semi", theme::fonts::MONO_SEMI),
-        ("label", theme::fonts::LABEL),
-        ("mark", theme::fonts::MARK),
-    ] {
-        f.font_data.insert(name.into(), Arc::new(egui::FontData::from_static(bytes)));
-    }
-    f.families.entry(FontFamily::Proportional).or_default().insert(0, "inter".into());
-    f.families.entry(FontFamily::Monospace).or_default().insert(0, "mono".into());
-    for (fam, font) in [("semi", "inter-semi"), ("label", "label"), ("mono-semi", "mono-semi"), ("mark", "mark")] {
-        f.families.insert(FontFamily::Name(fam.into()), vec![font.into(), "inter".into()]);
-    }
-    ctx.set_fonts(f);
-}
-
-/// Text at `pos` anchored by `anchor`.
-fn text(p: &Painter, pos: Pos2, anchor: Align2, s: &str, size: f32, fam: &str, color: Color32) -> Rect {
-    p.text(pos, anchor, s, FontId::new(size, family(fam)), color)
-}
-
-/// A label: condensed caps, tracked.
-fn label(p: &Painter, pos: Pos2, anchor: Align2, s: &str, color: Color32) -> Rect {
-    label_sized(p, pos, anchor, s, 11.0, color)
-}
-
-fn label_sized(p: &Painter, pos: Pos2, anchor: Align2, s: &str, size: f32, color: Color32) -> Rect {
-    let mut job = LayoutJob::default();
-    job.append(
-        &s.to_uppercase(),
-        0.0,
-        TextFormat { font_id: FontId::new(size, family("label")), color, extra_letter_spacing: size * 0.09, ..Default::default() },
-    );
-    let galley = p.layout_job(job);
-    let r = anchor.anchor_size(pos, galley.size());
-    p.galley(r.min, galley, color);
-    r
-}
-
-fn panel(p: &Painter, r: Rect, dense: bool) {
-    let fill = col(if dense { theme::GLASS_DENSE } else { theme::GLASS_PANEL });
-    p.rect(r, CornerRadius::same(10), fill, Stroke::new(1.0, col(theme::GLASS_EDGE)), StrokeKind::Inside);
-    p.line_segment([pos2(r.left() + 10.0, r.top() + 1.5), pos2(r.right() - 10.0, r.top() + 1.5)], Stroke::new(1.0, col(theme::GLASS_HIGHLIGHT)));
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum Lit {
-    No,
-    Deck(usize),
-    Ok,
-}
-
-/// A button, painted; its response.
-fn button(ui: &mut egui::Ui, p: &Painter, r: Rect, s: &str, lit: Lit, id: impl std::hash::Hash + std::fmt::Debug) -> egui::Response {
-    let resp = ui.interact(r, ui.scope_id().with(id), Sense::click());
-    let (bg, edge, ink) = match lit {
-        Lit::No => (white(0.05), white(0.11), col(theme::SOFT)),
-        Lit::Deck(d) => (alpha(theme::DECKS[d], 0.15), alpha(theme::DECKS[d], 0.6), col(theme::TINTS[d])),
-        Lit::Ok => (alpha(theme::OK, 0.15), alpha(theme::OK, 0.6), Color32::from_rgb(0xCF, 0xF5, 0xDF)),
-    };
-    let bg = if resp.hovered() { bg.gamma_multiply(1.6) } else { bg };
-    p.rect(r, CornerRadius::same(6), bg, Stroke::new(1.0, edge), StrokeKind::Inside);
-    label_sized(p, r.center(), Align2::CENTER_CENTER, s, 11.5, ink);
-    resp
-}
-
-/// The two edges of a band, mirrored around `mid`, as one mesh.
-fn band(mesh: &mut Mesh, x0: f32, step: f32, mid: f32, amps: impl Iterator<Item = f32>, color: Color32) {
-    let base = mesh.vertices.len() as u32;
-    let mut n = 0u32;
-    for (i, a) in amps.enumerate() {
-        let x = x0 + i as f32 * step;
-        mesh.colored_vertex(pos2(x, mid - a), color);
-        mesh.colored_vertex(pos2(x, mid + a), color);
-        if i > 0 {
-            let k = base + 2 * (i as u32 - 1);
-            mesh.add_triangle(k, k + 1, k + 2);
-            mesh.add_triangle(k + 1, k + 3, k + 2);
-        }
-        n += 1;
-    }
-    let _ = n;
-}
-
-/// A knob on a 270° sweep (bipolar ones drawn from 12 o'clock); drag up or down.
-fn knob(ui: &mut egui::Ui, p: &Painter, c: Pos2, v: f32, color: Color32, bipolar: bool, id: impl std::hash::Hash + std::fmt::Debug) -> Option<f32> {
-    let r = Rect::from_center_size(c, vec2(36.0, 36.0));
-    let resp = ui.interact(r, ui.scope_id().with(id), Sense::drag());
-    let arc = |a0: f32, a1: f32, color: Color32| {
-        let n = 24;
-        let pts: Vec<Pos2> = (0..=n).map(|i| {
-            let a = (a0 + (a1 - a0) * i as f32 / n as f32).to_radians();
-            pos2(c.x + 13.5 * a.cos(), c.y + 13.5 * a.sin())
-        }).collect();
-        p.add(egui::Shape::line(pts, Stroke::new(2.7, color)));
-    };
-    arc(135.0, 405.0, col(theme::EDGE));
-    let at = 135.0 + 270.0 * v;
-    if bipolar { arc(270.0f32.min(at), 270.0f32.max(at), color) } else { arc(135.0, at, color) }
-    p.circle(c, 9.5, Color32::from_rgb(0x1E, 0x20, 0x27), Stroke::new(1.0, Color32::from_rgb(0x33, 0x36, 0x3E)));
-    let a = at.to_radians();
-    p.line_segment([c, pos2(c.x + 8.0 * a.cos(), c.y + 8.0 * a.sin())], Stroke::new(2.0, col(theme::TEXT)));
-    resp.dragged().then(|| (v - resp.drag_delta().y * 0.004).clamp(0.0, 1.0))
-}
-
-/// A vertical fader: track, cap; drag the cap.
-fn vfader(ui: &mut egui::Ui, p: &Painter, r: Rect, v: f32, id: impl std::hash::Hash + std::fmt::Debug) -> Option<f32> {
-    let resp = ui.interact(r, ui.scope_id().with(id), Sense::drag());
-    p.rect_filled(Rect::from_center_size(r.center(), vec2(4.0, r.height())), CornerRadius::same(2), col(theme::LINE));
-    let y = r.bottom() - 9.0 - v * (r.height() - 18.0);
-    p.rect_filled(Rect::from_center_size(pos2(r.center().x, y), vec2(30.0, 18.0)), CornerRadius::same(4), col(theme::CAP));
-    resp.dragged().then(|| (v - resp.drag_delta().y / (r.height() - 18.0)).clamp(0.0, 1.0))
-}
-
-fn meter(p: &Painter, r: Rect, level: f32, n: usize) {
-    let h = (r.height() - (n - 1) as f32 * 2.0) / n as f32;
-    for i in 0..n {
-        let on = (n - i) as f32 / n as f32 <= level;
-        let c = if !on { Color32::from_rgb(0x22, 0x25, 0x2C) } else if i < 2 { col(theme::HOT) } else if i < 5 { col(theme::WARM) } else { Color32::from_rgb(0xD7, 0xDA, 0xE0) };
-        p.rect_filled(Rect::from_min_size(pos2(r.left(), r.top() + i as f32 * (h + 2.0)), vec2(r.width(), h)), CornerRadius::same(1), c);
-    }
-}
-
-fn mmss(s: f64) -> String {
-    let s = s.max(0.0);
-    format!("{}:{:04.1}", (s / 60.0) as u32, s % 60.0)
-}
-
-struct App {
-    desk: Desk,
-    backdrop: TextureHandle,
-    ball: TextureHandle,
-    search: String,
-    bench: Option<Bench>,
-    shot: Option<mpsc::Receiver<Arc<ColorImage>>>,
-}
+use crate::App;
+use crate::paint::*;
 
 impl App {
-    fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        fonts(&cc.egui_ctx);
-        let tex = |name: &str, b: wo_deskcore::Backdrop| {
-            cc.egui_ctx.load_texture(name, ColorImage::from_rgba_unmultiplied([b.width as usize, b.height as usize], &b.rgba), TextureOptions::LINEAR)
-        };
-        let desk = Desk::open();
-        App {
-            desk,
-            backdrop: tex("backdrop", wo_deskcore::backdrop::backdrop(480, 270)),
-            ball: tex("ball", wo_deskcore::backdrop::ball()),
-            search: String::new(),
-            bench: Bench::from_args(if std::env::var("WO_RENDERER").as_deref() == Ok("glow") { "egui-glow" } else { "egui-wgpu" }),
-            shot: None,
+    /// The whole booth over the backdrop, for this frame's snapshot.
+    pub(crate) fn draw(&mut self, ui: &mut egui::Ui, p: &Painter, full: Rect, s: &Snapshot) {
+        let l = layout(full);
+        self.top_bar(ui, p, l.top, s);
+        self.overviews(p, l.overview, s);
+        self.waves(p, l.waves, s);
+        for d in 0..2 {
+            self.deck(ui, p, l.decks[d], s, d);
         }
+        self.mixer(ui, p, l.mixer, s);
+        self.crate_(ui, p, l.crate_, s);
+        self.auto_dj(ui, p, l.auto, s);
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui, p: &Painter, r: Rect, s: &Snapshot) {
@@ -618,27 +451,9 @@ impl App {
     }
 }
 
-fn pad_name(k: PadKind) -> &'static str {
-    match k {
-        PadKind::Intro => "Intro",
-        PadKind::Drop => "Drop",
-        PadKind::Break => "Break",
-        PadKind::Out => "Out",
-    }
-}
-
-/// One line of text cut to `room` px with an ellipsis.
-fn clip_text(p: &Painter, pos: Pos2, s: &str, size: f32, color: Color32, room: f32) {
-    let font = FontId::new(size, family(""));
-    let mut job = LayoutJob::single_section(s.to_owned(), TextFormat { font_id: font, color, ..Default::default() });
-    job.wrap = egui::text::TextWrapping { max_width: room.max(10.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
-    let g = p.layout_job(job);
-    p.galley(pos2(pos.x, pos.y - g.size().y / 2.0), g, color);
-}
-
 /// The booth is drawn for 1920 × 1080 points: a smaller window (or a desk at 125 %
 /// scaling) gets the whole design scaled down to fit rather than panels overlapping.
-fn fit_the_design(ctx: &egui::Context) {
+pub(crate) fn fit_the_design(ctx: &egui::Context) {
     let native = ctx.native_pixels_per_point().unwrap_or(1.0);
     let zoom = ctx.zoom_factor();
     let px = ctx.content_rect().size() * ctx.pixels_per_point();
@@ -674,58 +489,4 @@ fn layout(full: Rect) -> Layout {
     let crate_ = Rect::from_min_max(rest.min, pos2(rest.right() - 410.0, rest.bottom()));
     let auto = Rect::from_min_max(pos2(rest.right() - 400.0, rest.top()), rest.max);
     Layout { top, overview, waves, decks, mixer, crate_, auto }
-}
-
-impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let t0 = Instant::now();
-        fit_the_design(ui.ctx());
-        self.desk.tick();
-        let s = self.desk.snapshot();
-        let full = ui.max_rect();
-        let p = ui.painter().clone();
-        p.rect_filled(full, CornerRadius::ZERO, col(theme::GROUND));
-        p.image(self.backdrop.id(), full, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-        let l = layout(full);
-        self.top_bar(ui, &p, l.top, &s);
-        self.overviews(&p, l.overview, &s);
-        self.waves(&p, l.waves, &s);
-        for d in 0..2 {
-            self.deck(ui, &p, l.decks[d], &s, d);
-        }
-        self.mixer(ui, &p, l.mixer, &s);
-        self.crate_(ui, &p, l.crate_, &s);
-        self.auto_dj(ui, &p, l.auto, &s);
-        let work = t0.elapsed().as_secs_f32() * 1000.0;
-        if let Some(b) = &mut self.bench {
-            b.size = (full.width() as u32, full.height() as u32);
-            if self.shot.is_none() && b.frame(work) {
-                let (tx, rx) = mpsc::channel();
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |img| {
-                    let _ = tx.send(img);
-                })));
-                self.shot = Some(rx);
-            }
-            if let Some(rx) = &self.shot
-                && let Ok(img) = rx.try_recv() {
-                    let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
-                    println!("{}", b.finish(Some((img.size[0] as u32, img.size[1] as u32, &rgba))));
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-        }
-        ui.ctx().request_repaint();
-    }
-}
-
-fn main() -> eframe::Result {
-    let renderer = match std::env::var("WO_RENDERER").as_deref() {
-        Ok("glow") => eframe::Renderer::Glow,
-        _ => eframe::Renderer::Wgpu,
-    };
-    let options = eframe::NativeOptions {
-        renderer,
-        viewport: egui::ViewportBuilder::default().with_inner_size([1920.0, 1080.0]).with_title("WetOwl Desk — egui").with_app_id("wetowl-desk-egui"),
-        ..Default::default()
-    };
-    eframe::run_native("WetOwl Desk — egui", options, Box::new(|cc| Ok(Box::new(App::new(cc)))))
 }

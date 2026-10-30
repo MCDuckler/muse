@@ -61,3 +61,5 @@ synthesised ones.
 | State | immediate mode: read the snapshot, draw | properties set from Rust each frame (RefCell care) |
 | Text input, accessibility | real widgets (TextEdit, AccessKit); painted controls need their own | built into the elements |
 | Renderers | wgpu (Vulkan/DX12/Metal), glow | femtovg, Skia, software |
+
+**Decision (2026-10-30, the user): egui.** The Desk is `apps/wetowl-desk`; the Slint booth is in git history (392233b).

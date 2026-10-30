@@ -10,6 +10,7 @@ crates/wo-engine       the engine, safe: one at a time, sources owned by whoever
 crates/wo-decode       records decoded in-process (symphonia), resampled exactly (rubato FFT),
                        MP4 edit lists honoured so beat grids line up with ffmpeg's samples
 apps/wo-play           two records on two decks, B synced to A: the stack end to end
+apps/wetowl-desk       the Desk (egui): the glass booth; chosen over Slint in the bake-off (bakeoff/RESULTS.md)
 ```
 
 ## Build and test
