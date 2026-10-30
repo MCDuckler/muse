@@ -67,6 +67,9 @@ impl Bench {
 
     /// Writes bench-<toolkit>.json (and the screenshot, RGBA8, when given) into the out dir.
     pub fn finish(&mut self, shot: Option<(u32, u32, &[u8])>) -> String {
+        if let Some(m) = memory_stats::memory_stats() {
+            self.peak_rss = self.peak_rss.max(m.physical_mem as u64);
+        }
         let (t0, cpu0) = self.measuring.unwrap_or((Instant::now(), ProcessTime::now()));
         let wall = t0.elapsed().as_secs_f64();
         let cpu = cpu0.elapsed().as_secs_f64();

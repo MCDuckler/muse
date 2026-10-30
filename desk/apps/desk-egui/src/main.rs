@@ -636,6 +636,18 @@ fn clip_text(p: &Painter, pos: Pos2, s: &str, size: f32, color: Color32, room: f
     p.galley(pos2(pos.x, pos.y - g.size().y / 2.0), g, color);
 }
 
+/// The booth is drawn for 1920 × 1080 points: a smaller window (or a desk at 125 %
+/// scaling) gets the whole design scaled down to fit rather than panels overlapping.
+fn fit_the_design(ctx: &egui::Context) {
+    let native = ctx.native_pixels_per_point().unwrap_or(1.0);
+    let zoom = ctx.zoom_factor();
+    let px = ctx.content_rect().size() * ctx.pixels_per_point();
+    let want = (px.x / 1920.0).min(px.y / 1080.0).min(native) / native;
+    if (want - zoom).abs() > 0.01 {
+        ctx.set_zoom_factor(want);
+    }
+}
+
 struct Layout {
     top: Rect,
     overview: Rect,
@@ -667,6 +679,7 @@ fn layout(full: Rect) -> Layout {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let t0 = Instant::now();
+        fit_the_design(ui.ctx());
         self.desk.tick();
         let s = self.desk.snapshot();
         let full = ui.max_rect();
