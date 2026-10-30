@@ -14,7 +14,7 @@ fn desk() -> Desk {
         std::env::set_var("WO_AUDIO", "off");
         std::env::set_var("WO_RECORDS", &empty);
     }
-    let mut d = Desk::open();
+    let mut d = Desk::open(true);
     d.set_auto(false);
     // the synthesised records render in well under a second
     let t0 = Instant::now();

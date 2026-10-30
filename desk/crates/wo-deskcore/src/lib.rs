@@ -162,9 +162,10 @@ impl Drop for Pacer {
 
 impl Desk {
     /// Starts the engine (the sound card; else, or with WO_AUDIO=off, silently and
-    /// paced in real time), loads the first two
-    /// playable records, and plays the first from its first drop.
-    pub fn open() -> Desk {
+    /// paced in real time) and loads the first two playable records, parked. With
+    /// `autoplay` (benches, demos) the first plays from just before its drop and the
+    /// Auto DJ is on; without, nothing sounds until a hand asks.
+    pub fn open(autoplay: bool) -> Desk {
         // WO_AUDIO=off: no sound card even where there is one (tests, CI).
         let device = if std::env::var("WO_AUDIO").as_deref() == Ok("off") { Output::Offline } else { Output::Device };
         let started = if device == Output::Device { Engine::start(Some(RATE), Output::Device) } else { Err(wo_engine::Error::NotOffline) };
@@ -220,7 +221,7 @@ impl Desk {
             mix: None,
             solo_since: Instant::now(),
             started: Instant::now(),
-            auto: true,
+            auto: autoplay,
             _pacer: pacer,
             house: None,
             done_tx,
@@ -241,11 +242,13 @@ impl Desk {
         for d in 0..2 {
             desk.engine.deck(DeckId::new(d).unwrap()).set_keylock(true);
         }
-        let start = desk.slots[0].hands.pads[1].map(|p| p.at).unwrap_or(0.0);
-        let a = desk.engine.deck(DeckId::A);
-        a.seek((start - 4.0).max(0.0));
-        a.play(true);
         desk.set_crossfader(0.0);
+        if autoplay {
+            let start = desk.slots[0].hands.pads[1].map(|p| p.at).unwrap_or(0.0);
+            let a = desk.engine.deck(DeckId::A);
+            a.seek((start - 4.0).max(0.0));
+            a.play(true);
+        }
         desk
     }
 

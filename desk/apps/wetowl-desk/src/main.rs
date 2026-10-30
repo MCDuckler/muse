@@ -40,13 +40,15 @@ impl App {
         let tex = |name: &str, b: wo_deskcore::Backdrop| {
             cc.egui_ctx.load_texture(name, ColorImage::from_rgba_unmultiplied([b.width as usize, b.height as usize], &b.rgba), TextureOptions::LINEAR)
         };
-        let desk = Desk::open();
+        // --bench plays and mixes by itself; a desk opened by hand stays quiet
+        let bench = Bench::from_args(if glow() { "egui-glow" } else { "egui-wgpu" });
+        let desk = Desk::open(bench.is_some());
         App {
             desk,
             backdrop: tex("backdrop", wo_deskcore::backdrop::backdrop(480, 270)),
             ball: tex("ball", wo_deskcore::backdrop::ball()),
             search: String::new(),
-            bench: Bench::from_args(if std::env::var("WO_RENDERER").as_deref() == Ok("glow") { "egui-glow" } else { "egui-wgpu" }),
+            bench,
             shot: None,
             cue_held: [false; 2],
             nudge_held: [0; 2],
@@ -91,14 +93,27 @@ impl eframe::App for App {
     }
 }
 
+/// The window's icon (the launcher's, for X11 and Windows; Wayland takes the launcher's).
+fn icon() -> egui::IconData {
+    let img = image::load_from_memory(include_bytes!("../../../deploy/icon-64.png")).expect("the icon").to_rgba8();
+    egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() }
+}
+
+/// OpenGL on Linux (measured: 60 fps on the HP's Vega 8), wgpu elsewhere;
+/// WO_RENDERER=glow|wgpu chooses.
+fn glow() -> bool {
+    match std::env::var("WO_RENDERER").as_deref() {
+        Ok("glow") => true,
+        Ok("wgpu") => false,
+        _ => cfg!(target_os = "linux"),
+    }
+}
+
 fn main() -> eframe::Result {
-    let renderer = match std::env::var("WO_RENDERER").as_deref() {
-        Ok("glow") => eframe::Renderer::Glow,
-        _ => eframe::Renderer::Wgpu,
-    };
+    let renderer = if glow() { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
     let options = eframe::NativeOptions {
         renderer,
-        viewport: egui::ViewportBuilder::default().with_inner_size([1920.0, 1080.0]).with_title("WetOwl Desk").with_app_id("wetowl-desk"),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1920.0, 1080.0]).with_title("WetOwl Desk").with_app_id("wetowl-desk").with_icon(icon()),
         ..Default::default()
     };
     eframe::run_native("WetOwl Desk", options, Box::new(|cc| Ok(Box::new(App::new(cc)))))

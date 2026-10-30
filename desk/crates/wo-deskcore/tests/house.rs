@@ -26,7 +26,7 @@ fn a_house_record_plays_on_its_grid() {
     };
     // SAFETY: before any thread reads the environment.
     unsafe { std::env::set_var("WO_AUDIO", "off") };
-    let mut d = Desk::open();
+    let mut d = Desk::open(false);
     d.set_auto(false);
     d.use_session(session);
     let filled = until(|| { d.tick(); !d.library().loading && !d.library().rows.is_empty() }, 20);

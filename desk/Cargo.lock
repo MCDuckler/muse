@@ -4258,6 +4258,7 @@ name = "wetowl-desk"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "image",
  "wo-deskcore",
  "wo-house",
 ]
