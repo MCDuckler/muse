@@ -1,0 +1,10 @@
+[package]
+name = "wo-engine"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The booth engine, safe: one engine, sources owned by whoever fills them, decks by handle"
+
+[dependencies]
+wo-engine-sys.workspace = true
