@@ -1,0 +1,13 @@
+[package]
+name = "wo-control"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "DJ controllers for the Desk: the v1 layouts (controllers/*.json), MIDI and HID, soft takeover, one binding"
+
+[dependencies]
+hidapi = { version = "2.6.7", default-features = false, features = ["linux-native"] }
+midir = "0.11.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"

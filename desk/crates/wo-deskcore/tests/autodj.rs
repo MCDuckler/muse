@@ -25,6 +25,7 @@ fn a_roll_planned_made_and_handed_over() {
     // SAFETY: before any thread reads the environment.
     unsafe {
         std::env::set_var("WO_AUDIO", "off");
+        std::env::set_var("WO_CONTROLLERS", "off");
         std::env::set_var("WO_RECORDS", &empty);
     }
     let mut d = Desk::open(true);

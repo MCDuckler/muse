@@ -20,6 +20,33 @@ impl App {
         self.mixer(ui, p, l.mixer, s);
         self.crate_(ui, p, l.crate_, s);
         self.auto_dj(ui, p, l.auto, s);
+        if self.show_keys {
+            self.keys(p, full);
+        }
+    }
+
+    /// The keys, over everything (? shows and hides them).
+    fn keys(&self, p: &Painter, full: Rect) {
+        let rows = [
+            ("1  2", "Play deck A / B"),
+            ("Q  W", "Sync A / B"),
+            ("Z  X", "Start A / B in step"),
+            ("F  G", "Kill the bass on A / B"),
+            ("[  ]", "A 16-beat loop on A / B"),
+            ("← →", "Crossfader (shift: nudge the master)"),
+            ("A", "Auto DJ on / off"),
+            ("M  Space", "Mix now"),
+            ("S  N", "Not that: another record next"),
+            ("?", "These keys"),
+        ];
+        let r = Rect::from_center_size(full.center(), vec2(460.0, 70.0 + rows.len() as f32 * 30.0));
+        p.rect(r, CornerRadius::same(12), col(theme::GLASS_DENSE), Stroke::new(1.0, col(theme::GLASS_EDGE)), StrokeKind::Inside);
+        label(p, pos2(r.left() + 24.0, r.top() + 22.0), Align2::LEFT_TOP, "Keys", col(theme::SOFT));
+        for (i, (k, what)) in rows.iter().enumerate() {
+            let y = r.top() + 60.0 + i as f32 * 30.0;
+            text(p, pos2(r.left() + 24.0, y), Align2::LEFT_CENTER, k, 14.0, "mono-semi", col(theme::TEXT));
+            text(p, pos2(r.left() + 140.0, y), Align2::LEFT_CENTER, what, 13.0, "", col(theme::MUTED));
+        }
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui, p: &Painter, r: Rect, s: &Snapshot) {
@@ -52,8 +79,23 @@ impl App {
         button(ui, p, gear, "⚙", Lit::No, "settings");
         rx = gear.left() - 12.0;
         let h = label(p, pos2(rx, r.center().y), Align2::RIGHT_CENTER, "House", col(theme::MUTED));
-        p.circle_filled(pos2(h.left() - 8.0, r.center().y), 3.5, col(theme::OK));
+        let signed = self.desk.house().is_some();
+        p.circle_filled(pos2(h.left() - 8.0, r.center().y), 3.5, if signed { col(theme::OK) } else { col(theme::FAINT) });
         rx = h.left() - 24.0;
+        // the controllers found: green when listening, warm when one could not be opened
+        for c in self.desk.controllers() {
+            let short = if c.layout.contains("RMX") { "RMX".to_owned() } else { c.name.chars().take(14).collect() };
+            let ok = c.trouble.is_none();
+            let t = label(p, pos2(rx, r.center().y), Align2::RIGHT_CENTER, &short, col(theme::MUTED));
+            p.circle_filled(pos2(t.left() - 8.0, r.center().y), 3.5, if ok { col(theme::OK) } else { col(theme::WARM) });
+            let tip = Rect::from_min_max(pos2(t.left() - 14.0, r.top()), pos2(t.right(), r.bottom()));
+            let hover = ui.interact(tip, ui.scope_id().with(("controller", &c.name)), Sense::hover());
+            hover.on_hover_text(match &c.trouble {
+                None => format!("{} · {}", c.name, c.layout),
+                Some(why) => format!("{}: {why}", c.name),
+            });
+            rx = t.left() - 24.0;
+        }
         let pct = (s.load.average * 100.0).round();
         let t = text(p, pos2(rx, r.center().y), Align2::RIGHT_CENTER, &format!("{pct:.0}%"), 12.0, "mono", col(theme::MUTED));
         let bar = Rect::from_min_size(pos2(t.left() - 72.0, r.center().y - 3.0), vec2(64.0, 6.0));
@@ -424,15 +466,46 @@ impl App {
         p.line_segment([pos2(main.left(), hy + 13.0), pos2(main.right(), hy + 13.0)], Stroke::new(1.0, white(0.08)));
         let list = Rect::from_min_max(pos2(main.left(), hy + 14.0), main.max);
         let rows = self.desk.rows(&self.search, s.master_bpm);
+        // a controller's browse moves the cursor, its LOAD loads the row under it (never
+        // onto a deck that is playing)
+        let mut scroll_to = None;
+        for a in self.desk.take_crate_actions() {
+            match a {
+                wo_control::Action::Browse(_, dy) if !rows.is_empty() => {
+                    self.cursor = (self.cursor as i64 + dy as i64).clamp(0, rows.len() as i64 - 1) as usize;
+                    scroll_to = Some(self.cursor);
+                }
+                wo_control::Action::Load(d) => {
+                    if let Some(row) = rows.get(self.cursor)
+                        && row.record.playable() && row.on_deck.is_none() && !s.decks[d].playing {
+                            self.desk.load(d, row.record.clone());
+                        }
+                }
+                _ => {}
+            }
+        }
+        self.cursor = self.cursor.min(rows.len().saturating_sub(1));
         let mut load: Option<wo_deskcore::Record> = None;
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list));
-        egui::ScrollArea::vertical().id_salt("crate").auto_shrink([false, false]).show_rows(&mut child, 34.0, rows.len(), |ui, range| {
+        let mut area = egui::ScrollArea::vertical().id_salt("crate").auto_shrink([false, false]);
+        if let Some(i) = scroll_to {
+            area = area.vertical_scroll_offset((i as f32 * 34.0 - list.height() / 2.0).max(0.0));
+        }
+        let cursor = self.cursor;
+        let mut clicked = None;
+        area.show_rows(&mut child, 34.0, rows.len(), |ui, range| {
             for i in range {
                 let row = &rows[i];
                 let (rr, resp) = ui.allocate_exact_size(vec2(list.width(), 34.0), Sense::click());
                 let p = ui.painter();
-                if resp.hovered() {
+                if i == cursor {
+                    p.rect_filled(rr, CornerRadius::ZERO, white(0.08));
+                    p.rect_filled(Rect::from_min_size(rr.min, vec2(3.0, rr.height())), CornerRadius::ZERO, col(theme::SOFT));
+                } else if resp.hovered() {
                     p.rect_filled(rr, CornerRadius::ZERO, white(0.05));
+                }
+                if resp.clicked() {
+                    clicked = Some(i);
                 }
                 p.line_segment([pos2(rr.left(), rr.bottom()), pos2(rr.right(), rr.bottom())], Stroke::new(1.0, white(0.04)));
                 let y = rr.center().y;
@@ -465,11 +538,15 @@ impl App {
                 }
             }
         });
+        if let Some(i) = clicked {
+            self.cursor = i;
+        }
         if let Some(rec) = load
-            && s.mix.is_none() {
-                let free = s.decks.iter().position(|d| !d.master).unwrap_or(1);
-                self.desk.load(free, rec);
-            }
+            && s.mix.is_none()
+        {
+            let free = s.decks.iter().position(|d| !d.master).unwrap_or(1);
+            self.desk.load(free, rec);
+        }
     }
 
     /// The crate's left column: the house's shelves, or the sign-in.

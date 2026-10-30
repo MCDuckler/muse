@@ -12,6 +12,7 @@ fn desk() -> Desk {
     // SAFETY: set before any thread of this test reads the environment.
     unsafe {
         std::env::set_var("WO_AUDIO", "off");
+        std::env::set_var("WO_CONTROLLERS", "off");
         std::env::set_var("WO_RECORDS", &empty);
     }
     let mut d = Desk::open(true);

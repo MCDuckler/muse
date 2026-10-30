@@ -25,7 +25,10 @@ fn a_house_record_plays_on_its_grid() {
         return;
     };
     // SAFETY: before any thread reads the environment.
-    unsafe { std::env::set_var("WO_AUDIO", "off") };
+    unsafe {
+        std::env::set_var("WO_AUDIO", "off");
+        std::env::set_var("WO_CONTROLLERS", "off");
+    }
     let mut d = Desk::open(false);
     d.set_auto(false);
     d.use_session(session);

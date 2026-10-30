@@ -167,6 +167,16 @@ pub struct Desk {
     shelf_gen: u64,
     /// Each deck's load, counted: an answer for a record since replaced is dropped.
     load_gen: [u64; 2],
+    /// DJ controllers: found and read on their own threads, bound the v1 booth's way.
+    controls: Option<wo_control::Manager>,
+    binding: wo_control::Binding,
+    /// What the controllers asked of the crate (browse, load), for the UI, which has it.
+    for_the_crate: Vec<wo_control::Action>,
+    /// The jog wheel's feel per deck: its speed, and when it last turned.
+    jog: [(f64, Option<Instant>); 2],
+    /// The lights as last sent, and to how many controllers.
+    lit: std::collections::HashMap<String, bool>,
+    lit_for: usize,
 }
 
 /// An offline engine rendered in real time on its own thread: a computer with no
@@ -255,6 +265,13 @@ impl Desk {
             library: Library::default(),
             shelf_gen: 0,
             load_gen: [0; 2],
+            // WO_CONTROLLERS=off: none (tests)
+            controls: (std::env::var("WO_CONTROLLERS").as_deref() != Ok("off")).then(wo_control::Manager::start),
+            binding: wo_control::Binding::default(),
+            for_the_crate: vec![],
+            jog: [(0.0, None); 2],
+            lit: Default::default(),
+            lit_for: 0,
         };
         // the Desk's own saved sign-in; WO_APP_SIGN_IN=1 borrows the WetOwl app's for
         // this run only (development, screenshots)
@@ -413,6 +430,7 @@ impl Desk {
         while let Ok(done) = self.done_rx.try_recv() {
             self.handle(done);
         }
+        self.controllers_tick();
         if !self.auto {
             return;
         }
@@ -959,6 +977,160 @@ impl Desk {
                 self.library.error = Some(format!("{}: {why}", self.slots[slot].record.title));
             }
             Done::LoadFailed { .. } => {}
+        }
+    }
+
+    // ---- controllers and the keyboard
+
+    /// The controllers found (and any that could not be opened, with why).
+    pub fn controllers(&self) -> Vec<wo_control::Controller> {
+        self.controls.as_ref().map(|c| c.controllers()).unwrap_or_default()
+    }
+
+    /// What the controllers asked of the crate since the last call (browse, load).
+    pub fn take_crate_actions(&mut self) -> Vec<wo_control::Action> {
+        std::mem::take(&mut self.for_the_crate)
+    }
+
+    fn controllers_tick(&mut self) {
+        let events = self.controls.as_ref().map(|c| c.poll()).unwrap_or_default();
+        for e in events {
+            let at = self.positions();
+            for a in self.binding.handle(&e, &at) {
+                self.act(a);
+            }
+        }
+        // the jog wheel settles when it stops turning
+        for d in 0..2 {
+            if self.jog[d].1.is_some_and(|t| t.elapsed() > Duration::from_millis(90)) {
+                self.jog[d] = (0.0, None);
+                let nudge = self.slots[d].hands.nudging;
+                self.engine.deck(DeckId::new(d).unwrap()).bend(1.0 + nudge as f64 * wo_booth::NUDGE);
+            }
+        }
+        self.lights();
+    }
+
+    /// Where the booth's knobs and faders are, for the controllers' soft takeover.
+    fn positions(&self) -> wo_control::Positions {
+        wo_control::Positions {
+            crossfader: self.crossfader,
+            fader: [self.slots[0].fader, self.slots[1].fader],
+            filter: [self.slots[0].filter, self.slots[1].filter],
+            eq: [self.slots[0].eq, self.slots[1].eq],
+            pitch: [self.slots[0].hands.pitch, self.slots[1].hands.pitch],
+        }
+    }
+
+    /// One thing a controller (or a key) asked for.
+    pub fn act(&mut self, a: wo_control::Action) {
+        use wo_control::Action as A;
+        match a {
+            A::PlayPause(d) => self.toggle_play(d),
+            A::CueDown(d) => self.cue_down(d),
+            A::CueUp(d) => self.cue_up(d),
+            A::Stop(d) => {
+                let cue = self.slots[d].hands.cue.unwrap_or(0.0);
+                let deck = self.engine.deck(DeckId::new(d).unwrap());
+                deck.play(false);
+                deck.seek(cue);
+            }
+            A::Sync(d) => self.toggle_sync(d),
+            A::Keylock(d) => self.toggle_keylock(d),
+            A::PitchReset(d) => self.set_pitch(d, 0.0),
+            A::CyclePitchRange => {
+                self.cycle_range(0);
+                self.cycle_range(1);
+            }
+            A::Pitch(d, v) => self.set_pitch(d, v),
+            A::Jog { deck, ticks, scratch, shift } => self.jog(deck, ticks, scratch, shift),
+            A::Jump(d, beats) => self.jump(d, beats),
+            A::Fader(d, v) => self.set_fader(d, v),
+            A::Filter(d, v) => self.set_filter(d, v),
+            A::Eq(d, band, v) => self.set_eq(d, band, v),
+            A::KillToggle(d, band) => self.kill(d, band),
+            A::Pad(d, n) => self.pad(d, n),
+            A::ClearPad(d, n) => self.clear_pad(d, n),
+            A::LoopIn(d) => self.loop_in(d),
+            A::LoopOut(d) => self.loop_out(d),
+            A::HalveLoop(d) => self.halve_loop(d),
+            A::Unloop(d) => self.unloop(d),
+            A::Crossfader(x) => {
+                // a hand on the crossfader mid-mix takes the mix over
+                if self.mix.as_ref().is_some_and(|m| m.started) {
+                    self.set_auto(false);
+                }
+                self.set_crossfader(x);
+            }
+            a @ (A::Load(_) | A::Browse(..)) => self.for_the_crate.push(a),
+        }
+    }
+
+    /// A band killed, or back to flat.
+    pub fn kill(&mut self, d: usize, band: usize) {
+        let v = if self.slots[d].eq[band] <= 0.01 { 0.5 } else { 0.0 };
+        self.set_eq(d, band, v);
+    }
+
+    /// The jog wheel turned `ticks`: a parked record is moved (20 ms a tick, 250 with
+    /// shift); a playing one bends with the speed of the hand (much harder in scratch).
+    pub fn jog(&mut self, d: usize, ticks: f64, scratch: bool, shift: bool) {
+        let deck = self.engine.deck(DeckId::new(d).unwrap());
+        if !deck.read().playing {
+            deck.seek((deck.position() + ticks * if shift { 0.25 } else { 0.02 }).max(0.0));
+            return;
+        }
+        let v = self.jog[d].0 * 0.6 + ticks;
+        self.jog[d] = (v, Some(Instant::now()));
+        let k = if scratch { 0.06 } else { 0.008 };
+        deck.bend((1.0 + k * v).clamp(0.5, 2.0));
+    }
+
+    /// The record moved by `secs` (a nudge by ear).
+    pub fn nudge_by(&mut self, d: usize, secs: f64) {
+        let deck = self.engine.deck(DeckId::new(d).unwrap());
+        deck.seek((deck.position() + secs).max(0.0));
+    }
+
+    /// The master deck's index.
+    pub fn master(&self) -> usize {
+        self.master
+    }
+
+    pub fn crossfader(&self) -> f32 {
+        self.crossfader
+    }
+
+    /// Starts deck `d` in step with the other, on its beat.
+    pub fn start_in_step(&mut self, d: usize) {
+        let master = DeckId::new(1 - d).unwrap();
+        self.engine.deck(DeckId::new(d).unwrap()).start_with(master, 4, None, 0.0);
+    }
+
+    /// The controllers' lights as the decks are (only what changed is sent).
+    fn lights(&mut self) {
+        let Some(controls) = &self.controls else { return };
+        // a controller come (or come back): every light again
+        let n = controls.controllers().len();
+        if n != self.lit_for {
+            self.lit.clear();
+            self.lit_for = n;
+        }
+        let mut want = vec![("mixer.scratch".to_owned(), self.binding.scratch)];
+        for d in 0..2 {
+            let st = self.engine.deck(DeckId::new(d).unwrap()).read();
+            let side = ["a", "b"][d];
+            let on_cue = self.slots[d].hands.cue.is_some_and(|c| (c - st.heard).abs() < 0.06);
+            want.push((format!("deck.{side}.play"), st.playing));
+            want.push((format!("deck.{side}.cue"), on_cue && !st.playing));
+            want.push((format!("deck.{side}.sync"), st.synced));
+            want.push((format!("deck.{side}.keylock"), self.slots[d].keylock));
+        }
+        for (id, on) in want {
+            if self.lit.get(&id) != Some(&on) {
+                controls.light(&id, on);
+                self.lit.insert(id, on);
+            }
         }
     }
 
