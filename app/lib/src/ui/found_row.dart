@@ -158,7 +158,9 @@ class FoundRow extends StatelessWidget {
                       ? const Icon(Icons.play_arrow_rounded,
                           key: ValueKey('hover'), size: 24, color: Colors.white)
                       : null,
-                  child: Artwork(url: art, size: 40, radius: person ? 20 : 5),
+                  // Its own printed sleeve where the service had no picture, as in
+                  // the booth's crate: not one blank shared by every such row.
+                  child: Artwork(url: art, title: found.title, size: 40, radius: person ? 20 : 5),
                 ),
                 Positioned(left: -4, bottom: -4, child: PlaceDot(found.place)),
               ],

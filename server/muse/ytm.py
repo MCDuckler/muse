@@ -253,6 +253,13 @@ def thumbnail_url(raw: dict, px: int = 300) -> str | None:
     return _GOOGLE_SIZE.sub(f"=w{px}-h{px}", url) if url else None
 
 
+def cover_for(raw: dict, video_id: str | None) -> str | None:
+    """A picture for a hit, whatever came back with it: its own album art, else the
+    video's still, which YouTube serves for every video there is. A search answer
+    without thumbnails was a song drawn as a blank square in the crate."""
+    return thumbnail_url(raw) or (f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg" if video_id else None)
+
+
 # ---------------------------------------------------------------- one person's library
 #
 # Search needs nobody's permission; "my playlists" and "songs I liked" are the opposite.

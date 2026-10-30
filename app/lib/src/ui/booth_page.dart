@@ -247,8 +247,13 @@ class _BoothPageState extends State<BoothPage> {
 }
 
 /// Into the booth, and — with [mix] — with the booth mixing [tracks] from [at].
+///
+/// [named]: [tracks] are a playlist of that name, for the Auto DJ to mix from now in
+/// a queue of their own (AppState.mixInBooth) — what "Mix in the booth" on a
+/// playlist's page does. Without it the booth mixed [tracks] while the crate went on
+/// showing, and the Auto DJ following, whatever queue was there before.
 Future<void> openBooth(BuildContext context,
-    {List<Track>? tracks, int at = 0, Map<String, dynamic>? mix}) async {
+    {List<Track>? tracks, int at = 0, Map<String, dynamic>? mix, String? named}) async {
   final app = context.read<AppState>();
   final booth = app.booth;
   // The lights as they were left, before the room is built.
@@ -263,7 +268,11 @@ Future<void> openBooth(BuildContext context,
       ? was?.position
       : null;
   await app.player?.pause();
-  if (tracks != null && tracks.isNotEmpty) {
+  if (tracks != null && tracks.isNotEmpty && named != null && mix == null) {
+    unawaited(app.mixInBooth(tracks, name: named).catchError((Object e) {
+      if (context.mounted) ScaffoldMessenger.of(context).say(problem(e));
+    }));
+  } else if (tracks != null && tracks.isNotEmpty) {
     await booth.init();
     unawaited(booth.auto.start(tracks, at: at, kept: MixMove.allIn(mix), from: carryOn));
   }

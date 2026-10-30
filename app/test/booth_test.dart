@@ -513,6 +513,108 @@ void main() {
       booth.auto.keepGoing(false);
     });
 
+    test("the booth's own picks go once a hand queues past them; what is coming and not here is asked for",
+        () async {
+      for (final id in [1, 2, 3, 4, 5, 6]) {
+        booth.timing.put(id, grid(500));
+      }
+      useThisClientInstead(MockClient((r) async {
+        if (r.url.path.contains('/stream-key')) {
+          return http.Response('{"key": "signed", "expires_at": 99999999999}', 200);
+        }
+        if (r.url.path.contains('/stem/')) return http.Response('', 202);
+        return http.Response('{}', 200);
+      }));
+      addTearDown(() => useThisClientInstead(http.Client()));
+      Track row(int id, int item, {String origin = 'user', String state = 'ready'}) => Track.fromJson({
+            'id': id,
+            'title': 'Song $id',
+            'artists': ['Someone'],
+            'duration_ms': 60000,
+            'state': state,
+            if (state == 'ready') 'stream_url': '/tracks/$id/stream',
+            'source': 'youtube',
+            'origin': origin,
+            'item_id': item,
+          });
+      final dropped = <List<int>>[];
+      final wanted = <List<int>>[];
+      booth.auto.onUnfill = (rows) async => dropped.add([for (final r in rows) r.queueItemId!]);
+      booth.auto.onWantSoon = (ts) => wanted.add([for (final t in ts) t.id]);
+      addTearDown(() {
+        booth.auto.onUnfill = null;
+        booth.auto.onWantSoon = null;
+      });
+      await booth.auto.start([row(1, 100)]);
+
+      // KEEP GOING's two picks, at the end: nothing after them, nothing to take back.
+      booth.auto.follow([row(1, 100), row(2, 101, origin: 'booth'), row(3, 102, origin: 'booth')]);
+      expect(dropped, isEmpty, reason: "the booth's picks are the end of the queue");
+
+      // A playlist queued after them: they were chosen to follow record 1 as the last
+      // there was, and the hand's records come first now.
+      booth.auto.follow([
+        row(1, 100),
+        row(2, 101, origin: 'booth'),
+        row(3, 102, origin: 'booth'),
+        row(4, 103),
+        row(5, 104, state: 'pending'),
+        row(6, 105, state: 'pending'),
+      ]);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(dropped.single, unorderedEquals([101, 102]));
+      expect(wanted.single, [5, 6], reason: 'the next records not here yet, fetched before their turn');
+
+      // Asked once: the same queue again is not another fetch.
+      booth.auto.follow([row(1, 100), row(4, 103), row(5, 104, state: 'pending'), row(6, 105, state: 'pending')]);
+      expect(wanted, hasLength(1));
+      booth.auto.stop();
+    });
+
+    test('a new list in place of the queue drops what was held for the old one', () async {
+      for (final id in [1, 2, 3, 7]) {
+        booth.timing.put(id, grid(500));
+      }
+      useThisClientInstead(MockClient((r) async {
+        if (r.url.path.contains('/stream-key')) {
+          return http.Response('{"key": "signed", "expires_at": 99999999999}', 200);
+        }
+        if (r.url.path.contains('/stem/')) return http.Response('', 202);
+        return http.Response('{}', 200);
+      }));
+      addTearDown(() => useThisClientInstead(http.Client()));
+      await booth.auto.start([song(1), song(2), song(3)]);
+      await booth.auto.swapNext(song(3));
+      expect(booth.auto.next?.id, 3, reason: 'a hand made it next');
+      // A playlist put on to mix: its own first record is next, not the old hand's.
+      booth.auto.takeNewList();
+      booth.auto.follow([song(1), song(7), song(3)]);
+      expect(booth.auto.next?.id, 7);
+      booth.auto.stop();
+    });
+
+    test('a record on its way to a deck is said on the deck at once, and not once it is on', () async {
+      booth.timing.put(1, grid(500));
+      final hold = Completer<void>();
+      useThisClientInstead(MockClient((r) async {
+        if (r.url.path.contains('/stream-key')) {
+          await hold.future;
+          return http.Response('{"key": "signed", "expires_at": 99999999999}', 200);
+        }
+        if (r.url.path.contains('/stem/')) return http.Response('', 202);
+        return http.Response('{}', 200);
+      }));
+      addTearDown(() => useThisClientInstead(http.Client()));
+      final loading = booth.load(booth.a, song(1));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(booth.a.coming?.id, 1, reason: 'named on the deck before anything is waited for');
+      expect(booth.a.track?.id, isNot(1));
+      hold.complete();
+      await loading;
+      expect(booth.a.coming, isNull);
+      expect(booth.a.track?.id, 1);
+    });
+
     test('a queue changing under the automix loads the free deck once, with the last word',
         () async {
       for (final id in [1, 2, 3, 4, 5]) {

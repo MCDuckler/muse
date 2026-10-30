@@ -16,9 +16,12 @@ import '../desk/set_planner_page.dart';
 /// (skip, now, not now, sooner, longer); the room's word; KEEP GOING; UNDO after
 /// anything it changed; and the ways into the set, the plan and PLAN A SET.
 class PhoneAutoCard extends StatelessWidget {
-  const PhoneAutoCard({super.key, required this.booth, required this.onSet, required this.onPlan});
+  const PhoneAutoCard({super.key, required this.booth, required this.onSet, required this.onPlan, this.onPickList});
   final Booth booth;
   final VoidCallback onSet, onPlan;
+
+  /// With nothing queued, AUTO DJ opens the crate's library to pick a playlist.
+  final VoidCallback? onPickList;
 
   @override
   Widget build(BuildContext context) {
@@ -41,14 +44,14 @@ class PhoneAutoCard extends StatelessWidget {
                 colour: accent,
                 lit: auto.running,
                 height: 34,
-                tooltip: auto.running ? 'Stop mixing' : items.isEmpty ? 'Queue some records first' : 'Mix the queue, record into record',
-                onTap: auto.running ? auto.stop : items.isEmpty ? null : () => startAuto(booth, items),
+                tooltip: auto.running ? 'Stop mixing' : items.isEmpty ? 'Pick a playlist to mix' : 'Mix the queue, record into record',
+                onTap: auto.running ? auto.stop : items.isEmpty ? onPickList : () => startAuto(booth, items),
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: !auto.running
                     ? Text(
-                        items.isEmpty ? 'NOTHING QUEUED' : '${items.length} ${items.length == 1 ? 'RECORD' : 'RECORDS'} · ${clockOf(Duration(milliseconds: total))}',
+                        items.isEmpty ? 'NOTHING QUEUED — PICK A PLAYLIST' : '${items.length} ${items.length == 1 ? 'RECORD' : 'RECORDS'} · ${clockOf(Duration(milliseconds: total))}',
                         style: Console.label(8.5))
                     : AutoStateLine(booth: booth, onTap: onSet, titleSize: 13),
               ),

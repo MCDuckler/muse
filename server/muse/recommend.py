@@ -953,7 +953,8 @@ def public(p: Pick) -> dict:
             "video_id": meta["video_id"], "title": meta.get("title") or meta["video_id"],
             "artists": meta.get("artists") or [], "album": meta.get("album"),
             "duration_ms": meta.get("duration_ms"), "known": False,
-            "cover_url": search._art(ytm.thumbnail_url({"thumbnails": meta.get("thumbnails") or []})),
+            "cover_url": search._art(ytm.cover_for({"thumbnails": meta.get("thumbnails") or []},
+                                                   meta["video_id"])),
         }
     return out
 

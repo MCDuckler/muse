@@ -286,7 +286,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
                 out["remote_error"] = "YouTube would not answer just now"
                 found = []
             for r in found:
-                thumb = ytm.thumbnail_url(r.get("raw") or {})
+                thumb = ytm.cover_for(r.get("raw") or {}, r.get("video_id"))
                 hits.append({
                     **{k: v for k, v in r.items() if k != "raw"},
                     "known": r["video_id"] in have,
@@ -387,6 +387,17 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
     # scrolling a result list twice costs nothing.
     # Google serves this artwork from several interchangeable hosts; the allowlist has
     # to cover the ones actually used, not the one that appeared in a doc example.
+    def _art_host_allowed(host: str | None) -> bool:
+        """One of the services' own image hosts — by name, or any host of the
+        services' image domains: SoundCloud serves art from i1 to i4 and a1, Bandcamp
+        from f1 to f4, and a cover from the one not listed was a blank square."""
+        if not host:
+            return False
+        return host in _REMOTE_ART_HOSTS or any(host.endswith("." + d) for d in _REMOTE_ART_DOMAINS)
+
+    _REMOTE_ART_DOMAINS = ("ytimg.com", "googleusercontent.com", "ggpht.com", "scdn.co",
+                           "spotifycdn.com", "sndcdn.com", "bcbits.com", "dzcdn.net")
+
     _REMOTE_ART_HOSTS = (
         "lh3.googleusercontent.com",
         "yt3.googleusercontent.com",
@@ -420,7 +431,7 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         _by_token_or_key(authorization, k)
 
         parsed = urlparse(u)
-        if parsed.scheme != "https" or parsed.hostname not in _REMOTE_ART_HOSTS:
+        if parsed.scheme != "https" or not _art_host_allowed(parsed.hostname):
             # An open proxy is a liability; this one only fetches album art.
             raise HTTPException(400, "not an allowed image host")
 

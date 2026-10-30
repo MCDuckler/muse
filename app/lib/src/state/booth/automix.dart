@@ -888,6 +888,8 @@ class AutoMix extends ChangeNotifier {
     final ready = [for (final t in queue) if (t.isReady) t];
     final on = current;
     final before = next?.id;
+    _unfill(queue, on);
+    fetchAhead(queue);
     final at = on == null ? -1 : ready.indexWhere((t) => t.id == on.id);
     if (at >= 0) {
       _tracks = ready;
@@ -918,6 +920,79 @@ class AutoMix extends ChangeNotifier {
     } else {
       notifyListeners();
     }
+  }
+
+  /// Takes the booth's own picks (KEEP GOING's, `origin` booth) back out of [queue]
+  /// where a hand has queued records after them.
+  ///
+  /// They were picked to follow what was last in the queue at the time; once a hand
+  /// has put more after them, they are neither last nor chosen for what they follow,
+  /// and a playlist queued after them played only once the booth's own records had —
+  /// the queue emptied, the Auto DJ filling it at once, and the hand's records after
+  /// its picks. The one already on the free deck, or a hand's next, stays.
+  void _unfill(List<Track> queue, Track? on) {
+    final drop = onUnfill;
+    if (drop == null) return;
+    final at = on == null ? -1 : queue.indexWhere((t) => t.id == on.id);
+    if (at < 0 && on != null) return;
+    final ahead = queue.sublist(at + 1);
+    final lastHand = ahead.lastIndexWhere((t) => t.origin != 'booth');
+    if (lastHand < 0) return;
+    final onDeck = booth.other(booth.master).track?.id;
+    final stale = [
+      for (var i = 0; i < lastHand; i++)
+        if (ahead[i].origin == 'booth' && ahead[i].id != onDeck && ahead[i].id != _heldNext && ahead[i].queueItemId != null)
+          ahead[i],
+    ];
+    final key = stale.map((t) => t.queueItemId).join(',');
+    if (stale.isEmpty || key == _unfilling) return;
+    _unfilling = key;
+    booth.note(BoothEventKind.plan,
+        stale.length == 1
+            ? '${stale.first.displayTitle} out: the queue goes on past it now'
+            : '${stale.length} of the booth\'s picks out: the queue goes on past them now');
+    unawaited(drop(stale).whenComplete(() => _unfilling = null));
+  }
+
+  String? _unfilling;
+
+  /// Takes the booth's own picks back out of the queue (the app's, by row).
+  Future<void> Function(List<Track> rows)? onUnfill;
+
+  /// Asks for records not here yet to be fetched now (the app's: on this computer).
+  void Function(List<Track> tracks)? onWantSoon;
+
+  /// The next records of [queue] after the one on now that are not here yet, asked
+  /// for before their turn: two at a time, the way this computer fetches. A record
+  /// that is not here when its turn comes is passed over, and a playlist that had
+  /// never been fetched played as only the few of it that had.
+  void fetchAhead(List<Track> queue) {
+    final want = onWantSoon;
+    if (want == null) return;
+    final on = current;
+    final at = on == null ? -1 : queue.indexWhere((t) => t.id == on.id);
+    final soon = [
+      for (final t in queue.skip(at + 1).take(6))
+        if (!t.isReady && t.state != 'failed' && !_askedHere.contains(t.id)) t,
+    ].take(2).toList();
+    if (soon.isEmpty) return;
+    _askedHere.addAll([for (final t in soon) t.id]);
+    want(soon);
+  }
+
+  final _askedHere = <int>{};
+
+  /// A new list is about to be followed in place of the queue (AppState.mixInBooth):
+  /// what was held for the last one goes — the next a hand chose, a set being laid
+  /// out over it — and the new list plays in its own order.
+  void takeNewList() {
+    _heldNext = null;
+    if (mode == SetMode.set) {
+      set = null;
+      mode = SetMode.asQueued;
+    }
+    _rerouteSoon?.cancel();
+    notifyListeners();
   }
 
   /// The moves made lately, newest last — the booth's own log of them, by hand or by

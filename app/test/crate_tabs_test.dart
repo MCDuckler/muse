@@ -23,6 +23,10 @@ void main() {
     (CrateTab.similar, 'SIMILAR', Icons.auto_awesome_outlined),
     (CrateTab.parts, 'PARTS', Icons.call_split),
   ];
+  const seven = [
+    ...all,
+    (CrateTab.check, 'CHECK', Icons.fact_check_outlined),
+  ];
 
   testWidgets('the names are worn only where the longest of them fits',
       (tester) async {
@@ -84,5 +88,18 @@ void main() {
     expect(crateWordsFit(plain, all, 900), isTrue);
     expect(crateWordsFit(large, all, 900), isFalse,
         reason: 'the words are nearly twice as wide; the crate is the same');
+  });
+
+  testWidgets('the pages go wide whether or not the tabs can wear their names', (tester) async {
+    late BuildContext here;
+    await tester.pumpWidget(MaterialApp(home: Builder(builder: (c) {
+      here = c;
+      return const SizedBox();
+    })));
+    // Seven tabs need some 800 pixels to say their names; a crate widened to half a
+    // 1600-pixel screen has about 620. The library's two panes, a record's length and
+    // its menu went by the words, so that crate was drawn as a narrow one.
+    expect(crateWordsFit(here, seven, 640), isFalse);
+    expect(640 >= crateWide, isTrue, reason: 'and its pages are wide all the same');
   });
 }

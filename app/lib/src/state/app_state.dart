@@ -13,7 +13,7 @@ import '../api/client.dart';
 import '../api/connection.dart';
 import '../worker/door_here.dart' show doorPulledPath, shutDoorHere;
 import '../worker/splitter.dart' show Splitter;
-import '../worker/this_computer.dart' show fetchedHerePath, stopFetching;
+import '../worker/this_computer.dart' show fetchHereNow, fetchedHerePath, stopFetching;
 import '../api/models.dart';
 import 'eq_engines.dart';
 import 'equalizer.dart';
@@ -565,7 +565,13 @@ class AppState extends ChangeNotifier {
     )..addListener(_boothChanged);
     // A record the booth takes from the library at the end of the queue goes into
     // the crate, so what it plays is what the queue shows.
-    b.auto.onFill = (t) => addTrack(t);
+    b.auto.onFill = (t) => addTracks([t], origin: 'booth');
+    // Its picks taken back out once a hand has queued records after them: they were
+    // chosen to follow a record that is no longer the last, and the hand's come first.
+    b.auto.onUnfill = _dropBoothPicks;
+    // Records coming up that are not here yet, fetched before their turn rather than
+    // passed over when it comes.
+    b.auto.onWantSoon = (ts) => unawaited(fetchHereNow([for (final t in ts) t.id]));
     // And an order it decides — a record a hand put on a deck, one moved later, a set
     // laid out — is the queue's order too, so the crate never says one thing while
     // the booth plays another.
@@ -1333,14 +1339,17 @@ class AppState extends ChangeNotifier {
   /// "Add all to queue" on a playlist used to be one request per song, each one
   /// followed by re-reading every queue and reloading the player: two hundred songs
   /// was four hundred round trips and a list that flickered for the whole of it.
-  Future<void> addTracks(List<Track> tracks, {String mode = 'end'}) async {
+  ///
+  /// [origin] `booth`: the Auto DJ's own pick (KEEP GOING), not a hand's — see
+  /// AutoMix.follow, which takes such picks back out once a hand has queued past them.
+  Future<void> addTracks(List<Track> tracks, {String mode = 'end', String? origin}) async {
     if (tracks.isEmpty) return;
     // Queued again is wanted again: it is back in the library, so back in the lists.
     _removedTracks.removeAll([for (final t in tracks) t.id]);
     if (_queueIsLocal) _setQueue(null);
     if (activeQueue == null) _setQueue(await ensureQueue('Now'));
     _setQueue(await api.addToQueue(
-        activeQueue!.id, [for (final t in tracks) t.id], mode: mode));
+        activeQueue!.id, [for (final t in tracks) t.id], mode: mode, origin: origin));
     queues = await api.queues();      // a queue created just now must show in the chips
     await player?.loadQueue(activeQueue!);
     _rememberQueue(activeQueue!.id);
@@ -1771,6 +1780,83 @@ class AppState extends ChangeNotifier {
         onPressed: () => _restoreToQueue(q.id, removed.id, row),
       ),
     ));
+  }
+
+  /// The Auto DJ's own picks, [rows] of the queue, taken back out: a hand queued
+  /// records after them. By the row's own name, the last first, so the places of
+  /// the ones still to go do not move under it.
+  Future<void> _dropBoothPicks(List<Track> rows) async {
+    final q = activeQueue;
+    if (q == null || _queueIsLocal) return;
+    final items = player?.items ?? const <Track>[];
+    final off = player?.windowFrom ?? 0;
+    final at = [
+      for (final r in rows)
+        if (r.queueItemId != null) items.indexWhere((x) => x.queueItemId == r.queueItemId),
+    ].where((i) => i >= 0).toList()
+      ..sort((a, b) => b.compareTo(a));
+    if (at.isEmpty) return;
+    Queue? last;
+    try {
+      for (final i in at) {
+        last = await api.removeQueueItem(q.id, off + i);
+      }
+    } catch (_) {
+      await _resyncQueue();
+      return;
+    }
+    if (last != null) await _applyQueue(last);
+  }
+
+  /// [tracks] mixed by the booth, from now: what a DJ means by "play this playlist".
+  ///
+  /// It took clearing the queue, then queueing the playlist — and between the two the
+  /// Auto DJ, finding the queue empty, filled it with picks of its own, so the playlist
+  /// went on after them. Now it is one step. The list goes into a queue of its own,
+  /// named [name] (the playlist's), so the queue that was there is kept, not emptied,
+  /// and can be gone back to. The record playing stays on and goes first; the Auto
+  /// DJ, switched on if it was not, mixes from it into the list, in the list's order —
+  /// [shuffle]d first if asked. With nothing playing it starts the list's first record.
+  ///
+  /// Records in it that are not here yet are fetched first by the house (the queue
+  /// is prioritised) and the next few on this computer.
+  Future<void> mixInBooth(List<Track> tracks, {required String name, bool shuffle = false}) async {
+    if (tracks.isEmpty) return;
+    final b = booth;
+    await b.init();
+    _removedTracks.removeAll([for (final t in tracks) t.id]);
+    final auto = b.auto;
+    final on = auto.running
+        ? auto.current
+        : b.master.playing
+            ? b.master.track
+            : null;
+    final order = shuffle ? ([...tracks]..shuffle(math.Random())) : tracks;
+    final ids = [
+      if (on != null) on.id,
+      for (final t in order)
+        if (t.id != on?.id) t.id,
+    ];
+    if (_queueIsLocal) _setQueue(null);
+    final target = await ensureQueue(name);
+    final live = await api.queue(target.id);
+    final filled = await api.replaceQueue(target.id, live.rev, ids);
+    queues = await api.queues();
+    _rememberQueue(filled.id);
+    // The order this list is in is the order it plays in: whatever the booth was
+    // doing with the last queue — a set it was laying out, a record a hand had made
+    // next — was about that queue.
+    auto.takeNewList();
+    await _applyQueue(filled);
+    final items = player?.items ?? const <Track>[];
+    if (auto.running) {
+      auto.follow(items);
+    } else {
+      final ready = [for (final t in items) if (t.isReady) t];
+      if (ready.isNotEmpty) await auto.start(ready, at: 0);
+    }
+    auto.fetchAhead(items);
+    notifyListeners();
   }
 
   /// [row] is counted in the whole queue.

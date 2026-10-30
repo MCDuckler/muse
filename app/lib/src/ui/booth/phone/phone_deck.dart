@@ -14,6 +14,7 @@ import '../../snack.dart';
 import '../../stage/arm_grip.dart';
 import '../booth_clock.dart';
 import '../desk/console.dart';
+import '../desk/deck_coming.dart';
 import '../meters.dart' show CentreSlider;
 
 /// One deck of the phone's console: half the width of the screen, and everything
@@ -107,7 +108,12 @@ class _PhoneDeckState extends State<PhoneDeck> with TickerProviderStateMixin {
           children: [
             _header(isMaster),
             const SizedBox(height: 6),
-            Center(child: _d.track == null ? _empty(96) : _record(96)),
+            Center(
+              child: Stack(alignment: Alignment.center, children: [
+                _d.track == null ? _empty(96) : _record(96),
+                DeckComingCard(booth: _b, deck: _d, side: 96),
+              ]),
+            ),
             const SizedBox(height: 6),
             _pitch(),
             const SizedBox(height: 6),
@@ -124,6 +130,7 @@ class _PhoneDeckState extends State<PhoneDeck> with TickerProviderStateMixin {
 
   Widget _header(bool isMaster) {
     final t = _d.track;
+    final coming = _d.coming;
     final bpm = _d.bpm;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -136,12 +143,20 @@ class _PhoneDeckState extends State<PhoneDeck> with TickerProviderStateMixin {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(t?.displayTitle ?? 'Nothing on',
-                      maxLines: 1, overflow: TextOverflow.ellipsis, style: Mag.title(12, color: t == null ? Console.faint : Console.ink)),
-                  Text(_d.trouble != null ? 'Would not load' : t?.artistLine ?? '',
+                  Text(coming?.displayTitle ?? t?.displayTitle ?? 'Nothing on',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: Mag.typewriter(9.5, color: _d.trouble != null ? Console.a : Console.quiet)),
+                      style: Mag.title(12, color: t == null || coming != null ? Console.quiet : Console.ink)),
+                  Text(
+                      coming != null
+                          ? 'Loading…'
+                          : _d.trouble != null
+                              ? 'Would not load'
+                              : t?.artistLine ?? '',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Mag.typewriter(9.5,
+                          color: coming != null ? _colour : _d.trouble != null ? Console.a : Console.quiet)),
                 ],
               ),
             ),

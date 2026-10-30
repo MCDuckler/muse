@@ -238,6 +238,26 @@ class Deck extends ChangeNotifier {
   Track? track;
   TrackTiming? timing;
 
+  /// The record on its way onto this deck, from the moment it was asked for until it
+  /// is on — its beat read, its parts asked for, the engine handed the file. That can
+  /// be seconds, and a deck that went on showing the old record (or LOAD) for all of
+  /// them looked as if the click had not been heard. Null when nothing is coming.
+  Track? coming;
+
+  /// [track] is on its way here: said at once, before anything is waited for.
+  void announce(Track track) {
+    if (coming?.id == track.id) return;
+    coming = track;
+    notifyListeners();
+  }
+
+  /// It is on, or it is not coming after all.
+  void arrived(Track track) {
+    if (coming?.id != track.id) return;
+    coming = null;
+    notifyListeners();
+  }
+
   /// Which part of the record is on the platter: its drums, the music under them, or
   /// the whole of it with the voice taken out. Null is the record itself.
   ///
@@ -655,6 +675,16 @@ class Deck extends ChangeNotifier {
   /// Put [track] on, parked at [at] — its first sound, unless told otherwise. With a
   /// [part], that part of it rather than the whole record.
   Future<void> load(Track track,
+      {TrackTiming? timing, Duration? at, String? part}) async {
+    announce(track);
+    try {
+      await _loadWhole(track, timing: timing, at: at, part: part);
+    } finally {
+      arrived(track);
+    }
+  }
+
+  Future<void> _loadWhole(Track track,
       {TrackTiming? timing, Duration? at, String? part}) async {
     this.part = part;
     _freshlyLoaded = true;

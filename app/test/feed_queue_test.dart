@@ -44,7 +44,7 @@ class _App extends AppState {
   }
 
   @override
-  Future<void> addTracks(List<Track> tracks, {String mode = 'end'}) async {
+  Future<void> addTracks(List<Track> tracks, {String mode = 'end', String? origin}) async {
     added.add((ids: [for (final t in tracks) t.id], mode: mode));
   }
 }

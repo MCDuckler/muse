@@ -18,9 +18,15 @@ class Artwork extends StatelessWidget {
     this.radius = 6,
     this.small = true,
     this.sleeve = false,
+    this.title,
   });
 
   final Track? track;
+
+  /// What the song is called, where there is no [track]: the printed sleeve drawn
+  /// when there is no picture is the song's own, not one shared by every song found
+  /// elsewhere without one.
+  final String? title;
   /// Render the cover as a physical record rather than a flat square. The picture
   /// arrives with its own shadow and transparent corners, so it is not clipped.
   final bool sleeve;
@@ -95,8 +101,8 @@ class Artwork extends StatelessWidget {
   /// A song with no cover gets a sleeve printed for it. See PrintedSleeve: the same
   /// song gets the same one every time, and no two songs in a list look alike.
   Widget _missing() => PrintedSleeve(
-        seed: track?.id ?? PrintedSleeve.seedOf(url),
-        title: track?.displayTitle ?? '',
+        seed: track?.id ?? PrintedSleeve.seedOf(url ?? title),
+        title: track?.displayTitle ?? title ?? '',
         size: size,
       );
 
@@ -107,6 +113,40 @@ class Artwork extends StatelessWidget {
   /// posters and then swap them all for the real thing.
   Widget _loading(ColorScheme scheme) =>
       ColoredBox(color: scheme.surfaceContainerHighest);
+}
+
+/// The picture for a song that may not be here: its own cover where the library has
+/// one, else the picture where it was found (YouTube's, SoundCloud's, Spotify's —
+/// fetched through the house), else a sleeve printed for it. The same everywhere a
+/// song from elsewhere is shown: the search page and the booth's crate.
+class ElsewhereArt extends StatelessWidget {
+  const ElsewhereArt({
+    super.key,
+    this.track,
+    this.cover,
+    required this.title,
+    this.by = '',
+    this.size = 40,
+    this.radius = 5,
+  });
+
+  final Track? track;
+
+  /// The picture's path at the house, as a search answers with it.
+  final String? cover;
+  final String title, by;
+  final double size, radius;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = track;
+    if (t != null && t.hasCover) return Artwork(track: t, size: size, radius: radius);
+    final c = cover;
+    final url = c == null
+        ? null
+        : context.read<AppState>().api.remoteCoverUrl(c.contains('?') ? c : '$c?size=sm');
+    return Artwork(url: url, title: title, size: size, radius: radius);
+  }
 }
 
 /// A playlist's own cover: bands of the records in it, built by the server.

@@ -319,6 +319,8 @@ def test_search_results_carry_artwork(client, hdr, monkeypatch):
 @pytest.mark.parametrize("host", [
     "lh3.googleusercontent.com", "yt3.googleusercontent.com", "yt3.ggpht.com",
     "i.ytimg.com",
+    # The other services' art from the hosts a fixed list did not name.
+    "i3.sndcdn.com", "a1.sndcdn.com", "f1.bcbits.com", "image-cdn-ak.spotifycdn.com",
 ])
 def test_the_art_proxy_accepts_the_hosts_youtube_actually_uses(client, hdr, host,
                                                                monkeypatch):
@@ -336,10 +338,28 @@ def test_the_art_proxy_accepts_the_hosts_youtube_actually_uses(client, hdr, host
     assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
 
 
+def test_a_hit_without_thumbnails_still_has_a_cover(client, hdr, monkeypatch):
+    """YouTube serves a still for every video: a hit that came back with no art of its
+    own is drawn with that, not as a blank square."""
+    from muse import ytm
+
+    monkeypatch.setattr(ytm, "search_songs", lambda q, limit=10: [{
+        "video_id": "NOART1", "title": "Bare", "artists": ["Someone"],
+        "album": None, "duration_ms": 1000, "raw": {},
+    }])
+    hits = client.get("/search", headers=hdr, params={"q": "bare"}).json()["remote"]
+    assert "i.ytimg.com%2Fvi%2FNOART1" in hits[0]["cover_url"]
+
+
 def test_the_art_proxy_only_serves_image_hosts(client, hdr):
     bad = client.get("/art/remote", headers=hdr,
                      params={"u": "https://example.com/secret.png"})
     assert bad.status_code == 400, "an open proxy is a liability"
+    # A name that only ends like one of theirs is not theirs.
+    assert client.get("/art/remote", headers=hdr,
+                      params={"u": "https://evilsndcdn.com/x.png"}).status_code == 400
+    assert client.get("/art/remote", headers=hdr,
+                      params={"u": "https://sndcdn.com.evil.net/x.png"}).status_code == 400
     assert client.get("/art/remote", headers=hdr,
                       params={"u": "http://lh3.googleusercontent.com/x"}).status_code == 400
     assert client.get("/art/remote",

@@ -11,11 +11,14 @@ import '../../../state/booth/booth.dart';
 import '../../../state/booth/deck.dart' as engine;
 import '../../../state/booth/dj_set.dart';
 import '../../../state/booth/set_planner.dart';
+import '../../../state/library_arrangement.dart';
 import '../../../worker/parts_jobs.dart';
 import '../../../worker/this_computer.dart' show fetchHereNow;
 import '../../artwork.dart';
+import '../../found_row.dart' show PlaceDot;
 import '../../mag.dart';
 import '../../snack.dart';
+import '../booth_clock.dart';
 import 'console.dart';
 import 'console_check.dart';
 import 'data_marks.dart';
@@ -23,6 +26,10 @@ import 'set_planner_page.dart';
 
 /// The crate's pages.
 enum CrateTab { queue, fits, library, search, similar, check, parts }
+
+/// From this wide, the crate's pages draw their columns: a playlist's records beside
+/// the list of playlists, each record's length, its menu always out.
+const crateWide = 560.0;
 
 /// Whether every tab can wear its name in the width the row gives it.
 ///
@@ -51,6 +58,14 @@ bool crateWordsFit(
   return each >= air + height * 0.42 + between + widest;
 }
 
+
+/// What the crates of this session remember — the playlist open last, the lists as
+/// they came — forgotten, as a new session starts with them.
+@visibleForTesting
+void forgetCrateMemory() {
+  _ConsoleCrateState._lastList = null;
+  _ConsoleCrateState._lists.clear();
+}
 
 /// The crate: everything a set is made of, without leaving the booth.
 ///
@@ -98,9 +113,11 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
   final _query = TextEditingController();
   final _focus = FocusNode();
   Timer? _debounce;
-  List<Track>? _found;
-  List<RemoteHit> _elsewhere = const [];
+  /// What SEARCH found: the library's records and, past them, songs anywhere the
+  /// main search looks — YouTube Music, YouTube, SoundCloud, Bandcamp, Spotify.
+  List<Found>? _found;
   bool _looking = false;
+  String? _searchTrouble;
 
   /// The queue by how well each would mix with the one on now, rather than in order.
   bool _byMatch = false;
@@ -108,6 +125,19 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
   /// The playlist open in LIBRARY, and its songs once they are here.
   Playlist? _list;
   List<Track>? _listTracks;
+
+  /// Why the open playlist could not be had, when it could not: not the same thing
+  /// as a playlist with nothing in it, which is what a failure used to read as.
+  String? _listTrouble;
+
+  /// Every playlist opened in a crate this session, as it last came: shown the moment
+  /// it is opened again while the house is asked for it afresh.
+  static final _lists = <int, Playlist>{};
+
+  /// The playlist open last, in any crate. A phone's crate is a new one each time
+  /// its sheet comes up — and each time it opened on the list of playlists, the one
+  /// being worked down gone.
+  static int? _lastList;
 
   /// FITS: what goes with the record on the deck, out of the whole library.
   List<({Track track, double fit, String why})>? _fits;
@@ -121,6 +151,11 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
   @override
   void initState() {
     super.initState();
+    final last = _lastList;
+    if (last != null) {
+      final p = context.read<AppState>().playlists.where((p) => p.id == last).firstOrNull ?? _lists[last];
+      if (p != null) unawaited(_openList(p));
+    }
     _tab.addListener(_retab);
     // The deck's record changing is what FITS is about, so it is listened to rather
     // than waited for: the list is for whatever is on now.
@@ -206,26 +241,34 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
     super.dispose();
   }
 
+  /// The same search as the app's own search page, songs only: the crate used one
+  /// of its own that reached YouTube alone, and left out every song the house already
+  /// had but this library did not — they were neither "in the library" nor offered.
   void _search(String q) {
     _debounce?.cancel();
     if (q.trim().length < 2) {
       setState(() {
         _found = null;
-        _elsewhere = const [];
+        _searchTrouble = null;
       });
       return;
     }
-    _debounce = Timer(const Duration(milliseconds: 280), () async {
+    _debounce = Timer(const Duration(milliseconds: 320), () async {
       setState(() => _looking = true);
       try {
-        final r = await context.read<AppState>().api.search(q.trim());
+        final r = await context.read<AppState>().api.searchEverything(q.trim(), kind: 'song', limit: 40);
         if (!mounted || _query.text != q) return;
         setState(() {
-          _found = r.local;
-          _elsewhere = [for (final h in r.remote) if (!h.known) h];
+          _found = r.items;
+          _searchTrouble = null;
         });
-      } catch (_) {
-        if (mounted) setState(() => _found = const []);
+      } catch (e) {
+        if (mounted && _query.text == q) {
+          setState(() {
+            _found = const [];
+            _searchTrouble = '$e';
+          });
+        }
       } finally {
         if (mounted) setState(() => _looking = false);
       }
@@ -242,12 +285,16 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
   }
 
   Future<void> _openList(Playlist p) async {
+    final had = _lists[p.id];
+    _lastList = p.id;
     setState(() {
-      _list = p;
-      _listTracks = null;
+      _list = had ?? p;
+      _listTracks = had?.items;
+      _listTrouble = null;
     });
     try {
       final full = await context.read<AppState>().api.playlist(p.id);
+      _lists[p.id] = full;
       if (mounted && _list?.id == p.id) {
         setState(() {
           _list = full;
@@ -255,12 +302,29 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
         });
       }
     } catch (e) {
-      if (mounted) setState(() => _listTracks = const []);
+      // Only for the list still open: an answer about one left behind is not news
+      // about this one.
+      if (mounted && _list?.id == p.id) setState(() => _listTrouble = '$e');
     }
   }
 
+  void _closeList() => setState(() {
+        _list = null;
+        _lastList = null;
+      });
+
+  /// What the pages draw of the app's state, taken once a build: only those, so the
+  /// crate is not rebuilt with every download's progress and every cover that comes.
+  late (List<Track>, Queue?, List<Queue>) _queueNow;
+  late List<Playlist> _listsNow;
+  late List<PlaylistFolder> _foldersNow;
+
   @override
   Widget build(BuildContext context) {
+    _queueNow = context.select<AppState, (List<Track>, Queue?, List<Queue>)>(
+        (a) => (a.player?.items ?? const <Track>[], a.activeQueue, a.queues));
+    _listsNow = context.select<AppState, List<Playlist>>((a) => a.playlists);
+    _foldersNow = context.select<AppState, List<PlaylistFolder>>((a) => a.folders);
     final tab = _tab.value;
     final partsHere = widget.booth.parts.separatesHere;
     return Plate(
@@ -288,6 +352,11 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
         // Measured instead, against the font the labels are actually drawn in, so it
         // also holds at a larger text size and for however many tabs there are.
         final roomy = crateWordsFit(context, tabs, c.maxWidth);
+        // Whether the pages have room for their columns — the lists beside a
+        // playlist, a record's length, its menu always out. Not the same question as
+        // whether the tabs' words fit: with seven tabs those need some 800 pixels,
+        // and a crate widened to half the screen was still drawn as a narrow one.
+        final wide = c.maxWidth >= crateWide;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -354,10 +423,10 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
             const SizedBox(height: 6),
             Expanded(
               child: switch (tab) {
-                CrateTab.queue => _queue(roomy),
-                CrateTab.fits => _fitsPage(roomy),
-                CrateTab.library => _library(roomy),
-                CrateTab.search => _searchPage(roomy),
+                CrateTab.queue => _queue(wide),
+                CrateTab.fits => _fitsPage(wide),
+                CrateTab.library => _library(wide),
+                CrateTab.search => _searchPage(wide),
                 CrateTab.similar => _SimilarList(
                     booth: widget.booth,
                     row: (t, note) => _Row(
@@ -366,7 +435,8 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
                       booth: widget.booth,
                       loadInto: widget.loadInto,
                       forDeck: widget.forDeck,
-                      roomy: roomy,
+                      roomy: wide,
+                      ask: true,
                       note: note,
                     )),
                 CrateTab.check => CueCheckList(
@@ -377,7 +447,8 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
                       booth: widget.booth,
                       loadInto: widget.loadInto,
                       forDeck: widget.forDeck,
-                      roomy: roomy,
+                      roomy: wide,
+                      ask: true,
                       note: note,
                     )),
                 CrateTab.parts => _PartsList(
@@ -390,8 +461,10 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
     );
   }
 
-  Widget _row(Track t, bool roomy, {int? queuePos, Widget? handle}) => _Row(
-        key: ValueKey('${queuePos ?? 'x'}-${t.id}'),
+  /// [place]: where it is in the list it is drawn in, for its key — a playlist can
+  /// hold the same record twice, and two rows with one key are one row to Flutter.
+  Widget _row(Track t, bool roomy, {int? queuePos, Widget? handle, int? place, bool played = false, bool ask = false}) => _Row(
+        key: ValueKey('${queuePos ?? 'x'}-${place ?? ''}-${t.id}'),
         track: t,
         booth: widget.booth,
         loadInto: widget.loadInto,
@@ -399,6 +472,8 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
         roomy: roomy,
         queuePos: queuePos,
         handle: handle,
+        played: played,
+        ask: ask,
       );
 
   // ------------------------------------------------------------------ FITS
@@ -477,6 +552,7 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
                               forDeck: widget.forDeck,
                               roomy: roomy,
                               note: found[i].why,
+                              ask: true,
                               fit: best > 0 ? (found[i].fit / best).clamp(0.0, 1.0) : null,
                             ),
                           );
@@ -488,8 +564,12 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
 
   // ------------------------------------------------------------------ QUEUE
   Widget _queue(bool roomy) {
-    final app = context.watch<AppState>();
-    final items = app.player?.items ?? const <Track>[];
+    final app = context.read<AppState>();
+    final (items, active, queues) = _queueNow;
+    // The record the room is on: the rows above it in the queue are played.
+    final b = widget.booth;
+    final onId = b.auto.running ? b.auto.current?.id : b.master.track?.id;
+    final nowAt = onId == null ? -1 : items.indexWhere((t) => t.id == onId);
     final total = items.fold<int>(0, (a, t) => a + (t.durationMs ?? 0));
     final waiting = items.where((t) => !t.isReady).length;
     String clock(int ms) {
@@ -497,12 +577,47 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
       return m >= 60 ? '${m ~/ 60}h ${(m % 60).toString().padLeft(2, '0')}m' : '$m min';
     }
 
+    final others = [for (final q in queues) if (q.id != active?.id) q];
     final bar = Row(
       children: [
+        // Which queue this is, and the others to change to: mixing a playlist puts it
+        // in a queue of its own, and the one there before is a tap away, not gone.
+        if (active != null)
+          Flexible(
+            child: PopupMenuButton<Queue>(
+              tooltip: others.isEmpty ? active.name : 'Change to another queue',
+              enabled: others.isNotEmpty,
+              color: Console.raised,
+              onSelected: (q) => app.openQueue(q.id, autoplay: false),
+              itemBuilder: (context) => [
+                for (final q in others)
+                  PopupMenuItem(
+                    value: q,
+                    height: 36,
+                    child: Row(children: [
+                      Icon(Icons.queue_music, size: 15, color: Console.quiet),
+                      const SizedBox(width: 10),
+                      Expanded(child: Text(q.name, style: Mag.typewriter(12, color: Console.ink))),
+                      Text('${q.total}', style: Mag.typewriter(11, color: Console.quiet)),
+                    ]),
+                  ),
+              ],
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Flexible(
+                  child: Text(active.name.toUpperCase(),
+                      maxLines: 1, overflow: TextOverflow.ellipsis, style: Console.label(8.5, color: Console.ink)),
+                ),
+                if (others.isNotEmpty) Icon(Icons.arrow_drop_down, size: 16, color: Console.quiet),
+              ]),
+            ),
+          ),
+        const SizedBox(width: 8),
         Expanded(
           child: Text(
               '${items.length} ${items.length == 1 ? 'RECORD' : 'RECORDS'} · ${clock(total)}'
               '${waiting > 0 ? ' · $waiting ON THE WAY' : ''}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: Console.label(8.5, color: Console.quiet)),
         ),
         _Toggle(
@@ -525,7 +640,7 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
         const Expanded(
           child: _Empty(
               icon: Icons.queue_music,
-              line: 'THE QUEUE IS EMPTY — ADD FROM LIBRARY OR SEARCH'),
+              line: 'THE QUEUE IS EMPTY — MIX A PLAYLIST FROM THE LIBRARY, OR ADD FROM SEARCH'),
         ),
       ]);
     }
@@ -540,7 +655,8 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
         Expanded(
           child: ListView.builder(
             itemCount: sorted.length,
-            itemBuilder: (context, i) => _row(sorted[i].$2, roomy, queuePos: sorted[i].$1),
+            itemBuilder: (context, i) =>
+                _row(sorted[i].$2, roomy, queuePos: sorted[i].$1, played: sorted[i].$1 < nowAt, ask: true),
           ),
         ),
       ]);
@@ -558,6 +674,8 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
           proxyDecorator: (child, i, a) => Material(color: Colors.transparent, child: child),
           itemBuilder: (context, i) => _row(items[i], roomy,
               queuePos: i,
+              played: i < nowAt,
+              ask: true,
               handle: ReorderableDragStartListener(
                 index: i,
                 child: MouseRegion(
@@ -574,42 +692,48 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
   }
 
   // ------------------------------------------------------------------ LIBRARY
-  Widget _library(bool roomy) {
-    final app = context.watch<AppState>();
-    final lists = app.playlists;
-    Widget listOfLists() => lists.isEmpty
-        ? const _Empty(icon: Icons.library_music_outlined, line: 'NO PLAYLISTS YET')
-        : ListView.builder(
-            itemCount: lists.length,
-            itemBuilder: (context, i) {
-              final p = lists[i];
-              final open = _list?.id == p.id;
-              return _Hover(
-                lit: open,
-                onTap: () => _openList(p),
-                child: Row(children: [
-                  Icon(p.kind == 'favourites' ? Icons.favorite : Icons.queue_music,
-                      size: 16, color: open ? Console.ink : Console.quiet),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(p.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Mag.title(13, color: Console.ink)),
-                  ),
-                  if (p.autoSplit)
-                    Padding(
-                      padding: EdgeInsets.only(left: 6),
-                      child: Tooltip(
-                          message: 'Every song is taken apart',
-                          child: Icon(Icons.call_split, size: 13, color: Console.quiet)),
-                    ),
-                  const SizedBox(width: 6),
-                  Text('${p.itemCount}', style: Console.label(8.5, color: Console.faint)),
-                ]),
-              );
-            },
-          );
+  /// The playlists, as the library files them — pinned, then each folder, then the
+  /// rest — each with its cover and a way to mix it at once; and, one picked, its
+  /// records, to load, queue, or mix the whole of.
+  Widget _library(bool wide) {
+    final lists = _listsNow;
+    final folders = _foldersNow;
+    final open = _list;
+    // The open list changed somewhere else — added to from SEARCH, on another
+    // device, a fetch finishing: asked for again rather than shown as it was.
+    if (open != null && _listTracks != null && _listTrouble == null) {
+      final now = lists.where((p) => p.id == open.id).firstOrNull;
+      if (now != null && (now.itemCount != _listTracks!.length || now.waiting != open.waiting)) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _list?.id == now.id) unawaited(_openList(now));
+        });
+      }
+    }
+
+    Widget listOfLists() {
+      if (lists.isEmpty) {
+        return const _Empty(icon: Icons.library_music_outlined, line: 'NO PLAYLISTS YET');
+      }
+      final shelf = LibraryArrangement(lists, folders);
+      final rows = <Widget>[
+        if (_queueNow.$1.isEmpty)
+          const _Hint('PICK ONE AND PRESS ▶ — THE AUTO DJ MIXES IT FROM THE TOP'),
+        if (!shelf.flat && shelf.pinned.isNotEmpty) ...[
+          const _Head('PINNED'),
+          for (final p in shelf.pinned) _ListRow(playlist: p, open: open?.id == p.id, onOpen: () => _openList(p)),
+        ],
+        for (final f in shelf.shelves)
+          if (f.playlists.isNotEmpty) ...[
+            _FolderHead(shelf: f),
+            for (final p in f.playlists)
+              _ListRow(playlist: p, open: open?.id == p.id, indent: true, onOpen: () => _openList(p)),
+          ],
+        if (!shelf.flat && shelf.loose.isNotEmpty) const _Head('PLAYLISTS'),
+        for (final p in shelf.loose)
+          if (shelf.flat || !p.pinned) _ListRow(playlist: p, open: open?.id == p.id, onOpen: () => _openList(p)),
+      ];
+      return ListView(children: rows);
+    }
 
     Widget songs() {
       final p = _list;
@@ -617,70 +741,119 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
         return const _Empty(icon: Icons.arrow_back, line: 'PICK A PLAYLIST');
       }
       final tracks = _listTracks;
+      final here = tracks?.where((t) => t.isReady).length ?? 0;
+      final away = (tracks?.length ?? 0) - here;
+      final app = context.read<AppState>();
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(children: [
-            if (!roomy)
-              IconButton(
-                visualDensity: VisualDensity.compact,
-                icon: Icon(Icons.arrow_back, size: 18, color: Console.quiet),
-                tooltip: 'All playlists',
-                onPressed: () => setState(() => _list = null),
+          SizedBox(
+            height: 44,
+            child: Row(children: [
+              if (!wide)
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  icon: Icon(Icons.arrow_back, size: 18, color: Console.quiet),
+                  tooltip: 'All playlists',
+                  onPressed: _closeList,
+                ),
+              p.isFavourites
+                  ? SizedBox(width: 34, height: 34, child: Icon(Icons.favorite, size: 20, color: Console.ink))
+                  : PlaylistArt(playlist: p, size: 34, radius: 4),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: Mag.title(13.5, color: Console.ink)),
+                    Text(
+                        tracks == null
+                            ? '${p.itemCount} ${p.itemCount == 1 ? 'RECORD' : 'RECORDS'}'
+                            : '${tracks.length} ${tracks.length == 1 ? 'RECORD' : 'RECORDS'}'
+                                '${away > 0 ? ' · $away NOT HERE YET' : ''}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Console.label(8, color: Console.quiet)),
+                  ],
+                ),
               ),
-            Expanded(
-              child: Text(p.name.toUpperCase(),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Console.label(9, color: Console.ink)),
-            ),
-            if (tracks != null && tracks.isNotEmpty)
-              _Toggle(
-                label: 'QUEUE ALL',
-                tooltip: 'Add every song in it to the end of the queue',
-                onTap: () async {
-                  final messenger = ScaffoldMessenger.of(context);
-                  await app.addTracks(tracks);
-                  messenger.say(snack(Text('${tracks.length} added to the queue')));
-                },
-              ),
-            const SizedBox(width: 4),
-            _Menu(items: [
-              if (p.mine)
-                (
-                  p.autoSplit ? 'Stop taking every song apart' : 'Take every song apart',
-                  Icons.call_split,
-                  () async {
+              if (tracks != null && tracks.isNotEmpty) ...[
+                Pad(
+                  label: 'MIX IT',
+                  icon: Icons.play_arrow,
+                  colour: Theme.of(context).colorScheme.primary,
+                  lit: true,
+                  height: 28,
+                  tooltip: 'The Auto DJ mixes this playlist from now, in its order —\n'
+                      'the record on now first. The queue you had is kept.',
+                  onTap: () => mixList(context, name: p.name, tracks: () async => tracks),
+                ),
+                const SizedBox(width: 4),
+                Pad(
+                  icon: Icons.playlist_add,
+                  height: 28,
+                  width: 30,
+                  colour: Console.ink,
+                  tooltip: 'Add the records that are here to the end of the queue',
+                  onTap: () => _queueAll(app, tracks),
+                ),
+              ],
+              const SizedBox(width: 2),
+              _Menu(items: [
+                if (tracks != null && tracks.isNotEmpty) ...[
+                  ('Shuffle it and mix it', Icons.shuffle,
+                      () => mixList(context, name: p.name, tracks: () async => tracks, shuffle: true)),
+                  ('Queue all next', Icons.playlist_play, () => _queueAll(app, tracks, mode: 'next')),
+                ],
+                if (away > 0)
+                  ('Fetch the $away not here yet', Icons.download_outlined, () async {
                     final messenger = ScaffoldMessenger.of(context);
                     try {
-                      final n = await app.api.setPlaylistAutoSplit(p.id, !p.autoSplit);
-                      await app.refreshPlaylists();
-                      await _openList(p);
-                      messenger.say(snack(Text(!p.autoSplit
-                          ? n == 0
-                              ? 'Songs added to it will be taken apart'
-                              : 'Taking $n apart, and every one added'
-                          : 'Songs added to it are left whole')));
+                      final n = await app.api.downloadPlaylist(p.id);
+                      unawaited(fetchHereNow([for (final t in tracks!) if (!t.isReady) t.id]));
+                      messenger.say(snack(Text(n == 0 ? 'Already on their way' : 'Fetching $n')));
                     } catch (e) {
                       messenger.say(problem(e));
                     }
-                  },
-                ),
-              ('Queue all next', Icons.playlist_play, () => app.addTracks(tracks ?? const [], mode: 'next')),
+                  }),
+                if (p.mine)
+                  (
+                    p.autoSplit ? 'Stop taking every song apart' : 'Take every song apart',
+                    Icons.call_split,
+                    () async {
+                      final messenger = ScaffoldMessenger.of(context);
+                      try {
+                        final n = await app.api.setPlaylistAutoSplit(p.id, !p.autoSplit);
+                        await app.refreshPlaylists();
+                        await _openList(p);
+                        messenger.say(snack(Text(!p.autoSplit
+                            ? n == 0
+                                ? 'Songs added to it will be taken apart'
+                                : 'Taking $n apart, and every one added'
+                            : 'Songs added to it are left whole')));
+                      } catch (e) {
+                        messenger.say(problem(e));
+                      }
+                    },
+                  ),
+              ]),
             ]),
-          ]),
+          ),
           const SizedBox(height: 4),
           Expanded(
-            child: tracks == null
-                ? const Center(
-                    child: SizedBox(
-                        width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 1.5)))
-                : tracks.isEmpty
-                    ? const _Empty(icon: Icons.music_off, line: 'NOTHING IN IT')
-                    : ListView.builder(
-                        itemCount: tracks.length,
-                        itemBuilder: (context, i) => _row(tracks[i], roomy),
-                      ),
+            child: _listTrouble != null && tracks == null
+                ? _Empty(icon: Icons.cloud_off, line: 'COULD NOT OPEN IT', onAgain: () => _openList(p))
+                : tracks == null
+                    ? const Center(
+                        child: SizedBox(
+                            width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 1.5)))
+                    : tracks.isEmpty
+                        ? const _Empty(icon: Icons.music_off, line: 'NOTHING IN IT')
+                        : ListView.builder(
+                            itemCount: tracks.length,
+                            itemBuilder: (context, i) => _row(tracks[i], wide, place: i),
+                          ),
           ),
         ],
       );
@@ -694,11 +867,11 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
     // decks next to it were squeezed to make room for it. The narrow crate has always
     // done the sensible thing here; it does it at every width now, and the names get
     // the whole crate until one of them is chosen.
-    if (roomy && _list != null) {
+    if (wide && _list != null) {
       return Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          SizedBox(width: 200, child: listOfLists()),
+          SizedBox(width: 210, child: listOfLists()),
           VerticalDivider(width: 14, color: Console.line),
           Expanded(child: songs()),
         ],
@@ -707,10 +880,34 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
     return _list == null ? listOfLists() : songs();
   }
 
+  /// The records of a list that are here, onto the queue — those not here yet are
+  /// left out and said, since the Auto DJ passes over a record it cannot play.
+  Future<void> _queueAll(AppState app, List<Track> tracks, {String mode = 'end'}) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final here = [for (final t in tracks) if (t.isReady) t];
+    if (here.isEmpty) {
+      messenger.say(snack(const Text('None of them is here yet — fetch them first')));
+      return;
+    }
+    try {
+      await app.addTracks(here, mode: mode);
+      final left = tracks.length - here.length;
+      messenger.say(snack(Text('${here.length} ${mode == 'next' ? 'next in' : 'added to'} the queue'
+          '${left > 0 ? ' · $left not here yet, left out' : ''}')));
+    } catch (e) {
+      messenger.say(problem(e));
+    }
+  }
+
   // ------------------------------------------------------------------ SEARCH
   Widget _searchPage(bool roomy) {
     final accent = Theme.of(context).colorScheme.primary;
     final found = _found;
+    // A record of the library's that is here goes in as any crate row does; anything
+    // else — not fetched yet, the house's, somebody else's service — is offered to be
+    // fetched, with its cover and a dot saying where it is from.
+    final mine = [for (final f in found ?? const <Found>[]) if (f.track != null && f.track!.isReady && f.place == 'library') f];
+    final rest = [for (final f in found ?? const <Found>[]) if (!mine.contains(f)) f];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -722,7 +919,7 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
           cursorColor: accent,
           decoration: InputDecoration(
             isDense: true,
-            hintText: 'Title, artist — the library, then YouTube',
+            hintText: 'Title, artist — the library, then everywhere',
             hintStyle: Mag.typewriter(12, color: Console.faint),
             filled: true,
             fillColor: Console.ground,
@@ -741,15 +938,17 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
         Expanded(
           child: found == null
               ? const _Empty(icon: Icons.search, line: 'TYPE TO SEARCH')
-              : found.isEmpty && _elsewhere.isEmpty
-                  ? const _Empty(icon: Icons.search_off, line: 'NOTHING FOUND')
+              : found.isEmpty
+                  ? _Empty(
+                      icon: _searchTrouble == null ? Icons.search_off : Icons.cloud_off,
+                      line: _searchTrouble == null ? 'NOTHING FOUND' : 'COULD NOT SEARCH')
                   : ListView(
                       children: [
-                        if (found.isNotEmpty) _Head('IN THE LIBRARY · ${found.length}'),
-                        for (final t in found) _row(t, roomy),
-                        if (_elsewhere.isNotEmpty) ...[
-                          const _Head('NOT IN THE LIBRARY YET — ADDED, IT IS FETCHED HERE'),
-                          for (final h in _elsewhere) _Elsewhere(hit: h),
+                        if (mine.isNotEmpty) _Head('IN THE LIBRARY · ${mine.length}'),
+                        for (final (i, f) in mine.indexed) _row(f.track!, roomy, place: i),
+                        if (rest.isNotEmpty) ...[
+                          const _Head('NOT HERE YET — ADDED, IT IS FETCHED'),
+                          for (final f in rest) _Elsewhere.found(f, key: ValueKey('f-${f.place}-${f.id}')),
                         ],
                       ],
                     ),
@@ -759,14 +958,85 @@ class _ConsoleCrateState extends State<ConsoleCrate> {
   }
 }
 
-/// A song on YouTube that is not in the library: added to the queue, it is fetched on
-/// this computer at once and shared with the house.
-class _Elsewhere extends StatefulWidget {
-  const _Elsewhere({super.key, required this.hit, this.track});
-  final RemoteHit hit;
+/// [name]'s records, mixed by the Auto DJ from now (AppState.mixInBooth): a queue of
+/// their own, the record on now first, the queue there before kept and offered back.
+/// [tracks] is asked for only here, so a playlist not yet opened is fetched on the tap.
+Future<void> mixList(BuildContext context,
+    {required String name, required Future<List<Track>> Function() tracks, bool shuffle = false}) async {
+  final app = context.read<AppState>();
+  final messenger = ScaffoldMessenger.of(context);
+  final was = app.activeQueue;
+  try {
+    final list = await tracks();
+    if (list.isEmpty) {
+      messenger.say(snack(Text('Nothing in $name to mix')));
+      return;
+    }
+    await app.mixInBooth(list, name: name, shuffle: shuffle);
+    final away = list.where((t) => !t.isReady).length;
+    messenger.say(snack(
+      Text('Mixing $name${shuffle ? ', shuffled' : ''}'
+          '${away > 0 ? ' · $away not here yet, fetched as they come up' : ''}'),
+      action: was == null || was.name == name
+          ? null
+          : SnackBarAction(label: 'Back to ${was.name}', onPressed: () => app.openQueue(was.id, autoplay: false)),
+    ));
+  } catch (e) {
+    messenger.say(problem(e));
+  }
+}
 
-  /// The song itself, when the house knows it but has never fetched it.
+/// A song that is not here to play yet — not in the library, or in it but never
+/// fetched, or somebody else's service's: its cover, where it is from, and the ways
+/// to have it. Added, it is fetched on this computer at once and shared with the house.
+class _Elsewhere extends StatefulWidget {
+  const _Elsewhere({
+    super.key,
+    required this.title,
+    required this.by,
+    required this.resolve,
+    this.durationMs,
+    this.cover,
+    this.track,
+    this.place,
+  });
+
+  /// A YouTube Music hit, as SIMILAR offers them; [track] where the house knows it.
+  factory _Elsewhere.hit(RemoteHit h, {Key? key, Track? track}) => _Elsewhere(
+        key: key,
+        title: track?.displayTitle ?? h.title,
+        by: h.artistLine,
+        durationMs: h.durationMs,
+        cover: h.coverPath,
+        track: track,
+        place: 'ytmusic',
+        resolve: (app) async =>
+            track ?? await app.api.resolve(videoId: h.videoId, title: h.title, artists: h.artists, album: h.album),
+      );
+
+  /// A row of the search, from wherever it was found.
+  factory _Elsewhere.found(Found f, {Key? key}) => _Elsewhere(
+        key: key,
+        title: f.title,
+        by: f.subtitle,
+        durationMs: f.durationMs,
+        cover: f.coverUrl,
+        track: f.track,
+        place: f.place,
+        resolve: (app) async => f.track ?? await app.api.addFound(f),
+      );
+
+  final String title, by;
+  final int? durationMs;
+
+  /// The picture, addressed through the house (a search hit's), when there is no
+  /// [track] with a cover of its own.
+  final String? cover;
   final Track? track;
+
+  /// Where it was found: library, ytmusic, youtube, soundcloud, bandcamp, spotify.
+  final String? place;
+  final Future<Track> Function(AppState app) resolve;
 
   @override
   State<_Elsewhere> createState() => _ElsewhereState();
@@ -781,9 +1051,7 @@ class _ElsewhereState extends State<_Elsewhere> {
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _adding = true);
     try {
-      final h = widget.hit;
-      final t = widget.track ??
-          await app.api.resolve(videoId: h.videoId, title: h.title, artists: h.artists, album: h.album);
+      final t = await widget.resolve(app);
       // 'library': fetched and kept, and nothing queued — a record for later.
       if (mode != 'library') {
         await app.addTrack(t, mode: mode);
@@ -800,24 +1068,28 @@ class _ElsewhereState extends State<_Elsewhere> {
 
   @override
   Widget build(BuildContext context) {
-    final h = widget.hit;
-    final d = h.durationMs;
+    final d = widget.durationMs ?? widget.track?.durationMs;
+    final t = widget.track;
+    final place = widget.place;
     return _Hover(
       child: Row(children: [
-        SizedBox(
-            width: 36, height: 36, child: Icon(Icons.cloud_download_outlined, color: Console.faint)),
+        Stack(clipBehavior: Clip.none, children: [
+          Opacity(opacity: 0.85, child: ElsewhereArt(track: t, cover: widget.cover, title: widget.title, by: widget.by, size: 36)),
+          if (place != null) Positioned(left: -3, bottom: -3, child: PlaceDot(place, size: 7)),
+        ]),
         const SizedBox(width: 10),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(h.title,
+              Text(widget.title,
                   maxLines: 1, overflow: TextOverflow.ellipsis, style: Mag.title(13, color: Console.ink)),
               Text(
-                  [h.artists.join(', '), if (d != null) '${d ~/ 60000}:${(d ~/ 1000 % 60).toString().padLeft(2, '0')}']
-                      .where((x) => x.isNotEmpty)
-                      .join(' · '),
+                  [
+                    if (t != null && t.state != 'ready' && t.progressFraction != null) t.statusLine else widget.by,
+                    if (d != null) '${d ~/ 60000}:${(d ~/ 1000 % 60).toString().padLeft(2, '0')}',
+                  ].where((x) => x.isNotEmpty).join(' · '),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Mag.typewriter(10.5, color: Console.quiet)),
@@ -827,7 +1099,7 @@ class _ElsewhereState extends State<_Elsewhere> {
         if (_adding)
           const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 1.5))
         else if (_added)
-          Icon(Icons.check, size: 16, color: Console.ink)
+          Text('FETCHING', style: Console.label(8, color: Console.ink))
         else ...[
           Pad(
               icon: Icons.playlist_add,
@@ -1001,9 +1273,8 @@ class _SimilarListState extends State<_SimilarList> {
                                       if (p.where == 'house') 'the house has it',
                                       if (p.why.isNotEmpty) p.why,
                                     ].join(' · '))
-                                  : _Elsewhere(
-                                      key: ValueKey('else-${p.key}'),
-                                      hit: p.hit ??
+                                  : _Elsewhere.hit(
+                                      p.hit ??
                                           RemoteHit(
                                             videoId: p.track!.providerId ?? '',
                                             title: p.track!.title,
@@ -1011,6 +1282,7 @@ class _SimilarListState extends State<_SimilarList> {
                                             album: p.track!.album,
                                             durationMs: p.track!.durationMs,
                                           ),
+                                      key: ValueKey('else-${p.key}'),
                                       track: p.track),
                             ),
                           ),
@@ -1057,9 +1329,12 @@ class _HoverState extends State<_Hover> {
 }
 
 class _Empty extends StatelessWidget {
-  const _Empty({required this.icon, required this.line});
+  const _Empty({required this.icon, required this.line, this.onAgain});
   final IconData icon;
   final String line;
+
+  /// Where something went wrong rather than there being nothing: a way to try again.
+  final VoidCallback? onAgain;
 
   @override
   Widget build(BuildContext context) => Center(
@@ -1067,8 +1342,128 @@ class _Empty extends StatelessWidget {
           Icon(icon, size: 26, color: Console.faint),
           const SizedBox(height: 8),
           Text(line, textAlign: TextAlign.center, style: Console.label(8.5, color: Console.faint)),
+          if (onAgain != null) ...[
+            const SizedBox(height: 10),
+            _Toggle(label: 'TRY AGAIN', onTap: onAgain),
+          ],
         ]),
       );
+}
+
+/// A line of advice over a list, where the list is the answer to "now what?".
+class _Hint extends StatelessWidget {
+  const _Hint(this.text);
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(6, 4, 6, 8),
+        child: Row(children: [
+          Icon(Icons.play_circle_outline, size: 14, color: Theme.of(context).colorScheme.primary),
+          const SizedBox(width: 6),
+          Expanded(child: Text(text, style: Console.label(8, color: Console.quiet))),
+        ]),
+      );
+}
+
+/// A playlist in the crate: its cover, its name, how many records and how many of
+/// them are not here yet — and ▶, which has the Auto DJ mix it from now.
+class _ListRow extends StatelessWidget {
+  const _ListRow({required this.playlist, required this.open, required this.onOpen, this.indent = false});
+  final Playlist playlist;
+  final bool open;
+  final VoidCallback onOpen;
+
+  /// Filed in a folder: set in under its name.
+  final bool indent;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = playlist;
+    final app = context.read<AppState>();
+    return Padding(
+      padding: EdgeInsets.only(left: indent ? 10 : 0),
+      child: _Hover(
+        lit: open,
+        onTap: onOpen,
+        child: Row(children: [
+          p.isFavourites
+              ? SizedBox(width: 32, height: 32, child: Icon(Icons.favorite, size: 18, color: open ? Console.ink : Console.quiet))
+              : PlaylistArt(playlist: p, size: 32, radius: 4),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: Mag.title(13, color: Console.ink)),
+                Text(
+                    [
+                      '${p.itemCount}',
+                      if (p.waiting > 0) '${p.waiting} not here yet',
+                      if (p.saved && p.ownerName != null) p.ownerName!,
+                    ].join(' · '),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Mag.typewriter(10, color: Console.faint)),
+              ],
+            ),
+          ),
+          if (p.autoSplit)
+            Padding(
+              padding: const EdgeInsets.only(left: 6, right: 4),
+              child: Tooltip(
+                  message: 'Every song is taken apart', child: Icon(Icons.call_split, size: 13, color: Console.quiet)),
+            ),
+          if (p.itemCount > 0)
+            Pad(
+              icon: Icons.play_arrow,
+              width: 30,
+              height: 26,
+              colour: Theme.of(context).colorScheme.primary,
+              tooltip: 'Mix ${p.name} — the Auto DJ plays it from now',
+              onTap: () => mixList(context, name: p.name, tracks: () async {
+                final full = await app.api.playlist(p.id);
+                _ConsoleCrateState._lists[p.id] = full;
+                return full.items;
+              }),
+            ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// A folder's divider over its playlists: its name, how many, and ▶ for the lot of
+/// them as one list — every song in the folder once, list by list.
+class _FolderHead extends StatelessWidget {
+  const _FolderHead({required this.shelf});
+  final FolderShelf shelf;
+
+  @override
+  Widget build(BuildContext context) {
+    final f = shelf.folder;
+    final app = context.read<AppState>();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(6, 10, 0, 2),
+      child: Row(children: [
+        Icon(Icons.folder_outlined, size: 13, color: Console.quiet),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text('${f.name.toUpperCase()} · ${shelf.playlists.length}',
+              maxLines: 1, overflow: TextOverflow.ellipsis, style: Console.label(8.5, color: Console.quiet)),
+        ),
+        Pad(
+          icon: Icons.play_arrow,
+          width: 30,
+          height: 22,
+          colour: Console.quiet,
+          tooltip: 'Mix the whole folder — every song in it once',
+          onTap: () => mixList(context, name: f.name, tracks: () => app.api.folderTracks(f.id)),
+        ),
+      ]),
+    );
+  }
 }
 
 /// A small switch in words, the way the console labels things.
@@ -1151,12 +1546,23 @@ class _Row extends StatefulWidget {
       this.queuePos,
       this.handle,
       this.note,
-      this.fit});
+      this.fit,
+      this.played = false,
+      this.ask = false});
   final Track track;
   final Booth booth;
   final void Function(engine.Deck deck, Track track) loadInto;
   final engine.Deck? forDeck;
   final bool roomy;
+
+  /// Played already, in the queue: above the record the room is on.
+  final bool played;
+
+  /// Whether to ask the house for the record's whole analysis for its marks. Lists a
+  /// DJ is about to play from (the queue, FITS) do; a playlist or a search being
+  /// scrolled through does not — asked of a record the house had not measured, that
+  /// is seconds of its work, for every row scrolled past.
+  final bool ask;
 
   /// Where it is in the queue, when this is the queue.
   final int? queuePos;
@@ -1285,6 +1691,11 @@ class _RowState extends State<_Row> {
     final ready = t.isReady;
     final target = widget.forDeck ?? b.other(b.master);
     final onDeck = b.decks.where((d) => d.track?.id == t.id).firstOrNull;
+    // On its way to a deck, or the Auto DJ's next: said on the row, in the colour of
+    // the deck it is going to — the row clicked is the row that says LOADING.
+    final loadingOn = b.decks.where((d) => d.coming?.id == t.id).firstOrNull;
+    final isNext = onDeck == null && loadingOn == null && b.auto.running && b.auto.next?.id == t.id;
+    final edge = loadingOn ?? onDeck ?? (isNext ? b.other(b.master) : null);
     final d = t.durationMs;
     final length = d == null ? '' : '${d ~/ 60000}:${(d ~/ 1000 % 60).toString().padLeft(2, '0')}';
     final row = MouseRegion(
@@ -1299,9 +1710,11 @@ class _RowState extends State<_Row> {
           decoration: BoxDecoration(
             color: _over ? Console.raised : null,
             borderRadius: BorderRadius.circular(6),
-            border: onDeck == null
+            border: edge == null
                 ? null
-                : Border(left: BorderSide(color: Console.deck(onDeck.name), width: 3)),
+                : Border(
+                    left: BorderSide(
+                        color: Console.deck(edge.name).withValues(alpha: onDeck != null ? 1 : 0.6), width: 3)),
           ),
           child: Row(
             children: [
@@ -1363,12 +1776,15 @@ class _RowState extends State<_Row> {
                     ),
                   ),
                 ),
-              if (onDeck != null && !_over)
-                Padding(
-                  padding: const EdgeInsets.only(right: 6),
-                  child: Text('ON ${onDeck.name}',
-                      style: Console.label(8, color: Console.deck(onDeck.name))),
-                ),
+              if (!_over)
+                if (loadingOn != null)
+                  _Status.loading(loadingOn)
+                else if (onDeck != null)
+                  _Status.on(onDeck, playing: onDeck.playing)
+                else if (isNext)
+                  _NextChip(booth: b, colour: Console.deck(b.other(b.master).name))
+                else if (widget.queuePos != null && t.origin == 'booth')
+                  const _Status.auto(),
               if (_over && ready) ...[
                 for (final dk in [b.a, b.b]) ...[
                   Pad(
@@ -1384,7 +1800,7 @@ class _RowState extends State<_Row> {
                 ],
               ] else if (ready) ...[
                 _PartsGlyph(trackId: t.id),
-                _Facts(booth: b, track: t, roomy: widget.roomy),
+                _Facts(booth: b, track: t, roomy: widget.roomy, ask: widget.ask),
               ],
               if (widget.roomy && !_over)
                 SizedBox(
@@ -1406,7 +1822,7 @@ class _RowState extends State<_Row> {
         ),
       ),
     );
-    if (!ready) return row;
+    if (!ready) return widget.played ? Opacity(opacity: 0.45, child: row) : row;
     // A record is dragged onto a deck — with a mouse. On a touch screen a plain
     // Draggable takes the gesture the moment a finger moves at all, whichever way it
     // moved, so it beat the list to every swipe and the crate could not be scrolled:
@@ -1440,23 +1856,111 @@ class _RowState extends State<_Row> {
         ),
     );
     final faded = Opacity(opacity: 0.4, child: row);
+    final shown = widget.played ? Opacity(opacity: 0.45, child: row) : row;
     return _touchPointer
         ? LongPressDraggable<Track>(
             data: t,
             dragAnchorStrategy: pointerDragAnchorStrategy,
             feedback: feedback,
             childWhenDragging: faded,
-            child: row,
+            child: shown,
           )
         : Draggable<Track>(
             data: t,
             dragAnchorStrategy: pointerDragAnchorStrategy,
             feedback: feedback,
             childWhenDragging: faded,
-            child: row,
+            child: shown,
           );
   }
 
+}
+
+/// What is happening to a record, in a word on its row: LOADING → A while it goes
+/// onto a deck, ON A once it is there, AUTO for a record the Auto DJ queued itself.
+class _Status extends StatelessWidget {
+  const _Status.loading(engine.Deck this.deck)
+      : loading = true,
+        playing = false;
+  const _Status.on(engine.Deck this.deck, {this.playing = false}) : loading = false;
+  const _Status.auto()
+      : deck = null,
+        loading = false,
+        playing = false;
+
+  final engine.Deck? deck;
+  final bool loading, playing;
+
+  @override
+  Widget build(BuildContext context) {
+    final d = deck;
+    final colour = d == null ? Console.faint : Console.deck(d.name);
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: Tooltip(
+        message: d == null
+            ? 'The Auto DJ queued this itself (KEEP GOING) — it goes again if you queue past it'
+            : loading
+                ? 'Going onto deck ${d.name}'
+                : playing
+                    ? 'Playing on deck ${d.name}'
+                    : 'On deck ${d.name}',
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          if (loading) ...[
+            SizedBox(width: 10, height: 10, child: CircularProgressIndicator(strokeWidth: 1.5, color: colour)),
+            const SizedBox(width: 5),
+          ],
+          Text(
+              d == null
+                  ? 'AUTO'
+                  : loading
+                      ? 'LOADING → ${d.name}'
+                      : playing
+                          ? '▶ ${d.name}'
+                          : 'ON ${d.name}',
+              style: Console.label(8, color: colour)),
+        ]),
+      ),
+    );
+  }
+}
+
+/// The Auto DJ's next record, and in how long it comes in, counted down.
+class _NextChip extends StatelessWidget {
+  const _NextChip({required this.booth, required this.colour});
+  final Booth booth;
+  final Color colour;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(right: 6),
+        child: ListenableBuilder(
+          listenable: BoothClock.of(context).positionOf(booth.master),
+          builder: (context, _) {
+            final left = booth.auto.timeToGo;
+            final ready = booth.auto.isReady;
+            final s = left?.inSeconds;
+            return Container(
+              padding: const EdgeInsets.fromLTRB(5, 2, 5, 1),
+              decoration: BoxDecoration(
+                color: ready ? colour : null,
+                border: Border.all(color: colour),
+                borderRadius: BorderRadius.circular(3),
+              ),
+              child: Text(
+                !ready
+                    ? 'NEXT · GETTING READY'
+                    : booth.inTransition || (left?.isNegative ?? false)
+                        ? 'COMING IN'
+                        : s == null
+                            ? 'NEXT'
+                            : 'NEXT ${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}',
+                style: Console.label(7.5, color: ready ? Console.ground : colour),
+              ),
+            );
+          },
+        ),
+      );
 }
 
 /// Whether a finger is doing the pointing, in which case the list needs the plain
@@ -1469,10 +1973,14 @@ bool get _touchPointer =>
 
 /// Tempo and key, lit where they sit with the master.
 class _Facts extends StatelessWidget {
-  const _Facts({required this.booth, required this.track, this.roomy = false});
+  const _Facts({required this.booth, required this.track, this.roomy = false, this.ask = false});
   final Booth booth;
   final Track track;
   final bool roomy;
+
+  /// The record's whole analysis asked for (its marks), not only looked for: see
+  /// [_Row.ask].
+  final bool ask;
 
   @override
   Widget build(BuildContext context) {
@@ -1483,7 +1991,7 @@ class _Facts extends StatelessWidget {
       future: booth.facts.of(track),
       initialData: booth.facts.peek(track.id),
       builder: (context, facts) => FutureBuilder<TrackTiming?>(
-        future: booth.timing.later(track),
+        future: ask ? booth.timing.later(track) : Future.value(booth.timing.peek(track.id)),
         initialData: booth.timing.peek(track.id),
         builder: (context, snap) {
           final tm = snap.data, f = facts.data;

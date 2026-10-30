@@ -20,6 +20,7 @@ import 'package:muse/src/api/connection.dart';
 import 'package:muse/src/api/models.dart';
 import 'package:muse/src/state/booth/board/pad_spec.dart';
 import 'package:muse/src/ui/booth/board/board_pad.dart';
+import 'package:muse/src/ui/booth/desk/console_crate.dart' show forgetCrateMemory;
 import 'package:muse/src/ui/booth/board/board_room.dart';
 import 'package:muse/src/state/app_state.dart';
 import 'package:muse/src/state/booth/booth.dart';
@@ -111,10 +112,11 @@ void main() {
   for (final dark in [true]) {
     final phone = w < 700;
     for (final state in phone
-        ? ['empty', 'playing', 'set', 'plan', 'planner', 'crate', 'light', 'board']
-        : ['empty', 'playing', if (w == 1600) 'mixing', if (w != 1920) 'parts', if (w != 1280) 'crate', 'plan', 'set', if (w == 1600) 'show', 'planner', if (w == 1600) 'light', if (w != 1920) 'board', if (w == 1600) 'board-light', if (w == 1600) 'strip']) {
+        ? ['empty', 'playing', 'set', 'plan', 'planner', 'crate', 'crate-list', 'light', 'board']
+        : ['empty', 'playing', if (w == 1600) ...['mixing', 'crate-list', 'crate-search', 'loading'], if (w != 1920) 'parts', if (w != 1280) 'crate', 'plan', 'set', if (w == 1600) 'show', 'planner', if (w == 1600) 'light', if (w != 1920) 'board', if (w == 1600) 'board-light', if (w == 1600) 'strip']) {
       testWidgets('the booth at ${w.round()}x${h.round()}, $state', (tester) async {
         JustAudioPlatform.instance = FakeJustAudio();
+        forgetCrateMemory();
         useThisClientInstead(MockClient((r) async {
           if (r.url.path.contains('stream-key')) return http.Response('{"key": "k", "expires_at": 99999999999}', 200);
           // A house that builds sets: a dozen records rising to a peak and easing off.
@@ -124,10 +126,13 @@ void main() {
           if (r.url.path.endsWith('/booth/pool')) return json(_aPool());
           // The board's library: nothing of one's own, the house's shelf beside it.
           if (r.url.path.endsWith('/samples')) return json({'samples': [], 'house': _houseShelf()});
+          // A playlist opened in the crate: most of it here, some of it not yet.
+          if (r.url.path.endsWith('/playlists/51')) return json(_aPlaylist());
+          if (r.url.path.endsWith('/search/everything')) return json(_aSearch());
           return http.Response('{}', 200);
         }));
         // The crate wide and the log folded, as a DJ leaves them.
-        SharedPreferences.setMockInitialValues(state == 'crate'
+        SharedPreferences.setMockInitialValues(state.startsWith('crate')
             ? {'muse.booth.crateWide': true, 'muse.booth.logFolded': true}
             : state == 'plan'
                 ? {'muse.booth.view': 'plan'}
@@ -141,7 +146,7 @@ void main() {
                             ? {'muse.booth.look': 'light'}
                             : {});
         final app = AppState()..api = (ApiClient(baseUrl: 'http://example.invalid')..token = 'x');
-        if (state == 'crate' || state == 'planner') {
+        if (state.startsWith('crate') || state == 'planner') {
           app.playlists = [
             for (final (i, n) in ['Favourites', 'Friday warm-up', 'Hardtekk crate', 'Eurodance', 'Peak time'].indexed)
               Playlist(id: 50 + i, name: n, kind: i == 0 ? 'favourites' : 'local', itemCount: 12 + i * 7, autoSplit: i == 2),
@@ -192,6 +197,10 @@ void main() {
             await (b.a.play()).timeout(const Duration(seconds: 10), onTimeout: () => throw StateError('stuck: b.a.play()'));
             await (b.setCrossfader(0.35)).timeout(const Duration(seconds: 10), onTimeout: () => throw StateError('stuck: b.setCrossfader(0.35)'));
             await (b.sync(b.b)).timeout(const Duration(seconds: 10), onTimeout: () => throw StateError('stuck: b.sync(b.b)'));
+            if (state == 'loading') {
+              // A record on its way to B: named on the deck while it comes.
+              b.b.announce(_song(3, 'Freed from Desire', 'Gala', '#2a6a4a'));
+            }
             if (state == 'strip') {
               await b.board.setStrip(const StripSpec(bank: 0, row: 0));
             }
@@ -329,12 +338,42 @@ void main() {
           expect(find.text('NOW'), findsOneWidget);
           expect(find.text('WAITING · 2'), findsOneWidget);
         }
-        if (state == 'crate' && phone) {
+        if (state.startsWith('crate') && phone) {
           // The crate opens over the room on a phone.
           await tester.tap(find.byIcon(Icons.inventory_2_outlined));
           for (var i = 0; i < 6; i++) {
             await tester.pump(const Duration(milliseconds: 100));
           }
+          if (state == 'crate-list') {
+            await tester.tap(find.byIcon(Icons.library_music_outlined).last);
+            await tester.pump(const Duration(milliseconds: 100));
+            await tester.tap(find.text('Friday warm-up'));
+            for (var i = 0; i < 4; i++) {
+              await tester.pump(const Duration(milliseconds: 100));
+            }
+            expect(find.text('MIX IT'), findsOneWidget);
+          }
+        } else if (state == 'crate-list') {
+          // A playlist open: its cover, how much of it is here, and MIX IT.
+          await tester.tap(find.byIcon(Icons.library_music_outlined));
+          await tester.pump(const Duration(milliseconds: 100));
+          await tester.tap(find.text('Friday warm-up'));
+          for (var i = 0; i < 4; i++) {
+            await tester.pump(const Duration(milliseconds: 100));
+          }
+          expect(find.text('MIX IT'), findsOneWidget);
+          expect(find.textContaining('NOT HERE YET'), findsWidgets);
+        } else if (state == 'crate-search') {
+          // Songs from everywhere: the library's first, the rest with their covers and
+          // the dot saying where each is from.
+          await tester.tap(find.byIcon(Icons.search).first);
+          await tester.pump(const Duration(milliseconds: 100));
+          await tester.enterText(find.byType(TextField), 'euro');
+          for (var i = 0; i < 6; i++) {
+            await tester.pump(const Duration(milliseconds: 100));
+          }
+          expect(find.textContaining('NOT HERE YET'), findsOneWidget);
+          expect(find.text('Euro Dance Remix (Live)'), findsOneWidget);
         } else if (state == 'crate') {
           // Typing in the search is typing: Q is a letter, not SYNC on deck A.
           await tester.tap(find.byIcon(Icons.search).first);
@@ -407,6 +446,48 @@ void main() {
   }
 }
 
+
+/// A playlist as the house answers for one: its records, a few of them not here yet.
+Map<String, dynamic> _aPlaylist() => {
+      'id': 51,
+      'name': 'Friday warm-up',
+      'kind': 'local',
+      'items': [
+        for (final (i, (t, a)) in const [
+          ('Pump Up the Jam', 'Technotronic'), ('Rhythm Is a Dancer', 'SNAP!'), ('Mr. Vain', 'Culture Beat'),
+          ('What Is Love', 'Haddaway'), ('Children', 'Robert Miles'), ('Freed from Desire', 'Gala'),
+          ('Better Off Alone', 'Alice Deejay'), ('Sandstorm', 'Darude'),
+        ].indexed)
+          {
+            'id': 200 + i,
+            'title': t,
+            'artists': [a],
+            'duration_ms': 230000,
+            'state': i % 3 == 2 ? 'pending' : 'ready',
+            if (i % 3 != 2) 'stream_url': '/tracks/${200 + i}/stream',
+            'pos': i,
+          },
+      ],
+    };
+
+/// A search for songs everywhere: one of the library's, the rest from elsewhere.
+Map<String, dynamic> _aSearch() => {
+      'items': [
+        {
+          'kind': 'song', 'place': 'library', 'id': '10', 'title': 'Hide and Seek (Laserleo Remix)',
+          'subtitle': 'Imogen Heap',
+          'track': {'id': 10, 'title': 'Hide and Seek (Laserleo Remix)', 'artists': ['Imogen Heap'],
+                    'duration_ms': 245000, 'state': 'ready', 'stream_url': '/tracks/10/stream'},
+        },
+        {'kind': 'song', 'place': 'ytmusic', 'id': 'v1', 'title': 'Euro Dance Remix (Live)', 'subtitle': 'DJ Mangoo',
+         'cover_url': '/art/remote?u=https%3A%2F%2Fi.ytimg.com%2Fvi%2Fv1%2Fhqdefault.jpg', 'duration_ms': 201000},
+        {'kind': 'song', 'place': 'soundcloud', 'id': 'sc1', 'title': 'Eurodance Bootleg', 'subtitle': 'somebody',
+         'duration_ms': 188000},
+        {'kind': 'song', 'place': 'bandcamp', 'id': 'bc1', 'title': 'Euro Nights', 'subtitle': 'A Small Label',
+         'duration_ms': 260000},
+      ],
+      'notes': {},
+    };
 
 /// What a house that builds sets answers: twelve records, loud in the middle.
 Map<String, dynamic> _aSet() {

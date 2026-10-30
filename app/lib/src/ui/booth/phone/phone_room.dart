@@ -193,7 +193,14 @@ class _PhoneRoomState extends State<PhoneRoom> {
                       const SizedBox(height: 8),
                       BoothPanel(child: PhoneMixer(booth: _b)),
                       const SizedBox(height: 8),
-                      BoothPanel(child: PhoneAutoCard(booth: _b, onSet: _openSet, onPlan: _openPlan)),
+                      BoothPanel(child: PhoneAutoCard(
+                          booth: _b,
+                          onSet: _openSet,
+                          onPlan: _openPlan,
+                          onPickList: () {
+                            _tab.value = CrateTab.library;
+                            unawaited(_openCrate());
+                          })),
                       const SizedBox(height: 8),
                       SizedBox(height: 200, child: BoothPanel(child: ConsoleLog(booth: _b))),
                     ],

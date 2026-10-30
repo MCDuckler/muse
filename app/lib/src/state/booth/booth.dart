@@ -706,6 +706,17 @@ class Booth extends ChangeNotifier {
   /// starting, a session coming back): a record put on by a hand while the automix
   /// runs is one it has to hear about — it is what plays next, or what plays now.
   Future<void> load(Deck deck, Track track, {Duration? at, bool byHand = true}) async {
+    // Said on the deck at once: what follows (the automix letting go, the record's
+    // beat asked of the house) can take seconds before the deck itself is touched.
+    deck.announce(track);
+    try {
+      await _load(deck, track, at: at, byHand: byHand);
+    } finally {
+      deck.arrived(track);
+    }
+  }
+
+  Future<void> _load(Deck deck, Track track, {Duration? at, required bool byHand}) async {
     final told = byHand && auto.running;
     if (told) await auto.beforeHandLoad(deck);
     final t = await timing.of(track);

@@ -1052,6 +1052,14 @@ class _PlaylistHeader extends StatelessWidget {
                       ? null
                       : () => openBooth(context, tracks: items, mix: playlist.mix),
                 ),
+              // Any other list: the Auto DJ mixes it, record into record, from the top.
+              if (!playlist.isMix && app.boothOn)
+                PressButton(
+                  label: 'Mix in the booth',
+                  onTap: items.isEmpty
+                      ? null
+                      : () => openBooth(context, tracks: items, named: playlist.name),
+                ),
             ],
           ),
           // How far the station reaches past the library: what you have, a bit of

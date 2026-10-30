@@ -432,7 +432,13 @@ class _ConsoleRoomState extends State<ConsoleRoom> {
             const SizedBox(width: 2),
             BoothMark(on: _b.live),
             const SizedBox(width: 22),
-            Expanded(child: ConsoleAutoBar(booth: _b, onSetView: () => _show(BoothView.set))),
+            Expanded(child: ConsoleAutoBar(
+                booth: _b,
+                onSetView: () => _show(BoothView.set),
+                onPickList: () => setState(() {
+                      _crate = true;
+                      _tab.value = CrateTab.library;
+                    }))),
             const SizedBox(width: 12),
             if (_b.parts.separatesHere)
               _PartsLight(

@@ -1199,9 +1199,12 @@ class ApiClient {
               body: jsonEncode({if (order != null) 'order': order})))
           as Map<String, dynamic>);
 
-  Future<Queue> addToQueue(int id, List<int> trackIds, {String mode = 'end'}) async =>
+  /// [origin] says who put them there where it is not a hand: `booth` for the Auto
+  /// DJ's own picks (KEEP GOING), which the booth may take back out again.
+  Future<Queue> addToQueue(int id, List<int> trackIds, {String mode = 'end', String? origin}) async =>
       Queue.fromJson(await _decode(await net.post(_u('/queues/$id/items'),
-              headers: _headers, body: jsonEncode({'track_ids': trackIds, 'mode': mode})))
+              headers: _headers,
+              body: jsonEncode({'track_ids': trackIds, 'mode': mode, if (origin != null) 'origin': origin})))
           as Map<String, dynamic>);
 
   /// The cursor is not versioned: the device that is playing is the authority.

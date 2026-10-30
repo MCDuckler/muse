@@ -15,6 +15,7 @@ import '../../snack.dart';
 import '../../stage/arm_grip.dart';
 import '../booth_clock.dart';
 import 'console.dart';
+import 'deck_coming.dart';
 
 /// One deck of the console: the record turning with its arm, the pitch beside it,
 /// and under it what is done to this record alone — as pads, not paragraphs.
@@ -150,6 +151,7 @@ class _ConsoleDeckState extends State<ConsoleDeck> with TickerProviderStateMixin
   // ------------------------------------------------------------------ what is on
   Widget _header(bool isMaster) {
     final t = _d.track;
+    final coming = _d.coming;
     final bpm = _d.bpm;
     final letter = Text(_d.name, style: Mag.numerals(40, color: _colour));
     final words = Expanded(
@@ -157,18 +159,22 @@ class _ConsoleDeckState extends State<ConsoleDeck> with TickerProviderStateMixin
         crossAxisAlignment: _left ? CrossAxisAlignment.start : CrossAxisAlignment.end,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(t?.displayTitle ?? '',
+          // A record being put on is named at once, over the one it replaces.
+          Text(coming?.displayTitle ?? t?.displayTitle ?? '',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: Mag.title(18, color: Console.ink)),
+              style: Mag.title(18, color: coming != null ? Console.quiet : Console.ink)),
           const SizedBox(height: 2),
           Text(
-              _d.trouble != null
-                  ? 'Would not load'
-                  : t?.artistLine ?? '',
+              coming != null
+                  ? 'Loading…'
+                  : _d.trouble != null
+                      ? 'Would not load'
+                      : t?.artistLine ?? '',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: Mag.typewriter(11.5, color: _d.trouble != null ? Console.a : Console.quiet)),
+              style: Mag.typewriter(11.5,
+                  color: coming != null ? _colour : _d.trouble != null ? Console.a : Console.quiet)),
         ],
       ),
     );
@@ -212,7 +218,12 @@ class _ConsoleDeckState extends State<ConsoleDeck> with TickerProviderStateMixin
     final platter = Expanded(
       child: LayoutBuilder(builder: (context, c) {
         final side = c.biggest.shortestSide.clamp(80.0, 340.0);
-        return Center(child: _d.track == null ? _empty(side) : _record(side));
+        return Center(
+          child: Stack(alignment: Alignment.center, children: [
+            _d.track == null ? _empty(side) : _record(side),
+            DeckComingCard(booth: _b, deck: _d, side: side),
+          ]),
+        );
       }),
     );
     return Row(

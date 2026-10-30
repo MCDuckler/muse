@@ -32,9 +32,13 @@ enum BoothView { waves, set, plan, show }
 /// now, sooner, longer); the room's word where there is room for it; KEEP GOING —
 /// and, just after it changed something, a way back. The set itself is the SET view.
 class ConsoleAutoBar extends StatelessWidget {
-  const ConsoleAutoBar({super.key, required this.booth, required this.onSetView});
+  const ConsoleAutoBar({super.key, required this.booth, required this.onSetView, this.onPickList});
   final Booth booth;
   final VoidCallback onSetView;
+
+  /// With nothing queued, AUTO DJ opens the library to pick a playlist to mix — it
+  /// was a switch that did nothing, with "queue some records first" in its tooltip.
+  final VoidCallback? onPickList;
 
   @override
   Widget build(BuildContext context) {
@@ -52,12 +56,12 @@ class ConsoleAutoBar extends StatelessWidget {
       tooltip: auto.running
           ? 'Stop mixing (A)'
           : items.isEmpty
-              ? 'Queue some records first'
+              ? 'Pick a playlist to mix'
               : 'Mix the queue, record into record (A)',
       onTap: auto.running
           ? auto.stop
           : items.isEmpty
-              ? null
+              ? onPickList
               : () => startAuto(booth, items),
     );
 
@@ -73,7 +77,7 @@ class ConsoleAutoBar extends StatelessWidget {
           Expanded(
             child: Text(
                 items.isEmpty
-                    ? 'NOTHING QUEUED'
+                    ? 'NOTHING QUEUED — PICK A PLAYLIST AND MIX IT'
                     : '${items.length} ${items.length == 1 ? 'RECORD' : 'RECORDS'} · ${clockOf(Duration(milliseconds: total))}',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
