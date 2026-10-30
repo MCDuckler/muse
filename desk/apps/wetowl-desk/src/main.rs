@@ -21,6 +21,10 @@ pub(crate) struct App {
     search: String,
     bench: Option<Bench>,
     shot: Option<mpsc::Receiver<Arc<ColorImage>>>,
+    /// CUE held, per deck (CUE acts on press and on release).
+    cue_held: [bool; 2],
+    /// The nudge held, per deck.
+    nudge_held: [i8; 2],
 }
 
 impl App {
@@ -37,6 +41,8 @@ impl App {
             search: String::new(),
             bench: Bench::from_args(if std::env::var("WO_RENDERER").as_deref() == Ok("glow") { "egui-glow" } else { "egui-wgpu" }),
             shot: None,
+            cue_held: [false; 2],
+            nudge_held: [0; 2],
         }
     }
 

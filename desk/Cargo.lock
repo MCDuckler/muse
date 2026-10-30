@@ -4482,6 +4482,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "wo-booth"
+version = "0.1.0"
+
+[[package]]
 name = "wo-decode"
 version = "0.1.0"
 dependencies = [
@@ -4497,6 +4501,7 @@ dependencies = [
  "cpu-time",
  "image",
  "memory-stats",
+ "wo-booth",
  "wo-decode",
  "wo-engine",
  "wo-wave",

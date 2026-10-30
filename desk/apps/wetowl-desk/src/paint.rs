@@ -88,15 +88,20 @@ pub(crate) enum Lit {
 /// A button, painted; its response.
 pub(crate) fn button(ui: &mut egui::Ui, p: &Painter, r: Rect, s: &str, lit: Lit, id: impl std::hash::Hash + std::fmt::Debug) -> egui::Response {
     let resp = ui.interact(r, ui.scope_id().with(id), Sense::click());
+    paint_button(p, r, s, lit, resp.hovered());
+    resp
+}
+
+/// A button's face only: for one whose response comes from elsewhere ([`held`]).
+pub(crate) fn paint_button(p: &Painter, r: Rect, s: &str, lit: Lit, hovered: bool) {
     let (bg, edge, ink) = match lit {
         Lit::No => (white(0.05), white(0.11), col(theme::SOFT)),
         Lit::Deck(d) => (alpha(theme::DECKS[d], 0.15), alpha(theme::DECKS[d], 0.6), col(theme::TINTS[d])),
         Lit::Ok => (alpha(theme::OK, 0.15), alpha(theme::OK, 0.6), Color32::from_rgb(0xCF, 0xF5, 0xDF)),
     };
-    let bg = if resp.hovered() { bg.gamma_multiply(1.6) } else { bg };
+    let bg = if hovered { bg.gamma_multiply(1.6) } else { bg };
     p.rect(r, CornerRadius::same(6), bg, Stroke::new(1.0, edge), StrokeKind::Inside);
     label_sized(p, r.center(), Align2::CENTER_CENTER, s, 11.5, ink);
-    resp
 }
 
 /// The two edges of a band, mirrored around `mid`, as one mesh.
@@ -161,13 +166,25 @@ pub(crate) fn mmss(s: f64) -> String {
     format!("{}:{:04.1}", (s / 60.0) as u32, s % 60.0)
 }
 
-pub(crate) fn pad_name(k: PadKind) -> &'static str {
+/// A pad's word: why the booth placed it, or CUE for one a hand set.
+pub(crate) fn pad_name(k: Option<PadKind>) -> &'static str {
     match k {
-        PadKind::Intro => "Intro",
-        PadKind::Drop => "Drop",
-        PadKind::Break => "Break",
-        PadKind::Out => "Out",
+        Some(PadKind::Intro) => "Intro",
+        Some(PadKind::Drop) => "Drop",
+        Some(PadKind::Break) => "Break",
+        Some(PadKind::Out) => "Out",
+        None => "Cue",
     }
+}
+
+/// A pad's colour: the booth's by kind, a hand's in plain light grey.
+pub(crate) fn pad_colour(k: Option<PadKind>) -> Rgba {
+    k.map(theme::pad).unwrap_or(theme::SOFT)
+}
+
+/// Whether the pointer is held down on `r` (a button that acts on press and release).
+pub(crate) fn held(ui: &mut egui::Ui, r: Rect, id: impl std::hash::Hash + std::fmt::Debug) -> egui::Response {
+    ui.interact(r, ui.scope_id().with(id), Sense::click_and_drag())
 }
 
 /// One line of text cut to `room` px with an ellipsis.

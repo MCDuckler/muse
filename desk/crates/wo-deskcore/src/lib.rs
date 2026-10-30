@@ -17,6 +17,7 @@ pub mod theme;
 
 pub use backdrop::Backdrop;
 pub use records::{Audio, Record};
+pub use wo_booth::{Grid, Hands, Pad, PadKind, RANGES, Transport};
 pub use wo_engine::Load;
 
 const RATE: u32 = 48_000;
@@ -26,21 +27,6 @@ pub const SWAP_BAR: f64 = 16.0;
 /// Seconds a record plays alone before the next comes in.
 const SOLO: f64 = 8.0;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum PadKind {
-    Intro,
-    Drop,
-    Break,
-    Out,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Pad {
-    pub n: u8,
-    pub kind: PadKind,
-    /// Source seconds.
-    pub at: f64,
-}
 
 /// One deck as it is this frame.
 #[derive(Clone, Debug)]
@@ -66,6 +52,14 @@ pub struct DeckView {
     pub pads: [Option<Pad>; 8],
     /// How much of the record is decoded, 0..1.
     pub decoded: f32,
+    /// The hands' state: CUE, the loop, the pitch fader.
+    pub cue: Option<f64>,
+    pub looped: Option<(f64, f64)>,
+    pub loop_beats: Option<f64>,
+    pub loop_open: bool,
+    /// The pitch fader -1..1 and its range (±fraction).
+    pub pitch: f64,
+    pub range: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -101,13 +95,13 @@ pub struct Row {
 pub struct Lines {
     pub beats: Vec<f32>,
     pub bars: Vec<f32>,
-    pub pads: Vec<(f32, Pad)>,
+    /// x, the pad's index, the pad.
+    pub pads: Vec<(f32, usize, Pad)>,
 }
 
 struct Slot {
     record: Record,
-    beats: Arc<Vec<f64>>,
-    bar_one: usize,
+    hands: Hands,
     wave: Arc<Mutex<Wave>>,
     loader: Option<JoinHandle<Source>>,
     gain: f32,
@@ -115,7 +109,6 @@ struct Slot {
     filter: f32,
     fader: f32,
     keylock: bool,
-    pads: [Option<Pad>; 8],
 }
 
 struct Mix {
@@ -158,10 +151,14 @@ impl Drop for Pacer {
 }
 
 impl Desk {
-    /// Starts the engine (the sound card; else silently, paced), loads the first two
+    /// Starts the engine (the sound card; else, or with WO_AUDIO=off, silently and
+    /// paced in real time), loads the first two
     /// playable records, and plays the first from its first drop.
     pub fn open() -> Desk {
-        let (engine, pacer) = match Engine::start(Some(RATE), Output::Device) {
+        // WO_AUDIO=off: no sound card even where there is one (tests, CI).
+        let device = if std::env::var("WO_AUDIO").as_deref() == Ok("off") { Output::Offline } else { Output::Device };
+        let started = if device == Output::Device { Engine::start(Some(RATE), Output::Device) } else { Err(wo_engine::Error::NotOffline) };
+        let (engine, pacer) = match started {
             Ok(e) => (e, None),
             Err(_) => {
                 let e = Engine::start(Some(RATE), Output::Offline).expect("an offline engine");
@@ -192,8 +189,7 @@ impl Desk {
         }
         let empty = || Slot {
             record: queue[0].clone(),
-            beats: Arc::new(vec![]),
-            bar_one: 0,
+            hands: Hands::new(Grid::default()),
             wave: Arc::new(Mutex::new(Wave::default())),
             loader: None,
             gain: 0.5,
@@ -201,7 +197,6 @@ impl Desk {
             filter: 0.5,
             fader: 0.85,
             keylock: true,
-            pads: [None; 8],
         };
         let mut desk = Desk {
             engine,
@@ -223,7 +218,7 @@ impl Desk {
         for d in 0..2 {
             desk.engine.deck(DeckId::new(d).unwrap()).set_keylock(true);
         }
-        let start = desk.slots[0].pads[1].map(|p| p.at).unwrap_or(0.0);
+        let start = desk.slots[0].hands.pads[1].map(|p| p.at).unwrap_or(0.0);
         let a = desk.engine.deck(DeckId::A);
         a.seek((start - 4.0).max(0.0));
         a.play(true);
@@ -242,6 +237,8 @@ impl Desk {
         let deck = self.engine.deck(DeckId::new(slot).unwrap());
         deck.play(false);
         deck.unsync();
+        deck.clear_loop();
+        deck.bend(1.0);
         if let Some(old) = self.slots[slot].loader.take() {
             thread::spawn(move || drop(old.join()));
         }
@@ -292,20 +289,20 @@ impl Desk {
             Audio::Synth { .. } => synth::first_drop(bpm),
             _ => bar_at(0.3),
         };
-        let mut pads = [None; 8];
+        let mut hands = Hands::new(Grid::new(beats.clone(), bar_one));
         if !beats.is_empty() {
-            pads[0] = Some(Pad { n: 1, kind: PadKind::Intro, at: beats[bar_one.min(beats.len() - 1)] });
-            pads[1] = Some(Pad { n: 2, kind: PadKind::Drop, at: drop_at });
-            pads[2] = Some(Pad { n: 3, kind: PadKind::Break, at: bar_at(0.5) });
-            pads[3] = Some(Pad { n: 4, kind: PadKind::Out, at: bar_at(0.86) });
+            hands.place_auto(&[
+                (0, beats[bar_one.min(beats.len() - 1)], PadKind::Intro),
+                (1, drop_at, PadKind::Drop),
+                (2, bar_at(0.5), PadKind::Break),
+                (3, bar_at(0.86), PadKind::Out),
+            ]);
         }
         let s = &mut self.slots[slot];
         s.record = record;
-        s.beats = Arc::new(beats);
-        s.bar_one = bar_one;
+        s.hands = hands;
         s.wave = wave;
         s.loader = Some(loader);
-        s.pads = pads;
         self.apply_levels();
         let deck = self.engine.deck(DeckId::new(slot).unwrap());
         deck.set_keylock(self.slots[slot].keylock);
@@ -325,7 +322,7 @@ impl Desk {
                     let from = self.master;
                     let bpm = self.deck_bpm(from);
                     let d = self.engine.deck(DeckId::new(to).unwrap());
-                    let start = self.slots[to].pads[0].map(|p| p.at).unwrap_or(0.0);
+                    let start = self.slots[to].hands.pads[0].map(|p| p.at).unwrap_or(0.0);
                     d.seek(start);
                     let master = DeckId::new(from).unwrap();
                     d.start_with(master, 4, None, 0.0);
@@ -386,7 +383,13 @@ impl Desk {
                 eq: s.eq,
                 filter: s.filter,
                 fader: s.fader,
-                pads: s.pads,
+                pads: s.hands.pads,
+                cue: s.hands.cue,
+                looped: s.hands.looped,
+                loop_beats: s.hands.loop_beats,
+                loop_open: s.hands.loop_in.is_some(),
+                pitch: s.hands.pitch,
+                range: RANGES[s.hands.range],
                 decoded: if wave.done { 1.0 } else { (wave.seconds() / length.max(1.0)).min(1.0) as f32 },
             }
         };
@@ -443,17 +446,19 @@ impl Desk {
             .collect();
         let t1 = t0 + width as f64 / px_per_s;
         let mut lines = Lines::default();
-        let first = s.beats.partition_point(|&b| b < t0);
-        for (i, &b) in s.beats.iter().enumerate().skip(first) {
+        let grid = &s.hands.grid;
+        let first = grid.beats.partition_point(|&b| b < t0);
+        for (i, &b) in grid.beats.iter().enumerate().skip(first) {
             if b > t1 {
                 break;
             }
             let x = ((b - t0) * px_per_s) as f32;
-            if (i + 4 - s.bar_one % 4).is_multiple_of(4) { lines.bars.push(x) } else { lines.beats.push(x) }
+            if grid.is_bar(i) { lines.bars.push(x) } else { lines.beats.push(x) }
         }
-        for p in s.pads.iter().flatten() {
+        for (i, p) in s.hands.pads.iter().enumerate() {
+            let Some(p) = p else { continue };
             if p.at >= t0 && p.at <= t1 {
-                lines.pads.push((((p.at - t0) * px_per_s) as f32, *p));
+                lines.pads.push((((p.at - t0) * px_per_s) as f32, i, *p));
             }
         }
         (cols, lines)
@@ -517,10 +522,77 @@ impl Desk {
         self.engine.deck(DeckId::new(deck).unwrap()).set_keylock(s.keylock);
     }
 
-    pub fn jump_to_pad(&mut self, deck: usize, n: usize) {
-        if let Some(p) = self.slots[deck].pads.get(n).copied().flatten() {
-            self.engine.deck(DeckId::new(deck).unwrap()).seek(p.at);
-        }
+    // ---- a deck's hands (wo-booth), on the engine
+
+    /// Runs `f` with deck `d`'s hands over its engine deck.
+    fn hands<R>(&mut self, d: usize, f: impl FnOnce(&mut Hands, &mut EngineDeck<'_>) -> R) -> R {
+        let mut t = EngineDeck(self.engine.deck(DeckId::new(d).unwrap()));
+        f(&mut self.slots[d].hands, &mut t)
+    }
+
+    pub fn cue_down(&mut self, d: usize) {
+        self.hands(d, |h, t| h.cue_down(t));
+    }
+
+    pub fn cue_up(&mut self, d: usize) {
+        self.hands(d, |h, t| h.cue_up(t));
+    }
+
+    /// A pad pressed: set here when empty, else the record goes there.
+    pub fn pad(&mut self, d: usize, n: usize) {
+        self.hands(d, |h, t| h.pad(n, t));
+    }
+
+    pub fn clear_pad(&mut self, d: usize, n: usize) {
+        self.slots[d].hands.clear_pad(n);
+    }
+
+    /// A loop of `beats` from the bar (the same again lets go).
+    pub fn loop_beats(&mut self, d: usize, beats: f64) {
+        self.hands(d, |h, t| h.loop_beats(beats, t));
+    }
+
+    pub fn loop_in(&mut self, d: usize) {
+        self.hands(d, |h, t| h.loop_in(t));
+    }
+
+    pub fn loop_out(&mut self, d: usize) {
+        self.hands(d, |h, t| h.loop_out(t));
+    }
+
+    pub fn halve_loop(&mut self, d: usize) {
+        self.hands(d, |h, t| h.halve(t));
+    }
+
+    pub fn double_loop(&mut self, d: usize) {
+        self.hands(d, |h, t| h.double(t));
+    }
+
+    pub fn unloop(&mut self, d: usize) {
+        self.hands(d, |h, t| h.unloop(t));
+    }
+
+    /// `beats` on (negative: back), the loop with it.
+    pub fn jump(&mut self, d: usize, beats: f64) {
+        self.hands(d, |h, t| h.jump(beats, t));
+    }
+
+    /// The pitch fader, -1..1.
+    pub fn set_pitch(&mut self, d: usize, v: f64) {
+        self.hands(d, |h, t| h.set_pitch(v, t));
+    }
+
+    pub fn cycle_range(&mut self, d: usize) {
+        self.hands(d, |h, t| h.cycle_range(t));
+    }
+
+    /// A nudge held (-1, 1) or let go (0).
+    pub fn nudge(&mut self, d: usize, dir: i8) {
+        self.hands(d, |h, t| h.nudge(dir, t));
+    }
+
+    pub fn brake(&mut self, d: usize) {
+        self.hands(d, |h, t| h.brake(t));
     }
 
     pub fn set_auto(&mut self, on: bool) {
@@ -540,8 +612,7 @@ impl Desk {
     }
 
     fn spb(&self, deck: usize) -> f64 {
-        let b = &self.slots[deck].beats;
-        if b.len() > 1 { (b[b.len() - 1] - b[0]) / (b.len() - 1) as f64 } else { 60.0 / self.slots[deck].record.bpm.max(1.0) }
+        self.slots[deck].hands.grid.spb().unwrap_or(60.0 / self.slots[deck].record.bpm.max(1.0))
     }
 
     fn base_bpm(&self, deck: usize) -> f64 {
@@ -557,4 +628,37 @@ impl Desk {
 fn eq_db(eq: [f32; 3]) -> Eq {
     let db = |v: f32| if v >= 0.5 { (v - 0.5) * 12.0 } else { -40.0 * ((0.5 - v) * 2.0).powf(1.5) };
     Eq { low: db(eq[0]), mid: db(eq[1]), high: db(eq[2]) }
+}
+
+/// An engine deck as the hands' transport.
+struct EngineDeck<'e>(wo_engine::Deck<'e>);
+
+impl Transport for EngineDeck<'_> {
+    fn position(&self) -> f64 {
+        self.0.position()
+    }
+    fn playing(&self) -> bool {
+        self.0.read().playing
+    }
+    fn play(&mut self, on: bool) {
+        self.0.play(on);
+    }
+    fn seek(&mut self, t: f64) {
+        self.0.seek(t);
+    }
+    fn set_loop(&mut self, ab: Option<(f64, f64)>) {
+        match ab {
+            Some((a, b)) => self.0.set_loop(a, b),
+            None => self.0.clear_loop(),
+        }
+    }
+    fn set_rate(&mut self, rate: f64) {
+        self.0.set_rate(rate);
+    }
+    fn bend(&mut self, factor: f64) {
+        self.0.bend(factor);
+    }
+    fn brake(&mut self, seconds: f64) {
+        self.0.brake(seconds);
+    }
 }
