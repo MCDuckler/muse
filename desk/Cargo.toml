@@ -12,6 +12,8 @@ publish = false
 wo-engine-sys = { path = "crates/wo-engine-sys" }
 wo-engine = { path = "crates/wo-engine" }
 wo-decode = { path = "crates/wo-decode" }
+wo-wave = { path = "crates/wo-wave" }
+wo-deskcore = { path = "crates/wo-deskcore" }
 
 # Decoding and resampling are far too slow unoptimised; a debug build of the app
 # still plays records in real time.
