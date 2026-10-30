@@ -14,7 +14,6 @@ import 'package:muse/src/state/show/show_combos.dart';
 import 'package:muse/src/state/show/show_director.dart';
 import 'package:muse/src/state/show/show_events.dart';
 import 'package:muse/src/state/show/show_plan.dart';
-import 'package:muse/src/state/show/show_faves.dart';
 import 'package:muse/src/state/show/show_store.dart';
 import 'package:muse/src/state/show/show_taste.dart';
 import 'package:muse/src/state/show/show_rig.dart';

@@ -10,7 +10,7 @@ import 'package:muse/src/state/show/show_rig.dart';
 import 'package:muse/src/state/show/show_state.dart';
 import 'package:muse/src/ui/show/show_type3d.dart';
 
-ShowState _frame({TypeSpec spec = TypeSpec.standard, double kick = 0}) => ShowState(
+ShowState _frame({TypeSpec spec = TypeSpec.standard}) => ShowState(
       now: DateTime(2026),
       a: const ShowDeck(name: 'A', title: 'Rails', artist: 'Owl', bpm: 128, playing: true, beatIndex: 9, beatPhase: 0.25, barIndex: 2, beatInBar: 1),
       b: const ShowDeck(name: 'B'),

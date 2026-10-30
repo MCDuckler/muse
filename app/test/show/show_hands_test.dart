@@ -12,8 +12,6 @@ import 'package:muse/src/state/show/show_director.dart';
 import 'package:muse/src/state/show/show_engine.dart';
 import 'package:muse/src/state/show/show_pool.dart';
 import 'package:muse/src/state/show/show_rig.dart';
-import 'package:muse/src/state/show/show_tune.dart';
-import 'package:muse/src/state/show/show_state.dart' show ShowMacros;
 import 'package:muse/src/state/show/show_store.dart';
 
 import '../fake_audio.dart';

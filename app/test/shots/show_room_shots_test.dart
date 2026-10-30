@@ -16,7 +16,6 @@ import 'package:muse/src/state/booth/booth.dart';
 import 'package:muse/src/state/booth/deck.dart';
 import 'package:muse/src/state/booth/mixer.dart';
 import 'package:muse/src/state/show/show_pool.dart';
-import 'package:muse/src/state/show/show_rig.dart';
 import 'package:muse/src/state/show/show_store.dart';
 import 'package:muse/src/ui/show/show_room.dart';
 import 'package:muse/src/ui/show/stage_kit.dart';
