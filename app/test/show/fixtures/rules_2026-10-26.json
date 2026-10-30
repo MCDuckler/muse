@@ -1,0 +1,322 @@
+[
+{
+"scene": "siebenschlaefer",
+"style": "raw",
+"weight": 0.0
+},
+{
+"ground": "black",
+"scene": "siebenschlaefer",
+"mask": "none",
+"mix": "normal",
+"weight": 0.0
+},
+{
+"ground": "black",
+"scene": "turntable",
+"style": "raw",
+"mask": "none",
+"mix": "normal",
+"weight": 0.0
+},
+{
+"ground": "black",
+"scene": "turntable",
+"style": "ascii",
+"mask": "none",
+"mix": "normal",
+"weight": 0.0
+},
+{
+"ground": "white",
+"scene": "turntable",
+"mask": "none",
+"mix": "normal",
+"weight": 0.0
+},
+{
+"ground": "white",
+"scene": "turntable",
+"style": "raw",
+"mask": "none",
+"mix": "normal",
+"weight": 0.0
+},
+{
+"scene": "turntable",
+"weight": 0.0
+},
+{
+"scene": "siebenschlaefer",
+"weight": 0.0
+},
+{
+"scene": "fold",
+"weight": 0.0
+},
+{
+"scene": "echo",
+"weight": 0.0
+},
+{
+"scene": "lyrics",
+"weight": 0.0
+},
+{
+"scene": "veins",
+"weight": 0.0
+},
+{
+"scene": "fluid",
+"weight": 0.0
+},
+{
+"scene": "drift",
+"weight": 0.0
+},
+{
+"ground": "camera",
+"weight": 0.0
+},
+{
+"ground": "cover",
+"weight": 0.0
+},
+{
+"ground": "pulse.smoke",
+"weight": 0.0
+},
+{
+"ground": "pulse.smoke",
+"scene": "milk",
+"weight": 0.0
+},
+{
+"style": "viewports",
+"weight": 0.0
+},
+{
+"scene": "dance-art",
+"style": "disco",
+"weight": 0.0
+},
+{
+"ground": "pulse.stars",
+"weight": 0.0
+},
+{
+"ground": "field.drift",
+"weight": 0.0
+},
+{
+"ground": "pulse.rays",
+"weight": 0.0
+},
+{
+"ground": "pulse.grid",
+"weight": 0.0
+},
+{
+"ground": "wash",
+"weight": 0.0
+},
+{
+"ground": "wash",
+"scene": "milk",
+"weight": 0.0
+},
+{
+"ground": "own",
+"scene": "milk",
+"mask": "none",
+"mix": "normal",
+"weight": 0.0
+},
+{
+"scene": "milk",
+"style": "raw",
+"weight": 0.0
+},
+{
+"ground": "white",
+"scene": "dance-art",
+"style": "ascii",
+"mask": "none",
+"mix": "normal",
+"weight": 0.0
+},
+{
+"ground": "white",
+"scene": "dance-art",
+"style": "ascii",
+"mask": "none",
+"mix": "add",
+"weight": 0.0
+},
+{
+"ground": "white",
+"scene": "dance-art",
+"style": [
+"ascii",
+"dither",
+"lines",
+"trails"
+],
+"mask": "none",
+"mix": [
+"normal",
+"add",
+"screen"
+],
+"weight": 0.0
+},
+{
+"ground": "milk",
+"scene": "dance-art",
+"style": "ascii",
+"mask": "none",
+"mix": "contrast",
+"weight": 0.0
+},
+{
+"ground": "milk",
+"scene": "dance-art",
+"style": "dither",
+"mask": "none",
+"mix": "contrast",
+"weight": 0.0
+},
+{
+"ground": "white",
+"scene": "dance-art",
+"style": "ascii",
+"mask": "none",
+"mix": "screen",
+"weight": 0.0
+},
+{
+"ground": "white",
+"scene": "dance-art",
+"style": "ascii",
+"mask": "none",
+"weight": 0.0
+},
+{
+"ground": "white",
+"scene": "dance-art",
+"style": [
+"ascii",
+"dither"
+],
+"mask": "none",
+"weight": 0.0
+},
+{
+"ground": "white",
+"scene": "dance-art",
+"style": "lines",
+"mask": "none",
+"weight": 0.0
+},
+{
+"ground": "milk",
+"scene": "dance-art",
+"style": "plain",
+"mask": "none",
+"mix": "add",
+"weight": 0.0
+},
+{
+"ground": "black",
+"scene": "dance-art",
+"style": "plain",
+"mask": [
+"none",
+"keyhole",
+"inverted"
+],
+"mix": [
+"normal",
+"add",
+"screen",
+"contrast"
+],
+"weight": 2.0
+},
+{
+"ground": "white",
+"scene": "type3d",
+"style": "crt",
+"mask": "none",
+"mix": "normal",
+"weight": 0.75
+},
+{
+"scene": "type3d",
+"weight": 0.75
+},
+{
+"ground": "milk",
+"scene": "type3d",
+"style": "raw",
+"mask": "none",
+"mix": "contrast",
+"weight": 4.0
+},
+{
+"scene": [
+"drift",
+"flash",
+"turntable"
+],
+"weight": 0.0
+},
+{
+"ground": "white",
+"scene": [
+"blocks",
+"flock",
+"glide",
+"kinetic"
+],
+"style": [
+"ascii",
+"dither",
+"lines"
+],
+"mask": "none",
+"weight": 0.0
+},
+{
+"ground": "milk",
+"scene": [
+"blocks",
+"flock",
+"glide",
+"kinetic"
+],
+"style": [
+"ascii",
+"dither"
+],
+"mask": "none",
+"mix": "contrast",
+"weight": 0.0
+},
+{
+"scene": "flock",
+"weight": 0.0
+},
+{
+"scene": "glide",
+"weight": 0.3333
+},
+{
+"scene": "kinetic",
+"weight": 0.3333
+},
+{
+"scene": "blocks",
+"weight": 0.3333
+}
+]

@@ -38,6 +38,7 @@ import '../../state/show/camera_feed.dart';
 import '../../state/show/milk_feed.dart';
 import '../../state/show/show_feed.dart';
 import '../../state/show/show_pool.dart' show QualityPool;
+import '../../state/show/mosh_clock.dart';
 import '../../state/show/show_rig.dart';
 import '../../state/show/show_state.dart';
 import '../../state/show/show_tune.dart' show fxKnobs, imageTreatments;
@@ -282,7 +283,7 @@ class NativeStage {
   static String? whyNotRig(ShowRig rig, {bool? treats, bool? transforms}) {
     final f = rig.figure;
     // The transformation: a build of the stage from before ws_ghosts has no pass for it.
-    if (rig.transform.any && f.kind != Figure.none && !(transforms ?? (_it?.transformsToo ?? false))) {
+    if (rig.transform.beforeStyle && f.kind != Figure.none && !(transforms ?? (_it?.transformsToo ?? false))) {
       return 'the scene transformed, which this build of the stage cannot draw';
     }
     final t = f.treatment;
@@ -436,6 +437,19 @@ class NativeStage {
     }
   }();
   late final bool transformsToo = _ghostsFn != null;
+
+  /// The datamosh held (ws_mosh_hold: a library from before it has none), played by
+  /// the music (mosh_clock.dart).
+  late final void Function(Pointer<Float>, int)? _moshHoldFn = () {
+    try {
+      return _lib.lookupFunction<Void Function(Pointer<Float>, Int32), void Function(Pointer<Float>, int)>('ws_mosh_hold');
+    } catch (_) {
+      return null;
+    }
+  }();
+  final Pointer<Float> _moshHoldBuf = calloc<Float>(5);
+  final _moshClock = MoshClock();
+  bool _moshHeld = false;
   RigTransform? _ghostsSent;
   bool? _adaptSent;
   final Pointer<Float> _slitBuf = calloc<Float>(19);
@@ -468,6 +482,20 @@ class NativeStage {
         _slitBuf[0] = 0;
         slit(_slitBuf, 19);
         _slitOn = false;
+      }
+    }
+    // The datamosh held over the whole picture, MilkDrop alone too: the clock's
+    // numbers every frame while on, off once when it goes.
+    final moshHold = _moshHoldFn;
+    if (moshHold != null) {
+      final d = _moshClock.frame(st, st.rig.transform);
+      if (d.on || _moshHeld) {
+        final v = [d.on ? 1.0 : 0.0, d.heal, d.strength, d.grain, d.keys.toDouble()];
+        for (var i = 0; i < v.length; i++) {
+          _moshHoldBuf[i] = v[i];
+        }
+        moshHold(_moshHoldBuf, v.length);
+        _moshHeld = d.on;
       }
     }
     final a = st.macros.adapt;

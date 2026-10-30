@@ -1,12 +1,14 @@
 // The director: which scene is on, in which combination (show_combos.dart), and
 // when they change.
 //
-// Reads the frame and the moments and decides, by rule: a scene fits a section
+// Which scene: the one that fits the music best, among the ones the plan has on
+// (show_plan.dart) — each tiring the faster the lower its level, so over a night the
+// scenes share the time by their levels. Reads the frame and the moments and decides, by rule: a scene fits a section
 // and a band of energy (the scene files say which, see ui/show/scene.dart); a
 // change waits for a phrase, or a section turning, or a drop; a drop lands with a
 // cut and a hit, a breakdown goes through a dissolve; and the performer's next/prev
 // override it until the next section. The combination — background, style, mask,
-// blend — is drawn by the rules' weights for the scene on: the background kept a
+// blend — is drawn by the plan's weights for the scene on: the background kept a
 // while, the rest turned on the sections and the phrases. Deterministic from its
 // seed, so a recording plays the same show twice.
 //
@@ -21,6 +23,7 @@ import 'dart:math' as math;
 import 'combo_scores.dart';
 import 'show_combos.dart';
 import 'show_events.dart';
+import 'show_plan.dart';
 import 'show_rig.dart';
 import 'show_state.dart';
 
@@ -157,15 +160,16 @@ class ShowDirector {
   ComboScores? _scores;
   set scores(ComboScores? v) {
     _scores = v;
-    _leans = null;
+    _levels = null;
   }
 
-  /// The rules in force (the pool's, shipped and the hands').
-  List<ComboRule> get rules => _rules;
-  List<ComboRule> _rules = shippedComboRules;
-  set rules(List<ComboRule> v) {
-    _rules = v;
-    _leans = null;
+  /// How often everything comes (the pool's).
+  ShowPlan get plan => _plan;
+  ShowPlan _plan = ShowPlan.shipped;
+  set plan(ShowPlan v) {
+    if (identical(v, _plan)) return;
+    _plan = v;
+    _levels = null;
   }
 
   /// The backgrounds there are now (the camera with a camera on, the cover with a
@@ -205,10 +209,9 @@ class ShowDirector {
     ];
   }
 
-  /// [c]'s weight: the rules', less as it looks worse (none under ComboScores.floor) —
-  /// but a combination the hands named themselves comes as they said, however it
-  /// measured.
-  double weigh(Combo c) => ComboScores.weigh(c, _rules, scores: scores);
+  /// [c]'s weight within its scene: the plan's, less as it looks worse (none under
+  /// ComboScores.floor) — but a look the hands let come comes however it measured.
+  double weigh(Combo c) => ComboScores.weigh(c, _plan, scores: scores);
 
   // ---------------------------------------------------------------- the record
   /// How intense the picture should be now, 0..1, by where the record is (null: no
@@ -283,11 +286,27 @@ class ShowDirector {
   /// How many bars the combination on has been on.
   int get comboBars => _comboSinceBar;
 
+  /// How much where the record is leans on an effect: the datamosh most through a
+  /// build (more as it climbs) and a breakdown — it melts, and breaks on the drop —
+  /// less in an intro or an outro; the others as they are.
+  static double fxLean(Fx f, String? section, double buildK) => switch (f) {
+        Fx.mosh => switch (section) {
+            'build' => 1.5 + 1.5 * buildK,
+            'breakdown' || 'break' => 1.8,
+            'drop' => 1.2,
+            'intro' || 'outro' => 0.6,
+            _ => 1.0,
+          },
+        _ => 1.0,
+      };
+
+  double _buildK = 0;
+
   /// [c]'s weight now: [weigh], times how near it is to the [target], the record's
-  /// own look and the hands' taste.
+  /// own look, the hands' taste and where the record is for its effect.
   double leanNow(Combo c, double w) {
     if (w <= 0) return 0;
-    var k = affinity(c) * (taste?.call(c) ?? 1);
+    var k = affinity(c) * (taste?.call(c) ?? 1) * fxLean(c.fx, _now, _buildK);
     final t = target, i = scores?.intensity(c);
     if (t != null && i != null) {
       final d = i - t;
@@ -305,29 +324,30 @@ class ShowDirector {
     _comboBook.clear();
   }
 
-  /// Each scene's lean, by id: the mean weight of its combinations that are on (0 —
-  /// none on: never). Kept until the rules or the backgrounds change.
-  Map<String, double> get leans {
+  /// Each scene's level, by id: the plan's (0 — muted, or none of its looks on with
+  /// the backgrounds here: never). Kept until the plan or the backgrounds change.
+  Map<String, double> get levels {
     final here = _groundsNow;
     final key = (here.toList()..sort()).join(',');
-    if (_leans != null && _leansKey == key) return _leans!;
-    _leansKey = key;
-    return _leans = {
+    if (_levels != null && _levelsKey == key) return _levels!;
+    _levelsKey = key;
+    return _levels = {
       for (final sc in scenes)
         sc.id: () {
-          var n = 0, sum = 0.0;
-          for (final (_, w) in weighted(sc.id)) {
-            if (w <= 0) continue;
-            n++;
-            sum += w;
+          final level = _plan.sceneLevel(sc.id);
+          if (level <= 0) return 0.0;
+          // Any look of it on (stopping at the first).
+          final kind = kinds[sc.id] ?? Figure.none;
+          for (final c in combosOf(sc.id, kind, grounds: comboGrounds.where(here.contains))) {
+            if (weigh(c) > 0) return level;
           }
-          return n == 0 ? 0.0 : sum / n;
+          return 0.0;
         }(),
     };
   }
 
-  Map<String, double>? _leans;
-  String? _leansKey;
+  Map<String, double>? _levels;
+  String? _levelsKey;
 
   void _setCombo(Combo c) {
     if (c.ground != _combo?.ground) _groundSinceBar = 0;
@@ -400,9 +420,9 @@ class ShowDirector {
     return out;
   }
 
-  /// The scenes with a combination on — all of them, if none has.
+  /// The scenes on — all of them, if none is.
   List<SceneMeta> get on {
-    final l = leans;
+    final l = levels;
     final on = [
       for (final s in scenes)
         if ((l[s.id] ?? 1) > 0) s
@@ -486,12 +506,13 @@ class ShowDirector {
       final lean = s.genome.genes['scene.${sc.id}'];
       if (lean != null) score += (lean - 1) * 1.0;
       score += sc.priority;
-      // How often the hands want it (its combinations' weights): two points either way.
-      final hands = leans[sc.id];
-      if (hands != null && hands > 0) score += (math.log(hands) / math.ln2).clamp(-1.4, 1.2) * 1.5;
-      // What has been on a lot lately scores less (a minute on costs a point, fading);
-      // another family than the one on scores a little more.
-      score -= (fatigue[sc.id] ?? 0) / 60;
+      // How often the plan wants it: a little either way at once, and over a night by
+      // the fatigue — what has been on a lot lately scores less (a minute on costs a
+      // point at level 1, three at a third, fading), so the scenes share the time by
+      // their levels. Another family than the one on scores a little more.
+      final level = levels[sc.id] ?? 1;
+      if (level > 0) score += (math.log(level) / math.ln2).clamp(-2.0, 2.0) * 0.5;
+      score -= (fatigue[sc.id] ?? 0) / 60 / math.max(0.1, level);
       // And a family on a lot lately tires as a whole (two minutes of shapes cost
       // every shape a point), so the evening turns from shapes to bodies to flow.
       final fam = families[sc.id];
@@ -530,6 +551,7 @@ class ShowDirector {
     }
     _newRecord(m);
     _now = m.breakdown ? 'breakdown' : m.section;
+    _buildK = m.buildK;
     target = m.playing || m.bpm != null ? intensityFor(m, bias: bias) : null;
     var turned = false;
     if (section && m.section != _lastSection) {
@@ -571,9 +593,11 @@ class ShowDirector {
         if ((_scene?.startsWith('dance-') ?? false) && fits.any((f) => f.id == 'flock') && _rng.nextDouble() < 0.6) {
           _go('flock', SceneChange.dissolve, why: 'after the dancers, the birds', mayMosh: false);
         } else if (pool.isNotEmpty) {
-          // In a loud section a cut on the phrase; elsewhere a dissolve.
-          _go(pool[_rng.nextInt(pool.length)].id, loudSections.contains(_now) ? SceneChange.cut : SceneChange.dissolve,
-              why: 'a new phrase: another of the three that fit best');
+          // In a loud section a cut on the phrase; elsewhere a dissolve. One of them as
+          // likely as its level.
+          final l = levels;
+          final pick = pickByWeight([for (final f in pool) (f, l[f.id] ?? 1)], _rng.nextDouble()) ?? pool.first;
+          _go(pick.id, loudSections.contains(_now) ? SceneChange.cut : SceneChange.dissolve, why: 'a new phrase: another of the three that fit best');
         }
       }
     }

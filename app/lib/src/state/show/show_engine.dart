@@ -33,6 +33,7 @@ import 'show_genome.dart';
 import 'show_taste.dart';
 import 'show_heard.dart';
 import 'show_palette.dart';
+import 'show_plan_legacy.dart';
 import 'show_pool.dart';
 import 'show_rig.dart';
 import 'show_tune.dart';
@@ -83,7 +84,42 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
     director.families = {for (final l in v.values) l.id: familyOf(l.rig.figure.kind, l.rig.ground.kind)};
     director.kinds = {for (final l in v.values) l.id: l.rig.figure.kind};
     director.grounds = groundsHere;
+    StylePool.sceneOf = {
+      for (final l in v.values.toList().reversed)
+        if (l.rig.figure.kind != Figure.none) l.rig.figure.kind: l.id,
+    };
+    _readLegacy();
   }
+
+  /// The scenes' figures, by id (what a scene's styles are).
+  Map<String, Figure> get kinds => director.kinds;
+
+  /// The combination rules of before the plan read into it, once the scenes are
+  /// known (a style's rule is about every scene that has it): the pool's, and the
+  /// snapshots kept here.
+  void _readLegacy() {
+    if (_looks.isEmpty || !_isReady) return;
+    final pool = _doc.pool;
+    final raw = pool.legacy;
+    final oldSnaps = _doc.snapshots.any((s) => s.legacy != null) || (_doc.snapshot?.legacy != null);
+    if (raw == null && !oldSnaps) return;
+    var doc = _doc;
+    if (raw != null) {
+      final r = planFromRules(legacyRules(raw), kinds);
+      for (final n in r.notes) {
+        debugPrint('show: the rules into the plan: $n');
+      }
+      doc = doc.copyWith(pool: pool.copyWith(plan: r.plan, clearLegacy: true, before: raw));
+    }
+    if (oldSnaps) {
+      ShowSnapshot read(ShowSnapshot s) => s.legacy == null ? s : s.withSetup(setupFromLegacy(s.legacy!));
+      doc = doc.copyWith(snapshots: [for (final s in doc.snapshots) read(s)], snapshot: doc.snapshot == null ? null : read(doc.snapshot!));
+    }
+    setDoc(doc);
+  }
+
+  /// A set as the combination rules of before said it (a snapshot of then).
+  ShowSetup setupFromLegacy(List<dynamic> raw) => ShowSetup(plan: planFromRules(legacyRules(raw), kinds).plan);
 
   /// The family a look belongs to, for the director's turns: geometric shapes,
   /// figures in a space, organic simulations, media.
@@ -119,12 +155,13 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
       }
       _apply(doc);
       _isReady = true;
+      _readLegacy();
     }();
   }
 
   void _apply(ShowDoc doc) {
     _doc = doc;
-    director.rules = doc.pool.allRules;
+    director.plan = doc.pool.plan;
     director.taste = (c) => ShowTaste.lean(c, doc.taste, doc.faves);
     director.bias = doc.pool.bias;
     director.moshShare = doc.pool.mosh;
@@ -146,6 +183,9 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   /// The hands changed the pool: applied now, kept a moment later.
   void setPool(ShowPool p) => setDoc(_doc.copyWith(pool: p));
 
+  /// The hands changed the plan.
+  void setPlan(ShowPlan p) => setPool(pool.copyWith(plan: p));
+
   void setDoc(ShowDoc d) {
     _apply(d);
     _saving?.cancel();
@@ -156,16 +196,28 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   }
 
   // ------------------------------------------------------------------ the hands
-  /// A combination put on as it is, held until let go ([holdScene] false, NEXT).
-  void play(Combo c) {
+  /// A combination put on as it is, held until let go ([holdScene] false, NEXT):
+  /// landing on the master's next beat, bar or phrase (the pool's LAND ON, or [at]) —
+  /// or now, and now when nothing plays. MilkDrop alone so put on: NEXT steps its
+  /// presets.
+  void play(Combo c, {Quantise? at}) {
+    if (_waits(at)) {
+      _launch = (look: c.scene, combo: c, fave: null, at: at ?? pool.quantise, asked: DateTime.now());
+      notifyListeners();
+      return;
+    }
     _letFave();
     _play(c);
   }
 
+  /// Whether a change asked for now waits for its moment.
+  bool _waits(Quantise? at) => (at ?? pool.quantise) != Quantise.now && _state.master.playing;
+
   void _play(Combo c) {
     _launch = null;
-    _milkOnly = false;
     director.play(c);
+    _milkOnly = c.scene == 'milk';
+    if (_milkOnly) unawaited(MilkFeed.shared.start());
     if (!running) tick(DateTime.now());
     notifyListeners();
   }
@@ -211,7 +263,12 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   /// [f] on the stage as it was kept, whatever the rules say of it: the combination
   /// held, its MilkDrop preset loaded and held, its framing cut to, its 3D text's
   /// motion, look and bends.
-  void playFave(ShowFave f) {
+  void playFave(ShowFave f, {Quantise? at}) {
+    if (_waits(at)) {
+      _launch = (look: f.combo.scene, combo: f.combo, fave: f, at: at ?? pool.quantise, asked: DateTime.now());
+      notifyListeners();
+      return;
+    }
     _faveOn = f;
     _faveMilkDone = f.milk == null;
     StylePool.heldShot = f.shot;
@@ -250,28 +307,19 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   Combo? get combo => director.combo;
 
   /// The hands' finish over every scene (the trails, the bloom…); null: each look's
-  /// own. And how strong the blend is (1: all of it). Not kept.
-  RigFinish? get finish => _finish;
-  RigFinish? _finish;
-  void setFinish(RigFinish? f) {
-    _finish = f;
-    if (!running) tick(DateTime.now());
-    notifyListeners();
-  }
+  /// own. And how strong the blend is (1: all of it). Kept (in a set, too).
+  RigFinish? get finish => pool.finish;
+  void setFinish(RigFinish? f) => setPool(pool.copyWith(finish: f, clearFinish: f == null));
 
-  double get blendStrength => _strength;
-  double _strength = 1;
-  void setBlendStrength(double v) {
-    _strength = v.clamp(0.0, 1.0);
-    if (!running) tick(DateTime.now());
-    notifyListeners();
-  }
+  double get blendStrength => pool.strength;
+  void setBlendStrength(double v) => setPool(pool.copyWith(strength: v.clamp(0.0, 1.0)));
 
   ShowRig _hands(ShowRig r) {
     // The transformation: the hands' held, or the director's for this combination.
     var out = r.copyWith(transform: _transformNow);
-    if (_finish != null) out = out.copyWith(finish: _finish);
-    if (_strength != 1) out = out.copyWith(blend: out.blend.copyWith(strength: _strength));
+    final finish = pool.finish, strength = pool.strength;
+    if (finish != null) out = out.copyWith(finish: finish);
+    if (strength != 1) out = out.copyWith(blend: out.blend.copyWith(strength: strength));
     return out;
   }
 
@@ -284,32 +332,24 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
     notifyListeners();
   }
 
-  /// The transformation's settings (TransformSet), kept.
+  /// The effects' settings (TransformSet: the mirrors, the datamosh's grain…), kept.
   void setTransform(TransformSet t) => setPool(pool.copyWith(transform: t));
 
-  /// The transformation on: the one the hands hold, or the director's for the
-  /// combination on — one roll a combination, none most of the time (the rest of
-  /// TransformSet.often a kaleidoscope or the slit-scan, as likely each), the same for
-  /// the same night (the session's seed).
-  RigTransform get _transformNow {
-    final t = pool.transform;
-    if (t.mode != TransformMode.auto) return t.of(t.mode);
-    final key = director.combo?.key;
-    if (key != _rolledFor) {
-      _rolledFor = key;
-      _rolls++;
-      final d = math.Random(_macros.seed * 7919 + _rolls).nextDouble();
-      _rolled = d >= t.often ? TransformMode.none : (d < t.often / 2 ? TransformMode.kaleidoscope : TransformMode.slit);
-    }
-    return t.of(_rolled);
+  /// An effect held by the hands over whatever comes (the kaleidoscope, the slit-scan,
+  /// the datamosh), till let go; null: each combination's own (the plan's effect row).
+  /// Not kept.
+  Fx? get heldFx => _heldFx;
+  Fx? _heldFx;
+  void holdFx(Fx? f) {
+    _heldFx = f;
+    if (!running) tick(DateTime.now());
+    notifyListeners();
   }
 
-  String? _rolledFor;
-  int _rolls = 0;
-  TransformMode _rolled = TransformMode.none;
+  /// The effect on: the one the hands hold, or the combination's.
+  Fx get fxOn => _heldFx ?? director.combo?.fx ?? Fx.none;
 
-  /// What the director put on for the combination on (the hands' mode where held).
-  TransformMode get transformOn => pool.transform.mode == TransformMode.auto ? _rolled : pool.transform.mode;
+  RigTransform get _transformNow => pool.transform.of(fxOn);
 
   /// Whether the stages trade the picture's size for their frames, kept.
   void setAdapt(bool on) => setPool(pool.copyWith(adapt: on));
@@ -324,10 +364,13 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   }
 
   // ------------------------------------------------------------------ launches
-  /// A look the hands asked for, landing on the next beat, bar or phrase of the
-  /// master (the pool's quantise, or [at]) — or now, and now when nothing plays.
-  ({String look, Quantise at, DateTime asked})? _launch;
+  /// What the hands asked for, landing on the next beat, bar or phrase of the master
+  /// (the pool's LAND ON, or [at]) — or now, and now when nothing plays: a scene, a
+  /// combination ([play]) or a favourite ([playFave]).
+  ({String look, Combo? combo, ShowFave? fave, Quantise at, DateTime asked})? _launch;
   String? get pendingLook => _launch?.look;
+  Combo? get pendingCombo => _launch?.combo;
+  ShowFave? get pendingFave => _launch?.fave;
   Quantise? get pendingAt => _launch?.at;
 
   void launch(String id, {Quantise? at}) {
@@ -338,7 +381,7 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
       director.choose(id, how: SceneChange.cut);
       _launch = null;
     } else {
-      _launch = (look: id, at: q, asked: DateTime.now());
+      _launch = (look: id, combo: null, fave: null, at: q, asked: DateTime.now());
     }
     if (!running) tick(DateTime.now());
     notifyListeners();
@@ -365,8 +408,51 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
           Quantise.now => true,
         });
     if (!due && now.difference(l.asked) < launchPatience) return;
-    director.choose(l.look, how: SceneChange.cut);
     _launch = null;
+    if (l.fave != null) {
+      playFave(l.fave!, at: Quantise.now);
+    } else if (l.combo != null) {
+      play(l.combo!, at: Quantise.now);
+    } else {
+      director.choose(l.look, how: SceneChange.cut);
+    }
+  }
+
+  // ------------------------------------------------------------------ holds
+  /// What the hands hold now, each let go of on its own ([letGo]) or all at once.
+  List<ShowHold> get holds {
+    final milk = MilkFeed.shared.director;
+    return [
+      if (director.locked) ShowHold.look,
+      if (heldGround != null) ShowHold.ground,
+      if (_heldFx != null) ShowHold.effect,
+      if (MilkFeed.shared.available && (milk.locked || milk.heldByHand)) ShowHold.preset,
+      if (_launch != null) ShowHold.pending,
+    ];
+  }
+
+  void letGo(ShowHold h) {
+    switch (h) {
+      case ShowHold.look:
+        holdScene(false);
+      case ShowHold.ground:
+        holdGround(null);
+      case ShowHold.effect:
+        holdFx(null);
+      case ShowHold.preset:
+        final d = MilkFeed.shared.director;
+        if (d.locked) d.set(locked: false);
+        d.release();
+        notifyListeners();
+      case ShowHold.pending:
+        cancelLaunch();
+    }
+  }
+
+  void letGoAll() {
+    for (final h in holds) {
+      letGo(h);
+    }
   }
 
   /// The performer's offset, in milliseconds: how much later than the deck's clock
@@ -777,24 +863,31 @@ extension ShowTrackWords on Track {
   String get showArtist => artists.join(', ');
 }
 
-/// The show as the snapshots' shelf sees it: the pool's rules, the document's
-/// snapshots, the booth's server.
+/// The show as the sets' shelf sees it: the pool's set, the document's snapshots,
+/// the booth's server.
 class _SnapshotHost implements SnapshotHost {
   _SnapshotHost(this.show);
   final ShowEngine show;
 
   @override
-  List<ComboRule> get rules => show.pool.rules;
+  ShowSetup get setup => show.pool.setup;
   @override
   List<ShowSnapshot> get kept => show.doc.snapshots;
   @override
   ShowSnapshot? get taken => show.doc.snapshot;
   @override
   ApiClient get api => show.booth.api;
+  @override
+  ShowSetup fromLegacy(List<dynamic> rules) => show.setupFromLegacy(rules);
 
   @override
-  void put({List<ComboRule>? rules, List<ShowSnapshot>? kept, ShowSnapshot? taken, bool clearTaken = false}) {
+  void put({ShowSetup? setup, List<ShowSnapshot>? kept, ShowSnapshot? taken, bool clearTaken = false}) {
     final d = show.doc;
-    show.setDoc(d.copyWith(pool: rules == null ? null : d.pool.copyWith(rules: rules), snapshots: kept, snapshot: taken, clearSnapshot: clearTaken));
+    show.setDoc(d.copyWith(pool: setup == null ? null : d.pool.withSetup(setup), snapshots: kept, snapshot: taken, clearSnapshot: clearTaken));
   }
 }
+
+/// Something the hands hold (show_engine.dart's holds): the look on (HOLD, a
+/// combination or a favourite put on), a background held under everything, an effect
+/// over everything, MilkDrop's preset, a change waiting for its moment.
+enum ShowHold { look, ground, effect, preset, pending }

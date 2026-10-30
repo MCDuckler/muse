@@ -1,6 +1,8 @@
 // The show in the booth's top band: a small picture of what the stage is showing,
-// the director's word under it, and the hands — the scene either way, a hit, the
-// blackout, the stage full screen here, or in a window of its own.
+// what is on in words, what the hands hold, MilkDrop's preset, and the few hands a
+// glance wants — the scene either way, hold, a hit, the blackout — with the way to the
+// show's own page (K) for everything else, the stage full screen here, or in a window
+// of its own.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -9,15 +11,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../state/app_state.dart';
 import '../../state/booth/booth.dart';
-import '../../state/show/camera_feed.dart';
 import '../../state/show/milk_feed.dart';
+import '../../state/show/show_engine.dart';
 import '../../state/show/show_state.dart';
 import '../../worker/tools.dart';
 import '../booth/desk/console.dart';
 import 'milk_page.dart';
 import 'native_stage.dart';
 import 'scene.dart';
-import 'show_dance.dart' show DanceModels;
 import 'show_debug.dart';
 import 'stage_preview.dart';
 import 'stage_kit.dart';
@@ -31,7 +32,7 @@ class ShowTile extends StatefulWidget {
   const ShowTile({super.key, required this.booth, this.onRig});
   final Booth booth;
 
-  /// Opens the show's own page (the rig), where there is one.
+  /// Opens the show's own page, where there is one.
   final VoidCallback? onRig;
 
   @override
@@ -63,31 +64,6 @@ class _ShowTileState extends State<ShowTile> {
   /// The performer's offset for this screen: see ShowEngine.offsetMs.
   static const _kOffset = 'muse.show.offsetMs';
 
-  /// Who dances in the dancer scenes: the pool's (show_pool.dart), and from there
-  /// ShowMacros.dancer.
-  void _setDancer(String id) {
-    final show = widget.booth.show;
-    final mix = id == DanceModels.mix;
-    show.setPool(show.pool.copyWith(dancer: mix ? null : id, clearDancer: mix));
-  }
-
-  /// A dancer switched off in the menu: never in a mix, as lead or in a troupe.
-  void _setDancerOff(String id, bool off) {
-    final show = widget.booth.show;
-    var pool = show.pool.withOff('dancer.$id', off);
-    // The one chosen to dance alone, switched off: back to the mix.
-    if (off && pool.dancer == id) pool = pool.copyWith(clearDancer: true);
-    show.setPool(pool);
-  }
-
-  /// A scene (a look) switched off in the menu: its card at 0 (show_combos.dart).
-  void _setSceneOff(String id, bool off) {
-    final show = widget.booth.show;
-    show.setPool(show.pool.withScene(id, !off));
-    // Turned off while it is on: on to the next one now, not at the next section.
-    if (off && show.state.scene == id) show.stepOn();
-  }
-
   Future<void> _load() async {
     try {
       await ShowDebug.load();
@@ -105,7 +81,20 @@ class _ShowTileState extends State<ShowTile> {
     }
   }
 
-  Future<void> _offset(BuildContext context) => showTileOffsetDialog(context, widget.booth);
+  /// What the hands hold, in a few words.
+  String _held(ShowEngine show) {
+    final book = _kit?.book;
+    return [
+      for (final h in show.holds)
+        switch (h) {
+          ShowHold.look => show.faveOn != null ? 'a favourite' : (show.milkOnly ? 'MilkDrop alone' : (book?[show.state.scene]?.name ?? 'the scene')),
+          ShowHold.ground => 'MilkDrop under',
+          ShowHold.effect => 'an effect',
+          ShowHold.preset => 'the preset',
+          ShowHold.pending => 'one waiting',
+        },
+    ].join(', ');
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -131,148 +120,24 @@ class _ShowTileState extends State<ShowTile> {
         SizedBox(
           width: 200,
           child: ListenableBuilder(
-            listenable: show,
+            listenable: Listenable.merge([show, MilkFeed.shared.director]),
             builder: (context, _) {
               final st = show.state;
               final m = st.master;
-              final scene = kit?.book[st.scene];
+              final c = show.combo;
+              final held = _held(show);
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        // The scene's name is the list of them: any one, straight to it.
-                        child: kit == null
-                            ? Text(scene?.name ?? '—', style: TextStyle(color: Console.ink, fontWeight: FontWeight.w700, fontSize: 15))
-                            : PopupMenuButton<String>(
-                                tooltip: 'Choose a scene, or turn scenes off',
-                                onSelected: show.chooseScene,
-                                itemBuilder: (context) => [
-                                  const PopupMenuItem<String>(
-                                    enabled: false,
-                                    height: 28,
-                                    child: Text('A name puts it on · a switch off keeps the director away from it', style: TextStyle(fontSize: 11)),
-                                  ),
-                                  for (final s in kit.book.scenes.values.toList()..sort((a, b) => a.name.compareTo(b.name)))
-                                    PopupMenuItem<String>(
-                                      value: s.id,
-                                      child: StatefulBuilder(builder: (context, setItem) {
-                                        final isOn = show.pool.sceneOn(s.id);
-                                        return Row(
-                                          children: [
-                                            SizedBox(width: 22, child: s.id == st.scene ? const Icon(Icons.play_arrow, size: 16) : null),
-                                            Expanded(
-                                              child: Text(
-                                                s.meta.needs.contains('camera') ? '${s.name} (camera)' : s.name,
-                                                style: TextStyle(color: isOn ? null : Theme.of(context).disabledColor),
-                                              ),
-                                            ),
-                                            Tooltip(
-                                              message: isOn ? 'On: the director may choose it' : 'Off: the director passes it by',
-                                              child: Switch(
-                                                value: isOn,
-                                                onChanged: (v) {
-                                                  _setSceneOff(s.id, !v);
-                                                  setItem(() {});
-                                                },
-                                              ),
-                                            ),
-                                          ],
-                                        );
-                                      }),
-                                    ),
-                                ],
-                                child: Row(
-                                  children: [
-                                    Flexible(
-                                      child: Text(scene?.name ?? '—',
-                                          style: TextStyle(color: Console.ink, fontWeight: FontWeight.w700, fontSize: 15),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis),
-                                    ),
-                                    Icon(Icons.arrow_drop_down, size: 18, color: Console.quiet),
-                                  ],
-                                ),
-                              ),
-                      ),
-                      // On a dancer scene: who dances.
-                      if (st.scene?.startsWith('dance-') ?? false)
-                        PopupMenuButton<String>(
-                          tooltip: 'Who dances: ${DanceModels.all.where((d) => d.$1 == st.macros.dancer).firstOrNull?.$2 ?? 'a mix, each record its own'}',
-                          onSelected: _setDancer,
-                          itemBuilder: (context) => [
-                            const PopupMenuItem<String>(
-                              enabled: false,
-                              height: 28,
-                              child: Text('A name dances alone · a switch off keeps them out of the mix', style: TextStyle(fontSize: 11)),
-                            ),
-                            CheckedPopupMenuItem<String>(
-                              value: DanceModels.mix,
-                              checked: (st.macros.dancer ?? DanceModels.mix) == DanceModels.mix,
-                              child: const Text('Mix — each record its own'),
-                            ),
-                            for (final (id, name) in DanceModels.all)
-                              PopupMenuItem<String>(
-                                value: id,
-                                child: StatefulBuilder(builder: (context, setItem) {
-                                  final isOn = !show.macros.dancersOff.contains(id);
-                                  return Row(
-                                    children: [
-                                      SizedBox(width: 22, child: st.macros.dancer == id ? const Icon(Icons.check, size: 16) : null),
-                                      Expanded(
-                                        child: Text(name, style: TextStyle(color: isOn ? null : Theme.of(context).disabledColor)),
-                                      ),
-                                      Tooltip(
-                                        message: isOn ? 'On: may dance in the mix' : 'Off: never in the mix',
-                                        child: Switch(
-                                          value: isOn,
-                                          onChanged: (v) {
-                                            _setDancerOff(id, !v);
-                                            setItem(() {});
-                                          },
-                                        ),
-                                      ),
-                                    ],
-                                  );
-                                }),
-                              ),
-                          ],
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 3),
-                            child: Icon(Icons.accessibility_new, size: 18, color: Console.quiet),
-                          ),
-                        ),
-                      Pad(
-                        icon: show.sceneHeld ? Icons.lock : Icons.lock_open,
-                        width: 26,
-                        height: 26,
-                        lit: show.sceneHeld,
-                        colour: Console.quiet,
-                        tooltip: show.sceneHeld
-                            ? 'This scene is held — let the director choose again'
-                            : 'Hold this scene: the stage stays on it, the arrows still change it',
-                        onTap: () => show.holdScene(!show.sceneHeld),
-                      ),
-                      Pad(
-                          icon: Icons.timer_outlined,
-                          width: 26,
-                          height: 26,
-                          colour: Console.quiet,
-                          tooltip: 'The picture against the sound',
-                          onTap: () => _offset(context)),
-                    ],
-                  ),
-                  const SizedBox(height: 2),
+                  Text(kit?.book[st.scene]?.name ?? st.scene ?? '—',
+                      style: TextStyle(color: Console.ink, fontWeight: FontWeight.w700, fontSize: 15), maxLines: 1, overflow: TextOverflow.ellipsis),
                   ValueListenableBuilder<StageInfo>(
                     valueListenable: _info,
                     builder: (context, info, _) => Text(
                       [
+                        if (c != null && c.style != 'raw') c.style,
                         if (m.section != null) m.section!,
                         if (m.dropBeatsAway != null && m.dropBeatsAway! > 0) 'drop in ${m.dropBeatsAway!.ceil()}',
-                        if (st.mix.on) 'mix ${(st.mix.k * 100).round()}%',
-                        // Which stage draws this picture: the native one, or Flutter's —
-                        // and how fast. The debug pad says why, over the picture.
                         '${info.word}${info.parked ? ' parked' : ''}${info.fps > 0 ? ' ${info.fps.round()}' : ''}',
                       ].join(' · '),
                       style: TextStyle(color: Console.quiet, fontSize: 12),
@@ -280,6 +145,13 @@ class _ShowTileState extends State<ShowTile> {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
+                  if (held.isNotEmpty)
+                    Row(children: [
+                      Expanded(
+                        child: Text('held: $held', style: TextStyle(color: Console.a, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+                      ),
+                      Pad(label: 'LET GO', height: 20, colour: Console.a, tooltip: 'Every hold let go: the director has it all again', onTap: show.letGoAll),
+                    ]),
                   const SizedBox(height: 4),
                   // MilkDrop: the preset on, and the hands on it — where the helper is here.
                   if (MilkFeed.shared.available)
@@ -287,40 +159,19 @@ class _ShowTileState extends State<ShowTile> {
                       listenable: MilkFeed.shared,
                       builder: (context, _) {
                         final milk = MilkFeed.shared;
-                        final d = milk.director;
-                        final only = show.milkOnly;
                         return Row(
                           children: [
                             Expanded(
-                              child: Text(
-                                milk.running ? (milk.presetName ?? 'MilkDrop…') : 'MilkDrop off',
-                                style: TextStyle(color: milk.running ? Console.ink : Console.quiet, fontSize: 12),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                              child: Tooltip(
+                                message: 'MilkDrop\'s presets: the SHOW page (K), MILKDROP',
+                                child: Text(
+                                  milk.running ? (milk.presetName ?? 'MilkDrop…') : 'MilkDrop off',
+                                  style: TextStyle(color: milk.running ? Console.ink : Console.quiet, fontSize: 12),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
                             ),
-                            Pad(
-                              icon: Icons.filter_center_focus,
-                              width: 22,
-                              height: 22,
-                              lit: only,
-                              colour: Console.quiet,
-                              tooltip: only ? 'MilkDrop alone — back to the scenes' : 'MilkDrop alone on the stage: held on it, ‹ › step its presets',
-                              onTap: () => show.setMilkOnly(!only),
-                            ),
-                            const SizedBox(width: 2),
-                            Pad(
-                              icon: Icons.layers_outlined,
-                              width: 22,
-                              height: 22,
-                              lit: show.pool.milkOn,
-                              colour: Console.quiet,
-                              tooltip: show.pool.milkOn
-                                  ? 'The director puts MilkDrop under the scenes — tap and it never does (the combinations: the SHOW page)'
-                                  : 'The director never puts MilkDrop under a scene — tap to let it again',
-                              onTap: () => show.setPool(show.pool.withMilk(!show.pool.milkOn)),
-                            ),
-                            const SizedBox(width: 2),
                             Pad(
                                 icon: Icons.casino_outlined,
                                 width: 22,
@@ -329,7 +180,7 @@ class _ShowTileState extends State<ShowTile> {
                                 tooltip: 'Another preset',
                                 onTap: () {
                                   if (!milk.running) unawaited(milk.start());
-                                  d.random(byHand: true);
+                                  milk.director.random(byHand: true);
                                 }),
                             const SizedBox(width: 2),
                             const MilkHoldPad(size: 22),
@@ -358,35 +209,17 @@ class _ShowTileState extends State<ShowTile> {
                       const SizedBox(width: 4),
                       Pad(icon: Icons.chevron_right, width: 30, height: 30, colour: Console.ink, tooltip: 'The next scene', onTap: show.nextScene),
                       const SizedBox(width: 4),
-                      Pad(icon: Icons.flash_on, width: 30, height: 30, colour: Console.ink, tooltip: 'Hit', onTap: show.hit),
-                      const SizedBox(width: 4),
-                      ListenableBuilder(
-                        listenable: CameraFeed.shared,
-                        builder: (context, _) {
-                          final cam = CameraFeed.shared;
-                          return Pad(
-                            icon: cam.running ? Icons.videocam : Icons.videocam_off_outlined,
-                            width: 30,
-                            height: 30,
-                            lit: cam.running,
-                            colour: cam.running ? const Color(0xffe0302a) : Console.ink,
-                            tooltip: cam.running
-                                ? 'The camera is on — off'
-                                : cam.trouble != null
-                                    ? 'The room\'s camera on — last time: ${cam.trouble}'
-                                    : 'The room\'s camera on (the camera scenes need it)',
-                            onTap: () {
-                              if (cam.running) {
-                                cam.pinned = false;
-                                cam.stop();
-                              } else {
-                                cam.pinned = true;
-                                unawaited(cam.start());
-                              }
-                            },
-                          );
-                        },
+                      Pad(
+                        icon: show.sceneHeld ? Icons.lock : Icons.lock_open,
+                        width: 30,
+                        height: 30,
+                        lit: show.sceneHeld,
+                        colour: Console.ink,
+                        tooltip: show.sceneHeld ? 'Held — let the show change again' : 'Hold what is on until you let go',
+                        onTap: () => show.holdScene(!show.sceneHeld),
                       ),
+                      const SizedBox(width: 4),
+                      Pad(icon: Icons.flash_on, width: 30, height: 30, colour: Console.ink, tooltip: 'Hit', onTap: show.hit),
                       const SizedBox(width: 4),
                       Pad(
                         icon: Icons.dark_mode_outlined,
@@ -397,25 +230,19 @@ class _ShowTileState extends State<ShowTile> {
                         tooltip: 'Blackout',
                         onTap: () => show.setMacros(show.macros.copyWith(blackout: !show.macros.blackout)),
                       ),
-                      const SizedBox(width: 4),
-                      ValueListenableBuilder<bool>(
-                        valueListenable: ShowDebug.on,
-                        builder: (context, on, _) => Pad(
-                          icon: Icons.bug_report_outlined,
-                          width: 30,
-                          height: 30,
-                          lit: on,
-                          colour: Console.ink,
-                          tooltip: on
-                              ? 'The debug words over every stage — off'
-                              : 'Debug words over every stage: which renderer draws it (native or Flutter), why, how fast (I on the stage page)',
-                          onTap: ShowDebug.toggle,
-                        ),
-                      ),
                     ],
                   ),
                   const SizedBox(height: 6),
-                  if (MilkFeed.shared.available)
+                  if (widget.onRig != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: _Button(
+                          icon: Icons.tune,
+                          label: 'The show (K)',
+                          tip: 'The show\'s own page: how often everything comes, each scene\'s looks, the favourites, MilkDrop, the settings',
+                          onTap: widget.onRig),
+                    )
+                  else if (MilkFeed.shared.available)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 4),
                       child: _Button(
@@ -424,12 +251,6 @@ class _ShowTileState extends State<ShowTile> {
                         tip: 'Browse, favourite, make and edit MilkDrop presets',
                         onTap: () => openMilkPage(context, widget.booth),
                       ),
-                    ),
-                  if (widget.onRig != null)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 4),
-                      child:
-                          _Button(icon: Icons.tune, label: 'The rig', tip: 'The show\'s own page: its layers, its pool, the dancers (K)', onTap: widget.onRig),
                     ),
                   Row(
                     children: [

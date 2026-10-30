@@ -1,4 +1,4 @@
-// The TEXT tab: the 3D type's words and how they are shown (state/show/show_type3d.dart
+// The 3D text's own part of its scene's page: the 3D type's words and how they are shown (state/show/show_type3d.dart
 // TypeSpec, kept in the pool): the lines, when the next comes, the face, the motions
 // and the looks a phrase picks from, the colours, and the knobs — size, depth, bevel,
 // speed, the beat's push, the glow. SHOW IT puts the 3D text on the stage, held.
@@ -146,7 +146,7 @@ class _Type3dTabState extends State<_Type3dTab> {
                   onChanged: (x) => _put((_) => set(x)),
                 ),
               );
-          return ListView(children: [
+          return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             Row(children: [
               Expanded(
                 child: Text('Your words as solid 3D letters, turned and bent by the music. A phrase picks one of the motions, one of the looks and two of the bends lit below.',

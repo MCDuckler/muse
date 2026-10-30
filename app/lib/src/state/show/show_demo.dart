@@ -61,6 +61,15 @@ class DemoShowFeed extends ChangeNotifier implements ShowFeed {
     }
   }();
 
+  /// WETOWL_SHOW_FX=mosh|kaleidoscope|slit|both|none: that effect over everything.
+  static final Fx? _forcedFx = () {
+    try {
+      return Fx.values.asNameMap()[Platform.environment['WETOWL_SHOW_FX']];
+    } catch (_) {
+      return null;
+    }
+  }();
+
   static final RigBlend? _forcedBlend = () {
     try {
       final mask = Mask.values.asNameMap()[Platform.environment['WETOWL_SHOW_MASK']];
@@ -280,6 +289,8 @@ class DemoShowFeed extends ChangeNotifier implements ShowFeed {
       final b = blend ?? _forcedBlend;
       if (b != null) rig = rig.copyWith(blend: b);
     }
+    // The effect: the director's combination's, or WETOWL_SHOW_FX's.
+    rig = rig.copyWith(transform: TransformSet.standard.of(_forcedFx ?? director.combo?.fx ?? Fx.none));
     st = st.copyWith(
       scene: d.scene,
       sceneFrom: d.from,

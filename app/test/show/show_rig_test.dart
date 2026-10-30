@@ -1,5 +1,6 @@
 // The rig and the look: round trips, the hands over a look, the words.
 import 'package:flutter_test/flutter_test.dart';
+import 'package:muse/src/state/show/show_combos.dart' show Fx;
 import 'package:muse/src/state/show/show_rig.dart';
 import 'package:muse/src/state/show/show_state.dart';
 
@@ -78,10 +79,17 @@ void main() {
     expect(const RigTransform().on, isFalse);
     expect(const RigTransform(count: 1).on, isTrue, reason: 'one mirror is a kaleidoscope already');
     expect(RigTransform.fromJson({'count': 40, 'differ': 3}), const RigTransform(count: RigTransform.most, differ: 1));
-    const set = TransformSet(mode: TransformMode.kaleidoscope, count: 3, differ: 0.2, often: 0.3);
+    const set = TransformSet(count: 3, differ: 0.2, grain: 0.4, melt: 0.8, keys: 0.2);
     expect(TransformSet.fromJson(set.toJson()), set);
-    expect(set.of(TransformMode.none).any, isFalse);
-    expect(set.of(TransformMode.both), const RigTransform(count: 3, differ: 0.2, slit: true, line: 0.3, blend: Mix.screen, amount: 0.85));
+    expect(set.of(Fx.none).any, isFalse);
+    expect(set.of(Fx.both), const RigTransform(count: 3, differ: 0.2, slit: true, line: 0.3, blend: Mix.screen, amount: 0.85, grain: 0.4, melt: 0.8, keys: 0.2));
+    // The datamosh: over the whole picture, after everything — not between the figure
+    // and its style as the kaleidoscope and the slit-scan are.
+    final mosh = set.of(Fx.mosh);
+    expect(mosh.mosh && mosh.any, isTrue);
+    expect(mosh.beforeStyle, isFalse);
+    expect(RigTransform.fromJson(mosh.toJson()), mosh);
+    expect(set.of(Fx.kaleidoscope).beforeStyle, isTrue);
     const blended = RigTransform(count: 2, blend: Mix.contrast, amount: 0.5);
     expect(RigTransform.fromJson(blended.toJson()), blended);
     expect(const RigTransform(count: 4, turn: 0.5).turnRadians, closeTo(1.5708, 1e-3), reason: 'half of up to half a turn');

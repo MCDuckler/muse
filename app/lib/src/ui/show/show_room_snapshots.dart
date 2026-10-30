@@ -1,23 +1,24 @@
-// The snapshots, over the selector: the rules as they are named and kept, switched
-// between in a tap (state/show/show_snapshots.dart). Each one a chip — this device's,
-// then the shared ones (every WetOwl account's, a figure of two beside the name) —
-// the one on lit, a dot after its name where the rules have changed since. SAVE puts
-// the rules over the one on (a shared one: over everyone's, unless someone saved it
-// since — then theirs or ours); SAVE AS keeps them as a new one; the menu shares one
+// The sets, over the rotation: the show as the hands set it up — how often everything
+// comes, the effects, the director's temper, the knobs, the finish — named and kept,
+// switched between in a tap (state/show/show_snapshots.dart). Each one a chip — this
+// device's, then the shared ones (every WetOwl account's, a figure of two beside the
+// name) — the one on lit, a dot after its name where the show has changed since. SAVE
+// puts the show over the one on (a shared one: over everyone's, unless someone saved
+// it since — then theirs or ours); SAVE AS keeps it as a new one; the menu shares one
 // with everyone, takes it away again, renames and forgets.
 //
-// Switching away from rules not saved puts them aside, with an UNDO.
+// Switching away from a show not saved puts it aside, with an UNDO.
 part of 'show_room.dart';
 
-class _SnapshotBar extends StatefulWidget {
-  const _SnapshotBar({required this.show});
+class _SetBar extends StatefulWidget {
+  const _SetBar({required this.show});
   final ShowEngine show;
 
   @override
-  State<_SnapshotBar> createState() => _SnapshotBarState();
+  State<_SetBar> createState() => _SetBarState();
 }
 
-class _SnapshotBarState extends State<_SnapshotBar> {
+class _SetBarState extends State<_SetBar> {
   SnapshotShelf get shelf => widget.show.snapshots;
 
   @override
@@ -34,12 +35,12 @@ class _SnapshotBarState extends State<_SnapshotBar> {
 
   void _say(String words, {SnackBarAction? action}) => ScaffoldMessenger.of(context).say(snack(Text(words), action: action));
 
-  /// The rules and the snapshot on, as they are: what UNDO goes back to.
-  ({List<ComboRule> rules, ShowSnapshot? on}) get _now => (rules: widget.show.pool.rules, on: shelf.on);
+  /// The setup and the set on, as they are: what UNDO goes back to.
+  ({ShowSetup setup, ShowSnapshot? on}) get _now => (setup: widget.show.pool.setup, on: shelf.on);
 
-  void _back(({List<ComboRule> rules, ShowSnapshot? on}) was) {
+  void _back(({ShowSetup setup, ShowSnapshot? on}) was) {
     final show = widget.show;
-    show.setDoc(show.doc.copyWith(pool: show.pool.copyWith(rules: was.rules), snapshot: was.on, clearSnapshot: was.on == null));
+    show.setDoc(show.doc.copyWith(pool: show.pool.withSetup(was.setup), snapshot: was.on, clearSnapshot: was.on == null));
   }
 
   void _switch(ShowSnapshot? to) {
@@ -52,13 +53,14 @@ class _SnapshotBarState extends State<_SnapshotBar> {
       shelf.use(to);
     }
     if (lost) {
-      _say(from == null ? 'Your rules were put aside' : 'Your changes to $from were not saved',
+      _say(from == null ? 'Your changes were put aside' : 'Your changes to $from were not saved',
           action: SnackBarAction(label: 'UNDO', onPressed: () => _back(was)));
     }
   }
 
   Future<void> _saveAs() async {
-    final name = await promptForName(context, 'Save the rules as', '', 'Name', 'A snapshot of the selector: switch back to it in a tap.');
+    final name = await promptForName(context, 'Save the show as a set', '', 'Name',
+        'How often everything comes, the effects, the director\'s temper, the knobs and the finish: switch back to it in a tap.');
     if (name == null || name.trim().isEmpty || !mounted) return;
     shelf.saveAs(name);
   }
@@ -107,7 +109,7 @@ class _SnapshotBarState extends State<_SnapshotBar> {
         case 'forget':
           final was = (kept: shelf.kept, now: _now);
           shelf.forget(s);
-          _say('${s.name} forgotten (the rules on stay as they are)',
+          _say('${s.name} forgotten (the show stays as it is)',
               action: SnackBarAction(label: 'UNDO', onPressed: () {
                 final show = widget.show;
                 show.setDoc(show.doc.copyWith(snapshots: was.kept, snapshot: was.now.on));
@@ -137,11 +139,10 @@ class _SnapshotBarState extends State<_SnapshotBar> {
                   lit: lit,
                   colour: lit ? Console.a : Console.ink,
                   tooltip: s == null
-                      ? 'No snapshot: only the rules the app came with'
+                      ? 'No set: the show as the app came'
                       : s.shared
-                          ? 'Shared by ${s.mine ? 'you' : s.owner ?? 'someone'}${s.updatedBy != null ? ', last saved by ${s.updatedBy}' : ''}: '
-                              '${s.rules.length} rules'
-                          : 'On this device: ${s.rules.length} rules',
+                          ? 'Shared by ${s.mine ? 'you' : s.owner ?? 'someone'}${s.updatedBy != null ? ', last saved by ${s.updatedBy}' : ''}'
+                          : 'On this device',
                   onTap: lit ? null : () => _switch(s),
                 ),
               ),
@@ -149,9 +150,9 @@ class _SnapshotBarState extends State<_SnapshotBar> {
           }
 
           return Padding(
-            padding: const EdgeInsets.only(top: 8),
+            padding: const EdgeInsets.only(top: 2),
             child: Row(children: [
-              Text('SNAPSHOT', style: Console.label(9)),
+              Text('SET', style: Console.label(9, color: Console.ink)),
               const SizedBox(width: 8),
               Expanded(
                 child: SingleChildScrollView(
@@ -174,19 +175,19 @@ class _SnapshotBarState extends State<_SnapshotBar> {
                   lit: on != null && changed,
                   colour: Console.a,
                   tooltip: on == null
-                      ? 'Switch to a snapshot or SAVE AS one first'
+                      ? 'Switch to a set or SAVE AS one first'
                       : on.shared
-                          ? 'Your rules over ${on.name}, for everyone'
-                          : 'Your rules over ${on.name}',
+                          ? 'The show as it is over ${on.name}, for everyone'
+                          : 'The show as it is over ${on.name}',
                   onTap: on != null && changed ? () => unawaited(_save()) : null,
                 ),
               ),
               const SizedBox(width: 4),
               IntrinsicWidth(
-                child: Pad(label: 'SAVE AS', height: 24, colour: Console.ink, tooltip: 'Keep the rules as they are as a new snapshot', onTap: () => unawaited(_saveAs())),
+                child: Pad(label: 'SAVE AS', height: 24, colour: Console.ink, tooltip: 'Keep the show as it is as a new set', onTap: () => unawaited(_saveAs())),
               ),
               PopupMenuButton<String>(
-                tooltip: 'The snapshot on',
+                tooltip: 'The set on',
                 icon: Icon(Icons.more_vert, size: 18, color: Console.quiet),
                 onSelected: (w) => unawaited(_menu(w)),
                 itemBuilder: (context) => [

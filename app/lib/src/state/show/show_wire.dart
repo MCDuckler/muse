@@ -9,7 +9,7 @@
 //   {"t":"hello","v":1}
 //   {"t":"state","s":{...}}
 //   {"t":"event","e":{...}}
-//   {"t":"rules","r":[...],"c":"<combo key>",   the hands' combination rules and the
+//   {"t":"plan","p":{...},"c":"<combo key>",    the plan (show_plan.dart) and the
 //    "h":"<figure.shot>"}                       combination on, as they change: what
 //                                               the figures' clocks weigh their styles
 //                                               and their cameras by (StylePool); and
@@ -54,26 +54,26 @@ class ShowWire {
     if (now.difference(_lastAt) < every) return;
     _lastAt = now;
     say(jsonEncode({'t': 'state', 's': feed.state.toJson()}));
-    _rules();
+    _plan();
   }
 
-  List<ComboRule>? _rulesSent;
+  ShowPlan? _planSent;
   Combo? _comboSent;
   String? _heldSent;
   bool _sentOnce = false;
 
-  /// The rules and the combination on, where they changed (the booth's StylePool: the
+  /// The plan and the combination on, where they changed (the booth's StylePool: the
   /// engine's, in this process).
-  void _rules() {
-    final rules = StylePool.pool.rules, combo = StylePool.combo, held = StylePool.heldShot;
-    if (_sentOnce && identical(rules, _rulesSent) && combo == _comboSent && held == _heldSent) return;
+  void _plan() {
+    final plan = StylePool.plan, combo = StylePool.combo, held = StylePool.heldShot;
+    if (_sentOnce && identical(plan, _planSent) && combo == _comboSent && held == _heldSent) return;
     _sentOnce = true;
-    _rulesSent = rules;
+    _planSent = plan;
     _comboSent = combo;
     _heldSent = held;
     say(jsonEncode({
-      't': 'rules',
-      'r': [for (final r in rules) r.toJson()],
+      't': 'plan',
+      'p': plan.toJson(),
       if (combo != null) 'c': combo.key,
       if (held != null) 'h': held,
     }));
@@ -142,9 +142,8 @@ class RemoteShowFeed extends ChangeNotifier implements ShowFeed {
       case 'event':
         final e = j['e'];
         if (e is Map) _events.add(ShowEvent.fromJson(e.cast<String, dynamic>()));
-      case 'rules':
-        final r = j['r'];
-        StylePool.from(ShowPool(rules: r is List ? [for (final x in r) ComboRule.fromJson(x)].whereType<ComboRule>().toList() : const []));
+      case 'plan':
+        StylePool.plan = ShowPlan.fromJson(j['p']);
         final c = j['c'];
         StylePool.combo = c is String ? Combo.fromKey(c) : null;
         final h = j['h'];

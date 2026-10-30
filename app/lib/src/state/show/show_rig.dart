@@ -285,13 +285,28 @@ class RigBlend {
 ///    original, which stays whole on top wherever it draws anything (shaders/show/
 ///    ghosts.frag). [turn] turns the mirrors (0..1: up to half a turn; 2 mirrors at 0
 ///    are one horizontal and one vertical), [line] how much of their edges is drawn,
-///    [differ] how far the reflections' light and colour are from the original's.
+///    [differ] how far the reflections' light and colour are from the original's;
+///  * or the datamosh held ([mosh]), over the whole picture as finished (fx.h, driven
+///    by mosh_clock.dart): [grain] how blocky (a melt .. a codec's grain), [melt] how
+///    long its smears hold, [keys] how often the picture is let through again.
 class RigTransform {
-  const RigTransform({this.count = 0, this.differ = 0.5, this.slit = false, this.turn = 0, this.line = 0, this.blend = Mix.normal, this.amount = 1});
+  const RigTransform(
+      {this.count = 0,
+      this.differ = 0.5,
+      this.slit = false,
+      this.turn = 0,
+      this.line = 0,
+      this.blend = Mix.normal,
+      this.amount = 1,
+      this.mosh = false,
+      this.grain = 0.7,
+      this.melt = 0.5,
+      this.keys = 0.5});
 
   final int count;
   final double differ, turn, line;
-  final bool slit;
+  final bool slit, mosh;
+  final double grain, melt, keys;
 
   /// How the reflections meet the original (normal: the original whole on top; add,
   /// screen, contrast as the combinations' blends), and how much of them.
@@ -307,19 +322,29 @@ class RigTransform {
   bool get on => count >= 1;
 
   /// Anything of it on.
-  bool get any => on || slit;
+  bool get any => on || slit || mosh;
+
+  /// What of it goes between the figure and its style (the kaleidoscope, the
+  /// slit-scan); the datamosh goes over the whole picture, after everything.
+  bool get beforeStyle => on || slit;
 
   /// The mirrors' turn, in radians (up to half a turn).
   double get turnRadians => turn * 3.14159265;
 
-  RigTransform copyWith({int? count, double? differ, bool? slit, double? turn, double? line, Mix? blend, double? amount}) => RigTransform(
-      count: count ?? this.count,
-      differ: differ ?? this.differ,
-      slit: slit ?? this.slit,
-      turn: turn ?? this.turn,
-      line: line ?? this.line,
-      blend: blend ?? this.blend,
-      amount: amount ?? this.amount);
+  RigTransform copyWith(
+          {int? count, double? differ, bool? slit, double? turn, double? line, Mix? blend, double? amount, bool? mosh, double? grain, double? melt, double? keys}) =>
+      RigTransform(
+          count: count ?? this.count,
+          differ: differ ?? this.differ,
+          slit: slit ?? this.slit,
+          turn: turn ?? this.turn,
+          line: line ?? this.line,
+          blend: blend ?? this.blend,
+          amount: amount ?? this.amount,
+          mosh: mosh ?? this.mosh,
+          grain: grain ?? this.grain,
+          melt: melt ?? this.melt,
+          keys: keys ?? this.keys);
 
   Map<String, dynamic> toJson() => {
         'count': count,
@@ -329,6 +354,10 @@ class RigTransform {
         if (line != 0) 'line': line,
         if (blend != Mix.normal) 'blend': blend.name,
         if (amount != 1) 'amount': amount,
+        if (mosh) 'mosh': true,
+        if (grain != 0.7) 'grain': grain,
+        if (melt != 0.5) 'melt': melt,
+        if (keys != 0.5) 'keys': keys,
       };
 
   factory RigTransform.fromJson(Object? j) => j is Map
@@ -340,6 +369,10 @@ class RigTransform {
           line: _d(j['line'], 0).clamp(0.0, 1.0),
           blend: _enumOf(Mix.values, j['blend'], Mix.normal),
           amount: _d(j['amount'], 1).clamp(0.0, 1.0),
+          mosh: j['mosh'] == true,
+          grain: _d(j['grain'], 0.7).clamp(0.0, 1.0),
+          melt: _d(j['melt'], 0.5).clamp(0.0, 1.0),
+          keys: _d(j['keys'], 0.5).clamp(0.0, 1.0),
         )
       : none;
 
@@ -352,96 +385,106 @@ class RigTransform {
       other.turn == turn &&
       other.line == line &&
       other.blend == blend &&
-      other.amount == amount;
+      other.amount == amount &&
+      other.mosh == mosh &&
+      other.grain == grain &&
+      other.melt == melt &&
+      other.keys == keys;
   @override
-  int get hashCode => Object.hash(count, differ, slit, turn, line, blend, amount);
+  int get hashCode => Object.hash(count, differ, slit, turn, line, blend, amount, mosh, grain, melt, keys);
 }
 
-/// Which transformation is on: the director's pick ([auto]: none most of the time),
-/// or one the hands hold.
-enum TransformMode { auto, none, kaleidoscope, slit, both }
-
-/// The hands' transformation settings (ShowPool.transform, kept in show.json): the
-/// mode, the kaleidoscope's mirrors (how many wedges, their turn, how much of their
-/// edges shows) and how far the reflections differ, and how often the director puts
-/// one on at all (a share of its combinations; the rest have none).
+/// The hands' settings of the effects (ShowPool.transform, kept in show.json): the
+/// kaleidoscope's mirrors (how many wedges, their turn, how much of their edges shows,
+/// how far the reflections differ, how they meet the original and how much of them),
+/// and the datamosh's grain, melt and key frames. Which effect comes, and how often,
+/// is the plan's (show_plan.dart's effect row: Fx).
 class TransformSet {
   const TransformSet(
-      {this.mode = TransformMode.auto,
-      this.count = 2,
+      {this.count = 2,
       this.differ = 0.3,
-      this.often = 0.15,
       this.turn = 0,
       this.line = 0.3,
       this.blend = Mix.screen,
-      this.amount = 0.85});
+      this.amount = 0.85,
+      this.grain = 0.7,
+      this.melt = 0.5,
+      this.keys = 0.5});
 
-  final TransformMode mode;
   final int count;
-  final double differ, often, turn, line, amount;
+  final double differ, turn, line, amount;
   final Mix blend;
+  final double grain, melt, keys;
 
   static const standard = TransformSet();
 
-  /// What [mode] puts on, with these settings.
-  RigTransform of(TransformMode m) => RigTransform(
-        count: m == TransformMode.kaleidoscope || m == TransformMode.both ? count : 0,
+  /// What the effect [f] puts on, with these settings.
+  RigTransform of(Fx f) => RigTransform(
+        count: f == Fx.kaleidoscope || f == Fx.both ? count : 0,
         differ: differ,
-        slit: m == TransformMode.slit || m == TransformMode.both,
+        slit: f == Fx.slit || f == Fx.both,
         turn: turn,
         line: line,
         blend: blend,
         amount: amount,
+        mosh: f == Fx.mosh,
+        grain: grain,
+        melt: melt,
+        keys: keys,
       );
 
-  TransformSet copyWith({TransformMode? mode, int? count, double? differ, double? often, double? turn, double? line, Mix? blend, double? amount}) =>
+  TransformSet copyWith({int? count, double? differ, double? turn, double? line, Mix? blend, double? amount, double? grain, double? melt, double? keys}) =>
       TransformSet(
-          mode: mode ?? this.mode,
           count: count ?? this.count,
           differ: differ ?? this.differ,
-          often: often ?? this.often,
           turn: turn ?? this.turn,
           line: line ?? this.line,
           blend: blend ?? this.blend,
-          amount: amount ?? this.amount);
+          amount: amount ?? this.amount,
+          grain: grain ?? this.grain,
+          melt: melt ?? this.melt,
+          keys: keys ?? this.keys);
 
   Map<String, dynamic> toJson() => {
-        'mode': mode.name,
         'count': count,
         'differ': differ,
-        'often': often,
         'turn': turn,
         'line': line,
         'blend': blend.name,
         'amount': amount,
+        'grain': grain,
+        'melt': melt,
+        'keys': keys,
       };
 
   factory TransformSet.fromJson(Object? j) => j is Map
       ? TransformSet(
-          mode: _enumOf(TransformMode.values, j['mode'], TransformMode.auto),
           count: (j['count'] is num ? (j['count'] as num).round() : 2).clamp(1, RigTransform.most),
           differ: _d(j['differ'], 0.3).clamp(0.0, 1.0),
-          often: _d(j['often'], 0.15).clamp(0.0, 1.0),
           turn: _d(j['turn'], 0).clamp(0.0, 1.0),
           line: _d(j['line'], 0.3).clamp(0.0, 1.0),
           blend: _enumOf(Mix.values, j['blend'], Mix.screen),
           amount: _d(j['amount'], 0.85).clamp(0.0, 1.0),
+          grain: _d(j['grain'], 0.7).clamp(0.0, 1.0),
+          melt: _d(j['melt'], 0.5).clamp(0.0, 1.0),
+          keys: _d(j['keys'], 0.5).clamp(0.0, 1.0),
         )
       : standard;
 
   @override
   bool operator ==(Object other) =>
       other is TransformSet &&
-      other.mode == mode &&
       other.count == count &&
       other.differ == differ &&
-      other.often == often &&
       other.turn == turn &&
       other.line == line &&
       other.blend == blend &&
-      other.amount == amount;
+      other.amount == amount &&
+      other.grain == grain &&
+      other.melt == melt &&
+      other.keys == keys;
   @override
-  int get hashCode => Object.hash(mode, count, differ, often, turn, line, blend, amount);
+  int get hashCode => Object.hash(count, differ, turn, line, blend, amount, grain, melt, keys);
 }
 
 /// The finish over everything (a scene file's `post`, `text` and `particles`).

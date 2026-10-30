@@ -1,14 +1,15 @@
-"""The show's shared snapshots: the combination selector's rules, named, for every account.
+"""The show's shared sets (snapshots): the show as a desk set it up, named, for every account.
 
-A snapshot is the booth's combination rules as they were when it was taken (the app
-keeps its own on the device: show.json). One shared here is listed to every account
+A set is the booth's setup as it was when it was saved — how often everything comes
+(the plan), the effects, the director's temper, the knobs, the finish; before the sets,
+the combination rules alone (the app keeps its own on the device: show.json). One shared here is listed to every account
 signed in, which may switch its show to it and save over it — with the revision, as a
 board: a desk saving over a copy older than the one kept is told so (409) with the
 snapshot as it is, and reads again. Only whoever shared it renames it away from
 everyone or takes it away.
 
-The document is the app's, kept as it comes (`{"rules": [...]}`), only its size
-checked: the app reads what it understands of it.
+The document is the app's, kept as it comes (`{"setup": {...}}`, or `{"rules": [...]}`
+from before the sets), only its size checked: the app reads what it understands of it.
 """
 from __future__ import annotations
 
@@ -62,7 +63,7 @@ def _doc(body: dict) -> dict:
     if not isinstance(doc, dict):
         raise HTTPException(400, "doc must be the snapshot as JSON")
     if len(json.dumps(doc)) > MAX_DOC:
-        raise HTTPException(413, "that is a lot of rules")
+        raise HTTPException(413, "that is a lot of show")
     return doc
 
 
@@ -85,7 +86,7 @@ def share(body: dict = Body(...), user: dict = Depends(current_user)):
 
 @router.put("/{snapshot_id}")
 def save(snapshot_id: int, body: dict = Body(...), user: dict = Depends(current_user)):
-    """The rules (and the name, its keeper only) over the ones kept — if [rev] is the
+    """The setup (and the name, its keeper only) over the one kept — if [rev] is the
     one kept. A stale [rev] is a 409 with the snapshot as it is."""
     kept = _row(snapshot_id)
     try:

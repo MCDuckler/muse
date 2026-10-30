@@ -113,8 +113,8 @@ void main() {
       show.putFave(f.copyWith(stars: 5));
       expect(show.faves.single.stars, 5);
 
-      // The rules since: the combination off, the scene let go.
-      show.setPool(show.pool.withRule(const ComboRule(scenes: {'type3d'}), 0));
+      // The plan since: the scene off, let go.
+      show.setPlan(show.pool.plan.withScene('type3d', muted: true));
       show.holdScene(false);
       show.playFave(show.faves.single);
       show.tick(DateTime.now());

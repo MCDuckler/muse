@@ -105,7 +105,7 @@ void main() {
     expect(show.state.rig.blend, RigBlend(mask: c.mask, mix: c.mix));
     expect(c.ground, isNot('camera'), reason: 'no camera on');
     expect(c.ground, isNot('cover'), reason: 'no record\'s cover');
-    expect(show.pool.weightOf(c), greaterThan(0));
+    expect(show.pool.plan.lookWeight(c), greaterThan(0));
     expect(show.state.rig.finish.trails, 0.35, reason: 'the look\'s own finish');
   });
 
@@ -143,11 +143,12 @@ void main() {
     expect(show.state.rig.finish.trails, 0.35);
   });
 
-  test("the transformation: held by the hands, or the director's — none most of the time — and the working size's switch with the frame", () {
+  test("the effect: the combination's, by the plan's effect row (none most of the time), or one held by the hands; the working size's switch with the frame", () {
     final t = DateTime(2026, 1, 1);
     show.chooseScene('kinetic');
-    // Held: what the hands say, over every combination.
-    show.setTransform(const TransformSet(mode: TransformMode.both, count: 3, differ: 0.4, turn: 0.25, line: 0.5));
+    // Held: what the hands say, over every combination, with the knobs.
+    show.setTransform(const TransformSet(count: 3, differ: 0.4, turn: 0.25, line: 0.5));
+    show.holdFx(Fx.both);
     show.setAdapt(false);
     show.tick(t);
     expect(show.state.rig.transform, const RigTransform(count: 3, differ: 0.4, slit: true, turn: 0.25, line: 0.5, blend: Mix.screen, amount: 0.85));
@@ -155,126 +156,124 @@ void main() {
     show.chooseScene('flash');
     show.tick(t.add(const Duration(milliseconds: 16)));
     expect(show.state.rig.transform.count, 3, reason: 'over whatever is on');
+    expect(show.holds, contains(ShowHold.effect));
     final back = ShowPool.fromJson(show.pool.toJson());
     expect(back.transform, show.pool.transform);
     expect(back.adapt, isFalse);
-    // The director's, never: none.
-    show.setTransform(const TransformSet(often: 0));
-    show.chooseScene('kinetic');
+    show.holdFx(null);
+    // The plan's: the combination on carries its effect, and the frame with it.
+    show.play(const Combo(ground: 'white', scene: 'kinetic', style: 'raw', fx: Fx.mosh));
     show.tick(t.add(const Duration(milliseconds: 32)));
-    expect(show.state.rig.transform.any, isFalse);
-    expect(show.transformOn, TransformMode.none);
-    // The director's, always: one of the two, the same while the combination stays.
-    show.setTransform(const TransformSet(often: 1));
-    show.chooseScene('flash');
-    show.tick(t.add(const Duration(milliseconds: 48)));
-    expect(show.transformOn, isIn([TransformMode.kaleidoscope, TransformMode.slit]));
-    final picked = show.state.rig.transform;
-    expect(picked.any, isTrue);
-    show.tick(t.add(const Duration(milliseconds: 64)));
-    expect(show.state.rig.transform, picked);
+    expect(show.fxOn, Fx.mosh);
+    expect(show.state.rig.transform.mosh, isTrue);
+    expect(show.state.rig.transform.beforeStyle, isFalse);
+    show.holdScene(false);
+    // Every effect but none off: the director never puts one on.
+    var p = show.pool.plan;
+    for (final f in Fx.values) {
+      if (f != Fx.none) p = p.withShared(PlanAxis.fx, f.name, muted: true);
+    }
+    show.setPlan(p);
+    for (var i = 0; i < 12; i++) {
+      show.chooseScene(i.isEven ? 'kinetic' : 'flash');
+      show.tick(t.add(Duration(milliseconds: 48 + 16 * i)));
+      expect(show.fxOn, Fx.none);
+      expect(show.state.rig.transform.any, isFalse);
+    }
+    // The datamosh alone: always it.
+    p = show.pool.plan.withShared(PlanAxis.fx, 'none', muted: true).withShared(PlanAxis.fx, 'mosh', muted: false);
+    show.setPlan(p);
+    show.chooseScene('kinetic');
+    show.tick(t.add(const Duration(milliseconds: 400)));
+    expect(show.fxOn, Fx.mosh);
     show.setTransform(TransformSet.standard);
     show.setAdapt(true);
     expect(show.pool.toJson().containsKey('transform'), isFalse);
   });
 
-
-  test('a launch lands on the bar, now when nothing plays, and the pool says when', () async {
+  test('everything held is said, let go one by one or all at once', () async {
+    await show.ready();
     final t = DateTime(2026, 1, 1);
     show.chooseScene('kinetic');
     show.tick(t);
-    // Nothing playing: now.
-    show.launch('flash');
-    expect(show.pendingLook, isNull);
-    expect(show.state.scene, 'flash');
-    // A record playing (the fake deck's clock is the wall's): the launch waits for
-    // the bar — two seconds at 120 — and lands on it, on a cut.
+    expect(show.holds, isEmpty);
+    show.play(const Combo(ground: 'white', scene: 'kinetic', style: 'raw'));
+    show.holdGround('milk');
+    show.holdFx(Fx.slit);
+    expect(show.holds, [ShowHold.look, ShowHold.ground, ShowHold.effect]);
+    show.letGo(ShowHold.ground);
+    expect(show.heldGround, isNull);
+    expect(show.holds, [ShowHold.look, ShowHold.effect]);
+    show.letGoAll();
+    expect(show.holds, isEmpty);
+    expect(show.sceneHeld, isFalse);
+    expect(show.heldFx, isNull, reason: 'the effect back to each look\'s own');
+    // The finish and the blend's strength are kept now.
+    show.setFinish(const RigFinish(trails: 0.5));
+    show.setBlendStrength(0.4);
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    expect(store.kept?.pool.finish?.trails, 0.5);
+    expect(store.kept?.pool.strength, 0.4);
+  });
+
+  test('a combination put on waits for the bar while a record plays, said as held', () async {
+    show.chooseScene('flash');
+    show.tick(DateTime.now());
     await booth.load(booth.a, song(1));
     await booth.a.play();
     show.tick(DateTime.now());
     expect(show.state.master.playing, isTrue);
-    show.launch('kinetic');
-    expect(show.pendingLook, 'kinetic');
-    expect(show.pendingAt, Quantise.bar);
-    await Future<void>.delayed(const Duration(milliseconds: 150));
-    show.tick(DateTime.now());
-    expect(show.state.scene, 'flash', reason: 'no bar yet');
-    expect(show.pendingLook, 'kinetic');
-    await Future<void>.delayed(const Duration(milliseconds: 2100));
-    show.tick(DateTime.now());
-    expect(show.state.scene, 'kinetic');
-    expect(show.pendingLook, isNull);
-    expect(show.state.sceneK, 1, reason: 'a launch is a cut, not a dissolve');
-    // The pool's quantise: now.
-    show.setPool(show.pool.copyWith(quantise: Quantise.now));
-    show.launch('flash');
+    const c = Combo(ground: 'white', scene: 'kinetic', style: 'raw');
+    show.play(c);
+    expect(show.pendingCombo, c);
+    expect(show.holds, contains(ShowHold.pending));
     expect(show.state.scene, 'flash');
-    expect(show.pendingLook, isNull);
-    // Asked for the phrase, then thought better of it.
-    show.launch('dance-art', at: Quantise.phrase);
-    expect(show.pendingLook, 'dance-art');
-    show.cancelLaunch();
-    expect(show.pendingLook, isNull);
+    await Future<void>.delayed(const Duration(milliseconds: 2200));
+    show.tick(DateTime.now());
+    expect(show.combo, c);
+    expect(show.sceneHeld, isTrue);
+    expect(show.pendingCombo, isNull);
+    // Now, said so.
+    show.play(const Combo(ground: 'black', scene: 'flash', style: 'raw'), at: Quantise.now);
+    expect(show.state.scene, 'flash');
   }, tags: ['wall-clock']);
 
-  test('a style\'s card at 0 is never picked; the moves reach the dancers', () async {
-    final t = DateTime(2026, 1, 1);
-    await show.ready();
-    // Every dancer style off but the silhouettes.
-    var p = show.pool;
-    for (final st in stylesOfFigure(Figure.dancers)) {
-      if (st != 'mono') p = p.withRule(ComboRule(styles: {st}), 0);
-    }
-    show.setPool(p);
-    for (var round = 0; round < 6; round++) {
-      show.chooseScene(round.isEven ? 'dance-art' : 'flash');
-      show.tick(t.add(Duration(milliseconds: 16 * round)));
-      if (show.state.scene == 'dance-art') expect(show.state.rig.figure.style, 'mono');
-    }
-    // The moves: the pool's switches and stars reach the dancers' statics.
-    show.setPool(show.pool.withOff('move.long22', true).withLean('move.long30', 2));
-    expect(MovePool.off, {'long22'});
-    expect(MovePool.favourites, {'long30'});
-    show.audition('long14');
-    expect(MovePool.audition, 'long14');
-    MovePool.audition = null;
-  });
-
-  test('the pool reaches the director and the dancers, and is kept', () async {
-    await show.ready();
-    show.setPool(show.pool.withScene('flash', false).withOff('dancer.joe', true).copyWith(dancer: 'chris'));
-    expect(show.director.leans['flash'], 0);
-    expect(show.director.on.map((s) => s.id), isNot(contains('flash')));
-    expect(show.macros.dancersOff, ['joe']);
-    expect(show.macros.dancer, 'chris');
-    show.setPool(show.pool.copyWith(clearDancer: true));
-    expect(show.macros.dancer, 'mix');
-    // Kept a moment later.
+  test('the rules of before are read into the plan once the scenes are known, and kept', () async {
+    final old = MemoryShowStore(ShowDoc.fromJson(const {
+      'v': 1,
+      'pool': {
+        'combos': [
+          {'scene': 'flash', 'weight': 0},
+          {'ground': 'milk', 'weight': 4},
+          {'ground': 'white', 'scene': 'kinetic', 'style': 'raw', 'weight': 0},
+        ]
+      },
+      'snapshots': [
+        {
+          'id': 'l:1',
+          'name': 'Calm',
+          'rules': [
+            {'scene': 'kinetic', 'weight': 0}
+          ]
+        }
+      ],
+    }));
+    final b = Booth(ApiClient(baseUrl: 'http://example.invalid')..token = 'x', mixer: QuietMixer(), showStore: old);
+    await b.init();
+    final e = b.show;
+    await e.ready();
+    expect(e.pool.legacy, isNotNull, reason: 'the scenes not known yet');
+    e.looks = {for (final l in [kinetic, flash, dancers]) l.id: l};
+    expect(e.pool.legacy, isNull);
+    expect(e.pool.before, hasLength(3));
+    expect(e.pool.plan.sceneLevel('flash'), 0);
+    expect(e.pool.plan.shared(PlanAxis.ground, 'milk'), 4);
+    expect(e.pool.plan.lookWeight(const Combo(ground: 'white', scene: 'kinetic', style: 'raw')), 0);
+    expect(e.doc.snapshots.single.legacy, isNull);
+    expect(e.doc.snapshots.single.setup.plan.sceneLevel('kinetic'), 0);
     await Future<void>.delayed(const Duration(milliseconds: 400));
-    expect(store.kept?.pool.sceneOn('flash'), isFalse);
-    expect(store.kept?.pool.isOn('dancer.joe'), isFalse);
-  });
-
-  test('a scene through a treatment carries it on its frame, with the knobs; the dancers draw theirs as their style', () {
-    final t = DateTime(2026, 1, 1);
-    show.play(const Combo(ground: 'milk', scene: 'kinetic', style: 'lines'));
-    show.setTune('lines', TuneKnob.weight, 2);
-    show.tick(t);
-    expect(show.state.rig.figure.treatment, Treatment.lines);
-    expect(show.state.rig.figure.style, isNull, reason: 'kinetic has no style of its own: the stage pass draws it');
-    expect(show.state.macros.tune['lines.weight'], 2);
-    expect(ShowMacros.fromJson(show.state.macros.toJson()).tune['lines.weight'], 2, reason: 'over the wire to a stage of its own');
-    // As drawn: no treatment.
-    show.play(const Combo(ground: 'milk', scene: 'flash', style: 'raw'));
-    show.tick(t.add(const Duration(milliseconds: 16)));
-    expect(show.state.rig.figure.treatment, Treatment.auto);
-    // The dancers draw it as their own style.
-    show.play(const Combo(ground: 'milk', scene: 'dance-art', style: 'ascii'));
-    show.tick(t.add(const Duration(milliseconds: 32)));
-    expect(show.state.rig.figure.treatment, Treatment.auto);
-    expect(show.state.rig.figure.style, 'ascii');
-    show.setTune('lines', TuneKnob.weight, null);
-    expect(show.pool.tune, isEmpty);
-    expect(tuneOf(show.pool.tune, 'lines', TuneKnob.weight), 1);
+    expect(old.kept?.pool.legacy, isNull);
+    expect(old.kept?.pool.plan.sceneLevel('flash'), 0);
+    b.dispose();
   });
 }

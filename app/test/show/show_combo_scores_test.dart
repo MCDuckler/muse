@@ -1,5 +1,5 @@
 // How the combinations look, measured (combo_scores.dart), and the director by it: the
-// ugly ones never come by themselves (but by the hands' own rule); the intensity
+// ugly ones never come by themselves (but let come by the hands); the intensity
 // follows the record — spare in an intro, the hardest on the drop; a record leans on
 // a look of its own; a section that comes back brings back its combination.
 import 'dart:convert';
@@ -13,6 +13,7 @@ import 'package:muse/src/state/show/combo_scores.dart';
 import 'package:muse/src/state/show/show_combos.dart';
 import 'package:muse/src/state/show/show_director.dart';
 import 'package:muse/src/state/show/show_events.dart';
+import 'package:muse/src/state/show/show_plan.dart';
 import 'package:muse/src/state/show/show_faves.dart';
 import 'package:muse/src/state/show/show_store.dart';
 import 'package:muse/src/state/show/show_taste.dart';
@@ -49,11 +50,22 @@ ShowDirector _director(ComboScores s, {int seed = 1}) => ShowDirector(scenes: co
   ..scores = s
   ..grounds = (() => const {'black', 'white'})
   // One style, no masks but two, no blends but two: the table's eight.
-  ..rules = const [
-    ComboRule(styles: {'ascii', 'dither', 'halftone', 'thermal', 'lines', 'contour', 'crt', 'slit'}, weight: 0),
-    ComboRule(masks: {Mask.inverted}, weight: 0),
-    ComboRule(mixes: {Mix.screen, Mix.contrast}, weight: 0),
-  ];
+  ..plan = () {
+    // Every level at 1, every background taking every mask and blend: these alone.
+    var p = const ShowPlan(notWith: {}, levels: {
+      PlanAxis.ground: {'white': 1},
+      PlanAxis.mask: {'none': 1, 'keyhole': 1},
+      PlanAxis.fx: {'none': 1},
+    }).withShared(PlanAxis.mask, 'inverted', muted: true).withShared(PlanAxis.mix, 'screen', muted: true).withShared(PlanAxis.mix, 'contrast', muted: true);
+    // No effects: the table's eight looks alone.
+    for (final f in Fx.values) {
+      if (f != Fx.none) p = p.withShared(PlanAxis.fx, f.name, muted: true);
+    }
+    for (final t in treatmentStyles) {
+      p = p.withIn('one', PlanAxis.style, t, muted: true);
+    }
+    return p;
+  }();
 
 void main() {
   final s = ComboScores.parse(_table)!;
@@ -79,7 +91,8 @@ void main() {
       d.direct(_frame('verse'), [_bar, if (i % 8 == 7) _phrase, if (i % 32 == 0) _section]);
       expect(d.combo, isNot(ugly));
     }
-    d.rules = [...d.rules, const ComboRule(grounds: {'white'}, scenes: {'one'}, styles: {'raw'}, masks: {Mask.none}, mixes: {Mix.normal}, weight: 2)];
+    d.plan = d.plan.withCell('one', cellOf(ugly), 2).withAllow('one', cellOf(ugly), true);
+    // The hands' ×2, however it measured.
     expect(d.weigh(ugly), 2);
   });
 

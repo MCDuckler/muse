@@ -5,6 +5,7 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart' show kSecondaryButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -14,10 +15,9 @@ import 'package:muse/src/api/client.dart';
 import 'package:muse/src/state/booth/booth.dart';
 import 'package:muse/src/state/booth/deck.dart';
 import 'package:muse/src/state/booth/mixer.dart';
-import 'package:muse/src/state/show/show_combos.dart';
+import 'package:muse/src/state/show/show_pool.dart';
+import 'package:muse/src/state/show/show_rig.dart';
 import 'package:muse/src/state/show/show_store.dart';
-import 'package:muse/src/ui/show/show_dance.dart' show DanceAssets;
-import 'package:muse/src/ui/show/show_moves.dart';
 import 'package:muse/src/ui/show/show_room.dart';
 import 'package:muse/src/ui/show/stage_kit.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -88,7 +88,7 @@ void main() {
 
   tearDown(() => booth.dispose());
 
-  for (final (w, h) in const [(1600.0, 900.0), (1280.0, 720.0)]) {
+  for (final (w, h) in const [(1600.0, 900.0), (1280.0, 720.0), (1920.0, 1080.0)]) {
     testWidgets('the show page at ${w.round()}', (tester) async {
       tester.view.physicalSize = Size(w, h);
       tester.view.devicePixelRatio = 1;
@@ -100,13 +100,34 @@ void main() {
         debugPrint('show page shot: ${d.exceptionAsString()}\n${d.stack}');
         err ??= d;
       };
+      final show = booth.show;
+      // A night's plan: a few scenes, three backgrounds, some looks judged.
+      var plan = ShowPlan.shipped;
+      for (final s in ['siebenschlaefer', 'fold', 'echo', 'lyrics', 'veins', 'fluid', 'drift', 'flash', 'flock', 'turntable']) {
+        plan = plan.withScene(s, muted: true);
+      }
+      for (final g in comboGrounds) {
+        if (!const {'black', 'white', 'milk'}.contains(g)) plan = plan.withShared(PlanAxis.ground, g, muted: true);
+      }
+      plan = plan
+          .withScene('type3d', level: 0.75)
+          .withScene('glide', level: 1 / 3)
+          .withScene('kinetic', level: 1 / 3)
+          .withScene('blocks', level: 1 / 3)
+          .withCell('dance-art', cellKey(style: 'ascii', ground: 'white', mask: 'none'), 0)
+          .withCell('dance-art', cellKey(style: 'dither', ground: 'white'), 0)
+          .withCell('dance-art', cellKey(style: 'plain', ground: 'milk'), 2)
+          .withCell('dance-art', cellKey(style: 'lines', ground: 'milk'), 0.5)
+          .withIn('dance-art', PlanAxis.style, 'disco', muted: true)
+          .withIn('dance-art', PlanAxis.style, 'viewports', muted: true);
+      show.setPlan(plan);
       await tester.pumpWidget(MaterialApp(
         theme: ThemeData.dark(useMaterial3: true),
         // The whole app in the shot, so a card (a dialog over the page) is in it too.
         builder: (context, child) => RepaintBoundary(key: const ValueKey('shot'), child: child),
         home: Scaffold(body: ShowRoom(booth: booth)),
       ));
-      for (var i = 0; i < 20 && find.text('BACKGROUND').evaluate().isEmpty; i++) {
+      for (var i = 0; i < 20 && find.text('SCENES').evaluate().isEmpty; i++) {
         await tester.pump(const Duration(milliseconds: 100));
       }
       await tester.pump(const Duration(milliseconds: 300));
@@ -120,10 +141,6 @@ void main() {
         });
       }
 
-      // The selector, following the stage; the rules tab it opens on.
-      expect(find.text('RULES'), findsOneWidget);
-      expect(find.text('NEXT'), findsOneWidget);
-      expect(find.text('HOLD'), findsOneWidget);
       // The stills, read off the assets in real time.
       Future<void> settle() async {
         for (var i = 0; i < 3; i++) {
@@ -132,128 +149,100 @@ void main() {
         }
       }
 
-      // One whole combination picked: the plain dancers on MilkDrop.
-      Future<void> pick(String word) async {
-        final f = find.text(word).last;
+      Future<void> moment() async {
+        for (var i = 0; i < 4; i++) {
+          await tester.pump(const Duration(milliseconds: 150));
+        }
+      }
+
+      Future<void> tap(Finder f) async {
         await tester.ensureVisible(f);
         await tester.pump();
         await tester.tap(f);
         await tester.pump();
       }
 
-      await pick('Dancer');
+      final page = find.byKey(const ValueKey('scene page'));
+
+      // What is on: the plain dancer on MilkDrop, held; then MilkDrop under and an
+      // effect always on as well.
+      show.play(const Combo(ground: 'milk', scene: 'dance-art', style: 'plain', mix: Mix.contrast));
+      show.tick(DateTime.now());
       await settle();
-      for (final w in ['plain', 'MilkDrop', 'No mask', 'Normal']) {
-        await pick(w);
-      }
-      await settle();
-      expect(find.text('PLAY IT'), findsOneWidget);
+      expect(find.text('NEVER THIS'), findsOneWidget);
       await shot('show-room-${w.round()}');
-      // The same on white.
-      await pick('White');
-      await settle();
-      await shot('show-room-${w.round()}-white');
-      // Silhouettes through the keyhole on MilkDrop, and a shape in contrast on white.
-      for (final w in ['mono', 'MilkDrop', 'Keyhole']) {
-        await pick(w);
-      }
-      await settle();
-      await shot('show-room-${w.round()}-keyhole');
-      for (final w in ['Kinetic', 'As drawn', 'White', 'No mask', 'Contrast']) {
-        await pick(w);
-      }
-      await settle();
-      await shot('show-room-${w.round()}-contrast');
-      // Snapshots: two kept here, one changed since.
-      booth.show.snapshots.saveAs('Calm night');
-      booth.show.setPool(booth.show.pool.withRule(const ComboRule(grounds: {'milk'}), 4));
-      booth.show.snapshots.saveAs('Club, MilkDrop heavy');
-      booth.show.setPool(booth.show.pool.withRule(const ComboRule(scenes: {'flash'}), 0));
-      await tester.pump(const Duration(milliseconds: 300));
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(find.text('Club, MilkDrop heavy •'), findsOneWidget);
-      await shot('show-room-${w.round()}-snapshots');
-      // A batch: the turntable, any style, any background, the keyhole, added or
-      // screened — one rule, switched off; and the map of the rotation.
-      for (final w in ['Turntable', 'Keyhole', 'Add']) {
-        await pick(w);
-      }
-      for (final i in [1, 2]) {
-        final any = find.text('ANY').at(i);
-        await tester.ensureVisible(any);
-        await tester.pump();
-        await tester.tap(any);
-        await tester.pump();
-      }
-      await tester.ensureVisible(find.text('Screen').last);
+      show.holdGround('milk');
+      show.holdFx(Fx.mosh);
       await tester.pump();
-      await tester.longPress(find.text('Screen').last);
+      await shot('show-room-${w.round()}-holds');
+      show.letGoAll();
       await tester.pump();
+      // The dancer's page: its styles, then its looks.
+      await tap(find.byTooltip('Its page: Dancer'));
       await settle();
-      expect(find.textContaining('Turntable × any style × any background × Keyhole × Add, Screen'), findsWidgets);
-      await shot('show-room-${w.round()}-batch');
-      await tester.tap(find.text('MAP'));
-      await tester.pump(const Duration(milliseconds: 300));
-      await shot('show-room-${w.round()}-map');
-      await tester.tap(find.byType(Switch).first);
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(booth.show.pool.rules.last.pattern, '*|turntable|*|keyhole|add,screen');
-      await shot('show-room-${w.round()}-map-off');
-      // The camera: the dancers in ascii, never through the fisheyes; the map with the
-      // camera across.
-      for (final w in ['Dancer', 'ascii', 'Fisheye']) {
-        await pick(w);
-      }
-      await tester.ensureVisible(find.text('Fisheye floor').last);
-      await tester.pump();
-      await tester.longPress(find.text('Fisheye floor').last);
-      await tester.pump();
-      await tester.tap(find.byType(Switch).first);
-      await tester.pump(const Duration(milliseconds: 300));
-      await tester.tap(find.text('CAMERA').at(1));
-      await tester.pump(const Duration(milliseconds: 300));
       await settle();
-      await shot('show-room-${w.round()}-camera');
-      await tester.tap(find.text('RULES'));
-      await tester.pump(const Duration(milliseconds: 300));
-      // A rule with ANY: every plain-dancer combination on MilkDrop at twice the weight.
-      booth.show.setPool(booth.show.pool
-          .withRule(const ComboRule(grounds: {'milk'}, scenes: {'dance-art'}, styles: {'plain'}), 2)
-          .withRule(const ComboRule(grounds: {'black'}, masks: {Mask.keyhole}), 1));
-      await tester.pump();
-      expect(find.text('YOURS'), findsOneWidget);
-      await shot('show-room-${w.round()}-rules');
-      // The 3D text's tab.
-      await tester.tap(find.text('TEXT'));
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(find.text('LINES'), findsOneWidget);
+      await shot('show-room-${w.round()}-dancer');
+      await tester.dragUntilVisible(find.text('ITS LOOKS'), page, const Offset(0, -300));
+      await tester.drag(page, const Offset(0, -120));
+      await settle();
+      await settle();
+      await shot('show-room-${w.round()}-looks');
+      // A square's menu, and its masks and blends.
+      final square = find.byKey(const ValueKey('look:ascii|white'));
+      await tester.ensureVisible(square);
+      await tester.tap(square, buttons: kSecondaryButton);
+      await moment();
+      await shot('show-room-${w.round()}-menu');
+      await tester.tap(find.text('Each mask, blend and effect…'));
+      await moment();
+      await settle();
+      await settle();
+      await shot('show-room-${w.round()}-variants');
+      await tester.tap(find.text('Done'));
+      await moment();
+      // Kinetic with its own backgrounds.
+      show.setPlan(show.pool.plan.withOwn('kinetic', PlanAxis.ground, true));
+      await tap(find.text('ROTATION').last);
+      await tap(find.byTooltip('Its page: Kinetic'));
+      await settle();
+      await settle();
+      await shot('show-room-${w.round()}-kinetic');
+      // The 3D text's page, down to its words.
+      await tap(find.text('ROTATION').last);
+      await tap(find.byTooltip('Its page: 3D Text'));
+      await tester.dragUntilVisible(find.text('LINES'), page, const Offset(0, -300));
+      await settle();
       await shot('show-room-${w.round()}-text');
-      // The settings: the finish, the director, the stage's numbers.
-      await tester.tap(find.text('SETTINGS'));
+      await tap(find.text('ROTATION').last);
+      // The rotation's lower part: what each background takes, the effects' knobs.
+      // (Two lists side by side when wide, one when not: the one that holds it.)
+      final rotation = find.byKey(const ValueKey('rotation shared'));
+      await tester.dragUntilVisible(find.text('WHAT EACH BACKGROUND TAKES'), rotation, const Offset(0, -300));
+      await tap(find.text('WHAT EACH BACKGROUND TAKES'));
+      await tester.dragUntilVisible(find.text('THEIR KNOBS'), rotation, const Offset(0, -200));
+      await tap(find.text('THEIR KNOBS'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.drag(rotation, const Offset(0, -260));
+      await tester.pump(const Duration(milliseconds: 200));
+      await shot('show-room-${w.round()}-rotation-more');
+      // The settings, MilkDrop, the faves.
+      await tap(find.text('SETTINGS'));
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.text('THE FINISH'), findsOneWidget);
       await shot('show-room-${w.round()}-settings');
-      // MilkDrop, in the page: the panel with no helper (a test has none).
-      await tester.tap(find.text('MILKDROP'));
+      await tap(find.text('MILKDROP'));
       await tester.pump(const Duration(milliseconds: 300));
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 300)));
       await tester.pump(const Duration(milliseconds: 300));
-      expect(find.text('New preset'), findsOneWidget);
       await shot('show-room-${w.round()}-milk');
-      // The dancers' tab, with the moves browser (the bank read in this zone).
-      await tester.runAsync(() => DanceAssets.of('chris').loaded);
-      await tester.tap(find.text('DANCERS'));
-      for (var i = 0; i < 10; i++) {
-        await tester.pump(const Duration(milliseconds: 100));
-      }
-      if (find.byType(MoveStrip).evaluate().isNotEmpty) {
-        await tester.tap(find.byType(MoveStrip).first);
-        await tester.pump(const Duration(milliseconds: 200));
-      }
-      await shot('show-room-${w.round()}-dancers');
+      await tap(find.text('FAVES'));
+      await tester.pump(const Duration(milliseconds: 300));
+      await shot('show-room-${w.round()}-faves');
       FlutterError.onError = was;
       expect(err, isNull, reason: err?.exceptionAsString());
+      await tester.pump(const Duration(seconds: 6));
       await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(milliseconds: 500));
     });
   }
 }

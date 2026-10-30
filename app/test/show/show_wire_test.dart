@@ -1,5 +1,5 @@
-// The stage over a wire: the hands' rules and the combination on reach the far end,
-// where the figures' clocks weigh their cameras by them.
+// The stage over a wire: the plan and the combination on reach the far end, where the
+// figures' clocks weigh their styles and cameras by it.
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -20,13 +20,13 @@ class _Feed extends ChangeNotifier implements ShowFeed {
 }
 
 void main() {
-  test('the rules and the combination on go over the wire, once and as they change', () {
+  test('the plan and the combination on go over the wire, once and as they change', () {
     const combo = Combo(ground: 'milk', scene: 'dance-art', style: 'ascii');
-    StylePool.from(ShowPool.none.withRule(const ComboRule(styles: {'ascii'}, shots: {'dancers.fisheye'}), 0));
+    StylePool.from(ShowPool.none.withPlan(ShowPlan.shipped.withIn('dance-art', PlanAxis.shot, 'fisheye', muted: true)));
     StylePool.combo = combo;
     final lines = <String>[];
     final wire = ShowWire(_Feed(), lines.add);
-    expect(lines.where((l) => l.contains('"rules"')), hasLength(1));
+    expect(lines.where((l) => l.contains('"plan"')), hasLength(1));
     // The far end, in a process of its own: nothing known yet.
     StylePool.from(ShowPool.none);
     StylePool.combo = null;

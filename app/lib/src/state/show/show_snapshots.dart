@@ -1,6 +1,7 @@
-// The selector's snapshots: the hands' combination rules (show_combos.dart), named
-// and kept, to switch the show between in a tap — a calm set for a dinner, the club
-// set, one with the dancers never through the fisheye.
+// The sets: the show as the hands set it up — how often everything comes (the plan,
+// show_plan.dart), the effects, the director's temper, the knobs, the finish
+// (ShowSetup) — named and kept, to switch the show between in a tap: a calm set for a
+// dinner, the club set, one with the dancers never through the fisheye.
 //
 // Kept on this device (show.json, ShowDoc.snapshots), or shared on the server
 // (server/muse/routes_show.py): a shared one is listed to every WetOwl account, which
@@ -8,23 +9,28 @@
 // taken is said, and the hands choose theirs or ours). A desk on a shared snapshot,
 // its rules not changed since, follows it: a newer revision is taken as it is seen.
 //
-// The document remembers the snapshot on as it was taken (ShowDoc.snapshot): what the
-// rules are measured against ("changed"), and where a shared one is followed from.
+// The document remembers the set on as it was taken (ShowDoc.snapshot): what the show
+// is measured against ("changed"), and where a shared one is followed from. One kept
+// before the sets (the combination rules alone, show_plan_legacy.dart) is read into a
+// set when it is first used.
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
 import '../../api/client.dart';
-import 'show_combos.dart';
+import 'show_pool.dart';
 
-/// One snapshot: a name and the hands' rules (the shipped ones are under every one).
+/// One set: a name and the show's setup.
 class ShowSnapshot {
-  const ShowSnapshot({required this.id, required this.name, this.rules = const [], this.rev = 0, this.owner, this.mine = true, this.updatedBy});
+  const ShowSnapshot({required this.id, required this.name, this.setup = ShowSetup.shipped, this.legacy, this.rev = 0, this.owner, this.mine = true, this.updatedBy});
 
   /// `l:<n>` kept here; `s:<n>` shared, by the server's id.
   final String id;
   final String name;
-  final List<ComboRule> rules;
+  final ShowSetup setup;
+
+  /// The combination rules of one kept before the sets, not read yet.
+  final List<dynamic>? legacy;
 
   /// A shared one's: its revision, who shared it (whether it was this account), who
   /// saved it last.
@@ -36,15 +42,23 @@ class ShowSnapshot {
   bool get shared => id.startsWith('s:');
   int? get serverId => shared ? int.tryParse(id.substring(2)) : null;
 
-  bool sameRules(List<ComboRule> other) => listEquals(rules, other);
+  bool same(ShowSetup other) => legacy == null && setup == other;
 
-  ShowSnapshot copyWith({String? id, String? name, List<ComboRule>? rules, int? rev}) =>
-      ShowSnapshot(id: id ?? this.id, name: name ?? this.name, rules: rules ?? this.rules, rev: rev ?? this.rev, owner: owner, mine: mine, updatedBy: updatedBy);
+  ShowSnapshot copyWith({String? id, String? name, ShowSetup? setup, int? rev}) => ShowSnapshot(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      setup: setup ?? this.setup,
+      legacy: setup == null ? legacy : null,
+      rev: rev ?? this.rev,
+      owner: owner,
+      mine: mine,
+      updatedBy: updatedBy);
+
+  /// [s] as its setup (one kept before the sets, read).
+  ShowSnapshot withSetup(ShowSetup s) => copyWith(setup: s);
 
   /// What the server keeps of it.
-  Map<String, dynamic> get doc => {
-        'rules': [for (final r in rules) r.toJson()]
-      };
+  Map<String, dynamic> get doc => legacy != null ? {'rules': legacy} : {'setup': setup.toJson()};
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -55,14 +69,17 @@ class ShowSnapshot {
         if (!mine) 'mine': false,
       };
 
-  static List<ComboRule> _rules(Object? list) => list is List ? [for (final r in list) ComboRule.fromJson(r)].whereType<ComboRule>().toList() : const [];
+  static ShowSetup _setup(Object? doc) => doc is Map && doc['setup'] is Map ? ShowSetup.fromJson(doc['setup']) : ShowSetup.shipped;
+
+  static List<dynamic>? _legacy(Object? doc) => doc is Map && doc['setup'] == null && doc['rules'] is List ? doc['rules'] as List : null;
 
   static ShowSnapshot? fromJson(Object? j) {
     if (j is! Map || j['id'] is! String || j['name'] is! String) return null;
     return ShowSnapshot(
       id: j['id'] as String,
       name: j['name'] as String,
-      rules: _rules(j['rules']),
+      setup: _setup(j),
+      legacy: _legacy(j),
       rev: (j['rev'] as num?)?.toInt() ?? 0,
       owner: j['owner'] as String?,
       mine: j['mine'] != false,
@@ -73,7 +90,8 @@ class ShowSnapshot {
   factory ShowSnapshot.fromServer(Map<String, dynamic> j) => ShowSnapshot(
         id: 's:${j['id']}',
         name: '${j['name']}',
-        rules: _rules((j['doc'] as Map?)?['rules']),
+        setup: _setup(j['doc']),
+        legacy: _legacy(j['doc']),
         rev: (j['rev'] as num?)?.toInt() ?? 0,
         owner: j['owner'] as String?,
         mine: j['mine'] == true,
@@ -88,15 +106,18 @@ class SnapshotConflict implements Exception {
   final ShowSnapshot theirs;
 }
 
-/// What the shelf needs of the show: its rules, its document, and the server.
+/// What the shelf needs of the show: its setup, its document, and the server.
 abstract class SnapshotHost {
-  List<ComboRule> get rules;
+  ShowSetup get setup;
   List<ShowSnapshot> get kept;
   ShowSnapshot? get taken;
 
-  /// The rules, the snapshots kept here and the one taken, as one change.
-  void put({List<ComboRule>? rules, List<ShowSnapshot>? kept, ShowSnapshot? taken, bool clearTaken = false});
+  /// The setup, the sets kept here and the one taken, as one change.
+  void put({ShowSetup? setup, List<ShowSnapshot>? kept, ShowSnapshot? taken, bool clearTaken = false});
   ApiClient get api;
+
+  /// A set as the combination rules of before the sets said it.
+  ShowSetup fromLegacy(List<dynamic> rules);
 }
 
 /// The snapshots: this device's and the shared ones, switched to, saved, shared.
@@ -116,50 +137,54 @@ class SnapshotShelf extends ChangeNotifier {
   /// The snapshot on, as taken.
   ShowSnapshot? get on => host.taken;
 
-  /// Whether the rules are other than the snapshot on's (with none on: whether there
-  /// are any of the hands' at all).
+  /// Whether the show is set up other than the set on says (with none on: other than
+  /// as shipped).
   bool get changed {
     final s = on;
-    return s == null ? host.rules.isNotEmpty : !s.sameRules(host.rules);
+    return s == null ? host.setup != ShowSetup.shipped : !s.same(host.setup);
   }
+
+  /// [s] as a set (one kept before the sets read into one).
+  ShowSnapshot _read(ShowSnapshot s) => s.legacy == null ? s : s.withSetup(host.fromLegacy(s.legacy!));
 
   /// Every one by name and id, this device's first.
   List<ShowSnapshot> get all => [...kept, ...shared];
 
-  /// The rules of [s] in force, and it the one on.
+  /// [s] in force, and it the one on.
   void use(ShowSnapshot s) {
-    host.put(rules: s.rules, taken: s);
+    final r = _read(s);
+    host.put(setup: r.setup, taken: r, kept: r.shared || identical(r, s) ? null : [for (final k in kept) k.id == r.id ? r : k]);
     notifyListeners();
   }
 
-  /// No snapshot: the rules as shipped.
+  /// No set: the show as shipped.
   void useShipped() {
-    host.put(rules: const [], clearTaken: true);
+    host.put(setup: ShowSetup.shipped, clearTaken: true);
     notifyListeners();
   }
 
-  /// The rules as they are, as a new snapshot kept here, and it the one on.
+  /// The show as it is, as a new set kept here, and it the one on.
   ShowSnapshot saveAs(String name) {
-    final s = ShowSnapshot(id: 'l:${DateTime.now().microsecondsSinceEpoch}', name: name.trim(), rules: host.rules);
+    final s = ShowSnapshot(id: 'l:${DateTime.now().microsecondsSinceEpoch}', name: name.trim(), setup: host.setup);
     host.put(kept: [...kept, s], taken: s);
     notifyListeners();
     return s;
   }
 
-  /// The rules as they are over the snapshot on. A shared one saved over since it was
-  /// taken throws [SnapshotConflict] (nothing saved); [over] saves over that one.
+  /// The show as it is over the set on. A shared one saved over since it was taken
+  /// throws [SnapshotConflict] (nothing saved); [over] saves over that one.
   Future<void> save({ShowSnapshot? over}) async {
     final s = on;
     if (s == null) return;
-    final rules = host.rules;
+    final setup = host.setup;
     if (!s.shared) {
-      final next = s.copyWith(rules: rules);
+      final next = s.copyWith(setup: setup);
       host.put(kept: [for (final k in kept) k.id == s.id ? next : k], taken: next);
       notifyListeners();
       return;
     }
     try {
-      final j = await host.api.saveShowSnapshot(s.serverId!, s.copyWith(rules: rules).doc, (over ?? s).rev);
+      final j = await host.api.saveShowSnapshot(s.serverId!, s.copyWith(setup: setup).doc, (over ?? s).rev);
       _took(ShowSnapshot.fromServer(j));
       trouble = null;
     } on ShowSnapshotConflict catch (e) {
@@ -179,7 +204,7 @@ class SnapshotShelf extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// One kept here forgotten (the rules on stay as they are).
+  /// One kept here forgotten (the show stays as it is).
   void forget(ShowSnapshot s) {
     host.put(kept: [for (final k in kept) if (k.id != s.id) k], clearTaken: on?.id == s.id);
     notifyListeners();
@@ -188,7 +213,7 @@ class SnapshotShelf extends ChangeNotifier {
   /// One kept here shared with everyone: on the server, and no longer here.
   Future<ShowSnapshot> share(ShowSnapshot s) async {
     try {
-      final shared = ShowSnapshot.fromServer(await host.api.shareShowSnapshot(s.name, s.doc));
+      final shared = ShowSnapshot.fromServer(await host.api.shareShowSnapshot(s.name, _read(s).doc));
       _listed(shared);
       host.put(kept: [for (final k in kept) if (k.id != s.id) k], taken: on?.id == s.id ? shared : null);
       trouble = null;
@@ -210,7 +235,8 @@ class SnapshotShelf extends ChangeNotifier {
       notifyListeners();
       rethrow;
     }
-    final here = ShowSnapshot(id: 'l:${DateTime.now().microsecondsSinceEpoch}', name: s.name, rules: s.rules);
+    final r = _read(s);
+    final here = ShowSnapshot(id: 'l:${DateTime.now().microsecondsSinceEpoch}', name: s.name, setup: r.setup);
     shared = [for (final x in shared) if (x.id != s.id) x];
     host.put(kept: [...kept, here], taken: on?.id == s.id ? here : null);
     trouble = null;
@@ -218,7 +244,7 @@ class SnapshotShelf extends ChangeNotifier {
     return here;
   }
 
-  /// The shared ones listed again. The one on, its rules not changed since it was
+  /// The shared ones listed again. The one on, the show not changed since it was
   /// taken and saved since by someone: taken again, as it is now.
   Future<void> refresh() async {
     if (loading) return;
@@ -230,7 +256,10 @@ class SnapshotShelf extends ChangeNotifier {
       final s = on;
       if (s != null && s.shared && !changed) {
         final now = shared.where((x) => x.id == s.id).firstOrNull;
-        if (now != null && now.rev > s.rev) host.put(rules: now.rules, taken: now);
+        if (now != null && now.rev > s.rev) {
+          final r = _read(now);
+          host.put(setup: r.setup, taken: r);
+        }
       }
     } catch (e) {
       trouble = 'the shared ones could not be listed: ${e is ApiException ? e.message : e}';

@@ -1,6 +1,6 @@
-// The selector's snapshots: kept here, switched between, saved; shared with every
-// account on the server — saved over by revision, followed while not changed here,
-// taken away again by whoever shared it.
+// The sets: kept here, switched between, saved; shared with every account on the
+// server — saved over by revision, followed while not changed here, taken away again
+// by whoever shared it; one kept before the sets (the rules alone) read into a set.
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -18,15 +18,17 @@ class _Host implements SnapshotHost {
   @override
   final api = ApiClient(baseUrl: 'http://box', token: 't');
   @override
-  List<ComboRule> get rules => doc.pool.rules;
+  ShowSetup get setup => doc.pool.setup;
   @override
   List<ShowSnapshot> get kept => doc.snapshots;
   @override
   ShowSnapshot? get taken => doc.snapshot;
   @override
-  void put({List<ComboRule>? rules, List<ShowSnapshot>? kept, ShowSnapshot? taken, bool clearTaken = false}) =>
-      doc = doc.copyWith(pool: rules == null ? null : doc.pool.copyWith(rules: rules), snapshots: kept, snapshot: taken, clearSnapshot: clearTaken);
-  void hands(List<ComboRule> r) => put(rules: r);
+  void put({ShowSetup? setup, List<ShowSnapshot>? kept, ShowSnapshot? taken, bool clearTaken = false}) =>
+      doc = doc.copyWith(pool: setup == null ? null : doc.pool.withSetup(setup), snapshots: kept, snapshot: taken, clearSnapshot: clearTaken);
+  @override
+  ShowSetup fromLegacy(List<dynamic> rules) => ShowSetup(plan: ShowPlan.shipped.withScene('read', level: rules.length.toDouble()));
+  void hands(ShowSetup s) => put(setup: s);
 }
 
 /// The server's snapshots: one list for every account; `as` says who asks.
@@ -66,8 +68,9 @@ void main() {
   late _Host host;
   late _Box box;
   late SnapshotShelf shelf;
-  const calm = [ComboRule(scenes: {'kinetic'}, weight: 0)];
-  const club = [ComboRule(grounds: {'milk'}, weight: 4), ComboRule(shots: {'dancers.fisheye'}, weight: 0)];
+  final calm = ShowSetup(plan: ShowPlan.shipped.withScene('kinetic', muted: true));
+  final club = ShowSetup(plan: ShowPlan.shipped.withShared(PlanAxis.ground, 'milk', level: 4).withIn('dance-art', PlanAxis.shot, 'fisheye', muted: true), mosh: 0.9);
+  ShowSetup more(ShowSetup s) => ShowSetup(plan: s.plan.withShared(PlanAxis.mask, 'keyhole', muted: true), mosh: s.mosh);
 
   setUp(() {
     host = _Host();
@@ -88,22 +91,23 @@ void main() {
     host.hands(club);
     final b = shelf.saveAs('Club');
     shelf.use(a);
-    expect(host.rules, calm);
+    expect(host.setup, calm);
     shelf.use(b);
-    expect(host.rules, club);
-    host.hands([...club, const ComboRule(masks: {Mask.keyhole}, weight: 0)]);
+    expect(host.setup, club);
+    expect(host.doc.pool.mosh, 0.9, reason: 'a set is more than the plan');
+    host.hands(more(club));
     expect(shelf.changed, isTrue);
     shelf.save();
     expect(shelf.changed, isFalse);
-    expect(shelf.kept.last.rules, hasLength(3));
+    expect(shelf.kept.last.setup, more(club));
     shelf.useShipped();
-    expect(host.rules, isEmpty);
+    expect(host.setup, ShowSetup.shipped);
     expect(shelf.on, isNull);
     shelf.forget(a);
     expect(shelf.kept.map((s) => s.name), ['Club']);
     // The document keeps them.
     final back = ShowDoc.fromJson(jsonDecode(jsonEncode(host.doc.toJson())) as Map<String, dynamic>);
-    expect(back.snapshots.single.rules, shelf.kept.single.rules);
+    expect(back.snapshots.single.setup, shelf.kept.single.setup);
   });
 
   test('shared: everyone lists it, saves over it by revision, follows it; its keeper takes it away', () async {
@@ -113,7 +117,7 @@ void main() {
     expect(shared.shared && shared.mine, isTrue);
     expect(shelf.kept, isEmpty, reason: 'shared, no longer only here');
     expect(shelf.on?.id, shared.id);
-    expect(box.rows.single['doc'], {'rules': [for (final r in club) r.toJson()]});
+    expect(box.rows.single['doc'], {'setup': club.toJson()});
 
     // Another desk: lists it, switches to it, saves over it.
     final other = _Host();
@@ -122,7 +126,7 @@ void main() {
     await theirShelf.refresh();
     expect(theirShelf.shared.single.mine, isFalse);
     theirShelf.use(theirShelf.shared.single);
-    expect(other.rules, club);
+    expect(other.setup, club);
     other.hands(calm);
     await theirShelf.save();
     expect(box.rows.single['rev'], 2);
@@ -130,14 +134,14 @@ void main() {
     // This desk, its rules not changed: follows it.
     box.as = 'chris';
     await shelf.refresh();
-    expect(host.rules, calm);
+    expect(host.setup, calm);
     expect(shelf.on?.rev, 2);
     expect(shelf.changed, isFalse);
 
     // Both change it: the later save is told, and may save over it.
     host.hands(club);
     box.as = 'joe';
-    other.hands([...calm, ...club]);
+    other.hands(more(calm));
     await theirShelf.refresh();
     await theirShelf.save();
     box.as = 'chris';
@@ -145,7 +149,7 @@ void main() {
     expect(box.rows.single['rev'], 3);
     // Changed here: not followed over the hands' own.
     await shelf.refresh();
-    expect(host.rules, club);
+    expect(host.setup, club);
     final theirs = shelf.shared.single;
     await shelf.save(over: theirs);
     expect(box.rows.single['rev'], 4);
@@ -158,7 +162,7 @@ void main() {
     final here = await shelf.unshare(shelf.on!);
     expect(box.rows, isEmpty);
     expect(here.shared, isFalse);
-    expect(shelf.kept.single.rules, club);
+    expect(shelf.kept.single.setup, club);
     expect(shelf.on?.id, here.id);
   });
 
@@ -170,5 +174,35 @@ void main() {
     expect(shelf.trouble, isNotNull);
     await expectLater(shelf.share(a), throwsA(anything));
     expect(shelf.kept.single.id, a.id);
+  });
+
+  test('one kept before the sets — the rules alone — is read into a set when it is used', () {
+    final old = ShowSnapshot.fromJson(const {
+      'id': 'l:1',
+      'name': 'Old',
+      'rules': [
+        {'scene': 'flash', 'weight': 0},
+        {'ground': 'milk', 'weight': 4},
+      ],
+    })!;
+    expect(old.legacy, hasLength(2));
+    host.put(kept: [old]);
+    expect(shelf.changed, isFalse);
+    shelf.use(old);
+    expect(host.setup.plan.sceneLevel('read'), 2, reason: 'read by the host');
+    expect(shelf.kept.single.legacy, isNull, reason: 'kept as a set from now on');
+    expect(shelf.on?.legacy, isNull);
+    // From the server too.
+    final shared = ShowSnapshot.fromServer(const {
+      'id': 7,
+      'name': 'Shared old',
+      'doc': {
+        'rules': [
+          {'scene': 'flash', 'weight': 0}
+        ]
+      },
+    });
+    expect(shared.legacy, hasLength(1));
+    expect(shared.doc, {'rules': shared.legacy});
   });
 }

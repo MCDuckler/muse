@@ -4,8 +4,8 @@
 // nothing blown out, no mud, no noise, something there) and how intense it is
 // (contrast, detail, motion, light, colour, ranked across them all).
 //
-// The director weighs by both: the ugly ones never come by themselves (a rule of the
-// hands' that names one still puts it on), and the intensity is matched to where the
+// The director weighs by both: the ugly ones never come by themselves (the hands may
+// let one come: an allow of the plan's), and the intensity is matched to where the
 // record is — dark and spare in an intro, climbing through a build, the hardest on the
 // drop (show_director.dart).
 import 'dart:convert';
@@ -13,6 +13,7 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 
 import 'show_combos.dart';
+import 'show_plan.dart';
 
 class ComboScores {
   ComboScores._(this._grounds, this._masks, this._mixes, this._figures);
@@ -82,16 +83,13 @@ class ComboScores {
   /// Below this a combination does not come by itself.
   static const floor = 0.3;
 
-  /// [c]'s weight by [rules] and how it looks ([scores]; the shipped table where none
-  /// is given): less as it looks worse, none under [floor] — but a combination the
-  /// hands named themselves (a rule of theirs for it alone) comes as they said.
-  static double weigh(Combo c, List<ComboRule> rules, {ComboScores? scores}) {
-    final e = explainWeight(c, rules);
-    if (e.weight <= 0) return 0;
-    final ex = e.exception;
-    final named = ex != null && (ex.single || (c.world && ex.fields == 2 && ex.scenes?.length == 1 && ex.styles?.length == 1));
-    if (named && !shippedComboRules.contains(ex)) return e.weight;
-    return e.weight * lean((scores ?? shipped)?.quality(c));
+  /// [c]'s weight within its scene by [plan] and how it looks ([scores]; the shipped
+  /// table where none is given): less as it looks worse, none under [floor] — but a
+  /// look the hands let come (an allow of the plan's) comes as the levels say.
+  static double weigh(Combo c, ShowPlan plan, {ComboScores? scores}) {
+    final w = plan.lookWeight(c);
+    if (w <= 0 || plan.allowed(c)) return w;
+    return w * lean((scores ?? shipped)?.quality(c));
   }
 
   /// What [quality] does to a combination's weight: nothing for a good one, less and

@@ -36,7 +36,7 @@ String _faveTitle(ShowFave f, SceneBook? book) {
   if (f.name.isNotEmpty) return f.name;
   final c = f.combo;
   return [
-    _valueName(ComboAxis.scene, c.scene, book),
+    _sceneName(c.scene, book),
     if (c.style != 'raw') c.style,
     if (!c.world) _groundName(c.ground),
   ].join(' · ');
@@ -47,7 +47,7 @@ String _faveWords(ShowFave f, SceneBook? book) {
   final c = f.combo;
   final t = f.type3d;
   return [
-    '${_valueName(ComboAxis.scene, c.scene, book)}${c.style != 'raw' ? ' · ${c.style}' : ''}',
+    '${_sceneName(c.scene, book)}${c.style != 'raw' ? ' · ${c.style}' : ''}',
     if (!c.world) 'on ${_groundName(c.ground)} · ${_maskName(c.mask).toLowerCase()} · ${_mixName(c.mix).toLowerCase()}',
     if (f.milk != null) 'MilkDrop: ${f.milk}',
     if (f.shot != null) 'Camera: ${_shotName(f.shot!).toLowerCase()}',
@@ -201,7 +201,7 @@ class _FavesTabState extends State<_FavesTab> {
                   _Word(label: 'ANY SCENE', lit: _scene == null, onTap: () => setState(() => _scene = null)),
                   for (final s in scenes)
                     _Word(
-                        label: _valueName(ComboAxis.scene, s, book), lit: _scene == s, onTap: () => setState(() => _scene = _scene == s ? null : s)),
+                        label: _sceneName(s, book), lit: _scene == s, onTap: () => setState(() => _scene = _scene == s ? null : s)),
                 ]),
               ),
             if (on != null)

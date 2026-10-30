@@ -1,6 +1,6 @@
-// The director: scenes turned off (their card at 0) are stepped past and never
-// reached for, though chosen by name one still goes on; the combinations drawn by
-// weight, the background held a while.
+// The director: scenes turned off are stepped past and never reached for, though
+// chosen by name one still goes on; the scenes share a night by their levels; the
+// combinations drawn by weight, the background held a while.
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -8,6 +8,7 @@ import 'package:muse/src/state/show/show_combos.dart';
 import 'package:muse/src/state/show/show_director.dart';
 import 'package:muse/src/state/show/show_engine.dart';
 import 'package:muse/src/state/show/show_events.dart';
+import 'package:muse/src/state/show/show_plan.dart';
 import 'package:muse/src/state/show/show_rig.dart';
 import 'package:muse/src/state/show/show_state.dart';
 import 'package:muse/src/ui/show/scene.dart';
@@ -21,7 +22,7 @@ void main() {
       ]);
 
   test('the arrows step past a scene that is off', () {
-    final d = make()..rules = const [ComboRule(scenes: {'two'}, weight: 0)];
+    final d = make()..plan = ShowPlan.shipped.withScene('two', muted: true);
     d.choose('one');
     d.next();
     expect(d.scene, 'three');
@@ -32,14 +33,14 @@ void main() {
   });
 
   test('the director never reaches for one, however well it fits', () {
-    final d = make()..rules = const [ComboRule(scenes: {'one'}, weight: 0)];
+    final d = make()..plan = ShowPlan.shipped.withScene('one', muted: true);
     expect(d.fitting(st).map((s) => s.id), isNot(contains('one')));
     d.direct(st, const []);
     expect(d.scene, isNot('one'));
   });
 
   test('but by name it goes on', () {
-    final d = make()..rules = const [ComboRule(scenes: {'one'}, weight: 0)];
+    final d = make()..plan = ShowPlan.shipped.withScene('one', muted: true);
     d.choose('one');
     expect(d.scene, 'one');
   });
@@ -48,7 +49,7 @@ void main() {
     final d = make();
     d.direct(st, const []);
     expect(d.scene, 'one');
-    d.rules = const [ComboRule(scenes: {'one'}, weight: 0)];
+    d.plan = ShowPlan.shipped.withScene('one', muted: true);
     // No beat, no phrase, no section: it goes all the same.
     d.direct(st, const []);
     expect(d.scene, isNot('one'));
@@ -61,7 +62,7 @@ void main() {
   });
 
   test('every one off is none off: the stage is never empty', () {
-    final d = make()..rules = const [ComboRule(scenes: {'one'}, weight: 0), ComboRule(scenes: {'two'}, weight: 0), ComboRule(scenes: {'three'}, weight: 0)];
+    final d = make()..plan = ShowPlan.shipped.withScene('one', muted: true).withScene('two', muted: true).withScene('three', muted: true);
     expect(d.on.length, 3);
     d.direct(st, const []);
     expect(d.scene, isNotNull);
@@ -96,7 +97,7 @@ void main() {
   test('a combination by weight for the scene on, its background held for phrases', () {
     final d = make()
       ..kinds = const {'one': Figure.kinetic, 'two': Figure.kinetic, 'three': Figure.kinetic}
-      ..rules = const [ComboRule(grounds: {'black'}, weight: 0), ComboRule(mixes: {Mix.add}, weight: 0)]
+      ..plan = ShowPlan.shipped.withShared(PlanAxis.ground, 'black', muted: true).withShared(PlanAxis.mix, 'add', muted: true)
       ..grounds = () => const {'black', 'milk', 'wash'};
     final frame = ShowState(now: DateTime(2026), dt: 0.5, a: const ShowDeck(name: 'A', energy: 0.5, level: 1), b: const ShowDeck(name: 'B'));
     d
@@ -148,9 +149,9 @@ void main() {
   test('a scene whose combinations are all off is not reached for', () {
     final d = make()
       ..kinds = const {'one': Figure.kinetic, 'two': Figure.kinetic, 'three': Figure.kinetic}
-      ..rules = const [ComboRule(scenes: {'one'}, grounds: {'milk'}, weight: 0), ComboRule(scenes: {'one'}, grounds: {'wash'}, weight: 0)]
+      ..plan = ShowPlan.shipped.withCell('one', cellKey(ground: 'milk'), 0).withCell('one', cellKey(ground: 'wash'), 0)
       ..grounds = () => const {'milk', 'wash'};
-    expect(d.leans['one'], 0);
+    expect(d.levels['one'], 0);
     expect(d.on.map((s) => s.id), ['two', 'three']);
   });
 
@@ -195,5 +196,46 @@ void main() {
     for (final fam in ['geometric', 'figurative', 'organic', 'media']) {
       expect((seconds[fam] ?? 0) / total, greaterThan(0.08), reason: '$fam: ${seconds.map((k, v) => MapEntry(k, (v / total * 100).round()))} %');
     }
+  });
+
+  test('over a night the scenes share the time by their levels', () {
+    final files = Directory('assets/show/scenes').listSync().whereType<File>().where((f) => f.path.endsWith('.json'));
+    final book = SceneBook.fromStrings([for (final f in files) f.readAsStringSync()]);
+    var plan = ShowPlan.shipped;
+    for (final s in book.scenes.keys) {
+      if (!const {'dance-art', 'type3d', 'glide', 'kinetic', 'blocks'}.contains(s)) plan = plan.withScene(s, muted: true);
+    }
+    plan = plan.withScene('type3d', level: 0.75).withScene('glide', level: 1 / 3).withScene('kinetic', level: 1 / 3).withScene('blocks', level: 1 / 3);
+    final d = ShowDirector(scenes: book.metas, seed: 5)
+      ..families = {for (final l in book.looks.values) l.id: ShowEngine.familyOf(l.rig.figure.kind, l.rig.ground.kind)}
+      ..kinds = {for (final l in book.looks.values) l.id: l.rig.figure.kind}
+      ..plan = plan;
+    const form = [('intro', 0.3), ('verse', 0.5), ('build', 0.7), ('drop', 0.9), ('chorus', 0.8), ('breakdown', 0.35)];
+    const barSeconds = 240 / 128;
+    final seconds = <String, double>{};
+    var t = DateTime(2026);
+    String? was;
+    for (var b = 0; b < 4000; b++) {
+      final (label, energy) = form[(b ~/ 32) % form.length];
+      t = t.add(const Duration(milliseconds: 1875));
+      final frame = ShowState(now: t, dt: barSeconds, a: ShowDeck(name: 'A', section: label, energy: energy, level: 1, playing: true), b: const ShowDeck(name: 'B'));
+      d.direct(frame, [
+        ShowEvent(ShowEventKind.bar, t, data: const {'master': true}),
+        if (b % 8 == 0) ShowEvent(ShowEventKind.phrase, t, data: const {'master': true}),
+        if (label != was) ShowEvent(ShowEventKind.section, t, data: const {'master': true}),
+      ]);
+      was = label;
+      seconds[d.scene!] = (seconds[d.scene!] ?? 0) + barSeconds;
+    }
+    final total = seconds.values.fold<double>(0, (a, b) => a + b);
+    final share = {for (final e in seconds.entries) e.key: e.value / total};
+    // 1 : ¾ : ⅓ : ⅓ : ⅓ of 2¾ — within a few points.
+    final why = share.map((k, v) => MapEntry(k, (v * 100).round()));
+    expect(share['dance-art']!, closeTo(1 / 2.75, 0.04), reason: '$why');
+    expect(share['type3d']!, closeTo(0.75 / 2.75, 0.04), reason: '$why');
+    for (final s in ['glide', 'kinetic', 'blocks']) {
+      expect(share[s]!, closeTo(1 / 3 / 2.75, 0.03), reason: '$why');
+    }
+    expect(share.keys.toSet(), {'dance-art', 'type3d', 'glide', 'kinetic', 'blocks'});
   });
 }

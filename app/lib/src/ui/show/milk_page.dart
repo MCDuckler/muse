@@ -1,8 +1,7 @@
 // MilkDrop in one panel: the preset on (with the helper's own picture to judge it
-// by) and the hands on it — before, next, another, hold, favourite, off — where it
-// goes in the rig (the background, or alone on the stage), what its director does
-// (a new preset every so many bars, cut on a drop, favourites only, the least
-// rating), and every preset the library has, searched and filtered, each a tap
+// by) and the hands on it — before, next, another, hold, favourite, off — what its
+// director does (a new preset every so many bars, cut on a drop, favourites only, the
+// least rating), and every preset the library has, searched and filtered, each a tap
 // away, with the way to the maker.
 //
 // The panel sits in the show page's MILKDROP tab (ui/show/show_room.dart); MilkPage
@@ -17,7 +16,6 @@ import '../../state/booth/booth.dart';
 import '../../state/show/milk_feed.dart';
 import '../../state/show/milk_library.dart';
 import '../../state/show/milk_preset_text.dart';
-import '../../state/show/show_rig.dart';
 import '../booth/desk/console.dart';
 import '../mag.dart';
 import '../snack.dart';
@@ -203,12 +201,7 @@ class _MilkPanelState extends State<MilkPanel> {
         listenable: Listenable.merge([feed.director, feed, widget.booth.show]),
         builder: (context, _) {
           final d = feed.director;
-          final show = widget.booth.show;
           final p = feed.preset;
-          final rig = show.state.rig;
-          final under = rig.ground.kind == Ground.milk;
-          final kept = show.heldGround == 'milk';
-          final alone = show.milkOnly;
           return Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -274,44 +267,6 @@ class _MilkPanelState extends State<MilkPanel> {
                       tooltip: 'Switch this one off: never put on by itself again (and on to another)',
                       onTap: () => setState(d.switchOff),
                     ),
-                  ]),
-                  const SizedBox(height: 8),
-                  Text('WHERE IT GOES', style: Console.label(8)),
-                  const SizedBox(height: 3),
-                  Wrap(spacing: 3, runSpacing: 3, crossAxisAlignment: WrapCrossAlignment.center, children: [
-                    IntrinsicWidth(
-                        child: Pad(
-                      label: kept ? 'THE BACKGROUND, KEPT' : 'THE BACKGROUND',
-                      height: 24,
-                      lit: under,
-                      colour: Console.a,
-                      tooltip: kept
-                          ? 'MilkDrop is the background and stays it whatever the director does — tap to let the director choose backgrounds again'
-                          : under
-                              ? 'MilkDrop is the background now — tap to keep it there whatever the director does'
-                              : 'Put MilkDrop under the scene, and keep it there',
-                      onTap: () => show.holdGround(kept ? null : 'milk'),
-                    )),
-                    IntrinsicWidth(
-                        child: Pad(
-                      label: 'ALONE',
-                      height: 24,
-                      lit: alone,
-                      colour: Console.a,
-                      tooltip: alone ? 'MilkDrop alone on the stage — tap for the scenes again' : 'Nothing but MilkDrop on the stage: ‹ › step its presets',
-                      onTap: () => show.setMilkOnly(!alone),
-                    )),
-                    IntrinsicWidth(
-                        child: Pad(
-                      label: show.pool.milkOn ? 'THE DIRECTOR\'S' : 'NOT THE DIRECTOR\'S',
-                      height: 24,
-                      lit: show.pool.milkOn,
-                      colour: Console.quiet,
-                      tooltip: show.pool.milkOn
-                          ? 'The director may put MilkDrop under the scenes (most of the time) — tap and it never does (MilkDrop\'s card at 0)'
-                          : 'The director never puts MilkDrop under a scene — tap to let it again',
-                      onTap: () => show.setPool(show.pool.withMilk(!show.pool.milkOn)),
-                    )),
                   ]),
                 ]),
               ),
