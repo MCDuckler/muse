@@ -1,9 +1,16 @@
 """Discover: lists made for a person, genres to follow, a station from a genre."""
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 import pytest
 
 from muse import auth, brainz, db, discography, discover, follows
+
+# Records out a few days ago: the radar looks back a few weeks from today, so a fixed
+# date ages out of it (these tests failed once October was over).
+DAYS_AGO_4 = (date.today() - timedelta(days=4)).isoformat()
+DAYS_AGO_3 = (date.today() - timedelta(days=3)).isoformat()
 
 
 def _me() -> int:
@@ -170,10 +177,10 @@ def test_keeping_a_list_makes_a_playlist_of_it(client, hdr, shelf):
 def test_following_a_genre_watches_its_new_records(client, hdr, monkeypatch):
     monkeypatch.setattr(brainz, "fresh_releases", lambda days=14: [
         {"release_mbid": "rel-1", "release_group_mbid": "rg-1", "title": "Warehouse",
-         "artist": "Some Producer", "artist_mbids": ["a1"], "release_date": "2026-10-01",
+         "artist": "Some Producer", "artist_mbids": ["a1"], "release_date": DAYS_AGO_4,
          "record_type": "ep", "tags": ["techno", "electronic"], "listens": 40, "cover": None},
         {"release_mbid": "rel-2", "release_group_mbid": "rg-2", "title": "Lullabies",
-         "artist": "A Choir", "artist_mbids": ["a2"], "release_date": "2026-10-02",
+         "artist": "A Choir", "artist_mbids": ["a2"], "release_date": DAYS_AGO_3,
          "record_type": "album", "tags": ["classical"], "listens": 900, "cover": None},
     ])
     r = client.put("/discover/genres/Techno", headers=hdr)
@@ -246,7 +253,7 @@ def test_release_radar_takes_a_song_from_each_new_record(client, hdr, monkeypatc
     me = _me()
     monkeypatch.setattr(discography, "artist_albums", lambda remote_id, limit=60: [
         {"remote_id": "alb-1", "title": "Fresh One", "cover": None,
-         "release_date": "2026-10-01", "record_type": "single", "tracks": 1}])
+         "release_date": DAYS_AGO_4, "record_type": "single", "tracks": 1}])
     monkeypatch.setattr(discography, "album", lambda album_id: {
         "remote_id": album_id, "title": "Fresh One", "artist": "Followed Act",
         "tracks": [{"pos": 1, "title": "Opening Cut", "artists": ["Followed Act"]}]})

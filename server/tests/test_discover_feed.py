@@ -1,9 +1,16 @@
 """Discover, round two: playlist sort, follow import that opens labels, the feed."""
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 import pytest
 
 from muse import brainz, db, discography, discover, follows, linked
+
+# Records out a few days ago: the radar looks back a few weeks from today, so a fixed
+# date ages out of it (these tests failed once October was over).
+DAYS_AGO_4 = (date.today() - timedelta(days=4)).isoformat()
+DAYS_AGO_3 = (date.today() - timedelta(days=3)).isoformat()
 
 
 def _me() -> int:
@@ -104,7 +111,7 @@ def test_importing_follows_adds_and_opens_labels_into_their_acts(client, hdr, mo
             {"remote_id": f"{url}/album/one", "title": "One", "artist": "Only On Bandcamp",
              "cover": None, "record_type": "album"}]})
     monkeypatch.setattr(linked, "bandcamp_record", lambda url: {
-        "release_date": "2026-10-01", "tags": ["techno"], "reviews": [], "about": None})
+        "release_date": DAYS_AGO_4, "tags": ["techno"], "reviews": [], "about": None})
 
     r = follows.import_entries(me, "bandcamp", [
         {"name": "Alewya", "url": "https://alewya.bandcamp.com", "image": None},
@@ -233,7 +240,7 @@ def test_a_labels_new_record_reaches_the_radar_and_says_whose_it_is(client, hdr,
              "title": "If This Is It", "artist": "DJ Seinfeld", "cover": None,
              "record_type": "album"}]})
     monkeypatch.setattr(linked, "bandcamp_record", lambda url: {
-        "release_date": "2026-10-02", "tags": ["house"], "reviews": [], "about": None})
+        "release_date": DAYS_AGO_3, "tags": ["house"], "reviews": [], "about": None})
     monkeypatch.setattr(sources, "bandcamp_tracks", lambda url: [
         {"provider": "bandcamp", "provider_id": "8801", "title": "If This Is It", "artists": ["DJ Seinfeld"],
          "album": "If This Is It", "track_no": 1, "duration_ms": 240000, "url": url + "#1",
