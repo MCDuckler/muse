@@ -51,11 +51,10 @@ pub fn crate_rows() -> Vec<Record> {
         .map(|mut r| {
             if let Some(d) = &dir {
                 let path = d.join(format!("{}.m4a", r.id));
-                if path.exists() {
-                    if let Some((beats, bar_one)) = beats_for(d, r.id) {
+                if path.exists()
+                    && let Some((beats, bar_one)) = beats_for(d, r.id) {
                         r.audio = Audio::File { path, beats, bar_one };
                     }
-                }
             }
             r
         })

@@ -1,0 +1,47 @@
+# WetOwl Desk (v2) bake-off builds: the egui and the Slint booth for Windows, zipped
+# with bench.cmd for a tester to run on real hardware (see desk/README.md). Runs on
+# pushes to the desk branch that touch desk/ (or by hand). No music goes in the zip:
+# the booths play the tester's own fetched records, else synthesised ones.
+name: Desk bake-off
+
+on:
+  push:
+    branches: [desk]
+    paths: ["desk/**", "app/native/engine/**", ".github/workflows/desk-bakeoff.yml"]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desk
+      - name: Build both booths
+        run: cargo build --release -p desk-egui -p desk-slint
+      - name: Engine and decoder tests
+        run: cargo test --release -p wo-engine -p wo-deskcore -p wo-wave
+      - name: Smoke — the egui booth starts and draws (WARP, no GPU here)
+        continue-on-error: true
+        timeout-minutes: 3
+        run: |
+          ./target/release/desk-egui.exe --bench 8 --out smoke
+          Get-Content smoke/bench-egui-wgpu.json
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force pkg | Out-Null
+          Copy-Item target/release/desk-egui.exe, target/release/desk-slint.exe, bakeoff/bench.cmd pkg/
+          Copy-Item design/fonts/OFL-*.txt pkg/
+          Compress-Archive -Path pkg/* -DestinationPath wetowl-desk-bakeoff-windows.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wetowl-desk-bakeoff-windows
+          path: |
+            desk/wetowl-desk-bakeoff-windows.zip
+            desk/smoke/

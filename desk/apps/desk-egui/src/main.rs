@@ -184,7 +184,7 @@ impl App {
             backdrop: tex("backdrop", wo_deskcore::backdrop::backdrop(480, 270)),
             ball: tex("ball", wo_deskcore::backdrop::ball()),
             search: String::new(),
-            bench: Bench::from_args("egui"),
+            bench: Bench::from_args(if std::env::var("WO_RENDERER").as_deref() == Ok("glow") { "egui-glow" } else { "egui-wgpu" }),
             shot: None,
         }
     }
@@ -558,12 +558,11 @@ impl App {
                 }
             }
         });
-        if let Some(rec) = load {
-            if s.mix.is_none() {
+        if let Some(rec) = load
+            && s.mix.is_none() {
                 let free = s.decks.iter().position(|d| !d.master).unwrap_or(1);
                 self.desk.load(free, rec);
             }
-        }
     }
 
     fn auto_dj(&mut self, ui: &mut egui::Ui, p: &Painter, r: Rect, s: &Snapshot) {
@@ -694,13 +693,12 @@ impl eframe::App for App {
                 })));
                 self.shot = Some(rx);
             }
-            if let Some(rx) = &self.shot {
-                if let Ok(img) = rx.try_recv() {
+            if let Some(rx) = &self.shot
+                && let Ok(img) = rx.try_recv() {
                     let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
                     println!("{}", b.finish(Some((img.size[0] as u32, img.size[1] as u32, &rgba))));
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
-            }
         }
         ui.ctx().request_repaint();
     }

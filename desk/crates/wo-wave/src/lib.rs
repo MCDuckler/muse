@@ -100,11 +100,11 @@ impl Analyser {
     }
 
     pub fn feed(&mut self, stereo: &[i16]) {
-        for f in stereo.chunks_exact(2) {
+        for f in stereo.as_chunks::<2>().0 {
             let x = (f[0] as f32 + f[1] as f32) * (0.5 / 32768.0);
             let b = [self.low.run(x), self.mid_lp.run(self.mid_hp.run(x)), self.high.run(x)];
-            for k in 0..3 {
-                self.peak[k] = self.peak[k].max(b[k].abs());
+            for (peak, v) in self.peak.iter_mut().zip(b) {
+                *peak = peak.max(v.abs());
             }
             self.at += 1;
             if self.at == self.per_col {

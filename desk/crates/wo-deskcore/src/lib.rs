@@ -449,7 +449,7 @@ impl Desk {
                 break;
             }
             let x = ((b - t0) * px_per_s) as f32;
-            if (i + 4 - s.bar_one % 4) % 4 == 0 { lines.bars.push(x) } else { lines.beats.push(x) }
+            if (i + 4 - s.bar_one % 4).is_multiple_of(4) { lines.bars.push(x) } else { lines.beats.push(x) }
         }
         for p in s.pads.iter().flatten() {
             if p.at >= t0 && p.at <= t1 {

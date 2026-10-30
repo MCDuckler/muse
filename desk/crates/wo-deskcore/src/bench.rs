@@ -58,11 +58,10 @@ impl Bench {
             self.work.push(work_ms);
         }
         self.last = Some(now);
-        if self.intervals.len() % 60 == 0 {
-            if let Some(m) = memory_stats::memory_stats() {
+        if self.intervals.len().is_multiple_of(60)
+            && let Some(m) = memory_stats::memory_stats() {
                 self.peak_rss = self.peak_rss.max(m.physical_mem as u64);
             }
-        }
         since >= WARM_UP + self.seconds
     }
 

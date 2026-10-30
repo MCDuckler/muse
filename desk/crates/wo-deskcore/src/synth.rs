@@ -48,7 +48,7 @@ pub fn render(bpm: f64, seed: u32) -> (Vec<i16>, Vec<f64>) {
         hp = 0.85 * (hp + hat_raw - hp_prev);
         hp_prev = hat_raw;
         let hat = if ph >= 0.5 { hp * (-hat_t * 60.0).exp() as f32 * 0.35 } else { 0.0 };
-        let bass_on = matches!(section, 1 | 2 | 3);
+        let bass_on = matches!(section, 1..=3);
         let bass = if bass_on && sixteenth > 0.25 {
             let saw = ((t as f32 * root).fract() * 2.0 - 1.0) * (1.0 - (sixteenth - 0.25) * 1.2).max(0.0);
             lp += 0.06 * (saw - lp);
