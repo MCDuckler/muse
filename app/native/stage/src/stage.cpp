@@ -321,6 +321,10 @@ struct Stage {
   std::vector<float> words;
   // The datamosh asked for (ws_mosh): a count, and how long and how hard.
   int moshAsk = 0;
+  // The datamosh held (ws_mosh_hold): on, how healed, how hard, how blocky, the key
+  // frames asked for (a count).
+  float moshHold[WS_MOSH_HOLD] = {};
+  int moshKeysSeen = 0;
   // ws_dump: where the next frame's layers go (empty: nowhere).
   std::string dumpPath;
   float moshSeconds = 1, moshStrength = 1;
@@ -783,6 +787,7 @@ void frame(int slot) {
   std::vector<float> wordsV;
   int moshAsk;
   float moshSeconds, moshStrength;
+  float moshHold[WS_MOSH_HOLD];
   std::string dumpPath;
   {
     std::lock_guard<std::mutex> g(S->lock);
@@ -802,6 +807,7 @@ void frame(int slot) {
     std::memcpy(slitLayer, S->slitLayer, sizeof slitLayer);
     wordsV = S->words;
     moshAsk = S->moshAsk; moshSeconds = S->moshSeconds; moshStrength = S->moshStrength;
+    std::memcpy(moshHold, S->moshHold, sizeof moshHold);
     dumpPath.swap(S->dumpPath);
   }
   // A sim of Dart's numbers: the words, or one by name (`@sim:type3d`).
@@ -1097,10 +1103,22 @@ void frame(int slot) {
     S->trailScene.clear();
   }
 
-  // 2b. the datamosh under way: the picture being left moved by this one's motion
-  if (S->mosh.active) {
-    current = S->mosh.step(*current, dt, common[24], S->workFormat, S->vao);
+  // 2b. the datamosh: held on and on (ws_mosh_hold), the picture as it was moved by
+  // what is drawn now, healed and taken whole as the hands say; or a change's under
+  // way, the picture being left moved by this one's motion
+  if (moshHold[0] > 0.5f) {
+    if (!S->mosh.held) S->mosh.hold(*current, S->workFormat);
+    const int keys = (int)moshHold[4];
+    const bool key = keys != S->moshKeysSeen;
+    S->moshKeysSeen = keys;
+    current = S->mosh.stepHeld(*current, dt, common[24], moshHold[1], moshHold[2], moshHold[3], key, S->workFormat, S->vao);
     glBindVertexArray(S->vao);
+  } else {
+    if (S->mosh.held) S->mosh.release();
+    if (S->mosh.active) {
+      current = S->mosh.step(*current, dt, common[24], S->workFormat, S->vao);
+      glBindVertexArray(S->vao);
+    }
   }
   S->lastPic = current == &S->mosh.a ? 2 : current == &S->trailA ? 1 : 0;
 
@@ -1546,6 +1564,7 @@ WS_API int ws_features(void) {
   f |= 512; // @fluid
   f |= 1024; // scenes sampling the camera, its motion, the cover, their own last picture
   f |= 2048; // the dancers' list's kMesh, kPostFx: the birds
+  f |= 4096; // ws_mosh_hold
   return f;
 }
 
@@ -1695,6 +1714,12 @@ WS_API void ws_mosh(float seconds, float strength) {
   S->moshAsk++;
   S->moshSeconds = seconds;
   S->moshStrength = strength;
+}
+
+WS_API void ws_mosh_hold(const float* p, int n) {
+  if (!S) S = new Stage();
+  std::lock_guard<std::mutex> g(S->lock);
+  for (int i = 0; i < WS_MOSH_HOLD; i++) S->moshHold[i] = p && i < n ? p[i] : 0;
 }
 
 WS_API void ws_ground(int kind, const char* field, float dim, const float* knobs4) {

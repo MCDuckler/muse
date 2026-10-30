@@ -48,7 +48,9 @@ WS_API int ws_attach_shared(void);
 // "milk", ws_dance_texture); 2 frames shared by Direct3D handle; 4 frames as pixels;
 // 8 ws_treat; 16 sims by name (`@sim:<name>`); 32 the veins (`@slime`, fx.h: their
 // rules a frame through ws_words); 64 the slit-scan (ws_treat mode 9); 128 ws_mosh;
-// 256 ws_ghosts, ws_slit and ws_adapt.
+// 256 ws_ghosts, ws_slit and ws_adapt; 512 @fluid; 1024 scenes sampling the camera, its
+// motion, the cover, their own last picture; 2048 the birds (kMesh, kPostFx); 4096
+// ws_mosh_hold.
 WS_API int ws_features(void);
 WS_API const char* ws_error(void);
 WS_API void ws_stop(void);
@@ -122,6 +124,13 @@ WS_API void ws_adapt(int on);
 // A datamosh from the picture on now into whatever is drawn next (fx.h): over
 // `seconds`, `strength` 0..2 how far the old picture is dragged.
 WS_API void ws_mosh(float seconds, float strength);
+// The datamosh held, on and on over whatever is drawn (fx.h), its floats in order:
+// on (0/1); how healed, 0 (all smear) .. 1 (the new picture whole); how far it is
+// dragged, 0..2; how blocky, 0 (a melt) .. 1 (a codec's grain); the key frames asked
+// for, a count (each one the new picture whole, smeared again from there). Taken
+// whole again by itself where it goes flat, black or white.
+#define WS_MOSH_HOLD 5
+WS_API void ws_mosh_hold(const float* p, int n);
 
 // The next frame's layers written out for the combination audit (tools/show-audit):
 // <path>.fig (the figure, its treatment on, before the blend), <path>.ground (where a

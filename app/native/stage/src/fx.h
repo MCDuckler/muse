@@ -22,6 +22,10 @@
 //          its shapes surface in the old one's light; and the new picture breaks
 //          through in soft patches, where it moves first, until it is all there.
 //          Never squares: a block's motion is read between its neighbours'.
+//          Held (ws_mosh_hold): the same, on and on over whatever is drawn — the
+//          picture never quite let through but where the hands say (how healed, a
+//          key frame whole), and taken whole again when it goes to mud (flat, black
+//          or white: looked at a few times a second).
 #pragma once
 #include <GLES3/gl3.h>
 
@@ -658,7 +662,7 @@ uniform sampler2D uField;  // the field so far
 uniform sampler2D uNow;    // the new scene's brightness, a quarter
 uniform sampler2D uPrev;   // and the last frame's
 uniform vec2 uSize;        // the quarter picture, pixels
-uniform float uKick, uFresh, uTime, uSeed;
+uniform float uKick, uFresh, uTime, uSeed, uSwirl;
 in vec2 vUv;
 out vec4 o;
 HASH
@@ -699,7 +703,7 @@ void main() {
   v += clamp(-it * g / (dot(g, g) + 0.004), vec2(-3.0), vec2(3.0)) * 0.6;
   // Where the new scene hardly moves, the swirl; on a kick a push out from the middle.
   float still = 1.0 - smoothstep(0.3, 2.0, length(v));
-  v += swirl(vUv) * 0.9 * still;
+  v += swirl(vUv) * uSwirl * still;
   v += (vUv - 0.5) * uKick * 6.0;
   // The field so far, where this motion came from, blurred a touch.
   vec2 back = vUv + v * t;
@@ -730,7 +734,7 @@ uniform sampler2D uMv;     // the blocks' motion, quarter pixels
 uniform sampler2D uField;  // the smooth field, quarter pixels
 uniform sampler2D uLuma;   // the new scene's brightness, a quarter
 uniform vec2 uResolution;
-uniform float uK, uStrength, uKick, uHavePrev, uSeed, uGlitch;
+uniform float uK, uStrength, uKick, uHavePrev, uSeed, uGlitch, uFade;
 out vec4 o;
 HASH
 float noise(vec2 p) {
@@ -778,7 +782,7 @@ void main() {
   vec2 chromaAt = mix(uv, (floor(px / 4.0) * 4.0 + 2.0) * r, uGlitch) + mv * (1.0 + 0.6 * uGlitch) * r;
   vec3 ycc = toYcc(old);
   ycc.yz = mix(ycc.yz, toYcc(texture(uOld, chromaAt).rgb).yz, 0.5 + 0.4 * uGlitch);
-  old = toRgb(ycc) * 0.997;
+  old = toRgb(ycc) * uFade;
   // The new picture's own change, let in as the time runs — a block's at a time
   // (coarse, stepped), so its shapes surface blocky through the old light.
   vec3 now = texture(uNow, uv).rgb;
@@ -806,9 +810,15 @@ void main() {
 
 struct Mosh {
   GLuint luma_ = 0, match_ = 0, field_ = 0, step_ = 0;
-  Target a, b, prev, lumaNow, lumaPrev, mv, fieldA, fieldB;
+  Target a, b, prev, lumaNow, lumaPrev, mv, fieldA, fieldB, look1, look2;
   bool active = false, havePrev = false, failed = false;
   float k = 0, seconds = 1, strength = 1, seed = 0;
+  // Held (ws_mosh_hold): on until let go, how healed the hands' (not the clock's);
+  // the time since its picture was last looked at for mud, and how many key frames
+  // the mud has asked for.
+  bool held = false, mudKey = false;
+  float sinceLook = 0, sinceStart = 0;
+  int mudKeys = 0;
   // How much of the codec's grain: 0 a smooth melt, 1 all blocks.
   float glitch = 0.8f;
 
@@ -829,6 +839,9 @@ struct Mosh {
 
   // The picture being left, kept: the mosh starts from it.
   void begin(const Target& last, int w, int h, GLenum fmt, float secs, float str) {
+    // Held, the new scene's motion moves the moshed picture on as it is: that is the
+    // change's mosh already.
+    if (held) return;
     if (!setUp() || !last.tex) return;
     a.make(w, h, fmt);
     b.make(w, h, fmt);
@@ -844,9 +857,103 @@ struct Mosh {
 
   // One frame: `now` the new scene; the picture to show instead (a or `now` itself).
   const Target* step(const Target& now, double dt, float kick, GLenum fmt, GLuint quadVao) {
-    if (!active || !step_) return &now;
+    if (!active || !step_ || held) return &now;
+    if (a.w != now.w || a.h != now.h) { active = false; return &now; }
+    run(now, kick, k, strength, glitch, 0.997f, fmt, quadVao);
+    k += (float)(dt / seconds);
+    if (k >= 1) active = false;
+    return &a;
+  }
+
+  // Held: on from the picture `now` is (whole), till let go ([release]).
+  void hold(const Target& now, GLenum fmt) {
+    if (!setUp() || !now.tex) return;
+    a.make(now.w, now.h, fmt);
+    b.make(now.w, now.h, fmt);
+    fxCopy(now, a);
+    active = held = true;
+    havePrev = false;
+    mudKey = false;
+    sinceLook = sinceStart = 0;
+    seed += 17.13f;
+  }
+
+  void release() {
+    if (held) active = false;
+    held = false;
+  }
+
+  // One held frame: how healed (0 all smear .. 1 the new picture whole), how far it
+  // is dragged and how blocky, a key frame (the new picture whole, from which it
+  // smears again); the picture looked at for mud now and then.
+  const Target* stepHeld(const Target& now, double dt, float kick, float heal, float str, float grain, bool key, GLenum fmt, GLuint quadVao) {
+    if (!held || !step_) return &now;
+    if (a.w != now.w || a.h != now.h || a.internal != fmt) {
+      hold(now, fmt);
+      if (!held) return &now;
+    }
+    const bool whole = key || mudKey;
+    mudKey = false;
+    sinceStart += (float)dt;
+    // Slower to fade than a change's (held a long while, it would go dark).
+    run(now, kick, whole ? 1.0f : std::clamp(heal, 0.0f, 0.95f), std::clamp(str, 0.0f, 2.0f), std::clamp(grain, 0.0f, 1.0f), 0.9993f, fmt, quadVao);
+    sinceLook += (float)dt;
+    if (sinceLook > 0.35f) {
+      sinceLook = 0;
+      if (muddy(now, fmt)) {
+        mudKey = true;
+        mudKeys++;
+      }
+    }
+    return &a;
+  }
+
+  // Whether the moshed picture has gone to mud: flat (no light and dark left in it),
+  // all but black or white, or gone grey or dark where the scene drawn now is not.
+  // Both looked at small, a few times a second.
+  bool muddy(const Target& now, GLenum fmt) {
+    const Look m = look(a, fmt), s = look(now, fmt);
+    if (m.sd < 0.045 || m.mean < 0.012 || m.mean > 0.93 || (m.sd < 0.08 && m.chroma < 0.05)) return true;
+    if (s.chroma > 0.08 && m.chroma < 0.4 * s.chroma) return true;
+    if (s.mean > 0.05 && m.mean < 0.3 * s.mean) return true;
+    return false;
+  }
+
+  struct Look {
+    double mean, sd, chroma;
+  };
+
+  Look look(const Target& t, GLenum fmt) {
+    look1.make(128, 72, fmt);
+    look2.make(32, 18, fmt);
+    fxCopy(t, look1);
+    fxCopy(look1, look2);
+    look2.bind();
+    const bool fl = fmt != GL_RGBA8;
+    float px[32 * 18 * 4];
+    unsigned char bytes[32 * 18 * 4];
+    if (fl) {
+      glReadPixels(0, 0, 32, 18, GL_RGBA, GL_FLOAT, px);
+    } else {
+      glReadPixels(0, 0, 32, 18, GL_RGBA, GL_UNSIGNED_BYTE, bytes);
+      for (int i = 0; i < 32 * 18 * 4; i++) px[i] = bytes[i] / 255.0f;
+    }
+    double sum = 0, sq = 0, chroma = 0;
+    const int n = 32 * 18;
+    for (int i = 0; i < n; i++) {
+      const float r = std::clamp(px[i * 4], 0.0f, 1.0f), g = std::clamp(px[i * 4 + 1], 0.0f, 1.0f), bl = std::clamp(px[i * 4 + 2], 0.0f, 1.0f);
+      const float y = 0.299f * r + 0.587f * g + 0.114f * bl;
+      sum += y;
+      sq += y * y;
+      chroma += std::max(r, std::max(g, bl)) - std::min(r, std::min(g, bl));
+    }
+    const double mean = sum / n;
+    return {mean, std::sqrt(std::max(0.0, sq / n - mean * mean)), chroma / n};
+  }
+
+  // The frame's passes: the motion, the field, the step into `a`.
+  void run(const Target& now, float kick, float kNow, float strengthNow, float grain, float fade, GLenum fmt, GLuint quadVao) {
     const int w = now.w, h = now.h;
-    if (a.w != w || a.h != h) { active = false; return &now; }
     const int qw = std::max(4, w / 4), qh = std::max(4, h / 4);
     prev.make(w, h, fmt);
     lumaNow.make(qw, qh, fmt);
@@ -887,10 +994,13 @@ struct Mosh {
       fxTex(field_, "uNow", 2, lumaNow.tex);
       fxTex(field_, "uPrev", 3, lumaPrev.tex);
       fxSet2(field_, "uSize", (float)qw, (float)qh);
-      fxSet(field_, "uKick", kick * strength);
-      // How much of the field is this frame's: the rest is carried on.
-      fxSet(field_, "uFresh", 0.3f);
-      fxSet(field_, "uTime", k * seconds);
+      fxSet(field_, "uKick", kick * strengthNow);
+      // How much of the field is this frame's: the rest is carried on (held, more of
+      // it this frame's, the codec's way, and less of the swirl: on and on, carried
+      // motion and swirl melt everything into one soup).
+      fxSet(field_, "uFresh", held ? 0.6f : 0.3f);
+      fxSet(field_, "uSwirl", held ? 0.2f : 0.9f);
+      fxSet(field_, "uTime", held ? sinceStart : k * seconds);
       fxSet(field_, "uSeed", seed);
       fxQuad();
       std::swap(fieldA, fieldB);
@@ -905,21 +1015,19 @@ struct Mosh {
     fxTex(step_, "uLuma", 4, lumaNow.tex);
     fxTex(step_, "uField", 5, fieldA.tex);
     fxSet2(step_, "uResolution", (float)w, (float)h);
-    fxSet(step_, "uK", k);
-    fxSet(step_, "uStrength", strength);
+    fxSet(step_, "uK", kNow);
+    fxSet(step_, "uStrength", strengthNow);
     fxSet(step_, "uKick", kick);
     fxSet(step_, "uHavePrev", havePrev ? 1.0f : 0.0f);
     fxSet(step_, "uSeed", seed);
-    fxSet(step_, "uGlitch", glitch);
+    fxSet(step_, "uGlitch", grain);
+    fxSet(step_, "uFade", fade);
     fxQuad();
     std::swap(a, b);
 
     fxCopy(now, prev);
     std::swap(lumaNow, lumaPrev);
     havePrev = true;
-    k += (float)(dt / seconds);
-    if (k >= 1) active = false;
-    return &a;
   }
 
   void lost() {
@@ -927,8 +1035,8 @@ struct Mosh {
       if (*p) glDeleteProgram(*p);
       *p = 0;
     }
-    for (Target* t : {&a, &b, &prev, &lumaNow, &lumaPrev, &mv, &fieldA, &fieldB}) t->drop();
-    active = havePrev = false;
+    for (Target* t : {&a, &b, &prev, &lumaNow, &lumaPrev, &mv, &fieldA, &fieldB, &look1, &look2}) t->drop();
+    active = havePrev = held = false;
   }
 };
 

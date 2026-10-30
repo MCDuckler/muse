@@ -27,6 +27,9 @@
 //               [--mosh scene] (the first half --scene, then a datamosh into this one; --ppm-at f
 //                               writes frame f instead of the last; --ppm-at f,g,… each of
 //                               them, as <ppm>.<f>.ppm)
+//               [--mosh-hold grain] (the datamosh held from frame 10 on, as mosh_clock.dart
+//                               would drive it in a verse: a little healed on each bar, a key
+//                               frame every 8 bars; grain 0..1)
 // A synthetic record plays: 128 BPM, a kick each beat, a snare on two and four.
 #include "ws_stage.h"
 
@@ -50,6 +53,7 @@ int main(int argc, char** argv) {
   int treat = 0, type3d = -1, bends = 0, slime = -1, species = 3, agents = 640, slit = -1, ppmAt = -1;
   std::vector<int> ppmAts;  // several frames, each its own file
   std::string mosh, audio, feed, stats;
+  float moshHold = -1;
   int milkW = 960, milkH = 540;
   float accent = 0;
   float expo = 0.3f, mapScale = 1.0f;
@@ -88,6 +92,7 @@ int main(int argc, char** argv) {
     else if (a == "--q") { int i = 0; float x = 0; if (std::sscanf(next().c_str(), "%d=%f", &i, &x) == 2) qs.push_back({i, x}); }
     else if (a == "--slit") slit = std::atoi(next().c_str());
     else if (a == "--mosh") mosh = next();
+    else if (a == "--mosh-hold") moshHold = (float)std::atof(next().c_str());
     else if (a == "--milk-size") { std::string v = next(); std::sscanf(v.c_str(), "%dx%d", &milkW, &milkH); }
     else if (a == "--audio") audio = next();
     else if (a == "--feed") feed = next();
@@ -297,6 +302,13 @@ int main(int argc, char** argv) {
       float tq[WS_TREAT] = {};
       tq[0] = 9; tq[1] = (float)slit; tq[10] = kick; tq[13] = (float)t; tq[14] = 1; tq[15] = 1;
       ws_treat(tq, WS_TREAT);
+    }
+    if (moshHold >= 0) {
+      // On each bar a little healed (a few patches let through), a key frame every 8.
+      const double barPhase = std::fmod(beats, 4.0) / 4.0;
+      const float pulse = (float)std::exp(-barPhase * 14.0);
+      const float hold[WS_MOSH_HOLD] = {f >= 10 ? 1.0f : 0.0f, 0.22f + 0.38f * pulse, 1.2f, moshHold, (float)std::floor(beats / 32.0)};
+      ws_mosh_hold(hold, WS_MOSH_HOLD);
     }
     if (!mosh.empty() && f == frames / 2) {
       ws_scene(mosh.c_str());
