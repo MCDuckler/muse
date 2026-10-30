@@ -41,6 +41,7 @@ impl Default for Library {
 /// A record's analysis, ready for its deck.
 pub(crate) struct Analysed {
     pub grid: Grid,
+    pub timing: wo_booth::Timing,
     pub auto: Vec<(usize, f64, PadKind)>,
     pub hand: HandPads,
     pub camelot: Option<String>,
@@ -49,17 +50,17 @@ pub(crate) struct Analysed {
 
 /// What a worker thread hands back.
 pub(crate) enum Done {
-    SignedIn(Result<House, String>),
+    SignedIn(Result<Box<House>, String>),
     Shelf { turn: u64, rows: Result<(Vec<Record>, i64), String> },
     Playlists(Result<Vec<PlaylistSummary>, String>),
-    Analysed { slot: usize, turn: u64, result: Result<Analysed, String> },
+    Analysed { slot: usize, turn: u64, result: Result<Box<Analysed>, String> },
     LoadFailed { slot: usize, turn: u64, why: String },
 }
 
 pub(crate) fn sign_in(tx: &Sender<Done>, server: String, user: String, password: String) {
     let tx = tx.clone();
     thread::spawn(move || {
-        let _ = tx.send(Done::SignedIn(House::sign_in(&server, &user, &password).map_err(|e| e.to_string())));
+        let _ = tx.send(Done::SignedIn(House::sign_in(&server, &user, &password).map(Box::new).map_err(|e| e.to_string())));
     });
 }
 
@@ -101,5 +102,5 @@ pub(crate) fn fetch_playlists(tx: &Sender<Done>, house: &House) {
 pub(crate) fn analyse(house: &House, id: i64) -> Result<Analysed, String> {
     let a = house.analysis(id).map_err(|e| e.to_string())?;
     let hand = house.hand_pads(id).unwrap_or_default();
-    Ok(Analysed { grid: a.grid(), auto: a.auto_pads(), hand, camelot: a.camelot.clone(), bpm: a.bpm })
+    Ok(Analysed { grid: a.grid(), timing: a.timing(), auto: a.auto_pads(), hand, camelot: a.camelot.clone(), bpm: a.bpm })
 }

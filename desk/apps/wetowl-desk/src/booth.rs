@@ -2,7 +2,7 @@
 //! and where each sits.
 use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Mesh, Painter, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use wo_deskcore::theme;
-use wo_deskcore::{MIX_BARS, SWAP_BAR, Shelf, Snapshot};
+use wo_deskcore::{Shelf, Snapshot, Style, Transition};
 
 use crate::App;
 use crate::paint::*;
@@ -575,7 +575,23 @@ impl App {
         panel(p, r, false);
         let inner = r.shrink(14.0);
         label(p, inner.left_top(), Align2::LEFT_TOP, "Auto DJ", col(theme::SOFT));
-        label(p, inner.right_top(), Align2::RIGHT_TOP, if s.auto { "On · follows your hands" } else { "Off" }, if s.auto { col(theme::OK) } else { col(theme::FAINT_ON_GLASS) });
+        // the style it mixes in: Easy / Normal / Bold
+        let mut sx = inner.right();
+        for (word, style) in [("Bold", Style::Bold), ("Normal", Style::Normal), ("Easy", Style::Easy)] {
+            let sr = Rect::from_min_size(pos2(sx - 58.0, inner.top() - 4.0), vec2(58.0, 20.0));
+            let on = self.desk.style == style;
+            let resp = ui.interact(sr, ui.scope_id().with(("style", word)), Sense::click());
+            if on {
+                p.rect_filled(sr, CornerRadius::same(5), alpha(theme::OK, 0.18));
+            } else if resp.hovered() {
+                p.rect_filled(sr, CornerRadius::same(5), white(0.05));
+            }
+            label(p, sr.center(), Align2::CENTER_CENTER, word, if on { col(theme::OK) } else { col(theme::FAINT_ON_GLASS) });
+            if resp.clicked() {
+                self.desk.style = style;
+            }
+            sx -= 60.0;
+        }
         let card = Rect::from_min_size(pos2(inner.left(), inner.top() + 26.0), vec2(inner.width(), 132.0));
         p.rect(card, CornerRadius::same(8), white(0.035), Stroke::new(1.0, white(0.06)), StrokeKind::Inside);
         let c = card.shrink(12.0);
@@ -584,13 +600,25 @@ impl App {
         let a = text(p, pos2(c.left(), c.top() + 8.0), Align2::LEFT_CENTER, ["A", "B"][from], 12.0, "mono", col(theme::DECKS[from]));
         text(p, pos2(a.right() + 14.0, c.top() + 8.0), Align2::CENTER_CENTER, "→", 13.0, "", col(theme::MUTED));
         let b = text(p, pos2(a.right() + 26.0, c.top() + 8.0), Align2::LEFT_CENTER, ["A", "B"][to], 12.0, "mono", col(theme::DECKS[to]));
-        text(p, pos2(b.right() + 10.0, c.top() + 8.0), Align2::LEFT_CENTER, "Long blend", 13.0, "semi", col(theme::TEXT));
-        let bar = s.mix.map(|m| m.bar).unwrap_or(0.0);
-        let status = if s.mix.is_some() { format!("bar {:.0} / {:.0}", bar.floor() + 1.0, MIX_BARS) } else { "next soon".into() };
+        // what it will do, and when
+        let (what, status, progress) = match (s.auto, s.mix) {
+            (false, _) => ("Off".to_owned(), "press Auto DJ".to_owned(), 0.0),
+            (true, None) => ("Listening".to_owned(), if s.decks[master].playing { "planning…" } else { "play a deck" }.to_owned(), 0.0),
+            (true, Some(m)) => {
+                let what = format!("{} · {} bar{}", m.kind.word(), m.bars, if m.bars == 1 { "" } else { "s" });
+                let status = if m.mixing {
+                    format!("bar {:.0} / {}", m.bar.floor() + 1.0, m.bars)
+                } else {
+                    format!("in {}:{:02}", m.starts_in as u64 / 60, m.starts_in as u64 % 60)
+                };
+                (what, status, if m.mixing { (m.bar / m.bars.max(1) as f64).min(1.0) } else { 0.0 })
+            }
+        };
+        text(p, pos2(b.right() + 10.0, c.top() + 8.0), Align2::LEFT_CENTER, &what, 13.0, "semi", col(theme::TEXT));
         text(p, pos2(c.right(), c.top() + 8.0), Align2::RIGHT_CENTER, &status, 12.0, "mono", col(theme::MUTED));
         let track = Rect::from_min_size(pos2(c.left(), c.top() + 26.0), vec2(c.width(), 6.0));
         p.rect_filled(track, CornerRadius::same(3), col(theme::LINE));
-        let fill = Rect::from_min_size(track.min, vec2(c.width() * (bar / MIX_BARS).min(1.0) as f32, 6.0));
+        let fill = Rect::from_min_size(track.min, vec2(c.width() * progress as f32, 6.0));
         let mut mesh = Mesh::default();
         mesh.colored_vertex(fill.left_top(), col(theme::DECKS[from]));
         mesh.colored_vertex(fill.right_top(), col(theme::DECKS[to]));
@@ -599,14 +627,33 @@ impl App {
         mesh.add_triangle(0, 1, 2);
         mesh.add_triangle(0, 2, 3);
         p.add(mesh);
-        let sw = track.left() + track.width() * (SWAP_BAR / MIX_BARS) as f32;
-        p.rect_filled(Rect::from_center_size(pos2(sw, track.center().y), vec2(2.0, 12.0)), CornerRadius::ZERO, col(theme::TEXT));
-        text(p, pos2(c.left(), c.top() + 50.0), Align2::LEFT_CENTER, &format!("Bass swap on bar {:.0}", SWAP_BAR + 1.0), 12.0, "", col(theme::MUTED));
+        let note = match s.mix {
+            Some(m) => match m.swap_bar {
+                Some(sw) => {
+                    let x = track.left() + track.width() * (sw / m.bars.max(1) as f64) as f32;
+                    p.rect_filled(Rect::from_center_size(pos2(x, track.center().y), vec2(2.0, 12.0)), CornerRadius::ZERO, col(theme::TEXT));
+                    format!("Bass changes hands on bar {:.0}", sw + 1.0)
+                }
+                None => match m.kind {
+                    Transition::Cut => "On the one, no overlap".to_owned(),
+                    _ => "Levels crossed over the bars".to_owned(),
+                },
+            },
+            None => "Each mix chosen from key, tempo and the phrases".to_owned(),
+        };
+        text(p, pos2(c.left(), c.top() + 50.0), Align2::LEFT_CENTER, &note, 12.0, "", col(theme::MUTED));
         let bw = (c.width() - 16.0) / 3.0;
+        let planned = s.mix.is_some_and(|m| !m.mixing);
         for (i, name) in ["Mix now", "Not that", "Hold"].iter().enumerate() {
             let br = Rect::from_min_size(pos2(c.left() + i as f32 * (bw + 8.0), c.bottom() - 30.0), vec2(bw, 30.0));
-            if button(ui, p, br, name, Lit::No, ("mixbtn", i)).clicked() && i == 2 {
-                self.desk.set_auto(!s.auto);
+            let lit = if i == 2 && !s.auto { Lit::Ok } else { Lit::No };
+            if button(ui, p, br, name, lit, ("mixbtn", i)).clicked() {
+                match i {
+                    0 if planned => self.desk.mix_now(),
+                    1 if planned => self.desk.not_that(),
+                    2 => self.desk.set_auto(!s.auto),
+                    _ => {}
+                }
             }
         }
         label(p, pos2(inner.left(), card.bottom() + 14.0), Align2::LEFT_TOP, "Up next", col(theme::FAINT_ON_GLASS));

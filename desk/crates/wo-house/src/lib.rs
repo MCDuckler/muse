@@ -113,6 +113,17 @@ pub struct Playlist {
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Analysis {
     #[serde(default)]
+    pub duration_ms: Option<i64>,
+    /// "cold", "fade" or "".
+    #[serde(default)]
+    pub ends: String,
+    #[serde(default)]
+    pub four_bars: Vec<i64>,
+    #[serde(default)]
+    pub phrases: Vec<i64>,
+    #[serde(default)]
+    pub hand_cues: Option<HandCues>,
+    #[serde(default)]
     pub bpm: Option<f64>,
     /// Beat times, ms.
     #[serde(default)]
@@ -135,6 +146,38 @@ pub struct Cues {
     pub first_downbeat_ms: Option<i64>,
     pub mix_in_ms: Option<i64>,
     pub mix_out_ms: Option<i64>,
+    #[serde(default)]
+    pub sound_end_ms: Option<i64>,
+}
+
+/// Where a hand said a record leaves and comes in.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct HandCues {
+    pub out_ms: Option<i64>,
+    pub in_ms: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct SectionRow {
+    #[serde(default)]
+    pub label: String,
+    pub start_ms: i64,
+    pub end_ms: i64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct PlaceRow {
+    pub ms: i64,
+    #[serde(default)]
+    pub why: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Places {
+    #[serde(default)]
+    pub outs: Vec<PlaceRow>,
+    #[serde(default)]
+    pub ins: Vec<PlaceRow>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -143,9 +186,50 @@ pub struct Structure {
     pub drops_ms: Vec<i64>,
     #[serde(default)]
     pub breakdowns_ms: Vec<i64>,
+    #[serde(default)]
+    pub sections: Vec<SectionRow>,
+    #[serde(default)]
+    pub cues: Option<Places>,
+    #[serde(default)]
+    pub bars_ms: Vec<i64>,
+    #[serde(default)]
+    pub mix_db: Vec<f64>,
 }
 
 impl Analysis {
+    /// Everything the booth mixes by, in seconds (wo_booth::Timing).
+    pub fn timing(&self) -> wo_booth::Timing {
+        let s = |ms: i64| ms as f64 / 1000.0;
+        let grid = self.grid();
+        let mut t = wo_booth::Timing::from_grid(grid, self.duration_ms.map(s).unwrap_or(0.0));
+        t.bpm = self.bpm.or(t.bpm);
+        t.camelot = self.camelot.clone();
+        t.ends = self.ends.clone();
+        t.first_downbeat = self.cues.first_downbeat_ms.map(s).or(t.first_downbeat);
+        t.mix_in = self.cues.mix_in_ms.map(s);
+        t.mix_out = self.cues.mix_out_ms.map(s);
+        t.sound_end = self.cues.sound_end_ms.map(s);
+        if !self.four_bars.is_empty() {
+            t.markers = self.four_bars.iter().map(|&m| s(m)).collect();
+        }
+        t.phrases = self.phrases.iter().map(|&m| s(m)).collect();
+        let st = self.structure.clone().unwrap_or_default();
+        let drops = if st.drops_ms.is_empty() { &self.drops } else { &st.drops_ms };
+        t.drops = drops.iter().map(|&m| s(m)).collect();
+        t.sections = st.sections.iter().map(|x| wo_booth::mix::Section { label: x.label.clone(), start: s(x.start_ms), end: s(x.end_ms) }).collect();
+        let places = |v: &[PlaceRow]| v.iter().map(|p| wo_booth::mix::Place { at: s(p.ms), why: p.why.clone() }).collect();
+        if let Some(c) = &st.cues {
+            t.outs = places(&c.outs);
+            t.ins = places(&c.ins);
+        }
+        t.bars_db = st.bars_ms.iter().zip(&st.mix_db).map(|(&b, &d)| (s(b), d)).collect();
+        if let Some(h) = &self.hand_cues {
+            t.hand_out = h.out_ms.map(s);
+            t.hand_in = h.in_ms.map(s);
+        }
+        t
+    }
+
     pub fn grid(&self) -> Grid {
         Grid::new(self.beats.iter().map(|&b| b as f64 / 1000.0).collect(), self.bar_starts_on.unwrap_or(0))
     }

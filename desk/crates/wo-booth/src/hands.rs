@@ -152,6 +152,12 @@ impl Hands {
         if self.looped.is_some() && self.loop_beats == Some(beats) {
             return self.unloop(t);
         }
+        self.loop_from_bar(beats, t);
+    }
+
+    /// A loop of `beats` from the bar (the rule above), never letting go: for the booth's
+    /// own moves, which say what they want each time.
+    pub fn loop_from_bar(&mut self, beats: f64, t: &mut impl Transport) {
         let Some(spb) = self.grid.spb() else { return };
         let here = t.position();
         let next = self.grid.next_beat(here, 4).unwrap_or(here);

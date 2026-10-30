@@ -19,15 +19,14 @@ pub mod theme;
 pub use backdrop::Backdrop;
 pub use library::{Library, Shelf};
 pub use records::{Audio, Record};
-pub use wo_booth::{Grid, Hands, Pad, PadKind, RANGES, Transport};
+pub use wo_booth::{Grid, Hands, Moves, Pad, PadKind, RANGES, Style, Timing, Transition, Transport};
 pub use wo_engine::Load;
 
 const RATE: u32 = 48_000;
 /// Bars the Auto DJ's blend takes, and the bar its bass swap lands on.
-pub const MIX_BARS: f64 = 32.0;
-pub const SWAP_BAR: f64 = 16.0;
-/// Seconds a record plays alone before the next comes in.
-const SOLO: f64 = 8.0;
+/// How far ahead of a transition's out point the next record is started (the engine
+/// then starts it sample-exactly on the point).
+const LEAD: f64 = 0.25;
 
 
 /// One deck as it is this frame.
@@ -64,11 +63,20 @@ pub struct DeckView {
     pub range: f64,
 }
 
+/// The Auto DJ's next transition, planned or under way.
 #[derive(Clone, Copy, Debug)]
 pub struct MixView {
     pub from: usize,
     pub to: usize,
+    pub kind: Transition,
+    pub bars: u32,
+    /// Under way (else planned).
+    pub mixing: bool,
+    /// Bars into it when mixing; when planned, seconds until it starts.
     pub bar: f64,
+    pub starts_in: f64,
+    /// Where its bass changes hands, bars in (the transitions that swap it).
+    pub swap_bar: Option<f64>,
 }
 
 #[derive(Clone, Debug)]
@@ -104,6 +112,9 @@ pub struct Lines {
 struct Slot {
     record: Record,
     hands: Hands,
+    /// What the record is made of in time, for the Auto DJ (the house's analysis, or
+    /// the grid alone).
+    timing: Timing,
     wave: Arc<Mutex<Wave>>,
     loader: Option<JoinHandle<Source>>,
     gain: f32,
@@ -113,12 +124,26 @@ struct Slot {
     keylock: bool,
 }
 
-struct Mix {
+/// A transition the Auto DJ has planned (and, once `started`, is making).
+struct Plan {
     from: usize,
     to: usize,
-    started: Instant,
-    bpm: f64,
-    swapped: bool,
+    kind: Transition,
+    bars: u32,
+    /// The outgoing's source time where it starts, and how long it lasts there.
+    out: f64,
+    length: f64,
+    in_step: bool,
+    /// The incoming deck's load it was planned for: a load since makes it stale.
+    turn: u64,
+    started: bool,
+    /// When the outgoing reached the out point (the engine's clock) and its rate then:
+    /// the move's progress is time from there, not the outgoing's place — a roll loops
+    /// that place.
+    begun: Option<(f64, f64)>,
+    /// 0..1 through the move.
+    progress: f64,
+    applied: Option<Moves>,
 }
 
 pub struct Desk {
@@ -129,8 +154,8 @@ pub struct Desk {
     rows: Vec<Record>,
     queue: Vec<Record>,
     next: usize,
-    mix: Option<Mix>,
-    solo_since: Instant,
+    mix: Option<Plan>,
+    pub style: Style,
     started: Instant,
     auto: bool,
     _pacer: Option<Pacer>,
@@ -201,6 +226,7 @@ impl Desk {
         let empty = || Slot {
             record: queue[0].clone(),
             hands: Hands::new(Grid::default()),
+            timing: Timing::default(),
             wave: Arc::new(Mutex::new(Wave::default())),
             loader: None,
             gain: 0.5,
@@ -219,7 +245,7 @@ impl Desk {
             queue,
             next: 0,
             mix: None,
-            solo_since: Instant::now(),
+            style: Style::Normal,
             started: Instant::now(),
             auto: autoplay,
             _pacer: pacer,
@@ -305,7 +331,7 @@ impl Desk {
             match audio {
                 Audio::House { id } => match house {
                     Some(house) => {
-                        let result = library::analyse(&house, id);
+                        let result = library::analyse(&house, id).map(Box::new);
                         let ok = result.is_ok();
                         let _ = tx.send(library::Done::Analysed { slot, turn, result });
                         match house.audio(id) {
@@ -362,9 +388,11 @@ impl Desk {
                 (3, bar_at(0.86), PadKind::Out),
             ]);
         }
+        let timing = self.timing_of(&record, hands.grid.clone());
         let s = &mut self.slots[slot];
         s.record = record;
         s.hands = hands;
+        s.timing = timing;
         s.wave = wave;
         s.loader = Some(loader);
         self.apply_levels();
@@ -374,6 +402,13 @@ impl Desk {
     }
 
     /// Advances the Auto DJ. Call once a frame.
+    ///
+    /// Planned: with the master playing and a timed record on the other deck, the
+    /// transition is chosen (wo_booth::mix: which kind, how many bars, where the master
+    /// goes out, where the next comes in) and the next is parked at its in point.
+    /// Started: a beat ahead of the out point the engine is told to start it exactly
+    /// there, in step. Under way: the transition's moves each frame. Done: the old
+    /// record stops, the new one is master, and the record after goes on the free deck.
     pub fn tick(&mut self) {
         while let Ok(done) = self.done_rx.try_recv() {
             self.handle(done);
@@ -381,51 +416,179 @@ impl Desk {
         if !self.auto {
             return;
         }
-        match &mut self.mix {
-            None => {
-                let to = 1 - self.master;
-                let ready = self.slots[to].wave.lock().unwrap().seconds() > 30.0;
-                if self.solo_since.elapsed().as_secs_f64() >= SOLO && ready {
-                    let from = self.master;
-                    let bpm = self.deck_bpm(from);
-                    let d = self.engine.deck(DeckId::new(to).unwrap());
-                    let start = self.slots[to].hands.pads[0].map(|p| p.at).unwrap_or(0.0);
-                    d.seek(start);
-                    let master = DeckId::new(from).unwrap();
-                    d.start_with(master, 4, None, 0.0);
-                    d.sync(master, 4, 0.0);
-                    self.slots[to].eq[0] = 0.0;
-                    d.set_eq(eq_db(self.slots[to].eq), 0.0);
-                    self.mix = Some(Mix { from, to, started: Instant::now(), bpm, swapped: false });
+        // a hand loaded something else onto the incoming deck: plan again
+        if self.mix.as_ref().is_some_and(|m| !m.started && m.turn != self.load_gen[m.to]) {
+            self.mix = None;
+        }
+        let Some(m) = self.mix.as_ref() else { return self.plan() };
+        let (from, to, out, length, kind, started) = (m.from, m.to, m.out, m.length, m.kind, m.started);
+        let fd = DeckId::new(from).unwrap();
+        let heard = self.engine.deck(fd).position();
+        if !started {
+            if heard >= out - LEAD {
+                let d = self.engine.deck(DeckId::new(to).unwrap());
+                // a moment late (the plan came in after its point): start now, in step
+                d.start_with(fd, 4, (heard < out).then_some(out), 0.0);
+                if self.mix.as_ref().is_some_and(|m| m.in_step) {
+                    d.sync(fd, 4, 0.0);
+                }
+                if let Some(m) = self.mix.as_mut() {
+                    m.started = true;
                 }
             }
-            Some(m) => {
-                let bar = m.started.elapsed().as_secs_f64() * m.bpm / 240.0;
-                let (from, to) = (m.from, m.to);
-                let p = (bar / MIX_BARS).min(1.0) as f32;
-                let x = if to == 1 { p } else { 1.0 - p };
-                if bar >= SWAP_BAR && !m.swapped {
-                    m.swapped = true;
-                    self.slots[from].eq[0] = 0.0;
-                    self.slots[to].eq[0] = 0.5;
-                    for d in [from, to] {
-                        self.engine.deck(DeckId::new(d).unwrap()).set_eq(eq_db(self.slots[d].eq), 60.0 / m.bpm);
-                    }
+            return;
+        }
+        let now = self.engine.now();
+        let begun = match self.mix.as_ref().and_then(|m| m.begun) {
+            Some(b) => b,
+            None if heard >= out - 0.005 => {
+                let b = (now, self.engine.deck(fd).read().rate.max(0.01));
+                if let Some(m) = self.mix.as_mut() {
+                    m.begun = Some(b);
                 }
-                self.set_crossfader(x);
-                if bar >= MIX_BARS {
-                    self.mix = None;
-                    let old = self.engine.deck(DeckId::new(from).unwrap());
-                    old.play(false);
-                    self.engine.deck(DeckId::new(to).unwrap()).unsync();
-                    self.master = to;
-                    self.slots[from].eq = [0.5; 3];
-                    self.solo_since = Instant::now();
-                    let next = self.take_next();
-                    self.load(from, next);
-                }
+                b
+            }
+            None => return,
+        };
+        let p = (now - begun.0) * begun.1 / length.max(0.01);
+        let moves = wo_booth::mix::moves(kind, p);
+        self.apply_moves(from, to, &moves);
+        if let Some(m) = self.mix.as_mut() {
+            m.applied = Some(moves);
+            m.progress = p.min(1.0);
+        }
+        if p >= 1.0 {
+            self.finish_mix(from, to);
+        }
+    }
+
+    /// The next transition, when there is one to plan.
+    fn plan(&mut self) {
+        let (from, to) = (self.master, 1 - self.master);
+        let fd = self.engine.deck(DeckId::new(from).unwrap());
+        if !fd.read().playing || !self.slots[to].record.playable() {
+            return;
+        }
+        let (ft, tt) = (&self.slots[from].timing, &self.slots[to].timing);
+        // the incoming's grid (a house record's comes with its analysis) and some sound
+        let decoded = self.slots[to].wave.lock().unwrap().seconds();
+        if !tt.has_beats() || decoded < 20.0 {
+            return;
+        }
+        let pitch = fd.read().rate.max(0.01);
+        let (kind, bars) = wo_booth::mix::choose(Some(ft), Some(tt), self.style, pitch);
+        let bar = ft.bar().unwrap_or(60.0 / self.slots[from].record.bpm.max(60.0) * 4.0);
+        let length = bars as f64 * bar;
+        let mut out = wo_booth::mix::clear_of_drops(ft, wo_booth::mix::out_point(ft, length), length);
+        // a plan for a place already behind the record goes at the soonest marker
+        // there is time for
+        let heard = fd.position();
+        if out < heard + bar {
+            out = ft.markers.iter().copied().find(|&m| m >= heard + bar).unwrap_or_else(|| ft.on_grid(heard + bar, 4));
+        }
+        let in_step = match (ft.bpm, tt.bpm) {
+            (Some(a), Some(b)) => wo_booth::mix::sync_ratio(b, a * pitch, wo_booth::mix::BRIDGE_REACH).is_some(),
+            _ => false,
+        };
+        let on_the_drop = self.style == Style::Bold && !tt.drops.is_empty();
+        let park = if in_step { wo_booth::mix::in_point(tt, bars, on_the_drop) } else { tt.first_downbeat.unwrap_or(0.0) };
+        let td = self.engine.deck(DeckId::new(to).unwrap());
+        td.play(false);
+        td.unsync();
+        td.seek(park);
+        self.mix = Some(Plan { from, to, kind, bars, out, length, in_step, turn: self.load_gen[to], started: false, begun: None, progress: 0.0, applied: None });
+        // the incoming waits silent, its bass already out where the move wants it so —
+        // levels only: nothing happens to the outgoing until the move starts
+        let parked = Moves { from_loop: None, from_brake: false, ..wo_booth::mix::moves(kind, 0.0) };
+        self.apply_moves(from, to, &parked);
+        if let Some(m) = self.mix.as_mut() {
+            m.applied = Some(parked);
+        }
+    }
+
+    /// One frame of a transition's moves onto the decks (only what changed).
+    fn apply_moves(&mut self, from: usize, to: usize, m: &Moves) {
+        let was = self.mix.as_ref().and_then(|p| p.applied);
+        let x = if from == 0 { m.crossfader } else { 1.0 - m.crossfader };
+        if (x - self.crossfader).abs() > 1e-4 {
+            self.set_crossfader(x);
+        }
+        for (d, eq) in [(from, m.from_eq), (to, m.to_eq)] {
+            if self.slots[d].eq != eq {
+                self.slots[d].eq = eq;
+                self.engine.deck(DeckId::new(d).unwrap()).set_eq(eq_db(eq), 0.05);
             }
         }
+        if (self.slots[from].filter - m.from_filter).abs() > 1e-4 {
+            self.set_filter(from, m.from_filter);
+        }
+        let had_loop = was.and_then(|w| w.from_loop);
+        if m.from_loop != had_loop {
+            match (had_loop, m.from_loop) {
+                (None, Some(beats)) => self.hands(from, |h, t| h.loop_from_bar(beats, t)),
+                (Some(_), Some(_)) => self.halve_loop(from),
+                (Some(_), None) => self.unloop(from),
+                (None, None) => {}
+            }
+        }
+        if m.from_brake && !was.is_some_and(|w| w.from_brake) {
+            self.brake(from);
+        }
+    }
+
+    /// The transition is over: the old record stops and is put back to flat, the new
+    /// one is the master, and the record after goes on the deck just freed.
+    fn finish_mix(&mut self, from: usize, to: usize) {
+        self.mix = None;
+        self.engine.deck(DeckId::new(from).unwrap()).play(false);
+        self.unloop(from);
+        self.set_filter(from, 0.5);
+        self.slots[from].eq = [0.5; 3];
+        self.engine.deck(DeckId::new(from).unwrap()).set_eq(eq_db([0.5; 3]), 0.0);
+        self.engine.deck(DeckId::new(to).unwrap()).unsync();
+        self.master = to;
+        let next = self.take_next();
+        self.load(from, next);
+    }
+
+    /// Mix now: a planned transition starts on the master's next bar.
+    pub fn mix_now(&mut self) {
+        let Some(m) = self.mix.as_ref().filter(|m| !m.started) else { return };
+        let ft = &self.slots[m.from].timing;
+        let heard = self.engine.deck(DeckId::new(m.from).unwrap()).position();
+        let out = ft.grid.next_beat(heard + 2.0 * LEAD, 4).unwrap_or(heard + 2.0 * LEAD);
+        if let Some(m) = self.mix.as_mut() {
+            m.out = out;
+        }
+    }
+
+    /// Not that: another record onto the incoming deck (the plan follows it).
+    pub fn not_that(&mut self) {
+        let Some(m) = self.mix.as_ref().filter(|m| !m.started) else { return };
+        let to = m.to;
+        self.mix = None;
+        let mut next = self.take_next();
+        if next.id == self.slots[to].record.id {
+            next = self.take_next();
+        }
+        self.load(to, next);
+    }
+
+    /// A record's timing before its analysis comes: its grid, and for the synthesised
+    /// records the sections they were made with.
+    fn timing_of(&self, record: &Record, grid: Grid) -> Timing {
+        let mut t = Timing::from_grid(grid, record.seconds as f64);
+        if !record.key.is_empty() {
+            t.camelot = Some(record.key.clone());
+        }
+        if let Audio::Synth { .. } = record.audio {
+            let bar = |n: f64| n * 4.0 * 60.0 / record.bpm;
+            t.mix_in = Some(bar(16.0));
+            t.mix_out = Some(bar(112.0));
+            t.drops = vec![bar(32.0), bar(80.0)];
+            t.phrases = (0..8).map(|k| bar(16.0 * k as f64)).collect();
+        }
+        t
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -472,7 +635,20 @@ impl Desk {
         Snapshot {
             master_bpm,
             crossfader: self.crossfader,
-            mix: self.mix.as_ref().map(|m| MixView { from: m.from, to: m.to, bar: m.started.elapsed().as_secs_f64() * m.bpm / 240.0 }),
+            mix: self.mix.as_ref().map(|m| {
+                let heard = self.engine.deck(DeckId::new(m.from).unwrap()).position();
+                let swaps = matches!(m.kind, Transition::Blend | Transition::Sweep | Transition::Roll | Transition::Brake);
+                MixView {
+                    from: m.from,
+                    to: m.to,
+                    kind: m.kind,
+                    bars: m.bars,
+                    mixing: m.started,
+                    bar: m.progress * m.bars as f64,
+                    starts_in: (m.out - heard).max(0.0),
+                    swap_bar: swaps.then_some(m.bars as f64 / 2.0),
+                }
+            }),
             auto: self.auto,
             load: self.engine.load(),
             set_seconds: self.started.elapsed().as_secs_f64(),
@@ -732,7 +908,7 @@ impl Desk {
         match done {
             Done::SignedIn(Ok(house)) => {
                 self.library.signing_in = false;
-                self.signed_in(house);
+                self.signed_in(*house);
             }
             Done::SignedIn(Err(e)) => {
                 self.library.signing_in = false;
@@ -754,6 +930,7 @@ impl Desk {
             Done::Playlists(Err(e)) => self.library.error = Some(e),
             Done::Analysed { slot, turn, result } if turn == self.load_gen[slot] => match result {
                 Ok(a) => {
+                    let a = *a;
                     let deck = self.engine.deck(DeckId::new(slot).unwrap());
                     deck.set_beats(&a.grid.beats);
                     deck.set_bar_one(a.grid.bar_one);
@@ -767,6 +944,7 @@ impl Desk {
                     hands.place_auto(&a.auto);
                     let s = &mut self.slots[slot];
                     s.hands = hands;
+                    s.timing = a.timing;
                     if let Some(k) = a.camelot {
                         s.record.key = k;
                     }
@@ -808,9 +986,6 @@ impl Desk {
         60.0 / self.spb(deck)
     }
 
-    fn deck_bpm(&self, deck: usize) -> f64 {
-        self.base_bpm(deck) * self.engine.deck(DeckId::new(deck).unwrap()).read().rate.max(0.01)
-    }
 }
 
 /// A knob 0..1 to decibels: 0 kills (-40), 0.5 flat, 1 is +6.
