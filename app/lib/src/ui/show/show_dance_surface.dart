@@ -355,7 +355,12 @@ class _Floats {
     return at;
   }
 
-  void add(double v) => buf[room(1)] = v;
+  void add(double v) {
+    // The room first: it may put a bigger list in [buf], which `buf[room(1)]` would
+    // have read before it.
+    final at = room(1);
+    buf[at] = v;
+  }
 
   void addAll(Iterable<double> vs) {
     if (vs is List<double>) {

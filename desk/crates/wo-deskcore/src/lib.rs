@@ -2,23 +2,26 @@
 //! the crate, the waveforms and the glass backdrop. Both bake-off UIs (egui, Slint)
 //! drive one [`Desk`] the same way: [`Desk::tick`] and [`Desk::snapshot`] once a
 //! frame, the controls when a hand moves one. Nothing here knows how it is drawn.
+//! The show is the Stage's (stage.rs): a window of its own, fed a frame each tick.
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use wo_engine::{Channels, DeckId, Engine, Eq, Gains, Output, Source};
+use wo_engine::{Bus, Channels, DeckId, Engine, Eq, Gains, Output, Source};
 use wo_wave::{Analyser, Tee, Wave};
 
 pub mod backdrop;
 pub mod bench;
 pub mod library;
 pub mod records;
+pub mod stage;
 pub mod synth;
 pub mod theme;
 
 pub use backdrop::Backdrop;
 pub use library::{Library, Shelf};
 pub use records::{Audio, Record};
+pub use stage::{Hand as ShowHand, StageView, Thumb};
 pub use wo_booth::{Grid, Hands, Moves, Pad, PadKind, RANGES, Style, Timing, Transition, Transport};
 pub use wo_engine::Load;
 
@@ -177,6 +180,8 @@ pub struct Desk {
     /// The lights as last sent, and to how many controllers.
     lit: std::collections::HashMap<String, bool>,
     lit_for: usize,
+    /// The show's window.
+    stage: stage::Stage,
 }
 
 /// An offline engine rendered in real time on its own thread: a computer with no
@@ -272,6 +277,7 @@ impl Desk {
             jog: [(0.0, None); 2],
             lit: Default::default(),
             lit_for: 0,
+            stage: stage::Stage::default(),
         };
         // the Desk's own saved sign-in; WO_APP_SIGN_IN=1 borrows the WetOwl app's for
         // this run only (development, screenshots)
@@ -431,6 +437,7 @@ impl Desk {
             self.handle(done);
         }
         self.controllers_tick();
+        self.feed_stage();
         if !self.auto {
             return;
         }
@@ -1136,6 +1143,117 @@ impl Desk {
 
     pub fn set_auto(&mut self, on: bool) {
         self.auto = on;
+    }
+
+    // ---- the stage
+
+    /// Starts the show's window (unless one is reading already).
+    pub fn open_stage(&mut self) {
+        self.stage.open();
+    }
+
+    /// Closes the window the Desk started.
+    pub fn close_stage(&mut self) {
+        self.stage.close();
+    }
+
+    pub fn stage(&self) -> StageView {
+        self.stage.view()
+    }
+
+    /// The stage's picture, and its count (a new count is a new picture).
+    pub fn stage_thumb(&self) -> Option<(u64, std::sync::Arc<Thumb>)> {
+        self.stage.thumb()
+    }
+
+    /// Where a stage window started by hand connects (`wetowl --stage <url>`).
+    pub fn stage_url(&mut self) -> Option<String> {
+        self.stage.url()
+    }
+
+    /// A hand on the show: the stage's director takes it.
+    pub fn show(&mut self, h: ShowHand) {
+        self.stage.hand(h);
+    }
+
+    /// A frame to the stage, when one reads and one is due: the decks as the ear hears
+    /// them, what the engine heard of each since the last frame, the mix on.
+    fn feed_stage(&mut self) {
+        if !self.stage.due() {
+            return;
+        }
+        // read as the v1 show reads its engine: up to the clock plus the output's
+        // latency (40 ms at most), so the picture, a frame late to the eye, keeps up
+        let to = self.engine.now() + self.engine.latency().min(0.04);
+        let from = match self.stage.heard_to {
+            Some(f) if f <= to && to - f < 0.25 => f,
+            _ => to - 1.0 / 60.0,
+        };
+        self.stage.heard_to = Some(to);
+        let audio = |f: &wo_engine::Features| wo_wire::Audio {
+            sub: f.sub,
+            low: f.low,
+            mid: f.mid,
+            high: f.high,
+            air: f.air,
+            kick: f.kick,
+            snare: f.snare,
+            hat: f.hat,
+            onset: f.onset,
+        };
+        let x = self.crossfader;
+        let deck = |i: usize| {
+            let s = &self.slots[i];
+            let id = DeckId::new(i).unwrap();
+            let e = self.engine.deck(id);
+            let st = e.read();
+            let g = if i == 0 { (2.0 * (1.0 - x)).min(1.0) } else { (2.0 * x).min(1.0) };
+            let eq = eq_db(s.eq);
+            let k = (s.filter - 0.5) * 2.0;
+            wo_wire::Deck {
+                // a record of the house's (the WetOwl app's fetched copies are too)
+                track_id: (s.record.id > 0 && !matches!(s.record.audio, Audio::Synth { .. })).then_some(s.record.id),
+                title: s.record.title.clone(),
+                artist: s.record.artist.clone(),
+                playing: st.playing,
+                position_ms: e.position() * 1000.0,
+                rate: if st.playing { st.rate } else { 0.0 },
+                level: (s.fader * s.fader * g).clamp(0.0, 1.0),
+                eq: wo_wire::EqDb { low: eq.low, mid: eq.mid, high: eq.high },
+                filter: if k.abs() < 0.04 { 0.0 } else { k },
+                looping: s.hands.looped.is_some(),
+                heard: self.engine.features(Bus::Deck(id), from, to).as_ref().map(audio),
+            }
+        };
+        let heard = self.engine.features(Bus::Master, from, to).map(|m| wo_wire::Heard { master: audio(&m), spectrum: m.spectrum.to_vec() });
+        let frame = wo_wire::Frame { a: deck(0), b: deck(1), heard, mix: self.show_mix() };
+        self.stage.say(&wo_wire::frame(&frame));
+    }
+
+    /// The Auto DJ's transition as the show sees it: on while it is being made, armed
+    /// in the bar before it goes (as the v1 booth arms a mix).
+    fn show_mix(&self) -> wo_wire::Mix {
+        let Some(m) = self.mix.as_ref().filter(|_| self.auto) else { return wo_wire::Mix::default() };
+        let name = |d: usize| Some(if d == 0 { "A" } else { "B" }.to_owned());
+        let kind = Some(format!("{:?}", m.kind).to_lowercase());
+        if m.begun.is_some() {
+            return wo_wire::Mix { on: true, kind, from: name(m.from), to: name(m.to), bars: m.bars, k: m.progress, ..Default::default() };
+        }
+        let d = self.engine.deck(DeckId::new(m.from).unwrap());
+        let rate = d.read().rate.max(0.01);
+        let wait = (m.out - d.position()) / rate;
+        if wait > 4.0 * self.spb(m.from) / rate {
+            return wo_wire::Mix::default();
+        }
+        wo_wire::Mix {
+            armed: true,
+            kind,
+            from: name(m.from),
+            to: name(m.to),
+            bars: m.bars,
+            starts_in_ms: Some((wait.max(0.0) * 1000.0) as i64),
+            ..Default::default()
+        }
     }
 
     // ---- inside

@@ -1,12 +1,19 @@
 //! WetOwl Desk: the glass booth of the Look board (design/tokens.json), painted by hand over
-//! one blurred stage, driven by wo-deskcore. `--bench 30 [--out DIR]` measures it.
-use std::sync::{Arc, mpsc};
-use std::time::Instant;
+//! one blurred stage, driven by wo-deskcore. `--bench 30 [--out DIR]` measures it;
+//! `--stage` opens the show's window from the start.
+//!
+//! The Desk keeps time on a thread of its own (the Auto DJ, the controllers, the stage's
+//! frames), so the set goes on while the window is hidden — behind a full-screen stage,
+//! say, where a compositor stops drawing it. The window takes the Desk for a frame.
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, ColorImage, CornerRadius, Rect, TextureHandle, TextureOptions, pos2};
 use wo_deskcore::bench::Bench;
 use wo_deskcore::theme;
-use wo_deskcore::Desk;
+use wo_deskcore::{Desk, ShowHand};
 
 mod booth;
 mod paint;
@@ -15,7 +22,10 @@ use booth::fit_the_design;
 use paint::{col, fonts};
 
 pub(crate) struct App {
-    desk: Desk,
+    desk: Arc<Mutex<Desk>>,
+    clock: Option<(Arc<AtomicBool>, JoinHandle<()>)>,
+    /// The stage's picture, and which of its pictures it is.
+    pub(crate) stage_pic: Option<(u64, TextureHandle)>,
     backdrop: TextureHandle,
     ball: TextureHandle,
     search: String,
@@ -45,9 +55,16 @@ impl App {
         };
         // --bench plays and mixes by itself; a desk opened by hand stays quiet
         let bench = Bench::from_args(if glow() { "egui-glow" } else { "egui-wgpu" });
-        let desk = Desk::open(bench.is_some());
+        let mut desk = Desk::open(bench.is_some());
+        // --stage: the show's window from the start
+        if std::env::args().any(|a| a == "--stage") {
+            desk.open_stage();
+        }
+        let desk = Arc::new(Mutex::new(desk));
         App {
+            clock: Some(keep_time(desk.clone())),
             desk,
+            stage_pic: None,
             backdrop: tex("backdrop", wo_deskcore::backdrop::backdrop(480, 270)),
             ball: tex("ball", wo_deskcore::backdrop::ball()),
             search: String::new(),
@@ -70,7 +87,9 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let t0 = Instant::now();
         fit_the_design(ui.ctx());
-        self.desk.tick();
+        let shared = self.desk.clone();
+        let mut guard = shared.lock().unwrap_or_else(|e| e.into_inner());
+        let desk: &mut Desk = &mut guard;
         // the keyboard, unless a field is being typed in
         if !ui.ctx().egui_wants_keyboard_input() {
             let keys: Vec<(egui::Key, egui::Modifiers)> = ui.input(|i| {
@@ -83,15 +102,17 @@ impl eframe::App for App {
                     .collect()
             });
             for (k, m) in keys {
-                self.key(k, m);
+                self.key(desk, k, m);
             }
         }
-        let s = self.desk.snapshot();
+        self.stage_picture(ui.ctx(), desk);
+        let s = desk.snapshot();
         let full = ui.max_rect();
         let p = ui.painter().clone();
         p.rect_filled(full, CornerRadius::ZERO, col(theme::GROUND));
         p.image(self.backdrop.id(), full, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-        self.draw(ui, &p, full, &s);
+        self.draw(desk, ui, &p, full, &s);
+        drop(guard);
         let work = t0.elapsed().as_secs_f32() * 1000.0;
         if let Some(b) = &mut self.bench {
             b.size = (full.width() as u32, full.height() as u32);
@@ -110,6 +131,52 @@ impl eframe::App for App {
                 }
         }
         ui.ctx().request_repaint();
+    }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        if let Some((stop, t)) = self.clock.take() {
+            stop.store(true, Ordering::Relaxed);
+            let _ = t.join();
+        }
+    }
+}
+
+/// The Desk's own clock: a tick every few milliseconds, whatever the window does.
+fn keep_time(desk: Arc<Mutex<Desk>>) -> (Arc<AtomicBool>, JoinHandle<()>) {
+    let stop = Arc::new(AtomicBool::new(false));
+    let s = stop.clone();
+    let t = thread::Builder::new()
+        .name("desk clock".into())
+        .spawn(move || {
+            while !s.load(Ordering::Relaxed) {
+                desk.lock().unwrap_or_else(|e| e.into_inner()).tick();
+                thread::sleep(Duration::from_millis(4));
+            }
+        })
+        .expect("the Desk's clock");
+    (stop, t)
+}
+
+impl App {
+    /// The stage's newest picture into a texture, when there is a new one.
+    fn stage_picture(&mut self, ctx: &egui::Context, desk: &Desk) {
+        let Some((n, pic)) = desk.stage_thumb() else {
+            self.stage_pic = None;
+            return;
+        };
+        if self.stage_pic.as_ref().is_some_and(|(m, _)| *m == n) {
+            return;
+        }
+        let img = ColorImage::from_rgba_unmultiplied([pic.width, pic.height], &pic.rgba);
+        match &mut self.stage_pic {
+            Some((m, tex)) => {
+                tex.set(img, TextureOptions::LINEAR);
+                *m = n;
+            }
+            None => self.stage_pic = Some((n, ctx.load_texture("stage", img, TextureOptions::LINEAR))),
+        }
     }
 }
 
@@ -143,10 +210,10 @@ fn main() -> eframe::Result {
 impl App {
     /// The booth's keys, the v1 booth's map: 1 2 play, Q W sync, Z X start in step, F G
     /// kill the bass, A the Auto DJ, M or Space mix now, S or N not that, ← → the
-    /// crossfader (with shift: nudge the master), [ ] a 16-beat loop, ? the keys.
-    fn key(&mut self, k: egui::Key, m: egui::Modifiers) {
+    /// crossfader (with shift: nudge the master), [ ] a 16-beat loop, H the show's hit,
+    /// B its blackout, ? the keys.
+    fn key(&mut self, d: &mut Desk, k: egui::Key, m: egui::Modifiers) {
         use egui::Key as K;
-        let d = &mut self.desk;
         match k {
             K::Num1 => d.toggle_play(0),
             K::Num2 => d.toggle_play(1),
@@ -170,6 +237,11 @@ impl App {
                     let x = d.crossfader() + dir as f32 * 0.05;
                     d.set_crossfader(x);
                 }
+            }
+            K::H => d.show(ShowHand::Hit),
+            K::B => {
+                let on = !d.stage().blackout;
+                d.show(ShowHand::Blackout(on));
             }
             K::OpenBracket => d.loop_beats(0, 16.0),
             K::CloseBracket => d.loop_beats(1, 16.0),

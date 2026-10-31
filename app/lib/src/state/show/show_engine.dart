@@ -7,21 +7,17 @@
 // analysis says of that moment (show_deck.dart), the mixer's settings and the mix
 // in progress, eases the palette towards the record's, decays the hit, and hands
 // the frame on. Everything downstream — the stage, the lights, a recording — reads
-// [state] and [events] and nothing else.
+// [state] and [events] and nothing else. The booth's facts come through a
+// ShowSource (show_source.dart): this process's booth, or the Desk's over the wire.
 import 'dart:async';
-import 'dart:io' show Platform;
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
 
 import '../../api/client.dart';
 import '../../api/models.dart';
-import '../../audio/engine.dart';
 import '../booth/booth.dart';
-import '../booth/deck.dart';
-import 'show_deck.dart';
 import 'show_director.dart';
 import 'show_dynamics.dart';
 import 'show_events.dart';
@@ -31,39 +27,29 @@ import 'show_faves.dart';
 import 'show_feed.dart';
 import 'show_genome.dart';
 import 'show_taste.dart';
-import 'show_heard.dart';
 import 'show_palette.dart';
 import 'show_plan_legacy.dart';
 import 'show_pool.dart';
 import 'show_rig.dart';
 import 'show_tune.dart';
 import 'show_snapshots.dart';
+import 'show_source.dart';
 import 'show_state.dart';
 import 'show_store.dart';
 
 class ShowEngine extends ChangeNotifier implements ShowFeed {
-  ShowEngine(this.booth, {ShowStore? store}) : store = store ?? ShowStore.forThisDevice() {
-    booth.stepApplied.addListener(_stepSaid);
-    booth.fxFired.addListener(_fxSaid);
+  ShowEngine(Booth booth, {ShowStore? store}) : this.fed(BoothShowSource(booth), store: store);
+
+  /// The show over a booth that is not this process's own (show_source.dart): the
+  /// WetOwl Desk's, read off the wire by a stage that directs the show itself.
+  ShowEngine.fed(this.source, {ShowStore? store}) : store = store ?? ShowStore.forThisDevice() {
+    source.said = _pending.add;
     _state = _blank(DateTime.now());
     _macros = _macros.copyWith(seed: seed);
-    // MilkDrop's sound: the record's file here, or its stream.
-    MilkFeed.shared.pcm.source = (id) {
-      final local = booth.a.offlinePath?.call(id);
-      if (local != null) return (url: local, headers: const <String, String>{});
-      final track = booth.a.track?.id == id
-          ? booth.a.track
-          : booth.b.track?.id == id
-              ? booth.b.track
-              : null;
-      if (track == null) return null;
-      return (url: booth.api.streamUrl(track), headers: booth.api.streamHeaders);
-    };
-    // Or, where the booth plays on its own engine, what the room hears.
-    MilkFeed.shared.pcm.heard = _heardPcm;
   }
 
-  final Booth booth;
+  /// Where each frame's decks, sound and mix come from.
+  final ShowSource source;
 
   // ------------------------------------------------------------------ the document
   /// Where the show's own document is kept (show_store.dart): the pool, the hands'
@@ -498,42 +484,8 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
   Genome _genome = Genome.none;
   int? _genomeTrack;
 
-  /// WETOWL_SHOW_SOUND=pulse: the house's pulse through the mixer model even where
-  /// the engine could say what is heard (to compare the two).
-  static final _pulseOnly = !kIsWeb && Platform.environment['WETOWL_SHOW_SOUND'] == 'pulse';
-
-  /// What the engine hears, where the booth plays on it (show_heard.dart).
-  ShowHeard? _heard;
-  ShowHeard? get _heardNow {
-    final e = Engine.started;
-    if (e == null || _pulseOnly) return _heard = null;
-    if (_heard?.engine != e) _heard = ShowHeard(e);
-    return _heard;
-  }
-
-  /// MilkDrop's sound off the engine: the master's samples since the last tick.
-  double? _pcmAt;
-  Int16List? _heardPcm() {
-    final e = Engine.started;
-    if (e == null || _pulseOnly || !(booth.a.onEngine || booth.b.onEngine)) return null;
-    final at = e.now() + math.min(e.latency, ShowHeard.maxLead);
-    var from = _pcmAt;
-    if (from == null || from > at || at - from > 0.25) from = at - 1 / 60;
-    final n = ((at - from) * e.rate).round();
-    if (n <= 0) return null;
-    _pcmAt = from + n / e.rate;
-    final x = e.scope(Engine.master, _pcmAt!, n);
-    if (x == null) return null;
-    final out = Int16List(n);
-    for (var i = 0; i < n; i++) {
-      out[i] = (x[i] * 32767).round().clamp(-32768, 32767);
-    }
-    return out;
-  }
-
   /// Said by the booth between frames, told on the next.
   final _pending = <ShowEvent>[];
-  final _askedVocals = <int>{};
 
   void start() {
     if (_ticker != null) return;
@@ -651,18 +603,6 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
     notifyListeners();
   }
 
-  void _stepSaid() {
-    final s = booth.stepApplied.last;
-    if (s == null) return;
-    _pending.add(ShowEvent(ShowEventKind.step, DateTime.now(), data: {'at': s.at, 'crossfader': s.crossfader}));
-  }
-
-  void _fxSaid() {
-    final f = booth.fxFired.last;
-    if (f == null) return;
-    _pending.add(ShowEvent(ShowEventKind.fx, DateTime.now(), data: {'sound': f.sound.name, 'beats': f.beats}));
-  }
-
   // ------------------------------------------------------------------ the frame
   /// One frame, at [now]. Public for a test; the ticker calls it.
   void tick(DateTime now) {
@@ -671,31 +611,7 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
     _last = now;
     final prev = _state;
 
-    final levels = booth.levels;
-    var a = _deck(booth.a, now, levels.a);
-    var b = _deck(booth.b, now, levels.b);
-
-    // The sound as heard, where the decks play on the engine: each deck's own, and
-    // the room's; the stems' levels stay the pulse's.
-    var audio = a.audio + b.audio;
-    final live = <String, double>{};
-    final heardBy = _heardNow;
-    final ai = booth.a.engineIndex, bi = booth.b.engineIndex;
-    if (heardBy != null && (ai != null || bi != null)) {
-      final h = heardBy.read([if (ai != null) ai, if (bi != null) bi]);
-      if (h != null) {
-        if (h.decks[ai] case final ha?) a = a.withAudio(ShowHeard.over(ha, a.audio));
-        if (h.decks[bi] case final hb?) b = b.withAudio(ShowHeard.over(hb, b.audio));
-        audio = ShowHeard.over(h.master, audio);
-        live['live.on'] = 1;
-        final spec = h.spectrum;
-        if (spec != null) {
-          for (var i = 0; i < spec.length; i++) {
-            live['spec.$i'] = spec[i];
-          }
-        }
-      }
-    }
+    final (:a, :b, :audio, :live, :mix) = source.facts(now, offsetMs);
 
     // Which deck has the room: the louder channel, and it keeps it until the other
     // is clearly louder — a fader at the middle must not flip the show every frame.
@@ -709,14 +625,6 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
       _genomeTrack = master.trackId;
       _genome = master.trackId == null ? Genome.none : Genome.of(trackId: master.trackId!, camelot: master.camelot, bpm: master.bpm, cover: master.coverColor);
     }
-
-    final m = booth.mixing;
-    final arm = booth.arming;
-    final mix = m != null
-        ? ShowMix(on: true, kind: m.kind.name, from: m.from, to: m.to, bars: m.bars, k: m.k)
-        : arm != null
-            ? ShowMix(armed: true, kind: arm.kind.name, from: arm.from, to: arm.to, startsIn: arm.startsAt.difference(now))
-            : ShowMix.none;
 
     // The palette eased towards the record's.
     final want = paletteFor(
@@ -808,39 +716,6 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
     }
   }
 
-  ShowDeck _deck(Deck deck, DateTime now, double level) {
-    final track = deck.track;
-    if (track == null) return ShowDeck(name: deck.name);
-    // The ear's position: the engine's clock, less what the stretcher holds back,
-    // plus the performer's offset.
-    final at = deck.positionAt(now) - booth.mixer.stretchLatency(deck) + Duration(milliseconds: offsetMs);
-    final timing = deck.timing ?? booth.timing.peek(track.id);
-    var vocals = booth.vocals.peek(track.id);
-    if (vocals == null && _askedVocals.add(track.id)) {
-      unawaited(booth.vocals.of(track).then((_) => _askedVocals.remove(track.id)));
-    }
-    final pulse = booth.pulse[track.id];
-    if (pulse == null) unawaited(booth.fetchPulse(track));
-    return deriveDeck(
-      name: deck.name,
-      track: track,
-      coverUrl: booth.api.coverUrl(track),
-      streamUrl: booth.api.streamUrl(track),
-      playing: deck.playing,
-      position: at < Duration.zero ? Duration.zero : at,
-      timing: timing,
-      vocals: vocals,
-      pulse: pulse,
-      channel: ChannelSettings(
-        level: level.clamp(0.0, 1.0),
-        eq: booth.eqOf(deck),
-        filter: booth.filters[deck] ?? 0,
-        stems: deck.stemLevels,
-        looping: deck.loopStart != null && deck.loopEnd != null,
-      ),
-    );
-  }
-
   static ShowState _blank(DateTime now) => ShowState(now: now, a: const ShowDeck(name: 'A'), b: const ShowDeck(name: 'B'));
 
   @override
@@ -851,8 +726,7 @@ class ShowEngine extends ChangeNotifier implements ShowFeed {
       _saving = null;
       unawaited(store.save(_doc));
     }
-    booth.stepApplied.removeListener(_stepSaid);
-    booth.fxFired.removeListener(_fxSaid);
+    source.dispose();
     unawaited(_events.close());
     super.dispose();
   }
@@ -876,7 +750,7 @@ class _SnapshotHost implements SnapshotHost {
   @override
   ShowSnapshot? get taken => show.doc.snapshot;
   @override
-  ApiClient get api => show.booth.api;
+  ApiClient get api => show.source.api;
   @override
   ShowSetup fromLegacy(List<dynamic> rules) => show.setupFromLegacy(rules);
 

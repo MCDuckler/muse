@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../state/booth/booth.dart';
+import '../../state/show/show_engine.dart';
 import '../../state/show/show_feed.dart';
 import '../../state/show/show_state.dart';
 import 'native_stage.dart';
@@ -49,15 +50,17 @@ class StageHands {
   final ShowMacros Function() macros;
   final void Function(ShowMacros) setMacros;
 
-  static StageHands ofEngine(Booth booth) => StageHands(
-        next: booth.show.nextScene,
-        previous: booth.show.previousScene,
-        hit: booth.show.hit,
-        macros: () => booth.show.macros,
-        setMacros: booth.show.setMacros,
-        hold: () => booth.show.holdScene(!booth.show.sceneHeld),
-        keep: () => unawaited(keepFaveNow(booth.show)),
-        mosh: booth.show.moshNext,
+  static StageHands ofEngine(Booth booth) => ofShow(booth.show);
+
+  static StageHands ofShow(ShowEngine show) => StageHands(
+        next: show.nextScene,
+        previous: show.previousScene,
+        hit: show.hit,
+        macros: () => show.macros,
+        setMacros: show.setMacros,
+        hold: () => show.holdScene(!show.sceneHeld),
+        keep: () => unawaited(keepFaveNow(show)),
+        mosh: show.moshNext,
       );
 
   static const none = StageHands(next: _nothing, previous: _nothing, hit: _nothing, macros: _noMacros, setMacros: _setNothing);

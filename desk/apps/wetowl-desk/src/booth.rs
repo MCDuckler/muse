@@ -1,25 +1,26 @@
-//! The booth's panels — top bar, overviews, waveforms, decks, mixer, crate, Auto DJ —
-//! and where each sits.
+//! The booth's panels — top bar, overviews, waveforms, decks, mixer, crate, stage,
+//! Auto DJ — and where each sits.
 use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Mesh, Painter, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use wo_deskcore::theme;
-use wo_deskcore::{Shelf, Snapshot, Style, Transition};
+use wo_deskcore::{Desk, Shelf, ShowHand, Snapshot, Style, Transition};
 
 use crate::App;
 use crate::paint::*;
 
 impl App {
     /// The whole booth over the backdrop, for this frame's snapshot.
-    pub(crate) fn draw(&mut self, ui: &mut egui::Ui, p: &Painter, full: Rect, s: &Snapshot) {
+    pub(crate) fn draw(&mut self, desk: &mut Desk, ui: &mut egui::Ui, p: &Painter, full: Rect, s: &Snapshot) {
         let l = layout(full);
-        self.top_bar(ui, p, l.top, s);
-        self.overviews(p, l.overview, s);
-        self.waves(p, l.waves, s);
+        self.top_bar(desk, ui, p, l.top, s);
+        self.overviews(desk, p, l.overview, s);
+        self.waves(desk, p, l.waves, s);
         for d in 0..2 {
-            self.deck(ui, p, l.decks[d], s, d);
+            self.deck(desk, ui, p, l.decks[d], s, d);
         }
-        self.mixer(ui, p, l.mixer, s);
-        self.crate_(ui, p, l.crate_, s);
-        self.auto_dj(ui, p, l.auto, s);
+        self.mixer(desk, ui, p, l.mixer, s);
+        self.crate_(desk, ui, p, l.crate_, s);
+        self.stage(desk, ui, p, l.stage);
+        self.auto_dj(desk, ui, p, l.auto, s);
         if self.show_keys {
             self.keys(p, full);
         }
@@ -37,6 +38,7 @@ impl App {
             ("A", "Auto DJ on / off"),
             ("M  Space", "Mix now"),
             ("S  N", "Not that: another record next"),
+            ("H  B", "The show: a hit, the blackout"),
             ("?", "These keys"),
         ];
         let r = Rect::from_center_size(full.center(), vec2(460.0, 70.0 + rows.len() as f32 * 30.0));
@@ -49,7 +51,7 @@ impl App {
         }
     }
 
-    fn top_bar(&mut self, ui: &mut egui::Ui, p: &Painter, r: Rect, s: &Snapshot) {
+    fn top_bar(&mut self, desk: &mut Desk, ui: &mut egui::Ui, p: &Painter, r: Rect, s: &Snapshot) {
         panel(p, r, false);
         let logo = Rect::from_min_size(pos2(r.left() + 6.0, r.center().y - 17.0), vec2(104.0, 34.0));
         p.rect_filled(logo, CornerRadius::same(6), col(theme::RED));
@@ -79,11 +81,11 @@ impl App {
         button(ui, p, gear, "⚙", Lit::No, "settings");
         rx = gear.left() - 12.0;
         let h = label(p, pos2(rx, r.center().y), Align2::RIGHT_CENTER, "House", col(theme::MUTED));
-        let signed = self.desk.house().is_some();
+        let signed = desk.house().is_some();
         p.circle_filled(pos2(h.left() - 8.0, r.center().y), 3.5, if signed { col(theme::OK) } else { col(theme::FAINT) });
         rx = h.left() - 24.0;
         // the controllers found: green when listening, warm when one could not be opened
-        for c in self.desk.controllers() {
+        for c in desk.controllers() {
             let short = if c.layout.contains("RMX") { "RMX".to_owned() } else { c.name.chars().take(14).collect() };
             let ok = c.trouble.is_none();
             let t = label(p, pos2(rx, r.center().y), Align2::RIGHT_CENTER, &short, col(theme::MUTED));
@@ -107,18 +109,18 @@ impl App {
         p.circle_stroke(pos2(rec.left() + 16.0, rec.center().y), 4.0, Stroke::new(1.5, col(theme::RED)));
         let auto = Rect::from_min_size(pos2(rec.left() - 104.0, r.center().y - 15.0), vec2(96.0, 30.0));
         if button(ui, p, auto, "  Auto DJ", if s.auto { Lit::Ok } else { Lit::No }, "auto").clicked() {
-            self.desk.set_auto(!s.auto);
+            desk.set_auto(!s.auto);
         }
         p.circle_filled(pos2(auto.left() + 14.0, auto.center().y), 3.5, if s.auto { col(theme::OK) } else { col(theme::FAINT) });
     }
 
-    fn overviews(&self, p: &Painter, r: Rect, s: &Snapshot) {
+    fn overviews(&self, desk: &mut Desk, p: &Painter, r: Rect, s: &Snapshot) {
         panel(p, r, true);
         for d in 0..2 {
             let y = r.top() + 8.0 + d as f32 * 28.0;
             text(p, pos2(r.left() + 12.0, y + 11.0), Align2::LEFT_CENTER, ["A", "B"][d], 12.0, "mono-semi", col(theme::DECKS[d]));
             let bar = Rect::from_min_max(pos2(r.left() + 36.0, y), pos2(r.right() - 86.0, y + 22.0));
-            let cols = self.desk.overview(d, (bar.width() / 3.0) as usize);
+            let cols = desk.overview(d, (bar.width() / 3.0) as usize);
             let mut mesh = Mesh::default();
             band(&mut mesh, bar.left(), 3.0, bar.center().y, cols.iter().map(|c| c[0] * 10.0 + 1.0), alpha(theme::DECKS[d], 0.85));
             p.add(mesh);
@@ -134,13 +136,13 @@ impl App {
         }
     }
 
-    fn waves(&self, p: &Painter, r: Rect, s: &Snapshot) {
+    fn waves(&self, desk: &mut Desk, p: &Painter, r: Rect, s: &Snapshot) {
         panel(p, r, true);
         let clip = p.with_clip_rect(r.shrink(1.0));
         for d in 0..2 {
             let w = Rect::from_min_size(pos2(r.left(), r.top() + 8.0 + d as f32 * 116.0), vec2(r.width(), 112.0));
             let v = &s.decks[d];
-            let (cols, lines) = self.desk.waveform(d, v.heard, w.width(), 3.0, 110.0);
+            let (cols, lines) = desk.waveform(d, v.heard, w.width(), 3.0, 110.0);
             for x in &lines.beats {
                 clip.line_segment([pos2(w.left() + x, w.top()), pos2(w.left() + x, w.bottom())], Stroke::new(1.0, white(0.10)));
             }
@@ -179,7 +181,7 @@ impl App {
         }
     }
 
-    fn deck(&mut self, ui: &mut egui::Ui, p: &Painter, r: Rect, s: &Snapshot, d: usize) {
+    fn deck(&mut self, desk: &mut Desk, ui: &mut egui::Ui, p: &Painter, r: Rect, s: &Snapshot, d: usize) {
         panel(p, r, false);
         let v = &s.decks[d];
         let inner = r.shrink(14.0);
@@ -211,25 +213,25 @@ impl App {
         let cue = held(ui, cue_r, (d, "cue"));
         let down = cue.is_pointer_button_down_on();
         if down && !self.cue_held[d] {
-            self.desk.cue_down(d);
+            desk.cue_down(d);
         } else if !down && self.cue_held[d] {
-            self.desk.cue_up(d);
+            desk.cue_up(d);
         }
         self.cue_held[d] = down;
         let on_cue = v.cue.is_some_and(|c| (c - v.heard).abs() < 0.06);
         paint_button(p, cue_r, "Cue", if down || (on_cue && !v.playing) { Lit::Deck(d) } else { Lit::No }, cue.hovered());
         if button(ui, p, cell(1.0, 0.0, 71.0, 44.0), if v.playing { "❚❚" } else { "▶" }, if v.playing { Lit::Deck(d) } else { Lit::No }, (d, "play")).clicked() {
-            self.desk.toggle_play(d);
+            desk.toggle_play(d);
         }
         if button(ui, p, cell(0.0, 52.0, 71.0, 30.0), "Sync", if v.synced { Lit::Ok } else { Lit::No }, (d, "sync")).clicked() {
-            self.desk.toggle_sync(d);
+            desk.toggle_sync(d);
         }
         button(ui, p, cell(1.0, 52.0, 71.0, 30.0), "Master", if v.master { Lit::Deck(d) } else { Lit::No }, (d, "master"));
         if button(ui, p, cell(0.0, 90.0, 71.0, 30.0), "Key lock", if v.keylock { Lit::Deck(d) } else { Lit::No }, (d, "kl")).clicked() {
-            self.desk.toggle_keylock(d);
+            desk.toggle_keylock(d);
         }
         if button(ui, p, cell(1.0, 90.0, 71.0, 30.0), "Brake", Lit::No, (d, "brake")).clicked() {
-            self.desk.brake(d);
+            desk.brake(d);
         }
         // nudges bend the record while held
         let mut nudge = 0i8;
@@ -243,7 +245,7 @@ impl App {
             paint_button(p, nr, word, if down { Lit::Deck(d) } else { Lit::No }, resp.hovered());
         }
         if nudge != self.nudge_held[d] {
-            self.desk.nudge(d, nudge);
+            desk.nudge(d, nudge);
             self.nudge_held[d] = nudge;
         }
         // pads: set here or jump there; shift- or right-click clears
@@ -262,9 +264,9 @@ impl App {
                     let n = text(p, pos2(pr.left() + 10.0, pr.center().y), Align2::LEFT_CENTER, &(i + 1).to_string(), 11.0, "mono", white(0.8));
                     label_sized(p, pos2(n.right() + 8.0, pr.center().y), Align2::LEFT_CENTER, pad_name(pad.auto), 11.5, col(theme::TEXT));
                     if resp.secondary_clicked() || (resp.clicked() && shift) {
-                        self.desk.clear_pad(d, i);
+                        desk.clear_pad(d, i);
                     } else if resp.clicked() {
-                        self.desk.pad(d, i);
+                        desk.pad(d, i);
                     }
                 }
                 None => {
@@ -272,7 +274,7 @@ impl App {
                     p.rect_stroke(pr, CornerRadius::same(6), Stroke::new(1.0, edge), StrokeKind::Inside);
                     text(p, pos2(pr.left() + 10.0, pr.center().y), Align2::LEFT_CENTER, &(i + 1).to_string(), 11.0, "mono", col(theme::FAINT));
                     if resp.clicked() && !shift {
-                        self.desk.pad(d, i);
+                        desk.pad(d, i);
                     }
                 }
             }
@@ -292,7 +294,7 @@ impl App {
             }
             text(p, sr.center(), Align2::CENTER_CENTER, n, 11.5, "mono", if on { col(theme::TINTS[d]) } else { col(theme::MUTED) });
             if resp.clicked() {
-                self.desk.loop_beats(d, beats);
+                desk.loop_beats(d, beats);
             }
             lx += 33.0;
         }
@@ -303,10 +305,10 @@ impl App {
             let br = Rect::from_min_size(pos2(lx, ly - 13.0), vec2(34.0, 26.0));
             if button(ui, p, br, word, if lit { Lit::Deck(d) } else { Lit::No }, (d, "loopbtn", act)).clicked() {
                 match act {
-                    0 => self.desk.loop_in(d),
-                    1 => self.desk.loop_out(d),
-                    2 => self.desk.halve_loop(d),
-                    _ => self.desk.double_loop(d),
+                    0 => desk.loop_in(d),
+                    1 => desk.loop_out(d),
+                    2 => desk.halve_loop(d),
+                    _ => desk.double_loop(d),
                 }
             }
             lx += 38.0;
@@ -316,7 +318,7 @@ impl App {
         let pf = Rect::from_min_max(pos2(body.right() - 46.0, body.top() + 18.0), pos2(body.right(), body.bottom() - 18.0));
         let range_r = Rect::from_center_size(pos2(pf.center().x, body.top() + 6.0), vec2(46.0, 16.0));
         if ui.interact(range_r, ui.scope_id().with((d, "range")), Sense::click()).clicked() {
-            self.desk.cycle_range(d);
+            desk.cycle_range(d);
         }
         label(p, range_r.center(), Align2::CENTER_CENTER, &format!("±{:.0}", v.range * 100.0), col(theme::FAINT_ON_GLASS));
         p.rect_filled(Rect::from_center_size(pf.center(), vec2(4.0, pf.height())), CornerRadius::same(2), col(theme::LINE));
@@ -324,16 +326,16 @@ impl App {
         let travel = pf.height() / 2.0 - 8.0;
         let fader = ui.interact(pf, ui.scope_id().with((d, "pitch")), Sense::click_and_drag());
         if fader.double_clicked() {
-            self.desk.set_pitch(d, 0.0);
+            desk.set_pitch(d, 0.0);
         } else if fader.dragged() {
-            self.desk.set_pitch(d, v.pitch + (fader.drag_delta().y / travel) as f64);
+            desk.set_pitch(d, v.pitch + (fader.drag_delta().y / travel) as f64);
         }
         let py = pf.center().y + v.pitch as f32 * travel;
         p.rect_filled(Rect::from_center_size(pos2(pf.center().x, py), vec2(36.0, 16.0)), CornerRadius::same(4), col(theme::CAP));
         text(p, pos2(pf.center().x, body.bottom()), Align2::CENTER_BOTTOM, &format!("{pitch:+.2}%"), 11.0, "mono", col(theme::MUTED));
     }
 
-    fn mixer(&mut self, ui: &mut egui::Ui, p: &Painter, r: Rect, s: &Snapshot) {
+    fn mixer(&mut self, desk: &mut Desk, ui: &mut egui::Ui, p: &Painter, r: Rect, s: &Snapshot) {
         panel(p, r, false);
         let inner = r.shrink2(vec2(14.0, 12.0));
         let names = ["Gain", "High", "Mid", "Low", "Filter"];
@@ -351,11 +353,11 @@ impl App {
                 };
                 if let Some(nv) = knob(ui, p, c, val, color, bip, (d, "knob", i)) {
                     match i {
-                        0 => self.desk.set_gain(d, nv),
-                        1 => self.desk.set_eq(d, 2, nv),
-                        2 => self.desk.set_eq(d, 1, nv),
-                        3 => self.desk.set_eq(d, 0, nv),
-                        _ => self.desk.set_filter(d, nv),
+                        0 => desk.set_gain(d, nv),
+                        1 => desk.set_eq(d, 2, nv),
+                        2 => desk.set_eq(d, 1, nv),
+                        3 => desk.set_eq(d, 0, nv),
+                        _ => desk.set_filter(d, nv),
                     }
                 }
                 label(p, pos2(c.x, c.y + 19.0), Align2::CENTER_TOP, name, col(theme::FAINT_ON_GLASS));
@@ -366,7 +368,7 @@ impl App {
             let (mx, fdx) = if d == 0 { (fx, fx + 16.0) } else { (fx + 46.0, fx) };
             meter(p, Rect::from_min_size(pos2(mx, inner.top() + 26.0), vec2(6.0, 178.0)), level, 18);
             if let Some(nv) = vfader(ui, p, Rect::from_min_size(pos2(fdx, inner.top() + 24.0), vec2(34.0, 182.0)), v.fader, (d, "fader")) {
-                self.desk.set_fader(d, nv);
+                desk.set_fader(d, nv);
             }
             let e = Rect::from_min_size(pos2(fx - 2.0, inner.top() + 216.0), vec2(56.0, 24.0));
             button(ui, p, e, "Echo", Lit::No, (d, "echo"));
@@ -386,23 +388,23 @@ impl App {
         let x = cf.left() + 14.0 + s.crossfader * (cf.width() - 28.0);
         p.rect_filled(Rect::from_center_size(pos2(x, cf.center().y), vec2(28.0, 22.0)), CornerRadius::same(4), col(theme::CAP));
         if resp.dragged() {
-            self.desk.set_auto(false);
-            self.desk.set_crossfader(s.crossfader + resp.drag_delta().x / (cf.width() - 28.0));
+            desk.set_auto(false);
+            desk.set_crossfader(s.crossfader + resp.drag_delta().x / (cf.width() - 28.0));
         }
     }
 
-    fn crate_(&mut self, ui: &mut egui::Ui, p: &Painter, r: Rect, s: &Snapshot) {
+    fn crate_(&mut self, desk: &mut Desk, ui: &mut egui::Ui, p: &Painter, r: Rect, s: &Snapshot) {
         panel(p, r, true);
         let tree = Rect::from_min_max(r.min, pos2(r.left() + 230.0, r.bottom()));
         p.line_segment([pos2(tree.right(), r.top()), pos2(tree.right(), r.bottom())], Stroke::new(1.0, white(0.06)));
-        self.shelves(ui, p, tree);
+        self.shelves(desk, ui, p, tree);
         // search + sort
         let main = Rect::from_min_max(pos2(tree.right(), r.top()), r.max);
         let field = Rect::from_min_size(pos2(main.left() + 14.0, main.top() + 8.0), vec2(360.0, 32.0));
         p.rect(field, CornerRadius::same(7), white(0.03), Stroke::new(1.0, col(theme::EDGE)), StrokeKind::Inside);
         let edit = Rect::from_min_max(pos2(field.left() + 32.0, field.top() + 7.0), pos2(field.right() - 8.0, field.bottom() - 6.0));
         p.circle_stroke(pos2(field.left() + 16.0, field.center().y - 1.0), 5.5, Stroke::new(1.8, col(theme::FAINT)));
-        let hint = if self.desk.house().is_some() { "Search the house" } else { "Search these records" };
+        let hint = if desk.house().is_some() { "Search the house" } else { "Search these records" };
         let typed = ui.put(
             edit,
             egui::TextEdit::singleline(&mut self.search)
@@ -417,14 +419,14 @@ impl App {
         }
         let enter = typed.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let paused = self.search_at.is_some_and(|t| t.elapsed().as_millis() > 350);
-        if self.desk.house().is_some() && (enter || paused) && self.search != self.searched {
+        if desk.house().is_some() && (enter || paused) && self.search != self.searched {
             self.searched = self.search.clone();
-            self.desk.open_shelf(Shelf::Search(self.search.clone()));
+            desk.open_shelf(Shelf::Search(self.search.clone()));
             self.search_at = None;
         }
         // what the list is: the shelf and its count, or what went wrong
-        let lib = self.desk.library();
-        let status = match (&lib.error, self.desk.house().is_some()) {
+        let lib = desk.library();
+        let status = match (&lib.error, desk.house().is_some()) {
             (Some(e), _) => Some((e.clone(), col(theme::HOT))),
             (None, true) => {
                 let name = match &lib.shelf {
@@ -465,11 +467,11 @@ impl App {
         }
         p.line_segment([pos2(main.left(), hy + 13.0), pos2(main.right(), hy + 13.0)], Stroke::new(1.0, white(0.08)));
         let list = Rect::from_min_max(pos2(main.left(), hy + 14.0), main.max);
-        let rows = self.desk.rows(&self.search, s.master_bpm);
+        let rows = desk.rows(&self.search, s.master_bpm);
         // a controller's browse moves the cursor, its LOAD loads the row under it (never
         // onto a deck that is playing)
         let mut scroll_to = None;
-        for a in self.desk.take_crate_actions() {
+        for a in desk.take_crate_actions() {
             match a {
                 wo_control::Action::Browse(_, dy) if !rows.is_empty() => {
                     self.cursor = (self.cursor as i64 + dy as i64).clamp(0, rows.len() as i64 - 1) as usize;
@@ -478,7 +480,7 @@ impl App {
                 wo_control::Action::Load(d) => {
                     if let Some(row) = rows.get(self.cursor)
                         && row.record.playable() && row.on_deck.is_none() && !s.decks[d].playing {
-                            self.desk.load(d, row.record.clone());
+                            desk.load(d, row.record.clone());
                         }
                 }
                 _ => {}
@@ -545,16 +547,16 @@ impl App {
             && s.mix.is_none()
         {
             let free = s.decks.iter().position(|d| !d.master).unwrap_or(1);
-            self.desk.load(free, rec);
+            desk.load(free, rec);
         }
     }
 
     /// The crate's left column: the house's shelves, or the sign-in.
-    fn shelves(&mut self, ui: &mut egui::Ui, p: &Painter, tree: Rect) {
-        let Some((server, user)) = self.desk.house().map(|(s, u)| (s.to_owned(), u.map(str::to_owned))) else {
-            return self.sign_in(ui, p, tree);
+    fn shelves(&mut self, desk: &mut Desk, ui: &mut egui::Ui, p: &Painter, tree: Rect) {
+        let Some((server, user)) = desk.house().map(|(s, u)| (s.to_owned(), u.map(str::to_owned))) else {
+            return self.sign_in(desk, ui, p, tree);
         };
-        let lib = self.desk.library();
+        let lib = desk.library();
         let (shelf, total, lists) = (lib.shelf.clone(), lib.total, lib.playlists.clone());
         let mut open = None;
         label(p, pos2(tree.left() + 18.0, tree.top() + 14.0), Align2::LEFT_TOP, "Library", col(theme::FAINT_ON_GLASS));
@@ -593,18 +595,18 @@ impl App {
         clip_text(p, pos2(tree.left() + 18.0, tree.bottom() - 20.0), &who, 11.0, col(theme::FAINT), 120.0);
         let out = Rect::from_min_size(pos2(tree.right() - 82.0, tree.bottom() - 33.0), vec2(72.0, 26.0));
         if button(ui, p, out, "Sign out", Lit::No, "sign-out").clicked() {
-            self.desk.sign_out();
+            desk.sign_out();
         }
         if let Some(s) = open {
             self.search.clear();
             self.searched.clear();
-            self.desk.open_shelf(s);
+            desk.open_shelf(s);
         }
     }
 
     /// Signing in to the house: its address, a name, a password — or the WetOwl app's own
     /// sign-in where this computer has one.
-    fn sign_in(&mut self, ui: &mut egui::Ui, p: &Painter, tree: Rect) {
+    fn sign_in(&mut self, desk: &mut Desk, ui: &mut egui::Ui, p: &Painter, tree: Rect) {
         let x = tree.left() + 18.0;
         label(p, pos2(x, tree.top() + 14.0), Align2::LEFT_TOP, "The house", col(theme::FAINT_ON_GLASS));
         let mut y = tree.top() + 36.0;
@@ -627,18 +629,18 @@ impl App {
             );
             y += 34.0;
         }
-        let lib = self.desk.library();
+        let lib = desk.library();
         let (busy, error) = (lib.signing_in, lib.error.clone());
         let go = Rect::from_min_size(pos2(x - 8.0, y + 2.0), vec2(204.0, 30.0));
         if button(ui, p, go, if busy { "Signing in…" } else { "Sign in" }, Lit::Ok, "sign-in").clicked() && !busy {
             let (server, user, pass) = self.form.clone();
-            self.desk.sign_in(&server, &user, &pass);
+            desk.sign_in(&server, &user, &pass);
         }
         y += 40.0;
         if self.app_sign_in {
             let app = Rect::from_min_size(pos2(x - 8.0, y), vec2(204.0, 30.0));
             if button(ui, p, app, "Use the WetOwl app's", Lit::No, "app-sign-in").clicked() {
-                self.desk.use_app_sign_in();
+                desk.use_app_sign_in();
             }
             y += 40.0;
         }
@@ -648,7 +650,75 @@ impl App {
         }
     }
 
-    fn auto_dj(&mut self, ui: &mut egui::Ui, p: &Painter, r: Rect, s: &Snapshot) {
+    /// The show's window: its picture, the scene on, and the hands on it.
+    fn stage(&mut self, desk: &mut Desk, ui: &mut egui::Ui, p: &Painter, r: Rect) {
+        panel(p, r, false);
+        let inner = r.shrink(14.0);
+        let v = desk.stage();
+        let on = v.stages > 0;
+        label(p, inner.left_top(), Align2::LEFT_TOP, "Stage", col(theme::SOFT));
+        let (dot, word) = match (on, v.starting) {
+            (true, _) => (col(theme::OK), "Showing"),
+            (false, true) => (col(theme::WARM), "Starting…"),
+            _ => (col(theme::FAINT), "Closed"),
+        };
+        let w = label(p, pos2(inner.right(), inner.top() + 6.0), Align2::RIGHT_CENTER, word, col(theme::MUTED));
+        p.circle_filled(pos2(w.left() - 8.0, w.center().y), 3.5, dot);
+        // the picture, as the stage sends it
+        let pic = Rect::from_min_size(pos2(inner.left(), inner.top() + 24.0), vec2(inner.width(), inner.width() * 9.0 / 16.0));
+        p.rect_filled(pic, CornerRadius::same(6), Color32::BLACK);
+        match (&self.stage_pic, on) {
+            (Some((_, tex)), true) => {
+                p.image(tex.id(), pic, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            }
+            _ => {
+                let (say, ink) = match (&v.trouble, v.starting) {
+                    (Some(why), _) => (why.clone(), col(theme::WARM)),
+                    (None, true) => ("The stage window is opening".to_owned(), col(theme::MUTED)),
+                    (None, false) => ("The show, in a window of its own".to_owned(), col(theme::FAINT_ON_GLASS)),
+                };
+                let g = p.layout(say, FontId::new(12.0, family("")), ink, pic.width() - 32.0);
+                p.galley(pic.center() - g.size() / 2.0, g, ink);
+            }
+        }
+        p.rect_stroke(pic, CornerRadius::same(6), Stroke::new(1.0, white(0.08)), StrokeKind::Inside);
+        // the scene on
+        let y = pic.bottom() + 16.0;
+        let sc = label(p, pos2(inner.left(), y), Align2::LEFT_CENTER, "Scene", col(theme::FAINT_ON_GLASS));
+        let held = if v.held { text(p, pos2(inner.right(), y), Align2::RIGHT_CENTER, "HELD", 11.0, "mono-semi", col(theme::WARM)).left() } else { inner.right() };
+        let scene = match (on, v.untold) {
+            (true, true) => "this WetOwl app's stage is older than the Desk",
+            (true, false) => v.scene.as_deref().unwrap_or("—"),
+            _ => "—",
+        };
+        clip_text(p, pos2(sc.right() + 10.0, y), scene, 13.0, col(theme::TEXT), held - sc.right() - 20.0);
+        // the hands: they go to the stage's director
+        let bw = (inner.width() - 3.0 * 6.0) / 4.0;
+        let hy = inner.bottom() - 30.0 - 8.0 - 30.0;
+        let hands = [("Hit", Lit::No), ("Next", Lit::No), ("Hold", if v.held { Lit::Ok } else { Lit::No }), ("Black", if v.blackout { Lit::Ok } else { Lit::No })];
+        for (i, (name, lit)) in hands.into_iter().enumerate() {
+            let br = Rect::from_min_size(pos2(inner.left() + i as f32 * (bw + 6.0), hy), vec2(bw, 30.0));
+            if button(ui, p, br, name, if on { lit } else { Lit::No }, ("show", i)).clicked() && on {
+                desk.show(match i {
+                    0 => ShowHand::Hit,
+                    1 => ShowHand::Next,
+                    2 => ShowHand::Hold(!v.held),
+                    _ => ShowHand::Blackout(!v.blackout),
+                });
+            }
+        }
+        let open = Rect::from_min_size(pos2(inner.left(), inner.bottom() - 30.0), vec2(inner.width(), 30.0));
+        let word = if on || v.starting { "Close the stage" } else { "Open the stage" };
+        if button(ui, p, open, word, Lit::No, "stage-open").clicked() {
+            if on || v.starting {
+                desk.close_stage();
+            } else {
+                desk.open_stage();
+            }
+        }
+    }
+
+    fn auto_dj(&mut self, desk: &mut Desk, ui: &mut egui::Ui, p: &Painter, r: Rect, s: &Snapshot) {
         panel(p, r, false);
         let inner = r.shrink(14.0);
         label(p, inner.left_top(), Align2::LEFT_TOP, "Auto DJ", col(theme::SOFT));
@@ -656,7 +726,7 @@ impl App {
         let mut sx = inner.right();
         for (word, style) in [("Bold", Style::Bold), ("Normal", Style::Normal), ("Easy", Style::Easy)] {
             let sr = Rect::from_min_size(pos2(sx - 58.0, inner.top() - 4.0), vec2(58.0, 20.0));
-            let on = self.desk.style == style;
+            let on = desk.style == style;
             let resp = ui.interact(sr, ui.scope_id().with(("style", word)), Sense::click());
             if on {
                 p.rect_filled(sr, CornerRadius::same(5), alpha(theme::OK, 0.18));
@@ -665,7 +735,7 @@ impl App {
             }
             label(p, sr.center(), Align2::CENTER_CENTER, word, if on { col(theme::OK) } else { col(theme::FAINT_ON_GLASS) });
             if resp.clicked() {
-                self.desk.style = style;
+                desk.style = style;
             }
             sx -= 60.0;
         }
@@ -726,9 +796,9 @@ impl App {
             let lit = if i == 2 && !s.auto { Lit::Ok } else { Lit::No };
             if button(ui, p, br, name, lit, ("mixbtn", i)).clicked() {
                 match i {
-                    0 if planned => self.desk.mix_now(),
-                    1 if planned => self.desk.not_that(),
-                    2 => self.desk.set_auto(!s.auto),
+                    0 if planned => desk.mix_now(),
+                    1 if planned => desk.not_that(),
+                    2 => desk.set_auto(!s.auto),
                     _ => {}
                 }
             }
@@ -767,6 +837,7 @@ struct Layout {
     decks: [Rect; 2],
     mixer: Rect,
     crate_: Rect,
+    stage: Rect,
     auto: Rect,
 }
 
@@ -783,9 +854,10 @@ fn layout(full: Rect) -> Layout {
     let dw = (r.width() - 440.0 - 20.0) / 2.0;
     let decks = [Rect::from_min_size(mid.min, vec2(dw, mid.height())), Rect::from_min_size(pos2(mid.right() - dw, mid.top()), vec2(dw, mid.height()))];
     let mixer = Rect::from_min_max(pos2(decks[0].right() + 10.0, mid.top()), pos2(decks[1].left() - 10.0, mid.bottom()));
-    let crate_ = Rect::from_min_max(rest.min, pos2(rest.right() - 410.0, rest.bottom()));
     let auto = Rect::from_min_max(pos2(rest.right() - 400.0, rest.top()), rest.max);
-    Layout { top, overview, waves, decks, mixer, crate_, auto }
+    let stage = Rect::from_min_max(pos2(auto.left() - 10.0 - 320.0, rest.top()), pos2(auto.left() - 10.0, rest.bottom()));
+    let crate_ = Rect::from_min_max(rest.min, pos2(stage.left() - 10.0, rest.bottom()));
+    Layout { top, overview, waves, decks, mixer, crate_, stage, auto }
 }
 
 /// 12774 → "12,774".

@@ -3,7 +3,9 @@
 // same shape as the board's window (board_window.dart): a second process, not a
 // second window, for the same reasons.
 //
-//   wetowl --stage ws://127.0.0.1:<port>/stage?t=<token>   the show off the desk
+//   wetowl --stage ws://127.0.0.1:<port>/stage?t=<token>   the show off the desk (or off the
+//                                                           WetOwl Desk, whose decks this
+//                                                           window directs: desk_show_source.dart)
 //   wetowl --stage --demo [--scene <id>]                    a made-up record (one scene held)
 //   wetowl --stage --record <id> [--at <s>] [--scene <id>]   a real record off the house, played
 //                                                           here through the booth's own engine
@@ -40,10 +42,12 @@ import '../../state/booth/board/link_server.dart' show encodeStageThumb;
 import '../../state/booth/booth.dart';
 import '../../state/playback_log.dart';
 import '../../state/show/camera_feed.dart';
+import '../../state/show/desk_show_source.dart';
 import '../../state/show/milk_feed.dart';
 import '../../state/player.dart' show PlayerService;
 import '../../state/show/show_demo.dart';
 import '../../state/show/show_director.dart' show SceneChange;
+import '../../state/show/show_engine.dart';
 import '../../state/show/show_feed.dart';
 import '../../state/show/show_wire.dart';
 import 'scene.dart';
@@ -108,6 +112,11 @@ class _StageWindowState extends State<_StageWindow> {
   ShowFeed? _feed;
   DemoShowFeed? _demo;
   RemoteShowFeed? _remote;
+  // Fed by the WetOwl Desk: the show directed here, over its decks.
+  DeskShowSource? _deskSource;
+  ShowEngine? _deskShow;
+  bool _deskStarting = false;
+  String? _deskLast;
   Booth? _booth;
   WebSocket? _ws;
   Timer? _ping, _reconnect;
@@ -333,7 +342,7 @@ class _StageWindowState extends State<_StageWindow> {
       _thumbs = Timer.periodic(const Duration(milliseconds: 100), (_) => unawaited(_thumb(ws)));
       ws.listen(
         (data) {
-          if (data is String) _remote?.arrived(data);
+          if (data is String && !_fromDesk(data)) _remote?.arrived(data);
         },
         onDone: () => _lost(url),
         onError: (Object _) => _lost(url),
@@ -361,12 +370,59 @@ class _StageWindowState extends State<_StageWindow> {
         ws.add(encodeStageThumb(image.width, image.height, data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes)));
         // And what is on it that the booth cannot see in the combination.
         ws.add(stageNowJson());
+        if (_deskShow case final show?) ws.add(deskShownJson(show));
       }
       image.dispose();
     } catch (_) {
       // A frame missed is nothing; the next comes in a moment.
     } finally {
       _thumbing = false;
+    }
+  }
+
+  /// The Desk's lines (desk_show_source.dart): the first turns this window into a stage
+  /// that directs the show itself, over the Desk's decks. False for a booth's line.
+  bool _fromDesk(String line) {
+    final source = _deskSource;
+    if (source != null) return deskSaid(line, source, _deskShow);
+    final frame = line.startsWith('{"t":"desk"');
+    if (!frame && !_deskStarting && !line.startsWith('{"t":"hello","v":1,"from":"desk"')) return false;
+    if (frame) _deskLast = line;
+    if (!_deskStarting) {
+      _deskStarting = true;
+      unawaited(_startDesk());
+    }
+    return true;
+  }
+
+  Future<void> _startDesk() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final api = ApiClient(
+        baseUrl: prefs.getString('muse.server') ?? AppState.defaultServer,
+        token: prefs.getString('muse.token'),
+      );
+      final kit = await StageKit.load();
+      final source = DeskShowSource(api);
+      final show = ShowEngine.fed(source);
+      show.director.scenes = kit.book.metas;
+      show.looks = kit.book.looks;
+      if (_deskLast case final line?) deskSaid(line, source, show);
+      show.start();
+      if (!mounted || _closing) {
+        show.dispose();
+        return;
+      }
+      setState(() {
+        _deskSource = source;
+        _deskShow = show;
+        _feed = show;
+        _word = '';
+      });
+    } catch (e) {
+      // ignore: avoid_print
+      print('STAGE the Desk\'s show could not start: $e');
+      if (mounted) setState(() => _word = 'The show could not start: $e');
     }
   }
 
@@ -394,6 +450,7 @@ class _StageWindowState extends State<_StageWindow> {
     unawaited(_ws?.close());
     _demo?.dispose();
     _remote?.dispose();
+    _deskShow?.dispose();
     _booth?.dispose();
     _focus.dispose();
     super.dispose();
@@ -429,8 +486,11 @@ class _StageWindowState extends State<_StageWindow> {
     final feed = _feed;
     final demo = _demo;
     final booth = _booth;
+    final desk = _deskShow;
     final hands = booth != null
         ? StageHands.ofEngine(booth)
+        : desk != null
+            ? StageHands.ofShow(desk)
         : demo == null
             ? StageHands.none
             : StageHands(

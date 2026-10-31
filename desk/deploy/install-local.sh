@@ -3,6 +3,13 @@
 # leaves alone: the binary in ~/.local/opt/wetowl-desk, the launcher io.wetowl.desk, the
 # icon io.wetowl.desk. Run again to update; a running Desk keeps its old binary until
 # it is restarted. Logs: ~/.local/state/wetowl-desk.log.
+#
+#   install-local.sh            the Desk
+#   install-local.sh --stage    and its stage: the WetOwl app built from this checkout
+#                               (app/), in ~/.local/opt/wetowl-desk/stage — the window the
+#                               Desk opens for the show (desk_show_source.dart). Without
+#                               it the Desk opens the installed WetOwl app, whose stage
+#                               draws the Desk's show once its build has that file.
 set -euo pipefail
 desk=$(cd "$(dirname "$0")/.." && pwd)
 cd "$desk"
@@ -14,6 +21,12 @@ mkdir -p "$dest" "$HOME/.local/state" "$HOME/.local/share/applications" "$HOME/.
 install -m 755 target/release/wetowl-desk "$dest/wetowl-desk.new"
 mv -f "$dest/wetowl-desk.new" "$dest/wetowl-desk"
 printf '%s %s\n' "$(git rev-parse --short HEAD)" "$(date -u +%Y%m%d%H%M)" > "$dest/build.txt"
+if [ "${1:-}" = "--stage" ]; then
+  (cd ../app && flutter build linux --release --dart-define=MUSE_SERVER="${MUSE_SERVER:-https://89-58-49-140.nip.io}" \
+    --dart-define=MUSE_BUILD="desk-stage-$(date -u +%Y%m%d%H%M)")
+  mkdir -p "$dest/stage"
+  rsync -a --delete ../app/build/linux/x64/release/bundle/ "$dest/stage/"
+fi
 install -m 644 deploy/icon-256.png "$HOME/.local/share/icons/hicolor/256x256/apps/io.wetowl.desk.png"
 
 cat > "$HOME/.local/share/applications/io.wetowl.desk.desktop" <<DESKTOP

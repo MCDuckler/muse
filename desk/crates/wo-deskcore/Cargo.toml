@@ -13,9 +13,12 @@ wo-wave = { path = "../wo-wave" }
 wo-booth = { path = "../wo-booth" }
 wo-house = { path = "../wo-house" }
 wo-control = { path = "../wo-control" }
+wo-wire = { path = "../wo-wire" }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 memory-stats = "1.2.0"
 cpu-time = "1.0.0"
 
 [dev-dependencies]
 midir = "0.11.1"
+serde_json = "1.0.154"
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
