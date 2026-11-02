@@ -906,6 +906,7 @@ impl Desk {
     pub fn sign_out(&mut self) {
         wo_house::Session::forget();
         self.house = None;
+        self.stage.set_house(None);
         self.library = Library::default();
     }
 
@@ -924,6 +925,7 @@ impl Desk {
 
     fn signed_in(&mut self, house: wo_house::House) {
         library::fetch_playlists(&self.done_tx, &house);
+        self.stage.set_house(Some(wo_wire::House { server: house.session.server.clone(), token: house.session.token.clone() }));
         self.house = Some(house);
         self.open_shelf(Shelf::All);
     }
@@ -1228,6 +1230,16 @@ impl Desk {
         let heard = self.engine.features(Bus::Master, from, to).map(|m| wo_wire::Heard { master: audio(&m), spectrum: m.spectrum.to_vec() });
         let frame = wo_wire::Frame { a: deck(0), b: deck(1), heard, mix: self.show_mix() };
         self.stage.say(&wo_wire::frame(&frame));
+        // and the room's sound over the same span, for MilkDrop: what the master
+        // plays, every fader, EQ and kill in it (v1's stage read the records instead)
+        let rate = self.engine.rate();
+        let n = (((to - from) * rate as f64).round() as usize).min(rate as usize / 4);
+        if n > 0 {
+            let mut buf = vec![0.0f32; n];
+            if self.engine.scope(Bus::Master, to, &mut buf) == n {
+                self.stage.say_pcm(wo_wire::pcm(rate, &buf));
+            }
+        }
     }
 
     /// The Auto DJ's transition as the show sees it: on while it is being made, armed

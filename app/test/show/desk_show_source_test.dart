@@ -2,11 +2,13 @@
 // off the house's timing, their sound the Desk's engine's), carried forward between
 // frames, and its hands reach the show the stage directs.
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muse/src/api/client.dart';
 import 'package:muse/src/api/models.dart';
 import 'package:muse/src/state/show/desk_show_source.dart';
+import 'package:muse/src/state/show/milk_feed.dart';
 import 'package:muse/src/state/show/show_engine.dart';
 import 'package:muse/src/state/show/show_store.dart';
 
@@ -117,5 +119,36 @@ void main() {
   test("a booth's lines are not the Desk's", () {
     expect(deskSaid('{"t":"state","s":{}}', source, show), isFalse);
     expect(deskSaid('{"t":"ping"}', source, show), isFalse);
+  });
+  test("the Desk's house: its sign-in read from the hello, the stage's api on it", () {
+    expect(deskHouse('{"t":"hello","v":1,"from":"desk"}'), isNull);
+    final h = deskHouse('{"t":"hello","v":1,"from":"desk","house":{"server":"https://desk.house/","token":"tk"}}');
+    expect(h?.server, 'https://desk.house');
+    expect(h?.token, 'tk');
+    expect(deskSaid('{"t":"hello","v":1,"from":"desk","house":{"server":"https://other","token":"t2"}}', source, show), isTrue);
+    expect(source.api.baseUrl, 'https://other');
+    expect(source.api.token, 't2');
+  });
+
+  test("MilkDrop hears the Desk's master: its samples, in order, once each", () {
+    Uint8List pcm(List<int> xs) {
+      final b = ByteData(8 + xs.length * 2);
+      for (final (i, c) in 'PCM1'.codeUnits.indexed) {
+        b.setUint8(i, c);
+      }
+      b.setUint32(4, 48000, Endian.little);
+      for (final (i, x) in xs.indexed) {
+        b.setInt16(8 + i * 2, x, Endian.little);
+      }
+      return b.buffer.asUint8List();
+    }
+
+    final heard = MilkFeed.shared.pcm.heard!;
+    expect(heard(), isNull, reason: 'no sound from the Desk yet: the records are read instead');
+    expect(source.pcmArrived(Uint8List.fromList([1, 2, 3, 4, 5, 6, 7, 8, 9])), isFalse);
+    expect(source.pcmArrived(pcm([1, -2, 3])), isTrue);
+    expect(source.pcmArrived(pcm([32767, -32768])), isTrue);
+    expect(heard(), [1, -2, 3, 32767, -32768]);
+    expect(heard(), isEmpty, reason: 'between two frames: nothing new, but not the records either');
   });
 }

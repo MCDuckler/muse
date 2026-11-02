@@ -2,10 +2,13 @@
 //! v1's protocol (app/lib/src/state/show/show_wire.dart) with the Desk's own lines
 //! (app/lib/src/state/show/desk_show_source.dart).
 //!
-//! Desk → stage: `hello` once, a `desk` frame each tick (the two decks as facts: the
-//! stage directs the show over them, as the Desk has no director of its own), `hands`
-//! when a hand moves the show. Stage → Desk: its picture ten times a second (four bytes
-//! of size, then RGBA) with `shown` (the scene on, held or not), and `ping`.
+//! Desk → stage: `hello` (on connecting, and again when the Desk signs in or out: the
+//! house it reads records from, so the stage needs no sign-in of its own), a `desk`
+//! frame each tick (the two decks as facts: the stage directs the show over them, as
+//! the Desk has no director of its own) with the room's sound beside it as a binary
+//! message ([pcm]: what MilkDrop listens to), `hands` when a hand moves the show.
+//! Stage → Desk: its picture ten times a second (four bytes of size, then RGBA) with
+//! `shown` (the scene on, held or not), and `ping`.
 //!
 //! The stage tells a line by how it starts (`{"t":"desk"`), so the `t` goes first.
 use serde::{Deserialize, Serialize};
@@ -109,8 +112,33 @@ pub enum Hand {
     Freeze(bool),
 }
 
-pub fn hello() -> String {
-    r#"{"t":"hello","v":1,"from":"desk"}"#.to_owned()
+/// The house the Desk is signed into: the stage reads the records' beats, sections,
+/// voices and pulse from it with the Desk's sign-in, not its own.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct House {
+    pub server: String,
+    pub token: String,
+}
+
+pub fn hello(house: Option<&House>) -> String {
+    match house {
+        Some(h) => format!(r#"{{"t":"hello","v":1,"from":"desk","house":{}}}"#, serde_json::to_string(h).expect("a house is JSON")),
+        None => r#"{"t":"hello","v":1,"from":"desk"}"#.to_owned(),
+    }
+}
+
+/// The room's sound since the last frame, as the master heard it (every fader, EQ and
+/// kill in it): `PCM1`, the rate (u32, little-endian), then mono 16-bit samples
+/// (little-endian). Binary, so the stage tells it from the picture's way back by
+/// direction and from any line by kind.
+pub fn pcm(rate: u32, samples: &[f32]) -> Vec<u8> {
+    let mut b = Vec::with_capacity(8 + samples.len() * 2);
+    b.extend_from_slice(b"PCM1");
+    b.extend_from_slice(&rate.to_le_bytes());
+    for &x in samples {
+        b.extend_from_slice(&((x.clamp(-1.0, 1.0) * 32767.0).round() as i16).to_le_bytes());
+    }
+    b
 }
 
 pub fn frame(f: &Frame) -> String {
@@ -164,6 +192,19 @@ mod tests {
         assert_eq!(back["d"]["mix"]["startsInMs"], serde_json::Value::Null);
         assert_eq!(hand(Hand::Hit), r#"{"t":"hands","do":"hit"}"#);
         assert_eq!(hand(Hand::Blackout(true)), r#"{"t":"hands","do":"blackout","on":true}"#);
+        // the stage knows a Desk by this beginning, house or not
+        let h = House { server: "https://h".into(), token: "tk".into() };
+        assert!(hello(Some(&h)).starts_with(r#"{"t":"hello","v":1,"from":"desk""#));
+        assert_eq!(hello(Some(&h)), r#"{"t":"hello","v":1,"from":"desk","house":{"server":"https://h","token":"tk"}}"#);
+    }
+
+    #[test]
+    fn the_sound_is_sixteen_bit_after_its_header() {
+        let b = pcm(48000, &[0.0, 1.0, -1.0, 2.0]);
+        assert_eq!(&b[..4], b"PCM1");
+        assert_eq!(u32::from_le_bytes(b[4..8].try_into().unwrap()), 48000);
+        let s: Vec<i16> = b[8..].chunks(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
+        assert_eq!(s, vec![0, 32767, -32767, 32767]);
     }
 
     #[test]

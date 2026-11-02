@@ -23,18 +23,32 @@ fn a_stage_reads_the_desk() {
     let (mut ws, _) = tungstenite::connect(&url).unwrap();
     let tungstenite::stream::MaybeTlsStream::Plain(tcp) = ws.get_ref() else { unreachable!() };
     tcp.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
-    assert_eq!(ws.read().unwrap().to_text().unwrap(), r#"{"t":"hello","v":1,"from":"desk"}"#);
+    // (with the house the Desk is signed into, where it is)
+    let hello = ws.read().unwrap();
+    assert!(hello.to_text().unwrap().starts_with(r#"{"t":"hello","v":1,"from":"desk""#), "{hello}");
 
     // frames, tick by tick; the playing deck's ear moves on, and the engine hears it
     // (once the record is made: the first frames are silence)
     let heard = |f: &serde_json::Value| f["d"]["heard"]["master"]["low"].as_f64().unwrap_or(0.0) > 0.0;
+    let heard_a = |f: &serde_json::Value| f["d"]["a"]["heard"]["low"].as_f64().unwrap_or(0.0) > 0.0;
     let mut frames = vec![];
+    let mut sound = 0usize;
     let t0 = Instant::now();
-    while (frames.len() < 20 || !frames.iter().any(heard)) && t0.elapsed() < Duration::from_secs(10) {
+    while (frames.len() < 20 || !frames.iter().any(heard) || !frames.iter().any(heard_a) || sound == 0) && t0.elapsed() < Duration::from_secs(10) {
         d.tick();
-        if let Ok(Message::Text(t)) = ws.read() {
-            assert!(t.starts_with(r#"{"t":"desk""#), "{t}");
-            frames.push(serde_json::from_str::<serde_json::Value>(&t).unwrap());
+        match ws.read() {
+            Ok(Message::Text(t)) => {
+                assert!(t.starts_with(r#"{"t":"desk""#), "{t}");
+                frames.push(serde_json::from_str::<serde_json::Value>(&t).unwrap());
+            }
+            // the room's sound beside each frame, for MilkDrop
+            Ok(Message::Binary(b)) => {
+                assert_eq!(&b[..4], b"PCM1");
+                if b[8..].chunks(2).any(|c| i16::from_le_bytes([c[0], c[1]]) != 0) {
+                    sound += 1;
+                }
+            }
+            _ => {}
         }
         sleep(Duration::from_millis(5));
     }
@@ -48,7 +62,8 @@ fn a_stage_reads_the_desk() {
     assert!(last["rate"].as_f64().unwrap() > 0.9);
     assert!(last["level"].as_f64().unwrap() > 0.5, "A has the room");
     assert!(frames.iter().any(heard), "the engine heard nothing");
-    assert!(frames.iter().any(|f| f["d"]["a"]["heard"]["low"].as_f64().unwrap_or(0.0) > 0.0), "nothing heard of A");
+    assert!(frames.iter().any(heard_a), "nothing heard of A");
+    assert!(sound > 0, "no sound sent for MilkDrop");
     assert_eq!(frames[frames.len() - 1]["d"]["heard"]["spectrum"].as_array().map(Vec::len), Some(32));
     assert_eq!(a(&frames[0]).get("trackId"), None, "a synthesised record is none of the house's");
 

@@ -117,6 +117,8 @@ class _StageWindowState extends State<_StageWindow> {
   ShowEngine? _deskShow;
   bool _deskStarting = false;
   String? _deskLast;
+  /// The Desk's hello: the house it reads from, if signed in.
+  String? _deskHello;
   Booth? _booth;
   WebSocket? _ws;
   Timer? _ping, _reconnect;
@@ -342,7 +344,11 @@ class _StageWindowState extends State<_StageWindow> {
       _thumbs = Timer.periodic(const Duration(milliseconds: 100), (_) => unawaited(_thumb(ws)));
       ws.listen(
         (data) {
-          if (data is String && !_fromDesk(data)) _remote?.arrived(data);
+          if (data is String) {
+            if (!_fromDesk(data)) _remote?.arrived(data);
+          } else if (data is List<int>) {
+            _deskSource?.pcmArrived(data);
+          }
         },
         onDone: () => _lost(url),
         onError: (Object _) => _lost(url),
@@ -388,6 +394,7 @@ class _StageWindowState extends State<_StageWindow> {
     final frame = line.startsWith('{"t":"desk"');
     if (!frame && !_deskStarting && !line.startsWith('{"t":"hello","v":1,"from":"desk"')) return false;
     if (frame) _deskLast = line;
+    if (line.startsWith('{"t":"hello"')) _deskHello = line;
     if (!_deskStarting) {
       _deskStarting = true;
       unawaited(_startDesk());
@@ -397,10 +404,13 @@ class _StageWindowState extends State<_StageWindow> {
 
   Future<void> _startDesk() async {
     try {
+      // The Desk's house with its sign-in, else this stage's own (kept in memory: the
+      // WetOwl app's saved sign-in is left as it is).
       final prefs = await SharedPreferences.getInstance();
+      final house = _deskHello == null ? null : deskHouse(_deskHello!);
       final api = ApiClient(
-        baseUrl: prefs.getString('muse.server') ?? AppState.defaultServer,
-        token: prefs.getString('muse.token'),
+        baseUrl: house?.server ?? prefs.getString('muse.server') ?? AppState.defaultServer,
+        token: house?.token ?? prefs.getString('muse.token'),
       );
       final kit = await StageKit.load();
       final source = DeskShowSource(api);

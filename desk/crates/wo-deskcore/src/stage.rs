@@ -28,6 +28,8 @@ pub(crate) struct Stage {
     blackout: bool,
     /// Since when a stage has been reading.
     reading: Option<Instant>,
+    /// What a stage is told first: the Desk's house, once signed in.
+    hello: Option<String>,
 }
 
 /// A stage reading this long without saying what it shows is one from before the Desk
@@ -82,7 +84,12 @@ impl Stage {
     fn wire(&mut self) -> Option<&wo_wire::Server> {
         if self.wire.is_none() {
             match wo_wire::Server::open() {
-                Ok(s) => self.wire = Some(s),
+                Ok(s) => {
+                    if let Some(h) = &self.hello {
+                        s.set_hello(h.clone());
+                    }
+                    self.wire = Some(s)
+                }
                 Err(e) => self.trouble = Some(format!("the Desk could not listen for a stage: {e}")),
             }
         }
@@ -165,6 +172,22 @@ impl Stage {
         if let Some(w) = &self.wire {
             w.say(line);
         }
+    }
+
+    /// The room's sound since the last frame (wo_wire::pcm).
+    pub(crate) fn say_pcm(&self, bytes: Vec<u8>) {
+        if let Some(w) = &self.wire {
+            w.say_binary(bytes);
+        }
+    }
+
+    /// The house the Desk reads from, for the stages (now and to come); None signed out.
+    pub(crate) fn set_house(&mut self, house: Option<wo_wire::House>) {
+        let hello = wo_wire::hello(house.as_ref());
+        if let Some(w) = &self.wire {
+            w.set_hello(hello.clone());
+        }
+        self.hello = Some(hello);
     }
 
     pub(crate) fn hand(&mut self, h: Hand) {

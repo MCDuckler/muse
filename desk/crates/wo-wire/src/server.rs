@@ -46,7 +46,7 @@ impl Thumb {
 }
 
 struct Link {
-    tx: SyncSender<Arc<str>>,
+    tx: SyncSender<Message>,
     alive: Arc<AtomicBool>,
 }
 
@@ -56,6 +56,8 @@ struct Heard {
     /// The newest picture, counted.
     thumb: Option<(u64, Arc<Thumb>)>,
     shown: Option<Shown>,
+    /// What a stage is told first (crate::hello), with the Desk's house once signed in.
+    hello: Option<String>,
 }
 
 pub struct Server {
@@ -114,11 +116,25 @@ impl Server {
 
     /// A line to every stage.
     pub fn say(&self, line: &str) {
-        let line: Arc<str> = line.into();
+        self.send(Message::text(line));
+    }
+
+    /// Binary to every stage (the room's sound, crate::pcm).
+    pub fn say_binary(&self, bytes: Vec<u8>) {
+        self.send(Message::binary(bytes));
+    }
+
+    /// The hello a stage connecting from now on is told, and the stages reading now too.
+    pub fn set_hello(&self, line: String) {
+        self.heard.lock().unwrap().hello = Some(line.clone());
+        self.say(&line);
+    }
+
+    fn send(&self, m: Message) {
         let mut h = self.heard.lock().unwrap();
         h.links.retain(|l| l.alive.load(Ordering::Relaxed));
         for l in &h.links {
-            match l.tx.try_send(line.clone()) {
+            match l.tx.try_send(m.clone()) {
                 Ok(()) | Err(TrySendError::Full(_)) => {}
                 Err(TrySendError::Disconnected(_)) => l.alive.store(false, Ordering::Relaxed),
             }
@@ -160,10 +176,14 @@ fn serve(stream: TcpStream, token: &str, heard: Arc<Mutex<Heard>>) {
     let Ok(mut ws) = tungstenite::accept_hdr(stream, check) else { return };
     // woken every few milliseconds to send what the Desk said meanwhile
     let _ = ws.get_ref().set_read_timeout(Some(Duration::from_millis(4)));
-    let (tx, rx) = mpsc::sync_channel::<Arc<str>>(BACKLOG);
+    let (tx, rx) = mpsc::sync_channel::<Message>(BACKLOG);
     let alive = Arc::new(AtomicBool::new(true));
-    heard.lock().unwrap().links.push(Link { tx, alive: alive.clone() });
-    let _ = ws.send(Message::text(crate::hello()));
+    let hello = {
+        let mut h = heard.lock().unwrap();
+        h.links.push(Link { tx, alive: alive.clone() });
+        h.hello.clone().unwrap_or_else(|| crate::hello(None))
+    };
+    let _ = ws.send(Message::text(hello));
     run(&mut ws, &rx, &alive, &heard);
     alive.store(false, Ordering::Relaxed);
     let mut h = heard.lock().unwrap();
@@ -174,11 +194,11 @@ fn serve(stream: TcpStream, token: &str, heard: Arc<Mutex<Heard>>) {
     }
 }
 
-fn run(ws: &mut WebSocket<TcpStream>, rx: &Receiver<Arc<str>>, alive: &AtomicBool, heard: &Mutex<Heard>) {
+fn run(ws: &mut WebSocket<TcpStream>, rx: &Receiver<Message>, alive: &AtomicBool, heard: &Mutex<Heard>) {
     while alive.load(Ordering::Relaxed) {
         let mut wrote = false;
-        while let Ok(line) = rx.try_recv() {
-            if ws.write(Message::text(line.as_ref())).is_err() {
+        while let Ok(m) = rx.try_recv() {
+            if ws.write(m).is_err() {
                 return;
             }
             wrote = true;
@@ -230,7 +250,7 @@ mod tests {
         assert!(tungstenite::connect(bad).is_err());
         let (mut ws, _) = tungstenite::connect(server.url()).unwrap();
         let hello = ws.read().unwrap();
-        assert_eq!(hello.to_text().unwrap(), crate::hello());
+        assert_eq!(hello.to_text().unwrap(), crate::hello(None));
         for _ in 0..100 {
             if server.stages() == 1 {
                 break;
@@ -242,6 +262,12 @@ mod tests {
         assert_eq!(ws.read().unwrap().to_text().unwrap(), r#"{"t":"hands","do":"next"}"#);
         ws.send(Message::text(r#"{"t":"ping"}"#)).unwrap();
         assert_eq!(ws.read().unwrap().to_text().unwrap(), r#"{"t":"pong"}"#);
+        // the room's sound, binary; a sign-in told to the stage reading
+        server.say_binary(crate::pcm(48000, &[0.5]));
+        assert_eq!(&ws.read().unwrap().into_data()[..4], b"PCM1");
+        let house = crate::House { server: "https://h".into(), token: "tk".into() };
+        server.set_hello(crate::hello(Some(&house)));
+        assert!(ws.read().unwrap().to_text().unwrap().contains(r#""house":{"server":"https://h""#));
         let mut pic = vec![1, 0, 1, 0];
         pic.extend([9, 9, 9, 255]);
         ws.send(Message::binary(pic)).unwrap();

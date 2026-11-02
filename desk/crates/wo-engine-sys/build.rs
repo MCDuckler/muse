@@ -44,7 +44,8 @@ fn main() {
             }
         }
         Ok("macos") => {
-            for f in ["CoreFoundation", "CoreAudio", "AudioToolbox"] {
+            // Accelerate: Rubber Band's FFT and vector maths are vDSP's on Apple
+            for f in ["CoreFoundation", "CoreAudio", "AudioToolbox", "Accelerate"] {
                 println!("cargo:rustc-link-lib=framework={f}");
             }
         }

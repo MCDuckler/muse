@@ -3,10 +3,13 @@
 // the Desk (`wetowl --stage ws://…`, the Desk's /stage) runs the show's director
 // itself over these facts (ShowEngine.fed) — the Desk has no director of its own.
 // The records' own facts (their beats, sections, voices, pulse) come from the house
-// this stage is signed into, as the booth's do.
+// the Desk is signed into, with its sign-in (the hello's `house`), else from the one
+// this stage is signed into. MilkDrop listens to the Desk's master, sent beside each
+// frame; from a Desk that sends none, to the records' streams off the house.
 //
 // The Desk's lines (desk/crates/wo-wire):
-//   {"t":"hello","v":1,"from":"desk"}
+//   {"t":"hello","v":1,"from":"desk","house":{"server","token"}}   (house: signed in;
+//      said again when the Desk signs in or out)
 //   {"t":"desk","d":{"a":DECK,"b":DECK,"heard":{"master":AUDIO,"spectrum":[32]},"mix":MIX}}
 //      DECK  {"trackId","title","artist","playing","positionMs" (the ear's),"rate",
 //             "level","eq":{"low","mid","high"} (dB),"filter" (-1..1),"looping",
@@ -14,9 +17,11 @@
 //      AUDIO ShowAudio's JSON, the engine's measure (no stems)
 //      MIX   ShowMix's JSON
 //   {"t":"hands","do":"hit"|"next"|"previous"|"mosh"|"hold"|"blackout"|"strobe"|"freeze","on":bool}
+//   binary "PCM1", rate (u32 LE), mono 16-bit samples (LE): the master since the last frame
 // and back, a few times a second, with the picture: {"t":"shown","scene" (its name),"held"}.
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import '../../api/client.dart';
 import '../../api/models.dart';
@@ -34,13 +39,68 @@ class DeskShowSource extends ShowSource {
   DeskShowSource(this.api)
       : timing = TimingStore(api),
         vocals = VocalStore(api) {
-    // MilkDrop's sound: the record's stream off the house (the Desk's engine is in
-    // another process).
+    // MilkDrop's sound: the Desk's master as it sends it; from a Desk that sends
+    // none, the record's stream off the house.
     MilkFeed.shared.pcm.source = (id) {
       final t = _tracks[id];
       return t == null ? null : (url: api.streamUrl(t), headers: api.streamHeaders);
     };
-    MilkFeed.shared.pcm.heard = null;
+    MilkFeed.shared.pcm.heard = _heardPcm;
+  }
+
+  /// The Desk's sound, waiting for the next tick.
+  final _pcm = <Int16List>[];
+  int _pcmQueued = 0;
+  DateTime? _pcmAt;
+
+  /// A binary message off the wire: the Desk's master since its last frame. False for
+  /// anything else.
+  bool pcmArrived(List<int> data) {
+    final b = data is Uint8List ? data : Uint8List.fromList(data);
+    if (b.length < 8 || b[0] != 0x50 || b[1] != 0x43 || b[2] != 0x4d || b[3] != 0x31) return false; // PCM1
+    final n = (b.length - 8) ~/ 2;
+    final out = Int16List(n);
+    final bd = ByteData.sublistView(b, 8);
+    for (var i = 0; i < n; i++) {
+      out[i] = bd.getInt16(i * 2, Endian.little);
+    }
+    _pcm.add(out);
+    _pcmQueued += n;
+    // A stage that stopped reading (hidden, slow) keeps the newest half second.
+    while (_pcmQueued > 24000 && _pcm.length > 1) {
+      _pcmQueued -= _pcm.removeAt(0).length;
+    }
+    _pcmAt = DateTime.now();
+    return true;
+  }
+
+  /// What came since the last tick; empty between two of the Desk's frames; null from
+  /// a Desk that sends no sound (then the records are read off the house).
+  Int16List? _heardPcm() {
+    final at = _pcmAt;
+    if (at == null || DateTime.now().difference(at) > const Duration(seconds: 2)) return null;
+    if (_pcm.length == 1) {
+      _pcmQueued = 0;
+      return _pcm.removeLast();
+    }
+    final out = Int16List(_pcmQueued);
+    var o = 0;
+    for (final p in _pcm) {
+      out.setAll(o, p);
+      o += p.length;
+    }
+    _pcm.clear();
+    _pcmQueued = 0;
+    return out;
+  }
+
+  /// The Desk's house, from its hello: this stage reads the records' facts with the
+  /// Desk's sign-in from then on (the ones it could not read are asked again).
+  void useHouse(String server, String token) {
+    if (api.baseUrl == server && api.token == token) return;
+    api.baseUrl = server;
+    api.token = token;
+    _asked.removeWhere((id) => !_tracks.containsKey(id));
   }
 
   @override
@@ -175,6 +235,11 @@ class DeskShowSource extends ShowSource {
 /// A Desk's line for this stage: a frame into [source], the hands onto [show] (once it
 /// is going). False for any other line.
 bool deskSaid(String line, DeskShowSource source, ShowEngine? show) {
+  if (line.startsWith('{"t":"hello","v":1,"from":"desk"')) {
+    final house = deskHouse(line);
+    if (house != null) source.useHouse(house.server, house.token);
+    return true;
+  }
   if (!line.startsWith('{"t":"desk"') && !line.startsWith('{"t":"hands"')) return false;
   final Object? j;
   try {
@@ -210,6 +275,18 @@ bool deskSaid(String line, DeskShowSource source, ShowEngine? show) {
       }
   }
   return true;
+}
+
+/// The house in a Desk's hello, or null (a Desk not signed in, or not a hello).
+({String server, String token})? deskHouse(String hello) {
+  try {
+    final j = jsonDecode(hello);
+    final h = j is Map ? j['house'] : null;
+    if (h is Map && h['server'] is String && h['token'] is String) {
+      return (server: (h['server'] as String).replaceAll(RegExp(r'/+$'), ''), token: h['token'] as String);
+    }
+  } catch (_) {}
+  return null;
 }
 
 /// What the stage shows, for the Desk's panel: the scene on, by name.
