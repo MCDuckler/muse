@@ -11,7 +11,7 @@ name: Desk
 on:
   push:
     branches: [desk]
-    paths: ["desk/**", "app/native/engine/**", "app/native/stage/**", "app/shaders/**", "app/macos/**", "app/lib/src/ui/show/**", "app/lib/src/state/show/**", ".github/workflows/desk.yml"]
+    paths: ["desk/**", "app/native/engine/**", "app/native/stage/**", "app/native/milk/**", "app/shaders/**", "app/macos/**", "app/lib/src/ui/show/**", "app/lib/src/state/show/**", ".github/workflows/desk.yml"]
   workflow_dispatch:
 
 jobs:
@@ -70,6 +70,17 @@ jobs:
         with:
           channel: stable
           cache: true
+      - name: MilkDrop's helper for the Mac, and does it draw
+        run: |
+          # First, before the long build: projectM through CGL (no window), for both
+          # chips. On its own it draws projectM's idle preset; a frame must come.
+          app/native/milk/build-macos.sh
+          mkdir -p smoke
+          h=app/native/milk/build-macos/wetowl-milk
+          ( sleep 6; printf 'quit\n' ) | "$h" --size 320x180 --fps 30 > smoke/milk-frames.bin 2> smoke/milk.log || true
+          cat smoke/milk.log
+          ls -l smoke/milk-frames.bin
+          [ "$(head -c 4 smoke/milk-frames.bin)" = "MILK" ] || { echo "the helper drew no frame"; exit 1; }
       - name: The stage — the WetOwl app, built from this checkout
         working-directory: app
         run: |
@@ -81,8 +92,10 @@ jobs:
             --dart-define=MUSE_BUILD="desk-stage-$stamp"
           # In Resources, not beside the program: see lib/src/worker/build_stamp.dart.
           echo "$stamp" > "../$STAGE/Contents/Resources/build-stamp.txt"
-      - name: The Desk, bundled with its stage
-        run: desk/deploy/macos/bundle.sh "$PWD/$STAGE"
+      - name: The Desk, bundled with its stage (and MilkDrop in it)
+        run: |
+          app/native/milk/build-macos.sh "$PWD/$STAGE"
+          desk/deploy/macos/bundle.sh "$PWD/$STAGE"
       - name: Smoke — the Desk opens its stage, and both draw
         timeout-minutes: 4
         run: |
@@ -125,6 +138,13 @@ jobs:
               bad=1
             else
               echo "$sc: built (shot: ${shot:-none})"
+            fi
+            # MilkDrop's scene: its helper started and said ready
+            if [ "$sc" = milk ]; then
+              grep -E 'milk: ' "smoke/$sc.log" | head -8 || true
+              # the helper said its renderer (the context made) and a preset took
+              grep -q 'milk: egl cgl' "smoke/$sc.log" || { echo "milk: the helper did not start drawing"; bad=1; }
+              grep -q 'milk: preset ok' "smoke/$sc.log" || echo "milk: no preset said ok (yet)"
             fi
           done
           exit $bad

@@ -28,7 +28,9 @@
 //
 // Offscreen through EGL, trying the surfaceless platform, then a GBM render node,
 // then whatever the default display is (X11, Wayland) — so it draws on a desk
-// with no window of its own and on a box with no display at all.
+// with no window of its own and on a box with no display at all. On Windows a
+// hidden window's WGL context; on a Mac a CGL context with no drawable at all (the
+// frames go to the core's own framebuffer everywhere, so none is needed).
 #include <projectM-4/projectM.h>
 
 #ifdef _WIN32
@@ -38,6 +40,11 @@
 #include <GL/wglew.h>
 #include <fcntl.h>
 #include <io.h>
+#elif defined(__APPLE__)
+#define GL_SILENCE_DEPRECATION 1
+#include <OpenGL/OpenGL.h>
+#include <OpenGL/gl3.h>
+#include <unistd.h>
 #else
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -244,6 +251,64 @@ struct Egl {
 
     bool resize(int w, int h) {
         SetWindowPos(window, nullptr, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_HIDEWINDOW);
+        width = w;
+        height = h;
+        return true;
+    }
+};
+#elif defined(__APPLE__)
+// A Mac: an OpenGL 4.1 core context through CGL, with no window and no drawable —
+// projectM draws into the core's framebuffer (milk::Core::fbo), which is read back.
+// The GPU's if there is one (a MacBook's integrated one is allowed: offline
+// renderers), else Apple's software renderer.
+struct Egl {
+    CGLContextObj context = nullptr;
+    int width = 0, height = 0;
+    std::string platform = "cgl";
+
+    bool open() {
+        auto choose = [](bool software) -> CGLPixelFormatObj {
+            std::vector<CGLPixelFormatAttribute> a = {
+                kCGLPFAOpenGLProfile, (CGLPixelFormatAttribute)kCGLOGLPVersion_3_2_Core,
+                kCGLPFAColorSize, (CGLPixelFormatAttribute)24,
+                kCGLPFAAlphaSize, (CGLPixelFormatAttribute)8,
+                kCGLPFAAllowOfflineRenderers,
+            };
+            if (software) {
+                a.push_back(kCGLPFARendererID);
+                a.push_back((CGLPixelFormatAttribute)kCGLRendererGenericFloatID);
+            } else {
+                a.push_back(kCGLPFAAccelerated);
+            }
+            a.push_back((CGLPixelFormatAttribute)0);
+            CGLPixelFormatObj pf = nullptr;
+            GLint n = 0;
+            if (CGLChoosePixelFormat(a.data(), &pf, &n) != kCGLNoError) return nullptr;
+            return pf;
+        };
+        CGLPixelFormatObj pf = choose(false);
+        if (!pf) {
+            pf = choose(true);
+            platform = "cgl-software";
+        }
+        if (!pf) {
+            say("cgl: no OpenGL 4.1 core pixel format");
+            return false;
+        }
+        const CGLError e = CGLCreateContext(pf, nullptr, &context);
+        CGLDestroyPixelFormat(pf);
+        if (e != kCGLNoError || !context) {
+            say("cgl: no context");
+            return false;
+        }
+        if (CGLSetCurrentContext(context) != kCGLNoError) {
+            say("cgl: could not make the context current");
+            return false;
+        }
+        return true;
+    }
+
+    bool resize(int w, int h) {
         width = w;
         height = h;
         return true;

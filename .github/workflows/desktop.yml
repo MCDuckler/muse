@@ -436,6 +436,11 @@ jobs:
             echo "$said" | grep -q "usage: wetowl-$p"
           done
           ls -l "../$APP/Contents/MacOS"
+      - name: MilkDrop's helper beside it
+        run: |
+          # projectM through CGL, for both chips, in Contents/MacOS (signed there;
+          # the bundle is signed around it next).
+          app/native/milk/build-macos.sh "$APP"
       - name: Sign it
         run: |
           # Signed ad hoc — by no one, which is what a build without a paid Apple

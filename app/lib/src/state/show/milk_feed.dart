@@ -164,7 +164,8 @@ class MilkFeed extends ChangeNotifier {
   static String? _path;
 
   /// Beside the app (the bundle), under its lib/, named by WETOWL_MILK, or the
-  /// development build. Null where there is none — a Mac, for now.
+  /// development build (a Mac: Contents/MacOS, beside the program). Null where there
+  /// is none.
   static String? _find() {
     final env = Platform.environment['WETOWL_MILK'];
     if (env != null && File(env).existsSync()) return env;
@@ -307,7 +308,7 @@ class MilkFeed extends ChangeNotifier {
     } else if (line.startsWith('preset failed ')) {
       presetTrouble.value = line.substring(14);
       notifyListeners();
-    } else if (RegExp(r'^(egl|wgl|gl|projectm|frames):').hasMatch(line)) {
+    } else if (RegExp(r'^(egl|wgl|cgl|gl|projectm|frames):').hasMatch(line)) {
       // The helper's own word on why it cannot draw.
       debugPrint('milk: $line');
       trouble = line;

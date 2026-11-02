@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.22)
 project(wetowl-milk LANGUAGES C CXX)
 
-# wetowl-milk: MilkDrop, as a helper the booth talks to over pipes.
+# wetowl-milk: MilkDrop, as a helper the booth talks to over pipes. Linux (EGL),
+# Windows (WGL + GLEW) and macOS (CGL; build-macos.sh puts it in the app).
 #
 # projectM (the open MilkDrop) is fetched at this tag and built here with WetOwl's
 # patch, which lets the booth set values preset code can read by name (wo_kick,
@@ -56,6 +57,10 @@ if(WIN32)
   find_package(GLEW REQUIRED)
   target_link_libraries(wetowl-milk PRIVATE libprojectM::projectM OpenGL::GL GLEW::GLEW)
   set_target_properties(wetowl-milk PROPERTIES WIN32_EXECUTABLE FALSE)
+elseif(APPLE)
+  # A Mac: CGL with no window (OpenGL 4.1 core, deprecated by Apple but there).
+  find_package(OpenGL REQUIRED)
+  target_link_libraries(wetowl-milk PRIVATE libprojectM::projectM OpenGL::GL)
 else()
   set(OpenGL_GL_PREFERENCE GLVND)
   find_package(OpenGL REQUIRED COMPONENTS EGL OpenGL)
@@ -65,10 +70,17 @@ target_include_directories(wetowl-milk PRIVATE
   "${projectm_SOURCE_DIR}/src/api/include"
   "${projectm_BINARY_DIR}/src/api/include"
   "${projectm_BINARY_DIR}/include")
-# The library beside the helper, wherever the two are put.
-set_target_properties(wetowl-milk PROPERTIES
-  BUILD_RPATH "$ORIGIN;$ORIGIN/lib"
-  INSTALL_RPATH "$ORIGIN;$ORIGIN/lib")
+# The library beside the helper, wherever the two are put (a Mac: in the app's
+# Contents/MacOS, or its Frameworks).
+if(APPLE)
+  set_target_properties(wetowl-milk PROPERTIES
+    BUILD_RPATH "@loader_path;@loader_path/../Frameworks"
+    INSTALL_RPATH "@loader_path;@loader_path/../Frameworks")
+else()
+  set_target_properties(wetowl-milk PROPERTIES
+    BUILD_RPATH "$ORIGIN;$ORIGIN/lib"
+    INSTALL_RPATH "$ORIGIN;$ORIGIN/lib")
+endif()
 
 # Where the built pieces are, for whoever bundles them.
 set(WETOWL_MILK_HELPER $<TARGET_FILE:wetowl-milk> PARENT_SCOPE)
