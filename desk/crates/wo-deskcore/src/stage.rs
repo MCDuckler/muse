@@ -159,8 +159,7 @@ impl Stage {
             return;
         }
         self.close();
-        let rust = self.kept().rust || std::env::var_os("WO_STAGE_RUST").is_some();
-        let Some(program) = rust.then(rust_program).flatten().or_else(program) else {
+        let Some(program) = self.wants_rust().then(rust_program).flatten().or_else(program) else {
             self.trouble = Some("no stage here: install the WetOwl app, or set WO_STAGE to its program".into());
             return;
         };
@@ -250,6 +249,11 @@ impl Stage {
         self.hello = Some(hello);
     }
 
+    /// The Rust stage asked for: on the Show page, or by WO_STAGE_RUST.
+    fn wants_rust(&self) -> bool {
+        self.kept().rust || std::env::var_os("WO_STAGE_RUST").is_some()
+    }
+
     fn kept(&self) -> &Kept {
         self.kept.get_or_init(Kept::read)
     }
@@ -335,7 +339,7 @@ impl Stage {
                 freeze: cue.macros.freeze,
                 told: Shown { scene: name, held: s.direct.held(), blackout: cue.macros.blackout, freeze: cue.macros.freeze, ..shown },
                 kept_screen: self.kept().screen.clone(),
-                rust: self.kept().rust,
+                rust: self.wants_rust(),
                 rust_here: rust_program().is_some(),
                 why: Some(cue.why.clone()).filter(|w| !w.is_empty()),
             };
@@ -351,7 +355,7 @@ impl Stage {
             freeze: stages > 0 && if perform { shown.freeze } else { self.freeze },
             told: shown,
             kept_screen: self.kept().screen.clone(),
-            rust: self.kept().rust,
+            rust: self.wants_rust(),
             rust_here: rust_program().is_some(),
             why: None,
         }

@@ -70,9 +70,27 @@ fn main() {
         }
         let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
         let piped = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        // paced as a display paces them: one every 16.7 ms, each waited for (a GPU that
+        // idles between frames may run them slower than back to back)
+        let mut paced = vec![];
+        for i in 0..n {
+            let t = 20.0 + i as f64 / 60.0;
+            let a = ShowDeck::derive("A", Some(&r), true, t * 1000.0, Channel::default(), ShowAudio::default());
+            let st = ShowState { a, scene: Some(scene.into()), ..Default::default() };
+            let f = stage_frame(&st, &book, t);
+            let t1 = Instant::now();
+            let cmd = stage.draw(&gpu, &f, 1.0 / 60.0, Some(&view), w, h, None);
+            gpu.queue.submit([cmd]);
+            let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+            let ms = t1.elapsed().as_secs_f64() * 1000.0;
+            paced.push(ms);
+            std::thread::sleep(std::time::Duration::from_secs_f64((1.0 / 60.0 - ms / 1000.0).max(0.0)));
+        }
+        paced.sort_by(f64::total_cmp);
+        let paced_mid = paced[paced.len() / 2];
         times.sort_by(f64::total_cmp);
         let mean = times.iter().sum::<f64>() / times.len() as f64;
         let p95 = times[(times.len() * 95 / 100).min(times.len() - 1)];
-        println!("{label:32} waited: mean {mean:5.2} ms p95 {p95:5.2} ms · back to back {piped:5.2} ms/frame ({} particles)", stage.drawn.particles);
+        println!("{label:32} waited: mean {mean:5.2} ms p95 {p95:5.2} ms · back to back {piped:5.2} ms/frame · paced at 60 Hz {paced_mid:5.2} ms ({} particles)", stage.drawn.particles);
     }
 }

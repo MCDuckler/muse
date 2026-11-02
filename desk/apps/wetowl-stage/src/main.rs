@@ -205,8 +205,24 @@ struct Window_ {
     stage: Stage,
     picture: Option<Picture>,
     adapt: Adapt,
-    /// The last frame's time on the GPU, microseconds (from its submission to its end).
+    /// The last frame's time, microseconds: from its start to the GPU's end of it.
     took: Arc<AtomicU64>,
+    /// Each frame's submission, to the thread that waits for it and notes the time.
+    timer: std::sync::mpsc::Sender<(wgpu::SubmissionIndex, Instant)>,
+}
+
+/// A thread waiting on each frame's work, noting when it was done (a callback would be
+/// heard only at the next poll, a whole frame later).
+fn timer(device: wgpu::Device, took: Arc<AtomicU64>) -> std::sync::mpsc::Sender<(wgpu::SubmissionIndex, Instant)> {
+    let (tx, rx) = std::sync::mpsc::channel::<(wgpu::SubmissionIndex, Instant)>();
+    std::thread::spawn(move || {
+        for (index, began) in rx {
+            if device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: Some(Duration::from_secs(2)) }).is_ok() {
+                took.store(began.elapsed().as_micros() as u64, Ordering::Relaxed);
+            }
+        }
+    });
+    tx
 }
 
 struct App {
@@ -242,7 +258,7 @@ impl App {
         let screen = d.window.current_monitor().map(|m| m.name().unwrap_or_default()).unwrap_or_default();
         let (ww, wh) = d.stage.drawn.work;
         println!(
-            "STAGE fps={:.1} size={}x{} screen={} full={} gpu={} ({:?}) scene={} work={}x{} heard={} cues={} pictures={} black={}",
+            "STAGE fps={:.1} size={}x{} screen={} full={} gpu={} ({:?}) scene={} work={}x{} ms={:.1} heard={} cues={} pictures={} black={}",
             self.frames as f64 / secs,
             size.width,
             size.height,
@@ -253,6 +269,7 @@ impl App {
             self.play_scene().unwrap_or("-"),
             ww,
             wh,
+            d.took.load(Ordering::Relaxed) as f64 / 1000.0,
             self.heard,
             self.cues,
             self.pictures,
@@ -429,10 +446,9 @@ impl App {
             );
             cmds.push(enc.finish());
         }
-        d.gpu.queue.submit(cmds);
+        let index = d.gpu.queue.submit(cmds);
         if present {
-            let took = d.took.clone();
-            d.gpu.queue.on_submitted_work_done(move || took.store(began.elapsed().as_micros() as u64, Ordering::Relaxed));
+            let _ = d.timer.send((index, began));
         }
         if let Some(p) = pic {
             p.state.store(1, Ordering::Release);
@@ -526,7 +542,9 @@ impl ApplicationHandler for App {
         stage.scale = self.args.scale;
         eprintln!("stage: {} shaders ready in {:.0} ms on {} ({:?})", wo_render::stage::stage_shaders().len() + 2, t0.elapsed().as_secs_f64() * 1000.0, gpu.info.name, gpu.info.backend);
         window.request_redraw();
-        self.win = Some(Window_ { window, surface, config, gpu, stage, picture: None, adapt: Adapt::new(self.args.scale), took: Arc::new(AtomicU64::new(0)) });
+        let took = Arc::new(AtomicU64::new(0));
+        let timer = timer(gpu.device.clone(), took.clone());
+        self.win = Some(Window_ { window, surface, config, gpu, stage, picture: None, adapt: Adapt::new(self.args.scale), took, timer });
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
